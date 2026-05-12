@@ -16,6 +16,7 @@
     "web:typecheck": "pnpm --filter @codex-autorunner/web-hub typecheck",
     "web:lint": "pnpm --filter @codex-autorunner/web-hub lint",
     "web:test": "pnpm --filter @codex-autorunner/web-hub test",
-    "web:smoke:hub": ".venv/bin/python scripts/pma_live_hub_smoke.py"
+    "web:smoke:hub": ".venv/bin/python scripts/pma_live_hub_smoke.py",
+    "web:smoke:journeys": ".venv/bin/python scripts/web_ui_smoke_journeys.py"
   }
 }

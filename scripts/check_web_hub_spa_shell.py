@@ -9,7 +9,7 @@ This script builds probe URLs from directory names under
 ``web_frontend/src/routes`` (same rules as SvelteKit dynamic segments) and
 asserts each probe succeeds with either:
   - 200 + Web Hub HTML markers, or
-  - 307/308 (legacy redirects for /worktrees and /contextspace).
+  - 307/308 (legacy redirects for /worktrees).
 
 Usage:
   python scripts/check_web_hub_spa_shell.py
@@ -37,7 +37,7 @@ PROBE_BY_PARAM: dict[str, str] = {
 }
 
 # Prefixes where the hub returns redirects instead of the HTML shell.
-REDIRECT_PREFIXES: tuple[str, ...] = ("/worktrees", "/contextspace")
+REDIRECT_PREFIXES: tuple[str, ...] = ("/worktrees",)
 
 _WEB_MARKERS: tuple[str, ...] = (
     "<title>Web Hub</title>",

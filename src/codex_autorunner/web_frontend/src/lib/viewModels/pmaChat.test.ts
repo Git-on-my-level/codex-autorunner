@@ -1150,6 +1150,25 @@ describe('PMA chat view helpers', () => {
     expect(merged.map((item) => item.id)).toEqual(['turn:turn-1:user', 'turn:turn-2:user']);
   });
 
+  it('suppresses duplicate assistant deliveries for the same turn while preserving separate turns', () => {
+    const cards = buildPmaTranscriptCards(
+      [
+        timelineItem('turn:one:user', 'user_message', { text: 'Do work' }, '001'),
+        timelineItem('turn:one:assistant:a', 'assistant_message', { text: 'Done.' }, '002'),
+        timelineItem('turn:one:assistant:b', 'assistant_message', { text: 'Done.' }, '003'),
+        timelineItem('turn:two:assistant', 'assistant_message', { text: 'Done.' }, '004')
+      ],
+      baseChat,
+      [],
+      null
+    );
+
+    const assistantMessages = cards.filter(
+      (card) => card.kind === 'message' && card.message.role === 'assistant'
+    );
+    expect(assistantMessages.map((card) => card.id)).toEqual(['turn:one:assistant:a', 'turn:two:assistant']);
+  });
+
   it('normalizes optimistic send status through the canonical optional work-status mapper', () => {
     expect(
       optimisticUserTimelineItemFromSend(

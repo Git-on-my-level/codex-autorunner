@@ -5,6 +5,8 @@ from __future__ import annotations
 
 import argparse
 import importlib.util
+import json
+import subprocess
 import sys
 from pathlib import Path
 from typing import Sequence
@@ -52,7 +54,13 @@ WEB_SOURCE_TEST_SUFFIXES = (
 )
 
 
-def needs_web_static_refresh(path: str) -> bool:
+def needs_web_static_refresh(
+    path: str, *, inspect_staged_package_json: bool = False
+) -> bool:
+    if path == "src/codex_autorunner/web_frontend/package.json":
+        if not inspect_staged_package_json:
+            return True
+        return _package_json_requires_static_refresh(path)
     if path in WEB_BUILD_CONFIG_PATHS:
         return True
     if not matches_prefix(path, WEB_FRONTEND_SOURCE_PREFIX):
@@ -60,17 +68,54 @@ def needs_web_static_refresh(path: str) -> bool:
     return not path.endswith(WEB_SOURCE_TEST_SUFFIXES)
 
 
+def _package_json_requires_static_refresh(path: str) -> bool:
+    """Script-only package changes do not alter generated web_static assets."""
+
+    try:
+        before = _git_json(f"HEAD:{path}")
+        after = _git_json(f":{path}")
+    except (subprocess.CalledProcessError, json.JSONDecodeError):
+        return True
+    return _without_scripts(before) != _without_scripts(after)
+
+
+def _git_json(revision: str) -> dict[str, object]:
+    result = subprocess.run(
+        ["git", "show", revision],
+        cwd=REPO_ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    value = json.loads(result.stdout)
+    return value if isinstance(value, dict) else {}
+
+
+def _without_scripts(value: dict[str, object]) -> dict[str, object]:
+    copy = dict(value)
+    copy.pop("scripts", None)
+    return copy
+
+
 def includes_web_static(path: str) -> bool:
     return matches_prefix(path, WEB_STATIC_PREFIX)
 
 
-def missing_static_for_paths(paths: Sequence[str]) -> tuple[str, ...]:
+def missing_static_for_paths(
+    paths: Sequence[str], *, inspect_staged_package_json: bool = False
+) -> tuple[str, ...]:
     normalized_paths = tuple(
         sorted({path for path in map(normalize_changed_path, paths) if path})
     )
     if any(includes_web_static(path) for path in normalized_paths):
         return ()
-    return tuple(path for path in normalized_paths if needs_web_static_refresh(path))
+    return tuple(
+        path
+        for path in normalized_paths
+        if needs_web_static_refresh(
+            path, inspect_staged_package_json=inspect_staged_package_json
+        )
+    )
 
 
 def _parse_args(argv: Sequence[str]) -> argparse.Namespace:
@@ -95,7 +140,9 @@ def _read_paths(args: argparse.Namespace) -> tuple[str, ...]:
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = _parse_args(tuple(sys.argv[1:] if argv is None else argv))
-    missing_paths = missing_static_for_paths(_read_paths(args))
+    missing_paths = missing_static_for_paths(
+        _read_paths(args), inspect_staged_package_json=True
+    )
     if not missing_paths:
         return 0
 

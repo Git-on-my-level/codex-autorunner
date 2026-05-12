@@ -77,6 +77,7 @@ from .routes.pma_routes.managed_thread_runtime import (
 from .routes.scm_webhooks import build_scm_webhook_routes
 from .routes.settings import build_settings_routes
 from .routes.system import build_system_routes
+from .routes.voice import build_voice_routes
 from .services.pma import create_pma_application_container
 from .static_assets import (
     render_web_index_html,
@@ -203,6 +204,9 @@ def create_hub_app(
     app.state.engine = repo_context.engine
     app.state.manager = repo_context.manager
     app.state.app_server_threads = repo_context.app_server_threads
+    app.state.voice_config = repo_context.voice_config
+    app.state.voice_missing_reason = repo_context.voice_missing_reason
+    app.state.voice_service = repo_context.voice_service
     app.add_middleware(GZipMiddleware, minimum_size=500)
     app.state.orchestration_housekeeping = None
     web_static_dir, web_static_context = resolve_web_static_dir()
@@ -868,6 +872,7 @@ def create_hub_app(
     app.include_router(build_flow_routes())
     app.include_router(build_interaction_routes())
     app.include_router(build_settings_routes())
+    app.include_router(build_voice_routes())
     app.include_router(build_hub_messages_routes(context))
     app.include_router(build_hub_repo_routes(context, mount_manager))
 
@@ -967,8 +972,8 @@ def create_hub_app(
         return _legacy_spa_redirect(f"/repos/{parent_repo_id}/worktrees/{worktree_id}")
 
     @app.get("/contextspace/{workspace_id}", include_in_schema=False)
-    def legacy_contextspace_redirect(workspace_id: str):
-        return _legacy_spa_redirect(f"/repos/{workspace_id}/contextspace")
+    def pma_contextspace_shell(workspace_id: str):
+        return _web_index_response()
 
     @app.get("/repos/{repo_id}/terminal", include_in_schema=False)
     @app.get("/repos/{repo_id}/terminal/{rest:path}", include_in_schema=False)

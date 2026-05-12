@@ -293,6 +293,9 @@ if [[ "$RUN_WEB_UI" == true ]]; then
   need_cmd node
   need_cmd pnpm
 
+  echo "Running fast Web UI lab scenarios..."
+  "$PYTHON_BIN" scripts/web_ui_lab_check.py
+
   echo "Linting Web Hub frontend..."
   WEB_LINT_OUTPUT="$(mktemp)"
   pnpm web:lint 2>&1 | tee "$WEB_LINT_OUTPUT"

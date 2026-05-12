@@ -791,8 +791,9 @@ export function buildPmaCards(
   chat: PmaChatSummary | null,
   artifacts: SurfaceArtifact[]
 ): PmaCard[] {
-  const messageAttachmentKeys = collectMessageAttachmentKeys(timeline);
-  const timelineCards = timeline
+  const normalizedTimeline = suppressDuplicateTimelineDeliveries(timeline);
+  const messageAttachmentKeys = collectMessageAttachmentKeys(normalizedTimeline);
+  const timelineCards = normalizedTimeline
     .flatMap(timelineItemToCard)
     .filter((card) => !isMessageAttachmentArtifactCard(card, messageAttachmentKeys));
   const cards: PmaCard[] = [...timelineCards];
@@ -815,6 +816,27 @@ export function buildPmaCards(
   }
 
   return cards;
+}
+
+function suppressDuplicateTimelineDeliveries(timeline: PmaTimelineItem[]): PmaTimelineItem[] {
+  const seen = new Set<string>();
+  const out: PmaTimelineItem[] = [];
+  for (const item of timeline) {
+    const key = duplicateDeliveryKey(item);
+    if (key) {
+      if (seen.has(key)) continue;
+      seen.add(key);
+    }
+    out.push(item);
+  }
+  return out;
+}
+
+function duplicateDeliveryKey(item: PmaTimelineItem): string | null {
+  if (item.kind !== 'assistant_message') return null;
+  const text = stringValue(item.payload.text).trim();
+  if (!text || !item.turnId) return null;
+  return `${item.chatId ?? ''}|${item.turnId}|${item.kind}|${text}`;
 }
 
 function isMessageAttachmentArtifactCard(card: PmaCard, messageAttachmentKeys: Set<string>): boolean {
@@ -861,7 +883,10 @@ export function buildPmaTranscriptCards(
   artifacts: SurfaceArtifact[],
   progress: PmaRunProgress | null
 ): PmaCard[] {
-  const timelineCards = coalesceThinkingTraceCards(buildPmaCards(timeline, chat, artifacts));
+  const normalizedTimeline = suppressDuplicateTimelineDeliveries(timeline);
+  const timelineCards = coalesceThinkingTraceCards(
+    buildPmaCards(normalizedTimeline, chat, artifacts)
+  );
   const activityCards = shouldSupplementWithLiveActivity(timelineCards, progress)
     ? buildPmaActivityCards(progress?.events ?? [], { fallbackTurnId: progress?.id ?? null })
     : [];

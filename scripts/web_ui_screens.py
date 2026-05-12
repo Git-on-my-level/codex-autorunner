@@ -74,6 +74,23 @@ class CaptureRoute:
     path: str
 
 
+@dataclass(frozen=True)
+class BrowserConsoleMessage:
+    type: str
+    text: str
+    location: dict[str, Any]
+    url: str
+
+
+@dataclass(frozen=True)
+class FailedNetworkRequest:
+    url: str
+    method: str
+    resource_type: str
+    failure: str | None
+    route_url: str
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Capture a repeatable screenshot pack for the Web Hub UI."
@@ -281,6 +298,211 @@ def route_url(base_url: str, base_path: str, path: str) -> str:
     return f"{base_url.rstrip('/')}{base_path}{path}"
 
 
+def _relative_artifact(path: Path, out_dir: Path) -> str:
+    try:
+        return str(path.relative_to(out_dir))
+    except ValueError:
+        return str(path)
+
+
+def build_loading_marker_status(
+    *,
+    timed_out: bool,
+    body_text: str,
+    markers: tuple[str, ...] = PRIMARY_LOADING_MARKERS,
+) -> dict[str, Any]:
+    remaining = [marker for marker in markers if marker in body_text]
+    if timed_out:
+        state = "timeout"
+    elif remaining:
+        state = "present"
+    else:
+        state = "cleared"
+    return {
+        "state": state,
+        "remaining_markers": remaining,
+        "rendered_error_state": "Could not load" in body_text,
+    }
+
+
+def classify_capture_failures(record: dict[str, Any]) -> list[str]:
+    failures: set[str] = set()
+    navigation = record.get("navigation", {})
+    if navigation.get("ok") is False:
+        failures.add("navigation")
+    if [
+        error
+        for error in record.get("console", {}).get("errors", [])
+        if "Failed to load resource:" not in str(error.get("text", ""))
+    ]:
+        failures.add("console")
+    if [
+        request
+        for request in record.get("network", {}).get("failed_requests", [])
+        if is_actionable_failed_request(request)
+    ]:
+        failures.add("network")
+    loading = record.get("loading_marker", {})
+    if loading.get("state") in {"timeout", "present"} or loading.get(
+        "rendered_error_state"
+    ):
+        failures.add("loading")
+    layout = record.get("layout", {})
+    if layout.get("has_horizontal_overflow"):
+        failures.add("layout")
+    screenshot = record.get("screenshot", {})
+    if not screenshot.get("path") or screenshot.get("size_bytes", 0) <= 0:
+        failures.add("screenshot")
+    accessibility = record.get("accessibility", {})
+    if accessibility.get("error"):
+        failures.add("accessibility capture")
+    return sorted(failures)
+
+
+def is_actionable_failed_request(request: dict[str, Any]) -> bool:
+    return request.get("failure") != "net::ERR_ABORTED"
+
+
+def build_manifest(
+    *,
+    mode: str,
+    base_url: str,
+    base_path: str,
+    hub_root: Path | None,
+    out_dir: Path,
+    viewports: list[tuple[int, int]],
+    full_page: bool,
+) -> dict[str, Any]:
+    return {
+        "schema_version": 2,
+        "generated_at_unix": time.time(),
+        "mode": mode,
+        "base_url": base_url,
+        "base_path": base_path,
+        "hub_root": str(hub_root) if hub_root is not None else None,
+        "out_dir": str(out_dir),
+        "viewports": [
+            {"width": viewport[0], "height": viewport[1]} for viewport in viewports
+        ],
+        "full_page": full_page,
+        "captures": [],
+        "diagnostics": {
+            "console_errors": [],
+            "console_warnings": [],
+            "page_errors": [],
+            "failed_requests": [],
+        },
+        "outbox": [],
+    }
+
+
+def summarize_dom(page) -> dict[str, Any]:
+    return page.evaluate(
+        """() => {
+            const bodyText = document.body?.innerText || '';
+            const visibleText = bodyText
+                .split(/\\n+/)
+                .map((line) => line.trim())
+                .filter(Boolean)
+                .slice(0, 80);
+            const collect = (selector) => Array.from(document.querySelectorAll(selector))
+                .map((node) => node.innerText?.trim() || node.getAttribute('aria-label') || '')
+                .filter(Boolean)
+                .slice(0, 40);
+            return {
+                title: document.title,
+                url: window.location.href,
+                body_text_chars: bodyText.length,
+                visible_text: visibleText,
+                headings: collect('h1,h2,h3,[role="heading"]'),
+                buttons: collect('button,[role="button"]'),
+                links: Array.from(document.querySelectorAll('a[href]'))
+                    .map((node) => ({
+                        text: node.innerText?.trim() || node.getAttribute('aria-label') || '',
+                        href: node.getAttribute('href'),
+                    }))
+                    .filter((item) => item.text || item.href)
+                    .slice(0, 40),
+                counts: {
+                    elements: document.querySelectorAll('*').length,
+                    buttons: document.querySelectorAll('button,[role="button"]').length,
+                    links: document.querySelectorAll('a[href]').length,
+                    inputs: document.querySelectorAll('input,textarea,select').length,
+                },
+            };
+        }"""
+    )
+
+
+def capture_accessibility_snapshot(page) -> tuple[dict[str, Any] | None, str | None]:
+    try:
+        accessibility = getattr(page, "accessibility", None)
+        if accessibility is not None:
+            snapshot = accessibility.snapshot()
+            return snapshot, None
+    except Exception as exc:
+        return None, str(exc)
+    try:
+        session = page.context.new_cdp_session(page)
+        return session.send("Accessibility.getFullAXTree"), None
+    except Exception as exc:
+        return None, str(exc)
+
+
+def capture_layout_diagnostics(page) -> dict[str, Any]:
+    return page.evaluate(
+        """() => {
+            const root = document.documentElement;
+            const viewportWidth = root.clientWidth;
+            const viewportHeight = root.clientHeight;
+            const describe = (node, rect) => ({
+                tag: node.tagName.toLowerCase(),
+                id: node.id || '',
+                class_name: String(node.className || '').slice(0, 120),
+                text: (node.innerText || node.getAttribute('aria-label') || '').trim().slice(0, 160),
+                rect: {
+                    left: Math.round(rect.left),
+                    right: Math.round(rect.right),
+                    top: Math.round(rect.top),
+                    bottom: Math.round(rect.bottom),
+                    width: Math.round(rect.width),
+                    height: Math.round(rect.height),
+                },
+            });
+            const overflowing = [];
+            const clipped = [];
+            for (const node of document.querySelectorAll('body *')) {
+                const rect = node.getBoundingClientRect();
+                if (!rect.width || !rect.height) continue;
+                if (rect.right > viewportWidth + 1 || rect.left < -1) {
+                    overflowing.push(describe(node, rect));
+                }
+                const style = window.getComputedStyle(node);
+                const clipsText = (
+                    (style.overflowX === 'hidden' || style.textOverflow === 'ellipsis') &&
+                    node.scrollWidth > node.clientWidth + 1
+                );
+                const clipsY = style.overflowY === 'hidden' && node.scrollHeight > node.clientHeight + 1;
+                if (clipsText || clipsY) {
+                    clipped.push({ ...describe(node, rect), reason: clipsText ? 'text-x' : 'content-y' });
+                }
+            }
+            return {
+                viewport: { width: viewportWidth, height: viewportHeight },
+                document: {
+                    scroll_width: root.scrollWidth,
+                    client_width: root.clientWidth,
+                    scroll_height: root.scrollHeight,
+                    client_height: root.clientHeight,
+                },
+                has_horizontal_overflow: root.scrollWidth > root.clientWidth + 1,
+                overflowing_elements: overflowing.slice(0, 25),
+                clipped_elements: clipped.slice(0, 25),
+            };
+        }"""
+    )
+
+
 def capture_screenshots(
     *,
     base_url: str,
@@ -304,9 +526,9 @@ def capture_screenshots(
         ) from exc
 
     captures: list[dict[str, Any]] = []
-    console_errors: list[str] = []
+    console_messages: list[BrowserConsoleMessage] = []
     page_errors: list[str] = []
-    failed_requests: list[str] = []
+    failed_requests: list[FailedNetworkRequest] = []
     screenshots_dir = out_dir / viewport_label(viewport)
     screenshots_dir.mkdir(parents=True, exist_ok=True)
 
@@ -316,30 +538,75 @@ def capture_screenshots(
             viewport={"width": viewport[0], "height": viewport[1]},
             device_scale_factor=1,
         )
-        page.on(
-            "console",
-            lambda message: (
-                console_errors.append(message.text) if message.type == "error" else None
-            ),
-        )
+        current_route_url = {"value": ""}
+
+        def _record_console(message) -> None:
+            if message.type not in {"error", "warning"}:
+                return
+            console_messages.append(
+                BrowserConsoleMessage(
+                    type=message.type,
+                    text=message.text,
+                    location=message.location,
+                    url=current_route_url["value"],
+                )
+            )
+
+        def _record_failed_request(request) -> None:
+            failed_requests.append(
+                FailedNetworkRequest(
+                    url=request.url,
+                    method=request.method,
+                    resource_type=request.resource_type,
+                    failure=request.failure,
+                    route_url=current_route_url["value"],
+                )
+            )
+
+        page.on("console", _record_console)
         page.on("pageerror", lambda error: page_errors.append(str(error)))
-        page.on("requestfailed", lambda request: failed_requests.append(request.url))
+        page.on("requestfailed", _record_failed_request)
 
         for item in routes:
+            started_at = time.monotonic()
             url = route_url(base_url, base_path, item.path)
+            current_route_url["value"] = url
+            console_start = len(console_messages)
+            failed_request_start = len(failed_requests)
             screenshot_path = screenshots_dir / f"{item.name}.png"
-            errors: list[str] = []
+            dom_summary_path = screenshots_dir / f"{item.name}.dom_summary.json"
+            accessibility_path = screenshots_dir / f"{item.name}.a11y_snapshot.json"
+            layout_path = screenshots_dir / f"{item.name}.layout_diagnostics.json"
+            final_url = url
+            navigation: dict[str, Any] = {"ok": True, "status": None, "error": None}
+            body_text = ""
+            loading_timed_out = False
+            screenshot_error: str | None = None
+            accessibility_error: str | None = None
             print(
                 f"capturing {viewport_label(viewport)} {item.name}: {url}",
                 flush=True,
             )
-            response = page.goto(
-                url, wait_until="domcontentloaded", timeout=timeout_seconds * 1000
-            )
-            if response is None:
-                errors.append("route did not return a browser navigation response")
-            elif response.status >= 400:
-                errors.append(f"route returned HTTP {response.status}")
+            try:
+                response = page.goto(
+                    url, wait_until="domcontentloaded", timeout=timeout_seconds * 1000
+                )
+                if response is None:
+                    navigation = {
+                        "ok": False,
+                        "status": None,
+                        "error": "route did not return a browser navigation response",
+                    }
+                elif response.status >= 400:
+                    navigation = {
+                        "ok": False,
+                        "status": response.status,
+                        "error": f"route returned HTTP {response.status}",
+                    }
+                else:
+                    navigation["status"] = response.status
+            except Exception as exc:
+                navigation = {"ok": False, "status": None, "error": str(exc)}
             try:
                 page.wait_for_function(
                     """(loadingMarkers) => {
@@ -352,32 +619,132 @@ def capture_screenshots(
                     timeout=timeout_seconds * 1000,
                 )
             except PlaywrightTimeoutError:
-                errors.append("primary loading markers did not clear before timeout")
+                loading_timed_out = True
             page.wait_for_timeout(wait_ms)
-            text = page.locator("body").inner_text(timeout=timeout_seconds * 1000)
-            if "Could not load" in text:
-                errors.append("route rendered an error state")
-            page.screenshot(path=str(screenshot_path), full_page=full_page)
-            captures.append(
-                {
-                    "name": item.name,
-                    "path": item.path,
-                    "url": url,
-                    "viewport": {"width": viewport[0], "height": viewport[1]},
-                    "screenshot": str(screenshot_path),
-                    "size_bytes": screenshot_path.stat().st_size,
-                    "errors": errors,
+            try:
+                body_text = page.locator("body").inner_text(
+                    timeout=timeout_seconds * 1000
+                )
+            except Exception as exc:
+                body_text = ""
+                navigation = {
+                    "ok": False,
+                    "status": navigation.get("status"),
+                    "error": str(exc),
                 }
+            final_url = page.url
+            dom_summary = summarize_dom(page)
+            dom_summary_path.write_text(
+                json.dumps(dom_summary, indent=2, sort_keys=True) + "\n",
+                encoding="utf-8",
             )
+            accessibility_snapshot, accessibility_error = (
+                capture_accessibility_snapshot(page)
+            )
+            if accessibility_snapshot is not None:
+                accessibility_path.write_text(
+                    json.dumps(accessibility_snapshot, indent=2, sort_keys=True) + "\n",
+                    encoding="utf-8",
+                )
+            layout_diagnostics = capture_layout_diagnostics(page)
+            layout_path.write_text(
+                json.dumps(layout_diagnostics, indent=2, sort_keys=True) + "\n",
+                encoding="utf-8",
+            )
+            try:
+                page.screenshot(path=str(screenshot_path), full_page=full_page)
+            except Exception as exc:
+                screenshot_error = str(exc)
+            route_console = console_messages[console_start:]
+            route_failed_requests = failed_requests[failed_request_start:]
+            loading_marker = build_loading_marker_status(
+                timed_out=loading_timed_out,
+                body_text=body_text,
+            )
+            capture = {
+                "name": item.name,
+                "path": item.path,
+                "url": url,
+                "final_url": final_url,
+                "viewport": {"width": viewport[0], "height": viewport[1]},
+                "duration_ms": int((time.monotonic() - started_at) * 1000),
+                "navigation": navigation,
+                "loading_marker": loading_marker,
+                "screenshot": {
+                    "path": str(screenshot_path),
+                    "relative_path": _relative_artifact(screenshot_path, out_dir),
+                    "size_bytes": (
+                        screenshot_path.stat().st_size
+                        if screenshot_path.exists()
+                        else 0
+                    ),
+                    "error": screenshot_error,
+                },
+                "accessibility": {
+                    "path": (
+                        str(accessibility_path) if accessibility_path.exists() else None
+                    ),
+                    "relative_path": (
+                        _relative_artifact(accessibility_path, out_dir)
+                        if accessibility_path.exists()
+                        else None
+                    ),
+                    "error": accessibility_error,
+                },
+                "dom_summary": {
+                    "path": str(dom_summary_path),
+                    "relative_path": _relative_artifact(dom_summary_path, out_dir),
+                },
+                "console": {
+                    "errors": [
+                        message.__dict__
+                        for message in route_console
+                        if message.type == "error"
+                    ],
+                    "warnings": [
+                        message.__dict__
+                        for message in route_console
+                        if message.type == "warning"
+                    ],
+                },
+                "network": {
+                    "failed_requests": [
+                        request.__dict__ for request in route_failed_requests
+                    ],
+                },
+                "layout": {
+                    "path": str(layout_path),
+                    "relative_path": _relative_artifact(layout_path, out_dir),
+                    "has_horizontal_overflow": layout_diagnostics.get(
+                        "has_horizontal_overflow", False
+                    ),
+                    "overflowing_elements": layout_diagnostics.get(
+                        "overflowing_elements", []
+                    ),
+                    "clipped_elements": layout_diagnostics.get("clipped_elements", []),
+                },
+            }
+            capture["failure_subsystems"] = classify_capture_failures(capture)
+            capture["errors"] = capture["failure_subsystems"]
+            captures.append(capture)
 
         browser.close()
 
     captures.append(
         {
             "name": "__browser_diagnostics__",
-            "console_errors": console_errors,
+            "console_errors": [
+                message.__dict__
+                for message in console_messages
+                if message.type == "error"
+            ],
+            "console_warnings": [
+                message.__dict__
+                for message in console_messages
+                if message.type == "warning"
+            ],
             "page_errors": page_errors,
-            "failed_requests": failed_requests,
+            "failed_requests": [request.__dict__ for request in failed_requests],
         }
     )
     return captures
@@ -387,7 +754,12 @@ def copy_to_outbox(captures: list[dict[str, Any]], outbox_dir: Path) -> list[str
     outbox_dir.mkdir(parents=True, exist_ok=True)
     copied: list[str] = []
     for capture in captures:
-        screenshot = capture.get("screenshot")
+        screenshot_record = capture.get("screenshot")
+        screenshot = (
+            screenshot_record.get("path")
+            if isinstance(screenshot_record, dict)
+            else screenshot_record
+        )
         if not screenshot:
             continue
         source = Path(str(screenshot))
@@ -448,25 +820,15 @@ def main() -> int:
         os.chdir(server_working_directory(hub_root))
         server, thread = start_server(hub_root, args.host, port, base_path or "/")
 
-    evidence: dict[str, Any] = {
-        "schema_version": 1,
-        "mode": args.mode,
-        "base_url": base_url,
-        "base_path": base_path,
-        "hub_root": str(hub_root) if hub_root is not None else None,
-        "out_dir": str(out_dir),
-        "viewports": [
-            {"width": viewport[0], "height": viewport[1]} for viewport in viewports
-        ],
-        "full_page": not args.viewport_only,
-        "captures": [],
-        "diagnostics": {
-            "console_errors": [],
-            "page_errors": [],
-            "failed_requests": [],
-        },
-        "outbox": [],
-    }
+    evidence = build_manifest(
+        mode=args.mode,
+        base_url=base_url,
+        base_path=base_path,
+        hub_root=hub_root,
+        out_dir=out_dir,
+        viewports=viewports,
+        full_page=not args.viewport_only,
+    )
     status = 0
     try:
         if args.mode != "url":
@@ -489,7 +851,12 @@ def main() -> int:
             diagnostics["console_errors"].extend(
                 viewport_diagnostics.get("console_errors", [])
             )
-            diagnostics["page_errors"].extend(viewport_diagnostics.get("page_errors", []))
+            diagnostics["console_warnings"].extend(
+                viewport_diagnostics.get("console_warnings", [])
+            )
+            diagnostics["page_errors"].extend(
+                viewport_diagnostics.get("page_errors", [])
+            )
             diagnostics["failed_requests"].extend(
                 viewport_diagnostics.get("failed_requests", [])
             )
@@ -500,17 +867,22 @@ def main() -> int:
             )
         evidence["captures"] = captures
         failures = [
-            f"{capture['name']}: {'; '.join(capture['errors'])}"
+            (
+                f"{capture['name']} {capture['viewport']['width']}x"
+                f"{capture['viewport']['height']}: "
+                f"{', '.join(capture['failure_subsystems'])}"
+            )
             for capture in captures
-            if capture.get("errors")
+            if capture.get("failure_subsystems")
         ]
         failures.extend(
             f"browser page error: {error}"
             for error in diagnostics.get("page_errors", [])
         )
         failures.extend(
-            f"browser failed request: {url}"
-            for url in diagnostics.get("failed_requests", [])
+            f"browser failed request: {request}"
+            for request in diagnostics.get("failed_requests", [])
+            if is_actionable_failed_request(request)
         )
         if failures:
             evidence["status"] = "failed"
@@ -522,10 +894,9 @@ def main() -> int:
             copied = copy_to_outbox(captures, outbox_dir)
             evidence["outbox"] = copied
     finally:
-        (out_dir / "manifest.json").write_text(
-            json.dumps(evidence, indent=2, sort_keys=True) + "\n",
-            encoding="utf-8",
-        )
+        manifest_text = json.dumps(evidence, indent=2, sort_keys=True) + "\n"
+        (out_dir / "manifest.json").write_text(manifest_text, encoding="utf-8")
+        (out_dir / "latest.json").write_text(manifest_text, encoding="utf-8")
         if server is not None:
             server.should_exit = True
         if thread is not None:

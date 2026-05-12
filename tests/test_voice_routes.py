@@ -6,6 +6,8 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from codex_autorunner.bootstrap import seed_hub_files
+from codex_autorunner.server import create_hub_app
 from codex_autorunner.surfaces.web.routes.voice import build_voice_routes
 from codex_autorunner.voice.config import VoiceConfig
 from codex_autorunner.voice.service import VoicePermanentError
@@ -59,3 +61,13 @@ def test_voice_transcribe_returns_503_for_provider_setup_errors(
 
     assert response.status_code == 503
     assert response.json() == {"detail": detail}
+
+
+def test_hub_app_exposes_voice_config_for_chat_shell(tmp_path) -> None:
+    hub_root = tmp_path / "hub"
+    seed_hub_files(hub_root, force=True)
+    with TestClient(create_hub_app(hub_root)) as client:
+        response = client.get("/api/voice/config")
+
+    assert response.status_code == 200
+    assert response.json()["enabled"] is False

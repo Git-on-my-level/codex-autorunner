@@ -1,24 +1,3 @@
 {
-  "warnings": [
-    {
-      "path": "src/codex_autorunner/web_frontend/src/lib/components/PageHero.svelte",
-      "message": "Also define the standard property 'line-clamp' for compatibility (css)"
-    },
-    {
-      "path": "src/codex_autorunner/web_frontend/src/lib/components/TicketViews.svelte",
-      "message": "Unused CSS selector \".ticket-flow-timeline > li\""
-    },
-    {
-      "path": "src/codex_autorunner/web_frontend/src/lib/components/ScopedNewTicketPage.svelte",
-      "message": "`<h1>` element should contain text"
-    },
-    {
-      "path": "src/codex_autorunner/web_frontend/src/lib/components/ScopedNewTicketPage.svelte",
-      "message": "Avoid using autofocus"
-    },
-    {
-      "path": "src/codex_autorunner/web_frontend/src/lib/components/ScopedNewTicketPage.svelte",
-      "message": "Unused CSS selector \".ticket-hero-num\""
-    }
-  ]
+  "warnings": []
 }

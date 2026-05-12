@@ -25,12 +25,9 @@ if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
 DEFAULT_EVIDENCE_DIR = (
-    REPO_ROOT
-    / ".codex-autorunner"
-    / "runs"
-    / "pma-live-hub-smoke"
-    / "latest"
+    REPO_ROOT / ".codex-autorunner" / "runs" / "pma-live-hub-smoke" / "latest"
 )
+SMOKE_FIXTURE_MANIFEST = "smoke-fixture-manifest.json"
 
 SMOKE_ROUTES = (
     ("/car/chats", ("Chats", "PMA Memory")),
@@ -116,10 +113,11 @@ Fixture ticket used by `scripts/pma_live_hub_smoke.py`.
 
 
 def seed_smoke_hub(evidence_dir: Path) -> Path:
-    from codex_autorunner.core.pma_thread_store import PmaThreadStore
-
     from codex_autorunner.bootstrap import seed_hub_files, seed_repo_files
     from codex_autorunner.core.config import load_hub_config
+    from codex_autorunner.core.managed_thread_store import ManagedThreadStore
+    from codex_autorunner.core.orchestration.turn_timeline import persist_turn_timeline
+    from codex_autorunner.core.ports.run_event import ApprovalRequested
     from codex_autorunner.manifest import load_manifest, save_manifest
 
     hub_root = evidence_dir / "hub"
@@ -158,7 +156,7 @@ def seed_smoke_hub(evidence_dir: Path) -> Path:
     )
     save_manifest(hub_config.manifest_path, manifest, hub_root)
 
-    store = PmaThreadStore(hub_root)
+    store = ManagedThreadStore(hub_root)
     thread = store.create_thread(
         "codex",
         repo_root.resolve(),
@@ -184,6 +182,50 @@ def seed_smoke_hub(evidence_dir: Path) -> Path:
         },
     )
     store.mark_turn_finished(str(turn["managed_turn_id"]), status="ok")
+    running_thread = store.create_thread(
+        "codex",
+        repo_root.resolve(),
+        repo_id=repo_id,
+        resource_kind="repo",
+        resource_id=repo_id,
+        name="Running queue smoke fixture",
+        metadata={"ticket_id": "TICKET-350-smoke-fixture"},
+    )
+    running_turn = store.create_turn(
+        str(running_thread["managed_thread_id"]),
+        prompt="Run the queued state fixture.",
+        metadata={"ticket_id": "TICKET-350-smoke-fixture"},
+    )
+    queued_turn = store.create_turn(
+        str(running_thread["managed_thread_id"]),
+        prompt="Queued follow-up from the smoke fixture.",
+        busy_policy="queue",
+        force_queue=True,
+        metadata={"ticket_id": "TICKET-350-smoke-fixture"},
+    )
+    with store._write_conn() as conn:  # Keep queued timeline state without a worker.
+        with conn:
+            conn.execute(
+                """
+                DELETE FROM orch_queue_items
+                 WHERE source_key = ?
+                """,
+                (str(queued_turn["managed_turn_id"]),),
+            )
+    persist_turn_timeline(
+        hub_root,
+        execution_id=str(running_turn["managed_turn_id"]),
+        target_kind="thread_target",
+        target_id=str(running_thread["managed_thread_id"]),
+        events=[
+            ApprovalRequested(
+                timestamp="2026-05-06T10:00:04Z",
+                request_id="approval-smoke-1",
+                description="Smoke approval fixture",
+                context={"scope": "workspace"},
+            )
+        ],
+    )
     worktree_thread = store.create_thread(
         "codex",
         worktree_root.resolve(),
@@ -209,6 +251,24 @@ def seed_smoke_hub(evidence_dir: Path) -> Path:
         },
     )
     store.mark_turn_finished(str(worktree_turn["managed_turn_id"]), status="failed")
+    (hub_root / SMOKE_FIXTURE_MANIFEST).write_text(
+        json.dumps(
+            {
+                "repo_id": repo_id,
+                "worktree_id": worktree_id,
+                "ticket_id": "TICKET-350-smoke-fixture",
+                "final_thread_id": str(thread["managed_thread_id"]),
+                "running_thread_id": str(running_thread["managed_thread_id"]),
+                "running_turn_id": str(running_turn["managed_turn_id"]),
+                "queued_turn_id": str(queued_turn["managed_turn_id"]),
+                "failed_thread_id": str(worktree_thread["managed_thread_id"]),
+            },
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
     return hub_root
 
 
@@ -224,7 +284,9 @@ def start_server(hub_root: Path, host: str, port: int):
 
     from codex_autorunner.server import create_hub_app
 
-    app = create_hub_app(hub_root, base_path="/car", endpoint_host=host, endpoint_port=port)
+    app = create_hub_app(
+        hub_root, base_path="/car", endpoint_host=host, endpoint_port=port
+    )
     config = uvicorn.Config(app, host=host, port=port, log_level="warning")
     server = uvicorn.Server(config)
     thread = threading.Thread(target=server.run, name="pma-smoke-hub", daemon=True)
@@ -246,7 +308,9 @@ def wait_for_server(base_url: str, timeout_seconds: float) -> None:
         except Exception as exc:  # intentional: startup can race socket binding
             last_error = str(exc)
         time.sleep(0.2)
-    raise RuntimeError(f"Hub did not become healthy within {timeout_seconds}s: {last_error}")
+    raise RuntimeError(
+        f"Hub did not become healthy within {timeout_seconds}s: {last_error}"
+    )
 
 
 def body_excerpt(text: str, limit: int = 1200) -> str:
@@ -287,9 +351,9 @@ def run_browser_smoke(
         )
         page.on(
             "console",
-            lambda message: console_errors.append(message.text)
-            if message.type == "error"
-            else None,
+            lambda message: (
+                console_errors.append(message.text) if message.type == "error" else None
+            ),
         )
         page.on("pageerror", lambda error: page_errors.append(str(error)))
         page.on("requestfailed", lambda request: failed_requests.append(request.url))
@@ -315,7 +379,9 @@ def run_browser_smoke(
             if missing:
                 errors.append(f"missing expected text: {', '.join(missing)}")
             if loading:
-                errors.append(f"still showing primary loading text: {', '.join(loading)}")
+                errors.append(
+                    f"still showing primary loading text: {', '.join(loading)}"
+                )
             if route == "/car/chats" and "<CAR_TICKET_FLOW_PROMPT>" in text:
                 errors.append("raw CAR_TICKET_FLOW_PROMPT is visible in PMA chat")
 
@@ -398,7 +464,8 @@ def main() -> int:
         if not diagnostics.get("pma_tail_event_paths"):
             failures.append("PMA tail EventSource request was not observed")
         failures.extend(
-            f"browser page error: {error}" for error in diagnostics.get("page_errors", [])
+            f"browser page error: {error}"
+            for error in diagnostics.get("page_errors", [])
         )
         if failures:
             evidence["status"] = "failed"

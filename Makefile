@@ -37,7 +37,7 @@ PIPX_ROOT ?= $(HOME)/.local/pipx
 PIPX_VENV ?= $(PIPX_ROOT)/venvs/codex-autorunner
 PIPX_PYTHON ?= $(PIPX_VENV)/bin/python
 
-.PHONY: install dev hooks build web-build test test-fast test-full test-chat-platform-contract test-chat-surface-lab test-managed-thread-cutover check check-full check-web-core-contract check-extended preflight-hub-startup format serve serve-hub serve-onboarding web-ui-screens launchd-hub deadcode-baseline venv venv-dev setup npm-install car-artifacts agent-compatibility-check agent-compatibility-refresh protocol-schemas-check protocol-schemas-refresh typecheck-strict perf-idle-cpu perf-chat-latency-budgets perf-chat-seeded-exploration
+.PHONY: install dev hooks build web-build test test-fast test-full test-chat-platform-contract test-chat-surface-lab test-managed-thread-cutover check check-full check-web-core-contract check-extended preflight-hub-startup format serve serve-hub serve-onboarding web-ui-fast web-ui-screens web-ui-smoke web-ui-dogfood-report launchd-hub deadcode-baseline venv venv-dev setup npm-install car-artifacts agent-compatibility-check agent-compatibility-refresh protocol-schemas-check protocol-schemas-refresh typecheck-strict perf-idle-cpu perf-chat-latency-budgets perf-chat-seeded-exploration
 
 build: web-build
 
@@ -211,6 +211,9 @@ serve-onboarding: web-build
 	echo ""; \
 	exec "$(PYTHON_ABS)" -m codex_autorunner.cli hub serve --path "$$ROOT" --host $(ONBOARDING_HOST) --port $(ONBOARDING_PORT)
 
+web-ui-fast:
+	$(PYTHON) scripts/web_ui_lab_check.py
+
 web-ui-screens: web-build
 	@set --; \
 	for viewport in $(WEB_UI_SCREEN_VIEWPORTS); do \
@@ -224,6 +227,12 @@ web-ui-screens: web-build
 		--out-dir '$(WEB_UI_SCREEN_OUT)' \
 		"$$@" \
 		$(WEB_UI_SCREEN_ARGS)
+
+web-ui-smoke: web-build
+	$(PYTHON) scripts/web_ui_smoke_journeys.py
+
+web-ui-dogfood-report:
+	$(PYTHON) scripts/web_ui_dogfood_report.py
 
 launchd-hub:
 	@LABEL="$(LAUNCH_LABEL)" \
