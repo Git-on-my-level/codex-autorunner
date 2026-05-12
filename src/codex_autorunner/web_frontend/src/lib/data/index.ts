@@ -1,3 +1,4 @@
+export * from './chatIndexSession';
 export * from './readModelClients';
 export * from './readModelLoaders';
 export * from './readModelStore';
