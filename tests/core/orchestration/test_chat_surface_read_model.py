@@ -213,6 +213,109 @@ def test_chat_surface_read_model_projects_thread_identity_from_metadata_json(
     assert surface["metadata"]["model"] == "gpt-5.5"
 
 
+def test_chat_index_and_detail_prefer_bound_chat_display_for_fallback_titles(
+    tmp_path: Path,
+) -> None:
+    hub_root = tmp_path / "hub"
+    with open_orchestration_sqlite(hub_root, durable=False, migrate=True) as conn:
+        conn.execute(
+            """
+            INSERT INTO orch_thread_targets (
+                thread_target_id,
+                agent_id,
+                repo_id,
+                resource_kind,
+                resource_id,
+                display_name,
+                lifecycle_status,
+                runtime_status,
+                metadata_json,
+                created_at,
+                updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "thread-discord-friendly",
+                "codex",
+                "repo-1",
+                "repo",
+                "repo-1",
+                "discord:1495134681929355404",
+                "active",
+                "idle",
+                "{}",
+                "2026-05-11T00:00:00Z",
+                "2026-05-11T00:00:10Z",
+            ),
+        )
+        conn.execute(
+            """
+            INSERT INTO orch_thread_targets (
+                thread_target_id,
+                agent_id,
+                repo_id,
+                resource_kind,
+                resource_id,
+                display_name,
+                lifecycle_status,
+                runtime_status,
+                metadata_json,
+                created_at,
+                updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "thread-discord-custom",
+                "codex",
+                "repo-1",
+                "repo",
+                "repo-1",
+                "Customer escalation",
+                "active",
+                "idle",
+                "{}",
+                "2026-05-11T00:01:00Z",
+                "2026-05-11T00:01:10Z",
+            ),
+        )
+    OrchestrationBindingStore(hub_root, durable=False).upsert_binding(
+        surface_kind="discord",
+        surface_key="1495134681929355404",
+        thread_target_id="thread-discord-friendly",
+        repo_id="repo-1",
+        resource_kind="repo",
+        resource_id="repo-1",
+        metadata={"display_name": "Agent Nexus / #codex"},
+    )
+    OrchestrationBindingStore(hub_root, durable=False).upsert_binding(
+        surface_kind="discord",
+        surface_key="1495134681929355405",
+        thread_target_id="thread-discord-custom",
+        repo_id="repo-1",
+        resource_kind="repo",
+        resource_id="repo-1",
+        metadata={"display_name": "Agent Nexus / #support"},
+    )
+
+    service = ChatSurfaceReadService(hub_root, durable=False)
+    index = service.chat_index_snapshot(limit=20)
+    row = next(
+        item
+        for item in index["rows"]
+        if item["managed_thread_id"] == "thread-discord-friendly"
+    )
+    assert row["title"] == "Agent Nexus / #codex"
+    assert row["chat_display_name"] == "Agent Nexus / #codex"
+
+    detail = service.chat_detail_snapshot("thread-discord-friendly")
+    assert detail["thread"]["title"] == "Agent Nexus / #codex"
+    assert detail["thread"]["chat_display_name"] == "Agent Nexus / #codex"
+
+    custom_detail = service.chat_detail_snapshot("thread-discord-custom")
+    assert custom_detail["thread"]["title"] == "Customer escalation"
+    assert custom_detail["thread"]["chat_display_name"] == "Agent Nexus / #support"
+
+
 def test_chat_surface_read_model_allows_lifecycle_recovery_events(
     tmp_path: Path,
 ) -> None:

@@ -440,7 +440,7 @@
               <VirtualList
                 items={childRows}
                 key={(worktree) => worktree.id}
-                estimatedItemSize={86}
+                estimatedItemSize={54}
                 overscan={6}
                 initialCount={32}
                 ariaLabel={`Worktrees owned by ${row.label}`}
@@ -924,7 +924,7 @@
                   <VirtualList
                     items={group.chats}
                     key={(chat) => chat.id}
-                    estimatedItemSize={58}
+                    estimatedItemSize={34}
                     overscan={6}
                     initialCount={32}
                     ariaLabel={`Chats in ${group.scopeLabel}`}
@@ -1087,7 +1087,11 @@
 
 <style>
   .repos-index-v2 {
+    display: flex;
+    flex-direction: column;
     gap: var(--space-3);
+    min-height: 0;
+    height: 100%;
   }
 
   .repos-controls {
@@ -1140,7 +1144,9 @@
 
   .repos-list {
     --virtual-list-gap: var(--space-3);
-    height: min(76vh, 1100px);
+    flex: 1 1 auto;
+    min-height: 0;
+    height: auto;
     margin: 0;
     padding: 0;
   }

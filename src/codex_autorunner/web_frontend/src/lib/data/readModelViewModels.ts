@@ -115,7 +115,13 @@ export function chatIndexRowToPmaChatSummary(row: ChatIndexRow): PmaChatSummary 
     ticketId: row.ticketId ?? null,
     runId: row.runId ?? null,
     flowType: null,
-    isTicketFlow: Boolean(row.ticketId || row.runId || row.groupId?.startsWith('ticket') || row.groupId?.startsWith('run')),
+    isTicketFlow: Boolean(
+      row.ticketId ||
+        row.runId ||
+        row.groupId?.startsWith('ticket') ||
+        row.groupId?.startsWith('run') ||
+        /^ticket-flow(?::\S+)?$/i.test(row.title.trim())
+    ),
     progressPercent: null,
     updatedAt: row.lastActivityAt ?? null,
     raw

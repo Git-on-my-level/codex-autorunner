@@ -680,7 +680,7 @@ function firstUserMessageExcerpt(raw: JsonRecord): string | null {
 }
 
 function isGenericTicketFlowTitle(value: string): boolean {
-  return /^ticket-flow(?::[\w.-]+)?$/i.test(value.trim());
+  return /^ticket-flow(?::\S+)?$/i.test(value.trim());
 }
 
 function isCarTicketFlowControlPrompt(value: string): boolean {
