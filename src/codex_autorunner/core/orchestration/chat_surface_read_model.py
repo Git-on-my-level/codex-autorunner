@@ -1557,8 +1557,14 @@ def _thread_execution_for_projection(
     if execution_status not in {"running", "queued"}:
         return execution
     lifecycle_status = _normalize_kind(_row_get(row, "lifecycle_status"))
+    if lifecycle_status == "archived":
+        return None
     runtime_status = _normalize_kind(_row_get(row, "runtime_status"))
-    if lifecycle_status == "archived" or runtime_status in {
+    # A prior turn can leave runtime terminal while another execution is still
+    # queued; keep queued rows visible for queue_depth / active-turn projections.
+    if execution_status == "queued":
+        return execution
+    if runtime_status in {
         "completed",
         "interrupted",
         "failed",

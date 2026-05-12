@@ -322,9 +322,9 @@ export function mapChatSurfaceToPmaChatSummary(surface: Record<string, unknown>)
   const bindingKind = firstRawString(metadata.binding_kind) ?? surfaceKind;
   const bindingId = firstRawString(metadata.binding_id) ?? surfaceKey;
   const statusSource =
+    lifecycle ??
     metadata.runtime_status ??
     metadata.target_runtime_status ??
-    lifecycle ??
     metadata.latest_execution_status ??
     metadata.latest_event_status;
 

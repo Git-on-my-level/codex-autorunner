@@ -301,7 +301,7 @@ describe('PMA chat view helpers', () => {
     ]);
   });
 
-  it('uses canonical runtime status before stale latest execution status', () => {
+  it('prefers projection lifecycle over stale latest execution when thread is archived', () => {
     const chats = mapChatSurfaceSnapshotToPmaChats({
       surfaces: [
         {
@@ -326,6 +326,37 @@ describe('PMA chat view helpers', () => {
         raw: {
           normalized_status: 'archived',
           status: 'archived'
+        }
+      }
+    ]);
+  });
+
+  it('prefers queued projection lifecycle over terminal runtime for sidebar status', () => {
+    const chats = mapChatSurfaceSnapshotToPmaChats({
+      surfaces: [
+        {
+          surface_kind: 'pma',
+          surface_key: 'thread-queued',
+          managed_thread_id: 'thread-queued',
+          lifecycle: 'queued',
+          lifecycle_status: 'active',
+          display: { display_name: 'Follow-up queued' },
+          metadata: {
+            runtime_status: 'completed',
+            latest_execution_status: 'queued',
+            queue_depth: 1
+          }
+        }
+      ]
+    });
+
+    expect(chats).toMatchObject([
+      {
+        id: 'thread-queued',
+        status: 'waiting',
+        raw: {
+          normalized_status: 'queued',
+          status: 'queued'
         }
       }
     ]);
