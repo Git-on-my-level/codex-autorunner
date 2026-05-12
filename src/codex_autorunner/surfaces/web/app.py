@@ -67,6 +67,7 @@ from .routes.flows import build_flow_routes
 from .routes.hub_control_plane import build_hub_control_plane_routes
 from .routes.hub_messages import build_hub_messages_routes
 from .routes.hub_repos import HubMountManager, build_hub_repo_routes
+from .routes.hub_state import build_hub_state_routes
 from .routes.interactions import build_interaction_routes
 from .routes.pma import build_pma_routes
 from .routes.pma_routes import PmaRuntimeState
@@ -242,6 +243,7 @@ def create_hub_app(
     app.include_router(build_scm_webhook_routes())
     app.include_router(build_hub_filebox_routes())
     app.include_router(build_hub_control_plane_routes())
+    app.include_router(build_hub_state_routes(context))
     app.include_router(build_hub_chat_event_routes(context))
 
     app.state.hub_started = False

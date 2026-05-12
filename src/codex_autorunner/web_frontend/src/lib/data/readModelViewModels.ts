@@ -38,7 +38,7 @@ export function pmaChatSummaryToChatIndexRow(chat: PmaChatSummary): ChatIndexRow
     surface: surfaceFromRaw(chat.raw),
     title: chat.title,
     status: chatIndexStatus(chat),
-    unreadCount: unreadCountFromRaw(chat.raw),
+    unreadCount: chat.unreadCount ?? unreadCountFromRaw(chat.raw),
     lastActivityAt: chat.updatedAt,
     repoId: chat.repoId,
     worktreeId: chat.worktreeId,
@@ -66,7 +66,7 @@ export function legacyChatIndexRecordToChatIndexRow(raw: JsonRecord): ChatIndexR
     surface: surfaceFromKinds(raw.surface_kinds, raw.surface),
     title: stringValue(raw.title ?? raw.display_name, chatId) ?? chatId,
     status: legacyChatIndexStatus(lifecycle, lifecycleStatus, runtimeStatus, queueDepth),
-    unreadCount: raw.unread === true ? 1 : 0,
+    unreadCount: numberValue(raw.unread_count ?? raw.unreadCount) || (raw.unread === true ? 1 : 0),
     lastActivityAt: stringValue(raw.updated_at ?? raw.created_at),
     repoId: stringValue(raw.repo_id),
     worktreeId: stringValue(raw.worktree_id ?? raw.worktree_repo_id),
@@ -95,6 +95,7 @@ export function chatIndexRowToPmaChatSummary(row: ChatIndexRow): PmaChatSummary 
     current_ticket_id: row.ticketId,
     ticket_id: row.ticketId,
     run_id: row.runId,
+    unread_count: row.unreadCount,
     agent_id: row.agent,
     agent_profile: row.agentProfile,
     model: row.model,
@@ -114,6 +115,7 @@ export function chatIndexRowToPmaChatSummary(row: ChatIndexRow): PmaChatSummary 
     worktreeId: row.worktreeId ?? null,
     ticketId: row.ticketId ?? null,
     runId: row.runId ?? null,
+    unreadCount: row.unreadCount,
     flowType: null,
     isTicketFlow: Boolean(
       row.ticketId ||

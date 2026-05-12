@@ -117,6 +117,10 @@ export type CreateWorktreeRequest = {
   force?: boolean;
 };
 
+export type HubState = {
+  title: string;
+};
+
 export type RequestOptions = Omit<RequestInit, 'body'> & {
   body?: unknown;
 };
@@ -426,6 +430,16 @@ export class PmaApiClient {
   };
 
   hub = {
+    getState: async (): Promise<ApiResult<HubState>> =>
+      mapResult(await this.getJson<JsonRecord>('/hub/state'), mapHubState),
+    updateState: async (request: Partial<HubState>): Promise<ApiResult<HubState>> =>
+      mapResult(
+        await this.requestJson<JsonRecord>('/hub/state', {
+          method: 'PUT',
+          body: request
+        }),
+        mapHubState
+      ),
     getDashboard: async (): Promise<ApiResult<DashboardSummary>> =>
       mapResult(
         await this.getJson<JsonRecord>('/hub/messages?sections=inbox,managed_threads,pma_files_detail,automation,action_queue,freshness'),
@@ -485,6 +499,11 @@ export class PmaApiClient {
         }
       });
     },
+    setRepoPinned: async (repoId: string, pinned: boolean): Promise<ApiResult<JsonRecord>> =>
+      this.requestJson<JsonRecord>(`/hub/repos/${encodeURIComponent(repoId)}/pin`, {
+        method: 'POST',
+        body: { pinned }
+      }),
     syncRepoMain: async (repoId: string): Promise<ApiResult<JsonRecord>> =>
       this.requestJson<JsonRecord>(`/hub/repos/${encodeURIComponent(repoId)}/sync-main`, {
         method: 'POST'
@@ -778,6 +797,12 @@ function mapPmaQueuedTurn(raw: JsonRecord): PmaQueuedTurn {
     reasoning: nullableString(raw.reasoning),
     enqueuedAt: nullableString(raw.enqueued_at ?? raw.enqueuedAt),
     raw
+  };
+}
+
+function mapHubState(raw: JsonRecord): HubState {
+  return {
+    title: stringValue(raw.title, 'Web Hub').trim() || 'Web Hub'
   };
 }
 

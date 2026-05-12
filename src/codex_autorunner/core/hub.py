@@ -24,6 +24,7 @@ from .hub_topology import (
     RepoSnapshot,
     RepoTopologyRecord,
     load_hub_state,
+    normalize_hub_title,
     normalize_pinned_parent_repo_ids,
     refresh_managed_threads_artifact,
     save_hub_state,
@@ -298,6 +299,7 @@ class HubSupervisor:
         self.state = self._topology_repository.build_hub_state(
             existing_pinned_parent_repo_ids=self.state.pinned_parent_repo_ids,
             last_scan_at=now_iso(),
+            title=self.state.title,
             manifest=manifest,
             records=records,
         )
@@ -323,6 +325,7 @@ class HubSupervisor:
             self.state = self._topology_repository.build_hub_state(
                 existing_pinned_parent_repo_ids=self.state.pinned_parent_repo_ids,
                 last_scan_at=self.state.last_scan_at,
+                title=self.state.title,
                 manifest=manifest,
                 records=records,
             )
@@ -354,6 +357,7 @@ class HubSupervisor:
                 last_scan_at=self.state.last_scan_at,
                 repos=self.state.repos,
                 pinned_parent_repo_ids=normalize_pinned_parent_repo_ids(current),
+                title=self.state.title,
             )
             save_hub_state(
                 self.state_path,
@@ -361,6 +365,21 @@ class HubSupervisor:
                 self.hub_config.root,
             )
             return list(self.state.pinned_parent_repo_ids)
+
+    def get_hub_title(self) -> str:
+        return normalize_hub_title(self.state.title)
+
+    def set_hub_title(self, title: str) -> str:
+        with self._list_lock:
+            normalized = normalize_hub_title(title)
+            self.state = HubState(
+                last_scan_at=self.state.last_scan_at,
+                repos=self.state.repos,
+                pinned_parent_repo_ids=self.state.pinned_parent_repo_ids,
+                title=normalized,
+            )
+            save_hub_state(self.state_path, self.state, self.hub_config.root)
+            return normalized
 
     def _reconcile_startup(self) -> None:
         try:

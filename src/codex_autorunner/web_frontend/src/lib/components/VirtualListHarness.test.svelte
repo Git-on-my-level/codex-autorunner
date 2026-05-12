@@ -1,7 +1,7 @@
 <script lang="ts">
   import VirtualList from './VirtualList.svelte';
 
-let { count = 5000, initialCount = 40 } = $props<{ count?: number; initialCount?: number }>();
+let { count = 5000, initialCount = 40, scrollable = true } = $props<{ count?: number; initialCount?: number; scrollable?: boolean }>();
 const rows = $derived(Array.from({ length: count }, (_, index) => ({
   id: `row-${index + 1}`,
   label: `Row ${index + 1}`
@@ -13,6 +13,7 @@ const rows = $derived(Array.from({ length: count }, (_, index) => ({
   key={(row) => row.id}
   estimatedItemSize={32}
   {initialCount}
+  {scrollable}
   ariaLabel="Seeded rows"
 >
   {#snippet children(row, index)}

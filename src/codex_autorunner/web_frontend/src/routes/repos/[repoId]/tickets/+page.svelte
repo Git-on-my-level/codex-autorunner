@@ -2,6 +2,7 @@
   import { page } from '$app/state';
   import { onDestroy, onMount } from 'svelte';
   import TicketViews from '$lib/components/TicketViews.svelte';
+  import { confirmDialog } from '$lib/components/confirmDialog';
   import { dataOr, partialPageIssue, pmaApi, type ApiError, type PartialPageIssue } from '$lib/api/client';
   import {
     pmaChatSummaryToChatIndexRow,
@@ -98,7 +99,13 @@
       queueConfig,
       command,
       runId,
-      () => window.confirm('Restart ticket flow? This will stop the current run and start a new one.'),
+      () =>
+        confirmDialog({
+          title: 'Restart ticket flow',
+          message: 'This will stop the current run and start a new one.',
+          confirmText: 'Restart',
+          danger: true
+        }),
       action
     );
     actionStatus = result.status;

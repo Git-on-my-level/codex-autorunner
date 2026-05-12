@@ -154,12 +154,14 @@ class HubState:
     last_scan_at: Optional[str]
     repos: List[RepoSnapshot]
     pinned_parent_repo_ids: List[str] = dataclasses.field(default_factory=list)
+    title: str = "Web Hub"
 
     def to_dict(self, hub_root: Path) -> Dict[str, object]:
         return {
             "last_scan_at": self.last_scan_at,
             "repos": [repo.to_dict(hub_root) for repo in self.repos],
             "pinned_parent_repo_ids": list(self.pinned_parent_repo_ids or []),
+            "title": normalize_hub_title(self.title),
         }
 
 
@@ -188,6 +190,7 @@ class HubTopologyRepository:
         *,
         existing_pinned_parent_repo_ids: list[str],
         last_scan_at: Optional[str],
+        title: str = "Web Hub",
         manifest: Optional[Manifest] = None,
         records: Optional[Sequence[RepoTopologyRecord]] = None,
     ) -> HubState:
@@ -205,6 +208,7 @@ class HubTopologyRepository:
             last_scan_at=last_scan_at,
             repos=repos,
             pinned_parent_repo_ids=pinned_parent_repo_ids,
+            title=normalize_hub_title(title),
         )
 
     def repo_snapshot(self, repo_id: str) -> RepoSnapshot:
@@ -378,12 +382,22 @@ def normalize_pinned_parent_repo_ids(value: Any) -> List[str]:
     return out
 
 
+def normalize_hub_title(value: Any) -> str:
+    if not isinstance(value, str):
+        return "Web Hub"
+    normalized = " ".join(value.strip().split())
+    if not normalized:
+        return "Web Hub"
+    return normalized[:80]
+
+
 def load_hub_state(state_path: Path, hub_root: Path) -> HubState:
     if not state_path.exists():
         return HubState(
             last_scan_at=None,
             repos=[],
             pinned_parent_repo_ids=[],
+            title="Web Hub",
         )
     data = state_path.read_text(encoding="utf-8")
     try:
@@ -396,6 +410,7 @@ def load_hub_state(state_path: Path, hub_root: Path) -> HubState:
             last_scan_at=None,
             repos=[],
             pinned_parent_repo_ids=[],
+            title="Web Hub",
         )
     last_scan_at = payload.get("last_scan_at")
     pinned_parent_repo_ids = normalize_pinned_parent_repo_ids(
@@ -454,6 +469,7 @@ def load_hub_state(state_path: Path, hub_root: Path) -> HubState:
         last_scan_at=last_scan_at,
         repos=repos,
         pinned_parent_repo_ids=pinned_parent_repo_ids,
+        title=normalize_hub_title(payload.get("title")),
     )
 
 

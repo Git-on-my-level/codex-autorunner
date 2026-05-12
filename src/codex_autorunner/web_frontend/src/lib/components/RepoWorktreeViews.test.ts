@@ -49,7 +49,7 @@ describe('RepoWorktreeViews', () => {
     expect(body).not.toContain('Analytics');
   });
 
-  it('keeps child worktree rows as navigation without scoped signal badges on the repo page', () => {
+  it('renders child worktree rows with scoped activity badges on the repo page', () => {
     const index = buildRepoWorktreeIndexViewModel({
       repos: [{ ...mockRepoSummary, status: 'idle', activeRuns: 0 }],
       worktrees: [{ ...mockWorktreeSummary, status: 'idle', activeRuns: 0 }],
@@ -61,8 +61,8 @@ describe('RepoWorktreeViews', () => {
     const { body } = render(RepoWorktreeViews, { props: { state: 'ready', mode: 'index', index } });
 
     expect(body).toContain('discord-5');
-    expect(body).not.toContain('Scoped PMA chats or runs waiting for attention');
-    expect(body).not.toContain('1 waiting');
+    expect(body).toContain('Scoped chats or runs waiting for attention');
+    expect(body).toContain('1 waiting');
   });
 
   it('renders repo archive plus child worktree archive and cleanup actions', () => {

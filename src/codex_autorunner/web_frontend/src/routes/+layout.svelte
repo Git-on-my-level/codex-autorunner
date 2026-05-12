@@ -4,6 +4,7 @@
   import { breadcrumbsForPath } from '$lib/breadcrumbs';
   import { primaryNav, isActiveRoute } from '$lib/navigation';
   import { stripRuntimeBasePath, withRuntimeBasePath as href } from '$lib/runtime/basePath';
+  import { pmaApi } from '$lib/api/client';
   import { Palette, createPaletteStore, scopeSource } from '$lib/palette';
   import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
   import {
@@ -20,6 +21,9 @@
   let { children }: { children: Snippet } = $props();
   let collapsed = $state(false);
   let mobileOpen = $state(false);
+  let hubTitle = $state('Web Hub');
+  let titleDraft = $state('Web Hub');
+  let titleSaving = $state(false);
   const currentPath = $derived(stripRuntimeBasePath(page.url.pathname));
   const breadcrumbs = $derived(breadcrumbsForPath(currentPath));
 
@@ -42,6 +46,7 @@
     } catch {
       /* private mode / quota */
     }
+    void loadHubState();
   });
 
   onDestroy(() => {
@@ -52,6 +57,42 @@
   const closeMobile = () => {
     mobileOpen = false;
   };
+
+  const hubGlyph = $derived((hubTitle.trim().charAt(0) || 'W').toUpperCase());
+
+  async function loadHubState(): Promise<void> {
+    const result = await pmaApi.hub.getState();
+    if (!result.ok) return;
+    hubTitle = result.data.title;
+    titleDraft = result.data.title;
+  }
+
+  async function saveHubTitle(): Promise<void> {
+    const next = titleDraft.trim() || 'Web Hub';
+    if (next === hubTitle || titleSaving) {
+      titleDraft = hubTitle;
+      return;
+    }
+    titleSaving = true;
+    const result = await pmaApi.hub.updateState({ title: next });
+    titleSaving = false;
+    if (!result.ok) {
+      titleDraft = hubTitle;
+      return;
+    }
+    hubTitle = result.data.title;
+    titleDraft = result.data.title;
+  }
+
+  function handleTitleKeydown(event: KeyboardEvent): void {
+    if (event.key === 'Enter') {
+      event.preventDefault();
+      (event.currentTarget as HTMLInputElement | null)?.blur();
+    } else if (event.key === 'Escape') {
+      titleDraft = hubTitle;
+      (event.currentTarget as HTMLInputElement | null)?.blur();
+    }
+  }
 
   function handleWindowKeydown(event: KeyboardEvent): void {
     if (event.key === 'Escape') {
@@ -68,19 +109,26 @@
 <svelte:window onkeydown={handleWindowKeydown} />
 
 <svelte:head>
-  <title>Web Hub</title>
+  <title>{hubTitle}</title>
 </svelte:head>
 
 <div class:sidebar-collapsed={collapsed} class:mobile-open={mobileOpen} class="app-shell">
   <aside class="sidebar" aria-label="Primary navigation">
     <div class="brand-row">
-      <a class="brand-mark" href={href('/chats')} onclick={closeMobile} aria-label="Web Hub home">
-        <span class="brand-glyph">W</span>
+      <div class="brand-mark" aria-label={`${hubTitle} home`}>
+        <a class="brand-glyph" href={href('/chats')} onclick={closeMobile} aria-label={`${hubTitle} home`}>{hubGlyph}</a>
         <span class="brand-copy">
-          <span class="brand-title">Web Hub</span>
+          <input
+            class="brand-title-input"
+            bind:value={titleDraft}
+            aria-label="Hub title"
+            disabled={titleSaving}
+            onblur={saveHubTitle}
+            onkeydown={handleTitleKeydown}
+          />
           <span class="brand-subtitle">Chats</span>
         </span>
-      </a>
+      </div>
       <button
         class="icon-button desktop-collapse"
         type="button"

@@ -33,7 +33,7 @@ describe('repo/worktree view models', () => {
     expect(vm.rows.map((row) => row.id)).toEqual(['repo-1']);
     expect(vm.title).toBe('Repos');
     expect(vm.eyebrow).toBe('Repo ownership');
-    expect(vm.activeCount).toBe(1);
+    expect(vm.activeCount).toBe(2);
     expect(vm.openTicketCount).toBe(1);
     expect(vm.rows[0]).toMatchObject({
       href: '/repos/repo-1',
@@ -52,12 +52,15 @@ describe('repo/worktree view models', () => {
           href: '/repos/repo-1/worktrees/worktree-1',
           pmaChatHref: '/chats?new=worktree:worktree-1&kind=pma',
           codingAgentChatHref: '/chats?new=worktree:worktree-1&kind=agent',
-          signalActive: 0,
+          status: 'running',
+          activeRuns: 1,
+          lastActivityAt: '2026-05-04T00:02:00Z',
+          signalActive: 1,
           openTickets: 0,
           totalTickets: 0,
           doneTickets: 0,
-          currentTicketId: null,
-          currentRunTitle: null
+          currentTicketId: 'TICKET-110',
+          currentRunTitle: 'Hub rewrite foundation'
         }
       ]
     });
@@ -259,7 +262,7 @@ describe('repo/worktree view models', () => {
     expect(vm.rows[0].detail).toBeNull();
   });
 
-  it('keeps repo-page child worktrees searchable as navigation rows without promoting their status', () => {
+  it('preserves repo-page child worktree activity fields', () => {
     const activeWorktree = {
       ...mockWorktreeSummary,
       id: 'worktree-active',
@@ -285,15 +288,21 @@ describe('repo/worktree view models', () => {
       artifacts: []
     });
 
-    expect(filterRepoWorktreeIndexRows(vm.rows, '', 'active').map((row) => row.id)).toEqual([]);
+    expect(filterRepoWorktreeIndexRows(vm.rows, '', 'active').map((row) => row.id)).toEqual(['repo-1']);
     expect(visibleRepoWorktreeChildren(vm.rows[0], 'active', 'all').map((child) => child.id)).toEqual([
       'worktree-active'
     ]);
     expect(countRepoWorktreeIndexEntities(vm.rows)).toBe(3);
-    expect(vm.activeCount).toBe(0);
+    expect(vm.activeCount).toBe(1);
+    expect(vm.rows[0].childWorktrees[0]).toMatchObject({
+      id: 'worktree-active',
+      status: 'running',
+      activeRuns: 1,
+      lastActivityAt: '2026-05-04T00:02:00Z'
+    });
   });
 
-  it('does not carry worktree PMA signal badges onto repo-page child navigation rows', () => {
+  it('preserves worktree PMA signal badges on repo-page child navigation rows', () => {
     const vm = buildRepoWorktreeIndexViewModel({
       repos: [{ ...mockRepoSummary, status: 'idle', activeRuns: 0 }],
       worktrees: [{ ...mockWorktreeSummary, status: 'idle', activeRuns: 0 }],
@@ -304,7 +313,7 @@ describe('repo/worktree view models', () => {
     });
 
     expect(vm.rows[0].signalWaiting).toBe(0);
-    expect(vm.rows[0].childWorktrees[0]).toMatchObject({ signalWaiting: 0, signalFailed: 0, signalActive: 0 });
+    expect(vm.rows[0].childWorktrees[0]).toMatchObject({ signalWaiting: 1, signalFailed: 0, signalActive: 0 });
   });
 
   it('builds active current-run detail with scoped sections and artifacts', () => {
@@ -359,7 +368,7 @@ describe('repo/worktree view models', () => {
       href: '/repos/repo-1/worktrees/worktree-1',
       currentTicketId: null,
       openTickets: 0,
-      activeRuns: 0
+      activeRuns: 1
     });
   });
 
@@ -379,6 +388,56 @@ describe('repo/worktree view models', () => {
 
     expect(vm.hasActiveRun).toBe(false);
     expect(vm.flowStatus.status).toBe('idle');
+  });
+
+  it('groups repo detail ticket-flow chats by run id when available', () => {
+    const vm = buildRepoWorktreeDetailViewModel(
+      {
+        repos: [{ ...mockRepoSummary, status: 'idle', activeRuns: 0 }],
+        worktrees: [],
+        runs: [],
+        chats: [
+          {
+            ...mockChatSummary,
+            id: 'chat-run-a-1',
+            title: 'Run A first ticket',
+            repoId: 'repo-1',
+            worktreeId: null,
+            ticketId: 'TICKET-1',
+            runId: 'run-a',
+            updatedAt: '2026-05-04T00:01:00Z'
+          },
+          {
+            ...mockChatSummary,
+            id: 'chat-run-b-1',
+            title: 'Run B ticket',
+            repoId: 'repo-1',
+            worktreeId: null,
+            ticketId: 'TICKET-2',
+            runId: 'run-b',
+            updatedAt: '2026-05-04T00:03:00Z'
+          },
+          {
+            ...mockChatSummary,
+            id: 'chat-run-a-2',
+            title: 'Run A second ticket',
+            repoId: 'repo-1',
+            worktreeId: null,
+            ticketId: 'TICKET-3',
+            runId: 'run-a',
+            updatedAt: '2026-05-04T00:02:00Z'
+          }
+        ],
+        tickets: [],
+        artifacts: []
+      },
+      'repo',
+      'repo-1'
+    );
+
+    expect(vm.chatList.groups.map((group) => group.key)).toEqual(['run:run-b', 'run:run-a']);
+    expect(vm.chatList.groups.map((group) => group.totalCount)).toEqual([1, 2]);
+    expect(vm.chatList.groups[1].chats.map((chat) => chat.id)).toEqual(['chat-run-a-2', 'chat-run-a-1']);
   });
 
   it('names the base repo on worktree detail when known', () => {

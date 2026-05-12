@@ -408,6 +408,7 @@ __all__ = [
     "HubMessagesResponse",
     "HubPinRepoRequest",
     "HubRemoveRepoRequest",
+    "HubStateUpdateRequest",
     "LocalRunArchiveSummary",
     "LocalRunArchivesResponse",
     "Payload",
@@ -470,6 +471,12 @@ class HubPinRepoRequest(Payload):
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
     pinned: bool = True
+
+
+class HubStateUpdateRequest(Payload):
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+    title: str = "Web Hub"
 
 
 class HubDestinationMountRequest(Payload):
