@@ -1038,6 +1038,55 @@ describe('PMA chat view helpers', () => {
     ]);
   });
 
+  it('dedupes live commentary against canonical source event ids', () => {
+    const canonical = buildPmaCards(
+      [
+        timelineItem('turn:one:user', 'user_message', { text: 'Investigate duplicate chat cards' }, '00000001'),
+        timelineItem(
+          'turn:one:intermediate:13',
+          'intermediate',
+          {
+            intermediate_kind: 'progress',
+            text: 'I am checking the latest context.',
+            source_event_ids: [13],
+            progress_item: {
+              kind: 'notice',
+              title: 'Commentary',
+              summary: 'I am checking the latest context.',
+              event_ids: [13]
+            }
+          },
+          '00000013'
+        )
+      ],
+      null,
+      []
+    );
+    const live = buildPmaActivityCards([
+      {
+        ...baseArtifact,
+        id: 'progress-commentary-13',
+        kind: 'progress',
+        createdAt: '2026-05-08T12:00:13Z',
+        summary: 'I am checking the latest context.',
+        raw: {
+          managed_turn_id: 'one',
+          progress_item: {
+            kind: 'notice',
+            title: 'Commentary',
+            summary: 'I am checking the latest context.',
+            event_ids: [13]
+          }
+        }
+      }
+    ]);
+
+    expect(mergePmaTimelineAndActivityCards(canonical, live).map((card) => card.id)).toEqual([
+      'turn:one:user',
+      'turn:one:intermediate:13'
+    ]);
+  });
+
   it('does not merge live progress notices across tool activity', () => {
     const cards = buildPmaActivityCards(
       [

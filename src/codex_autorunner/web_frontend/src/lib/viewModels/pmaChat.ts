@@ -1064,7 +1064,7 @@ export function buildPmaActivityCards(
     const mergeTarget = findMergeableIntermediate(cards, event, fallbackTurnId);
     if (mergeTarget) {
       mergeTarget.text = mergeIntermediateText(mergeTarget.text, text);
-      mergeTarget.eventIds.push(event.id);
+      mergeTarget.eventIds.push(event.id, ...progressItemEventIds(canonicalProgressItem(event)));
       continue;
     }
     cards.push({
@@ -1073,7 +1073,7 @@ export function buildPmaActivityCards(
       title: intermediateTitle(event),
       text,
       detail: null,
-      eventIds: [event.id],
+      eventIds: [event.id, ...progressItemEventIds(canonicalProgressItem(event))],
       turnId: activityTurnId(event, fallbackTurnId),
       orderKey: activityOrderKey(event),
       timestamp: event.createdAt
