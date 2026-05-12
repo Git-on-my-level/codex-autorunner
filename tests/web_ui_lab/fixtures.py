@@ -26,6 +26,8 @@ def build_fixture_payload(fixture_kind: SeedFixtureKind) -> JsonDict:
         SeedFixtureKind.PMA_INTERRUPT: _pma_interrupt,
         SeedFixtureKind.PMA_ATTACHMENT: _pma_attachment,
         SeedFixtureKind.PMA_DUPLICATE_REPAIR: _pma_duplicate_repair,
+        SeedFixtureKind.PMA_DISCORD_WEB_HANDOFF: _pma_discord_web_handoff,
+        SeedFixtureKind.PMA_GROUPED_TOOLS: _pma_grouped_tools,
     }
     return builders[fixture_kind]()
 
@@ -355,6 +357,7 @@ def _pma_duplicate_repair() -> JsonDict:
             {"text": "Summary complete."},
             order="00000002",
             status="done",
+            source_event_ids=["evt-dup-1"],
         ),
         _timeline_item(
             "turn:dup:assistant:b",
@@ -362,6 +365,10 @@ def _pma_duplicate_repair() -> JsonDict:
             {"text": "Summary complete."},
             order="00000003",
             status="done",
+            source_event_ids=["evt-dup-1"],
+            progress_item_ids=[],
+            correlation_id=None,
+            cursor_event_id=None,
         ),
         _timeline_item(
             "snapshot:repair",
@@ -374,7 +381,120 @@ def _pma_duplicate_repair() -> JsonDict:
             status="done",
         ),
     ]
+    payload["timeline"][2]["identity"]["timeline_item_id"] = "turn:dup:assistant:a"
     payload["repair"] = {"stream_gap_repaired": True, "snapshot_cursor": "00000004"}
+    return payload
+
+
+def _pma_discord_web_handoff() -> JsonDict:
+    payload = _chat_list_detail()
+    payload["chats"][0]["title"] = "discord:123456"
+    payload["chats"][0]["raw"] = {
+        "surface_kind": "discord",
+        "surface_key": "123456",
+        "surface_urn": "discord:channel:123456",
+    }
+    payload["runs"] = [
+        _run_progress(
+            status="running",
+            phase="implementation",
+            queue_depth=0,
+            progress_percent=55,
+        )
+    ]
+    payload["timeline"] = [
+        _timeline_item(
+            "turn:one:user",
+            "user_message",
+            {"text": "Fix the deploy script"},
+        ),
+        _timeline_item(
+            "turn:one:intermediate:1",
+            "intermediate",
+            {"intermediate_kind": "thinking", "text": "Checking deploy config"},
+            order="00000002",
+            source_event_ids=["turn:one:intermediate:1"],
+        ),
+        _timeline_item(
+            "turn:one:tool:1:rg",
+            "tool_group",
+            {
+                "tool_name": "rg",
+                "progress_items": [{"event_ids": ["evt-41"]}],
+                "call": {"summary": "rg deploy"},
+                "result": {"status": "completed", "summary": "Found 3 matches"},
+            },
+            order="00000003",
+            source_event_ids=["turn:one:tool:1:rg", "evt-41"],
+            progress_event_ids=["evt-41"],
+        ),
+        _timeline_item(
+            "turn:one:assistant",
+            "assistant_message",
+            {"text": "Deploy script fixed."},
+            order="00000004",
+            status="done",
+            source_event_ids=["turn:one:assistant"],
+        ),
+    ]
+    return payload
+
+
+def _pma_grouped_tools() -> JsonDict:
+    payload = _chat_list_detail()
+    payload["runs"] = [
+        _run_progress(
+            status="running",
+            phase="implementation",
+            queue_depth=0,
+            progress_percent=70,
+        )
+    ]
+    payload["timeline"] = [
+        _timeline_item(
+            "turn:one:user",
+            "user_message",
+            {"text": "Refactor and test the module"},
+        ),
+        _timeline_item(
+            "turn:one:tool:group:1",
+            "tool_group",
+            {
+                "tool_name": "multi-tool-group",
+                "progress_items": [
+                    {"event_ids": ["evt-51"]},
+                    {"event_ids": ["evt-52"]},
+                    {"event_ids": ["evt-53"]},
+                ],
+                "tools": [
+                    {"tool_name": "rg", "state": "completed", "summary": "Found files"},
+                    {
+                        "tool_name": "edit",
+                        "state": "completed",
+                        "summary": "Applied patch",
+                    },
+                    {
+                        "tool_name": "test",
+                        "state": "completed",
+                        "summary": "Tests pass",
+                    },
+                ],
+                "call": {"summary": "Refactor pipeline"},
+                "result": {"status": "completed", "summary": "3 tools completed"},
+            },
+            order="00000002",
+            source_event_ids=["evt-51", "evt-52", "evt-53"],
+            progress_event_ids=["evt-51", "evt-52", "evt-53"],
+            progress_item_ids=["prog-51", "prog-52", "prog-53"],
+        ),
+        _timeline_item(
+            "turn:one:assistant",
+            "assistant_message",
+            {"text": "Refactoring complete."},
+            order="00000003",
+            status="done",
+        ),
+    ]
     return payload
 
 
@@ -448,9 +568,15 @@ def _timeline_item(
     *,
     order: str = "00000001",
     status: str = "running",
+    source_event_ids: list[str] | None = None,
+    progress_event_ids: list[str] | None = None,
+    progress_item_ids: list[str] | None = None,
+    correlation_id: str | None = None,
+    cursor_event_id: str | None = None,
 ) -> JsonDict:
     turn_id = item_id.split(":")[1] if ":" in item_id else None
     return {
+        "contract_version": "managed_thread_timeline.v2",
         "item_id": item_id,
         "kind": kind,
         "order_key": order,
@@ -458,6 +584,16 @@ def _timeline_item(
         "managed_thread_id": "chat-smoke-1",
         "managed_turn_id": turn_id,
         "status": status,
+        "identity": {
+            "timeline_item_id": item_id,
+            "progress_item_ids": progress_item_ids or [],
+            "correlation_id": correlation_id,
+        },
+        "provenance": {
+            "source_event_ids": source_event_ids or [item_id],
+            "progress_event_ids": progress_event_ids or [],
+            "cursor_event_id": cursor_event_id,
+        },
         "payload": payload,
     }
 

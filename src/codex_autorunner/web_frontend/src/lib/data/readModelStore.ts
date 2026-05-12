@@ -333,8 +333,8 @@ export class ReadModelEntityStore implements Readable<ReadModelEntityState> {
   replacePmaTimeline(chatId: string, items: PmaTimelineItem[]): void {
     const next = cloneState(this.state);
     next.pmaTimelines[chatId] = {
-      itemsById: keyed(items, (item) => item.id),
-      order: items.map((item) => item.id)
+      itemsById: keyed(items, pmaTimelineEntityId),
+      order: items.map(pmaTimelineEntityId)
     };
     bump(next, 'timeline', chatId);
     this.commit(next);
@@ -345,8 +345,9 @@ export class ReadModelEntityStore implements Readable<ReadModelEntityState> {
     const next = cloneState(this.state);
     const timeline = next.pmaTimelines[chatId] ?? { itemsById: {}, order: [] };
     for (const item of items) {
-      timeline.itemsById[item.id] = item;
-      if (!timeline.order.includes(item.id)) timeline.order.push(item.id);
+      const entityId = pmaTimelineEntityId(item);
+      timeline.itemsById[entityId] = item;
+      if (!timeline.order.includes(entityId)) timeline.order.push(entityId);
     }
     next.pmaTimelines[chatId] = timeline;
     bump(next, 'timeline', chatId);
@@ -737,6 +738,10 @@ function keyed<T>(items: T[], key: (item: T) => string): Record<string, T> {
   const record: Record<string, T> = {};
   for (const item of items) record[key(item)] = item;
   return record;
+}
+
+function pmaTimelineEntityId(item: PmaTimelineItem): string {
+  return item.identity.timelineItemId;
 }
 
 function bump(state: ReadModelEntityState, kind: EntityKind, id: string): void {

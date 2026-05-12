@@ -43,6 +43,7 @@ export type ExistingPmaChatMessageOptions = {
   reasoning?: string;
   profile?: string;
   busyPolicy?: PmaChatBusyPolicy | null;
+  clientTurnId?: string;
 };
 
 type PmaCommandClient = {
@@ -85,7 +86,8 @@ export function planSendExistingChat(
       options.attachments ?? [],
       options.reasoning ?? '',
       options.profile ?? '',
-      options.busyPolicy ?? (isRunning ? 'queue' : null)
+      options.busyPolicy ?? (isRunning ? 'queue' : null),
+      options.clientTurnId ?? ''
     )
   };
 }

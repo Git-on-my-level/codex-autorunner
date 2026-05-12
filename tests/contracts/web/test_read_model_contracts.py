@@ -2,6 +2,9 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
+import pytest
+from pydantic import ValidationError
+
 from codex_autorunner.surfaces.web.read_model_contracts import (
     ChatDetailPatch,
     ChatDetailPatchEvent,
@@ -13,7 +16,9 @@ from codex_autorunner.surfaces.web.read_model_contracts import (
     ChatIndexSnapshot,
     ChatQueueSummary,
     ChatThreadProjection,
+    ChatTimelineIdentity,
     ChatTimelineItem,
+    ChatTimelineProvenance,
     PageWindow,
     ProjectionCursor,
     ReadModelEventEnvelope,
@@ -136,6 +141,16 @@ def test_chat_detail_snapshot_and_patch_round_trip_without_legacy_thread_payload
         created_at=NOW,
         text="Working on it.",
         backend_message_id="turn-1",
+        identity=ChatTimelineIdentity(
+            timeline_item_id="timeline-1",
+            progress_item_ids=["progress-1"],
+            correlation_id="client-corr-1",
+        ),
+        provenance=ChatTimelineProvenance(
+            source_event_ids=["evt-1", "evt-2"],
+            progress_event_ids=["pevt-1"],
+            cursor_event_id="cursor-42",
+        ),
     )
     snapshot = ChatDetailSnapshot(
         cursor=cursor(),
@@ -150,6 +165,15 @@ def test_chat_detail_snapshot_and_patch_round_trip_without_legacy_thread_payload
     assert payload["timelineWindow"]["limit"] == 50
     assert payload["thread"]["chatKind"] == "coding_agent"
     assert payload["timeline"][0]["backendMessageId"] == "turn-1"
+    assert payload["timeline"][0]["identity"]["timelineItemId"] == "timeline-1"
+    assert payload["timeline"][0]["identity"]["progressItemIds"] == ["progress-1"]
+    assert payload["timeline"][0]["identity"]["correlationId"] == "client-corr-1"
+    assert payload["timeline"][0]["provenance"]["sourceEventIds"] == [
+        "evt-1",
+        "evt-2",
+    ]
+    assert payload["timeline"][0]["provenance"]["progressEventIds"] == ["pevt-1"]
+    assert payload["timeline"][0]["provenance"]["cursorEventId"] == "cursor-42"
     assert load_read_model_contract(ChatDetailSnapshot, payload) == snapshot
 
     event = ChatDetailPatchEvent(
@@ -158,10 +182,54 @@ def test_chat_detail_snapshot_and_patch_round_trip_without_legacy_thread_payload
     )
     event_payload = dump_read_model_contract(event)
     assert event_payload["patch"]["appendedTimeline"][0]["itemId"] == "timeline-1"
+    assert (
+        event_payload["patch"]["appendedTimeline"][0]["identity"]["timelineItemId"]
+        == "timeline-1"
+    )
     assert load_read_model_contract(ChatDetailPatchEvent, event_payload) == event
 
 
-def test_repo_worktree_topology_and_runtime_contracts_round_trip_separately() -> None:
+def test_chat_timeline_item_canonical_identity_and_provenance_fields_round_trip() -> (
+    None
+):
+    item = ChatTimelineItem(
+        item_id="tl-canonical",
+        kind="tool_event",
+        role="tool",
+        created_at=NOW,
+        text="Ran npm test",
+        identity=ChatTimelineIdentity(
+            timeline_item_id="tl-canonical",
+            progress_item_ids=["prog-1", "prog-2"],
+            correlation_id=None,
+        ),
+        provenance=ChatTimelineProvenance(
+            source_event_ids=["src-1"],
+            progress_event_ids=["pe-1", "pe-2"],
+            cursor_event_id="sse-cursor-99",
+        ),
+    )
+    payload = dump_read_model_contract(item)
+    assert payload["identity"]["timelineItemId"] == "tl-canonical"
+    assert payload["identity"]["progressItemIds"] == ["prog-1", "prog-2"]
+    assert payload["provenance"]["sourceEventIds"] == ["src-1"]
+    assert payload["provenance"]["cursorEventId"] == "sse-cursor-99"
+    assert load_read_model_contract(ChatTimelineItem, payload) == item
+
+
+def test_chat_timeline_item_rejects_legacy_identity_less_payloads() -> None:
+    legacy_payload = {
+        "itemId": "tl-legacy",
+        "kind": "user_message",
+        "role": "user",
+        "createdAt": NOW.isoformat(),
+        "text": "hello",
+        "clientMessageId": "client-1",
+        "backendMessageId": "backend-1",
+    }
+    with pytest.raises(ValidationError):
+        load_read_model_contract(ChatTimelineItem, legacy_payload)
+
     repo = RepoTopology(
         repo_id="repo-1",
         label="Repo",

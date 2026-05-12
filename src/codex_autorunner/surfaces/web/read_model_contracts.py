@@ -28,7 +28,9 @@ __all__ = [
     "ChatIndexSnapshot",
     "ChatQueueSummary",
     "ChatThreadProjection",
+    "ChatTimelineIdentity",
     "ChatTimelineItem",
+    "ChatTimelineProvenance",
     "PageWindow",
     "ProjectionCursor",
     "ProjectionRevision",
@@ -171,6 +173,18 @@ class ChatIndexPatchEvent(ReadModelContract):
     patch: ChatIndexPatch
 
 
+class ChatTimelineIdentity(ReadModelContract):
+    timeline_item_id: str
+    progress_item_ids: list[str] = Field(default_factory=list)
+    correlation_id: Optional[str] = None
+
+
+class ChatTimelineProvenance(ReadModelContract):
+    source_event_ids: list[Any] = Field(default_factory=list)
+    progress_event_ids: list[Any] = Field(default_factory=list)
+    cursor_event_id: Optional[str] = None
+
+
 class ChatTimelineItem(ReadModelContract):
     item_id: str
     kind: Literal[
@@ -187,6 +201,8 @@ class ChatTimelineItem(ReadModelContract):
     artifact_ids: list[str] = Field(default_factory=list)
     client_message_id: Optional[str] = None
     backend_message_id: Optional[str] = None
+    identity: ChatTimelineIdentity
+    provenance: ChatTimelineProvenance
 
 
 class ChatQueueSummary(ReadModelContract):

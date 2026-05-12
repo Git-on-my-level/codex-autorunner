@@ -39,7 +39,7 @@ def test_managed_thread_timeline_endpoint_returns_canonical_items(hub_env) -> No
 
     assert timeline_resp.status_code == 200
     payload = timeline_resp.json()
-    assert payload["contract_version"] == "managed_thread_timeline.v1"
+    assert payload["contract_version"] == "managed_thread_timeline.v2"
     assert [item["kind"] for item in payload["items"]] == [
         "user_message",
         "assistant_message",
@@ -47,6 +47,12 @@ def test_managed_thread_timeline_endpoint_returns_canonical_items(hub_env) -> No
     ]
     assert payload["items"][0]["payload"]["text"] == "hello timeline"
     assert payload["items"][1]["payload"]["text"] == "hello from assistant"
+    for item in payload["items"]:
+        assert item["contract_version"] == "managed_thread_timeline.v2"
+        assert item["identity"]["timeline_item_id"] == item["item_id"]
+        assert isinstance(item["identity"]["progress_item_ids"], list)
+        assert isinstance(item["provenance"]["source_event_ids"], list)
+        assert isinstance(item["provenance"]["progress_event_ids"], list)
 
 
 def test_managed_thread_chat_events_endpoint_returns_snapshot(hub_env) -> None:
