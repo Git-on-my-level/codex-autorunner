@@ -1,0 +1,262 @@
+import { describe, expect, it, vi } from 'vitest';
+import { READ_MODEL_CONTRACT_VERSION, type ChatDetailSnapshot, type ChatIndexSnapshot, type ProjectionCursor, type RepoWorktreeRuntimeSnapshot, type RepoWorktreeTopologySnapshot, type TicketDetailSnapshot } from '$lib/api/readModelContracts';
+import type { ApiError, ApiResult } from '$lib/api/client';
+import { ReadModelEntityStore, selectChatDetailView } from './readModelStore';
+import type { ReadModelSnapshotClient } from './readModelClients';
+
+const now = '2026-05-11T12:00:00Z';
+
+describe('read model loaders', () => {
+  it('returns a cache hit and calls depends when the chat index is already in the store', async () => {
+    const store = new ReadModelEntityStore();
+    store.applyChatIndexSnapshot(chatIndexSnapshot());
+    const client = mockClient();
+    const depends = vi.fn();
+    const { ensureChatIndexLoaded, readModelEntityTags } = await importLoaders(true);
+
+    const result = await ensureChatIndexLoaded({}, { store, client, depends });
+
+    expect(result).toEqual({ status: 'cache-hit', tags: [readModelEntityTags.chatIndex] });
+    expect(depends).toHaveBeenCalledWith('entity:chat:index');
+    expect(client.chatIndex).not.toHaveBeenCalled();
+  });
+
+  it('fetches a cache miss through the snapshot client and hydrates the store', async () => {
+    const store = new ReadModelEntityStore();
+    const snapshot = chatDetailSnapshot('chat-1');
+    const client = mockClient({
+      chatDetail: vi.fn().mockResolvedValue(ok(snapshot))
+    });
+    const { ensureChatDetailLoaded } = await importLoaders(true);
+
+    const result = await ensureChatDetailLoaded('chat-1', { store, client, timelineLimit: 25 });
+
+    expect(result.status).toBe('fetched');
+    expect(client.chatDetail).toHaveBeenCalledWith('chat-1', 25);
+    expect(selectChatDetailView(store.snapshot(), 'chat-1').thread?.title).toBe('Chat detail');
+  });
+
+  it('returns an error result without mutating the store when fetch fails', async () => {
+    const store = new ReadModelEntityStore();
+    const error = apiError('Snapshot unavailable');
+    const client = mockClient({
+      chatDetail: vi.fn().mockResolvedValue(fail(error))
+    });
+    const { ensureChatDetailLoaded } = await importLoaders(true);
+
+    const result = await ensureChatDetailLoaded('chat-1', { store, client });
+
+    expect(result).toEqual({ status: 'error', tags: ['entity:chat:chat-1'], error });
+    expect(selectChatDetailView(store.snapshot(), 'chat-1').thread).toBeNull();
+  });
+
+  it('returns a cold placeholder and does not fetch when browser is false', async () => {
+    const store = new ReadModelEntityStore();
+    const client = mockClient();
+    const depends = vi.fn();
+    const { ensureChatIndexLoaded } = await importLoaders(false);
+
+    const result = await ensureChatIndexLoaded({}, { store, client, depends });
+
+    expect(result).toEqual({ status: 'cold', tags: ['entity:chat:index'] });
+    expect(depends).toHaveBeenCalledWith('entity:chat:index');
+    expect(client.chatIndex).not.toHaveBeenCalled();
+  });
+
+  it('hydrates repo-worktree index snapshots from existing snapshot clients', async () => {
+    const store = new ReadModelEntityStore();
+    const client = mockClient({
+      repoWorktreeTopology: vi.fn().mockResolvedValue(ok(repoWorktreeTopologySnapshot())),
+      repoWorktreeRuntime: vi.fn().mockResolvedValue(ok(repoWorktreeRuntimeSnapshot()))
+    });
+    const { ensureRepoWorktreeIndexLoaded } = await importLoaders(true);
+
+    const result = await ensureRepoWorktreeIndexLoaded({ store, client });
+
+    expect(result.status).toBe('fetched');
+    expect(store.snapshot().repos['repo-1']?.label).toBe('Repo One');
+    expect(store.snapshot().runtime['repo:repo-1']?.activeRunStatus).toBe('running');
+  });
+
+  it('uses ticket and owner entity tags for scoped ticket details', async () => {
+    const store = new ReadModelEntityStore();
+    const depends = vi.fn();
+    const client = mockClient({
+      ticketDetail: vi.fn().mockResolvedValue(ok(ticketDetailSnapshot()))
+    });
+    const { ensureTicketDetailLoaded } = await importLoaders(true);
+
+    const result = await ensureTicketDetailLoaded('ticket-1', { kind: 'repo', id: 'repo-1' }, { store, client, depends });
+
+    expect(result).toEqual({ status: 'fetched', tags: ['entity:ticket:ticket-1', 'entity:repo:repo-1'] });
+    expect(depends).toHaveBeenCalledWith('entity:ticket:ticket-1');
+    expect(depends).toHaveBeenCalledWith('entity:repo:repo-1');
+    expect(store.snapshot().tickets['ticket-1']?.title).toBe('Ticket One');
+  });
+});
+
+async function importLoaders(browser: boolean) {
+  vi.resetModules();
+  vi.doMock('$app/environment', () => ({ browser, dev: false, building: false, version: 'test' }));
+  return import('./readModelLoaders');
+}
+
+function mockClient(overrides: Partial<Record<keyof ReadModelSnapshotClient, ReturnType<typeof vi.fn>>> = {}): ReadModelSnapshotClient {
+  return {
+    chatIndex: vi.fn().mockResolvedValue(ok(chatIndexSnapshot())),
+    chatDetail: vi.fn().mockResolvedValue(ok(chatDetailSnapshot())),
+    repoWorktreeTopology: vi.fn().mockResolvedValue(ok(repoWorktreeTopologySnapshot())),
+    repoWorktreeRuntime: vi.fn().mockResolvedValue(ok(repoWorktreeRuntimeSnapshot())),
+    repoDetail: vi.fn(),
+    worktreeDetail: vi.fn(),
+    ticketDetail: vi.fn().mockResolvedValue(ok(ticketDetailSnapshot())),
+    ...overrides
+  } as ReadModelSnapshotClient;
+}
+
+function ok<T>(data: T): ApiResult<T> {
+  return { ok: true, data };
+}
+
+function fail<T>(error: ApiError): ApiResult<T> {
+  return { ok: false, error };
+}
+
+function apiError(message: string): ApiError {
+  return { kind: 'http', status: 503, code: 'unavailable', message };
+}
+
+function cursor(sequence: number, source = 'test'): ProjectionCursor {
+  return { value: `${source}:${sequence}`, sequence, source, issuedAt: now };
+}
+
+function chatIndexSnapshot(): ChatIndexSnapshot {
+  return {
+    contractVersion: READ_MODEL_CONTRACT_VERSION,
+    kind: 'chat.index.snapshot',
+    cursor: cursor(1, 'chat.index'),
+    window: { limit: 50, totalEstimate: 1, totalIsExact: true },
+    filter: 'all',
+    query: null,
+    rows: [{
+      chatId: 'chat-1',
+      surface: 'pma',
+      title: 'Chat One',
+      status: 'idle',
+      unreadCount: 0,
+      lastActivityAt: now,
+      repoId: 'repo-1',
+      worktreeId: null,
+      ticketId: null,
+      runId: null,
+      agent: 'codex',
+      chatKind: 'pma',
+      model: 'gpt-5.5',
+      groupId: null
+    }],
+    groups: [],
+    counters: { total: 1, waiting: 0, running: 0, unread: 0, archived: 0 },
+    repair: repair('/hub/chat/index')
+  };
+}
+
+function chatDetailSnapshot(chatId = 'chat-1'): ChatDetailSnapshot {
+  return {
+    contractVersion: READ_MODEL_CONTRACT_VERSION,
+    kind: 'chat.detail.snapshot',
+    cursor: cursor(2, 'chat.detail'),
+    thread: {
+      chatId,
+      surface: 'pma',
+      title: 'Chat detail',
+      status: 'running',
+      repoId: 'repo-1',
+      worktreeId: null,
+      ticketId: null,
+      runId: 'run-1',
+      agent: 'codex',
+      chatKind: 'coding_agent',
+      model: 'gpt-5.5',
+      archived: false
+    },
+    timelineWindow: { limit: 50, totalEstimate: 1, totalIsExact: true },
+    timeline: [{
+      itemId: 'item-1',
+      kind: 'user_message',
+      role: 'user',
+      createdAt: now,
+      text: 'hello',
+      artifactIds: []
+    }],
+    queue: { depth: 0, queuedTurnIds: [] },
+    artifacts: [],
+    repair: repair(`/hub/read-models/chats/${chatId}`)
+  };
+}
+
+function repoWorktreeTopologySnapshot(): RepoWorktreeTopologySnapshot {
+  return {
+    contractVersion: READ_MODEL_CONTRACT_VERSION,
+    kind: 'repo_worktree.topology.snapshot',
+    cursor: cursor(3, 'repo_worktree.topology'),
+    window: { limit: 200, totalEstimate: 2, totalIsExact: true },
+    repos: [{ repoId: 'repo-1', label: 'Repo One', path: '/repo', archived: false, childWorktreeIds: ['worktree-1'] }],
+    worktrees: [{ worktreeId: 'worktree-1', repoId: 'repo-1', label: 'Worktree One', path: '/repo/wt', branch: 'main', archived: false }],
+    repair: repair('/hub/read-models/repo-worktree/topology')
+  };
+}
+
+function repoWorktreeRuntimeSnapshot(): RepoWorktreeRuntimeSnapshot {
+  return {
+    contractVersion: READ_MODEL_CONTRACT_VERSION,
+    kind: 'repo_worktree.runtime.snapshot',
+    cursor: cursor(4, 'repo_worktree.runtime'),
+    window: { limit: 200, totalEstimate: 1, totalIsExact: true },
+    runtime: [{
+      entityKind: 'repo',
+      entityId: 'repo-1',
+      activeRunStatus: 'running',
+      waitingTicketCount: 1,
+      runningTicketCount: 1,
+      chatCount: 2,
+      cleanupBlockers: []
+    }],
+    repair: repair('/hub/read-models/repo-worktree/runtime')
+  };
+}
+
+function ticketDetailSnapshot(): TicketDetailSnapshot {
+  return {
+    contractVersion: READ_MODEL_CONTRACT_VERSION,
+    kind: 'ticket.detail.snapshot',
+    cursor: cursor(5, 'ticket.detail'),
+    ticket: {
+      ticketId: 'ticket-1',
+      routeId: 'TICKET-001',
+      title: 'Ticket One',
+      status: 'running',
+      ownerKind: 'repo',
+      ownerId: 'repo-1',
+      agent: 'codex',
+      model: 'gpt-5.5',
+      done: false,
+      updatedAt: now
+    },
+    siblings: [],
+    linkedRun: null,
+    linkedChats: [],
+    artifacts: [],
+    dispatchWindow: { limit: 20, totalEstimate: 0, totalIsExact: true },
+    dispatches: [],
+    repair: repair('/hub/read-models/tickets/ticket-1')
+  };
+}
+
+function repair(snapshotRoute: string) {
+  return {
+    snapshotRoute,
+    cursorQueryParam: 'after' as const,
+    gapEventType: 'projection.cursor_gap' as const,
+    behavior: 'repair_snapshot_required' as const
+  };
+}
