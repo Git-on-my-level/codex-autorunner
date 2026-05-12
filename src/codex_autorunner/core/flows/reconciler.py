@@ -37,6 +37,7 @@ from .supervisor import (
     RestartPolicyObservation,
     SupervisorEffectKind,
     supervise_reconcile_flow,
+    worker_observation_from_health,
 )
 from .worker_process import (
     FlowWorkerHealth,
@@ -271,16 +272,9 @@ def _restart_policy_observation(
     repo_root: Path, record: FlowRunRecord, health: Optional[Any] = None
 ) -> RestartPolicyObservation:
     enabled, max_attempts, backoff_seconds = _load_restart_config(repo_root)
-    worker_exit_origin = getattr(health, "exit_origin", None)
-    worker_exit_kind = getattr(health, "exit_kind", None)
-    recoverable_shutdown = worker_exit_origin in {
-        "worker_signal",
-        "worker_watchdog",
-    } or worker_exit_kind in {
-        "external_signal",
-        "max_wall_time",
-        "opencode_stream_stalled_timeout",
-    }
+    recoverable_shutdown = worker_observation_from_health(
+        health
+    ).exit.recoverable_shutdown
     if (
         record.flow_type != "ticket_flow"
         or (record.stop_requested and not recoverable_shutdown)
