@@ -18,6 +18,7 @@ import {
   type WorktreeSummary,
   type WorkStatus
 } from '$lib/viewModels/domain';
+import { normalizeManagedThreadChatKind } from '$lib/viewModels/managedThreadChatKind';
 import type { PmaQueuedTurn } from '$lib/api/client';
 import type { ReadModelEntityState } from './readModelStore';
 
@@ -75,7 +76,7 @@ export function legacyChatIndexRecordToChatIndexRow(raw: JsonRecord): ChatIndexR
     runId: resourceKind === 'run' || resourceKind === 'ticket_run' ? resourceId : stringValue(raw.run_id),
     agent: stringValue(raw.agent ?? raw.agent_id),
     agentProfile: stringValue(raw.agent_profile ?? raw.agentProfile),
-    chatKind: chatKindValue(raw.chat_kind ?? raw.chatKind ?? raw.thread_kind),
+    chatKind: normalizeManagedThreadChatKind(raw.chat_kind ?? raw.chatKind ?? raw.thread_kind),
     model: stringValue(raw.model),
     groupId: stringValue(raw.group_id)
   };
@@ -132,14 +133,6 @@ export function chatIndexRowToPmaChatSummary(row: ChatIndexRow): PmaChatSummary 
     updatedAt: row.lastActivityAt ?? null,
     raw
   };
-}
-
-function chatKindValue(value: unknown): 'pma' | 'coding_agent' | null {
-  const text = stringValue(value)?.toLowerCase();
-  if (!text) return null;
-  if (text === 'pma') return 'pma';
-  if (['coding_agent', 'coding-agent', 'agent', 'direct_agent', 'direct-agent'].includes(text)) return 'coding_agent';
-  return null;
 }
 
 export function selectPmaChats(state: ReadModelEntityState): PmaChatSummary[] {

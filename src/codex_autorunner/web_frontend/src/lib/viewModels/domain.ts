@@ -1,3 +1,5 @@
+import { normalizeManagedThreadChatKind } from './managedThreadChatKind';
+
 type JsonRecord = Record<string, unknown>;
 
 export type WorkStatus = 'running' | 'waiting' | 'idle' | 'done' | 'failed' | 'blocked' | 'invalid';
@@ -237,7 +239,7 @@ export function mapPmaChatSummary(raw: JsonRecord): PmaChatSummary {
     lifecycleStatus: nullableString(raw.lifecycle_status ?? raw.lifecycleStatus),
     status,
     agentId: nullableString(raw.agent_id ?? raw.agent),
-    chatKind: chatKindValue(raw.chat_kind ?? raw.chatKind ?? raw.thread_kind),
+    chatKind: normalizeManagedThreadChatKind(raw.chat_kind ?? raw.chatKind ?? raw.thread_kind),
     agentProfile: nullableString(raw.agent_profile ?? raw.agentProfile),
     model: nullableString(raw.model ?? latest.model),
     repoId,
@@ -263,14 +265,6 @@ export function mapPmaChatSummary(raw: JsonRecord): PmaChatSummary {
     ),
     raw
   };
-}
-
-function chatKindValue(value: unknown): 'pma' | 'coding_agent' | null {
-  const text = nullableString(value)?.toLowerCase();
-  if (!text) return null;
-  if (text === 'pma') return 'pma';
-  if (['coding_agent', 'coding-agent', 'agent', 'direct_agent', 'direct-agent'].includes(text)) return 'coding_agent';
-  return null;
 }
 
 export function mapPmaChatMessage(raw: JsonRecord): PmaChatMessage {

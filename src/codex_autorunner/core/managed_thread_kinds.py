@@ -55,19 +55,11 @@ def infer_managed_thread_chat_kind(
     return default
 
 
-def managed_thread_chat_kind_is_pma(value: Any) -> bool:
-    return (
-        normalize_managed_thread_chat_kind(value, default=MANAGED_THREAD_CHAT_KIND_PMA)
-        == MANAGED_THREAD_CHAT_KIND_PMA
-    )
-
-
 __all__ = [
     "MANAGED_THREAD_CHAT_KIND_CODING_AGENT",
     "MANAGED_THREAD_CHAT_KIND_PMA",
     "MANAGED_THREAD_CHAT_KIND_VALUES",
     "ManagedThreadChatKind",
     "infer_managed_thread_chat_kind",
-    "managed_thread_chat_kind_is_pma",
     "normalize_managed_thread_chat_kind",
 ]
