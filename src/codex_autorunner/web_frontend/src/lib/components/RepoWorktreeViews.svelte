@@ -374,69 +374,76 @@
               >
                 + Agent
               </a>
-                {#if row.kind === 'repo' && onOpenRepoSettings}
-                  <button
-                    class="icon-action settings"
-                    type="button"
-                    title="Repo settings (worktree setup, etc.)"
-                    aria-label={`Settings for ${row.label}`}
-                    onclick={(event) => {
-                      event.preventDefault();
-                      event.stopPropagation();
-                      onOpenRepoSettings?.({
+              {#if row.kind === 'repo' && onCreateWorktree}
+                <button
+                  class="row-action-button"
+                  type="button"
+                  title="Create a new worktree from a fresh origin/main"
+                  aria-label={`Create worktree on ${row.label}`}
+                  onclick={(event) => {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    onCreateWorktree?.({ id: row.id, label: row.label });
+                  }}
+                >
+                  + Worktree
+                </button>
+              {/if}
+              {#if
+                (row.kind === 'repo' && onOpenRepoSettings) ||
+                (onArchiveState && canArchiveState(row)) ||
+                (row.kind === 'worktree' && onCleanupWorktree)}
+                <span class="repo-head-icon-actions">
+                  {#if row.kind === 'repo' && onOpenRepoSettings}
+                    <button
+                      class="icon-action settings"
+                      type="button"
+                      title="Repo settings (worktree setup, etc.)"
+                      aria-label={`Settings for ${row.label}`}
+                      onclick={(event) => {
+                        event.preventDefault();
+                        event.stopPropagation();
+                        onOpenRepoSettings?.({
+                          id: row.id,
+                          label: row.label,
+                          worktreeSetupCommands: row.worktreeSetupCommands ?? []
+                        });
+                      }}
+                    >
+                      <span class="emoji-icon" aria-hidden="true">⚙️</span>
+                    </button>
+                  {/if}
+                  {#if onArchiveState && canArchiveState(row)}
+                    <button
+                      class="icon-action archive"
+                      type="button"
+                      title="Archive CAR state without deleting git files"
+                      aria-label={`Archive CAR state for ${row.label}`}
+                      onclick={(event) => handleArchiveClick(event, {
+                        kind: row.kind,
                         id: row.id,
                         label: row.label,
-                        worktreeSetupCommands: row.worktreeSetupCommands ?? []
-                      });
-                    }}
-                  >
-                    <span class="emoji-icon" aria-hidden="true">⚙️</span>
-                  </button>
-                {/if}
-                {#if row.kind === 'repo' && onCreateWorktree}
-                  <button
-                    class="row-action-button"
-                    type="button"
-                    title="Create a new worktree from a fresh origin/main"
-                    aria-label={`Create worktree on ${row.label}`}
-                    onclick={(event) => {
-                      event.preventDefault();
-                      event.stopPropagation();
-                      onCreateWorktree?.({ id: row.id, label: row.label });
-                    }}
-                  >
-                    + Worktree
-                  </button>
-                {/if}
-                {#if onArchiveState && canArchiveState(row)}
-                  <button
-                    class="icon-action archive"
-                    type="button"
-                    title="Archive CAR state without deleting git files"
-                    aria-label={`Archive CAR state for ${row.label}`}
-                    onclick={(event) => handleArchiveClick(event, {
-                      kind: row.kind,
-                      id: row.id,
-                      label: row.label,
-                      hasCarState: row.hasCarState,
-                      unboundManagedThreadCount: row.unboundManagedThreadCount
-                    })}
-                  >
-                    <span class="emoji-icon" aria-hidden="true">🧹</span>
-                  </button>
-                {/if}
-                {#if row.kind === 'worktree' && onCleanupWorktree}
-                  <button
-                    class="icon-action cleanup"
-                    type="button"
-                    title="Cleanup worktree: archive a snapshot, then delete the checkout"
-                    aria-label={`Cleanup worktree ${row.label}`}
-                    onclick={(event) => handleCleanupClick(event, row)}
-                  >
-                    {@render trashIcon()}
-                  </button>
-                {/if}
-              </div>
+                        hasCarState: row.hasCarState,
+                        unboundManagedThreadCount: row.unboundManagedThreadCount
+                      })}
+                    >
+                      <span class="emoji-icon" aria-hidden="true">🧹</span>
+                    </button>
+                  {/if}
+                  {#if row.kind === 'worktree' && onCleanupWorktree}
+                    <button
+                      class="icon-action cleanup"
+                      type="button"
+                      title="Cleanup worktree: archive a snapshot, then delete the checkout"
+                      aria-label={`Cleanup worktree ${row.label}`}
+                      onclick={(event) => handleCleanupClick(event, row)}
+                    >
+                      {@render trashIcon()}
+                    </button>
+                  {/if}
+                </span>
+              {/if}
+            </div>
             {#if ticketMetricsReady && row.totalTickets > 0}
               {@const pct = Math.round((row.doneTickets / row.totalTickets) * 100)}
               <span
@@ -567,35 +574,39 @@
                         >
                           + Agent
                         </a>
-                          {#if onArchiveState && canArchiveState(worktree)}
-                            <button
-                              class="icon-action archive"
-                              type="button"
-                              title="Archive CAR state without deleting git files"
-                              aria-label={`Archive CAR state for ${worktree.label}`}
-                              onclick={(event) => handleArchiveClick(event, {
-                                kind: 'worktree',
-                                id: worktree.id,
-                                label: worktree.label,
-                                hasCarState: worktree.hasCarState,
-                                unboundManagedThreadCount: worktree.unboundManagedThreadCount
-                              })}
-                            >
-                              <span class="emoji-icon" aria-hidden="true">🧹</span>
-                            </button>
-                          {/if}
-                          {#if onCleanupWorktree}
-                            <button
-                              class="icon-action cleanup"
-                              type="button"
-                              title="Cleanup worktree: archive a snapshot, then delete the checkout"
-                              aria-label={`Cleanup worktree ${worktree.label}`}
-                              onclick={(event) => handleCleanupClick(event, worktree)}
-                            >
-                              {@render trashIcon()}
-                            </button>
-                          {/if}
-                        </div>
+                        {#if (onArchiveState && canArchiveState(worktree)) || onCleanupWorktree}
+                          <span class="worktree-row-icon-actions">
+                            {#if onArchiveState && canArchiveState(worktree)}
+                              <button
+                                class="icon-action archive"
+                                type="button"
+                                title="Archive CAR state without deleting git files"
+                                aria-label={`Archive CAR state for ${worktree.label}`}
+                                onclick={(event) => handleArchiveClick(event, {
+                                  kind: 'worktree',
+                                  id: worktree.id,
+                                  label: worktree.label,
+                                  hasCarState: worktree.hasCarState,
+                                  unboundManagedThreadCount: worktree.unboundManagedThreadCount
+                                })}
+                              >
+                                <span class="emoji-icon" aria-hidden="true">🧹</span>
+                              </button>
+                            {/if}
+                            {#if onCleanupWorktree}
+                              <button
+                                class="icon-action cleanup"
+                                type="button"
+                                title="Cleanup worktree: archive a snapshot, then delete the checkout"
+                                aria-label={`Cleanup worktree ${worktree.label}`}
+                                onclick={(event) => handleCleanupClick(event, worktree)}
+                              >
+                                {@render trashIcon()}
+                              </button>
+                            {/if}
+                          </span>
+                        {/if}
+                      </div>
                     </div>
                   </div>
                 {/snippet}
@@ -1311,6 +1322,14 @@
     flex: 0 0 auto;
   }
 
+  .repo-head-icon-actions,
+  .worktree-row-icon-actions {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    margin-left: 8px;
+  }
+
   .repo-signal-pills {
     display: flex;
     flex-wrap: wrap;
@@ -1801,7 +1820,7 @@
     }
     .worktree-card > .repo-action-buttons {
       grid-column: 2;
-      justify-self: start;
+      justify-self: end;
     }
   }
 

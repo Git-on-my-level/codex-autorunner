@@ -164,6 +164,7 @@ def test_repo_worktree_topology_and_runtime_contracts_round_trip_separately() ->
         label="Repo",
         path="/work/repo",
         child_worktree_ids=["wt-1"],
+        worktree_setup_commands=["npm ci", "make tools"],
     )
     worktree = WorktreeTopology(
         worktree_id="wt-1",
@@ -200,6 +201,10 @@ def test_repo_worktree_topology_and_runtime_contracts_round_trip_separately() ->
     runtime_payload = dump_read_model_contract(runtime)
 
     assert topology_payload["repos"][0]["childWorktreeIds"] == ["wt-1"]
+    assert topology_payload["repos"][0]["worktreeSetupCommands"] == [
+        "npm ci",
+        "make tools",
+    ]
     assert runtime_payload["runtime"][0]["entityKind"] == "worktree"
     assert (
         load_read_model_contract(RepoWorktreeTopologySnapshot, topology_payload)

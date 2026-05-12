@@ -95,6 +95,14 @@ def _int_value(value: object) -> int:
     return 0
 
 
+def _topology_worktree_setup_commands(item: dict[str, Any]) -> Optional[list[str]]:
+    raw = item.get("worktree_setup_commands")
+    if not isinstance(raw, list):
+        return None
+    commands = [str(cmd) for cmd in raw if str(cmd).strip()]
+    return commands or None
+
+
 def _runtime_projection(item: dict[str, Any]) -> RuntimeProjection:
     item_id = str(
         item.get("id") or item.get("repo_id") or item.get("worktree_id") or ""
@@ -224,6 +232,7 @@ class RepoWorktreeReadModelService:
                     else None
                 ),
                 child_worktree_ids=sorted(child_ids.get(str(item.get("id")), [])),
+                worktree_setup_commands=_topology_worktree_setup_commands(item),
             )
             for item in enriched
             if str(item.get("kind") or "") != "worktree" and kind in {"all", "repo"}

@@ -250,6 +250,7 @@ class RepoTopology(ReadModelContract):
     archived: bool = False
     destination_id: Optional[str] = None
     child_worktree_ids: list[str] = Field(default_factory=list)
+    worktree_setup_commands: Optional[list[str]] = None
 
 
 class WorktreeTopology(ReadModelContract):

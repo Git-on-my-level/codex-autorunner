@@ -177,6 +177,7 @@ export type RepoTopology = {
   archived: boolean;
   destinationId?: string | null;
   childWorktreeIds: string[];
+  worktreeSetupCommands?: string[] | null;
 };
 
 export type WorktreeTopology = {

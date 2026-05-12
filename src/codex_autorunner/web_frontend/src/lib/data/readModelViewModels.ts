@@ -205,6 +205,9 @@ export function selectRepoSummaries(state: ReadModelEntityState): RepoSummary[] 
         path: repo.path,
         kind: 'base',
         worktree_count: repo.childWorktreeIds.length,
+        ...(Array.isArray(repo.worktreeSetupCommands)
+          ? { worktree_setup_commands: repo.worktreeSetupCommands }
+          : {}),
         ...runtimeRaw(state.runtime[`repo:${repo.repoId}`])
       })
     );

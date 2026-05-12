@@ -95,7 +95,16 @@ describe('read model view-model selectors', () => {
       kind: 'repo_worktree.topology.snapshot',
       cursor,
       window: { limit: 50, totalIsExact: true },
-      repos: [{ repoId: 'repo-1', label: 'Repo', path: '/repo', archived: false, childWorktreeIds: ['wt-1'] }],
+      repos: [
+        {
+          repoId: 'repo-1',
+          label: 'Repo',
+          path: '/repo',
+          archived: false,
+          childWorktreeIds: ['wt-1'],
+          worktreeSetupCommands: ['make setup']
+        }
+      ],
       worktrees: [{ worktreeId: 'wt-1', repoId: 'repo-1', label: 'Feature', path: '/repo-wt', branch: 'feature', archived: false }],
       repair: {
         snapshotRoute: '/hub/read-models/repo-worktree/topology',
@@ -131,6 +140,7 @@ describe('read model view-model selectors', () => {
 
     expect(selectPmaChats(store.snapshot())[0].status).toBe('running');
     expect(selectRepoSummaries(store.snapshot())[0].activeRuns).toBe(1);
+    expect(selectRepoSummaries(store.snapshot())[0].raw.worktree_setup_commands).toEqual(['make setup']);
     expect(selectWorktreeSummaries(store.snapshot())[0].repoId).toBe('repo-1');
   });
 });
