@@ -67,18 +67,19 @@ class ManagedThreadTimelineItem:
     managed_turn_id: Optional[str] = None
     status: Optional[str] = None
     payload: dict[str, Any] = field(default_factory=dict)
-    identity: Optional[ManagedThreadTimelineIdentity] = None
-    provenance: Optional[ManagedThreadTimelineProvenance] = None
+    identity: ManagedThreadTimelineIdentity = field(
+        default_factory=lambda: ManagedThreadTimelineIdentity(timeline_item_id="")
+    )
+    provenance: ManagedThreadTimelineProvenance = field(
+        default_factory=ManagedThreadTimelineProvenance
+    )
 
     def to_dict(self) -> dict[str, Any]:
-        identity = self.identity or ManagedThreadTimelineIdentity(
-            timeline_item_id=self.item_id,
-            progress_item_ids=tuple(_progress_item_ids_from_payload(self.payload)),
-        )
-        provenance = self.provenance or ManagedThreadTimelineProvenance(
-            source_event_ids=tuple(_source_event_ids_from_payload(self.payload)),
-            progress_event_ids=tuple(_progress_event_ids_from_payload(self.payload)),
-        )
+        if self.identity.timeline_item_id != self.item_id:
+            raise ValueError(
+                "managed timeline item identity must be backend-authored and "
+                "match item_id"
+            )
         data: dict[str, Any] = {
             "contract_version": TIMELINE_CONTRACT_VERSION,
             "item_id": self.item_id,
@@ -88,59 +89,11 @@ class ManagedThreadTimelineItem:
             "managed_thread_id": self.managed_thread_id,
             "managed_turn_id": self.managed_turn_id,
             "status": self.status,
-            "identity": identity.to_dict(),
-            "provenance": provenance.to_dict(),
+            "identity": self.identity.to_dict(),
+            "provenance": self.provenance.to_dict(),
             "payload": dict(self.payload),
         }
         return data
-
-
-def _progress_item_ids_from_payload(payload: dict[str, Any]) -> list[str]:
-    progress_items: list[dict[str, Any]] = []
-    progress_item = payload.get("progress_item")
-    if isinstance(progress_item, dict):
-        progress_items.append(progress_item)
-    raw_progress_items = payload.get("progress_items")
-    if isinstance(raw_progress_items, list):
-        progress_items.extend(
-            item for item in raw_progress_items if isinstance(item, dict)
-        )
-    ids: list[str] = []
-    for item in progress_items:
-        item_id = _normalize_optional_text(item.get("item_id"))
-        if item_id is not None and item_id not in ids:
-            ids.append(item_id)
-    return ids
-
-
-def _source_event_ids_from_payload(payload: dict[str, Any]) -> list[Any]:
-    value = payload.get("source_event_ids")
-    if isinstance(value, list):
-        return list(value)
-    return []
-
-
-def _progress_event_ids_from_payload(payload: dict[str, Any]) -> list[Any]:
-    event_ids: list[Any] = []
-    progress_items: list[dict[str, Any]] = []
-    progress_item = payload.get("progress_item")
-    if isinstance(progress_item, dict):
-        progress_items.append(progress_item)
-    raw_progress_items = payload.get("progress_items")
-    if isinstance(raw_progress_items, list):
-        progress_items.extend(
-            item for item in raw_progress_items if isinstance(item, dict)
-        )
-    for item in progress_items:
-        raw_event_ids = item.get("event_ids")
-        if not isinstance(raw_event_ids, list):
-            continue
-        for event_id in raw_event_ids:
-            if event_id not in event_ids:
-                event_ids.append(event_id)
-    if event_ids:
-        return event_ids
-    return _source_event_ids_from_payload(payload)
 
 
 def _dedupe_preserving_order(values: Iterable[Any]) -> list[Any]:
@@ -215,9 +168,9 @@ def _timeline_provenance(
 def _with_contract_metadata(
     item: dict[str, Any],
     *,
-    progress_item_ids: Optional[list[str]] = None,
-    source_event_ids: Optional[list[Any]] = None,
-    progress_event_ids: Optional[list[Any]] = None,
+    progress_item_ids: list[str],
+    source_event_ids: list[Any],
+    progress_event_ids: list[Any],
     cursor_event_id: Optional[str] = None,
 ) -> dict[str, Any]:
     """Attach v2 identity/provenance to live timeline frames.
@@ -227,33 +180,17 @@ def _with_contract_metadata(
     """
 
     item_id = str(item.get("item_id") or "")
-    payload = item.get("payload")
-    payload_dict = dict(payload) if isinstance(payload, dict) else {}
-    resolved_source_event_ids = (
-        source_event_ids
-        if source_event_ids is not None
-        else _source_event_ids_from_payload(payload_dict)
-    )
-    resolved_progress_event_ids = (
-        progress_event_ids
-        if progress_event_ids is not None
-        else _progress_event_ids_from_payload(payload_dict)
-    )
     return {
         "contract_version": TIMELINE_CONTRACT_VERSION,
         **item,
         "identity": {
             "timeline_item_id": item_id,
-            "progress_item_ids": (
-                progress_item_ids
-                if progress_item_ids is not None
-                else _progress_item_ids_from_payload(payload_dict)
-            ),
+            "progress_item_ids": list(progress_item_ids),
             "correlation_id": None,
         },
         "provenance": {
-            "source_event_ids": list(resolved_source_event_ids),
-            "progress_event_ids": list(resolved_progress_event_ids),
+            "source_event_ids": list(source_event_ids),
+            "progress_event_ids": list(progress_event_ids),
             "cursor_event_id": cursor_event_id,
         },
     }
@@ -862,6 +799,7 @@ def timeline_item_from_tail_event(
         }
         return _with_contract_metadata(
             item,
+            progress_item_ids=_progress_item_ids_from_items(progress_items),
             source_event_ids=source_event_ids,
             progress_event_ids=list(source_event_ids),
             cursor_event_id=event_id or None,
@@ -888,6 +826,7 @@ def timeline_item_from_tail_event(
         }
         return _with_contract_metadata(
             item,
+            progress_item_ids=_progress_item_ids_from_items(progress_items),
             source_event_ids=source_event_ids,
             progress_event_ids=list(source_event_ids),
             cursor_event_id=event_id or None,
@@ -917,6 +856,7 @@ def timeline_item_from_tail_event(
         }
         return _with_contract_metadata(
             item,
+            progress_item_ids=_progress_item_ids_from_items(progress_items),
             source_event_ids=source_event_ids,
             progress_event_ids=list(source_event_ids),
             cursor_event_id=event_id or None,

@@ -345,15 +345,26 @@ describe('API client error handling', () => {
   it('maps PMA canonical timeline payloads with stable item IDs', async () => {
     const fetcher = vi.fn(async () =>
       Response.json({
-        contract_version: 'managed_thread_timeline.v1',
+        contract_version: 'managed_thread_timeline.v2',
         items: [
           {
+            contract_version: 'managed_thread_timeline.v2',
             item_id: 'turn:turn-1:user',
             kind: 'user_message',
             order_key: '001',
             managed_thread_id: 'thread-1',
             managed_turn_id: 'turn-1',
             status: 'queued',
+            identity: {
+              timeline_item_id: 'turn:turn-1:user',
+              progress_item_ids: [],
+              correlation_id: null
+            },
+            provenance: {
+              source_event_ids: [],
+              progress_event_ids: [],
+              cursor_event_id: null
+            },
             payload: { text: 'first queued message' }
           }
         ]

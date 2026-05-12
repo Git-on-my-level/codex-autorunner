@@ -1291,7 +1291,17 @@ describe('PMA chat view helpers', () => {
         managed_turn_id: 'one',
         delivered_message: 'Hi',
         managed_thread_id: 'chat-1',
-        client_turn_id: 'client-1'
+        client_turn_id: 'client-1',
+        identity: {
+          timeline_item_id: 'turn:one:user',
+          progress_item_ids: [],
+          correlation_id: 'client-1'
+        },
+        provenance: {
+          source_event_ids: [],
+          progress_event_ids: [],
+          cursor_event_id: null
+        }
       },
       'Hi',
       'chat-1'
@@ -1440,7 +1450,17 @@ describe('PMA chat view helpers', () => {
         managed_turn_id: 'turn-2',
         delivered_message: 'queued second',
         client_turn_id: 'client-turn-2',
-        execution_state: 'queued'
+        execution_state: 'queued',
+        identity: {
+          timeline_item_id: 'turn:turn-2:user',
+          progress_item_ids: [],
+          correlation_id: 'client-turn-2'
+        },
+        provenance: {
+          source_event_ids: [],
+          progress_event_ids: [],
+          cursor_event_id: null
+        }
       },
       'fallback',
       'chat-1'
@@ -1633,7 +1653,17 @@ describe('PMA chat view helpers', () => {
           managed_turn_id: 'turn-active',
           client_turn_id: 'client-active',
           delivered_message: 'active work',
-          execution_state: 'active'
+          execution_state: 'active',
+          identity: {
+            timeline_item_id: 'turn:turn-active:user',
+            progress_item_ids: [],
+            correlation_id: 'client-active'
+          },
+          provenance: {
+            source_event_ids: [],
+            progress_event_ids: [],
+            cursor_event_id: null
+          }
         },
         'fallback',
         'chat-1'
@@ -1647,7 +1677,17 @@ describe('PMA chat view helpers', () => {
           managed_turn_id: 'turn-unknown',
           client_turn_id: 'client-unknown',
           delivered_message: 'unknown work',
-          execution_state: 'unknown-status'
+          execution_state: 'unknown-status',
+          identity: {
+            timeline_item_id: 'turn:turn-unknown:user',
+            progress_item_ids: [],
+            correlation_id: 'client-unknown'
+          },
+          provenance: {
+            source_event_ids: [],
+            progress_event_ids: [],
+            cursor_event_id: null
+          }
         },
         'fallback',
         'chat-1'
@@ -1661,7 +1701,17 @@ describe('PMA chat view helpers', () => {
           managed_turn_id: 'turn-empty',
           client_turn_id: 'client-empty',
           delivered_message: 'empty work',
-          execution_state: ''
+          execution_state: '',
+          identity: {
+            timeline_item_id: 'turn:turn-empty:user',
+            progress_item_ids: [],
+            correlation_id: 'client-empty'
+          },
+          provenance: {
+            source_event_ids: [],
+            progress_event_ids: [],
+            cursor_event_id: null
+          }
         },
         'fallback',
         'chat-1'

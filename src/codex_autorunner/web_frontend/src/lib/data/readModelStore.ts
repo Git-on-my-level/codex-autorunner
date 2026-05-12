@@ -741,7 +741,7 @@ function keyed<T>(items: T[], key: (item: T) => string): Record<string, T> {
 }
 
 function pmaTimelineEntityId(item: PmaTimelineItem): string {
-  return item.identity.timelineItemId || item.id;
+  return item.identity.timelineItemId;
 }
 
 function bump(state: ReadModelEntityState, kind: EntityKind, id: string): void {

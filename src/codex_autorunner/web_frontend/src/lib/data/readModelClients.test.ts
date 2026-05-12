@@ -84,7 +84,17 @@ describe('read model snapshot client', () => {
                   kind: 'assistant_message',
                   role: 'assistant',
                   timestamp: '2026-05-11T12:01:00Z',
-                  text: 'working on it'
+                  text: 'working on it',
+                  identity: {
+                    timeline_item_id: 'item-2',
+                    progress_item_ids: [],
+                    correlation_id: null
+                  },
+                  provenance: {
+                    source_event_ids: ['evt-2'],
+                    progress_event_ids: ['evt-2'],
+                    cursor_event_id: null
+                  }
                 }
               ]
             },
@@ -117,7 +127,7 @@ describe('read model snapshot client', () => {
       cursorEventId: null
     });
     expect(items[1]).toMatchObject({ itemId: 'item-2', kind: 'assistant_message' });
-    expect(items[1].identity).toBeUndefined();
-    expect(items[1].provenance).toBeUndefined();
+    expect(items[1].identity?.timelineItemId).toBe('item-2');
+    expect(items[1].provenance?.sourceEventIds).toEqual(['evt-2']);
   });
 });

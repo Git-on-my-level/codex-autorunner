@@ -2,6 +2,9 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
+import pytest
+from pydantic import ValidationError
+
 from codex_autorunner.surfaces.web.read_model_contracts import (
     ChatDetailPatch,
     ChatDetailPatchEvent,
@@ -189,7 +192,7 @@ def test_chat_detail_snapshot_and_patch_round_trip_without_legacy_thread_payload
 def test_chat_timeline_item_canonical_identity_and_provenance_fields_round_trip() -> (
     None
 ):
-    item_with_canonical = ChatTimelineItem(
+    item = ChatTimelineItem(
         item_id="tl-canonical",
         kind="tool_event",
         role="tool",
@@ -206,31 +209,26 @@ def test_chat_timeline_item_canonical_identity_and_provenance_fields_round_trip(
             cursor_event_id="sse-cursor-99",
         ),
     )
-    payload = dump_read_model_contract(item_with_canonical)
+    payload = dump_read_model_contract(item)
     assert payload["identity"]["timelineItemId"] == "tl-canonical"
     assert payload["identity"]["progressItemIds"] == ["prog-1", "prog-2"]
     assert payload["provenance"]["sourceEventIds"] == ["src-1"]
     assert payload["provenance"]["cursorEventId"] == "sse-cursor-99"
-    assert load_read_model_contract(ChatTimelineItem, payload) == item_with_canonical
+    assert load_read_model_contract(ChatTimelineItem, payload) == item
 
-    item_without_canonical = ChatTimelineItem(
-        item_id="tl-legacy",
-        kind="user_message",
-        role="user",
-        created_at=NOW,
-        text="hello",
-        client_message_id="client-1",
-        backend_message_id="backend-1",
-    )
-    legacy_payload = dump_read_model_contract(item_without_canonical)
-    assert "identity" not in legacy_payload
-    assert "provenance" not in legacy_payload
-    assert legacy_payload["clientMessageId"] == "client-1"
-    assert legacy_payload["backendMessageId"] == "backend-1"
-    assert (
+
+def test_chat_timeline_item_rejects_legacy_identity_less_payloads() -> None:
+    legacy_payload = {
+        "itemId": "tl-legacy",
+        "kind": "user_message",
+        "role": "user",
+        "createdAt": NOW.isoformat(),
+        "text": "hello",
+        "clientMessageId": "client-1",
+        "backendMessageId": "backend-1",
+    }
+    with pytest.raises(ValidationError):
         load_read_model_contract(ChatTimelineItem, legacy_payload)
-        == item_without_canonical
-    )
 
     repo = RepoTopology(
         repo_id="repo-1",

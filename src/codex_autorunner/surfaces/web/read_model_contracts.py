@@ -201,8 +201,8 @@ class ChatTimelineItem(ReadModelContract):
     artifact_ids: list[str] = Field(default_factory=list)
     client_message_id: Optional[str] = None
     backend_message_id: Optional[str] = None
-    identity: Optional[ChatTimelineIdentity] = None
-    provenance: Optional[ChatTimelineProvenance] = None
+    identity: ChatTimelineIdentity
+    provenance: ChatTimelineProvenance
 
 
 class ChatQueueSummary(ReadModelContract):

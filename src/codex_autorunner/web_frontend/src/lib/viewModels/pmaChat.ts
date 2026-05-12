@@ -881,7 +881,7 @@ function suppressDuplicateTimelineDeliveries(timeline: PmaTimelineItem[]): PmaTi
 }
 
 function canonicalTimelineIdentityKey(item: PmaTimelineItem): string {
-  return item.identity.timelineItemId || item.id;
+  return item.identity.timelineItemId;
 }
 
 function isMessageAttachmentArtifactCard(card: PmaCard, messageAttachmentKeys: Set<string>): boolean {
@@ -991,8 +991,8 @@ export function optimisticUserTimelineItemFromSend(
 ): PmaTimelineItem | null {
   const identity = asRecord(raw.identity);
   const provenance = asRecord(raw.provenance);
-  const timelineItemId = stringValue(identity.timeline_item_id ?? raw.item_id);
-  const correlationId = stringValue(identity.correlation_id ?? raw.client_turn_id);
+  const timelineItemId = stringValue(identity.timeline_item_id);
+  const correlationId = stringValue(identity.correlation_id);
   const turnId = stringValue(raw.managed_turn_id);
   const text = stringValue(raw.delivered_message) || stringValue(raw.prompt) || fallbackText;
   if (!timelineItemId || !text.trim() || !correlationId) return null;

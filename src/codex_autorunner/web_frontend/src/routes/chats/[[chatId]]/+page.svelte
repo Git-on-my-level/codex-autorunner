@@ -988,7 +988,7 @@
           const payload = event.payload && typeof event.payload === 'object' && !Array.isArray(event.payload)
             ? (event.payload as JsonRecord)
             : null;
-          if (payload && (payload.kind || payload.item_id || payload.managed_turn_id || payload.turn_id || payload.message_id)) {
+          if (payload && payload.contract_version === 'managed_thread_timeline.v2') {
             const item = mapPmaTimelineItem(payload);
             readModelEntityStore.replacePmaTimeline(chatId, reconcilePmaTimeline(currentTimeline(chatId), [item]));
             if (item.kind === 'user_message') dropOptimisticPlaceholders();

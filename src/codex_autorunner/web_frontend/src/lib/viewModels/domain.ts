@@ -321,6 +321,13 @@ export function mapPmaTimelineItem(raw: JsonRecord): PmaTimelineItem {
   const payload = asRecord(raw.payload);
   const identity = asRecord(raw.identity);
   const provenance = asRecord(raw.provenance);
+  const timelineItemId = nullableString(identity.timeline_item_id);
+  if (!timelineItemId) {
+    throw new Error('PMA timeline item is missing canonical identity.timeline_item_id');
+  }
+  if (!raw.provenance || typeof raw.provenance !== 'object' || Array.isArray(raw.provenance)) {
+    throw new Error('PMA timeline item is missing canonical provenance');
+  }
   return {
     id: stringValue(raw.item_id ?? raw.id, 'timeline-item'),
     kind: normalizeTimelineKind(raw.kind),
@@ -329,10 +336,10 @@ export function mapPmaTimelineItem(raw: JsonRecord): PmaTimelineItem {
     chatId: nullableString(raw.managed_thread_id ?? raw.thread_id ?? raw.chat_id),
     turnId: nullableString(raw.managed_turn_id ?? raw.turn_id),
     status: normalizeOptionalWorkStatus(raw.status),
-    ...pmaTimelineContractFields(stringValue(identity.timeline_item_id ?? raw.item_id ?? raw.id, 'timeline-item'), {
-      progressItemIds: asArray(identity.progress_item_ids).map((value) => String(value)),
-      sourceEventIds: asArray(provenance.source_event_ids),
-      progressEventIds: asArray(provenance.progress_event_ids),
+    ...pmaTimelineContractFields(timelineItemId, {
+      progressItemIds: asUnknownArray(identity.progress_item_ids).map((value) => String(value)),
+      sourceEventIds: asUnknownArray(provenance.source_event_ids),
+      progressEventIds: asUnknownArray(provenance.progress_event_ids),
       cursorEventId: nullableString(provenance.cursor_event_id),
       correlationId: nullableString(identity.correlation_id)
     }),
@@ -819,6 +826,10 @@ function asRecord(value: unknown): JsonRecord {
 function asArray(value: unknown): JsonRecord[] {
   if (!Array.isArray(value)) return [];
   return value.map((item) => (typeof item === 'string' ? { summary: item } : item)).filter((item): item is JsonRecord => Boolean(item) && typeof item === 'object');
+}
+
+function asUnknownArray(value: unknown): unknown[] {
+  return Array.isArray(value) ? value : [];
 }
 
 function stringValue(value: unknown, fallback: string): string {
