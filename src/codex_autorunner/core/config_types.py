@@ -201,6 +201,9 @@ class TicketFlowConfig:
     include_previous_ticket_context: bool
     auto_resume: bool = False
     max_total_turns: Optional[int] = None
+    restart_recoverable_failures: bool = True
+    restart_max_attempts: int = 2
+    restart_backoff_seconds: float = 0.0
 
 
 class SecurityConfigSection(TypedDict, total=False):

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import sqlite3
+import subprocess
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
@@ -9,6 +10,7 @@ from typing import Any, Optional
 
 from ...tickets.outbox import archive_dispatch, ensure_outbox_dirs, resolve_outbox_paths
 from ...tickets.replies import resolve_reply_paths
+from ..config import ConfigError, load_repo_config
 from ..locks import FileLockBusy, file_lock
 from ..state_roots import resolve_repo_flows_db_path
 from .failure_diagnostics import (
@@ -27,15 +29,21 @@ from .lifecycle_reducer import (
     NO_CHANGE,
     EffectKind,
     reduce_flow_lifecycle,
-    resolve_reconcile_trigger,
 )
-from .models import FlowEventType, FlowRunRecord, FlowRunStatus
+from .models import FlowEventType, FlowRunRecord, FlowRunStatus, parse_flow_timestamp
 from .store import UNSET, FlowStore, now_iso
+from .supervisor import (
+    CommitBarrierObservation,
+    RestartPolicyObservation,
+    SupervisorEffectKind,
+    supervise_reconcile_flow,
+)
 from .worker_process import (
     FlowWorkerHealth,
     check_worker_health,
     clear_worker_metadata,
     read_worker_crash_info,
+    spawn_flow_worker,
     write_worker_crash_info,
 )
 from .workspace_root import resolve_ticket_flow_workspace_root
@@ -164,6 +172,169 @@ def _resolve_workspace_root(repo_root: Path, record: FlowRunRecord) -> Path:
     return resolve_ticket_flow_workspace_root(input_data, repo_root)
 
 
+def _git_status_porcelain(repo_root: Path) -> Optional[str]:
+    try:
+        proc = subprocess.run(
+            ["git", "status", "--porcelain"],
+            cwd=repo_root,
+            check=True,
+            text=True,
+            capture_output=True,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return (proc.stdout or "").strip()
+
+
+def _ticket_marked_done(path: Path) -> bool:
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError:
+        return False
+    if not text.startswith("---"):
+        return False
+    end = text.find("\n---", 3)
+    if end < 0:
+        return False
+    for raw_line in text[3:end].splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or ":" not in line:
+            continue
+        key, value = line.split(":", 1)
+        if key.strip() == "done":
+            return value.strip().strip("\"'").lower() == "true"
+    return False
+
+
+def _commit_barrier_observation(
+    repo_root: Path, record: FlowRunRecord
+) -> CommitBarrierObservation:
+    state = record.state if isinstance(record.state, dict) else {}
+    engine = state.get("ticket_engine") if isinstance(state, dict) else {}
+    engine = engine if isinstance(engine, dict) else {}
+    current_ticket = engine.get("current_ticket")
+    if not isinstance(current_ticket, str) or not current_ticket.strip():
+        return CommitBarrierObservation()
+
+    commit = engine.get("commit")
+    commit = commit if isinstance(commit, dict) else {}
+    ticket_path = repo_root / current_ticket
+    current_ticket_done = ticket_path.exists() and _ticket_marked_done(ticket_path)
+    dirty_status = _git_status_porcelain(repo_root) if current_ticket_done else None
+    return CommitBarrierObservation(
+        current_ticket=current_ticket,
+        current_ticket_done=current_ticket_done,
+        worktree_dirty=bool(dirty_status),
+        commit_pending=bool(commit.get("pending")),
+    )
+
+
+def _restart_state(record: FlowRunRecord) -> dict[str, Any]:
+    state = record.state if isinstance(record.state, dict) else {}
+    recovery = state.get("recovery") if isinstance(state, dict) else {}
+    recovery = recovery if isinstance(recovery, dict) else {}
+    restart = recovery.get("restart") if isinstance(recovery, dict) else {}
+    return dict(restart) if isinstance(restart, dict) else {}
+
+
+def _restart_attempt_count(record: FlowRunRecord) -> int:
+    raw = _restart_state(record).get("count")
+    return raw if isinstance(raw, int) and not isinstance(raw, bool) and raw >= 0 else 0
+
+
+def _load_restart_config(repo_root: Path) -> tuple[bool, int, float]:
+    try:
+        ticket_flow = load_repo_config(repo_root).ticket_flow
+    except ConfigError:
+        return True, 2, 0.0
+    return (
+        bool(getattr(ticket_flow, "restart_recoverable_failures", True)),
+        max(0, int(getattr(ticket_flow, "restart_max_attempts", 2))),
+        max(0.0, float(getattr(ticket_flow, "restart_backoff_seconds", 0.0))),
+    )
+
+
+def _restart_backoff_ready(record: FlowRunRecord, backoff_seconds: float) -> bool:
+    if backoff_seconds <= 0:
+        return True
+    last_attempted_at = _restart_state(record).get("last_attempted_at")
+    if not isinstance(last_attempted_at, str) or not last_attempted_at.strip():
+        return True
+    last_dt = parse_flow_timestamp(last_attempted_at)
+    now_dt = parse_flow_timestamp(now_iso())
+    if last_dt is None or now_dt is None:
+        return True
+    return (now_dt - last_dt).total_seconds() >= backoff_seconds
+
+
+def _restart_policy_observation(
+    repo_root: Path, record: FlowRunRecord
+) -> RestartPolicyObservation:
+    enabled, max_attempts, backoff_seconds = _load_restart_config(repo_root)
+    if (
+        record.flow_type != "ticket_flow"
+        or record.stop_requested
+        or record.status != FlowRunStatus.RUNNING
+    ):
+        enabled = False
+    return RestartPolicyObservation(
+        enabled=enabled,
+        attempts=_restart_attempt_count(record),
+        max_attempts=max_attempts,
+        backoff_ready=_restart_backoff_ready(record, backoff_seconds),
+    )
+
+
+def _with_restart_attempt(
+    state: dict[str, Any],
+    *,
+    max_attempts: int,
+    reason: str,
+    failure_reason: Optional[str] = None,
+) -> dict[str, Any]:
+    updated = dict(state)
+    recovery = updated.get("recovery")
+    recovery = dict(recovery) if isinstance(recovery, dict) else {}
+    restart = recovery.get("restart")
+    restart = dict(restart) if isinstance(restart, dict) else {}
+    count = restart.get("count")
+    count = count if isinstance(count, int) and not isinstance(count, bool) else 0
+    count += 1
+    restart.update(
+        {
+            "count": count,
+            "max_attempts": max_attempts,
+            "last_attempted_at": now_iso(),
+            "last_failure_reason": failure_reason,
+            "last_reason": reason,
+            "exhausted": count >= max_attempts if max_attempts > 0 else False,
+        }
+    )
+    recovery["restart"] = restart
+    updated["recovery"] = recovery
+    return updated
+
+
+def _with_restart_exhausted(
+    state: dict[str, Any],
+    *,
+    max_attempts: int,
+    reason: str,
+) -> dict[str, Any]:
+    updated = dict(state)
+    recovery = updated.get("recovery")
+    recovery = dict(recovery) if isinstance(recovery, dict) else {}
+    restart = recovery.get("restart")
+    restart = dict(restart) if isinstance(restart, dict) else {}
+    restart.setdefault("count", 0)
+    restart["max_attempts"] = max_attempts
+    restart["last_failure_reason"] = reason
+    restart["exhausted"] = True
+    recovery["restart"] = restart
+    updated["recovery"] = recovery
+    return updated
+
+
 def _ensure_worker_crash_artifact(
     store: FlowStore,
     run_id: str,
@@ -245,6 +416,9 @@ def _ensure_crash_payload(
             last_event=last_method,
             stderr_tail=getattr(health, "stderr_tail", None),
             exception=record.error_message,
+            exit_origin=getattr(health, "exit_origin", None),
+            exit_kind=getattr(health, "exit_kind", None),
+            reap_reason=getattr(health, "reap_reason", None),
         )
         if crash_path is not None:
             crash_info = read_worker_crash_info(repo_root, record.id)
@@ -368,7 +542,91 @@ def reconcile_flow_run(
                 crash_info = _ensure_crash_payload(repo_root, record, store, health)
 
             now = now_iso()
-            trigger = resolve_reconcile_trigger(record, health)
+            commit_barrier = _commit_barrier_observation(repo_root, record)
+            restart_policy = _restart_policy_observation(repo_root, record)
+            decision = supervise_reconcile_flow(
+                record,
+                health,
+                commit_barrier=commit_barrier,
+                restart=restart_policy,
+            )
+            trigger = decision.first_lifecycle_trigger()
+
+            wants_restart = any(
+                effect.kind == SupervisorEffectKind.SPAWN_WORKER
+                for effect in decision.effects
+            )
+            restart_enabled_waiting_for_backoff = (
+                restart_policy.enabled
+                and not restart_policy.backoff_ready
+                and health.status in {"dead", "invalid", "mismatch"}
+                and trigger is not None
+            )
+
+            if restart_enabled_waiting_for_backoff:
+                emit_reconcile_noop(
+                    store=store,
+                    run_id=record.id,
+                    status=record.status,
+                    note="restart-backoff-wait",
+                    worker_status=health.status,
+                )
+                return record, False, False
+
+            restart_state_override: Optional[dict[str, Any]] = None
+
+            if wants_restart:
+                restart_state = _with_restart_attempt(
+                    dict(record.state or {}),
+                    max_attempts=restart_policy.max_attempts,
+                    reason=decision.note,
+                )
+                try:
+                    clear_worker_metadata(health.artifact_path.parent)
+                    proc, stdout_handle, stderr_handle = spawn_flow_worker(
+                        repo_root, record.id
+                    )
+                    for stream in (stdout_handle, stderr_handle):
+                        try:
+                            stream.close()
+                        except OSError:
+                            pass
+                except (
+                    OSError,
+                    ValueError,
+                    RuntimeError,
+                    subprocess.SubprocessError,
+                ) as exc:
+                    restart_state_override = _with_restart_attempt(
+                        dict(record.state or {}),
+                        max_attempts=restart_policy.max_attempts,
+                        reason=decision.note,
+                        failure_reason=f"spawn_failed: {exc}",
+                    )
+                else:
+                    updated = store.update_flow_run_status(
+                        run_id=record.id,
+                        status=FlowRunStatus.RUNNING,
+                        state=restart_state,
+                        error_message=None,
+                        finished_at=UNSET,
+                    )
+                    emit_recovery_takeover(
+                        store=store,
+                        run_id=record.id,
+                        previous_status=record.status,
+                        resulting_status=FlowRunStatus.RUNNING,
+                        note="restart-worker-spawned",
+                        worker_status=health.status,
+                        crash_info=crash_info,
+                    )
+                    (logger or _logger).info(
+                        "Restarted flow worker for %s after %s (pid=%s)",
+                        record.id,
+                        decision.note,
+                        getattr(proc, "pid", None),
+                    )
+                    return (updated or record), bool(updated), False
 
             if trigger is None:
                 if record.status == FlowRunStatus.PAUSED and health.status in {
@@ -426,6 +684,14 @@ def reconcile_flow_run(
                 if result.state is not NO_CHANGE
                 else dict(record.state or {})
             )
+            if restart_state_override is not None:
+                state = restart_state_override
+            elif restart_policy.exhausted:
+                state = _with_restart_exhausted(
+                    state,
+                    max_attempts=restart_policy.max_attempts,
+                    reason="restart-attempts-exhausted",
+                )
             for effect in result.effects:
                 if effect.kind == EffectKind.ENRICH_FAILURE_PAYLOAD:
                     reconcile_ctx = ReconcileContext(

@@ -57,6 +57,9 @@ class FlowWorkerHealth:
     crash_path: Optional[Path] = None
     crash_info: Optional[dict[str, Any]] = None
     shutdown_intent: bool = False
+    exit_origin: Optional[str] = None
+    exit_kind: Optional[str] = None
+    reap_reason: Optional[str] = None
     active_tool: Optional[FlowActiveTool] = None
 
     @property
@@ -139,6 +142,10 @@ def write_worker_exit_info(
     *,
     returncode: Optional[int],
     shutdown_intent: bool = False,
+    exit_origin: Optional[str] = None,
+    exit_kind: Optional[str] = None,
+    reap_reason: Optional[str] = None,
+    preserve_existing_shutdown_intent: bool = True,
     artifacts_root: Optional[Path] = None,
 ) -> None:
     """Persist worker exit status + log tails for fast postmortem debugging.
@@ -166,7 +173,7 @@ def write_worker_exit_info(
 
     existing_shutdown_intent = False
     exit_path = _worker_exit_path(artifacts_dir)
-    if not shutdown_intent and exit_path.exists():
+    if preserve_existing_shutdown_intent and not shutdown_intent and exit_path.exists():
         try:
             existing = json.loads(exit_path.read_text(encoding="utf-8"))
             if isinstance(existing, dict) and existing.get("shutdown_intent") is True:
@@ -184,6 +191,12 @@ def write_worker_exit_info(
         "stderr_tail": _tail_file(artifacts_dir / "worker.err.log"),
         "stdout_tail": _tail_file(artifacts_dir / "worker.out.log"),
     }
+    if exit_origin:
+        data["exit_origin"] = exit_origin
+    if exit_kind:
+        data["exit_kind"] = exit_kind
+    if reap_reason:
+        data["reap_reason"] = reap_reason
     try:
         _worker_exit_path(artifacts_dir).write_text(
             json.dumps(data, indent=2), encoding="utf-8"
@@ -203,6 +216,9 @@ def write_worker_crash_info(
     stderr_tail: Optional[str] = None,
     exception: Optional[str] = None,
     stack_trace: Optional[str] = None,
+    exit_origin: Optional[str] = None,
+    exit_kind: Optional[str] = None,
+    reap_reason: Optional[str] = None,
     artifacts_root: Optional[Path] = None,
 ) -> Optional[Path]:
     try:
@@ -225,6 +241,12 @@ def write_worker_crash_info(
         "exception": exception,
         "stack_trace": stack_trace,
     }
+    if exit_origin:
+        payload["exit_origin"] = exit_origin
+    if exit_kind:
+        payload["exit_kind"] = exit_kind
+    if reap_reason:
+        payload["reap_reason"] = reap_reason
     crash_path = _worker_crash_path(artifacts_dir)
     try:
         crash_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
@@ -544,6 +566,9 @@ def check_worker_health(
         stderr_tail = None
         crash_info = None
         shutdown_intent = False
+        exit_origin = None
+        exit_kind = None
+        reap_reason = None
         crash_path = _worker_crash_path(artifacts_dir)
         if exit_path.exists():
             try:
@@ -561,6 +586,15 @@ def check_worker_health(
                         raw_shutdown = exit_data.get("shutdown_intent")
                         if isinstance(raw_shutdown, bool):
                             shutdown_intent = raw_shutdown
+                        raw_origin = exit_data.get("exit_origin")
+                        if isinstance(raw_origin, str) and raw_origin.strip():
+                            exit_origin = raw_origin.strip()
+                        raw_kind = exit_data.get("exit_kind")
+                        if isinstance(raw_kind, str) and raw_kind.strip():
+                            exit_kind = raw_kind.strip()
+                        raw_reap_reason = exit_data.get("reap_reason")
+                        if isinstance(raw_reap_reason, str) and raw_reap_reason.strip():
+                            reap_reason = raw_reap_reason.strip()
             except (json.JSONDecodeError, OSError):
                 exit_code = None
                 stderr_tail = None
@@ -591,6 +625,9 @@ def check_worker_health(
             crash_path=crash_path if crash_path.exists() else None,
             crash_info=crash_info if isinstance(crash_info, dict) else None,
             shutdown_intent=shutdown_intent,
+            exit_origin=exit_origin,
+            exit_kind=exit_kind,
+            reap_reason=reap_reason,
         )
 
     expected_cmd = cmd or _build_worker_cmd(entrypoint, run_id, repo_root)

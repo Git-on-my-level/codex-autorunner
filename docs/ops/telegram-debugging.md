@@ -2,6 +2,23 @@
 
 Use this guide when Telegram replies are missing, delayed, or out of order.
 
+## Ticket-flow Recovery State
+
+Telegram should mirror canonical ticket-flow recovery state, not infer its own
+worker lifecycle. If a Telegram-driven ticket flow appears stuck after a crash
+or restart:
+
+- Run `car ticket-flow status --run-id <run_id>` in the workspace and compare
+  the reported recovery state, worker status, restart attempts, and recommended
+  action with the Telegram message.
+- Inspect `.codex-autorunner/flows/<run_id>/crash.json` and
+  `.codex-autorunner/flows/<run_id>/worker.exit.json`.
+- Treat `exit_origin: stale_reaper` with `shutdown_intent: false` as stale
+  process cleanup. The reconciler/supervisor owns whether the run fails,
+  restarts, hits the commit barrier, or needs user action.
+- If a done ticket has dirty worktree changes, the commit barrier should keep
+  the flow on that ticket until the work is committed or explicitly handled.
+
 ## Quick Triage
 
 - Confirm the bot process is running:

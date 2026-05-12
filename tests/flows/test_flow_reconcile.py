@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import uuid
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -275,3 +276,205 @@ def test_resume_clears_error_message(monkeypatch, tmp_path: Path) -> None:
     assert recovered.status == FlowRunStatus.RUNNING
     assert updated is False
     assert locked is False
+
+
+def test_dead_worker_restarts_same_running_ticket_flow_run(
+    monkeypatch, tmp_path: Path
+) -> None:
+    db = tmp_path / "flows.db"
+    store = FlowStore(db)
+    store.initialize()
+    run_id = str(uuid.uuid4())
+    record = store.create_flow_run(
+        run_id=run_id,
+        flow_type="ticket_flow",
+        input_data={},
+        state={
+            "ticket_engine": {"status": "running", "current_ticket": "TICKET-001.md"}
+        },
+        current_step="ticket_turn",
+    )
+    store.update_flow_run_status(
+        run_id=record.id,
+        status=FlowRunStatus.RUNNING,
+        state=record.state,
+    )
+    artifact_dir = tmp_path / ".codex-autorunner" / "flows" / run_id
+    artifact_dir.mkdir(parents=True)
+
+    monkeypatch.setattr(
+        "codex_autorunner.core.flows.reconciler.check_worker_health",
+        lambda repo_root, run_id: SimpleNamespace(
+            is_alive=False,
+            status="dead",
+            pid=12345,
+            message="worker PID not running",
+            artifact_path=artifact_dir / "worker.json",
+        ),
+    )
+    spawned: list[str] = []
+
+    def fake_spawn(repo_root: Path, run_id: str):
+        spawned.append(run_id)
+        return (
+            SimpleNamespace(pid=999),
+            SimpleNamespace(close=lambda: None),
+            SimpleNamespace(close=lambda: None),
+        )
+
+    monkeypatch.setattr(
+        "codex_autorunner.core.flows.reconciler.spawn_flow_worker",
+        fake_spawn,
+    )
+
+    current_record = store.get_flow_run(record.id)
+    assert current_record is not None
+    recovered, updated, locked = reconcile_flow_run(tmp_path, current_record, store)
+
+    assert recovered.status == FlowRunStatus.RUNNING
+    assert recovered.current_step == "ticket_turn"
+    assert recovered.error_message is None
+    assert updated is True
+    assert locked is False
+    assert spawned == [run_id]
+    restart = recovered.state["recovery"]["restart"]
+    assert restart["count"] == 1
+    assert restart["max_attempts"] == 2
+    assert restart["exhausted"] is False
+
+
+def test_dead_worker_spawn_failure_marks_run_failed(
+    monkeypatch, tmp_path: Path
+) -> None:
+    db = tmp_path / "flows.db"
+    store = FlowStore(db)
+    store.initialize()
+    run_id = str(uuid.uuid4())
+    record = store.create_flow_run(
+        run_id=run_id,
+        flow_type="ticket_flow",
+        input_data={},
+        state={"ticket_engine": {"status": "running"}},
+        current_step="ticket_turn",
+    )
+    store.update_flow_run_status(run_id=record.id, status=FlowRunStatus.RUNNING)
+    artifact_dir = tmp_path / ".codex-autorunner" / "flows" / run_id
+    artifact_dir.mkdir(parents=True)
+    monkeypatch.setattr(
+        "codex_autorunner.core.flows.reconciler.check_worker_health",
+        lambda repo_root, run_id: SimpleNamespace(
+            is_alive=False,
+            status="dead",
+            pid=12345,
+            message="worker PID not running",
+            artifact_path=artifact_dir / "worker.json",
+        ),
+    )
+    monkeypatch.setattr(
+        "codex_autorunner.core.flows.reconciler.spawn_flow_worker",
+        lambda repo_root, run_id: (_ for _ in ()).throw(OSError("spawn boom")),
+    )
+
+    current_record = store.get_flow_run(record.id)
+    assert current_record is not None
+    recovered, updated, locked = reconcile_flow_run(tmp_path, current_record, store)
+
+    assert recovered.status == FlowRunStatus.FAILED
+    assert updated is True
+    assert locked is False
+    restart = recovered.state["recovery"]["restart"]
+    assert restart["count"] == 1
+    assert restart["last_failure_reason"] == "spawn_failed: spawn boom"
+
+
+def test_dead_worker_restart_attempt_exhaustion_does_not_spawn(
+    monkeypatch, tmp_path: Path
+) -> None:
+    db = tmp_path / "flows.db"
+    store = FlowStore(db)
+    store.initialize()
+    run_id = str(uuid.uuid4())
+    record = store.create_flow_run(
+        run_id=run_id,
+        flow_type="ticket_flow",
+        input_data={},
+        state={
+            "ticket_engine": {"status": "running"},
+            "recovery": {"restart": {"count": 2, "max_attempts": 2}},
+        },
+        current_step="ticket_turn",
+    )
+    store.update_flow_run_status(
+        run_id=record.id,
+        status=FlowRunStatus.RUNNING,
+        state=record.state,
+    )
+    monkeypatch.setattr(
+        "codex_autorunner.core.flows.reconciler.check_worker_health",
+        lambda repo_root, run_id: SimpleNamespace(
+            is_alive=False,
+            status="dead",
+            pid=12345,
+            message="worker PID not running",
+            artifact_path=tmp_path / "worker.json",
+        ),
+    )
+    spawned: list[str] = []
+    monkeypatch.setattr(
+        "codex_autorunner.core.flows.reconciler.spawn_flow_worker",
+        lambda repo_root, run_id: spawned.append(run_id),
+    )
+
+    current_record = store.get_flow_run(record.id)
+    assert current_record is not None
+    recovered, updated, locked = reconcile_flow_run(tmp_path, current_record, store)
+
+    assert recovered.status == FlowRunStatus.FAILED
+    assert updated is True
+    assert locked is False
+    assert spawned == []
+    restart = recovered.state["recovery"]["restart"]
+    assert restart["count"] == 2
+    assert restart["exhausted"] is True
+
+
+def test_user_stop_requested_dead_worker_is_not_auto_restarted(
+    monkeypatch, tmp_path: Path
+) -> None:
+    db = tmp_path / "flows.db"
+    store = FlowStore(db)
+    store.initialize()
+    run_id = str(uuid.uuid4())
+    record = store.create_flow_run(
+        run_id=run_id,
+        flow_type="ticket_flow",
+        input_data={},
+        state={"ticket_engine": {"status": "running"}},
+        current_step="ticket_turn",
+    )
+    store.update_flow_run_status(run_id=record.id, status=FlowRunStatus.RUNNING)
+    store.set_stop_requested(record.id, True)
+    monkeypatch.setattr(
+        "codex_autorunner.core.flows.reconciler.check_worker_health",
+        lambda repo_root, run_id: SimpleNamespace(
+            is_alive=False,
+            status="dead",
+            pid=12345,
+            message="worker PID not running",
+            artifact_path=tmp_path / "worker.json",
+        ),
+    )
+    spawned: list[str] = []
+    monkeypatch.setattr(
+        "codex_autorunner.core.flows.reconciler.spawn_flow_worker",
+        lambda repo_root, run_id: spawned.append(run_id),
+    )
+
+    current_record = store.get_flow_run(record.id)
+    assert current_record is not None
+    recovered, updated, locked = reconcile_flow_run(tmp_path, current_record, store)
+
+    assert recovered.status == FlowRunStatus.FAILED
+    assert updated is True
+    assert locked is False
+    assert spawned == []

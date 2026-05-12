@@ -12,9 +12,9 @@ from codex_autorunner.core.flows.lifecycle_reducer import (
     TransitionResult,
     TriggerKind,
     reduce_flow_lifecycle,
-    resolve_reconcile_trigger,
 )
 from codex_autorunner.core.flows.models import FlowRunRecord, FlowRunStatus
+from codex_autorunner.core.flows.supervisor import supervise_reconcile_flow
 
 _NOW = "2024-01-15T12:00:00Z"
 
@@ -560,12 +560,22 @@ class TestReconcileWorkerDead:
         assert len(enrich) == 1
         assert enrich[0].note == "worker_dead"
 
-    def test_rejects_non_running(self):
+    def test_rejects_non_running_or_stopping(self):
         with pytest.raises(InvalidTransition):
             _reduce(
                 FlowRunStatus.PAUSED,
                 FlowTrigger(kind=TriggerKind.RECONCILE_WORKER_DEAD, error_message="x"),
             )
+
+    def test_stopping_to_failed(self):
+        result = _reduce(
+            FlowRunStatus.STOPPING,
+            FlowTrigger(kind=TriggerKind.RECONCILE_WORKER_DEAD, error_message="x"),
+        )
+        assert result.status == FlowRunStatus.FAILED
+        assert result.finished_at == _NOW
+        assert result.current_step is None
+        assert result.note == "worker-dead"
 
 
 class TestReconcileWorkerShutdown:
@@ -707,43 +717,60 @@ def _health(alive: bool, **kwargs) -> SimpleNamespace:
     return SimpleNamespace(**defaults)
 
 
+def _resolve_reconcile_trigger(rec: FlowRunRecord, health: SimpleNamespace):
+    return supervise_reconcile_flow(rec, health).first_lifecycle_trigger()
+
+
 class TestResolveReconcileTrigger:
     def test_pending_stop_requested_with_dead_worker_stops(self):
         rec = _rec(FlowRunStatus.PENDING)
         rec.stop_requested = True
         rec.current_step = "ticket_turn"
-        trigger = resolve_reconcile_trigger(rec, _health(False))
+        trigger = _resolve_reconcile_trigger(rec, _health(False))
         assert trigger is not None
         assert trigger.kind == TriggerKind.STOP_REQUESTED
 
     def test_running_engine_completed(self):
         rec = _rec(FlowRunStatus.RUNNING, {"ticket_engine": {"status": "completed"}})
-        trigger = resolve_reconcile_trigger(rec, _health(True))
+        trigger = _resolve_reconcile_trigger(rec, _health(True))
         assert trigger is not None
         assert trigger.kind == TriggerKind.RECONCILE_ENGINE_COMPLETED
 
     def test_running_dead_worker(self):
         rec = _rec(FlowRunStatus.RUNNING, {"ticket_engine": {"status": "running"}})
-        trigger = resolve_reconcile_trigger(rec, _health(False))
+        trigger = _resolve_reconcile_trigger(rec, _health(False))
         assert trigger is not None
         assert trigger.kind == TriggerKind.RECONCILE_WORKER_DEAD
         assert "Worker died" in (trigger.error_message or "")
 
     def test_running_dead_shutdown_intent(self):
         rec = _rec(FlowRunStatus.RUNNING, {"ticket_engine": {"status": "running"}})
-        trigger = resolve_reconcile_trigger(rec, _health(False, shutdown_intent=True))
+        trigger = _resolve_reconcile_trigger(rec, _health(False, shutdown_intent=True))
         assert trigger is not None
         assert trigger.kind == TriggerKind.RECONCILE_WORKER_SHUTDOWN
 
+    def test_running_dead_stale_reaper_shutdown_intent_is_recovery_failure(self):
+        rec = _rec(FlowRunStatus.RUNNING, {"ticket_engine": {"status": "running"}})
+        trigger = _resolve_reconcile_trigger(
+            rec,
+            _health(
+                False,
+                shutdown_intent=True,
+                exit_origin="stale_reaper",
+            ),
+        )
+        assert trigger is not None
+        assert trigger.kind == TriggerKind.RECONCILE_WORKER_DEAD
+
     def test_running_engine_paused(self):
         rec = _rec(FlowRunStatus.RUNNING, {"ticket_engine": {"status": "paused"}})
-        trigger = resolve_reconcile_trigger(rec, _health(True))
+        trigger = _resolve_reconcile_trigger(rec, _health(True))
         assert trigger is not None
         assert trigger.kind == TriggerKind.RECONCILE_ENGINE_PAUSED
 
     def test_running_alive_noop(self):
         rec = _rec(FlowRunStatus.RUNNING, {"ticket_engine": {"status": "running"}})
-        trigger = resolve_reconcile_trigger(rec, _health(True))
+        trigger = _resolve_reconcile_trigger(rec, _health(True))
         assert trigger is None
 
     def test_running_alive_stale_error(self):
@@ -752,31 +779,31 @@ class TestResolveReconcileTrigger:
             {"ticket_engine": {"status": "running"}},
             error_message="old error",
         )
-        trigger = resolve_reconcile_trigger(rec, _health(True))
+        trigger = _resolve_reconcile_trigger(rec, _health(True))
         assert trigger is not None
         assert trigger.kind == TriggerKind.RECONCILE_CLEAR_STALE_ERROR
 
     def test_stopping_dead_worker(self):
         rec = _rec(FlowRunStatus.STOPPING, {"ticket_engine": {"status": "running"}})
-        trigger = resolve_reconcile_trigger(rec, _health(False))
+        trigger = _resolve_reconcile_trigger(rec, _health(False))
         assert trigger is not None
         assert trigger.kind == TriggerKind.RECONCILE_STOPPING_FINALIZE
 
     def test_paused_engine_completed(self):
         rec = _rec(FlowRunStatus.PAUSED, {"ticket_engine": {"status": "completed"}})
-        trigger = resolve_reconcile_trigger(rec, _health(True))
+        trigger = _resolve_reconcile_trigger(rec, _health(True))
         assert trigger is not None
         assert trigger.kind == TriggerKind.RECONCILE_ENGINE_COMPLETED
 
     def test_paused_stale_resume(self):
         rec = _rec(FlowRunStatus.PAUSED, {"ticket_engine": {"status": "running"}})
-        trigger = resolve_reconcile_trigger(rec, _health(True))
+        trigger = _resolve_reconcile_trigger(rec, _health(True))
         assert trigger is not None
         assert trigger.kind == TriggerKind.RECONCILE_STALE_PAUSE_RESUME
 
     def test_paused_stale_resume_none_engine(self):
         rec = _rec(FlowRunStatus.PAUSED, {"ticket_engine": {}})
-        trigger = resolve_reconcile_trigger(rec, _health(True))
+        trigger = _resolve_reconcile_trigger(rec, _health(True))
         assert trigger is not None
         assert trigger.kind == TriggerKind.RECONCILE_STALE_PAUSE_RESUME
 
@@ -785,7 +812,7 @@ class TestResolveReconcileTrigger:
             FlowRunStatus.PAUSED,
             {"ticket_engine": {"status": "running", "reason_code": "user_pause"}},
         )
-        trigger = resolve_reconcile_trigger(rec, _health(True))
+        trigger = _resolve_reconcile_trigger(rec, _health(True))
         assert trigger is None
 
     def test_paused_dead_worker_noop(self):
@@ -793,7 +820,7 @@ class TestResolveReconcileTrigger:
             FlowRunStatus.PAUSED,
             {"ticket_engine": {"status": "paused", "reason_code": "user_pause"}},
         )
-        trigger = resolve_reconcile_trigger(rec, _health(False))
+        trigger = _resolve_reconcile_trigger(rec, _health(False))
         assert trigger is None
 
     def test_terminal_returns_none(self):
@@ -803,5 +830,5 @@ class TestResolveReconcileTrigger:
             FlowRunStatus.STOPPED,
         ):
             rec = _rec(status, {"ticket_engine": {"status": "running"}})
-            trigger = resolve_reconcile_trigger(rec, _health(True))
+            trigger = _resolve_reconcile_trigger(rec, _health(True))
             assert trigger is None

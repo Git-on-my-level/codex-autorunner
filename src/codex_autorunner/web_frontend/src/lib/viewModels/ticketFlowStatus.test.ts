@@ -78,4 +78,48 @@ describe('ticket flow status routes', () => {
     expect(vm.status).toBe('idle');
     expect(vm.signal).toBe('idle');
   });
+
+  it('renders restart exhaustion from canonical run state', () => {
+    const vm = buildTicketFlowStatusViewModel(
+      [],
+      [
+        {
+          id: 'run-restart-exhausted',
+          chatId: null,
+          status: 'blocked',
+          workStatus: null,
+          operatorStatus: null,
+          terminal: false,
+          streamShouldClose: false,
+          streamCloseReason: null,
+          phase: null,
+          guidance: null,
+          queueDepth: 0,
+          elapsedSeconds: null,
+          startedAt: null,
+          idleSeconds: null,
+          lastEventId: null,
+          lastEventAt: '2026-05-04T00:02:00Z',
+          progressPercent: null,
+          events: [],
+          raw: {
+            id: 'run-restart-exhausted',
+            status: 'failed',
+            repo_id: 'codex-autorunner',
+            run_state: {
+              recovery_state: 'restart_exhausted',
+              blocking_reason: 'Restart attempts exhausted',
+              restart_attempts: 2,
+              restart_max_attempts: 2
+            }
+          }
+        }
+      ],
+      { kind: 'repo', id: 'codex-autorunner' }
+    );
+
+    expect(vm.statusLabel).toBe('Recovery exhausted');
+    expect(vm.signal).toBe('failed');
+    expect(vm.reasonLabel).toContain('Restart attempts exhausted');
+  });
 });

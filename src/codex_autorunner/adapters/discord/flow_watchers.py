@@ -17,6 +17,7 @@ from ...core.flows import (
     FlowStore,
     list_unseen_ticket_flow_dispatches,
 )
+from ...core.flows.ux_helpers import build_flow_status_snapshot
 from ...core.logging_utils import log_event
 from ...core.utils import canonicalize_path
 from ..chat.pause_notifications import (
@@ -91,6 +92,89 @@ def _format_terminal_notification(
     elif status == FlowRunStatus.STOPPED.value:
         return f"Ticket flow stopped (run {run_id})."
     return f"Ticket flow ended (run {run_id}, status: {status})."
+
+
+def _recovery_fingerprint(run_id: str, run_state: dict[str, Any]) -> Optional[str]:
+    recovery_state = run_state.get("recovery_state") or run_state.get("state")
+    if not isinstance(recovery_state, str) or not recovery_state.strip():
+        return None
+    recovery_state = recovery_state.strip()
+    if recovery_state not in {
+        "recovering",
+        "restarted",
+        "failed",
+        "restart_exhausted",
+        "commit_barrier_pending",
+    }:
+        return None
+    attempts = run_state.get("restart_attempts")
+    last_action = run_state.get("last_recovery_action")
+    return ":".join(
+        str(part)
+        for part in (
+            run_id,
+            recovery_state,
+            attempts if isinstance(attempts, int) else "",
+            last_action if isinstance(last_action, str) else "",
+        )
+    )
+
+
+def _format_recovery_notification(
+    *,
+    run_id: str,
+    run_state: dict[str, Any],
+) -> str:
+    recovery_state = str(
+        run_state.get("recovery_state") or run_state.get("state") or "recovery"
+    ).strip()
+    lines = [f"Ticket flow recovery update (run {run_id}): {recovery_state}."]
+    worker_status = run_state.get("worker_status")
+    if isinstance(worker_status, str) and worker_status.strip():
+        lines.append(f"Worker: {worker_status.strip()}.")
+    attempts = run_state.get("restart_attempts")
+    max_attempts = run_state.get("restart_max_attempts")
+    if isinstance(attempts, int) and not isinstance(attempts, bool):
+        if isinstance(max_attempts, int) and not isinstance(max_attempts, bool):
+            lines.append(f"Restart attempts: {attempts}/{max_attempts}.")
+        else:
+            lines.append(f"Restart attempts: {attempts}.")
+    if run_state.get("commit_barrier_pending"):
+        lines.append("Commit barrier pending; preserving completed ticket work.")
+    reason = run_state.get("blocking_reason") or run_state.get("crash_reason")
+    if isinstance(reason, str) and reason.strip():
+        lines.append(f"Reason: {_truncate_error(reason, limit=260)}")
+    recommended = run_state.get("recommended_action")
+    if isinstance(recommended, str) and recommended.strip():
+        lines.append(f"Recommended: `{recommended.strip()}`")
+    return "\n".join(lines)
+
+
+def _load_ticket_flow_recovery_notifications(
+    workspace_root: Path,
+) -> list[tuple[str, str, str, dict[str, Any]]]:
+    db_path = workspace_root / ".codex-autorunner" / "flows.db"
+    if not db_path.exists():
+        return []
+    config = load_repo_config(workspace_root)
+    notifications: list[tuple[str, str, str, dict[str, Any]]] = []
+    with FlowStore(db_path, durable=config.durable_writes) as store:
+        for record in store.list_flow_runs(flow_type="ticket_flow"):
+            if record.status == FlowRunStatus.SUPERSEDED:
+                continue
+            snapshot = build_flow_status_snapshot(workspace_root, record, store)
+            run_state = snapshot.get("run_state")
+            if not isinstance(run_state, dict):
+                continue
+            fingerprint = _recovery_fingerprint(record.id, run_state)
+            if fingerprint is None:
+                continue
+            message = _format_recovery_notification(
+                run_id=record.id,
+                run_state=run_state,
+            )
+            notifications.append((record.id, fingerprint, message, run_state))
+    return notifications
 
 
 def _format_pause_notification_source(
@@ -313,6 +397,91 @@ async def _scan_and_enqueue_pause_notifications(service: Any) -> int:
     return notified
 
 
+async def _scan_and_enqueue_recovery_notifications(service: Any) -> int:
+    notified = 0
+    bindings = await service._store.list_bindings()
+    preferred_sources = _preferred_bound_sources_by_workspace(service)
+    for binding in bindings:
+        channel_id = binding.get("channel_id")
+        workspace_raw = binding.get("workspace_path")
+        if not isinstance(channel_id, str) or not isinstance(workspace_raw, str):
+            continue
+        workspace_root = canonicalize_path(Path(workspace_raw))
+        preferred_source = preferred_sources.get(str(workspace_root))
+        if preferred_source is None:
+            preferred_source = _preferred_bound_source_for_workspace(
+                service, workspace_root
+            )
+        if preferred_source == "telegram":
+            continue
+        try:
+            notifications = await asyncio.to_thread(
+                _load_ticket_flow_recovery_notifications,
+                workspace_root,
+            )
+        except (ConfigError, OSError, RuntimeError, ValueError) as exc:
+            log_event(
+                service._logger,
+                logging.WARNING,
+                "discord.recovery_watch.load_failed",
+                exc=exc,
+                channel_id=channel_id,
+            )
+            continue
+        for run_id, fingerprint, message, run_state in notifications:
+            if binding.get("last_recovery_fingerprint") == fingerprint:
+                continue
+            record_id = f"recovery:{channel_id}:{fingerprint}"
+            try:
+                await service._store.enqueue_outbox(
+                    OutboxRecord(
+                        record_id=record_id,
+                        channel_id=channel_id,
+                        message_id=None,
+                        operation="send",
+                        payload_json={"content": message},
+                    )
+                )
+                run_mirror = service._flow_run_mirror(workspace_root)
+                run_mirror.mirror_outbound(
+                    run_id=run_id,
+                    platform="discord",
+                    event_type="flow_recovery_notice",
+                    kind="notification",
+                    actor="car",
+                    text=message,
+                    chat_id=channel_id,
+                    thread_id=binding.get("guild_id"),
+                    message_id=record_id,
+                    meta={"run_state": run_state},
+                )
+                await service._store.mark_recovery_seen(
+                    channel_id=channel_id,
+                    fingerprint=fingerprint,
+                )
+                binding["last_recovery_fingerprint"] = fingerprint
+            except (OSError, ValueError, KeyError, TypeError) as exc:
+                log_event(
+                    service._logger,
+                    logging.WARNING,
+                    "discord.recovery_watch.enqueue_failed",
+                    exc=exc,
+                    channel_id=channel_id,
+                    run_id=run_id,
+                )
+                continue
+            log_event(
+                service._logger,
+                logging.INFO,
+                "discord.recovery_watch.notified",
+                channel_id=channel_id,
+                run_id=run_id,
+                fingerprint=fingerprint,
+            )
+            notified += 1
+    return notified
+
+
 async def _scan_and_enqueue_terminal_notifications(service: Any) -> int:
     notified = 0
     bindings = await service._store.list_bindings()
@@ -426,6 +595,18 @@ async def watch_ticket_flow_pauses(service: Any) -> None:
             scope.record_db_read(1)
             try:
                 notified = await _scan_and_enqueue_pause_notifications(service) or 0
+                if notified == 0:
+                    try:
+                        notified += (
+                            await _scan_and_enqueue_recovery_notifications(service) or 0
+                        )
+                    except Exception as exc:  # intentional: secondary scan best effort
+                        log_event(
+                            service._logger,
+                            logging.WARNING,
+                            "discord.recovery_watch.scan_failed",
+                            exc=exc,
+                        )
                 if notified > 0:
                     found_work = True
                     scope.mark_productive()

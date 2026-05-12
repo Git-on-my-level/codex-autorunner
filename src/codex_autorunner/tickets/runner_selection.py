@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from ..core.flows.models import FlowEventType
+from ..core.git_utils import GitError, run_git
 from .files import (
     list_ticket_paths,
     read_ticket,
@@ -108,8 +109,17 @@ def select_ticket(
         commit_pending = False
 
     if current_path and current_ticket_done and not commit_pending:
-        current_path = None
-        _clear_per_ticket_state()
+        dirty_status = _git_status_porcelain(workspace_root)
+        if dirty_status is not None and dirty_status.strip():
+            state_updates["commit"] = {
+                "pending": True,
+                "retries": 0,
+                "status_porcelain": dirty_status,
+            }
+            commit_pending = True
+        else:
+            current_path = None
+            _clear_per_ticket_state()
 
     if current_path is None:
         next_path = _find_next_ticket(ticket_paths)
@@ -270,6 +280,14 @@ def _find_next_ticket(ticket_paths: list[Path]) -> Optional[Path]:
             continue
         return path
     return None
+
+
+def _git_status_porcelain(workspace_root: Path) -> Optional[str]:
+    try:
+        proc = run_git(["status", "--porcelain"], cwd=workspace_root, check=True)
+    except GitError:
+        return None
+    return (proc.stdout or "").strip()
 
 
 TICKET_CONTEXT_DEFAULT_MAX_BYTES = 4096

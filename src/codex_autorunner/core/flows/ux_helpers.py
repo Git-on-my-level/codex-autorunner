@@ -402,6 +402,35 @@ def format_ticket_flow_status_lines(
     if freshness_summary:
         lines.append(f"Freshness: {freshness_summary}")
 
+    run_state = snapshot.get("run_state")
+    if isinstance(run_state, Mapping):
+        recovery_state = run_state.get("recovery_state")
+        if isinstance(recovery_state, str) and recovery_state.strip():
+            lines.append(f"Recovery: {recovery_state.strip()}")
+        worker_projection = run_state.get("worker_status")
+        if isinstance(worker_projection, str) and worker_projection.strip():
+            lines.append(f"Worker status: {worker_projection.strip()}")
+        restart_attempts = run_state.get("restart_attempts")
+        restart_max = run_state.get("restart_max_attempts")
+        if isinstance(restart_attempts, int) and not isinstance(restart_attempts, bool):
+            if isinstance(restart_max, int) and not isinstance(restart_max, bool):
+                lines.append(f"Restart attempts: {restart_attempts}/{restart_max}")
+            else:
+                lines.append(f"Restart attempts: {restart_attempts}")
+        if run_state.get("commit_barrier_pending"):
+            lines.append(
+                "Commit barrier: pending; preserving completed ticket work before advancing"
+            )
+        last_action = run_state.get("last_recovery_action")
+        if isinstance(last_action, str) and last_action.strip():
+            lines.append(f"Last recovery action: {last_action.strip()}")
+        crash_reason = run_state.get("crash_reason") or run_state.get("reap_reason")
+        if isinstance(crash_reason, str) and crash_reason.strip():
+            lines.append(f"Crash/reap reason: {crash_reason.strip()}")
+        recommended = run_state.get("recommended_action")
+        if isinstance(recommended, str) and recommended.strip():
+            lines.append(f"Recommended: {recommended.strip()}")
+
     lines.append(f"Archive: {_format_ticket_flow_archive_status(record)}")
     return lines
 
@@ -416,11 +445,18 @@ def build_flow_status_snapshot(
     return _build_ticket_flow_status_snapshot(repo_root, record, store, lite=lite)
 
 
-def ensure_worker(repo_root: Path, run_id: str, is_terminal: bool = False) -> dict:
+def ensure_worker(
+    repo_root: Path,
+    run_id: str,
+    is_terminal: bool = False,
+    *,
+    replace_stale_worker: bool = False,
+) -> dict:
     return _ensure_flow_worker(
         repo_root,
         run_id,
         is_terminal=is_terminal,
+        replace_stale_worker=replace_stale_worker,
         check_worker_health_fn=check_worker_health,
         clear_worker_metadata_fn=clear_worker_metadata,
         spawn_flow_worker_fn=spawn_flow_worker,

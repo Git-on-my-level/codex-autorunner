@@ -296,6 +296,30 @@ TICKET_FLOW_FIELD_SCHEMAS: dict[str, FieldSchema] = {
         range_message="ticket_flow.max_total_turns must be a positive integer or null",
         reject_bool=True,
     ),
+    "restart_recoverable_failures": FieldSchema(
+        path="ticket_flow.restart_recoverable_failures",
+        kind="bool",
+        default=True,
+        type_message="ticket_flow.restart_recoverable_failures must be boolean",
+    ),
+    "restart_max_attempts": FieldSchema(
+        path="ticket_flow.restart_max_attempts",
+        kind="int",
+        default=2,
+        min_value=0,
+        type_message="ticket_flow.restart_max_attempts must be a non-negative integer",
+        range_message="ticket_flow.restart_max_attempts must be >= 0",
+        reject_bool=True,
+    ),
+    "restart_backoff_seconds": FieldSchema(
+        path="ticket_flow.restart_backoff_seconds",
+        kind="number",
+        default=0.0,
+        min_value=0,
+        type_message="ticket_flow.restart_backoff_seconds must be a number",
+        range_message="ticket_flow.restart_backoff_seconds must be >= 0",
+        reject_bool=True,
+    ),
 }
 
 APP_SERVER_FIELD_SCHEMAS: dict[str, FieldSchema] = {

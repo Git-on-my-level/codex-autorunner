@@ -12,7 +12,7 @@ Runtime path
     → ``_apply_transition`` (persists + emits).
 
 Reconciler path
-    ``resolve_reconcile_trigger`` → ``FlowTrigger`` → ``reduce_flow_lifecycle``
+    ``supervise_reconcile_flow`` → ``FlowTrigger`` → ``reduce_flow_lifecycle``
     → reconciler applies the ``TransitionResult`` (persist + emit telemetry).
 
 There is no other code path that may mutate flow lifecycle state.
@@ -24,7 +24,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Dict, List, Optional
 
-from .models import FlowRunRecord, FlowRunStatus
+from .models import FlowRunStatus
 from .reasons import ensure_reason_summary
 
 
@@ -551,7 +551,12 @@ def _reduce_reconcile_worker_dead(
     *,
     now: str,
 ) -> TransitionResult:
-    _require_status(current_status, FlowRunStatus.RUNNING, trigger=trigger.kind)
+    _require_status(
+        current_status,
+        FlowRunStatus.RUNNING,
+        FlowRunStatus.STOPPING,
+        trigger=trigger.kind,
+    )
     state = _merge_state(current_state, trigger)
     state = ensure_reason_summary(
         state, status=FlowRunStatus.FAILED, error_message=trigger.error_message
@@ -674,81 +679,3 @@ def _reduce_reconcile_clear_stale_error(
         error_message=None,
         note="clear-stale-error",
     )
-
-
-def resolve_reconcile_trigger(
-    record: FlowRunRecord,
-    health: Any,
-) -> Optional[FlowTrigger]:
-    """Map reconciliation context to a lifecycle trigger.
-
-    Returns ``None`` when no state transition is warranted (true no-ops).
-    Callers (the reconciler) feed the returned trigger into
-    :func:`reduce_flow_lifecycle` to obtain the authoritative
-    :class:`TransitionResult`.
-    """
-    status = record.status
-    state: dict[str, Any] = record.state if isinstance(record.state, dict) else {}
-    engine_raw = state.get("ticket_engine") if isinstance(state, dict) else {}
-    engine: dict[str, Any] = engine_raw if isinstance(engine_raw, dict) else {}
-    inner_status = engine.get("status")
-    reason_code = engine.get("reason_code")
-    is_alive = getattr(health, "is_alive", False)
-
-    if status == FlowRunStatus.PENDING:
-        if record.stop_requested and not is_alive:
-            return FlowTrigger(kind=TriggerKind.STOP_REQUESTED)
-        return None
-
-    if status == FlowRunStatus.RUNNING:
-        if inner_status == "completed":
-            return FlowTrigger(kind=TriggerKind.RECONCILE_ENGINE_COMPLETED)
-
-        if not is_alive:
-            shutdown_intent = getattr(health, "shutdown_intent", False)
-            if shutdown_intent:
-                return FlowTrigger(kind=TriggerKind.RECONCILE_WORKER_SHUTDOWN)
-
-            error_msg = f"Worker died (status={getattr(health, 'status', 'unknown')}"
-            pid = getattr(health, "pid", None)
-            if pid:
-                error_msg += f", pid={pid}"
-            message = getattr(health, "message", None)
-            if message:
-                error_msg += f", reason: {message}"
-            exit_code = getattr(health, "exit_code", None)
-            if isinstance(exit_code, int):
-                error_msg += f", exit_code={exit_code}"
-            error_msg += ")"
-            return FlowTrigger(
-                kind=TriggerKind.RECONCILE_WORKER_DEAD,
-                error_message=error_msg,
-            )
-
-        if inner_status == "paused":
-            return FlowTrigger(kind=TriggerKind.RECONCILE_ENGINE_PAUSED)
-
-        if record.error_message:
-            return FlowTrigger(kind=TriggerKind.RECONCILE_CLEAR_STALE_ERROR)
-
-        return None
-
-    if status == FlowRunStatus.STOPPING:
-        if not is_alive:
-            return FlowTrigger(kind=TriggerKind.RECONCILE_STOPPING_FINALIZE)
-        return None
-
-    if status == FlowRunStatus.PAUSED:
-        if inner_status == "completed":
-            return FlowTrigger(kind=TriggerKind.RECONCILE_ENGINE_COMPLETED)
-
-        if (
-            inner_status in (None, "running")
-            and reason_code != "user_pause"
-            and is_alive
-        ):
-            return FlowTrigger(kind=TriggerKind.RECONCILE_STALE_PAUSE_RESUME)
-
-        return None
-
-    return None

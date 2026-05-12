@@ -192,6 +192,13 @@ CAR passes tickets to agents along with relevant context, and agents execute the
 ### File System as Truth
 CAR's philosophy is that the file system is the source of truth. Tickets, contextspace docs, and all state live on disk. This makes everything inspectable, versionable, and debuggable.
 
+Ticket-flow recovery follows the same rule. Worker metadata and crash artifacts
+under `.codex-autorunner/flows/<run_id>/` are evidence; the lifecycle
+supervisor/reconciler is the only recovery decision path for active runs.
+Process reapers only clean up stale processes and must not be interpreted as
+user shutdown. If a current ticket is marked `done: true` while the worktree is
+dirty, CAR preserves that ticket behind the commit barrier instead of advancing.
+
 ---
 
 ## Troubleshooting

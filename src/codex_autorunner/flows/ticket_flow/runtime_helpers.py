@@ -120,7 +120,7 @@ async def start_ticket_flow_run(
             run_id=run_id,
             metadata=metadata,
         )
-    ensure_worker(repo_root, record.id, is_terminal=False)
+    ensure_worker(repo_root, record.id, is_terminal=False, replace_stale_worker=True)
     return record
 
 
@@ -138,7 +138,7 @@ async def resume_ticket_flow_run(
 ) -> FlowRunRecord:
     async with ticket_flow_runtime_session(repo_root) as resources:
         record = await resources.controller.resume_flow(run_id, force=force)
-    ensure_worker(repo_root, record.id, is_terminal=False)
+    ensure_worker(repo_root, record.id, is_terminal=False, replace_stale_worker=True)
     return record
 
 
@@ -205,9 +205,18 @@ def spawn_ticket_flow_worker(
 
 
 def ensure_ticket_flow_worker(
-    repo_root: Path, run_id: str, *, is_terminal: bool = False
+    repo_root: Path,
+    run_id: str,
+    *,
+    is_terminal: bool = False,
+    replace_stale_worker: bool = False,
 ) -> None:
-    result = ensure_flow_worker(repo_root, run_id, is_terminal=is_terminal)
+    result = ensure_flow_worker(
+        repo_root,
+        run_id,
+        is_terminal=is_terminal,
+        replace_stale_worker=replace_stale_worker,
+    )
     for key in ("stdout", "stderr"):
         handle = result.get(key)
         close = getattr(handle, "close", None)
@@ -218,9 +227,20 @@ def ensure_ticket_flow_worker(
                 logger.debug("Failed to close %s handle", key, exc_info=True)
 
 
-def ensure_worker(repo_root: Path, run_id: str, *, is_terminal: bool = False) -> None:
+def ensure_worker(
+    repo_root: Path,
+    run_id: str,
+    *,
+    is_terminal: bool = False,
+    replace_stale_worker: bool = False,
+) -> None:
     """Backward-compatible alias for orchestration wrappers/tests."""
-    ensure_ticket_flow_worker(repo_root, run_id, is_terminal=is_terminal)
+    ensure_ticket_flow_worker(
+        repo_root,
+        run_id,
+        is_terminal=is_terminal,
+        replace_stale_worker=replace_stale_worker,
+    )
 
 
 def stop_ticket_flow_worker(repo_root: Path, run_id: str) -> None:

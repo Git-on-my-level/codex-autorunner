@@ -776,6 +776,17 @@ def _start_flow_worker(
             health.pid,
         )
         return None
+    if result["status"] == "stale_worker_requires_reconcile":
+        health = result["health"]
+        _logger.info(
+            "Worker for run %s is %s; supervisor/reconciler owns recovery",
+            normalized_run_id,
+            health.status,
+        )
+        return None
+    if result["status"] == "terminal":
+        _logger.info("Run %s is terminal; skipping worker spawn", normalized_run_id)
+        return None
     proc: subprocess.Popen = result["proc"]
     stdout_handle = result["stdout"]
     stderr_handle = result["stderr"]
