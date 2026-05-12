@@ -1549,9 +1549,11 @@ def _thread_execution_for_projection(
 ) -> Optional[Mapping[str, Any]]:
     if execution is None:
         return None
-    if row is None:
-        return execution
     execution_status = _status_to_lifecycle(_row_get(execution, "status"))
+    if row is None:
+        if execution_status in {"running", "queued"}:
+            return None
+        return execution
     if execution_status not in {"running", "queued"}:
         return execution
     lifecycle_status = _normalize_kind(_row_get(row, "lifecycle_status"))
