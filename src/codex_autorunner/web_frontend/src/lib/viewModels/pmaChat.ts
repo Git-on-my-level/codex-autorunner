@@ -25,6 +25,8 @@ export const PMA_MEMORY_LIST_ID = '__memory__';
 
 export const PMA_CHAT_FILTER_ORDER: PmaChatStatusFilter[] = ['all', 'waiting', 'active', 'unread', 'archived'];
 
+const PMA_TIMELINE_RECONCILE_LIMIT = 2_000;
+
 const INTERNAL_MESSENGER_SURFACE_KINDS = new Set([
   'managed_thread',
   'web',
@@ -231,6 +233,7 @@ export type PmaStatusBar = {
 
 export type ManagedThreadCreatePayload = {
   agent?: string;
+  chat_kind?: PmaChatKind;
   model?: string;
   profile?: string;
   name: string;
@@ -363,6 +366,8 @@ export function mapChatSurfaceToPmaChatSummary(surface: Record<string, unknown>)
       scope_urn: firstRawString(owner.scope_urn),
       display_name: firstRawString(display.display_name, display.title),
       name: firstRawString(display.display_name, display.title),
+      chat_kind: firstRawString(metadata.chat_kind),
+      thread_kind: firstRawString(metadata.thread_kind),
       normalized_status: metadata.latest_execution_status ?? metadata.latest_event_status ?? metadata.runtime_status ?? lifecycle,
       status: metadata.latest_execution_status ?? metadata.latest_event_status ?? metadata.runtime_status ?? lifecycle,
       unread_count: rawNumber(metadata.unread_count ?? metadata.unreadCount ?? surface.unread_count ?? surface.unreadCount)
@@ -949,7 +954,7 @@ export function buildPmaTranscriptCards(
 export function reconcilePmaTimeline(
   existing: PmaTimelineItem[],
   incoming: PmaTimelineItem[],
-  limit = 500
+  limit = PMA_TIMELINE_RECONCILE_LIMIT
 ): PmaTimelineItem[] {
   if (!incoming.length) return existing;
   const canonicalUserMessages = incoming.filter((item) => item.kind === 'user_message' && !item.id.startsWith('optimistic:'));
@@ -961,9 +966,15 @@ export function reconcilePmaTimeline(
   for (const item of incoming) {
     byId.set(item.id, { ...byId.get(item.id), ...item, payload: { ...byId.get(item.id)?.payload, ...item.payload } });
   }
-  return [...byId.values()]
-    .sort(compareTimelineItems)
-    .slice(-limit);
+  return trimPmaTimeline([...byId.values()].sort(compareTimelineItems), limit);
+}
+
+function trimPmaTimeline(items: PmaTimelineItem[], limit: number): PmaTimelineItem[] {
+  if (!Number.isFinite(limit) || limit <= 0 || items.length <= limit) return items;
+  const trimmed = items.slice(-limit);
+  const firstUserMessage = items.find((item) => item.kind === 'user_message');
+  if (!firstUserMessage || trimmed.some((item) => item.id === firstUserMessage.id)) return trimmed;
+  return [firstUserMessage, ...trimmed.slice(1)].sort(compareTimelineItems);
 }
 
 function isSupersededOptimisticUserMessage(item: PmaTimelineItem, canonicalUserMessages: PmaTimelineItem[]): boolean {
@@ -1955,7 +1966,8 @@ export function buildManagedThreadCreatePayload(
   scope: PmaChatScopeOption = localPmaChatScopeOption(),
   name = 'New chat',
   model = '',
-  profile = ''
+  profile = '',
+  chatKind: PmaChatKind = 'pma'
 ): ManagedThreadCreatePayload {
   const base: Pick<ManagedThreadCreatePayload, 'agent' | 'name' | 'model'> = {
     agent: agent || undefined,
@@ -1965,6 +1977,7 @@ export function buildManagedThreadCreatePayload(
   const trimmedProfile = profile.trim();
   return {
     ...base,
+    chat_kind: chatKind,
     ...(trimmedProfile ? { profile: trimmedProfile } : {}),
     scope_urn: scope.scopeUrn
   };
@@ -1975,6 +1988,7 @@ export type PmaChatKind = 'pma' | 'coding_agent';
 export function pmaChatKind(chat: PmaChatSummary | null): PmaChatKind {
   if (!chat) return 'pma';
   const rawKind = stringValue(chat.raw.chat_kind ?? chat.raw.thread_kind ?? chat.raw.kind).toLowerCase();
+  if (rawKind === 'pma') return 'pma';
   if (['coding_agent', 'coding-agent', 'agent', 'direct_agent', 'direct-agent'].includes(rawKind)) return 'coding_agent';
   const explicitName = stringValue(chat.raw.display_name ?? chat.raw.name ?? chat.raw.title ?? chat.title).toLowerCase();
   return explicitName.includes('coding agent') ? 'coding_agent' : 'pma';

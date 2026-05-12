@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { goto } from '$app/navigation';
   import { onDestroy, onMount } from 'svelte';
   import AutoDismissNotice from '$lib/components/AutoDismissNotice.svelte';
   import RepoWorktreeViews from '$lib/components/RepoWorktreeViews.svelte';
@@ -49,7 +50,7 @@
   });
 
   async function loadRepos(): Promise<void> {
-    loading = true;
+    if (selectRepoSummaries(readModelEntityStore.snapshot()).length === 0) loading = true;
     error = null;
     sectionIssues = [];
     const [topology, runtime] = await Promise.all([
@@ -126,7 +127,9 @@
 
   async function handleDialogResult(result: ActionNotice): Promise<void> {
     notice = result;
-    if (result.tone === 'success') await loadRepos();
+    if (result.tone !== 'success') return;
+    await loadRepos();
+    if (result.navigateTo) void goto(result.navigateTo);
   }
 </script>
 

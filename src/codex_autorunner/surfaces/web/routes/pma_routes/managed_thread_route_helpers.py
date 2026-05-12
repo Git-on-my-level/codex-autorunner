@@ -797,6 +797,11 @@ def resolve_managed_thread_create_resolution(
         "context_profile": context_profile,
         "approval_mode": approval_mode,
     }
+    chat_kind = normalize_optional_text(payload.chat_kind)
+    if chat_kind is not None:
+        metadata["chat_kind"] = chat_kind
+        if chat_kind == "pma":
+            metadata["thread_kind"] = "pma"
     preferred_model = normalize_optional_text(payload.model)
     if preferred_model is not None:
         metadata["model"] = preferred_model
