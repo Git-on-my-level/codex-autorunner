@@ -346,10 +346,6 @@ def _resolve_discord_progress_reconcile_note(
         return "Status: this turn already failed."
     if resolved_status == "queued":
         return "Status: this turn is queued and no longer has an active cancel surface."
-    if resolved_status == "running":
-        running_execution_id = _execution_field(running_execution, "execution_id")
-        if running_execution_id == referenced_execution_id:
-            return None
     return "Status: this turn is no longer active."
 
 
