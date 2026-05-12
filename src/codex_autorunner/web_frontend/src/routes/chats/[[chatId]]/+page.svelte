@@ -845,7 +845,6 @@
     });
 
     await Promise.all([timelineTask, progressTask, queueTask]);
-    if (activeChatId !== chatId && !options.quiet) loadingActive = false;
   }
 
   function connectStream(chatId: string): void {
