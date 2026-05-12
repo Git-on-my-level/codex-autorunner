@@ -545,7 +545,6 @@
       activateRequestedChatFromCurrentRows();
     });
     void loadInitialSupportingData(artifactPromise, agentPromise, topologyPromise, runtimePromise);
-    applyNewChatQueryParam();
   }
 
   function applyInitialChatRows(rows: JsonRecord[], cursorSource: string): void {
@@ -627,6 +626,7 @@
       }
       void loadModels(selectedAgent, activeChat?.model ?? selectedModel);
     }
+    applyNewChatQueryParam();
   }
 
   function asRecords(value: unknown): JsonRecord[] {
