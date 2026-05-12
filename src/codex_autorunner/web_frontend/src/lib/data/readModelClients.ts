@@ -132,6 +132,7 @@ function chatThreadFromIndexRow(row: ChatIndexRow): ChatThreadProjection {
     runId: row.runId ?? null,
     agent: row.agent ?? null,
     agentProfile: row.agentProfile ?? null,
+    chatKind: row.chatKind ?? null,
     model: row.model ?? null,
     archived: row.status === 'archived'
   };

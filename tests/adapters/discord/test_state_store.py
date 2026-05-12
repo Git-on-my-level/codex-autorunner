@@ -70,6 +70,46 @@ async def test_channel_binding_crud(tmp_path: Path) -> None:
 
 
 @pytest.mark.anyio
+async def test_stale_hermes_profile_does_not_override_explicit_codex_agent(
+    tmp_path: Path,
+) -> None:
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    try:
+        await store.initialize()
+        await store.upsert_binding(
+            channel_id="123",
+            guild_id="456",
+            workspace_path=str(tmp_path / "workspace"),
+            repo_id="repo-1",
+            resource_kind="repo",
+            resource_id="repo-1",
+        )
+        await store.update_agent_state(
+            channel_id="123",
+            agent="hermes",
+            agent_profile="m4-pma",
+        )
+
+        def contaminate_agent_profile() -> None:
+            conn = store._connection_sync()
+            with conn:
+                conn.execute(
+                    "UPDATE channel_bindings SET agent = ?, agent_profile = ? WHERE channel_id = ?",
+                    ("codex", "m4-pma", "123"),
+                )
+
+        await store._run(contaminate_agent_profile)
+
+        binding = await store.get_binding(channel_id="123")
+
+        assert binding is not None
+        assert binding["agent"] == "codex"
+        assert binding["agent_profile"] is None
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
 async def test_discord_workspace_bind_command_emits_chat_surface_events(
     tmp_path: Path,
 ) -> None:

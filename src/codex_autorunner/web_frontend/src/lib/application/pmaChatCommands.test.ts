@@ -23,6 +23,14 @@ describe('PMA chat command plans', () => {
         scope_urn: 'hub'
       }
     });
+    expect(planStartChat(localPmaChatScopeOption(), 'codex', '', '', 'New coding agent chat', 'coding_agent')).toMatchObject({
+      body: {
+        agent: 'codex',
+        chat_kind: 'coding_agent',
+        name: 'New coding agent chat',
+        scope_urn: 'hub'
+      }
+    });
   });
 
   it('plans existing sends against only the supplied thread id', () => {

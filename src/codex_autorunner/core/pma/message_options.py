@@ -9,6 +9,7 @@ from ..car_context import (
     default_managed_thread_context_profile,
     normalize_car_context_profile,
 )
+from ..managed_thread_kinds import infer_managed_thread_chat_kind
 from ..text_utils import _normalize_optional_text
 from .attachments import (
     build_managed_thread_attachment_execution_context,
@@ -96,6 +97,10 @@ def resolve_managed_thread_message_options(
     if not isinstance(metadata, dict):
         metadata = {}
     agent_profile = _normalize_optional_text(input.agent_profile)
+    chat_kind = infer_managed_thread_chat_kind(
+        metadata=metadata,
+        display_name=input.thread.get("display_name") or input.thread.get("name"),
+    )
     context_profile = normalize_car_context_profile(
         input.thread.get("context_profile") or metadata.get("context_profile"),
         default=default_managed_thread_context_profile(),
@@ -113,6 +118,7 @@ def resolve_managed_thread_message_options(
             compact_seed=compact_seed,
             message=execution_message,
             context_bundle=context_bundle,
+            chat_kind=chat_kind,
         )
     )
 

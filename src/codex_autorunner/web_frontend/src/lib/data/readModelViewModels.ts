@@ -18,6 +18,7 @@ import {
   type WorktreeSummary,
   type WorkStatus
 } from '$lib/viewModels/domain';
+import { normalizeManagedThreadChatKind } from '$lib/viewModels/managedThreadChatKind';
 import type { PmaQueuedTurn } from '$lib/api/client';
 import type { ReadModelEntityState } from './readModelStore';
 
@@ -46,7 +47,9 @@ export function pmaChatSummaryToChatIndexRow(chat: PmaChatSummary): ChatIndexRow
     runId: chat.runId ?? null,
     agent: chat.agentId,
     agentProfile: chat.agentProfile,
-    chatKind: stringValue(chat.raw.chat_kind ?? chat.raw.thread_kind),
+    chatKind:
+      chat.chatKind ??
+      normalizeManagedThreadChatKind(chat.raw.chat_kind ?? chat.raw.thread_kind),
     model: chat.model,
     groupId: chat.ticketId ? `ticket:${chat.ticketId}` : chat.runId ? `run:${chat.runId}` : null
   };
@@ -75,7 +78,7 @@ export function legacyChatIndexRecordToChatIndexRow(raw: JsonRecord): ChatIndexR
     runId: resourceKind === 'run' || resourceKind === 'ticket_run' ? resourceId : stringValue(raw.run_id),
     agent: stringValue(raw.agent ?? raw.agent_id),
     agentProfile: stringValue(raw.agent_profile ?? raw.agentProfile),
-    chatKind: stringValue(raw.chat_kind ?? raw.thread_kind),
+    chatKind: normalizeManagedThreadChatKind(raw.chat_kind ?? raw.chatKind ?? raw.thread_kind),
     model: stringValue(raw.model),
     groupId: stringValue(raw.group_id)
   };
@@ -112,6 +115,7 @@ export function chatIndexRowToPmaChatSummary(row: ChatIndexRow): PmaChatSummary 
     lifecycleStatus: row.status === 'archived' ? 'archived' : 'active',
     status: normalizeWorkStatus(row.status),
     agentId: row.agent ?? null,
+    chatKind: row.chatKind ?? null,
     agentProfile: row.agentProfile ?? null,
     model: row.model ?? null,
     repoId: row.repoId ?? null,

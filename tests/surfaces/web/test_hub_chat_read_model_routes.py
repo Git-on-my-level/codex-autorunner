@@ -23,6 +23,7 @@ def _seed_thread_rows(hub_root: Path, count: int) -> None:
                 metadata = {"model": "gpt-5.5"}
                 if index == 3:
                     metadata["agent_profile"] = "m4-pma"
+                    metadata["chat_kind"] = "coding_agent"
                 lifecycle = "archived" if index == 7 else "active"
                 resource_kind = "ticket" if index < 12 else "repo"
                 resource_id = "TICKET-900" if index < 12 else "repo"
@@ -116,6 +117,7 @@ def test_chat_index_snapshot_filters_groups_and_bounds_large_windows(hub_env) ->
     assert payload["rows"][0]["managed_thread_id"] == "thread-0003"
     assert payload["rows"][0]["agent"] == "hermes"
     assert payload["rows"][0]["agent_profile"] == "m4-pma"
+    assert payload["rows"][0]["chat_kind"] == "coding_agent"
     assert "discord" in payload["rows"][0]["surface_kinds"]
     assert payload["window"]["total_count"] == 1
 

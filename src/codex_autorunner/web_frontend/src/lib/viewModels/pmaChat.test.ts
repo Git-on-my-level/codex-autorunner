@@ -1698,6 +1698,7 @@ describe('PMA chat view helpers', () => {
 
   it('derives chat kind and reasoning affordances from shared thread/model metadata', () => {
     expect(pmaChatKind(baseChat)).toBe('pma');
+    expect(pmaChatKind({ ...baseChat, chatKind: 'coding_agent', raw: { name: 'New chat' } })).toBe('coding_agent');
     expect(pmaChatKind({ ...baseChat, raw: { name: 'New coding agent chat' } })).toBe('coding_agent');
     expect(pmaChatKind({ ...baseChat, raw: { chat_kind: 'pma', name: 'New coding agent chat' } })).toBe('pma');
     expect(pmaChatKind({ ...baseChat, raw: { chat_kind: 'direct_agent' } })).toBe('coding_agent');

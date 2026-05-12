@@ -756,21 +756,23 @@ function isRepairEvent(eventType: string, operation: string): boolean {
 }
 
 function upsertChatThread(state: ReadModelEntityState, thread: ChatThreadProjection): void {
+  const existing = state.chats[thread.chatId];
   state.chats[thread.chatId] = {
     chatId: thread.chatId,
     surface: thread.surface === 'pma' ? 'pma' : 'other',
     title: thread.title,
     status: thread.archived ? 'archived' : thread.status,
-    unreadCount: state.chats[thread.chatId]?.unreadCount ?? 0,
+    unreadCount: existing?.unreadCount ?? 0,
     repoId: thread.repoId,
     worktreeId: thread.worktreeId,
     ticketId: thread.ticketId,
     runId: thread.runId,
     agent: thread.agent,
     agentProfile: thread.agentProfile,
+    chatKind: thread.chatKind ?? existing?.chatKind ?? null,
     model: thread.model,
-    lastActivityAt: state.chats[thread.chatId]?.lastActivityAt ?? null,
-    groupId: state.chats[thread.chatId]?.groupId ?? null
+    lastActivityAt: existing?.lastActivityAt ?? null,
+    groupId: existing?.groupId ?? null
   };
   if (!state.chatOrder.includes(thread.chatId)) state.chatOrder.push(thread.chatId);
 }

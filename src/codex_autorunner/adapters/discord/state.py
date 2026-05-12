@@ -1189,8 +1189,10 @@ class DiscordStateStore:
             raw_profile = agent_profile_raw.strip().lower()
             if raw_profile and agent == "hermes":
                 agent_profile = raw_profile
-        if agent_profile is not None:
+        if agent_profile is not None and (agent is None or agent == "hermes"):
             agent = "hermes"
+        elif agent != "hermes":
+            agent_profile = None
         return ChannelBinding(
             channel_id=str(row["channel_id"]),
             guild_id=row["guild_id"] if isinstance(row["guild_id"], str) else None,

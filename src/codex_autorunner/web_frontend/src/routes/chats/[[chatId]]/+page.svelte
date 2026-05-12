@@ -1273,7 +1273,7 @@
         selectedProfile,
         selectedModel,
         newChatDisplayName(),
-        newChatKind === 'agent' ? 'coding_agent' : 'pma'
+        newChatKind === 'agent' && canStartCodingAgentChat ? 'coding_agent' : 'pma'
       )
     );
     if (result.ok) {

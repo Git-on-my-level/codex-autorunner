@@ -81,6 +81,7 @@ def chat_row() -> ChatIndexRow:
         run_id="run-1",
         agent="codex",
         agent_profile="m4-pma",
+        chat_kind="coding_agent",
         model="gpt-5.3-codex",
         group_id="ticket-run:run-1",
     )
@@ -126,6 +127,7 @@ def test_chat_detail_snapshot_and_patch_round_trip_without_legacy_thread_payload
         run_id="run-1",
         agent="hermes",
         agent_profile="m4-pma",
+        chat_kind="coding_agent",
     )
     item = ChatTimelineItem(
         item_id="timeline-1",
@@ -146,6 +148,7 @@ def test_chat_detail_snapshot_and_patch_round_trip_without_legacy_thread_payload
 
     payload = dump_read_model_contract(snapshot)
     assert payload["timelineWindow"]["limit"] == 50
+    assert payload["thread"]["chatKind"] == "coding_agent"
     assert payload["timeline"][0]["backendMessageId"] == "turn-1"
     assert load_read_model_contract(ChatDetailSnapshot, payload) == snapshot
 

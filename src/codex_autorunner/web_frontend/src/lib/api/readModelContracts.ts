@@ -57,7 +57,7 @@ export type ChatIndexRow = {
   runId?: string | null;
   agent?: string | null;
   agentProfile?: string | null;
-  chatKind?: 'pma' | 'coding_agent' | string | null;
+  chatKind?: 'pma' | 'coding_agent' | null;
   model?: string | null;
   groupId?: string | null;
 };
@@ -141,6 +141,7 @@ export type ChatThreadProjection = {
   runId?: string | null;
   agent?: string | null;
   agentProfile?: string | null;
+  chatKind?: 'pma' | 'coding_agent' | null;
   model?: string | null;
   archived: boolean;
 };

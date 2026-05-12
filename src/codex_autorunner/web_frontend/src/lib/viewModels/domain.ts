@@ -1,3 +1,5 @@
+import { normalizeManagedThreadChatKind } from './managedThreadChatKind';
+
 type JsonRecord = Record<string, unknown>;
 
 export type WorkStatus = 'running' | 'waiting' | 'idle' | 'done' | 'failed' | 'blocked' | 'invalid';
@@ -9,6 +11,7 @@ export type PmaChatSummary = {
   lifecycleStatus: string | null;
   status: WorkStatus;
   agentId: string | null;
+  chatKind?: 'pma' | 'coding_agent' | null;
   /** Hermes (and similar) runtime profile when set on the managed thread. */
   agentProfile: string | null;
   model: string | null;
@@ -236,6 +239,7 @@ export function mapPmaChatSummary(raw: JsonRecord): PmaChatSummary {
     lifecycleStatus: nullableString(raw.lifecycle_status ?? raw.lifecycleStatus),
     status,
     agentId: nullableString(raw.agent_id ?? raw.agent),
+    chatKind: normalizeManagedThreadChatKind(raw.chat_kind ?? raw.chatKind ?? raw.thread_kind),
     agentProfile: nullableString(raw.agent_profile ?? raw.agentProfile),
     model: nullableString(raw.model ?? latest.model),
     repoId,

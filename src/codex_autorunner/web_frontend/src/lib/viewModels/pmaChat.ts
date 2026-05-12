@@ -1987,6 +1987,8 @@ export type PmaChatKind = 'pma' | 'coding_agent';
 
 export function pmaChatKind(chat: PmaChatSummary | null): PmaChatKind {
   if (!chat) return 'pma';
+  if (chat.chatKind === 'coding_agent') return 'coding_agent';
+  if (chat.chatKind === 'pma') return 'pma';
   const rawKind = stringValue(chat.raw.chat_kind ?? chat.raw.thread_kind ?? chat.raw.kind).toLowerCase();
   if (rawKind === 'pma') return 'pma';
   if (['coding_agent', 'coding-agent', 'agent', 'direct_agent', 'direct-agent'].includes(rawKind)) return 'coding_agent';

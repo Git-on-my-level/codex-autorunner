@@ -27,6 +27,10 @@ from .....core.car_context import (
 from .....core.chat_bindings import active_chat_binding_metadata_by_thread
 from .....core.domain.refs import ScopeRef, ScopeRefError
 from .....core.hub_control_plane.models import THREAD_TARGET_LIST_LIFECYCLE_STATUSES
+from .....core.managed_thread_kinds import (
+    infer_managed_thread_chat_kind,
+    normalize_managed_thread_chat_kind,
+)
 from .....core.managed_thread_status import derive_managed_thread_operator_status
 from .....core.orchestration import ActiveWorkSummary, ManagedThreadExecutionStore
 from .....core.orchestration.models import Binding, ThreadTarget
@@ -603,6 +607,10 @@ def _serialize_thread_target(
             display_name=thread.display_name,
         )
     )
+    payload["chat_kind"] = infer_managed_thread_chat_kind(
+        metadata=dict(thread.metadata or {}),
+        display_name=thread.display_name,
+    )
     updated_at_value = normalize_optional_text(thread.updated_at)
     if not updated_at_value:
         updated_at_value = normalize_optional_text(thread.status_changed_at)
@@ -796,6 +804,7 @@ def resolve_managed_thread_create_resolution(
     metadata: dict[str, Any] = {
         "context_profile": context_profile,
         "approval_mode": approval_mode,
+        "chat_kind": normalize_managed_thread_chat_kind(payload.chat_kind),
     }
     chat_kind = normalize_optional_text(payload.chat_kind)
     if chat_kind is not None:
