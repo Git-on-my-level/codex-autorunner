@@ -673,6 +673,146 @@ def test_apply_orchestration_migrations_adds_chat_surface_event_journal_from_v29
     assert unique_index is not None
 
 
+def test_apply_orchestration_migrations_reconciles_stale_running_executions_from_v30(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "orchestration.sqlite3"
+
+    with _connect(db_path) as conn:
+        conn.execute(
+            """
+            CREATE TABLE orch_schema_migrations (
+                version INTEGER PRIMARY KEY,
+                name TEXT NOT NULL,
+                applied_at TEXT NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE orch_migration_runs (
+                run_id TEXT PRIMARY KEY,
+                from_version INTEGER NOT NULL,
+                target_version INTEGER NOT NULL,
+                started_at TEXT NOT NULL,
+                finished_at TEXT,
+                status TEXT NOT NULL,
+                error_text TEXT
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE orch_thread_targets (
+                thread_target_id TEXT PRIMARY KEY,
+                lifecycle_status TEXT,
+                runtime_status TEXT,
+                status_updated_at TEXT,
+                updated_at TEXT
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE orch_thread_executions (
+                execution_id TEXT PRIMARY KEY,
+                thread_target_id TEXT NOT NULL,
+                status TEXT NOT NULL,
+                error_text TEXT,
+                started_at TEXT,
+                finished_at TEXT,
+                created_at TEXT NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO orch_schema_migrations (version, name, applied_at)
+            VALUES (30, 'add_chat_surface_event_journal', '2026-05-11T00:00:00Z')
+            """
+        )
+        conn.executemany(
+            """
+            INSERT INTO orch_thread_targets (
+                thread_target_id, lifecycle_status, runtime_status, status_updated_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?)
+            """,
+            [
+                (
+                    "archived-thread",
+                    "archived",
+                    "archived",
+                    "2026-05-11T01:00:00Z",
+                    "2026-05-11T01:00:00Z",
+                ),
+                (
+                    "active-thread",
+                    "active",
+                    "running",
+                    "2026-05-11T02:00:00Z",
+                    "2026-05-11T02:00:00Z",
+                ),
+            ],
+        )
+        conn.executemany(
+            """
+            INSERT INTO orch_thread_executions (
+                execution_id, thread_target_id, status, started_at, created_at
+            ) VALUES (?, ?, 'running', ?, ?)
+            """,
+            [
+                (
+                    "stale-running",
+                    "archived-thread",
+                    "2026-05-11T00:30:00Z",
+                    "2026-05-11T00:30:00Z",
+                ),
+                (
+                    "active-running-old",
+                    "active-thread",
+                    "2026-05-11T02:00:00Z",
+                    "2026-05-11T02:00:00Z",
+                ),
+                (
+                    "active-running-new",
+                    "active-thread",
+                    "2026-05-11T02:01:00Z",
+                    "2026-05-11T02:01:00Z",
+                ),
+            ],
+        )
+
+        version_after = apply_orchestration_migrations(conn)
+        rows = {
+            row["execution_id"]: row
+            for row in conn.execute(
+                """
+                SELECT execution_id, status, error_text, finished_at
+                  FROM orch_thread_executions
+                """
+            ).fetchall()
+        }
+        unique_index = conn.execute(
+            """
+            SELECT name
+              FROM sqlite_master
+             WHERE type = 'index'
+               AND name = 'idx_orch_thread_executions_one_running'
+            """
+        ).fetchone()
+
+    assert version_after == ORCHESTRATION_SCHEMA_VERSION
+    assert rows["stale-running"]["status"] == "interrupted"
+    assert (
+        rows["stale-running"]["error_text"]
+        == "reconciled running execution after terminal thread status"
+    )
+    assert rows["stale-running"]["finished_at"] == "2026-05-11T01:00:00Z"
+    assert rows["active-running-old"]["status"] == "interrupted"
+    assert rows["active-running-new"]["status"] == "running"
+    assert unique_index is not None
+
+
 def test_apply_orchestration_migrations_adds_pr_binding_table_from_v9(
     tmp_path: Path,
 ) -> None:

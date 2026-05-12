@@ -211,6 +211,8 @@ def _runtime_terminal_tail_event(
             "received_at": received_at,
             "tool_name": None,
             "tool_state": None,
+            "source_event_ids": [event_id],
+            "progress_event_ids": [event_id],
         }
     if method in {"prompt/cancelled", "turn/cancelled"}:
         return {
@@ -222,6 +224,8 @@ def _runtime_terminal_tail_event(
             "received_at": received_at,
             "tool_name": None,
             "tool_state": None,
+            "source_event_ids": [event_id],
+            "progress_event_ids": [event_id],
         }
     if method in {"prompt/failed", "turn/failed", "turn/error", "error"}:
         detail = (
@@ -237,6 +241,8 @@ def _runtime_terminal_tail_event(
             "received_at": received_at,
             "tool_name": None,
             "tool_state": None,
+            "source_event_ids": [event_id],
+            "progress_event_ids": [event_id],
         }
     return None
 
@@ -259,7 +265,16 @@ def _tail_event_from_run_event(
     )
     if item is None or item.hidden:
         return None
-    return _tail_event_from_progress_item(item, received_at=received_at)
+    progress_items: list[ProgressProjectionItem] | None = None
+    if item.kind == "tool" and item.group_id:
+        grouped = (*state.tool_group_items.get(item.group_id, ()), item)
+        state.tool_group_items[item.group_id] = grouped
+        progress_items = list(grouped)
+    return _tail_event_from_progress_item(
+        item,
+        received_at=received_at,
+        progress_items=progress_items,
+    )
 
 
 def _tail_event_type_from_progress_item(item: ProgressProjectionItem) -> str:
@@ -284,9 +299,19 @@ def _tail_event_from_progress_item(
     item: ProgressProjectionItem,
     *,
     received_at: str,
+    progress_items: list[ProgressProjectionItem] | None = None,
 ) -> dict[str, Any]:
     event_id = item.event_ids[-1] if item.event_ids else 0
     event_type = _tail_event_type_from_progress_item(item)
+    grouped_items = progress_items or [item]
+    progress_event_ids: list[int] = []
+    progress_item_ids: list[str] = []
+    for grouped_item in grouped_items:
+        if grouped_item.item_id not in progress_item_ids:
+            progress_item_ids.append(grouped_item.item_id)
+        for grouped_event_id in grouped_item.event_ids:
+            if grouped_event_id not in progress_event_ids:
+                progress_event_ids.append(grouped_event_id)
     return {
         "event_id": event_id,
         "event_type": event_type,
@@ -298,12 +323,14 @@ def _tail_event_from_progress_item(
         "tool_name": item.tool_name,
         "tool_state": item.state if item.kind == "tool" else None,
         "progress_item": item.to_dict(),
+        "progress_items": [progress_item.to_dict() for progress_item in grouped_items],
+        "progress_item_ids": progress_item_ids,
         "progress_item_id": item.item_id,
         "progress_kind": item.kind,
         "progress_state": item.state,
         "progress_group_id": item.group_id,
         "progress_group_kind": item.group_kind,
-        "progress_event_ids": list(item.event_ids),
+        "progress_event_ids": progress_event_ids,
     }
 
 

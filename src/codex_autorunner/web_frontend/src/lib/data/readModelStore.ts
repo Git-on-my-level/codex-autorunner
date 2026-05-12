@@ -24,12 +24,13 @@ import type {
   TicketQueueSibling,
   WorktreeTopology
 } from '$lib/api/readModelContracts';
-import type {
-  PmaRunProgress,
-  PmaTimelineItem,
-  PmaTimelineItemKind,
-  SurfaceArtifact,
-  TicketSummary
+import {
+  pmaTimelineContractFields,
+  type PmaRunProgress,
+  type PmaTimelineItem,
+  type PmaTimelineItemKind,
+  type SurfaceArtifact,
+  type TicketSummary
 } from '$lib/viewModels/domain';
 
 export type EntityKind =
@@ -360,8 +361,8 @@ export class ReadModelEntityStore implements Readable<ReadModelEntityState> {
   replacePmaTimeline(chatId: string, items: PmaTimelineItem[]): void {
     const next = cloneState(this.state);
     next.pmaTimelines[chatId] = {
-      itemsById: keyed(items, (item) => item.id),
-      order: items.map((item) => item.id)
+      itemsById: keyed(items, pmaTimelineEntityId),
+      order: items.map(pmaTimelineEntityId)
     };
     bump(next, 'timeline', chatId);
     this.commit(next);
@@ -372,8 +373,9 @@ export class ReadModelEntityStore implements Readable<ReadModelEntityState> {
     const next = cloneState(this.state);
     const timeline = next.pmaTimelines[chatId] ?? { itemsById: {}, order: [] };
     for (const item of items) {
-      timeline.itemsById[item.id] = item;
-      if (!timeline.order.includes(item.id)) timeline.order.push(item.id);
+      const entityId = pmaTimelineEntityId(item);
+      timeline.itemsById[entityId] = item;
+      if (!timeline.order.includes(entityId)) timeline.order.push(entityId);
     }
     next.pmaTimelines[chatId] = timeline;
     bump(next, 'timeline', chatId);
@@ -793,13 +795,14 @@ function chatTimelineItemToPmaItem(chatId: string, item: ChatTimelineItem): PmaT
     chatId,
     turnId: item.backendMessageId ?? null,
     status: null,
+    ...pmaTimelineContractFields(item.itemId),
     payload: {
       text: item.text ?? '',
       text_preview: item.text ?? '',
       role: item.role ?? null,
       artifact_ids: item.artifactIds
     },
-    raw: item
+    raw: item as unknown as PmaTimelineItem['raw']
   };
 }
 
@@ -808,6 +811,10 @@ function pmaKindForChatTimelineItem(kind: ChatTimelineItem['kind']): PmaTimeline
   if (kind === 'progress') return 'status';
   if (kind === 'system') return 'lifecycle';
   return 'intermediate';
+}
+
+function pmaTimelineEntityId(item: PmaTimelineItem): string {
+  return item.identity.timelineItemId;
 }
 
 function bump(state: ReadModelEntityState, kind: EntityKind, id: string): void {

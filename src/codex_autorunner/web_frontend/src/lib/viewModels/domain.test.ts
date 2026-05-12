@@ -4,6 +4,7 @@ import {
   mapDashboardSummary,
   mapPmaChatSummary,
   mapPmaRunProgress,
+  mapPmaTimelineItem,
   mapRepoSummary,
   mapSurfaceArtifact,
   mapTicketDetail,
@@ -35,6 +36,47 @@ describe('view model mappers', () => {
     for (const [raw, expected] of cases) {
       expect(normalizeWorkStatus(raw)).toBe(expected);
     }
+  });
+
+  it('requires canonical PMA timeline identity and provenance', () => {
+    expect(() =>
+      mapPmaTimelineItem({
+        item_id: 'cursor-99',
+        kind: 'intermediate',
+        order_key: '00000099|cursor',
+        timestamp: '2026-05-12T00:00:00Z',
+        managed_thread_id: 'thread-1',
+        managed_turn_id: 'turn-1',
+        payload: { text: 'legacy payload only', source_event_ids: [1] }
+      })
+    ).toThrow(/canonical identity/);
+
+    const item = mapPmaTimelineItem({
+      item_id: 'turn:turn-1:intermediate:0001',
+      kind: 'intermediate',
+      order_key: '00000001|item',
+      timestamp: '2026-05-12T00:00:00Z',
+      managed_thread_id: 'thread-1',
+      managed_turn_id: 'turn-1',
+      identity: {
+        timeline_item_id: 'turn:turn-1:intermediate:0001',
+        progress_item_ids: ['progress:notice:0001'],
+        correlation_id: null
+      },
+      provenance: {
+        source_event_ids: [1],
+        progress_event_ids: [1],
+        cursor_event_id: '99'
+      },
+      payload: {
+        text: 'canonical',
+        source_event_ids: ['legacy-payload-value']
+      }
+    });
+
+    expect(item.identity.timelineItemId).toBe('turn:turn-1:intermediate:0001');
+    expect(item.provenance.sourceEventIds).toEqual([1]);
+    expect(item.provenance.cursorEventId).toBe('99');
   });
 
   it('keeps nullable status fields explicit without owning a second alias table', () => {

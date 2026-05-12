@@ -26,7 +26,27 @@ describe('/tickets/[ticketId] route load', () => {
 
     expect(result.ticketId).toBe('t-1');
     expect(result.indexResult.status).toBe('fetched');
+    expect(result.detailResult?.status).toBe('fetched');
     expect(depends).toHaveBeenCalledWith('entity:ticket:index');
+    expect(client.ticketDetail).toHaveBeenCalledWith('t-1', { kind: 'repo', id: 'repo-1' });
+  });
+
+  it('resolves ticket detail owner from the matching ticket summary entry', async () => {
+    const store = new ReadModelEntityStore();
+    const depends = vi.fn();
+    const summaries = [
+      ticketSummary('t-other', 'Other', 'repo', 'repo-wrong'),
+      ticketSummary('t-1', 'Mine', 'repo', 'repo-right')
+    ];
+    const client = mockClient({
+      ticketIndex: vi.fn().mockResolvedValue(ok(summaries)),
+      ticketDetail: vi.fn().mockResolvedValue(ok(ticketDetailSnapshot('t-1')))
+    });
+    const { loadTicketDetailRoute } = await importPageLoad(true);
+
+    await loadTicketDetailRoute({ ticketId: 't-1', depends, loaderOptions: { store, client } });
+
+    expect(client.ticketDetail).toHaveBeenCalledWith('t-1', { kind: 'repo', id: 'repo-right' });
   });
 
   it('returns cache hit when ticket index is already loaded', async () => {

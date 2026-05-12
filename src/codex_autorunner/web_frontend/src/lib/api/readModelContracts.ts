@@ -105,6 +105,18 @@ export type ChatIndexPatchEvent = {
   patch: ChatIndexPatch;
 };
 
+export type ChatTimelineIdentity = {
+  timelineItemId: string;
+  progressItemIds: string[];
+  correlationId?: string | null;
+};
+
+export type ChatTimelineProvenance = {
+  sourceEventIds: unknown[];
+  progressEventIds: unknown[];
+  cursorEventId?: string | null;
+};
+
 export type ChatTimelineItem = {
   itemId: string;
   kind: 'user_message' | 'assistant_message' | 'tool_event' | 'progress' | 'artifact' | 'system';
@@ -114,6 +126,8 @@ export type ChatTimelineItem = {
   artifactIds: string[];
   clientMessageId?: string | null;
   backendMessageId?: string | null;
+  identity?: ChatTimelineIdentity | null;
+  provenance?: ChatTimelineProvenance | null;
 };
 
 export type ChatQueueSummary = {
@@ -177,6 +191,7 @@ export type RepoTopology = {
   label: string;
   path: string;
   archived: boolean;
+  isPinned?: boolean;
   destinationId?: string | null;
   childWorktreeIds: string[];
   worktreeSetupCommands?: string[] | null;

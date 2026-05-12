@@ -57,6 +57,8 @@ def test_progress_projection_groups_tool_call_and_result_pairs() -> None:
 
     assert [item.kind for item in items] == ["tool", "tool"]
     assert [item.state for item in items] == ["started", "completed"]
+    assert items[0].event_ids == (1,)
+    assert items[1].event_ids == (1, 2)
     assert items[0].group_id == items[1].group_id
     assert items[0].group_kind == "tool_group"
 
@@ -74,6 +76,7 @@ def test_progress_projection_marks_tool_failures() -> None:
 
     assert items[-1].kind == "tool"
     assert items[-1].state == "failed"
+    assert items[-1].event_ids == (1, 2)
 
 
 def test_progress_projection_marks_turn_failure_and_interruption() -> None:

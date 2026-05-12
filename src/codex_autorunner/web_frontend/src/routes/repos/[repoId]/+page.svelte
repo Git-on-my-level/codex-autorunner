@@ -23,8 +23,15 @@
   let { data = { repoId: '', result: { status: 'cold' as const, tags: [] } } } = $props();
   const repoId = $derived(page.params.repoId ?? 'unknown-repo');
   let detail = $state<RepoWorktreeDetailViewModel | null>(null);
-  let loading = $state<boolean>(data.result.status === 'cold' && !readModelEntityStore.snapshot().repoDetails[repoId]);
-  let error = $state<ApiError | null>(data.result.status === 'error' ? data.result.error : null);
+  let loading = $state<boolean>(true);
+  let error = $state<ApiError | null>(null);
+
+  $effect(() => {
+    const r = data.result;
+    const id = repoId;
+    loading = r.status === 'cold' && !readModelEntityStore.snapshot().repoDetails[id];
+    error = r.status === 'error' ? r.error : null;
+  });
   let sectionIssues = $state<PartialPageIssue[]>([]);
   let notice = $state<ActionNotice | null>(null);
   let syncRepoBusy = $state(false);

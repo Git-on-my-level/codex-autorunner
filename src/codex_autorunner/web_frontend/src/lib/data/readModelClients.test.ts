@@ -59,9 +59,44 @@ describe('read model snapshot client', () => {
               model: 'gpt-5.5'
             },
             timeline: {
-              item_count: 1,
-              window: { limit: 50, returned: 1, has_older: false },
-              items: [{ item_id: 'item-1', kind: 'user_message', role: 'user', timestamp: '2026-05-11T12:00:00Z', text: 'hello' }]
+              item_count: 2,
+              window: { limit: 50, returned: 2, has_older: false },
+              items: [
+                {
+                  item_id: 'item-1',
+                  kind: 'user_message',
+                  role: 'user',
+                  timestamp: '2026-05-11T12:00:00Z',
+                  text: 'hello',
+                  identity: {
+                    timeline_item_id: 'item-1',
+                    progress_item_ids: [],
+                    correlation_id: null
+                  },
+                  provenance: {
+                    source_event_ids: ['evt-1'],
+                    progress_event_ids: [],
+                    cursor_event_id: null
+                  }
+                },
+                {
+                  item_id: 'item-2',
+                  kind: 'assistant_message',
+                  role: 'assistant',
+                  timestamp: '2026-05-11T12:01:00Z',
+                  text: 'working on it',
+                  identity: {
+                    timeline_item_id: 'item-2',
+                    progress_item_ids: [],
+                    correlation_id: null
+                  },
+                  provenance: {
+                    source_event_ids: ['evt-2'],
+                    progress_event_ids: ['evt-2'],
+                    cursor_event_id: null
+                  }
+                }
+              ]
             },
             queue_summary: { depth: 0, items: [] }
           }
@@ -79,6 +114,20 @@ describe('read model snapshot client', () => {
       agentProfile: 'm4-pma',
       status: 'running'
     });
-    expect(result.ok && result.data.timeline[0]).toMatchObject({ itemId: 'item-1', kind: 'user_message' });
+    const items = result.ok ? result.data.timeline : [];
+    expect(items[0]).toMatchObject({ itemId: 'item-1', kind: 'user_message' });
+    expect(items[0].identity).toEqual({
+      timelineItemId: 'item-1',
+      progressItemIds: [],
+      correlationId: null
+    });
+    expect(items[0].provenance).toEqual({
+      sourceEventIds: ['evt-1'],
+      progressEventIds: [],
+      cursorEventId: null
+    });
+    expect(items[1]).toMatchObject({ itemId: 'item-2', kind: 'assistant_message' });
+    expect(items[1].identity?.timelineItemId).toBe('item-2');
+    expect(items[1].provenance?.sourceEventIds).toEqual(['evt-2']);
   });
 });

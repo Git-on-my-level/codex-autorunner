@@ -214,6 +214,7 @@ export function selectRepoSummaries(state: ReadModelEntityState): RepoSummary[] 
         path: repo.path,
         kind: 'base',
         worktree_count: repo.childWorktreeIds.length,
+        is_pinned: Boolean(repo.isPinned),
         ...(Array.isArray(repo.worktreeSetupCommands)
           ? { worktree_setup_commands: repo.worktreeSetupCommands }
           : {}),

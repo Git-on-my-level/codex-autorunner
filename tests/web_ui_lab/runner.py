@@ -514,19 +514,27 @@ def _pma_timeline_summary(
     assistant_delivery_keys: set[str] = set()
     duplicate_assistant_deliveries = 0
     attachment_count = 0
+    items_with_v2_identity = 0
+    items_with_v2_provenance = 0
     for item in timeline:
         kind = str(item.get("kind") or "")
         counts[kind] = counts.get(kind, 0) + 1
         item_payload = _payload(item)
         attachment_count += len(_records(item_payload, "attachments"))
+        identity = item.get("identity")
+        if isinstance(identity, dict) and identity.get("timeline_item_id"):
+            items_with_v2_identity += 1
+        provenance = item.get("provenance")
+        if isinstance(provenance, dict) and isinstance(
+            provenance.get("source_event_ids"), list
+        ):
+            items_with_v2_provenance += 1
         if kind == "assistant_message":
-            text = str(item_payload.get("text") or "").strip()
-            turn_id = str(item.get("managed_turn_id") or "")
-            key = f"{item.get('managed_thread_id') or ''}|{turn_id}|{text}"
-            if text and turn_id:
-                if key in assistant_delivery_keys:
+            canonical_key = str((identity or {}).get("timeline_item_id") or "")
+            if canonical_key:
+                if canonical_key in assistant_delivery_keys:
                     duplicate_assistant_deliveries += 1
-                assistant_delivery_keys.add(key)
+                assistant_delivery_keys.add(canonical_key)
     repair = payload.get("repair") if isinstance(payload.get("repair"), dict) else {}
     return {
         "counts": counts,
@@ -544,6 +552,9 @@ def _pma_timeline_summary(
             for chat in _records(payload, "chats")
         ),
         "stream_gap_repaired": repair.get("stream_gap_repaired") is True,
+        "items_with_v2_identity": items_with_v2_identity,
+        "items_with_v2_provenance": items_with_v2_provenance,
+        "total_timeline_items": len(timeline),
     }
 
 
@@ -604,6 +615,23 @@ def _pma_timeline_invariant_failure(
             return {
                 "id": "pma_stream_gap_repair_missing",
                 "message": "Duplicate repair fixture did not include a repair snapshot marker.",
+                "pma_timeline": summary,
+            }
+    if summary.get("total_timeline_items", 0) > 0:
+        if int(summary.get("items_with_v2_identity", 0)) != int(
+            summary.get("total_timeline_items", 0)
+        ):
+            return {
+                "id": "pma_timeline_missing_v2_identity",
+                "message": "Not all timeline items have v2 canonical identity fields.",
+                "pma_timeline": summary,
+            }
+        if int(summary.get("items_with_v2_provenance", 0)) != int(
+            summary.get("total_timeline_items", 0)
+        ):
+            return {
+                "id": "pma_timeline_missing_v2_provenance",
+                "message": "Not all timeline items have v2 canonical provenance fields.",
                 "pma_timeline": summary,
             }
     return None

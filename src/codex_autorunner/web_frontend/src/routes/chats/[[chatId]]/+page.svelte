@@ -45,7 +45,7 @@
     worktreeRoute,
     worktreeTicketRoute
   } from '$lib/viewModels/routes';
-  import { mapPmaRunProgress, mapPmaTimelineItem } from '$lib/viewModels/domain';
+  import { mapPmaRunProgress, mapPmaTimelineItem, pmaTimelineContractFields } from '$lib/viewModels/domain';
   import type {
     PmaChatSummary,
     PmaRunProgress,
@@ -986,7 +986,7 @@
           const payload = event.payload && typeof event.payload === 'object' && !Array.isArray(event.payload)
             ? (event.payload as JsonRecord)
             : null;
-          if (payload && (payload.kind || payload.item_id || payload.managed_turn_id || payload.turn_id || payload.message_id)) {
+          if (payload && payload.contract_version === 'managed_thread_timeline.v2') {
             const item = mapPmaTimelineItem(payload);
             readModelEntityStore.replacePmaTimeline(chatId, reconcilePmaTimeline(currentTimeline(chatId), [item]));
             if (item.kind === 'user_message') dropOptimisticPlaceholders();
@@ -1303,6 +1303,7 @@
           size_label: att.sizeLabel
         }))
       },
+      ...pmaTimelineContractFields(optimisticId, { correlationId: optimisticId }),
       raw: { optimistic: true }
     };
     readModelEntityStore.optimisticSend(
@@ -1357,20 +1358,23 @@
             model: selectedModel,
             attachments: attachmentsForMessage,
             reasoning: selectedReasoning,
-            profile: profileForSend
+            profile: profileForSend,
+            clientTurnId: optimisticId
           })
         : busyPolicy === 'queue' || targetIsRunning
           ? planQueueExistingChat(targetChatId, message, {
               model: selectedModel,
               attachments: attachmentsForMessage,
               reasoning: selectedReasoning,
-              profile: profileForSend
+              profile: profileForSend,
+              clientTurnId: optimisticId
             })
           : planSendExistingChat(targetChatId, message, {
               model: selectedModel,
               attachments: attachmentsForMessage,
               reasoning: selectedReasoning,
-              profile: profileForSend
+              profile: profileForSend,
+              clientTurnId: optimisticId
             });
     const result = await executePmaChatCommandPlan(pmaApi, commandPlan);
     if (result.ok) {

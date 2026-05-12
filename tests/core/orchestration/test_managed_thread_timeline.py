@@ -48,6 +48,16 @@ def _kinds(payload: dict) -> list[str]:
     return [str(item["kind"]) for item in payload["items"]]
 
 
+def _assert_v2_metadata(item: dict) -> None:
+    assert item["contract_version"] == "managed_thread_timeline.v2"
+    assert item["identity"]["timeline_item_id"] == item["item_id"]
+    assert isinstance(item["identity"]["progress_item_ids"], list)
+    assert "correlation_id" in item["identity"]
+    assert isinstance(item["provenance"]["source_event_ids"], list)
+    assert isinstance(item["provenance"]["progress_event_ids"], list)
+    assert item["provenance"]["cursor_event_id"] is None
+
+
 def test_completed_timeline_separates_intermediate_and_final_output(
     tmp_path: Path,
 ) -> None:
@@ -97,10 +107,14 @@ def test_completed_timeline_separates_intermediate_and_final_output(
     assert kinds.count("assistant_message") == 1
     assert kinds.count("artifact") == 2
     assert payload["items"][0]["item_id"] == f"turn:{turn_id}:user"
+    for item in payload["items"]:
+        _assert_v2_metadata(item)
     assistant = next(
         item for item in payload["items"] if item["kind"] == "assistant_message"
     )
     assert assistant["payload"]["text"] == "final answer"
+    assert assistant["provenance"]["source_event_ids"] == [3]
+    assert assistant["provenance"]["progress_event_ids"] == [3]
     assert all(item["kind"] != "assistant_message" for item in payload["items"][1:3])
 
 
@@ -168,13 +182,27 @@ def test_running_timeline_projects_progress_tool_group_and_approval(
         "started",
         "completed",
     ]
+    assert tool["identity"]["progress_item_ids"] == [
+        "progress:tool:0002:pytest",
+        "progress:tool:0003:pytest",
+    ]
+    assert tool["provenance"]["source_event_ids"] == [2, 3]
+    assert tool["provenance"]["progress_event_ids"] == [2, 3]
     approval = next(item for item in payload["items"] if item["kind"] == "approval")
     assert approval["payload"]["progress_item"]["kind"] == "approval"
+    assert approval["identity"]["progress_item_ids"] == ["progress:approval:approval-1"]
+    assert approval["provenance"]["source_event_ids"] == [4]
+    assert approval["provenance"]["progress_event_ids"] == [4]
     intermediate = next(
         item for item in payload["items"] if item["kind"] == "intermediate"
     )
     assert intermediate["payload"]["source_event_ids"] == [1]
+    assert intermediate["identity"]["progress_item_ids"] == ["progress:notice:0001"]
+    assert intermediate["provenance"]["source_event_ids"] == [1]
+    assert intermediate["provenance"]["progress_event_ids"] == [1]
     assert intermediate["payload"]["detail_available"] is True
+    for item in payload["items"]:
+        _assert_v2_metadata(item)
 
 
 def test_queued_user_messages_remain_distinct_and_ordered_while_running(
@@ -297,7 +325,7 @@ def test_live_tail_event_projects_to_canonical_timeline_item() -> None:
 
     assert item is not None
     assert item["kind"] == "tool_group"
-    assert item["item_id"] == "turn:turn-1:tool:1:pytest"
+    assert item["item_id"] == "turn:turn-1:tool:2:pytest"
     assert item["payload"]["source_event_ids"] == [2]
     assert item["payload"]["detail_available"] is True
 

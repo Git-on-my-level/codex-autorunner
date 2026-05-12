@@ -8,7 +8,7 @@ import type {
   WorktreeSummary,
   WorkStatus
 } from './domain';
-import { normalizeOptionalWorkStatus } from './domain';
+import { normalizeOptionalWorkStatus, pmaTimelineContractFields } from './domain';
 import { surfaceRefFromThreadRaw } from './thread';
 import { isChatUnread } from './unread';
 
@@ -183,7 +183,19 @@ export type ArtifactCardView = {
 
 export type PmaCard =
   | { kind: 'message'; id: string; message: PmaChatMessage; turnId: string | null; orderKey: string; timestamp: string | null }
-  | { kind: 'intermediate'; id: string; title: string; text: string; eventIds: string[]; detail: string | null; turnId: string | null; orderKey: string; timestamp: string | null }
+  | {
+      kind: 'intermediate';
+      id: string;
+      title: string;
+      text: string;
+      eventIds: string[];
+      /** Backend `progress_item.event_ids` accumulated on this live card; used to dedupe against the timeline without hiding partial catch-up. */
+      progressSourceIds: string[];
+      detail: string | null;
+      turnId: string | null;
+      orderKey: string;
+      timestamp: string | null;
+    }
   | { kind: 'tool_group'; id: string; tools: PmaToolCallCard[]; turnId: string | null; orderKey: string; timestamp: string | null }
   | { kind: 'turn_summary'; id: string; title: string; cards: PmaCard[]; turnId: string | null; orderKey: string; timestamp: string | null }
   | { kind: 'approval'; id: string; title: string; summary: string; detail: string | null; turnId: string | null; orderKey: string; timestamp: string | null }
@@ -321,15 +333,18 @@ export function mapChatSurfaceToPmaChatSummary(surface: Record<string, unknown>)
   const worktreeId = resourceKind === 'worktree' ? resourceId : null;
   const bindingKind = firstRawString(metadata.binding_kind) ?? surfaceKind;
   const bindingId = firstRawString(metadata.binding_id) ?? surfaceKey;
+  const statusSource =
+    lifecycle ??
+    metadata.runtime_status ??
+    metadata.target_runtime_status ??
+    metadata.latest_execution_status ??
+    metadata.latest_event_status;
 
   return {
     id,
     title: surfaceTitle(surfaceKind, surfaceKey, display),
     lifecycleStatus,
-    status:
-      normalizeOptionalWorkStatus(
-        metadata.latest_execution_status ?? metadata.latest_event_status ?? metadata.runtime_status ?? lifecycle
-      ) ?? 'idle',
+    status: normalizeOptionalWorkStatus(statusSource) ?? 'idle',
     agentId: firstRawString(metadata.agent_id),
     agentProfile: firstRawString(metadata.agent_profile),
     model: firstRawString(metadata.model),
@@ -369,8 +384,8 @@ export function mapChatSurfaceToPmaChatSummary(surface: Record<string, unknown>)
       name: firstRawString(display.display_name, display.title),
       chat_kind: firstRawString(metadata.chat_kind),
       thread_kind: firstRawString(metadata.thread_kind),
-      normalized_status: metadata.latest_execution_status ?? metadata.latest_event_status ?? metadata.runtime_status ?? lifecycle,
-      status: metadata.latest_execution_status ?? metadata.latest_event_status ?? metadata.runtime_status ?? lifecycle,
+      normalized_status: statusSource,
+      status: statusSource,
       unread_count: rawNumber(metadata.unread_count ?? metadata.unreadCount ?? surface.unread_count ?? surface.unreadCount)
     }
   };
@@ -500,6 +515,7 @@ export type ManagedThreadMessagePayload = {
   model?: string;
   reasoning?: string;
   profile?: string;
+  client_turn_id?: string;
   busy_policy?: 'queue' | 'interrupt' | 'reject';
   defer_execution?: boolean;
   wait_for_confirmation?: boolean;
@@ -859,21 +875,16 @@ function suppressDuplicateTimelineDeliveries(timeline: PmaTimelineItem[]): PmaTi
   const seen = new Set<string>();
   const out: PmaTimelineItem[] = [];
   for (const item of timeline) {
-    const key = duplicateDeliveryKey(item);
-    if (key) {
-      if (seen.has(key)) continue;
-      seen.add(key);
-    }
+    const key = canonicalTimelineIdentityKey(item);
+    if (seen.has(key)) continue;
+    seen.add(key);
     out.push(item);
   }
   return out;
 }
 
-function duplicateDeliveryKey(item: PmaTimelineItem): string | null {
-  if (item.kind !== 'assistant_message') return null;
-  const text = stringValue(item.payload.text).trim();
-  if (!text || !item.turnId) return null;
-  return `${item.chatId ?? ''}|${item.turnId}|${item.kind}|${text}`;
+function canonicalTimelineIdentityKey(item: PmaTimelineItem): string {
+  return item.identity.timelineItemId;
 }
 
 function isMessageAttachmentArtifactCard(card: PmaCard, messageAttachmentKeys: Set<string>): boolean {
@@ -946,10 +957,11 @@ export function reconcilePmaTimeline(
   const byId = new Map(
     existing
       .filter((item) => !isSupersededOptimisticUserMessage(item, canonicalUserMessages))
-      .map((item) => [item.id, item])
+      .map((item) => [canonicalTimelineIdentityKey(item), item])
   );
   for (const item of incoming) {
-    byId.set(item.id, { ...byId.get(item.id), ...item, payload: { ...byId.get(item.id)?.payload, ...item.payload } });
+    const key = canonicalTimelineIdentityKey(item);
+    byId.set(key, { ...byId.get(key), ...item, payload: { ...byId.get(key)?.payload, ...item.payload } });
   }
   return trimPmaTimeline([...byId.values()].sort(compareTimelineItems), limit);
 }
@@ -964,11 +976,14 @@ function trimPmaTimeline(items: PmaTimelineItem[], limit: number): PmaTimelineIt
 
 function isSupersededOptimisticUserMessage(item: PmaTimelineItem, canonicalUserMessages: PmaTimelineItem[]): boolean {
   if (!item.id.startsWith('optimistic:') || item.kind !== 'user_message') return false;
-  const optimisticText = stringValue(item.payload.text).trim();
+  const optimisticCorrelationId = item.identity.correlationId;
+  const optimisticTimelineItemId = item.identity.timelineItemId;
   return canonicalUserMessages.some((canonical) => {
     if (canonical.chatId !== item.chatId) return false;
-    const canonicalText = stringValue(canonical.payload.text).trim();
-    return Boolean(optimisticText && canonicalText && optimisticText === canonicalText);
+    return Boolean(
+      (optimisticCorrelationId && canonical.identity.correlationId === optimisticCorrelationId) ||
+        (optimisticTimelineItemId && canonical.identity.timelineItemId === optimisticTimelineItemId)
+    );
   });
 }
 
@@ -977,24 +992,34 @@ export function optimisticUserTimelineItemFromSend(
   fallbackText: string,
   fallbackChatId: string
 ): PmaTimelineItem | null {
+  const identity = asRecord(raw.identity);
+  const provenance = asRecord(raw.provenance);
+  const timelineItemId = stringValue(identity.timeline_item_id);
+  const correlationId = stringValue(identity.correlation_id);
   const turnId = stringValue(raw.managed_turn_id);
   const text = stringValue(raw.delivered_message) || stringValue(raw.prompt) || fallbackText;
-  if (!turnId || !text.trim()) return null;
+  if (!timelineItemId || !text.trim() || !correlationId) return null;
   const chatId = stringValue(raw.managed_thread_id) || fallbackChatId;
   const timestamp = new Date().toISOString();
   return {
-    id: `turn:${turnId}:user`,
+    id: timelineItemId,
     kind: 'user_message',
-    orderKey: `optimistic|${timestamp}|turn:${turnId}:user`,
+    orderKey: `optimistic|${timestamp}|${timelineItemId}`,
     timestamp,
     chatId,
-    turnId,
+    turnId: turnId || null,
     status: normalizeOptionalWorkStatus(raw.execution_state ?? raw.status),
     payload: {
       text,
       text_preview: text.slice(0, 240),
       attachments: Array.isArray(raw.attachments) ? raw.attachments : []
     },
+    ...pmaTimelineContractFields(timelineItemId, {
+      sourceEventIds: unknownArray(provenance.source_event_ids),
+      progressEventIds: unknownArray(provenance.progress_event_ids),
+      cursorEventId: stringValue(provenance.cursor_event_id) || null,
+      correlationId
+    }),
     raw: { optimistic: true, ...raw }
   };
 }
@@ -1064,16 +1089,20 @@ export function buildPmaActivityCards(
     const mergeTarget = findMergeableIntermediate(cards, event, fallbackTurnId);
     if (mergeTarget) {
       mergeTarget.text = mergeIntermediateText(mergeTarget.text, text);
-      mergeTarget.eventIds.push(event.id);
+      const progressIds = progressItemEventIds(canonicalProgressItem(event));
+      mergeTarget.eventIds.push(event.id, ...progressIds);
+      mergeTarget.progressSourceIds.push(...progressIds);
       continue;
     }
+    const progressIds = progressItemEventIds(canonicalProgressItem(event));
     cards.push({
       kind: 'intermediate',
       id: `intermediate-${event.id}`,
       title: intermediateTitle(event),
       text,
       detail: null,
-      eventIds: [event.id],
+      eventIds: [event.id, ...progressIds],
+      progressSourceIds: [...progressIds],
       turnId: activityTurnId(event, fallbackTurnId),
       orderKey: activityOrderKey(event),
       timestamp: event.createdAt
@@ -1193,6 +1222,17 @@ function transcriptMergeSortKey(
   return `99999998|live|${String(liveInner).padStart(8, '0')}|${String(ctx.liveOrdinal).padStart(8, '0')}|${card.id}`;
 }
 
+/** True when live activity should not be layered on top of the persisted timeline. */
+function liveActivitySuppressedByCanonicalTimeline(card: PmaCard, timelineEventIds: Set<string>): boolean {
+  if (card.kind === 'intermediate') {
+    const sources = card.progressSourceIds;
+    if (sources.length > 0) {
+      return sources.every((id) => timelineEventIds.has(id));
+    }
+  }
+  return cardEventIds(card).some((id) => timelineEventIds.has(id));
+}
+
 export function mergePmaTimelineAndActivityCards(
   timelineCards: PmaCard[],
   activityCards: PmaCard[]
@@ -1205,7 +1245,7 @@ export function mergePmaTimelineAndActivityCards(
   }
   const extra = activityCards.filter((card) => {
     if (timelineIds.has(card.id)) return false;
-    return !cardEventIds(card).some((id) => timelineEventIds.has(id));
+    return !liveActivitySuppressedByCanonicalTimeline(card, timelineEventIds);
   });
   if (!extra.length) return timelineCards;
 
@@ -1491,6 +1531,9 @@ function coalesceSequentialIntermediateTraceCards(cards: PmaCard[]): PmaCard[] {
 
     existing.text = mergeIntermediateText(existing.text, card.text);
     existing.eventIds.push(...card.eventIds.filter((id) => !existing.eventIds.includes(id)));
+    existing.progressSourceIds.push(
+      ...card.progressSourceIds.filter((id) => !existing.progressSourceIds.includes(id))
+    );
     existing.detail = traceDetailSummary(existing.title, existing.eventIds);
   }
 
@@ -1582,6 +1625,7 @@ function timelineItemToCard(item: PmaTimelineItem): PmaCard[] {
       text,
       detail: thinkingTimelineDetail(item) ?? timelineDetail(item),
       eventIds: timelineSourceEventIds(item),
+      progressSourceIds: [],
       turnId: item.turnId,
       orderKey: item.orderKey,
       timestamp: item.timestamp
@@ -1780,15 +1824,17 @@ function cardEventIds(card: PmaCard): string[] {
 
 function timelineSourceEventIds(item: PmaTimelineItem): string[] {
   return [
-    item.id,
-    ...unknownArrayToStrings(item.payload.source_event_ids),
-    ...progressItemEventIds(asRecord(item.payload.progress_item) as CanonicalProgressItem),
-    ...asRecordArray(item.payload.progress_items).flatMap((progressItem) => progressItemEventIds(progressItem as CanonicalProgressItem))
+    ...unknownArrayToStrings(item.provenance.sourceEventIds),
+    ...unknownArrayToStrings(item.provenance.progressEventIds)
   ];
 }
 
 function progressItemEventIds(item: CanonicalProgressItem | null | undefined): string[] {
   return unknownArrayToStrings(item?.event_ids);
+}
+
+function unknownArray(value: unknown): unknown[] {
+  return Array.isArray(value) ? value : [];
 }
 
 function unknownArrayToStrings(value: unknown): string[] {
@@ -2133,15 +2179,18 @@ export function buildManagedThreadMessagePayload(
   attachments: Array<PendingAttachment | DocumentFileIntentPayload> = [],
   reasoning = '',
   profile = '',
-  busyPolicy: 'queue' | 'interrupt' | 'reject' | null = isRunning ? 'queue' : null
+  busyPolicy: 'queue' | 'interrupt' | 'reject' | null = isRunning ? 'queue' : null,
+  clientTurnId = ''
 ): ManagedThreadMessagePayload {
   const trimmed = profile.trim();
+  const trimmedClientTurnId = clientTurnId.trim();
   return {
     message,
     attachments: attachments.length ? attachments.map(pendingAttachmentToIntent) : undefined,
     model: model || undefined,
     reasoning: reasoning || undefined,
     ...(trimmed ? { profile: trimmed } : {}),
+    client_turn_id: trimmedClientTurnId || undefined,
     busy_policy: busyPolicy ?? undefined,
     defer_execution: true,
     wait_for_confirmation: false

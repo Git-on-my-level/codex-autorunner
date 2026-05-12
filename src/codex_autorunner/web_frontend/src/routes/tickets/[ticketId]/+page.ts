@@ -1,6 +1,7 @@
 import {
   ensureTicketIndexLoaded,
   ensureTicketDetailLoaded,
+  readModelEntityStore,
   type ReadModelDepends,
   type ReadModelLoaderOptions,
   type ReadModelLoaderResult
@@ -14,7 +15,11 @@ export type TicketDetailLoadData = {
 };
 
 export const load: PageLoad = async ({ depends, params }): Promise<TicketDetailLoadData> => {
-  return loadTicketDetailRoute({ ticketId: params.ticketId, depends });
+  return loadTicketDetailRoute({
+    ticketId: params.ticketId,
+    depends,
+    loaderOptions: { store: readModelEntityStore }
+  });
 };
 
 export async function loadTicketDetailRoute(options: {
@@ -34,9 +39,14 @@ export async function loadTicketDetailRoute(options: {
     const state = store.snapshot();
     const summaryIds = state.ticketOrderByOwner['all'];
     const summaries = summaryIds?.map(id => state.ticketSummaries[id]).filter(Boolean) ?? [];
-    const matched = summaries.find(s => s.id === ticketId && s.workspaceKind === 'repo' && s.workspaceId);
-    if (matched?.workspaceId) {
-      detailResult = await ensureTicketDetailLoaded(ticketId, { kind: 'repo', id: matched.workspaceId }, {
+    const matched = summaries.find(
+      s =>
+        s.id === ticketId &&
+        (s.workspaceKind === 'repo' || s.workspaceKind === 'worktree') &&
+        s.workspaceId
+    );
+    if (matched?.workspaceId && (matched.workspaceKind === 'repo' || matched.workspaceKind === 'worktree')) {
+      detailResult = await ensureTicketDetailLoaded(ticketId, { kind: matched.workspaceKind, id: matched.workspaceId }, {
         ...options.loaderOptions,
         depends: undefined
       });

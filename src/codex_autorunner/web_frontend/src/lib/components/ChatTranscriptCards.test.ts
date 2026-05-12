@@ -7,7 +7,8 @@ const baseTrace = {
   turnId: 'turn-1',
   orderKey: '00000001|trace',
   timestamp: '2026-05-10T00:00:00.000Z',
-  eventIds: []
+  eventIds: [],
+  progressSourceIds: [] as string[]
 };
 
 describe('ChatTranscriptCards', () => {
