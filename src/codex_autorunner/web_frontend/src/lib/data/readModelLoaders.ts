@@ -137,6 +137,46 @@ export async function ensureTicketDetailLoaded(
   return { status: 'fetched', tags };
 }
 
+export async function ensureRepoDetailLoaded(
+  repoId: string,
+  options: ReadModelLoaderOptions = {}
+): Promise<ReadModelLoaderResult> {
+  const tags = [readModelEntityTags.repo(repoId)];
+  markDepends(options.depends, tags);
+  const store = options.store ?? readModelEntityStore;
+  if (!browser) return { status: 'cold', tags };
+
+  const state = store.snapshot();
+  const cached = Boolean(state.repoDetails[repoId]);
+  if (!shouldRefresh(state, cached, options)) return { status: 'cache-hit', tags };
+
+  const client = options.client ?? readModelSnapshotClient;
+  const result = await client.repoDetail(repoId);
+  if (!result.ok) return { status: 'error', tags, error: result.error };
+  store.applyRepoDetailSnapshot(result.data);
+  return { status: 'fetched', tags };
+}
+
+export async function ensureWorktreeDetailLoaded(
+  worktreeId: string,
+  options: ReadModelLoaderOptions = {}
+): Promise<ReadModelLoaderResult> {
+  const tags = [readModelEntityTags.worktree(worktreeId)];
+  markDepends(options.depends, tags);
+  const store = options.store ?? readModelEntityStore;
+  if (!browser) return { status: 'cold', tags };
+
+  const state = store.snapshot();
+  const cached = Boolean(state.worktreeDetails[worktreeId]);
+  if (!shouldRefresh(state, cached, options)) return { status: 'cache-hit', tags };
+
+  const client = options.client ?? readModelSnapshotClient;
+  const result = await client.worktreeDetail(worktreeId);
+  if (!result.ok) return { status: 'error', tags, error: result.error };
+  store.applyWorktreeDetailSnapshot(result.data);
+  return { status: 'fetched', tags };
+}
+
 function shouldRefresh(
   state: ReadModelEntityState,
   cached: boolean,

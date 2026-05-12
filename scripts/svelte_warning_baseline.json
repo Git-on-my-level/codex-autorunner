@@ -1,3 +1,10 @@
 {
-  "warnings": []
+  "warnings": [
+    { "path": "src/codex_autorunner/web_frontend/src/routes/repos/+page.svelte", "message": "This reference only captures the initial value of `data`. Did you mean to reference it inside a derived instead?" },
+    { "path": "src/codex_autorunner/web_frontend/src/routes/repos/[repoId]/+page.svelte", "message": "This reference only captures the initial value of `data`. Did you mean to reference it inside a derived instead?" },
+    { "path": "src/codex_autorunner/web_frontend/src/routes/repos/[repoId]/+page.svelte", "message": "This reference only captures the initial value of `repoId`. Did you mean to reference it inside a derived instead?" },
+    { "path": "src/codex_autorunner/web_frontend/src/routes/worktrees/+page.svelte", "message": "This reference only captures the initial value of `data`. Did you mean to reference it inside a derived instead?" },
+    { "path": "src/codex_autorunner/web_frontend/src/routes/worktrees/[worktreeId]/+page.svelte", "message": "This reference only captures the initial value of `data`. Did you mean to reference it inside a derived instead?" },
+    { "path": "src/codex_autorunner/web_frontend/src/routes/worktrees/[worktreeId]/+page.svelte", "message": "This reference only captures the initial value of `worktreeId`. Did you mean to reference it inside a derived instead?" }
+  ]
 }

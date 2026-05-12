@@ -5,6 +5,7 @@
   import RepoWorktreeViews from '$lib/components/RepoWorktreeViews.svelte';
   import { confirmAndArchiveState, confirmAndCleanupWorktree, type ActionNotice } from '$lib/actions/repoWorktreeActions';
   import { pmaApi, type ApiError, type JsonRecord, type PartialPageIssue } from '$lib/api/client';
+  import { ensureRepoDetailLoaded, readModelEntityStore } from '$lib/data';
   import {
     mapContextspaceDocument,
     mapPmaChatSummary,
@@ -19,30 +20,25 @@
     type RepoWorktreeDetailViewModel
   } from '$lib/viewModels/repoWorktree';
 
+  let { data = { repoId: '', result: { status: 'cold' as const, tags: [] } } } = $props();
   const repoId = $derived(page.params.repoId ?? 'unknown-repo');
   let detail = $state<RepoWorktreeDetailViewModel | null>(null);
-  let loading = $state(true);
-  let error = $state<ApiError | null>(null);
+  let loading = $state<boolean>(data.result.status === 'cold' && !readModelEntityStore.snapshot().repoDetails[repoId]);
+  let error = $state<ApiError | null>(data.result.status === 'error' ? data.result.error : null);
   let sectionIssues = $state<PartialPageIssue[]>([]);
   let notice = $state<ActionNotice | null>(null);
   let syncRepoBusy = $state(false);
 
-  onMount(() => {
-    void loadRepoDetail();
-  });
-
-  async function loadRepoDetail(showLoading = true): Promise<void> {
-    if (showLoading) loading = true;
-    error = null;
-    sectionIssues = [];
-    const snapshot = await pmaApi.readModels.repoDetail(repoId);
-    if (!snapshot.ok) {
-      error = snapshot.error;
-      loading = false;
-      return;
-    }
-    const payload = snapshot.data;
-    const baseIssues: PartialPageIssue[] = [];
+  function buildDetailFromSnapshot(snapshot: Record<string, unknown>): RepoWorktreeDetailViewModel {
+    const payload = snapshot as {
+      identity: Record<string, unknown>;
+      topology: Record<string, unknown>;
+      scopedRuns: Record<string, unknown>[];
+      scopedChats: Record<string, unknown>[];
+      scopedTickets: Record<string, unknown>[];
+      contextspaceSummary: Record<string, unknown>[];
+      currentArtifacts: Record<string, unknown>[];
+    };
     const baseSource = {
       repos: [mapRepoSummary(payload.identity)],
       worktrees: childrenFromTopology(payload.topology).map(mapWorktreeSummary),
@@ -52,15 +48,31 @@
       contextspaceDocs: payload.contextspaceSummary.map(mapContextspaceDocument),
       artifacts: payload.currentArtifacts.map(mapSurfaceArtifact)
     };
-    const baseDetail = buildRepoWorktreeDetailViewModel(baseSource, 'repo', repoId);
-    if (baseDetail.isMissing) {
-      detail = baseDetail;
-      sectionIssues = baseIssues;
+    return buildRepoWorktreeDetailViewModel(baseSource, 'repo', repoId);
+  }
+
+  onMount(() => {
+    const snapshot = readModelEntityStore.snapshot().repoDetails[repoId];
+    if (snapshot) {
+      detail = buildDetailFromSnapshot(snapshot as unknown as Record<string, unknown>);
+    }
+    loading = false;
+  });
+
+  async function loadRepoDetail(showLoading = true): Promise<void> {
+    if (showLoading) loading = true;
+    error = null;
+    sectionIssues = [];
+    const result = await ensureRepoDetailLoaded(repoId, { refresh: true });
+    if (result.status === 'error') {
+      error = result.error;
       loading = false;
       return;
     }
-    sectionIssues = baseIssues;
-    detail = baseDetail;
+    const snapshot = readModelEntityStore.snapshot().repoDetails[repoId];
+    if (snapshot) {
+      detail = buildDetailFromSnapshot(snapshot as unknown as Record<string, unknown>);
+    }
     loading = false;
   }
 

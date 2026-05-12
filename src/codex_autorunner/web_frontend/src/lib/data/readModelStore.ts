@@ -13,6 +13,7 @@ import type {
   ChatTimelineItem,
   ProjectionCursor,
   RepoTopology,
+  RepoWorktreeDetailSnapshot,
   RepoWorktreePatchEvent,
   RepoWorktreeRuntimeSnapshot,
   RepoWorktreeTopologySnapshot,
@@ -102,6 +103,8 @@ export type ReadModelEntityState = {
   runs: Record<string, unknown>;
   pmaRuns: Record<string, PmaRunProgress>;
   pmaRunOrderByOwner: Record<string, string[]>;
+  repoDetails: Record<string, RepoWorktreeDetailSnapshot>;
+  worktreeDetails: Record<string, RepoWorktreeDetailSnapshot>;
   agents: Record<string, unknown>;
   models: Record<string, unknown>;
   optimistic: Record<string, OptimisticMutation>;
@@ -160,6 +163,8 @@ export function createInitialReadModelState(): ReadModelEntityState {
     runs: {},
     pmaRuns: {},
     pmaRunOrderByOwner: {},
+    repoDetails: {},
+    worktreeDetails: {},
     agents: {},
     models: {},
     optimistic: {},
@@ -456,6 +461,22 @@ export class ReadModelEntityStore implements Readable<ReadModelEntityState> {
     this.commit(next);
   }
 
+  applyRepoDetailSnapshot(snapshot: RepoWorktreeDetailSnapshot): void {
+    const next = cloneState(this.state);
+    next.repoDetails[snapshot.ownerId] = snapshot;
+    bump(next, 'repo', snapshot.ownerId);
+    rememberCursor(next, `repo.detail:${snapshot.ownerId}`, snapshot.cursor);
+    this.commit(next);
+  }
+
+  applyWorktreeDetailSnapshot(snapshot: RepoWorktreeDetailSnapshot): void {
+    const next = cloneState(this.state);
+    next.worktreeDetails[snapshot.ownerId] = snapshot;
+    bump(next, 'worktree', snapshot.ownerId);
+    rememberCursor(next, `worktree.detail:${snapshot.ownerId}`, snapshot.cursor);
+    this.commit(next);
+  }
+
   applyRepoWorktreePatchEvent(event: RepoWorktreePatchEvent): 'applied' | 'ignored' | 'repair_required' {
     const cursorKey = event.envelope.eventType.includes('runtime') ? 'repo_worktree.runtime' : 'repo_worktree.topology';
     if (isRepairEvent(event.envelope.eventType, event.envelope.operation)) {
@@ -733,6 +754,8 @@ function cloneState(state: ReadModelEntityState): ReadModelEntityState {
     runs: { ...state.runs },
     pmaRuns: { ...state.pmaRuns },
     pmaRunOrderByOwner: cloneRecord(state.pmaRunOrderByOwner),
+    repoDetails: cloneRecord(state.repoDetails),
+    worktreeDetails: cloneRecord(state.worktreeDetails),
     agents: { ...state.agents },
     models: { ...state.models },
     optimistic: { ...state.optimistic },

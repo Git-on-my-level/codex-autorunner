@@ -8,12 +8,13 @@
   import RepoSettingsDialog, { type RepoSettingsTarget } from '$lib/components/RepoSettingsDialog.svelte';
   import { confirmAndArchiveState, confirmAndCleanupWorktree, type ActionNotice } from '$lib/actions/repoWorktreeActions';
   import { pmaApi, type ApiError, type PartialPageIssue } from '$lib/api/client';
-  import { readModelEntityStore, selectRepoSummaries, selectWorktreeSummaries } from '$lib/data';
+  import { ensureRepoWorktreeIndexLoaded, readModelEntityStore, selectRepoSummaries, selectWorktreeSummaries } from '$lib/data';
   import {
     buildRepoWorktreeIndexViewModel,
     type RepoWorktreeIndexViewModel
   } from '$lib/viewModels/repoWorktree';
 
+  let { data = { status: 'cold' as const, tags: [] } } = $props();
   let readModelState = $state(readModelEntityStore.snapshot());
   let unsubscribeReadModels: (() => void) | null = null;
   const index = $derived<RepoWorktreeIndexViewModel | null>(
@@ -27,8 +28,8 @@
       ticketsListLoaded: false
     })
   );
-  let loading = $state(true);
-  let error = $state<ApiError | null>(null);
+  let loading = $state<boolean>(data.status === 'cold');
+  let error = $state<ApiError | null>(data.status === 'error' ? data.error : null);
   let sectionIssues = $state<PartialPageIssue[]>([]);
   let notice = $state<ActionNotice | null>(null);
 
@@ -42,7 +43,6 @@
     unsubscribeReadModels = readModelEntityStore.subscribe((state) => {
       readModelState = state;
     });
-    void loadRepos();
   });
 
   onDestroy(() => {
@@ -50,42 +50,14 @@
   });
 
   async function loadRepos(): Promise<void> {
-    if (selectRepoSummaries(readModelEntityStore.snapshot()).length === 0) loading = true;
+    loading = true;
     error = null;
     sectionIssues = [];
-    const [topology, runtime] = await Promise.all([
-      withTransientRetry(() => pmaApi.readModels.repoWorktreeTopology('all', 200)),
-      withTransientRetry(() => pmaApi.readModels.repoWorktreeRuntime('all', 200))
-    ]);
-    if (!topology.ok) {
-      error = topology.error;
-      loading = false;
-      return;
-    }
-    readModelEntityStore.applyRepoWorktreeTopologySnapshot(topology.data);
-    if (runtime.ok) {
-      readModelEntityStore.applyRepoWorktreeRuntimeSnapshot(runtime.data);
-      sectionIssues = [];
-    } else {
-      sectionIssues = [{
-        id: 'current_run',
-        title: 'Runtime state unavailable',
-        message: runtime.error.message,
-        retryLabel: 'Retry'
-      }];
+    const result = await ensureRepoWorktreeIndexLoaded({ refresh: true });
+    if (result.status === 'error') {
+      error = result.error;
     }
     loading = false;
-  }
-
-  async function withTransientRetry<T>(request: () => Promise<{ ok: true; data: T } | { ok: false; error: ApiError }>): Promise<{ ok: true; data: T } | { ok: false; error: ApiError }> {
-    const first = await request();
-    if (first.ok || !isTransientLoadError(first.error)) return first;
-    await new Promise((resolve) => window.setTimeout(resolve, 180));
-    return request();
-  }
-
-  function isTransientLoadError(error: ApiError): boolean {
-    return error.kind === 'network' || error.status === 502 || error.status === 503 || error.status === 504;
   }
 
   async function handleCleanupWorktree(target: Parameters<typeof confirmAndCleanupWorktree>[0]): Promise<void> {

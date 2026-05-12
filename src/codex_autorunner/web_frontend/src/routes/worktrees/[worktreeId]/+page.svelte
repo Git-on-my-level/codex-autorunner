@@ -5,7 +5,7 @@
   import AutoDismissNotice from '$lib/components/AutoDismissNotice.svelte';
   import RepoWorktreeViews from '$lib/components/RepoWorktreeViews.svelte';
   import { confirmAndArchiveState, confirmAndCleanupWorktree, type ActionNotice } from '$lib/actions/repoWorktreeActions';
-  import { pmaApi, type ApiError, type PartialPageIssue } from '$lib/api/client';
+  import { pmaApi, type ApiError, type JsonRecord, type PartialPageIssue } from '$lib/api/client';
   import { mapContextspaceDocument, mapPmaChatSummary, mapPmaRunProgress, mapSurfaceArtifact, mapTicketSummary, mapWorktreeSummary } from '$lib/viewModels/domain';
   import { stripRuntimeBasePath, withRuntimeBasePath as href } from '$lib/runtime/basePath';
   import {
@@ -13,41 +13,30 @@
     type RepoWorktreeDetailViewModel
   } from '$lib/viewModels/repoWorktree';
   import { legacyWorktreeRedirectPath } from '$lib/viewModels/routes';
+  import { ensureWorktreeDetailLoaded, readModelEntityStore } from '$lib/data';
 
+  let { data = { worktreeId: '', result: { status: 'cold' as const, tags: [] } } } = $props();
   const worktreeId = $derived(page.params.worktreeId ?? 'unknown-worktree');
   let detail = $state<RepoWorktreeDetailViewModel | null>(null);
-  let loading = $state(true);
-  let error = $state<ApiError | null>(null);
+  let loading = $state<boolean>(data.result.status === 'cold' && !readModelEntityStore.snapshot().worktreeDetails[worktreeId]);
+  let error = $state<ApiError | null>(data.result.status === 'error' ? data.result.error : null);
   let sectionIssues = $state<PartialPageIssue[]>([]);
   let notice = $state<ActionNotice | null>(null);
   let syncRepoBusy = $state(false);
   let backingRepoId = $state<string | null>(null);
 
-  onMount(() => {
-    void loadWorktreeDetail();
-  });
-
-  async function loadWorktreeDetail(showLoading = true): Promise<void> {
-    if (showLoading) loading = true;
-    error = null;
-    sectionIssues = [];
-    backingRepoId = null;
-    const snapshot = await pmaApi.readModels.worktreeDetail(worktreeId);
-    if (!snapshot.ok) {
-      error = snapshot.error;
-      loading = false;
-      return;
-    }
-    const payload = snapshot.data;
+  function buildDetailFromSnapshot(snapshot: Record<string, unknown>): RepoWorktreeDetailViewModel {
+    const payload = snapshot as {
+      identity: Record<string, unknown>;
+      scopedRuns: Record<string, unknown>[];
+      scopedChats: Record<string, unknown>[];
+      scopedTickets: Record<string, unknown>[];
+      contextspaceSummary: Record<string, unknown>[];
+      currentArtifacts: Record<string, unknown>[];
+    };
     const worktreeList = [mapWorktreeSummary(payload.identity)];
     const matchedWorktree = worktreeList.find((worktree) => worktree.id === worktreeId);
-    const redirectTo = legacyWorktreeRedirectPath(stripRuntimeBasePath(page.url.pathname), worktreeId, matchedWorktree?.repoId ?? null);
-    if (redirectTo) {
-      await goto(href(redirectTo), { replaceState: true });
-      return;
-    }
     backingRepoId = matchedWorktree?.repoId ?? null;
-    const baseIssues: PartialPageIssue[] = [];
     const baseSource = {
       repos: [],
       worktrees: worktreeList,
@@ -57,15 +46,46 @@
       contextspaceDocs: payload.contextspaceSummary.map(mapContextspaceDocument),
       artifacts: payload.currentArtifacts.map(mapSurfaceArtifact)
     };
-    const baseDetail = buildRepoWorktreeDetailViewModel(baseSource, 'worktree', worktreeId);
-    if (baseDetail.isMissing) {
-      detail = baseDetail;
-      sectionIssues = baseIssues;
+    return buildRepoWorktreeDetailViewModel(baseSource, 'worktree', worktreeId);
+  }
+
+  onMount(() => {
+    const snapshot = readModelEntityStore.snapshot().worktreeDetails[worktreeId];
+    if (snapshot) {
+      const worktreeList = [mapWorktreeSummary(snapshot.identity as Record<string, unknown>)];
+      const matchedWorktree = worktreeList.find((worktree) => worktree.id === worktreeId);
+      const redirectTo = legacyWorktreeRedirectPath(stripRuntimeBasePath(page.url.pathname), worktreeId, matchedWorktree?.repoId ?? null);
+      if (redirectTo) {
+        void goto(href(redirectTo), { replaceState: true });
+        return;
+      }
+      detail = buildDetailFromSnapshot(snapshot as unknown as Record<string, unknown>);
+    }
+    loading = false;
+  });
+
+  async function loadWorktreeDetail(showLoading = true): Promise<void> {
+    if (showLoading) loading = true;
+    error = null;
+    sectionIssues = [];
+    backingRepoId = null;
+    const result = await ensureWorktreeDetailLoaded(worktreeId, { refresh: true });
+    if (result.status === 'error') {
+      error = result.error;
       loading = false;
       return;
     }
-    sectionIssues = baseIssues;
-    detail = baseDetail;
+    const snapshot = readModelEntityStore.snapshot().worktreeDetails[worktreeId];
+    if (snapshot) {
+      const worktreeList = [mapWorktreeSummary(snapshot.identity as Record<string, unknown>)];
+      const matchedWorktree = worktreeList.find((worktree) => worktree.id === worktreeId);
+      const redirectTo = legacyWorktreeRedirectPath(stripRuntimeBasePath(page.url.pathname), worktreeId, matchedWorktree?.repoId ?? null);
+      if (redirectTo) {
+        await goto(href(redirectTo), { replaceState: true });
+        return;
+      }
+      detail = buildDetailFromSnapshot(snapshot as unknown as Record<string, unknown>);
+    }
     loading = false;
   }
 
