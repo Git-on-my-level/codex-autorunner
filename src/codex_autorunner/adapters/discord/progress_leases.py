@@ -328,10 +328,12 @@ def _resolve_discord_progress_reconcile_note(
         return (
             "Status: this progress message no longer maps to an active managed thread."
         )
-    if orphaned:
-        return _orphaned_progress_note(startup=startup)
     if referenced_execution_id is None:
         return "Status: this turn failed before execution started."
+    if _execution_field(running_execution, "execution_id") == referenced_execution_id:
+        return None
+    if orphaned:
+        return _orphaned_progress_note(startup=startup)
     latest_execution_id = _execution_field(latest_execution, "execution_id")
     if latest_execution_id and latest_execution_id != referenced_execution_id:
         return "Status: this progress message belongs to an older turn. A newer turn is active."
@@ -344,10 +346,6 @@ def _resolve_discord_progress_reconcile_note(
         return "Status: this turn already failed."
     if resolved_status == "queued":
         return "Status: this turn is queued and no longer has an active cancel surface."
-    if resolved_status == "running":
-        running_execution_id = _execution_field(running_execution, "execution_id")
-        if running_execution_id == referenced_execution_id:
-            return None
     return "Status: this turn is no longer active."
 
 

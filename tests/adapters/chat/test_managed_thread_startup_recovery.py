@@ -150,6 +150,79 @@ async def test_startup_recovery_selects_owned_binding_among_same_surface_binding
 
 
 @pytest.mark.anyio
+async def test_startup_recovery_reattaches_running_turn_before_marking_lost() -> None:
+    reattached: list[tuple[str, str, str]] = []
+    marked_lost: list[str] = []
+
+    class FakeThreadStore:
+        def list_thread_ids_with_running_executions(self, limit=None):
+            _ = limit
+            return ["thread-1"]
+
+        def get_running_turn(self, managed_thread_id: str):
+            assert managed_thread_id == "thread-1"
+            return {"client_turn_id": "discord:channel-1:run-1"}
+
+    class FakeOrchestrationService:
+        thread_store = FakeThreadStore()
+
+        def get_thread_target(self, managed_thread_id: str):
+            assert managed_thread_id == "thread-1"
+            return SimpleNamespace(
+                backend_thread_id="backend-thread-1",
+                agent_id="codex",
+                workspace_root="/workspace/thread-1",
+            )
+
+        def get_running_execution(self, managed_thread_id: str):
+            assert managed_thread_id == "thread-1"
+            return SimpleNamespace(
+                execution_id="turn-1",
+                backend_id="backend-turn-1",
+            )
+
+        def list_bindings(self, **kwargs: object):
+            assert kwargs["surface_kind"] == "discord"
+            return [SimpleNamespace(surface_key="channel-1")]
+
+        async def recover_running_execution_from_harness(
+            self,
+            managed_thread_id: str,
+            *,
+            default_error: str,
+        ):
+            assert managed_thread_id == "thread-1"
+            assert default_error == "Discord PMA turn failed"
+            return None
+
+        def recover_running_execution_after_restart(self, managed_thread_id: str):
+            marked_lost.append(managed_thread_id)
+            return SimpleNamespace(
+                status="error",
+                output_text="",
+                error="lost",
+                execution_id="turn-1",
+            )
+
+    await recovery_module.recover_managed_thread_executions_on_startup(
+        SimpleNamespace(_logger=logging.getLogger("test.startup_recovery.reattach")),
+        surface_kind="discord",
+        build_orchestration_service=lambda _service: FakeOrchestrationService(),
+        build_durable_delivery=lambda *_args: object(),
+        reattach_running_execution=lambda _service, _orch, surface_key, thread_id, _thread, execution: reattached.append(
+            (surface_key, thread_id, execution.execution_id)
+        )
+        or True,
+        public_execution_error="Discord PMA turn failed",
+        failure_event_name="discord.turn.startup_execution_recovery_failed",
+        finished_event_name="discord.turn.startup_execution_recovery_finished",
+    )
+
+    assert reattached == [("channel-1", "thread-1", "turn-1")]
+    assert marked_lost == []
+
+
+@pytest.mark.anyio
 async def test_startup_recovery_runs_execution_hooks_for_recovered_running_turn(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

@@ -267,6 +267,154 @@ async def test_startup_recovery_cleans_interrupted_progress_leases(
 
 
 @pytest.mark.anyio
+async def test_reattach_running_execution_cleans_interrupted_progress_leases(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    cleanup_calls: list[dict[str, object]] = []
+    base_finalized: list[str] = []
+    handoffs: list[object] = []
+    ensured_workers: list[str] = []
+    spawned_tasks: list[asyncio.Task[object]] = []
+
+    async def _fake_cleanup_discord_terminal_progress_leases(
+        owner: object,
+        *,
+        managed_thread_id: str,
+        execution_id: str | None,
+        channel_id: str,
+        note: str,
+        record_prefix: str,
+    ) -> int:
+        cleanup_calls.append(
+            {
+                "owner": owner,
+                "managed_thread_id": managed_thread_id,
+                "execution_id": execution_id,
+                "channel_id": channel_id,
+                "note": note,
+                "record_prefix": record_prefix,
+            }
+        )
+        return 1
+
+    async def _base_on_execution_finalized(_started: object, finalized: object) -> None:
+        base_finalized.append(str(finalized.managed_turn_id))
+
+    class FakeCoordinator:
+        async def run_started_execution(
+            self,
+            started: object,
+            *,
+            hooks: object,
+            runtime_event_state: object,
+            record_finalization_failure: bool,
+        ) -> object:
+            _ = runtime_event_state
+            assert record_finalization_failure is True
+            finalized = SimpleNamespace(
+                status="interrupted",
+                managed_turn_id="turn-1",
+                managed_thread_id="thread-1",
+                assistant_text="",
+                error="Discord PMA turn interrupted",
+                backend_thread_id="backend-thread-1",
+            )
+            await hooks.on_execution_finalized(started, finalized)
+            return finalized
+
+        def ensure_queue_worker(self, **kwargs: object) -> None:
+            ensured_workers.append(str(kwargs["managed_thread_id"]))
+
+    def _fake_runner_hooks(*_args: object, **_kwargs: object) -> object:
+        return SimpleNamespace(
+            queue_worker_hooks=lambda: SimpleNamespace(
+                durable_delivery=object(),
+                execution_hooks=discord_startup_recovery_module.ManagedThreadExecutionHooks(
+                    on_execution_finalized=_base_on_execution_finalized
+                ),
+            )
+        )
+
+    async def _fake_handoff(finalized: object, **_kwargs: object) -> None:
+        handoffs.append(finalized)
+
+    monkeypatch.setattr(
+        discord_startup_recovery_module,
+        "cleanup_discord_terminal_progress_leases",
+        _fake_cleanup_discord_terminal_progress_leases,
+    )
+    monkeypatch.setattr(
+        discord_startup_recovery_module,
+        "_build_discord_managed_thread_coordinator",
+        lambda **_kwargs: FakeCoordinator(),
+    )
+    monkeypatch.setattr(
+        discord_startup_recovery_module,
+        "_build_discord_runner_hooks",
+        _fake_runner_hooks,
+    )
+    monkeypatch.setattr(
+        discord_startup_recovery_module,
+        "handoff_managed_thread_final_delivery",
+        _fake_handoff,
+    )
+    monkeypatch.setattr(
+        discord_startup_recovery_module,
+        "_spawn_discord_progress_background_task",
+        lambda _service, coro, **_kwargs: spawned_tasks.append(
+            asyncio.create_task(coro)
+        )
+        or spawned_tasks[-1],
+    )
+
+    service = SimpleNamespace(
+        _config=SimpleNamespace(root=tmp_path),
+        _logger=logging.getLogger("test.discord.startup.reattach_interrupted"),
+    )
+    orchestration_service = SimpleNamespace(
+        thread_store=SimpleNamespace(get_running_turn=lambda _thread_id: {}),
+        _harness_for_thread=lambda _thread: object(),
+    )
+
+    reattached = discord_startup_recovery_module.reattach_running_discord_managed_thread_execution(
+        service,
+        orchestration_service=orchestration_service,
+        surface_key="channel-1",
+        managed_thread_id="thread-1",
+        thread=SimpleNamespace(
+            workspace_root=tmp_path,
+            backend_thread_id="backend-thread-1",
+        ),
+        execution=SimpleNamespace(
+            execution_id="turn-1",
+            backend_id="backend-turn-1",
+        ),
+    )
+
+    assert reattached is True
+    assert len(spawned_tasks) == 1
+    await spawned_tasks[0]
+
+    assert base_finalized == ["turn-1"]
+    assert len(handoffs) == 1
+    assert ensured_workers == ["thread-1"]
+    assert cleanup_calls == [
+        {
+            "owner": service,
+            "managed_thread_id": "thread-1",
+            "execution_id": "turn-1",
+            "channel_id": "channel-1",
+            "note": "Status: this turn was interrupted.",
+            "record_prefix": (
+                "discord:startup-recovery-interrupted-progress-cleanup:"
+                "thread-1:turn-1"
+            ),
+        }
+    ]
+
+
+@pytest.mark.anyio
 async def test_service_exposes_app_server_event_buffer_context(
     tmp_path: Path, monkeypatch
 ) -> None:

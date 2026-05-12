@@ -964,12 +964,12 @@ class DiscordBotService(DiscordInteractionResponseMixin):
             raise SystemExit(1)
         self._reap_managed_processes(stage="startup")
         await self._store.initialize()
-        await _reconcile_progress_leases_on_startup_impl(self)
         await self._resume_interaction_recovery()
         _validate_command_sync_config_impl(self)
         self._outbox.start()
         outbox_task = asyncio.create_task(self._outbox.run_loop())
         await _recover_managed_thread_executions_on_startup_impl(self)
+        await _reconcile_progress_leases_on_startup_impl(self)
         self._opencode_prune_task = asyncio.create_task(
             _run_opencode_prune_loop_impl(self)
         )
@@ -4042,6 +4042,10 @@ class DiscordBotService(DiscordInteractionResponseMixin):
         self, coro: Awaitable[None], *, await_on_shutdown: bool = False
     ) -> asyncio.Task[Any]:
         task = cast(asyncio.Task[Any], asyncio.ensure_future(coro))
+        if not isinstance(getattr(self, "_background_tasks", None), set):
+            self._background_tasks = set()
+        if not isinstance(getattr(self, "_background_shutdown_wait_tasks", None), set):
+            self._background_shutdown_wait_tasks = set()
         self._background_tasks.add(task)
         if await_on_shutdown:
             self._background_shutdown_wait_tasks.add(task)

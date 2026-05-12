@@ -31,6 +31,7 @@ BuildRecoveryExecutionHooks = Callable[
     Optional[ManagedThreadExecutionHooks],
 ]
 RecoverPendingQueue = Callable[[Any, Any, str, str, Any], object]
+ReattachRunningExecution = Callable[[Any, Any, str, str, Any, Any], object]
 _PENDING_QUEUE_SCAN_LIMIT = 10_000
 
 
@@ -187,6 +188,7 @@ async def recover_managed_thread_executions_on_startup(
     build_orchestration_service: BuildOrchestrationService,
     build_durable_delivery: BuildDurableDelivery,
     build_execution_hooks: Optional[BuildRecoveryExecutionHooks] = None,
+    reattach_running_execution: Optional[ReattachRunningExecution] = None,
     recover_pending_queue: Optional[RecoverPendingQueue] = None,
     public_execution_error: str,
     failure_event_name: str,
@@ -227,6 +229,20 @@ async def recover_managed_thread_executions_on_startup(
                 )
             )
             if recovered_execution is None:
+                if reattach_running_execution is not None:
+                    reattached = reattach_running_execution(
+                        service,
+                        orchestration_service,
+                        surface_key,
+                        managed_thread_id,
+                        thread,
+                        execution,
+                    )
+                    if asyncio.iscoroutine(reattached):
+                        reattached = await reattached
+                    if reattached:
+                        recovered += 1
+                        continue
                 recovered_execution = (
                     orchestration_service.recover_running_execution_after_restart(
                         managed_thread_id

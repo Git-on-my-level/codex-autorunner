@@ -342,6 +342,67 @@ async def test_reconcile_progress_lease_retries_when_retire_edit_fails(
 
 
 @pytest.mark.anyio
+async def test_startup_reconcile_keeps_lease_for_still_running_execution(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = support.DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    await store.upsert_turn_progress_lease(
+        lease_id="lease-1",
+        managed_thread_id="thread-1",
+        execution_id="exec-1",
+        channel_id="channel-1",
+        message_id="msg-1",
+        state="active",
+        progress_label="running",
+    )
+    fake_orchestration_service = SimpleNamespace(
+        get_thread_target=lambda _thread_id: SimpleNamespace(
+            thread_target_id="thread-1"
+        ),
+        get_latest_execution=lambda _thread_id: SimpleNamespace(
+            execution_id="exec-1",
+            status="running",
+        ),
+        get_running_execution=lambda _thread_id: SimpleNamespace(
+            execution_id="exec-1",
+            status="running",
+        ),
+        get_execution=lambda _thread_id, _execution_id: SimpleNamespace(
+            execution_id="exec-1",
+            status="running",
+        ),
+    )
+    monkeypatch.setattr(
+        discord_managed_thread_routing_module,
+        "build_discord_thread_orchestration_service",
+        lambda _service: fake_orchestration_service,
+    )
+    service = SimpleNamespace(
+        _store=store,
+        _rest=support._FakeRest(),
+        _config=support._config(tmp_path),
+        _logger=logging.getLogger("test"),
+    )
+
+    try:
+        reconciled = await support.discord_progress_leases_module.reconcile_discord_turn_progress_leases(
+            service,
+            lease_id="lease-1",
+            orphaned=True,
+            startup=True,
+        )
+
+        assert reconciled == 0
+        retained = await store.get_turn_progress_lease(lease_id="lease-1")
+        assert retained is not None
+        assert retained.state == "active"
+        assert service._rest.edited_channel_messages == []
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
 async def test_deliver_result_reconciles_stale_sibling_progress_leases(
     tmp_path,
     monkeypatch: pytest.MonkeyPatch,
