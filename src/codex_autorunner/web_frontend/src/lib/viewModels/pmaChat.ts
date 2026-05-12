@@ -236,7 +236,6 @@ export type ManagedThreadCreatePayload = {
   chat_kind?: PmaChatKind;
   model?: string;
   profile?: string;
-  chat_kind?: 'pma' | 'coding_agent';
   name: string;
   scope_urn: string;
 };

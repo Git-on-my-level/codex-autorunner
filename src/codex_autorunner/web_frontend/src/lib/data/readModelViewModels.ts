@@ -49,8 +49,7 @@ export function pmaChatSummaryToChatIndexRow(chat: PmaChatSummary): ChatIndexRow
     agentProfile: chat.agentProfile,
     chatKind:
       chat.chatKind ??
-      normalizeManagedThreadChatKind(stringValue(chat.raw.chat_kind ?? chat.raw.thread_kind)) ??
-      stringValue(chat.raw.chat_kind ?? chat.raw.thread_kind),
+      normalizeManagedThreadChatKind(chat.raw.chat_kind ?? chat.raw.thread_kind),
     model: chat.model,
     groupId: chat.ticketId ? `ticket:${chat.ticketId}` : chat.runId ? `run:${chat.runId}` : null
   };
