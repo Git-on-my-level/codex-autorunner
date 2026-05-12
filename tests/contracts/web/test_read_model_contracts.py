@@ -186,7 +186,9 @@ def test_chat_detail_snapshot_and_patch_round_trip_without_legacy_thread_payload
     assert load_read_model_contract(ChatDetailPatchEvent, event_payload) == event
 
 
-def test_chat_timeline_item_canonical_identity_and_provenance_fields_round_trip() -> None:
+def test_chat_timeline_item_canonical_identity_and_provenance_fields_round_trip() -> (
+    None
+):
     item_with_canonical = ChatTimelineItem(
         item_id="tl-canonical",
         kind="tool_event",
@@ -225,9 +227,10 @@ def test_chat_timeline_item_canonical_identity_and_provenance_fields_round_trip(
     assert "provenance" not in legacy_payload
     assert legacy_payload["clientMessageId"] == "client-1"
     assert legacy_payload["backendMessageId"] == "backend-1"
-    assert load_read_model_contract(ChatTimelineItem, legacy_payload) == item_without_canonical
-
-
+    assert (
+        load_read_model_contract(ChatTimelineItem, legacy_payload)
+        == item_without_canonical
+    )
 
     repo = RepoTopology(
         repo_id="repo-1",

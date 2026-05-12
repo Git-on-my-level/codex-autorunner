@@ -659,7 +659,10 @@ describe('PMA chat view helpers', () => {
     const cards = buildPmaCards(
       [
         timelineItem('turn:one:user', 'user_message', { text: 'Create tickets' }, '001'),
-        timelineItem('turn:one:intermediate:think-1', 'intermediate', { intermediate_kind: 'thinking', text: 'Inspecting repo state.', event: { kind: 'thinking', message: 'Inspecting repo state.' } }, '002'),
+        {
+          ...timelineItem('turn:one:intermediate:think-1', 'intermediate', { intermediate_kind: 'thinking', text: 'Inspecting repo state.', event: { kind: 'thinking', message: 'Inspecting repo state.' } }, '002'),
+          ...pmaTimelineContractFields('turn:one:intermediate:think-1', { sourceEventIds: ['turn:one:intermediate:think-1'] })
+        },
         timelineItem('turn:one:tool:1:rg', 'tool_group', { tool_name: 'rg tickets', call: { summary: 'rg tickets' }, result: { status: 'completed', summary: '2 matches' } }, '003'),
         timelineItem('turn:one:approval:write-1', 'approval', { description: 'Allow write' }, '0035'),
         timelineItem('turn:one:intermediate:think-2', 'intermediate', { intermediate_kind: 'thinking', text: 'Drafting ticket files.' }, '004'),
@@ -715,18 +718,27 @@ describe('PMA chat view helpers', () => {
     const cards = buildPmaTranscriptCards(
       [
         timelineItem('turn:one:user', 'user_message', { text: 'Run a smoke test' }, '001'),
-        timelineItem('turn:one:intermediate:think-1', 'intermediate', {
-          intermediate_kind: 'thinking',
-          text: 'Got it'
-        }, '002'),
-        timelineItem('turn:one:intermediate:think-2', 'intermediate', {
-          intermediate_kind: 'thinking',
-          text: ' - I will create a test file'
-        }, '003'),
-        timelineItem('turn:one:intermediate:think-3', 'intermediate', {
-          intermediate_kind: 'thinking',
-          text: ', edit it, search within it, and then delete it.'
-        }, '004'),
+        {
+          ...timelineItem('turn:one:intermediate:think-1', 'intermediate', {
+            intermediate_kind: 'thinking',
+            text: 'Got it'
+          }, '002'),
+          ...pmaTimelineContractFields('turn:one:intermediate:think-1', { sourceEventIds: ['turn:one:intermediate:think-1'] })
+        },
+        {
+          ...timelineItem('turn:one:intermediate:think-2', 'intermediate', {
+            intermediate_kind: 'thinking',
+            text: ' - I will create a test file'
+          }, '003'),
+          ...pmaTimelineContractFields('turn:one:intermediate:think-2', { sourceEventIds: ['turn:one:intermediate:think-2'] })
+        },
+        {
+          ...timelineItem('turn:one:intermediate:think-3', 'intermediate', {
+            intermediate_kind: 'thinking',
+            text: ', edit it, search within it, and then delete it.'
+          }, '004'),
+          ...pmaTimelineContractFields('turn:one:intermediate:think-3', { sourceEventIds: ['turn:one:intermediate:think-3'] })
+        },
         timelineItem('turn:one:assistant', 'assistant_message', { text: 'Done.' }, '005')
       ],
       null,
@@ -994,7 +1006,7 @@ describe('PMA chat view helpers', () => {
           'tool_group',
           {
             tool_name: 'rg',
-            progress_items: [{ event_ids: [7] }],
+            progress_items: [{ event_ids: [999] }],
             call: { summary: 'rg TODO' },
             result: { status: 'completed' }
           },
@@ -1004,7 +1016,11 @@ describe('PMA chat view helpers', () => {
           ...timelineItem('turn:one:assistant', 'assistant_message', { text: 'Done.' }, '00000009'),
           timestamp: '2026-05-04T00:00:13Z'
         }
-      ],
+      ].map((item) =>
+        item.id === 'turn:one:tool:7:rg'
+          ? { ...item, ...pmaTimelineContractFields(item.id, { progressEventIds: [7] }) }
+          : item
+      ),
       null,
       []
     );
@@ -1044,22 +1060,25 @@ describe('PMA chat view helpers', () => {
     const canonical = buildPmaCards(
       [
         timelineItem('turn:one:user', 'user_message', { text: 'Investigate duplicate chat cards' }, '00000001'),
-        timelineItem(
-          'turn:one:intermediate:13',
-          'intermediate',
-          {
-            intermediate_kind: 'progress',
-            text: 'I am checking the latest context.',
-            source_event_ids: [13],
-            progress_item: {
-              kind: 'notice',
-              title: 'Commentary',
-              summary: 'I am checking the latest context.',
-              event_ids: [13]
-            }
-          },
-          '00000013'
-        )
+        {
+          ...timelineItem(
+            'turn:one:intermediate:13',
+            'intermediate',
+            {
+              intermediate_kind: 'progress',
+              text: 'I am checking the latest context.',
+              source_event_ids: [999],
+              progress_item: {
+                kind: 'notice',
+                title: 'Commentary',
+                summary: 'I am checking the latest context.',
+                event_ids: [999]
+              }
+            },
+            '00000013'
+          ),
+          ...pmaTimelineContractFields('turn:one:intermediate:13', { sourceEventIds: [13] })
+        }
       ],
       null,
       []
@@ -1267,7 +1286,13 @@ describe('PMA chat view helpers', () => {
 
   it('anchors live progress after optimistic user bubbles', () => {
     const optimistic = optimisticUserTimelineItemFromSend(
-      { managed_turn_id: 'one', delivered_message: 'Hi', managed_thread_id: 'chat-1' },
+      {
+        item_id: 'turn:one:user',
+        managed_turn_id: 'one',
+        delivered_message: 'Hi',
+        managed_thread_id: 'chat-1',
+        client_turn_id: 'client-1'
+      },
       'Hi',
       'chat-1'
     );
@@ -1410,9 +1435,11 @@ describe('PMA chat view helpers', () => {
   it('reconciles optimistic sends with backend timeline IDs in order', () => {
     const optimistic = optimisticUserTimelineItemFromSend(
       {
+        item_id: 'turn:turn-2:user',
         managed_thread_id: 'chat-1',
         managed_turn_id: 'turn-2',
         delivered_message: 'queued second',
+        client_turn_id: 'client-turn-2',
         execution_state: 'queued'
       },
       'fallback',
@@ -1433,18 +1460,24 @@ describe('PMA chat view helpers', () => {
     expect(merged.map((item) => item.id)).toEqual(['turn:turn-1:user', 'turn:turn-2:user']);
   });
 
-  it('removes random optimistic user placeholders when the canonical user message arrives', () => {
+  it('does not remove optimistic user placeholders by matching raw text only', () => {
     const merged = reconcilePmaTimeline(
       [
-        timelineItem('optimistic:user:123', 'user_message', { text: 'queued second' }, 'optimistic'),
+        {
+          ...timelineItem('optimistic:user:123', 'user_message', { text: 'queued second' }, 'optimistic'),
+          ...pmaTimelineContractFields('optimistic:user:123', { correlationId: 'client-a' })
+        },
         timelineItem('turn:turn-1:user', 'user_message', { text: 'first' }, '001')
       ],
       [
-        timelineItem('turn:turn-2:user', 'user_message', { text: 'queued second' }, '002')
+        {
+          ...timelineItem('turn:turn-2:user', 'user_message', { text: 'queued second' }, '002'),
+          ...pmaTimelineContractFields('turn:turn-2:user', { correlationId: 'client-b' })
+        }
       ]
     );
 
-    expect(merged.map((item) => item.id)).toEqual(['turn:turn-1:user', 'turn:turn-2:user']);
+    expect(merged.map((item) => item.id)).toEqual(['turn:turn-1:user', 'turn:turn-2:user', 'optimistic:user:123']);
   });
 
   it('keeps timeline reconciliation bounded while preserving the first user message', () => {
@@ -1465,13 +1498,20 @@ describe('PMA chat view helpers', () => {
     expect(merged.map((item) => item.id)).toContain('turn:last:assistant');
   });
 
-  it('suppresses duplicate assistant deliveries for the same turn while preserving separate turns', () => {
+  it('dedupes duplicate assistant frames by canonical timeline identity only', () => {
     const cards = buildPmaTranscriptCards(
       [
         timelineItem('turn:one:user', 'user_message', { text: 'Do work' }, '001'),
-        timelineItem('turn:one:assistant:a', 'assistant_message', { text: 'Done.' }, '002'),
-        timelineItem('turn:one:assistant:b', 'assistant_message', { text: 'Done.' }, '003'),
-        timelineItem('turn:two:assistant', 'assistant_message', { text: 'Done.' }, '004')
+        {
+          ...timelineItem('cursor:a', 'assistant_message', { text: 'Done.' }, '002'),
+          ...pmaTimelineContractFields('turn:one:assistant')
+        },
+        {
+          ...timelineItem('cursor:b', 'assistant_message', { text: 'Done.' }, '003'),
+          ...pmaTimelineContractFields('turn:one:assistant')
+        },
+        timelineItem('turn:two:assistant', 'assistant_message', { text: 'Done.' }, '004'),
+        timelineItem('turn:three:assistant', 'assistant_message', { text: 'Done.' }, '005')
       ],
       baseChat,
       [],
@@ -1481,15 +1521,17 @@ describe('PMA chat view helpers', () => {
     const assistantMessages = cards.filter(
       (card) => card.kind === 'message' && card.message.role === 'assistant'
     );
-    expect(assistantMessages.map((card) => card.id)).toEqual(['turn:one:assistant:a', 'turn:two:assistant']);
+    expect(assistantMessages.map((card) => card.id)).toEqual(['cursor:a', 'turn:two:assistant', 'turn:three:assistant']);
   });
 
   it('normalizes optimistic send status through the canonical optional work-status mapper', () => {
     expect(
       optimisticUserTimelineItemFromSend(
         {
+          item_id: 'turn:turn-active:user',
           managed_thread_id: 'chat-1',
           managed_turn_id: 'turn-active',
+          client_turn_id: 'client-active',
           delivered_message: 'active work',
           execution_state: 'active'
         },
@@ -1500,8 +1542,10 @@ describe('PMA chat view helpers', () => {
     expect(
       optimisticUserTimelineItemFromSend(
         {
+          item_id: 'turn:turn-unknown:user',
           managed_thread_id: 'chat-1',
           managed_turn_id: 'turn-unknown',
+          client_turn_id: 'client-unknown',
           delivered_message: 'unknown work',
           execution_state: 'unknown-status'
         },
@@ -1512,8 +1556,10 @@ describe('PMA chat view helpers', () => {
     expect(
       optimisticUserTimelineItemFromSend(
         {
+          item_id: 'turn:turn-empty:user',
           managed_thread_id: 'chat-1',
           managed_turn_id: 'turn-empty',
+          client_turn_id: 'client-empty',
           delivered_message: 'empty work',
           execution_state: ''
         },
@@ -1745,6 +1791,7 @@ describe('PMA chat view helpers', () => {
       ],
       model: 'gpt-5.2',
       reasoning: undefined,
+      client_turn_id: undefined,
       busy_policy: 'queue',
       defer_execution: true,
       wait_for_confirmation: false
@@ -1755,6 +1802,7 @@ describe('PMA chat view helpers', () => {
       model: 'gpt-5.2',
       reasoning: undefined,
       profile: 'planning',
+      client_turn_id: undefined,
       busy_policy: undefined,
       defer_execution: true,
       wait_for_confirmation: false
@@ -1769,9 +1817,13 @@ describe('PMA chat view helpers', () => {
       attachments: undefined,
       model: undefined,
       reasoning: undefined,
+      client_turn_id: undefined,
       busy_policy: undefined,
       defer_execution: true,
       wait_for_confirmation: false
+    });
+    expect(buildManagedThreadMessagePayload('Continue', '', false, [], '', '', null, 'client-1')).toMatchObject({
+      client_turn_id: 'client-1'
     });
     expect(buildManagedThreadMessagePayload('Replace current work', '', true, [], '', '', 'interrupt')).toMatchObject({
       busy_policy: 'interrupt',

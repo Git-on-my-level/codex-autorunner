@@ -1390,20 +1390,23 @@
             model: selectedModel,
             attachments: attachmentsForMessage,
             reasoning: selectedReasoning,
-            profile: profileForSend
+            profile: profileForSend,
+            clientTurnId: optimisticId
           })
         : busyPolicy === 'queue' || targetIsRunning
           ? planQueueExistingChat(targetChatId, message, {
               model: selectedModel,
               attachments: attachmentsForMessage,
               reasoning: selectedReasoning,
-              profile: profileForSend
+              profile: profileForSend,
+              clientTurnId: optimisticId
             })
           : planSendExistingChat(targetChatId, message, {
               model: selectedModel,
               attachments: attachmentsForMessage,
               reasoning: selectedReasoning,
-              profile: profileForSend
+              profile: profileForSend,
+              clientTurnId: optimisticId
             });
     const result = await executePmaChatCommandPlan(pmaApi, commandPlan);
     if (result.ok) {

@@ -512,6 +512,7 @@ export type ManagedThreadMessagePayload = {
   model?: string;
   reasoning?: string;
   profile?: string;
+  client_turn_id?: string;
   busy_policy?: 'queue' | 'interrupt' | 'reject';
   defer_execution?: boolean;
   wait_for_confirmation?: boolean;
@@ -871,21 +872,16 @@ function suppressDuplicateTimelineDeliveries(timeline: PmaTimelineItem[]): PmaTi
   const seen = new Set<string>();
   const out: PmaTimelineItem[] = [];
   for (const item of timeline) {
-    const key = duplicateDeliveryKey(item);
-    if (key) {
-      if (seen.has(key)) continue;
-      seen.add(key);
-    }
+    const key = canonicalTimelineIdentityKey(item);
+    if (seen.has(key)) continue;
+    seen.add(key);
     out.push(item);
   }
   return out;
 }
 
-function duplicateDeliveryKey(item: PmaTimelineItem): string | null {
-  if (item.kind !== 'assistant_message') return null;
-  const text = stringValue(item.payload.text).trim();
-  if (!text || !item.turnId) return null;
-  return `${item.chatId ?? ''}|${item.turnId}|${item.kind}|${text}`;
+function canonicalTimelineIdentityKey(item: PmaTimelineItem): string {
+  return item.identity.timelineItemId || item.id;
 }
 
 function isMessageAttachmentArtifactCard(card: PmaCard, messageAttachmentKeys: Set<string>): boolean {
@@ -958,10 +954,11 @@ export function reconcilePmaTimeline(
   const byId = new Map(
     existing
       .filter((item) => !isSupersededOptimisticUserMessage(item, canonicalUserMessages))
-      .map((item) => [item.id, item])
+      .map((item) => [canonicalTimelineIdentityKey(item), item])
   );
   for (const item of incoming) {
-    byId.set(item.id, { ...byId.get(item.id), ...item, payload: { ...byId.get(item.id)?.payload, ...item.payload } });
+    const key = canonicalTimelineIdentityKey(item);
+    byId.set(key, { ...byId.get(key), ...item, payload: { ...byId.get(key)?.payload, ...item.payload } });
   }
   return trimPmaTimeline([...byId.values()].sort(compareTimelineItems), limit);
 }
@@ -976,11 +973,14 @@ function trimPmaTimeline(items: PmaTimelineItem[], limit: number): PmaTimelineIt
 
 function isSupersededOptimisticUserMessage(item: PmaTimelineItem, canonicalUserMessages: PmaTimelineItem[]): boolean {
   if (!item.id.startsWith('optimistic:') || item.kind !== 'user_message') return false;
-  const optimisticText = stringValue(item.payload.text).trim();
+  const optimisticCorrelationId = item.identity.correlationId;
+  const optimisticTimelineItemId = item.identity.timelineItemId;
   return canonicalUserMessages.some((canonical) => {
     if (canonical.chatId !== item.chatId) return false;
-    const canonicalText = stringValue(canonical.payload.text).trim();
-    return Boolean(optimisticText && canonicalText && optimisticText === canonicalText);
+    return Boolean(
+      (optimisticCorrelationId && canonical.identity.correlationId === optimisticCorrelationId) ||
+        (optimisticTimelineItemId && canonical.identity.timelineItemId === optimisticTimelineItemId)
+    );
   });
 }
 
@@ -989,26 +989,33 @@ export function optimisticUserTimelineItemFromSend(
   fallbackText: string,
   fallbackChatId: string
 ): PmaTimelineItem | null {
+  const identity = asRecord(raw.identity);
+  const provenance = asRecord(raw.provenance);
+  const timelineItemId = stringValue(identity.timeline_item_id ?? raw.item_id);
+  const correlationId = stringValue(identity.correlation_id ?? raw.client_turn_id);
   const turnId = stringValue(raw.managed_turn_id);
   const text = stringValue(raw.delivered_message) || stringValue(raw.prompt) || fallbackText;
-  if (!turnId || !text.trim()) return null;
+  if (!timelineItemId || !text.trim() || !correlationId) return null;
   const chatId = stringValue(raw.managed_thread_id) || fallbackChatId;
   const timestamp = new Date().toISOString();
   return {
-    id: `turn:${turnId}:user`,
+    id: timelineItemId,
     kind: 'user_message',
-    orderKey: `optimistic|${timestamp}|turn:${turnId}:user`,
+    orderKey: `optimistic|${timestamp}|${timelineItemId}`,
     timestamp,
     chatId,
-    turnId,
+    turnId: turnId || null,
     status: normalizeOptionalWorkStatus(raw.execution_state ?? raw.status),
     payload: {
       text,
       text_preview: text.slice(0, 240),
       attachments: Array.isArray(raw.attachments) ? raw.attachments : []
     },
-    ...pmaTimelineContractFields(`turn:${turnId}:user`, {
-      correlationId: stringValue(raw.client_turn_id) || null
+    ...pmaTimelineContractFields(timelineItemId, {
+      sourceEventIds: unknownArray(provenance.source_event_ids),
+      progressEventIds: unknownArray(provenance.progress_event_ids),
+      cursorEventId: stringValue(provenance.cursor_event_id) || null,
+      correlationId
     }),
     raw: { optimistic: true, ...raw }
   };
@@ -1814,15 +1821,17 @@ function cardEventIds(card: PmaCard): string[] {
 
 function timelineSourceEventIds(item: PmaTimelineItem): string[] {
   return [
-    item.id,
-    ...unknownArrayToStrings(item.payload.source_event_ids),
-    ...progressItemEventIds(asRecord(item.payload.progress_item) as CanonicalProgressItem),
-    ...asRecordArray(item.payload.progress_items).flatMap((progressItem) => progressItemEventIds(progressItem as CanonicalProgressItem))
+    ...unknownArrayToStrings(item.provenance.sourceEventIds),
+    ...unknownArrayToStrings(item.provenance.progressEventIds)
   ];
 }
 
 function progressItemEventIds(item: CanonicalProgressItem | null | undefined): string[] {
   return unknownArrayToStrings(item?.event_ids);
+}
+
+function unknownArray(value: unknown): unknown[] {
+  return Array.isArray(value) ? value : [];
 }
 
 function unknownArrayToStrings(value: unknown): string[] {
@@ -2167,15 +2176,18 @@ export function buildManagedThreadMessagePayload(
   attachments: Array<PendingAttachment | DocumentFileIntentPayload> = [],
   reasoning = '',
   profile = '',
-  busyPolicy: 'queue' | 'interrupt' | 'reject' | null = isRunning ? 'queue' : null
+  busyPolicy: 'queue' | 'interrupt' | 'reject' | null = isRunning ? 'queue' : null,
+  clientTurnId = ''
 ): ManagedThreadMessagePayload {
   const trimmed = profile.trim();
+  const trimmedClientTurnId = clientTurnId.trim();
   return {
     message,
     attachments: attachments.length ? attachments.map(pendingAttachmentToIntent) : undefined,
     model: model || undefined,
     reasoning: reasoning || undefined,
     ...(trimmed ? { profile: trimmed } : {}),
+    client_turn_id: trimmedClientTurnId || undefined,
     busy_policy: busyPolicy ?? undefined,
     defer_execution: true,
     wait_for_confirmation: false
