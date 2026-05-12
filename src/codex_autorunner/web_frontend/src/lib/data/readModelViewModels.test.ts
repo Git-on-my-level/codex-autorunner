@@ -62,7 +62,7 @@ describe('read model view-model selectors', () => {
     const summary = chatIndexRowToPmaChatSummary({
       chatId: 'chat-ticket-flow',
       surface: 'pma',
-      title: 'ticket-flow:codex',
+      title: 'ticket-flow:hermes@m4-pma',
       status: 'idle',
       unreadCount: 0,
       lastActivityAt: now,

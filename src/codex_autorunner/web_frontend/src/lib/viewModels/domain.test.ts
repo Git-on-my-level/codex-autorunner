@@ -173,7 +173,7 @@ describe('view model mappers', () => {
   it('flags ticket-flow chats from raw name even when no ticket id surfaces', () => {
     const vm = mapPmaChatSummary({
       managed_thread_id: 'thread-no-ticket',
-      name: 'ticket-flow:codex',
+      name: 'ticket-flow:hermes@m4-pma',
       agent: 'codex',
       status: 'running',
       resource_kind: 'worktree',

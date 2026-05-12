@@ -1220,6 +1220,9 @@ def _chat_detail_thread_metadata(
 ) -> dict[str, Any]:
     metadata = thread.get("metadata")
     metadata_map = dict(metadata) if isinstance(metadata, Mapping) else {}
+    managed_thread_id = thread.get("managed_thread_id") or thread.get(
+        "thread_target_id"
+    )
     stored_title = thread.get("display_name") or thread.get("name")
     chat_display_name = next(
         (
@@ -1229,10 +1232,14 @@ def _chat_detail_thread_metadata(
         ),
         None,
     )
+    title = stored_title
+    if chat_display_name and _is_fallback_chat_title(
+        stored_title, {"managed_thread_id": managed_thread_id}
+    ):
+        title = chat_display_name
     return {
-        "managed_thread_id": thread.get("managed_thread_id")
-        or thread.get("thread_target_id"),
-        "title": chat_display_name or stored_title,
+        "managed_thread_id": managed_thread_id,
+        "title": title,
         "chat_display_name": chat_display_name,
         "agent": thread.get("agent") or thread.get("agent_id"),
         "agent_profile": metadata_map.get("agent_profile"),

@@ -64,7 +64,7 @@ describe('mapThreadSummary', () => {
   it('extracts ticket id from ticket flow thread', () => {
     const vm = mapThreadSummary({
       managed_thread_id: 'thread-tf',
-      name: 'ticket-flow:codex',
+      name: 'ticket-flow:hermes@m4-pma',
       agent: 'codex',
       status: 'running',
       repo_id: 'codex-autorunner',

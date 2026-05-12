@@ -120,7 +120,7 @@ export function chatIndexRowToPmaChatSummary(row: ChatIndexRow): PmaChatSummary 
         row.runId ||
         row.groupId?.startsWith('ticket') ||
         row.groupId?.startsWith('run') ||
-        /^ticket-flow(?::[\w.-]+)?$/i.test(row.title.trim())
+        /^ticket-flow(?::\S+)?$/i.test(row.title.trim())
     ),
     progressPercent: null,
     updatedAt: row.lastActivityAt ?? null,
