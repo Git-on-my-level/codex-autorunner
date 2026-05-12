@@ -316,16 +316,16 @@ def _tool_item(
         state.active_tool_name = tool_name
         state.active_tool_call_event_id = event_id
     group_id = state.active_tool_group_id
+    event_ids_tuple: tuple[int, ...]
     if tool_state in {"completed", "failed"}:
         call_id = state.active_tool_call_event_id
         if call_id is not None and call_id != event_id:
-            merged_event_ids = (call_id, event_id)
+            event_ids_tuple = (call_id, event_id)
         else:
-            merged_event_ids = (event_id,)
+            event_ids_tuple = (event_id,)
         state.active_tool_group_id = None
         state.active_tool_name = None
         state.active_tool_call_event_id = None
-        event_ids_tuple = merged_event_ids
     else:
         event_ids_tuple = (event_id,)
     return ProgressProjectionItem(
