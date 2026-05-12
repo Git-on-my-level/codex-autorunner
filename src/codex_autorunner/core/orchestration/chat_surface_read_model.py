@@ -1036,11 +1036,6 @@ def _is_surface_id_title(value: Any, row: Mapping[str, Any]) -> bool:
     if title is None:
         return False
     lowered = title.lower()
-    surface_kind = _normalize_kind(row.get("surface_kind"))
-    if surface_kind in {"discord", "telegram"} and lowered.startswith(
-        f"{surface_kind}:"
-    ):
-        return True
     return lowered.startswith("discord:") or lowered.startswith("telegram:")
 
 
