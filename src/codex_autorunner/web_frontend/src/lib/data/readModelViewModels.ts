@@ -38,7 +38,7 @@ export function pmaChatSummaryToChatIndexRow(chat: PmaChatSummary): ChatIndexRow
     surface: surfaceFromRaw(chat.raw),
     title: chat.title,
     status: chatIndexStatus(chat),
-    unreadCount: 0,
+    unreadCount: unreadCountFromRaw(chat.raw),
     lastActivityAt: chat.updatedAt,
     repoId: chat.repoId,
     worktreeId: chat.worktreeId,
@@ -98,6 +98,7 @@ export function chatIndexRowToPmaChatSummary(row: ChatIndexRow): PmaChatSummary 
     agent_id: row.agent,
     agent_profile: row.agentProfile,
     model: row.model,
+    unreadCount: row.unreadCount,
     last_activity_at: row.lastActivityAt,
     surface_kind: row.surface
   };
@@ -182,7 +183,7 @@ export function pmaChatCounters(chats: PmaChatSummary[]): ChatIndexCounters {
     total: chats.length,
     waiting: chats.filter((chat) => chat.status === 'waiting').length,
     running: chats.filter((chat) => chat.status === 'running').length,
-    unread: 0,
+    unread: chats.reduce((total, chat) => total + unreadCountFromRaw(chat.raw), 0),
     archived: chats.filter((chat) => chat.lifecycleStatus === 'archived').length
   };
 }
@@ -290,4 +291,11 @@ function stringValue(value: unknown, fallback: string | null = null): string | n
 function numberValue(value: unknown): number {
   const parsed = typeof value === 'number' ? value : Number.parseInt(String(value ?? ''), 10);
   return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function unreadCountFromRaw(raw: JsonRecord): number {
+  const row = raw.row && typeof raw.row === 'object' && !Array.isArray(raw.row) ? (raw.row as JsonRecord) : {};
+  const count = numberValue(raw.unread_count ?? raw.unreadCount ?? row.unread_count ?? row.unreadCount);
+  if (count > 0) return count;
+  return raw.unread === true || row.unread === true ? 1 : 0;
 }

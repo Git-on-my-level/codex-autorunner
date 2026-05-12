@@ -40,6 +40,22 @@ describe('read model view-model selectors', () => {
     expect(summary.raw.agent_profile).toBe('m4-pma');
     expect(pmaChatSummaryToChatIndexRow(summary).agentProfile).toBe('m4-pma');
     expect(pmaChatSummaryToChatIndexRow(summary).chatId).toBe('chat-1');
+    expect(pmaChatSummaryToChatIndexRow(summary).unreadCount).toBe(2);
+  });
+
+  it('preserves unread counts through PMA chat row conversion', () => {
+    const row: ChatIndexRow = {
+      chatId: 'chat-1',
+      surface: 'pma',
+      title: 'Chat',
+      status: 'idle',
+      unreadCount: 3,
+      lastActivityAt: now
+    };
+
+    const summary = chatIndexRowToPmaChatSummary(row);
+
+    expect(pmaChatSummaryToChatIndexRow(summary).unreadCount).toBe(3);
   });
 
   it('selects chat and repo/worktree summaries from normalized state', () => {

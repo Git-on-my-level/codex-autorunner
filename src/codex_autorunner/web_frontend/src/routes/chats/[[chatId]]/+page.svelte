@@ -464,7 +464,6 @@
     const requestedDetail = requestedDetailFromUrl();
     if (!requestedDetail) {
       if (activeChatId !== null) {
-        clearActiveDetailState(activeChatId);
         closeStream();
         activeChatId = null;
         detailMode = 'list';
@@ -522,40 +521,82 @@
   async function loadInitial(): Promise<void> {
     loadingChats = true;
     chatError = null;
-    const [activeChatResult, archivedChatResult, artifactResult, agentResult, topologyResult, runtimeResult] = await Promise.all([
-      pmaApi.getJson<JsonRecord>('/hub/chat/index?view=all&limit=200'),
-      pmaApi.getJson<JsonRecord>('/hub/chat/index?view=archived&limit=200'),
-      pmaApi.pma.listFiles(),
-      pmaApi.pma.listAgents(),
-      pmaApi.readModels.repoWorktreeTopology('all', 200),
-      pmaApi.readModels.repoWorktreeRuntime('all', 200)
-    ]);
+    const archivedChatPromise = pmaApi.getJson<JsonRecord>('/hub/chat/index?view=archived&limit=200');
+    const artifactPromise = pmaApi.pma.listFiles();
+    const agentPromise = pmaApi.pma.listAgents();
+    const topologyPromise = pmaApi.readModels.repoWorktreeTopology('all', 200);
+    const runtimePromise = pmaApi.readModels.repoWorktreeRuntime('all', 200);
+    const activeChatResult = await pmaApi.getJson<JsonRecord>('/hub/chat/index?view=all&limit=200');
 
     if (activeChatResult.ok) {
-      const loadedRows = [
-        ...asRecords(activeChatResult.data.rows).map(legacyChatIndexRecordToChatIndexRow),
-        ...(archivedChatResult.ok ? asRecords(archivedChatResult.data.rows).map(legacyChatIndexRecordToChatIndexRow) : [])
-      ];
-      readModelEntityStore.replaceChatIndexRows(
-        loadedRows,
-        syntheticProjectionCursor('pma.thread-list'),
-        undefined
-      );
-      const loadedChats = selectPmaChats(readModelEntityStore.snapshot());
-      const requestedChat = page.params.chatId ?? page.url.searchParams.get('chat');
-      activeChatId = chooseActiveChatId(loadedChats, activeChatId, requestedChat);
-      if (activeChatId) {
-        detailMode = 'detail';
-        const selected = loadedChats.find((chat) => chat.id === activeChatId);
-        if (selected && isPmaChatArchived(selected)) filter = 'archived';
-        syncSelectorsToActiveChat();
-        void refreshActive(activeChatId);
-        connectStream(activeChatId);
-      }
+      applyInitialChatRows(asRecords(activeChatResult.data.rows), 'pma.thread-list');
     } else {
       chatError = activeChatResult.error;
     }
 
+    loadingChats = false;
+    void archivedChatPromise.then((archivedChatResult) => {
+      if (!archivedChatResult.ok) return;
+      const currentRows = selectPmaChats(readModelEntityStore.snapshot()).map(pmaChatSummaryToChatIndexRow);
+      readModelEntityStore.replaceChatIndexRows(
+        [...currentRows, ...asRecords(archivedChatResult.data.rows).map(legacyChatIndexRecordToChatIndexRow)],
+        syntheticProjectionCursor('pma.thread-list.archived')
+      );
+      activateRequestedChatFromCurrentRows();
+    });
+    void loadInitialSupportingData(artifactPromise, agentPromise, topologyPromise, runtimePromise);
+    applyNewChatQueryParam();
+  }
+
+  function applyInitialChatRows(rows: JsonRecord[], cursorSource: string): void {
+    readModelEntityStore.replaceChatIndexRows(
+      rows.map(legacyChatIndexRecordToChatIndexRow),
+      syntheticProjectionCursor(cursorSource)
+    );
+    activateRequestedChatFromCurrentRows();
+  }
+
+  function activateRequestedChatFromCurrentRows(): void {
+    const loadedChats = selectPmaChats(readModelEntityStore.snapshot());
+    const requestedChat = page.params.chatId ?? page.url.searchParams.get('chat');
+    const selectedChatId = chooseActiveChatId(loadedChats, activeChatId, requestedChat);
+    if (!selectedChatId || activeChatId === selectedChatId) return;
+    activeChatId = selectedChatId;
+    detailMode = 'detail';
+    const selected = loadedChats.find((chat) => chat.id === activeChatId);
+    if (selected && isPmaChatArchived(selected)) filter = 'archived';
+    syncSelectorsToActiveChat();
+    connectStream(selectedChatId);
+    void refreshActive(selectedChatId, { quiet: hasCachedDetail(selectedChatId) });
+  }
+
+  async function refreshChatListQuiet(): Promise<void> {
+    const [activeChatResult, archivedChatResult] = await Promise.all([
+      pmaApi.getJson<JsonRecord>('/hub/chat/index?view=all&limit=200'),
+      pmaApi.getJson<JsonRecord>('/hub/chat/index?view=archived&limit=200')
+    ]);
+    if (!activeChatResult.ok) return;
+    const rows = [
+      ...asRecords(activeChatResult.data.rows).map(legacyChatIndexRecordToChatIndexRow),
+      ...(archivedChatResult.ok ? asRecords(archivedChatResult.data.rows).map(legacyChatIndexRecordToChatIndexRow) : [])
+    ];
+    readModelEntityStore.replaceChatIndexRows(rows, syntheticProjectionCursor('pma.thread-list.repair'));
+    activateRequestedChatFromCurrentRows();
+  }
+
+
+  async function loadInitialSupportingData(
+    artifactPromise: ReturnType<typeof pmaApi.pma.listFiles>,
+    agentPromise: ReturnType<typeof pmaApi.pma.listAgents>,
+    topologyPromise: ReturnType<typeof pmaApi.readModels.repoWorktreeTopology>,
+    runtimePromise: ReturnType<typeof pmaApi.readModels.repoWorktreeRuntime>
+  ): Promise<void> {
+    const [artifactResult, agentResult, topologyResult, runtimeResult] = await Promise.all([
+      artifactPromise,
+      agentPromise,
+      topologyPromise,
+      runtimePromise
+    ]);
     if (artifactResult.ok) readModelEntityStore.setPmaArtifacts('__global__', artifactResult.data);
     if (topologyResult.ok) readModelEntityStore.applyRepoWorktreeTopologySnapshot(topologyResult.data);
     if (runtimeResult.ok) readModelEntityStore.applyRepoWorktreeRuntimeSnapshot(runtimeResult.data);
@@ -586,8 +627,6 @@
       }
       void loadModels(selectedAgent, activeChat?.model ?? selectedModel);
     }
-    applyNewChatQueryParam();
-    loadingChats = false;
   }
 
   function asRecords(value: unknown): JsonRecord[] {
@@ -673,14 +712,14 @@
   }
 
   async function selectChat(chatId: string): Promise<void> {
-    clearActiveDetailState(chatId);
     activeChatId = chatId;
     detailMode = 'detail';
     syncSelectorsToActiveChat();
     markActiveChatRead();
-    await syncDetailUrl(chatId);
-    await refreshActive(chatId);
     connectStream(chatId);
+    const urlPromise = syncDetailUrl(chatId);
+    void refreshActive(chatId, { quiet: hasCachedDetail(chatId) });
+    await urlPromise;
   }
 
   function requestedDetailFromUrl(): string | null {
@@ -697,13 +736,12 @@
   }
 
   async function selectChatWithoutUrl(chatId: string): Promise<void> {
-    clearActiveDetailState(chatId);
     activeChatId = chatId;
     detailMode = 'detail';
     syncSelectorsToActiveChat();
     markActiveChatRead();
-    await refreshActive(chatId);
     connectStream(chatId);
+    void refreshActive(chatId, { quiet: hasCachedDetail(chatId) });
   }
 
   function markActiveChatRead(): void {
@@ -783,24 +821,31 @@
       loadingActive = true;
       activeError = null;
     }
-    const [messageResult, tailResult, statusResult, queueResult] = await Promise.all([
-      pmaApi.pma.getTimeline(chatId),
-      pmaApi.pma.getTail(chatId),
-      pmaApi.pma.getStatus(chatId),
-      pmaApi.pma.getQueue(chatId)
-    ]);
+    const timelineTask = pmaApi.pma.getTimeline(chatId).then((messageResult) => {
+      if (activeChatId !== chatId) return;
+      if (messageResult.ok) {
+        readModelEntityStore.replacePmaTimeline(chatId, reconcilePmaTimeline(currentTimeline(chatId), messageResult.data));
+      } else if (!options.quiet) {
+        activeError = messageResult.error;
+      }
+      if (!options.quiet) loadingActive = false;
+    });
+    const progressTask = Promise.all([pmaApi.pma.getTail(chatId), pmaApi.pma.getStatus(chatId)]).then(
+      ([tailResult, statusResult]) => {
+        if (activeChatId !== chatId) return;
+        if (tailResult.ok) updateProgress(tailResult.data);
+        else if (statusResult.ok) updateProgress(statusResult.data);
+        else if (!options.quiet && !activeError) activeError = tailResult.error;
+      }
+    );
+    const queueTask = pmaApi.pma.getQueue(chatId).then((queueResult) => {
+      if (activeChatId === chatId && queueResult.ok) {
+        readModelEntityStore.setPmaQueue(chatId, queueResult.data.queuedTurns);
+      }
+    });
 
-    if (activeChatId !== chatId) return;
-    if (messageResult.ok) readModelEntityStore.replacePmaTimeline(chatId, reconcilePmaTimeline(timeline, messageResult.data));
-    else if (!options.quiet) activeError = messageResult.error;
-
-    if (tailResult.ok) updateProgress(tailResult.data);
-    else if (statusResult.ok) updateProgress(statusResult.data);
-    else if (!options.quiet) activeError = tailResult.error;
-
-    if (queueResult.ok) readModelEntityStore.setPmaQueue(chatId, queueResult.data.queuedTurns);
-
-    loadingActive = false;
+    await Promise.all([timelineTask, progressTask, queueTask]);
+    if (activeChatId !== chatId && !options.quiet) loadingActive = false;
   }
 
   function connectStream(chatId: string): void {
@@ -822,7 +867,7 @@
         streamState = 'connected';
         if (event.kind === 'timeline') {
           const item = mapPmaTimelineItem(event.payload);
-          readModelEntityStore.replacePmaTimeline(chatId, reconcilePmaTimeline(timeline, [item]));
+          readModelEntityStore.replacePmaTimeline(chatId, reconcilePmaTimeline(currentTimeline(chatId), [item]));
           if (item.kind === 'user_message') dropOptimisticPlaceholders();
           return;
         }
@@ -889,6 +934,7 @@
         }
       },
       onError: () => {
+        void refreshChatListQuiet();
         if (activeChatId) scheduleActiveRefresh(activeChatId, 900);
       }
     });
@@ -932,19 +978,20 @@
     const chatId = nextProgress.chatId ?? activeChatId;
     if (!chatId) return;
     const nowMs = Date.now();
-    if (progress && progress.id === nextProgress.id) {
+    const previousProgress = currentProgress(chatId);
+    if (previousProgress && previousProgress.id === nextProgress.id) {
       const incomingElapsed = nextProgress.elapsedSeconds ?? 0;
-      const mergedElapsed = Math.max(progressElapsedWithLiveWall(progress, nowMs), incomingElapsed);
+      const mergedElapsed = Math.max(progressElapsedWithLiveWall(previousProgress, nowMs), incomingElapsed);
       const seen = new Set<string>();
       const merged: SurfaceArtifact[] = [];
-      for (const ev of [...progress.events, ...nextProgress.events]) {
+      for (const ev of [...previousProgress.events, ...nextProgress.events]) {
         if (!ev.id || seen.has(ev.id)) continue;
         seen.add(ev.id);
         merged.push(ev);
       }
       readModelEntityStore.setPmaProgress(chatId, {
         ...nextProgress,
-        startedAt: nextProgress.startedAt ?? progress.startedAt,
+        startedAt: nextProgress.startedAt ?? previousProgress.startedAt,
         elapsedSeconds: mergedElapsed,
         events: merged
       });
@@ -959,10 +1006,21 @@
     return elapsedSeconds === value.elapsedSeconds ? value : { ...value, elapsedSeconds };
   }
 
-  function clearActiveDetailState(chatId: string): void {
-    readModelEntityStore.replacePmaTimeline(chatId, []);
-    readModelEntityStore.setPmaProgress(chatId, null);
-    readModelEntityStore.setPmaQueue(chatId, []);
+  function hasCachedDetail(chatId: string): boolean {
+    const state = readModelEntityStore.snapshot();
+    return Boolean(
+      state.pmaTimelines[chatId]?.order.length ||
+      state.pmaProgress[chatId] ||
+      state.pmaQueues[chatId]?.length
+    );
+  }
+
+  function currentTimeline(chatId: string): PmaTimelineItem[] {
+    return selectPmaTimeline(readModelEntityStore.snapshot(), chatId);
+  }
+
+  function currentProgress(chatId: string): PmaRunProgress | null {
+    return selectPmaProgress(readModelEntityStore.snapshot(), chatId);
   }
 
   function syncChatListStatusFromProgress(nextProgress: PmaRunProgress): void {
@@ -1109,9 +1167,15 @@
     );
     if (result.ok) {
       upsertPmaChats([result.data]);
-      await selectChat(result.data.id);
+      activeChatId = result.data.id;
+      detailMode = 'detail';
       selectedScopeId = scopeIdForChat(result.data) ?? 'local';
       newChatKind = 'pma';
+      syncSelectorsToActiveChat();
+      markActiveChatRead();
+      connectStream(result.data.id);
+      void refreshActive(result.data.id, { quiet: true });
+      void syncDetailUrl(result.data.id);
     } else {
       composeError = result.error;
     }
@@ -1159,7 +1223,10 @@
       },
       optimisticId
     );
-    readModelEntityStore.replacePmaTimeline(optimisticChatId, reconcilePmaTimeline(timeline, [optimisticPlaceholder]));
+    readModelEntityStore.replacePmaTimeline(
+      optimisticChatId,
+      reconcilePmaTimeline(currentTimeline(optimisticChatId), [optimisticPlaceholder])
+    );
     draft = '';
     pendingAttachments = [];
     const composerVersionAtClear = composerEditVersion;
@@ -1218,7 +1285,10 @@
         targetChatId
       );
       if (optimisticFromBackend) {
-        readModelEntityStore.replacePmaTimeline(targetChatId, reconcilePmaTimeline(timeline, [optimisticFromBackend]));
+        readModelEntityStore.replacePmaTimeline(
+          targetChatId,
+          reconcilePmaTimeline(currentTimeline(targetChatId), [optimisticFromBackend])
+        );
         readModelEntityStore.reconcileOptimisticTimelineItem(targetChatId, optimisticId, {
           itemId: optimisticFromBackend.id,
           kind: 'user_message',
@@ -1294,7 +1364,12 @@
         turn.prompt,
         chatId
       );
-      if (optimisticFromBackend) readModelEntityStore.replacePmaTimeline(chatId, reconcilePmaTimeline(timeline, [optimisticFromBackend]));
+      if (optimisticFromBackend) {
+        readModelEntityStore.replacePmaTimeline(
+          chatId,
+          reconcilePmaTimeline(currentTimeline(chatId), [optimisticFromBackend])
+        );
+      }
       await refreshActive(chatId, { quiet: true });
     } else {
       composeError = result.error;
