@@ -139,6 +139,22 @@ function chatThreadFromIndexRow(row: ChatIndexRow): ChatThreadProjection {
 }
 
 function legacyTimelineItemToContract(raw: JsonRecord): ChatTimelineItem {
+  const v2Identity = asRecord(raw.identity);
+  const v2Provenance = asRecord(raw.provenance);
+  const identity = v2Identity.timeline_item_id
+    ? {
+        timelineItemId: stringValue(v2Identity.timeline_item_id) ?? 'timeline-item',
+        progressItemIds: asStrings(v2Identity.progress_item_ids),
+        correlationId: stringValue(v2Identity.correlation_id)
+      }
+    : undefined;
+  const provenance = v2Provenance.source_event_ids
+    ? {
+        sourceEventIds: Array.isArray(v2Provenance.source_event_ids) ? v2Provenance.source_event_ids as unknown[] : [],
+        progressEventIds: Array.isArray(v2Provenance.progress_event_ids) ? v2Provenance.progress_event_ids as unknown[] : [],
+        cursorEventId: stringValue(v2Provenance.cursor_event_id)
+      }
+    : undefined;
   return {
     itemId: stringValue(raw.item_id ?? raw.id, 'timeline-item') ?? 'timeline-item',
     kind: timelineKind(raw.kind),
@@ -147,7 +163,9 @@ function legacyTimelineItemToContract(raw: JsonRecord): ChatTimelineItem {
     text: stringValue(raw.text ?? raw.summary ?? raw.payload_text),
     artifactIds: [],
     clientMessageId: stringValue(raw.client_message_id ?? raw.clientMessageId),
-    backendMessageId: stringValue(raw.backend_message_id ?? raw.managed_turn_id ?? raw.turn_id)
+    backendMessageId: stringValue(raw.backend_message_id ?? raw.managed_turn_id ?? raw.turn_id),
+    ...(identity ? { identity } : {}),
+    ...(provenance ? { provenance } : {})
   };
 }
 
@@ -220,4 +238,9 @@ function numberValue(value: unknown, fallback: number): number {
 
 function isString(value: string | null): value is string {
   return typeof value === 'string';
+}
+
+function asStrings(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value.filter((item): item is string => typeof item === 'string');
 }
