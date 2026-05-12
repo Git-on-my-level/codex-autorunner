@@ -542,6 +542,7 @@ Users can inspect tickets.
 
     expect(buildTicketRepairChatCreatePayload(detail)).toEqual({
       agent: 'codex',
+      chat_kind: 'pma',
       name: 'Repair #110 frontmatter',
       scope_urn: 'worktree:repo-1/worktree-1'
     });

@@ -416,6 +416,8 @@ class RepoWorktreeReadModelService:
                     "lifecycle_status": row["lifecycle_status"],
                     "runtime_status": row["runtime_status"],
                     "status": row["runtime_status"],
+                    "chat_kind": metadata.get("chat_kind"),
+                    "thread_kind": metadata.get("thread_kind"),
                     "model": metadata.get("model"),
                     "created_at": row["created_at"],
                     "updated_at": row["updated_at"],

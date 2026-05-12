@@ -7,6 +7,7 @@ import {
 export type ActionNotice = {
   message: string;
   tone: 'success' | 'warning' | 'danger';
+  navigateTo?: string;
 };
 
 export type CleanupWorktreeTarget = {
@@ -120,9 +121,11 @@ export async function submitCreateRepo(input: CreateRepoInput): Promise<ActionNo
   const result = await pmaApi.hub.createRepo({ repoId, gitUrl });
   if (!result.ok) return { tone: 'danger', message: result.error.message };
   const label = stringValue(result.data.repo_id) ?? repoId ?? gitUrl ?? 'repo';
+  const createdRepoId = stringValue(result.data.id) ?? stringValue(result.data.repo_id) ?? repoId ?? null;
   return {
     tone: 'success',
-    message: gitUrl ? `Cloned ${label}.` : `Created repo ${label}.`
+    message: gitUrl ? `Cloned ${label}.` : `Created repo ${label}.`,
+    ...(createdRepoId ? { navigateTo: `/repos/${encodeURIComponent(createdRepoId)}` } : {})
   };
 }
 
@@ -144,9 +147,18 @@ export async function submitCreateWorktree(input: CreateWorktreeInput): Promise<
     // after a fresh `git fetch --prune origin`.
   });
   if (!result.ok) return { tone: 'danger', message: result.error.message };
+  const worktreeId =
+    stringValue(result.data.id) ??
+    stringValue(result.data.repo_id) ??
+    stringValue(result.data.worktree_repo_id) ??
+    stringValue(result.data.worktree_id);
+  const parentRepoId = stringValue(result.data.worktree_of) ?? stringValue(result.data.parent_repo_id) ?? input.baseRepoId;
   return {
     tone: 'success',
-    message: `Created worktree ${branch} from origin/main on ${input.baseRepoLabel}.`
+    message: `Created worktree ${branch} from origin/main on ${input.baseRepoLabel}.`,
+    ...(worktreeId
+      ? { navigateTo: `/repos/${encodeURIComponent(parentRepoId)}/worktrees/${encodeURIComponent(worktreeId)}` }
+      : {})
   };
 }
 

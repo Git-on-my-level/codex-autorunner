@@ -46,6 +46,7 @@ export function pmaChatSummaryToChatIndexRow(chat: PmaChatSummary): ChatIndexRow
     runId: chat.runId ?? null,
     agent: chat.agentId,
     agentProfile: chat.agentProfile,
+    chatKind: stringValue(chat.raw.chat_kind ?? chat.raw.thread_kind),
     model: chat.model,
     groupId: chat.ticketId ? `ticket:${chat.ticketId}` : chat.runId ? `run:${chat.runId}` : null
   };
@@ -74,6 +75,7 @@ export function legacyChatIndexRecordToChatIndexRow(raw: JsonRecord): ChatIndexR
     runId: resourceKind === 'run' || resourceKind === 'ticket_run' ? resourceId : stringValue(raw.run_id),
     agent: stringValue(raw.agent ?? raw.agent_id),
     agentProfile: stringValue(raw.agent_profile ?? raw.agentProfile),
+    chatKind: stringValue(raw.chat_kind ?? raw.thread_kind),
     model: stringValue(raw.model),
     groupId: stringValue(raw.group_id)
   };
@@ -98,6 +100,7 @@ export function chatIndexRowToPmaChatSummary(row: ChatIndexRow): PmaChatSummary 
     unread_count: row.unreadCount,
     agent_id: row.agent,
     agent_profile: row.agentProfile,
+    chat_kind: row.chatKind,
     model: row.model,
     unreadCount: row.unreadCount,
     last_activity_at: row.lastActivityAt,

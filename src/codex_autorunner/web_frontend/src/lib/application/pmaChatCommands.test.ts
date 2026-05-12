@@ -16,6 +16,7 @@ describe('PMA chat command plans', () => {
       kind: 'StartChat',
       body: {
         agent: 'hermes',
+        chat_kind: 'pma',
         name: 'New chat',
         profile: 'planning',
         model: 'gpt-5.2',

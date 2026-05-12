@@ -119,6 +119,7 @@ function parsePlatformCombo(binding: ShortcutBinding): ParsedCombo {
 
 function executeAction(action: PaletteAction): void {
   if (action.kind === 'command') {
+    if (typeof action.handler !== 'function') return;
     action.handler();
   }
 }
