@@ -75,14 +75,19 @@ class WorkerExitObservation:
 
     @property
     def recoverable_shutdown(self) -> bool:
-        return self.exit_origin in {
-            "worker_signal",
-            "worker_watchdog",
-        } or self.exit_kind in {
-            "external_signal",
+        if self.exit_origin == "worker_watchdog":
+            return True
+        if self.exit_kind in {
             "max_wall_time",
             "opencode_stream_stalled_timeout",
-        }
+        }:
+            return True
+        # SIGTERM from the parent uses the same handler as an external signal, but
+        # cooperative shutdown records shutdown_intent=True in worker.exit.json.
+        # Only treat signal loss as recoverable when that cooperative bit is absent.
+        if self.exit_origin == "worker_signal" and self.exit_kind == "external_signal":
+            return not self.shutdown_intent
+        return False
 
 
 @dataclass(frozen=True)

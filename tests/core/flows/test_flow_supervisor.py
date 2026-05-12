@@ -107,7 +107,7 @@ def test_policy_treats_signal_shutdown_as_recoverable_crash() -> None:
             worker=_worker(
                 WorkerHealthStatus.DEAD,
                 pid=123,
-                shutdown_intent=True,
+                shutdown_intent=False,
                 signal="SIGTERM",
                 exit_origin="worker_signal",
                 exit_kind="external_signal",
@@ -126,6 +126,33 @@ def test_policy_treats_signal_shutdown_as_recoverable_crash() -> None:
     assert trigger is not None
     assert trigger.kind == TriggerKind.RECONCILE_WORKER_DEAD
     assert "exit_kind=external_signal" in (trigger.error_message or "")
+
+
+def test_policy_treats_cooperative_sigterm_as_intentional_stop_not_recoverable() -> (
+    None
+):
+    decision = supervise_flow_recovery(
+        FlowSupervisorObservation(
+            run=_run(status=FlowRunStatus.STOPPING, stop_requested=True),
+            worker=_worker(
+                WorkerHealthStatus.DEAD,
+                pid=123,
+                shutdown_intent=True,
+                signal="SIGTERM",
+                exit_origin="worker_signal",
+                exit_kind="external_signal",
+                exit_code=-15,
+            ),
+            restart=RestartPolicyObservation(enabled=True, attempts=0, max_attempts=2),
+        )
+    )
+
+    assert _intent_kinds(decision) == []
+    assert decision.note == "worker-stopped"
+    assert SupervisorEffectKind.UPDATE_RUN_STATE in _effect_kinds(decision)
+    trigger = decision.first_lifecycle_trigger()
+    assert trigger is not None
+    assert trigger.kind == TriggerKind.RECONCILE_STOPPING_FINALIZE
 
 
 def test_policy_classifies_stale_reaped_worker_active_run() -> None:

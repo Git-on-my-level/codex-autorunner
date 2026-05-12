@@ -508,7 +508,7 @@ def test_signal_stopped_worker_is_auto_restarted(monkeypatch, tmp_path: Path) ->
             pid=12345,
             message="worker PID not running",
             artifact_path=artifact_dir / "worker.json",
-            shutdown_intent=True,
+            shutdown_intent=False,
             signal="SIGTERM",
             exit_origin="worker_signal",
             exit_kind="external_signal",
