@@ -1,9 +1,8 @@
-"""Reconciliation transition matrix — now exercised through the lifecycle reducer.
+"""Reconciliation transition matrix through supervisor and lifecycle reducer.
 
-These tests validate that ``resolve_reconcile_trigger`` +
+These tests validate that ``supervise_reconcile_flow`` +
 ``reduce_flow_lifecycle`` produce the same transition semantics that the old
-``transition.resolve_flow_transition`` helper provided.  The legacy module has
-been removed; this is the single supported path.
+``transition.resolve_flow_transition`` helper provided.
 """
 
 from __future__ import annotations
@@ -15,9 +14,9 @@ import pytest
 from codex_autorunner.core.flows.lifecycle_reducer import (
     NO_CHANGE,
     reduce_flow_lifecycle,
-    resolve_reconcile_trigger,
 )
 from codex_autorunner.core.flows.models import FlowRunRecord, FlowRunStatus
+from codex_autorunner.core.flows.supervisor import supervise_reconcile_flow
 
 _NOW = "2024-01-02T00:00:00Z"
 
@@ -51,7 +50,7 @@ def _health(alive: bool) -> SimpleNamespace:
 
 
 def _apply(record: FlowRunRecord, health: SimpleNamespace) -> SimpleNamespace:
-    trigger = resolve_reconcile_trigger(record, health)
+    trigger = supervise_reconcile_flow(record, health).first_lifecycle_trigger()
     if trigger is None:
         return SimpleNamespace(
             status=record.status,
@@ -174,15 +173,15 @@ def test_no_shutdown_intent_still_fails():
 
 def test_running_alive_with_no_change_returns_none():
     state = {"ticket_engine": {"status": "running"}}
-    trigger = resolve_reconcile_trigger(
+    trigger = supervise_reconcile_flow(
         _rec(FlowRunStatus.RUNNING, state), _health(True)
-    )
+    ).first_lifecycle_trigger()
     assert trigger is None
 
 
 def test_paused_alive_with_user_pause_returns_none():
     state = {"ticket_engine": {"status": "running", "reason_code": "user_pause"}}
-    trigger = resolve_reconcile_trigger(
+    trigger = supervise_reconcile_flow(
         _rec(FlowRunStatus.PAUSED, state), _health(True)
-    )
+    ).first_lifecycle_trigger()
     assert trigger is None

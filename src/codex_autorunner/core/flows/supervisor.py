@@ -240,6 +240,23 @@ def supervise_flow_recovery(
             return FlowSupervisorDecision(intents, effects, note="engine-completed")
 
         if worker.is_deadish:
+            if worker.exit.shutdown_intent and not worker.exit.stale_reaper_exit:
+                effects.append(
+                    SupervisorEffectIntent(
+                        SupervisorEffectKind.UPDATE_RUN_STATE,
+                        {"reason": "worker_shutdown_intent"},
+                        FlowTrigger(kind=TriggerKind.RECONCILE_WORKER_SHUTDOWN),
+                    )
+                )
+                effects.append(
+                    _effect(
+                        SupervisorEffectKind.EMIT_LIFECYCLE_EVENT,
+                        "worker_shutdown_intent",
+                    )
+                )
+                return FlowSupervisorDecision(
+                    intents, effects, note="worker-shutdown-intent"
+                )
             _append_worker_dead_decision(observation, intents, effects)
             return FlowSupervisorDecision(
                 intents,
@@ -377,20 +394,6 @@ def supervise_reconcile_flow(
             backend_connected=backend_connected,
         )
     )
-
-
-def resolve_supervisor_reconcile_trigger(
-    record: FlowRunRecord,
-    health: Any,
-) -> Optional[FlowTrigger]:
-    """Return the lifecycle trigger selected by the supervisor policy.
-
-    This is the narrow adapter path for legacy callers: the supervisor classifies
-    the observation and exposes the lifecycle update as an effect, while the
-    caller still feeds the trigger through ``reduce_flow_lifecycle``.
-    """
-
-    return supervise_reconcile_flow(record, health).first_lifecycle_trigger()
 
 
 def _append_worker_dead_decision(
