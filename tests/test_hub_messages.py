@@ -491,6 +491,38 @@ def test_hub_messages_restart_exhausted_uses_recovery_projection(
         assert canonical.get("restart_exhausted") is True
 
 
+def test_hub_messages_commit_barrier_reads_ticket_engine_commit(
+    hub_env, monkeypatch
+) -> None:
+    run_id = "66666666-6666-6666-6666-666666666666"
+    _seed_failed_run(
+        hub_env.repo_root,
+        run_id,
+        state={
+            "ticket_engine": {
+                "current_ticket": ".codex-autorunner/tickets/TICKET-001.md",
+                "commit": {
+                    "pending": True,
+                    "status_porcelain": "M src/example.py",
+                },
+            }
+        },
+        error_message="Commit barrier pending",
+    )
+
+    app = _build_hub_messages_app(hub_env.hub_root, monkeypatch)
+    with TestClient(app) as client:
+        res = client.get("/hub/messages")
+        assert res.status_code == 200
+        items = res.json()["items"]
+        assert len(items) == 1
+        run_state = items[0].get("run_state") or {}
+        assert run_state.get("state") == "commit_barrier_pending"
+        assert run_state.get("recovery_state") == "commit_barrier_pending"
+        assert run_state.get("commit_barrier_pending") is True
+        assert (run_state.get("commit_barrier") or {}).get("pending") is True
+
+
 def test_hub_messages_surfaces_unreadable_latest_dispatch(hub_env, monkeypatch) -> None:
     run_id = "55555555-5555-5555-5555-555555555555"
     _seed_paused_run(hub_env.repo_root, run_id)

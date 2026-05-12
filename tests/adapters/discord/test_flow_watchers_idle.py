@@ -13,6 +13,7 @@ from codex_autorunner.adapters.discord.flow_watchers import (
     PAUSE_SCAN_INTERVAL_SECONDS,
     TERMINAL_SCAN_INTERVAL_SECONDS,
     _next_idle_interval,
+    _scan_and_enqueue_recovery_notifications,
 )
 
 
@@ -205,3 +206,53 @@ async def test_pause_watcher_resets_backoff_on_productive_scan():
     )
     assert sleep_intervals[2] == PAUSE_SCAN_INTERVAL_SECONDS
     assert sleep_intervals[3] == PAUSE_SCAN_INTERVAL_SECONDS
+
+
+@pytest.mark.anyio
+async def test_recovery_scan_updates_binding_cursor_after_enqueue(monkeypatch) -> None:
+    binding = {
+        "channel_id": "channel-1",
+        "guild_id": "guild-1",
+        "workspace_path": "/tmp/workspace",
+        "last_recovery_fingerprint": "fingerprint-1",
+    }
+    enqueued = []
+    seen = []
+
+    async def _enqueue(record: Any) -> None:
+        enqueued.append(record)
+
+    async def _mark_seen(*, channel_id: str, fingerprint: str) -> None:
+        seen.append((channel_id, fingerprint))
+
+    service = MagicMock()
+    service._logger = logging.getLogger("test")
+    service._store = MagicMock()
+    service._store.list_bindings = AsyncMock(return_value=[binding])
+    service._store.enqueue_outbox = AsyncMock(side_effect=_enqueue)
+    service._store.mark_recovery_seen = AsyncMock(side_effect=_mark_seen)
+    service._hub_raw_config_cache = {}
+    service._flow_run_mirror.return_value.mirror_outbound = MagicMock()
+
+    monkeypatch.setattr(
+        "codex_autorunner.adapters.discord.flow_watchers._preferred_bound_sources_by_workspace",
+        lambda _service: {},
+    )
+    monkeypatch.setattr(
+        "codex_autorunner.adapters.discord.flow_watchers._preferred_bound_source_for_workspace",
+        lambda _service, _workspace_root: None,
+    )
+    monkeypatch.setattr(
+        "codex_autorunner.adapters.discord.flow_watchers._load_ticket_flow_recovery_notifications",
+        lambda _workspace_root: [
+            ("run-1", "fingerprint-1", "already seen", {}),
+            ("run-2", "fingerprint-2", "new recovery", {}),
+        ],
+    )
+
+    notified = await _scan_and_enqueue_recovery_notifications(service)
+
+    assert notified == 1
+    assert len(enqueued) == 1
+    assert seen == [("channel-1", "fingerprint-2")]
+    assert binding["last_recovery_fingerprint"] == "fingerprint-2"

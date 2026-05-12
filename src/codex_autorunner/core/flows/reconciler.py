@@ -307,7 +307,7 @@ def _with_restart_attempt(
             "last_attempted_at": now_iso(),
             "last_failure_reason": failure_reason,
             "last_reason": reason,
-            "exhausted": count >= max_attempts if max_attempts >= 0 else False,
+            "exhausted": count >= max_attempts if max_attempts > 0 else False,
         }
     )
     recovery["restart"] = restart

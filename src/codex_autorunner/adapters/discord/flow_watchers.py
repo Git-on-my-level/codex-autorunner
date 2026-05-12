@@ -459,6 +459,7 @@ async def _scan_and_enqueue_recovery_notifications(service: Any) -> int:
                     channel_id=channel_id,
                     fingerprint=fingerprint,
                 )
+                binding["last_recovery_fingerprint"] = fingerprint
             except (OSError, ValueError, KeyError, TypeError) as exc:
                 log_event(
                     service._logger,

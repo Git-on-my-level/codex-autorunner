@@ -172,6 +172,20 @@ def test_policy_classifies_restart_attempts_exhausted() -> None:
     assert _effect_kinds(decision).count(SupervisorEffectKind.NOTIFY_SURFACES) == 2
 
 
+def test_policy_treats_zero_restart_budget_as_disabled_not_exhausted() -> None:
+    decision = supervise_flow_recovery(
+        FlowSupervisorObservation(
+            run=_run(),
+            worker=_worker(WorkerHealthStatus.DEAD, pid=123),
+            restart=RestartPolicyObservation(enabled=True, attempts=0, max_attempts=0),
+        )
+    )
+
+    assert _intent_kinds(decision) == [RecoveryIntentKind.WORKER_CRASH]
+    assert SupervisorEffectKind.SPAWN_WORKER not in _effect_kinds(decision)
+    assert RecoveryIntentKind.RESTART_EXHAUSTED not in _intent_kinds(decision)
+
+
 def test_issue1745_path_models_reaper_and_commit_barrier_without_surface_code() -> None:
     decision = supervise_flow_recovery(
         FlowSupervisorObservation(

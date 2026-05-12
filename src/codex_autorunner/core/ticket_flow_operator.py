@@ -1112,11 +1112,14 @@ def _extract_restart_status(record: FlowRunRecord) -> Optional[dict[str, Any]]:
 
 def _extract_commit_barrier_status(record: FlowRunRecord) -> Optional[dict[str, Any]]:
     state = record.state if isinstance(record.state, dict) else {}
+    ticket_engine = state.get("ticket_engine") if isinstance(state, dict) else {}
+    ticket_engine = ticket_engine if isinstance(ticket_engine, dict) else {}
     recovery = state.get("recovery") if isinstance(state, dict) else {}
     recovery = recovery if isinstance(recovery, dict) else {}
     candidates = [
         recovery.get("commit_barrier"),
         recovery.get("commit"),
+        ticket_engine.get("commit"),
         state.get("commit_barrier") if isinstance(state, dict) else None,
     ]
     for candidate in candidates:
