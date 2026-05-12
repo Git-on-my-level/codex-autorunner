@@ -73,6 +73,17 @@ class WorkerExitObservation:
     def stale_reaper_exit(self) -> bool:
         return self.exit_origin == "stale_reaper" or self.exit_kind == "reaped_stale"
 
+    @property
+    def recoverable_shutdown(self) -> bool:
+        return self.exit_origin in {
+            "worker_signal",
+            "worker_watchdog",
+        } or self.exit_kind in {
+            "external_signal",
+            "max_wall_time",
+            "opencode_stream_stalled_timeout",
+        }
+
 
 @dataclass(frozen=True)
 class WorkerObservation:
@@ -240,7 +251,12 @@ def supervise_flow_recovery(
             return FlowSupervisorDecision(intents, effects, note="engine-completed")
 
         if worker.is_deadish:
-            if worker.exit.shutdown_intent and not worker.exit.stale_reaper_exit:
+            if (
+                record.stop_requested
+                and worker.exit.shutdown_intent
+                and not worker.exit.stale_reaper_exit
+                and not worker.exit.recoverable_shutdown
+            ):
                 effects.append(
                     SupervisorEffectIntent(
                         SupervisorEffectKind.UPDATE_RUN_STATE,
@@ -302,6 +318,11 @@ def supervise_flow_recovery(
                 _append_worker_dead_decision(observation, intents, effects)
                 return FlowSupervisorDecision(
                     intents, effects, note="stale-worker-reaped"
+                )
+            if worker.exit.recoverable_shutdown:
+                _append_worker_dead_decision(observation, intents, effects)
+                return FlowSupervisorDecision(
+                    intents, effects, note="recoverable-worker-shutdown"
                 )
             effects.append(
                 SupervisorEffectIntent(
@@ -365,6 +386,7 @@ def worker_observation_from_health(health: Any) -> WorkerObservation:
         artifact_path=getattr(health, "artifact_path", None),
         exit=WorkerExitObservation(
             exit_code=getattr(health, "exit_code", None),
+            signal=getattr(health, "signal", None),
             shutdown_intent=bool(getattr(health, "shutdown_intent", False)),
             exit_origin=getattr(health, "exit_origin", None),
             exit_kind=getattr(health, "exit_kind", None),
@@ -515,6 +537,12 @@ def _worker_dead_error_message(worker: WorkerObservation) -> str:
         error_msg += f", reason: {worker.message}"
     if worker.exit.reap_reason:
         error_msg += f", reap_reason={worker.exit.reap_reason}"
+    if worker.exit.signal:
+        error_msg += f", signal={worker.exit.signal}"
+    if worker.exit.exit_origin:
+        error_msg += f", exit_origin={worker.exit.exit_origin}"
+    if worker.exit.exit_kind:
+        error_msg += f", exit_kind={worker.exit.exit_kind}"
     if isinstance(worker.exit.exit_code, int):
         error_msg += f", exit_code={worker.exit.exit_code}"
     error_msg += ")"

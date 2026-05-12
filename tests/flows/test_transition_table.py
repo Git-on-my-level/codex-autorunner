@@ -123,15 +123,29 @@ def _health_with_shutdown(alive: bool, shutdown_intent: bool) -> SimpleNamespace
     )
 
 
-def test_shutdown_intent_transitions_to_stopped_not_failed():
+def test_shutdown_intent_without_stop_request_transitions_to_failed():
     state = {"ticket_engine": {"status": "running"}}
     dec = _apply(
         _rec(FlowRunStatus.RUNNING, state),
         _health_with_shutdown(alive=False, shutdown_intent=True),
     )
-    assert dec.status == FlowRunStatus.STOPPED
-    assert dec.note == "worker-shutdown-intent"
+    assert dec.status == FlowRunStatus.FAILED
+    assert dec.note == "worker-dead"
     assert dec.finished_at == _NOW
+
+
+def test_signal_shutdown_transitions_to_failed_not_stopped():
+    state = {"ticket_engine": {"status": "running"}}
+    health = _health_with_shutdown(alive=False, shutdown_intent=True)
+    health.exit_origin = "worker_signal"
+    health.exit_kind = "external_signal"
+    health.signal = "SIGTERM"
+
+    dec = _apply(_rec(FlowRunStatus.STOPPING, state), health)
+
+    assert dec.status == FlowRunStatus.FAILED
+    assert dec.note == "worker-dead"
+    assert "exit_kind=external_signal" in (dec.error_message or "")
 
 
 def test_stale_reaper_shutdown_intent_transitions_to_failed_not_stopped():

@@ -743,11 +743,11 @@ class TestResolveReconcileTrigger:
         assert trigger.kind == TriggerKind.RECONCILE_WORKER_DEAD
         assert "Worker died" in (trigger.error_message or "")
 
-    def test_running_dead_shutdown_intent(self):
+    def test_running_dead_shutdown_intent_without_stop_request_is_worker_dead(self):
         rec = _rec(FlowRunStatus.RUNNING, {"ticket_engine": {"status": "running"}})
         trigger = _resolve_reconcile_trigger(rec, _health(False, shutdown_intent=True))
         assert trigger is not None
-        assert trigger.kind == TriggerKind.RECONCILE_WORKER_SHUTDOWN
+        assert trigger.kind == TriggerKind.RECONCILE_WORKER_DEAD
 
     def test_running_dead_stale_reaper_shutdown_intent_is_recovery_failure(self):
         rec = _rec(FlowRunStatus.RUNNING, {"ticket_engine": {"status": "running"}})

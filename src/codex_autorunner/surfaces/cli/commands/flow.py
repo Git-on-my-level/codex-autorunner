@@ -397,6 +397,9 @@ def register_flow_commands(
         shutdown_event = threading.Event()
         watchdog_reason: dict[str, Optional[str]] = {"value": None}
         watchdog_app_server_floor_seq: dict[str, Optional[int]] = {"value": None}
+        shutdown_signal: dict[str, Optional[str]] = {"value": None}
+        shutdown_exit_origin: dict[str, Optional[str]] = {"value": None}
+        shutdown_exit_kind: dict[str, Optional[str]] = {"value": None}
 
         def _write_exit_info(*, shutdown_intent: bool = False) -> None:
             try:
@@ -405,6 +408,9 @@ def register_flow_commands(
                     worker_run_id,
                     returncode=exit_code_holder[0] or None,
                     shutdown_intent=shutdown_intent,
+                    signal=shutdown_signal["value"],
+                    exit_origin=shutdown_exit_origin["value"],
+                    exit_kind=shutdown_exit_kind["value"],
                     artifacts_root=_artifacts_root,
                 )
             except OSError:
@@ -412,6 +418,16 @@ def register_flow_commands(
 
         def _signal_handler(signum: int, _frame) -> None:
             exit_code_holder[0] = -signum
+            signal_enum = getattr(signal, "Signals", None)
+            if signal_enum is not None:
+                try:
+                    shutdown_signal["value"] = signal_enum(signum).name
+                except ValueError:
+                    shutdown_signal["value"] = f"signal-{signum}"
+            else:
+                shutdown_signal["value"] = f"signal-{signum}"
+            shutdown_exit_origin["value"] = "worker_signal"
+            shutdown_exit_kind["value"] = "external_signal"
             shutdown_event.set()
 
         def _resolve_worker_max_wall_seconds() -> float:
@@ -457,6 +473,8 @@ def register_flow_commands(
                 if method == _OPENCODE_STALL_TIMEOUT_METHOD:
                     watchdog_reason["value"] = method
                     exit_code_holder[0] = 1
+                    shutdown_exit_origin["value"] = "worker_watchdog"
+                    shutdown_exit_kind["value"] = "opencode_stream_stalled_timeout"
                     write_worker_crash_info(
                         _repo_root,
                         worker_run_id,
@@ -472,6 +490,9 @@ def register_flow_commands(
                     continue
                 watchdog_reason["value"] = "max_wall_time"
                 exit_code_holder[0] = -signal.SIGTERM
+                shutdown_signal["value"] = "SIGTERM"
+                shutdown_exit_origin["value"] = "worker_watchdog"
+                shutdown_exit_kind["value"] = "max_wall_time"
                 write_worker_crash_info(
                     _repo_root,
                     worker_run_id,
