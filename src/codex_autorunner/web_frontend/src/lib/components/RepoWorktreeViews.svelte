@@ -293,6 +293,8 @@
               >
                 {@render chevronIcon()}
               </button>
+            {:else if row.kind === 'repo'}
+              <span class="repo-collapse-toggle is-placeholder" aria-hidden="true"></span>
             {/if}
             <div class="repo-card">
               {#if row.kind === 'repo' && onRepoPin}
@@ -1240,6 +1242,11 @@
     align-items: center;
     gap: var(--space-3);
     padding-right: var(--space-5);
+    transition: background-color var(--transition-fast);
+  }
+
+  .repo-head:hover {
+    background: var(--color-surface-muted);
   }
 
   .repo-collapse-toggle {
@@ -1259,6 +1266,13 @@
   .repo-collapse-toggle:hover {
     background: var(--color-surface-muted);
     color: var(--color-ink);
+  }
+  .repo-collapse-toggle.is-placeholder {
+    pointer-events: none;
+    cursor: default;
+  }
+  .repo-collapse-toggle.is-placeholder:hover {
+    background: transparent;
   }
   .repo-collapse-toggle:focus-visible {
     outline: 2px solid color-mix(in srgb, var(--color-accent) 55%, transparent);
@@ -1761,7 +1775,7 @@
     grid-template-columns: 28px minmax(0, 1fr) auto auto;
     align-items: center;
     gap: var(--space-3);
-    padding: var(--space-2) 0 var(--space-2) 8px;
+    padding: var(--space-2) var(--space-5) var(--space-2) 8px;
     color: var(--color-ink);
     text-decoration: none;
     border-radius: 6px;
@@ -1774,7 +1788,7 @@
   }
 
   .worktree-card:hover {
-    background: var(--color-surface);
+    background: var(--color-surface-muted);
   }
 
   .worktree-rail {
