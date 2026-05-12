@@ -883,7 +883,10 @@ export function buildPmaTranscriptCards(
   artifacts: SurfaceArtifact[],
   progress: PmaRunProgress | null
 ): PmaCard[] {
-  const timelineCards = coalesceThinkingTraceCards(buildPmaCards(timeline, chat, artifacts));
+  const normalizedTimeline = suppressDuplicateTimelineDeliveries(timeline);
+  const timelineCards = coalesceThinkingTraceCards(
+    buildPmaCards(normalizedTimeline, chat, artifacts)
+  );
   const activityCards = shouldSupplementWithLiveActivity(timelineCards, progress)
     ? buildPmaActivityCards(progress?.events ?? [], { fallbackTurnId: progress?.id ?? null })
     : [];

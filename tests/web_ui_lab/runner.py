@@ -63,16 +63,21 @@ def run_scenario(
 def _normalize_screen_model(
     scenario: WebUiScenario,
     payload: dict[str, Any],
+    *,
+    include_safety_checks: bool = True,
 ) -> dict[str, Any]:
-    repos = _records(payload, "repos")
-    worktrees = _records(payload, "worktrees")
-    tickets = _records(payload, "tickets")
-    runs = _records(payload, "runs")
-    chats = _records(payload, "chats")
-    timeline = _records(payload, "timeline")
-    docs = _records(payload, "contextspace_docs")
+    normalized_payload = _normalize_payload_records(payload)
+    repos = _records(normalized_payload, "repos")
+    worktrees = _records(normalized_payload, "worktrees")
+    tickets = _records(normalized_payload, "tickets")
+    runs = _records(normalized_payload, "runs")
+    chats = _records(normalized_payload, "chats")
+    timeline = _records(normalized_payload, "timeline")
+    docs = _records(normalized_payload, "contextspace_docs")
     settings = (
-        payload.get("settings") if isinstance(payload.get("settings"), dict) else {}
+        normalized_payload.get("settings")
+        if isinstance(normalized_payload.get("settings"), dict)
+        else {}
     )
 
     actions = _actions_for_route(scenario.route_name, repos, worktrees, tickets, chats)
@@ -112,10 +117,14 @@ def _normalize_screen_model(
         "unknown_status_normalized": _unknown_status_normalized(
             chats + runs + tickets + repos + worktrees + timeline
         ),
-        "missing_optional_fields_safe": _missing_optional_fields_safe(payload),
-        "cursor_snapshot": _cursor_snapshot(scenario, payload),
+        "missing_optional_fields_safe": (
+            _missing_optional_fields_safe(scenario, payload)
+            if include_safety_checks
+            else True
+        ),
+        "cursor_snapshot": _cursor_snapshot(scenario, normalized_payload),
         "repair_snapshot": _repair_snapshot(tickets),
-        "pma_timeline": _pma_timeline_summary(timeline, payload),
+        "pma_timeline": _pma_timeline_summary(timeline, normalized_payload),
     }
 
 
@@ -340,6 +349,79 @@ def _records(payload: dict[str, Any], key: str) -> list[dict[str, Any]]:
     return [item for item in value if isinstance(item, dict)]
 
 
+def _normalize_payload_records(payload: dict[str, Any]) -> dict[str, Any]:
+    clone = json.loads(json.dumps(payload))
+    for collection in (
+        "repos",
+        "worktrees",
+        "tickets",
+        "runs",
+        "chats",
+        "timeline",
+        "contextspace_docs",
+    ):
+        normalized_items: list[dict[str, Any]] = []
+        for record in _records(clone, collection):
+            normalized_items.append(_normalize_record(record, collection=collection))
+        clone[collection] = normalized_items
+    return clone
+
+
+def _normalize_record(record: dict[str, Any], *, collection: str) -> dict[str, Any]:
+    normalized = dict(record)
+    status = _status_value(record)
+    normalized["normalized_status"] = _normalize_status(status)
+    normalized["label"] = _label(normalized)
+    if collection in {"repos", "worktrees", "tickets", "runs", "chats"}:
+        normalized["updated_at_safe"] = _string_or_empty(
+            record.get("last_activity_at") or record.get("updated_at")
+        )
+    if collection in {"repos", "worktrees", "tickets"}:
+        normalized["path_safe"] = _string_or_empty(
+            record.get("path")
+            or record.get("ticket_path")
+            or record.get("workspace_path")
+        )
+    if collection in {"runs", "chats"}:
+        normalized["progress_percent_safe"] = _safe_percent(
+            record.get("progress_percent")
+        )
+    return normalized
+
+
+def _status_value(record: dict[str, Any]) -> Any:
+    return (
+        record.get("work_status")
+        or record.get("status")
+        or record.get("normalized_status")
+    )
+
+
+def _normalize_status(value: Any) -> str:
+    raw = str(value or "").strip().lower()
+    if raw in {"running", "waiting", "idle", "done", "failed", "blocked", "invalid"}:
+        return raw
+    if raw in {"active", "in_progress", "in-progress", "working"}:
+        return "running"
+    if raw in {"queued", "pending", "needs_approval", "approval"}:
+        return "waiting"
+    if raw in {"complete", "completed", "success", "succeeded", "ok"}:
+        return "done"
+    if raw in {"error", "errored", "failure"}:
+        return "failed"
+    return "idle"
+
+
+def _string_or_empty(value: Any) -> str:
+    return value if isinstance(value, str) else ""
+
+
+def _safe_percent(value: Any) -> int:
+    if isinstance(value, (int, float)):
+        return max(0, min(100, int(value)))
+    return 0
+
+
 def _label(record: dict[str, Any]) -> str:
     for key in ("title", "name", "id", "thread_target_id"):
         value = record.get(key)
@@ -365,40 +447,46 @@ def _timeline_label(record: dict[str, Any]) -> str:
 def _unknown_status_normalized(records: list[dict[str, Any]]) -> bool:
     known = {"running", "waiting", "idle", "done", "failed", "blocked", "invalid"}
     for record in records:
-        status = record.get("status") or record.get("normalized_status")
-        if isinstance(status, str) and status and status not in known:
-            normalized = "idle"
-            return normalized in known
+        status = _status_value(record)
+        if isinstance(status, str) and status and status.lower() not in known:
+            normalized = record.get("normalized_status")
+            return isinstance(normalized, str) and normalized in known
     return True
 
 
-def _missing_optional_fields_safe(payload: dict[str, Any]) -> bool:
+def _missing_optional_fields_safe(
+    scenario: WebUiScenario, payload: dict[str, Any]
+) -> bool:
     clone = json.loads(json.dumps(payload))
     for key in ("last_activity_at", "updated_at", "progress_percent", "path"):
         for collection in ("repos", "worktrees", "tickets", "runs", "chats"):
             for record in _records(clone, collection):
                 record.pop(key, None)
     try:
-        _records(clone, "repos")
-        _records(clone, "worktrees")
-        _records(clone, "tickets")
-        _records(clone, "runs")
-        _records(clone, "chats")
+        sparse_model = _normalize_screen_model(
+            scenario,
+            clone,
+            include_safety_checks=False,
+        )
     except (TypeError, AttributeError):
         return False
-    return True
+    return bool(sparse_model["landmarks"]) and isinstance(
+        sparse_model["cursor_snapshot"], dict
+    )
 
 
 def _cursor_snapshot(
     scenario: WebUiScenario, payload: dict[str, Any]
 ) -> dict[str, Any]:
+    normalized_records = {
+        key: _records(payload, key)
+        for key in ("repos", "worktrees", "tickets", "runs", "chats", "timeline")
+    }
     return {
         "scenario_id": scenario.scenario_id,
         "route": scenario.route_path,
-        "counts": {
-            key: len(_records(payload, key))
-            for key in ("repos", "worktrees", "tickets", "runs", "chats", "timeline")
-        },
+        "counts": {key: len(value) for key, value in normalized_records.items()},
+        "normalized_records": normalized_records,
         "next_cursor": None,
     }
 

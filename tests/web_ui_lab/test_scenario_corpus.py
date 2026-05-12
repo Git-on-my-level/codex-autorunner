@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 from tests.web_ui_lab.corpus import SCRIPT_ROUTE_PACK, WEB_UI_SCENARIOS
-from tests.web_ui_lab.runner import run_scenario
+from tests.web_ui_lab.fixtures import build_fixture_payload
+from tests.web_ui_lab.runner import _normalize_screen_model, run_scenario
 from tests.web_ui_lab.scenario_models import ScenarioTag, SeedFixtureKind
 
 
@@ -124,3 +125,41 @@ def test_fast_scenarios_execute_and_emit_reports(tmp_path) -> None:
         assert fixture_path.exists()
 
     assert len(executed) >= 5
+
+
+def test_unknown_status_invariant_uses_normalized_screen_model() -> None:
+    scenario = next(
+        item
+        for item in WEB_UI_SCENARIOS
+        if item.seed_fixture is SeedFixtureKind.CHAT_LIST_DETAIL
+    )
+    payload = build_fixture_payload(scenario.seed_fixture)
+
+    screen_model = _normalize_screen_model(scenario, payload)
+
+    assert screen_model["unknown_status_normalized"] is True
+    assert any(
+        chat.get("normalized_status") == "idle"
+        for chat in screen_model["cursor_snapshot"]["normalized_records"]["chats"]
+        if chat.get("status") == "mystery-new-state"
+    )
+
+
+def test_missing_optional_fields_invariant_reruns_screen_normalization() -> None:
+    scenario = next(
+        item
+        for item in WEB_UI_SCENARIOS
+        if item.seed_fixture is SeedFixtureKind.SEEDED_REPO_WORKTREE_TICKET
+    )
+    payload = build_fixture_payload(scenario.seed_fixture)
+    for key in ("last_activity_at", "updated_at", "progress_percent", "path"):
+        for collection in ("repos", "worktrees", "tickets", "runs", "chats"):
+            for record in payload.get(collection, []):
+                record.pop(key, None)
+
+    screen_model = _normalize_screen_model(scenario, payload)
+
+    assert screen_model["missing_optional_fields_safe"] is True
+    records = screen_model["cursor_snapshot"]["normalized_records"]
+    assert records["repos"][0]["updated_at_safe"] == ""
+    assert records["repos"][0]["path_safe"] == ""
