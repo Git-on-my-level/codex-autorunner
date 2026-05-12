@@ -1,30 +1,35 @@
 import type { PmaChatSummary } from './domain';
 
-const STORAGE_KEY = 'pma:lastSeen';
+const STORAGE_KEYS = ['pma:lastSeen', 'car.web.chat.lastSeen.v1'];
 
 export type ChatLastSeenMap = Record<string, string>;
 
 export function loadLastSeenMap(): ChatLastSeenMap {
   if (typeof window === 'undefined') return {};
+  const out: ChatLastSeenMap = {};
   try {
-    const raw = window.localStorage.getItem(STORAGE_KEY);
-    if (!raw) return {};
-    const parsed = JSON.parse(raw);
-    if (!parsed || typeof parsed !== 'object') return {};
-    const out: ChatLastSeenMap = {};
-    for (const [key, value] of Object.entries(parsed as Record<string, unknown>)) {
-      if (typeof key === 'string' && typeof value === 'string') out[key] = value;
+    for (const storageKey of STORAGE_KEYS) {
+      const raw = window.localStorage.getItem(storageKey);
+      if (!raw) continue;
+      const parsed = JSON.parse(raw);
+      if (!parsed || typeof parsed !== 'object') continue;
+      for (const [key, value] of Object.entries(parsed as Record<string, unknown>)) {
+        if (typeof key !== 'string' || typeof value !== 'string') continue;
+        if (!out[key] || value > out[key]) out[key] = value;
+      }
     }
+    if (Object.keys(out).length > 0) saveLastSeenMap(out);
     return out;
   } catch {
-    return {};
+    return out;
   }
 }
 
 export function saveLastSeenMap(map: ChatLastSeenMap): void {
   if (typeof window === 'undefined') return;
   try {
-    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(map));
+    const raw = JSON.stringify(map);
+    for (const storageKey of STORAGE_KEYS) window.localStorage.setItem(storageKey, raw);
   } catch {
     // Best-effort; ignore quota / disabled storage.
   }

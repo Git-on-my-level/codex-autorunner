@@ -20,7 +20,7 @@ from .progress_projection import (
     ProgressProjectionState,
     reduce_progress_event,
 )
-from .turn_timeline import list_turn_timeline
+from .turn_timeline import list_turn_timeline, list_turn_timelines
 
 TIMELINE_CONTRACT_VERSION = "managed_thread_timeline.v1"
 
@@ -797,11 +797,16 @@ def _append_turn_timeline_items(
     managed_thread_id: str,
     turn: dict[str, Any],
     sequence: int,
+    turn_timeline_entries: Optional[list[dict[str, Any]]] = None,
 ) -> int:
     managed_turn_id = str(turn.get("managed_turn_id") or "").strip()
     if not managed_turn_id:
         return sequence
-    entries = list_turn_timeline(hub_root, execution_id=managed_turn_id)
+    entries = (
+        turn_timeline_entries
+        if turn_timeline_entries is not None
+        else list_turn_timeline(hub_root, execution_id=managed_turn_id)
+    )
     sequence = _append_user_message(
         items,
         managed_thread_id=managed_thread_id,
@@ -867,6 +872,10 @@ def build_managed_thread_timeline(
     turns = list(
         reversed(thread_store.list_turns(normalized_thread_id, limit=bounded_limit))
     )
+    turn_timeline_entries = list_turn_timelines(
+        hub_root,
+        execution_ids=[str(turn.get("managed_turn_id") or "") for turn in turns],
+    )
     compact_actions = _sorted_compact_actions(thread_store, normalized_thread_id)
     items: list[ManagedThreadTimelineItem] = []
     sequence = 1
@@ -888,6 +897,9 @@ def build_managed_thread_timeline(
                 managed_thread_id=normalized_thread_id,
                 turn=turn,
                 sequence=sequence,
+                turn_timeline_entries=turn_timeline_entries.get(
+                    str(turn.get("managed_turn_id") or "")
+                ),
             )
             turn_index += 1
         else:
@@ -905,6 +917,9 @@ def build_managed_thread_timeline(
             managed_thread_id=normalized_thread_id,
             turn=turns[turn_index],
             sequence=sequence,
+            turn_timeline_entries=turn_timeline_entries.get(
+                str(turns[turn_index].get("managed_turn_id") or "")
+            ),
         )
         turn_index += 1
     while action_index < len(compact_actions):

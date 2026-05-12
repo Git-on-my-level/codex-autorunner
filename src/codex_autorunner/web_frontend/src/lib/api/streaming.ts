@@ -230,6 +230,7 @@ export function openChatSurfaceEventSource(
       options.onStatus?.('interrupted');
       options.onError?.(event);
       source?.close();
+      if (cursor) forgetCursor(storageKey);
       const delay = Math.min(8000, 500 * 2 ** attempt);
       attempt += 1;
       if (reconnectTimer) clearTimeout(reconnectTimer);
@@ -333,5 +334,13 @@ function rememberCursor(key: string, cursor: string): void {
     if (typeof localStorage !== 'undefined') localStorage.setItem(key, cursor);
   } catch {
     // Cursor persistence is best-effort; streams still resume through browser Last-Event-ID within one connection.
+  }
+}
+
+function forgetCursor(key: string): void {
+  try {
+    if (typeof localStorage !== 'undefined') localStorage.removeItem(key);
+  } catch {
+    // Cursor persistence is best-effort; reconnect can still fall back to a fresh snapshot.
   }
 }

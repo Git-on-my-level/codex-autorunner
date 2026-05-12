@@ -185,6 +185,23 @@ describe('SSE helpers', () => {
     subscription.close();
   });
 
+  it('drops stale chat surface cursors after a cursor-based reconnect fails', () => {
+    vi.useFakeTimers();
+    vi.stubGlobal('EventSource', FakeEventSource);
+    const storage = memoryStorage();
+    vi.stubGlobal('localStorage', storage);
+    storage.setItem('car.stream.cursor.chat.surface', 'stale-cursor');
+
+    const subscription = openChatSurfaceEventSource({ onEvent: vi.fn() }, '/car');
+    expect(FakeEventSource.instances[0].url).toBe('/car/hub/chat/events?cursor=stale-cursor');
+    FakeEventSource.instances[0].fail();
+    expect(storage.getItem('car.stream.cursor.chat.surface')).toBeNull();
+
+    vi.advanceTimersByTime(500);
+    expect(FakeEventSource.instances[1].url).toBe('/car/hub/chat/events');
+    subscription.close();
+  });
+
   it('resumes flow run streams by persisted event id after interruption', () => {
     vi.useFakeTimers();
     vi.stubGlobal('EventSource', FakeEventSource);

@@ -222,7 +222,7 @@ WEB_UI_SCENARIOS: tuple[WebUiScenario, ...] = (
         visible_landmarks=("Chats", "Search chats, repos, tickets"),
         read_model_routes=(
             "/hub/chat/index?view=active&limit=25",
-            "/hub/read-models/chats/patches",
+            "/hub/chat/patches",
         ),
         api_routes=("/hub/pma/threads",),
         frontend_mappers=("pmaChat.ts", "readModelClients.ts"),
@@ -236,7 +236,7 @@ WEB_UI_SCENARIOS: tuple[WebUiScenario, ...] = (
         visible_landmarks=("Chats", "Search chats, repos, tickets"),
         read_model_routes=(
             "/hub/chat/index?view=active&limit=25",
-            "/hub/read-models/chats/patches",
+            "/hub/chat/patches",
         ),
         api_routes=("/hub/pma/threads",),
         frontend_mappers=("pmaChat.ts", "readModelClients.ts"),
