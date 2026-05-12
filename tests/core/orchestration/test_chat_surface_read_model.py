@@ -213,6 +213,31 @@ def test_chat_surface_read_model_projects_thread_identity_from_metadata_json(
     assert surface["metadata"]["model"] == "gpt-5.5"
 
 
+def test_chat_surface_read_model_ignores_running_execution_on_archived_thread(
+    tmp_path: Path,
+) -> None:
+    hub_root = tmp_path / "hub"
+    _seed_thread(
+        hub_root,
+        thread_id="thread-archived",
+        lifecycle_status="archived",
+        runtime_status="archived",
+    )
+    _seed_execution(hub_root, thread_id="thread-archived", status="running")
+
+    snapshot = ChatSurfaceReadService(hub_root, durable=False).snapshot()
+    by_kind_key = {
+        (surface["surface_kind"], surface["surface_key"]): surface
+        for surface in snapshot["surfaces"]
+    }
+
+    surface = by_kind_key[("pma", "thread-archived")]
+    assert surface["lifecycle"] == "archived"
+    assert surface["metadata"]["runtime_status"] == "archived"
+    assert surface["metadata"]["latest_execution_status"] is None
+    assert surface["metadata"]["active_turn_id"] is None
+
+
 def test_chat_index_and_detail_prefer_bound_chat_display_for_fallback_titles(
     tmp_path: Path,
 ) -> None:

@@ -39,6 +39,9 @@ from .managed_thread_store_rows import (
     enrich_thread_metadata_for_workspace as _enrich_thread_metadata_for_workspace,
 )
 from .managed_thread_store_rows import (
+    fail_thread_execution_pending_items as _fail_thread_execution_pending_items,
+)
+from .managed_thread_store_rows import (
     fail_thread_execution_running_items as _fail_thread_execution_running_items,
 )
 from .managed_thread_store_rows import (
@@ -1014,6 +1017,12 @@ class ManagedThreadStore:
         changed_at = now_iso()
         with self._write_conn() as conn:
             with conn:
+                self._terminalize_open_turns_for_thread(
+                    conn,
+                    managed_thread_id,
+                    finished_at=changed_at,
+                    error_text="thread_archived",
+                )
                 conn.execute(
                     """
                     UPDATE orch_thread_targets
@@ -1038,6 +1047,66 @@ class ManagedThreadStore:
             lifecycle_status="archived",
             source_id=managed_thread_id,
             occurred_at=changed_at,
+        )
+
+    def _terminalize_open_turns_for_thread(
+        self,
+        conn: Any,
+        managed_thread_id: str,
+        *,
+        finished_at: str,
+        error_text: str,
+    ) -> None:
+        rows = conn.execute(
+            """
+            SELECT execution_id, status
+              FROM orch_thread_executions
+             WHERE thread_target_id = ?
+               AND status IN ('running', 'queued')
+            """,
+            (managed_thread_id,),
+        ).fetchall()
+        running_ids = [
+            str(row["execution_id"])
+            for row in rows
+            if isinstance(row["execution_id"], str)
+            and row["execution_id"]
+            and row["status"] == "running"
+        ]
+        queued_ids = [
+            str(row["execution_id"])
+            for row in rows
+            if isinstance(row["execution_id"], str)
+            and row["execution_id"]
+            and row["status"] == "queued"
+        ]
+        execution_ids = running_ids + queued_ids
+        if execution_ids:
+            placeholders = ",".join("?" for _ in execution_ids)
+            conn.execute(
+                f"""
+                UPDATE orch_thread_executions
+                   SET status = 'interrupted',
+                       error_text = COALESCE(error_text, ?),
+                       finished_at = COALESCE(finished_at, ?)
+                 WHERE thread_target_id = ?
+                   AND status IN ('running', 'queued')
+                   AND execution_id IN ({placeholders})
+                """,
+                (error_text, finished_at, managed_thread_id, *execution_ids),
+            )
+        _fail_thread_execution_running_items(
+            conn,
+            source_keys=running_ids,
+            completed_at=finished_at,
+            error_text=error_text,
+        )
+        _fail_thread_execution_pending_items(
+            conn,
+            source_keys=queued_ids,
+            lane_id=thread_queue_lane_id(managed_thread_id),
+            completed_at=finished_at,
+            error_text=error_text,
         )
 
     def activate_thread(self, managed_thread_id: str) -> None:

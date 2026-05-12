@@ -301,6 +301,36 @@ describe('PMA chat view helpers', () => {
     ]);
   });
 
+  it('uses canonical runtime status before stale latest execution status', () => {
+    const chats = mapChatSurfaceSnapshotToPmaChats({
+      surfaces: [
+        {
+          surface_kind: 'pma',
+          surface_key: 'thread-archived',
+          managed_thread_id: 'thread-archived',
+          lifecycle: 'archived',
+          lifecycle_status: 'archived',
+          display: { display_name: 'Archived chat' },
+          metadata: {
+            runtime_status: 'archived',
+            latest_execution_status: 'running'
+          }
+        }
+      ]
+    });
+
+    expect(chats).toMatchObject([
+      {
+        id: 'thread-archived',
+        status: 'idle',
+        raw: {
+          normalized_status: 'archived',
+          status: 'archived'
+        }
+      }
+    ]);
+  });
+
   it('maps chat surface unread activity from visible event metadata before row updates', () => {
     const chats = mapChatSurfaceSnapshotToPmaChats({
       surfaces: [

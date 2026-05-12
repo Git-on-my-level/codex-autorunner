@@ -321,15 +321,18 @@ export function mapChatSurfaceToPmaChatSummary(surface: Record<string, unknown>)
   const worktreeId = resourceKind === 'worktree' ? resourceId : null;
   const bindingKind = firstRawString(metadata.binding_kind) ?? surfaceKind;
   const bindingId = firstRawString(metadata.binding_id) ?? surfaceKey;
+  const statusSource =
+    metadata.runtime_status ??
+    metadata.target_runtime_status ??
+    lifecycle ??
+    metadata.latest_execution_status ??
+    metadata.latest_event_status;
 
   return {
     id,
     title: surfaceTitle(surfaceKind, surfaceKey, display),
     lifecycleStatus,
-    status:
-      normalizeOptionalWorkStatus(
-        metadata.latest_execution_status ?? metadata.latest_event_status ?? metadata.runtime_status ?? lifecycle
-      ) ?? 'idle',
+    status: normalizeOptionalWorkStatus(statusSource) ?? 'idle',
     agentId: firstRawString(metadata.agent_id),
     agentProfile: firstRawString(metadata.agent_profile),
     model: firstRawString(metadata.model),
@@ -369,8 +372,8 @@ export function mapChatSurfaceToPmaChatSummary(surface: Record<string, unknown>)
       name: firstRawString(display.display_name, display.title),
       chat_kind: firstRawString(metadata.chat_kind),
       thread_kind: firstRawString(metadata.thread_kind),
-      normalized_status: metadata.latest_execution_status ?? metadata.latest_event_status ?? metadata.runtime_status ?? lifecycle,
-      status: metadata.latest_execution_status ?? metadata.latest_event_status ?? metadata.runtime_status ?? lifecycle,
+      normalized_status: statusSource,
+      status: statusSource,
       unread_count: rawNumber(metadata.unread_count ?? metadata.unreadCount ?? surface.unread_count ?? surface.unreadCount)
     }
   };
