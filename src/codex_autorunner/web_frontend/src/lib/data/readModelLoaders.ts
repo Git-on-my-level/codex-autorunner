@@ -10,6 +10,7 @@ import {
   type ChatIndexRequest,
   type ReadModelSnapshotClient
 } from './readModelClients';
+import type { TicketSummary } from '$lib/viewModels/domain';
 
 export type ReadModelDependency = `${string}:${string}`;
 export type ReadModelDepends = (...dependencies: ReadModelDependency[]) => void;
@@ -39,7 +40,8 @@ export const readModelEntityTags = {
   chat: (chatId: string) => `entity:chat:${chatId}` as const,
   repo: (repoId: string) => `entity:repo:${repoId}` as const,
   worktree: (worktreeId: string) => `entity:worktree:${worktreeId}` as const,
-  ticket: (ticketId: string) => `entity:ticket:${ticketId}` as const
+  ticket: (ticketId: string) => `entity:ticket:${ticketId}` as const,
+  ticketIndex: 'entity:ticket:index' as const
 } as const;
 
 /**
@@ -174,6 +176,30 @@ export async function ensureWorktreeDetailLoaded(
   const result = await client.worktreeDetail(worktreeId);
   if (!result.ok) return { status: 'error', tags, error: result.error };
   store.applyWorktreeDetailSnapshot(result.data);
+  return { status: 'fetched', tags };
+}
+
+export type TicketIndexOwner = { repo?: string; worktree?: string } | undefined;
+
+export async function ensureTicketIndexLoaded(
+  options: ReadModelLoaderOptions & { owner?: TicketIndexOwner } = {}
+): Promise<ReadModelLoaderResult> {
+  const tags = [readModelEntityTags.ticketIndex];
+  markDepends(options.depends, tags);
+  const store = options.store ?? readModelEntityStore;
+  if (!browser) return { status: 'cold', tags };
+
+  const ownerKey = options.owner
+    ? options.owner.repo ? `repo:${options.owner.repo}` : options.owner.worktree ? `worktree:${options.owner.worktree}` : 'all'
+    : 'all';
+  const state = store.snapshot();
+  const cached = Boolean(state.ticketOrderByOwner[ownerKey]);
+  if (!shouldRefresh(state, cached, options)) return { status: 'cache-hit', tags };
+
+  const client = options.client ?? readModelSnapshotClient;
+  const result = await client.ticketIndex(options.owner);
+  if (!result.ok) return { status: 'error', tags, error: result.error };
+  store.replaceScopedTicketSummaries(ownerKey, result.data);
   return { status: 'fetched', tags };
 }
 

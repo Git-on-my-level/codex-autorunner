@@ -112,6 +112,24 @@
     sectionIssues = [];
     const cachedList = cachedTickets({ worktree: ownerId });
     if (showLoading && cachedList) renderCachedTicket(cachedList, ownerId, routeTicketId);
+    if (showLoading && !detail) {
+      const storeState = readModelEntityStore.snapshot();
+      const ownerKey = scopedOwnerKey({ kind: 'worktree', id: ownerId });
+      const summaryIds = storeState.ticketOrderByOwner[ownerKey];
+      if (summaryIds?.length) {
+        const ticketList = summaryIds.map(id => storeState.ticketSummaries[id]).filter(Boolean);
+        const selected = resolveTicketRouteId(ticketList, routeTicketId);
+        if (selected) {
+          detail = buildTicketDetailViewModel(ticketDetailFromSummary(selected), {
+            tickets: ticketList,
+            runs: [],
+            chats: [],
+            artifacts: []
+          });
+          loading = false;
+        }
+      }
+    }
     const snapshot = await pmaApi.readModels.ticketDetail(routeTicketId, { kind: 'worktree', id: ownerId });
     if (!isCurrentRequest()) return;
     if (!snapshot.ok) {

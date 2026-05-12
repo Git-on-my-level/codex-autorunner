@@ -3,6 +3,7 @@ import { READ_MODEL_CONTRACT_VERSION, type ChatDetailSnapshot, type ChatIndexSna
 import type { ApiError, ApiResult } from '$lib/api/client';
 import { ReadModelEntityStore, selectChatDetailView } from './readModelStore';
 import type { ReadModelSnapshotClient } from './readModelClients';
+import type { TicketSummary } from '$lib/viewModels/domain';
 
 const now = '2026-05-11T12:00:00Z';
 
@@ -93,6 +94,48 @@ describe('read model loaders', () => {
     expect(depends).toHaveBeenCalledWith('entity:repo:repo-1');
     expect(store.snapshot().tickets['ticket-1']?.title).toBe('Ticket One');
   });
+
+  it('fetches and stores ticket index summaries in the store', async () => {
+    const store = new ReadModelEntityStore();
+    const depends = vi.fn();
+    const summaries = [ticketSummary('t-1', 'Ticket A'), ticketSummary('t-2', 'Ticket B')];
+    const client = mockClient({
+      ticketIndex: vi.fn().mockResolvedValue(ok(summaries))
+    });
+    const { ensureTicketIndexLoaded } = await importLoaders(true);
+
+    const result = await ensureTicketIndexLoaded({ store, client, depends });
+
+    expect(result).toEqual({ status: 'fetched', tags: ['entity:ticket:index'] });
+    expect(depends).toHaveBeenCalledWith('entity:ticket:index');
+    expect(store.snapshot().ticketOrderByOwner['all']).toEqual(['t-1', 't-2']);
+    expect(store.snapshot().ticketSummaries['t-1']?.title).toBe('Ticket A');
+  });
+
+  it('returns cache hit when ticket index is already in the store', async () => {
+    const store = new ReadModelEntityStore();
+    store.replaceScopedTicketSummaries('all', [ticketSummary('t-1', 'Cached')]);
+    const client = mockClient();
+    const depends = vi.fn();
+    const { ensureTicketIndexLoaded } = await importLoaders(true);
+
+    const result = await ensureTicketIndexLoaded({ store, client, depends });
+
+    expect(result).toEqual({ status: 'cache-hit', tags: ['entity:ticket:index'] });
+    expect(client.ticketIndex).not.toHaveBeenCalled();
+  });
+
+  it('returns cold when not in the browser', async () => {
+    const store = new ReadModelEntityStore();
+    const client = mockClient();
+    const depends = vi.fn();
+    const { ensureTicketIndexLoaded } = await importLoaders(false);
+
+    const result = await ensureTicketIndexLoaded({ store, client, depends });
+
+    expect(result).toEqual({ status: 'cold', tags: ['entity:ticket:index'] });
+    expect(client.ticketIndex).not.toHaveBeenCalled();
+  });
 });
 
 async function importLoaders(browser: boolean) {
@@ -110,6 +153,7 @@ function mockClient(overrides: Partial<Record<keyof ReadModelSnapshotClient, Ret
     repoDetail: vi.fn(),
     worktreeDetail: vi.fn(),
     ticketDetail: vi.fn().mockResolvedValue(ok(ticketDetailSnapshot())),
+    ticketIndex: vi.fn().mockResolvedValue(ok([])),
     ...overrides
   } as ReadModelSnapshotClient;
 }
@@ -258,5 +302,29 @@ function repair(snapshotRoute: string) {
     cursorQueryParam: 'after' as const,
     gapEventType: 'projection.cursor_gap' as const,
     behavior: 'repair_snapshot_required' as const
+  };
+}
+
+function ticketSummary(id: string, title: string): TicketSummary {
+  return {
+    id,
+    number: null,
+    title,
+    status: 'waiting',
+    workspaceKind: 'unscoped',
+    workspaceId: null,
+    repoId: null,
+    worktreeId: null,
+    agentId: null,
+    path: null,
+    ticketPath: null,
+    workspacePath: null,
+    errors: [],
+    diffStats: null,
+    durationSeconds: null,
+    chatKey: null,
+    runId: null,
+    updatedAt: null,
+    raw: {}
   };
 }

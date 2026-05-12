@@ -4,6 +4,7 @@
   import { onMount } from 'svelte';
   import TicketViews from '$lib/components/TicketViews.svelte';
   import { pmaApi, type ApiError } from '$lib/api/client';
+  import { readModelEntityStore } from '$lib/data';
   import {
     buildTicketDetailViewModel,
     resolveTicketRouteId,
@@ -25,6 +26,29 @@
   async function loadTicket(): Promise<void> {
     loading = true;
     error = null;
+
+    const state = readModelEntityStore.snapshot();
+    const cachedIds = state.ticketOrderByOwner['all'];
+    if (cachedIds?.length) {
+      const cached = cachedIds.map(id => state.ticketSummaries[id]).filter(Boolean);
+      const selected = resolveTicketRouteId(cached, ticketId);
+      if (selected) {
+        const canonical = canonicalTicketHref(selected);
+        if (canonical) {
+          await goto(href(canonical), { replaceState: true });
+          return;
+        }
+        detail = buildTicketDetailViewModel(ticketDetailFromSummary(selected), {
+          tickets: cached,
+          runs: [],
+          chats: [],
+          artifacts: []
+        });
+        loading = false;
+        return;
+      }
+    }
+
     const result = await pmaApi.ticketFlow.listTickets();
     if (!result.ok) {
       error = result.error;
