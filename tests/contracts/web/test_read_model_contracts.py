@@ -81,6 +81,7 @@ def chat_row() -> ChatIndexRow:
         run_id="run-1",
         agent="codex",
         agent_profile="m4-pma",
+        chat_kind="coding_agent",
         model="gpt-5.3-codex",
         group_id="ticket-run:run-1",
     )

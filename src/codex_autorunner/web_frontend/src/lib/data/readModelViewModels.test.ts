@@ -27,6 +27,7 @@ describe('read model view-model selectors', () => {
       runId: 'run-1',
       agent: 'codex',
       agentProfile: 'm4-pma',
+      chatKind: 'coding_agent',
       model: 'gpt-5.5',
       groupId: 'ticket:TICKET-005'
     };
@@ -34,10 +35,12 @@ describe('read model view-model selectors', () => {
     const summary = chatIndexRowToPmaChatSummary(row);
     expect(summary.id).toBe('chat-1');
     expect(summary.status).toBe('waiting');
+    expect(summary.chatKind).toBe('coding_agent');
     expect(summary.agentProfile).toBe('m4-pma');
     expect(summary.isTicketFlow).toBe(true);
     expect(summary.raw.surface_kind).toBe('discord');
     expect(summary.raw.agent_profile).toBe('m4-pma');
+    expect(pmaChatSummaryToChatIndexRow(summary).chatKind).toBe('coding_agent');
     expect(pmaChatSummaryToChatIndexRow(summary).agentProfile).toBe('m4-pma');
     expect(pmaChatSummaryToChatIndexRow(summary).chatId).toBe('chat-1');
     expect(pmaChatSummaryToChatIndexRow(summary).unreadCount).toBe(2);

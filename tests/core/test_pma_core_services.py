@@ -72,6 +72,31 @@ def test_managed_thread_prompt_compacts_only_fresh_backend_conversations(
     assert "Context summary (from compaction)" not in resumed
 
 
+def test_coding_agent_prompt_excludes_pma_workspace_docs(tmp_path: Path) -> None:
+    pma_docs = tmp_path / ".codex-autorunner" / "pma" / "docs"
+    pma_docs.mkdir(parents=True)
+    (pma_docs / "AGENTS.md").write_text(
+        "Leaked Hermes PMA working memory", encoding="utf-8"
+    )
+
+    prompt = compose_managed_thread_execution_prompt(
+        ManagedThreadPromptRequest(
+            agent="codex",
+            hub_root=tmp_path,
+            runtime_cwd=tmp_path / "repo",
+            stored_backend_id=None,
+            compact_seed=None,
+            message="hello",
+            context_bundle=build_car_context_bundle("none"),
+            chat_kind="coding_agent",
+        )
+    )
+
+    assert "Leaked Hermes PMA working memory" not in prompt
+    assert "Hub PMA docs are hub-scoped" not in prompt
+    assert "<user_message>\nhello\n</user_message>" in prompt
+
+
 def test_queue_prompt_builder_can_return_plain_prompt_without_injector(
     tmp_path: Path,
 ) -> None:

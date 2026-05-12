@@ -256,6 +256,9 @@ class ManagedThreadCreateRequest(Payload):
 
     agent: Optional[str] = None
     profile: Optional[str] = None
+    chat_kind: Optional[Literal["pma", "coding_agent"]] = Field(
+        default=None, validation_alias=AliasChoices("chat_kind", "chatKind")
+    )
     scope_urn: Optional[str] = Field(
         default=None, validation_alias=AliasChoices("scope_urn", "scopeUrn")
     )

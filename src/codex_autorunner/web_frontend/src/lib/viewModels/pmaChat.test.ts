@@ -1481,30 +1481,41 @@ describe('PMA chat view helpers', () => {
 
     expect(buildManagedThreadCreatePayload('codex', local)).toEqual({
       agent: 'codex',
+      chat_kind: 'pma',
       name: 'New chat',
       scope_urn: 'hub'
     });
     expect(buildManagedThreadCreatePayload('codex', repo)).toEqual({
       agent: 'codex',
+      chat_kind: 'pma',
       name: 'New chat',
       scope_urn: 'repo:repo-1'
     });
     expect(buildManagedThreadCreatePayload('codex', worktree)).toEqual({
       agent: 'codex',
+      chat_kind: 'pma',
       name: 'New chat',
       scope_urn: 'worktree:repo-1/worktree-1'
     });
     expect(buildManagedThreadCreatePayload('opencode', local, 'New chat', 'zai/glm')).toEqual({
       agent: 'opencode',
+      chat_kind: 'pma',
       model: 'zai/glm',
       name: 'New chat',
       scope_urn: 'hub'
     });
     expect(buildManagedThreadCreatePayload('hermes', local, 'New chat', '', 'planning')).toEqual({
       agent: 'hermes',
+      chat_kind: 'pma',
       name: 'New chat',
       profile: 'planning',
       scope_urn: 'hub'
+    });
+    expect(buildManagedThreadCreatePayload('codex', repo, 'New coding agent chat', '', '', 'coding_agent')).toEqual({
+      agent: 'codex',
+      chat_kind: 'coding_agent',
+      name: 'New coding agent chat',
+      scope_urn: 'repo:repo-1'
     });
   });
 
@@ -1561,6 +1572,7 @@ describe('PMA chat view helpers', () => {
   it('builds managed-thread create and send payloads that match backend constraints', () => {
     expect(buildManagedThreadCreatePayload('codex')).toEqual({
       agent: 'codex',
+      chat_kind: 'pma',
       name: 'New chat',
       scope_urn: 'hub'
     });
@@ -1668,6 +1680,7 @@ describe('PMA chat view helpers', () => {
 
   it('derives chat kind and reasoning affordances from shared thread/model metadata', () => {
     expect(pmaChatKind(baseChat)).toBe('pma');
+    expect(pmaChatKind({ ...baseChat, chatKind: 'coding_agent', raw: { name: 'New chat' } })).toBe('coding_agent');
     expect(pmaChatKind({ ...baseChat, raw: { name: 'New coding agent chat' } })).toBe('coding_agent');
     expect(pmaChatKind({ ...baseChat, raw: { chat_kind: 'direct_agent' } })).toBe('coding_agent');
     expect(pmaChatKindLabel('coding_agent')).toBe('Coding agent');

@@ -59,11 +59,12 @@ export function planStartChat(
   agent: string,
   profile = '',
   model = '',
-  name = 'New chat'
+  name = 'New chat',
+  chatKind: 'pma' | 'coding_agent' = 'pma'
 ): StartPmaChatPlan {
   return {
     kind: 'StartChat',
-    body: buildManagedThreadCreatePayload(agent, scope, name, model, profile)
+    body: buildManagedThreadCreatePayload(agent, scope, name, model, profile, chatKind)
   };
 }
 

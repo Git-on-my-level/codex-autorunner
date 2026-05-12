@@ -1244,7 +1244,14 @@
     composeError = null;
     const result = await executePmaChatCommandPlan(
       pmaApi,
-      planStartChat(selectedScope, selectedAgent, selectedProfile, selectedModel, newChatDisplayName())
+      planStartChat(
+        selectedScope,
+        selectedAgent,
+        selectedProfile,
+        selectedModel,
+        newChatDisplayName(),
+        newChatKind === 'agent' && canStartCodingAgentChat ? 'coding_agent' : 'pma'
+      )
     );
     if (result.ok) {
       upsertPmaChats([result.data]);

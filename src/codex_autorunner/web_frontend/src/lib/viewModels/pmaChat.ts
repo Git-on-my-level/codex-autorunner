@@ -233,6 +233,7 @@ export type ManagedThreadCreatePayload = {
   agent?: string;
   model?: string;
   profile?: string;
+  chat_kind?: 'pma' | 'coding_agent';
   name: string;
   scope_urn: string;
 };
@@ -1955,7 +1956,8 @@ export function buildManagedThreadCreatePayload(
   scope: PmaChatScopeOption = localPmaChatScopeOption(),
   name = 'New chat',
   model = '',
-  profile = ''
+  profile = '',
+  chatKind: 'pma' | 'coding_agent' = 'pma'
 ): ManagedThreadCreatePayload {
   const base: Pick<ManagedThreadCreatePayload, 'agent' | 'name' | 'model'> = {
     agent: agent || undefined,
@@ -1966,6 +1968,7 @@ export function buildManagedThreadCreatePayload(
   return {
     ...base,
     ...(trimmedProfile ? { profile: trimmedProfile } : {}),
+    chat_kind: chatKind,
     scope_urn: scope.scopeUrn
   };
 }
@@ -1974,6 +1977,8 @@ export type PmaChatKind = 'pma' | 'coding_agent';
 
 export function pmaChatKind(chat: PmaChatSummary | null): PmaChatKind {
   if (!chat) return 'pma';
+  if (chat.chatKind === 'coding_agent') return 'coding_agent';
+  if (chat.chatKind === 'pma') return 'pma';
   const rawKind = stringValue(chat.raw.chat_kind ?? chat.raw.thread_kind ?? chat.raw.kind).toLowerCase();
   if (['coding_agent', 'coding-agent', 'agent', 'direct_agent', 'direct-agent'].includes(rawKind)) return 'coding_agent';
   const explicitName = stringValue(chat.raw.display_name ?? chat.raw.name ?? chat.raw.title ?? chat.title).toLowerCase();

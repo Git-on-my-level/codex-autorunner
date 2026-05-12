@@ -2156,6 +2156,7 @@ def test_managed_thread_crud_routes_use_orchestration_service(
                 "metadata": {
                     "context_profile": "car_ambient",
                     "approval_mode": "yolo",
+                    "chat_kind": "pma",
                 },
             },
         ),

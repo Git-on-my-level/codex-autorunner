@@ -9,6 +9,7 @@ export type PmaChatSummary = {
   lifecycleStatus: string | null;
   status: WorkStatus;
   agentId: string | null;
+  chatKind?: 'pma' | 'coding_agent' | null;
   /** Hermes (and similar) runtime profile when set on the managed thread. */
   agentProfile: string | null;
   model: string | null;
@@ -236,6 +237,7 @@ export function mapPmaChatSummary(raw: JsonRecord): PmaChatSummary {
     lifecycleStatus: nullableString(raw.lifecycle_status ?? raw.lifecycleStatus),
     status,
     agentId: nullableString(raw.agent_id ?? raw.agent),
+    chatKind: chatKindValue(raw.chat_kind ?? raw.chatKind ?? raw.thread_kind),
     agentProfile: nullableString(raw.agent_profile ?? raw.agentProfile),
     model: nullableString(raw.model ?? latest.model),
     repoId,
@@ -261,6 +263,14 @@ export function mapPmaChatSummary(raw: JsonRecord): PmaChatSummary {
     ),
     raw
   };
+}
+
+function chatKindValue(value: unknown): 'pma' | 'coding_agent' | null {
+  const text = nullableString(value)?.toLowerCase();
+  if (!text) return null;
+  if (text === 'pma') return 'pma';
+  if (['coding_agent', 'coding-agent', 'agent', 'direct_agent', 'direct-agent'].includes(text)) return 'coding_agent';
+  return null;
 }
 
 export function mapPmaChatMessage(raw: JsonRecord): PmaChatMessage {

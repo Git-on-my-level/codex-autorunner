@@ -16,9 +16,18 @@ describe('PMA chat command plans', () => {
       kind: 'StartChat',
       body: {
         agent: 'hermes',
+        chat_kind: 'pma',
         name: 'New chat',
         profile: 'planning',
         model: 'gpt-5.2',
+        scope_urn: 'hub'
+      }
+    });
+    expect(planStartChat(localPmaChatScopeOption(), 'codex', '', '', 'New coding agent chat', 'coding_agent')).toMatchObject({
+      body: {
+        agent: 'codex',
+        chat_kind: 'coding_agent',
+        name: 'New coding agent chat',
         scope_urn: 'hub'
       }
     });

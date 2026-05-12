@@ -46,6 +46,7 @@ export function pmaChatSummaryToChatIndexRow(chat: PmaChatSummary): ChatIndexRow
     runId: chat.runId ?? null,
     agent: chat.agentId,
     agentProfile: chat.agentProfile,
+    chatKind: chat.chatKind,
     model: chat.model,
     groupId: chat.ticketId ? `ticket:${chat.ticketId}` : chat.runId ? `run:${chat.runId}` : null
   };
@@ -74,6 +75,7 @@ export function legacyChatIndexRecordToChatIndexRow(raw: JsonRecord): ChatIndexR
     runId: resourceKind === 'run' || resourceKind === 'ticket_run' ? resourceId : stringValue(raw.run_id),
     agent: stringValue(raw.agent ?? raw.agent_id),
     agentProfile: stringValue(raw.agent_profile ?? raw.agentProfile),
+    chatKind: chatKindValue(raw.chat_kind ?? raw.chatKind ?? raw.thread_kind),
     model: stringValue(raw.model),
     groupId: stringValue(raw.group_id)
   };
@@ -98,6 +100,7 @@ export function chatIndexRowToPmaChatSummary(row: ChatIndexRow): PmaChatSummary 
     unread_count: row.unreadCount,
     agent_id: row.agent,
     agent_profile: row.agentProfile,
+    chat_kind: row.chatKind,
     model: row.model,
     unreadCount: row.unreadCount,
     last_activity_at: row.lastActivityAt,
@@ -109,6 +112,7 @@ export function chatIndexRowToPmaChatSummary(row: ChatIndexRow): PmaChatSummary 
     lifecycleStatus: row.status === 'archived' ? 'archived' : 'active',
     status: normalizeWorkStatus(row.status),
     agentId: row.agent ?? null,
+    chatKind: row.chatKind ?? null,
     agentProfile: row.agentProfile ?? null,
     model: row.model ?? null,
     repoId: row.repoId ?? null,
@@ -128,6 +132,14 @@ export function chatIndexRowToPmaChatSummary(row: ChatIndexRow): PmaChatSummary 
     updatedAt: row.lastActivityAt ?? null,
     raw
   };
+}
+
+function chatKindValue(value: unknown): 'pma' | 'coding_agent' | null {
+  const text = stringValue(value)?.toLowerCase();
+  if (!text) return null;
+  if (text === 'pma') return 'pma';
+  if (['coding_agent', 'coding-agent', 'agent', 'direct_agent', 'direct-agent'].includes(text)) return 'coding_agent';
+  return null;
 }
 
 export function selectPmaChats(state: ReadModelEntityState): PmaChatSummary[] {
