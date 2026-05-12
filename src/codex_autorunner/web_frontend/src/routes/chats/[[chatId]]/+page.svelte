@@ -1984,15 +1984,26 @@
           }
         }}
       >
-        {#if listScopeAccent && listScopeAccentHex}
-          <span
-            class="chat-row-glyph repo-mini-glyph"
-            style={`--glyph-accent: ${listScopeAccentHex}`}
-            aria-hidden="true"
-          >{repoInitials(listScopeAccent)}</span>
-        {:else}
-          <span class="chat-row-glyph pma-glyph" aria-hidden="true">P</span>
-        {/if}
+        <button
+          class="chat-glyph-slot"
+          class:is-pinned={pinnedChatIds[chat.id] === true}
+          type="button"
+          title={pinnedChatIds[chat.id] === true ? 'Unpin chat' : 'Pin chat'}
+          aria-label={pinnedChatIds[chat.id] === true ? `Unpin ${chat.title}` : `Pin ${chat.title}`}
+          aria-pressed={pinnedChatIds[chat.id] === true}
+          onclick={(event) => toggleChatPinned(event, chat.id)}
+        >
+          {#if listScopeAccent && listScopeAccentHex}
+            <span
+              class="chat-row-glyph repo-mini-glyph"
+              style={`--glyph-accent: ${listScopeAccentHex}`}
+              aria-hidden="true"
+            >{repoInitials(listScopeAccent)}</span>
+          {:else}
+            <span class="chat-row-glyph pma-glyph" aria-hidden="true">P</span>
+          {/if}
+          <span class="chat-pin-glyph" aria-hidden="true">📌</span>
+        </button>
         <span class="chat-card-main">
           <span class="chat-title-row">
             <span class="chat-title-cluster">
@@ -2062,21 +2073,6 @@
             </span>
           {/if}
         </span>
-        <button
-          class="chat-pin-button"
-          class:is-pinned={pinnedChatIds[chat.id] === true}
-          type="button"
-          title={pinnedChatIds[chat.id] === true ? 'Unpin chat' : 'Pin chat'}
-          aria-label={pinnedChatIds[chat.id] === true ? `Unpin ${chat.title}` : `Pin ${chat.title}`}
-          aria-pressed={pinnedChatIds[chat.id] === true}
-          onclick={(event) => toggleChatPinned(event, chat.id)}
-        >
-          <svg viewBox="0 0 24 24" aria-hidden="true">
-            <path d="M14 4l6 6" />
-            <path d="M12 6l6 6-4 4-6-6 4-4z" />
-            <path d="M9 15l-5 5" />
-          </svg>
-        </button>
       </div>
     {/snippet}
 

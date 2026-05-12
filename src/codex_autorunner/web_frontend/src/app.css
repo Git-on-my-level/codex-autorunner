@@ -635,7 +635,6 @@ a {
 
 .chat-list {
   min-height: 0;
-  overflow: hidden;
   padding: 0;
   display: flex;
   flex-direction: column;
@@ -1112,45 +1111,55 @@ a.scope-chip-label:hover {
   background: var(--color-surface-muted);
 }
 
-.chat-pin-button {
-  display: inline-grid;
+.chat-glyph-slot {
+  position: relative;
+  flex: 0 0 auto;
+  display: grid;
   place-items: center;
-  width: 24px;
-  height: 24px;
-  margin-left: auto;
-  border: 1px solid var(--color-border-subtle);
-  border-radius: 6px;
-  background: var(--color-surface);
-  color: var(--color-ink-faint);
+  width: 28px;
+  height: 28px;
+  margin-top: 2px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: inherit;
   cursor: pointer;
-  opacity: 0;
-  transition: opacity var(--transition-fast), color var(--transition-fast), border-color var(--transition-fast), background-color var(--transition-fast);
+  border-radius: 6px;
 }
 
-.chat-card:hover .chat-pin-button,
-.chat-pin-button:focus-visible,
-.chat-pin-button.is-pinned {
+.chat-glyph-slot:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--color-accent) 55%, transparent);
+  outline-offset: 2px;
+}
+
+.chat-glyph-slot .chat-row-glyph,
+.chat-glyph-slot .chat-pin-glyph {
+  grid-area: 1 / 1;
+  margin-top: 0;
+  transition: opacity var(--transition-fast);
+}
+
+.chat-pin-glyph {
+  font-size: 16px;
+  line-height: 1;
+  transform: rotate(-18deg);
+  opacity: 0;
+  pointer-events: none;
+}
+
+.chat-card:hover .chat-glyph-slot .chat-pin-glyph,
+.chat-glyph-slot.is-pinned .chat-pin-glyph {
   opacity: 1;
 }
 
-.chat-pin-button.is-pinned {
-  color: var(--color-accent);
-  border-color: color-mix(in srgb, var(--color-accent) 35%, var(--color-border));
-  background: var(--color-accent-soft);
+.chat-card:hover .chat-glyph-slot .chat-row-glyph,
+.chat-glyph-slot.is-pinned .chat-row-glyph {
+  opacity: 0;
 }
 
-.chat-pin-button svg {
-  width: 15px;
-  height: 15px;
-  fill: none;
-  stroke: currentColor;
-  stroke-width: 1.8;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-}
-
-.chat-pin-button.is-pinned svg {
-  fill: currentColor;
+.chat-card:hover .chat-glyph-slot:not(.is-pinned) .chat-pin-glyph {
+  opacity: 0.55;
+  filter: grayscale(1);
 }
 
 .chat-card + .chat-card {

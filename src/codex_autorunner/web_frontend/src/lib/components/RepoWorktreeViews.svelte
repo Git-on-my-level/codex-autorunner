@@ -294,8 +294,25 @@
               </button>
             {/if}
             <div class="repo-card">
+              {#if row.kind === 'repo' && onRepoPin}
+                <button
+                  class="repo-avatar-slot pinnable"
+                  class:is-pinned={row.isPinned}
+                  type="button"
+                  title={row.isPinned ? 'Unpin repo' : 'Pin repo'}
+                  aria-label={row.isPinned ? `Unpin ${row.label}` : `Pin ${row.label}`}
+                  aria-pressed={row.isPinned}
+                  onclick={(event) => handleRepoPinClick(event, row.id, !row.isPinned)}
+                >
+                  <span class="repo-avatar" aria-hidden="true">{repoInitials(row.label)}</span>
+                  <span class="repo-pin-glyph" aria-hidden="true">📌</span>
+                </button>
+              {:else}
+                <span class="repo-avatar-slot">
+                  <span class="repo-avatar" aria-hidden="true">{repoInitials(row.label)}</span>
+                </span>
+              {/if}
               <a class="repo-card-main" href={href(row.href)} aria-label={`Open ${row.label} detail`}>
-                <span class="repo-avatar" aria-hidden="true">{repoInitials(row.label)}</span>
                 <div class="repo-card-body">
                   <div class="repo-card-title">
                     <span class="repo-name">{row.label}</span>
@@ -398,23 +415,10 @@
                 </button>
               {/if}
               {#if
-                (row.kind === 'repo' && (onOpenRepoSettings || onRepoPin)) ||
+                (row.kind === 'repo' && onOpenRepoSettings) ||
                 (onArchiveState && canArchiveState(row)) ||
                 (row.kind === 'worktree' && onCleanupWorktree)}
                 <span class="repo-head-icon-actions">
-                  {#if row.kind === 'repo' && onRepoPin}
-                    <button
-                      class="icon-action pin"
-                      class:is-pinned={row.isPinned}
-                      type="button"
-                      title={row.isPinned ? 'Unpin repo' : 'Pin repo'}
-                      aria-label={row.isPinned ? `Unpin ${row.label}` : `Pin ${row.label}`}
-                      aria-pressed={row.isPinned}
-                      onclick={(event) => handleRepoPinClick(event, row.id, !row.isPinned)}
-                    >
-                      {@render pinIcon(row.isPinned)}
-                    </button>
-                  {/if}
                   {#if row.kind === 'repo' && onOpenRepoSettings}
                     <button
                       class="icon-action settings"
@@ -1133,14 +1137,6 @@
   </svg>
 {/snippet}
 
-{#snippet pinIcon(filled: boolean)}
-  <svg viewBox="0 0 24 24" aria-hidden="true" class:filled>
-    <path d="M14 4l6 6" />
-    <path d="M12 6l6 6-4 4-6-6 4-4z" />
-    <path d="M9 15l-5 5" />
-  </svg>
-{/snippet}
-
 {#snippet collapseAllIcon()}
   <svg viewBox="0 0 24 24" aria-hidden="true">
     <path d="M7 14l5-5 5 5" />
@@ -1328,12 +1324,64 @@
     color: var(--color-ink);
   }
 
-  .repo-card-main {
-    grid-column: 1 / 3;
+  .repo-avatar-slot {
+    position: relative;
     display: grid;
-    grid-template-columns: auto minmax(0, 1fr);
+    place-items: center;
+    width: 40px;
+    height: 40px;
+    padding: 0;
+    border: none;
+    background: transparent;
+    color: inherit;
+  }
+
+  .repo-avatar-slot.pinnable {
+    cursor: pointer;
+    border-radius: 10px;
+  }
+
+  .repo-avatar-slot.pinnable:focus-visible {
+    outline: 2px solid color-mix(in srgb, var(--color-accent) 55%, transparent);
+    outline-offset: 2px;
+  }
+
+  .repo-avatar-slot .repo-avatar,
+  .repo-avatar-slot .repo-pin-glyph {
+    grid-area: 1 / 1;
+    transition: opacity var(--transition-fast);
+  }
+
+  .repo-pin-glyph {
+    font-size: 20px;
+    line-height: 1;
+    transform: rotate(-18deg);
+    opacity: 0;
+    pointer-events: none;
+  }
+
+  .repo-avatar-slot:not(.pinnable) .repo-pin-glyph {
+    display: none;
+  }
+
+  .repo-head:hover .repo-avatar-slot.pinnable .repo-pin-glyph,
+  .repo-avatar-slot.pinnable.is-pinned .repo-pin-glyph {
+    opacity: 1;
+  }
+
+  .repo-head:hover .repo-avatar-slot.pinnable .repo-avatar,
+  .repo-avatar-slot.pinnable.is-pinned .repo-avatar {
+    opacity: 0;
+  }
+
+  .repo-head:hover .repo-avatar-slot.pinnable:not(.is-pinned) .repo-pin-glyph {
+    opacity: 0.55;
+    filter: grayscale(1);
+  }
+
+  .repo-card-main {
+    display: flex;
     align-items: center;
-    gap: var(--space-4);
     min-width: 0;
     color: inherit;
     text-decoration: none;
@@ -1400,26 +1448,6 @@
     color: var(--color-ink);
     border-color: var(--color-border-strong);
     background: var(--color-surface-muted);
-  }
-
-  .icon-action.pin {
-    opacity: 0;
-  }
-
-  .repo-head:hover .icon-action.pin,
-  .icon-action.pin:focus-visible,
-  .icon-action.pin.is-pinned {
-    opacity: 1;
-  }
-
-  .icon-action.pin.is-pinned {
-    color: var(--color-accent);
-    border-color: color-mix(in srgb, var(--color-accent) 35%, var(--color-border));
-    background: var(--color-accent-soft);
-  }
-
-  .icon-action svg.filled {
-    fill: currentColor;
   }
 
   .icon-action.cleanup:hover,
