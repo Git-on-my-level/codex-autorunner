@@ -6,8 +6,10 @@
   import { confirmDialog } from '$lib/components/confirmDialog';
   import { dataOr, partialPageIssue, pmaApi, type ApiError, type PartialPageIssue } from '$lib/api/client';
   import {
+    invalidateReadModelTags,
     pmaChatSummaryToChatIndexRow,
     readModelEntityStore,
+    readModelEntityTags,
     scopedOwnerKey,
     selectTicketListView
   } from '$lib/data';
@@ -100,7 +102,13 @@
   async function reorderTicket(sourceRouteId: string, destinationRouteId: string, placeAfter: boolean): Promise<boolean> {
     const result = await reorderScopedTicket(pmaApi, queueConfig, sourceRouteId, destinationRouteId, placeAfter);
     actionStatus = result.status;
-    if (result.ok) await loadTickets(false);
+    if (result.ok) {
+      await invalidateReadModelTags([
+        readModelEntityTags.ticketIndex,
+        readModelEntityTags.worktree(worktreeId)
+      ]);
+      await loadTickets(false);
+    }
     return result.ok;
   }
 

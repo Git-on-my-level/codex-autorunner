@@ -6,8 +6,10 @@
   import { pmaApi, type ApiError, type JsonRecord, type PartialPageIssue } from '$lib/api/client';
   import { openFlowRunEventSource, type StreamSubscription } from '$lib/api/streaming';
   import {
+    invalidateReadModelTags,
     pmaChatSummaryToChatIndexRow,
     readModelEntityStore,
+    readModelEntityTags,
     scopedOwnerKey,
     selectPmaChats,
     selectPmaRuns,
@@ -244,7 +246,14 @@
     saveStatus = 'Saving ticket...';
     const result = await pmaApi.ticketFlow.updateTicket(ticketNumber, buildTicketUpdateContent(detail, payload), { repo: repoId });
     saveStatus = result.ok ? 'Ticket saved.' : result.error.message;
-    if (result.ok) await loadTicketDetail(false);
+    if (result.ok) {
+      await invalidateReadModelTags([
+        readModelEntityTags.ticket(ticketId),
+        readModelEntityTags.ticketIndex,
+        readModelEntityTags.repo(repoId)
+      ]);
+      await loadTicketDetail(false);
+    }
     return result.ok;
   }
 
@@ -260,6 +269,12 @@
       actionStatus = sendResult.error.message;
       return;
     }
+    await invalidateReadModelTags([
+      readModelEntityTags.chatIndex,
+      readModelEntityTags.chat(createResult.data.id),
+      readModelEntityTags.ticket(ticketId),
+      readModelEntityTags.repo(repoId)
+    ]);
     await goto(href(`/chats?chat=${encodeURIComponent(createResult.data.id)}`));
   }
 </script>

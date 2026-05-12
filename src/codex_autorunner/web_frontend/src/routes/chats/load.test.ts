@@ -48,6 +48,8 @@ describe('/chats route load', () => {
       chatId: 'chat-1',
       activeDetail: { status: 'cache-hit', tags: ['entity:chat:chat-1'] }
     });
+    expect(result.activeDetail?.status).not.toBe('cold');
+    expect(selectChatDetailView(store.snapshot(), 'chat-1').thread?.title).toBe('Chat detail');
     expect(client.chatDetail).not.toHaveBeenCalled();
   });
 

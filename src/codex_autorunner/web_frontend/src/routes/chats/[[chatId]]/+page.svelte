@@ -15,7 +15,9 @@
   import {
     pmaChatSummaryToChatIndexRow,
     chatIndexSession,
+    invalidateReadModelTags,
     readModelEntityStore,
+    readModelEntityTags,
     type ReadModelLoaderResult,
     selectRepoSummaries,
     selectPmaArtifacts,
@@ -829,6 +831,13 @@
     saveLastSeenMap(next);
   }
 
+  function invalidateChatMutation(chatId: string): Promise<void> {
+    return invalidateReadModelTags([
+      readModelEntityTags.chatIndex,
+      readModelEntityTags.chat(chatId)
+    ]);
+  }
+
   async function archiveChat(chatId: string, options: { confirmed?: boolean } = {}): Promise<void> {
     if (archiving) return;
     if (!options.confirmed) {
@@ -847,6 +856,7 @@
     readModelEntityStore.optimisticArchiveChat(chatId, reconciliationId);
     const result = await pmaApi.pma.archiveThread(chatId);
     if (result.ok) {
+      await invalidateChatMutation(chatId);
       upsertPmaChats([result.data]);
       showCommandNotice('Chat archived.');
       if (activeChatId === chatId) {
@@ -874,6 +884,10 @@
     composeError = null;
     const result = await pmaApi.pma.archiveThreads(targets);
     if (result.ok) {
+      await invalidateReadModelTags([
+        readModelEntityTags.chatIndex,
+        ...targets.map((chatId) => readModelEntityTags.chat(chatId))
+      ]);
       upsertPmaChats(result.data.threads);
       showCommandNotice(
         result.data.errorCount > 0
@@ -1246,6 +1260,7 @@
       )
     );
     if (result.ok) {
+      await invalidateChatMutation(result.data.id);
       upsertPmaChats([result.data]);
       activeChatId = result.data.id;
       detailMode = 'detail';
@@ -1359,6 +1374,7 @@
             });
     const result = await executePmaChatCommandPlan(pmaApi, commandPlan);
     if (result.ok) {
+      await invalidateChatMutation(targetChatId);
       const optimisticFromBackend = optimisticUserTimelineItemFromSend(
         result.data.raw,
         draftSnapshot,
@@ -1448,6 +1464,7 @@
       })
     );
     if (result.ok) {
+      await invalidateChatMutation(chatId);
       const optimisticFromBackend = optimisticUserTimelineItemFromSend(
         result.data.raw,
         turn.prompt,
@@ -1493,6 +1510,7 @@
       sending = false;
       return;
     }
+    await invalidateChatMutation(chatId);
     const summary = summaryResult.data.text.trim();
     if (!summary) {
       showCommandNotice('Compaction returned an empty summary; current chat was left unchanged.');
@@ -1506,6 +1524,7 @@
       sending = false;
       return;
     }
+    await invalidateChatMutation(chatId);
     upsertPmaChats([compactResult.data]);
     showCommandNotice('Compact summary generated and saved.');
     sending = false;
@@ -1678,6 +1697,7 @@
       const result = await pmaApi.pma.resumeThread(activeChatId);
       if (!result.ok) composeError = result.error;
       else {
+        await invalidateChatMutation(activeChatId);
         upsertPmaChats([result.data]);
         showCommandNotice('Thread resumed.');
         await refreshActive(activeChatId, { quiet: true });
@@ -1693,6 +1713,7 @@
       const result = await pmaApi.pma.compactThread(activeChatId, args);
       if (!result.ok) composeError = result.error;
       else {
+        await invalidateChatMutation(activeChatId);
         upsertPmaChats([result.data]);
         showCommandNotice('Compaction seed saved.');
         await refreshActive(activeChatId, { quiet: true });

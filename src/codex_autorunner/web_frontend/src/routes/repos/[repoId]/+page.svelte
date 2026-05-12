@@ -5,7 +5,7 @@
   import RepoWorktreeViews from '$lib/components/RepoWorktreeViews.svelte';
   import { confirmAndArchiveState, confirmAndCleanupWorktree, type ActionNotice } from '$lib/actions/repoWorktreeActions';
   import { pmaApi, type ApiError, type JsonRecord, type PartialPageIssue } from '$lib/api/client';
-  import { ensureRepoDetailLoaded, readModelEntityStore } from '$lib/data';
+  import { ensureRepoDetailLoaded, invalidateReadModelTags, readModelEntityStore, readModelEntityTags } from '$lib/data';
   import {
     mapContextspaceDocument,
     mapPmaChatSummary,
@@ -103,6 +103,10 @@
         notice = { tone: 'danger', message: result.error.message };
         return;
       }
+      await invalidateReadModelTags([
+        readModelEntityTags.repoWorktreeIndex,
+        readModelEntityTags.repo(repoId)
+      ]);
       notice = { tone: 'success', message: 'Synced default branch with origin.' };
       await loadRepoDetail(false);
     } finally {

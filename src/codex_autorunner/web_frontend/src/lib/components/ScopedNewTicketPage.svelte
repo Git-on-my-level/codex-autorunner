@@ -3,6 +3,7 @@
   import { onMount, tick } from 'svelte';
   import { pmaApi } from '$lib/api/client';
   import AutoDismissNotice from '$lib/components/AutoDismissNotice.svelte';
+  import { invalidateReadModelTags, readModelEntityTags } from '$lib/data';
   import { createScopedTicket, type ScopedTicketQueueConfig } from '$lib/viewModels/scopedTicketQueue';
   import { repoTicketRoute, worktreeTicketRoute } from '$lib/viewModels/routes';
   import { withRuntimeBasePath as href } from '$lib/runtime/basePath';
@@ -37,6 +38,13 @@
       return;
     }
     const routeId = result.ticketRouteId;
+    await invalidateReadModelTags([
+      readModelEntityTags.ticketIndex,
+      queueConfig.kind === 'repo'
+        ? readModelEntityTags.repo(queueConfig.resourceId)
+        : readModelEntityTags.worktree(queueConfig.resourceId),
+      ...(routeId ? [readModelEntityTags.ticket(routeId)] : [])
+    ]);
     if (routeId) {
       const detailPath =
         queueConfig.kind === 'repo'

@@ -8,7 +8,7 @@
   import RepoSettingsDialog, { type RepoSettingsTarget } from '$lib/components/RepoSettingsDialog.svelte';
   import { confirmAndArchiveState, confirmAndCleanupWorktree, type ActionNotice } from '$lib/actions/repoWorktreeActions';
   import { pmaApi, type ApiError, type PartialPageIssue } from '$lib/api/client';
-  import { ensureRepoWorktreeIndexLoaded, readModelEntityStore, selectRepoSummaries, selectWorktreeSummaries } from '$lib/data';
+  import { ensureRepoWorktreeIndexLoaded, invalidateReadModelTags, readModelEntityStore, readModelEntityTags, selectRepoSummaries, selectWorktreeSummaries } from '$lib/data';
   import {
     buildRepoWorktreeIndexViewModel,
     type RepoWorktreeIndexViewModel
@@ -80,6 +80,10 @@
       notice = { tone: 'danger', message: result.error.message };
       return;
     }
+    await invalidateReadModelTags([
+      readModelEntityTags.repoWorktreeIndex,
+      readModelEntityTags.repo(target.id)
+    ]);
     await loadRepos();
   }
 

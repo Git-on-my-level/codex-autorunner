@@ -13,7 +13,7 @@
     type RepoWorktreeDetailViewModel
   } from '$lib/viewModels/repoWorktree';
   import { legacyWorktreeRedirectPath } from '$lib/viewModels/routes';
-  import { ensureWorktreeDetailLoaded, readModelEntityStore } from '$lib/data';
+  import { ensureWorktreeDetailLoaded, invalidateReadModelTags, readModelEntityStore, readModelEntityTags } from '$lib/data';
 
   let { data = { worktreeId: '', result: { status: 'cold' as const, tags: [] } } } = $props();
   const worktreeId = $derived(page.params.worktreeId ?? 'unknown-worktree');
@@ -117,6 +117,11 @@
         notice = { tone: 'danger', message: result.error.message };
         return;
       }
+      await invalidateReadModelTags([
+        readModelEntityTags.repoWorktreeIndex,
+        readModelEntityTags.repo(repoId),
+        readModelEntityTags.worktree(worktreeId)
+      ]);
       notice = { tone: 'success', message: 'Synced default branch with origin.' };
       await loadWorktreeDetail(false);
     } finally {
