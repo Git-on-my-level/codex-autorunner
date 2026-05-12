@@ -375,6 +375,105 @@ describe('API client error handling', () => {
     }
   });
 
+  it('maps v2 timeline items with canonical identity and provenance', async () => {
+    const fetcher = vi.fn(async () =>
+      Response.json({
+        contract_version: 'managed_thread_timeline.v2',
+        items: [
+          {
+            contract_version: 'managed_thread_timeline.v2',
+            item_id: 'turn:one:user',
+            kind: 'user_message',
+            order_key: '001',
+            timestamp: '2026-05-13T00:00:00Z',
+            managed_thread_id: 'thread-1',
+            managed_turn_id: 'one',
+            status: 'completed',
+            identity: {
+              timeline_item_id: 'turn:one:user',
+              progress_item_ids: [],
+              correlation_id: 'client-1'
+            },
+            provenance: {
+              source_event_ids: ['evt-1', 'evt-2'],
+              progress_event_ids: [],
+              cursor_event_id: 'cursor-42'
+            },
+            payload: { text: 'Fix the deploy script' }
+          },
+          {
+            contract_version: 'managed_thread_timeline.v2',
+            item_id: 'turn:one:tool:1:rg',
+            kind: 'tool_group',
+            order_key: '002',
+            timestamp: '2026-05-13T00:01:00Z',
+            managed_thread_id: 'thread-1',
+            managed_turn_id: 'one',
+            status: 'completed',
+            identity: {
+              timeline_item_id: 'turn:one:tool:1:rg',
+              progress_item_ids: ['prog-1'],
+              correlation_id: null
+            },
+            provenance: {
+              source_event_ids: ['evt-3', 'evt-4'],
+              progress_event_ids: ['evt-3', 'evt-4'],
+              cursor_event_id: 'cursor-43'
+            },
+            payload: {
+              tool_name: 'rg',
+              result: { status: 'completed', summary: 'Found 3 matches' }
+            }
+          },
+          {
+            contract_version: 'managed_thread_timeline.v2',
+            item_id: 'turn:one:assistant',
+            kind: 'assistant_message',
+            order_key: '003',
+            timestamp: '2026-05-13T00:02:00Z',
+            managed_thread_id: 'thread-1',
+            managed_turn_id: 'one',
+            status: 'completed',
+            identity: {
+              timeline_item_id: 'turn:one:assistant',
+              progress_item_ids: [],
+              correlation_id: null
+            },
+            provenance: {
+              source_event_ids: ['evt-5'],
+              progress_event_ids: [],
+              cursor_event_id: 'cursor-44'
+            },
+            payload: { text: 'Deploy script fixed.' }
+          }
+        ]
+      })
+    ) as unknown as typeof fetch;
+    const client = new PmaApiClient(fetcher);
+
+    const result = await client.pma.getTimeline('thread-1');
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.data).toHaveLength(3);
+      expect(result.data[0]).toMatchObject({
+        id: 'turn:one:user',
+        kind: 'user_message',
+        orderKey: '001'
+      });
+      expect(result.data[1]).toMatchObject({
+        id: 'turn:one:tool:1:rg',
+        kind: 'tool_group',
+        orderKey: '002'
+      });
+      expect(result.data[2]).toMatchObject({
+        id: 'turn:one:assistant',
+        kind: 'assistant_message',
+        orderKey: '003'
+      });
+    }
+  });
+
   it('uploads PMA inbox files with multipart form data', async () => {
     const fetcher = vi.fn(async () => Response.json({ status: 'ok', saved: ['screen.png'] })) as unknown as typeof fetch;
     const client = new PmaApiClient(fetcher);

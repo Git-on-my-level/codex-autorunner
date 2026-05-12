@@ -99,7 +99,17 @@ function detailSnapshot(chatId = 'chat-1'): ChatDetailSnapshot {
         role: 'user',
         createdAt: now,
         text: 'hello',
-        artifactIds: []
+        artifactIds: [],
+        identity: {
+          timelineItemId: 'item-1',
+          progressItemIds: [],
+          correlationId: null
+        },
+        provenance: {
+          sourceEventIds: ['evt-1'],
+          progressEventIds: [],
+          cursorEventId: null
+        }
       }
     ],
     queue: { depth: 0, queuedTurnIds: [] },

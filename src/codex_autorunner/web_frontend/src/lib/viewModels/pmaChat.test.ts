@@ -1524,6 +1524,106 @@ describe('PMA chat view helpers', () => {
     expect(assistantMessages.map((card) => card.id)).toEqual(['cursor:a', 'turn:two:assistant', 'turn:three:assistant']);
   });
 
+  it('does not duplicate commentary when a Discord-started thread is opened on the web with live progress', () => {
+    const discordChat: PmaChatSummary = {
+      ...baseChat,
+      id: 'discord-thread-1',
+      title: 'discord:123456',
+      raw: { surface_kind: 'discord', surface_key: '123456' }
+    };
+    const canonical = buildPmaCards(
+      [
+        timelineItem('turn:one:user', 'user_message', { text: 'Fix the deploy script' }, '00000001'),
+        {
+          ...timelineItem('turn:one:intermediate:1', 'intermediate', {
+            intermediate_kind: 'thinking',
+            text: 'Checking deploy config',
+            source_event_ids: [11]
+          }, '00000002'),
+          ...pmaTimelineContractFields('turn:one:intermediate:1', { sourceEventIds: [11] })
+        },
+        {
+          ...timelineItem('turn:one:tool:1:rg', 'tool_group', {
+            tool_name: 'rg',
+            progress_items: [{ event_ids: [12] }],
+            call: { summary: 'rg deploy' },
+            result: { status: 'completed', summary: 'Found 3 matches' }
+          }, '00000003'),
+          ...pmaTimelineContractFields('turn:one:tool:1:rg', { sourceEventIds: ['turn:one:tool:1:rg'], progressEventIds: [12] })
+        },
+        timelineItem('turn:one:assistant', 'assistant_message', { text: 'Deploy script fixed.' }, '00000004')
+      ],
+      discordChat,
+      []
+    );
+    const live = buildPmaActivityCards([
+      {
+        ...baseArtifact,
+        id: '12',
+        kind: 'progress',
+        createdAt: '2026-05-13T00:01:00Z',
+        raw: {
+          managed_turn_id: 'one',
+          progress_item: { kind: 'tool', state: 'completed', title: 'rg', event_ids: [12] }
+        }
+      }
+    ]);
+
+    const merged = mergePmaTimelineAndActivityCards(canonical, live);
+
+    const toolCards = merged.filter((card) => card.kind === 'tool_group');
+    expect(toolCards).toHaveLength(1);
+    expect(toolCards[0].id).toBe('turn:one:tool:1:rg');
+
+    const intermediateCards = merged.filter((card) => card.kind === 'intermediate');
+    expect(intermediateCards).toHaveLength(1);
+    expect(intermediateCards[0].id).toBe('turn:one:intermediate:1');
+
+    const assistantCards = merged.filter(
+      (card) => card.kind === 'message' && card.message.role === 'assistant'
+    );
+    expect(assistantCards).toHaveLength(1);
+  });
+
+  it('preserves grouped tool provenance across all contributing events', () => {
+    const cards = buildPmaCards(
+      [
+        timelineItem('turn:one:user', 'user_message', { text: 'Refactor' }, '001'),
+        {
+          ...timelineItem('turn:one:tool:group:1', 'tool_group', {
+            tool_name: 'multi-tool-group',
+            progress_items: [
+              { event_ids: ['evt-51'] },
+              { event_ids: ['evt-52'] },
+              { event_ids: ['evt-53'] }
+            ],
+            call: { summary: 'Refactor pipeline' },
+            result: { status: 'completed', summary: '3 tools completed' }
+          }, '002'),
+          ...pmaTimelineContractFields('turn:one:tool:group:1', {
+            sourceEventIds: ['evt-51', 'evt-52', 'evt-53'],
+            progressEventIds: ['evt-51', 'evt-52', 'evt-53'],
+            progressItemIds: ['prog-51', 'prog-52', 'prog-53']
+          })
+        }
+      ],
+      null,
+      []
+    );
+
+    expect(cards).toHaveLength(2);
+    expect(cards[1]).toMatchObject({
+      kind: 'tool_group',
+      id: 'turn:one:tool:group:1',
+      tools: [{ title: 'multi-tool-group', state: 'completed', summary: '3 tools completed' }]
+    });
+    const toolCard = cards[1];
+    if (toolCard.kind !== 'tool_group') throw new Error('expected tool_group');
+    expect(toolCard.tools[0].eventIds).toContain('evt-51');
+    expect(toolCard.tools[0].eventIds).toContain('evt-52');
+    expect(toolCard.tools[0].eventIds).toContain('evt-53');
+  });
+
   it('normalizes optimistic send status through the canonical optional work-status mapper', () => {
     expect(
       optimisticUserTimelineItemFromSend(

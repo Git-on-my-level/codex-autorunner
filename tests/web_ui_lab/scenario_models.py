@@ -21,6 +21,8 @@ class SeedFixtureKind(str, Enum):
     PMA_INTERRUPT = "pma_interrupt"
     PMA_ATTACHMENT = "pma_attachment"
     PMA_DUPLICATE_REPAIR = "pma_duplicate_repair"
+    PMA_DISCORD_WEB_HANDOFF = "pma_discord_web_handoff"
+    PMA_GROUPED_TOOLS = "pma_grouped_tools"
 
 
 class ViewportName(str, Enum):
