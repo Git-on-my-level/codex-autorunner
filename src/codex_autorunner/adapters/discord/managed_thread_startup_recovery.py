@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -29,6 +31,79 @@ from .progress_leases import (
     _spawn_discord_progress_background_task,
     cleanup_discord_terminal_progress_leases,
 )
+
+
+def _build_discord_startup_recovery_execution_hooks(
+    owner: Any,
+    *,
+    surface_key: str,
+    managed_thread_id: str,
+) -> ManagedThreadExecutionHooks:
+    hub_root, raw_config = resolve_bound_chat_queue_progress_context(
+        owner,
+        fallback_root=Path(owner._config.root),
+    )
+
+    async def _cleanup_interrupted_progress(
+        _started: Any,
+        finalized: Any,
+    ) -> None:
+        status = str(getattr(finalized, "status", "") or "").strip().lower()
+        managed_turn_id = str(getattr(finalized, "managed_turn_id", "") or "").strip()
+        if status != "interrupted" or not managed_turn_id:
+            return
+        await cleanup_discord_terminal_progress_leases(
+            owner,
+            managed_thread_id=managed_thread_id,
+            execution_id=managed_turn_id,
+            channel_id=surface_key,
+            note="Status: this turn was interrupted.",
+            record_prefix=(
+                "discord:startup-recovery-interrupted-progress-cleanup:"
+                f"{managed_thread_id}:{managed_turn_id}"
+            ),
+        )
+
+    return build_bound_chat_queue_execution_controller(
+        hub_root=hub_root,
+        raw_config=raw_config,
+        managed_thread_id=managed_thread_id,
+        surface_targets=(("discord", surface_key),),
+        base_hooks=ManagedThreadExecutionHooks(
+            on_execution_finalized=_cleanup_interrupted_progress
+        ),
+    ).hooks
+
+
+async def _invoke_discord_finalization_hook(
+    hook: Any,
+    started: Any,
+    finalized: Any,
+) -> None:
+    if hook is None:
+        return
+    result = hook(started, finalized)
+    if inspect.isawaitable(result):
+        await result
+
+
+def _compose_discord_reattach_execution_hooks(
+    base_hooks: ManagedThreadExecutionHooks,
+    startup_hooks: ManagedThreadExecutionHooks,
+) -> ManagedThreadExecutionHooks:
+    async def _on_execution_finalized(started: Any, finalized: Any) -> None:
+        await _invoke_discord_finalization_hook(
+            base_hooks.on_execution_finalized,
+            started,
+            finalized,
+        )
+        await _invoke_discord_finalization_hook(
+            startup_hooks.on_execution_finalized,
+            started,
+            finalized,
+        )
+
+    return replace(base_hooks, on_execution_finalized=_on_execution_finalized)
 
 
 def recover_pending_discord_managed_thread_queue(
@@ -169,6 +244,14 @@ def reattach_running_discord_managed_thread_execution(
         workspace_root=workspace_root,
         public_execution_error=public_execution_error,
     ).queue_worker_hooks()
+    execution_hooks = _compose_discord_reattach_execution_hooks(
+        runner_hooks.execution_hooks,
+        _build_discord_startup_recovery_execution_hooks(
+            service,
+            surface_key=surface_key,
+            managed_thread_id=managed_thread_id,
+        ),
+    )
     task_map = _get_discord_thread_queue_task_map(service)
     existing = task_map.get(managed_thread_id)
     if existing is not None and not existing.done():
@@ -178,7 +261,7 @@ def reattach_running_discord_managed_thread_execution(
         try:
             finalized = await coordinator.run_started_execution(
                 started,
-                hooks=runner_hooks.execution_hooks,
+                hooks=execution_hooks,
                 runtime_event_state=RuntimeThreadRunEventState(),
                 record_finalization_failure=True,
             )
@@ -235,42 +318,11 @@ async def recover_managed_thread_executions_on_startup(service: Any) -> None:
         managed_thread_id: str,
         _thread: Any,
     ) -> Any:
-        hub_root, raw_config = resolve_bound_chat_queue_progress_context(
+        return _build_discord_startup_recovery_execution_hooks(
             owner,
-            fallback_root=Path(owner._config.root),
-        )
-
-        async def _cleanup_interrupted_progress(
-            _started: Any,
-            finalized: Any,
-        ) -> None:
-            status = str(getattr(finalized, "status", "") or "").strip().lower()
-            managed_turn_id = str(
-                getattr(finalized, "managed_turn_id", "") or ""
-            ).strip()
-            if status != "interrupted" or not managed_turn_id:
-                return
-            await cleanup_discord_terminal_progress_leases(
-                owner,
-                managed_thread_id=managed_thread_id,
-                execution_id=managed_turn_id,
-                channel_id=surface_key,
-                note="Status: this turn was interrupted.",
-                record_prefix=(
-                    "discord:startup-recovery-interrupted-progress-cleanup:"
-                    f"{managed_thread_id}:{managed_turn_id}"
-                ),
-            )
-
-        return build_bound_chat_queue_execution_controller(
-            hub_root=hub_root,
-            raw_config=raw_config,
+            surface_key=surface_key,
             managed_thread_id=managed_thread_id,
-            surface_targets=(("discord", surface_key),),
-            base_hooks=ManagedThreadExecutionHooks(
-                on_execution_finalized=_cleanup_interrupted_progress
-            ),
-        ).hooks
+        )
 
     def _recover_pending_queue(
         owner: Any,
