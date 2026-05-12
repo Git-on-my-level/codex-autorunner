@@ -34,7 +34,7 @@ export async function loadTicketDetailRoute(options: {
     const state = store.snapshot();
     const summaryIds = state.ticketOrderByOwner['all'];
     const summaries = summaryIds?.map(id => state.ticketSummaries[id]).filter(Boolean) ?? [];
-    const matched = summaries.find(s => s.workspaceKind === 'repo' && s.workspaceId);
+    const matched = summaries.find(s => s.id === ticketId && s.workspaceKind === 'repo' && s.workspaceId);
     if (matched?.workspaceId) {
       detailResult = await ensureTicketDetailLoaded(ticketId, { kind: 'repo', id: matched.workspaceId }, {
         ...options.loaderOptions,
