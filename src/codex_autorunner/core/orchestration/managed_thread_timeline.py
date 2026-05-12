@@ -143,6 +143,75 @@ def _progress_event_ids_from_payload(payload: dict[str, Any]) -> list[Any]:
     return _source_event_ids_from_payload(payload)
 
 
+def _dedupe_preserving_order(values: Iterable[Any]) -> list[Any]:
+    deduped: list[Any] = []
+    for value in values:
+        if value not in deduped:
+            deduped.append(value)
+    return deduped
+
+
+def _progress_item_ids_from_items(
+    progress_items: Iterable[dict[str, Any]],
+) -> list[str]:
+    ids: list[str] = []
+    for item in progress_items:
+        item_id = _normalize_optional_text(item.get("item_id"))
+        if item_id is not None and item_id not in ids:
+            ids.append(item_id)
+    return ids
+
+
+def _progress_event_ids_from_items(
+    progress_items: Iterable[dict[str, Any]],
+) -> list[Any]:
+    event_ids: list[Any] = []
+    for item in progress_items:
+        raw_event_ids = item.get("event_ids")
+        if not isinstance(raw_event_ids, list):
+            continue
+        event_ids.extend(raw_event_ids)
+    return _dedupe_preserving_order(event_ids)
+
+
+def _progress_item_metadata(
+    progress_item: Optional[ProgressProjectionItem],
+) -> tuple[list[str], list[Any]]:
+    if progress_item is None:
+        return [], []
+    return [progress_item.item_id], list(progress_item.event_ids)
+
+
+def _timeline_identity(
+    item_id: str,
+    *,
+    progress_item_ids: Optional[Iterable[str]] = None,
+    correlation_id: Optional[Any] = None,
+) -> ManagedThreadTimelineIdentity:
+    return ManagedThreadTimelineIdentity(
+        timeline_item_id=item_id,
+        progress_item_ids=tuple(_dedupe_preserving_order(progress_item_ids or [])),
+        correlation_id=_normalize_optional_text(correlation_id),
+    )
+
+
+def _timeline_provenance(
+    *,
+    source_event_ids: Optional[Iterable[Any]] = None,
+    progress_event_ids: Optional[Iterable[Any]] = None,
+    cursor_event_id: Optional[str] = None,
+) -> ManagedThreadTimelineProvenance:
+    source_ids = _dedupe_preserving_order(source_event_ids or [])
+    progress_ids = _dedupe_preserving_order(
+        progress_event_ids if progress_event_ids is not None else source_ids
+    )
+    return ManagedThreadTimelineProvenance(
+        source_event_ids=tuple(source_ids),
+        progress_event_ids=tuple(progress_ids),
+        cursor_event_id=cursor_event_id,
+    )
+
+
 def _with_contract_metadata(
     item: dict[str, Any],
     *,
@@ -353,6 +422,11 @@ def _append_user_message(
             managed_thread_id=managed_thread_id,
             managed_turn_id=managed_turn_id,
             status=str(turn.get("status") or ""),
+            identity=_timeline_identity(
+                item_id,
+                correlation_id=turn.get("client_turn_id"),
+            ),
+            provenance=_timeline_provenance(),
             payload={
                 "text": str(turn.get("prompt") or ""),
                 "text_preview": _truncate_text(str(turn.get("prompt") or ""), 240),
@@ -387,6 +461,8 @@ def _append_status(
             managed_thread_id=managed_thread_id,
             managed_turn_id=managed_turn_id,
             status=status,
+            identity=_timeline_identity(item_id),
+            provenance=_timeline_provenance(source_event_ids=source_event_ids or []),
             payload={
                 "status": status,
                 "error": turn.get("error"),
@@ -423,6 +499,8 @@ def _append_timeline_event_items(
             if isinstance(item, dict)
         ]
         source_event_ids = list(tool_group.get("source_event_ids") or [])
+        progress_item_ids = _progress_item_ids_from_items(progress_items)
+        progress_event_ids = _progress_event_ids_from_items(progress_items)
         item_id = (
             f"turn:{managed_turn_id}:tool:"
             f"{tool_group.get('first_index')}:{tool_group.get('tool_name')}"
@@ -437,6 +515,14 @@ def _append_timeline_event_items(
                 managed_thread_id=managed_thread_id,
                 managed_turn_id=managed_turn_id,
                 status=str(tool_group.get("status") or "running"),
+                identity=_timeline_identity(
+                    item_id,
+                    progress_item_ids=progress_item_ids,
+                ),
+                provenance=_timeline_provenance(
+                    source_event_ids=source_event_ids,
+                    progress_event_ids=progress_event_ids or source_event_ids,
+                ),
                 payload={
                     "tool_name": tool_group.get("tool_name"),
                     "call": tool_group.get("call"),
@@ -509,6 +595,9 @@ def _append_timeline_event_items(
         if event_type == "approval_requested":
             request_id = str(event.get("request_id") or event_stable_id)
             item_id = f"turn:{managed_turn_id}:approval:{request_id}"
+            progress_item_ids, progress_event_ids = _progress_item_metadata(
+                progress_item
+            )
             items.append(
                 ManagedThreadTimelineItem(
                     item_id=item_id,
@@ -518,6 +607,14 @@ def _append_timeline_event_items(
                     managed_thread_id=managed_thread_id,
                     managed_turn_id=managed_turn_id,
                     status=str(entry.get("status") or "recorded"),
+                    identity=_timeline_identity(
+                        item_id,
+                        progress_item_ids=progress_item_ids,
+                    ),
+                    provenance=_timeline_provenance(
+                        source_event_ids=[event_index],
+                        progress_event_ids=progress_event_ids or [event_index],
+                    ),
                     payload={
                         **event,
                         "source_event_ids": [event_index],
@@ -535,6 +632,9 @@ def _append_timeline_event_items(
 
         if event_type == "run_notice":
             item_id = f"turn:{managed_turn_id}:intermediate:{event_stable_id}"
+            progress_item_ids, progress_event_ids = _progress_item_metadata(
+                progress_item
+            )
             items.append(
                 ManagedThreadTimelineItem(
                     item_id=item_id,
@@ -544,6 +644,14 @@ def _append_timeline_event_items(
                     managed_thread_id=managed_thread_id,
                     managed_turn_id=managed_turn_id,
                     status=str(entry.get("status") or "recorded"),
+                    identity=_timeline_identity(
+                        item_id,
+                        progress_item_ids=progress_item_ids,
+                    ),
+                    provenance=_timeline_provenance(
+                        source_event_ids=[event_index],
+                        progress_event_ids=progress_event_ids or [event_index],
+                    ),
                     payload={
                         "intermediate_kind": event.get("kind") or "notice",
                         "text": event.get("message") or "",
@@ -565,6 +673,9 @@ def _append_timeline_event_items(
 
         if event_type == "output_delta":
             item_id = f"turn:{managed_turn_id}:intermediate:{event_stable_id}"
+            progress_item_ids, progress_event_ids = _progress_item_metadata(
+                progress_item
+            )
             items.append(
                 ManagedThreadTimelineItem(
                     item_id=item_id,
@@ -574,6 +685,14 @@ def _append_timeline_event_items(
                     managed_thread_id=managed_thread_id,
                     managed_turn_id=managed_turn_id,
                     status=str(entry.get("status") or "recorded"),
+                    identity=_timeline_identity(
+                        item_id,
+                        progress_item_ids=progress_item_ids,
+                    ),
+                    provenance=_timeline_provenance(
+                        source_event_ids=[event_index],
+                        progress_event_ids=progress_event_ids or [event_index],
+                    ),
                     payload={
                         "intermediate_kind": event.get("delta_type") or "output",
                         "text": event.get("content") or "",
@@ -820,6 +939,8 @@ def _append_assistant_message(
             managed_thread_id=managed_thread_id,
             managed_turn_id=managed_turn_id,
             status=str(turn.get("status") or ""),
+            identity=_timeline_identity(item_id),
+            provenance=_timeline_provenance(source_event_ids=source_event_ids),
             payload={
                 "text": assistant_text,
                 "text_preview": _truncate_text(assistant_text, 240),
@@ -858,6 +979,8 @@ def _append_attachment_artifacts(
                     managed_thread_id=managed_thread_id,
                     managed_turn_id=managed_turn_id,
                     status=str(turn.get("status") or ""),
+                    identity=_timeline_identity(item_id),
+                    provenance=_timeline_provenance(),
                     payload={"artifact_kind": field_name.rstrip("s"), **value},
                 )
             )
@@ -889,6 +1012,8 @@ def _append_delivery_state_items(
                 managed_thread_id=managed_thread_id,
                 managed_turn_id=record.managed_turn_id,
                 status=record.state.value,
+                identity=_timeline_identity(item_id),
+                provenance=_timeline_provenance(),
                 payload={
                     "delivery_id": record.delivery_id,
                     "surface_kind": record.target.surface_kind,
@@ -965,6 +1090,8 @@ def _append_compact_lifecycle_item(
             managed_thread_id=managed_thread_id,
             managed_turn_id=None,
             status="recorded",
+            identity=_timeline_identity(item_id),
+            provenance=_timeline_provenance(),
             payload={
                 **payload,
                 "lifecycle_kind": "chat_compacted",
