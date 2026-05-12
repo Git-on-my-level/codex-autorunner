@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { goto } from '$app/navigation';
   import type {
     RepoWorktreeIndexFilter,
     RepoWorktreeDetailViewModel,
@@ -165,7 +166,7 @@
   function openRow(event: MouseEvent | KeyboardEvent, path: string): void {
     if (isInteractiveTarget(event.target)) return;
     event.preventDefault();
-    window.location.assign(href(path));
+    void goto(href(path));
   }
 </script>
 
