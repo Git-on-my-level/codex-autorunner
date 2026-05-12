@@ -183,7 +183,19 @@ export type ArtifactCardView = {
 
 export type PmaCard =
   | { kind: 'message'; id: string; message: PmaChatMessage; turnId: string | null; orderKey: string; timestamp: string | null }
-  | { kind: 'intermediate'; id: string; title: string; text: string; eventIds: string[]; detail: string | null; turnId: string | null; orderKey: string; timestamp: string | null }
+  | {
+      kind: 'intermediate';
+      id: string;
+      title: string;
+      text: string;
+      eventIds: string[];
+      /** Backend `progress_item.event_ids` accumulated on this live card; used to dedupe against the timeline without hiding partial catch-up. */
+      progressSourceIds: string[];
+      detail: string | null;
+      turnId: string | null;
+      orderKey: string;
+      timestamp: string | null;
+    }
   | { kind: 'tool_group'; id: string; tools: PmaToolCallCard[]; turnId: string | null; orderKey: string; timestamp: string | null }
   | { kind: 'turn_summary'; id: string; title: string; cards: PmaCard[]; turnId: string | null; orderKey: string; timestamp: string | null }
   | { kind: 'approval'; id: string; title: string; summary: string; detail: string | null; turnId: string | null; orderKey: string; timestamp: string | null }
@@ -1064,16 +1076,20 @@ export function buildPmaActivityCards(
     const mergeTarget = findMergeableIntermediate(cards, event, fallbackTurnId);
     if (mergeTarget) {
       mergeTarget.text = mergeIntermediateText(mergeTarget.text, text);
-      mergeTarget.eventIds.push(event.id, ...progressItemEventIds(canonicalProgressItem(event)));
+      const progressIds = progressItemEventIds(canonicalProgressItem(event));
+      mergeTarget.eventIds.push(event.id, ...progressIds);
+      mergeTarget.progressSourceIds.push(...progressIds);
       continue;
     }
+    const progressIds = progressItemEventIds(canonicalProgressItem(event));
     cards.push({
       kind: 'intermediate',
       id: `intermediate-${event.id}`,
       title: intermediateTitle(event),
       text,
       detail: null,
-      eventIds: [event.id, ...progressItemEventIds(canonicalProgressItem(event))],
+      eventIds: [event.id, ...progressIds],
+      progressSourceIds: [...progressIds],
       turnId: activityTurnId(event, fallbackTurnId),
       orderKey: activityOrderKey(event),
       timestamp: event.createdAt
@@ -1193,6 +1209,17 @@ function transcriptMergeSortKey(
   return `99999998|live|${String(liveInner).padStart(8, '0')}|${String(ctx.liveOrdinal).padStart(8, '0')}|${card.id}`;
 }
 
+/** True when live activity should not be layered on top of the persisted timeline. */
+function liveActivitySuppressedByCanonicalTimeline(card: PmaCard, timelineEventIds: Set<string>): boolean {
+  if (card.kind === 'intermediate') {
+    const sources = card.progressSourceIds;
+    if (sources.length > 0) {
+      return sources.every((id) => timelineEventIds.has(id));
+    }
+  }
+  return cardEventIds(card).some((id) => timelineEventIds.has(id));
+}
+
 export function mergePmaTimelineAndActivityCards(
   timelineCards: PmaCard[],
   activityCards: PmaCard[]
@@ -1205,7 +1232,7 @@ export function mergePmaTimelineAndActivityCards(
   }
   const extra = activityCards.filter((card) => {
     if (timelineIds.has(card.id)) return false;
-    return !cardEventIds(card).some((id) => timelineEventIds.has(id));
+    return !liveActivitySuppressedByCanonicalTimeline(card, timelineEventIds);
   });
   if (!extra.length) return timelineCards;
 
@@ -1491,6 +1518,9 @@ function coalesceSequentialIntermediateTraceCards(cards: PmaCard[]): PmaCard[] {
 
     existing.text = mergeIntermediateText(existing.text, card.text);
     existing.eventIds.push(...card.eventIds.filter((id) => !existing.eventIds.includes(id)));
+    existing.progressSourceIds.push(
+      ...card.progressSourceIds.filter((id) => !existing.progressSourceIds.includes(id))
+    );
     existing.detail = traceDetailSummary(existing.title, existing.eventIds);
   }
 
@@ -1582,6 +1612,7 @@ function timelineItemToCard(item: PmaTimelineItem): PmaCard[] {
       text,
       detail: thinkingTimelineDetail(item) ?? timelineDetail(item),
       eventIds: timelineSourceEventIds(item),
+      progressSourceIds: [],
       turnId: item.turnId,
       orderKey: item.orderKey,
       timestamp: item.timestamp
