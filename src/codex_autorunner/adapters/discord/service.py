@@ -4042,6 +4042,10 @@ class DiscordBotService(DiscordInteractionResponseMixin):
         self, coro: Awaitable[None], *, await_on_shutdown: bool = False
     ) -> asyncio.Task[Any]:
         task = cast(asyncio.Task[Any], asyncio.ensure_future(coro))
+        if not isinstance(getattr(self, "_background_tasks", None), set):
+            self._background_tasks = set()
+        if not isinstance(getattr(self, "_background_shutdown_wait_tasks", None), set):
+            self._background_shutdown_wait_tasks = set()
         self._background_tasks.add(task)
         if await_on_shutdown:
             self._background_shutdown_wait_tasks.add(task)
