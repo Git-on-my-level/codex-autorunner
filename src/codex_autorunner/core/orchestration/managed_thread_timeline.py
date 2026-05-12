@@ -737,6 +737,12 @@ def timeline_item_from_tail_event(
     timestamp = _normalize_optional_text(tail_event.get("received_at"))
     progress_item = tail_event.get("progress_item")
     progress = dict(progress_item) if isinstance(progress_item, dict) else {}
+    raw_progress_items = tail_event.get("progress_items")
+    progress_items = (
+        [dict(item) for item in raw_progress_items if isinstance(item, dict)]
+        if isinstance(raw_progress_items, list)
+        else ([progress] if progress else [])
+    )
     progress_kind = str(
         tail_event.get("progress_kind") or progress.get("kind") or ""
     ).strip()
@@ -753,7 +759,13 @@ def timeline_item_from_tail_event(
         or event_type
         or "event"
     )
-    source_event_ids = progress.get("event_ids")
+    source_event_ids = tail_event.get("source_event_ids")
+    if not isinstance(source_event_ids, list):
+        source_event_ids = tail_event.get("progress_event_ids")
+    if not isinstance(source_event_ids, list):
+        source_event_ids = _progress_event_ids_from_items(progress_items)
+    if not isinstance(source_event_ids, list) or not source_event_ids:
+        source_event_ids = progress.get("event_ids")
     if not isinstance(source_event_ids, list):
         source_event_ids = []
     try:
@@ -780,13 +792,11 @@ def timeline_item_from_tail_event(
             or "tool"
         )
         tool_stable_id = stable_suffix
-        if progress_group_id and progress_group_id.startswith("tools:"):
-            parts = progress_group_id.split(":", 2)
-            if len(parts) >= 2:
-                try:
-                    tool_stable_id = str(int(parts[1]))
-                except ValueError:
-                    tool_stable_id = parts[1]
+        if source_event_ids:
+            try:
+                tool_stable_id = str(int(source_event_ids[0]))
+            except (TypeError, ValueError):
+                tool_stable_id = str(source_event_ids[0])
         item_id = f"turn:{normalized_turn_id}:tool:{tool_stable_id}:{tool_name}"
         state = str(tail_event.get("tool_state") or progress.get("state") or "")
         result = None
@@ -807,7 +817,7 @@ def timeline_item_from_tail_event(
                     "summary": tail_event.get("summary"),
                 },
                 "result": result,
-                "progress_items": [progress] if progress else [],
+                "progress_items": progress_items,
                 "source_event_ids": source_event_ids,
                 "source_event_type": event_type,
                 "detail_available": True,
@@ -816,15 +826,16 @@ def timeline_item_from_tail_event(
         }
         return _with_contract_metadata(
             item,
+            progress_item_ids=_progress_item_ids_from_items(progress_items),
             source_event_ids=source_event_ids,
-            progress_event_ids=list(source_event_ids),
+            progress_event_ids=_progress_event_ids_from_items(progress_items)
+            or list(source_event_ids),
             cursor_event_id=event_id or None,
         )
 
-    if event_type in {"progress", "assistant_update"} or progress_kind in {
-        "assistant_update",
-        "notice",
-    }:
+    if (
+        event_type in {"progress", "assistant_update"} and progress_kind != "approval"
+    ) or progress_kind in {"assistant_update", "notice"}:
         item_id = f"turn:{normalized_turn_id}:intermediate:{source_event_key}"
         text = str(tail_event.get("summary") or "")
         title = str(tail_event.get("title") or progress.get("title") or "").strip()
@@ -858,6 +869,8 @@ def timeline_item_from_tail_event(
 
     if progress_kind == "approval" or event_type == "approval_requested":
         request_id = stable_suffix
+        if progress_item_id and progress_item_id.startswith("progress:approval:"):
+            request_id = progress_item_id.removeprefix("progress:approval:")
         item = {
             **base,
             "item_id": f"turn:{normalized_turn_id}:approval:{request_id}",
@@ -880,22 +893,25 @@ def timeline_item_from_tail_event(
             cursor_event_id=event_id or None,
         )
 
-    if event_type in {"turn_failed", "turn_interrupted"}:
-        item_id = f"turn:{normalized_turn_id}:intermediate:{source_event_key}"
+    if event_type in {"turn_completed", "turn_failed", "turn_interrupted"}:
+        status = {
+            "turn_completed": "ok",
+            "turn_failed": "error",
+            "turn_interrupted": "interrupted",
+        }[event_type]
+        item_id = f"turn:{normalized_turn_id}:status:{status}"
         item = {
             **base,
             "item_id": item_id,
-            "kind": "intermediate",
-            "status": "error" if event_type == "turn_failed" else "interrupted",
+            "kind": "status",
+            "status": status,
             "payload": {
-                "intermediate_kind": event_type,
-                "text": str(tail_event.get("summary") or ""),
+                "status": status,
+                "error": tail_event.get("summary") if status == "error" else None,
                 "event_type": event_type,
                 "event": dict(tail_event),
                 "source_event_ids": source_event_ids,
                 "source_event_type": event_type,
-                "detail_available": True,
-                "progress_item": progress or None,
                 "live_tail_event": dict(tail_event),
             },
         }

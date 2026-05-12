@@ -325,7 +325,7 @@ def test_live_tail_event_projects_to_canonical_timeline_item() -> None:
 
     assert item is not None
     assert item["kind"] == "tool_group"
-    assert item["item_id"] == "turn:turn-1:tool:1:pytest"
+    assert item["item_id"] == "turn:turn-1:tool:2:pytest"
     assert item["payload"]["source_event_ids"] == [2]
     assert item["payload"]["detail_available"] is True
 

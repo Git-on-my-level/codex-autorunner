@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Iterable, Optional
 
 from ..ports.run_event import (
@@ -67,6 +67,9 @@ class ProgressProjectionState:
     active_tool_group_id: Optional[str] = None
     active_tool_name: Optional[str] = None
     last_item: Optional[ProgressProjectionItem] = None
+    tool_group_items: dict[str, tuple[ProgressProjectionItem, ...]] = field(
+        default_factory=dict
+    )
 
 
 def _stable_event_key(event_id: int) -> str:
