@@ -27,6 +27,8 @@ jobs:
         uses: actions/setup-python@v6
         with:
           python-version: "3.11"
+          cache: "pip"
+          cache-dependency-path: "pyproject.toml"
 
       - name: Resolve lane routing
         id: route
@@ -81,6 +83,8 @@ jobs:
         uses: actions/setup-python@v6
         with:
           python-version: "3.11"
+          cache: "pip"
+          cache-dependency-path: "pyproject.toml"
 
       - name: Install Python deps
         run: pip install -e .[dev]
@@ -101,13 +105,16 @@ jobs:
         uses: actions/setup-python@v6
         with:
           python-version: "3.11"
+          cache: "pip"
+          cache-dependency-path: "pyproject.toml"
 
       - name: Set up Node
         uses: actions/setup-node@v5
         with:
           node-version: "20"
           registry-url: "https://registry.npmjs.org"
-          package-manager-cache: false
+          cache: "pnpm"
+          cache-dependency-path: "pnpm-lock.yaml"
 
       - name: Enable pnpm
         run: |
@@ -147,6 +154,8 @@ jobs:
         uses: actions/setup-python@v6
         with:
           python-version: "3.11"
+          cache: "pip"
+          cache-dependency-path: "pyproject.toml"
 
       - name: Install Python deps
         run: pip install -e .[dev]
@@ -183,13 +192,16 @@ jobs:
         uses: actions/setup-python@v6
         with:
           python-version: "3.11"
+          cache: "pip"
+          cache-dependency-path: "pyproject.toml"
 
       - name: Set up Node
         uses: actions/setup-node@v5
         with:
           node-version: "20"
           registry-url: "https://registry.npmjs.org"
-          package-manager-cache: false
+          cache: "pnpm"
+          cache-dependency-path: "pnpm-lock.yaml"
 
       - name: Enable pnpm
         run: |
