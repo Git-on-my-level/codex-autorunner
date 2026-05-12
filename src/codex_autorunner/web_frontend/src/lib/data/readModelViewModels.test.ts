@@ -104,6 +104,7 @@ describe('read model view-model selectors', () => {
           label: 'Repo',
           path: '/repo',
           archived: false,
+          isPinned: true,
           childWorktreeIds: ['wt-1'],
           worktreeSetupCommands: ['make setup']
         }
@@ -144,6 +145,7 @@ describe('read model view-model selectors', () => {
     expect(selectPmaChats(store.snapshot())[0].status).toBe('running');
     expect(selectRepoSummaries(store.snapshot())[0].activeRuns).toBe(1);
     expect(selectRepoSummaries(store.snapshot())[0].raw.worktree_setup_commands).toEqual(['make setup']);
+    expect(selectRepoSummaries(store.snapshot())[0].raw.is_pinned).toBe(true);
     expect(selectWorktreeSummaries(store.snapshot())[0].repoId).toBe('repo-1');
   });
 });

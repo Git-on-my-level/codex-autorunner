@@ -177,6 +177,7 @@ export type RepoTopology = {
   label: string;
   path: string;
   archived: boolean;
+  isPinned?: boolean;
   destinationId?: string | null;
   childWorktreeIds: string[];
   worktreeSetupCommands?: string[] | null;

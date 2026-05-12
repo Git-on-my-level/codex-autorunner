@@ -168,6 +168,7 @@ def test_repo_worktree_topology_and_runtime_contracts_round_trip_separately() ->
         path="/work/repo",
         child_worktree_ids=["wt-1"],
         worktree_setup_commands=["npm ci", "make tools"],
+        is_pinned=True,
     )
     worktree = WorktreeTopology(
         worktree_id="wt-1",
@@ -204,6 +205,7 @@ def test_repo_worktree_topology_and_runtime_contracts_round_trip_separately() ->
     runtime_payload = dump_read_model_contract(runtime)
 
     assert topology_payload["repos"][0]["childWorktreeIds"] == ["wt-1"]
+    assert topology_payload["repos"][0]["isPinned"] is True
     assert topology_payload["repos"][0]["worktreeSetupCommands"] == [
         "npm ci",
         "make tools",

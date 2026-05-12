@@ -226,6 +226,7 @@ class RepoWorktreeReadModelService:
                 label=str(item.get("name") or item.get("id")),
                 path=str(item.get("path") or ""),
                 archived=bool(item.get("archived")),
+                is_pinned=bool(item.get("is_pinned")),
                 destination_id=(
                     item.get("destination_id")
                     if isinstance(item.get("destination_id"), str)
