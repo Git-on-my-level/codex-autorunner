@@ -44,6 +44,7 @@ function chat(chatId: string, status: ChatIndexRow['status'] = 'idle'): ChatInde
     ticketId: null,
     runId: null,
     agent: 'codex',
+    chatKind: 'pma',
     model: 'gpt-5.5',
     groupId: null
   };
@@ -86,6 +87,7 @@ function detailSnapshot(chatId = 'chat-1'): ChatDetailSnapshot {
       runId: 'run-1',
       agent: 'hermes',
       agentProfile: 'm4-pma',
+      chatKind: 'coding_agent',
       model: 'gpt-5.5',
       archived: false
     },
@@ -161,6 +163,7 @@ describe('read model entity store', () => {
     const store = new ReadModelEntityStore();
     store.applyChatDetailSnapshot(detailSnapshot());
     expect(selectChatIndexView(store.snapshot()).rows[0].agentProfile).toBe('m4-pma');
+    expect(selectChatIndexView(store.snapshot()).rows[0].chatKind).toBe('coding_agent');
     store.optimisticSend(
       'chat-1',
       {
@@ -195,6 +198,25 @@ describe('read model entity store', () => {
     expect(timelineIds).not.toContain('optimistic:client-1');
     expect(timelineIds).toContain('item-2');
     expect(store.snapshot().optimistic['client-1'].status).toBe('reconciled');
+  });
+
+  it('preserves chat kind when detail snapshots omit the durable field', () => {
+    const store = new ReadModelEntityStore();
+    const row = chat('chat-1');
+    row.chatKind = 'coding_agent';
+    row.title = 'Renamed thread';
+    store.applyChatIndexSnapshot({
+      cursor: cursor(1),
+      rows: [row],
+      groups: [],
+      counters: { total: 1, waiting: 0, running: 0, unread: 0, archived: 0 }
+    });
+    const snapshot = detailSnapshot('chat-1');
+    delete snapshot.thread.chatKind;
+
+    store.applyChatDetailSnapshot(snapshot);
+
+    expect(selectChatIndexView(store.snapshot()).rows[0].chatKind).toBe('coding_agent');
   });
 
   it('rolls back failed optimistic sends', () => {

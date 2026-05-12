@@ -769,10 +769,10 @@ function upsertChatThread(state: ReadModelEntityState, thread: ChatThreadProject
     runId: thread.runId,
     agent: thread.agent,
     agentProfile: thread.agentProfile,
+    chatKind: thread.chatKind ?? existing?.chatKind ?? null,
     model: thread.model,
     lastActivityAt: existing?.lastActivityAt ?? null,
-    groupId: existing?.groupId ?? null,
-    chatKind: existing?.chatKind ?? null
+    groupId: existing?.groupId ?? null
   };
   if (!state.chatOrder.includes(thread.chatId)) state.chatOrder.push(thread.chatId);
 }

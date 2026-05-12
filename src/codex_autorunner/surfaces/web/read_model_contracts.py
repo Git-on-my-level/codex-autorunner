@@ -214,6 +214,7 @@ class ChatThreadProjection(ReadModelContract):
     run_id: Optional[str] = None
     agent: Optional[str] = None
     agent_profile: Optional[str] = None
+    chat_kind: Optional[Literal["pma", "coding_agent"]] = None
     model: Optional[str] = None
     archived: bool = False
 
