@@ -1038,6 +1038,121 @@ describe('PMA chat view helpers', () => {
     ]);
   });
 
+  it('dedupes live commentary against canonical source event ids', () => {
+    const canonical = buildPmaCards(
+      [
+        timelineItem('turn:one:user', 'user_message', { text: 'Investigate duplicate chat cards' }, '00000001'),
+        timelineItem(
+          'turn:one:intermediate:13',
+          'intermediate',
+          {
+            intermediate_kind: 'progress',
+            text: 'I am checking the latest context.',
+            source_event_ids: [13],
+            progress_item: {
+              kind: 'notice',
+              title: 'Commentary',
+              summary: 'I am checking the latest context.',
+              event_ids: [13]
+            }
+          },
+          '00000013'
+        )
+      ],
+      null,
+      []
+    );
+    const live = buildPmaActivityCards([
+      {
+        ...baseArtifact,
+        id: 'progress-commentary-13',
+        kind: 'progress',
+        createdAt: '2026-05-08T12:00:13Z',
+        summary: 'I am checking the latest context.',
+        raw: {
+          managed_turn_id: 'one',
+          progress_item: {
+            kind: 'notice',
+            title: 'Commentary',
+            summary: 'I am checking the latest context.',
+            event_ids: [13]
+          }
+        }
+      }
+    ]);
+
+    expect(mergePmaTimelineAndActivityCards(canonical, live).map((card) => card.id)).toEqual([
+      'turn:one:user',
+      'turn:one:intermediate:13'
+    ]);
+  });
+
+  it('keeps a merged live progress card when only some progress source ids are already canonical', () => {
+    const canonical = buildPmaCards(
+      [
+        timelineItem('turn:one:user', 'user_message', { text: 'Investigate' }, '00000001'),
+        timelineItem(
+          'turn:one:intermediate:13',
+          'intermediate',
+          {
+            intermediate_kind: 'progress',
+            text: 'Catchup line one.',
+            source_event_ids: [13],
+            progress_item: {
+              kind: 'notice',
+              title: 'Progress',
+              summary: 'Catchup line one.',
+              event_ids: [13]
+            }
+          },
+          '00000013'
+        )
+      ],
+      null,
+      []
+    );
+    const live = buildPmaActivityCards([
+      {
+        ...baseArtifact,
+        id: 'live-13',
+        kind: 'progress',
+        createdAt: '2026-05-08T12:00:01Z',
+        raw: {
+          managed_turn_id: 'one',
+          progress_item: {
+            kind: 'notice',
+            title: 'Progress',
+            summary: 'Catchup line one.',
+            event_ids: [13]
+          }
+        }
+      },
+      {
+        ...baseArtifact,
+        id: 'live-14',
+        kind: 'progress',
+        createdAt: '2026-05-08T12:00:02Z',
+        raw: {
+          managed_turn_id: 'one',
+          progress_item: {
+            kind: 'notice',
+            title: 'Progress',
+            summary: ' Only-live line two.',
+            event_ids: [14]
+          }
+        }
+      }
+    ]);
+
+    const merged = mergePmaTimelineAndActivityCards(canonical, live);
+    expect(merged.map((card) => card.id)).toEqual(['turn:one:user', 'turn:one:intermediate:13', 'intermediate-live-13']);
+    expect(merged[2]).toMatchObject({
+      kind: 'intermediate',
+      progressSourceIds: ['13', '14'],
+      text: 'Catchup line one. Only-live line two.'
+    });
+  });
+
   it('does not merge live progress notices across tool activity', () => {
     const cards = buildPmaActivityCards(
       [
