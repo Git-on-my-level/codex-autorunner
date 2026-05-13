@@ -657,6 +657,73 @@ async def test_opencode_harness_start_turn_returns_before_prompt_finishes_and_sy
 
 
 @pytest.mark.asyncio
+async def test_opencode_harness_wait_for_turn_keeps_collecting_after_empty_prompt_response(
+    tmp_path: Path,
+) -> None:
+    workspace = (tmp_path / "workspace").resolve()
+
+    class _PromptReturnsBeforeEventsClient(_StubClient):
+        def __init__(self) -> None:
+            super().__init__([])
+            self.stream_call_count = 0
+
+        async def stream_events(
+            self,
+            *,
+            directory: str | None = None,
+            ready_event: object = None,
+            session_id: str | None = None,
+            paths: object = None,
+        ):
+            self.stream_calls.append(
+                {
+                    "directory": directory,
+                    "ready_event": ready_event,
+                    "session_id": session_id,
+                    "paths": paths,
+                }
+            )
+            if ready_event is not None:
+                ready_event.set()
+            self.stream_call_count += 1
+            if self.stream_call_count == 1:
+                return
+            await asyncio.sleep(0.05)
+            yield SSEEvent(
+                event="message.completed",
+                data='{"sessionID":"session-1","info":{"id":"assistant-1","role":"assistant"},'
+                '"parts":[{"type":"text","text":"Agent reply"}]}',
+            )
+            yield SSEEvent(event="session.idle", data='{"sessionID":"session-1"}')
+
+        async def prompt_async(
+            self, session_id: str, **kwargs: object
+        ) -> dict[str, object]:
+            self.prompt_calls.append({"session_id": session_id, **kwargs})
+            return {"sessionID": session_id}
+
+    client = _PromptReturnsBeforeEventsClient()
+    harness = OpenCodeHarness(_StubSupervisor(client, session_stall_timeout_seconds=1))
+
+    turn = await harness.start_turn(
+        workspace,
+        "session-1",
+        prompt="hello",
+        model=None,
+        reasoning=None,
+        approval_mode=None,
+        sandbox_policy=None,
+    )
+
+    result = await harness.wait_for_turn(workspace, "session-1", turn.turn_id)
+
+    assert result.status == "ok"
+    assert result.assistant_text == "Agent reply"
+    assert client.list_messages_calls == ["session-1"]
+    assert client.stream_call_count == 2
+
+
+@pytest.mark.asyncio
 async def test_opencode_harness_polls_messages_for_rich_progress_when_sse_is_silent(
     monkeypatch,
     tmp_path: Path,

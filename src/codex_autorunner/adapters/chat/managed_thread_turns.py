@@ -87,6 +87,11 @@ from ...core.orchestration.runtime_threads import (
     begin_next_queued_runtime_thread_execution,
     begin_runtime_thread_execution,
 )
+from ...core.orchestration.turn_output_reducer import (
+    assistant_text_extends_prefix,
+    build_assistant_transcript_prefix,
+    reduce_turn_output,
+)
 from ...core.orchestration.turn_timeline import persist_turn_timeline
 from ...core.pma_transcripts import PmaTranscriptStore
 from ..github.managed_thread_pr_binding import self_claim_and_arm_pr_binding
@@ -739,75 +744,6 @@ def managed_thread_session_metadata(
     )
 
 
-def _whitespace_insensitive_prefix_end(value: str, prefix: str) -> Optional[int]:
-    value_index = 0
-    prefix_index = 0
-    prefix_non_ws = 0
-    value_length = len(value)
-    prefix_length = len(prefix)
-    while prefix_index < prefix_length:
-        prefix_char = prefix[prefix_index]
-        if prefix_char.isspace():
-            prefix_index += 1
-            continue
-        while value_index < value_length and value[value_index].isspace():
-            value_index += 1
-        if value_index >= value_length or value[value_index] != prefix_char:
-            return None
-        value_index += 1
-        prefix_index += 1
-        prefix_non_ws += 1
-    if prefix_non_ws == 0:
-        return None
-    return value_index
-
-
-def trim_cumulative_assistant_text(
-    assistant_text: str,
-    previous_assistant_text: str,
-) -> str:
-    """Return only this turn's text when a runtime repeats prior final output.
-
-    Hermes ACP can emit ``prompt/completed.finalOutput`` as the whole session's
-    assistant transcript. Managed chat surfaces need the final answer for the
-    current durable turn, so trim a prior completed answer only when it is a
-    clear prefix. Whitespace-insensitive matching covers markdown/stream joins
-    that collapse paragraph boundaries while still requiring the previous text's
-    non-whitespace characters to match exactly.
-    """
-
-    current = str(assistant_text or "")
-    previous = str(previous_assistant_text or "")
-    if not current.strip() or not previous.strip():
-        return current
-    if current == previous:
-        return current
-    if current.startswith(previous):
-        return current[len(previous) :].lstrip()
-    current_lstrip = current.lstrip()
-    previous_stripped = previous.strip()
-    if current_lstrip.startswith(previous_stripped):
-        leading = len(current) - len(current_lstrip)
-        return current[leading + len(previous_stripped) :].lstrip()
-    prefix_end = _whitespace_insensitive_prefix_end(current, previous)
-    if prefix_end is None:
-        return current
-    trimmed = current[prefix_end:].lstrip()
-    return trimmed or current
-
-
-def trim_cumulative_assistant_text_from_candidates(
-    assistant_text: str,
-    prior_assistant_texts: list[str],
-) -> tuple[str, str]:
-    current = str(assistant_text or "")
-    for candidate in prior_assistant_texts:
-        trimmed = trim_cumulative_assistant_text(current, candidate)
-        if trimmed != current:
-            return trimmed, candidate
-    return current, ""
-
-
 def _previous_completed_assistant_text(
     orchestration_service: Any,
     *,
@@ -885,57 +821,13 @@ def _prior_completed_assistant_text_prefix(
             assistant_text = _record_assistant_text(record)
             if not assistant_text.strip():
                 continue
-            if _assistant_text_extends_prefix(assistant_text, prefix):
+            if assistant_text_extends_prefix(assistant_text, prefix):
                 prefix = assistant_text
             else:
                 prefix += assistant_text
         if prefix.strip():
             return prefix
     return ""
-
-
-def _assistant_text_from_transcript_content(content: str) -> str:
-    text = str(content or "").strip()
-    marker = "\n\nAssistant:\n"
-    if marker in text:
-        return text.rsplit(marker, 1)[-1].strip()
-    return text
-
-
-def _assistant_text_extends_prefix(assistant_text: str, prefix: str) -> bool:
-    current = str(assistant_text or "")
-    previous = str(prefix or "")
-    if not current.strip() or not previous.strip():
-        return False
-    if current == previous:
-        return True
-    if current.startswith(previous):
-        return True
-    current_lstrip = current.lstrip()
-    previous_stripped = previous.strip()
-    if current_lstrip.startswith(previous_stripped):
-        return True
-    return _whitespace_insensitive_prefix_end(current, previous) is not None
-
-
-def build_assistant_transcript_prefix(entries: list[Mapping[str, Any]]) -> str:
-    prefix = ""
-    for entry in entries:
-        entry_turn_id = str(
-            entry.get("managed_turn_id") or entry.get("turn_id") or ""
-        ).strip()
-        if not entry_turn_id:
-            continue
-        assistant_text = _assistant_text_from_transcript_content(
-            str(entry.get("content") or "")
-        )
-        if not assistant_text.strip():
-            continue
-        if _assistant_text_extends_prefix(assistant_text, prefix):
-            prefix = assistant_text
-        else:
-            prefix += assistant_text
-    return prefix
 
 
 async def _assistant_transcript_text_from_hub(
@@ -3106,26 +2998,26 @@ async def finalize_managed_thread_execution(
         outcome = recovered_outcome
 
     if outcome.status == "ok":
-        assistant_text_for_normalization = (
-            outcome.assistant_text or event_state.best_assistant_text()
-        )
         prior_assistant_candidates = await _prior_assistant_text_candidates(
             orchestration_service,
             hub_client=resolved_hub_client,
             managed_thread_id=managed_thread_id,
             managed_turn_id=managed_turn_id,
         )
-        (
-            normalized_assistant_text,
-            matched_prior_assistant_text,
-        ) = trim_cumulative_assistant_text_from_candidates(
-            assistant_text_for_normalization,
-            prior_assistant_candidates,
+        turn_output = reduce_turn_output(
+            managed_thread_id=managed_thread_id,
+            managed_turn_id=managed_turn_id,
+            backend_thread_id=current_backend_thread_id or None,
+            backend_turn_id=outcome.backend_turn_id or started.execution.backend_id,
+            outcome=outcome,
+            event_state=event_state,
+            prior_assistant_texts=prior_assistant_candidates,
         )
         terminal_evidence_updates: dict[str, Any] = {}
-        if not outcome.assistant_text and assistant_text_for_normalization:
+        if turn_output.source in {"event_final", "event_stream"}:
             terminal_evidence_updates["assistant_text_from_event_state"] = True
-        if normalized_assistant_text != assistant_text_for_normalization:
+        terminal_evidence_updates.update(turn_output.evidence)
+        if turn_output.scope == "cumulative_transcript_trimmed":
             log_event(
                 logger,
                 logging.WARNING,
@@ -3138,18 +3030,39 @@ async def finalize_managed_thread_execution(
                     or started.execution.backend_id,
                     surface=surface,
                 ),
-                original_assistant_chars=len(assistant_text_for_normalization),
-                previous_assistant_chars=len(matched_prior_assistant_text),
-                trimmed_assistant_chars=len(normalized_assistant_text),
+                original_assistant_chars=len(
+                    outcome.assistant_text or event_state.best_assistant_text()
+                ),
+                previous_assistant_chars=len(turn_output.matched_prior_text),
+                trimmed_assistant_chars=len(turn_output.text),
                 prior_assistant_candidate_count=len(prior_assistant_candidates),
                 **runtime_trace_fields(event_state),
                 **terminal_evidence_trace_fields(outcome),
             )
             terminal_evidence_updates["assistant_text_trimmed_from_cumulative"] = True
-        if normalized_assistant_text != outcome.assistant_text:
+        elif turn_output.scope == "stale_prior_output":
+            log_event(
+                logger,
+                logging.ERROR,
+                "chat.managed_thread.stale_prior_assistant_output_rejected",
+                **_managed_thread_trace_fields(
+                    managed_thread_id=managed_thread_id,
+                    managed_turn_id=managed_turn_id,
+                    backend_thread_id=current_backend_thread_id or None,
+                    backend_turn_id=outcome.backend_turn_id
+                    or started.execution.backend_id,
+                    surface=surface,
+                ),
+                previous_assistant_chars=len(turn_output.matched_prior_text),
+                prior_assistant_candidate_count=len(prior_assistant_candidates),
+                **runtime_trace_fields(event_state),
+                **terminal_evidence_trace_fields(outcome),
+            )
+            terminal_evidence_updates["assistant_text_rejected_as_stale_prior"] = True
+        if turn_output.text != outcome.assistant_text or terminal_evidence_updates:
             outcome = replace(
                 outcome,
-                assistant_text=normalized_assistant_text,
+                assistant_text=turn_output.text,
                 terminal_evidence=dict(outcome.terminal_evidence)
                 | terminal_evidence_updates,
             )
@@ -3190,7 +3103,13 @@ async def finalize_managed_thread_execution(
     )
 
     resolved_assistant_text = (
-        outcome.assistant_text or event_state.best_assistant_text()
+        outcome.assistant_text
+        if outcome.status == "ok"
+        else (
+            (outcome.assistant_text or event_state.best_assistant_text())
+            if outcome.status == "interrupted"
+            else ""
+        )
     )
     finalized_state = _resolve_thread_state(
         orchestration_service,

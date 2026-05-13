@@ -560,9 +560,16 @@ def terminal_run_event_from_outcome(
     state: RuntimeThreadRunEventState,
 ) -> Completed | Failed:
     if outcome.status == "ok":
+        final_message = outcome.assistant_text
+        # Once managed-thread finalization has reduced provider output into a
+        # turn-owned envelope, that envelope is authoritative. Falling back to
+        # the runtime state's best text here can resurrect stale cumulative
+        # transcript output that the reducer already rejected.
+        if not final_message and "turn_output_scope" not in outcome.terminal_evidence:
+            final_message = state.best_assistant_text()
         return Completed(
             timestamp=now_iso(),
-            final_message=outcome.assistant_text or state.best_assistant_text(),
+            final_message=final_message,
         )
     _error_detail = str(outcome.error or "").strip()
     return Failed(

@@ -1290,9 +1290,6 @@ class OpenCodeHarness(AgentHarness):
                             pending.progress_events_published == 0
                             and not pending.pre_connected_event_seen.is_set()
                         ):
-                            collect_task.cancel()
-                            with contextlib.suppress(asyncio.CancelledError):
-                                await collect_task
                             early_asm = OutputAssembler(
                                 session_id=conversation_id,
                                 prompt=(
@@ -1302,10 +1299,16 @@ class OpenCodeHarness(AgentHarness):
                             )
                             early_asm.on_prompt_response(command_result)
                             early_result = await early_asm.build_result()
-                            output = OpenCodeTurnOutput(
-                                text=early_result.text,
-                                error=early_result.error,
-                            )
+                            if early_result.text or early_result.error:
+                                collect_task.cancel()
+                                with contextlib.suppress(asyncio.CancelledError):
+                                    await collect_task
+                                output = OpenCodeTurnOutput(
+                                    text=early_result.text,
+                                    error=early_result.error,
+                                )
+                            else:
+                                output = await collect_task
                         else:
                             output = await collect_task
                     if command_result is not None:

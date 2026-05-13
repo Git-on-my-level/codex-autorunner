@@ -860,6 +860,25 @@ async def test_terminal_run_event_from_outcome_uses_streamed_fallback_text() -> 
     assert event.final_message == "streamed fallback"
 
 
+async def test_terminal_run_event_from_outcome_respects_turn_output_envelope() -> None:
+    state = RuntimeThreadRunEventState(assistant_stream_text="stale prior output")
+
+    event = terminal_run_event_from_outcome(
+        RuntimeThreadOutcome(
+            status="ok",
+            assistant_text="",
+            error=None,
+            backend_thread_id="thread-1",
+            backend_turn_id="turn-2",
+            terminal_evidence={"turn_output_scope": "stale_prior_output"},
+        ),
+        state,
+    )
+
+    assert isinstance(event, Completed)
+    assert event.final_message == ""
+
+
 async def test_terminal_run_event_from_outcome_redacts_unknown_errors() -> None:
     state = RuntimeThreadRunEventState()
 

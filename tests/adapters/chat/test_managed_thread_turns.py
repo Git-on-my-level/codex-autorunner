@@ -30,8 +30,12 @@ from codex_autorunner.core.orchestration.runtime_threads import (
     RuntimeThreadExecution,
     RuntimeThreadOutcome,
 )
+from codex_autorunner.core.orchestration.turn_output_reducer import (
+    build_assistant_transcript_prefix,
+    trim_cumulative_assistant_text,
+)
 from codex_autorunner.core.orchestration.turn_timeline import list_turn_timeline
-from codex_autorunner.core.ports.run_event import RunNotice
+from codex_autorunner.core.ports.run_event import Completed, RunNotice
 from codex_autorunner.core.pr_bindings import PrBindingStore
 from codex_autorunner.core.scm_polling_watches import ScmPollingWatchStore
 
@@ -137,17 +141,11 @@ def test_trim_cumulative_assistant_text_removes_exact_prior_prefix() -> None:
     previous = "Previous answer " * 8
     current = previous + "\n\nNew answer only."
 
-    assert (
-        managed_thread_turns_module.trim_cumulative_assistant_text(current, previous)
-        == "New answer only."
-    )
+    assert trim_cumulative_assistant_text(current, previous)[0] == "New answer only."
 
 
 def test_trim_cumulative_assistant_text_removes_short_prior_prefix() -> None:
-    assert (
-        managed_thread_turns_module.trim_cumulative_assistant_text("ABCZYX", "ABC")
-        == "ZYX"
-    )
+    assert trim_cumulative_assistant_text("ABCZYX", "ABC")[0] == "ZYX"
 
 
 def test_trim_cumulative_assistant_text_handles_collapsed_whitespace_prefix() -> None:
@@ -164,10 +162,10 @@ def test_trim_cumulative_assistant_text_handles_collapsed_whitespace_prefix() ->
     )
 
     assert (
-        managed_thread_turns_module.trim_cumulative_assistant_text(
+        trim_cumulative_assistant_text(
             current,
             previous,
-        )
+        )[0]
         == "**One agent, one PR.**"
     )
 
@@ -176,10 +174,7 @@ def test_trim_cumulative_assistant_text_keeps_unrelated_text() -> None:
     previous = "Previous answer " * 8
     current = "New answer that happens to mention Previous answer once."
 
-    assert (
-        managed_thread_turns_module.trim_cumulative_assistant_text(current, previous)
-        == current
-    )
+    assert trim_cumulative_assistant_text(current, previous)[0] == current
 
 
 def test_trim_cumulative_assistant_text_from_candidates_uses_full_transcript_prefix() -> (
@@ -190,12 +185,14 @@ def test_trim_cumulative_assistant_text_from_candidates_uses_full_transcript_pre
     third = "Third answer only."
     current = first + second + third
 
-    trimmed, matched = (
-        managed_thread_turns_module.trim_cumulative_assistant_text_from_candidates(
-            current,
-            [first + second, second],
-        )
-    )
+    trimmed = ""
+    matched = ""
+    for candidate in [first + second, second]:
+        candidate_trimmed, scope = trim_cumulative_assistant_text(current, candidate)
+        if scope != "current_turn_final":
+            trimmed = candidate_trimmed
+            matched = candidate
+            break
 
     assert trimmed == third
     assert matched == first + second
@@ -232,10 +229,10 @@ def test_prior_completed_assistant_text_prefix_reconstructs_trimmed_history() ->
 
     assert prefix == "first answersecond answer"
     assert (
-        managed_thread_turns_module.trim_cumulative_assistant_text(
+        trim_cumulative_assistant_text(
             "first answersecond answerthird answer",
             prefix,
-        )
+        )[0]
         == "third answer"
     )
 
@@ -246,7 +243,7 @@ def test_build_assistant_transcript_prefix_collapses_legacy_cumulative_rows() ->
     third = "Third assistant answer " * 5
     fourth = "Fourth answer only."
 
-    prefix = managed_thread_turns_module.build_assistant_transcript_prefix(
+    prefix = build_assistant_transcript_prefix(
         [
             {
                 "managed_turn_id": "turn-1",
@@ -2257,6 +2254,106 @@ async def test_finalize_managed_thread_execution_trims_short_cumulative_history_
     assert recorded_results[-1]["assistant_text"] == "123"
     assert fake_hub_client.transcript_requests[-1].assistant_text == "123"
     assert fake_hub_client.transcript_history_requests[-1].limit == 0
+
+
+@pytest.mark.anyio
+async def test_finalize_managed_thread_execution_rejects_exact_prior_assistant_text(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    recorded_results: list[dict[str, Any]] = []
+    progress_events: list[Any] = []
+    fake_hub_client = _FakeHubPersistenceClient(
+        transcript_history=[
+            {
+                "managed_turn_id": "previous-1",
+                "content": "User:\nfirst\n\nAssistant:\nfirst answer",
+            },
+        ]
+    )
+    started = _started_execution_with_backend_ids(tmp_path)
+
+    monkeypatch.setattr(
+        managed_thread_turns_module,
+        "harness_supports_event_streaming",
+        lambda _harness: False,
+    )
+
+    async def _stale_successful_outcome(
+        *args: Any, **kwargs: Any
+    ) -> RuntimeThreadOutcome:
+        _ = args, kwargs
+        return RuntimeThreadOutcome(
+            status="ok",
+            assistant_text="first answer",
+            error=None,
+            backend_thread_id="session-1",
+            backend_turn_id="turn-1",
+        )
+
+    monkeypatch.setattr(
+        managed_thread_turns_module,
+        "await_runtime_thread_outcome",
+        _stale_successful_outcome,
+    )
+
+    async def _record_progress_event(event: Any) -> None:
+        progress_events.append(event)
+
+    orchestration_service = SimpleNamespace(
+        get_thread_target=lambda managed_thread_id: SimpleNamespace(
+            backend_thread_id="session-1",
+            repo_id="repo-1",
+            resource_kind="repo",
+            resource_id="repo-1",
+            agent_id="hermes",
+            workspace_root=str(tmp_path),
+        ),
+        get_thread_runtime_binding=lambda managed_thread_id: SimpleNamespace(
+            backend_thread_id="session-1"
+        ),
+        get_previous_completed_execution=(
+            lambda managed_thread_id, *, exclude_execution_id=None: None
+        ),
+        record_execution_result=lambda *args, **kwargs: (
+            recorded_results.append(dict(kwargs))
+            or SimpleNamespace(status="ok", error=None)
+        ),
+    )
+
+    caplog.set_level(logging.ERROR)
+    result = await managed_thread_turns_module.finalize_managed_thread_execution(
+        orchestration_service=orchestration_service,
+        started=started,
+        state_root=tmp_path,
+        hub_client=fake_hub_client,
+        raw_config={},
+        surface=managed_thread_turns_module.ManagedThreadSurfaceInfo(
+            log_label="Web",
+            surface_kind="web",
+            surface_key="thread-1",
+        ),
+        errors=managed_thread_turns_module.ManagedThreadErrorMessages(
+            public_execution_error="Web PMA execution failed",
+            timeout_error="Web PMA turn timed out",
+            interrupted_error="Web PMA turn interrupted",
+            timeout_seconds=5,
+        ),
+        logger=logging.getLogger("test.managed_thread.reject_stale_output"),
+        turn_preview="second",
+        on_progress_event=_record_progress_event,
+    )
+
+    assert result.assistant_text == ""
+    assert "chat.managed_thread.stale_prior_assistant_output_rejected" in caplog.text
+    assert recorded_results[-1]["assistant_text"] == ""
+    assert fake_hub_client.transcript_requests[-1].assistant_text == ""
+    completed_events = [
+        event for event in progress_events if isinstance(event, Completed)
+    ]
+    assert completed_events
+    assert completed_events[-1].final_message == ""
 
 
 @pytest.mark.anyio
