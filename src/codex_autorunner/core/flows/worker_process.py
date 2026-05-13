@@ -21,6 +21,9 @@ _WORKER_METADATA_FILENAME = "worker.json"
 _WORKER_EXIT_FILENAME = "worker.exit.json"
 _WORKER_CRASH_FILENAME = "crash.json"
 _MAX_TAIL_BYTES = 32_768
+_SPAWNED_FLOW_WORKERS: set[subprocess.Popen[Any]] = set()
+
+__all__ = ["cleanup_spawned_flow_workers"]
 
 
 @dataclass(frozen=True)
@@ -742,4 +745,46 @@ def spawn_flow_worker(
     _write_worker_metadata(
         _worker_metadata_path(artifacts_dir), proc.pid, cmd, repo_root
     )
+    _SPAWNED_FLOW_WORKERS.add(proc)
     return proc, stdout_handle, stderr_handle
+
+
+def cleanup_spawned_flow_workers(*, timeout_seconds: float = 5.0) -> None:
+    """Terminate flow workers spawned by this Python process."""
+    for proc in list(_SPAWNED_FLOW_WORKERS):
+        poll = getattr(proc, "poll", None)
+        if not callable(poll):
+            _SPAWNED_FLOW_WORKERS.discard(proc)
+            continue
+        if poll() is not None:
+            _SPAWNED_FLOW_WORKERS.discard(proc)
+            continue
+        _terminate_spawned_flow_worker(proc, signal.SIGTERM)
+        try:
+            proc.wait(timeout=max(0.0, timeout_seconds))
+        except subprocess.TimeoutExpired:
+            _terminate_spawned_flow_worker(proc, signal.SIGKILL)
+            try:
+                proc.wait(timeout=1.0)
+            except (subprocess.TimeoutExpired, OSError):
+                logger.debug("Flow worker did not exit during cleanup", exc_info=True)
+        except OSError:
+            logger.debug("Failed waiting for flow worker cleanup", exc_info=True)
+        finally:
+            if poll() is not None:
+                _SPAWNED_FLOW_WORKERS.discard(proc)
+
+
+def _terminate_spawned_flow_worker(
+    proc: subprocess.Popen[Any], sig: signal.Signals
+) -> None:
+    try:
+        if os.name != "nt" and hasattr(os, "killpg") and hasattr(os, "getpgid"):
+            pgid = os.getpgid(proc.pid)
+            os.killpg(pgid, sig)
+        elif sig == signal.SIGKILL:
+            proc.kill()
+        else:
+            proc.terminate()
+    except OSError:
+        logger.debug("Failed to signal spawned flow worker", exc_info=True)
