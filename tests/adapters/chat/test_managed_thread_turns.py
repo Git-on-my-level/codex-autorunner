@@ -2346,6 +2346,10 @@ async def test_finalize_managed_thread_execution_rejects_exact_prior_assistant_t
     )
 
     assert result.assistant_text == ""
+    assert result.assistant_output is not None
+    assert result.assistant_output.text == ""
+    assert result.assistant_output.ownership == "rejected_stale_prior"
+    assert result.assistant_output.source == "reducer"
     assert "chat.managed_thread.stale_prior_assistant_output_rejected" in caplog.text
     assert recorded_results[-1]["assistant_text"] == ""
     assert fake_hub_client.transcript_requests[-1].assistant_text == ""

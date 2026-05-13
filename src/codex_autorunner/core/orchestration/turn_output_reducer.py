@@ -1,10 +1,14 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
 from typing import Any, Literal, Mapping, Sequence
 
 from .runtime_thread_events import RuntimeThreadRunEventState
 from .runtime_threads import RuntimeThreadOutcome
+from .turn_assistant_output import (
+    TurnAssistantOutput,
+    TurnAssistantOutputOwnership,
+    TurnAssistantOutputSource,
+)
 
 TurnOutputScope = Literal[
     "current_turn_final",
@@ -15,35 +19,57 @@ TurnOutputScope = Literal[
 ]
 
 
-@dataclass(frozen=True)
-class TurnOutputEnvelope:
-    """Turn-owned assistant output after provider/runtime transcript normalization.
+def _output_source(source: str) -> TurnAssistantOutputSource:
+    if source == "event_stream":
+        return "runtime_stream"
+    if source == "event_final":
+        return "runtime_final"
+    if source in {"outcome", "prior_guard"}:
+        return "reducer"
+    return "none"
 
-    Runtime adapters may expose provider payloads that are cumulative at the
-    backend-thread level. Core finalization must persist only text owned by the
-    active managed turn. This envelope is the explicit boundary: downstream
-    timeline, transcript, and delivery code consumes ``text`` and ``scope``
-    rather than reinterpreting thread-level "latest assistant" state.
-    """
 
-    managed_thread_id: str
-    managed_turn_id: str
-    backend_thread_id: str | None
-    backend_turn_id: str | None
-    text: str
-    scope: TurnOutputScope
-    source: str
-    matched_prior_text: str = ""
+def _scope_ownership(scope: TurnOutputScope) -> TurnAssistantOutputOwnership:
+    if scope == "current_turn_stream":
+        return "current_turn_stream"
+    if scope == "cumulative_transcript_trimmed":
+        return "trimmed_from_cumulative"
+    if scope == "stale_prior_output":
+        return "rejected_stale_prior"
+    if scope == "empty":
+        return "empty"
+    return "current_turn"
 
-    @property
-    def evidence(self) -> dict[str, Any]:
-        data: dict[str, Any] = {
-            "turn_output_scope": self.scope,
-            "turn_output_source": self.source,
-        }
-        if self.matched_prior_text:
-            data["turn_output_prior_chars"] = len(self.matched_prior_text)
-        return data
+
+def _turn_output(
+    *,
+    managed_thread_id: str,
+    managed_turn_id: str,
+    backend_thread_id: str | None,
+    backend_turn_id: str | None,
+    text: str,
+    scope: TurnOutputScope,
+    source: str,
+    matched_prior_text: str = "",
+    candidate_source: str | None = None,
+) -> TurnAssistantOutput:
+    provenance: dict[str, Any] = {
+        "reducer_scope": scope,
+    }
+    if candidate_source:
+        provenance["candidate_source"] = candidate_source
+    if matched_prior_text:
+        provenance["matched_prior_text"] = matched_prior_text
+    return TurnAssistantOutput(
+        managed_thread_id=managed_thread_id,
+        managed_turn_id=managed_turn_id,
+        backend_thread_id=backend_thread_id,
+        backend_turn_id=backend_turn_id,
+        text=text,
+        ownership=_scope_ownership(scope),
+        source=_output_source(source),
+        provenance=provenance,
+    )
 
 
 def _whitespace_insensitive_prefix_end(value: str, prefix: str) -> int | None:
@@ -156,11 +182,11 @@ def reduce_turn_output(
     outcome: RuntimeThreadOutcome,
     event_state: RuntimeThreadRunEventState,
     prior_assistant_texts: Sequence[str],
-) -> TurnOutputEnvelope:
+) -> TurnAssistantOutput:
     """Return the only assistant text downstream code may persist for this turn."""
 
     if outcome.status != "ok":
-        return TurnOutputEnvelope(
+        return _turn_output(
             managed_thread_id=managed_thread_id,
             managed_turn_id=managed_turn_id,
             backend_thread_id=backend_thread_id,
@@ -168,6 +194,7 @@ def reduce_turn_output(
             text="",
             scope="empty",
             source="non_ok_outcome",
+            candidate_source="outcome",
         )
 
     candidates = [
@@ -188,7 +215,7 @@ def reduce_turn_output(
             continue
         if source == "event_stream" and scope == "current_turn_final":
             scope = "current_turn_stream"
-        return TurnOutputEnvelope(
+        return _turn_output(
             managed_thread_id=managed_thread_id,
             managed_turn_id=managed_turn_id,
             backend_thread_id=backend_thread_id,
@@ -197,9 +224,10 @@ def reduce_turn_output(
             scope=scope,
             source=source,
             matched_prior_text=matched_prior,
+            candidate_source=source,
         )
 
-    return TurnOutputEnvelope(
+    return _turn_output(
         managed_thread_id=managed_thread_id,
         managed_turn_id=managed_turn_id,
         backend_thread_id=backend_thread_id,
@@ -208,6 +236,7 @@ def reduce_turn_output(
         scope="stale_prior_output" if stale_match else "empty",
         source="prior_guard" if stale_match else "no_output",
         matched_prior_text=stale_match,
+        candidate_source="prior_guard" if stale_match else None,
     )
 
 
@@ -240,7 +269,6 @@ def assistant_text_from_transcript_content(content: str) -> str:
 
 
 __all__ = [
-    "TurnOutputEnvelope",
     "TurnOutputScope",
     "assistant_text_extends_prefix",
     "assistant_text_from_transcript_content",

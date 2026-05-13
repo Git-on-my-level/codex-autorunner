@@ -31,8 +31,9 @@ def test_reduce_turn_output_trims_cumulative_transcript_prefix() -> None:
     )
 
     assert envelope.text == "second answer"
-    assert envelope.scope == "cumulative_transcript_trimmed"
-    assert envelope.source == "outcome"
+    assert envelope.ownership == "trimmed_from_cumulative"
+    assert envelope.source == "reducer"
+    assert envelope.provenance["candidate_source"] == "outcome"
 
 
 def test_reduce_turn_output_rejects_exact_prior_output_as_stale() -> None:
@@ -49,8 +50,9 @@ def test_reduce_turn_output_rejects_exact_prior_output_as_stale() -> None:
     )
 
     assert envelope.text == ""
-    assert envelope.scope == "stale_prior_output"
-    assert envelope.source == "prior_guard"
+    assert envelope.ownership == "rejected_stale_prior"
+    assert envelope.source == "reducer"
+    assert envelope.provenance["candidate_source"] == "prior_guard"
 
 
 def test_reduce_turn_output_uses_stream_text_when_terminal_text_is_stale() -> None:
@@ -68,5 +70,6 @@ def test_reduce_turn_output_uses_stream_text_when_terminal_text_is_stale() -> No
     )
 
     assert envelope.text == "second answer"
-    assert envelope.scope == "current_turn_stream"
-    assert envelope.source == "event_stream"
+    assert envelope.ownership == "current_turn_stream"
+    assert envelope.source == "runtime_stream"
+    assert envelope.provenance["candidate_source"] == "event_stream"

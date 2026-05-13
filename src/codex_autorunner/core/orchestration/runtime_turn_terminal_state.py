@@ -23,6 +23,7 @@ from .runtime_state_events import (
     normalize_transport_returned,
 )
 from .stream_text_merge import AssistantOutputState
+from .turn_assistant_output import TurnAssistantOutput
 
 RuntimeThreadOutcomeStatus = Literal["ok", "error", "interrupted"]
 RuntimeThreadCompletionSource = Literal[
@@ -124,6 +125,7 @@ class RuntimeThreadOutcome:
     last_progress_timestamp: Optional[str] = None
     failure_cause: Optional[str] = None
     terminal_evidence: dict[str, Any] = field(default_factory=dict)
+    assistant_output: Optional[TurnAssistantOutput] = None
 
 
 def reduce_terminal_evidence(evidence: TerminalEvidence) -> TerminalEvidenceDecision:
