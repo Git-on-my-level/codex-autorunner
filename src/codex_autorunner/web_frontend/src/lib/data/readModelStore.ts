@@ -205,20 +205,21 @@ export class ReadModelEntityStore implements Readable<ReadModelEntityState> {
     groups: ChatIndexGroup[];
     counters: ChatIndexCounters;
   }): void {
+    const rows = uniqueChatIndexRows(snapshot.rows);
     const next = cloneState(this.state);
     const detailThreads = Object.values(next.chatDetails)
       .map((detail) => detail.thread)
       .filter((thread): thread is ChatThreadProjection => thread !== null);
     for (const id of Object.keys(next.chats)) bump(next, 'chat', id);
     for (const id of Object.keys(next.chatGroups)) bump(next, 'chatGroup', id);
-    next.chats = keyed(snapshot.rows, (row) => row.chatId);
-    next.chatOrder = snapshot.rows.map((row) => row.chatId);
+    next.chats = keyed(rows, (row) => row.chatId);
+    next.chatOrder = rows.map((row) => row.chatId);
     next.chatGroups = keyed(snapshot.groups, (group) => group.groupId);
     next.chatGroupOrder = snapshot.groups.map((group) => group.groupId);
     next.chatCounters = snapshot.counters;
     next.chatIndexCursor = snapshot.cursor;
     rememberCursor(next, 'chat.index', snapshot.cursor);
-    for (const row of snapshot.rows) bump(next, 'chat', row.chatId);
+    for (const row of rows) bump(next, 'chat', row.chatId);
     for (const group of snapshot.groups) bump(next, 'chatGroup', group.groupId);
     // The index snapshot is a bounded list window. Do not let a late index
     // response erase a detail-backed row loaded from a refreshable /chats/:id URL.
@@ -794,6 +795,16 @@ function keyed<T>(items: T[], key: (item: T) => string): Record<string, T> {
   const record: Record<string, T> = {};
   for (const item of items) record[key(item)] = item;
   return record;
+}
+
+function uniqueChatIndexRows(rows: ChatIndexRow[]): ChatIndexRow[] {
+  const order: string[] = [];
+  const byChatId = new Map<string, ChatIndexRow>();
+  for (const row of rows) {
+    if (!byChatId.has(row.chatId)) order.push(row.chatId);
+    byChatId.set(row.chatId, row);
+  }
+  return order.map((chatId) => byChatId.get(chatId)).filter((row): row is ChatIndexRow => Boolean(row));
 }
 
 function chatTimelineItemToPmaItem(chatId: string, item: ChatTimelineItem): PmaTimelineItem {

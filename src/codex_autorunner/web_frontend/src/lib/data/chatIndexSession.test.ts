@@ -29,6 +29,37 @@ describe('chat index session', () => {
     session.stop();
     expect(close).toHaveBeenCalledTimes(1);
   });
+
+  it('keeps live stream updates from reordering existing chat rows under the cursor', async () => {
+    const store = new ReadModelEntityStore();
+    const streamOptions: ChatSurfaceStreamOptions[] = [];
+    const openStream = vi.fn((options: ChatSurfaceStreamOptions): StreamSubscription => {
+      streamOptions.push(options);
+      return { close: vi.fn() };
+    });
+    const session = createChatIndexSession({ api: mockApi(), store, openStream });
+
+    session.start();
+    await session.refresh();
+
+    const options = streamOptions[0];
+    if (!options) throw new Error('stream was not opened');
+    options.onEvent({
+      kind: 'chat_snapshot',
+      lastEventId: 'evt-1',
+      payload: {
+        surfaces: [
+          chatSurface('chat-new', 'New chat'),
+          chatSurface('chat-active', 'Active chat renamed'),
+          chatSurface('chat-archived', 'Archived chat')
+        ]
+      }
+    });
+
+    const rows = selectPmaChats(store.snapshot());
+    expect(rows.map((chat) => chat.id)).toEqual(['chat-active', 'chat-archived', 'chat-new']);
+    expect(rows[0].title).toBe('Active chat renamed');
+  });
 });
 
 function mockApi(): PmaApiClient {
@@ -54,5 +85,19 @@ function chatRow(id: string, title: string, status: string): JsonRecord {
     runtime_status: status,
     updated_at: '2026-05-12T00:00:00Z',
     surface: 'pma'
+  };
+}
+
+function chatSurface(id: string, title: string): JsonRecord {
+  return {
+    surface_kind: 'pma',
+    surface_key: id,
+    managed_thread_id: id,
+    facts: ['managed_thread'],
+    lifecycle_status: 'active',
+    resource_owner: {},
+    display: { display_name: title },
+    metadata: { runtime_status: 'idle' },
+    updated_at: '2026-05-12T00:00:00Z'
   };
 }

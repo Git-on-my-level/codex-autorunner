@@ -226,6 +226,26 @@ describe('read model entity store', () => {
     expect(selectChatDetailView(store.snapshot(), 'deep-linked-chat').thread?.title).toBe('Chat detail');
   });
 
+  it('deduplicates full chat index snapshots by durable chat id', () => {
+    const store = new ReadModelEntityStore();
+    const first = chat('chat-1', 'waiting');
+    first.title = 'Original title';
+    const latest = chat('chat-1', 'running');
+    latest.title = 'Latest title';
+
+    store.applyChatIndexSnapshot({
+      cursor: cursor(1),
+      rows: [first, chat('chat-2'), latest],
+      groups: [],
+      counters: { total: 3, waiting: 1, running: 1, unread: 0, archived: 0 }
+    });
+
+    const view = selectChatIndexView(store.snapshot());
+    expect(view.rows.map((row) => row.chatId)).toEqual(['chat-1', 'chat-2']);
+    expect(view.rows[0].title).toBe('Latest title');
+    expect(view.rows[0].status).toBe('running');
+  });
+
   it('preserves chat kind when detail snapshots omit the durable field', () => {
     const store = new ReadModelEntityStore();
     const row = chat('chat-1');

@@ -24,6 +24,7 @@ import {
   mergePmaActivityEvents,
   mergePmaTimelineAndActivityCards,
   mapChatSurfaceSnapshotToPmaChats,
+  mapChatSurfaceEventToPmaChatSummary,
   modelReasoningOptions,
   modelSelectorState,
   optimisticUserTimelineItemFromSend,
@@ -269,6 +270,7 @@ describe('PMA chat view helpers', () => {
           surface_kind: 'discord',
           surface_key: 'channel-1',
           managed_thread_id: 'thread-1',
+          facts: ['managed_thread'],
           lifecycle: 'running',
           lifecycle_status: 'active',
           resource_owner: { repo_id: 'repo-1', resource_kind: 'repo', resource_id: 'repo-1' },
@@ -293,14 +295,50 @@ describe('PMA chat view helpers', () => {
         agentProfile: 'm4-pma',
         repoId: 'repo-1',
         raw: { surface_kind: 'discord', surface_key: 'channel-1', binding_kind: 'discord', binding_id: 'channel-1' }
-      },
-      {
-        id: 'surface:telegram:-100:42',
-        title: 'Telegram Topic',
-        status: 'idle',
-        raw: { surface_kind: 'telegram', surface_key: '-100:42' }
       }
     ]);
+  });
+
+  it('does not map unbound or stale surface inventory into selectable chats', () => {
+    const chats = mapChatSurfaceSnapshotToPmaChats({
+      surfaces: [
+        {
+          surface_kind: 'notification',
+          surface_key: 'notification:abc',
+          lifecycle: 'discovered',
+          display: { display_name: 'Notification abc' }
+        },
+        {
+          surface_kind: 'discord',
+          surface_key: 'channel-1',
+          managed_thread_id: 'missing-thread',
+          facts: ['binding'],
+          display: { display_name: 'Stale bound thread' }
+        },
+        {
+          surface_kind: 'discord',
+          surface_key: 'channel-2',
+          managed_thread_id: 'missing-facts-thread',
+          display: { display_name: 'Missing facts thread' }
+        },
+        {
+          surface_kind: 'discord',
+          surface_key: 'channel-3',
+          managed_thread_id: 'non-array-facts-thread',
+          facts: 'managed_thread',
+          display: { display_name: 'Non-array facts thread' }
+        },
+        {
+          surface_kind: 'pma',
+          surface_key: 'live-thread',
+          managed_thread_id: 'live-thread',
+          facts: ['managed_thread'],
+          display: { display_name: 'Live thread' }
+        }
+      ]
+    });
+
+    expect(chats.map((chat) => chat.id)).toEqual(['live-thread']);
   });
 
   it('prefers projection lifecycle over stale latest execution when thread is archived', () => {
@@ -310,6 +348,7 @@ describe('PMA chat view helpers', () => {
           surface_kind: 'pma',
           surface_key: 'thread-archived',
           managed_thread_id: 'thread-archived',
+          facts: ['managed_thread'],
           lifecycle: 'archived',
           lifecycle_status: 'archived',
           display: { display_name: 'Archived chat' },
@@ -340,6 +379,7 @@ describe('PMA chat view helpers', () => {
           surface_kind: 'pma',
           surface_key: 'thread-queued',
           managed_thread_id: 'thread-queued',
+          facts: ['managed_thread'],
           lifecycle: 'queued',
           lifecycle_status: 'active',
           display: { display_name: 'Follow-up queued' },
@@ -371,6 +411,7 @@ describe('PMA chat view helpers', () => {
           surface_kind: 'discord',
           surface_key: 'channel-1',
           managed_thread_id: 'thread-1',
+          facts: ['managed_thread'],
           lifecycle: 'completed',
           display: { display_name: 'Discord Ops' },
           updated_at: '2026-05-11T05:48:46Z',
@@ -427,6 +468,30 @@ describe('PMA chat view helpers', () => {
         updatedAt: '2026-05-04T01:00:00Z'
       }
     ]);
+  });
+
+  it('maps chat surface events as managed-thread projections', () => {
+    const chat = mapChatSurfaceEventToPmaChatSummary({
+      event_type: 'queue.state_changed',
+      surface: { surface_kind: 'discord', surface_key: 'channel-1' },
+      managed_thread_id: 'thread-1',
+      lifecycle: 'queued',
+      lifecycle_status: 'active',
+      status: 'queued',
+      occurred_at: '2026-05-04T01:00:00Z',
+      details: { channel: { display: 'Discord Ops' } }
+    });
+
+    expect(chat).toMatchObject({
+      id: 'thread-1',
+      title: 'Discord Ops',
+      status: 'waiting',
+      raw: {
+        facts: ['managed_thread'],
+        surface_kind: 'discord',
+        surface_key: 'channel-1'
+      }
+    });
   });
 
   it('filters chats by messenger surface slug', () => {
