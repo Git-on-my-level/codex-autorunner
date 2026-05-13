@@ -93,7 +93,7 @@ need_cmd make
 # unless the caller opts in with CODEX_FAST_TEST_ENFORCE_BUDGET=1.
 FAST_TEST_MARKERS='not integration and not slow'
 FAST_TEST_ENFORCE_BUDGET="${CODEX_FAST_TEST_ENFORCE_BUDGET:-0}"
-_AUTO_WORKERS="$("$PYTHON_BIN" -c 'import os;print(min(os.cpu_count() or 4,8))' 2>/dev/null || echo 4)"
+_AUTO_WORKERS="$("$PYTHON_BIN" -c 'import os;print(os.cpu_count() or 4)' 2>/dev/null || echo 4)"
 FAST_TEST_WORKERS="${CODEX_FAST_TEST_WORKERS:-$_AUTO_WORKERS}"
 STAGED_FILES="$(git diff --cached --name-only --diff-filter=ACMRD 2>/dev/null || true)"
 
