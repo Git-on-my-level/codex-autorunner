@@ -2414,6 +2414,9 @@ textarea:hover {
 }
 
 .pma-status-bar .meta {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.25em;
   min-width: 0;
   flex-shrink: 0;
 }

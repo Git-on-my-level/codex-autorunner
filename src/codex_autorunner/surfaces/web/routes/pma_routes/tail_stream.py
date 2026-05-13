@@ -9,10 +9,7 @@ from typing import Any, Optional
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
 
-from .....agents.base import (
-    harness_progress_event_stream,
-    harness_supports_event_streaming,
-)
+from .....agents.base import harness_supports_event_streaming
 from .....core.managed_thread_store import ManagedThreadStore
 from .....core.orchestration.managed_thread_timeline import (
     timeline_item_from_tail_event,
@@ -30,8 +27,6 @@ from .managed_thread_tail_serializers import (
     _derive_progress_phase,
     _event_received_at_iso,
     _latest_token_usage_from_timeline_entries,
-    _record_serialized_tail_event,
-    _refresh_active_turn_diagnostics,
     _running_turn_stall_flags,
     _serialize_persisted_timeline_tail_events,
     _serialize_runtime_raw_tail_events,
@@ -44,6 +39,9 @@ from .managed_threads import (
     _serialize_thread_target,
     build_managed_thread_orchestration_service,
 )
+
+_PERSISTED_TAIL_POLL_SECONDS = 1.0
+_PERSISTED_TAIL_HEARTBEAT_SECONDS = 15.0
 
 
 def parse_tail_duration_seconds(value: Optional[str]) -> Optional[int]:
@@ -213,20 +211,6 @@ def _load_managed_thread_status_state(
     return thread, serialized_thread, queued_turns, queue_depth
 
 
-def _poll_managed_thread_execution_state(
-    *,
-    service: Any,
-    managed_thread_id: str,
-    managed_turn_id: str,
-) -> tuple[Any, str, Any]:
-    turn = service.get_execution(managed_thread_id, managed_turn_id)
-    status = str((turn.status if turn is not None else "") or "").strip().lower()
-    refreshed_thread = (
-        service.get_thread_target(managed_thread_id) if status == "running" else None
-    )
-    return turn, status, refreshed_thread
-
-
 def _stream_lifecycle_fields(payload: dict[str, Any]) -> dict[str, Any]:
     return {
         "work_status": payload.get("work_status"),
@@ -276,6 +260,8 @@ async def _build_managed_thread_tail_snapshot(
     level: str,
     since_ms: Optional[int],
     resume_after: Optional[int],
+    resume_after_managed_turn_id: Optional[str] = None,
+    include_runtime_fallback: bool = True,
 ) -> dict[str, Any]:
     context = get_pma_request_context(request)
     thread, turn, persisted_timeline_entries, turn_record = await asyncio.to_thread(
@@ -287,7 +273,11 @@ async def _build_managed_thread_tail_snapshot(
     )
     if thread is None:
         raise HTTPException(status_code=404, detail="Managed thread not found")
+    requested_resume_turn_id = normalize_optional_text(resume_after_managed_turn_id)
     if turn is None:
+        effective_resume_after = (
+            0 if requested_resume_turn_id else int(resume_after or 0)
+        )
         lifecycle = build_managed_thread_stream_lifecycle(
             managed_turn_id=None,
             turn_status=None,
@@ -303,7 +293,7 @@ async def _build_managed_thread_tail_snapshot(
             "turn_status": None,
             "lifecycle_events": [],
             "events": [],
-            "last_event_id": int(resume_after or 0),
+            "last_event_id": effective_resume_after,
             "elapsed_seconds": None,
             "idle_seconds": None,
             "activity": "idle",
@@ -317,6 +307,12 @@ async def _build_managed_thread_tail_snapshot(
         }
 
     managed_turn_id = str(turn.execution_id or "")
+    effective_resume_after = int(resume_after or 0)
+    if (
+        requested_resume_turn_id is not None
+        and requested_resume_turn_id != managed_turn_id
+    ):
+        effective_resume_after = 0
     turn_status = str(turn.status or "").strip().lower()
     started_at = normalize_optional_text(turn.started_at)
     finished_at = normalize_optional_text(turn.finished_at)
@@ -354,16 +350,21 @@ async def _build_managed_thread_tail_snapshot(
         persisted_timeline_entries,
         level=level,
         since_ms=since_ms,
-        resume_after=resume_after,
+        resume_after=effective_resume_after,
     )
-    if not tail_events and has_backend_binding and harness is not None:
+    if (
+        include_runtime_fallback
+        and not tail_events
+        and has_backend_binding
+        and harness is not None
+    ):
         list_fn = getattr(harness, "list_progress_events", None)
         if callable(list_fn):
             try:
                 raw_events = await list_fn(
                     str(backend_thread_id),
                     str(backend_turn_id),
-                    after_id=int(resume_after or 0),
+                    after_id=effective_resume_after,
                     limit=limit,
                 )
             except (
@@ -372,7 +373,7 @@ async def _build_managed_thread_tail_snapshot(
                 raw_events = []
             state = RuntimeThreadRunEventState()
             projection_state = ProgressProjectionState()
-            event_id_start = int(resume_after or 0)
+            event_id_start = effective_resume_after
             for raw_event in raw_events:
                 if isinstance(raw_event, dict):
                     activity_at = _event_received_at_iso(raw_event)
@@ -399,7 +400,7 @@ async def _build_managed_thread_tail_snapshot(
             if len(tail_events) > limit:
                 tail_events = tail_events[-limit:]
 
-    last_event_id = int(resume_after or 0)
+    last_event_id = effective_resume_after
     last_activity_at: Optional[str] = raw_last_activity_at
     if tail_events:
         last_event_id = int(tail_events[-1].get("event_id") or last_event_id)
@@ -504,6 +505,52 @@ async def _build_managed_thread_tail_snapshot(
     return snapshot
 
 
+def _tail_event_sse_frames(
+    *,
+    managed_thread_id: str,
+    managed_turn_id: Any,
+    events: list[Any],
+) -> list[str]:
+    frames: list[str] = []
+    for event in events:
+        if not isinstance(event, dict):
+            continue
+        event_id = event.get("event_id")
+        event_id_line = (
+            f"id: {event_id}\n" if isinstance(event_id, int) and event_id > 0 else ""
+        )
+        frames.append(
+            f"event: tail\n"
+            f"{event_id_line}"
+            f"data: {json.dumps(event, ensure_ascii=True)}\n\n"
+        )
+        timeline_frame = _timeline_stream_frame(
+            managed_thread_id=managed_thread_id,
+            managed_turn_id=managed_turn_id,
+            tail_event=event,
+        )
+        if timeline_frame is not None:
+            frames.append(timeline_frame)
+    return frames
+
+
+def _progress_stream_payload(snapshot: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "managed_thread_id": snapshot.get("managed_thread_id"),
+        "managed_turn_id": snapshot.get("managed_turn_id"),
+        "turn_status": snapshot.get("turn_status") or "unknown",
+        "started_at": snapshot.get("started_at"),
+        "elapsed_seconds": snapshot.get("elapsed_seconds"),
+        "idle_seconds": snapshot.get("idle_seconds"),
+        "phase": snapshot.get("phase"),
+        "phase_source": snapshot.get("phase_source"),
+        "guidance": snapshot.get("guidance"),
+        "last_tool": snapshot.get("last_tool"),
+        "active_turn_diagnostics": snapshot.get("active_turn_diagnostics"),
+        **_stream_lifecycle_fields(snapshot),
+    }
+
+
 def build_managed_thread_tail_routes(
     router: APIRouter,
     get_runtime_state,
@@ -518,6 +565,7 @@ def build_managed_thread_tail_routes(
         limit: int = 20,
         since: Optional[str] = None,
         since_event_id: Optional[int] = None,
+        since_managed_turn_id: Optional[str] = None,
         level: str = "info",
     ) -> dict[str, Any]:
         if limit <= 0:
@@ -532,6 +580,7 @@ def build_managed_thread_tail_routes(
             level=normalize_tail_level(level),
             since_ms=since_ms_from_duration(since),
             resume_after=resolve_resume_after(request, since_event_id),
+            resume_after_managed_turn_id=since_managed_turn_id,
         )
         thread, serialized_thread, queued_turns, queue_depth = await asyncio.to_thread(
             _load_managed_thread_status_state,
@@ -557,6 +606,7 @@ def build_managed_thread_tail_routes(
         limit: int = 50,
         since: Optional[str] = None,
         since_event_id: Optional[int] = None,
+        since_managed_turn_id: Optional[str] = None,
         level: str = "info",
     ) -> dict[str, Any]:
         if limit <= 0:
@@ -570,6 +620,7 @@ def build_managed_thread_tail_routes(
             level=normalize_tail_level(level),
             since_ms=since_ms_from_duration(since),
             resume_after=resolve_resume_after(request, since_event_id),
+            resume_after_managed_turn_id=since_managed_turn_id,
         )
 
     @router.get("/threads/{managed_thread_id}/tail/events")
@@ -579,7 +630,9 @@ def build_managed_thread_tail_routes(
         limit: int = 50,
         since: Optional[str] = None,
         since_event_id: Optional[int] = None,
+        since_managed_turn_id: Optional[str] = None,
         level: str = "info",
+        once: bool = False,
     ):
         if limit <= 0:
             raise HTTPException(status_code=400, detail="limit must be greater than 0")
@@ -602,255 +655,64 @@ def build_managed_thread_tail_routes(
             level=normalized_level,
             since_ms=since_ms,
             resume_after=resolve_resume_after(request, since_event_id),
+            resume_after_managed_turn_id=since_managed_turn_id,
+            include_runtime_fallback=False,
         )
 
         async def _stream() -> Any:
             yield f"event: state\ndata: {json.dumps(snapshot, ensure_ascii=True)}\n\n"
-            for event in snapshot.get("events", []):
-                if not isinstance(event, dict):
-                    continue
-                event_id = event.get("event_id")
-                event_id_line = (
-                    f"id: {event_id}\n"
-                    if isinstance(event_id, int) and event_id > 0
-                    else ""
-                )
-                yield (
-                    f"event: tail\n"
-                    f"{event_id_line}"
-                    f"data: {json.dumps(event, ensure_ascii=True)}\n\n"
-                )
-                timeline_frame = _timeline_stream_frame(
-                    managed_thread_id=managed_thread_id,
-                    managed_turn_id=snapshot.get("managed_turn_id"),
-                    tail_event=event,
-                )
-                if timeline_frame is not None:
-                    yield timeline_frame
-
-            if snapshot.get("stream_should_close"):
-                return
-            if not snapshot.get("stream_available"):
-                while True:
-                    await asyncio.sleep(5.0)
-                    turn, status, refreshed_thread = await asyncio.to_thread(
-                        _poll_managed_thread_execution_state,
-                        service=service,
-                        managed_thread_id=managed_thread_id,
-                        managed_turn_id=str(snapshot.get("managed_turn_id") or ""),
-                    )
-                    if status != "running":
-                        lifecycle = build_managed_thread_stream_lifecycle(
-                            managed_turn_id=snapshot.get("managed_turn_id"),
-                            turn_status=status or "unknown",
-                            thread_status=getattr(refreshed_thread, "status", None),
-                            lifecycle_status=getattr(
-                                refreshed_thread, "lifecycle_status", None
-                            ),
-                            stream_available=False,
-                            queue_depth=0,
-                        )
-                        state_payload = {
-                            "managed_thread_id": managed_thread_id,
-                            "managed_turn_id": snapshot.get("managed_turn_id"),
-                            "turn_status": status or "unknown",
-                            "started_at": snapshot.get("started_at"),
-                            "elapsed_seconds": snapshot.get("elapsed_seconds"),
-                            **lifecycle,
-                            "stream_lifecycle": lifecycle,
-                        }
-                        yield (
-                            "event: state\ndata: "
-                            f"{json.dumps(state_payload, ensure_ascii=True)}\n\n"
-                        )
-                        return
-
-                    refreshed_backend_thread_id = (
-                        normalize_optional_text(
-                            getattr(refreshed_thread, "backend_thread_id", None)
-                        )
-                        if refreshed_thread is not None
-                        else None
-                    )
-                    refreshed_backend_turn_id = normalize_optional_text(
-                        turn.backend_id if turn is not None else None
-                    )
-                    if refreshed_backend_thread_id and refreshed_backend_turn_id:
-                        snapshot["stream_available"] = True
-                        snapshot["backend_thread_id"] = refreshed_backend_thread_id
-                        snapshot["backend_turn_id"] = refreshed_backend_turn_id
-                        refreshed_snapshot = await _build_managed_thread_tail_snapshot(
-                            request=request,
-                            service=service,
-                            managed_thread_id=managed_thread_id,
-                            harness=harness,
-                            limit=min(limit, 200),
-                            level=normalized_level,
-                            since_ms=since_ms,
-                            resume_after=resolve_resume_after(request, since_event_id),
-                        )
-                        for key in (
-                            "events",
-                            "last_event_id",
-                            "phase",
-                            "phase_source",
-                            "guidance",
-                            "last_tool",
-                            "idle_seconds",
-                            "active_turn_diagnostics",
-                        ):
-                            if key in refreshed_snapshot:
-                                snapshot[key] = refreshed_snapshot[key]
-                        for event in snapshot.get("events", []):
-                            if not isinstance(event, dict):
-                                continue
-                            event_id = event.get("event_id")
-                            event_id_line = (
-                                f"id: {event_id}\n"
-                                if isinstance(event_id, int) and event_id > 0
-                                else ""
-                            )
-                            yield (
-                                f"event: tail\n"
-                                f"{event_id_line}"
-                                f"data: {json.dumps(event, ensure_ascii=True)}\n\n"
-                            )
-                            timeline_frame = _timeline_stream_frame(
-                                managed_thread_id=managed_thread_id,
-                                managed_turn_id=snapshot.get("managed_turn_id"),
-                                tail_event=event,
-                            )
-                            if timeline_frame is not None:
-                                yield timeline_frame
-                        break
-
-                    now = datetime.now(timezone.utc)
-                    started_dt = parse_iso_datetime(snapshot.get("started_at"))
-                    elapsed = None
-                    if started_dt is not None:
-                        elapsed = max(0, int((now - started_dt).total_seconds()))
-                    phase, phase_source, guidance, last_tool = _derive_progress_phase(
-                        turn_status="running",
-                        stream_available=False,
-                        events=[
-                            event
-                            for event in snapshot.get("events", [])
-                            if isinstance(event, dict)
-                        ],
-                        idle_seconds=elapsed,
-                        agent_id=snapshot.get("agent"),
-                    )
-                    active_turn_diagnostics = _refresh_active_turn_diagnostics(
-                        snapshot,
-                        turn_status="running",
-                        idle_seconds=elapsed,
-                        phase=phase,
-                        guidance=guidance,
-                    )
-                    progress_payload = {
-                        "managed_thread_id": managed_thread_id,
-                        "managed_turn_id": snapshot.get("managed_turn_id"),
-                        "turn_status": "running",
-                        "started_at": snapshot.get("started_at"),
-                        "elapsed_seconds": elapsed,
-                        "phase": phase,
-                        "phase_source": phase_source,
-                        "guidance": guidance,
-                        "last_tool": last_tool,
-                        "active_turn_diagnostics": active_turn_diagnostics,
-                        **_stream_lifecycle_fields(snapshot),
-                    }
-                    yield (
-                        "event: progress\ndata: "
-                        f"{json.dumps(progress_payload, ensure_ascii=True)}\n\n"
-                    )
-
-            workspace_root = (
-                str(thread_target.workspace_root or "")
-                if thread_target is not None
-                else ""
-            )
-            backend_thread_id = str(snapshot.get("backend_thread_id") or "")
-            backend_turn_id = str(snapshot.get("backend_turn_id") or "")
-            if not backend_thread_id or not backend_turn_id or harness is None:
-                return
-
-            workspace_path = Path(workspace_root) if workspace_root else Path(".")
-            state = RuntimeThreadRunEventState()
-            projection_state = ProgressProjectionState()
-            initial_last_event_id = int(snapshot.get("last_event_id") or 0)
-            last_event_id = initial_last_event_id
-            async for raw_event in harness_progress_event_stream(
-                harness,
-                workspace_path,
-                backend_thread_id,
-                backend_turn_id,
-            ):
-                if isinstance(raw_event, dict):
-                    activity_at = _event_received_at_iso(raw_event)
-                    if activity_at is None:
-                        activity_at = normalize_optional_text(
-                            raw_event.get("published_at")
-                        )
-                    if activity_at:
-                        snapshot["last_activity_at"] = activity_at
-                serialized_entries = await _serialize_runtime_raw_tail_events(
-                    raw_event,
-                    state,
-                    level=normalized_level,
-                    event_id_start=last_event_id,
-                    since_ms=since_ms,
-                    projection_state=projection_state,
-                )
-                for serialized_entry in serialized_entries:
-                    entry_id = int(serialized_entry.get("event_id") or 0)
-                    if entry_id > 0 and entry_id <= initial_last_event_id:
-                        continue
-                    event_id = _record_serialized_tail_event(snapshot, serialized_entry)
-                    if event_id > 0:
-                        last_event_id = event_id
-                    yield (
-                        "event: tail\n"
-                        f"id: {event_id}\n"
-                        f"data: {json.dumps(serialized_entry, ensure_ascii=True)}\n\n"
-                    )
-                    timeline_frame = _timeline_stream_frame(
-                        managed_thread_id=managed_thread_id,
-                        managed_turn_id=snapshot.get("managed_turn_id"),
-                        tail_event=serialized_entry,
-                    )
-                    if timeline_frame is not None:
-                        yield timeline_frame
-
-            refreshed = await _build_managed_thread_tail_snapshot(
-                request=request,
-                service=service,
+            for frame in _tail_event_sse_frames(
                 managed_thread_id=managed_thread_id,
-                harness=harness,
-                limit=min(limit, 200),
-                level=normalized_level,
-                since_ms=since_ms,
-                resume_after=None,
+                managed_turn_id=snapshot.get("managed_turn_id"),
+                events=snapshot.get("events", []),
+            ):
+                yield frame
+            last_event_id = int(snapshot.get("last_event_id") or 0)
+            last_managed_turn_id = normalize_optional_text(
+                snapshot.get("managed_turn_id")
             )
-            progress_payload = {
-                "managed_thread_id": managed_thread_id,
-                "managed_turn_id": refreshed.get("managed_turn_id"),
-                "turn_status": refreshed.get("turn_status") or "running",
-                "started_at": refreshed.get("started_at"),
-                "elapsed_seconds": refreshed.get("elapsed_seconds"),
-                "idle_seconds": refreshed.get("idle_seconds"),
-                "phase": refreshed.get("phase"),
-                "phase_source": refreshed.get("phase_source"),
-                "guidance": refreshed.get("guidance"),
-                "last_tool": refreshed.get("last_tool"),
-                "active_turn_diagnostics": refreshed.get("active_turn_diagnostics"),
-                **_stream_lifecycle_fields(refreshed),
-            }
             yield (
                 "event: progress\ndata: "
-                f"{json.dumps(progress_payload, ensure_ascii=True)}\n\n"
+                f"{json.dumps(_progress_stream_payload(snapshot), ensure_ascii=True)}\n\n"
             )
-            return
+            if once or snapshot.get("stream_should_close"):
+                return
+
+            last_heartbeat_at = asyncio.get_running_loop().time()
+            while True:
+                await asyncio.sleep(_PERSISTED_TAIL_POLL_SECONDS)
+                refreshed = await _build_managed_thread_tail_snapshot(
+                    request=request,
+                    service=service,
+                    managed_thread_id=managed_thread_id,
+                    harness=harness,
+                    limit=min(limit, 200),
+                    level=normalized_level,
+                    since_ms=since_ms,
+                    resume_after=last_event_id,
+                    resume_after_managed_turn_id=last_managed_turn_id,
+                    include_runtime_fallback=False,
+                )
+                for frame in _tail_event_sse_frames(
+                    managed_thread_id=managed_thread_id,
+                    managed_turn_id=refreshed.get("managed_turn_id"),
+                    events=refreshed.get("events", []),
+                ):
+                    yield frame
+                last_event_id = int(refreshed.get("last_event_id") or last_event_id)
+                last_managed_turn_id = normalize_optional_text(
+                    refreshed.get("managed_turn_id")
+                )
+                yield (
+                    "event: progress\ndata: "
+                    f"{json.dumps(_progress_stream_payload(refreshed), ensure_ascii=True)}\n\n"
+                )
+                if refreshed.get("stream_should_close"):
+                    return
+                now = asyncio.get_running_loop().time()
+                if now - last_heartbeat_at >= _PERSISTED_TAIL_HEARTBEAT_SECONDS:
+                    yield ": keep-alive\n\n"
+                    last_heartbeat_at = now
 
         return StreamingResponse(
             _stream(),

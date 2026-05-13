@@ -6,7 +6,7 @@ import threading
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any, Optional
+from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
@@ -387,63 +387,15 @@ def test_managed_thread_tail_snapshot_marks_opencode_stream_available(
     assert payload["phase"] != "no_stream_available"
 
 
-def test_managed_thread_tail_events_streams_hermes_runtime_events(
+def test_managed_thread_tail_events_streams_persisted_timeline_events(
     hub_env, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     _enable_pma(hub_env.hub_root)
-
-    class _HermesSupervisor:
-        async def stream_turn_events(
-            self,
-            workspace_root: Path,
-            conversation_id: str,
-            turn_id: str,
-        ):
-            _ = workspace_root, conversation_id, turn_id
-            yield {"method": "prompt/progress", "params": {"delta": "hello "}}
-            yield {"method": "prompt/completed", "params": {"finalOutput": "hello"}}
-
-        async def ensure_ready(self, workspace_root: Path) -> None:
-            _ = workspace_root
-
-        async def create_session(
-            self, workspace_root: Path, title: Optional[str] = None
-        ):
-            _ = workspace_root, title
-            return type("Session", (), {"session_id": "hermes-session-1"})()
-
-        async def resume_session(self, workspace_root: Path, conversation_id: str):
-            _ = workspace_root
-            return type("Session", (), {"session_id": conversation_id})()
-
-        async def start_turn(self, *_args: Any, **_kwargs: Any) -> str:
-            return "hermes-turn-1"
-
-        async def wait_for_turn(self, *_args: Any, **_kwargs: Any):
-            return type(
-                "Result",
-                (),
-                {
-                    "status": "completed",
-                    "assistant_text": "hello",
-                    "raw_events": [],
-                    "errors": [],
-                },
-            )()
-
-        async def interrupt_turn(self, *_args: Any, **_kwargs: Any) -> None:
-            return None
-
-    supervisor = _HermesSupervisor()
-    monkeypatch.setattr(
-        tail_stream,
-        "_managed_thread_harness",
-        lambda service, agent_id: HermesHarness(supervisor),
-    )
+    monkeypatch.setattr(tail_stream, "_managed_thread_harness", lambda *args: None)
     app = create_hub_app(hub_env.hub_root)
 
     with TestClient(app) as client:
-        managed_thread_id, _ = _seed_running_managed_thread(
+        managed_thread_id, managed_turn_id = _seed_running_managed_thread(
             hub_env,
             app,
             agent="hermes",
@@ -451,15 +403,32 @@ def test_managed_thread_tail_events_streams_hermes_runtime_events(
             backend_turn_id="hermes-turn-1",
             name="hermes events",
         )
-        resp = client.get(f"/hub/pma/threads/{managed_thread_id}/tail/events")
+        persist_turn_timeline(
+            hub_env.hub_root,
+            execution_id=managed_turn_id,
+            target_kind="thread_target",
+            target_id=managed_thread_id,
+            repo_id=hub_env.repo_id,
+            metadata={"agent": "hermes", "status": "running"},
+            events=[
+                OutputDelta(
+                    timestamp="2026-04-06T10:00:00Z",
+                    content="hello",
+                    delta_type="assistant_stream",
+                )
+            ],
+        )
+        resp = client.get(
+            f"/hub/pma/threads/{managed_thread_id}/tail/events",
+            params={"once": "true"},
+        )
 
     assert resp.status_code == 200
     assert resp.headers["content-type"].startswith("text/event-stream")
     assert "assistant_update" in resp.text
-    assert "turn_completed" in resp.text
 
 
-def test_managed_thread_tail_events_reuses_active_harness_state(
+def test_managed_thread_tail_events_ignores_harness_runtime_stream(
     hub_env, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     _enable_pma(hub_env.hub_root)
@@ -512,7 +481,7 @@ def test_managed_thread_tail_events_reuses_active_harness_state(
     app = create_hub_app(hub_env.hub_root)
 
     with TestClient(app) as client:
-        managed_thread_id, _ = _seed_running_managed_thread(
+        managed_thread_id, managed_turn_id = _seed_running_managed_thread(
             hub_env,
             app,
             agent="opencode",
@@ -520,7 +489,25 @@ def test_managed_thread_tail_events_reuses_active_harness_state(
             backend_turn_id="opencode-turn-1",
             name="opencode events",
         )
-        resp = client.get(f"/hub/pma/threads/{managed_thread_id}/tail/events")
+        persist_turn_timeline(
+            hub_env.hub_root,
+            execution_id=managed_turn_id,
+            target_kind="thread_target",
+            target_id=managed_thread_id,
+            repo_id=hub_env.repo_id,
+            metadata={"agent": "opencode", "status": "running"},
+            events=[
+                OutputDelta(
+                    timestamp="2026-04-06T10:00:00Z",
+                    content="persisted-update",
+                    delta_type="assistant_stream",
+                )
+            ],
+        )
+        resp = client.get(
+            f"/hub/pma/threads/{managed_thread_id}/tail/events",
+            params={"once": "true"},
+        )
 
     assert resp.status_code == 200
     assert factory_calls == ["opencode"]
@@ -530,6 +517,74 @@ def test_managed_thread_tail_events_reuses_active_harness_state(
     assert "\nid: 1\n" in resp.text
     assert '"kind": "intermediate"' in resp.text
     assert "assistant_update" in resp.text
+    assert "tail-update" not in resp.text
+    assert "persisted-update" in resp.text
+
+
+def test_managed_thread_tail_events_picks_up_newly_persisted_timeline(
+    hub_env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _enable_pma(hub_env.hub_root)
+    monkeypatch.setattr(tail_stream, "_managed_thread_harness", lambda *args: None)
+    app = create_hub_app(hub_env.hub_root)
+
+    with TestClient(app) as client:
+        managed_thread_id, managed_turn_id = _seed_running_managed_thread(
+            hub_env,
+            app,
+            agent="codex",
+            backend_thread_id="codex-session-live",
+            backend_turn_id="codex-turn-live",
+            name="persisted live events",
+        )
+        store = ManagedThreadStore(hub_env.hub_root)
+
+        def _persist_later() -> None:
+            import time
+
+            time.sleep(0.2)
+            persist_turn_timeline(
+                hub_env.hub_root,
+                execution_id=managed_turn_id,
+                target_kind="thread_target",
+                target_id=managed_thread_id,
+                repo_id=hub_env.repo_id,
+                metadata={"agent": "codex", "status": "running"},
+                events=[
+                    OutputDelta(
+                        timestamp="2026-04-06T10:00:00Z",
+                        content="arrived-after-open",
+                        delta_type="assistant_stream",
+                    )
+                ],
+            )
+            store.mark_turn_finished(
+                managed_turn_id,
+                status="ok",
+                assistant_text="arrived-after-open",
+                backend_turn_id="codex-turn-live",
+            )
+
+        worker = threading.Thread(target=_persist_later)
+        worker.start()
+        try:
+            with client.stream(
+                "GET", f"/hub/pma/threads/{managed_thread_id}/tail/events"
+            ) as resp:
+                assert resp.status_code == 200
+                body_lines: list[str] = []
+                for line in resp.iter_lines():
+                    body_lines.append(line)
+                    body = "\n".join(body_lines)
+                    if "arrived-after-open" in body and "event: timeline" in body:
+                        break
+        finally:
+            worker.join(timeout=5)
+
+    body = "\n".join(body_lines)
+    assert "event: timeline" in body
+    assert "assistant_update" in body
+    assert "arrived-after-open" in body
 
 
 def test_managed_thread_tail_snapshot_includes_opencode_list_progress_events(
@@ -1060,6 +1115,26 @@ def test_managed_thread_tail_stream_resumes_with_last_event_id(hub_env) -> None:
     import asyncio
 
     asyncio.run(_seed())
+    persist_turn_timeline(
+        hub_env.hub_root,
+        execution_id=managed_turn_id,
+        target_kind="thread_target",
+        target_id=managed_thread_id,
+        repo_id=hub_env.repo_id,
+        metadata={"agent": "codex", "status": "running"},
+        events=[
+            OutputDelta(
+                timestamp="2026-04-06T10:00:00Z",
+                content="first",
+                delta_type="assistant_stream",
+            ),
+            OutputDelta(
+                timestamp="2026-04-06T10:00:01Z",
+                content="second",
+                delta_type="assistant_stream",
+            ),
+        ],
+    )
     store.mark_turn_finished(
         managed_turn_id,
         status="ok",
@@ -1079,58 +1154,119 @@ def test_managed_thread_tail_stream_resumes_with_last_event_id(hub_env) -> None:
         assert "\nid: 1\n" not in body
 
 
+def test_managed_thread_tail_stream_ignores_resume_cursor_from_previous_turn(
+    hub_env,
+) -> None:
+    _enable_pma(hub_env.hub_root)
+    app = create_hub_app(hub_env.hub_root)
+    managed_thread_id, first_turn_id = _seed_managed_thread_with_events(hub_env, app)
+    store = ManagedThreadStore(hub_env.hub_root)
+
+    persist_turn_timeline(
+        hub_env.hub_root,
+        execution_id=first_turn_id,
+        target_kind="thread_target",
+        target_id=managed_thread_id,
+        repo_id=hub_env.repo_id,
+        metadata={"agent": "codex", "status": "ok"},
+        events=[
+            OutputDelta(
+                timestamp="2026-04-06T10:00:00Z",
+                content="first turn first event",
+                delta_type="assistant_stream",
+            ),
+            OutputDelta(
+                timestamp="2026-04-06T10:00:01Z",
+                content="first turn second event",
+                delta_type="assistant_stream",
+            ),
+        ],
+    )
+    store.mark_turn_finished(
+        first_turn_id,
+        status="ok",
+        assistant_text="done",
+        backend_turn_id="backend-turn-1",
+    )
+
+    second_turn = store.create_turn(managed_thread_id, prompt="second prompt")
+    second_turn_id = str(second_turn["managed_turn_id"])
+    store.set_turn_backend_turn_id(second_turn_id, "backend-turn-2")
+    persist_turn_timeline(
+        hub_env.hub_root,
+        execution_id=second_turn_id,
+        target_kind="thread_target",
+        target_id=managed_thread_id,
+        repo_id=hub_env.repo_id,
+        metadata={"agent": "codex", "status": "running"},
+        events=[
+            OutputDelta(
+                timestamp="2026-04-06T10:00:02Z",
+                content="second turn first event",
+                delta_type="assistant_stream",
+            ),
+        ],
+    )
+
+    with TestClient(app) as client:
+        resp = client.get(
+            f"/hub/pma/threads/{managed_thread_id}/tail/events",
+            params={
+                "since_event_id": 2,
+                "since_managed_turn_id": first_turn_id,
+                "once": True,
+            },
+        )
+        assert resp.status_code == 200
+        body = resp.text
+        assert f'"managed_turn_id": "{second_turn_id}"' in body
+        assert "second turn first event" in body
+        assert "\nid: 1\n" in body
+
+
 def test_managed_thread_tail_stream_preserves_since_filter_for_live_events(
     hub_env,
 ) -> None:
     _enable_pma(hub_env.hub_root)
     app = create_hub_app(hub_env.hub_root)
-    managed_thread_id, _ = _seed_managed_thread_with_events(hub_env, app)
+    managed_thread_id, managed_turn_id = _seed_managed_thread_with_events(hub_env, app)
+    store = ManagedThreadStore(hub_env.hub_root)
 
     import time
 
     now_ms = int(time.time() * 1000)
     old_ms = now_ms - 10_000
     new_ms = now_ms
-
-    class FakeEvents:
-        async def list_events(
-            self,
-            thread_id: str,
-            turn_id: str,
-            *,
-            after_id: int = 0,
-            limit: int | None = None,
-        ):
-            _ = thread_id, turn_id, after_id, limit
-            return []
-
-        async def stream_entries(
-            self,
-            thread_id: str,
-            turn_id: str,
-            *,
-            after_id: int = 0,
-            heartbeat_interval: float = 15.0,
-        ):
-            _ = thread_id, turn_id, after_id, heartbeat_interval
-            yield {
-                "id": 1,
-                "received_at": old_ms,
-                "message": {
-                    "method": "item/completed",
-                    "params": {"item": {"type": "tool", "name": "old"}},
-                },
-            }
-            yield {
-                "id": 2,
-                "received_at": new_ms,
-                "message": {
-                    "method": "item/completed",
-                    "params": {"item": {"type": "tool", "name": "new"}},
-                },
-            }
-
-    app.state.app_server_events = FakeEvents()
+    persist_turn_timeline(
+        hub_env.hub_root,
+        execution_id=managed_turn_id,
+        target_kind="thread_target",
+        target_id=managed_thread_id,
+        repo_id=hub_env.repo_id,
+        metadata={"agent": "codex", "status": "running"},
+        events=[
+            OutputDelta(
+                timestamp=datetime.fromtimestamp(
+                    old_ms / 1000, tz=timezone.utc
+                ).isoformat(),
+                content="old",
+                delta_type="assistant_stream",
+            ),
+            OutputDelta(
+                timestamp=datetime.fromtimestamp(
+                    new_ms / 1000, tz=timezone.utc
+                ).isoformat(),
+                content="new",
+                delta_type="assistant_stream",
+            ),
+        ],
+    )
+    store.mark_turn_finished(
+        managed_turn_id,
+        status="ok",
+        assistant_text="done",
+        backend_turn_id="backend-turn-1",
+    )
 
     with TestClient(app) as client:
         resp = client.get(
