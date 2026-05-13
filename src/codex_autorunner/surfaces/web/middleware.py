@@ -337,7 +337,11 @@ class AuthTokenMiddleware:
 class HostOriginMiddleware:
     """Validate Host and Origin headers for localhost hardening."""
 
-    def __init__(self, app, allowed_hosts, allowed_origins):
+    _BOOTSTRAP_CLAIM_PATHS = frozenset(
+        {"/auth/bootstrap/claim", "/auth/bootstrap/claim/"}
+    )
+
+    def __init__(self, app, allowed_hosts, allowed_origins, base_path: str = ""):
         self.app = app
         self.allowed_hosts = [
             entry.strip().lower()
@@ -353,6 +357,7 @@ class HostOriginMiddleware:
             )
             if entry is not None
         }
+        self.base_path = base_path.rstrip("/")
 
     def __getattr__(self, name):
         return getattr(self.app, name)
@@ -440,6 +445,16 @@ class HostOriginMiddleware:
         request_origin = self._request_origin(scheme, host)
         return request_origin == normalized
 
+    def _is_bootstrap_claim_path(self, scope) -> bool:
+        path = scope.get("path") or ""
+        root_path = scope.get("root_path") or ""
+        candidates = [path]
+        if root_path and path.startswith(root_path):
+            candidates.append(path[len(root_path) :] or "/")
+        if self.base_path and path.startswith(f"{self.base_path}/"):
+            candidates.append(path[len(self.base_path) :] or "/")
+        return any(candidate in self._BOOTSTRAP_CLAIM_PATHS for candidate in candidates)
+
     async def _reject_http(self, scope, receive, send, status: int, body: str) -> None:
         response = Response(content=body, status_code=status)
         await response(scope, receive, send)
@@ -481,7 +496,11 @@ class HostOriginMiddleware:
         method = (scope.get("method") or "GET").upper()
         if method in {"POST", "PUT", "PATCH", "DELETE"} and origin:
             if not self._origin_allowed(origin, scheme, host):
-                return await self._reject_http(scope, receive, send, 403, "Forbidden")
+                if method == "POST" and self._is_bootstrap_claim_path(scope):
+                    return await self.app(scope, receive, send)
+                return await self._reject_http(
+                    scope, receive, send, 403, "Origin not allowed"
+                )
 
         return await self.app(scope, receive, send)
 

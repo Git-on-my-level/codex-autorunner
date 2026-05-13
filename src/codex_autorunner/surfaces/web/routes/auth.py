@@ -73,7 +73,20 @@ def _bootstrap_html() -> str:
             headers: { 'content-type': 'application/json', accept: 'application/json' },
             body: JSON.stringify({ token: token })
           });
-          if (!response.ok) throw new Error('Bootstrap claim failed.');
+          if (!response.ok) {
+            var errorText = 'Bootstrap claim failed.';
+            try {
+              var contentType = response.headers.get('content-type') || '';
+              if (contentType.indexOf('application/json') !== -1) {
+                var payload = await response.json();
+                errorText = payload && payload.detail ? payload.detail : errorText;
+              } else {
+                var text = await response.text();
+                errorText = text || errorText;
+              }
+            } catch (parseError) {}
+            throw new Error(errorText);
+          }
           window.location.replace(window.location.pathname.replace(/\/auth\/bootstrap\/?$/, '/') || '/');
         } catch (error) {
           status.textContent = 'Bootstrap claim failed.';

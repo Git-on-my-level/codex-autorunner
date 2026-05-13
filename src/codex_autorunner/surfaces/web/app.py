@@ -1058,7 +1058,12 @@ def create_hub_app(
         )
     if context.base_path:
         asgi_app = BasePathRouterMiddleware(asgi_app, context.base_path)
-    asgi_app = HostOriginMiddleware(asgi_app, allowed_hosts, allowed_origins)
+    asgi_app = HostOriginMiddleware(
+        asgi_app,
+        allowed_hosts,
+        allowed_origins,
+        base_path=context.base_path,
+    )
     asgi_app = RequestIdMiddleware(asgi_app)
     asgi_app = SecurityHeadersMiddleware(asgi_app)
 

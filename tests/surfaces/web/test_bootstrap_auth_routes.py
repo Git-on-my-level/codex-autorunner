@@ -64,6 +64,62 @@ def test_bootstrap_token_is_single_use(tmp_path: Path) -> None:
     assert second.status_code == 401
 
 
+def test_remote_hub_bootstrap_claim_reaches_token_validation_from_proxy_origin(
+    tmp_path: Path,
+) -> None:
+    hub_root = tmp_path / "hub"
+    seed_hub_files(hub_root, force=True)
+    config_path = hub_root / ".codex-autorunner/config.yml"
+    text = config_path.read_text(encoding="utf-8")
+    config_path.write_text(
+        f'{text}\nserver:\n  auth_token_env: CAR_TEST_TOKEN\n  allowed_hosts:\n    - "*"\n',
+        encoding="utf-8",
+    )
+    client = TestClient(create_hub_app(hub_root, endpoint_host="0.0.0.0"))
+
+    claim = client.post(
+        "/auth/bootstrap/claim",
+        json={"token": "deliberately-wrong"},
+        headers={
+            "host": "4173-glad-arch-jvr2.pad.dev",
+            "origin": "https://4173-glad-arch-jvr2.pad.dev",
+        },
+    )
+
+    assert claim.status_code == 401
+    assert claim.json() == {"detail": "Invalid bootstrap token"}
+    assert (hub_root / BOOTSTRAP_TOKEN_RELATIVE_PATH).exists()
+
+
+def test_base_path_remote_hub_bootstrap_claim_reaches_token_validation_from_proxy_origin(
+    tmp_path: Path,
+) -> None:
+    hub_root = tmp_path / "hub"
+    seed_hub_files(hub_root, force=True)
+    config_path = hub_root / ".codex-autorunner/config.yml"
+    text = config_path.read_text(encoding="utf-8")
+    config_path.write_text(
+        f'{text}\nserver:\n  auth_token_env: CAR_TEST_TOKEN\n  allowed_hosts:\n    - "*"\n',
+        encoding="utf-8",
+    )
+    client = TestClient(
+        create_hub_app(hub_root, base_path="/car", endpoint_host="0.0.0.0")
+    )
+
+    claim = client.post(
+        "/car/auth/bootstrap/claim",
+        json={"token": "deliberately-wrong"},
+        headers={
+            "host": "4173-glad-arch-jvr2.pad.dev",
+            "origin": "https://4173-glad-arch-jvr2.pad.dev",
+        },
+    )
+
+    assert claim.status_code == 401
+    assert claim.json() == {"detail": "Invalid bootstrap token"}
+    assert (hub_root / BOOTSTRAP_TOKEN_RELATIVE_PATH).exists()
+
+
 def test_bearer_token_auth_still_works_with_bootstrap_routes(
     tmp_path: Path, monkeypatch
 ) -> None:
