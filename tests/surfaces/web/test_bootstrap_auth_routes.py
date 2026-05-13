@@ -9,6 +9,8 @@ from codex_autorunner.server import create_hub_app
 from codex_autorunner.surfaces.web.services.browser_auth import (
     BOOTSTRAP_TOKEN_RELATIVE_PATH,
     SESSION_COOKIE_NAME,
+    SESSION_MAX_AGE_SECONDS,
+    BrowserAuthStore,
 )
 
 
@@ -79,3 +81,23 @@ def test_bearer_token_auth_still_works_with_bootstrap_routes(
     assert denied.status_code == 401
     assert allowed.status_code == 200
     assert (hub_root / BOOTSTRAP_TOKEN_RELATIVE_PATH).exists()
+
+
+def test_browser_session_validation_enforces_server_side_expiry(
+    tmp_path: Path,
+) -> None:
+    now = 1_000.0
+    store = BrowserAuthStore(tmp_path, now=lambda: now)
+    _, bootstrap_token = store.ensure_bootstrap_token()
+
+    claim = store.claim_bootstrap_token(bootstrap_token)
+    assert claim is not None
+    token = claim.session_token
+
+    assert store.validate_session_token(token) is True
+
+    now += SESSION_MAX_AGE_SECONDS + 1
+
+    assert store.validate_session_token(token) is False
+    data = store._read_store()
+    assert data["sessions"] == []

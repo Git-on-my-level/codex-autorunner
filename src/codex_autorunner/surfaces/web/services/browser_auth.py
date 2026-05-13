@@ -6,9 +6,10 @@ import json
 import os
 import secrets
 import threading
+import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 BOOTSTRAP_TOKEN_RELATIVE_PATH = Path(".codex-autorunner/bootstrap-token")
 SESSION_STORE_RELATIVE_PATH = Path(".codex-autorunner/browser-sessions.json")
@@ -58,10 +59,11 @@ class BootstrapClaim:
 
 
 class BrowserAuthStore:
-    def __init__(self, root: Path):
+    def __init__(self, root: Path, now: Callable[[], float] = time.time):
         self.root = root
         self.bootstrap_token_path = root / BOOTSTRAP_TOKEN_RELATIVE_PATH
         self.session_store_path = root / SESSION_STORE_RELATIVE_PATH
+        self._now = now
         self._lock = threading.Lock()
 
     def ensure_bootstrap_token(self) -> tuple[Path, str]:
@@ -99,14 +101,36 @@ class BrowserAuthStore:
         token_hash = _sha256(token.strip())
         if not token_hash:
             return False
-        data = self._read_store()
-        sessions = data.get("sessions")
-        if not isinstance(sessions, list):
-            return False
-        return any(
-            isinstance(entry, str) and hmac.compare_digest(entry, token_hash)
-            for entry in sessions
-        )
+        with self._lock:
+            data = self._read_store()
+            sessions = data.get("sessions")
+            if not isinstance(sessions, list):
+                return False
+            now = self._now()
+            valid = False
+            active_sessions = []
+            changed = False
+            for entry in sessions:
+                if not isinstance(entry, dict):
+                    changed = True
+                    continue
+                stored_hash = entry.get("token_hash")
+                expires_at = entry.get("expires_at")
+                if not isinstance(stored_hash, str) or not isinstance(
+                    expires_at, (int, float)
+                ):
+                    changed = True
+                    continue
+                if expires_at <= now:
+                    changed = True
+                    continue
+                active_sessions.append(entry)
+                if hmac.compare_digest(stored_hash, token_hash):
+                    valid = True
+            if changed:
+                data["sessions"] = active_sessions
+                self._write_store(data)
+            return valid
 
     def _add_session(self, token: str) -> None:
         data = self._read_store()
@@ -114,9 +138,28 @@ class BrowserAuthStore:
         if not isinstance(sessions, list):
             sessions = []
         token_hash = _sha256(token)
-        if token_hash not in sessions:
-            sessions.append(token_hash)
-        data["sessions"] = sessions
+        now = self._now()
+        active_sessions = []
+        for entry in sessions:
+            if not isinstance(entry, dict):
+                continue
+            stored_hash = entry.get("token_hash")
+            expires_at = entry.get("expires_at")
+            if not isinstance(stored_hash, str) or not isinstance(
+                expires_at, (int, float)
+            ):
+                continue
+            if expires_at <= now or stored_hash == token_hash:
+                continue
+            active_sessions.append(entry)
+        active_sessions.append(
+            {
+                "token_hash": token_hash,
+                "issued_at": now,
+                "expires_at": now + SESSION_MAX_AGE_SECONDS,
+            }
+        )
+        data["sessions"] = active_sessions
         self._write_store(data)
 
     def _read_store(self) -> dict[str, Any]:
