@@ -14,8 +14,9 @@ import json
 import logging
 import re
 from dataclasses import dataclass, field
+from enum import Enum
 from pathlib import Path
-from typing import Any, AsyncIterator, Awaitable, Callable, Optional
+from typing import Any, AsyncIterator, Awaitable, Callable, Literal, Optional
 
 import httpx
 
@@ -105,6 +106,37 @@ class _PendingTurnConfig:
     message_progress_task: Optional[asyncio.Task[None]] = None
     message_progress_roles_seen: set[str] = field(default_factory=set)
     message_progress_part_signatures: dict[str, str] = field(default_factory=dict)
+
+
+class OpenCodeTurnLifecycleState(Enum):
+    ACCEPTED = "accepted"
+    OBSERVING = "observing"
+    TERMINAL_OBSERVED = "terminal_observed"
+    SNAPSHOT_RECOVERED = "snapshot_recovered"
+    EMPTY_TERMINAL = "empty_terminal"
+    FAILED = "failed"
+
+
+OpenCodeTurnOutputSource = Literal[
+    "event_stream",
+    "prompt_response",
+    "messages_snapshot",
+    "none",
+]
+
+
+@dataclass(frozen=True)
+class OpenCodeTurnLifecycleResult:
+    state: OpenCodeTurnLifecycleState
+    assistant_text: str
+    terminal_signal: Optional[str]
+    output_source: OpenCodeTurnOutputSource
+    command_completed: bool
+    terminal_observed: bool
+    snapshot_recovered: bool
+    error: Optional[str]
+    raw_events: list[dict[str, object]]
+    evidence: dict[str, object]
 
 
 async def _pre_connect_event_stream(
@@ -338,6 +370,160 @@ def _saw_terminal_completion(payloads: list[dict[str, Any]]) -> bool:
             if isinstance(item, dict) and item.get("type") == "agentMessage":
                 return _extract_message_phase(params) != "commentary"
     return False
+
+
+def _terminal_signal_from_payloads(payloads: list[dict[str, Any]]) -> Optional[str]:
+    for payload in payloads:
+        method, params = _unwrap_harness_payload(payload)
+        if method == "turn/completed":
+            return "turn/completed"
+        if method == "session.idle":
+            return "session.idle"
+        if method == "session.status" and status_is_idle(extract_status_type(params)):
+            return "session.status:idle"
+        if (
+            method == "message.completed"
+            and _extract_message_phase(params) != "commentary"
+        ):
+            return "message.completed"
+        if method == "item/completed":
+            item = params.get("item")
+            if (
+                isinstance(item, dict)
+                and item.get("type") == "agentMessage"
+                and _extract_message_phase(params) != "commentary"
+            ):
+                return "item/completed:agentMessage"
+    return None
+
+
+def _make_lifecycle_result(
+    *,
+    output: OpenCodeTurnOutput,
+    raw_events: list[dict[str, Any]],
+    command_completed: bool,
+    command_accepted_before_terminal: bool,
+    snapshot_attempted: bool,
+    prompt_response_used: bool,
+    collected: bool,
+) -> OpenCodeTurnLifecycleResult:
+    terminal_signal = _terminal_signal_from_payloads(raw_events)
+    terminal_observed = collected and output.error is None
+    if terminal_signal is None and terminal_observed:
+        terminal_signal = "collector_completed"
+    snapshot_recovered = bool(
+        output.text and snapshot_attempted and not prompt_response_used
+    )
+    if output.error:
+        state = OpenCodeTurnLifecycleState.FAILED
+        source: OpenCodeTurnOutputSource = "none"
+    elif output.text and snapshot_recovered:
+        state = OpenCodeTurnLifecycleState.SNAPSHOT_RECOVERED
+        source = "messages_snapshot"
+    elif output.text:
+        state = OpenCodeTurnLifecycleState.TERMINAL_OBSERVED
+        source = "prompt_response" if prompt_response_used else "event_stream"
+    elif terminal_observed:
+        state = OpenCodeTurnLifecycleState.EMPTY_TERMINAL
+        source = "none"
+    elif command_completed:
+        state = OpenCodeTurnLifecycleState.ACCEPTED
+        source = "none"
+    else:
+        state = OpenCodeTurnLifecycleState.FAILED
+        source = "none"
+
+    return OpenCodeTurnLifecycleResult(
+        state=state,
+        assistant_text=output.text,
+        terminal_signal=terminal_signal,
+        output_source=source,
+        command_completed=command_completed,
+        terminal_observed=terminal_observed,
+        snapshot_recovered=snapshot_recovered,
+        error=output.error,
+        raw_events=[dict(event) for event in raw_events],
+        evidence={
+            "command_accepted_before_terminal": command_accepted_before_terminal,
+            "snapshot_attempted": snapshot_attempted,
+            "prompt_response_used": prompt_response_used,
+            "raw_event_count": len(raw_events),
+        },
+    )
+
+
+async def _coordinate_opencode_turn_lifecycle(
+    *,
+    collect_task: asyncio.Task[OpenCodeTurnOutput],
+    command_task: Optional[asyncio.Task[Any]],
+    prompt: Optional[str],
+    raw_events: Callable[[], list[dict[str, Any]]],
+    snapshot_attempted: Callable[[], bool],
+) -> OpenCodeTurnLifecycleResult:
+    command_result: Any = None
+    command_completed = False
+    command_accepted_before_terminal = False
+    prompt_response_used = False
+    collected = False
+    try:
+        if command_task is None:
+            output = await collect_task
+            collected = True
+        else:
+            done, _pending = await asyncio.wait(
+                {collect_task, command_task},
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            if command_task in done:
+                command_completed = True
+                command_exc = command_task.exception()
+                if command_exc is not None:
+                    collect_task.cancel()
+                    with contextlib.suppress(asyncio.CancelledError):
+                        await collect_task
+                    raise command_exc
+                command_result = command_task.result()
+                if collect_task not in done:
+                    command_accepted_before_terminal = True
+                    output = await collect_task
+                    collected = True
+                else:
+                    output = await collect_task
+                    collected = True
+            else:
+                output = await collect_task
+                collected = True
+                command_result = await command_task
+                command_completed = True
+
+        if command_result is not None:
+            original = output
+            output = apply_prompt_response_fallback(
+                output,
+                command_result,
+                prompt=prompt,
+            )
+            prompt_response_used = output.text != original.text
+    except Exception as exc:  # intentional: top-level turn error -> lifecycle failure
+        return _make_lifecycle_result(
+            output=OpenCodeTurnOutput(text="", error=str(exc)),
+            raw_events=raw_events(),
+            command_completed=command_completed,
+            command_accepted_before_terminal=command_accepted_before_terminal,
+            snapshot_attempted=snapshot_attempted(),
+            prompt_response_used=False,
+            collected=collected,
+        )
+
+    return _make_lifecycle_result(
+        output=output,
+        raw_events=raw_events(),
+        command_completed=command_completed,
+        command_accepted_before_terminal=command_accepted_before_terminal,
+        snapshot_attempted=snapshot_attempted(),
+        prompt_response_used=prompt_response_used,
+        collected=collected,
+    )
 
 
 def _coerce_providers(payload: Any) -> list[dict[str, Any]]:
@@ -941,6 +1127,10 @@ class OpenCodeHarness(AgentHarness):
             except json.JSONDecodeError:
                 parsed = {"raw": payload}
             session_id = extract_session_id(parsed)
+            if session_id and session_id != conversation_id:
+                continue
+            wrapped = {"message": {"method": event.event, "params": parsed}}
+            yield wrapped
             if (
                 event.event == "session.idle"
                 or (
@@ -949,10 +1139,6 @@ class OpenCodeHarness(AgentHarness):
                 )
             ) and session_id == conversation_id:
                 break
-            if session_id and session_id != conversation_id:
-                continue
-            wrapped = {"message": {"method": event.event, "params": parsed}}
-            yield wrapped
 
     async def stream_events(
         self, workspace_root: Path, conversation_id: str, turn_id: str
@@ -1045,9 +1231,11 @@ class OpenCodeHarness(AgentHarness):
                     if runtime_driver.state.last_error_message
                     else []
                 )
+                messages_snapshot_attempted = False
                 if not assistant_text and not errors:
                     messages_payload: Any = None
                     try:
+                        messages_snapshot_attempted = True
                         messages_payload = await client.list_messages(
                             conversation_id, limit=10
                         )
@@ -1085,11 +1273,38 @@ class OpenCodeHarness(AgentHarness):
                     assistant_text and _saw_terminal_completion(raw_events)
                 ):
                     raise stream_error
-                return TerminalTurnResult(
-                    status="error" if errors else "ok",
-                    assistant_text=assistant_text,
-                    errors=errors,
+                lifecycle_result = _make_lifecycle_result(
+                    output=OpenCodeTurnOutput(
+                        text=assistant_text,
+                        error=(errors[0] if errors else None),
+                    ),
                     raw_events=raw_events,
+                    command_completed=False,
+                    command_accepted_before_terminal=False,
+                    snapshot_attempted=messages_snapshot_attempted,
+                    prompt_response_used=False,
+                    collected=True,
+                )
+                log_event(
+                    _logger,
+                    logging.INFO,
+                    "opencode.harness.wait_for_turn.lifecycle_done",
+                    conversation_id=conversation_id,
+                    turn_id=turn_id or "",
+                    lifecycle_state=lifecycle_result.state.value,
+                    terminal_signal=lifecycle_result.terminal_signal,
+                    output_source=lifecycle_result.output_source,
+                    command_completed=lifecycle_result.command_completed,
+                    terminal_observed=lifecycle_result.terminal_observed,
+                    snapshot_recovered=lifecycle_result.snapshot_recovered,
+                    assistant_text_empty=not bool(lifecycle_result.assistant_text),
+                    evidence=lifecycle_result.evidence,
+                )
+                return TerminalTurnResult(
+                    status="error" if lifecycle_result.error else "ok",
+                    assistant_text=lifecycle_result.assistant_text,
+                    errors=([lifecycle_result.error] if lifecycle_result.error else []),
+                    raw_events=[dict(event) for event in lifecycle_result.raw_events],
                 )
 
             streamed_raw_events: list[dict[str, Any]] = []
@@ -1189,7 +1404,11 @@ class OpenCodeHarness(AgentHarness):
             async def _fetch_providers() -> Any:
                 return await client.providers(directory=str(workspace_root))
 
+            messages_snapshot_attempted = False
+
             async def _fetch_messages() -> Any:
+                nonlocal messages_snapshot_attempted
+                messages_snapshot_attempted = True
                 return await client.list_messages(conversation_id, limit=10)
 
             async def _respond_permission(request_id: str, reply: str) -> None:
@@ -1262,85 +1481,52 @@ class OpenCodeHarness(AgentHarness):
             )
             command_task = pending.command_task if pending is not None else None
             if command_task is None:
-                output = await collect_task
+                lifecycle_result = await _coordinate_opencode_turn_lifecycle(
+                    collect_task=collect_task,
+                    command_task=None,
+                    prompt=(pending.prompt if pending is not None else None),
+                    raw_events=lambda: (
+                        list(pending.synthetic_raw_events) + streamed_raw_events
+                        if pending is not None
+                        else streamed_raw_events
+                    ),
+                    snapshot_attempted=lambda: messages_snapshot_attempted,
+                )
             else:
-                try:
-                    command_result: Any = None
-                    done, _pending = await asyncio.wait(
-                        {collect_task, command_task},
-                        return_when=asyncio.FIRST_COMPLETED,
-                    )
-                    if collect_task in done:
-                        output = await collect_task
-                        if command_task in done:
-                            command_result = command_task.result()
-                        else:
-                            command_result = await command_task
-                    elif command_task in done:
-                        command_exc = command_task.exception()
-                        if command_exc is not None:
-                            collect_task.cancel()
-                            try:
-                                await collect_task
-                            except asyncio.CancelledError:
-                                pass
-                            raise command_exc
-                        command_result = command_task.result()
-                        if (
-                            pending.progress_events_published == 0
-                            and not pending.pre_connected_event_seen.is_set()
-                        ):
-                            early_asm = OutputAssembler(
-                                session_id=conversation_id,
-                                prompt=(
-                                    pending.prompt if pending is not None else None
-                                ),
-                                messages_fetcher=_fetch_messages,
-                            )
-                            early_asm.on_prompt_response(command_result)
-                            early_result = await early_asm.build_result()
-                            if early_result.text or early_result.error:
-                                collect_task.cancel()
-                                with contextlib.suppress(asyncio.CancelledError):
-                                    await collect_task
-                                output = OpenCodeTurnOutput(
-                                    text=early_result.text,
-                                    error=early_result.error,
-                                )
-                            else:
-                                output = await collect_task
-                        else:
-                            output = await collect_task
-                    if command_result is not None:
-                        output = apply_prompt_response_fallback(
-                            output,
-                            command_result,
-                            prompt=(pending.prompt if pending is not None else None),
-                        )
-                except (
-                    Exception
-                ) as exc:  # intentional: top-level turn error → error result conversion
-                    return TerminalTurnResult(
-                        status="error",
-                        assistant_text="",
-                        errors=[str(exc)],
-                        raw_events=(
-                            list(pending.synthetic_raw_events) + streamed_raw_events
-                            if pending is not None
-                            else streamed_raw_events
-                        ),
-                    )
+                lifecycle_result = await _coordinate_opencode_turn_lifecycle(
+                    collect_task=collect_task,
+                    command_task=command_task,
+                    prompt=(pending.prompt if pending is not None else None),
+                    raw_events=lambda: (
+                        list(pending.synthetic_raw_events) + streamed_raw_events
+                        if pending is not None
+                        else streamed_raw_events
+                    ),
+                    snapshot_attempted=lambda: messages_snapshot_attempted,
+                )
 
-            errors = [output.error] if output.error else []
+            log_event(
+                _logger,
+                logging.INFO,
+                "opencode.harness.wait_for_turn.lifecycle_done",
+                conversation_id=conversation_id,
+                turn_id=turn_id or "",
+                lifecycle_state=lifecycle_result.state.value,
+                terminal_signal=lifecycle_result.terminal_signal,
+                output_source=lifecycle_result.output_source,
+                command_completed=lifecycle_result.command_completed,
+                terminal_observed=lifecycle_result.terminal_observed,
+                snapshot_recovered=lifecycle_result.snapshot_recovered,
+                assistant_text_empty=not bool(lifecycle_result.assistant_text),
+                evidence=lifecycle_result.evidence,
+            )
+
+            errors = [lifecycle_result.error] if lifecycle_result.error else []
             return TerminalTurnResult(
                 status="error" if errors else "ok",
-                assistant_text=output.text,
+                assistant_text=lifecycle_result.assistant_text,
                 errors=errors,
-                raw_events=(
-                    list(pending.synthetic_raw_events) + streamed_raw_events
-                    if pending is not None
-                    else streamed_raw_events
-                ),
+                raw_events=[dict(event) for event in lifecycle_result.raw_events],
             )
 
         try:

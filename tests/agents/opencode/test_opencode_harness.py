@@ -658,6 +658,7 @@ async def test_opencode_harness_start_turn_returns_before_prompt_finishes_and_sy
 
 @pytest.mark.asyncio
 async def test_opencode_harness_wait_for_turn_keeps_collecting_after_empty_prompt_response(
+    caplog: pytest.LogCaptureFixture,
     tmp_path: Path,
 ) -> None:
     workspace = (tmp_path / "workspace").resolve()
@@ -715,12 +716,22 @@ async def test_opencode_harness_wait_for_turn_keeps_collecting_after_empty_promp
         sandbox_policy=None,
     )
 
-    result = await harness.wait_for_turn(workspace, "session-1", turn.turn_id)
+    with caplog.at_level(logging.INFO, logger=harness_module._logger.name):
+        result = await harness.wait_for_turn(workspace, "session-1", turn.turn_id)
 
     assert result.status == "ok"
     assert result.assistant_text == "Agent reply"
-    assert client.list_messages_calls == ["session-1"]
+    assert client.list_messages_calls == []
     assert client.stream_call_count == 2
+    lifecycle_logs = [
+        record.getMessage()
+        for record in caplog.records
+        if "opencode.harness.wait_for_turn.lifecycle_done" in record.getMessage()
+    ]
+    assert lifecycle_logs
+    assert '"lifecycle_state":"terminal_observed"' in lifecycle_logs[-1]
+    assert '"output_source":"event_stream"' in lifecycle_logs[-1]
+    assert '"command_accepted_before_terminal":true' in lifecycle_logs[-1]
 
 
 @pytest.mark.asyncio
@@ -1568,6 +1579,43 @@ async def test_opencode_harness_wait_for_turn_no_pending_list_messages_failure_b
 
 
 @pytest.mark.asyncio
+async def test_opencode_harness_wait_for_turn_records_snapshot_recovery(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    client = _StubClient(
+        [
+            SSEEvent(
+                event="session.status",
+                data='{"sessionID":"session-1","properties":{"status":{"type":"idle"}}}',
+            ),
+        ],
+    )
+    client.messages_response = {
+        "data": [
+            {
+                "info": {"id": "assistant-1", "role": "assistant"},
+                "parts": [{"type": "text", "text": "Recovered reply"}],
+            }
+        ]
+    }
+    harness = OpenCodeHarness(_StubSupervisor(client))
+
+    with caplog.at_level(logging.INFO, logger=harness_module._logger.name):
+        result = await harness.wait_for_turn(Path("."), "session-1", "turn-1")
+
+    assert result.status == "ok"
+    assert result.assistant_text == "Recovered reply"
+    lifecycle_logs = [
+        record.getMessage()
+        for record in caplog.records
+        if "opencode.harness.wait_for_turn.lifecycle_done" in record.getMessage()
+    ]
+    assert lifecycle_logs
+    assert '"lifecycle_state":"snapshot_recovered"' in lifecycle_logs[-1]
+    assert '"output_source":"messages_snapshot"' in lifecycle_logs[-1]
+
+
+@pytest.mark.asyncio
 async def test_opencode_harness_wait_for_turn_reports_errors() -> None:
     harness = OpenCodeHarness(
         _StubSupervisor(
@@ -1591,6 +1639,38 @@ async def test_opencode_harness_wait_for_turn_reports_errors() -> None:
     assert result.status == "error"
     assert result.assistant_text == ""
     assert result.errors == ["stream failed"]
+
+
+@pytest.mark.asyncio
+async def test_opencode_harness_wait_for_turn_records_empty_terminal_lifecycle(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    harness = OpenCodeHarness(
+        _StubSupervisor(
+            _StubClient(
+                [
+                    SSEEvent(
+                        event="session.status",
+                        data='{"sessionID":"session-1","properties":{"status":{"type":"idle"}}}',
+                    ),
+                ]
+            )
+        )
+    )
+
+    with caplog.at_level(logging.INFO, logger=harness_module._logger.name):
+        result = await harness.wait_for_turn(Path("."), "session-1", "turn-1")
+
+    assert result.status == "ok"
+    assert result.assistant_text == ""
+    lifecycle_logs = [
+        record.getMessage()
+        for record in caplog.records
+        if "opencode.harness.wait_for_turn.lifecycle_done" in record.getMessage()
+    ]
+    assert lifecycle_logs
+    assert '"lifecycle_state":"empty_terminal"' in lifecycle_logs[-1]
+    assert '"terminal_signal":"session.status:idle"' in lifecycle_logs[-1]
 
 
 @pytest.mark.asyncio
