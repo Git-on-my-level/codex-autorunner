@@ -296,6 +296,14 @@ _run_core_lane() {
   _run_pytest > "$_PYTEST_LOG" 2>&1 &
   _PYTEST_PID=$!
 
+  _DEADCODE_PID=""
+  _DEADCODE_LOG=""
+  if [ -n "${CI:-}" ] || [[ "${CODEX_LOCAL_CHECK_INCLUDE_DEADCODE:-0}" == "1" ]]; then
+    _DEADCODE_LOG="$(mktemp)"
+    "$PYTHON_BIN" "$REPO_ROOT/scripts/deadcode.py" --check > "$_DEADCODE_LOG" 2>&1 &
+    _DEADCODE_PID=$!
+  fi
+
   _CORE_FAIL=0
   if ! wait "$_PYTEST_PID"; then
     echo "Pytest FAILED" >&2
@@ -305,6 +313,10 @@ _run_core_lane() {
     echo "Static checks FAILED" >&2
     _CORE_FAIL=1
   fi
+  if [[ -n "$_DEADCODE_PID" ]] && ! wait "$_DEADCODE_PID"; then
+    echo "Dead-code check FAILED" >&2
+    _CORE_FAIL=1
+  fi
 
   echo "--- static checks output ---"
   cat "$_STATIC_LOG"
@@ -312,15 +324,16 @@ _run_core_lane() {
   cat "$_PYTEST_LOG"
   rm -f "$_STATIC_LOG" "$_PYTEST_LOG"
 
-  if [[ "$_CORE_FAIL" -eq 1 ]]; then
-    exit 1
-  fi
-
-  if [ -n "${CI:-}" ] || [[ "${CODEX_LOCAL_CHECK_INCLUDE_DEADCODE:-0}" == "1" ]]; then
-    echo "Dead-code check (heuristic)..."
-    "$PYTHON_BIN" "$REPO_ROOT/scripts/deadcode.py" --check
+  if [[ -n "$_DEADCODE_LOG" ]]; then
+    echo "--- dead-code check output ---"
+    cat "$_DEADCODE_LOG"
+    rm -f "$_DEADCODE_LOG"
   else
     echo "Skipping dead-code check locally; set CODEX_LOCAL_CHECK_INCLUDE_DEADCODE=1 to enable."
+  fi
+
+  if [[ "$_CORE_FAIL" -eq 1 ]]; then
+    exit 1
   fi
 }
 
