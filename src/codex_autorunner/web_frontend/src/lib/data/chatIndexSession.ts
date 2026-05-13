@@ -107,7 +107,7 @@ export function createChatIndexSession(deps: ChatIndexSessionDeps = {}): ChatInd
       const currentChats = selectPmaChats(store.snapshot());
       const nextChats = mapChatSurfaceSnapshotToPmaChats(event.payload);
       const reconciled = reconcileChatSurfaceSnapshot(currentChats, nextChats, null);
-      replacePmaChatList(reconciled.chats);
+      replacePmaChatList(preserveExistingChatOrder(currentChats, reconciled.chats));
       return;
     }
     if (event.kind === 'chat_event') {
@@ -133,6 +133,24 @@ export function createChatIndexSession(deps: ChatIndexSessionDeps = {}): ChatInd
 }
 
 export const chatIndexSession = createChatIndexSession();
+
+function preserveExistingChatOrder(currentChats: ReturnType<typeof selectPmaChats>, nextChats: ReturnType<typeof selectPmaChats>): ReturnType<typeof selectPmaChats> {
+  if (!currentChats.length) return nextChats;
+  const nextById = new Map(nextChats.map((chat) => [chat.id, chat]));
+  const ordered: ReturnType<typeof selectPmaChats> = [];
+  const seen = new Set<string>();
+  for (const current of currentChats) {
+    const next = nextById.get(current.id);
+    if (!next) continue;
+    ordered.push(next);
+    seen.add(next.id);
+  }
+  for (const next of nextChats) {
+    if (seen.has(next.id)) continue;
+    ordered.push(next);
+  }
+  return ordered;
+}
 
 function asRecords(value: unknown): JsonRecord[] {
   return Array.isArray(value) ? value.filter((item): item is JsonRecord => Boolean(item) && typeof item === 'object' && !Array.isArray(item)) : [];

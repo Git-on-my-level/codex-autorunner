@@ -173,6 +173,40 @@ def test_chat_surface_read_model_projects_contract_fixture_surface_inventory(
     )
 
 
+def test_chat_index_omits_stale_bound_surfaces_without_managed_thread(
+    tmp_path: Path,
+) -> None:
+    hub_root = tmp_path / "hub"
+    OrchestrationBindingStore(hub_root, durable=False).upsert_binding(
+        surface_kind="discord",
+        surface_key="guild:stale-thread",
+        thread_target_id="missing-thread",
+        repo_id="repo-1",
+        resource_kind="repo",
+        resource_id="repo-1",
+        metadata={"display_name": "Stale Discord thread"},
+    )
+    ChannelDirectoryStore(hub_root).record_seen(
+        "discord",
+        "guild-discovered-only",
+        None,
+        "Discovered only",
+    )
+    _seed_thread(hub_root, thread_id="live-thread")
+
+    service = ChatSurfaceReadService(hub_root, durable=False)
+    snapshot = service.snapshot()
+    surface_ids = {
+        surface["managed_thread_id"]
+        for surface in snapshot["surfaces"]
+        if surface.get("managed_thread_id")
+    }
+    assert {"missing-thread", "live-thread"} <= surface_ids
+
+    index = service.chat_index_snapshot(view="all", limit=20)
+    assert [row["managed_thread_id"] for row in index["rows"]] == ["live-thread"]
+
+
 def test_chat_surface_read_model_orders_and_limits_snapshot(tmp_path: Path) -> None:
     hub_root = tmp_path / "hub"
     journal = SQLiteChatSurfaceEventJournal(hub_root, durable=False)

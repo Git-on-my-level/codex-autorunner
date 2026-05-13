@@ -182,6 +182,8 @@
   let slashSelectedIndex = $state(0);
   let composerFocused = $state(false);
   let composerEditVersion = 0;
+  let pendingPointerChatId: string | null = null;
+  let removeDocumentChatPointerCapture: (() => void) | null = null;
 
   const COMPOSER_DEFAULT_MAX_PX = 360;
   const COMPOSER_MIN_MAX_PX = 120;
@@ -278,8 +280,8 @@
     slashSelectedIndex = Math.min(slashSelectedIndex, Math.max(slashSuggestions.length - 1, 0));
   });
   let pendingRefreshTimer: number | null = null;
-  let activeRepairInterval: number | null = null;
   let activeClockInterval: number | null = null;
+  let activeRefreshSeq = 0;
   let clockNowMs = $state(Date.now());
   let lastScrolledChatId: string | null = null;
   let lastScrolledCardCount = 0;
@@ -343,6 +345,7 @@
   function toggleChatPinned(event: MouseEvent, chatId: string): void {
     event.preventDefault();
     event.stopPropagation();
+    pendingPointerChatId = null;
     const next = { ...pinnedChatIds };
     if (next[chatId]) delete next[chatId];
     else next[chatId] = true;
@@ -531,6 +534,10 @@
   }
 
   onMount(() => {
+    document.addEventListener('pointerdown', captureDocumentChatPointer, true);
+    removeDocumentChatPointerCapture = () => {
+      document.removeEventListener('pointerdown', captureDocumentChatPointer, true);
+    };
     unsubscribeReadModels = readModelEntityStore.subscribe((state) => {
       const replacementChatId = replacementForActiveChat(readModelState, state);
       readModelState = state;
@@ -564,9 +571,6 @@
     activeClockInterval = window.setInterval(() => {
       if (progress?.status === 'running') clockNowMs = Date.now();
     }, 1000);
-    activeRepairInterval = window.setInterval(() => {
-      if (activeChatId && !isLocalDraftChatId(activeChatId)) void refreshActive(activeChatId, { quiet: true });
-    }, 7000);
   });
 
   $effect(() => {
@@ -604,10 +608,10 @@
   });
 
   onDestroy(() => {
+    removeDocumentChatPointerCapture?.();
     unsubscribeReadModels?.();
     unsubscribeChatIndexSession?.();
     if (pendingRefreshTimer) window.clearTimeout(pendingRefreshTimer);
-    if (activeRepairInterval) window.clearInterval(activeRepairInterval);
     if (activeClockInterval) window.clearInterval(activeClockInterval);
     closeStream();
   });
@@ -798,6 +802,33 @@
     await urlPromise;
   }
 
+  function chatIdFromRowEvent(event: Event, fallbackChatId: string): string {
+    const currentTarget = event.currentTarget;
+    if (currentTarget instanceof HTMLElement) {
+      const rowChatId = currentTarget.dataset.chatId?.trim();
+      if (rowChatId) return rowChatId;
+    }
+    return fallbackChatId;
+  }
+
+  function capturePointerChat(event: PointerEvent, fallbackChatId: string): void {
+    pendingPointerChatId = chatIdFromRowEvent(event, fallbackChatId);
+  }
+
+  function captureDocumentChatPointer(event: PointerEvent): void {
+    const target = event.target;
+    if (!(target instanceof Element)) return;
+    const row = target.closest<HTMLElement>('.chat-card[data-chat-id]');
+    const rowChatId = row?.dataset.chatId?.trim();
+    if (rowChatId) pendingPointerChatId = rowChatId;
+  }
+
+  function selectPointerChat(event: MouseEvent, fallbackChatId: string): void {
+    const targetChatId = pendingPointerChatId ?? chatIdFromRowEvent(event, fallbackChatId);
+    pendingPointerChatId = null;
+    void selectChat(targetChatId);
+  }
+
   function requestedDetailFromUrl(): string | null {
     if (page.params.chatId) return page.params.chatId;
     const detail = page.url.searchParams.get('detail');
@@ -807,7 +838,20 @@
 
   async function activateDetailFromUrl(detailId: string): Promise<void> {
     if (detailId === activeChatId) return;
-    if (!chats.some((chat) => chat.id === detailId)) return;
+    if (!chats.some((chat) => chat.id === detailId)) {
+      closeStream();
+      activeChatId = detailId;
+      detailMode = 'detail';
+      loadingActive = true;
+      const loaderResult = activeDetailLoadResult(detailId);
+      activeError = loaderResult?.status === 'error' ? loaderResult.error : null;
+      if (activeError) {
+        loadingActive = false;
+        return;
+      }
+      void refreshActive(detailId);
+      return;
+    }
     await selectChatWithoutUrl(detailId);
   }
 
@@ -927,38 +971,53 @@
   }
 
   async function refreshActive(chatId: string, options: { quiet?: boolean } = {}): Promise<void> {
+    const refreshSeq = ++activeRefreshSeq;
     if (!options.quiet) {
       loadingActive = true;
       activeError = null;
     }
+    let missingThreadError: ApiError | null = null;
     const timelineTask = pmaApi.pma.getTimeline(chatId).then((messageResult) => {
-      if (activeChatId !== chatId) return;
+      if (activeChatId !== chatId || refreshSeq !== activeRefreshSeq) return;
       if (messageResult.ok) {
         readModelEntityStore.replacePmaTimeline(chatId, reconcilePmaTimeline(currentTimeline(chatId), messageResult.data));
       } else if (isMissingManagedThreadError(messageResult.error)) {
+        missingThreadError = messageResult.error;
         readModelEntityStore.replacePmaTimeline(chatId, []);
       } else if (!options.quiet) {
         activeError = messageResult.error;
       }
-      if (!options.quiet) loadingActive = false;
     });
     const progressTask = Promise.all([pmaApi.pma.getTail(chatId), pmaApi.pma.getStatus(chatId)]).then(
       ([tailResult, statusResult]) => {
-        if (activeChatId !== chatId) return;
+        if (activeChatId !== chatId || refreshSeq !== activeRefreshSeq) return;
         if (tailResult.ok) updateProgress(tailResult.data);
         else if (statusResult.ok) updateProgress(statusResult.data);
         else if (isMissingManagedThreadError(tailResult.error) || isMissingManagedThreadError(statusResult.error)) {
+          missingThreadError = isMissingManagedThreadError(tailResult.error) ? tailResult.error : statusResult.error;
           readModelEntityStore.setPmaProgress(chatId, null);
         } else if (!options.quiet && !activeError) activeError = tailResult.error;
       }
     );
     const queueTask = pmaApi.pma.getQueue(chatId).then((queueResult) => {
-      if (activeChatId === chatId && queueResult.ok) {
+      if (activeChatId !== chatId || refreshSeq !== activeRefreshSeq) return;
+      if (queueResult.ok) {
         readModelEntityStore.setPmaQueue(chatId, queueResult.data.queuedTurns);
+      } else if (isMissingManagedThreadError(queueResult.error)) {
+        missingThreadError = queueResult.error;
+        readModelEntityStore.setPmaQueue(chatId, []);
       }
     });
 
     await Promise.all([timelineTask, progressTask, queueTask]);
+    if (activeChatId !== chatId || refreshSeq !== activeRefreshSeq) return;
+    if (missingThreadError) {
+      activeError = missingThreadError;
+      loadingActive = false;
+      closeStream();
+      return;
+    }
+    if (!options.quiet || loadingActive) loadingActive = false;
   }
 
   function connectStream(chatId: string): void {
@@ -2041,12 +2100,17 @@
         class={`chat-card status-${chat.status}`}
         role="button"
         tabindex="0"
+        data-chat-id={chat.id}
         aria-current={chat.id === activeChatId ? 'true' : undefined}
-        onclick={() => selectChat(chat.id)}
+        onpointerdowncapture={(event) => capturePointerChat(event, chat.id)}
+        onpointercancel={() => {
+          if (pendingPointerChatId === chat.id) pendingPointerChatId = null;
+        }}
+        onclick={(event) => selectPointerChat(event, chat.id)}
         onkeydown={(event) => {
           if (event.key === 'Enter' || event.key === ' ') {
             event.preventDefault();
-            selectChat(chat.id);
+            selectChat(chatIdFromRowEvent(event, chat.id));
           }
         }}
       >
@@ -2057,6 +2121,7 @@
           title={pinnedChatIds[chat.id] === true ? 'Unpin chat' : 'Pin chat'}
           aria-label={pinnedChatIds[chat.id] === true ? `Unpin ${chat.title}` : `Pin ${chat.title}`}
           aria-pressed={pinnedChatIds[chat.id] === true}
+          onpointerdown={(event) => event.stopPropagation()}
           onclick={(event) => toggleChatPinned(event, chat.id)}
         >
           {#if listScopeAccent && listScopeAccentHex}
@@ -2335,7 +2400,7 @@
     </div>
 
     <div bind:this={messageStack} class="message-stack" aria-live="polite">
-      {#if loadingActive && activeChat}
+      {#if loadingActive && (activeChat || activeChatId)}
         <div class="state-panel loading-state">
           <span class="state-icon" aria-hidden="true"></span>
           <strong>Loading active chat</strong>

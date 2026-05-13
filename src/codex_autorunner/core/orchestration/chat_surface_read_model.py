@@ -878,9 +878,18 @@ def _stable_revision(payload: Mapping[str, Any]) -> str:
 def _chat_index_rows_from_surfaces(
     surfaces: Iterable[Mapping[str, Any]],
 ) -> list[dict[str, Any]]:
+    surface_list = list(surfaces)
+    loadable_thread_ids = {
+        thread_id
+        for surface in surface_list
+        for thread_id in [_normalize_text(surface.get("managed_thread_id"))]
+        if thread_id is not None
+        and "managed_thread"
+        in {str(fact) for fact in (surface.get("facts") or []) if fact is not None}
+    }
     by_thread: dict[str, dict[str, Any]] = {}
     external_rows: list[dict[str, Any]] = []
-    for surface in surfaces:
+    for surface in surface_list:
         surface_kind = _normalize_text(surface.get("surface_kind")) or ""
         surface_key = _normalize_text(surface.get("surface_key")) or ""
         managed_thread_id = _normalize_text(surface.get("managed_thread_id"))
@@ -924,6 +933,8 @@ def _chat_index_rows_from_surfaces(
                     "search_text": "",
                 }
             )
+            continue
+        if managed_thread_id not in loadable_thread_ids:
             continue
         row = by_thread.get(managed_thread_id)
         if row is None:
@@ -1105,6 +1116,8 @@ def _filter_chat_index_rows(
     filtered: list[dict[str, Any]] = []
     for row in rows:
         if parent_group_id is not None and row.get("group_id") != parent_group_id:
+            continue
+        if normalized_view != "external" and row.get("managed_thread_id") is None:
             continue
         if normalized_surface is not None and normalized_surface not in set(
             row.get("surface_kinds") or []

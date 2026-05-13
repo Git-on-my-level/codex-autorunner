@@ -293,14 +293,37 @@ describe('PMA chat view helpers', () => {
         agentProfile: 'm4-pma',
         repoId: 'repo-1',
         raw: { surface_kind: 'discord', surface_key: 'channel-1', binding_kind: 'discord', binding_id: 'channel-1' }
-      },
-      {
-        id: 'surface:telegram:-100:42',
-        title: 'Telegram Topic',
-        status: 'idle',
-        raw: { surface_kind: 'telegram', surface_key: '-100:42' }
       }
     ]);
+  });
+
+  it('does not map unbound or stale surface inventory into selectable chats', () => {
+    const chats = mapChatSurfaceSnapshotToPmaChats({
+      surfaces: [
+        {
+          surface_kind: 'notification',
+          surface_key: 'notification:abc',
+          lifecycle: 'discovered',
+          display: { display_name: 'Notification abc' }
+        },
+        {
+          surface_kind: 'discord',
+          surface_key: 'channel-1',
+          managed_thread_id: 'missing-thread',
+          facts: ['binding'],
+          display: { display_name: 'Stale bound thread' }
+        },
+        {
+          surface_kind: 'pma',
+          surface_key: 'live-thread',
+          managed_thread_id: 'live-thread',
+          facts: ['managed_thread'],
+          display: { display_name: 'Live thread' }
+        }
+      ]
+    });
+
+    expect(chats.map((chat) => chat.id)).toEqual(['live-thread']);
   });
 
   it('prefers projection lifecycle over stale latest execution when thread is archived', () => {
