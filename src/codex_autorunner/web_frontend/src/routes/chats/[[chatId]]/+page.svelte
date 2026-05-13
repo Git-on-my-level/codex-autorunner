@@ -849,6 +849,7 @@
         loadingActive = false;
         return;
       }
+      connectStream(detailId);
       void refreshActive(detailId);
       return;
     }

@@ -333,10 +333,8 @@ export function mapChatSurfaceToPmaChatSummary(surface: Record<string, unknown>)
   const metadata = rawRecord(surface.metadata);
   const managedThreadId = firstRawString(surface.managed_thread_id);
   if (!managedThreadId) return null;
-  if (
-    Array.isArray(surface.facts) &&
-    !surface.facts.some((fact) => fact === 'managed_thread')
-  ) {
+  const facts = Array.isArray(surface.facts) ? surface.facts : [];
+  if (!facts.some((fact) => fact === 'managed_thread')) {
     return null;
   }
   const lifecycle = firstRawString(surface.lifecycle);
@@ -453,6 +451,7 @@ export function mapChatSurfaceEventToPmaChatSummary(payload: Record<string, unkn
   return mapChatSurfaceToPmaChatSummary({
     surface_kind: surfaceKind,
     surface_key: surfaceKey,
+    facts: ['managed_thread'],
     managed_thread_id: payload.managed_thread_id,
     lifecycle: payload.lifecycle,
     lifecycle_status: payload.lifecycle_status,
