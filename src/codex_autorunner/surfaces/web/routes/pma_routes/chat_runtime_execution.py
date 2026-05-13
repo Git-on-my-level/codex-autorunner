@@ -32,7 +32,6 @@ from .....core.pma.runtime_results import (
     DEFAULT_PMA_WALL_CLOCK_TIMEOUT_SECONDS,
     classify_runtime_turn_result,
     requires_fresh_pma_conversation,
-    timeline_has_assistant_output,
 )
 from .....core.ports.run_event import (
     Completed,
@@ -641,7 +640,6 @@ async def execute_opencode(
         collect_opencode_output,
         extract_session_id,
         opencode_stream_timeouts,
-        parse_message_response,
         split_model_id,
     )
 
@@ -740,9 +738,8 @@ async def execute_opencode(
     timeout_task = asyncio.create_task(asyncio.sleep(resolved_timeout_seconds))
     interrupt_task = asyncio.create_task(interrupt_event.wait())
     try:
-        prompt_response = None
         try:
-            prompt_response = await prompt_task
+            await prompt_task
         except (RuntimeError, OSError, ConnectionError) as exc:
             interrupt_event.set()
             cancel_background_task(output_task, name="pma.opencode.output.collect")
@@ -762,12 +759,6 @@ async def execute_opencode(
             await opencode_harness.interrupt(hub_root, session_id, None)
             return {"status": "interrupted", "detail": "PMA chat interrupted"}
         output_result = await output_task
-        if (not output_result.text) and prompt_response is not None:
-            fallback = parse_message_response(prompt_response)
-            if fallback.text:
-                output_result = type(output_result)(
-                    text=fallback.text, error=fallback.error
-                )
     finally:
         cancel_background_task(timeout_task, name="pma.opencode.timeout.wait")
         cancel_background_task(interrupt_task, name="pma.opencode.interrupt.wait")
@@ -775,31 +766,6 @@ async def execute_opencode(
 
     if output_result.error:
         raise HTTPException(status_code=502, detail=output_result.error)
-    if (
-        output_result.text
-        and prompt_response is not None
-        and not timeline_has_assistant_output(timeline_events)
-    ):
-        completion_payload = (
-            dict(prompt_response) if isinstance(prompt_response, dict) else {}
-        )
-        info = completion_payload.get("info")
-        if not isinstance(info, dict):
-            info = {}
-        info = dict(info)
-        if not isinstance(info.get("role"), str) or not str(info.get("role")).strip():
-            info["role"] = "assistant"
-        completion_payload["info"] = info
-        if not isinstance(completion_payload.get("parts"), list):
-            completion_payload["parts"] = [{"type": "text", "text": output_result.text}]
-        timeline_events.extend(
-            normalize_runtime_thread_message(
-                "message.completed",
-                completion_payload,
-                timeline_state,
-                timestamp=now_iso(),
-            )
-        )
     timeline_events.append(
         Completed(timestamp=now_iso(), final_message=output_result.text)
     )

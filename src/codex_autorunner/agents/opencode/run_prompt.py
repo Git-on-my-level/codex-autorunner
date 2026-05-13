@@ -9,7 +9,6 @@ from typing import Any, Awaitable, Callable, Optional
 
 from ...core.logging_utils import log_event
 from ...core.usage import persist_opencode_usage_snapshot
-from .protocol_payload import prompt_echo_matches
 from .runtime import (
     PERMISSION_ALLOW,
     OpenCodeTurnOutput,
@@ -18,7 +17,6 @@ from .runtime import (
     extract_session_id,
     opencode_missing_env,
     opencode_stream_timeouts,
-    parse_message_response,
     split_model_id,
 )
 from .supervisor import OpenCodeSupervisor
@@ -151,31 +149,6 @@ async def _collect_output_after_interrupt(
         if logger is not None:
             logger.warning(f"OpenCode output failed after interrupt: {exc}")
         return None
-
-
-def _apply_prompt_fallback(
-    output_text: str,
-    output_error: Optional[str],
-    prompt_task: asyncio.Task[Any],
-    *,
-    prompt: Optional[str] = None,
-) -> tuple[str, Optional[str]]:
-    if output_text:
-        return output_text, output_error
-    try:
-        prompt_response = prompt_task.result()
-    except (RuntimeError, OSError, ConnectionError, ValueError):
-        return output_text, output_error
-    if prompt_response is None:
-        return output_text, output_error
-    fallback = parse_message_response(prompt_response)
-    text = (
-        fallback.text
-        if fallback.text and not prompt_echo_matches(fallback.text, prompt=prompt)
-        else output_text
-    )
-    error = fallback.error if fallback.error and not output_error else output_error
-    return text, error
 
 
 async def run_opencode_prompt(
@@ -391,14 +364,6 @@ async def _run_turn(
     output_text = output_result.text if output_result else ""
     output_error = output_result.error if output_result else None
     output_usage = output_result.usage if output_result else None
-
-    if prompt_task.done():
-        output_text, output_error = _apply_prompt_fallback(
-            output_text,
-            output_error,
-            prompt_task,
-            prompt=config.prompt,
-        )
 
     if output_usage:
         persist_opencode_usage_snapshot(

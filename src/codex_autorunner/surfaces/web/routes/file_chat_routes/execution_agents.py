@@ -384,7 +384,6 @@ async def execute_opencode(
         collect_opencode_output,
         extract_session_id,
         opencode_stream_timeouts,
-        parse_message_response,
         split_model_id,
     )
 
@@ -464,9 +463,8 @@ async def execute_opencode(
     timeout_task = asyncio.create_task(asyncio.sleep(timeout_seconds))
     interrupt_task = asyncio.create_task(interrupt_event.wait())
     try:
-        prompt_response = None
         try:
-            prompt_response = await prompt_task
+            await prompt_task
         except (
             Exception
         ) as exc:  # intentional: rewrap any client failure as FileChatError
@@ -485,14 +483,6 @@ async def execute_opencode(
             output_task.cancel()
             return {"status": "interrupted", "detail": "File chat interrupted"}
         output_result = await output_task
-        if (not output_result.text) and prompt_response is not None:
-            fallback = parse_message_response(prompt_response)
-            if fallback.text:
-                output_result = type(output_result)(
-                    text=fallback.text,
-                    error=output_result.error or fallback.error,
-                    usage=output_result.usage,
-                )
     finally:
         timeout_task.cancel()
         interrupt_task.cancel()

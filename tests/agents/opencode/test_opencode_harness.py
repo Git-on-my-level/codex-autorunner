@@ -642,6 +642,14 @@ async def test_opencode_harness_start_turn_returns_before_prompt_finishes_and_sy
     assert first_event["message"]["method"] == "session.status"
     assert first_event["message"]["params"]["status"]["type"] == "busy"
 
+    client.messages_response = {
+        "data": [
+            {
+                "info": {"id": "assistant-1", "role": "assistant"},
+                "parts": [{"type": "text", "text": "Agent reply"}],
+            }
+        ]
+    }
     release_prompt.set()
     result = await harness.wait_for_turn(workspace, "session-1", turn.turn_id)
 
@@ -786,6 +794,14 @@ async def test_opencode_harness_polls_messages_for_rich_progress_when_sse_is_sil
                 }
             ]
         },
+        {
+            "data": [
+                {
+                    "info": {"id": "assistant-1", "role": "assistant"},
+                    "parts": [{"type": "text", "text": "Agent reply"}],
+                }
+            ]
+        },
     ]
     list_message_calls = 0
 
@@ -913,6 +929,7 @@ async def test_opencode_harness_polls_messages_when_preconnected_stream_only_has
                             "input": "rg stream_events",
                             "state": {"status": "running"},
                         },
+                        {"type": "text", "text": "Agent reply"},
                     ],
                 }
             ]
