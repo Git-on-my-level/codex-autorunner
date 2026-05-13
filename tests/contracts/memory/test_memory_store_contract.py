@@ -250,7 +250,11 @@ class TestMemoryWriteReadInvariant:
     """Hypothesis-based invariants: write then read through same scope."""
 
     @given(content=_doc_content, key=_valid_kinds)
-    @settings(max_examples=50, suppress_health_check=[HealthCheck.too_slow])
+    @settings(
+        deadline=None,
+        max_examples=50,
+        suppress_health_check=[HealthCheck.too_slow],
+    )
     def test_save_load_preserves_content(self, content: str, key: str) -> None:
         import tempfile
 

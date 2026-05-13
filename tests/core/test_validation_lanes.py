@@ -41,6 +41,14 @@ def test_classify_core_lane_for_root_level_backend_test() -> None:
     assert selection.lanes_touched == ("core",)
 
 
+def test_classify_core_lane_for_unit_tests() -> None:
+    selection = classify_changed_files(["tests/unit/test_idle_cpu_soak.py"])
+
+    assert selection.lane == "core"
+    assert selection.reason == "single-lane-diff"
+    assert selection.lanes_touched == ("core",)
+
+
 def test_classify_web_ui_lane_for_root_level_web_test() -> None:
     selection = classify_changed_files(["tests/test_app_server_events.py"])
 
@@ -59,6 +67,16 @@ def test_classify_web_ui_lane_for_ticket_flow_ui_integration_test() -> None:
     assert selection.lane_paths == (
         ("web-ui", ("tests/test_ticket_flow_ui_integration.py",)),
     )
+
+
+def test_classify_web_ui_lane_for_contract_tests() -> None:
+    selection = classify_changed_files(
+        ["tests/contracts/memory/test_memory_store_contract.py"]
+    )
+
+    assert selection.lane == "web-ui"
+    assert selection.reason == "single-lane-diff"
+    assert selection.lanes_touched == ("web-ui",)
 
 
 def test_shared_risk_paths_force_aggregate() -> None:
