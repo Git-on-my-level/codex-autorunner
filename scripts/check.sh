@@ -382,9 +382,9 @@ _run_chat_apps_lane() {
 
 # --- Lane dispatch: guardrails + lanes all in parallel -----------------------
 _ACTIVE_LANE_COUNT=0
-[[ "$RUN_CORE" == true ]] && ((_ACTIVE_LANE_COUNT++))
-[[ "$RUN_WEB_UI" == true ]] && ((_ACTIVE_LANE_COUNT++))
-[[ "$RUN_CHAT_APPS" == true ]] && ((_ACTIVE_LANE_COUNT++))
+[[ "$RUN_CORE" == true ]] && ((_ACTIVE_LANE_COUNT += 1))
+[[ "$RUN_WEB_UI" == true ]] && ((_ACTIVE_LANE_COUNT += 1))
+[[ "$RUN_CHAT_APPS" == true ]] && ((_ACTIVE_LANE_COUNT += 1))
 
 _RUN_PARALLEL=false
 if [[ "$_ACTIVE_LANE_COUNT" -ge 1 ]]; then
