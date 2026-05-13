@@ -47,7 +47,10 @@ class TurnAssistantOutput:
         if self.matched_prior_text:
             data["turn_output_prior_chars"] = len(self.matched_prior_text)
         if self.provenance:
-            data["turn_output_provenance"] = dict(self.provenance)
+            prov = dict(self.provenance)
+            prov.pop("matched_prior_text", None)
+            if prov:
+                data["turn_output_provenance"] = prov
         return data
 
 
