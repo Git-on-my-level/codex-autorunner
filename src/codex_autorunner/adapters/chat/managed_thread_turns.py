@@ -87,6 +87,10 @@ from ...core.orchestration.runtime_threads import (
     begin_next_queued_runtime_thread_execution,
     begin_runtime_thread_execution,
 )
+from ...core.orchestration.turn_assistant_output import (
+    TurnAssistantOutput,
+    TurnAssistantOutputOwnership,
+)
 from ...core.orchestration.turn_output_reducer import (
     assistant_text_extends_prefix,
     build_assistant_transcript_prefix,
@@ -151,6 +155,38 @@ class ManagedThreadFinalizationResult:
     token_usage: Optional[dict[str, Any]] = None
     session_notice: Optional[str] = None
     fresh_backend_session_reason: Optional[str] = None
+    assistant_output: Optional[TurnAssistantOutput] = None
+
+    def __post_init__(self) -> None:
+        assistant_output = self.assistant_output
+        if assistant_output is None:
+            ownership: TurnAssistantOutputOwnership = (
+                "current_turn"
+                if self.status == "ok" and self.assistant_text
+                else "empty"
+            )
+            assistant_output = TurnAssistantOutput(
+                managed_thread_id=self.managed_thread_id,
+                managed_turn_id=self.managed_turn_id,
+                backend_thread_id=self.backend_thread_id,
+                backend_turn_id=None,
+                text=str(self.assistant_text or "") if self.status == "ok" else "",
+                ownership=ownership,
+                source="none",
+                provenance={"compatibility_source": "managed_thread_finalization"},
+            )
+        object.__setattr__(
+            self,
+            "assistant_output",
+            assistant_output,
+        )
+        object.__setattr__(self, "assistant_text", assistant_output.text)
+
+    @property
+    def turn_assistant_text(self) -> str:
+        if self.assistant_output is None:
+            return ""
+        return self.assistant_output.text
 
 
 FinalizeQueuedExecution = Callable[
@@ -904,7 +940,7 @@ def render_managed_thread_response_text(
     *,
     no_response_fallback: str = "(No response text returned.)",
 ) -> str:
-    assistant_text = str(finalized.assistant_text or "").strip()
+    assistant_text = finalized.turn_assistant_text.strip()
     session_notice = str(finalized.session_notice or "").strip()
     return _render_managed_thread_delivery_text(
         assistant_text=assistant_text,
@@ -979,7 +1015,7 @@ def build_managed_thread_delivery_intent(
     envelope = ManagedThreadDeliveryEnvelope(
         envelope_version="managed_thread_delivery.v1",
         final_status=finalized.status,
-        assistant_text=str(finalized.assistant_text or ""),
+        assistant_text=finalized.turn_assistant_text,
         session_notice=_normalized_optional_text(finalized.session_notice),
         error_text=_normalized_optional_text(finalized.error),
         backend_thread_id=_normalized_optional_text(finalized.backend_thread_id),
@@ -3014,10 +3050,13 @@ async def finalize_managed_thread_execution(
             prior_assistant_texts=prior_assistant_candidates,
         )
         terminal_evidence_updates: dict[str, Any] = {}
-        if turn_output.source in {"event_final", "event_stream"}:
+        if turn_output.provenance.get("candidate_source") in {
+            "event_final",
+            "event_stream",
+        }:
             terminal_evidence_updates["assistant_text_from_event_state"] = True
         terminal_evidence_updates.update(turn_output.evidence)
-        if turn_output.scope == "cumulative_transcript_trimmed":
+        if turn_output.ownership == "trimmed_from_cumulative":
             log_event(
                 logger,
                 logging.WARNING,
@@ -3030,8 +3069,9 @@ async def finalize_managed_thread_execution(
                     or started.execution.backend_id,
                     surface=surface,
                 ),
-                original_assistant_chars=len(
-                    outcome.assistant_text or event_state.best_assistant_text()
+                original_assistant_chars=max(
+                    len(outcome.assistant_text),
+                    len(event_state.best_assistant_text()),
                 ),
                 previous_assistant_chars=len(turn_output.matched_prior_text),
                 trimmed_assistant_chars=len(turn_output.text),
@@ -3040,7 +3080,7 @@ async def finalize_managed_thread_execution(
                 **terminal_evidence_trace_fields(outcome),
             )
             terminal_evidence_updates["assistant_text_trimmed_from_cumulative"] = True
-        elif turn_output.scope == "stale_prior_output":
+        elif turn_output.ownership == "rejected_stale_prior":
             log_event(
                 logger,
                 logging.ERROR,
@@ -3063,6 +3103,7 @@ async def finalize_managed_thread_execution(
             outcome = replace(
                 outcome,
                 assistant_text=turn_output.text,
+                assistant_output=turn_output,
                 terminal_evidence=dict(outcome.terminal_evidence)
                 | terminal_evidence_updates,
             )
@@ -3103,13 +3144,9 @@ async def finalize_managed_thread_execution(
     )
 
     resolved_assistant_text = (
-        outcome.assistant_text
-        if outcome.status == "ok"
-        else (
-            (outcome.assistant_text or event_state.best_assistant_text())
-            if outcome.status == "interrupted"
-            else ""
-        )
+        outcome.assistant_output.text
+        if outcome.status == "ok" and outcome.assistant_output is not None
+        else outcome.assistant_text if outcome.status == "ok" else ""
     )
     finalized_state = _resolve_thread_state(
         orchestration_service,
@@ -3393,6 +3430,7 @@ async def finalize_managed_thread_execution(
             token_usage=event_state.token_usage,
             session_notice=session_notice,
             fresh_backend_session_reason=fresh_backend_session_reason,
+            assistant_output=outcome.assistant_output,
         )
 
     if outcome.status == "interrupted":

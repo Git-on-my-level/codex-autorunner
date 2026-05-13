@@ -36,6 +36,9 @@ from codex_autorunner.core.orchestration.runtime_turn_terminal_state import (
 from codex_autorunner.core.orchestration.runtime_turn_terminal_state import (
     RuntimeTurnTerminalStateMachine,
 )
+from codex_autorunner.core.orchestration.turn_assistant_output import (
+    TurnAssistantOutput,
+)
 from codex_autorunner.core.ports.run_event import (
     RUN_EVENT_DELTA_TYPE_ASSISTANT_STREAM,
     ApprovalRequested,
@@ -870,7 +873,16 @@ async def test_terminal_run_event_from_outcome_respects_turn_output_envelope() -
             error=None,
             backend_thread_id="thread-1",
             backend_turn_id="turn-2",
-            terminal_evidence={"turn_output_scope": "stale_prior_output"},
+            assistant_output=TurnAssistantOutput(
+                managed_thread_id="managed-thread-1",
+                managed_turn_id="turn-2",
+                backend_thread_id="thread-1",
+                backend_turn_id="turn-2",
+                text="",
+                ownership="rejected_stale_prior",
+                source="reducer",
+                provenance={"matched_prior_text": "stale prior output"},
+            ),
         ),
         state,
     )
