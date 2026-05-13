@@ -341,7 +341,7 @@ class HostOriginMiddleware:
         {"/auth/bootstrap/claim", "/auth/bootstrap/claim/"}
     )
 
-    def __init__(self, app, allowed_hosts, allowed_origins):
+    def __init__(self, app, allowed_hosts, allowed_origins, base_path: str = ""):
         self.app = app
         self.allowed_hosts = [
             entry.strip().lower()
@@ -357,6 +357,7 @@ class HostOriginMiddleware:
             )
             if entry is not None
         }
+        self.base_path = base_path.rstrip("/")
 
     def __getattr__(self, name):
         return getattr(self.app, name)
@@ -450,6 +451,8 @@ class HostOriginMiddleware:
         candidates = [path]
         if root_path and path.startswith(root_path):
             candidates.append(path[len(root_path) :] or "/")
+        if self.base_path and path.startswith(f"{self.base_path}/"):
+            candidates.append(path[len(self.base_path) :] or "/")
         return any(candidate in self._BOOTSTRAP_CLAIM_PATHS for candidate in candidates)
 
     async def _reject_http(self, scope, receive, send, status: int, body: str) -> None:

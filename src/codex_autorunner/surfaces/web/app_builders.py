@@ -390,6 +390,7 @@ def _add_shared_repo_middlewares(
         HostOriginMiddleware,
         allowed_hosts=allowed_hosts,
         allowed_origins=allowed_origins,
+        base_path=context.base_path if include_base_path_router else "",
     )
     app.add_middleware(RequestIdMiddleware)
     app.add_middleware(SecurityHeadersMiddleware)
