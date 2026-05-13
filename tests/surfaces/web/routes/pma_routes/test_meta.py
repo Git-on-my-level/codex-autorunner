@@ -251,7 +251,7 @@ def test_pma_agents_does_not_default_to_unavailable_synthetic_hermes(
                     "capability_projection": {},
                 }
             ],
-            "opencode",
+            "codex",
         ),
     )
 

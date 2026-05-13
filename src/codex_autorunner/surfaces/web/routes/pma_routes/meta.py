@@ -161,10 +161,23 @@ def build_pma_meta_routes(
                         include_supervisor_metadata=False,
                     )
                 )
+        fallback_default_agent = next(
+            (
+                str(agent.get("id") or "").strip().lower()
+                for agent in agents
+                if isinstance(agent, dict)
+                and str(agent.get("id") or "").strip().lower()
+            ),
+            default_agent,
+        )
         effective_default_agent = (
             configured_default_agent
             if configured_default_agent in available_agent_ids
-            else default_agent
+            else (
+                default_agent
+                if str(default_agent or "").strip().lower() in available_agent_ids
+                else fallback_default_agent
+            )
         )
         try:
             state = load_state(request.app.state.engine.state_path)
