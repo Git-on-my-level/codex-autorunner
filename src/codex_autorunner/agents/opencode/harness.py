@@ -493,8 +493,11 @@ async def _coordinate_opencode_turn_lifecycle(
             else:
                 output = await collect_task
                 collected = True
-                command_result = await command_task
-                command_completed = True
+                try:
+                    command_result = await command_task
+                finally:
+                    if command_task.done():
+                        command_completed = True
 
         if command_result is not None:
             original = output
