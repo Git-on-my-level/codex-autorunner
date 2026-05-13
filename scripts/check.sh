@@ -212,7 +212,7 @@ _run_guardrails() {
 
 # --- Lane runner functions ----------------------------------------------------
 
-_run_static_checks() {
+_run_core_lane() {
   echo "Linting injected context hints..."
   "$PYTHON_BIN" scripts/check_injected_context.py
 
@@ -224,9 +224,7 @@ _run_static_checks() {
 
   echo "Type check (mypy, strict repo-wide)..."
   make typecheck-strict PYTHON="$PYTHON_BIN"
-}
 
-_run_pytest() {
   echo "Running tests (pytest)..."
   if [ -z "${CI:-}" ]; then
       FAST_TEST_JUNIT="$(mktemp)"
@@ -284,36 +282,6 @@ _run_pytest() {
       else
         "$PYTHON_BIN" -m pytest -m "$FAST_TEST_MARKERS" -n "$FAST_TEST_WORKERS"
       fi
-  fi
-}
-
-_run_core_lane() {
-  _STATIC_LOG="$(mktemp)"
-  _run_static_checks > "$_STATIC_LOG" 2>&1 &
-  _STATIC_PID=$!
-
-  _PYTEST_LOG="$(mktemp)"
-  _run_pytest > "$_PYTEST_LOG" 2>&1 &
-  _PYTEST_PID=$!
-
-  _CORE_FAIL=0
-  if ! wait "$_PYTEST_PID"; then
-    echo "Pytest FAILED" >&2
-    _CORE_FAIL=1
-  fi
-  if ! wait "$_STATIC_PID"; then
-    echo "Static checks FAILED" >&2
-    _CORE_FAIL=1
-  fi
-
-  echo "--- static checks output ---"
-  cat "$_STATIC_LOG"
-  echo "--- pytest output ---"
-  cat "$_PYTEST_LOG"
-  rm -f "$_STATIC_LOG" "$_PYTEST_LOG"
-
-  if [[ "$_CORE_FAIL" -eq 1 ]]; then
-    exit 1
   fi
 
   if [ -n "${CI:-}" ] || [[ "${CODEX_LOCAL_CHECK_INCLUDE_DEADCODE:-0}" == "1" ]]; then
