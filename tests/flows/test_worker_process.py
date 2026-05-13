@@ -82,6 +82,18 @@ def test_cmdline_matches_when_executable_resolves_differently(tmp_path: Path) ->
     assert worker_process._cmdline_matches(expected, actual)
 
 
+def test_stale_alive_health_still_counts_as_alive(tmp_path: Path) -> None:
+    health = worker_process.FlowWorkerHealth(
+        status="stale_alive",
+        pid=123,
+        cmdline=["python"],
+        artifact_path=tmp_path / "worker.json",
+        stale_reason="semantic_progress_stale_without_active_tool",
+    )
+
+    assert health.is_alive is True
+
+
 def test_read_process_cmdline_uses_wide_ps(monkeypatch) -> None:
     _disable_proc_cmdline_probe(monkeypatch)
     seen: list[list[str]] = []

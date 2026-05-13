@@ -27,9 +27,14 @@ _OPENCODE_STREAM_RECONNECT_BACKOFF_SECONDS = (0.5, 1.0, 2.0, 5.0, 10.0)
 _OPENCODE_STREAM_MAX_STALL_RECONNECT_ATTEMPTS = 5
 _OPENCODE_STREAM_MAX_STALL_RECONNECT_SECONDS = 120.0
 _OPENCODE_STREAM_STALL_TIMEOUT_REASON = "opencode_stream_stalled_timeout"
+_OPENCODE_STREAM_STALL_IDLE_WAIT_TIMEOUT_REASON = (
+    "opencode_stream_stalled_timeout_waiting_for_idle"
+)
 _OPENCODE_FIRST_EVENT_TIMEOUT_REASON = "opencode_first_event_timeout"
 _OPENCODE_POST_COMPLETION_GRACE_SECONDS = 5.0
 _OPENCODE_ABSOLUTE_MAX_IDLE_SECONDS = 300.0
+_OPENCODE_POST_STALL_IDLE_WAIT_SECONDS = 30.0
+_OPENCODE_POST_STALL_IDLE_POLL_SECONDS = 5.0
 
 StatusEventHandler = Callable[[str, dict[str, Any], Optional[str]], Awaitable[None]]
 
@@ -424,11 +429,60 @@ class StreamLifecycleController:
 
         if not reconnected:
             if status_type and not status_is_idle(status_type):
+                idle_wait_started_at = time.monotonic()
+                last_status_type = status_type
                 while True:
-                    await asyncio.sleep(5.0)
+                    elapsed_wait = time.monotonic() - idle_wait_started_at
+                    if elapsed_wait >= _OPENCODE_POST_STALL_IDLE_WAIT_SECONDS:
+                        error_msg = (
+                            f"{_OPENCODE_STREAM_STALL_IDLE_WAIT_TIMEOUT_REASON}: "
+                            f"session stayed non-idle for {elapsed_wait:.1f}s after "
+                            f"{self._reconnect_attempts} reconnect attempts"
+                        )
+                        log_event(
+                            self._logger,
+                            logging.ERROR,
+                            "opencode.stream.stalled.timeout_waiting_for_idle",
+                            session_id=self._session_id,
+                            idle_seconds=idle_seconds,
+                            elapsed_wait_seconds=elapsed_wait,
+                            last_status_type=last_status_type,
+                            reconnect_attempts=self._reconnect_attempts,
+                            reconnect_error=reconnect_error,
+                        )
+                        await self._emit_status(
+                            {
+                                "type": "stall_idle_wait_timeout",
+                                "reason": _OPENCODE_STREAM_STALL_IDLE_WAIT_TIMEOUT_REASON,
+                                "idleSeconds": idle_seconds,
+                                "elapsedWaitSeconds": elapsed_wait,
+                                "lastStatus": last_status_type,
+                                "attempts": self._reconnect_attempts,
+                            }
+                        )
+                        return LifecycleDecision(
+                            action=LifecycleAction.BREAK,
+                            error=error_msg,
+                            should_flush_if_pending=False,
+                        )
+                    await asyncio.sleep(_OPENCODE_POST_STALL_IDLE_POLL_SECONDS)
                     polled = await self._poll_session_status_quiet()
                     if status_is_idle(polled):
+                        log_event(
+                            self._logger,
+                            logging.INFO,
+                            "opencode.stream.stalled.session_idle_after_timeout",
+                            session_id=self._session_id,
+                            idle_seconds=idle_seconds,
+                            elapsed_wait_seconds=time.monotonic()
+                            - idle_wait_started_at,
+                            last_status_type=polled,
+                            reconnect_attempts=self._reconnect_attempts,
+                            reconnect_error=reconnect_error,
+                        )
                         break
+                    if polled:
+                        last_status_type = polled
                 return LifecycleDecision(
                     action=LifecycleAction.BREAK,
                     should_flush_if_pending=False,

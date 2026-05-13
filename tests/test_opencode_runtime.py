@@ -1169,6 +1169,116 @@ async def test_collect_output_bounds_stall_reconnect_loop_if_session_missing(
 
 
 @pytest.mark.anyio
+async def test_stream_lifecycle_bounds_post_stall_idle_wait(monkeypatch) -> None:
+    progress_events: list[dict[str, object]] = []
+
+    async def _status_fetcher():
+        return {"status": {"type": "busy"}}
+
+    async def _status_handler(_event_type, payload, _event_id):
+        progress_events.append(payload)
+
+    async def _event_stream():
+        if False:
+            yield SSEEvent(event="keepalive", data="{}")
+
+    monkeypatch.setattr(
+        opencode_stream_lifecycle,
+        "_OPENCODE_STREAM_RECONNECT_BACKOFF_SECONDS",
+        (0.0,),
+    )
+    monkeypatch.setattr(
+        opencode_stream_lifecycle,
+        "_OPENCODE_STREAM_MAX_STALL_RECONNECT_ATTEMPTS",
+        0,
+    )
+    monkeypatch.setattr(
+        opencode_stream_lifecycle,
+        "_OPENCODE_POST_STALL_IDLE_WAIT_SECONDS",
+        0.001,
+    )
+    monkeypatch.setattr(
+        opencode_stream_lifecycle,
+        "_OPENCODE_POST_STALL_IDLE_POLL_SECONDS",
+        0.0,
+    )
+
+    controller = opencode_stream_lifecycle.StreamLifecycleController(
+        session_id="s1",
+        event_stream_factory=lambda: _event_stream(),
+        session_fetcher=_status_fetcher,
+        stall_timeout_seconds=0.001,
+        first_event_timeout_seconds=None,
+        status_event_handler=_status_handler,
+    )
+
+    decision = await controller.on_timeout_error(now=time.monotonic() + 1.0)
+
+    assert decision.action == opencode_stream_lifecycle.LifecycleAction.BREAK
+    assert decision.error is not None
+    assert "opencode_stream_stalled_timeout_waiting_for_idle" in decision.error
+    assert any(
+        event.get("type") == "stall_idle_wait_timeout" for event in progress_events
+    )
+
+
+@pytest.mark.anyio
+async def test_stream_lifecycle_preserves_idle_before_post_stall_deadline(
+    monkeypatch,
+) -> None:
+    statuses = iter(
+        [
+            {"status": {"type": "busy"}},
+            {"status": {"type": "busy"}},
+            {"status": {"type": "idle"}},
+        ]
+    )
+
+    async def _status_fetcher():
+        return next(statuses)
+
+    async def _event_stream():
+        if False:
+            yield SSEEvent(event="keepalive", data="{}")
+
+    monkeypatch.setattr(
+        opencode_stream_lifecycle,
+        "_OPENCODE_STREAM_RECONNECT_BACKOFF_SECONDS",
+        (0.0,),
+    )
+    monkeypatch.setattr(
+        opencode_stream_lifecycle,
+        "_OPENCODE_STREAM_MAX_STALL_RECONNECT_ATTEMPTS",
+        0,
+    )
+    monkeypatch.setattr(
+        opencode_stream_lifecycle,
+        "_OPENCODE_POST_STALL_IDLE_WAIT_SECONDS",
+        5.0,
+    )
+    monkeypatch.setattr(
+        opencode_stream_lifecycle,
+        "_OPENCODE_POST_STALL_IDLE_POLL_SECONDS",
+        0.0,
+    )
+
+    controller = opencode_stream_lifecycle.StreamLifecycleController(
+        session_id="s1",
+        event_stream_factory=lambda: _event_stream(),
+        session_fetcher=_status_fetcher,
+        stall_timeout_seconds=0.001,
+        first_event_timeout_seconds=None,
+        status_event_handler=None,
+    )
+
+    decision = await controller.on_timeout_error(now=time.monotonic() + 1.0)
+
+    assert decision.action == opencode_stream_lifecycle.LifecycleAction.BREAK
+    assert decision.error is None
+    assert decision.should_flush_if_pending is False
+
+
+@pytest.mark.anyio
 async def test_collect_output_reconnects_when_stream_ends_while_session_busy(
     monkeypatch,
 ) -> None:

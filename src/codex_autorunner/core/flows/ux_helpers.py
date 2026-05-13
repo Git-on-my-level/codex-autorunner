@@ -410,6 +410,21 @@ def format_ticket_flow_status_lines(
         worker_projection = run_state.get("worker_status")
         if isinstance(worker_projection, str) and worker_projection.strip():
             lines.append(f"Worker status: {worker_projection.strip()}")
+        stale_reason = run_state.get("stale_reason")
+        if isinstance(stale_reason, str) and stale_reason.strip():
+            lines.append(f"Stale reason: {stale_reason.strip()}")
+        last_semantic_progress_at = run_state.get("last_semantic_progress_at")
+        if (
+            isinstance(last_semantic_progress_at, str)
+            and last_semantic_progress_at.strip()
+        ):
+            lines.append(f"Last semantic progress: {last_semantic_progress_at.strip()}")
+        last_tool_activity_at = run_state.get("last_tool_activity_at")
+        if isinstance(last_tool_activity_at, str) and last_tool_activity_at.strip():
+            lines.append(f"Last tool activity: {last_tool_activity_at.strip()}")
+        current_phase = run_state.get("current_phase")
+        if isinstance(current_phase, str) and current_phase.strip():
+            lines.append(f"Phase: {current_phase.strip()}")
         restart_attempts = run_state.get("restart_attempts")
         restart_max = run_state.get("restart_max_attempts")
         if isinstance(restart_attempts, int) and not isinstance(restart_attempts, bool):

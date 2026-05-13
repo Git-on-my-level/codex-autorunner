@@ -564,6 +564,7 @@ DEFAULT_REPO_CONFIG: Dict[str, Any] = {
         "restart_recoverable_failures": True,
         "restart_max_attempts": 2,
         "restart_backoff_seconds": 0.0,
+        "stale_alive_threshold_seconds": 1800,
     },
     "git": {
         "auto_commit": False,

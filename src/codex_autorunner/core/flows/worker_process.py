@@ -47,7 +47,7 @@ class FlowActiveTool:
 
 @dataclass
 class FlowWorkerHealth:
-    status: Literal["absent", "alive", "dead", "invalid", "mismatch"]
+    status: Literal["absent", "alive", "dead", "invalid", "mismatch", "stale_alive"]
     pid: Optional[int]
     cmdline: list[str]
     artifact_path: Path
@@ -62,10 +62,16 @@ class FlowWorkerHealth:
     exit_kind: Optional[str] = None
     reap_reason: Optional[str] = None
     active_tool: Optional[FlowActiveTool] = None
+    last_semantic_progress_at: Optional[str] = None
+    last_tool_activity_at: Optional[str] = None
+    current_phase: Optional[str] = None
+    stale_reason: Optional[str] = None
+    stale_threshold_seconds: Optional[int] = None
+    semantic_stale_age_seconds: Optional[int] = None
 
     @property
     def is_alive(self) -> bool:
-        return self.status == "alive"
+        return self.status in {"alive", "stale_alive"}
 
 
 def _normalized_run_id(run_id: str) -> str:

@@ -383,6 +383,17 @@ def _parse_ticket_flow_config(
         ),
         TICKET_FLOW_FIELD_SCHEMAS["restart_backoff_seconds"],
     )
+    stale_alive_threshold_seconds = parse_schema_field(
+        cfg.get(
+            "stale_alive_threshold_seconds",
+            default_from_mapping(
+                defaults,
+                "stale_alive_threshold_seconds",
+                TICKET_FLOW_FIELD_SCHEMAS["stale_alive_threshold_seconds"],
+            ),
+        ),
+        TICKET_FLOW_FIELD_SCHEMAS["stale_alive_threshold_seconds"],
+    )
     return TicketFlowConfig(
         approval_mode=approval_mode,
         default_approval_decision=default_approval_decision,
@@ -392,6 +403,7 @@ def _parse_ticket_flow_config(
         restart_recoverable_failures=restart_recoverable_failures,
         restart_max_attempts=restart_max_attempts,
         restart_backoff_seconds=restart_backoff_seconds,
+        stale_alive_threshold_seconds=stale_alive_threshold_seconds,
     )
 
 

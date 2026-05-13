@@ -289,6 +289,23 @@ def register_flow_commands(
             worker_status = run_state.get("worker_status")
             if isinstance(worker_status, str) and worker_status.strip():
                 typer.echo(f"worker_status: {worker_status.strip()}")
+            stale_reason = run_state.get("stale_reason")
+            if isinstance(stale_reason, str) and stale_reason.strip():
+                typer.echo(f"stale_reason: {stale_reason.strip()}")
+            last_semantic_progress_at = run_state.get("last_semantic_progress_at")
+            if (
+                isinstance(last_semantic_progress_at, str)
+                and last_semantic_progress_at.strip()
+            ):
+                typer.echo(
+                    f"last_semantic_progress_at: {last_semantic_progress_at.strip()}"
+                )
+            last_tool_activity_at = run_state.get("last_tool_activity_at")
+            if isinstance(last_tool_activity_at, str) and last_tool_activity_at.strip():
+                typer.echo(f"last_tool_activity_at: {last_tool_activity_at.strip()}")
+            current_phase = run_state.get("current_phase")
+            if isinstance(current_phase, str) and current_phase.strip():
+                typer.echo(f"current_phase: {current_phase.strip()}")
             restart_attempts = run_state.get("restart_attempts")
             restart_max = run_state.get("restart_max_attempts")
             if isinstance(restart_attempts, int) and not isinstance(
