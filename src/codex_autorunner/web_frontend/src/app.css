@@ -1417,8 +1417,10 @@ a.scope-chip-label:hover {
   border-bottom: 1px solid var(--color-border-subtle);
 }
 
-/* Wide viewports: two-column grid so Archive lines up with the title row and
-   stream status lines up with the scope row (e.g. “Hub workspace”). */
+/* Wide viewports: two-column grid; title/scope/subtitle in column 1. Tools stay
+   in a single grid cell so Archive + stream status stack with a stable right
+   edge (separate grid items + display:contents could shrink the Archive row
+   when “Connecting…” appears). */
 @media (min-width: 761px) {
   .chat-header {
     display: grid;
@@ -1435,7 +1437,10 @@ a.scope-chip-label:hover {
   }
 
   .chat-header-tools {
-    display: contents;
+    grid-column: 2;
+    grid-row: 1 / -1;
+    justify-self: end;
+    align-self: start;
   }
 
   .chat-header-copy > h1 {
@@ -1454,20 +1459,6 @@ a.scope-chip-label:hover {
     grid-column: 1;
     grid-row: 3;
     min-width: 0;
-  }
-
-  .chat-header-tools > .chat-header-action {
-    grid-column: 2;
-    grid-row: 1;
-    justify-self: end;
-    align-self: start;
-  }
-
-  .chat-header-tools > .chat-header-aside {
-    grid-column: 2;
-    grid-row: 2;
-    justify-self: end;
-    align-self: center;
   }
 }
 
@@ -2099,40 +2090,35 @@ textarea:hover {
 }
 
 .message.commentary {
-  align-self: stretch;
-  max-width: none;
-  width: 100%;
-  margin-right: 0;
-  padding: 2px 0 2px 16px;
-  border: 0;
-  border-radius: 0;
-  background: transparent;
-  color: var(--color-ink-muted);
-  font-size: var(--font-size-0);
-  line-height: 1.5;
+  align-self: flex-start;
+  max-width: min(520px, 94%);
+  margin-right: auto;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: 10px 10px 10px 4px;
+  background: color-mix(in srgb, var(--color-surface-muted) 88%, var(--color-bg));
+  color: var(--color-ink);
 }
 
 .message.commentary.nested-commentary {
-  margin-top: 0;
-  padding-left: 16px;
+  margin-top: 2px;
 }
 
 .message.commentary .commentary-kind {
-  display: inline;
-  margin: 0 var(--space-2) 0 0;
-  font-size: 10px;
+  display: block;
+  margin-bottom: var(--space-1);
+  font-size: var(--font-size-0);
   font-weight: 600;
-  letter-spacing: 0.04em;
+  letter-spacing: 0.06em;
   text-transform: uppercase;
   color: var(--color-ink-faint);
-  opacity: 0.85;
+  opacity: 1;
 }
 
 .message.commentary .message-markdown {
-  display: inline;
   padding: 0;
-  color: var(--color-ink-muted);
-  font-size: var(--font-size-0);
+  color: var(--color-ink-soft);
+  font-size: var(--font-size-1);
 }
 
 .message-markdown.streaming {

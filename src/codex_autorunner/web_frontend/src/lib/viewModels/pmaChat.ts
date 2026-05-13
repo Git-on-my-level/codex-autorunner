@@ -1808,10 +1808,16 @@ function mapTimelineArtifact(raw: Record<string, unknown>): SurfaceArtifact {
 }
 
 function summarizeCompletedTurnActivity(cards: PmaCard[], progress: PmaRunProgress | null): PmaCard[] {
+  // Only collapse trace cards into a "Worked for Xs" summary once a turn has
+  // finished. While a turn is still running, the user wants to see commentary,
+  // thinking, and tool calls stream inline as they arrive — collapsing them
+  // mid-flight is what made the chat look frozen until completion.
+  const runningTurnId = progress?.status === 'running' ? progress.id : null;
   const byTurn = new Map<string, PmaCard[]>();
   for (const card of cards) {
     const turnId = cardTurnId(card);
     if (!turnId) continue;
+    if (turnId === runningTurnId) continue;
     const group = byTurn.get(turnId) ?? [];
     group.push(card);
     byTurn.set(turnId, group);

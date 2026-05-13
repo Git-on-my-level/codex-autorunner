@@ -293,6 +293,11 @@
   let lastScrolledChatId: string | null = null;
   let lastScrolledCardCount = 0;
   let lastScrolledEventCount = 0;
+  // Sticky-bottom state: true while the user is parked at (or near) the
+  // bottom of the transcript. Once they scroll up, we stop force-scrolling
+  // on every content change; scrolling back near the bottom re-arms it.
+  let followBottom = true;
+  let messageStackResizeObserver: ResizeObserver | null = null;
 
   const activeChat = $derived(
     activeChatId
@@ -664,11 +669,13 @@
 
     if (!activeChat || loadingActive || (!chatChanged && !cardCountChanged && !eventCountChanged)) return;
 
-    const shouldFollowLatest = chatChanged || isMessageStackNearBottom();
+    // Switching to a new chat re-arms sticky-bottom; otherwise let the
+    // user's current followBottom state decide.
+    if (chatChanged) followBottom = true;
     lastScrolledChatId = activeChatId;
     lastScrolledCardCount = cardCount;
     lastScrolledEventCount = eventCount;
-    if (shouldFollowLatest) void scrollMessagesToBottom();
+    if (followBottom) void scrollMessagesToBottom();
   });
 
   function activateRequestedChatFromCurrentRows(): void {
@@ -1104,7 +1111,10 @@
             refreshedTerminalTurnId = nextProgress.id;
             scheduleActiveRefresh(chatId, 700);
           }
-          if (nextProgress.streamShouldClose) {
+          // Only honor streamShouldClose from `progress` events. The `state`
+          // frame is the initial snapshot; a closed-from-state would tear the
+          // subscription down before any new turn can stream.
+          if (event.kind === 'progress' && nextProgress.streamShouldClose) {
             closeStream();
             return;
           }
@@ -1412,8 +1422,12 @@
     return null;
   }
 
+  function messageScroller(): HTMLElement | null {
+    return messageStack?.querySelector<HTMLElement>('.chat-transcript-virtual-list') ?? messageStack;
+  }
+
   function isMessageStackNearBottom(): boolean {
-    const scroller = messageStack?.querySelector<HTMLElement>('.chat-transcript-virtual-list') ?? messageStack;
+    const scroller = messageScroller();
     if (!scroller) return true;
     const distanceFromBottom = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight;
     return distanceFromBottom < 80;
@@ -1421,10 +1435,38 @@
 
   async function scrollMessagesToBottom(): Promise<void> {
     await tick();
-    const scroller = messageStack?.querySelector<HTMLElement>('.chat-transcript-virtual-list') ?? messageStack;
+    const scroller = messageScroller();
     if (!scroller) return;
     scroller.scrollTop = scroller.scrollHeight;
   }
+
+  function handleMessageScroll(): void {
+    // The user's scroll position is the source of truth for follow-bottom.
+    // Programmatic scrolls fire this too, but they land at the bottom so
+    // followBottom stays true; user-initiated scrolls up flip it false.
+    followBottom = isMessageStackNearBottom();
+  }
+
+  $effect(() => {
+    // Attach scroll listener + ResizeObserver to whichever element is the
+    // scroller right now. The ResizeObserver catches growing message content
+    // (streaming tokens, live commentary) which doesn't change card count,
+    // so the cardCount-keyed effect below would otherwise miss it.
+    if (!messageStack) return;
+    const scroller = messageScroller();
+    if (!scroller) return;
+    scroller.addEventListener('scroll', handleMessageScroll, { passive: true });
+    messageStackResizeObserver = new ResizeObserver(() => {
+      if (followBottom) scroller.scrollTop = scroller.scrollHeight;
+    });
+    messageStackResizeObserver.observe(scroller);
+    if (scroller.firstElementChild) messageStackResizeObserver.observe(scroller.firstElementChild);
+    return () => {
+      scroller.removeEventListener('scroll', handleMessageScroll);
+      messageStackResizeObserver?.disconnect();
+      messageStackResizeObserver = null;
+    };
+  });
 
   async function createChat(): Promise<void> {
     creating = true;

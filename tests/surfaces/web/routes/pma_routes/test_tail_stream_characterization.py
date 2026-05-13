@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from types import SimpleNamespace
 
 import pytest
@@ -11,6 +12,16 @@ from codex_autorunner.server import create_hub_app
 from codex_autorunner.surfaces.web.routes.pma_routes import tail_stream
 
 pytestmark = pytest.mark.slow
+
+
+def _sse_json_payload(body: str, event_name: str) -> dict[str, object]:
+    current_event: str | None = None
+    for line in body.splitlines():
+        if line.startswith("event: "):
+            current_event = line.removeprefix("event: ")
+        elif current_event == event_name and line.startswith("data: "):
+            return json.loads(line.removeprefix("data: "))
+    raise AssertionError(f"No {event_name!r} SSE data payload found in: {body!r}")
 
 
 class TestManagedThreadStatusShape:
@@ -242,6 +253,35 @@ class TestManagedThreadTailShape:
             response = client.get("/hub/pma/threads/nonexistent-thread/tail/events")
 
         assert response.status_code == 404
+
+    def test_tail_events_state_uses_sse_lifetime_not_turn_lifetime(
+        self, hub_env
+    ) -> None:
+        _enable_pma(hub_env.hub_root)
+        app = create_hub_app(hub_env.hub_root)
+        store = ManagedThreadStore(hub_env.hub_root)
+        created = store.create_thread(
+            "codex",
+            hub_env.repo_root.resolve(),
+            repo_id=hub_env.repo_id,
+        )
+        managed_thread_id = str(created["managed_thread_id"])
+
+        with TestClient(app) as client:
+            response = client.get(
+                f"/hub/pma/threads/{managed_thread_id}/tail/events",
+                params={"once": "true"},
+            )
+
+        assert response.status_code == 200
+        assert response.headers["content-type"].startswith("text/event-stream")
+        state = _sse_json_payload(response.text, "state")
+        progress = _sse_json_payload(response.text, "progress")
+        assert state["stream_should_close"] is False
+        assert state["stream_close_reason"] is None
+        assert state["stream_lifecycle"]["stream_should_close"] is False
+        assert progress["stream_should_close"] is False
+        assert progress["stream_close_reason"] is None
 
     def test_tail_endpoint_rejects_negative_since_event_id(self, hub_env) -> None:
         _enable_pma(hub_env.hub_root)

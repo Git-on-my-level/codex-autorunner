@@ -1037,7 +1037,7 @@ describe('PMA chat view helpers', () => {
     });
   });
 
-  it('accumulates current running raw activity in a turn summary until the assistant message lands', () => {
+  it('streams running raw activity inline rather than collapsing it into a summary', () => {
     const cards = buildPmaTranscriptCards(
       [
         timelineItem('turn:one:user', 'user_message', { text: 'Create tickets' }, '001'),
@@ -1048,11 +1048,10 @@ describe('PMA chat view helpers', () => {
       { ...baseProgress, id: 'one', terminal: false, status: 'running', events: [] }
     );
 
-    expect(cards.map((card) => card.kind)).toEqual(['message', 'turn_summary']);
+    expect(cards.map((card) => card.kind)).toEqual(['message', 'intermediate']);
     expect(cards[1]).toMatchObject({
-      kind: 'turn_summary',
-      title: 'Worked for 1m 35s',
-      cards: [{ kind: 'intermediate', text: 'Inspecting repo state.' }]
+      kind: 'intermediate',
+      text: 'Inspecting repo state.'
     });
   });
 
@@ -1114,13 +1113,11 @@ describe('PMA chat view helpers', () => {
       }
     );
 
-    expect(cards.map((card) => card.kind)).toEqual(['message', 'turn_summary', 'intermediate']);
+    expect(cards.map((card) => card.kind)).toEqual(['message', 'intermediate', 'intermediate']);
     expect(cards[1]).toMatchObject({
-      kind: 'turn_summary',
-      title: 'Worked for 21s',
-      cards: [
-        { kind: 'intermediate', title: 'Progress', text: 'The user wants' }
-      ]
+      kind: 'intermediate',
+      title: 'Progress',
+      text: 'The user wants'
     });
     expect(cards[2]).toMatchObject({
       kind: 'intermediate',
@@ -1157,10 +1154,11 @@ describe('PMA chat view helpers', () => {
       { ...baseProgress, id: 'one', elapsedSeconds: 69, events: [] }
     );
 
-    expect(cards.map((card) => card.kind)).toEqual(['message', 'turn_summary']);
+    expect(cards.map((card) => card.kind)).toEqual(['message', 'intermediate']);
     expect(cards[1]).toMatchObject({
-      kind: 'turn_summary',
-      cards: [{ kind: 'intermediate', title: 'Progress', text: 'The user wants' }]
+      kind: 'intermediate',
+      title: 'Progress',
+      text: 'The user wants'
     });
   });
 

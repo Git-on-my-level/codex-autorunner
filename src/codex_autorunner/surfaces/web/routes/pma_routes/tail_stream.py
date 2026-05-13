@@ -549,12 +549,29 @@ def _tail_event_sse_frames(
     return frames
 
 
+def _apply_sse_lifetime_to_snapshot(snapshot: dict[str, Any]) -> dict[str, Any]:
+    """Rewrite per-turn close hints to reflect the SSE-lifetime contract.
+
+    The per-turn lifecycle reports `stream_should_close=true` for every terminal
+    turn. The SSE subscription, by contrast, lives across turn boundaries — see
+    `_sse_stream_should_terminate`. Emitting the raw snapshot (in the `state`
+    frame) would tear down the client subscription the moment it sees a chat
+    that ended its previous turn, which is the steady state for most chats.
+    """
+    sse_close, sse_close_reason = _sse_stream_should_terminate(snapshot)
+    snapshot["stream_should_close"] = sse_close
+    snapshot["stream_close_reason"] = sse_close_reason
+    nested = snapshot.get("stream_lifecycle")
+    if isinstance(nested, dict):
+        nested = dict(nested)
+        nested["stream_should_close"] = sse_close
+        nested["stream_close_reason"] = sse_close_reason
+        snapshot["stream_lifecycle"] = nested
+    return snapshot
+
+
 def _progress_stream_payload(snapshot: dict[str, Any]) -> dict[str, Any]:
     lifecycle_fields = _stream_lifecycle_fields(snapshot)
-    # The SSE stream lives across turn boundaries; only the thread reaching a
-    # permanent state ends it. Override the per-turn lifecycle hints so the
-    # client doesn't tear down its subscription when a single turn finishes
-    # and the user is about to send another message.
     sse_close, sse_close_reason = _sse_stream_should_terminate(snapshot)
     lifecycle_fields["stream_should_close"] = sse_close
     lifecycle_fields["stream_close_reason"] = sse_close_reason
@@ -702,6 +719,7 @@ def build_managed_thread_tail_routes(
         )
 
         async def _stream() -> Any:
+            _apply_sse_lifetime_to_snapshot(snapshot)
             yield f"event: state\ndata: {json.dumps(snapshot, ensure_ascii=True)}\n\n"
             for frame in _tail_event_sse_frames(
                 managed_thread_id=managed_thread_id,
@@ -738,6 +756,7 @@ def build_managed_thread_tail_routes(
                     resume_after_managed_turn_id=last_managed_turn_id,
                     include_runtime_fallback=True,
                 )
+                _apply_sse_lifetime_to_snapshot(refreshed)
                 for frame in _tail_event_sse_frames(
                     managed_thread_id=managed_thread_id,
                     managed_turn_id=refreshed.get("managed_turn_id"),
