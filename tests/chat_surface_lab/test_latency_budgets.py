@@ -25,7 +25,7 @@ from tests.chat_surface_lab.scenario_runner import ScenarioDefinition
 
 @pytest.mark.anyio
 @pytest.mark.slow
-async def test_latency_budget_suite_writes_artifacts_and_covers_required_budgets(
+async def test_latency_budget_suite_writes_artifacts_covers_budgets_and_includes_north_star(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -58,6 +58,45 @@ async def test_latency_budget_suite_writes_artifacts_and_covers_required_budgets
     latest_payload = json.loads(result.latest_path.read_text(encoding="utf-8"))
     assert latest_payload["run_id"] == result.run_id
     assert latest_payload["signoff"]["passed"] is True
+
+    north_star = payload.get("campaign_north_star", {})
+    assert isinstance(north_star, dict)
+
+    budget_statuses = north_star.get("budget_statuses", [])
+    assert len(budget_statuses) == 4
+    for bs in budget_statuses:
+        assert bs["passed"] is True, bs
+        assert bs["observed"] is True, bs
+
+    covered = north_star.get("covered_scenario_ids", [])
+    assert "first_visible_feedback" in covered
+    assert "queued_visibility" in covered
+    assert "interrupt_optimistic_acceptance" in covered
+    assert "fast_ack" in covered
+    assert "duplicate_delivery" in covered
+    assert "interrupt_confirmation" in covered
+    assert "progress_anchor_reuse" in covered
+    assert "restart_recovery" in covered
+
+    assert "required_scenario_ids" in payload
+    assert "required_budget_ids" in payload
+
+    from tests.chat_surface_lab.latency_budget_runner import format_suite_summary
+
+    summary_text = format_suite_summary(result)
+    for budget_id in (
+        "first_visible_feedback",
+        "queue_visible",
+        "first_semantic_progress",
+        "interrupt_visible",
+    ):
+        assert budget_id in summary_text, f"summary missing budget_id {budget_id}"
+    for sid in (
+        "first_visible_feedback",
+        "queued_visibility",
+        "interrupt_optimistic_acceptance",
+    ):
+        assert sid in summary_text, f"summary missing scenario_id {sid}"
 
 
 @pytest.mark.anyio
@@ -98,57 +137,6 @@ async def test_latency_budget_suite_failure_includes_scenario_and_budget_for_tri
     assert any(
         "first_visible_feedback" in str(item.get("message", "")) for item in failures
     ), failures
-
-
-@pytest.mark.anyio
-@pytest.mark.slow
-async def test_suite_report_includes_campaign_north_star_status(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    result = await run_chat_surface_latency_budget_suite(
-        artifact_dir=tmp_path / "diagnostics" / "chat-latency-budgets",
-        apply_runtime_patch=lambda runtime: patch_hermes_runtime(monkeypatch, runtime),
-    )
-
-    north_star = result.payload.get("campaign_north_star", {})
-    assert isinstance(north_star, dict)
-
-    budget_statuses = north_star.get("budget_statuses", [])
-    assert len(budget_statuses) == 4
-    for bs in budget_statuses:
-        assert bs["passed"] is True, bs
-        assert bs["observed"] is True, bs
-
-    covered = north_star.get("covered_scenario_ids", [])
-    assert "first_visible_feedback" in covered
-    assert "queued_visibility" in covered
-    assert "interrupt_optimistic_acceptance" in covered
-    assert "fast_ack" in covered
-    assert "duplicate_delivery" in covered
-    assert "interrupt_confirmation" in covered
-    assert "progress_anchor_reuse" in covered
-    assert "restart_recovery" in covered
-
-    assert "required_scenario_ids" in result.payload
-    assert "required_budget_ids" in result.payload
-
-    from tests.chat_surface_lab.latency_budget_runner import format_suite_summary
-
-    summary_text = format_suite_summary(result)
-    for budget_id in (
-        "first_visible_feedback",
-        "queue_visible",
-        "first_semantic_progress",
-        "interrupt_visible",
-    ):
-        assert budget_id in summary_text, f"summary missing budget_id {budget_id}"
-    for sid in (
-        "first_visible_feedback",
-        "queued_visibility",
-        "interrupt_optimistic_acceptance",
-    ):
-        assert sid in summary_text, f"summary missing scenario_id {sid}"
 
 
 def test_campaign_scorecard_function_produces_readable_output() -> None:
