@@ -203,13 +203,17 @@
         </div>
         <FilterRow
           ariaLabel="Repo status filters"
-          items={REPO_FILTERS.map((item) => ({
-            key: item,
-            label: repoFilterLabel(item),
-            count: repoFilterCount(item),
-            active: filter === item,
-            onSelect: () => (filter = item)
-          }))}
+          items={REPO_FILTERS.map((item) => {
+            const count = repoFilterCount(item);
+            return {
+              key: item,
+              label: repoFilterLabel(item),
+              count,
+              active: filter === item,
+              className: count === 0 ? 'filter-chip-zero' : '',
+              onSelect: () => (filter = item)
+            };
+          })}
         >
           {#snippet trailing()}
             {#if collapsibleRepoCount > 0}
@@ -324,7 +328,7 @@
                   </div>
                   <div class="repo-card-meta">
                     {#if row.branch}
-                      <span class="repo-meta-branch">{row.branch}</span>
+                      <span class="repo-meta-branch"><span class="branch-glyph" aria-hidden="true">⎇</span>{row.branch}</span>
                     {/if}
                     {#if row.detail}
                       {#if row.branch}<span class="repo-meta-dot" aria-hidden="true">·</span>{/if}
@@ -384,7 +388,7 @@
             </div>
             <div class="repo-action-buttons repo-head-actions" aria-label={`Actions for ${row.label}`}>
               <a
-                class="row-action-button row-action-link"
+                class="row-action-button row-action-link is-primary-affordance"
                 href={href(row.pmaChatHref)}
                 title={`Start a new PMA chat scoped to ${row.label}`}
                 aria-label={`Start PMA chat for ${row.label}`}
@@ -522,13 +526,13 @@
                             <span class={`status-pill ${worktree.status}`}>{statusLabel(worktree.status)}</span>
                           {/if}
                         </div>
-                        {#if worktree.branch || worktree.currentRunTitle}
+                        {#if (worktree.branch && worktree.branch !== worktree.label) || worktree.currentRunTitle}
                           <div class="worktree-card-meta">
-                            {#if worktree.branch}
-                              <span class="repo-meta-branch">{worktree.branch}</span>
+                            {#if worktree.branch && worktree.branch !== worktree.label}
+                              <span class="repo-meta-branch"><span class="branch-glyph" aria-hidden="true">⎇</span>{worktree.branch}</span>
                             {/if}
                             {#if worktree.currentRunTitle}
-                              {#if worktree.branch}<span class="repo-meta-dot" aria-hidden="true">·</span>{/if}
+                              {#if worktree.branch && worktree.branch !== worktree.label}<span class="repo-meta-dot" aria-hidden="true">·</span>{/if}
                               <span class="worktree-run-title">{worktree.currentRunTitle}</span>
                             {/if}
                           </div>
@@ -584,7 +588,7 @@
                       {/if}
                       <div class="repo-action-buttons" aria-label={`Actions for ${worktree.label}`}>
                         <a
-                          class="row-action-button row-action-link"
+                          class="row-action-button row-action-link is-primary-affordance"
                           href={href(worktree.pmaChatHref)}
                           title={`Start a new PMA chat scoped to ${worktree.label}`}
                           aria-label={`Start PMA chat for ${worktree.label}`}
@@ -1203,6 +1207,38 @@
     border-color: color-mix(in srgb, var(--color-accent) 38%, var(--color-border));
     background: var(--color-accent-soft);
     color: var(--color-accent);
+  }
+
+  /* Quiet secondary action buttons so identity reads first.
+     Default row-action-button stays ghost; non-primary affordances get
+     a softer border and muted ink at rest. */
+  .row-action-button:not(.is-primary-affordance) {
+    border-color: var(--color-border-subtle);
+    color: var(--color-ink-muted);
+    font-weight: 550;
+  }
+
+  /* Primary affordance: "+ Chat" reads as the strongest of the row.
+     Still ghost-shaped — accent-tinted border and ink-strong text at rest. */
+  .row-action-button.is-primary-affordance {
+    border-color: color-mix(in srgb, var(--color-accent) 22%, var(--color-border-subtle));
+    color: var(--color-ink);
+  }
+  .row-action-button.is-primary-affordance:hover {
+    border-color: color-mix(in srgb, var(--color-accent) 50%, var(--color-border));
+  }
+
+  /* Zero-count filter chips: keep the dimension visible but mute the number. */
+  :global(.filter-row .chip.filter-chip-zero:not(.active) span) {
+    color: var(--color-ink-faint);
+  }
+
+  /* Branch glyph in meta rows — decorative, ink-faint, mono nudge. */
+  .branch-glyph {
+    color: var(--color-ink-faint);
+    font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 11px;
+    line-height: 1;
   }
 
   .repos-empty {

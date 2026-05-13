@@ -448,6 +448,27 @@
     if (rawId) return rawId;
     return activeChatKindLabel;
   });
+  const streamingMessageId = $derived.by<string | null>(() => {
+    if (displayedProgress?.status !== 'running') return null;
+    for (let i = activeCards.length - 1; i >= 0; i -= 1) {
+      const card = activeCards[i];
+      if (card.kind === 'message' && card.message.role === 'assistant') {
+        return card.id;
+      }
+    }
+    return null;
+  });
+  const srAnnouncement = $derived.by<string>(() => {
+    if (displayedProgress?.status !== 'running') return '';
+    for (let i = activeCards.length - 1; i >= 0; i -= 1) {
+      const card = activeCards[i];
+      if (card.kind === 'message' && card.message.role === 'assistant') {
+        const text = (card.message.text ?? '').trim();
+        return text.length > 120 ? text.slice(text.length - 120) : text;
+      }
+    }
+    return '';
+  });
   const activeMessengerSurface = $derived(pmaChatMessengerSurface(activeChat));
   const activeRepoIngress = $derived(repoIngressForChat(activeChat));
   const createChatLabel = $derived(
@@ -577,6 +598,7 @@
     const requestedDetail = requestedDetailFromUrl();
     if (!requestedDetail) {
       if (isLocalDraftChatId(activeChatId)) return;
+      if (sending || creating) return;
       if (activeChatId !== null) {
         closeStream();
         activeChatId = null;
@@ -2053,6 +2075,14 @@
             : []),
           ...surfaceFilterChips
             .filter((surf) => surf.count > 0 || filter === pmaChatSurfaceFilterToken(surf.slug))
+            // Suppress the surface chip when it is the only surface available and its
+            // count duplicates the All count — the chip would communicate nothing new
+            // and forces the filter row onto a second line.
+            .filter((surf, _idx, arr) => {
+              if (filter === pmaChatSurfaceFilterToken(surf.slug)) return true;
+              if (arr.length !== 1) return true;
+              return surf.count !== filterCounts.all;
+            })
             .map((surf) => ({
               key: `surface:${surf.slug}`,
               label: surf.label,
@@ -2349,7 +2379,9 @@
                 <span>{statusBar.phase}</span>
               {/if}
               <span>{statusBar.elapsedLabel}</span>
-            {:else if activeChat.status !== 'idle'}
+            {:else if activeChat.status !== 'idle' && !showStatusBar}
+              <!-- When the composer status bar is showing, it already carries the
+                   live status; don't duplicate the signal in the subtitle. -->
               <span class={`status-dot status-${activeChat.status}`} aria-hidden="true"></span>
               <span>{statusLabel(activeChat.status)}</span>
             {/if}
@@ -2400,7 +2432,7 @@
       {/if}
     </div>
 
-    <div bind:this={messageStack} class="message-stack" aria-live="polite">
+    <div bind:this={messageStack} class="message-stack" aria-live="off">
       {#if loadingActive && (activeChat || activeChatId)}
         <div class="state-panel loading-state">
           <span class="state-icon" aria-hidden="true"></span>
@@ -2435,10 +2467,13 @@
           />
         </div>
       {:else if activeCards.length === 0 && liveActivity}
-        <div class={`state-panel live-activity-state ${liveActivity.state}`} role="status">
-          <span class="state-icon" aria-hidden="true"></span>
-          <strong>{liveActivity.title}</strong>
-          <p>{liveActivity.elapsedLabel ? `${liveActivity.summary} · ${liveActivity.elapsedLabel}` : liveActivity.summary}</p>
+        <div class="assistant-skeleton" role="status" aria-label={liveActivity.title}>
+          <span class="assistant-skeleton-label">{chatAgentDisplayLabel || 'Assistant'}</span>
+          <span class="assistant-skeleton-dots" aria-hidden="true">
+            <span class="dot"></span>
+            <span class="dot"></span>
+            <span class="dot"></span>
+          </span>
         </div>
       {:else if activeCards.length === 0}
         <div class="state-panel empty-state">
@@ -2446,9 +2481,10 @@
           <p>This chat has no visible timeline yet.</p>
         </div>
       {:else}
-        <ChatTranscriptCards cards={activeCards} assistantLabel={chatAgentDisplayLabel} />
+        <ChatTranscriptCards cards={activeCards} assistantLabel={chatAgentDisplayLabel} {streamingMessageId} />
       {/if}
     </div>
+    <div class="sr-only" aria-live="polite" aria-atomic="false">{srAnnouncement}</div>
 
     {#if showStatusBar && statusBar}
       <div class={`pma-status-bar composer-status-bar ${statusBar.state}`} aria-label="Turn status">

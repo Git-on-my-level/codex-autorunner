@@ -2,10 +2,16 @@
   import SurfaceArtifactCard from '$lib/components/SurfaceArtifactCard.svelte';
   import { withRuntimeBasePath as href } from '$lib/runtime/basePath';
   import { renderMarkdownToHtml } from '$lib/viewModels/contextspace';
-  import { formatCompactMessageDateTime, type PmaCard } from '$lib/viewModels/pmaChat';
+  import { formatCompactMessageDateTime, type PmaCard, type PmaToolCallCard } from '$lib/viewModels/pmaChat';
   import type { SurfaceArtifact } from '$lib/viewModels/domain';
 
-  let { cards, assistantLabel = 'Assistant' }: { cards: PmaCard[]; assistantLabel?: string } = $props();
+  let {
+    cards,
+    assistantLabel = 'Assistant',
+    streamingMessageId = null,
+  }: { cards: PmaCard[]; assistantLabel?: string; streamingMessageId?: string | null } = $props();
+
+  const userToggled = $state<Record<string, boolean>>({});
 
   function attachmentKindLabel(kind: SurfaceArtifact['kind']): string {
     if (kind === 'image' || kind === 'screenshot') return 'image';
@@ -26,18 +32,100 @@
   }
 
   function thinkingTraceLabel(card: Extract<PmaCard, { kind: 'intermediate' }>): string {
+    const detail = card.detail;
+    if (detail) {
+      const trimmed = detail.trim();
+      if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
+        try {
+          const parsed = JSON.parse(trimmed);
+          const stack: unknown[] = [parsed];
+          while (stack.length) {
+            const node = stack.pop();
+            if (!node || typeof node !== 'object') continue;
+            const obj = node as Record<string, unknown>;
+            const ms = obj.duration_ms ?? obj.elapsed_ms;
+            if (typeof ms === 'number' && Number.isFinite(ms)) {
+              return `Thought for ${(ms / 1000).toFixed(1)}s`;
+            }
+            const secs = obj.duration_seconds;
+            if (typeof secs === 'number' && Number.isFinite(secs)) {
+              return `Thought for ${secs.toFixed(1)}s`;
+            }
+            for (const v of Object.values(obj)) {
+              if (v && typeof v === 'object') stack.push(v);
+            }
+          }
+        } catch {
+          // fall through
+        }
+      }
+    }
     const count = card.detail?.split('·', 1)[0]?.trim();
-    return count || 'Reasoning trace';
+    if (count) return count;
+    const text = card.text?.trim();
+    if (text) {
+      const oneLine = text.replace(/\s+/g, ' ');
+      return oneLine.length > 80 ? `${oneLine.slice(0, 80).trimEnd()}…` : oneLine;
+    }
+    return 'Reasoning trace';
   }
+
+  function isToolGroupRunning(tools: PmaToolCallCard[]): boolean {
+    return tools.length > 0 && tools[0].state === 'started';
+  }
+
+  function toolGroupOpen(card: Extract<PmaCard, { kind: 'tool_group' }>): boolean {
+    const userPref = userToggled[card.id];
+    if (typeof userPref === 'boolean') return userPref;
+    return isToolGroupRunning(card.tools);
+  }
+
+  function handleToolToggle(cardId: string, event: Event) {
+    const el = event.currentTarget as HTMLDetailsElement;
+    userToggled[cardId] = el.open;
+  }
+
+  function toolHeadlineText(tool: PmaToolCallCard | undefined): string {
+    if (!tool) return 'Tool call';
+    const summary = tool.summary?.trim();
+    if (summary) return summary;
+    return tool.title;
+  }
+
+  function foldConsecutiveToolGroups(input: PmaCard[]): PmaCard[] {
+    const out: PmaCard[] = [];
+    for (const card of input) {
+      const prev = out[out.length - 1];
+      if (
+        card.kind === 'tool_group' &&
+        prev &&
+        prev.kind === 'tool_group' &&
+        prev.turnId === card.turnId &&
+        prev.turnId !== null
+      ) {
+        out[out.length - 1] = { ...prev, tools: [...prev.tools, ...card.tools] };
+        continue;
+      }
+      out.push(card);
+    }
+    return out;
+  }
+
+  const displayCards = $derived(foldConsecutiveToolGroups(cards));
 </script>
 
-{#each cards as card (card.id)}
+{#each displayCards as card (card.id)}
   {#if card.kind === 'message'}
+    {@const isStreaming = card.message.role === 'assistant' && card.id === streamingMessageId}
     <article class={`message ${card.message.role === 'user' ? 'user' : 'assistant'}`}>
       <span>{card.message.role === 'user' ? 'You' : assistantLabel}</span>
-      <div class="message-markdown markdown-body">
-        {@html renderMarkdownToHtml(card.message.text, { openLinksInNewTab: true })}
-      </div>
+      {#if isStreaming}
+        <div class="message-markdown streaming">{card.message.text}<span class="stream-caret" aria-hidden="true"></span></div>
+      {:else}
+        <div class="message-markdown markdown-body">
+          {@html renderMarkdownToHtml(card.message.text, { openLinksInNewTab: true })}
+        </div>
+      {/if}
       {#if card.message.role === 'user' && card.message.artifacts.length > 0}
         <ul class="message-attachments" aria-label="Attachments">
           {#each card.message.artifacts as artifact (artifact.id)}
@@ -88,15 +176,11 @@
     {/if}
   {:else if card.kind === 'tool_group'}
     {@const headlineTool = card.tools[0]}
-    <details class="tool-call-bar">
+    {@const isOpen = toolGroupOpen(card)}
+    <details class="tool-call-bar" open={isOpen} ontoggle={(e) => handleToolToggle(card.id, e)}>
       <summary>
-        <span>Tools</span>
         <strong>
-          {#if headlineTool}
-            {headlineTool.title}{card.tools.length > 1 ? ` · +${card.tools.length - 1} more` : ''}
-          {:else}
-            Tool call
-          {/if}
+          {toolHeadlineText(headlineTool)}{card.tools.length > 1 ? ` · +${card.tools.length - 1} more` : ''}
         </strong>
       </summary>
       <ol>
@@ -142,15 +226,11 @@
             {/if}
           {:else if traceCard.kind === 'tool_group'}
             {@const traceHeadlineTool = traceCard.tools[0]}
-            <details class="tool-call-bar nested-trace">
+            {@const isNestedOpen = toolGroupOpen(traceCard)}
+            <details class="tool-call-bar nested-trace" open={isNestedOpen} ontoggle={(e) => handleToolToggle(traceCard.id, e)}>
               <summary>
-                <span>Tools</span>
                 <strong>
-                  {#if traceHeadlineTool}
-                    {traceHeadlineTool.title}{traceCard.tools.length > 1 ? ` · +${traceCard.tools.length - 1} more` : ''}
-                  {:else}
-                    Tool call
-                  {/if}
+                  {toolHeadlineText(traceHeadlineTool)}{traceCard.tools.length > 1 ? ` · +${traceCard.tools.length - 1} more` : ''}
                 </strong>
               </summary>
               <ol>

@@ -357,18 +357,27 @@
     gap: var(--space-3);
     width: 100%;
     padding: var(--space-3) var(--space-4);
-    border: 1px solid var(--color-border);
+    border: 1px solid var(--color-border-subtle);
     border-radius: 12px;
     background: var(--color-surface);
     color: var(--color-ink);
     text-align: left;
     cursor: pointer;
-    transition: border-color 120ms ease, background 120ms ease, transform 120ms ease;
+    transition:
+      border-color var(--transition-fast) var(--ease-out),
+      box-shadow var(--transition-fast) var(--ease-out);
   }
 
   .memory-card:hover {
-    border-color: var(--color-accent);
-    background: var(--color-accent-soft, var(--color-surface-muted));
+    border-color: var(--color-border-strong);
+    box-shadow:
+      0 8px 24px -16px rgb(15 15 20 / 0.18),
+      0 2px 6px -3px rgb(15 15 20 / 0.06);
+  }
+
+  .memory-card:hover .memory-card-chevron {
+    color: var(--color-ink-soft);
+    transform: translateX(2px);
   }
 
   .memory-card:focus-visible {
@@ -408,9 +417,12 @@
   }
 
   .memory-card-chevron {
-    color: var(--color-ink-muted);
+    color: var(--color-ink-faint);
     font-size: var(--font-size-3);
     line-height: 1;
+    transition:
+      color var(--transition-fast) var(--ease-out),
+      transform var(--transition-base) var(--ease-out);
   }
 
   .agent-status-id strong {
@@ -420,26 +432,42 @@
 
   .settings-action-grid {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 1fr));
+    /* Tight min so 4 cards fit one row at wide widths, then reflow to 2x2,
+       then 1-col. Avoids the 3+1 stranded-card layout. */
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 180px), 1fr));
     gap: var(--space-3);
+  }
+
+  @media (max-width: 760px) {
+    .settings-action-grid {
+      grid-template-columns: repeat(auto-fit, minmax(min(100%, 160px), 1fr));
+    }
   }
 
   .setup-action {
     display: grid;
     gap: var(--space-1);
     min-width: 0;
-    padding: var(--space-3);
-    border: 1px solid var(--color-border);
-    border-radius: 8px;
+    padding: var(--space-3) var(--space-4);
+    border: 1px solid var(--color-border-subtle);
+    border-radius: 10px;
     background: var(--color-surface);
     color: var(--color-ink);
     text-align: left;
     cursor: pointer;
+    transition:
+      border-color var(--transition-fast) var(--ease-out),
+      background var(--transition-fast) var(--ease-out);
   }
 
   .setup-action:hover {
     border-color: var(--color-border-strong);
     background: var(--color-surface-muted);
+  }
+
+  .setup-action:focus-visible {
+    outline: 2px solid var(--color-accent);
+    outline-offset: 2px;
   }
 
   .setup-action strong {
