@@ -128,6 +128,29 @@ describe('SSE helpers', () => {
     expect(close).toHaveBeenCalledOnce();
   });
 
+  it('resumes PMA tail streams by in-memory event id after interruption', () => {
+    vi.useFakeTimers();
+    vi.stubGlobal('EventSource', FakeEventSource);
+    const events: unknown[] = [];
+
+    const subscription = openPmaTailEventSource('thread/1', { onEvent: (event) => events.push(event) }, '/car');
+    expect(FakeEventSource.instances[0].url).toBe('/car/hub/pma/threads/thread%2F1/tail/events');
+
+    FakeEventSource.instances[0].emit('timeline', { item_id: 'item-1' }, '8');
+    FakeEventSource.instances[0].fail();
+    vi.advanceTimersByTime(500);
+
+    expect(FakeEventSource.instances[1].url).toBe('/car/hub/pma/threads/thread%2F1/tail/events?since_event_id=8');
+    expect(events).toEqual([
+      {
+        kind: 'timeline',
+        lastEventId: '8',
+        payload: { item_id: 'item-1' }
+      }
+    ]);
+    subscription.close();
+  });
+
   it('opens PMA chat EventSource under the configured hub base path', () => {
     const close = vi.fn();
     const addEventListener = vi.fn();

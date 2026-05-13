@@ -121,8 +121,10 @@ export function openPmaTailEventSource(
   let source: EventSource | null = null;
   let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   let attempt = 0;
+  let lastEventId: string | null = null;
   const handle = (message: MessageEvent) => {
     attempt = 0;
+    if (message.lastEventId) lastEventId = message.lastEventId;
     options.onStatus?.('connected');
     options.onEvent(
       normalizePmaTailStreamEvent({
@@ -136,7 +138,8 @@ export function openPmaTailEventSource(
   const connect = () => {
     if (closed) return;
     options.onStatus?.('connecting');
-    source = new EventSource(withRuntimeBasePath(`/hub/pma/threads/${encoded}/tail/events`, basePath), {
+    const cursorQuery = lastEventId ? `?since_event_id=${encodeURIComponent(lastEventId)}` : '';
+    source = new EventSource(withRuntimeBasePath(`/hub/pma/threads/${encoded}/tail/events${cursorQuery}`, basePath), {
       withCredentials: options.withCredentials
     });
     source.addEventListener('state', handle);
