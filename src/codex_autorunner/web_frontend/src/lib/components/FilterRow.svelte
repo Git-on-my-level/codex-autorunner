@@ -36,8 +36,9 @@
 
   let containerEl = $state<HTMLDivElement | undefined>();
   let measureEl = $state<HTMLDivElement | undefined>();
-  let detailsEl = $state<HTMLDetailsElement | undefined>();
+  let dropdownEl = $state<HTMLElement | undefined>();
   let collapsed = $state(false);
+  let dropdownOpen = $state(false);
 
   const activeItem = $derived(items.find((item) => item.active) ?? null);
   const rowClass = $derived(['filter-row', rootClass].filter(Boolean).join(' '));
@@ -47,11 +48,13 @@
     const chips = Array.from(measureEl.querySelectorAll<HTMLElement>('[data-filter-chip]'));
     if (chips.length === 0) {
       collapsed = false;
+      dropdownOpen = false;
       return;
     }
     const tops = new Set<number>();
     for (const chip of chips) tops.add(chip.offsetTop);
     collapsed = tops.size > maxRows;
+    if (!collapsed) dropdownOpen = false;
   }
 
   onMount(() => {
@@ -70,9 +73,9 @@
   });
 
   function handleClickOutside(event: MouseEvent) {
-    if (!detailsEl || !detailsEl.open) return;
-    if (event.target instanceof Node && detailsEl.contains(event.target)) return;
-    detailsEl.open = false;
+    if (!dropdownEl || !dropdownOpen) return;
+    if (event.target instanceof Node && dropdownEl.contains(event.target)) return;
+    dropdownOpen = false;
   }
 
   $effect(() => {
@@ -83,7 +86,11 @@
 
   function selectAndClose(item: FilterChip) {
     item.onSelect();
-    if (detailsEl) detailsEl.open = false;
+    dropdownOpen = false;
+  }
+
+  function toggleDropdown(): void {
+    dropdownOpen = !dropdownOpen;
   }
 </script>
 
@@ -101,33 +108,44 @@
 
   {#if collapsed}
     <div class={rowClass} aria-label={ariaLabel}>
-      <details class="filter-dropdown" bind:this={detailsEl}>
-        <summary class="chip filter-dropdown-trigger" class:active={activeItem !== null}>
+      <!-- Keep the collapsed menu button-driven; native details/summary can swallow option clicks
+        when this absolute menu is layered over virtualized scroll content. -->
+      <div class="filter-dropdown" class:open={dropdownOpen} bind:this={dropdownEl}>
+        <button
+          class="chip filter-dropdown-trigger"
+          class:active={activeItem !== null}
+          type="button"
+          aria-haspopup="menu"
+          aria-expanded={dropdownOpen}
+          onclick={toggleDropdown}
+        >
           <span class="filter-dropdown-label">{activeItem?.label ?? dropdownPlaceholder}</span>
           {#if activeItem && activeItem.count !== undefined && activeItem.count !== null}
             <span>{activeItem.count}</span>
           {/if}
           <span class="filter-dropdown-chevron" aria-hidden="true">▾</span>
-        </summary>
-        <div class="filter-dropdown-menu" role="menu" aria-label={ariaLabel}>
-          {#each items as item (item.key)}
-            <button
-              class:active={item.active}
-              class={`chip ${item.className ?? ''}`.trim()}
-              type="button"
-              role="menuitemradio"
-              aria-checked={item.ariaSelected ?? item.active ?? false}
-              title={item.title}
-              onclick={() => selectAndClose(item)}
-            >
-              {item.label}
-              {#if item.count !== undefined && item.count !== null}
-                <span>{item.count}</span>
-              {/if}
-            </button>
-          {/each}
-        </div>
-      </details>
+        </button>
+        {#if dropdownOpen}
+          <div class="filter-dropdown-menu" role="menu" aria-label={ariaLabel}>
+            {#each items as item (item.key)}
+              <button
+                class:active={item.active}
+                class={`chip ${item.className ?? ''}`.trim()}
+                type="button"
+                role="menuitemradio"
+                aria-checked={item.ariaSelected ?? item.active ?? false}
+                title={item.title}
+                onclick={() => selectAndClose(item)}
+              >
+                {item.label}
+                {#if item.count !== undefined && item.count !== null}
+                  <span>{item.count}</span>
+                {/if}
+              </button>
+            {/each}
+          </div>
+        {/if}
+      </div>
       {#if trailing}{@render trailing()}{/if}
     </div>
   {:else}
@@ -170,23 +188,13 @@
     position: relative;
   }
 
-  .filter-dropdown > summary {
-    list-style: none;
-    cursor: pointer;
-    user-select: none;
-  }
-
-  .filter-dropdown > summary::-webkit-details-marker {
-    display: none;
-  }
-
   .filter-dropdown-chevron {
     font-size: 10px;
     opacity: 0.6;
     transition: transform 120ms ease;
   }
 
-  .filter-dropdown[open] > summary .filter-dropdown-chevron {
+  .filter-dropdown.open .filter-dropdown-chevron {
     transform: rotate(180deg);
   }
 

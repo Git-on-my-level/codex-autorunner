@@ -210,6 +210,22 @@ describe('read model entity store', () => {
     expect(store.snapshot().optimistic['client-1'].status).toBe('reconciled');
   });
 
+  it('keeps detail-backed chats when a bounded index snapshot arrives later', () => {
+    const store = new ReadModelEntityStore();
+    store.applyChatDetailSnapshot(detailSnapshot('deep-linked-chat'));
+
+    store.applyChatIndexSnapshot({
+      cursor: cursor(2),
+      rows: [chat('chat-1')],
+      groups: [],
+      counters: { total: 1, waiting: 0, running: 0, unread: 0, archived: 0 }
+    });
+
+    const view = selectChatIndexView(store.snapshot());
+    expect(view.rows.map((row) => row.chatId)).toEqual(['chat-1', 'deep-linked-chat']);
+    expect(selectChatDetailView(store.snapshot(), 'deep-linked-chat').thread?.title).toBe('Chat detail');
+  });
+
   it('preserves chat kind when detail snapshots omit the durable field', () => {
     const store = new ReadModelEntityStore();
     const row = chat('chat-1');

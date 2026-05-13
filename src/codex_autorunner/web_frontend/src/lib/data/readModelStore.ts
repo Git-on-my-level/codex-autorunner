@@ -206,6 +206,9 @@ export class ReadModelEntityStore implements Readable<ReadModelEntityState> {
     counters: ChatIndexCounters;
   }): void {
     const next = cloneState(this.state);
+    const detailThreads = Object.values(next.chatDetails)
+      .map((detail) => detail.thread)
+      .filter((thread): thread is ChatThreadProjection => thread !== null);
     for (const id of Object.keys(next.chats)) bump(next, 'chat', id);
     for (const id of Object.keys(next.chatGroups)) bump(next, 'chatGroup', id);
     next.chats = keyed(snapshot.rows, (row) => row.chatId);
@@ -217,6 +220,13 @@ export class ReadModelEntityStore implements Readable<ReadModelEntityState> {
     rememberCursor(next, 'chat.index', snapshot.cursor);
     for (const row of snapshot.rows) bump(next, 'chat', row.chatId);
     for (const group of snapshot.groups) bump(next, 'chatGroup', group.groupId);
+    // The index snapshot is a bounded list window. Do not let a late index
+    // response erase a detail-backed row loaded from a refreshable /chats/:id URL.
+    for (const thread of detailThreads) {
+      if (next.chats[thread.chatId]) continue;
+      upsertChatThread(next, thread);
+      bump(next, 'chat', thread.chatId);
+    }
     this.commit(next);
   }
 

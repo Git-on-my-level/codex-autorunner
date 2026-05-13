@@ -15,17 +15,23 @@ import type { ReadModelSnapshotClient } from '$lib/data/readModelClients';
 const now = '2026-05-11T12:00:00Z';
 
 describe('/chats route load', () => {
-  it('returns list-mode data without a dependency when no active chat id is present', async () => {
+  it('loads the chat index and returns list-mode data when no active chat id is present', async () => {
     const depends = vi.fn();
+    const client = mockClient();
     const { loadChatRoute } = await importPageLoad(true);
 
-    const result = await loadChatRoute({ depends });
+    const result = await loadChatRoute({ depends, loaderOptions: { client } });
 
-    expect(result).toEqual({ chatId: null, activeDetail: null });
-    expect(depends).not.toHaveBeenCalled();
+    expect(result).toEqual({
+      chatId: null,
+      chatIndex: { status: 'fetched', tags: ['entity:chat:index'] },
+      activeDetail: null
+    });
+    expect(depends).toHaveBeenCalledWith('entity:chat:index');
+    expect(client.chatIndex).toHaveBeenCalledTimes(1);
   });
 
-  it('registers the active chat entity dependency', async () => {
+  it('registers the chat index and active chat entity dependencies', async () => {
     const store = new ReadModelEntityStore();
     store.applyChatDetailSnapshot(chatDetailSnapshot('chat-1'));
     const depends = vi.fn();
@@ -33,6 +39,7 @@ describe('/chats route load', () => {
 
     await loadChatRoute({ chatId: 'chat-1', depends, loaderOptions: { store, client: mockClient() } });
 
+    expect(depends).toHaveBeenCalledWith('entity:chat:index');
     expect(depends).toHaveBeenCalledWith('entity:chat:chat-1');
   });
 
@@ -46,6 +53,7 @@ describe('/chats route load', () => {
 
     expect(result).toEqual({
       chatId: 'chat-1',
+      chatIndex: { status: 'fetched', tags: ['entity:chat:index'] },
       activeDetail: { status: 'cache-hit', tags: ['entity:chat:chat-1'] }
     });
     expect(result.activeDetail?.status).not.toBe('cold');
@@ -62,6 +70,7 @@ describe('/chats route load', () => {
 
     const result = await loadChatRoute({ chatId: 'chat-2', loaderOptions: { store, client } });
 
+    expect(result.chatIndex.status).toBe('fetched');
     expect(result.activeDetail?.status).toBe('fetched');
     expect(client.chatDetail).toHaveBeenCalledWith('chat-2', undefined);
     expect(selectChatDetailView(store.snapshot(), 'chat-2').thread?.title).toBe('Chat detail');
@@ -80,6 +89,7 @@ describe('/chats route load', () => {
 
     expect(result).toEqual({
       chatId: 'chat-1',
+      chatIndex: { status: 'fetched', tags: ['entity:chat:index'] },
       activeDetail: { status: 'error', tags: ['entity:chat:chat-1'], error }
     });
     expect(selectChatDetailView(store.snapshot(), 'chat-1').thread).toBeNull();
@@ -89,7 +99,7 @@ describe('/chats route load', () => {
 async function importPageLoad(browser: boolean) {
   vi.resetModules();
   vi.doMock('$app/environment', () => ({ browser, dev: false, building: false, version: 'test' }));
-  return import('./[[chatId]]/+page');
+  return import('./[[chatId]]/loadChatRoute');
 }
 
 function mockClient(overrides: Partial<Record<keyof ReadModelSnapshotClient, ReturnType<typeof vi.fn>>> = {}): ReadModelSnapshotClient {

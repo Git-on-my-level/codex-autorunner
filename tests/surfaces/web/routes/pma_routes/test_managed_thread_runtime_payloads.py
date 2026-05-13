@@ -82,6 +82,29 @@ class TestNormalizeBusyPolicy:
         assert "busy_policy must be one of" in exc_info.value.detail
 
 
+def test_managed_thread_message_request_accepts_web_client_turn_id() -> None:
+    payload = ManagedThreadMessageRequest.model_validate(
+        {
+            "message": "hello from web",
+            "client_turn_id": "optimistic:user:1",
+            "defer_execution": True,
+            "wait_for_confirmation": False,
+        }
+    )
+
+    assert payload.client_turn_id == "optimistic:user:1"
+    assert payload.defer_execution is True
+    assert payload.wait_for_confirmation is False
+
+
+def test_managed_thread_message_request_accepts_camel_client_turn_id() -> None:
+    payload = ManagedThreadMessageRequest.model_validate(
+        {"message": "hello from web", "clientTurnId": "optimistic:user:2"}
+    )
+
+    assert payload.client_turn_id == "optimistic:user:2"
+
+
 def test_resolve_message_options_preserves_runtime_cwd_in_prompt(
     tmp_path: Path,
 ) -> None:

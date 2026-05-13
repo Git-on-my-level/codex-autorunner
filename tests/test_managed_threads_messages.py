@@ -64,7 +64,7 @@ def test_send_message_persists_turns_and_reuses_backend_thread(hub_env) -> None:
 
         first_resp = client.post(
             f"/hub/pma/threads/{managed_thread_id}/messages",
-            json={"message": "first prompt"},
+            json={"message": "first prompt", "client_turn_id": "web-client-turn-1"},
         )
         assert first_resp.status_code == 200
         first_payload = first_resp.json()
@@ -116,6 +116,9 @@ def test_send_message_persists_turns_and_reuses_backend_thread(hub_env) -> None:
     store = ManagedThreadStore(hub_env.hub_root)
     thread = store.get_thread(managed_thread_id)
     assert thread is not None
+    turns = store.list_turns(managed_thread_id, limit=2)
+    first_turn = next(turn for turn in turns if turn["prompt"] == "first prompt")
+    assert first_turn["client_turn_id"] == "web-client-turn-1"
     runtime_binding = store.get_thread_runtime_binding(managed_thread_id)
     assert runtime_binding is not None
     assert runtime_binding.backend_thread_id == "backend-thread-1"

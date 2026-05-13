@@ -864,6 +864,9 @@ class ManagedThreadMessageRequest(Payload):
     model: Optional[str] = None
     reasoning: Optional[str] = None
     profile: Optional[str] = None
+    client_turn_id: Optional[str] = Field(
+        default=None, validation_alias=AliasChoices("client_turn_id", "clientTurnId")
+    )
     defer_execution: bool = Field(
         default=False,
         validation_alias=AliasChoices("defer_execution", "deferExecution"),

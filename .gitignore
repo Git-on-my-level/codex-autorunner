@@ -1,6 +1,8 @@
 node_modules/
 build/
 .env
+# Cursor Pad workspace manifest (local / cloud-specific paths)
+Padfile
 .venv/
 .desloppify/
 .superset/

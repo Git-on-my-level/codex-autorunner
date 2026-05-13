@@ -862,6 +862,7 @@ def build_managed_thread_runtime_routes(
             thread=thread,
             service=service,
         )
+        client_turn_id = normalize_optional_text(payload.client_turn_id)
 
         if payload.profile_explicit:
             meta = thread.get("metadata")
@@ -929,11 +930,13 @@ def build_managed_thread_runtime_routes(
                 started_execution = await begin_runtime_thread_execution(
                     service,
                     message_request,
+                    client_request_id=client_turn_id,
                     sandbox_policy=options.sandbox_policy,
                 )
             else:
                 prepared_execution = await service.prepare_thread_execution(
                     message_request,
+                    client_request_id=client_turn_id,
                     sandbox_policy=options.sandbox_policy,
                 )
                 started_execution = None

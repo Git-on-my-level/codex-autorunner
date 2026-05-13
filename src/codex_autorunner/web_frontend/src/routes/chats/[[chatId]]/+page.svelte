@@ -301,6 +301,10 @@
   const surfaceFilterChips = $derived(pmaChatSurfaceFilterOptions(chats));
   const ticketRunGroupCount = $derived(countTicketRunGroups(chats));
   const activeChatCount = $derived(chats.filter((chat) => !isPmaChatArchived(chat)).length);
+  const hasUsableChatIndex = $derived(Boolean(readModelState.chatIndexCursor || readModelState.chatOrder.length > 0));
+  const initialChatIndexError = $derived(chatIndexLoadError());
+  const visibleChatError = $derived(chatError ?? (!hasUsableChatIndex ? initialChatIndexError : null));
+  const showChatListSkeleton = $derived(loadingChats && !hasUsableChatIndex && !visibleChatError);
 
   function isGroupExpanded(group: PmaChatRunGroup): boolean {
     if (group.key in expandedRunGroups) return expandedRunGroups[group.key];
@@ -526,7 +530,7 @@
     unsubscribeReadModels = readModelEntityStore.subscribe((state) => {
       const replacementChatId = replacementForActiveChat(readModelState, state);
       readModelState = state;
-      if (state.chatIndexCursor) {
+      if (state.chatIndexCursor || state.chatOrder.length > 0) {
         loadingChats = false;
         chatError = null;
         activateRequestedChatFromCurrentRows();
@@ -545,7 +549,7 @@
     readModelEntityStore.setReadMarkers(loadLastSeenMap());
     pinnedChatIds = loadPinnedChats();
     draft = page.url.searchParams.get('draft') ?? draft;
-    loadingChats = !readModelEntityStore.snapshot().chatIndexCursor;
+    loadingChats = !hasChatIndexProjection(readModelEntityStore.snapshot());
     if (!loadingChats) activateRequestedChatFromCurrentRows();
     void loadInitialSupportingData(
       pmaApi.pma.listFiles(),
@@ -1092,9 +1096,26 @@
   }
 
   function activeDetailLoadResult(chatId: string): ReadModelLoaderResult | null {
-    const data = page.data as ChatRouteLoadData | undefined;
+    const data = safePageData();
     if (data?.chatId !== chatId) return null;
     return data.activeDetail ?? null;
+  }
+
+  function chatIndexLoadError(): ApiError | null {
+    const data = safePageData();
+    return data?.chatIndex?.status === 'error' ? data.chatIndex.error : null;
+  }
+
+  function safePageData(): ChatRouteLoadData | undefined {
+    try {
+      return page.data as ChatRouteLoadData | undefined;
+    } catch {
+      return undefined;
+    }
+  }
+
+  function hasChatIndexProjection(state: typeof readModelState): boolean {
+    return Boolean(state.chatIndexCursor || state.chatOrder.length > 0);
   }
 
   function currentTimeline(chatId: string): PmaTimelineItem[] {
@@ -2067,12 +2088,12 @@
     {/snippet}
 
     <div class="chat-list-scroll">
-      {#if loadingChats}
+      {#if showChatListSkeleton}
         <ContentSkeleton variant="chat-list" rows={6} />
-      {:else if chatError}
+      {:else if visibleChatError}
         <div class="state-panel error">
           <strong>Could not load chats</strong>
-          <p>{chatError.message}</p>
+          <p>{visibleChatError.message}</p>
           <button type="button" onclick={() => void chatIndexSession.refresh()}>Retry</button>
         </div>
       {:else}
@@ -2224,33 +2245,37 @@
           </p>
         {/if}
       </div>
-      {#if activeChat && !isPmaChatArchived(activeChat)}
-        <button
-          class="chat-header-action"
-          type="button"
-          onclick={() => archiveChat(activeChat.id)}
-          disabled={archiving}
-          aria-label="Archive this chat"
-        >
-          {archiving ? 'Archiving...' : 'Archive'}
-        </button>
-      {/if}
-      {#if activeChat && showStreamHealthAside}
-        <aside class="chat-header-aside" aria-label="Chat stream status">
-          <div class={`stream-health ${streamState}`} role="status">
-            <span class="status-dot" aria-hidden="true"></span>
-            <span>
-              {#if streamState === 'connecting'}
-                Connecting…
-              {:else}
-                {streamError}
-              {/if}
-            </span>
-            {#if streamState === 'interrupted'}
-              <button type="button" onclick={retryStream}>Reconnect</button>
-            {/if}
-          </div>
-        </aside>
+      {#if activeChat && (showStreamHealthAside || !isPmaChatArchived(activeChat))}
+        <div class="chat-header-tools">
+          {#if showStreamHealthAside}
+            <aside class="chat-header-aside" aria-label="Chat stream status">
+              <div class={`stream-health ${streamState}`} role="status">
+                <span class="status-dot" aria-hidden="true"></span>
+                <span>
+                  {#if streamState === 'connecting'}
+                    Connecting…
+                  {:else}
+                    {streamError}
+                  {/if}
+                </span>
+                {#if streamState === 'interrupted'}
+                  <button type="button" onclick={retryStream}>Reconnect</button>
+                {/if}
+              </div>
+            </aside>
+          {/if}
+          {#if !isPmaChatArchived(activeChat)}
+            <button
+              class="chat-header-action"
+              type="button"
+              onclick={() => archiveChat(activeChat.id)}
+              disabled={archiving}
+              aria-label="Archive this chat"
+            >
+              {archiving ? 'Archiving...' : 'Archive'}
+            </button>
+          {/if}
+        </div>
       {/if}
     </div>
 
