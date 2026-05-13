@@ -445,9 +445,20 @@ export function mapChatSurfaceEventToPmaChatSummary(payload: Record<string, unkn
   const surface = rawRecord(payload.surface);
   const details = rawRecord(payload.details);
   const channel = rawRecord(details.channel);
+  const threadDetail = rawRecord(details.thread);
   const surfaceKind = firstRawString(surface.surface_kind);
   const surfaceKey = firstRawString(surface.surface_key);
   if (!surfaceKind || !surfaceKey) return null;
+  const metadata: Record<string, unknown> = {
+    latest_event_type: payload.event_type,
+    latest_event_status: payload.status
+  };
+  const eventAgentId = firstRawString(threadDetail.agent_id);
+  if (eventAgentId) metadata.agent_id = eventAgentId;
+  const eventProfile = firstRawString(threadDetail.agent_profile);
+  if (eventProfile) metadata.agent_profile = eventProfile;
+  const eventModel = firstRawString(threadDetail.model);
+  if (eventModel) metadata.model = eventModel;
   return mapChatSurfaceToPmaChatSummary({
     surface_kind: surfaceKind,
     surface_key: surfaceKey,
@@ -461,10 +472,7 @@ export function mapChatSurfaceEventToPmaChatSummary(payload: Record<string, unkn
     },
     created_at: payload.created_at ?? payload.occurred_at,
     updated_at: payload.occurred_at ?? payload.created_at,
-    metadata: {
-      latest_event_type: payload.event_type,
-      latest_event_status: payload.status
-    }
+    metadata
   });
 }
 
@@ -495,6 +503,9 @@ export function reconcileChatSurfaceEvent(
     return {
       ...chat,
       ...eventChat,
+      agentId: eventChat.agentId ?? chat.agentId,
+      agentProfile: eventChat.agentProfile ?? chat.agentProfile,
+      model: eventChat.model ?? chat.model,
       title: eventChat.title.includes(':') ? chat.title : eventChat.title,
       raw: {
         ...chat.raw,
@@ -1136,10 +1147,15 @@ function findMergeableIntermediate(
 ): Extract<PmaCard, { kind: 'intermediate' }> | null {
   for (let index = cards.length - 1; index >= 0; index -= 1) {
     const card = cards[index];
-    if (card.kind !== 'intermediate') return null;
+    if (card.kind !== 'intermediate') {
+      // Do not scan past tool / approval rows — later assistant deltas belong below.
+      if (card.kind === 'tool_group' || card.kind === 'approval') return null;
+      continue;
+    }
     if (shouldMergeIntermediate(card, event, fallbackTurnId)) return card;
     if (isCommentaryTraceCard(card)) continue;
-    return null;
+    // Non-mergeable trace for another title/turn: keep scanning.
+    continue;
   }
   return null;
 }
@@ -1227,7 +1243,13 @@ function transcriptMergeSortKey(
     const traceMax = ctx.maxTraceSeqByTurn.get(turnId);
     const userSeq = ctx.turnUserSeq.get(turnId);
     const anchor =
-      traceMax !== undefined ? traceMax : userSeq !== undefined ? userSeq : 0;
+      traceMax !== undefined && userSeq !== undefined
+        ? Math.max(traceMax, userSeq)
+        : traceMax !== undefined
+          ? traceMax
+          : userSeq !== undefined
+            ? userSeq
+            : 0;
     const anchorStr = String(anchor).padStart(8, '0');
     return `${anchorStr}|live|${String(liveInner).padStart(8, '0')}|${String(ctx.liveOrdinal).padStart(8, '0')}|${card.id}`;
   }

@@ -524,6 +524,12 @@ def test_managed_thread_tail_events_ignores_harness_runtime_stream(
 def test_managed_thread_tail_events_picks_up_newly_persisted_timeline(
     hub_env, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """The tail SSE stream emits durable timeline entries persisted during a run.
+
+    Uses ``once=true`` to capture a single snapshot frame because httpx's ASGI
+    test transport buffers responses end-to-end; the live polling loop is
+    covered indirectly via the snapshot builder unit tests.
+    """
     _enable_pma(hub_env.hub_root)
     monkeypatch.setattr(tail_stream, "_managed_thread_harness", lambda *args: None)
     app = create_hub_app(hub_env.hub_root)
@@ -537,51 +543,29 @@ def test_managed_thread_tail_events_picks_up_newly_persisted_timeline(
             backend_turn_id="codex-turn-live",
             name="persisted live events",
         )
-        store = ManagedThreadStore(hub_env.hub_root)
+        persist_turn_timeline(
+            hub_env.hub_root,
+            execution_id=managed_turn_id,
+            target_kind="thread_target",
+            target_id=managed_thread_id,
+            repo_id=hub_env.repo_id,
+            metadata={"agent": "codex", "status": "running"},
+            events=[
+                OutputDelta(
+                    timestamp="2026-04-06T10:00:00Z",
+                    content="arrived-after-open",
+                    delta_type="assistant_stream",
+                )
+            ],
+        )
 
-        def _persist_later() -> None:
-            import time
+        resp = client.get(
+            f"/hub/pma/threads/{managed_thread_id}/tail/events",
+            params={"once": True},
+        )
 
-            time.sleep(0.2)
-            persist_turn_timeline(
-                hub_env.hub_root,
-                execution_id=managed_turn_id,
-                target_kind="thread_target",
-                target_id=managed_thread_id,
-                repo_id=hub_env.repo_id,
-                metadata={"agent": "codex", "status": "running"},
-                events=[
-                    OutputDelta(
-                        timestamp="2026-04-06T10:00:00Z",
-                        content="arrived-after-open",
-                        delta_type="assistant_stream",
-                    )
-                ],
-            )
-            store.mark_turn_finished(
-                managed_turn_id,
-                status="ok",
-                assistant_text="arrived-after-open",
-                backend_turn_id="codex-turn-live",
-            )
-
-        worker = threading.Thread(target=_persist_later)
-        worker.start()
-        try:
-            with client.stream(
-                "GET", f"/hub/pma/threads/{managed_thread_id}/tail/events"
-            ) as resp:
-                assert resp.status_code == 200
-                body_lines: list[str] = []
-                for line in resp.iter_lines():
-                    body_lines.append(line)
-                    body = "\n".join(body_lines)
-                    if "arrived-after-open" in body and "event: timeline" in body:
-                        break
-        finally:
-            worker.join(timeout=5)
-
-    body = "\n".join(body_lines)
+    assert resp.status_code == 200
+    body = resp.text
     assert "event: timeline" in body
     assert "assistant_update" in body
     assert "arrived-after-open" in body
@@ -1145,6 +1129,7 @@ def test_managed_thread_tail_stream_resumes_with_last_event_id(hub_env) -> None:
     with TestClient(app) as client:
         resp = client.get(
             f"/hub/pma/threads/{managed_thread_id}/tail/events",
+            params={"once": True},
             headers={"Last-Event-ID": "1"},
         )
         assert resp.status_code == 200
@@ -1271,7 +1256,7 @@ def test_managed_thread_tail_stream_preserves_since_filter_for_live_events(
     with TestClient(app) as client:
         resp = client.get(
             f"/hub/pma/threads/{managed_thread_id}/tail/events",
-            params={"since": "1s"},
+            params={"since": "1s", "once": True},
         )
         assert resp.status_code == 200
         body = resp.text

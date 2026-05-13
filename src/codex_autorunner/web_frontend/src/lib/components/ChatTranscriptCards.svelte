@@ -120,7 +120,7 @@
     <article class={`message ${card.message.role === 'user' ? 'user' : 'assistant'}`}>
       <span>{card.message.role === 'user' ? 'You' : assistantLabel}</span>
       {#if isStreaming}
-        <div class="message-markdown streaming">{card.message.text}<span class="stream-caret" aria-hidden="true"></span></div>
+        <div class="message-markdown streaming">{card.message.text}</div>
       {:else}
         <div class="message-markdown markdown-body">
           {@html renderMarkdownToHtml(card.message.text, { openLinksInNewTab: true })}

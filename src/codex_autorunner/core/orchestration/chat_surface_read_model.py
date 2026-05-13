@@ -1846,6 +1846,21 @@ def _public_event_details(payload: Mapping[str, Any]) -> dict[str, Any]:
         value = payload.get(key)
         if isinstance(value, (bool, int, float, str)) or value is None:
             details[key] = value
+    thread = payload.get("thread")
+    if isinstance(thread, Mapping):
+        meta = thread.get("metadata")
+        meta_map = dict(meta) if isinstance(meta, Mapping) else {}
+        agent_id = _normalize_text(thread.get("agent_id")) or _normalize_text(
+            thread.get("agent")
+        )
+        details["thread"] = {
+            "managed_thread_id": _normalize_text(
+                thread.get("managed_thread_id") or thread.get("thread_target_id")
+            ),
+            "agent_id": agent_id,
+            "agent_profile": _normalize_text(meta_map.get("agent_profile")),
+            "model": _normalize_text(meta_map.get("model")),
+        }
     return details
 
 

@@ -137,6 +137,41 @@ def test_hub_chat_events_rejects_malformed_cursor(hub_env) -> None:
     assert resp.json()["detail"] == "cursor must be a non-negative integer"
 
 
+def test_hub_chat_surface_event_includes_thread_agent_id_in_details(hub_env) -> None:
+    """Incremental SSE events for managed threads expose agent_id for client reconciliation."""
+    _seed_thread(hub_env.hub_root)
+    journal = SQLiteChatSurfaceEventJournal(hub_env.hub_root, durable=True)
+    journal.append_event(
+        idempotency_key="thread-lifecycle-1",
+        event_type="lifecycle.status_changed",
+        surface_kind="pma",
+        surface_key="thread-1",
+        managed_thread_id="thread-1",
+        repo_id="repo",
+        lifecycle_status="active",
+        status="created",
+        source_kind="managed_thread.lifecycle",
+        source_id="thread-1",
+        payload={
+            "thread": {
+                "managed_thread_id": "thread-1",
+                "agent": "codex",
+                "metadata": {"agent_profile": "m4-pma", "model": "gpt-5"},
+            },
+        },
+    )
+
+    client = TestClient(create_hub_app(hub_env.hub_root))
+    resp = client.get("/hub/chat/events", params={"cursor": "0", "once": "true"})
+    assert resp.status_code == 200
+    events = _event_payloads(resp.text, "chat.event")
+    assert events
+    agent_ids = {
+        event.get("details", {}).get("thread", {}).get("agent_id") for event in events
+    }
+    assert "codex" in agent_ids
+
+
 def test_hub_chat_events_can_emit_heartbeat_frame(hub_env) -> None:
     client = TestClient(create_hub_app(hub_env.hub_root))
 

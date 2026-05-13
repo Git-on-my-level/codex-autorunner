@@ -46,6 +46,7 @@ import {
   summarizeFilterCounts,
   buildPmaChatListEntries
 } from './pmaChat';
+import { resolvePmaChatSelectorsForActiveChat } from './modelPickers';
 
 const baseChat: PmaChatSummary = {
   id: 'chat-1',
@@ -491,6 +492,97 @@ describe('PMA chat view helpers', () => {
         surface_kind: 'discord',
         surface_key: 'channel-1'
       }
+    });
+  });
+
+  it('maps chat surface event thread details into metadata.agent_id', () => {
+    const chat = mapChatSurfaceEventToPmaChatSummary({
+      event_type: 'lifecycle.status_changed',
+      surface: { surface_kind: 'pma', surface_key: 'thread-99' },
+      managed_thread_id: 'thread-99',
+      lifecycle: 'idle',
+      lifecycle_status: 'active',
+      status: 'created',
+      occurred_at: '2026-05-04T01:00:00Z',
+      details: {
+        thread: {
+          managed_thread_id: 'thread-99',
+          agent_id: 'codex',
+          agent_profile: 'm4-pma',
+          model: 'gpt-5'
+        }
+      }
+    });
+
+    expect(chat?.agentId).toBe('codex');
+    expect(chat?.agentProfile).toBe('m4-pma');
+    expect(chat?.model).toBe('gpt-5');
+  });
+
+  it('does not clear chat agent identity when reconciling status-only surface events', () => {
+    const current: PmaChatSummary[] = [
+      {
+        ...baseChat,
+        id: 'thread-1',
+        title: 'My chat',
+        agentId: 'codex',
+        agentProfile: 'pma',
+        model: null,
+        raw: {}
+      }
+    ];
+    const next = reconcileChatSurfaceEvent(current, {
+      event_type: 'queue.state_changed',
+      surface: { surface_kind: 'pma', surface_key: 'thread-1' },
+      managed_thread_id: 'thread-1',
+      lifecycle: 'queued',
+      lifecycle_status: 'active',
+      status: 'queued',
+      occurred_at: '2026-05-04T01:00:00Z'
+    });
+    expect(next[0]?.agentId).toBe('codex');
+    expect(next[0]?.agentProfile).toBe('pma');
+  });
+
+  it('resolvePmaChatSelectorsForActiveChat restores defaults when chat has no agent', () => {
+    const withAgent = resolvePmaChatSelectorsForActiveChat(
+      { ...baseChat, id: 'a', agentId: 'opencode', agentProfile: 'x', model: 'm-1', raw: {} },
+      [{ id: 'codex' }, { id: 'opencode' }],
+      'codex',
+      'profile-a'
+    );
+    expect(withAgent).toEqual({
+      mode: 'chat-bound',
+      agentId: 'opencode',
+      agentProfile: 'x',
+      reasoning: '',
+      model: 'm-1'
+    });
+
+    const noAgent = resolvePmaChatSelectorsForActiveChat(
+      { ...baseChat, id: 'b', agentId: null, agentProfile: null, model: null, raw: {} },
+      [{ id: 'codex' }, { id: 'opencode' }],
+      'codex',
+      ''
+    );
+    expect(noAgent).toEqual({
+      mode: 'defaults',
+      agentId: 'codex',
+      agentProfile: '',
+      reasoning: ''
+    });
+
+    const hermesDefault = resolvePmaChatSelectorsForActiveChat(
+      { ...baseChat, id: 'c', agentId: null, agentProfile: null, model: null, raw: {} },
+      [{ id: 'hermes' }],
+      'hermes',
+      'm4-pma'
+    );
+    expect(hermesDefault).toEqual({
+      mode: 'defaults',
+      agentId: 'hermes',
+      agentProfile: 'm4-pma',
+      reasoning: ''
     });
   });
 
@@ -1188,6 +1280,57 @@ describe('PMA chat view helpers', () => {
       'intermediate-8',
       'turn:one:assistant'
     ]);
+  });
+
+  it('keeps live streaming after the user prompt when trace sequence is below the user row sequence', () => {
+    const canonical = buildPmaCards(
+      [
+        timelineItem('turn:1:user', 'user_message', { text: 'first question' }, '00000010'),
+        timelineItem('turn:1:assistant', 'assistant_message', { text: 'first answer' }, '00000011'),
+        timelineItem('turn:2:user', 'user_message', { text: 'second question' }, '00000020'),
+        timelineItem(
+          'turn:2:intermediate:0001',
+          'intermediate',
+          {
+            intermediate_kind: 'thinking',
+            text: 'early trace line',
+            source_event_ids: [1],
+            progress_item: { kind: 'assistant_update', title: 'Thinking', summary: 'early', event_ids: [1] }
+          },
+          '00000003'
+        )
+      ],
+      null,
+      []
+    );
+    const live = buildPmaActivityCards(
+      [
+        {
+          ...baseArtifact,
+          id: 'live-stream-2',
+          kind: 'progress',
+          createdAt: '2026-05-13T12:00:02Z',
+          raw: {
+            managed_turn_id: '2',
+            progress_item: {
+              kind: 'assistant_update',
+              title: 'Thinking',
+              summary: 'second answer line',
+              event_ids: [2]
+            }
+          }
+        }
+      ],
+      { fallbackTurnId: '2' }
+    );
+
+    const merged = mergePmaTimelineAndActivityCards(canonical, live);
+    const ids = merged.map((card) => card.id);
+    const user2 = ids.indexOf('turn:2:user');
+    const liveIdx = ids.indexOf('intermediate-live-stream-2');
+    expect(user2).toBeGreaterThanOrEqual(0);
+    expect(liveIdx).toBeGreaterThanOrEqual(0);
+    expect(user2).toBeLessThan(liveIdx);
   });
 
   it('dedupes live commentary against canonical source event ids', () => {

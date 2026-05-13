@@ -2141,22 +2141,6 @@ textarea:hover {
   word-break: break-word;
 }
 
-.stream-caret {
-  display: inline-block;
-  width: 0.5em;
-  height: 1em;
-  margin-left: 1px;
-  vertical-align: text-bottom;
-  background: currentColor;
-  animation: stream-blink 1.1s steps(2, start) infinite;
-}
-
-@keyframes stream-blink {
-  to {
-    visibility: hidden;
-  }
-}
-
 .message-attachments {
   display: flex;
   flex-wrap: wrap;

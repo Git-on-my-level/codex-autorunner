@@ -291,6 +291,8 @@ async def _build_managed_thread_tail_snapshot(
             "managed_turn_id": None,
             "agent": thread.agent_id,
             "turn_status": None,
+            "thread_status": getattr(thread, "status", None),
+            "thread_lifecycle_status": getattr(thread, "lifecycle_status", None),
             "lifecycle_events": [],
             "events": [],
             "last_event_id": effective_resume_after,
@@ -352,19 +354,26 @@ async def _build_managed_thread_tail_snapshot(
         since_ms=since_ms,
         resume_after=effective_resume_after,
     )
-    if (
+    turn_running = str(turn_status or "").strip().lower() == "running"
+    persisted_floor_id = int(effective_resume_after or 0)
+    persisted_max_event_id = persisted_floor_id
+    if tail_events:
+        persisted_max_event_id = max(int(e.get("event_id") or 0) for e in tail_events)
+
+    runtime_overlay_eligible = bool(
         include_runtime_fallback
-        and not tail_events
         and has_backend_binding
         and harness is not None
-    ):
+        and (not tail_events or (turn_running and stream_available))
+    )
+    if runtime_overlay_eligible:
         list_fn = getattr(harness, "list_progress_events", None)
         if callable(list_fn):
             try:
                 raw_events = await list_fn(
                     str(backend_thread_id),
                     str(backend_turn_id),
-                    after_id=effective_resume_after,
+                    after_id=persisted_max_event_id,
                     limit=limit,
                 )
             except (
@@ -373,7 +382,8 @@ async def _build_managed_thread_tail_snapshot(
                 raw_events = []
             state = RuntimeThreadRunEventState()
             projection_state = ProgressProjectionState()
-            event_id_start = effective_resume_after
+            event_id_start = persisted_max_event_id
+            overlay_floor = persisted_max_event_id
             for raw_event in raw_events:
                 if isinstance(raw_event, dict):
                     activity_at = _event_received_at_iso(raw_event)
@@ -395,6 +405,9 @@ async def _build_managed_thread_tail_snapshot(
                 if isinstance(state.token_usage, dict) and state.token_usage:
                     token_usage = dict(state.token_usage)
                 for entry in serialized_entries:
+                    eid = int(entry.get("event_id") or 0)
+                    if eid <= overlay_floor:
+                        continue
                     tail_events.append(entry)
                     event_id_start = int(entry.get("event_id") or event_id_start)
             if len(tail_events) > limit:
@@ -463,6 +476,8 @@ async def _build_managed_thread_tail_snapshot(
         "backend_thread_id": backend_thread_id,
         "backend_turn_id": backend_turn_id,
         "turn_status": turn_status,
+        "thread_status": getattr(thread, "status", None),
+        "thread_lifecycle_status": getattr(thread, "lifecycle_status", None),
         "started_at": started_at,
         "finished_at": finished_at,
         "elapsed_seconds": elapsed_seconds,
@@ -535,6 +550,14 @@ def _tail_event_sse_frames(
 
 
 def _progress_stream_payload(snapshot: dict[str, Any]) -> dict[str, Any]:
+    lifecycle_fields = _stream_lifecycle_fields(snapshot)
+    # The SSE stream lives across turn boundaries; only the thread reaching a
+    # permanent state ends it. Override the per-turn lifecycle hints so the
+    # client doesn't tear down its subscription when a single turn finishes
+    # and the user is about to send another message.
+    sse_close, sse_close_reason = _sse_stream_should_terminate(snapshot)
+    lifecycle_fields["stream_should_close"] = sse_close
+    lifecycle_fields["stream_close_reason"] = sse_close_reason
     return {
         "managed_thread_id": snapshot.get("managed_thread_id"),
         "managed_turn_id": snapshot.get("managed_turn_id"),
@@ -547,8 +570,25 @@ def _progress_stream_payload(snapshot: dict[str, Any]) -> dict[str, Any]:
         "guidance": snapshot.get("guidance"),
         "last_tool": snapshot.get("last_tool"),
         "active_turn_diagnostics": snapshot.get("active_turn_diagnostics"),
-        **_stream_lifecycle_fields(snapshot),
+        **lifecycle_fields,
     }
+
+
+def _sse_stream_should_terminate(
+    snapshot: dict[str, Any],
+) -> tuple[bool, str | None]:
+    """Whether the SSE stream should end for this snapshot.
+
+    The SSE subscription represents a viewer attached to a thread, not to a
+    single turn. A finished turn does NOT end the stream — the user may queue
+    another turn and expects to see it stream live. The stream ends only when
+    the thread itself will produce no further activity (archived or missing).
+    """
+    thread_status = (snapshot.get("thread_status") or "").strip().lower()
+    lifecycle_status = (snapshot.get("thread_lifecycle_status") or "").strip().lower()
+    if thread_status == "archived" or lifecycle_status == "archived":
+        return True, "thread_archived"
+    return False, None
 
 
 def build_managed_thread_tail_routes(
@@ -656,7 +696,9 @@ def build_managed_thread_tail_routes(
             since_ms=since_ms,
             resume_after=resolve_resume_after(request, since_event_id),
             resume_after_managed_turn_id=since_managed_turn_id,
-            include_runtime_fallback=False,
+            # Live UI needs harness-buffered deltas (OpenCode) while the durable
+            # turn journal may lag; JSON GET /tail already uses the default True.
+            include_runtime_fallback=True,
         )
 
         async def _stream() -> Any:
@@ -675,7 +717,10 @@ def build_managed_thread_tail_routes(
                 "event: progress\ndata: "
                 f"{json.dumps(_progress_stream_payload(snapshot), ensure_ascii=True)}\n\n"
             )
-            if once or snapshot.get("stream_should_close"):
+            if once:
+                return
+            sse_close, _ = _sse_stream_should_terminate(snapshot)
+            if sse_close:
                 return
 
             last_heartbeat_at = asyncio.get_running_loop().time()
@@ -691,7 +736,7 @@ def build_managed_thread_tail_routes(
                     since_ms=since_ms,
                     resume_after=last_event_id,
                     resume_after_managed_turn_id=last_managed_turn_id,
-                    include_runtime_fallback=False,
+                    include_runtime_fallback=True,
                 )
                 for frame in _tail_event_sse_frames(
                     managed_thread_id=managed_thread_id,
@@ -707,7 +752,8 @@ def build_managed_thread_tail_routes(
                     "event: progress\ndata: "
                     f"{json.dumps(_progress_stream_payload(refreshed), ensure_ascii=True)}\n\n"
                 )
-                if refreshed.get("stream_should_close"):
+                sse_close, _ = _sse_stream_should_terminate(refreshed)
+                if sse_close:
                     return
                 now = asyncio.get_running_loop().time()
                 if now - last_heartbeat_at >= _PERSISTED_TAIL_HEARTBEAT_SECONDS:

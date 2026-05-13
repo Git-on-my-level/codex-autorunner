@@ -113,6 +113,7 @@
     modelLabel,
     modelRecordForValue,
     pickerReasoningOptions,
+    resolvePmaChatSelectorsForActiveChat,
     stringField
   } from '$lib/viewModels/modelPickers';
   import { getLastModelForAgent, persistLastModelForAgent } from '$lib/viewModels/lastModelByAgent';
@@ -147,6 +148,8 @@
   let models = $state<JsonRecord[]>([]);
   let scopeOptions = $state<PmaChatScopeOption[]>(buildPmaChatScopeOptions([], []));
   let pendingAttachments = $state<PendingAttachment[]>([]);
+  let configuredDefaultAgentId = $state<string | undefined>(undefined);
+  let configuredDefaultProfile = $state('');
   let linkDialogOpen = $state(false);
   let linkDraft = $state('');
   let selectedAgent = $state('codex');
@@ -173,6 +176,10 @@
   let streamState = $state<'idle' | 'connecting' | 'connected' | 'interrupted'>('idle');
   let streamError = $state<string | null>(null);
   let streamSubscription: StreamSubscription | null = null;
+  // Tracks which managed turn we've already refreshed-on-terminal for, so the
+  // SSE poll's repeated terminal progress payloads don't trigger a refresh per
+  // tick while the stream stays open across turns.
+  let refreshedTerminalTurnId: string | null = null;
   let fileInput: HTMLInputElement | null = $state(null);
   let imageInput: HTMLInputElement | null = $state(null);
   let messageStack: HTMLDivElement | null = $state(null);
@@ -427,6 +434,15 @@
   const displayedProgress = $derived(progressWithLiveElapsed(progress, clockNowMs));
   const liveActivity = $derived(buildPmaLiveActivity(displayedProgress));
   const activeCards = $derived<PmaCard[]>(buildPmaTranscriptCards(timeline, activeChat, artifacts, displayedProgress));
+  const lastAssistantMessageCard = $derived.by<PmaCard | null>(() => {
+    for (let i = activeCards.length - 1; i >= 0; i -= 1) {
+      const card = activeCards[i];
+      if (card.kind === 'message' && card.message.role === 'assistant') {
+        return card;
+      }
+    }
+    return null;
+  });
   const statusBar = $derived(buildPmaStatusBar(displayedProgress, activeChat));
   const selectedScope = $derived(scopeOptions.find((scope) => scope.id === selectedScopeId) ?? localPmaChatScopeOption());
   const selectedAgentRecord = $derived(agentRecordForId(agents, selectedAgent));
@@ -440,34 +456,35 @@
   const canStartCodingAgentChat = $derived(selectedScope.kind !== 'local');
   const activeChatKind = $derived(pmaChatKind(activeChat));
   const activeChatKindLabel = $derived(pmaChatKindLabel(activeChatKind));
+  // Single source of truth for the chat's agent display name. Reads from the
+  // picker, which is kept in sync with chat.agentId by syncSelectorsToActiveChat
+  // and falls back to the user's configured default. This is the same value
+  // the header config line uses, so the in-transcript assistant label, the
+  // kind badge, and the header config line never disagree.
   const chatAgentDisplayLabel = $derived.by(() => {
     if (!activeChat) return 'Assistant';
-    const fromCatalog = agentDisplayForChat(agents, activeChat);
-    if (fromCatalog) return fromCatalog;
-    const rawId = activeChat.agentId?.trim();
-    if (rawId) return rawId;
+    if (selectedAgentRecord) return agentLabel(selectedAgentRecord);
+    const selectedTrim = selectedAgent?.trim();
+    if (selectedTrim) return selectedTrim;
     return activeChatKindLabel;
   });
   const streamingMessageId = $derived.by<string | null>(() => {
     if (displayedProgress?.status !== 'running') return null;
-    for (let i = activeCards.length - 1; i >= 0; i -= 1) {
-      const card = activeCards[i];
-      if (card.kind === 'message' && card.message.role === 'assistant') {
-        return card.id;
-      }
-    }
-    return null;
+    const card = lastAssistantMessageCard;
+    return card?.kind === 'message' ? card.id : null;
+  });
+  const showTypingIndicator = $derived.by<boolean>(() => {
+    if (displayedProgress?.status !== 'running') return false;
+    const last = activeCards[activeCards.length - 1];
+    if (!last) return false;
+    return last.kind === 'message' && last.message.role === 'user';
   });
   const srAnnouncement = $derived.by<string>(() => {
     if (displayedProgress?.status !== 'running') return '';
-    for (let i = activeCards.length - 1; i >= 0; i -= 1) {
-      const card = activeCards[i];
-      if (card.kind === 'message' && card.message.role === 'assistant') {
-        const text = (card.message.text ?? '').trim();
-        return text.length > 120 ? text.slice(text.length - 120) : text;
-      }
-    }
-    return '';
+    const card = lastAssistantMessageCard;
+    if (!card || card.kind !== 'message') return '';
+    const text = (card.message.text ?? '').trim();
+    return text.length > 120 ? text.slice(text.length - 120) : text;
   });
   const activeMessengerSurface = $derived(pmaChatMessengerSurface(activeChat));
   const activeRepoIngress = $derived(repoIngressForChat(activeChat));
@@ -717,13 +734,20 @@
           : agentResult.data.default;
       const defaultProfile =
         typeof defaults.profile === 'string' && defaults.profile.trim() ? defaults.profile.trim() : '';
+      configuredDefaultAgentId =
+        typeof defaultAgent === 'string' && defaultAgent.trim() ? defaultAgent.trim().toLowerCase() : undefined;
+      configuredDefaultProfile = defaultProfile;
       if (!activeChat?.agentId) {
-        const configuredDefault = agents.find((record) => agentId(record) === defaultAgent);
-        selectedAgent = configuredDefault
-          ? agentId(configuredDefault)
-          : agentResult.data.agents[0] ? agentId(agentResult.data.agents[0]) : selectedAgent;
-        if (selectedAgent === 'hermes' && defaultProfile && !selectedProfile.trim()) {
-          selectedProfile = defaultProfile;
+        const resolved = resolvePmaChatSelectorsForActiveChat(
+          activeChat,
+          agents,
+          configuredDefaultAgentId,
+          configuredDefaultProfile
+        );
+        if (resolved.mode === 'defaults') {
+          selectedAgent = resolved.agentId;
+          selectedProfile = resolved.agentProfile;
+          selectedReasoning = resolved.reasoning;
         }
       }
       void loadModels(selectedAgent, activeChat?.model ?? selectedModel);
@@ -1047,6 +1071,7 @@
     closeStream();
     streamState = 'connecting';
     streamError = null;
+    refreshedTerminalTurnId = null;
     streamSubscription = openPmaTailEventSource(chatId, {
       onStatus: (status) => {
         if (activeChatId !== chatId) return;
@@ -1070,8 +1095,16 @@
         if (event.kind === 'progress' || event.kind === 'state') {
           const nextProgress = mapPmaRunProgress(event.payload);
           updateProgress(nextProgress);
-          if (shouldEndStream(event.kind, nextProgress)) {
+          if (
+            event.kind === 'progress' &&
+            nextProgress.terminal &&
+            nextProgress.id &&
+            refreshedTerminalTurnId !== nextProgress.id
+          ) {
+            refreshedTerminalTurnId = nextProgress.id;
             scheduleActiveRefresh(chatId, 700);
+          }
+          if (nextProgress.streamShouldClose) {
             closeStream();
             return;
           }
@@ -1088,13 +1121,10 @@
           scheduleActiveRefresh(chatId, 250);
           return;
         }
-        if (progress?.status === 'done' || progress?.status === 'failed') {
-          scheduleActiveRefresh(chatId, 700);
-        }
       },
       onError: () => {
         if (activeChatId !== chatId) return;
-        if (progress && shouldEndStream('progress', progress)) {
+        if (progress?.streamShouldClose) {
           closeStream();
           return;
         }
@@ -1103,10 +1133,6 @@
         scheduleActiveRefresh(chatId, 900);
       }
     });
-  }
-
-  function shouldEndStream(kind: 'state' | 'progress', value: PmaRunProgress): boolean {
-    return value.streamShouldClose || (kind === 'progress' && value.terminal);
   }
 
   function scheduleActiveRefresh(chatId: string, delayMs = 600): void {
@@ -1257,15 +1283,27 @@
     const chat = chats.find((item) => item.id === activeChatId);
     const scopeId = scopeIdForChat(chat);
     if (scopeId) selectedScopeId = scopeId;
-    if (!chat?.agentId) return;
+    const resolved = resolvePmaChatSelectorsForActiveChat(
+      chat,
+      agents,
+      configuredDefaultAgentId,
+      configuredDefaultProfile
+    );
+    if (resolved.mode === 'defaults') {
+      selectedAgent = resolved.agentId;
+      selectedProfile = resolved.agentProfile;
+      selectedReasoning = resolved.reasoning;
+      void loadModels(selectedAgent);
+      return;
+    }
     const previousAgent = selectedAgent;
-    selectedAgent = chat.agentId;
-    selectedProfile = chat.agentProfile ?? '';
-    selectedReasoning = stringField(chat.raw, 'reasoning') ?? '';
-    if (previousAgent !== chat.agentId || models.length === 0) {
-      void loadModels(chat.agentId, chat.model ?? selectedModel);
-    } else if (chat.model) {
-      selectedModel = chat.model;
+    selectedAgent = resolved.agentId;
+    selectedProfile = resolved.agentProfile;
+    selectedReasoning = resolved.reasoning;
+    if (previousAgent !== resolved.agentId || models.length === 0) {
+      void loadModels(resolved.agentId, resolved.model ?? selectedModel);
+    } else if (resolved.model) {
+      selectedModel = resolved.model;
     }
   }
 
@@ -1534,7 +1572,9 @@
         activeChatId = committedChatId;
         detailMode = 'detail';
         connectStream(committedChatId);
-        void syncDetailUrl(committedChatId);
+        // Must complete before `sending` clears: the URL effect treats no `chatId`
+        // segment as "list mode" unless we're still sending or on a local draft id.
+        await syncDetailUrl(committedChatId);
       }
       await invalidateChatMutation(committedChatId);
       const optimisticFromBackend = optimisticUserTimelineItemFromSend(
@@ -2350,6 +2390,16 @@
   {/snippet}
 
   {#snippet detail()}
+  {#snippet typingDots(ariaLabel: string)}
+    <div class="assistant-skeleton" role="status" aria-label={ariaLabel}>
+      <span class="assistant-skeleton-label">{chatAgentDisplayLabel || 'Assistant'}</span>
+      <span class="assistant-skeleton-dots" aria-hidden="true">
+        <span class="dot"></span>
+        <span class="dot"></span>
+        <span class="dot"></span>
+      </span>
+    </div>
+  {/snippet}
   <div class="active-chat">
     <div class="chat-header">
       <div class="chat-header-copy">
@@ -2368,7 +2418,7 @@
             </span>
           </div>
           <p class="chat-header-subtitle">
-            <span class={`chat-kind-badge ${activeChatKind}`}>{chatAgentDisplayLabel}</span>
+            <span class={`chat-kind-badge ${activeChatKind}`}>{activeChatKindLabel}</span>
             {#if activeMessengerSurface}
               <span class={`chat-surface-badge ${activeMessengerSurface.badgeClass}`}>{activeMessengerSurface.label}</span>
             {/if}
@@ -2467,14 +2517,7 @@
           />
         </div>
       {:else if activeCards.length === 0 && liveActivity}
-        <div class="assistant-skeleton" role="status" aria-label={liveActivity.title}>
-          <span class="assistant-skeleton-label">{chatAgentDisplayLabel || 'Assistant'}</span>
-          <span class="assistant-skeleton-dots" aria-hidden="true">
-            <span class="dot"></span>
-            <span class="dot"></span>
-            <span class="dot"></span>
-          </span>
-        </div>
+        {@render typingDots(liveActivity.title)}
       {:else if activeCards.length === 0}
         <div class="state-panel empty-state">
           <strong>No transcript available</strong>
@@ -2482,6 +2525,9 @@
         </div>
       {:else}
         <ChatTranscriptCards cards={activeCards} assistantLabel={chatAgentDisplayLabel} {streamingMessageId} />
+        {#if showTypingIndicator}
+          {@render typingDots('Assistant is typing')}
+        {/if}
       {/if}
     </div>
     <div class="sr-only" aria-live="polite" aria-atomic="false">{srAnnouncement}</div>

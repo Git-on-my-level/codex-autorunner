@@ -1,6 +1,48 @@
 import { agentCapabilityAllowed, modelReasoningOptions, modelSelectorState, type ModelSelectorState } from './pmaChat';
+import type { PmaChatSummary } from './domain';
 
 export type PickerRecord = Record<string, unknown>;
+
+/** Selector state when switching chats or applying user defaults (no chat-bound agent). */
+export type PmaChatResolvedSelectors =
+  | { mode: 'defaults'; agentId: string; agentProfile: string; reasoning: string }
+  | {
+      mode: 'chat-bound';
+      agentId: string;
+      agentProfile: string;
+      reasoning: string;
+      model: string | null;
+    };
+
+/** Match `+page` / `loadInitialSupportingData` default-agent path: hub defaults + first agent fallback. */
+export function resolvePmaChatSelectorsForActiveChat(
+  chat: PmaChatSummary | null | undefined,
+  agents: PickerRecord[],
+  configuredDefaultAgentId: string | undefined,
+  configuredDefaultProfile: string
+): PmaChatResolvedSelectors {
+  if (!chat?.agentId) {
+    if (agents.length === 0) {
+      return { mode: 'defaults', agentId: '', agentProfile: '', reasoning: '' };
+    }
+    const configuredDefault = configuredDefaultAgentId
+      ? agents.find((record) => agentId(record) === configuredDefaultAgentId)
+      : undefined;
+    const pick = configuredDefault ? agentId(configuredDefault) : agentId(agents[0]!);
+    let agentProfile = '';
+    if (pick === 'hermes' && configuredDefaultProfile.trim()) {
+      agentProfile = configuredDefaultProfile;
+    }
+    return { mode: 'defaults', agentId: pick, agentProfile, reasoning: '' };
+  }
+  return {
+    mode: 'chat-bound',
+    agentId: chat.agentId,
+    agentProfile: chat.agentProfile ?? '',
+    reasoning: stringField(chat.raw, 'reasoning') ?? '',
+    model: chat.model ?? null
+  };
+}
 
 export function stringField(record: PickerRecord | undefined | null, key: string): string | null {
   const value = record?.[key];
