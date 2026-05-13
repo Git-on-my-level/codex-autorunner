@@ -381,10 +381,21 @@ _run_chat_apps_lane() {
 }
 
 # --- Lane dispatch: guardrails + lanes all in parallel -----------------------
+RUN_CHAT_APPS_IN_PARALLEL="$RUN_CHAT_APPS"
+RUN_CHAT_APPS_AFTER_PARALLEL=false
+if [[ "$RUN_CHAT_APPS" == true && "$LANE" == "aggregate" && -n "${CI:-}" ]]; then
+  # The chat-surface latency suite asserts wall-clock UX budgets. Running it
+  # beside repo-wide pytest, mypy, frontend build, and frontend tests makes the
+  # result mostly measure shared runner contention, so aggregate CI runs it
+  # after the heavy parallel lanes finish.
+  RUN_CHAT_APPS_IN_PARALLEL=false
+  RUN_CHAT_APPS_AFTER_PARALLEL=true
+fi
+
 _ACTIVE_LANE_COUNT=0
 [[ "$RUN_CORE" == true ]] && ((_ACTIVE_LANE_COUNT += 1))
 [[ "$RUN_WEB_UI" == true ]] && ((_ACTIVE_LANE_COUNT += 1))
-[[ "$RUN_CHAT_APPS" == true ]] && ((_ACTIVE_LANE_COUNT += 1))
+[[ "$RUN_CHAT_APPS_IN_PARALLEL" == true ]] && ((_ACTIVE_LANE_COUNT += 1))
 
 _RUN_PARALLEL=false
 if [[ "$_ACTIVE_LANE_COUNT" -ge 1 ]]; then
@@ -411,7 +422,7 @@ if [[ "$_RUN_PARALLEL" == true ]]; then
     _LANE_PIDS+=($!)
     _LANE_NAMES+=("web-ui")
   fi
-  if [[ "$RUN_CHAT_APPS" == true ]]; then
+  if [[ "$RUN_CHAT_APPS_IN_PARALLEL" == true ]]; then
     _run_chat_apps_lane > "$_LANE_LOG_DIR/chat-apps.log" 2>&1 &
     _LANE_PIDS+=($!)
     _LANE_NAMES+=("chat-apps")
@@ -433,6 +444,11 @@ if [[ "$_RUN_PARALLEL" == true ]]; then
 
   if [[ "$_LANE_FAIL" -eq 1 ]]; then
     exit 1
+  fi
+
+  if [[ "$RUN_CHAT_APPS_AFTER_PARALLEL" == true ]]; then
+    echo "Running chat-apps lane after aggregate parallel lanes..."
+    _run_chat_apps_lane
   fi
 else
   _run_guardrails
