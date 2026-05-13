@@ -163,6 +163,9 @@ def test_write_worker_exit_info_with_shutdown_intent(tmp_path: Path) -> None:
         run_id,
         returncode=-15,
         shutdown_intent=True,
+        signal="SIGTERM",
+        exit_origin="worker_signal",
+        exit_kind="external_signal",
     )
 
     exit_path = artifacts_dir / "worker.exit.json"
@@ -170,6 +173,9 @@ def test_write_worker_exit_info_with_shutdown_intent(tmp_path: Path) -> None:
     payload = json.loads(exit_path.read_text(encoding="utf-8"))
     assert payload["returncode"] == -15
     assert payload["shutdown_intent"] is True
+    assert payload["signal"] == "SIGTERM"
+    assert payload["exit_origin"] == "worker_signal"
+    assert payload["exit_kind"] == "external_signal"
 
 
 def test_write_worker_exit_info_without_shutdown_intent(tmp_path: Path) -> None:
@@ -234,6 +240,7 @@ def test_check_worker_health_reads_shutdown_intent(monkeypatch, tmp_path: Path) 
     assert health.status == "dead"
     assert health.shutdown_intent is True
     assert health.exit_code == -15
+    assert health.signal is None
 
 
 def test_write_worker_exit_info_preserves_existing_shutdown_intent(

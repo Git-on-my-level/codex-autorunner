@@ -41,6 +41,8 @@ def _worker(
     status: WorkerHealthStatus,
     *,
     pid: Optional[int] = None,
+    shutdown_intent: bool = False,
+    signal: Optional[str] = None,
     exit_origin: Optional[str] = None,
     exit_kind: Optional[str] = None,
     reap_reason: Optional[str] = None,
@@ -50,6 +52,8 @@ def _worker(
         status=status,
         pid=pid,
         exit=WorkerExitObservation(
+            shutdown_intent=shutdown_intent,
+            signal=signal,
             exit_origin=exit_origin,
             exit_kind=exit_kind,
             reap_reason=reap_reason,
@@ -94,6 +98,61 @@ def test_policy_classifies_dead_worker_active_run_as_crash() -> None:
     assert trigger is not None
     assert trigger.kind == TriggerKind.RECONCILE_WORKER_DEAD
     assert "pid=123" in (trigger.error_message or "")
+
+
+def test_policy_treats_signal_shutdown_as_recoverable_crash() -> None:
+    decision = supervise_flow_recovery(
+        FlowSupervisorObservation(
+            run=_run(status=FlowRunStatus.STOPPING, stop_requested=True),
+            worker=_worker(
+                WorkerHealthStatus.DEAD,
+                pid=123,
+                shutdown_intent=False,
+                signal="SIGTERM",
+                exit_origin="worker_signal",
+                exit_kind="external_signal",
+                exit_code=-15,
+            ),
+            restart=RestartPolicyObservation(enabled=True, attempts=0, max_attempts=2),
+        )
+    )
+
+    assert _intent_kinds(decision) == [
+        RecoveryIntentKind.WORKER_CRASH,
+        RecoveryIntentKind.RESTART_ATTEMPTED,
+    ]
+    assert SupervisorEffectKind.SPAWN_WORKER in _effect_kinds(decision)
+    trigger = decision.first_lifecycle_trigger()
+    assert trigger is not None
+    assert trigger.kind == TriggerKind.RECONCILE_WORKER_DEAD
+    assert "exit_kind=external_signal" in (trigger.error_message or "")
+
+
+def test_policy_treats_cooperative_sigterm_as_intentional_stop_not_recoverable() -> (
+    None
+):
+    decision = supervise_flow_recovery(
+        FlowSupervisorObservation(
+            run=_run(status=FlowRunStatus.STOPPING, stop_requested=True),
+            worker=_worker(
+                WorkerHealthStatus.DEAD,
+                pid=123,
+                shutdown_intent=True,
+                signal="SIGTERM",
+                exit_origin="worker_signal",
+                exit_kind="external_signal",
+                exit_code=-15,
+            ),
+            restart=RestartPolicyObservation(enabled=True, attempts=0, max_attempts=2),
+        )
+    )
+
+    assert _intent_kinds(decision) == []
+    assert decision.note == "worker-stopped"
+    assert SupervisorEffectKind.UPDATE_RUN_STATE in _effect_kinds(decision)
+    trigger = decision.first_lifecycle_trigger()
+    assert trigger is not None
+    assert trigger.kind == TriggerKind.RECONCILE_STOPPING_FINALIZE
 
 
 def test_policy_classifies_stale_reaped_worker_active_run() -> None:

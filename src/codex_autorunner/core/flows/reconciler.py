@@ -37,6 +37,7 @@ from .supervisor import (
     RestartPolicyObservation,
     SupervisorEffectKind,
     supervise_reconcile_flow,
+    worker_observation_from_health,
 )
 from .worker_process import (
     FlowWorkerHealth,
@@ -268,13 +269,19 @@ def _restart_backoff_ready(record: FlowRunRecord, backoff_seconds: float) -> boo
 
 
 def _restart_policy_observation(
-    repo_root: Path, record: FlowRunRecord
+    repo_root: Path, record: FlowRunRecord, health: Optional[Any] = None
 ) -> RestartPolicyObservation:
     enabled, max_attempts, backoff_seconds = _load_restart_config(repo_root)
+    recoverable_shutdown = worker_observation_from_health(
+        health
+    ).exit.recoverable_shutdown
     if (
         record.flow_type != "ticket_flow"
-        or record.stop_requested
-        or record.status != FlowRunStatus.RUNNING
+        or (record.stop_requested and not recoverable_shutdown)
+        or (
+            record.status != FlowRunStatus.RUNNING
+            and not (record.status == FlowRunStatus.STOPPING and recoverable_shutdown)
+        )
     ):
         enabled = False
     return RestartPolicyObservation(
@@ -543,7 +550,7 @@ def reconcile_flow_run(
 
             now = now_iso()
             commit_barrier = _commit_barrier_observation(repo_root, record)
-            restart_policy = _restart_policy_observation(repo_root, record)
+            restart_policy = _restart_policy_observation(repo_root, record, health)
             decision = supervise_reconcile_flow(
                 record,
                 health,
@@ -604,6 +611,7 @@ def reconcile_flow_run(
                         failure_reason=f"spawn_failed: {exc}",
                     )
                 else:
+                    store.set_stop_requested(record.id, False)
                     updated = store.update_flow_run_status(
                         run_id=record.id,
                         status=FlowRunStatus.RUNNING,

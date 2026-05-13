@@ -57,6 +57,7 @@ class FlowWorkerHealth:
     crash_path: Optional[Path] = None
     crash_info: Optional[dict[str, Any]] = None
     shutdown_intent: bool = False
+    signal: Optional[str] = None
     exit_origin: Optional[str] = None
     exit_kind: Optional[str] = None
     reap_reason: Optional[str] = None
@@ -142,6 +143,7 @@ def write_worker_exit_info(
     *,
     returncode: Optional[int],
     shutdown_intent: bool = False,
+    signal: Optional[str] = None,
     exit_origin: Optional[str] = None,
     exit_kind: Optional[str] = None,
     reap_reason: Optional[str] = None,
@@ -153,10 +155,9 @@ def write_worker_exit_info(
     Parameters
     ----------
     shutdown_intent : bool
-        When True, indicates the worker received a signal (SIGTERM/SIGINT) and
-        intended to shut down gracefully. This is used by the transition logic
-        to distinguish between unexpected worker death (FAILED) and intentional
-        shutdown (STOPPED).
+        When True, indicates the worker intentionally started shutdown cleanup.
+        Transition policy also considers exit provenance fields; a raw signal or
+        watchdog shutdown can still be classified as recoverable worker loss.
     """
     import time
 
@@ -195,6 +196,8 @@ def write_worker_exit_info(
         data["exit_origin"] = exit_origin
     if exit_kind:
         data["exit_kind"] = exit_kind
+    if signal:
+        data["signal"] = signal
     if reap_reason:
         data["reap_reason"] = reap_reason
     try:
@@ -568,6 +571,7 @@ def check_worker_health(
         shutdown_intent = False
         exit_origin = None
         exit_kind = None
+        signal = None
         reap_reason = None
         crash_path = _worker_crash_path(artifacts_dir)
         if exit_path.exists():
@@ -592,6 +596,9 @@ def check_worker_health(
                         raw_kind = exit_data.get("exit_kind")
                         if isinstance(raw_kind, str) and raw_kind.strip():
                             exit_kind = raw_kind.strip()
+                        raw_signal = exit_data.get("signal")
+                        if isinstance(raw_signal, str) and raw_signal.strip():
+                            signal = raw_signal.strip()
                         raw_reap_reason = exit_data.get("reap_reason")
                         if isinstance(raw_reap_reason, str) and raw_reap_reason.strip():
                             reap_reason = raw_reap_reason.strip()
@@ -625,6 +632,7 @@ def check_worker_health(
             crash_path=crash_path if crash_path.exists() else None,
             crash_info=crash_info if isinstance(crash_info, dict) else None,
             shutdown_intent=shutdown_intent,
+            signal=signal,
             exit_origin=exit_origin,
             exit_kind=exit_kind,
             reap_reason=reap_reason,

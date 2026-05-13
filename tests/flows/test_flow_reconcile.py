@@ -478,3 +478,68 @@ def test_user_stop_requested_dead_worker_is_not_auto_restarted(
     assert updated is True
     assert locked is False
     assert spawned == []
+
+
+def test_signal_stopped_worker_is_auto_restarted(monkeypatch, tmp_path: Path) -> None:
+    db = tmp_path / "flows.db"
+    store = FlowStore(db)
+    store.initialize()
+    run_id = str(uuid.uuid4())
+    record = store.create_flow_run(
+        run_id=run_id,
+        flow_type="ticket_flow",
+        input_data={},
+        state={"ticket_engine": {"status": "running"}},
+        current_step="ticket_turn",
+    )
+    store.update_flow_run_status(
+        run_id=record.id,
+        status=FlowRunStatus.STOPPING,
+        state=record.state,
+    )
+    store.set_stop_requested(record.id, True)
+    artifact_dir = tmp_path / ".codex-autorunner" / "flows" / run_id
+    artifact_dir.mkdir(parents=True)
+    monkeypatch.setattr(
+        "codex_autorunner.core.flows.reconciler.check_worker_health",
+        lambda repo_root, run_id: SimpleNamespace(
+            is_alive=False,
+            status="dead",
+            pid=12345,
+            message="worker PID not running",
+            artifact_path=artifact_dir / "worker.json",
+            shutdown_intent=False,
+            signal="SIGTERM",
+            exit_origin="worker_signal",
+            exit_kind="external_signal",
+            exit_code=-15,
+        ),
+    )
+    spawned: list[str] = []
+
+    def fake_spawn(repo_root: Path, run_id: str):
+        spawned.append(run_id)
+        return (
+            SimpleNamespace(pid=999),
+            SimpleNamespace(close=lambda: None),
+            SimpleNamespace(close=lambda: None),
+        )
+
+    monkeypatch.setattr(
+        "codex_autorunner.core.flows.reconciler.spawn_flow_worker",
+        fake_spawn,
+    )
+
+    current_record = store.get_flow_run(record.id)
+    assert current_record is not None
+    recovered, updated, locked = reconcile_flow_run(tmp_path, current_record, store)
+
+    assert recovered.status == FlowRunStatus.RUNNING
+    assert recovered.stop_requested is False
+    assert recovered.error_message is None
+    assert updated is True
+    assert locked is False
+    assert spawned == [run_id]
+    restart = recovered.state["recovery"]["restart"]
+    assert restart["count"] == 1
+    assert restart["last_reason"] == "recoverable-worker-shutdown"
