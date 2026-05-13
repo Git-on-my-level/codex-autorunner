@@ -24,6 +24,7 @@ import {
   mergePmaActivityEvents,
   mergePmaTimelineAndActivityCards,
   mapChatSurfaceSnapshotToPmaChats,
+  mapChatSurfaceEventToPmaChatSummary,
   modelReasoningOptions,
   modelSelectorState,
   optimisticUserTimelineItemFromSend,
@@ -315,6 +316,19 @@ describe('PMA chat view helpers', () => {
           display: { display_name: 'Stale bound thread' }
         },
         {
+          surface_kind: 'discord',
+          surface_key: 'channel-2',
+          managed_thread_id: 'missing-facts-thread',
+          display: { display_name: 'Missing facts thread' }
+        },
+        {
+          surface_kind: 'discord',
+          surface_key: 'channel-3',
+          managed_thread_id: 'non-array-facts-thread',
+          facts: 'managed_thread',
+          display: { display_name: 'Non-array facts thread' }
+        },
+        {
           surface_kind: 'pma',
           surface_key: 'live-thread',
           managed_thread_id: 'live-thread',
@@ -454,6 +468,30 @@ describe('PMA chat view helpers', () => {
         updatedAt: '2026-05-04T01:00:00Z'
       }
     ]);
+  });
+
+  it('maps chat surface events as managed-thread projections', () => {
+    const chat = mapChatSurfaceEventToPmaChatSummary({
+      event_type: 'queue.state_changed',
+      surface: { surface_kind: 'discord', surface_key: 'channel-1' },
+      managed_thread_id: 'thread-1',
+      lifecycle: 'queued',
+      lifecycle_status: 'active',
+      status: 'queued',
+      occurred_at: '2026-05-04T01:00:00Z',
+      details: { channel: { display: 'Discord Ops' } }
+    });
+
+    expect(chat).toMatchObject({
+      id: 'thread-1',
+      title: 'Discord Ops',
+      status: 'waiting',
+      raw: {
+        facts: ['managed_thread'],
+        surface_kind: 'discord',
+        surface_key: 'channel-1'
+      }
+    });
   });
 
   it('filters chats by messenger surface slug', () => {
