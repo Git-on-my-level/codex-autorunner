@@ -55,6 +55,29 @@ def test_reduce_turn_output_rejects_exact_prior_output_as_stale() -> None:
     assert envelope.provenance["candidate_source"] == "prior_guard"
 
 
+def test_turn_output_evidence_does_not_include_matched_prior_text() -> None:
+    state = RuntimeThreadRunEventState()
+    prior_text = "first answer"
+
+    envelope = reduce_turn_output(
+        managed_thread_id="thread-1",
+        managed_turn_id="turn-2",
+        backend_thread_id="session-1",
+        backend_turn_id="turn-2",
+        outcome=_outcome(prior_text),
+        event_state=state,
+        prior_assistant_texts=[prior_text],
+    )
+
+    assert envelope.matched_prior_text == prior_text
+    assert envelope.evidence["turn_output_prior_chars"] == len(prior_text)
+    assert envelope.evidence["turn_output_provenance"]["candidate_source"] == (
+        "prior_guard"
+    )
+    assert "matched_prior_text" not in envelope.evidence["turn_output_provenance"]
+    assert prior_text not in str(envelope.evidence)
+
+
 def test_reduce_turn_output_uses_stream_text_when_terminal_text_is_stale() -> None:
     state = RuntimeThreadRunEventState()
     state.note_stream_text("second answer")
