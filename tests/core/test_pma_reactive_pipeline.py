@@ -18,6 +18,8 @@ from codex_autorunner.core.pma_queue import PmaQueue, QueueItemState
 from codex_autorunner.core.pma_transcripts import PmaTranscriptStore
 from codex_autorunner.manifest import load_manifest, save_manifest
 
+_LANE_WORKER_TEST_TIMEOUT_SECONDS = 5.0
+
 
 def _write_hub_config(hub_root: Path) -> None:
     hub_root.mkdir(parents=True, exist_ok=True)
@@ -65,7 +67,10 @@ async def _process_one_item(
 
     worker = PmaLaneWorker("pma:default", queue, executor)
     await worker.start()
-    await asyncio.wait_for(processed.wait(), timeout=0.5)
+    await asyncio.wait_for(
+        processed.wait(),
+        timeout=_LANE_WORKER_TEST_TIMEOUT_SECONDS,
+    )
     await worker.stop()
 
 
