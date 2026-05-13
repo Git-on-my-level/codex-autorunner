@@ -7,6 +7,9 @@ from types import SimpleNamespace
 import pytest
 
 from codex_autorunner.core import ticket_flow_operator as operator_module
+from codex_autorunner.core.flows import (
+    ticket_flow_stale_alive as ticket_flow_stale_alive_module,
+)
 from codex_autorunner.core.flows.models import FlowRunStatus
 from codex_autorunner.core.flows.store import FlowStore
 from codex_autorunner.core.flows.worker_process import FlowActiveTool, FlowWorkerHealth
@@ -176,8 +179,8 @@ def test_build_ticket_flow_run_state_marks_live_stale_alive_as_attention(
             operator_module, "now_iso", lambda: "2026-03-11T01:00:01+00:00"
         )
         monkeypatch.setattr(
-            operator_module,
-            "_ticket_flow_stale_alive_threshold_seconds",
+            ticket_flow_stale_alive_module,
+            "ticket_flow_stale_alive_threshold_seconds",
             lambda _repo_root: 1800,
         )
 
@@ -241,8 +244,8 @@ def test_build_ticket_flow_run_state_keeps_active_tool_running(
             operator_module, "now_iso", lambda: "2026-03-11T02:00:01+00:00"
         )
         monkeypatch.setattr(
-            operator_module,
-            "_ticket_flow_stale_alive_threshold_seconds",
+            ticket_flow_stale_alive_module,
+            "ticket_flow_stale_alive_threshold_seconds",
             lambda _repo_root: 1800,
         )
 

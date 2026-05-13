@@ -5,7 +5,6 @@ import logging
 import shlex
 import subprocess
 from dataclasses import dataclass, field
-from datetime import timezone
 from pathlib import Path
 from typing import Any, Literal, Mapping, Optional, Sequence, TypedDict
 
@@ -22,10 +21,10 @@ from .flows.models import (
     FlowRunRecord,
     FlowRunStatus,
     flow_run_duration_seconds,
-    parse_flow_timestamp,
 )
 from .flows.start_policy import evaluate_ticket_start_policy
 from .flows.store import FlowStore, now_iso
+from .flows.ticket_flow_stale_alive import ticket_flow_annotate_stale_alive_health
 from .flows.worker_process import (
     check_worker_health,
     clear_worker_metadata,
@@ -51,7 +50,6 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_MAX_TEXT_CHARS = 800
 _CODEX_VERSION_TIMEOUT_SECONDS = 5.0
-_DEFAULT_STALE_ALIVE_THRESHOLD_SECONDS = 30 * 60
 TicketFlowRunSelection = Literal["active", "authoritative", "non_terminal", "paused"]
 
 
@@ -1305,78 +1303,6 @@ def _effective_freshness(
     )
 
 
-def _ticket_flow_stale_alive_threshold_seconds(repo_root: Path) -> int:
-    try:
-        ticket_flow = load_repo_config(repo_root).ticket_flow
-    except ConfigError:
-        return _DEFAULT_STALE_ALIVE_THRESHOLD_SECONDS
-    try:
-        raw_value: Any = getattr(ticket_flow, "stale_alive_threshold_seconds", None)
-        value = int(raw_value)
-    except (TypeError, ValueError):
-        return _DEFAULT_STALE_ALIVE_THRESHOLD_SECONDS
-    return value if value > 0 else _DEFAULT_STALE_ALIVE_THRESHOLD_SECONDS
-
-
-def _latest_status_semantic_progress_at(
-    record: FlowRunRecord,
-    *,
-    last_event_at: Optional[str],
-) -> Optional[str]:
-    parsed = [
-        parse_flow_timestamp(candidate)
-        for candidate in (
-            last_event_at,
-            record.started_at,
-            record.created_at,
-            record.finished_at,
-        )
-        if isinstance(candidate, str) and candidate.strip()
-    ]
-    normalized = [dt.astimezone(timezone.utc) for dt in parsed if dt is not None]
-    if not normalized:
-        return None
-    return max(normalized).isoformat()
-
-
-def _annotate_status_stale_alive_health(
-    repo_root: Path,
-    record: FlowRunRecord,
-    health: Any,
-    *,
-    last_event_at: Optional[str],
-) -> Any:
-    if (
-        record.flow_type != "ticket_flow"
-        or record.status != FlowRunStatus.RUNNING
-        or getattr(health, "status", None) != "alive"
-        or getattr(health, "active_tool", None) is not None
-    ):
-        return health
-    last_progress_at = _latest_status_semantic_progress_at(
-        record,
-        last_event_at=last_event_at,
-    )
-    last_progress_dt = parse_flow_timestamp(last_progress_at)
-    now_dt = parse_flow_timestamp(now_iso())
-    if last_progress_dt is None or now_dt is None:
-        return health
-    age_seconds = int(max(0.0, (now_dt - last_progress_dt).total_seconds()))
-    threshold_seconds = _ticket_flow_stale_alive_threshold_seconds(repo_root)
-    if age_seconds <= threshold_seconds:
-        return health
-
-    health.status = "stale_alive"
-    health.message = "worker alive but no active tool and semantic progress is stale"
-    health.last_semantic_progress_at = last_progress_at
-    health.last_tool_activity_at = None
-    health.current_phase = record.current_step
-    health.stale_reason = "semantic_progress_stale_without_active_tool"
-    health.stale_threshold_seconds = threshold_seconds
-    health.semantic_stale_age_seconds = age_seconds
-    return health
-
-
 def build_ticket_flow_status_snapshot(
     repo_root: Path,
     record: FlowRunRecord,
@@ -1427,11 +1353,12 @@ def build_ticket_flow_status_snapshot(
             last_event_seq, last_event_at = None, None
 
     health = check_worker_health(repo_root, record.id)
-    health = _annotate_status_stale_alive_health(
+    health = ticket_flow_annotate_stale_alive_health(
         repo_root,
         record,
         health,
         last_event_at=last_event_at,
+        now=now_iso(),
     )
     run_state = _build_status_run_state(repo_root, record, store)
     canonical_state = _canonical_flow_status_state(repo_root, record, store)
@@ -1599,11 +1526,12 @@ def build_ticket_flow_run_state(
     ):
         try:
             health = check_worker_health(repo_root, run_id)
-            health = _annotate_status_stale_alive_health(
+            health = ticket_flow_annotate_stale_alive_health(
                 repo_root,
                 record,
                 health,
                 last_event_at=last_event_at,
+                now=now_iso(),
             )
             dead_worker = health.status in {"dead", "invalid", "mismatch"}
         except (OSError, ValueError) as exc:
@@ -1647,7 +1575,7 @@ def build_ticket_flow_run_state(
             if active_tool is not None and hasattr(active_tool, "to_dict")
             else None
         )
-        if not stale_alive and getattr(health, "status", None) == "stale_alive":
+        if getattr(health, "status", None) == "stale_alive":
             stale_alive = {
                 "last_semantic_progress_at": getattr(
                     health, "last_semantic_progress_at", None
@@ -1662,6 +1590,8 @@ def build_ticket_flow_run_state(
                     health, "semantic_stale_age_seconds", None
                 ),
             }
+        elif not (isinstance(restart_status, dict) and restart_status.get("exhausted")):
+            stale_alive = None
     recovery_state = _derive_recovery_state(
         record_status=record.status,
         dead_worker=dead_worker,

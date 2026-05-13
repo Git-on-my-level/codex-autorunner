@@ -562,8 +562,8 @@ def test_alive_worker_with_active_tool_is_not_stale_alive(
     store.update_flow_run_status(run_id=record.id, status=FlowRunStatus.RUNNING)
 
     monkeypatch.setattr(
-        "codex_autorunner.core.flows.reconciler._latest_semantic_progress_at",
-        lambda _record, _store: "2026-05-12T00:00:00+00:00",
+        "codex_autorunner.core.flows.ticket_flow_stale_alive.ticket_flow_latest_semantic_progress_at",
+        lambda _record, *, last_event_at=None: "2026-05-12T00:00:00+00:00",
     )
     monkeypatch.setattr(
         "codex_autorunner.core.flows.reconciler.now_iso",
@@ -615,8 +615,8 @@ def test_stale_alive_worker_restarts_same_running_ticket_flow_run(
     artifact_dir.mkdir(parents=True)
 
     monkeypatch.setattr(
-        "codex_autorunner.core.flows.reconciler._latest_semantic_progress_at",
-        lambda _record, _store: "2026-05-12T00:00:00+00:00",
+        "codex_autorunner.core.flows.ticket_flow_stale_alive.ticket_flow_latest_semantic_progress_at",
+        lambda _record, *, last_event_at=None: "2026-05-12T00:00:00+00:00",
     )
     monkeypatch.setattr(
         "codex_autorunner.core.flows.reconciler.now_iso",
@@ -687,8 +687,8 @@ def test_stale_alive_worker_restart_exhaustion_fails_run(
     )
 
     monkeypatch.setattr(
-        "codex_autorunner.core.flows.reconciler._latest_semantic_progress_at",
-        lambda _record, _store: "2026-05-12T00:00:00+00:00",
+        "codex_autorunner.core.flows.ticket_flow_stale_alive.ticket_flow_latest_semantic_progress_at",
+        lambda _record, *, last_event_at=None: "2026-05-12T00:00:00+00:00",
     )
     monkeypatch.setattr(
         "codex_autorunner.core.flows.reconciler.now_iso",
