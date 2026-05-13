@@ -5,7 +5,6 @@ import sqlite3
 import subprocess
 import uuid
 from dataclasses import dataclass
-from datetime import timezone
 from pathlib import Path
 from typing import Any, Optional
 
@@ -32,6 +31,12 @@ from .lifecycle_reducer import (
     reduce_flow_lifecycle,
 )
 from .models import FlowEventType, FlowRunRecord, FlowRunStatus, parse_flow_timestamp
+from .stale_alive import (
+    DEFAULT_STALE_ALIVE_THRESHOLD_SECONDS,
+    STALE_ALIVE_REASON,
+    annotate_stale_alive_health,
+    stale_alive_recovery_payload,
+)
 from .store import UNSET, FlowStore, now_iso
 from .supervisor import (
     CommitBarrierObservation,
@@ -46,6 +51,7 @@ from .worker_process import (
     clear_worker_metadata,
     read_worker_crash_info,
     spawn_flow_worker,
+    terminate_flow_worker_pid,
     write_worker_crash_info,
 )
 from .workspace_root import resolve_ticket_flow_workspace_root
@@ -58,8 +64,6 @@ _ACTIVE_STATUSES = (
     FlowRunStatus.STOPPING,
     FlowRunStatus.PAUSED,
 )
-_DEFAULT_STALE_ALIVE_THRESHOLD_SECONDS = 30 * 60
-
 _mtime_cache: dict[Path, tuple[float, int, int, int]] = {}
 
 
@@ -117,7 +121,7 @@ def _reconcile_lock_path(repo_root: Path, run_id: str) -> Path:
 
 
 def _ensure_worker_not_stale(health: FlowWorkerHealth) -> None:
-    if health.status in {"dead", "mismatch", "invalid", "stale_alive"}:
+    if health.status in {"dead", "mismatch", "invalid"}:
         try:
             clear_worker_metadata(health.artifact_path.parent)
         except (OSError, RuntimeError):
@@ -261,36 +265,25 @@ def _load_stale_alive_threshold_seconds(repo_root: Path) -> int:
     try:
         ticket_flow = load_repo_config(repo_root).ticket_flow
     except ConfigError:
-        return _DEFAULT_STALE_ALIVE_THRESHOLD_SECONDS
+        return DEFAULT_STALE_ALIVE_THRESHOLD_SECONDS
     try:
         raw_value: Any = getattr(ticket_flow, "stale_alive_threshold_seconds", None)
         value = int(raw_value)
     except (TypeError, ValueError):
-        return _DEFAULT_STALE_ALIVE_THRESHOLD_SECONDS
-    return value if value > 0 else _DEFAULT_STALE_ALIVE_THRESHOLD_SECONDS
+        return DEFAULT_STALE_ALIVE_THRESHOLD_SECONDS
+    return value if value > 0 else DEFAULT_STALE_ALIVE_THRESHOLD_SECONDS
 
 
 def _latest_semantic_progress_at(
     record: FlowRunRecord, store: FlowStore
 ) -> Optional[str]:
-    candidates: list[str] = []
     try:
         _seq, last_event_at = store.get_last_event_meta(record.id)
     except (sqlite3.Error, ValueError, TypeError, RuntimeError, AttributeError):
         last_event_at = None
-    for candidate in (
-        last_event_at,
-        record.started_at,
-        record.created_at,
-        record.finished_at,
-    ):
-        if isinstance(candidate, str) and candidate.strip():
-            candidates.append(candidate.strip())
-    parsed = [parse_flow_timestamp(candidate) for candidate in candidates]
-    normalized = [dt.astimezone(timezone.utc) for dt in parsed if dt is not None]
-    if not normalized:
-        return None
-    return max(normalized).isoformat()
+    from .stale_alive import latest_semantic_progress_at
+
+    return latest_semantic_progress_at(record, last_event_at=last_event_at)
 
 
 def _annotate_stale_alive_health(
@@ -309,24 +302,15 @@ def _annotate_stale_alive_health(
     ):
         return health
     last_progress_at = _latest_semantic_progress_at(record, store)
-    last_progress_dt = parse_flow_timestamp(last_progress_at)
-    now_dt = parse_flow_timestamp(now)
-    if last_progress_dt is None or now_dt is None:
-        return health
-    age_seconds = int(max(0.0, (now_dt - last_progress_dt).total_seconds()))
-    threshold_seconds = _load_stale_alive_threshold_seconds(repo_root)
-    if age_seconds <= threshold_seconds:
-        return health
-
-    health.status = "stale_alive"
-    health.message = "worker alive but no active tool and semantic progress is stale"
-    health.last_semantic_progress_at = last_progress_at
-    health.last_tool_activity_at = None
-    health.current_phase = record.current_step
-    health.stale_reason = "semantic_progress_stale_without_active_tool"
-    health.stale_threshold_seconds = threshold_seconds
-    health.semantic_stale_age_seconds = age_seconds
-    return health
+    return annotate_stale_alive_health(
+        repo_root,
+        record,
+        health,
+        last_event_at=None,
+        last_semantic_progress_at=last_progress_at,
+        threshold_seconds=_load_stale_alive_threshold_seconds(repo_root),
+        now=now,
+    )
 
 
 def _restart_backoff_ready(record: FlowRunRecord, backoff_seconds: float) -> bool:
@@ -373,6 +357,7 @@ def _with_restart_attempt(
     reason: str,
     failure_reason: Optional[str] = None,
     health: Optional[Any] = None,
+    persist_stale_alive: bool = False,
 ) -> dict[str, Any]:
     updated = dict(state)
     recovery = updated.get("recovery")
@@ -393,8 +378,14 @@ def _with_restart_attempt(
         }
     )
     recovery["restart"] = restart
-    if health is not None and getattr(health, "status", None) == "stale_alive":
-        recovery["stale_alive"] = _stale_alive_recovery_payload(health)
+    if (
+        persist_stale_alive
+        and health is not None
+        and getattr(health, "status", None) == "stale_alive"
+    ):
+        recovery["stale_alive"] = stale_alive_recovery_payload(health)
+    else:
+        recovery.pop("stale_alive", None)
     updated["recovery"] = recovery
     return updated
 
@@ -417,23 +408,9 @@ def _with_restart_exhausted(
     restart["exhausted"] = True
     recovery["restart"] = restart
     if health is not None and getattr(health, "status", None) == "stale_alive":
-        recovery["stale_alive"] = _stale_alive_recovery_payload(health)
+        recovery["stale_alive"] = stale_alive_recovery_payload(health)
     updated["recovery"] = recovery
     return updated
-
-
-def _stale_alive_recovery_payload(health: Any) -> dict[str, Any]:
-    return {
-        "reason": getattr(health, "stale_reason", None),
-        "last_semantic_progress_at": getattr(health, "last_semantic_progress_at", None),
-        "last_tool_activity_at": getattr(health, "last_tool_activity_at", None),
-        "current_phase": getattr(health, "current_phase", None),
-        "stale_threshold_seconds": getattr(health, "stale_threshold_seconds", None),
-        "semantic_stale_age_seconds": getattr(
-            health, "semantic_stale_age_seconds", None
-        ),
-        "worker_pid": getattr(health, "pid", None),
-    }
 
 
 def _ensure_worker_crash_artifact(
@@ -544,7 +521,7 @@ def _crash_dispatch_body(
 ) -> str:
     stale_alive = (
         isinstance(crash_info, dict)
-        and crash_info.get("exception") == "semantic_progress_stale_without_active_tool"
+        and crash_info.get("exception") == STALE_ALIVE_REASON
     )
     lines = [
         (
@@ -609,7 +586,7 @@ def _ensure_crash_dispatch(
 
     stale_alive = (
         isinstance(crash_info, dict)
-        and crash_info.get("exception") == "semantic_progress_stale_without_active_tool"
+        and crash_info.get("exception") == STALE_ALIVE_REASON
     )
     title = "Worker stale-alive stall" if stale_alive else "Worker crashed"
     dispatch_frontmatter = f"---\nmode: pause\ntitle: {title}\n---\n\n"
@@ -710,6 +687,18 @@ def reconcile_flow_run(
                     health=health,
                 )
                 try:
+                    if health.status == "stale_alive":
+                        stopped = terminate_flow_worker_pid(
+                            repo_root,
+                            record.id,
+                            pid=getattr(health, "pid", None),
+                            reason=getattr(health, "stale_reason", None)
+                            or STALE_ALIVE_REASON,
+                        )
+                        if not stopped:
+                            raise RuntimeError(
+                                "stale-alive worker still running after termination"
+                            )
                     clear_worker_metadata(health.artifact_path.parent)
                     proc, stdout_handle, stderr_handle = spawn_flow_worker(
                         repo_root, record.id
@@ -731,6 +720,7 @@ def reconcile_flow_run(
                         reason=decision.note,
                         failure_reason=f"spawn_failed: {exc}",
                         health=health,
+                        persist_stale_alive=True,
                     )
                 else:
                     store.set_stop_requested(record.id, False)

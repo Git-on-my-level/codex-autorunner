@@ -261,6 +261,69 @@ def test_build_ticket_flow_run_state_keeps_active_tool_running(
     assert run_state["last_tool_activity_at"] == "2026-03-11T01:00:00+00:00"
 
 
+def test_build_ticket_flow_run_state_prefers_restarted_after_stale_alive_restart(
+    tmp_path: Path, monkeypatch
+) -> None:
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir(parents=True, exist_ok=True)
+    db_path = repo_root / ".codex-autorunner" / "flows.db"
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    run_id = "33333333-2222-3333-4444-555555555555"
+
+    with FlowStore(db_path) as store:
+        store.initialize()
+        store.create_flow_run(
+            run_id,
+            "ticket_flow",
+            input_data={"workspace_root": str(repo_root)},
+            state={
+                "recovery": {
+                    "restart": {"count": 1, "max_attempts": 2, "exhausted": False},
+                    "stale_alive": {
+                        "reason": "semantic_progress_stale_without_active_tool",
+                        "last_semantic_progress_at": "2026-03-11T00:00:00+00:00",
+                    },
+                }
+            },
+            metadata={},
+        )
+        store.update_flow_run_status(run_id, FlowRunStatus.RUNNING)
+        record = store.get_flow_run(run_id)
+        assert record is not None
+
+        health = FlowWorkerHealth(
+            status="alive",
+            pid=4242,
+            cmdline=["car", "flow", "worker"],
+            artifact_path=repo_root / ".codex-autorunner" / "flows" / run_id,
+            active_tool=FlowActiveTool(
+                pid=4343,
+                ppid=4242,
+                pgid=4242,
+                command=".venv/bin/python -m pytest -q",
+                elapsed_seconds=245,
+                last_activity_at="2026-03-11T01:00:00+00:00",
+                output_updated_at="2026-03-11T01:00:00+00:00",
+            ),
+        )
+        monkeypatch.setattr(
+            operator_module, "check_worker_health", lambda *_args, **_kwargs: health
+        )
+
+        run_state = build_ticket_flow_run_state(
+            repo_root=repo_root,
+            repo_id="repo",
+            record=record,
+            store=store,
+            has_pending_dispatch=False,
+        )
+
+    assert run_state["state"] == "running"
+    assert run_state["recovery_state"] == "restarted"
+    assert run_state["attention_required"] is False
+    assert run_state["worker_status"] == "alive"
+
+
 def test_ticket_flow_operator_latest_dispatch_prefers_handoff_and_turn_summary(
     tmp_path: Path,
 ) -> None:

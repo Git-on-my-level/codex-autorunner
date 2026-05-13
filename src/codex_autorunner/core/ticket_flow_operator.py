@@ -5,7 +5,6 @@ import logging
 import shlex
 import subprocess
 from dataclasses import dataclass, field
-from datetime import timezone
 from pathlib import Path
 from typing import Any, Literal, Mapping, Optional, Sequence, TypedDict
 
@@ -22,7 +21,10 @@ from .flows.models import (
     FlowRunRecord,
     FlowRunStatus,
     flow_run_duration_seconds,
-    parse_flow_timestamp,
+)
+from .flows.stale_alive import (
+    DEFAULT_STALE_ALIVE_THRESHOLD_SECONDS,
+    annotate_stale_alive_health,
 )
 from .flows.start_policy import evaluate_ticket_start_policy
 from .flows.store import FlowStore, now_iso
@@ -51,7 +53,6 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_MAX_TEXT_CHARS = 800
 _CODEX_VERSION_TIMEOUT_SECONDS = 5.0
-_DEFAULT_STALE_ALIVE_THRESHOLD_SECONDS = 30 * 60
 TicketFlowRunSelection = Literal["active", "authoritative", "non_terminal", "paused"]
 
 
@@ -1190,12 +1191,13 @@ def _derive_recovery_state(
     restart_status: Optional[dict[str, Any]],
     commit_barrier: Optional[dict[str, Any]],
     stale_alive: Optional[dict[str, Any]] = None,
+    stale_alive_is_live: bool = False,
 ) -> Optional[str]:
     if isinstance(commit_barrier, dict) and commit_barrier.get("pending"):
         return "commit_barrier_pending"
     if isinstance(restart_status, dict) and restart_status.get("exhausted"):
         return "restart_exhausted"
-    if isinstance(stale_alive, dict) and stale_alive:
+    if stale_alive_is_live and isinstance(stale_alive, dict) and stale_alive:
         return "stale_alive"
     restart_count = 0
     if isinstance(restart_status, dict):
@@ -1206,6 +1208,8 @@ def _derive_recovery_state(
             restart_count = raw_restart_count
     if restart_count > 0 and record_status == FlowRunStatus.RUNNING:
         return "restarted"
+    if isinstance(stale_alive, dict) and stale_alive:
+        return "stale_alive"
     if dead_worker and record_status in {
         FlowRunStatus.RUNNING,
         FlowRunStatus.STOPPING,
@@ -1309,34 +1313,13 @@ def _ticket_flow_stale_alive_threshold_seconds(repo_root: Path) -> int:
     try:
         ticket_flow = load_repo_config(repo_root).ticket_flow
     except ConfigError:
-        return _DEFAULT_STALE_ALIVE_THRESHOLD_SECONDS
+        return DEFAULT_STALE_ALIVE_THRESHOLD_SECONDS
     try:
         raw_value: Any = getattr(ticket_flow, "stale_alive_threshold_seconds", None)
         value = int(raw_value)
     except (TypeError, ValueError):
-        return _DEFAULT_STALE_ALIVE_THRESHOLD_SECONDS
-    return value if value > 0 else _DEFAULT_STALE_ALIVE_THRESHOLD_SECONDS
-
-
-def _latest_status_semantic_progress_at(
-    record: FlowRunRecord,
-    *,
-    last_event_at: Optional[str],
-) -> Optional[str]:
-    parsed = [
-        parse_flow_timestamp(candidate)
-        for candidate in (
-            last_event_at,
-            record.started_at,
-            record.created_at,
-            record.finished_at,
-        )
-        if isinstance(candidate, str) and candidate.strip()
-    ]
-    normalized = [dt.astimezone(timezone.utc) for dt in parsed if dt is not None]
-    if not normalized:
-        return None
-    return max(normalized).isoformat()
+        return DEFAULT_STALE_ALIVE_THRESHOLD_SECONDS
+    return value if value > 0 else DEFAULT_STALE_ALIVE_THRESHOLD_SECONDS
 
 
 def _annotate_status_stale_alive_health(
@@ -1353,28 +1336,14 @@ def _annotate_status_stale_alive_health(
         or getattr(health, "active_tool", None) is not None
     ):
         return health
-    last_progress_at = _latest_status_semantic_progress_at(
+    return annotate_stale_alive_health(
+        repo_root,
         record,
+        health,
         last_event_at=last_event_at,
+        threshold_seconds=_ticket_flow_stale_alive_threshold_seconds(repo_root),
+        now=now_iso(),
     )
-    last_progress_dt = parse_flow_timestamp(last_progress_at)
-    now_dt = parse_flow_timestamp(now_iso())
-    if last_progress_dt is None or now_dt is None:
-        return health
-    age_seconds = int(max(0.0, (now_dt - last_progress_dt).total_seconds()))
-    threshold_seconds = _ticket_flow_stale_alive_threshold_seconds(repo_root)
-    if age_seconds <= threshold_seconds:
-        return health
-
-    health.status = "stale_alive"
-    health.message = "worker alive but no active tool and semantic progress is stale"
-    health.last_semantic_progress_at = last_progress_at
-    health.last_tool_activity_at = None
-    health.current_phase = record.current_step
-    health.stale_reason = "semantic_progress_stale_without_active_tool"
-    health.stale_threshold_seconds = threshold_seconds
-    health.semantic_stale_age_seconds = age_seconds
-    return health
 
 
 def build_ticket_flow_status_snapshot(
@@ -1638,7 +1607,8 @@ def build_ticket_flow_run_state(
 
     restart_status = _extract_restart_status(record)
     commit_barrier = _extract_commit_barrier_status(record)
-    stale_alive = _extract_stale_alive_status(record)
+    stale_alive = None
+    stale_alive_is_live = False
     active_tool_payload = None
     if health is not None:
         active_tool = getattr(health, "active_tool", None)
@@ -1647,7 +1617,8 @@ def build_ticket_flow_run_state(
             if active_tool is not None and hasattr(active_tool, "to_dict")
             else None
         )
-        if not stale_alive and getattr(health, "status", None) == "stale_alive":
+        if getattr(health, "status", None) == "stale_alive":
+            stale_alive_is_live = True
             stale_alive = {
                 "last_semantic_progress_at": getattr(
                     health, "last_semantic_progress_at", None
@@ -1662,12 +1633,15 @@ def build_ticket_flow_run_state(
                     health, "semantic_stale_age_seconds", None
                 ),
             }
+    if stale_alive is None:
+        stale_alive = _extract_stale_alive_status(record)
     recovery_state = _derive_recovery_state(
         record_status=record.status,
         dead_worker=dead_worker,
         restart_status=restart_status,
         commit_barrier=commit_barrier,
         stale_alive=stale_alive,
+        stale_alive_is_live=stale_alive_is_live,
     )
     crash_reason, reap_reason = _normalize_crash_reason(
         crash_info,
@@ -1703,7 +1677,11 @@ def build_ticket_flow_run_state(
         worker_status = "exited_expected"
     elif dead_worker:
         worker_status = "dead_unexpected"
-    elif isinstance(stale_alive, dict) and stale_alive:
+    elif (
+        (stale_alive_is_live or recovery_state == "restart_exhausted")
+        and isinstance(stale_alive, dict)
+        and stale_alive
+    ):
         worker_status = "stale_alive"
     elif health is not None and health.is_alive:
         worker_status = "alive"
