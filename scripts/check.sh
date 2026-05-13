@@ -176,37 +176,39 @@ if [[ "$RUN_WEB_UI" == true && -n "$STAGED_FILES" ]]; then
 fi
 
 # --- Always-on guardrails (non-negotiable safety checks) ---------------------
-echo "Checking staged .codex-autorunner paths..."
-"$PYTHON_BIN" scripts/check_no_codex_autorunner_staged.py
+_run_guardrails() {
+  echo "Checking staged .codex-autorunner paths..."
+  "$PYTHON_BIN" scripts/check_no_codex_autorunner_staged.py
 
-paths=(src)
-if [ -d tests ]; then
-  paths+=(tests)
-fi
+  paths=(src)
+  if [ -d tests ]; then
+    paths+=(tests)
+  fi
 
-echo "Formatting check (black)..."
-"$PYTHON_BIN" -m black --check "${paths[@]}"
+  echo "Formatting check (black)..."
+  "$PYTHON_BIN" -m black --check "${paths[@]}"
 
-echo "Linting Python (ruff)..."
-"$PYTHON_BIN" -m ruff check "${paths[@]}"
+  echo "Linting Python (ruff)..."
+  "$PYTHON_BIN" -m ruff check "${paths[@]}"
 
-echo "Checking import boundaries..."
-"$PYTHON_BIN" scripts/check_import_boundaries.py
+  echo "Checking import boundaries..."
+  "$PYTHON_BIN" scripts/check_import_boundaries.py
 
-echo "Validating hub interface contracts..."
-"$PYTHON_BIN" scripts/validate_interfaces.py
+  echo "Validating hub interface contracts..."
+  "$PYTHON_BIN" scripts/validate_interfaces.py
 
-echo "Checking core imports (no adapter implementations)..."
-"$PYTHON_BIN" scripts/check_core_imports.py
+  echo "Checking core imports (no adapter implementations)..."
+  "$PYTHON_BIN" scripts/check_core_imports.py
 
-echo "Checking destination contract drift..."
-"$PYTHON_BIN" scripts/check_destination_contract_drift.py
+  echo "Checking destination contract drift..."
+  "$PYTHON_BIN" scripts/check_destination_contract_drift.py
 
-echo "Checking keyword contracts..."
-"$PYTHON_BIN" scripts/check_keyword_contracts.py --report-only
+  echo "Checking keyword contracts..."
+  "$PYTHON_BIN" scripts/check_keyword_contracts.py --report-only
 
-echo "Checking test /tmp hermetic usage..."
-"$PYTHON_BIN" scripts/check_test_tmp_usage.py
+  echo "Checking test /tmp hermetic usage..."
+  "$PYTHON_BIN" scripts/check_test_tmp_usage.py
+}
 
 # --- Lane runner functions ----------------------------------------------------
 
@@ -332,17 +334,26 @@ _run_chat_apps_lane() {
   fi
 }
 
-# --- Lane dispatch: parallel when multiple lanes active -----------------------
+# --- Lane dispatch: guardrails + lanes all in parallel -----------------------
 _ACTIVE_LANE_COUNT=0
 [[ "$RUN_CORE" == true ]] && ((_ACTIVE_LANE_COUNT++))
 [[ "$RUN_WEB_UI" == true ]] && ((_ACTIVE_LANE_COUNT++))
 [[ "$RUN_CHAT_APPS" == true ]] && ((_ACTIVE_LANE_COUNT++))
 
-if [[ "$_ACTIVE_LANE_COUNT" -gt 1 ]]; then
-  echo "Running $_ACTIVE_LANE_COUNT lanes in parallel..."
+_RUN_PARALLEL=false
+if [[ "$_ACTIVE_LANE_COUNT" -ge 1 ]]; then
+  _RUN_PARALLEL=true
+fi
+
+if [[ "$_RUN_PARALLEL" == true ]]; then
+  echo "Running guardrails + $_ACTIVE_LANE_COUNT lane(s) in parallel..."
   _LANE_LOG_DIR="$(mktemp -d)"
   _LANE_PIDS=()
   _LANE_NAMES=()
+
+  _run_guardrails > "$_LANE_LOG_DIR/guardrails.log" 2>&1 &
+  _LANE_PIDS+=($!)
+  _LANE_NAMES+=("guardrails")
 
   if [[ "$RUN_CORE" == true ]]; then
     _run_core_lane > "$_LANE_LOG_DIR/core.log" 2>&1 &
@@ -378,6 +389,7 @@ if [[ "$_ACTIVE_LANE_COUNT" -gt 1 ]]; then
     exit 1
   fi
 else
+  _run_guardrails
   if [[ "$RUN_CORE" == true ]]; then _run_core_lane; fi
   if [[ "$RUN_WEB_UI" == true ]]; then _run_web_ui_lane; fi
   if [[ "$RUN_CHAT_APPS" == true ]]; then _run_chat_apps_lane; fi
