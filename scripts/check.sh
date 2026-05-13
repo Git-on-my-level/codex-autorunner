@@ -208,8 +208,9 @@ echo "Checking keyword contracts..."
 echo "Checking test /tmp hermetic usage..."
 "$PYTHON_BIN" scripts/check_test_tmp_usage.py
 
-# --- Core lane checks --------------------------------------------------------
-if [[ "$RUN_CORE" == true ]]; then
+# --- Lane runner functions ----------------------------------------------------
+
+_run_core_lane() {
   echo "Linting injected context hints..."
   "$PYTHON_BIN" scripts/check_injected_context.py
 
@@ -287,10 +288,9 @@ if [[ "$RUN_CORE" == true ]]; then
   else
     echo "Skipping dead-code check locally; set CODEX_LOCAL_CHECK_INCLUDE_DEADCODE=1 to enable."
   fi
-fi
+}
 
-# --- Web-UI lane checks ------------------------------------------------------
-if [[ "$RUN_WEB_UI" == true ]]; then
+_run_web_ui_lane() {
   need_cmd node
   need_cmd pnpm
 
@@ -320,10 +320,9 @@ if [[ "$RUN_WEB_UI" == true ]]; then
       exit 1
     fi
   fi
-fi
+}
 
-# --- Chat-apps lane checks ---------------------------------------------------
-if [[ "$RUN_CHAT_APPS" == true ]]; then
+_run_chat_apps_lane() {
   if [[ "$LANE" == "aggregate" && "${CODEX_CHECK_RUN_CHAT_SURFACE_LAB:-0}" != "1" && -z "${CI:-}" ]]; then
     echo "Skipping chat-surface lab in local aggregate validation."
     echo "Run 'make test-chat-surface-lab' or set CODEX_CHECK_RUN_CHAT_SURFACE_LAB=1 to include it."
@@ -331,6 +330,57 @@ if [[ "$RUN_CHAT_APPS" == true ]]; then
     echo "Running chat-surface lab deterministic checks..."
     make test-chat-surface-lab PYTHON="$PYTHON_BIN"
   fi
+}
+
+# --- Lane dispatch: parallel when multiple lanes active -----------------------
+_ACTIVE_LANE_COUNT=0
+[[ "$RUN_CORE" == true ]] && ((_ACTIVE_LANE_COUNT++))
+[[ "$RUN_WEB_UI" == true ]] && ((_ACTIVE_LANE_COUNT++))
+[[ "$RUN_CHAT_APPS" == true ]] && ((_ACTIVE_LANE_COUNT++))
+
+if [[ "$_ACTIVE_LANE_COUNT" -gt 1 ]]; then
+  echo "Running $_ACTIVE_LANE_COUNT lanes in parallel..."
+  _LANE_LOG_DIR="$(mktemp -d)"
+  _LANE_PIDS=()
+  _LANE_NAMES=()
+
+  if [[ "$RUN_CORE" == true ]]; then
+    _run_core_lane > "$_LANE_LOG_DIR/core.log" 2>&1 &
+    _LANE_PIDS+=($!)
+    _LANE_NAMES+=("core")
+  fi
+  if [[ "$RUN_WEB_UI" == true ]]; then
+    _run_web_ui_lane > "$_LANE_LOG_DIR/web-ui.log" 2>&1 &
+    _LANE_PIDS+=($!)
+    _LANE_NAMES+=("web-ui")
+  fi
+  if [[ "$RUN_CHAT_APPS" == true ]]; then
+    _run_chat_apps_lane > "$_LANE_LOG_DIR/chat-apps.log" 2>&1 &
+    _LANE_PIDS+=($!)
+    _LANE_NAMES+=("chat-apps")
+  fi
+
+  _LANE_FAIL=0
+  for _i in "${!_LANE_PIDS[@]}"; do
+    if ! wait "${_LANE_PIDS[$_i]}"; then
+      echo "Lane ${_LANE_NAMES[$_i]} FAILED" >&2
+      _LANE_FAIL=1
+    fi
+  done
+
+  for _name in "${_LANE_NAMES[@]}"; do
+    echo "--- ${_name} lane output ---"
+    cat "$_LANE_LOG_DIR/${_name}.log"
+  done
+  rm -rf "$_LANE_LOG_DIR"
+
+  if [[ "$_LANE_FAIL" -eq 1 ]]; then
+    exit 1
+  fi
+else
+  if [[ "$RUN_CORE" == true ]]; then _run_core_lane; fi
+  if [[ "$RUN_WEB_UI" == true ]]; then _run_web_ui_lane; fi
+  if [[ "$RUN_CHAT_APPS" == true ]]; then _run_chat_apps_lane; fi
 fi
 
 echo "Checks passed (lane: $LANE)."
