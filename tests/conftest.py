@@ -11,7 +11,9 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import shlex
 import shutil
+import signal
 import subprocess
 import sys
 import time
@@ -27,6 +29,7 @@ _TIMEOUT_FAST_SECONDS = 30
 _TIMEOUT_INTEGRATION_SECONDS = 60
 _TIMEOUT_SLOW_SECONDS = 120
 _OPENCODE_PROCESS_KIND = "opencode"
+_FLOW_WORKER_TERMINATE_GRACE_SECONDS = 2.0
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 _HERMETIC_ROOTS: HermeticTestRoots | None = None
 
@@ -62,6 +65,13 @@ def _format_temp_processes(processes: tuple[object, ...]) -> str:
     if remaining > 0:
         parts.append(f"... plus {remaining} more")
     return "; ".join(parts)
+
+
+@dataclass(frozen=True)
+class _FlowWorkerProcess:
+    pid: int
+    command: str
+    repo_root: str | None = None
 
 
 _ORIGINAL_UNRAISABLE_HOOK = sys.unraisablehook
@@ -511,6 +521,113 @@ def _reap_opencode_processes(roots: set[Path], *, force: bool) -> list[str]:
     return failures
 
 
+def _looks_like_flow_worker_command(command: str) -> bool:
+    command_lc = command.lower()
+    return " flow worker " in f" {command_lc} " or (
+        "codex_autorunner" in command_lc
+        and " flow " in command_lc
+        and " worker" in command_lc
+    )
+
+
+def _flow_worker_repo_from_command(command: str) -> str | None:
+    try:
+        parts = shlex.split(command)
+    except ValueError:
+        return None
+    for index, part in enumerate(parts):
+        if part == "--repo" and index + 1 < len(parts):
+            return parts[index + 1]
+        if part.startswith("--repo="):
+            return part.split("=", 1)[1]
+    return None
+
+
+def _list_flow_worker_processes_under(root: Path) -> tuple[_FlowWorkerProcess, ...]:
+    from codex_autorunner.core.diagnostics.process_snapshot import collect_processes
+
+    workers: list[_FlowWorkerProcess] = []
+    for process in collect_processes().car_service_processes:
+        if not _looks_like_flow_worker_command(process.command):
+            continue
+        repo_root = _flow_worker_repo_from_command(process.command)
+        if repo_root is not None:
+            if not _path_is_within(repo_root, root):
+                continue
+        elif str(root) not in process.command:
+            continue
+        workers.append(
+            _FlowWorkerProcess(
+                pid=process.pid,
+                command=process.command,
+                repo_root=repo_root,
+            )
+        )
+    return tuple(workers)
+
+
+def _terminate_flow_worker_process(process: _FlowWorkerProcess) -> None:
+    from codex_autorunner.core.text_utils import _pid_is_running
+
+    pid = process.pid
+    try:
+        if os.name != "nt" and hasattr(os, "killpg") and hasattr(os, "getpgid"):
+            os.killpg(os.getpgid(pid), signal.SIGTERM)
+        else:
+            os.kill(pid, signal.SIGTERM)
+    except ProcessLookupError:
+        return
+    except OSError:
+        try:
+            os.kill(pid, signal.SIGTERM)
+        except ProcessLookupError:
+            return
+        except OSError:
+            pass
+
+    deadline = time.monotonic() + _FLOW_WORKER_TERMINATE_GRACE_SECONDS
+    while time.monotonic() < deadline:
+        if not _pid_is_running(pid):
+            return
+        time.sleep(0.05)
+    if not _pid_is_running(pid):
+        return
+
+    try:
+        if os.name != "nt" and hasattr(os, "killpg") and hasattr(os, "getpgid"):
+            os.killpg(os.getpgid(pid), signal.SIGKILL)
+        else:
+            os.kill(pid, signal.SIGKILL)
+    except ProcessLookupError:
+        return
+    except OSError:
+        try:
+            os.kill(pid, signal.SIGKILL)
+        except OSError:
+            pass
+
+
+def _reap_flow_worker_processes_under(root: Path) -> tuple[_FlowWorkerProcess, ...]:
+    workers = _list_flow_worker_processes_under(root)
+    for process in workers:
+        _terminate_flow_worker_process(process)
+    return _list_flow_worker_processes_under(root)
+
+
+def _has_active_non_flow_worker_processes(
+    root: Path, hermetic_roots: HermeticTestRoots
+) -> bool:
+    cleanup_module = hermetic_roots.load_pytest_temp_cleanup_module()
+    try:
+        processes = cleanup_module.find_processes_using_path(root)
+    except RuntimeError:
+        return True
+    for process in processes:
+        if not _looks_like_flow_worker_command(process.command):
+            return True
+    return False
+
+
 @pytest.fixture(autouse=True)
 def docker_managed_cleanup(request: pytest.FixtureRequest) -> None:
     if request.node.get_closest_marker("docker_managed_cleanup") is None:
@@ -592,6 +709,29 @@ def _cleanup_opencode_processes_session(
 
 
 @pytest.fixture(scope="session", autouse=True)
+def _cleanup_flow_worker_processes_session(
+    _cleanup_pytest_temp_runs_session, hermetic_roots: HermeticTestRoots
+) -> None:
+    """
+    Reap flow workers rooted in pytest temp dirs before temp cleanup runs.
+    """
+    if hermetic_roots.pytest_temp_root.exists():
+        for run_root in sorted(hermetic_roots.pytest_temp_root.iterdir()):
+            if not run_root.is_dir() or run_root.name == hermetic_roots.run_token:
+                continue
+            if _has_active_non_flow_worker_processes(run_root, hermetic_roots):
+                continue
+            _reap_flow_worker_processes_under(run_root)
+    yield
+    remaining = _reap_flow_worker_processes_under(hermetic_roots.pytest_process_root)
+    if remaining:
+        raise AssertionError(
+            "Leaked flow worker processes remained after the test session: "
+            + _format_temp_processes(remaining)
+        )
+
+
+@pytest.fixture(scope="session", autouse=True)
 def _cleanup_pytest_temp_runs_session(
     _init_hermetic_environment, hermetic_roots: HermeticTestRoots
 ) -> None:
@@ -626,6 +766,16 @@ def _cleanup_pytest_temp_runs_session(
         failures.append(f"pytest temp env root still exists after cleanup: {env_root}")
     if failures:
         raise AssertionError(" ; ".join(failures))
+
+
+@pytest.fixture(autouse=True)
+def _cleanup_flow_worker_processes_per_test() -> None:
+    yield
+    from codex_autorunner.core.flows.worker_process import (
+        cleanup_spawned_flow_workers,
+    )
+
+    cleanup_spawned_flow_workers(timeout_seconds=1.0)
 
 
 @pytest.fixture(autouse=True)

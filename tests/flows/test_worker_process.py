@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import signal
 import subprocess
 import sys
 from pathlib import Path
@@ -247,3 +248,42 @@ def test_spawn_flow_worker_closes_streams_when_popen_fails(
 
     assert len(opened) == 2
     assert all(handle.closed for handle in opened)
+
+
+def test_cleanup_spawned_flow_workers_terminates_registered_process_group(
+    monkeypatch, tmp_path: Path
+) -> None:
+    run_id = "3022db08-82b8-40dd-8cfa-d04eb0fcded2"
+    signals: list[tuple[int, int]] = []
+
+    class _FakeProc:
+        pid = 777
+        returncode = None
+
+        def poll(self):  # type: ignore[no-untyped-def]
+            return self.returncode
+
+        def wait(self, timeout=None):  # type: ignore[no-untyped-def]
+            self.returncode = -signal.SIGTERM
+            return self.returncode
+
+    def _fake_popen(*_args, **_kwargs):  # type: ignore[no-untyped-def]
+        return _FakeProc()
+
+    monkeypatch.setattr(worker_process.subprocess, "Popen", _fake_popen)
+    monkeypatch.setattr(worker_process.os, "name", "posix", raising=False)
+    monkeypatch.setattr(worker_process.os, "getpgid", lambda pid: pid)
+    monkeypatch.setattr(
+        worker_process.os,
+        "killpg",
+        lambda pgid, sig: signals.append((pgid, sig)),
+    )
+
+    proc, out, err = worker_process.spawn_flow_worker(tmp_path, run_id)
+    out.close()
+    err.close()
+
+    worker_process.cleanup_spawned_flow_workers(timeout_seconds=0.01)
+
+    assert proc.poll() == -signal.SIGTERM
+    assert signals == [(777, signal.SIGTERM)]
