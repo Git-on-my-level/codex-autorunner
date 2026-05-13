@@ -69,12 +69,6 @@ class BrowserAuthStore:
     def ensure_bootstrap_token(self) -> tuple[Path, str]:
         return ensure_bootstrap_token(self.root)
 
-    def has_bootstrap_token(self) -> bool:
-        try:
-            return bool(self.bootstrap_token_path.read_text(encoding="utf-8").strip())
-        except FileNotFoundError:
-            return False
-
     def claim_bootstrap_token(self, token: str) -> Optional[BootstrapClaim]:
         candidate = token.strip()
         if not candidate:
