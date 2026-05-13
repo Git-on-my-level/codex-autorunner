@@ -35,6 +35,7 @@ from ....tickets.files import list_ticket_paths, read_ticket, safe_relpath
 from ....tickets.frontmatter import render_markdown_frontmatter
 from ....tickets.ingest_state import INGEST_STATE_FILENAME
 from ....tickets.lint import lint_ticket_directory, parse_ticket_index
+from ...web.services.browser_auth import ensure_bootstrap_token
 
 if TYPE_CHECKING:
     from ....core.hub import HubSupervisor
@@ -85,13 +86,18 @@ def is_loopback_host(host: str) -> bool:
         return False
 
 
-def enforce_bind_auth(host: str, token_env: str) -> None:
+def enforce_bind_auth(
+    host: str, token_env: str, hub_root: Optional[Path] = None
+) -> None:
     if is_loopback_host(host):
         return
     if resolve_auth_token(token_env):
         return
+    if hub_root is not None:
+        ensure_bootstrap_token(hub_root)
+        return
     raise_exit(
-        "Refusing to bind to a non-loopback host without server.auth_token_env set."
+        "Refusing to bind to a non-loopback host without server.auth_token_env or bootstrap auth."
     )
 
 

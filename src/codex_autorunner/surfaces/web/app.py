@@ -14,6 +14,7 @@ from starlette.middleware.gzip import GZipMiddleware
 from starlette.types import ASGIApp
 
 from ...core.config import parse_flow_retention_config
+from ...core.config_validation import is_loopback_host
 from ...core.diagnostics import (
     DEFAULT_PROCESS_MONITOR_CADENCE_SECONDS,
     DEFAULT_PROCESS_MONITOR_WINDOW_SECONDS,
@@ -59,6 +60,7 @@ from .middleware import (
     RequestIdMiddleware,
     SecurityHeadersMiddleware,
 )
+from .routes.auth import build_auth_routes
 from .routes.chat_events import build_hub_chat_event_routes
 from .routes.contextspace import build_contextspace_routes
 from .routes.feedback_reports import build_feedback_report_routes
@@ -79,6 +81,7 @@ from .routes.scm_webhooks import build_scm_webhook_routes
 from .routes.settings import build_settings_routes
 from .routes.system import build_system_routes
 from .routes.voice import build_voice_routes
+from .services.browser_auth import SESSION_COOKIE_NAME, BrowserAuthStore
 from .services.pma import create_pma_application_container
 from .static_assets import (
     render_web_index_html,
@@ -213,6 +216,15 @@ def create_hub_app(
     web_static_dir, web_static_context = resolve_web_static_dir()
     app.state.web_static_dir = web_static_dir
     app.state.web_static_assets_context = web_static_context
+    bind_host = endpoint_host or context.config.server_host
+    remote_bind = not is_loopback_host(bind_host)
+    auth_token = resolve_auth_token(context.config.server_auth_token_env)
+    browser_auth_store: Optional[BrowserAuthStore] = None
+    if auth_token or remote_bind:
+        browser_auth_store = BrowserAuthStore(context.config.root)
+        browser_auth_store.ensure_bootstrap_token()
+        app.state.browser_auth_store = browser_auth_store
+        app.include_router(build_auth_routes(browser_auth_store))
     web_app_assets_dir = web_static_dir / "_app"
     if web_app_assets_dir.exists():
         app.mount(
@@ -1030,11 +1042,20 @@ def create_hub_app(
         context.config.server_host, context.config.server_allowed_hosts
     )
     allowed_origins = context.config.server_allowed_origins
-    auth_token = resolve_auth_token(context.config.server_auth_token_env)
     app.state.auth_token = auth_token
     asgi_app: ASGIApp = app
-    if auth_token:
-        asgi_app = AuthTokenMiddleware(asgi_app, auth_token, context.base_path)
+    if auth_token or browser_auth_store is not None:
+        asgi_app = AuthTokenMiddleware(
+            asgi_app,
+            auth_token,
+            context.base_path,
+            session_cookie_name=SESSION_COOKIE_NAME,
+            session_validator=(
+                browser_auth_store.validate_session_token
+                if browser_auth_store is not None
+                else None
+            ),
+        )
     if context.base_path:
         asgi_app = BasePathRouterMiddleware(asgi_app, context.base_path)
     asgi_app = HostOriginMiddleware(asgi_app, allowed_hosts, allowed_origins)

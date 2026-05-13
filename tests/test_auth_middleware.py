@@ -83,3 +83,15 @@ def test_auth_middleware_keeps_query_token_for_legacy_websockets() -> None:
     scope = _ws_scope()
     scope["query_string"] = b"token=secret"
     assert middleware._extract_query_token(scope) == "secret"
+
+
+def test_auth_middleware_accepts_browser_session_cookie() -> None:
+    middleware = AuthTokenMiddleware(
+        lambda *_: None,
+        token=None,
+        session_validator=lambda token: token == "session-secret",
+    )
+    scope = _scope("/hub/repos")
+    scope["headers"] = [(b"cookie", b"car_session=session-secret")]
+    assert middleware._extract_session_cookie(scope) == "session-secret"
+    assert middleware.session_validator(middleware._extract_session_cookie(scope))

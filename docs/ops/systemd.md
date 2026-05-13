@@ -7,8 +7,9 @@ user and system service guidance plus templates for hub and Telegram.
 
 - CAR installed and `car` on disk (use an absolute path from `which car`).
 - Hub workspace initialized: `car init --mode hub --path ~/car-workspace`.
-- If binding to a non-loopback host, set `server.auth_token_env` and
-  `server.allowed_hosts` (see `docs/web/security.md`).
+- If binding to a non-loopback host, set `server.allowed_hosts`. Keep
+  `server.auth_token_env` for CLI/API automation; browser access can be claimed
+  with `.codex-autorunner/bootstrap-token` (see `docs/web/security.md`).
 
 ## Environment file
 
@@ -36,6 +37,10 @@ server:
 
 If you set `server.base_path`, also set `CAR_BASE_PATH=/car` in the env file
 and update your health check URLs to include the prefix.
+
+For first browser login on a remote host, read the token from
+`~/car-workspace/.codex-autorunner/bootstrap-token` after the hub starts and
+open `https://host/auth/bootstrap#token=...`.
 
 Set Linux updater defaults in `codex-autorunner.yml` (or `.codex-autorunner/config.yml`)
 so `/system/update` and Telegram `/update` use systemd:

@@ -10,38 +10,48 @@ interface and how to secure it.
 - The UI/API can run code and modify files in bound workspaces.
 - There is no built-in multi-user auth or per-endpoint role separation.
 
-## Authentication token
+## Bootstrap browser auth
 
-CAR supports a bearer token enforced by middleware when configured:
+Remote hub deployments can use a one-time bootstrap token to create a browser
+session without putting a bearer token in browser storage:
+
+- On remote boot, CAR writes a high-entropy token to
+  `.codex-autorunner/bootstrap-token` with `0600` permissions.
+- Open `https://host/auth/bootstrap#token=YOUR_BOOTSTRAP_TOKEN`.
+- The browser posts the fragment token to `/auth/bootstrap/claim`; URL fragments
+  are not sent in HTTP requests.
+- A successful claim deletes the bootstrap token and sets an HttpOnly Secure
+  `car_session` cookie with `SameSite=Lax`.
+- Because the session cookie is `Secure`, expose remote browser deployments over
+  HTTPS, including when a reverse proxy terminates TLS in front of CAR.
+
+To recover or rotate browser access, remove the old session file
+`.codex-autorunner/browser-sessions.json`, remove any stale
+`.codex-autorunner/bootstrap-token`, and restart the hub. CAR will write a fresh
+bootstrap token on the next authenticated or remote boot.
+
+## API bearer token
+
+CAR also supports a bearer token enforced by middleware when configured:
 
 - Set `server.auth_token_env` in `.codex-autorunner/config.yml`.
 - Export the token in the environment before starting the server.
-- All non-public endpoints require `Authorization: Bearer <token>`.
+- API and CLI requests can use `Authorization: Bearer <token>`.
 - WebSockets accept the token via `Sec-WebSocket-Protocol: car-token-b64.<base64url(token)>`.
   The legacy `?token=...` query string is still accepted for backward compatibility.
-
-When `server.auth_token_env` is set, the web UI can be accessed by visiting:
-
-```
-http://host:port/?token=YOUR_TOKEN
-```
-
-The UI stores the token in `sessionStorage` and removes it from the URL.
 
 ## Public endpoints
 
 The following endpoints remain public so health checks and static assets work:
 
 - `/` (UI shell)
-- `/pma`, `/dashboard`, `/repos`, `/worktrees`, `/tickets`, `/contextspace/*`,
-  and `/settings` (Web Hub shell)
+- `/auth/bootstrap` and `/auth/bootstrap/claim`
 - `/_app/*`
-- `/static/*` (Web Hub assets)
 - `/health`
 - `/cat/*`
 
-All API endpoints, hub endpoints, and repo endpoints require the auth token
-once configured.
+All API endpoints, hub endpoints, repo endpoints, and deep-linked UI routes
+require a valid browser session or bearer token once auth is enabled.
 
 ## Localhost hardening (Host/Origin checks)
 
@@ -65,7 +75,8 @@ Config:
 ## Recommendations
 
 - Prefer local-only access (`127.0.0.1`) or a private network like Tailscale.
-- If exposing the server beyond localhost, always set `server.auth_token_env`.
+- If exposing the server beyond localhost, use bootstrap browser auth and keep
+  `server.auth_token_env` available for automation.
 - Use a reverse proxy with additional auth (basic auth, SSO) if you must put it
   on the public internet.
 - Avoid placing the web UI behind a publicly accessible hostname without
