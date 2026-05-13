@@ -973,7 +973,7 @@ def register_hub_commands(
         )
         bind_host = host or config.server_host
         bind_port = port or config.server_port
-        enforce_bind_auth(bind_host, config.server_auth_token_env)
+        enforce_bind_auth(bind_host, config.server_auth_token_env, config.root)
         typer.echo(
             f"Serving hub on http://{bind_host}:{bind_port}{normalized_base or ''}"
         )

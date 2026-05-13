@@ -6,6 +6,8 @@ import hmac
 import logging
 import time
 import uuid
+from http.cookies import SimpleCookie
+from typing import Callable, Optional
 from urllib.parse import parse_qs, urlparse
 
 from fastapi.responses import RedirectResponse, Response
@@ -44,6 +46,7 @@ class BasePathRouterMiddleware:
                 "/contextspace",
                 "/settings",
                 "/health",
+                "/auth",
                 "/cat",
             )
         )
@@ -149,11 +152,21 @@ class BasePathRouterMiddleware:
 class AuthTokenMiddleware:
     """Middleware that enforces an auth token on all non-public endpoints."""
 
-    def __init__(self, app, token: str, base_path: str = ""):
+    def __init__(
+        self,
+        app,
+        token: Optional[str] = None,
+        base_path: str = "",
+        *,
+        session_cookie_name: str = "car_session",
+        session_validator: Optional[Callable[[Optional[str]], bool]] = None,
+    ):
         self.app = app
         self.token = token
         self.base_path = normalize_base_path(base_path)
-        self.public_prefixes = ("/_app", "/health", "/cat")
+        self.session_cookie_name = session_cookie_name
+        self.session_validator = session_validator
+        self.public_prefixes = ("/_app", "/health", "/auth/bootstrap", "/cat")
 
     def __getattr__(self, name):
         return getattr(self.app, name)
@@ -212,6 +225,25 @@ class AuthTokenMiddleware:
         if not value.lower().startswith("bearer "):
             return None
         return value.split(" ", 1)[1].strip() or None
+
+    def _extract_session_cookie(self, scope) -> Optional[str]:
+        headers = {k.lower(): v for k, v in (scope.get("headers") or [])}
+        raw = headers.get(b"cookie")
+        if not raw:
+            return None
+        try:
+            value = raw.decode("latin-1")
+        except UnicodeDecodeError:
+            return None
+        cookie = SimpleCookie()
+        try:
+            cookie.load(value)
+        except Exception:
+            return None
+        morsel = cookie.get(self.session_cookie_name)
+        if morsel is None:
+            return None
+        return morsel.value.strip() or None
 
     def _allows_query_token(self, scope) -> bool:
         # Query-string bearer tokens are intentionally limited to WebSocket
@@ -284,12 +316,22 @@ class AuthTokenMiddleware:
                 token = self._extract_ws_protocol_token(scope)
             token = token or self._extract_query_token(scope)
 
-        if not token or not hmac.compare_digest(token, self.token):
+        if token and self.token and hmac.compare_digest(token, self.token):
+            return await self.app(scope, receive, send)
+
+        if self.session_validator is not None:
+            session_token = self._extract_session_cookie(scope)
+            if self.session_validator(session_token):
+                return await self.app(scope, receive, send)
+
+        if not token or not self.token:
             if scope.get("type") == "websocket":
                 return await self._reject_ws(scope, receive, send)
             return await self._reject_http(scope, receive, send)
 
-        return await self.app(scope, receive, send)
+        if scope.get("type") == "websocket":
+            return await self._reject_ws(scope, receive, send)
+        return await self._reject_http(scope, receive, send)
 
 
 class HostOriginMiddleware:
