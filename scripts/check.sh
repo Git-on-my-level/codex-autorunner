@@ -234,7 +234,7 @@ _run_pytest() {
         rm -f "$FAST_TEST_JUNIT" "${FAST_TEST_SELECTED:-}"
       }
       trap cleanup_fast_test_artifacts EXIT
-      "$PYTHON_BIN" -m pytest -m "$FAST_TEST_MARKERS" -n "$FAST_TEST_WORKERS" -o junit_duration_report=call --junitxml "$FAST_TEST_JUNIT"
+      "$PYTHON_BIN" -m pytest -m "$FAST_TEST_MARKERS" -n "$FAST_TEST_WORKERS" --dist loadfile -o junit_duration_report=call --junitxml "$FAST_TEST_JUNIT"
       FAST_TEST_REPORT_ARGS=(
         "$FAST_TEST_JUNIT"
         --repo-root "$REPO_ROOT"
@@ -263,7 +263,7 @@ _run_pytest() {
           rm -f "$FAST_TEST_JUNIT" "${FAST_TEST_SELECTED:-}"
         }
         trap cleanup_fast_test_artifacts EXIT
-        "$PYTHON_BIN" -m pytest -m "$FAST_TEST_MARKERS" -n "$FAST_TEST_WORKERS" -o junit_duration_report=call --junitxml "$FAST_TEST_JUNIT"
+        "$PYTHON_BIN" -m pytest -m "$FAST_TEST_MARKERS" -n "$FAST_TEST_WORKERS" --dist loadfile -o junit_duration_report=call --junitxml "$FAST_TEST_JUNIT"
         FAST_TEST_REPORT_ARGS=(
           "$FAST_TEST_JUNIT"
           --repo-root "$REPO_ROOT"
@@ -282,7 +282,7 @@ _run_pytest() {
         echo "Enforcing fast-test budget (CODEX_FAST_TEST_ENFORCE_BUDGET=1)."
         "$PYTHON_BIN" scripts/report_fast_test_budget.py "${FAST_TEST_REPORT_ARGS[@]}"
       else
-        "$PYTHON_BIN" -m pytest -m "$FAST_TEST_MARKERS" -n "$FAST_TEST_WORKERS"
+        "$PYTHON_BIN" -m pytest -m "$FAST_TEST_MARKERS" -n "$FAST_TEST_WORKERS" --dist loadfile
       fi
   fi
 }
