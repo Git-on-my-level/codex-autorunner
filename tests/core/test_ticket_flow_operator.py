@@ -9,6 +9,7 @@ import pytest
 from codex_autorunner.core import ticket_flow_operator as operator_module
 from codex_autorunner.core.flows.models import FlowRunStatus
 from codex_autorunner.core.flows.store import FlowStore
+from codex_autorunner.core.flows.worker_process import FlowActiveTool, FlowWorkerHealth
 from codex_autorunner.core.ticket_flow_operator import (
     build_ticket_flow_operator_service,
     build_ticket_flow_run_state,
@@ -137,6 +138,127 @@ def test_codex_runtime_preflight_decodes_non_utf8_version_output(
 
     assert resolved is not None
     assert any(detail.startswith("version: codex") for detail in details)
+
+
+def test_build_ticket_flow_run_state_marks_live_stale_alive_as_attention(
+    tmp_path: Path, monkeypatch
+) -> None:
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir(parents=True, exist_ok=True)
+    db_path = repo_root / ".codex-autorunner" / "flows.db"
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    run_id = "11111111-2222-3333-4444-555555555555"
+
+    with FlowStore(db_path) as store:
+        store.initialize()
+        store.create_flow_run(
+            run_id,
+            "ticket_flow",
+            input_data={"workspace_root": str(repo_root)},
+            state={},
+            metadata={},
+        )
+        store.update_flow_run_status(run_id, FlowRunStatus.RUNNING)
+        record = store.get_flow_run(run_id)
+        assert record is not None
+        record.created_at = "2026-03-11T00:00:00+00:00"
+
+        health = FlowWorkerHealth(
+            status="alive",
+            pid=4242,
+            cmdline=["car", "flow", "worker"],
+            artifact_path=repo_root / ".codex-autorunner" / "flows" / run_id,
+        )
+        monkeypatch.setattr(
+            operator_module, "check_worker_health", lambda *_args, **_kwargs: health
+        )
+        monkeypatch.setattr(
+            operator_module, "now_iso", lambda: "2026-03-11T01:00:01+00:00"
+        )
+        monkeypatch.setattr(
+            operator_module,
+            "_ticket_flow_stale_alive_threshold_seconds",
+            lambda _repo_root: 1800,
+        )
+
+        run_state = build_ticket_flow_run_state(
+            repo_root=repo_root,
+            repo_id="repo",
+            record=record,
+            store=store,
+            has_pending_dispatch=False,
+        )
+
+    assert run_state["state"] == "stale_alive"
+    assert run_state["recovery_state"] == "stale_alive"
+    assert run_state["attention_required"] is True
+    assert run_state["worker_status"] == "stale_alive"
+    assert run_state["last_semantic_progress_at"] == "2026-03-11T00:00:00+00:00"
+    assert run_state["stale_reason"] == "semantic_progress_stale_without_active_tool"
+
+
+def test_build_ticket_flow_run_state_keeps_active_tool_running(
+    tmp_path: Path, monkeypatch
+) -> None:
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir(parents=True, exist_ok=True)
+    db_path = repo_root / ".codex-autorunner" / "flows.db"
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    run_id = "22222222-2222-3333-4444-555555555555"
+
+    with FlowStore(db_path) as store:
+        store.initialize()
+        store.create_flow_run(
+            run_id,
+            "ticket_flow",
+            input_data={"workspace_root": str(repo_root)},
+            state={},
+            metadata={},
+        )
+        store.update_flow_run_status(run_id, FlowRunStatus.RUNNING)
+        record = store.get_flow_run(run_id)
+        assert record is not None
+
+        health = FlowWorkerHealth(
+            status="alive",
+            pid=4242,
+            cmdline=["car", "flow", "worker"],
+            artifact_path=repo_root / ".codex-autorunner" / "flows" / run_id,
+            active_tool=FlowActiveTool(
+                pid=4343,
+                ppid=4242,
+                pgid=4242,
+                command=".venv/bin/python -m pytest -q",
+                elapsed_seconds=245,
+                last_activity_at="2026-03-11T01:00:00+00:00",
+                output_updated_at="2026-03-11T01:00:00+00:00",
+            ),
+        )
+        monkeypatch.setattr(
+            operator_module, "check_worker_health", lambda *_args, **_kwargs: health
+        )
+        monkeypatch.setattr(
+            operator_module, "now_iso", lambda: "2026-03-11T02:00:01+00:00"
+        )
+        monkeypatch.setattr(
+            operator_module,
+            "_ticket_flow_stale_alive_threshold_seconds",
+            lambda _repo_root: 1800,
+        )
+
+        run_state = build_ticket_flow_run_state(
+            repo_root=repo_root,
+            repo_id="repo",
+            record=record,
+            store=store,
+            has_pending_dispatch=False,
+        )
+
+    assert run_state["state"] == "running"
+    assert run_state["attention_required"] is False
+    assert run_state["worker_status"] == "alive"
+    assert run_state["active_tool"]["command"] == ".venv/bin/python -m pytest -q"
+    assert run_state["last_tool_activity_at"] == "2026-03-11T01:00:00+00:00"
 
 
 def test_ticket_flow_operator_latest_dispatch_prefers_handoff_and_turn_summary(

@@ -150,6 +150,42 @@ def test_build_canonical_state_v1_adds_freshness_metadata(
     assert freshness.get("is_stale") is True
 
 
+def test_build_canonical_state_v1_projects_stale_alive_health_fields(
+    tmp_path: Path,
+) -> None:
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir(parents=True, exist_ok=True)
+
+    canonical = build_canonical_state_v1(
+        repo_root=repo_root,
+        repo_id="repo-1",
+        run_state={
+            "state": "stale_alive",
+            "recovery_state": "restart_exhausted",
+            "attention_required": True,
+            "worker_status": "stale_alive",
+            "active_tool": None,
+            "last_semantic_progress_at": "2026-03-11T00:00:00+00:00",
+            "last_tool_activity_at": None,
+            "current_phase": "agent_turn",
+            "stale_reason": "semantic_progress_stale_without_active_tool",
+            "restart_attempts": 2,
+            "restart_max_attempts": 2,
+            "restart_exhausted": True,
+        },
+    )
+
+    assert canonical.get("attention_required") is True
+    assert canonical.get("recovery_state") == "restart_exhausted"
+    assert canonical.get("worker_status") == "stale_alive"
+    assert canonical.get("active_tool") is None
+    assert canonical.get("last_semantic_progress_at") == "2026-03-11T00:00:00+00:00"
+    assert (
+        canonical.get("stale_reason") == "semantic_progress_stale_without_active_tool"
+    )
+    assert canonical.get("restart_exhausted") is True
+
+
 def test_is_start_new_flow_action_accepts_legacy_and_canonical_cli_spelling() -> None:
     # Split so check_cli_command_hints does not see a removed CLI path in one literal.
     legacy = "".join(

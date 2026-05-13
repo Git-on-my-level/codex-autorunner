@@ -105,6 +105,7 @@ def _recovery_fingerprint(run_id: str, run_state: dict[str, Any]) -> Optional[st
         "failed",
         "restart_exhausted",
         "commit_barrier_pending",
+        "stale_alive",
     }:
         return None
     attempts = run_state.get("restart_attempts")
@@ -141,6 +142,12 @@ def _format_recovery_notification(
             lines.append(f"Restart attempts: {attempts}.")
     if run_state.get("commit_barrier_pending"):
         lines.append("Commit barrier pending; preserving completed ticket work.")
+    stale_reason = run_state.get("stale_reason")
+    if isinstance(stale_reason, str) and stale_reason.strip():
+        lines.append(f"Stale reason: {stale_reason.strip()}.")
+    last_progress = run_state.get("last_semantic_progress_at")
+    if isinstance(last_progress, str) and last_progress.strip():
+        lines.append(f"Last semantic progress: {last_progress.strip()}.")
     reason = run_state.get("blocking_reason") or run_state.get("crash_reason")
     if isinstance(reason, str) and reason.strip():
         lines.append(f"Reason: {_truncate_error(reason, limit=260)}")

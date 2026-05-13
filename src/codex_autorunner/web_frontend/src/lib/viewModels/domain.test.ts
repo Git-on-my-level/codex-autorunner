@@ -405,6 +405,29 @@ describe('view model mappers', () => {
     expect(vm.openTickets).toBe(2);
   });
 
+  it('maps stale-alive repo ticket-flow state as attention instead of active', () => {
+    const vm = mapRepoSummary({
+      id: 'base',
+      name: 'Base repo',
+      ticket_flow_display: {
+        status: 'running',
+        is_active: true,
+        done_count: 1,
+        total_count: 3
+      },
+      run_state: {
+        state: 'stale_alive',
+        recovery_state: 'stale_alive',
+        attention_required: true,
+        worker_status: 'stale_alive'
+      }
+    });
+
+    expect(vm.status).toBe('blocked');
+    expect(vm.activeRuns).toBe(0);
+    expect(vm.openTickets).toBe(2);
+  });
+
   it('maps worktree summaries from enriched hub repo payloads', () => {
     const vm = mapWorktreeSummary({
       id: 'base--feature',

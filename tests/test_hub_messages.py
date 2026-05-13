@@ -95,6 +95,29 @@ def _seed_failed_run(
         )
 
 
+def _seed_running_run(
+    repo_root: Path,
+    run_id: str,
+    *,
+    state: dict | None = None,
+) -> None:
+    db_path = repo_root / ".codex-autorunner" / "flows.db"
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    with FlowStore(db_path) as store:
+        store.initialize()
+        store.create_flow_run(
+            run_id,
+            "ticket_flow",
+            input_data={
+                "workspace_root": str(repo_root),
+                "runs_dir": ".codex-autorunner/runs",
+            },
+            state=state or {},
+            metadata={},
+        )
+        store.update_flow_run_status(run_id, FlowRunStatus.RUNNING, state=state or {})
+
+
 def _seed_failed_worker_dead_run(repo_root: Path, run_id: str) -> None:
     _seed_failed_run(
         repo_root,
@@ -488,6 +511,52 @@ def test_hub_messages_restart_exhausted_uses_recovery_projection(
         canonical = items[0].get("canonical_state_v1") or {}
         assert canonical.get("recovery_state") == "restart_exhausted"
         assert canonical.get("restart_attempts") == 2
+        assert canonical.get("restart_exhausted") is True
+
+
+def test_hub_messages_stale_alive_restart_exhausted_requires_attention(
+    hub_env, monkeypatch
+) -> None:
+    run_id = "78787878-7777-7777-7777-777777777777"
+    _seed_running_run(
+        hub_env.repo_root,
+        run_id,
+        state={
+            "recovery": {
+                "restart": {
+                    "count": 2,
+                    "max_attempts": 2,
+                    "exhausted": True,
+                    "last_reason": "stale_alive",
+                },
+                "stale_alive": {
+                    "last_semantic_progress_at": "2026-03-11T00:00:00+00:00",
+                    "last_tool_activity_at": None,
+                    "current_phase": "agent_turn",
+                    "reason": "semantic_progress_stale_without_active_tool",
+                },
+            }
+        },
+    )
+
+    app = _build_hub_messages_app(hub_env.hub_root, monkeypatch)
+    with TestClient(app) as client:
+        res = client.get("/hub/messages")
+        assert res.status_code == 200
+        items = res.json()["items"]
+        assert len(items) == 1
+        assert items[0]["item_type"] == "run_state_attention"
+        run_state = items[0].get("run_state") or {}
+        assert run_state.get("state") == "restart_exhausted"
+        assert run_state.get("recovery_state") == "restart_exhausted"
+        assert run_state.get("attention_required") is True
+        assert run_state.get("worker_status") == "stale_alive"
+        assert run_state.get("stale_reason") == (
+            "semantic_progress_stale_without_active_tool"
+        )
+        canonical = items[0].get("canonical_state_v1") or {}
+        assert canonical.get("recovery_state") == "restart_exhausted"
+        assert canonical.get("worker_status") == "stale_alive"
         assert canonical.get("restart_exhausted") is True
 
 

@@ -122,6 +122,7 @@ class TicketFlowRunState(TypedDict, total=False):
     recommended_actions: list[str]
     attention_required: bool
     worker_status: Optional[str]
+    active_tool: Optional[dict[str, Any]]
     last_semantic_progress_at: Optional[str]
     last_tool_activity_at: Optional[str]
     current_phase: Optional[str]
@@ -1598,6 +1599,12 @@ def build_ticket_flow_run_state(
     ):
         try:
             health = check_worker_health(repo_root, run_id)
+            health = _annotate_status_stale_alive_health(
+                repo_root,
+                record,
+                health,
+                last_event_at=last_event_at,
+            )
             dead_worker = health.status in {"dead", "invalid", "mismatch"}
         except (OSError, ValueError) as exc:
             logger.warning("Could not check worker health: %s", exc)
@@ -1632,6 +1639,29 @@ def build_ticket_flow_run_state(
     restart_status = _extract_restart_status(record)
     commit_barrier = _extract_commit_barrier_status(record)
     stale_alive = _extract_stale_alive_status(record)
+    active_tool_payload = None
+    if health is not None:
+        active_tool = getattr(health, "active_tool", None)
+        active_tool_payload = (
+            active_tool.to_dict()
+            if active_tool is not None and hasattr(active_tool, "to_dict")
+            else None
+        )
+        if not stale_alive and getattr(health, "status", None) == "stale_alive":
+            stale_alive = {
+                "last_semantic_progress_at": getattr(
+                    health, "last_semantic_progress_at", None
+                ),
+                "last_tool_activity_at": getattr(health, "last_tool_activity_at", None),
+                "current_phase": getattr(health, "current_phase", None),
+                "reason": getattr(health, "stale_reason", None),
+                "stale_threshold_seconds": getattr(
+                    health, "stale_threshold_seconds", None
+                ),
+                "semantic_stale_age_seconds": getattr(
+                    health, "semantic_stale_age_seconds", None
+                ),
+            }
     recovery_state = _derive_recovery_state(
         record_status=record.status,
         dead_worker=dead_worker,
@@ -1760,6 +1790,7 @@ def build_ticket_flow_run_state(
         "recommended_actions": recommended_actions,
         "attention_required": attention_required,
         "worker_status": worker_status,
+        "active_tool": active_tool_payload,
         "last_semantic_progress_at": (
             stale_alive.get("last_semantic_progress_at")
             if isinstance(stale_alive, dict)
@@ -1768,7 +1799,11 @@ def build_ticket_flow_run_state(
         "last_tool_activity_at": (
             stale_alive.get("last_tool_activity_at")
             if isinstance(stale_alive, dict)
-            else None
+            else (
+                active_tool_payload.get("last_activity_at")
+                if isinstance(active_tool_payload, dict)
+                else None
+            )
         ),
         "current_phase": (
             stale_alive.get("current_phase") if isinstance(stale_alive, dict) else None
