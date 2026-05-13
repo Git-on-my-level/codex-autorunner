@@ -92,6 +92,7 @@ need_cmd make
 # Keep the fast lane selector centralized here; budget failures stay report-only
 # unless the caller opts in with CODEX_FAST_TEST_ENFORCE_BUDGET=1.
 FAST_TEST_MARKERS='not integration and not slow'
+FAST_TEST_IGNORES='--ignore=tests/chat_surface_lab --ignore=tests/chat_surface_integration'
 FAST_TEST_ENFORCE_BUDGET="${CODEX_FAST_TEST_ENFORCE_BUDGET:-0}"
 _AUTO_WORKERS="$("$PYTHON_BIN" -c 'import os;print(os.cpu_count() or 4)' 2>/dev/null || echo 4)"
 FAST_TEST_WORKERS="${CODEX_FAST_TEST_WORKERS:-$_AUTO_WORKERS}"
@@ -234,7 +235,7 @@ _run_pytest() {
         rm -f "$FAST_TEST_JUNIT" "${FAST_TEST_SELECTED:-}"
       }
       trap cleanup_fast_test_artifacts EXIT
-      "$PYTHON_BIN" -m pytest -m "$FAST_TEST_MARKERS" -n "$FAST_TEST_WORKERS" --dist loadfile -o junit_duration_report=call --junitxml "$FAST_TEST_JUNIT"
+      "$PYTHON_BIN" -m pytest -m "$FAST_TEST_MARKERS" -n "$FAST_TEST_WORKERS" --dist loadfile $FAST_TEST_IGNORES -o junit_duration_report=call --junitxml "$FAST_TEST_JUNIT"
       FAST_TEST_REPORT_ARGS=(
         "$FAST_TEST_JUNIT"
         --repo-root "$REPO_ROOT"
@@ -243,7 +244,7 @@ _run_pytest() {
       )
       if [[ "${CODEX_FAST_TEST_VERIFY_NODEIDS:-0}" == "1" ]]; then
         FAST_TEST_SELECTED="$(mktemp)"
-        "$PYTHON_BIN" -m pytest -m "$FAST_TEST_MARKERS" --collect-only -q > "$FAST_TEST_SELECTED"
+        "$PYTHON_BIN" -m pytest -m "$FAST_TEST_MARKERS" --collect-only -q $FAST_TEST_IGNORES > "$FAST_TEST_SELECTED"
         FAST_TEST_REPORT_ARGS+=(
           --selected-nodeids "$FAST_TEST_SELECTED"
           --verify-nodeids
@@ -263,7 +264,7 @@ _run_pytest() {
           rm -f "$FAST_TEST_JUNIT" "${FAST_TEST_SELECTED:-}"
         }
         trap cleanup_fast_test_artifacts EXIT
-        "$PYTHON_BIN" -m pytest -m "$FAST_TEST_MARKERS" -n "$FAST_TEST_WORKERS" --dist loadfile -o junit_duration_report=call --junitxml "$FAST_TEST_JUNIT"
+        "$PYTHON_BIN" -m pytest -m "$FAST_TEST_MARKERS" -n "$FAST_TEST_WORKERS" --dist loadfile $FAST_TEST_IGNORES -o junit_duration_report=call --junitxml "$FAST_TEST_JUNIT"
         FAST_TEST_REPORT_ARGS=(
           "$FAST_TEST_JUNIT"
           --repo-root "$REPO_ROOT"
@@ -273,7 +274,7 @@ _run_pytest() {
         )
         if [[ "${CODEX_FAST_TEST_VERIFY_NODEIDS:-0}" == "1" ]]; then
           FAST_TEST_SELECTED="$(mktemp)"
-          "$PYTHON_BIN" -m pytest -m "$FAST_TEST_MARKERS" --collect-only -q > "$FAST_TEST_SELECTED"
+          "$PYTHON_BIN" -m pytest -m "$FAST_TEST_MARKERS" --collect-only -q $FAST_TEST_IGNORES > "$FAST_TEST_SELECTED"
           FAST_TEST_REPORT_ARGS+=(
             --selected-nodeids "$FAST_TEST_SELECTED"
             --verify-nodeids
@@ -282,7 +283,7 @@ _run_pytest() {
         echo "Enforcing fast-test budget (CODEX_FAST_TEST_ENFORCE_BUDGET=1)."
         "$PYTHON_BIN" scripts/report_fast_test_budget.py "${FAST_TEST_REPORT_ARGS[@]}"
       else
-        "$PYTHON_BIN" -m pytest -m "$FAST_TEST_MARKERS" -n "$FAST_TEST_WORKERS" --dist loadfile
+        "$PYTHON_BIN" -m pytest -m "$FAST_TEST_MARKERS" -n "$FAST_TEST_WORKERS" --dist loadfile $FAST_TEST_IGNORES
       fi
   fi
 }
