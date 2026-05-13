@@ -38,6 +38,36 @@ def test_origin_rejects_mismatched_post():
 
     messages = anyio.run(_http_call, middleware, scope)
     assert messages[0]["status"] == 403
+    assert messages[1]["body"] == b"Origin not allowed"
+
+
+def test_origin_allows_bootstrap_claim_from_public_proxy_origin():
+    called = False
+
+    async def dummy_app(scope, receive, send):
+        nonlocal called
+        called = True
+        await send({"type": "http.response.start", "status": 200, "headers": []})
+        await send({"type": "http.response.body", "body": b"ok", "more_body": False})
+
+    middleware = HostOriginMiddleware(dummy_app, ["*"], [])
+    scope = {
+        "type": "http",
+        "path": "/auth/bootstrap/claim",
+        "root_path": "",
+        "headers": [
+            (b"host", b"4173-glad-arch-jvr2.pad.dev"),
+            (b"origin", b"https://4173-glad-arch-jvr2.pad.dev"),
+        ],
+        "method": "POST",
+        "scheme": "http",
+        "http_version": "1.1",
+        "query_string": b"",
+    }
+
+    messages = anyio.run(_http_call, middleware, scope)
+    assert called is True
+    assert messages[0]["status"] == 200
 
 
 def test_origin_allows_no_origin_post():

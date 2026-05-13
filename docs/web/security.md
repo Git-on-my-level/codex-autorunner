@@ -20,6 +20,9 @@ session without putting a bearer token in browser storage:
 - Open `https://host/auth/bootstrap#token=YOUR_BOOTSTRAP_TOKEN`.
 - The browser posts the fragment token to `/auth/bootstrap/claim`; URL fragments
   are not sent in HTTP requests.
+- The bootstrap claim endpoint accepts the browser `Origin` from an HTTPS
+  reverse proxy so first login does not require pre-populating
+  `server.allowed_origins`; Host header validation still applies.
 - A successful claim deletes the bootstrap token and sets an HttpOnly Secure
   `car_session` cookie with `SameSite=Lax`.
 - Because the session cookie is `Secure`, expose remote browser deployments over
@@ -71,6 +74,8 @@ Config:
 - `server.allowed_hosts`: explicit host allowlist. Required when binding to a
   non-loopback host.
 - `server.allowed_origins`: extra allowed origins (scheme + host + port).
+  Configure this for normal browser API/WebSocket use when CAR is exposed
+  through a public reverse proxy.
 
 ## Recommendations
 

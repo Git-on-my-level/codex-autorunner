@@ -7,9 +7,11 @@ user and system service guidance plus templates for hub and Telegram.
 
 - CAR installed and `car` on disk (use an absolute path from `which car`).
 - Hub workspace initialized: `car init --mode hub --path ~/car-workspace`.
-- If binding to a non-loopback host, set `server.allowed_hosts`. Keep
-  `server.auth_token_env` for CLI/API automation; browser access can be claimed
-  with `.codex-autorunner/bootstrap-token` (see `docs/web/security.md`).
+- If binding to a non-loopback host, set `server.allowed_hosts`. When exposing
+  CAR through a public HTTPS reverse proxy, also set `server.allowed_origins`
+  to the public origin for normal browser API/WebSocket requests. Keep
+  `server.auth_token_env` for CLI/API automation; first browser access can be
+  claimed with `.codex-autorunner/bootstrap-token` (see `docs/web/security.md`).
 
 ## Environment file
 
@@ -32,6 +34,10 @@ Set the auth token env in `.codex-autorunner/config.yml`:
 ```yaml
 server:
   auth_token_env: CAR_AUTH_TOKEN
+  allowed_hosts:
+    - your-public-host.example
+  allowed_origins:
+    - https://your-public-host.example
   # base_path: /car
 ```
 
