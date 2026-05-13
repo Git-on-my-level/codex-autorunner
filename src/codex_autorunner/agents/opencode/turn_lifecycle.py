@@ -17,6 +17,7 @@ from typing import Any, Callable, Literal, Optional
 from .protocol_payload import (
     extract_message_phase,
     extract_status_type,
+    parse_message_response,
     status_is_idle,
 )
 
@@ -149,6 +150,15 @@ def lifecycle_result_from_observation(
     )
 
 
+def command_response_error(response: Any) -> Optional[str]:
+    """Return command-response errors without treating response text as output."""
+
+    if response is None:
+        return None
+    result = parse_message_response(response)
+    return result.error or None
+
+
 async def coordinate_turn_lifecycle(
     *,
     collect_task: asyncio.Task[OpenCodeTurnObservation],
@@ -179,6 +189,12 @@ async def coordinate_turn_lifecycle(
                     with contextlib.suppress(asyncio.CancelledError):
                         await collect_task
                     raise command_exc
+                error = command_response_error(command_task.result())
+                if error is not None:
+                    collect_task.cancel()
+                    with contextlib.suppress(asyncio.CancelledError):
+                        await collect_task
+                    raise RuntimeError(error)
                 observation = await collect_task
                 collector_completed = True
             else:
@@ -194,6 +210,12 @@ async def coordinate_turn_lifecycle(
                         with contextlib.suppress(asyncio.CancelledError):
                             await collect_task
                         raise command_exc
+                    error = command_response_error(command_task.result())
+                    if error is not None:
+                        collect_task.cancel()
+                        with contextlib.suppress(asyncio.CancelledError):
+                            await collect_task
+                        raise RuntimeError(error)
                     if collect_task not in done:
                         command_accepted_before_terminal = True
                         observation = await collect_task
@@ -205,10 +227,13 @@ async def coordinate_turn_lifecycle(
                     observation = await collect_task
                     collector_completed = True
                     try:
-                        await command_task
+                        response = await command_task
                     finally:
                         if command_task.done():
                             command_completed = True
+                    error = command_response_error(response)
+                    if error is not None:
+                        raise RuntimeError(error)
     except Exception as exc:  # intentional: turn-level failure conversion
         return lifecycle_result_from_observation(
             OpenCodeTurnObservation(

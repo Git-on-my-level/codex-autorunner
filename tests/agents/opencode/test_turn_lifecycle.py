@@ -85,6 +85,36 @@ async def test_lifecycle_never_uses_prompt_response_as_output() -> None:
     assert result.output_source == "none"
 
 
+@pytest.mark.asyncio
+async def test_lifecycle_preserves_prompt_response_error() -> None:
+    release_collector = asyncio.Event()
+
+    async def _command() -> dict[str, Any]:
+        return {
+            "sessionID": "session-1",
+            "info": {"error": "prompt rejected"},
+        }
+
+    async def _collect() -> OpenCodeTurnObservation:
+        await release_collector.wait()
+        return OpenCodeTurnObservation(
+            assistant_text="",
+            error="stream timeout",
+            output_source="none",
+            terminal_signal=None,
+        )
+
+    result = await coordinate_turn_lifecycle(
+        collect_task=asyncio.create_task(_collect()),
+        command_task=asyncio.create_task(_command()),
+        raw_events=lambda: [],
+    )
+
+    assert result.state == OpenCodeTurnLifecycleState.FAILED
+    assert result.command_completed is True
+    assert result.error == "prompt rejected"
+
+
 def test_lifecycle_snapshot_recovery_is_explicit() -> None:
     result = lifecycle_result_from_observation(
         OpenCodeTurnObservation(
