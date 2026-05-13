@@ -919,6 +919,51 @@ class ManagedThreadMessageRequest(Payload):
         return payload
 
 
+class ManagedThreadStartMessageRequest(ManagedThreadCreateRequest):
+    message: str
+    attachments: list[dict[str, Any]] = Field(default_factory=list)
+    busy_policy: Optional[Literal["queue", "interrupt", "reject"]] = Field(
+        default=None, validation_alias=AliasChoices("busy_policy", "busyPolicy")
+    )
+    reasoning: Optional[str] = None
+    client_turn_id: Optional[str] = Field(
+        default=None, validation_alias=AliasChoices("client_turn_id", "clientTurnId")
+    )
+    defer_execution: bool = Field(
+        default=False,
+        validation_alias=AliasChoices("defer_execution", "deferExecution"),
+    )
+    wait_for_confirmation: bool = Field(
+        default=True,
+        validation_alias=AliasChoices(
+            "wait_for_confirmation",
+            "waitForConfirmation",
+        ),
+    )
+    profile_explicit: bool = Field(default=False, exclude=True)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _capture_start_message_intent(cls, value: Any) -> Any:
+        if not isinstance(value, dict):
+            return value
+        payload = dict(value)
+        payload["notify_on_explicit"] = any(
+            key in value for key in ("notify_on", "notifyOn")
+        )
+        payload["terminal_followup_explicit"] = any(
+            key in value for key in ("terminal_followup", "terminalFollowup")
+        )
+        payload["notify_lane_explicit"] = any(
+            key in value for key in ("notify_lane", "notifyLane")
+        )
+        payload["notify_once_explicit"] = any(
+            key in value for key in ("notify_once", "notifyOnce")
+        )
+        payload["profile_explicit"] = "profile" in value
+        return payload
+
+
 class ManagedThreadCompactRequest(Payload):
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
 

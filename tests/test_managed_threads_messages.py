@@ -159,6 +159,72 @@ def test_send_message_persists_turns_and_reuses_backend_thread(hub_env) -> None:
     assert transcript["content"].strip() == "assistant-output-1"
 
 
+def test_start_thread_message_commits_agent_selection_without_empty_thread(
+    hub_env,
+) -> None:
+    _enable_pma(
+        hub_env.hub_root,
+        model="model-default",
+        reactive_enabled=False,
+        managed_thread_terminal_followup_default=False,
+    )
+    app = create_hub_app(hub_env.hub_root)
+    fake_supervisor = FakeSupervisor(FakeClient(sequential=True))
+
+    with TestClient(app) as client:
+        app.state.app_server_supervisor = fake_supervisor
+        app.state.app_server_events = object()
+        start_resp = client.post(
+            "/hub/pma/thread-starts",
+            json={
+                "message": "run with the selected agent",
+                "agent": "opencode",
+                "model": "zai/glm",
+                "defer_execution": True,
+                "wait_for_confirmation": False,
+                **_repo_owner(hub_env),
+            },
+        )
+        assert start_resp.status_code == 200
+        managed_thread_id = start_resp.json()["managed_thread_id"]
+
+    store = ManagedThreadStore(hub_env.hub_root)
+    thread = store.get_thread(managed_thread_id)
+    assert thread is not None
+    assert thread["agent"] == "opencode"
+    assert thread["metadata"]["model"] == "zai/glm"
+    turns = store.list_turns(managed_thread_id, limit=5)
+    assert len(turns) == 1
+    assert turns[0]["prompt"] == "run with the selected agent"
+    assert turns[0]["model"] == "zai/glm"
+
+
+def test_existing_thread_message_rejects_agent_field(hub_env) -> None:
+    _enable_pma(
+        hub_env.hub_root,
+        reactive_enabled=False,
+        managed_thread_terminal_followup_default=False,
+    )
+    app = create_hub_app(hub_env.hub_root)
+    fake_supervisor = FakeSupervisor(FakeClient(sequential=True))
+
+    with TestClient(app) as client:
+        app.state.app_server_supervisor = fake_supervisor
+        app.state.app_server_events = object()
+        create_resp = client.post(
+            "/hub/pma/threads",
+            json={"agent": "codex", **_repo_owner(hub_env)},
+        )
+        assert create_resp.status_code == 200
+        managed_thread_id = create_resp.json()["thread"]["managed_thread_id"]
+
+        first_resp = client.post(
+            f"/hub/pma/threads/{managed_thread_id}/messages",
+            json={"message": "first prompt", "agent": "codex"},
+        )
+        assert first_resp.status_code == 422
+
+
 def test_send_message_round_trips_structured_attachments(hub_env) -> None:
     _enable_pma(
         hub_env.hub_root,

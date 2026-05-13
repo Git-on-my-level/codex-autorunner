@@ -33,7 +33,7 @@
     planInterruptExistingChat,
     planQueueExistingChat,
     planSendExistingChat,
-    planStartChat
+    planStartAndSendChat
   } from '$lib/application/pmaChatCommands';
   import { withRuntimeBasePath as href } from '$lib/runtime/basePath';
   import { openPmaTailEventSource, type StreamSubscription } from '$lib/api/streaming';
@@ -133,7 +133,11 @@
   let unsubscribeReadModels: (() => void) | null = null;
   let unsubscribeChatIndexSession: (() => void) | null = null;
   let activeChatId = $state<string | null>(null);
-  const chats = $derived<PmaChatSummary[]>(selectPmaChats(readModelState));
+  // New chats are local drafts until the first send commits agent/scope/model
+  // and message in one backend call.
+  let localDraftChat = $state<PmaChatSummary | null>(null);
+  const persistedChats = $derived<PmaChatSummary[]>(selectPmaChats(readModelState));
+  const chats = $derived<PmaChatSummary[]>(localDraftChat ? [localDraftChat, ...persistedChats] : persistedChats);
   const timeline = $derived<PmaTimelineItem[]>(selectPmaTimeline(readModelState, activeChatId));
   const progress = $derived<PmaRunProgress | null>(selectPmaProgress(readModelState, activeChatId));
   const artifacts = $derived<SurfaceArtifact[]>(selectPmaArtifacts(readModelState, activeChatId));
@@ -561,13 +565,14 @@
       if (progress?.status === 'running') clockNowMs = Date.now();
     }, 1000);
     activeRepairInterval = window.setInterval(() => {
-      if (activeChatId) void refreshActive(activeChatId, { quiet: true });
+      if (activeChatId && !isLocalDraftChatId(activeChatId)) void refreshActive(activeChatId, { quiet: true });
     }, 7000);
   });
 
   $effect(() => {
     const requestedDetail = requestedDetailFromUrl();
     if (!requestedDetail) {
+      if (isLocalDraftChatId(activeChatId)) return;
       if (activeChatId !== null) {
         closeStream();
         activeChatId = null;
@@ -624,6 +629,7 @@
   });
 
   function activateRequestedChatFromCurrentRows(): void {
+    if (isLocalDraftChatId(activeChatId)) return;
     const loadedChats = selectPmaChats(readModelEntityStore.snapshot());
     const requestedChat = page.params.chatId ?? page.url.searchParams.get('chat');
     const selectedChatId = chooseActiveChatId(loadedChats, activeChatId, requestedChat);
@@ -779,6 +785,7 @@
 
   async function selectChat(chatId: string): Promise<void> {
     const cached = hasCachedDetail(chatId);
+    if (!isLocalDraftChatId(chatId)) localDraftChat = null;
     activeChatId = chatId;
     detailMode = 'detail';
     loadingActive = !cached;
@@ -808,6 +815,7 @@
     const cached = hasCachedDetail(chatId);
     const loaderResult = activeDetailLoadResult(chatId);
     const loaderOwnsInitialDetail = Boolean(loaderResult && loaderResult.status !== 'cold');
+    if (!isLocalDraftChatId(chatId)) localDraftChat = null;
     activeChatId = chatId;
     detailMode = 'detail';
     loadingActive = !(cached || loaderOwnsInitialDetail);
@@ -1158,6 +1166,7 @@
 
   function retryStream(): void {
     if (!activeChatId) return;
+    if (isLocalDraftChatId(activeChatId)) return;
     connectStream(activeChatId);
     void refreshActive(activeChatId, { quiet: true });
   }
@@ -1197,6 +1206,37 @@
     return newChatKind === 'agent' && canStartCodingAgentChat
       ? 'New coding agent chat'
       : 'New chat';
+  }
+
+  function newDraftChatSummary(): PmaChatSummary {
+    const now = new Date().toISOString();
+    const scope = selectedScope;
+    const chatKind = newChatKind === 'agent' && canStartCodingAgentChat ? 'coding_agent' : 'pma';
+    return {
+      id: `draft:pma:${Date.now()}`,
+      title: newChatDisplayName(),
+      lifecycleStatus: 'draft',
+      status: 'idle',
+      agentId: selectedAgent || null,
+      chatKind,
+      agentProfile: selectedProfile.trim() || null,
+      model: selectedModel.trim() || null,
+      repoId: scope.kind === 'repo' ? scope.resourceId : null,
+      worktreeId: scope.kind === 'worktree' ? scope.resourceId : null,
+      ticketId: null,
+      isTicketFlow: false,
+      progressPercent: null,
+      updatedAt: now,
+      raw: {
+        draft: true,
+        scope_urn: scope.scopeUrn,
+        chat_kind: chatKind
+      }
+    };
+  }
+
+  function isLocalDraftChatId(chatId: string | null): boolean {
+    return Boolean(chatId && chatId.startsWith('draft:pma:'));
   }
 
   function worktreeScopeOption(worktreeId: string): Extract<PmaChatScopeOption, { kind: 'worktree' }> | null {
@@ -1269,32 +1309,12 @@
   async function createChat(): Promise<void> {
     creating = true;
     composeError = null;
-    const result = await executePmaChatCommandPlan(
-      pmaApi,
-      planStartChat(
-        selectedScope,
-        selectedAgent,
-        selectedProfile,
-        selectedModel,
-        newChatDisplayName(),
-        newChatKind === 'agent' && canStartCodingAgentChat ? 'coding_agent' : 'pma'
-      )
-    );
-    if (result.ok) {
-      await invalidateChatMutation(result.data.id);
-      upsertPmaChats([result.data]);
-      activeChatId = result.data.id;
-      detailMode = 'detail';
-      selectedScopeId = scopeIdForChat(result.data) ?? 'local';
-      newChatKind = 'pma';
-      syncSelectorsToActiveChat();
-      markActiveChatRead();
-      connectStream(result.data.id);
-      void refreshActive(result.data.id, { quiet: true });
-      void syncDetailUrl(result.data.id);
-    } else {
-      composeError = result.error;
-    }
+    localDraftChat = newDraftChatSummary();
+    activeChatId = localDraftChat.id;
+    detailMode = 'detail';
+    newChatKind = 'pma';
+    closeStream();
+    void goto(href('/chats'), { replaceState: true });
     creating = false;
   }
 
@@ -1370,11 +1390,27 @@
     const attachmentsForMessage = uploaded;
     const message = composeMessageWithAttachments(draftSnapshot, attachmentsForMessage);
     const targetChatId = activeChatId;
+    const targetIsDraft = isLocalDraftChatId(targetChatId);
     const targetIsRunning = displayedProgress?.status === 'running';
     const profileForSend =
       activeChat?.agentProfile?.trim() || selectedProfile?.trim() || '';
     const commandPlan =
-      busyPolicy === 'interrupt'
+      targetIsDraft
+        ? planStartAndSendChat(
+            selectedScope,
+            selectedAgent,
+            selectedProfile,
+            selectedModel,
+            message,
+            {
+              name: activeChat?.title || newChatDisplayName(),
+              chatKind: newChatKind === 'agent' && canStartCodingAgentChat ? 'coding_agent' : 'pma',
+              attachments: attachmentsForMessage,
+              reasoning: selectedReasoning,
+              clientTurnId: optimisticId
+            }
+          )
+        : busyPolicy === 'interrupt'
         ? planInterruptExistingChat(targetChatId, message, {
             model: selectedModel,
             attachments: attachmentsForMessage,
@@ -1399,18 +1435,37 @@
             });
     const result = await executePmaChatCommandPlan(pmaApi, commandPlan);
     if (result.ok) {
-      await invalidateChatMutation(targetChatId);
+      const committedChatId = targetIsDraft ? result.data.chatId : targetChatId;
+      if (!committedChatId) {
+        removeOptimistic();
+        composeError = {
+          kind: 'parse',
+          status: null,
+          code: 'missing_chat_id',
+          message: 'Started chat response did not include a managed thread id.'
+        };
+        sending = false;
+        return;
+      }
+      if (targetIsDraft) {
+        localDraftChat = null;
+        activeChatId = committedChatId;
+        detailMode = 'detail';
+        connectStream(committedChatId);
+        void syncDetailUrl(committedChatId);
+      }
+      await invalidateChatMutation(committedChatId);
       const optimisticFromBackend = optimisticUserTimelineItemFromSend(
         result.data.raw,
         draftSnapshot,
-        targetChatId
+        committedChatId
       );
       if (optimisticFromBackend) {
         readModelEntityStore.replacePmaTimeline(
-          targetChatId,
-          reconcilePmaTimeline(currentTimeline(targetChatId), [optimisticFromBackend])
+          committedChatId,
+          reconcilePmaTimeline(currentTimeline(committedChatId), [optimisticFromBackend])
         );
-        readModelEntityStore.reconcileOptimisticTimelineItem(targetChatId, optimisticId, {
+        readModelEntityStore.reconcileOptimisticTimelineItem(committedChatId, optimisticId, {
           itemId: optimisticFromBackend.id,
           kind: 'user_message',
           role: 'user',
@@ -1421,11 +1476,11 @@
           backendMessageId: optimisticFromBackend.turnId || undefined
         });
       }
-      await refreshActive(targetChatId, { quiet: true });
+      await refreshActive(committedChatId, { quiet: true });
       removeOptimistic();
       if (activeChat?.agentId === 'hermes' && profileForSend.trim()) {
         const stamped = profileForSend.trim();
-        const chat = chats.find((row) => row.id === targetChatId);
+        const chat = chats.find((row) => row.id === committedChatId);
         if (chat) upsertPmaChats([{ ...chat, agentProfile: stamped }]);
       }
     } else {
@@ -2247,6 +2302,17 @@
       </div>
       {#if activeChat && (showStreamHealthAside || !isPmaChatArchived(activeChat))}
         <div class="chat-header-tools">
+          {#if !isPmaChatArchived(activeChat)}
+            <button
+              class="chat-header-action"
+              type="button"
+              onclick={() => archiveChat(activeChat.id)}
+              disabled={archiving}
+              aria-label="Archive this chat"
+            >
+              {archiving ? 'Archiving...' : 'Archive'}
+            </button>
+          {/if}
           {#if showStreamHealthAside}
             <aside class="chat-header-aside" aria-label="Chat stream status">
               <div class={`stream-health ${streamState}`} role="status">
@@ -2263,17 +2329,6 @@
                 {/if}
               </div>
             </aside>
-          {/if}
-          {#if !isPmaChatArchived(activeChat)}
-            <button
-              class="chat-header-action"
-              type="button"
-              onclick={() => archiveChat(activeChat.id)}
-              disabled={archiving}
-              aria-label="Archive this chat"
-            >
-              {archiving ? 'Archiving...' : 'Archive'}
-            </button>
           {/if}
         </div>
       {/if}
@@ -2334,19 +2389,40 @@
         <span class="status-dot" aria-hidden="true"></span>
         <strong>{statusLabel(statusBar.state)}</strong>
         {#if statusBar.phase && statusBar.phase.toLowerCase() !== statusLabel(statusBar.state).toLowerCase()}
-          <span>{statusBar.phase}</span>
+          <span class="meta meta-phase">{statusBar.phase}</span>
         {/if}
-        {#if displayedProgress?.elapsedSeconds !== null && displayedProgress?.elapsedSeconds !== undefined}
-          <span>{statusBar.elapsedLabel}</span>
+        {#if statusBar.elapsedValue}
+          <span class="meta meta-elapsed" title={statusBar.elapsedLabel}>
+            <span class="meta-num">{statusBar.elapsedValue}</span><span class="meta-suffix"> elapsed</span>
+          </span>
         {/if}
-        {#if (displayedProgress?.queueDepth ?? 0) > 0}
-          <span>{statusBar.queueDepthLabel}</span>
+        {#if statusBar.queueDepth > 0}
+          <span class="meta meta-queue" title={statusBar.queueDepthLabel}>
+            <span class="meta-prefix">queue </span><span class="meta-num">{statusBar.queueDepth}</span>
+          </span>
         {/if}
-        {#if statusBar.tokenUsageLabel}
-          <span>{statusBar.tokenUsageLabel}</span>
+        {#if statusBar.totalTokensFull}
+          <span class="meta meta-tokens" title={statusBar.tokenUsageLabel ?? ''}>
+            <span class="meta-prefix">tokens </span><span
+              class="meta-num meta-num-full">{statusBar.totalTokensFull}</span><span
+              class="meta-num meta-num-compact">{statusBar.totalTokensCompact}</span><span
+              class="meta-suffix"> total</span>
+            {#if statusBar.inputTokensFull}
+              <span class="meta-extra"><span class="meta-sep"> · </span><span
+                class="meta-num meta-num-full">{statusBar.inputTokensFull}</span><span
+                class="meta-num meta-num-compact">{statusBar.inputTokensCompact}</span><span
+                class="meta-suffix"> in</span></span>
+            {/if}
+            {#if statusBar.outputTokensFull}
+              <span class="meta-extra"><span class="meta-sep"> · </span><span
+                class="meta-num meta-num-full">{statusBar.outputTokensFull}</span><span
+                class="meta-num meta-num-compact">{statusBar.outputTokensCompact}</span><span
+                class="meta-suffix"> out</span></span>
+            {/if}
+          </span>
         {/if}
         {#if statusBar.contextRemainingLabel && statusBar.contextRemainingPercent !== null}
-          <span class="context-meter" title="Context remaining">
+          <span class="context-meter" title={`Context remaining ${statusBar.contextRemainingPercent}%`}>
             <span class="context-meter-label">{statusBar.contextRemainingLabel}</span>
             <span class="context-meter-track" aria-hidden="true">
               <span style={`width: ${statusBar.contextRemainingPercent}%`}></span>

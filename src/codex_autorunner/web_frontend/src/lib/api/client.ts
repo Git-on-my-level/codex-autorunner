@@ -285,6 +285,14 @@ export class PmaApiClient {
         }),
         (payload) => mapPmaChatSummary(asRecord(payload.thread ?? payload))
       ),
+    startChatWithMessage: async (body: unknown): Promise<ApiResult<PmaChatMessage>> =>
+      mapResult(
+        await this.requestJson<JsonRecord>('/hub/pma/thread-starts', {
+          method: 'POST',
+          body
+        }),
+        (payload) => mapPmaChatMessage(asRecord(payload.message ?? payload.turn ?? payload))
+      ),
     getChat: async (chatId: string): Promise<ApiResult<PmaChatSummary>> =>
       mapResult(await this.getJson<JsonRecord>(`/hub/pma/threads/${encodeURIComponent(chatId)}`), (payload) =>
         mapPmaChatSummary(asRecord(payload.thread))

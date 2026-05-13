@@ -238,8 +238,16 @@ export type PmaStatusBar = {
   state: WorkStatus;
   phase: string;
   elapsedLabel: string;
+  elapsedValue: string | null;
+  queueDepth: number;
   queueDepthLabel: string;
   tokenUsageLabel: string | null;
+  totalTokensFull: string | null;
+  totalTokensCompact: string | null;
+  inputTokensFull: string | null;
+  inputTokensCompact: string | null;
+  outputTokensFull: string | null;
+  outputTokensCompact: string | null;
   contextRemainingLabel: string | null;
   contextRemainingPercent: number | null;
 };
@@ -520,6 +528,9 @@ export type ManagedThreadMessagePayload = {
   defer_execution?: boolean;
   wait_for_confirmation?: boolean;
 };
+
+export type ManagedThreadStartMessagePayload = ManagedThreadCreatePayload &
+  ManagedThreadMessagePayload;
 
 const activeStatuses: WorkStatus[] = ['running'];
 const waitingStatuses: WorkStatus[] = ['waiting', 'blocked'];
@@ -1359,18 +1370,42 @@ export function buildPmaStatusBar(progress: PmaRunProgress | null, chat: PmaChat
   const state = progress?.status ?? chat?.status ?? 'idle';
   const tokenUsage = extractTokenUsage(progress?.raw) ?? extractTokenUsage(chat?.raw);
   const contextRemainingPercent = contextRemainingPercentFromUsage(tokenUsage);
+  const elapsedValue =
+    progress?.elapsedSeconds === null || progress?.elapsedSeconds === undefined
+      ? null
+      : formatDuration(progress.elapsedSeconds);
+  const queueDepth = progress?.queueDepth ?? 0;
+  const bucket = usageBucket(tokenUsage);
+  const totalTokens = tokenNumber(bucket, 'totalTokens', 'total_tokens');
+  const inputTokens = tokenNumber(bucket, 'inputTokens', 'input_tokens');
+  const outputTokens = tokenNumber(bucket, 'outputTokens', 'output_tokens');
   return {
     state,
     phase: progress?.phase?.replace(/_/g, ' ') || statusLabel(state),
-    elapsedLabel: progress?.elapsedSeconds === null || progress?.elapsedSeconds === undefined
-      ? 'elapsed n/a'
-      : `${formatDuration(progress.elapsedSeconds)} elapsed`,
-    queueDepthLabel: `queue ${progress?.queueDepth ?? 0}`,
+    elapsedLabel: elapsedValue === null ? 'elapsed n/a' : `${elapsedValue} elapsed`,
+    elapsedValue,
+    queueDepth,
+    queueDepthLabel: `queue ${queueDepth}`,
     tokenUsageLabel: formatTokenUsageLabel(tokenUsage),
+    totalTokensFull: totalTokens === null ? null : formatCompactNumber(totalTokens),
+    totalTokensCompact: totalTokens === null ? null : formatAbbreviatedNumber(totalTokens),
+    inputTokensFull: inputTokens === null ? null : formatCompactNumber(inputTokens),
+    inputTokensCompact: inputTokens === null ? null : formatAbbreviatedNumber(inputTokens),
+    outputTokensFull: outputTokens === null ? null : formatCompactNumber(outputTokens),
+    outputTokensCompact: outputTokens === null ? null : formatAbbreviatedNumber(outputTokens),
     contextRemainingLabel:
       contextRemainingPercent === null ? null : `ctx ${contextRemainingPercent}%`,
     contextRemainingPercent
   };
+}
+
+function formatAbbreviatedNumber(value: number): string {
+  const abs = Math.abs(value);
+  if (abs < 1000) return `${Math.round(value)}`;
+  if (abs < 10000) return `${(value / 1000).toFixed(1)}k`;
+  if (abs < 1000000) return `${Math.round(value / 1000)}k`;
+  if (abs < 10000000) return `${(value / 1000000).toFixed(1)}M`;
+  return `${Math.round(value / 1000000)}M`;
 }
 
 function recordValue(value: unknown): Record<string, unknown> | null {
@@ -2194,6 +2229,33 @@ export function buildManagedThreadMessagePayload(
     busy_policy: busyPolicy ?? undefined,
     defer_execution: true,
     wait_for_confirmation: false
+  };
+}
+
+export function buildManagedThreadStartMessagePayload(
+  scope: PmaChatScopeOption,
+  agent: string,
+  profile: string,
+  model: string,
+  name: string,
+  chatKind: PmaChatKind,
+  message: string,
+  attachments: Array<PendingAttachment | DocumentFileIntentPayload> = [],
+  reasoning = '',
+  clientTurnId = ''
+): ManagedThreadStartMessagePayload {
+  return {
+    ...buildManagedThreadCreatePayload(agent, scope, name, model, profile, chatKind),
+    ...buildManagedThreadMessagePayload(
+      message,
+      model,
+      false,
+      attachments,
+      reasoning,
+      profile,
+      null,
+      clientTurnId
+    )
   };
 }
 

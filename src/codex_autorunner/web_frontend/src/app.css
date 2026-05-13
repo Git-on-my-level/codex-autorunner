@@ -1419,6 +1419,60 @@ a.scope-chip-label:hover {
   border-bottom: 1px solid var(--color-border-subtle);
 }
 
+/* Wide viewports: two-column grid so Archive lines up with the title row and
+   stream status lines up with the scope row (e.g. “Hub workspace”). */
+@media (min-width: 761px) {
+  .chat-header {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) max-content;
+    grid-template-rows: auto auto auto;
+    column-gap: var(--space-4);
+    row-gap: 2px;
+    justify-content: initial;
+    align-items: start;
+  }
+
+  .chat-header-copy {
+    display: contents;
+  }
+
+  .chat-header-tools {
+    display: contents;
+  }
+
+  .chat-header-copy > h1 {
+    grid-column: 1;
+    grid-row: 1;
+    min-width: 0;
+  }
+
+  .chat-header-copy > .chat-header-scope-line {
+    grid-column: 1;
+    grid-row: 2;
+    min-width: 0;
+  }
+
+  .chat-header-copy > .chat-header-subtitle {
+    grid-column: 1;
+    grid-row: 3;
+    min-width: 0;
+  }
+
+  .chat-header-tools > .chat-header-action {
+    grid-column: 2;
+    grid-row: 1;
+    justify-self: end;
+    align-self: start;
+  }
+
+  .chat-header-tools > .chat-header-aside {
+    grid-column: 2;
+    grid-row: 2;
+    justify-self: end;
+    align-self: center;
+  }
+}
+
 .chat-header h1,
 .chat-header h2 {
   font-size: var(--font-size-3);
@@ -1435,9 +1489,10 @@ a.scope-chip-label:hover {
 
 .chat-header-tools {
   display: flex;
-  align-items: flex-start;
-  justify-content: flex-end;
-  gap: var(--space-3);
+  flex-direction: column;
+  align-items: flex-end;
+  justify-content: flex-start;
+  gap: 4px;
   flex: 0 0 auto;
   min-width: 0;
 }
@@ -1596,8 +1651,9 @@ a.scope-chip-label:hover {
   align-items: flex-end;
   gap: 4px;
   flex: 0 0 auto;
+  width: max-content;
+  max-width: min(560px, 50vw);
   min-width: 0;
-  max-width: 50%;
 }
 
 .chat-header-aside .pma-status-bar {
@@ -1629,6 +1685,12 @@ a.scope-chip-label:hover {
 .chat-header-aside .stream-health {
   margin: 0;
   padding: 0;
+}
+
+.chat-header-aside .stream-health.connecting span:nth-child(2) {
+  white-space: nowrap;
+  min-width: max-content;
+  overflow-wrap: normal;
 }
 
 .chat-header-config {
@@ -2336,7 +2398,7 @@ textarea:hover {
   background: var(--color-surface-sunken);
   color: var(--color-ink-muted);
   font-size: var(--font-size-0);
-  overflow-x: auto;
+  overflow: hidden;
   white-space: nowrap;
 }
 
@@ -2344,10 +2406,20 @@ textarea:hover {
   color: var(--color-ink);
   font-size: var(--font-size-0);
   font-weight: 650;
+  flex-shrink: 0;
 }
 
-.pma-status-bar span:not(.status-dot) {
-  min-width: max-content;
+.pma-status-bar > .status-dot {
+  flex-shrink: 0;
+}
+
+.pma-status-bar .meta {
+  min-width: 0;
+  flex-shrink: 0;
+}
+
+.pma-status-bar .meta-num-compact {
+  display: none;
 }
 
 .pma-status-bar.running .status-dot {
@@ -2368,6 +2440,34 @@ textarea:hover {
   width: 100%;
   margin-top: var(--space-3);
   border-radius: 8px;
+  container-type: inline-size;
+  container-name: status-bar;
+}
+
+@container status-bar (max-width: 640px) {
+  .composer-status-bar .meta-phase { display: none; }
+}
+
+@container status-bar (max-width: 560px) {
+  .composer-status-bar .meta-tokens .meta-extra { display: none; }
+}
+
+@container status-bar (max-width: 480px) {
+  .composer-status-bar .meta-prefix,
+  .composer-status-bar .meta-suffix { display: none; }
+}
+
+@container status-bar (max-width: 420px) {
+  .composer-status-bar .meta-num-full { display: none; }
+  .composer-status-bar .meta-num-compact { display: inline; }
+}
+
+@container status-bar (max-width: 360px) {
+  .composer-status-bar .context-meter-track { display: none; }
+}
+
+@container status-bar (max-width: 300px) {
+  .composer-status-bar .meta-elapsed { display: none; }
 }
 
 .context-meter {

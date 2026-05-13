@@ -2,10 +2,12 @@ import type { ApiResult, PmaApiClient } from '$lib/api/client';
 import type { PmaChatMessage, PmaChatSummary } from '$lib/viewModels/domain';
 import {
   buildManagedThreadCreatePayload,
+  buildManagedThreadStartMessagePayload,
   buildManagedThreadMessagePayload,
   type DocumentFileIntentPayload,
   type ManagedThreadCreatePayload,
   type ManagedThreadMessagePayload,
+  type ManagedThreadStartMessagePayload,
   type PendingAttachment,
   type PmaChatScopeOption
 } from '$lib/viewModels/pmaChat';
@@ -24,13 +26,18 @@ export type SendExistingPmaChatPlan = {
   body: ManagedThreadMessagePayload;
 };
 
+export type StartAndSendPmaChatPlan = {
+  kind: 'StartAndSendChat';
+  body: ManagedThreadStartMessagePayload;
+};
+
 export type ForkPmaChatPlan = {
   kind: 'ForkChat';
   threadId: string;
   body: PmaChatForkPayload;
 };
 
-export type PmaChatCommandPlan = StartPmaChatPlan | SendExistingPmaChatPlan | ForkPmaChatPlan;
+export type PmaChatCommandPlan = StartPmaChatPlan | StartAndSendPmaChatPlan | SendExistingPmaChatPlan | ForkPmaChatPlan;
 
 export type PmaChatForkPayload = {
   name?: string;
@@ -47,7 +54,7 @@ export type ExistingPmaChatMessageOptions = {
 };
 
 type PmaCommandClient = {
-  pma: Pick<PmaApiClient['pma'], 'createChat' | 'sendMessage' | 'forkThread'>;
+  pma: Pick<PmaApiClient['pma'], 'createChat' | 'startChatWithMessage' | 'sendMessage' | 'forkThread'>;
 };
 
 function requireThreadId(threadId: string): string {
@@ -67,6 +74,37 @@ export function planStartChat(
   return {
     kind: 'StartChat',
     body: buildManagedThreadCreatePayload(agent, scope, name, model, profile, chatKind)
+  };
+}
+
+export function planStartAndSendChat(
+  scope: PmaChatScopeOption,
+  agent: string,
+  profile: string,
+  model: string,
+  message: string,
+  options: {
+    name?: string;
+    chatKind?: PmaChatKind;
+    attachments?: Array<PendingAttachment | DocumentFileIntentPayload>;
+    reasoning?: string;
+    clientTurnId?: string;
+  } = {}
+): StartAndSendPmaChatPlan {
+  return {
+    kind: 'StartAndSendChat',
+    body: buildManagedThreadStartMessagePayload(
+      scope,
+      agent,
+      profile,
+      model,
+      options.name ?? 'New chat',
+      options.chatKind ?? 'pma',
+      message,
+      options.attachments ?? [],
+      options.reasoning ?? '',
+      options.clientTurnId ?? ''
+    )
   };
 }
 
@@ -122,13 +160,14 @@ export async function executePmaChatCommandPlan(
 ): Promise<ApiResult<PmaChatSummary>>;
 export async function executePmaChatCommandPlan(
   client: PmaCommandClient,
-  plan: SendExistingPmaChatPlan
+  plan: StartAndSendPmaChatPlan | SendExistingPmaChatPlan
 ): Promise<ApiResult<PmaChatMessage>>;
 export async function executePmaChatCommandPlan(
   client: PmaCommandClient,
   plan: PmaChatCommandPlan
 ): Promise<ApiResult<PmaChatSummary> | ApiResult<PmaChatMessage>> {
   if (plan.kind === 'StartChat') return client.pma.createChat(plan.body);
+  if (plan.kind === 'StartAndSendChat') return client.pma.startChatWithMessage(plan.body);
   if (plan.kind === 'ForkChat') return client.pma.forkThread(plan.threadId, plan.body);
   return client.pma.sendMessage(plan.threadId, plan.body);
 }

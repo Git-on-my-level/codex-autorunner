@@ -53,12 +53,16 @@ from .....core.orchestration.runtime_threads import (
 )
 from .....core.orchestration.service import BusyInterruptFailedError
 from .....core.text_utils import _truncate_text
-from ...schemas import ManagedThreadMessageRequest
+from ...schemas import ManagedThreadMessageRequest, ManagedThreadStartMessageRequest
 from ...services.pma.managed_thread_followup import (
     ManagedThreadAutomationClient,
     ManagedThreadAutomationUnavailable,
 )
 from .automation_adapter import normalize_optional_text
+from .managed_thread_route_helpers import (
+    provision_managed_thread_workspace,
+    resolve_managed_thread_create_resolution,
+)
 from .managed_thread_runtime_control import (
     deliver_bound_chat_assistant_output,
     ensure_queue_worker,
@@ -84,6 +88,9 @@ from .managed_thread_runtime_payloads import (
 )
 from .managed_thread_runtime_payloads import (
     get_live_thread_runtime_binding as _get_live_thread_runtime_binding,
+)
+from .managed_threads import (
+    _cleanup_failed_provisioned_worktree,
 )
 from .managed_threads import (
     build_managed_thread_orchestration_service as _shared_managed_thread_orchestration_service,
@@ -145,6 +152,79 @@ def _track_managed_thread_task(app: Any, task: asyncio.Task[Any]) -> None:
     task_pool = _managed_thread_task_pool(app)
     task_pool.add(task)
     task.add_done_callback(lambda done: task_pool.discard(done))
+
+
+async def _create_managed_thread_for_first_message(
+    request: Request,
+    payload: ManagedThreadStartMessageRequest,
+) -> str:
+    resolved = resolve_managed_thread_create_resolution(request, payload)
+    provisioned_workspace = await asyncio.to_thread(
+        provision_managed_thread_workspace,
+        request,
+        resolution=resolved,
+        display_name=normalize_optional_text(payload.name),
+    )
+    service = _build_managed_thread_orchestration_service(request)
+    try:
+        try:
+            if resolved.scope is not None:
+                thread = service.create_thread_target(
+                    resolved.agent_id,
+                    provisioned_workspace.workspace_root,
+                    scope=resolved.scope,
+                    display_name=normalize_optional_text(payload.name),
+                    metadata=resolved.metadata,
+                )
+            else:
+                thread = service.create_thread_target(
+                    resolved.agent_id,
+                    provisioned_workspace.workspace_root,
+                    repo_id=resolved.repo_id,
+                    resource_kind=resolved.resource_kind,
+                    resource_id=resolved.resource_id,
+                    display_name=normalize_optional_text(payload.name),
+                    metadata=resolved.metadata,
+                )
+        except Exception:
+            await _cleanup_failed_provisioned_worktree(
+                request,
+                worktree_repo_id=provisioned_workspace.worktree_repo_id,
+            )
+            raise
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return str(thread.thread_target_id)
+
+
+def _start_payload_to_message_payload(
+    payload: ManagedThreadStartMessageRequest,
+) -> ManagedThreadMessageRequest:
+    return ManagedThreadMessageRequest.model_validate(
+        {
+            "message": payload.message,
+            "attachments": payload.attachments,
+            "busy_policy": payload.busy_policy,
+            "model": payload.model,
+            "reasoning": payload.reasoning,
+            "profile": payload.profile,
+            "client_turn_id": payload.client_turn_id,
+            "defer_execution": payload.defer_execution,
+            "wait_for_confirmation": payload.wait_for_confirmation,
+            "notify_on": payload.notify_on,
+            "terminal_followup": payload.terminal_followup,
+            "notify_lane": payload.notify_lane,
+            "notify_once": payload.notify_once,
+        }
+    )
+
+
+def _archive_new_thread_without_turns(request: Request, managed_thread_id: str) -> None:
+    hub_root = request.app.state.config.root
+    thread_store = ManagedThreadStore(hub_root)
+    if thread_store.list_turns(managed_thread_id, limit=1):
+        return
+    thread_store.archive_thread(managed_thread_id)
 
 
 def _runtime_thread_execution_from_started_pair(
@@ -1227,6 +1307,27 @@ def build_managed_thread_runtime_routes(
         if notification is not None:
             response["notification"] = notification
         return response
+
+    @router.post("/thread-starts")
+    async def start_managed_thread_message(
+        request: Request,
+        payload: ManagedThreadStartMessageRequest,
+    ) -> Any:
+        # A new chat becomes durable only with its first turn; failures before a
+        # turn exists must not leave a selectable empty runtime thread behind.
+        managed_thread_id = await _create_managed_thread_for_first_message(
+            request,
+            payload,
+        )
+        try:
+            return await send_managed_thread_message(
+                managed_thread_id,
+                request,
+                _start_payload_to_message_payload(payload),
+            )
+        except Exception:
+            _archive_new_thread_without_turns(request, managed_thread_id)
+            raise
 
     @router.post("/threads/{managed_thread_id}/interrupt")
     async def interrupt_managed_thread(

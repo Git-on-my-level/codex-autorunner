@@ -655,8 +655,16 @@ describe('PMA chat view helpers', () => {
       state: 'running',
       phase: 'testing',
       elapsedLabel: '2m 5s elapsed',
+      elapsedValue: '2m 5s',
+      queueDepth: 2,
       queueDepthLabel: 'queue 2',
       tokenUsageLabel: null,
+      totalTokensFull: null,
+      totalTokensCompact: null,
+      inputTokensFull: null,
+      inputTokensCompact: null,
+      outputTokensFull: null,
+      outputTokensCompact: null,
       contextRemainingLabel: null,
       contextRemainingPercent: null
     });

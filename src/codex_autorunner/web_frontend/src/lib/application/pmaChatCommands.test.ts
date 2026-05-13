@@ -7,6 +7,7 @@ import {
   planInterruptExistingChat,
   planQueueExistingChat,
   planSendExistingChat,
+  planStartAndSendChat,
   planStartChat
 } from './pmaChatCommands';
 
@@ -50,6 +51,26 @@ describe('PMA chat command plans', () => {
         reasoning: undefined,
         busy_policy: undefined,
         defer_execution: true,
+        wait_for_confirmation: false
+      }
+    });
+  });
+
+  it('plans draft first sends as a single start-and-send command', () => {
+    expect(
+      planStartAndSendChat(localPmaChatScopeOption(), 'hermes', 'planning', '', 'Hello', {
+        reasoning: 'high',
+        clientTurnId: 'client-1'
+      })
+    ).toMatchObject({
+      kind: 'StartAndSendChat',
+      body: {
+        agent: 'hermes',
+        profile: 'planning',
+        message: 'Hello',
+        reasoning: 'high',
+        client_turn_id: 'client-1',
+        scope_urn: 'hub',
         wait_for_confirmation: false
       }
     });
@@ -112,6 +133,24 @@ describe('PMA chat command execution', () => {
         method: 'POST',
         body: JSON.stringify({ name: 'Forked chat' })
       })
+    );
+  });
+
+  it('executes draft start-and-send through the composite endpoint', async () => {
+    const fetcher = vi.fn(async () =>
+      Response.json({ managed_thread_id: 'thread-new', managed_turn_id: 'turn-1', delivered_message: 'Hello' })
+    ) as unknown as typeof fetch;
+    const client = new PmaApiClient(fetcher);
+
+    const result = await executePmaChatCommandPlan(
+      client,
+      planStartAndSendChat(localPmaChatScopeOption(), 'hermes', '', '', 'Hello')
+    );
+
+    expect(result.ok).toBe(true);
+    expect(fetcher).toHaveBeenCalledWith(
+      '/hub/pma/thread-starts',
+      expect.objectContaining({ method: 'POST' })
     );
   });
 });
