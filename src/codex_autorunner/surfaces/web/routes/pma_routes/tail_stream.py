@@ -260,6 +260,7 @@ async def _build_managed_thread_tail_snapshot(
     level: str,
     since_ms: Optional[int],
     resume_after: Optional[int],
+    resume_after_managed_turn_id: Optional[str] = None,
     include_runtime_fallback: bool = True,
 ) -> dict[str, Any]:
     context = get_pma_request_context(request)
@@ -272,7 +273,11 @@ async def _build_managed_thread_tail_snapshot(
     )
     if thread is None:
         raise HTTPException(status_code=404, detail="Managed thread not found")
+    requested_resume_turn_id = normalize_optional_text(resume_after_managed_turn_id)
     if turn is None:
+        effective_resume_after = (
+            0 if requested_resume_turn_id else int(resume_after or 0)
+        )
         lifecycle = build_managed_thread_stream_lifecycle(
             managed_turn_id=None,
             turn_status=None,
@@ -288,7 +293,7 @@ async def _build_managed_thread_tail_snapshot(
             "turn_status": None,
             "lifecycle_events": [],
             "events": [],
-            "last_event_id": int(resume_after or 0),
+            "last_event_id": effective_resume_after,
             "elapsed_seconds": None,
             "idle_seconds": None,
             "activity": "idle",
@@ -302,6 +307,12 @@ async def _build_managed_thread_tail_snapshot(
         }
 
     managed_turn_id = str(turn.execution_id or "")
+    effective_resume_after = int(resume_after or 0)
+    if (
+        requested_resume_turn_id is not None
+        and requested_resume_turn_id != managed_turn_id
+    ):
+        effective_resume_after = 0
     turn_status = str(turn.status or "").strip().lower()
     started_at = normalize_optional_text(turn.started_at)
     finished_at = normalize_optional_text(turn.finished_at)
@@ -339,7 +350,7 @@ async def _build_managed_thread_tail_snapshot(
         persisted_timeline_entries,
         level=level,
         since_ms=since_ms,
-        resume_after=resume_after,
+        resume_after=effective_resume_after,
     )
     if (
         include_runtime_fallback
@@ -353,7 +364,7 @@ async def _build_managed_thread_tail_snapshot(
                 raw_events = await list_fn(
                     str(backend_thread_id),
                     str(backend_turn_id),
-                    after_id=int(resume_after or 0),
+                    after_id=effective_resume_after,
                     limit=limit,
                 )
             except (
@@ -362,7 +373,7 @@ async def _build_managed_thread_tail_snapshot(
                 raw_events = []
             state = RuntimeThreadRunEventState()
             projection_state = ProgressProjectionState()
-            event_id_start = int(resume_after or 0)
+            event_id_start = effective_resume_after
             for raw_event in raw_events:
                 if isinstance(raw_event, dict):
                     activity_at = _event_received_at_iso(raw_event)
@@ -389,7 +400,7 @@ async def _build_managed_thread_tail_snapshot(
             if len(tail_events) > limit:
                 tail_events = tail_events[-limit:]
 
-    last_event_id = int(resume_after or 0)
+    last_event_id = effective_resume_after
     last_activity_at: Optional[str] = raw_last_activity_at
     if tail_events:
         last_event_id = int(tail_events[-1].get("event_id") or last_event_id)
@@ -554,6 +565,7 @@ def build_managed_thread_tail_routes(
         limit: int = 20,
         since: Optional[str] = None,
         since_event_id: Optional[int] = None,
+        since_managed_turn_id: Optional[str] = None,
         level: str = "info",
     ) -> dict[str, Any]:
         if limit <= 0:
@@ -568,6 +580,7 @@ def build_managed_thread_tail_routes(
             level=normalize_tail_level(level),
             since_ms=since_ms_from_duration(since),
             resume_after=resolve_resume_after(request, since_event_id),
+            resume_after_managed_turn_id=since_managed_turn_id,
         )
         thread, serialized_thread, queued_turns, queue_depth = await asyncio.to_thread(
             _load_managed_thread_status_state,
@@ -593,6 +606,7 @@ def build_managed_thread_tail_routes(
         limit: int = 50,
         since: Optional[str] = None,
         since_event_id: Optional[int] = None,
+        since_managed_turn_id: Optional[str] = None,
         level: str = "info",
     ) -> dict[str, Any]:
         if limit <= 0:
@@ -606,6 +620,7 @@ def build_managed_thread_tail_routes(
             level=normalize_tail_level(level),
             since_ms=since_ms_from_duration(since),
             resume_after=resolve_resume_after(request, since_event_id),
+            resume_after_managed_turn_id=since_managed_turn_id,
         )
 
     @router.get("/threads/{managed_thread_id}/tail/events")
@@ -615,6 +630,7 @@ def build_managed_thread_tail_routes(
         limit: int = 50,
         since: Optional[str] = None,
         since_event_id: Optional[int] = None,
+        since_managed_turn_id: Optional[str] = None,
         level: str = "info",
         once: bool = False,
     ):
@@ -639,6 +655,7 @@ def build_managed_thread_tail_routes(
             level=normalized_level,
             since_ms=since_ms,
             resume_after=resolve_resume_after(request, since_event_id),
+            resume_after_managed_turn_id=since_managed_turn_id,
             include_runtime_fallback=False,
         )
 
@@ -651,6 +668,9 @@ def build_managed_thread_tail_routes(
             ):
                 yield frame
             last_event_id = int(snapshot.get("last_event_id") or 0)
+            last_managed_turn_id = normalize_optional_text(
+                snapshot.get("managed_turn_id")
+            )
             yield (
                 "event: progress\ndata: "
                 f"{json.dumps(_progress_stream_payload(snapshot), ensure_ascii=True)}\n\n"
@@ -670,6 +690,7 @@ def build_managed_thread_tail_routes(
                     level=normalized_level,
                     since_ms=since_ms,
                     resume_after=last_event_id,
+                    resume_after_managed_turn_id=last_managed_turn_id,
                     include_runtime_fallback=False,
                 )
                 for frame in _tail_event_sse_frames(
@@ -679,6 +700,9 @@ def build_managed_thread_tail_routes(
                 ):
                     yield frame
                 last_event_id = int(refreshed.get("last_event_id") or last_event_id)
+                last_managed_turn_id = normalize_optional_text(
+                    refreshed.get("managed_turn_id")
+                )
                 yield (
                     "event: progress\ndata: "
                     f"{json.dumps(_progress_stream_payload(refreshed), ensure_ascii=True)}\n\n"

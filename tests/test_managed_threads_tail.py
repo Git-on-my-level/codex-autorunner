@@ -1154,6 +1154,76 @@ def test_managed_thread_tail_stream_resumes_with_last_event_id(hub_env) -> None:
         assert "\nid: 1\n" not in body
 
 
+def test_managed_thread_tail_stream_ignores_resume_cursor_from_previous_turn(
+    hub_env,
+) -> None:
+    _enable_pma(hub_env.hub_root)
+    app = create_hub_app(hub_env.hub_root)
+    managed_thread_id, first_turn_id = _seed_managed_thread_with_events(hub_env, app)
+    store = ManagedThreadStore(hub_env.hub_root)
+
+    persist_turn_timeline(
+        hub_env.hub_root,
+        execution_id=first_turn_id,
+        target_kind="thread_target",
+        target_id=managed_thread_id,
+        repo_id=hub_env.repo_id,
+        metadata={"agent": "codex", "status": "ok"},
+        events=[
+            OutputDelta(
+                timestamp="2026-04-06T10:00:00Z",
+                content="first turn first event",
+                delta_type="assistant_stream",
+            ),
+            OutputDelta(
+                timestamp="2026-04-06T10:00:01Z",
+                content="first turn second event",
+                delta_type="assistant_stream",
+            ),
+        ],
+    )
+    store.mark_turn_finished(
+        first_turn_id,
+        status="ok",
+        assistant_text="done",
+        backend_turn_id="backend-turn-1",
+    )
+
+    second_turn = store.create_turn(managed_thread_id, prompt="second prompt")
+    second_turn_id = str(second_turn["managed_turn_id"])
+    store.set_turn_backend_turn_id(second_turn_id, "backend-turn-2")
+    persist_turn_timeline(
+        hub_env.hub_root,
+        execution_id=second_turn_id,
+        target_kind="thread_target",
+        target_id=managed_thread_id,
+        repo_id=hub_env.repo_id,
+        metadata={"agent": "codex", "status": "running"},
+        events=[
+            OutputDelta(
+                timestamp="2026-04-06T10:00:02Z",
+                content="second turn first event",
+                delta_type="assistant_stream",
+            ),
+        ],
+    )
+
+    with TestClient(app) as client:
+        resp = client.get(
+            f"/hub/pma/threads/{managed_thread_id}/tail/events",
+            params={
+                "since_event_id": 2,
+                "since_managed_turn_id": first_turn_id,
+                "once": True,
+            },
+        )
+        assert resp.status_code == 200
+        body = resp.text
+        assert f'"managed_turn_id": "{second_turn_id}"' in body
+        assert "second turn first event" in body
+        assert "\nid: 1\n" in body
+
+
 def test_managed_thread_tail_stream_preserves_since_filter_for_live_events(
     hub_env,
 ) -> None:

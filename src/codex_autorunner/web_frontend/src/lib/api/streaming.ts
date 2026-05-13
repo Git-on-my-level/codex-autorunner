@@ -122,23 +122,33 @@ export function openPmaTailEventSource(
   let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   let attempt = 0;
   let lastEventId: string | null = null;
+  let lastManagedTurnId: string | null = null;
   const handle = (message: MessageEvent) => {
     attempt = 0;
+    const event = normalizePmaTailStreamEvent({
+      id: message.lastEventId || null,
+      event: message.type || 'message',
+      data: parseJson(message.data),
+      retry: null
+    });
+    const managedTurnId = managedTurnIdFromPayload(event.payload);
+    if (managedTurnId && managedTurnId !== lastManagedTurnId) {
+      lastManagedTurnId = managedTurnId;
+      lastEventId = null;
+    }
     if (message.lastEventId) lastEventId = message.lastEventId;
     options.onStatus?.('connected');
-    options.onEvent(
-      normalizePmaTailStreamEvent({
-        id: message.lastEventId || null,
-        event: message.type || 'message',
-        data: parseJson(message.data),
-        retry: null
-      })
-    );
+    options.onEvent(event);
   };
   const connect = () => {
     if (closed) return;
     options.onStatus?.('connecting');
-    const cursorQuery = lastEventId ? `?since_event_id=${encodeURIComponent(lastEventId)}` : '';
+    const params = new URLSearchParams();
+    if (lastEventId) {
+      params.set('since_event_id', lastEventId);
+      if (lastManagedTurnId) params.set('since_managed_turn_id', lastManagedTurnId);
+    }
+    const cursorQuery = params.size > 0 ? `?${params.toString()}` : '';
     source = new EventSource(withRuntimeBasePath(`/hub/pma/threads/${encoded}/tail/events${cursorQuery}`, basePath), {
       withCredentials: options.withCredentials
     });
@@ -322,6 +332,15 @@ function parseJson(value: string): unknown {
 
 function asRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
+}
+
+function optionalString(value: unknown): string | null {
+  return typeof value === 'string' && value.length > 0 ? value : null;
+}
+
+function managedTurnIdFromPayload(payload: unknown): string | null {
+  const data = asRecord(payload);
+  return optionalString(data.managed_turn_id ?? data.managedTurnId);
 }
 
 function readCursor(key: string): string | null {
