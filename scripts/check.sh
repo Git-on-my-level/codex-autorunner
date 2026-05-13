@@ -92,7 +92,7 @@ need_cmd make
 # Keep the fast lane selector centralized here; budget failures stay report-only
 # unless the caller opts in with CODEX_FAST_TEST_ENFORCE_BUDGET=1.
 FAST_TEST_MARKERS='not integration and not slow'
-FAST_TEST_IGNORES='--ignore=tests/chat_surface_lab --ignore=tests/chat_surface_integration'
+FAST_TEST_IGNORES='--ignore=tests/chat_surface_integration'
 FAST_TEST_ENFORCE_BUDGET="${CODEX_FAST_TEST_ENFORCE_BUDGET:-0}"
 _AUTO_WORKERS="$("$PYTHON_BIN" -c 'import os;print(os.cpu_count() or 4)' 2>/dev/null || echo 4)"
 FAST_TEST_WORKERS="${CODEX_FAST_TEST_WORKERS:-$_AUTO_WORKERS}"

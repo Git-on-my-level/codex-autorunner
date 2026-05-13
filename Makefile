@@ -88,7 +88,7 @@ hooks:
 test: test-fast
 
 test-fast:
-	$(PYTHON) -m pytest -m "not integration and not slow" -n $(PYTEST_FAST_WORKERS) --dist loadfile --ignore=tests/chat_surface_lab --ignore=tests/chat_surface_integration
+	$(PYTHON) -m pytest -m "not integration and not slow" -n $(PYTEST_FAST_WORKERS) --dist loadfile --ignore=tests/chat_surface_integration
 
 test-full:
 	$(PYTHON) -m pytest -m "not integration"
