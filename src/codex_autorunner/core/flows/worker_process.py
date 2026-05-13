@@ -6,6 +6,7 @@ import os
 import signal
 import subprocess
 import sys
+import time
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -23,7 +24,7 @@ _WORKER_CRASH_FILENAME = "crash.json"
 _MAX_TAIL_BYTES = 32_768
 _SPAWNED_FLOW_WORKERS: set[subprocess.Popen[Any]] = set()
 
-__all__ = ["cleanup_spawned_flow_workers"]
+__all__ = ["cleanup_spawned_flow_workers", "terminate_flow_worker_pid"]
 
 
 @dataclass(frozen=True)
@@ -50,7 +51,7 @@ class FlowActiveTool:
 
 @dataclass
 class FlowWorkerHealth:
-    status: Literal["absent", "alive", "dead", "invalid", "mismatch"]
+    status: Literal["absent", "alive", "dead", "invalid", "mismatch", "stale_alive"]
     pid: Optional[int]
     cmdline: list[str]
     artifact_path: Path
@@ -65,10 +66,16 @@ class FlowWorkerHealth:
     exit_kind: Optional[str] = None
     reap_reason: Optional[str] = None
     active_tool: Optional[FlowActiveTool] = None
+    last_semantic_progress_at: Optional[str] = None
+    last_tool_activity_at: Optional[str] = None
+    current_phase: Optional[str] = None
+    stale_reason: Optional[str] = None
+    stale_threshold_seconds: Optional[int] = None
+    semantic_stale_age_seconds: Optional[int] = None
 
     @property
     def is_alive(self) -> bool:
-        return self.status == "alive"
+        return self.status in {"alive", "stale_alive"}
 
 
 def _normalized_run_id(run_id: str) -> str:
@@ -518,6 +525,68 @@ def clear_worker_metadata(artifacts_dir: Path) -> None:
             pass
         except OSError:
             logger.debug("failed to remove %s", name, exc_info=True)
+
+
+def terminate_flow_worker_pid(
+    repo_root: Path,
+    run_id: str,
+    *,
+    pid: Optional[int],
+    reason: str,
+    terminate_grace_seconds: float = 5.0,
+) -> bool:
+    if not isinstance(pid, int) or pid <= 0:
+        return False
+    write_worker_exit_info(
+        repo_root,
+        run_id,
+        returncode=-signal.SIGTERM,
+        shutdown_intent=False,
+        exit_origin="stale_alive_recovery",
+        exit_kind="reaped_stale_alive",
+        reap_reason=reason,
+        preserve_existing_shutdown_intent=False,
+    )
+    try:
+        _send_signal(pid, signal.SIGTERM)
+    except OSError:
+        return not _pid_is_running(pid)
+
+    deadline = time.monotonic() + max(0.0, terminate_grace_seconds)
+    while time.monotonic() < deadline:
+        if not _pid_is_running(pid):
+            return True
+        time.sleep(0.1)
+    if not _pid_is_running(pid):
+        return True
+
+    write_worker_exit_info(
+        repo_root,
+        run_id,
+        returncode=-signal.SIGKILL,
+        shutdown_intent=False,
+        exit_origin="stale_alive_recovery",
+        exit_kind="reaped_stale_alive",
+        reap_reason=reason,
+        preserve_existing_shutdown_intent=False,
+    )
+    try:
+        _send_signal(pid, signal.SIGKILL)
+    except OSError:
+        return not _pid_is_running(pid)
+    return not _pid_is_running(pid)
+
+
+def _send_signal(pid: int, sig: signal.Signals) -> None:
+    if os.name != "nt" and hasattr(os, "getpgid") and hasattr(os, "killpg"):
+        try:
+            pgid = os.getpgid(pid)
+        except OSError:
+            pgid = None
+        if pgid == pid:
+            os.killpg(pgid, sig)
+            return
+    os.kill(pid, sig)
 
 
 def check_worker_health(

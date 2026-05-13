@@ -196,6 +196,8 @@ def register_flow_commands(
             if isinstance(record.error_message, str) and record.error_message.strip()
             else None
         )
+        run_state = snapshot.get("run_state")
+        run_state_payload = run_state if isinstance(run_state, dict) else {}
         return {
             "run_id": record.id,
             "flow_type": record.flow_type,
@@ -214,8 +216,17 @@ def register_flow_commands(
                 else None
             ),
             "active_tool": snapshot.get("active_tool"),
+            "recovery_state": run_state_payload.get("recovery_state"),
+            "worker_status": run_state_payload.get("worker_status"),
+            "last_semantic_progress_at": run_state_payload.get(
+                "last_semantic_progress_at"
+            ),
+            "last_tool_activity_at": run_state_payload.get("last_tool_activity_at"),
+            "current_phase": run_state_payload.get("current_phase"),
+            "stale_reason": run_state_payload.get("stale_reason"),
+            "restart_exhausted": run_state_payload.get("restart_exhausted"),
             "freshness": snapshot.get("freshness"),
-            "run_state": snapshot.get("run_state"),
+            "run_state": run_state,
             "current_ticket": effective_ticket,
             "app": snapshot.get("app"),
             "ticket_progress": snapshot.get("ticket_progress"),
@@ -289,6 +300,23 @@ def register_flow_commands(
             worker_status = run_state.get("worker_status")
             if isinstance(worker_status, str) and worker_status.strip():
                 typer.echo(f"worker_status: {worker_status.strip()}")
+            stale_reason = run_state.get("stale_reason")
+            if isinstance(stale_reason, str) and stale_reason.strip():
+                typer.echo(f"stale_reason: {stale_reason.strip()}")
+            last_semantic_progress_at = run_state.get("last_semantic_progress_at")
+            if (
+                isinstance(last_semantic_progress_at, str)
+                and last_semantic_progress_at.strip()
+            ):
+                typer.echo(
+                    f"last_semantic_progress_at: {last_semantic_progress_at.strip()}"
+                )
+            last_tool_activity_at = run_state.get("last_tool_activity_at")
+            if isinstance(last_tool_activity_at, str) and last_tool_activity_at.strip():
+                typer.echo(f"last_tool_activity_at: {last_tool_activity_at.strip()}")
+            current_phase = run_state.get("current_phase")
+            if isinstance(current_phase, str) and current_phase.strip():
+                typer.echo(f"current_phase: {current_phase.strip()}")
             restart_attempts = run_state.get("restart_attempts")
             restart_max = run_state.get("restart_max_attempts")
             if isinstance(restart_attempts, int) and not isinstance(

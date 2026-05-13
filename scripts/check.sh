@@ -323,8 +323,13 @@ fi
 
 # --- Chat-apps lane checks ---------------------------------------------------
 if [[ "$RUN_CHAT_APPS" == true ]]; then
-  echo "Running chat-surface lab deterministic checks..."
-  make test-chat-surface-lab PYTHON="$PYTHON_BIN"
+  if [[ "$LANE" == "aggregate" && "${CODEX_CHECK_RUN_CHAT_SURFACE_LAB:-0}" != "1" && -z "${CI:-}" ]]; then
+    echo "Skipping chat-surface lab in local aggregate validation."
+    echo "Run 'make test-chat-surface-lab' or set CODEX_CHECK_RUN_CHAT_SURFACE_LAB=1 to include it."
+  else
+    echo "Running chat-surface lab deterministic checks..."
+    make test-chat-surface-lab PYTHON="$PYTHON_BIN"
+  fi
 fi
 
 echo "Checks passed (lane: $LANE)."

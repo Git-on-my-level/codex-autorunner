@@ -21,18 +21,20 @@ from .models import FlowRunRecord, FlowRunStatus
 class WorkerHealthStatus(str, Enum):
     ABSENT = "absent"
     ALIVE = "alive"
+    STALE_ALIVE = "stale_alive"
     DEAD = "dead"
     INVALID = "invalid"
     MISMATCH = "mismatch"
 
     @property
     def is_alive(self) -> bool:
-        return self == WorkerHealthStatus.ALIVE
+        return self in {WorkerHealthStatus.ALIVE, WorkerHealthStatus.STALE_ALIVE}
 
     @property
     def is_deadish(self) -> bool:
         return self in {
             WorkerHealthStatus.ABSENT,
+            WorkerHealthStatus.STALE_ALIVE,
             WorkerHealthStatus.DEAD,
             WorkerHealthStatus.INVALID,
             WorkerHealthStatus.MISMATCH,
@@ -43,6 +45,7 @@ class RecoveryIntentKind(str, Enum):
     USER_STOP = "user_stop"
     WORKER_CRASH = "worker_crash"
     STALE_WORKER_REAPED = "stale_worker_reaped"
+    STALE_ALIVE_WORKER = "stale_alive_worker"
     BACKEND_DISCONNECT = "backend_disconnect"
     COMMIT_BARRIER_REQUIRED = "commit_barrier_required"
     RESTART_ATTEMPTED = "restart_attempted"
@@ -98,6 +101,12 @@ class WorkerObservation:
     artifact_path: Optional[Path] = None
     exit: WorkerExitObservation = field(default_factory=WorkerExitObservation)
     crash_info: Optional[Dict[str, Any]] = None
+    last_semantic_progress_at: Optional[str] = None
+    last_tool_activity_at: Optional[str] = None
+    current_phase: Optional[str] = None
+    stale_reason: Optional[str] = None
+    stale_threshold_seconds: Optional[int] = None
+    semantic_stale_age_seconds: Optional[int] = None
 
     @property
     def is_alive(self) -> bool:
@@ -283,9 +292,13 @@ def supervise_flow_recovery(
                 intents,
                 effects,
                 note=(
-                    "stale-worker-reaped"
-                    if worker.exit.stale_reaper_exit
-                    else "worker-crash"
+                    "stale-alive-worker"
+                    if worker.status == WorkerHealthStatus.STALE_ALIVE
+                    else (
+                        "stale-worker-reaped"
+                        if worker.exit.stale_reaper_exit
+                        else "worker-crash"
+                    )
                 ),
             )
 
@@ -399,6 +412,12 @@ def worker_observation_from_health(health: Any) -> WorkerObservation:
             stderr_tail=getattr(health, "stderr_tail", None),
         ),
         crash_info=getattr(health, "crash_info", None),
+        last_semantic_progress_at=getattr(health, "last_semantic_progress_at", None),
+        last_tool_activity_at=getattr(health, "last_tool_activity_at", None),
+        current_phase=getattr(health, "current_phase", None),
+        stale_reason=getattr(health, "stale_reason", None),
+        stale_threshold_seconds=getattr(health, "stale_threshold_seconds", None),
+        semantic_stale_age_seconds=getattr(health, "semantic_stale_age_seconds", None),
     )
 
 
@@ -430,7 +449,16 @@ def _append_worker_dead_decision(
 ) -> None:
     worker = observation.worker
     stale_reaped = worker.exit.stale_reaper_exit
-    if stale_reaped:
+    stale_alive = worker.status == WorkerHealthStatus.STALE_ALIVE
+    if stale_alive:
+        intents.append(
+            RecoveryIntent(
+                RecoveryIntentKind.STALE_ALIVE_WORKER,
+                "alive-worker-stale-semantic-progress",
+                _worker_data(worker),
+            )
+        )
+    elif stale_reaped:
         intents.append(
             RecoveryIntent(
                 RecoveryIntentKind.STALE_WORKER_REAPED,
@@ -452,19 +480,34 @@ def _append_worker_dead_decision(
 
     effects.extend(
         [
-            _effect(SupervisorEffectKind.WRITE_CRASH_ARTIFACT, "worker_dead"),
+            _effect(
+                SupervisorEffectKind.WRITE_CRASH_ARTIFACT,
+                "stale_alive_worker" if stale_alive else "worker_dead",
+            ),
             SupervisorEffectIntent(
                 SupervisorEffectKind.UPDATE_RUN_STATE,
-                {"reason": "worker_dead"},
+                {"reason": "stale_alive_worker" if stale_alive else "worker_dead"},
                 FlowTrigger(
                     kind=TriggerKind.RECONCILE_WORKER_DEAD,
                     error_message=_worker_dead_error_message(worker),
                 ),
             ),
-            _effect(SupervisorEffectKind.CLEAR_WORKER_METADATA, "worker_dead"),
-            _effect(SupervisorEffectKind.EMIT_LIFECYCLE_EVENT, "worker_dead"),
-            _effect(SupervisorEffectKind.NOTIFY_SURFACES, "worker_dead"),
-            _effect(SupervisorEffectKind.EMIT_TELEMETRY, "worker_dead"),
+            _effect(
+                SupervisorEffectKind.CLEAR_WORKER_METADATA,
+                "stale_alive_worker" if stale_alive else "worker_dead",
+            ),
+            _effect(
+                SupervisorEffectKind.EMIT_LIFECYCLE_EVENT,
+                "stale_alive_worker" if stale_alive else "worker_dead",
+            ),
+            _effect(
+                SupervisorEffectKind.NOTIFY_SURFACES,
+                "stale_alive_worker" if stale_alive else "worker_dead",
+            ),
+            _effect(
+                SupervisorEffectKind.EMIT_TELEMETRY,
+                "stale_alive_worker" if stale_alive else "worker_dead",
+            ),
         ]
     )
 
@@ -535,6 +578,26 @@ def _worker_status(value: Any) -> WorkerHealthStatus:
 
 
 def _worker_dead_error_message(worker: WorkerObservation) -> str:
+    if worker.status == WorkerHealthStatus.STALE_ALIVE:
+        error_msg = "Worker stalled while still alive"
+        if worker.pid:
+            error_msg += f" (status={worker.status.value}, pid={worker.pid}"
+        else:
+            error_msg += f" (status={worker.status.value}"
+        if worker.stale_reason:
+            error_msg += f", reason: {worker.stale_reason}"
+        if worker.last_semantic_progress_at:
+            error_msg += (
+                f", last_semantic_progress_at={worker.last_semantic_progress_at}"
+            )
+        if isinstance(worker.semantic_stale_age_seconds, int):
+            error_msg += (
+                f", semantic_stale_age_seconds={worker.semantic_stale_age_seconds}"
+            )
+        if isinstance(worker.stale_threshold_seconds, int):
+            error_msg += f", stale_threshold_seconds={worker.stale_threshold_seconds}"
+        error_msg += ")"
+        return error_msg
     error_msg = f"Worker died (status={worker.status.value}"
     if worker.pid:
         error_msg += f", pid={worker.pid}"
@@ -562,6 +625,12 @@ def _worker_data(worker: WorkerObservation) -> Dict[str, Any]:
         "exit_origin": worker.exit.exit_origin,
         "exit_kind": worker.exit.exit_kind,
         "reap_reason": worker.exit.reap_reason,
+        "last_semantic_progress_at": worker.last_semantic_progress_at,
+        "last_tool_activity_at": worker.last_tool_activity_at,
+        "current_phase": worker.current_phase,
+        "stale_reason": worker.stale_reason,
+        "stale_threshold_seconds": worker.stale_threshold_seconds,
+        "semantic_stale_age_seconds": worker.semantic_stale_age_seconds,
     }
 
 

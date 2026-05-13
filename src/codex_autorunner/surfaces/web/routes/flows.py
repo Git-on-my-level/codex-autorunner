@@ -520,6 +520,12 @@ class FlowWorkerHealthResponse(BaseModel):
     exit_code: Optional[int] = None
     stderr_tail: Optional[str] = None
     active_tool: Optional[Dict[str, Any]] = None
+    last_semantic_progress_at: Optional[str] = None
+    last_tool_activity_at: Optional[str] = None
+    current_phase: Optional[str] = None
+    stale_reason: Optional[str] = None
+    stale_threshold_seconds: Optional[int] = None
+    semantic_stale_age_seconds: Optional[int] = None
 
     @classmethod
     def from_health(cls, health: FlowWorkerHealth) -> "FlowWorkerHealthResponse":
@@ -532,6 +538,16 @@ class FlowWorkerHealthResponse(BaseModel):
             exit_code=getattr(health, "exit_code", None),
             stderr_tail=getattr(health, "stderr_tail", None),
             active_tool=active_tool.to_dict() if active_tool is not None else None,
+            last_semantic_progress_at=getattr(
+                health, "last_semantic_progress_at", None
+            ),
+            last_tool_activity_at=getattr(health, "last_tool_activity_at", None),
+            current_phase=getattr(health, "current_phase", None),
+            stale_reason=getattr(health, "stale_reason", None),
+            stale_threshold_seconds=getattr(health, "stale_threshold_seconds", None),
+            semantic_stale_age_seconds=getattr(
+                health, "semantic_stale_age_seconds", None
+            ),
         )
 
 

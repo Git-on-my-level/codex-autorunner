@@ -47,6 +47,9 @@ def _worker(
     exit_kind: Optional[str] = None,
     reap_reason: Optional[str] = None,
     exit_code: Optional[int] = None,
+    last_semantic_progress_at: Optional[str] = None,
+    stale_reason: Optional[str] = None,
+    semantic_stale_age_seconds: Optional[int] = None,
 ) -> WorkerObservation:
     return WorkerObservation(
         status=status,
@@ -59,6 +62,9 @@ def _worker(
             reap_reason=reap_reason,
             exit_code=exit_code,
         ),
+        last_semantic_progress_at=last_semantic_progress_at,
+        stale_reason=stale_reason,
+        semantic_stale_age_seconds=semantic_stale_age_seconds,
     )
 
 
@@ -98,6 +104,45 @@ def test_policy_classifies_dead_worker_active_run_as_crash() -> None:
     assert trigger is not None
     assert trigger.kind == TriggerKind.RECONCILE_WORKER_DEAD
     assert "pid=123" in (trigger.error_message or "")
+
+
+def test_policy_classifies_stale_alive_worker_as_unhealthy() -> None:
+    decision = supervise_flow_recovery(
+        FlowSupervisorObservation(
+            run=_run(),
+            worker=_worker(
+                WorkerHealthStatus.STALE_ALIVE,
+                pid=123,
+                last_semantic_progress_at="2026-05-12T00:00:00+00:00",
+                stale_reason="semantic_progress_stale_without_active_tool",
+                semantic_stale_age_seconds=2400,
+            ),
+        )
+    )
+
+    assert decision.note == "stale-alive-worker"
+    assert _intent_kinds(decision) == [RecoveryIntentKind.STALE_ALIVE_WORKER]
+    assert SupervisorEffectKind.WRITE_CRASH_ARTIFACT in _effect_kinds(decision)
+    trigger = decision.first_lifecycle_trigger()
+    assert trigger is not None
+    assert trigger.kind == TriggerKind.RECONCILE_WORKER_DEAD
+    assert "Worker stalled while still alive" in (trigger.error_message or "")
+
+
+def test_policy_restarts_stale_alive_worker_when_budget_remains() -> None:
+    decision = supervise_flow_recovery(
+        FlowSupervisorObservation(
+            run=_run(),
+            worker=_worker(WorkerHealthStatus.STALE_ALIVE, pid=123),
+            restart=RestartPolicyObservation(enabled=True, attempts=0, max_attempts=2),
+        )
+    )
+
+    assert _intent_kinds(decision) == [
+        RecoveryIntentKind.STALE_ALIVE_WORKER,
+        RecoveryIntentKind.RESTART_ATTEMPTED,
+    ]
+    assert SupervisorEffectKind.SPAWN_WORKER in _effect_kinds(decision)
 
 
 def test_policy_treats_signal_shutdown_as_recoverable_crash() -> None:

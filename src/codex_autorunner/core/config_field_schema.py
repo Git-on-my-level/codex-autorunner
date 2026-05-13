@@ -320,6 +320,15 @@ TICKET_FLOW_FIELD_SCHEMAS: dict[str, FieldSchema] = {
         range_message="ticket_flow.restart_backoff_seconds must be >= 0",
         reject_bool=True,
     ),
+    "stale_alive_threshold_seconds": FieldSchema(
+        path="ticket_flow.stale_alive_threshold_seconds",
+        kind="int",
+        default=1800,
+        min_value=1,
+        type_message="ticket_flow.stale_alive_threshold_seconds must be a positive integer",
+        range_message="ticket_flow.stale_alive_threshold_seconds must be > 0",
+        reject_bool=True,
+    ),
 }
 
 APP_SERVER_FIELD_SCHEMAS: dict[str, FieldSchema] = {

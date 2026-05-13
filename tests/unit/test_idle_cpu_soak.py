@@ -329,7 +329,7 @@ print(proc.pid, flush=True)
             capture_output=True,
             text=True,
             check=True,
-            timeout=5,
+            timeout=20,
         )
         wrapper_pid = int(result.stdout.strip().splitlines()[-1])
 

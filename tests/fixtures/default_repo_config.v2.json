@@ -461,7 +461,8 @@
     "include_previous_ticket_context": false,
     "restart_backoff_seconds": 0.0,
     "restart_max_attempts": 2,
-    "restart_recoverable_failures": true
+    "restart_recoverable_failures": true,
+    "stale_alive_threshold_seconds": 1800
   },
   "ui": {
     "editor": "vi"

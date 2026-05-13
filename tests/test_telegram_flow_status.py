@@ -1105,6 +1105,37 @@ def test_flow_status_includes_freshness_summary(tmp_path: Path) -> None:
     assert any(line == "Freshness: stale · last progress 2h ago" for line in lines)
 
 
+def test_flow_status_includes_stale_alive_attention_details(tmp_path: Path) -> None:
+    handler = FlowCommands()
+    record = _record(FlowRunStatus.RUNNING)
+    lines = handler._format_flow_status_lines(
+        tmp_path,
+        record,
+        store=None,
+        health=_health(tmp_path, status="stale_alive"),
+        snapshot={
+            "worker_health": _health(tmp_path, status="stale_alive"),
+            "effective_current_ticket": None,
+            "last_event_seq": 7,
+            "last_event_at": "2026-03-11T00:00:00Z",
+            "run_state": {
+                "state": "stale_alive",
+                "recovery_state": "stale_alive",
+                "worker_status": "stale_alive",
+                "last_semantic_progress_at": "2026-03-11T00:00:00+00:00",
+                "current_phase": "agent_turn",
+                "stale_reason": "semantic_progress_stale_without_active_tool",
+                "attention_required": True,
+            },
+        },
+    )
+
+    assert "Recovery: stale_alive" in lines
+    assert "Worker status: stale_alive" in lines
+    assert "Stale reason: semantic_progress_stale_without_active_tool" in lines
+    assert "Last semantic progress: 2026-03-11T00:00:00+00:00" in lines
+
+
 def test_flow_status_includes_elapsed_for_finished_run(tmp_path: Path) -> None:
     handler = FlowCommands()
     record = _record(

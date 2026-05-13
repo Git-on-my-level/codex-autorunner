@@ -122,4 +122,48 @@ describe('ticket flow status routes', () => {
     expect(vm.signal).toBe('failed');
     expect(vm.reasonLabel).toContain('Restart attempts exhausted');
   });
+
+  it('renders stale-alive recovery as attention required', () => {
+    const vm = buildTicketFlowStatusViewModel(
+      [],
+      [
+        {
+          id: 'run-stale-alive',
+          chatId: null,
+          status: 'running',
+          workStatus: null,
+          operatorStatus: null,
+          terminal: false,
+          streamShouldClose: false,
+          streamCloseReason: null,
+          phase: null,
+          guidance: null,
+          queueDepth: 0,
+          elapsedSeconds: null,
+          startedAt: null,
+          idleSeconds: null,
+          lastEventId: null,
+          lastEventAt: '2026-05-04T00:02:00Z',
+          progressPercent: null,
+          events: [],
+          raw: {
+            id: 'run-stale-alive',
+            status: 'running',
+            repo_id: 'codex-autorunner',
+            run_state: {
+              recovery_state: 'stale_alive',
+              blocking_reason: 'Worker is alive but semantic progress is stale',
+              worker_status: 'stale_alive',
+              stale_reason: 'semantic_progress_stale_without_active_tool'
+            }
+          }
+        }
+      ],
+      { kind: 'repo', id: 'codex-autorunner' }
+    );
+
+    expect(vm.statusLabel).toBe('Needs attention');
+    expect(vm.signal).toBe('blocked');
+    expect(vm.reasonLabel).toContain('semantic progress is stale');
+  });
 });

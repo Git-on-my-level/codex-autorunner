@@ -31,6 +31,12 @@ from .lifecycle_reducer import (
     reduce_flow_lifecycle,
 )
 from .models import FlowEventType, FlowRunRecord, FlowRunStatus, parse_flow_timestamp
+from .stale_alive import (
+    DEFAULT_STALE_ALIVE_THRESHOLD_SECONDS,
+    STALE_ALIVE_REASON,
+    annotate_stale_alive_health,
+    stale_alive_recovery_payload,
+)
 from .store import UNSET, FlowStore, now_iso
 from .supervisor import (
     CommitBarrierObservation,
@@ -45,6 +51,7 @@ from .worker_process import (
     clear_worker_metadata,
     read_worker_crash_info,
     spawn_flow_worker,
+    terminate_flow_worker_pid,
     write_worker_crash_info,
 )
 from .workspace_root import resolve_ticket_flow_workspace_root
@@ -57,7 +64,6 @@ _ACTIVE_STATUSES = (
     FlowRunStatus.STOPPING,
     FlowRunStatus.PAUSED,
 )
-
 _mtime_cache: dict[Path, tuple[float, int, int, int]] = {}
 
 
@@ -255,6 +261,58 @@ def _load_restart_config(repo_root: Path) -> tuple[bool, int, float]:
     )
 
 
+def _load_stale_alive_threshold_seconds(repo_root: Path) -> int:
+    try:
+        ticket_flow = load_repo_config(repo_root).ticket_flow
+    except ConfigError:
+        return DEFAULT_STALE_ALIVE_THRESHOLD_SECONDS
+    try:
+        raw_value: Any = getattr(ticket_flow, "stale_alive_threshold_seconds", None)
+        value = int(raw_value)
+    except (TypeError, ValueError):
+        return DEFAULT_STALE_ALIVE_THRESHOLD_SECONDS
+    return value if value > 0 else DEFAULT_STALE_ALIVE_THRESHOLD_SECONDS
+
+
+def _latest_semantic_progress_at(
+    record: FlowRunRecord, store: FlowStore
+) -> Optional[str]:
+    try:
+        _seq, last_event_at = store.get_last_event_meta(record.id)
+    except (sqlite3.Error, ValueError, TypeError, RuntimeError, AttributeError):
+        last_event_at = None
+    from .stale_alive import latest_semantic_progress_at
+
+    return latest_semantic_progress_at(record, last_event_at=last_event_at)
+
+
+def _annotate_stale_alive_health(
+    repo_root: Path,
+    record: FlowRunRecord,
+    store: FlowStore,
+    health: Any,
+    *,
+    now: str,
+) -> Any:
+    if (
+        record.flow_type != "ticket_flow"
+        or record.status != FlowRunStatus.RUNNING
+        or getattr(health, "status", None) != "alive"
+        or getattr(health, "active_tool", None) is not None
+    ):
+        return health
+    last_progress_at = _latest_semantic_progress_at(record, store)
+    return annotate_stale_alive_health(
+        repo_root,
+        record,
+        health,
+        last_event_at=None,
+        last_semantic_progress_at=last_progress_at,
+        threshold_seconds=_load_stale_alive_threshold_seconds(repo_root),
+        now=now,
+    )
+
+
 def _restart_backoff_ready(record: FlowRunRecord, backoff_seconds: float) -> bool:
     if backoff_seconds <= 0:
         return True
@@ -298,6 +356,8 @@ def _with_restart_attempt(
     max_attempts: int,
     reason: str,
     failure_reason: Optional[str] = None,
+    health: Optional[Any] = None,
+    persist_stale_alive: bool = False,
 ) -> dict[str, Any]:
     updated = dict(state)
     recovery = updated.get("recovery")
@@ -318,6 +378,14 @@ def _with_restart_attempt(
         }
     )
     recovery["restart"] = restart
+    if (
+        persist_stale_alive
+        and health is not None
+        and getattr(health, "status", None) == "stale_alive"
+    ):
+        recovery["stale_alive"] = stale_alive_recovery_payload(health)
+    else:
+        recovery.pop("stale_alive", None)
     updated["recovery"] = recovery
     return updated
 
@@ -327,6 +395,7 @@ def _with_restart_exhausted(
     *,
     max_attempts: int,
     reason: str,
+    health: Optional[Any] = None,
 ) -> dict[str, Any]:
     updated = dict(state)
     recovery = updated.get("recovery")
@@ -338,6 +407,8 @@ def _with_restart_exhausted(
     restart["last_failure_reason"] = reason
     restart["exhausted"] = True
     recovery["restart"] = restart
+    if health is not None and getattr(health, "status", None) == "stale_alive":
+        recovery["stale_alive"] = stale_alive_recovery_payload(health)
     updated["recovery"] = recovery
     return updated
 
@@ -411,7 +482,7 @@ def _ensure_crash_payload(
     if crash_info is None:
         crash_info = read_worker_crash_info(repo_root, record.id)
     should_write = crash_info is None or (
-        health.status == "dead" and _is_stale_crash_info(crash_info)
+        health.status in {"dead", "stale_alive"} and _is_stale_crash_info(crash_info)
     )
     if should_write:
         last_method, _ = _latest_app_server_event_details(store, record.id)
@@ -422,7 +493,11 @@ def _ensure_crash_payload(
             exit_code=getattr(health, "exit_code", None),
             last_event=last_method,
             stderr_tail=getattr(health, "stderr_tail", None),
-            exception=record.error_message,
+            exception=(
+                getattr(health, "stale_reason", None)
+                if health.status == "stale_alive"
+                else record.error_message
+            ),
             exit_origin=getattr(health, "exit_origin", None),
             exit_kind=getattr(health, "exit_kind", None),
             reap_reason=getattr(health, "reap_reason", None),
@@ -444,8 +519,17 @@ def _crash_dispatch_body(
     *,
     crash_info: Optional[dict[str, Any]],
 ) -> str:
+    stale_alive = (
+        isinstance(crash_info, dict)
+        and crash_info.get("exception") == STALE_ALIVE_REASON
+    )
     lines = [
-        "The ticket worker stopped unexpectedly and no actionable dispatch was available.",
+        (
+            "The ticket worker appears stale while still alive: no active child tool "
+            "was detected and semantic progress was stale."
+            if stale_alive
+            else "The ticket worker stopped unexpectedly and no actionable dispatch was available."
+        ),
         "",
         f"run_id: {record.id}",
     ]
@@ -468,10 +552,15 @@ def _crash_dispatch_body(
     lines.extend(
         [
             "",
-            "Crash artifact:",
+            "Diagnostic artifact:" if stale_alive else "Crash artifact:",
             f"- `.codex-autorunner/flows/{record.id}/crash.json`",
             "",
-            "Please inspect the crash artifact and decide whether to resume or restart the run.",
+            (
+                "Please inspect the stale-alive diagnostic and decide whether to "
+                "resume or intentionally start a replacement run."
+                if stale_alive
+                else "Please inspect the crash artifact and decide whether to resume or restart the run."
+            ),
         ]
     )
     return "\n".join(lines).strip() + "\n"
@@ -495,7 +584,12 @@ def _ensure_crash_dispatch(
     if latest_dispatch > latest_reply:
         return
 
-    dispatch_frontmatter = "---\nmode: pause\ntitle: Worker crashed\n---\n\n"
+    stale_alive = (
+        isinstance(crash_info, dict)
+        and crash_info.get("exception") == STALE_ALIVE_REASON
+    )
+    title = "Worker stale-alive stall" if stale_alive else "Worker crashed"
+    dispatch_frontmatter = f"---\nmode: pause\ntitle: {title}\n---\n\n"
     outbox_paths.dispatch_path.write_text(
         dispatch_frontmatter + _crash_dispatch_body(record, crash_info=crash_info),
         encoding="utf-8",
@@ -538,17 +632,20 @@ def reconcile_flow_run(
     try:
         with file_lock(lock_path, blocking=False):
             health = check_worker_health(repo_root, record.id)
+            now = now_iso()
+            health = _annotate_stale_alive_health(
+                repo_root, record, store, health, now=now
+            )
             crash_info = None
             pending_stop_requested = (
                 record.status == FlowRunStatus.PENDING and record.stop_requested
             )
             if (
-                health.status in {"dead", "invalid", "mismatch"}
+                health.status in {"dead", "invalid", "mismatch", "stale_alive"}
                 and not pending_stop_requested
             ):
                 crash_info = _ensure_crash_payload(repo_root, record, store, health)
 
-            now = now_iso()
             commit_barrier = _commit_barrier_observation(repo_root, record)
             restart_policy = _restart_policy_observation(repo_root, record, health)
             decision = supervise_reconcile_flow(
@@ -566,7 +663,7 @@ def reconcile_flow_run(
             restart_enabled_waiting_for_backoff = (
                 restart_policy.enabled
                 and not restart_policy.backoff_ready
-                and health.status in {"dead", "invalid", "mismatch"}
+                and health.status in {"dead", "invalid", "mismatch", "stale_alive"}
                 and trigger is not None
             )
 
@@ -587,8 +684,21 @@ def reconcile_flow_run(
                     dict(record.state or {}),
                     max_attempts=restart_policy.max_attempts,
                     reason=decision.note,
+                    health=health,
                 )
                 try:
+                    if health.status == "stale_alive":
+                        stopped = terminate_flow_worker_pid(
+                            repo_root,
+                            record.id,
+                            pid=getattr(health, "pid", None),
+                            reason=getattr(health, "stale_reason", None)
+                            or STALE_ALIVE_REASON,
+                        )
+                        if not stopped:
+                            raise RuntimeError(
+                                "stale-alive worker still running after termination"
+                            )
                     clear_worker_metadata(health.artifact_path.parent)
                     proc, stdout_handle, stderr_handle = spawn_flow_worker(
                         repo_root, record.id
@@ -609,6 +719,8 @@ def reconcile_flow_run(
                         max_attempts=restart_policy.max_attempts,
                         reason=decision.note,
                         failure_reason=f"spawn_failed: {exc}",
+                        health=health,
+                        persist_stale_alive=True,
                     )
                 else:
                     store.set_stop_requested(record.id, False)
@@ -677,7 +789,12 @@ def reconcile_flow_run(
                 current_step=record.current_step,
             )
 
-            is_recovery = health.status in {"dead", "invalid", "mismatch"}
+            is_recovery = health.status in {
+                "dead",
+                "invalid",
+                "mismatch",
+                "stale_alive",
+            }
 
             (logger or _logger).info(
                 "Reconciling flow %s: %s -> %s (%s)",
@@ -699,6 +816,7 @@ def reconcile_flow_run(
                     state,
                     max_attempts=restart_policy.max_attempts,
                     reason="restart-attempts-exhausted",
+                    health=health,
                 )
             for effect in result.effects:
                 if effect.kind == EffectKind.ENRICH_FAILURE_PAYLOAD:
@@ -824,10 +942,17 @@ def reconcile_flow_run(
                         "Failed to emit flow_failed event for %s: %s", record.id, exc
                     )
 
-            if record.status == FlowRunStatus.PAUSED and health.status in {
+            if (
+                record.status == FlowRunStatus.PAUSED
+                or (
+                    health.status == "stale_alive"
+                    and result.status == FlowRunStatus.FAILED
+                )
+            ) and health.status in {
                 "dead",
                 "invalid",
                 "mismatch",
+                "stale_alive",
             }:
                 try:
                     _ensure_crash_dispatch(repo_root, record, crash_info=crash_info)

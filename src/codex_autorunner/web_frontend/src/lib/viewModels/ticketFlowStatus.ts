@@ -262,6 +262,13 @@ function recoveryReasonFromRun(run: PmaRunProgress | null): string | null {
       'Restart attempts exhausted; inspect the crash artifact and resume or restart intentionally'
     );
   }
+  if (state === 'stale_alive') {
+    return (
+      stringFromRaw(run.raw, 'run_state.blocking_reason') ??
+      stringFromRaw(run.raw, 'canonical_state_v1.stale_reason') ??
+      'Worker is alive but semantic progress is stale'
+    );
+  }
   if (state === 'recovering') {
     return stringFromRaw(run.raw, 'run_state.crash_reason') ?? 'Worker recovery in progress';
   }
@@ -274,6 +281,7 @@ function recoveryReasonFromRun(run: PmaRunProgress | null): string | null {
 function recoveryStatusLabel(state: string | null): string | null {
   if (state === 'commit_barrier_pending') return 'Preserving work';
   if (state === 'restart_exhausted') return 'Recovery exhausted';
+  if (state === 'stale_alive') return 'Needs attention';
   if (state === 'recovering') return 'Recovering';
   if (state === 'restarted') return 'Restarted';
   if (state === 'failed') return 'Recovery failed';
@@ -283,6 +291,7 @@ function recoveryStatusLabel(state: string | null): string | null {
 function recoverySignal(state: string | null): TicketFlowStatusViewModel['signal'] | null {
   if (state === 'restarted') return 'active';
   if (state === 'recovering' || state === 'commit_barrier_pending') return 'waiting';
+  if (state === 'stale_alive') return 'blocked';
   if (state === 'restart_exhausted') return 'failed';
   if (state === 'failed') return 'failed';
   return null;

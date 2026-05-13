@@ -204,6 +204,7 @@ class TicketFlowConfig:
     restart_recoverable_failures: bool = True
     restart_max_attempts: int = 2
     restart_backoff_seconds: float = 0.0
+    stale_alive_threshold_seconds: int = 1800
 
 
 class SecurityConfigSection(TypedDict, total=False):

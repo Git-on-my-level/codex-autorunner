@@ -423,7 +423,8 @@ export function mapRepoSummary(raw: JsonRecord): RepoSummary {
   const id = stringValue(raw.id ?? raw.repo_id ?? raw.name, 'unknown-repo');
   const ticketFlow = asRecord(raw.ticket_flow_display ?? raw.ticket_flow);
   const runState = asRecord(raw.run_state);
-  const activeRuns = Boolean(ticketFlow.is_active ?? runState.is_active)
+  const attentionRequired = runState.attention_required === true;
+  const activeRuns = !attentionRequired && Boolean(ticketFlow.is_active ?? runState.is_active)
     ? 1
     : numberOrNull(raw.active_runs ?? raw.active_run_count) ?? 0;
   const totalTickets = numberOrNull(ticketFlow.total_count);
@@ -432,7 +433,7 @@ export function mapRepoSummary(raw: JsonRecord): RepoSummary {
     id,
     name: stringValue(raw.name ?? raw.display_name, id),
     path: nullableString(raw.path ?? raw.repo_root),
-    status: normalizeResourceWorkStatus(ticketFlow.status ?? runState.flow_status ?? raw.normalized_status ?? raw.runtime_status ?? raw.status ?? raw.lifecycle_status),
+    status: normalizeRepoRuntimeStatus(ticketFlow, runState, raw),
     defaultBranch: nullableString(raw.default_branch ?? raw.branch ?? raw.current_branch),
     worktreeCount: numberOrNull(raw.worktree_count ?? raw.worktrees_count ?? asArray(raw.worktrees).length) ?? 0,
     activeRuns,
@@ -449,7 +450,8 @@ export function mapWorktreeSummary(raw: JsonRecord): WorktreeSummary {
   const id = stringValue(raw.worktree_id ?? raw.id ?? raw.repo_id ?? raw.name, 'unknown-worktree');
   const ticketFlow = asRecord(raw.ticket_flow_display ?? raw.ticket_flow);
   const runState = asRecord(raw.run_state);
-  const activeRuns = Boolean(ticketFlow.is_active ?? runState.is_active)
+  const attentionRequired = runState.attention_required === true;
+  const activeRuns = !attentionRequired && Boolean(ticketFlow.is_active ?? runState.is_active)
     ? 1
     : numberOrNull(raw.active_runs ?? raw.active_run_count) ?? 0;
   const totalTickets = numberOrNull(ticketFlow.total_count);
@@ -460,7 +462,7 @@ export function mapWorktreeSummary(raw: JsonRecord): WorktreeSummary {
     name: stringValue(raw.name ?? raw.display_name ?? raw.branch, id),
     path: nullableString(raw.path ?? raw.workspace_root),
     branch: nullableString(raw.branch ?? raw.current_branch),
-    status: normalizeResourceWorkStatus(ticketFlow.status ?? runState.flow_status ?? raw.normalized_status ?? raw.runtime_status ?? raw.status ?? raw.lifecycle_status),
+    status: normalizeRepoRuntimeStatus(ticketFlow, runState, raw),
     activeRuns,
     openTickets:
       numberOrNull(raw.open_tickets ?? raw.open_ticket_count) ??
@@ -615,6 +617,19 @@ function normalizeResourceWorkStatus(value: unknown): WorkStatus {
   // Flow "pending" and PMA queue "queued" still represent active work, not user input.
   if (['pending', 'queued', 'stopping'].includes(text)) return 'running';
   return normalizeWorkStatus(value);
+}
+
+function normalizeRepoRuntimeStatus(ticketFlow: JsonRecord, runState: JsonRecord, raw: JsonRecord): WorkStatus {
+  if (runState.attention_required === true) {
+    const state = String(runState.state ?? runState.recovery_state ?? '').trim().toLowerCase();
+    if (state === 'restart_exhausted') return 'failed';
+    if (state === 'stale_alive') return 'blocked';
+    if (state === 'commit_barrier_pending') return 'blocked';
+    return normalizeResourceWorkStatus(state || 'blocked');
+  }
+  return normalizeResourceWorkStatus(
+    ticketFlow.status ?? runState.flow_status ?? raw.normalized_status ?? raw.runtime_status ?? raw.status ?? raw.lifecycle_status
+  );
 }
 
 export function normalizeOptionalWorkStatus(value: unknown): WorkStatus | null {

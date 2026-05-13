@@ -422,6 +422,21 @@ def build_canonical_state_v1(
         "worker_status": _normalize_optional_str(
             run_state_payload.get("worker_status")
         ),
+        "active_tool": (
+            dict(run_state_payload["active_tool"])
+            if isinstance(run_state_payload.get("active_tool"), dict)
+            else None
+        ),
+        "last_semantic_progress_at": _normalize_optional_str(
+            run_state_payload.get("last_semantic_progress_at")
+        ),
+        "last_tool_activity_at": _normalize_optional_str(
+            run_state_payload.get("last_tool_activity_at")
+        ),
+        "current_phase": _normalize_optional_str(
+            run_state_payload.get("current_phase")
+        ),
+        "stale_reason": _normalize_optional_str(run_state_payload.get("stale_reason")),
         "restart_attempts": _normalize_optional_int(
             run_state_payload.get("restart_attempts")
         ),

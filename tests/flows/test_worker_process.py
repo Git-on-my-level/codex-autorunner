@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import signal
 import subprocess
 import sys
@@ -81,6 +82,18 @@ def test_cmdline_matches_when_executable_resolves_differently(tmp_path: Path) ->
     actual = [str(real_exec), *expected[1:]]
 
     assert worker_process._cmdline_matches(expected, actual)
+
+
+def test_stale_alive_health_still_counts_as_alive(tmp_path: Path) -> None:
+    health = worker_process.FlowWorkerHealth(
+        status="stale_alive",
+        pid=123,
+        cmdline=["python"],
+        artifact_path=tmp_path / "worker.json",
+        stale_reason="semantic_progress_stale_without_active_tool",
+    )
+
+    assert health.is_alive is True
 
 
 def test_read_process_cmdline_uses_wide_ps(monkeypatch) -> None:
@@ -236,6 +249,46 @@ def test_spawn_flow_worker_closes_streams_when_popen_fails(
 
     assert len(opened) == 2
     assert all(handle.closed for handle in opened)
+
+
+def test_terminate_flow_worker_pid_records_exit_and_signals(
+    monkeypatch, tmp_path: Path
+) -> None:
+    run_id = "3022db08-82b8-40dd-8cfa-d04eb0fcded2"
+    artifacts_dir = worker_process._worker_artifacts_dir(tmp_path, run_id)
+    worker_process._write_worker_metadata(
+        worker_process._worker_metadata_path(artifacts_dir),
+        pid=4242,
+        cmd=["python", "-m", "codex_autorunner", "flow", "worker"],
+        repo_root=tmp_path,
+    )
+    signals: list[str] = []
+    running = [False]
+    monkeypatch.setattr(
+        worker_process,
+        "_send_signal",
+        lambda _pid, sig: signals.append(sig.name),
+    )
+    monkeypatch.setattr(
+        worker_process,
+        "_pid_is_running",
+        lambda _pid: running.pop(0) if running else False,
+    )
+
+    stopped = worker_process.terminate_flow_worker_pid(
+        tmp_path,
+        run_id,
+        pid=4242,
+        reason="semantic_progress_stale_without_active_tool",
+        terminate_grace_seconds=0.0,
+    )
+
+    assert stopped is True
+    assert signals == ["SIGTERM"]
+    exit_data = json.loads((artifacts_dir / "worker.exit.json").read_text())
+    assert exit_data["exit_origin"] == "stale_alive_recovery"
+    assert exit_data["exit_kind"] == "reaped_stale_alive"
+    assert exit_data["reap_reason"] == "semantic_progress_stale_without_active_tool"
 
 
 def test_cleanup_spawned_flow_workers_terminates_registered_process_group(
