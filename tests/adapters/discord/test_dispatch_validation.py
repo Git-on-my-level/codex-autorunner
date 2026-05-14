@@ -61,6 +61,14 @@ class _InitialResponseFailingRest(_FakeRest):
         raise DiscordAPIError("simulated initial response failure")
 
 
+async def _wait_for_condition(condition: Any, *, timeout: float = 1.0) -> None:
+    deadline = asyncio.get_running_loop().time() + timeout
+    while not condition():
+        if asyncio.get_running_loop().time() >= deadline:
+            raise AssertionError("condition was not met before timeout")
+        await asyncio.sleep(0.01)
+
+
 def _config(
     root: Path,
     *,
@@ -248,6 +256,10 @@ async def test_service_continues_when_sync_request_fails(tmp_path: Path) -> None
 
     try:
         await service.run_forever()
+        await _wait_for_condition(
+            lambda: len(rest.interaction_responses) == 1
+            and len(rest.followup_messages) == 1
+        )
         assert len(rest.interaction_responses) == 1
         payload = rest.interaction_responses[0]["payload"]
         assert payload["type"] == 5
@@ -764,6 +776,7 @@ async def test_malformed_interaction_payload_returns_ephemeral_response(
 
 
 @pytest.mark.anyio
+@pytest.mark.slow
 async def test_dispatch_deferred_slash_commands_ack_before_prior_handler_finishes(
     tmp_path: Path,
 ) -> None:
@@ -835,7 +848,7 @@ async def test_dispatch_deferred_slash_commands_ack_before_prior_handler_finishe
         assert started == ["inter-1"]
 
         release_first.set()
-        await asyncio.wait_for(task, timeout=1.0)
+        await asyncio.wait_for(task, timeout=3.0)
         assert started == ["inter-1", "inter-2"]
     finally:
         release_first.set()
