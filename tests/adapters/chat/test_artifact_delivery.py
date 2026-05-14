@@ -14,6 +14,7 @@ from codex_autorunner.core.artifact_delivery import (
     ArtifactDeliveryService,
     ArtifactRecord,
     DeliveryIntent,
+    delivery_filename,
 )
 
 
@@ -32,7 +33,7 @@ class _Transport:
         if self.fail:
             raise RuntimeError("network timeout")
         data = Path(artifact.storage_path).read_bytes()
-        self.sent.append((artifact.filename, data))
+        self.sent.append((delivery_filename(intent, artifact), data))
         return {"message_id": "m1"}
 
 

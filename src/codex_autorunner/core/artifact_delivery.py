@@ -123,10 +123,6 @@ class ArtifactDeliveryStore:
                     updated_at
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(artifact_id) DO UPDATE SET
-                    filename = excluded.filename,
-                    mime_type = excluded.mime_type,
-                    size = excluded.size,
-                    origin_root = excluded.origin_root,
                     storage_path = excluded.storage_path,
                     updated_at = excluded.updated_at
                 """,
@@ -163,6 +159,11 @@ class ArtifactDeliveryStore:
         workspace_scope: str | None = None,
         metadata: dict[str, Any] | None = None,
     ) -> DeliveryIntent:
+        delivery_metadata = dict(metadata or {})
+        artifact = self.get_artifact(artifact_id)
+        if artifact is not None:
+            delivery_metadata.setdefault("filename", artifact.filename)
+            delivery_metadata.setdefault("mime_type", artifact.mime_type)
         delivery_id = _delivery_key(
             artifact_id=artifact_id,
             target_surface=target_surface,
@@ -203,7 +204,7 @@ class ArtifactDeliveryStore:
                     target_surface,
                     target_conversation_key,
                     workspace_scope,
-                    _dump_json(metadata or {}),
+                    _dump_json(delivery_metadata),
                     now,
                     now,
                 ),
@@ -434,6 +435,8 @@ class ArtifactDeliveryStore:
                         target_conversation_key=target_conversation_key,
                         workspace_scope=workspace_scope,
                         metadata={
+                            "filename": path.name,
+                            "mime_type": _guess_mime_type(path.name),
                             "legacy_filebox_source": legacy_source,
                             "legacy_path": str(path),
                         },
@@ -558,16 +561,21 @@ class ArtifactDeliveryService:
         origin_root: Path | None = None,
         metadata: dict[str, Any] | None = None,
     ) -> DeliveryIntent:
+        resolved_filename = filebox.sanitize_filename(path.name)
         artifact = self.store.upsert_artifact_from_path(
             path,
             origin_root=origin_root or self.root,
+            filename=resolved_filename,
         )
+        delivery_metadata = dict(metadata or {})
+        delivery_metadata.setdefault("filename", resolved_filename)
+        delivery_metadata.setdefault("mime_type", _guess_mime_type(resolved_filename))
         return self.store.enqueue_delivery(
             artifact_id=artifact.artifact_id,
             target_surface=target_surface,
             target_conversation_key=target_conversation_key,
             workspace_scope=workspace_scope,
-            metadata=metadata,
+            metadata=delivery_metadata,
         )
 
     def import_legacy_outbox(
@@ -801,6 +809,13 @@ def serialize_delivery(
     }
 
 
+def delivery_filename(intent: DeliveryIntent, artifact: ArtifactRecord | None) -> str:
+    value = intent.metadata_json.get("filename")
+    if isinstance(value, str) and value:
+        return value
+    return artifact.filename if artifact is not None else intent.artifact_id
+
+
 def format_delivery_summary(
     service: ArtifactDeliveryService,
     *,
@@ -819,7 +834,7 @@ def format_delivery_summary(
     lines = [f"Artifact deliveries ({len(deliveries)}):"]
     for intent in deliveries[:limit]:
         artifact = service.store.get_artifact(intent.artifact_id)
-        name = artifact.filename if artifact is not None else intent.artifact_id
+        name = delivery_filename(intent, artifact)
         detail: str = intent.state
         if intent.last_error:
             detail = f"{detail}, {intent.last_error}"
@@ -838,6 +853,7 @@ __all__ = [
     "ArtifactRecord",
     "ClaimedDelivery",
     "DeliveryIntent",
+    "delivery_filename",
     "DeliveryState",
     "artifact_blob_path",
     "artifact_delivery_db_path",

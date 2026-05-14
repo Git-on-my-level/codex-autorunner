@@ -164,6 +164,7 @@ from ...helpers import (
     _with_conversation_id,
 )
 from ...immediate_feedback_bridge import telegram_create_or_reuse_working_anchor
+from ...state import parse_topic_key
 from ...state import topic_key as build_topic_key
 
 if TYPE_CHECKING:
@@ -188,6 +189,16 @@ TELEGRAM_REPO_INTERRUPTED_ERROR = "Telegram turn interrupted"
 TELEGRAM_PMA_IDLE_TIMEOUT_SECONDS = 1800
 _DEFAULT_TELEGRAM_PMA_IDLE_TIMEOUT_SECONDS = 1800
 _DEFAULT_TELEGRAM_REPO_TURN_TIMEOUT_SECONDS = 7200
+
+
+def _artifact_conversation_key_from_topic(topic_key: str) -> str:
+    try:
+        chat_id, thread_id, _scope = parse_topic_key(topic_key)
+    except ValueError:
+        return f"topic:{topic_key}"
+    if thread_id is None:
+        return f"chat:{chat_id}"
+    return f"chat:{chat_id}/thread:{thread_id}"
 
 
 @dataclass
@@ -1740,7 +1751,7 @@ class ExecutionCommands(TelegramCommandSupportMixin):
                 FILES_HINT_TEMPLATE.format(
                     inbox=str(inbox_dir),
                     outbox=str(outbox_dir),
-                    conversation_key=f"topic:{topic_key}",
+                    conversation_key=_artifact_conversation_key_from_topic(topic_key),
                     workspace_path=record.workspace_path,
                     topic_key=topic_key,
                     topic_dir=str(topic_dir),

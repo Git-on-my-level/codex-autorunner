@@ -10,6 +10,7 @@ from ...core.artifact_delivery import (
     ArtifactDeliveryService,
     ArtifactRecord,
     DeliveryIntent,
+    delivery_filename,
 )
 from ...core.filebox import outbox_sent_dir
 from ...core.logging_utils import log_event
@@ -177,7 +178,10 @@ def _archive_legacy_source(
             )
         return None
     sent_dir = archive_policy.sent_dir or outbox_sent_dir(Path(artifact.origin_root))
-    destination = _sent_destination(sent_dir=sent_dir, filename=artifact.filename)
+    destination = _sent_destination(
+        sent_dir=sent_dir,
+        filename=delivery_filename(intent, artifact),
+    )
     sent_dir.mkdir(parents=True, exist_ok=True)
     try:
         source.replace(destination)

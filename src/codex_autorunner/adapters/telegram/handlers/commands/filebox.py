@@ -12,6 +12,7 @@ from .....core.artifact_delivery import (
     ArtifactDeliveryService,
     ArtifactRecord,
     DeliveryIntent,
+    delivery_filename,
     format_delivery_summary,
 )
 from .....core.filebox import delete_regular_files, list_regular_files
@@ -41,12 +42,11 @@ class _TelegramArtifactTransport:
         artifact: ArtifactRecord,
         intent: DeliveryIntent,
     ) -> dict[str, Any]:
-        _ = intent
         data = Path(artifact.storage_path).read_bytes()
         receipt = await self.bot.send_document(
             self.chat_id,
             data,
-            filename=artifact.filename,
+            filename=delivery_filename(intent, artifact),
             message_thread_id=self.thread_id,
             reply_to_message_id=self.reply_to,
         )

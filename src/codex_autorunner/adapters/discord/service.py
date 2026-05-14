@@ -113,6 +113,7 @@ from ...core.artifact_delivery import (
     ArtifactDeliveryService,
     ArtifactRecord,
     DeliveryIntent,
+    delivery_filename,
 )
 from ...core.config import (
     ConfigError,
@@ -631,14 +632,13 @@ class _DiscordArtifactTransport:
         artifact: ArtifactRecord,
         intent: DeliveryIntent,
     ) -> dict[str, Any]:
-        _ = intent
         data = Path(artifact.storage_path).read_bytes()
         return cast(
             dict[str, Any],
             await self.rest.create_channel_message_with_attachment(
                 channel_id=self.channel_id,
                 data=data,
-                filename=artifact.filename,
+                filename=delivery_filename(intent, artifact),
             ),
         )
 

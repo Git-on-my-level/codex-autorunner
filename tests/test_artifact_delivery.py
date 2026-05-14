@@ -6,6 +6,7 @@ from codex_autorunner.core.artifact_delivery import (
     ArtifactDeliveryService,
     ArtifactDeliveryStore,
     artifact_delivery_db_path,
+    delivery_filename,
 )
 from codex_autorunner.core.filebox import outbox_dir, outbox_pending_dir
 
@@ -91,6 +92,32 @@ def test_enqueue_is_idempotent_for_same_artifact_and_target(tmp_path: Path) -> N
     assert second.delivery_id == first.delivery_id
     assert third.delivery_id != first.delivery_id
     assert len(service.list_deliveries()) == 2
+
+
+def test_delivery_filename_is_preserved_per_intent_for_shared_artifact(
+    tmp_path: Path,
+) -> None:
+    service = ArtifactDeliveryService(tmp_path)
+    first_source = _write(tmp_path / "first.txt", b"same contents")
+    second_source = _write(tmp_path / "second.md", b"same contents")
+
+    first = service.enqueue_file(
+        first_source,
+        target_surface="discord",
+        target_conversation_key="channel:1",
+    )
+    second = service.enqueue_file(
+        second_source,
+        target_surface="discord",
+        target_conversation_key="channel:2",
+    )
+
+    assert first.artifact_id == second.artifact_id
+    artifact = service.store.get_artifact(first.artifact_id)
+    assert artifact is not None
+    assert artifact.filename == "first.txt"
+    assert delivery_filename(first, artifact) == "first.txt"
+    assert delivery_filename(second, artifact) == "second.md"
 
 
 def test_claim_next_can_filter_by_target_conversation(tmp_path: Path) -> None:
