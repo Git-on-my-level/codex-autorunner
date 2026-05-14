@@ -671,8 +671,6 @@ class CodexAppServerClient:
     def _schedule_notification_handler(
         self, message: Dict[str, Any], *, method: str, handled: bool = True
     ) -> None:
-        if self._notification_handler is None:
-            return
         envelope = normalize_notification_envelope(message)
         if envelope is None:
             return
