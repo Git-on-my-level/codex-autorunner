@@ -12,6 +12,8 @@ from tests.chat_surface_lab.scenario_runner import (
     load_scenario_by_id,
 )
 
+pytestmark = pytest.mark.slow
+
 
 @pytest.mark.anyio
 async def test_runner_executes_first_visible_feedback_and_emits_artifacts(

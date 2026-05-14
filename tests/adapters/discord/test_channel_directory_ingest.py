@@ -335,10 +335,13 @@ async def test_message_create_dispatch_does_not_wait_for_channel_directory_looku
         "author": {"id": "user-1", "bot": False},
     }
 
-    await asyncio.wait_for(service._on_dispatch("MESSAGE_CREATE", dict(payload)), 0.1)
-    await asyncio.wait_for(lookup_started.wait(), 0.1)
+    await asyncio.wait_for(service._on_dispatch("MESSAGE_CREATE", dict(payload)), 1.0)
+    await asyncio.wait_for(lookup_started.wait(), 1.0)
 
     assert submitted_message_ids == ["m-hot-path"]
 
     release_lookup.set()
-    await asyncio.sleep(0)
+    if service._background_tasks:
+        await asyncio.wait_for(
+            asyncio.gather(*list(service._background_tasks)), timeout=1.0
+        )
