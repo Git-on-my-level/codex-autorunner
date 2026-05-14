@@ -180,14 +180,16 @@ function preserveMetadataOnlyEventActivity(
   });
 }
 
+const METADATA_ONLY_CHAT_EVENT_TYPES = new Set([
+  'channel_directory.discovered',
+  'notification.reply_context_changed',
+  'surface.bound',
+  'surface.rebound'
+]);
+
 function chatEventMovesRows(eventPayload: JsonRecord): boolean {
   const eventType = typeof eventPayload.event_type === 'string' ? eventPayload.event_type : '';
-  return !new Set([
-    'channel_directory.discovered',
-    'notification.reply_context_changed',
-    'surface.bound',
-    'surface.rebound'
-  ]).has(eventType);
+  return !METADATA_ONLY_CHAT_EVENT_TYPES.has(eventType);
 }
 
 function streamCursorFromPayload(payload: JsonRecord): number {
