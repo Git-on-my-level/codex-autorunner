@@ -439,11 +439,16 @@ def _with_commit_barrier_recovery(
     state: dict[str, Any],
     observation: CommitBarrierObservation,
 ) -> dict[str, Any]:
-    if not observation.required:
-        return state
     updated = dict(state)
     recovery = updated.get("recovery")
     recovery = dict(recovery) if isinstance(recovery, dict) else {}
+    if not observation.required:
+        recovery.pop("commit_barrier", None)
+        if recovery:
+            updated["recovery"] = recovery
+        else:
+            updated.pop("recovery", None)
+        return updated
     engine = updated.get("ticket_engine")
     engine = engine if isinstance(engine, dict) else {}
     commit = engine.get("commit")

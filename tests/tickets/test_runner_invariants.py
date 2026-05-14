@@ -15,7 +15,12 @@ from codex_autorunner.tickets.runner_execution import (
     compute_loop_guard,
     should_pause_for_loop,
 )
-from codex_autorunner.tickets.runner_prompt import build_prompt as runner_prompt_build
+from codex_autorunner.tickets.runner_prompt import (
+    build_prompt as runner_prompt_build,
+)
+from codex_autorunner.tickets.runner_prompt import (
+    build_prompt_variants as runner_prompt_variants_build,
+)
 from codex_autorunner.tickets.runner_selection import (
     TICKET_CONTEXT_TOTAL_MAX_BYTES,
     build_reply_context,
@@ -253,6 +258,67 @@ class TestPromptXmlStructure:
         ]
         for tag in xml_tags:
             assert tag in prompt, f"Prompt missing {tag}"
+
+    def test_build_prompt_variants_compacts_existing_session_prompt(
+        self, tmp_path: Path
+    ) -> None:
+        workspace_root = tmp_path
+        ticket_dir = workspace_root / ".codex-autorunner" / "tickets"
+        ticket_dir.mkdir(parents=True, exist_ok=True)
+        ticket_path = ticket_dir / "TICKET-001.md"
+        _write_ticket(ticket_path, body="Current ticket body")
+
+        ctx_dir = workspace_root / ".codex-autorunner" / "contextspace"
+        ctx_dir.mkdir(parents=True, exist_ok=True)
+        (ctx_dir / "active_context.md").write_text(
+            "static contextspace payload",
+            encoding="utf-8",
+        )
+
+        outbox_paths = MagicMock()
+        outbox_paths.dispatch_dir = (
+            workspace_root / ".codex-autorunner" / "runs" / "run-1" / "dispatch"
+        )
+        outbox_paths.dispatch_path = (
+            workspace_root / ".codex-autorunner" / "runs" / "run-1" / "DISPATCH.md"
+        )
+
+        ticket_doc, _ = read_ticket(ticket_path)
+
+        variants = runner_prompt_variants_build(
+            ticket_path=ticket_path,
+            workspace_root=workspace_root,
+            ticket_doc=ticket_doc,
+            last_agent_output="previous agent output",
+            commit_required=True,
+            commit_attempt=1,
+            commit_max_attempts=2,
+            outbox_paths=outbox_paths,
+            lint_errors=["done must be a boolean"],
+            reply_context="new human reply",
+            requested_context="requested context payload",
+            previous_ticket_content="---\ntitle: prior\n---\nprior ticket payload",
+        )
+
+        full_prompt = variants.new_session_prompt
+        compact_prompt = variants.existing_session_prompt
+
+        assert "You are running inside Codex Autorunner" in full_prompt
+        assert "static contextspace payload" in full_prompt
+        assert "previous agent output" in full_prompt
+        assert "prior ticket payload" in full_prompt
+
+        assert "You are running inside Codex Autorunner" not in compact_prompt
+        assert "static contextspace payload" not in compact_prompt
+        assert "previous agent output" not in compact_prompt
+        assert "prior ticket payload" not in compact_prompt
+        assert "CAR ticket flow: read ticket" in compact_prompt
+        assert "Current ticket body" in compact_prompt
+        assert "new human reply" in compact_prompt
+        assert "requested context payload" in compact_prompt
+        assert "<CAR_COMMIT_REQUIRED>" in compact_prompt
+        assert "<CAR_TICKET_FRONTMATTER_LINT_REPAIR>" in compact_prompt
+        assert len(compact_prompt.encode("utf-8")) < len(full_prompt.encode("utf-8"))
 
     def test_build_prompt_with_lint_errors(self, tmp_path: Path) -> None:
         workspace_root = tmp_path

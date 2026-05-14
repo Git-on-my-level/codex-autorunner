@@ -817,17 +817,25 @@ class DefaultAgentPool:
             else None
         )
 
-        if req.additional_messages:
-            merged: list[str] = [req.prompt]
+        def _with_additional_messages(base_prompt: str) -> str:
+            if not req.additional_messages:
+                return base_prompt
+            merged: list[str] = [base_prompt]
             for msg in req.additional_messages:
                 if not isinstance(msg, dict):
                     continue
                 text = msg.get("text")
                 if isinstance(text, str) and text.strip():
                     merged.append(text)
-            prompt = "\n\n".join(merged)
-        else:
-            prompt = req.prompt
+            return "\n\n".join(merged)
+
+        prompt = _with_additional_messages(req.prompt)
+        existing_session_prompt = (
+            _with_additional_messages(req.existing_session_prompt)
+            if isinstance(req.existing_session_prompt, str)
+            and req.existing_session_prompt.strip()
+            else None
+        )
 
         state = self._ticket_flow_runner_state()
         service = self._get_orchestration_service()
@@ -853,6 +861,15 @@ class DefaultAgentPool:
                 "ticket_path": ticket_path,
             },
         )
+        request_metadata = {
+            "execution_error_message": _DEFAULT_EXECUTION_ERROR,
+            "runtime_prompt": prompt,
+        }
+        if existing_session_prompt is not None:
+            request_metadata["existing_session_runtime_prompt"] = (
+                existing_session_prompt
+            )
+
         request = MessageRequest(
             target_id=thread.thread_target_id,
             target_kind="thread",
@@ -862,7 +879,7 @@ class DefaultAgentPool:
             model=model,
             reasoning=reasoning,
             approval_mode=state.autorunner_approval_policy,
-            metadata={"execution_error_message": _DEFAULT_EXECUTION_ERROR},
+            metadata=request_metadata,
         )
         execution, harness = await service.send_message_with_started_harness(
             request,

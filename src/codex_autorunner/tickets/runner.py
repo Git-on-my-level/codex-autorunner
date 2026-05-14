@@ -290,6 +290,7 @@ class TicketRunner:
         commit_pending = pre_turn_plan.commit_pending
         commit_retries = pre_turn_plan.commit_retries
         prompt = pre_turn_plan.prompt
+        existing_session_prompt = pre_turn_plan.existing_session_prompt
         turn_options = dict(pre_turn_plan.turn_options or {})
         turn_options["ticket_flow_run_id"] = self._run_id
         turn_options["ticket_id"] = current_ticket_id
@@ -312,6 +313,7 @@ class TicketRunner:
             agent_id=canonical_agent_id,
             profile=current_ticket_profile,
             prompt=prompt,
+            existing_session_prompt=existing_session_prompt,
             lint_retry_conversation_id=lint_retry_conversation_id,
             turn_options=turn_options if turn_options else None,
             emit_event=emit_event,

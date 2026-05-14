@@ -1034,6 +1034,54 @@ async def test_run_turn_passes_model_reasoning_and_reuses_thread_target(
 
 
 @pytest.mark.asyncio
+async def test_run_turn_delegates_prompt_variant_selection_to_orchestration(
+    tmp_path: Path,
+):
+    harness = _FakeHarness(
+        [
+            _HarnessScript(assistant_text="first"),
+            _HarnessScript(assistant_text="second"),
+            _HarnessScript(assistant_text="third"),
+        ]
+    )
+    pool = _make_pool(tmp_path, harness, approval_mode="review")
+
+    first = await pool.run_turn(
+        AgentTurnRequest(
+            agent_id="opencode",
+            prompt="initial full prompt",
+            workspace_root=tmp_path,
+        )
+    )
+
+    second = await pool.run_turn(
+        AgentTurnRequest(
+            agent_id="opencode",
+            prompt="second full prompt",
+            existing_session_prompt="second compact prompt",
+            workspace_root=tmp_path,
+            conversation_id=first.conversation_id,
+        )
+    )
+
+    pool._thread_store.set_thread_backend_id(first.conversation_id, None)
+    third = await pool.run_turn(
+        AgentTurnRequest(
+            agent_id="opencode",
+            prompt="third full prompt",
+            existing_session_prompt="third compact prompt",
+            workspace_root=tmp_path,
+            conversation_id=first.conversation_id,
+        )
+    )
+
+    assert first.conversation_id == second.conversation_id == third.conversation_id
+    assert harness.calls[0]["prompt"] == "initial full prompt"
+    assert harness.calls[1]["prompt"] == "second compact prompt"
+    assert harness.calls[2]["prompt"] == "third full prompt"
+
+
+@pytest.mark.asyncio
 async def test_run_turn_reuses_started_harness_instance_for_wait_for_turn(
     tmp_path: Path,
 ):

@@ -54,7 +54,7 @@ def _commit_barrier_state(
     )
     exhausted = bool(
         resolution_state == "exhausted"
-        or (max_commit_retries > 0 and retries >= max_commit_retries)
+        or (max_commit_retries >= 0 and retries >= max_commit_retries)
     )
     state = {
         "pending": pending,

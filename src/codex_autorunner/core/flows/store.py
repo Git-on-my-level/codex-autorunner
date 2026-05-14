@@ -5,11 +5,11 @@ import logging
 import sqlite3
 import threading
 from contextlib import contextmanager
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Generator, List, Mapping, Optional, cast
 
 from ..config import ConfigError, load_repo_config
+from ..notification_intent_records import FlowNotificationIntentRecord
 from ..sqlite_utils import (
     DEFAULT_SQLITE_BUSY_TIMEOUT_MS,
     SqliteMigrationStep,
@@ -33,25 +33,6 @@ _logger = logging.getLogger(__name__)
 
 SCHEMA_VERSION = 4
 UNSET = object()
-
-
-@dataclass(frozen=True)
-class FlowNotificationIntentRecord:
-    intent_id: str
-    run_id: str
-    event_type: str
-    severity: str
-    reason: str
-    recommended_actions: tuple[str, ...]
-    cooldown_seconds: int
-    resolved: bool
-    first_seen_at: str
-    last_observed_at: str
-    last_notified_at: Optional[str]
-    resolved_at: Optional[str]
-    observed_count: int
-    payload: Mapping[str, Any]
-    delivery_attempts: Mapping[str, Any]
 
 
 def _get_durable_writes(repo_root: Path) -> bool:

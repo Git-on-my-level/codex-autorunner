@@ -15,6 +15,7 @@ class AgentTurnRequest:
     prompt: str
     workspace_root: Path
     conversation_id: Optional[str] = None
+    existing_session_prompt: Optional[str] = None
     # Optional, agent-specific extras.
     options: Optional[dict[str, Any]] = None
     # Optional flow event emitter (for live streaming).
