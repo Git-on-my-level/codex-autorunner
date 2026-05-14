@@ -1686,6 +1686,8 @@ def test_format_pma_prompt_includes_filebox_paths(tmp_path: Path) -> None:
     result = _format_seeded_pma_prompt(tmp_path)
 
     hub = tmp_path.expanduser().resolve()
+    assert "Artifact delivery contract:" in result
+    assert "car artifacts send <file> --to current" in result
     assert str(hub / ".codex-autorunner/filebox/outbox") in result
     assert str(hub / ".codex-autorunner/filebox/inbox") in result
 

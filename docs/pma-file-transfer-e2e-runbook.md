@@ -19,8 +19,20 @@ All PMA files live under the hub root:
 ```
 <hub_root>/.codex-autorunner/filebox/
 ├── inbox/    # Files uploaded by users
-└── outbox/   # Files written by agents for users to download
+└── outbox/   # Legacy send-back ingress for the active PMA target
 ```
+
+The canonical send-back path is the artifact journal:
+
+```bash
+car artifacts send ./response.txt --to current
+```
+
+When a runtime does not expose the current target environment, use `--to explicit`
+with the target surface and conversation shown in the prompt. Legacy files already
+in `outbox/` or `outbox/pending/` can be imported with `car artifacts import-legacy`.
+Use `car artifacts diagnose --root <repo_root> --sibling-root <hub_root>` to find
+files stranded in the wrong hub/repo FileBox scope.
 
 ## PMA Durable Docs (Manual Mode)
 
@@ -89,7 +101,7 @@ Response should include the file in `inbox` array.
 
 1. In the PMA chat, ask the agent to write a file:
    ```
-   Create a file called response.txt in the PMA outbox with the text "Hello from agent".
+   Create response.txt with "Hello from agent" and send it to the current artifact delivery target.
    ```
 2. **Expected:**
    - Agent completes the request
@@ -104,8 +116,8 @@ Response should include the file in `inbox` array.
 
 **Verify via file system:**
 ```bash
-ls -la <hub_root>/.codex-autorunner/filebox/outbox/
-cat <hub_root>/.codex-autorunner/filebox/outbox/response.txt
+car artifacts list --root <hub_root>
+car artifacts diagnose --root <hub_root>
 ```
 
 ---
@@ -180,11 +192,11 @@ ls -la <hub_root>/.codex-autorunner/filebox/inbox/
 
 ---
 
-### 4. Agent Writes Outbox File → `/files outbox` Shows It
+### 4. Agent Sends Artifact → `/files outbox` Compatibility Still Shows Legacy Imports
 
 1. Ask the agent to write a file:
    ```
-   Create a file telegram-output.txt in the PMA outbox with text "Telegram test".
+   Create telegram-output.txt with "Telegram test" and send it to the current artifact delivery target.
    ```
 2. **Expected:**
    - Agent completes the request
@@ -262,11 +274,11 @@ cat <hub_root>/.codex-autorunner/filebox/outbox/telegram-output.txt
 
 1. In the web PMA chat, ask the agent to write a file:
    ```
-   Create web-produced.txt in the PMA outbox with "Cross-surface test from web".
+   Create web-produced.txt with "Cross-surface test from web" and send it to the current artifact delivery target.
    ```
-2. **Expected:** File appears in web Outbox panel
+2. **Expected:** File appears in artifact delivery records or the web Outbox compatibility panel
 
-3. In Telegram (same hub, PMA mode), check outbox:
+3. In Telegram (same hub, PMA mode), check deliveries or legacy outbox:
    ```
    /files outbox
    ```
