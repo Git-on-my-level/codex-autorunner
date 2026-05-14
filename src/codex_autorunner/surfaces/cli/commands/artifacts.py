@@ -216,6 +216,46 @@ def register_artifacts_commands(app: typer.Typer) -> None:
         """Inspect one artifact delivery by id."""
         _echo_json(_delivery_payload(ArtifactDeliveryService(_root(root)), delivery_id))
 
+    @app.command("import-legacy")
+    def import_legacy(
+        root: Optional[Path] = typer.Option(None, "--root", help="Repo or hub root"),
+        to: str = typer.Option("current", "--to", help="current or explicit"),
+        surface: Optional[str] = typer.Option(
+            None, "--surface", help="Explicit target surface"
+        ),
+        conversation: Optional[str] = typer.Option(
+            None, "--conversation", help="Explicit target conversation key"
+        ),
+        workspace_scope: Optional[str] = typer.Option(
+            None, "--workspace-scope", help="Workspace scope to record"
+        ),
+        json_output: bool = typer.Option(False, "--json", help="Emit JSON output"),
+    ) -> None:
+        """Import legacy FileBox outbox files into delivery records."""
+        target_surface, target_conversation, target_workspace = _target(
+            to=to,
+            surface=surface,
+            conversation=conversation,
+            workspace_scope=workspace_scope,
+        )
+        service = ArtifactDeliveryService(_root(root))
+        intents = service.import_legacy_outbox(
+            target_surface=target_surface,
+            target_conversation_key=target_conversation,
+            workspace_scope=target_workspace,
+        )
+        rows = [
+            serialize_delivery(
+                intent,
+                artifact=service.store.get_artifact(intent.artifact_id),
+            )
+            for intent in intents
+        ]
+        if json_output:
+            _echo_json(rows)
+        else:
+            typer.echo(f"imported {len(rows)} legacy FileBox file(s)")
+
     @app.command("retry")
     def retry(
         delivery_id: str,

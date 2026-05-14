@@ -99,3 +99,35 @@ def test_artifacts_diagnose_flags_legacy_hub_pending_file(tmp_path: Path) -> Non
         and finding["root"] == str(hub.resolve())
         for finding in findings
     )
+
+
+def test_artifacts_import_legacy_queues_scoped_delivery_records(tmp_path: Path) -> None:
+    legacy = tmp_path / ".codex-autorunner" / "filebox" / "outbox" / "report.txt"
+    legacy.parent.mkdir(parents=True)
+    legacy.write_text("report\n", encoding="utf-8")
+
+    result = runner.invoke(
+        app,
+        [
+            "artifacts",
+            "import-legacy",
+            "--root",
+            str(tmp_path),
+            "--to",
+            "explicit",
+            "--surface",
+            "discord",
+            "--conversation",
+            "channel:123",
+            "--workspace-scope",
+            f"repo:{tmp_path}",
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    rows = json.loads(result.output)
+    assert len(rows) == 1
+    assert rows[0]["target_surface"] == "discord"
+    assert rows[0]["target_conversation_key"] == "channel:123"
+    assert rows[0]["metadata"]["legacy_filebox_source"] == "outbox"

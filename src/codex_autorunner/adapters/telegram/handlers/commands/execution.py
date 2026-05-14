@@ -1740,6 +1740,8 @@ class ExecutionCommands(TelegramCommandSupportMixin):
                 FILES_HINT_TEMPLATE.format(
                     inbox=str(inbox_dir),
                     outbox=str(outbox_dir),
+                    conversation_key=f"topic:{topic_key}",
+                    workspace_path=record.workspace_path,
                     topic_key=topic_key,
                     topic_dir=str(topic_dir),
                     max_bytes=self._config.media.max_file_bytes,

@@ -115,7 +115,10 @@ async def test_telegram_file_hints_injected_for_plain_text_outbox_keyword(
         input_items=None,
     )
 
-    assert "Outbox (pending):" in prompt
+    assert "Artifact delivery target:" in prompt
+    assert "car artifacts send <file> --to current" in prompt
+    assert "topic:3:4" in prompt
+    assert "Legacy pending outbox:" in prompt
     assert "Inbox:" in prompt
 
 
@@ -143,7 +146,7 @@ async def test_telegram_file_hints_injected_for_plain_text_inbox_keyword(
         input_items=None,
     )
 
-    assert "Outbox (pending):" in prompt
+    assert "Legacy pending outbox:" in prompt
     assert "Inbox:" in prompt
 
 
@@ -172,7 +175,7 @@ async def test_telegram_file_hints_do_not_trigger_from_injected_car_context(
         user_input_text="summarize the notes",
     )
 
-    assert "Outbox (pending):" not in prompt
+    assert "Legacy pending outbox:" not in prompt
     assert "Inbox:" not in prompt
 
 
@@ -208,7 +211,7 @@ async def test_telegram_file_hints_injected_when_file_context_exists(
     )
 
     assert "Inbox:" in prompt
-    assert "Outbox (pending):" in prompt
+    assert "Legacy pending outbox:" in prompt
     assert topic_key in prompt
 
 

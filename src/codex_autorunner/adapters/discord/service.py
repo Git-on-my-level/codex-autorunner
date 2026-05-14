@@ -2700,6 +2700,8 @@ class DiscordBotService(DiscordInteractionResponseMixin):
             max_message_length=int(self._config.max_message_length),
             voice_provider_name=provider_name,
             whisper_transcript_disclaimer=DISCORD_WHISPER_TRANSCRIPT_DISCLAIMER,
+            target_conversation_key=f"channel:{channel_id}",
+            workspace_scope=f"repo:{workspace_root}",
         )
         return (
             payload.prompt_text,
