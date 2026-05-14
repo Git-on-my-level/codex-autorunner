@@ -469,7 +469,7 @@ class ArtifactDeliveryStore:
             token_sql = " AND claim_token = ?"
             params.append(claim_token)
         with open_sqlite(self.db_path) as conn:
-            conn.execute(
+            cursor = conn.execute(
                 f"""
                 UPDATE delivery_intents
                    SET {", ".join(assignments)}
@@ -479,16 +479,16 @@ class ArtifactDeliveryStore:
                 """,
                 params,
             )
+            updated_rows = cursor.rowcount
             row = conn.execute(
                 "SELECT * FROM delivery_intents WHERE delivery_id = ?",
                 (delivery_id,),
             ).fetchone()
         if row is None:
             raise ValueError(f"Unknown delivery: {delivery_id}")
-        intent = _intent_from_row(row)
-        if intent.state != updates["state"] and intent.state in allowed_states:
+        if updated_rows != 1:
             raise RuntimeError(f"Delivery transition failed: {delivery_id}")
-        return intent
+        return _intent_from_row(row)
 
     def _ensure_schema(self) -> None:
         with open_sqlite(self.db_path) as conn:

@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from codex_autorunner.core.artifact_delivery import (
     ArtifactDeliveryService,
     ArtifactDeliveryStore,
@@ -64,6 +66,25 @@ def test_delivery_lifecycle_records_receipt_and_archive_metadata(
 
     pending = service.list_deliveries(states=("pending",))
     assert pending == []
+
+
+def test_mark_sent_rejects_mismatched_claim_token(tmp_path: Path) -> None:
+    service = ArtifactDeliveryService(tmp_path)
+    source = _write(tmp_path / "token.txt", b"tok")
+    intent = service.enqueue_file(
+        source,
+        target_surface="telegram",
+        target_conversation_key="chat:1",
+    )
+    claimed = service.claim_next(target_surface="telegram")
+    assert claimed is not None
+    service.mark_sending(intent.delivery_id, claim_token=claimed.claim_token)
+    with pytest.raises(RuntimeError, match="Delivery transition failed"):
+        service.mark_sent(
+            intent.delivery_id,
+            receipt={"message_id": 1},
+            claim_token="not-the-worker-token",
+        )
 
 
 def test_enqueue_is_idempotent_for_same_artifact_and_target(tmp_path: Path) -> None:

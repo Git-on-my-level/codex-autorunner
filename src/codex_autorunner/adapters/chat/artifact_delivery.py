@@ -130,6 +130,9 @@ async def drain_artifact_deliveries(
                 logger,
                 logging.WARNING,
                 "chat.artifact_delivery.send_failed",
+                delivery_target=delivery_target_key(
+                    surface=target_surface, conversation_key=target_conversation_key
+                ),
                 target_surface=target_surface,
                 target_conversation_key=target_conversation_key,
                 delivery_id=intent.delivery_id,
