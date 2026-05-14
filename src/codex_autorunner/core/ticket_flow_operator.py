@@ -47,6 +47,10 @@ from .ticket_flow_projection import (
     collect_ticket_flow_census,
     select_authoritative_run_record,
 )
+from .ticket_flow_recovery import (
+    build_recovery_notification_intents,
+    build_recovery_projection,
+)
 from .utils import resolve_executable
 
 logger = logging.getLogger(__name__)
@@ -136,6 +140,8 @@ class TicketFlowRunState(TypedDict, total=False):
     reap_reason: Optional[str]
     commit_barrier_pending: bool
     commit_barrier: Optional[dict[str, Any]]
+    recovery_projection: dict[str, Any]
+    notification_intents: list[dict[str, Any]]
     crash: Optional[TicketFlowWorkerCrash]
     flow_status: str
     duration_seconds: Optional[float]
@@ -1758,6 +1764,30 @@ def build_ticket_flow_run_state(
     elif recovery_state:
         last_recovery_action = recovery_state
 
+    stale_alive_payload = stale_alive if isinstance(stale_alive, dict) else None
+    recovery_projection = build_recovery_projection(
+        run_id=run_id,
+        state=state,
+        recovery_state=recovery_state,
+        attention_required=attention_required,
+        recommended_actions=recommended_actions,
+        worker_status=worker_status,
+        blocking_reason=blocking_reason,
+        restart_attempts=restart_attempts,
+        restart_max_attempts=restart_max_attempts,
+        restart_exhausted=restart_exhausted,
+        commit_barrier_pending=bool(
+            isinstance(commit_barrier, dict) and commit_barrier.get("pending")
+        ),
+        commit_barrier=commit_barrier,
+        stale_alive=stale_alive_payload,
+        dispatch_pause_pending=bool(record.status == FlowRunStatus.PAUSED),
+        terminal_failure=bool(record.status == FlowRunStatus.FAILED),
+        crash_reason=crash_reason,
+        reap_reason=reap_reason,
+    )
+    notification_intents = build_recovery_notification_intents(recovery_projection)
+
     return {
         "state": state,
         "recovery_state": recovery_state,
@@ -1799,6 +1829,8 @@ def build_ticket_flow_run_state(
             isinstance(commit_barrier, dict) and commit_barrier.get("pending")
         ),
         "commit_barrier": commit_barrier,
+        "recovery_projection": recovery_projection.to_dict(),
+        "notification_intents": [intent.to_dict() for intent in notification_intents],
         "crash": (
             {
                 "summary": crash_summary,
