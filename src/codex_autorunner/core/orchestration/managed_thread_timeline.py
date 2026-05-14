@@ -1233,10 +1233,7 @@ def build_managed_thread_timeline(
     normalized_thread_id = str(managed_thread_id or "").strip()
     if not normalized_thread_id:
         raise ValueError("managed_thread_id is required")
-    bounded_limit = min(
-        max(int(limit or MAX_MANAGED_THREAD_TIMELINE_LIMIT), 1),
-        MAX_MANAGED_THREAD_TIMELINE_LIMIT,
-    )
+    bounded_limit = max(int(limit or 500), 1)
     thread = thread_store.get_thread(normalized_thread_id)
     if thread is None:
         raise KeyError(normalized_thread_id)
