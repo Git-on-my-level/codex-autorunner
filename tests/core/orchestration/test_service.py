@@ -1800,6 +1800,103 @@ async def test_recover_running_execution_from_harness_marks_terminal_result(
     ]
 
 
+async def test_recovery_scanner_replays_1791_completion_gap_and_unblocks_queue(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    harness = _FakeHarness(
+        recover_stalled_turn_result=TerminalTurnResult(
+            status="completed",
+            assistant_text="Recovered backend completion after timeline cancellation",
+        )
+    )
+    service = _build_service(tmp_path, harness)
+    workspace_root = tmp_path / "workspace"
+    workspace_root.mkdir()
+    thread = service.create_thread_target("codex", workspace_root)
+    running = await service.send_message(
+        MessageRequest(
+            target_id=thread.thread_target_id,
+            target_kind="thread",
+            message_text="first turn",
+            metadata={"managed_turn_lifecycle_phase": "terminal_recording"},
+        )
+    )
+    queued = await service.send_message(
+        MessageRequest(
+            target_id=thread.thread_target_id,
+            target_kind="thread",
+            message_text="queued turn",
+        )
+    )
+
+    with caplog.at_level(logging.WARNING):
+        first_scan = await service.recover_stale_managed_thread_turns(
+            stale_after_seconds=0
+        )
+        second_scan = await service.recover_stale_managed_thread_turns(
+            stale_after_seconds=0
+        )
+
+    recovered = service.get_execution(thread.thread_target_id, running.execution_id)
+    assert recovered is not None
+    assert recovered.status == "ok"
+    assert (
+        recovered.output_text
+        == "Recovered backend completion after timeline cancellation"
+    )
+    assert first_scan.scanned == 1
+    assert first_scan.changed == 1
+    assert first_scan.decisions[0].prior_phase == "terminal_recording"
+    assert first_scan.decisions[0].selected_action == "recover_from_harness"
+    assert first_scan.decisions[0].queue_depth == 1
+    assert second_scan.scanned == 0
+    assert second_scan.changed == 0
+    assert service.get_queue_depth(thread.thread_target_id) == 1
+    assert "orchestration.thread.recovery_scanner.decision" in caplog.text
+    assert '"prior_phase":"terminal_recording"' in caplog.text
+    assert '"selected_action":"recover_from_harness"' in caplog.text
+
+    next_execution = await service.start_next_queued_execution(
+        thread.thread_target_id,
+        harness=harness,
+    )
+
+    assert queued.status == "queued"
+    assert next_execution is not None
+    assert next_execution.execution_id == queued.execution_id
+    assert next_execution.status == "running"
+
+
+async def test_recovery_scanner_marks_stale_running_error_when_backend_not_recoverable(
+    tmp_path: Path,
+) -> None:
+    harness = _FakeHarness(recover_stalled_turn_result=None)
+    service = _build_service(tmp_path, harness)
+    workspace_root = tmp_path / "workspace"
+    workspace_root.mkdir()
+    thread = service.create_thread_target("codex", workspace_root)
+    running = await service.send_message(
+        MessageRequest(
+            target_id=thread.thread_target_id,
+            target_kind="thread",
+            message_text="unrecoverable turn",
+            metadata={"managed_turn_lifecycle_phase": "runtime_running"},
+        )
+    )
+
+    scan = await service.recover_stale_managed_thread_turns(stale_after_seconds=0)
+
+    recovered = service.get_execution(thread.thread_target_id, running.execution_id)
+    assert recovered is not None
+    assert recovered.status == "error"
+    assert recovered.error == "Running execution could not be reattached after restart"
+    assert scan.scanned == 1
+    assert scan.changed == 1
+    assert scan.decisions[0].selected_action == "recover_from_harness"
+    assert service.get_running_execution(thread.thread_target_id) is None
+
+
 async def test_stop_thread_recovers_unknown_hermes_turn_interrupt_error(
     tmp_path: Path,
 ) -> None:

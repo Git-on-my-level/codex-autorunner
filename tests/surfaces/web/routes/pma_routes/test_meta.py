@@ -237,6 +237,9 @@ def test_pma_agents_does_not_default_to_unavailable_synthetic_hermes(
     def _mock_get_available(_context):
         return _only_opencode
 
+    def _descriptor_for(agent_id, _context):
+        return hermes_descriptor if agent_id == "hermes" else None
+
     monkeypatch.setattr(
         "codex_autorunner.surfaces.web.routes.pma_routes.meta.get_available_agents",
         _mock_get_available,
@@ -251,7 +254,11 @@ def test_pma_agents_does_not_default_to_unavailable_synthetic_hermes(
     )
     monkeypatch.setattr(
         "codex_autorunner.surfaces.web.routes.pma_routes.meta.get_agent_descriptor",
-        lambda agent_id, _context: hermes_descriptor if agent_id == "hermes" else None,
+        _descriptor_for,
+    )
+    monkeypatch.setattr(
+        "codex_autorunner.agents.registry.get_agent_descriptor",
+        _descriptor_for,
     )
 
     def _mock_available_agents(_request):
