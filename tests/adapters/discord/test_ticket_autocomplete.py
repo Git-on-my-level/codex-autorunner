@@ -72,6 +72,7 @@ async def test_returns_empty_on_exception() -> None:
 
 
 @pytest.mark.anyio
+@pytest.mark.slow
 async def test_returns_empty_on_slow_scan() -> None:
     def _slow(*args, **kwargs):
         import time

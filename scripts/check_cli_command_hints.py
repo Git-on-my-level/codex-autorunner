@@ -261,8 +261,13 @@ def _scan_python_files(
     for path in sorted(_iter_py_files()):
         try:
             source = path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            continue
+        if "car" not in source.lower():
+            continue
+        try:
             tree = ast.parse(source, filename=str(path))
-        except (OSError, SyntaxError, UnicodeDecodeError):
+        except SyntaxError:
             continue
 
         for lineno, s in _strings_from_ast(tree):

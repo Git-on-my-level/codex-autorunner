@@ -92,8 +92,10 @@ need_cmd make
 # Keep the fast lane selector centralized here; budget failures stay report-only
 # unless the caller opts in with CODEX_FAST_TEST_ENFORCE_BUDGET=1.
 FAST_TEST_MARKERS='not integration and not slow'
+FAST_TEST_IGNORES='--ignore=tests/chat_surface_integration'
 FAST_TEST_ENFORCE_BUDGET="${CODEX_FAST_TEST_ENFORCE_BUDGET:-0}"
-FAST_TEST_WORKERS="${CODEX_FAST_TEST_WORKERS:-4}"
+_AUTO_WORKERS="$("$PYTHON_BIN" -c 'import os;print(os.cpu_count() or 4)' 2>/dev/null || echo 4)"
+FAST_TEST_WORKERS="${CODEX_FAST_TEST_WORKERS:-$_AUTO_WORKERS}"
 STAGED_FILES="$(git diff --cached --name-only --diff-filter=ACMRD 2>/dev/null || true)"
 
 # --- Lane detection (if not explicitly set) ----------------------------------
@@ -175,40 +177,43 @@ if [[ "$RUN_WEB_UI" == true && -n "$STAGED_FILES" ]]; then
 fi
 
 # --- Always-on guardrails (non-negotiable safety checks) ---------------------
-echo "Checking staged .codex-autorunner paths..."
-"$PYTHON_BIN" scripts/check_no_codex_autorunner_staged.py
+_run_guardrails() {
+  echo "Checking staged .codex-autorunner paths..."
+  "$PYTHON_BIN" scripts/check_no_codex_autorunner_staged.py
 
-paths=(src)
-if [ -d tests ]; then
-  paths+=(tests)
-fi
+  paths=(src)
+  if [ -d tests ]; then
+    paths+=(tests)
+  fi
 
-echo "Formatting check (black)..."
-"$PYTHON_BIN" -m black --check "${paths[@]}"
+  echo "Formatting check (black)..."
+  "$PYTHON_BIN" -m black --check "${paths[@]}"
 
-echo "Linting Python (ruff)..."
-"$PYTHON_BIN" -m ruff check "${paths[@]}"
+  echo "Linting Python (ruff)..."
+  "$PYTHON_BIN" -m ruff check "${paths[@]}"
 
-echo "Checking import boundaries..."
-"$PYTHON_BIN" scripts/check_import_boundaries.py
+  echo "Checking import boundaries..."
+  "$PYTHON_BIN" scripts/check_import_boundaries.py
 
-echo "Validating hub interface contracts..."
-"$PYTHON_BIN" scripts/validate_interfaces.py
+  echo "Validating hub interface contracts..."
+  "$PYTHON_BIN" scripts/validate_interfaces.py
 
-echo "Checking core imports (no adapter implementations)..."
-"$PYTHON_BIN" scripts/check_core_imports.py
+  echo "Checking core imports (no adapter implementations)..."
+  "$PYTHON_BIN" scripts/check_core_imports.py
 
-echo "Checking destination contract drift..."
-"$PYTHON_BIN" scripts/check_destination_contract_drift.py
+  echo "Checking destination contract drift..."
+  "$PYTHON_BIN" scripts/check_destination_contract_drift.py
 
-echo "Checking keyword contracts..."
-"$PYTHON_BIN" scripts/check_keyword_contracts.py --report-only
+  echo "Checking keyword contracts..."
+  "$PYTHON_BIN" scripts/check_keyword_contracts.py --report-only
 
-echo "Checking test /tmp hermetic usage..."
-"$PYTHON_BIN" scripts/check_test_tmp_usage.py
+  echo "Checking test /tmp hermetic usage..."
+  "$PYTHON_BIN" scripts/check_test_tmp_usage.py
+}
 
-# --- Core lane checks --------------------------------------------------------
-if [[ "$RUN_CORE" == true ]]; then
+# --- Lane runner functions ----------------------------------------------------
+
+_run_static_checks() {
   echo "Linting injected context hints..."
   "$PYTHON_BIN" scripts/check_injected_context.py
 
@@ -220,7 +225,9 @@ if [[ "$RUN_CORE" == true ]]; then
 
   echo "Type check (mypy, strict repo-wide)..."
   make typecheck-strict PYTHON="$PYTHON_BIN"
+}
 
+_run_pytest() {
   echo "Running tests (pytest)..."
   if [ -z "${CI:-}" ]; then
       FAST_TEST_JUNIT="$(mktemp)"
@@ -228,7 +235,7 @@ if [[ "$RUN_CORE" == true ]]; then
         rm -f "$FAST_TEST_JUNIT" "${FAST_TEST_SELECTED:-}"
       }
       trap cleanup_fast_test_artifacts EXIT
-      "$PYTHON_BIN" -m pytest -m "$FAST_TEST_MARKERS" -n "$FAST_TEST_WORKERS" -o junit_duration_report=call --junitxml "$FAST_TEST_JUNIT"
+      "$PYTHON_BIN" -m pytest -m "$FAST_TEST_MARKERS" -n "$FAST_TEST_WORKERS" --dist loadfile $FAST_TEST_IGNORES -o junit_duration_report=call --junitxml "$FAST_TEST_JUNIT"
       FAST_TEST_REPORT_ARGS=(
         "$FAST_TEST_JUNIT"
         --repo-root "$REPO_ROOT"
@@ -237,7 +244,7 @@ if [[ "$RUN_CORE" == true ]]; then
       )
       if [[ "${CODEX_FAST_TEST_VERIFY_NODEIDS:-0}" == "1" ]]; then
         FAST_TEST_SELECTED="$(mktemp)"
-        "$PYTHON_BIN" -m pytest -m "$FAST_TEST_MARKERS" --collect-only -q > "$FAST_TEST_SELECTED"
+        "$PYTHON_BIN" -m pytest -m "$FAST_TEST_MARKERS" --collect-only -q $FAST_TEST_IGNORES > "$FAST_TEST_SELECTED"
         FAST_TEST_REPORT_ARGS+=(
           --selected-nodeids "$FAST_TEST_SELECTED"
           --verify-nodeids
@@ -257,7 +264,7 @@ if [[ "$RUN_CORE" == true ]]; then
           rm -f "$FAST_TEST_JUNIT" "${FAST_TEST_SELECTED:-}"
         }
         trap cleanup_fast_test_artifacts EXIT
-        "$PYTHON_BIN" -m pytest -m "$FAST_TEST_MARKERS" -n "$FAST_TEST_WORKERS" -o junit_duration_report=call --junitxml "$FAST_TEST_JUNIT"
+        "$PYTHON_BIN" -m pytest -m "$FAST_TEST_MARKERS" -n "$FAST_TEST_WORKERS" --dist loadfile $FAST_TEST_IGNORES -o junit_duration_report=call --junitxml "$FAST_TEST_JUNIT"
         FAST_TEST_REPORT_ARGS=(
           "$FAST_TEST_JUNIT"
           --repo-root "$REPO_ROOT"
@@ -267,7 +274,7 @@ if [[ "$RUN_CORE" == true ]]; then
         )
         if [[ "${CODEX_FAST_TEST_VERIFY_NODEIDS:-0}" == "1" ]]; then
           FAST_TEST_SELECTED="$(mktemp)"
-          "$PYTHON_BIN" -m pytest -m "$FAST_TEST_MARKERS" --collect-only -q > "$FAST_TEST_SELECTED"
+          "$PYTHON_BIN" -m pytest -m "$FAST_TEST_MARKERS" --collect-only -q $FAST_TEST_IGNORES > "$FAST_TEST_SELECTED"
           FAST_TEST_REPORT_ARGS+=(
             --selected-nodeids "$FAST_TEST_SELECTED"
             --verify-nodeids
@@ -276,20 +283,62 @@ if [[ "$RUN_CORE" == true ]]; then
         echo "Enforcing fast-test budget (CODEX_FAST_TEST_ENFORCE_BUDGET=1)."
         "$PYTHON_BIN" scripts/report_fast_test_budget.py "${FAST_TEST_REPORT_ARGS[@]}"
       else
-        "$PYTHON_BIN" -m pytest -m "$FAST_TEST_MARKERS" -n "$FAST_TEST_WORKERS"
+        "$PYTHON_BIN" -m pytest -m "$FAST_TEST_MARKERS" -n "$FAST_TEST_WORKERS" --dist loadfile $FAST_TEST_IGNORES
       fi
   fi
+}
 
+_run_core_lane() {
+  _STATIC_LOG="$(mktemp)"
+  _run_static_checks > "$_STATIC_LOG" 2>&1 &
+  _STATIC_PID=$!
+
+  _PYTEST_LOG="$(mktemp)"
+  _run_pytest > "$_PYTEST_LOG" 2>&1 &
+  _PYTEST_PID=$!
+
+  _DEADCODE_PID=""
+  _DEADCODE_LOG=""
   if [ -n "${CI:-}" ] || [[ "${CODEX_LOCAL_CHECK_INCLUDE_DEADCODE:-0}" == "1" ]]; then
-    echo "Dead-code check (heuristic)..."
-    "$PYTHON_BIN" "$REPO_ROOT/scripts/deadcode.py" --check
+    _DEADCODE_LOG="$(mktemp)"
+    "$PYTHON_BIN" "$REPO_ROOT/scripts/deadcode.py" --check > "$_DEADCODE_LOG" 2>&1 &
+    _DEADCODE_PID=$!
+  fi
+
+  _CORE_FAIL=0
+  if ! wait "$_PYTEST_PID"; then
+    echo "Pytest FAILED" >&2
+    _CORE_FAIL=1
+  fi
+  if ! wait "$_STATIC_PID"; then
+    echo "Static checks FAILED" >&2
+    _CORE_FAIL=1
+  fi
+  if [[ -n "$_DEADCODE_PID" ]] && ! wait "$_DEADCODE_PID"; then
+    echo "Dead-code check FAILED" >&2
+    _CORE_FAIL=1
+  fi
+
+  echo "--- static checks output ---"
+  cat "$_STATIC_LOG"
+  echo "--- pytest output ---"
+  cat "$_PYTEST_LOG"
+  rm -f "$_STATIC_LOG" "$_PYTEST_LOG"
+
+  if [[ -n "$_DEADCODE_LOG" ]]; then
+    echo "--- dead-code check output ---"
+    cat "$_DEADCODE_LOG"
+    rm -f "$_DEADCODE_LOG"
   else
     echo "Skipping dead-code check locally; set CODEX_LOCAL_CHECK_INCLUDE_DEADCODE=1 to enable."
   fi
-fi
 
-# --- Web-UI lane checks ------------------------------------------------------
-if [[ "$RUN_WEB_UI" == true ]]; then
+  if [[ "$_CORE_FAIL" -eq 1 ]]; then
+    exit 1
+  fi
+}
+
+_run_web_ui_lane() {
   need_cmd node
   need_cmd pnpm
 
@@ -319,10 +368,9 @@ if [[ "$RUN_WEB_UI" == true ]]; then
       exit 1
     fi
   fi
-fi
+}
 
-# --- Chat-apps lane checks ---------------------------------------------------
-if [[ "$RUN_CHAT_APPS" == true ]]; then
+_run_chat_apps_lane() {
   if [[ "$LANE" == "aggregate" && "${CODEX_CHECK_RUN_CHAT_SURFACE_LAB:-0}" != "1" && -z "${CI:-}" ]]; then
     echo "Skipping chat-surface lab in local aggregate validation."
     echo "Run 'make test-chat-surface-lab' or set CODEX_CHECK_RUN_CHAT_SURFACE_LAB=1 to include it."
@@ -330,6 +378,83 @@ if [[ "$RUN_CHAT_APPS" == true ]]; then
     echo "Running chat-surface lab deterministic checks..."
     make test-chat-surface-lab PYTHON="$PYTHON_BIN"
   fi
+}
+
+# --- Lane dispatch: guardrails + lanes all in parallel -----------------------
+RUN_CHAT_APPS_IN_PARALLEL="$RUN_CHAT_APPS"
+RUN_CHAT_APPS_AFTER_PARALLEL=false
+if [[ "$RUN_CHAT_APPS" == true && "$LANE" == "aggregate" && -n "${CI:-}" ]]; then
+  # The chat-surface latency suite asserts wall-clock UX budgets. Running it
+  # beside repo-wide pytest, mypy, frontend build, and frontend tests makes the
+  # result mostly measure shared runner contention, so aggregate CI runs it
+  # after the heavy parallel lanes finish.
+  RUN_CHAT_APPS_IN_PARALLEL=false
+  RUN_CHAT_APPS_AFTER_PARALLEL=true
+fi
+
+_ACTIVE_LANE_COUNT=0
+[[ "$RUN_CORE" == true ]] && ((_ACTIVE_LANE_COUNT += 1))
+[[ "$RUN_WEB_UI" == true ]] && ((_ACTIVE_LANE_COUNT += 1))
+[[ "$RUN_CHAT_APPS_IN_PARALLEL" == true ]] && ((_ACTIVE_LANE_COUNT += 1))
+
+_RUN_PARALLEL=false
+if [[ "$_ACTIVE_LANE_COUNT" -ge 1 ]]; then
+  _RUN_PARALLEL=true
+fi
+
+if [[ "$_RUN_PARALLEL" == true ]]; then
+  echo "Running guardrails + $_ACTIVE_LANE_COUNT lane(s) in parallel..."
+  _LANE_LOG_DIR="$(mktemp -d)"
+  _LANE_PIDS=()
+  _LANE_NAMES=()
+
+  _run_guardrails > "$_LANE_LOG_DIR/guardrails.log" 2>&1 &
+  _LANE_PIDS+=($!)
+  _LANE_NAMES+=("guardrails")
+
+  if [[ "$RUN_CORE" == true ]]; then
+    _run_core_lane > "$_LANE_LOG_DIR/core.log" 2>&1 &
+    _LANE_PIDS+=($!)
+    _LANE_NAMES+=("core")
+  fi
+  if [[ "$RUN_WEB_UI" == true ]]; then
+    _run_web_ui_lane > "$_LANE_LOG_DIR/web-ui.log" 2>&1 &
+    _LANE_PIDS+=($!)
+    _LANE_NAMES+=("web-ui")
+  fi
+  if [[ "$RUN_CHAT_APPS_IN_PARALLEL" == true ]]; then
+    _run_chat_apps_lane > "$_LANE_LOG_DIR/chat-apps.log" 2>&1 &
+    _LANE_PIDS+=($!)
+    _LANE_NAMES+=("chat-apps")
+  fi
+
+  _LANE_FAIL=0
+  for _i in "${!_LANE_PIDS[@]}"; do
+    if ! wait "${_LANE_PIDS[$_i]}"; then
+      echo "Lane ${_LANE_NAMES[$_i]} FAILED" >&2
+      _LANE_FAIL=1
+    fi
+  done
+
+  for _name in "${_LANE_NAMES[@]}"; do
+    echo "--- ${_name} lane output ---"
+    cat "$_LANE_LOG_DIR/${_name}.log"
+  done
+  rm -rf "$_LANE_LOG_DIR"
+
+  if [[ "$_LANE_FAIL" -eq 1 ]]; then
+    exit 1
+  fi
+
+  if [[ "$RUN_CHAT_APPS_AFTER_PARALLEL" == true ]]; then
+    echo "Running chat-apps lane after aggregate parallel lanes..."
+    _run_chat_apps_lane
+  fi
+else
+  _run_guardrails
+  if [[ "$RUN_CORE" == true ]]; then _run_core_lane; fi
+  if [[ "$RUN_WEB_UI" == true ]]; then _run_web_ui_lane; fi
+  if [[ "$RUN_CHAT_APPS" == true ]]; then _run_chat_apps_lane; fi
 fi
 
 echo "Checks passed (lane: $LANE)."
