@@ -556,6 +556,23 @@ def _merge_activity_events(
     return merged
 
 
+def _live_activity_event_type(event: dict[str, Any]) -> str:
+    return str(event.get("event_type") or "").strip().lower()
+
+
+def _can_coalesce_live_activity_event(
+    previous: dict[str, Any],
+    current: dict[str, Any],
+) -> bool:
+    event_type = _live_activity_event_type(current)
+    if _live_activity_event_type(previous) != event_type:
+        return False
+    # Only assistant-update events are known to be high-volume, replaceable
+    # stream progress. Generic "progress" events can include actionable state
+    # such as approvals and should remain distinct in the live activity window.
+    return event_type == "assistant_update"
+
+
 def build_live_activity_projection(
     *,
     snapshot: dict[str, Any],
@@ -571,12 +588,9 @@ def build_live_activity_projection(
     )
     coalesced_events: list[dict[str, Any]] = []
     for event in event_list:
-        event_type = str(event.get("event_type") or "").strip().lower()
         if (
             coalesced_events
-            and event_type in {"assistant_update", "progress"}
-            and str(coalesced_events[-1].get("event_type") or "").strip().lower()
-            == event_type
+            and _can_coalesce_live_activity_event(coalesced_events[-1], event)
         ):
             coalesced_events[-1] = _merge_activity_events(coalesced_events[-1], event)
             continue

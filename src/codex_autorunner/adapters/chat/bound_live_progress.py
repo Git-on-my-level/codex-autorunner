@@ -121,7 +121,7 @@ class BoundChatLiveProgressSession:
                         adapter.surface_key,
                     )
             if published:
-                self.projector.note_rendered(rendered, now=now)
+                self.projector.note_rendered(rendered, now=time.monotonic())
 
     async def finalize(
         self,
