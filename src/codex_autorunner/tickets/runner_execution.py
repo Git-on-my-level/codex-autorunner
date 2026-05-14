@@ -41,6 +41,7 @@ async def execute_turn(
     prompt: str,
     workspace_root: Path,
     conversation_id: Optional[str] = None,
+    existing_session_prompt: Optional[str] = None,
     options: Optional[dict[str, Any]] = None,
     emit_event: Optional[Any] = None,
     max_network_retries: int = 5,
@@ -53,6 +54,7 @@ async def execute_turn(
         prompt=prompt,
         workspace_root=workspace_root,
         conversation_id=conversation_id,
+        existing_session_prompt=existing_session_prompt,
         emit_event=emit_event,
         options=turn_options if turn_options else None,
     )

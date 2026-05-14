@@ -66,6 +66,7 @@ class PreTurnPlan:
     state_updates: dict[str, Any] = field(default_factory=dict)
 
     prompt: Optional[str] = None
+    existing_session_prompt: Optional[str] = None
     ticket_doc: Any = None
     current_ticket_id: Optional[str] = None
     conversation_id: Optional[str] = None

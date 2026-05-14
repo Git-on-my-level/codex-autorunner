@@ -1701,7 +1701,20 @@ async def test_ticket_runner_requires_commit_before_advancing_done_ticket(
     assert second.state.get("commit") is None
     assert second.state.get("current_ticket") is None
     assert len(pool.requests) == 2
+    assert pool.requests[1].conversation_id == "conv1"
     assert "<CAR_COMMIT_REQUIRED>" in pool.requests[1].prompt
+    assert pool.requests[1].existing_session_prompt is not None
+    assert "CAR ticket flow: read ticket" in pool.requests[1].existing_session_prompt
+    assert (
+        "You are running inside Codex Autorunner"
+        not in pool.requests[1].existing_session_prompt
+    )
+    assert "<CAR_HUD>" in pool.requests[0].prompt
+    assert "<CAR_HUD>" in pool.requests[1].prompt
+    assert (
+        "CAR HUD (stable, bounded, non-secret-bearing):"
+        not in pool.requests[1].existing_session_prompt
+    )
 
 
 @pytest.mark.asyncio

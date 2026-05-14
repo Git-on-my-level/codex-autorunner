@@ -15,7 +15,7 @@ from .files import (
 from .frontmatter import parse_markdown_frontmatter
 from .lint import lint_ticket_directory
 from .models import TicketContextEntry, TicketDoc, TicketFrontmatter, TicketRunConfig
-from .runner_prompt import _truncate_text_by_bytes, build_prompt
+from .runner_prompt import _truncate_text_by_bytes, build_prompt_variants
 from .runner_step_support import (
     build_reply_context as render_new_reply_context,
 )
@@ -535,7 +535,7 @@ def plan_pre_turn(
         include_previous_ticket_context=config.include_previous_ticket_context,
     )
 
-    prompt = build_prompt(
+    prompt_variants = build_prompt_variants(
         ticket_path=current_path,
         workspace_root=workspace_root,
         ticket_doc=ticket_doc,
@@ -567,7 +567,8 @@ def plan_pre_turn(
     return PreTurnPlan(
         status="ready",
         state_updates=state_updates,
-        prompt=prompt,
+        prompt=prompt_variants.new_session_prompt,
+        existing_session_prompt=prompt_variants.existing_session_prompt,
         ticket_doc=ticket_doc,
         current_ticket_id=current_ticket_id,
         conversation_id=reuse_conversation_id,

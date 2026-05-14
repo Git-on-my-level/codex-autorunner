@@ -90,13 +90,23 @@ SECTION_REDUCTION_POLICY = (
 MAIN_SECTION_ORDER = [policy.key for policy in SECTION_REDUCTION_POLICY]
 
 
-def _section_key_affects_render_size(
-    key: str, *, include_optional_sections: bool
-) -> bool:
+def _section_key_affects_render_size(key: str, *, model: TicketFlowPromptModel) -> bool:
     """Return whether mutating this section key can change rendered prompt size."""
-    if include_optional_sections:
+    if key == "ticket_block":
         return True
-    return key == "ticket_block"
+    if not model.include_optional_sections:
+        return False
+    if key == "prev_block":
+        return model.include_previous_agent_output
+    if key == "prev_ticket_block":
+        return model.include_previous_ticket_reference
+    if key == "reply_block":
+        return model.include_human_replies
+    if key == "requested_context_block":
+        return model.include_requested_context
+    if key == "contextspace_block":
+        return model.include_contextspace_docs
+    return True
 
 
 @dataclass(frozen=True)
@@ -134,6 +144,11 @@ class TicketFlowPromptSections:
 class TicketFlowPromptModel:
     instructions: str
     include_optional_sections: bool
+    include_requested_context: bool
+    include_contextspace_docs: bool
+    include_human_replies: bool
+    include_previous_ticket_reference: bool
+    include_previous_agent_output: bool
     rel_ticket: str
     rel_dispatch_dir: str
     rel_dispatch_path: str
@@ -151,6 +166,11 @@ class TicketFlowPromptModel:
         return TicketFlowPromptModel(
             instructions=self.instructions,
             include_optional_sections=self.include_optional_sections,
+            include_requested_context=self.include_requested_context,
+            include_contextspace_docs=self.include_contextspace_docs,
+            include_human_replies=self.include_human_replies,
+            include_previous_ticket_reference=self.include_previous_ticket_reference,
+            include_previous_agent_output=self.include_previous_agent_output,
             rel_ticket=self.rel_ticket,
             rel_dispatch_dir=self.rel_dispatch_dir,
             rel_dispatch_path=self.rel_dispatch_path,
@@ -167,6 +187,11 @@ class TicketFlowPromptModel:
         return TicketFlowPromptModel(
             instructions=instructions,
             include_optional_sections=self.include_optional_sections,
+            include_requested_context=self.include_requested_context,
+            include_contextspace_docs=self.include_contextspace_docs,
+            include_human_replies=self.include_human_replies,
+            include_previous_ticket_reference=self.include_previous_ticket_reference,
+            include_previous_agent_output=self.include_previous_agent_output,
             rel_ticket=self.rel_ticket,
             rel_dispatch_dir=self.rel_dispatch_dir,
             rel_dispatch_path=self.rel_dispatch_path,
@@ -183,6 +208,39 @@ class TicketFlowPromptModel:
         return TicketFlowPromptModel(
             instructions=self.instructions,
             include_optional_sections=False,
+            include_requested_context=False,
+            include_contextspace_docs=False,
+            include_human_replies=False,
+            include_previous_ticket_reference=False,
+            include_previous_agent_output=False,
+            rel_ticket=self.rel_ticket,
+            rel_dispatch_dir=self.rel_dispatch_dir,
+            rel_dispatch_path=self.rel_dispatch_path,
+            car_hud="",
+            apps_hint="",
+            checkpoint_block=self.checkpoint_block,
+            commit_block=self.commit_block,
+            lint_block=self.lint_block,
+            loop_guard_block=self.loop_guard_block,
+            sections=self.sections,
+        )
+
+    def for_existing_session(self) -> TicketFlowPromptModel:
+        """Return the same-ticket continuation prompt for a live agent thread.
+
+        A reused backend thread already received the static CAR orientation,
+        durable contextspace dump, previous-ticket reference, and previous
+        agent output earlier in the conversation. Keep only turn-specific
+        dynamic material plus the current ticket and repair/checkpoint blocks.
+        """
+        return TicketFlowPromptModel(
+            instructions=COMPACT_TICKET_FLOW_INSTRUCTIONS,
+            include_optional_sections=True,
+            include_requested_context=True,
+            include_contextspace_docs=False,
+            include_human_replies=True,
+            include_previous_ticket_reference=False,
+            include_previous_agent_output=False,
             rel_ticket=self.rel_ticket,
             rel_dispatch_dir=self.rel_dispatch_dir,
             rel_dispatch_path=self.rel_dispatch_path,
@@ -479,23 +537,29 @@ def render_ticket_flow_prompt(model: TicketFlowPromptModel) -> str:
     sections = model.sections
     optional_sections = ""
     if model.include_optional_sections:
-        chunks: list[str] = [
-            "<CAR_REQUESTED_CONTEXT>\n"
-            f"{sections.requested_context_block}\n"
-            "</CAR_REQUESTED_CONTEXT>\n\n",
-        ]
-        if sections.contextspace_block.strip():
+        chunks: list[str] = []
+        if model.include_requested_context:
+            chunks.append(
+                "<CAR_REQUESTED_CONTEXT>\n"
+                f"{sections.requested_context_block}\n"
+                "</CAR_REQUESTED_CONTEXT>\n\n"
+            )
+        if model.include_contextspace_docs and sections.contextspace_block.strip():
             chunks.append(
                 "<CAR_CONTEXTSPACE_DOCS>\n"
                 f"{sections.contextspace_block}\n"
                 "</CAR_CONTEXTSPACE_DOCS>\n\n"
             )
-        chunks.append(
-            "<CAR_HUMAN_REPLIES>\n"
-            f"{sections.reply_block}\n"
-            "</CAR_HUMAN_REPLIES>\n\n",
-        )
-        if sections.prev_ticket_block.strip():
+        if model.include_human_replies:
+            chunks.append(
+                "<CAR_HUMAN_REPLIES>\n"
+                f"{sections.reply_block}\n"
+                "</CAR_HUMAN_REPLIES>\n\n",
+            )
+        if (
+            model.include_previous_ticket_reference
+            and sections.prev_ticket_block.strip()
+        ):
             chunks.append(
                 "<CAR_PREVIOUS_TICKET_REFERENCE>\n"
                 f"{sections.prev_ticket_block}\n"
@@ -503,7 +567,7 @@ def render_ticket_flow_prompt(model: TicketFlowPromptModel) -> str:
             )
         optional_sections = "".join(chunks)
     previous_agent_output = ""
-    if model.include_optional_sections:
+    if model.include_optional_sections and model.include_previous_agent_output:
         previous_agent_output = (
             "\n\n<CAR_PREVIOUS_AGENT_OUTPUT>\n"
             f"{sections.prev_block}\n"
@@ -552,7 +616,8 @@ def reduce_ticket_flow_prompt_to_budget(
         for policy in SECTION_REDUCTION_POLICY:
             key = policy.key
             if not _section_key_affects_render_size(
-                key, include_optional_sections=work_model.include_optional_sections
+                key,
+                model=work_model,
             ):
                 continue
             value = sections.get(key, "")
@@ -577,7 +642,8 @@ def reduce_ticket_flow_prompt_to_budget(
             for policy in SECTION_REDUCTION_POLICY:
                 key = policy.key
                 if not _section_key_affects_render_size(
-                    key, include_optional_sections=work_model.include_optional_sections
+                    key,
+                    model=work_model,
                 ):
                     continue
                 value = sections.get(key, "")
