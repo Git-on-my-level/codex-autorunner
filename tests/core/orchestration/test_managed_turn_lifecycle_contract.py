@@ -10,6 +10,10 @@ from codex_autorunner.core.orchestration.managed_turn_lifecycle_contract import 
     is_legal_managed_turn_phase_transition,
     managed_turn_phase_unblocks_queue,
 )
+from codex_autorunner.core.orchestration.models import ExecutionRecord
+from codex_autorunner.core.orchestration.recovery_lifecycle import (
+    classify_stale_managed_turn_recovery,
+)
 
 
 def test_only_terminal_recorded_unblocks_managed_thread_queue() -> None:
@@ -74,3 +78,34 @@ def test_conflicting_terminal_outcome_preserves_first_durable_outcome() -> None:
     assert decision.existing == existing
     assert decision.should_write is False
     assert decision.unblocks_queue is True
+
+
+@pytest.mark.parametrize(
+    ("phase", "status", "expected_action"),
+    [
+        ("runtime_running", "running", "recover_from_harness"),
+        ("runtime_terminal_observed", "running", "recover_from_harness"),
+        ("terminal_recording", "running", "recover_from_harness"),
+        ("delivery_enqueued", "ok", "recover_delivery"),
+        ("side_effects_pending", "ok", "recover_side_effects"),
+        ("side_effects_complete", "ok", "none"),
+    ],
+)
+def test_recovery_classifier_covers_stale_lifecycle_phases(
+    phase: str, status: str, expected_action: str
+) -> None:
+    decision = classify_stale_managed_turn_recovery(
+        managed_thread_id="thread-1",
+        execution=ExecutionRecord(
+            execution_id="turn-1",
+            target_id="thread-1",
+            target_kind="thread",
+            status=status,
+            metadata={"managed_turn_lifecycle_phase": phase},
+        ),
+        queue_depth=1,
+    )
+
+    assert decision.prior_phase == phase
+    assert decision.selected_action == expected_action
+    assert decision.queue_depth == 1
