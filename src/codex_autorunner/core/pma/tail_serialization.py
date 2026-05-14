@@ -76,6 +76,8 @@ _LIKELY_HUNG_IDLE_SECONDS = 90
 _STALL_IDLE_SECONDS = 30
 _BATCHED_INITIAL_EVENT_GRACE_SECONDS = 5 * 60
 _BATCHED_INITIAL_EVENT_AGENTS = frozenset({"codex"})
+LIVE_ACTIVITY_CONTRACT_VERSION = "pma_live_activity.v1"
+LIVE_ACTIVITY_EVENT_WINDOW = 5
 
 
 def _agent_batches_initial_events(agent_id: Any) -> bool:
@@ -503,6 +505,133 @@ def _derive_progress_phase(
     )
 
 
+def _event_source_ids(event: dict[str, Any]) -> list[int]:
+    raw_ids = event.get("progress_event_ids") or event.get("source_event_ids")
+    ids: list[int] = []
+    if isinstance(raw_ids, list):
+        for value in raw_ids:
+            if isinstance(value, int) and value not in ids:
+                ids.append(value)
+    event_id = event.get("event_id")
+    if isinstance(event_id, int) and event_id not in ids:
+        ids.append(event_id)
+    return ids
+
+
+def _merge_activity_events(
+    previous: dict[str, Any],
+    current: dict[str, Any],
+) -> dict[str, Any]:
+    merged = dict(previous)
+    merged["event_id"] = current.get("event_id", previous.get("event_id"))
+    merged["summary"] = current.get("summary") or previous.get("summary")
+    merged["title"] = current.get("title") or previous.get("title")
+    merged["lines"] = current.get("lines") or previous.get("lines") or []
+    merged["received_at"] = current.get("received_at") or previous.get("received_at")
+    merged["received_at_ms"] = current.get("received_at_ms") or previous.get(
+        "received_at_ms"
+    )
+    merged["progress_item"] = current.get("progress_item") or previous.get(
+        "progress_item"
+    )
+    merged["progress_item_id"] = current.get("progress_item_id") or previous.get(
+        "progress_item_id"
+    )
+    merged["progress_item_ids"] = list(
+        dict.fromkeys(
+            [
+                *(previous.get("progress_item_ids") or []),
+                *(current.get("progress_item_ids") or []),
+            ]
+        )
+    )
+    merged["progress_event_ids"] = list(
+        dict.fromkeys([*_event_source_ids(previous), *_event_source_ids(current)])
+    )
+    merged["coalesced_event_count"] = int(
+        previous.get("coalesced_event_count") or len(_event_source_ids(previous)) or 1
+    ) + int(
+        current.get("coalesced_event_count") or len(_event_source_ids(current)) or 1
+    )
+    return merged
+
+
+def build_live_activity_projection(
+    *,
+    snapshot: dict[str, Any],
+    event_window: int = LIVE_ACTIVITY_EVENT_WINDOW,
+) -> dict[str, Any]:
+    """Project live turn state into a small replaceable activity model."""
+
+    events = snapshot.get("events")
+    event_list = (
+        [event for event in events if isinstance(event, dict)]
+        if isinstance(events, list)
+        else []
+    )
+    coalesced_events: list[dict[str, Any]] = []
+    for event in event_list:
+        event_type = str(event.get("event_type") or "").strip().lower()
+        if (
+            coalesced_events
+            and event_type in {"assistant_update", "progress"}
+            and str(coalesced_events[-1].get("event_type") or "").strip().lower()
+            == event_type
+        ):
+            coalesced_events[-1] = _merge_activity_events(coalesced_events[-1], event)
+            continue
+        copied = dict(event)
+        copied["coalesced_event_count"] = int(
+            copied.get("coalesced_event_count") or len(_event_source_ids(copied)) or 1
+        )
+        coalesced_events.append(copied)
+
+    bounded_events = coalesced_events[-max(1, int(event_window)) :]
+    latest_event = bounded_events[-1] if bounded_events else {}
+    latest_summary = normalize_optional_text(latest_event.get("summary"))
+    if latest_summary is None:
+        latest_summary = normalize_optional_text(snapshot.get("guidance"))
+    if latest_summary is None:
+        activity = normalize_optional_text(snapshot.get("activity")) or "idle"
+        latest_summary = activity.replace("_", " ").title()
+
+    managed_turn_id = normalize_optional_text(snapshot.get("managed_turn_id"))
+    activity_id_subject = managed_turn_id or normalize_optional_text(
+        snapshot.get("managed_thread_id")
+    )
+    activity_id = (
+        f"turn:{activity_id_subject}:current"
+        if activity_id_subject
+        else "thread:unknown:current"
+    )
+    raw_event_count = len(event_list)
+    visible_event_count = sum(
+        int(event.get("coalesced_event_count") or 1) for event in bounded_events
+    )
+    return {
+        "contract_version": LIVE_ACTIVITY_CONTRACT_VERSION,
+        "activity_id": activity_id,
+        "managed_thread_id": snapshot.get("managed_thread_id"),
+        "managed_turn_id": snapshot.get("managed_turn_id"),
+        "state": snapshot.get("activity") or "idle",
+        "phase": snapshot.get("phase"),
+        "phase_source": snapshot.get("phase_source"),
+        "summary": latest_summary,
+        "current_tool": snapshot.get("last_tool"),
+        "elapsed_seconds": snapshot.get("elapsed_seconds"),
+        "idle_seconds": snapshot.get("idle_seconds"),
+        "latest_event_id": latest_event.get("event_id"),
+        "latest_event_at": latest_event.get("received_at"),
+        "raw_event_count": raw_event_count,
+        "visible_event_count": visible_event_count,
+        "coalesced_event_count": max(0, raw_event_count - len(coalesced_events)),
+        "event_window_limit": max(1, int(event_window)),
+        "events": bounded_events,
+        "terminal": snapshot.get("terminal"),
+        "stream_available": bool(snapshot.get("stream_available")),
+    }
+
+
 _TURN_STATUS_ALIASES = {
     "active": "running",
     "in_progress": "running",
@@ -904,6 +1033,9 @@ def build_managed_thread_status_response(
     queue_depth: int,
 ) -> dict[str, Any]:
     turn_status = str(snapshot.get("turn_status") or "")
+    live_activity = snapshot.get("live_activity")
+    if not isinstance(live_activity, dict):
+        live_activity = build_live_activity_projection(snapshot=snapshot)
     lifecycle = build_managed_thread_stream_lifecycle(
         managed_turn_id=snapshot.get("managed_turn_id"),
         turn_status=snapshot.get("turn_status"),
@@ -933,6 +1065,7 @@ def build_managed_thread_status_response(
             "managed_turn_id": snapshot.get("managed_turn_id"),
             "status": snapshot.get("turn_status"),
             "activity": snapshot.get("activity"),
+            "live_activity": live_activity,
             "phase": snapshot.get("phase"),
             "phase_source": snapshot.get("phase_source"),
             "guidance": snapshot.get("guidance"),
@@ -944,6 +1077,7 @@ def build_managed_thread_status_response(
             "lifecycle_events": snapshot.get("lifecycle_events"),
             "token_usage": snapshot.get("token_usage"),
         },
+        "live_activity": live_activity,
         "token_usage": snapshot.get("token_usage"),
         "queue_depth": queue_depth,
         "queued_turns": [
@@ -956,7 +1090,7 @@ def build_managed_thread_status_response(
             }
             for item in queued_turns
         ],
-        "recent_progress": snapshot.get("events") or [],
+        "recent_progress": live_activity.get("events") or [],
         "latest_turn_id": serialized_thread.get("latest_turn_id"),
         "latest_turn_status": serialized_thread.get("latest_turn_status"),
         "latest_assistant_text": serialized_thread.get("latest_assistant_text"),
@@ -972,6 +1106,9 @@ def build_managed_thread_status_response(
 
 
 __all__ = [
+    "LIVE_ACTIVITY_CONTRACT_VERSION",
+    "LIVE_ACTIVITY_EVENT_WINDOW",
+    "build_live_activity_projection",
     "build_managed_thread_status_response",
     "build_managed_thread_stream_lifecycle",
     "coerce_dict",

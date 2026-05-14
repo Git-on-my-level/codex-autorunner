@@ -74,11 +74,13 @@ class TestManagedThreadStatusShape:
             "stream_available": payload["stream_available"],
         }
         assert "active_turn_diagnostics" in payload
+        assert payload["live_activity"]["contract_version"] == "pma_live_activity.v1"
 
         turn = payload["turn"]
         assert "managed_turn_id" in turn
         assert "status" in turn
         assert "activity" in turn
+        assert "live_activity" in turn
         assert "phase" in turn
         assert "phase_source" in turn
         assert "guidance" in turn
@@ -235,6 +237,8 @@ class TestManagedThreadTailShape:
             "stream_close_reason": payload["stream_close_reason"],
             "stream_available": payload["stream_available"],
         }
+        assert payload["live_activity"]["state"] == "idle"
+        assert payload["live_activity"]["events"] == []
 
     def test_tail_endpoint_returns_404_for_missing_thread(self, hub_env) -> None:
         _enable_pma(hub_env.hub_root)
@@ -666,6 +670,88 @@ class TestTailSnapshotEnumContracts:
             "outputTokens": 23,
             "modelContextWindow": 1000,
         }
+
+    async def test_tail_snapshot_collapses_many_stream_deltas_into_live_activity(
+        self, monkeypatch, hub_env
+    ) -> None:
+        class Harness:
+            def supports(self, capability: str) -> bool:
+                return capability == "event_streaming"
+
+            async def list_progress_events(
+                self,
+                _backend_thread_id: str,
+                _backend_turn_id: str,
+                *,
+                after_id: int,
+                limit: int,
+            ) -> list[dict[str, object]]:
+                assert after_id == 0
+                assert limit == 200
+                return [
+                    {
+                        "id": index + 1,
+                        "received_at": 1_762_000_000_000 + index,
+                        "message": {
+                            "method": "turn/streamDelta",
+                            "params": {
+                                "delta": f"chunk-{index} ",
+                                "delta_type": "assistant_stream",
+                            },
+                        },
+                    }
+                    for index in range(1000)
+                ]
+
+        monkeypatch.setattr(
+            tail_stream,
+            "get_pma_request_context",
+            lambda _request: SimpleNamespace(
+                hub_root=hub_env.hub_root,
+                thread_store=lambda: object(),
+            ),
+        )
+        monkeypatch.setattr(
+            tail_stream,
+            "_load_managed_thread_tail_store_state",
+            lambda **_kwargs: (
+                SimpleNamespace(
+                    agent_id="hermes",
+                    backend_thread_id="backend-thread-1",
+                    status="running",
+                    lifecycle_status="active",
+                ),
+                SimpleNamespace(
+                    execution_id="turn-1",
+                    status="running",
+                    started_at="2026-05-10T17:00:00+00:00",
+                    finished_at=None,
+                    backend_id="backend-turn-1",
+                ),
+                [],
+                None,
+            ),
+        )
+
+        payload = await tail_stream._build_managed_thread_tail_snapshot(
+            request=object(),
+            service=object(),
+            managed_thread_id="thread-1",
+            harness=Harness(),
+            limit=200,
+            level="info",
+            since_ms=None,
+            resume_after=0,
+        )
+
+        assert len(payload["events"]) == 200
+        live_activity = payload["live_activity"]
+        assert live_activity["activity_id"] == "turn:turn-1:current"
+        assert live_activity["state"] in {"running", "stalled"}
+        assert live_activity["event_window_limit"] == 5
+        assert len(live_activity["events"]) == 1
+        assert live_activity["events"][0]["event_type"] == "assistant_update"
+        assert live_activity["events"][0]["coalesced_event_count"] == 200
 
 
 class TestStatusDoesNotSynthesizeState:
