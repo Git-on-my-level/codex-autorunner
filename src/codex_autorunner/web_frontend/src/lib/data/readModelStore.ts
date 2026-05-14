@@ -135,6 +135,9 @@ export const emptyChatCounters: ChatIndexCounters = {
   archived: 0
 };
 
+export const PMA_TIMELINE_RETAIN_LIMIT = 200;
+export const PMA_LIVE_PROGRESS_EVENT_LIMIT = 80;
+
 export function createInitialReadModelState(): ReadModelEntityState {
   return {
     cursors: {},
@@ -370,10 +373,11 @@ export class ReadModelEntityStore implements Readable<ReadModelEntityState> {
   }
 
   replacePmaTimeline(chatId: string, items: PmaTimelineItem[]): void {
+    const retainedItems = retainPmaTimelineWindow(items);
     const next = cloneState(this.state);
     next.pmaTimelines[chatId] = {
-      itemsById: keyed(items, pmaTimelineEntityId),
-      order: items.map(pmaTimelineEntityId)
+      itemsById: keyed(retainedItems, pmaTimelineEntityId),
+      order: retainedItems.map(pmaTimelineEntityId)
     };
     bump(next, 'timeline', chatId);
     this.commit(next);
@@ -384,10 +388,12 @@ export class ReadModelEntityStore implements Readable<ReadModelEntityState> {
     const next = cloneState(this.state);
     const timeline = next.pmaTimelines[chatId] ?? { itemsById: {}, order: [] };
     for (const item of items) {
+      if (isDebugOnlyPmaTimelineItem(item)) continue;
       const entityId = pmaTimelineEntityId(item);
       timeline.itemsById[entityId] = item;
       if (!timeline.order.includes(entityId)) timeline.order.push(entityId);
     }
+    retainPmaTimelineProjectionWindow(timeline);
     next.pmaTimelines[chatId] = timeline;
     bump(next, 'timeline', chatId);
     this.commit(next);
@@ -408,7 +414,7 @@ export class ReadModelEntityStore implements Readable<ReadModelEntityState> {
 
   setPmaProgress(chatId: string, progress: PmaRunProgress | null): void {
     const next = cloneState(this.state);
-    if (progress) next.pmaProgress[chatId] = progress;
+    if (progress) next.pmaProgress[chatId] = withBoundedPmaProgressEvents(progress);
     else delete next.pmaProgress[chatId];
     bump(next, 'run', chatId);
     this.commit(next);
@@ -836,6 +842,51 @@ function pmaKindForChatTimelineItem(kind: ChatTimelineItem['kind']): PmaTimeline
 
 function pmaTimelineEntityId(item: PmaTimelineItem): string {
   return item.identity.timelineItemId;
+}
+
+function retainPmaTimelineWindow(items: PmaTimelineItem[]): PmaTimelineItem[] {
+  return items.filter((item) => !isDebugOnlyPmaTimelineItem(item)).slice(-PMA_TIMELINE_RETAIN_LIMIT);
+}
+
+function retainPmaTimelineProjectionWindow(timeline: { itemsById: Record<string, PmaTimelineItem>; order: string[] }): void {
+  if (timeline.order.length <= PMA_TIMELINE_RETAIN_LIMIT) return;
+  const retain = new Set(timeline.order.slice(-PMA_TIMELINE_RETAIN_LIMIT));
+  for (const id of timeline.order) {
+    if (!retain.has(id)) delete timeline.itemsById[id];
+  }
+  timeline.order = timeline.order.filter((id) => retain.has(id));
+}
+
+function withBoundedPmaProgressEvents(progress: PmaRunProgress): PmaRunProgress {
+  const events = progress.events.filter((event) => !isDebugOnlyProgressArtifact(event)).slice(-PMA_LIVE_PROGRESS_EVENT_LIMIT);
+  return events.length === progress.events.length ? progress : { ...progress, events };
+}
+
+function isDebugOnlyPmaTimelineItem(item: PmaTimelineItem): boolean {
+  if (item.raw.hidden === true || item.payload.hidden === true) return true;
+  const intermediateKind = stringValue(item.payload.intermediate_kind).toLowerCase();
+  const eventType = stringValue(item.payload.event_type).toLowerCase();
+  if (eventType === 'output_delta' && ['assistant_stream', 'assistant_message', 'log_line'].includes(intermediateKind)) return true;
+  const event = asRecord(item.payload.event);
+  return ['chat_execution_journal', 'compaction_summary'].includes(stringValue(event.kind).toLowerCase());
+}
+
+function isDebugOnlyProgressArtifact(event: SurfaceArtifact): boolean {
+  const progressItem = asRecord(event.raw.progress_item);
+  if (progressItem.hidden === true || event.raw.hidden === true) return true;
+  const kind = stringValue(progressItem.kind ?? event.kind).toLowerCase();
+  if (kind === 'hidden' || kind === 'decode_failure') return true;
+  const eventType = stringValue(event.raw.event_type ?? progressItem.event_type).toLowerCase();
+  const intermediateKind = stringValue(progressItem.intermediate_kind ?? event.raw.intermediate_kind).toLowerCase();
+  return eventType === 'output_delta' && ['assistant_stream', 'assistant_message', 'log_line'].includes(intermediateKind);
+}
+
+function asRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
+}
+
+function stringValue(value: unknown): string {
+  return typeof value === 'string' ? value : value === null || value === undefined ? '' : String(value);
 }
 
 function bump(state: ReadModelEntityState, kind: EntityKind, id: string): void {

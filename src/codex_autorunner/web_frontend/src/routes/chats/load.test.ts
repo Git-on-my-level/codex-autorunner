@@ -72,7 +72,7 @@ describe('/chats route load', () => {
 
     expect(result.chatIndex.status).toBe('fetched');
     expect(result.activeDetail?.status).toBe('fetched');
-    expect(client.chatDetail).toHaveBeenCalledWith('chat-2', undefined);
+    expect(client.chatDetail).toHaveBeenCalledWith('chat-2', 50);
     expect(selectChatDetailView(store.snapshot(), 'chat-2').thread?.title).toBe('Chat detail');
     expect(store.snapshot().pmaTimelines['chat-2']?.order).toEqual(['item-1']);
   });

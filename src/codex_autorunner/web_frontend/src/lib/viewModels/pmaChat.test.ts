@@ -1975,6 +1975,49 @@ describe('PMA chat view helpers', () => {
     ).toEqual([]);
   });
 
+  it('keeps rendered card counts stable for high-volume hidden assistant streams', () => {
+    const noisyTimeline = Array.from({ length: 1_000 }, (_, index) =>
+      timelineItem(`turn:one:intermediate:stream:${index}`, 'intermediate', {
+        intermediate_kind: 'assistant_stream',
+        event_type: 'output_delta',
+        text: `chunk ${index}`
+      })
+    );
+
+    const baseInput = [
+      timelineItem('turn:one:intermediate:thinking', 'intermediate', {
+        intermediate_kind: 'thinking',
+        text: 'Reading files'
+      })
+    ];
+    const smallCards = buildPmaTranscriptCards(
+      [
+        timelineItem('turn:one:intermediate:stream:baseline', 'intermediate', {
+          intermediate_kind: 'assistant_stream',
+          event_type: 'output_delta',
+          text: 'baseline chunk'
+        }),
+        ...baseInput
+      ],
+      baseChat,
+      [],
+      null
+    );
+    const cards = buildPmaTranscriptCards(
+      [
+        ...noisyTimeline,
+        ...baseInput
+      ],
+      baseChat,
+      [],
+      null
+    );
+
+    expect(cards).toHaveLength(smallCards.length);
+    expect(cards.some((card) => card.kind === 'intermediate' && card.text === 'Reading files')).toBe(true);
+    expect(cards.some((card) => card.kind === 'intermediate' && card.text?.startsWith('chunk '))).toBe(false);
+  });
+
   it('renders compaction lifecycle timeline items as visible dividers', () => {
     const cards = buildPmaCards(
       [
