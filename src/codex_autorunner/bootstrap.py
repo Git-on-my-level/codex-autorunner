@@ -290,7 +290,7 @@ You are an **abstraction layer, not an executor**. Coordinate tickets and flows 
 
 ## Guidance
 
-- Use CAR-native artifacts (tickets, ticket_flow, dispatch, PMA inbox/outbox).
+- Use CAR-native artifacts (tickets, ticket_flow, dispatch, artifact delivery, PMA inbox/outbox compatibility).
 - Ask questions when requirements are ambiguous; keep updates concise.
 - Treat this prompt as code: keep it short and stable.
 - See the hub-scoped PMA operations guide advertised in the prompt preamble for operational how-to.
@@ -512,7 +512,8 @@ Do NOT copy `.codex-autorunner/` between worktrees:
 - User uploads arrive in `.codex-autorunner/filebox/inbox/`.
 - Archive reviewed uploads with `car pma file consume|dismiss <filename> --path <hub_root>`.
 - Restore archived uploads with `car pma file restore <filename> --path <hub_root>`.
-- Send user-facing files by writing to `.codex-autorunner/filebox/outbox/`.
+- Send user-facing files with `car artifacts send <file> --to current` when the active target is available.
+- Treat `.codex-autorunner/filebox/outbox/` as legacy ingress scoped to the active hub/repo target only.
 
 ## PMA dispatches (user attention)
 

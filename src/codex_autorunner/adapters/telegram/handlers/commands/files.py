@@ -24,7 +24,7 @@ from ....chat.media import IMAGE_CONTENT_TYPES, IMAGE_EXTS
 from ...adapter import TelegramAPIError, TelegramMessage
 from ...config import TelegramMediaCandidate
 from ...forwarding import format_forwarded_telegram_message_text
-from ...state import PendingVoiceRecord, TelegramTopicRecord
+from ...state import PendingVoiceRecord, TelegramTopicRecord, parse_topic_key
 from ..media_ingress import record_with_media_workspace as _record_with_media_workspace
 from ..media_ingress import select_file_candidate, select_image_candidate
 from .command_utils import (
@@ -35,9 +35,18 @@ from .filebox import FileBoxCommandsMixin
 from .shared import FILES_HINT_TEMPLATE, TelegramCommandSupportMixin
 
 PMA_FILES_HINT_TEMPLATE = (
-    "PMA inbox: {inbox}\n"
-    "PMA outbox (pending): {outbox}\n"
-    "Place files in outbox pending to send after this turn finishes.\n"
+    "Artifact delivery target:\n"
+    "- Active scope: hub PMA FileBox for this Telegram PMA chat\n"
+    "- Target surface: telegram\n"
+    "- Target conversation: {conversation_key}\n"
+    "- Canonical send-back command: `car artifacts send <file> --to current`.\n"
+    "- If current-target environment variables are unavailable, use: "
+    "`car artifacts send <file> --to explicit --surface telegram --conversation {conversation_key}`.\n"
+    "- Compatibility FileBox paths for this active PMA target only:\n"
+    "  - Inbox: {inbox}\n"
+    "  - Legacy outbox: {outbox}\n"
+    "Files placed in a different hub/repo FileBox outbox are not implied to "
+    "belong to this conversation; run `car artifacts diagnose` to find them.\n"
     "Check delivery with /files outbox.\n"
     "Max file size: {max_bytes} bytes."
 )
@@ -1178,6 +1187,9 @@ class FilesCommands(FileBoxCommandsMixin, TelegramCommandSupportMixin):
                     PMA_FILES_HINT_TEMPLATE.format(
                         inbox=str(pma_inbox),
                         outbox=str(pma_outbox),
+                        conversation_key=_artifact_conversation_key_from_topic(
+                            topic_key
+                        ),
                         max_bytes=self._config.media.max_file_bytes,
                     )
                 )
@@ -1188,8 +1200,20 @@ class FilesCommands(FileBoxCommandsMixin, TelegramCommandSupportMixin):
             FILES_HINT_TEMPLATE.format(
                 inbox=str(inbox_dir),
                 outbox=str(outbox_dir),
+                conversation_key=_artifact_conversation_key_from_topic(topic_key),
+                workspace_path=workspace_path,
                 topic_key=topic_key,
                 topic_dir=str(topic_dir),
                 max_bytes=self._config.media.max_file_bytes,
             )
         )
+
+
+def _artifact_conversation_key_from_topic(topic_key: str) -> str:
+    try:
+        chat_id, thread_id, _scope = parse_topic_key(topic_key)
+    except ValueError:
+        return f"topic:{topic_key}"
+    if thread_id is None:
+        return f"chat:{chat_id}"
+    return f"chat:{chat_id}/thread:{thread_id}"

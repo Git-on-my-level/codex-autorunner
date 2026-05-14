@@ -12,6 +12,7 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from starlette.datastructures import UploadFile
 
+from ....core.artifact_delivery import ArtifactDeliveryService, serialize_delivery
 from ....core.filebox import (
     BOXES,
     FileBoxEntry,
@@ -170,6 +171,35 @@ def build_filebox_routes() -> APIRouter:
         entries = list_filebox(repo_root)
         return _serialize_listing(entries, request=request)
 
+    @router.get("/artifacts/deliveries")
+    def list_artifact_deliveries(
+        request: Request,
+        state: Optional[str] = None,
+        surface: Optional[str] = None,
+        conversation: Optional[str] = None,
+    ) -> dict[str, Any]:
+        repo_root = _resolve_repo_root(request)
+        states = (
+            tuple(item.strip() for item in (state or "").split(",") if item.strip())
+            or None
+        )
+        service = ArtifactDeliveryService(repo_root)
+        deliveries = service.list_deliveries(
+            states=states,  # type: ignore[arg-type]
+            target_surface=surface,
+            target_conversation_key=conversation,
+        )
+        return {
+            "root": str(repo_root),
+            "deliveries": [
+                serialize_delivery(
+                    intent,
+                    artifact=service.store.get_artifact(intent.artifact_id),
+                )
+                for intent in deliveries
+            ],
+        }
+
     @router.get("/filebox/{box}")
     def list_single_box(box: str, request: Request) -> dict[str, Any]:
         if box not in BOXES:
@@ -273,6 +303,37 @@ def build_hub_filebox_routes() -> APIRouter:
             for box, files in entries.items()
         }
         return serialized
+
+    @router.get("/{repo_id}/artifacts/deliveries")
+    def list_repo_artifact_deliveries(
+        repo_id: str,
+        request: Request,
+        state: Optional[str] = None,
+        surface: Optional[str] = None,
+        conversation: Optional[str] = None,
+    ) -> dict[str, Any]:
+        repo_root = _resolve_hub_repo_root(request, repo_id)
+        states = (
+            tuple(item.strip() for item in (state or "").split(",") if item.strip())
+            or None
+        )
+        service = ArtifactDeliveryService(repo_root)
+        deliveries = service.list_deliveries(
+            states=states,  # type: ignore[arg-type]
+            target_surface=surface,
+            target_conversation_key=conversation,
+        )
+        return {
+            "repo_id": repo_id,
+            "root": str(repo_root),
+            "deliveries": [
+                serialize_delivery(
+                    intent,
+                    artifact=service.store.get_artifact(intent.artifact_id),
+                )
+                for intent in deliveries
+            ],
+        }
 
     @router.post("/{repo_id}/{box}")
     async def hub_upload(repo_id: str, box: str, request: Request) -> dict[str, Any]:
