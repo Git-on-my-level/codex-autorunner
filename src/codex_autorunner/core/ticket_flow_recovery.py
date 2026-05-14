@@ -7,7 +7,10 @@ from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Mapping, Optional
 
+from .flows.store import FlowNotificationIntentRecord
 from .text_utils import _iso_now
+
+RecoveryNotificationIntentRecord = FlowNotificationIntentRecord
 
 
 class RecoveryFacetName(str, Enum):
@@ -104,44 +107,6 @@ class RecoveryNotificationIntent:
             "cooldown_seconds": self.cooldown_seconds,
             "resolved": self.resolved,
             "payload": dict(self.payload),
-        }
-
-
-@dataclass(frozen=True)
-class RecoveryNotificationIntentRecord:
-    intent_id: str
-    run_id: str
-    event_type: str
-    severity: str
-    reason: str
-    recommended_actions: tuple[str, ...]
-    cooldown_seconds: int
-    resolved: bool
-    first_seen_at: str
-    last_observed_at: str
-    last_notified_at: Optional[str]
-    resolved_at: Optional[str]
-    observed_count: int
-    payload: Mapping[str, Any]
-    delivery_attempts: Mapping[str, Any]
-
-    def to_dict(self) -> dict[str, Any]:
-        return {
-            "intent_id": self.intent_id,
-            "run_id": self.run_id,
-            "event_type": self.event_type,
-            "severity": self.severity,
-            "reason": self.reason,
-            "recommended_actions": list(self.recommended_actions),
-            "cooldown_seconds": self.cooldown_seconds,
-            "resolved": self.resolved,
-            "first_seen_at": self.first_seen_at,
-            "last_observed_at": self.last_observed_at,
-            "last_notified_at": self.last_notified_at,
-            "resolved_at": self.resolved_at,
-            "observed_count": self.observed_count,
-            "payload": dict(self.payload),
-            "delivery_attempts": dict(self.delivery_attempts),
         }
 
 
@@ -391,7 +356,7 @@ def recovery_notification_transport_key(*, transport: str, channel_id: Any) -> s
 
 
 def recovery_notification_intent_should_deliver(
-    record: RecoveryNotificationIntentRecord,
+    record: FlowNotificationIntentRecord,
     *,
     transport_key: str,
     now: Optional[str] = None,
@@ -418,7 +383,7 @@ def recovery_notification_intent_should_deliver(
 
 
 def format_recovery_notification_intent(
-    record: RecoveryNotificationIntentRecord,
+    record: FlowNotificationIntentRecord,
 ) -> str:
     payload = record.payload if isinstance(record.payload, Mapping) else {}
     primary_state = _normalize_optional_text(payload.get("primary_state"))

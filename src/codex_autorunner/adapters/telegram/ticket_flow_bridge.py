@@ -15,7 +15,10 @@ from ...core.config import ConfigError, load_hub_config, load_repo_config
 from ...core.flows import FlowStore
 from ...core.flows.models import FlowRunRecord, FlowRunStatus
 from ...core.flows.pause_dispatch import load_latest_paused_ticket_flow_dispatch
-from ...core.flows.ux_helpers import build_flow_status_snapshot
+from ...core.flows.recovery_notification_intents import (
+    list_active_ticket_flow_notification_intents,
+    mark_ticket_flow_notification_intent_delivered,
+)
 from ...core.logging_utils import log_event
 from ...core.runtime_services import RuntimeServices
 from ...core.ticket_flow_recovery import (
@@ -187,30 +190,32 @@ class TelegramTicketFlowBridge:
             await asyncio.sleep(interval)
 
     async def _scan_and_notify_pauses(self) -> None:
-        if not self._pause_config.enabled:
-            return
         topics = await self._store.list_topics()
         workspace_topics = self._get_all_workspaces(topics or {})
         preferred_sources = self._preferred_bound_sources_by_workspace()
+        pause_enabled = self._pause_config.enabled
 
         tasks = []
         for workspace_root, entries in workspace_topics.items():
+            preferred_source = preferred_sources.get(str(workspace_root))
+            tasks.append(
+                asyncio.create_task(
+                    self._notify_recovery_for_workspace(
+                        workspace_root,
+                        entries,
+                        preferred_source=preferred_source,
+                    )
+                )
+            )
+            if not pause_enabled:
+                continue
             if entries:
                 tasks.append(
                     asyncio.create_task(
                         self._notify_ticket_flow_pause(
                             workspace_root,
                             entries,
-                            preferred_source=preferred_sources.get(str(workspace_root)),
-                        )
-                    )
-                )
-                tasks.append(
-                    asyncio.create_task(
-                        self._notify_recovery_for_workspace(
-                            workspace_root,
-                            entries,
-                            preferred_source=preferred_sources.get(str(workspace_root)),
+                            preferred_source=preferred_source,
                         )
                     )
                 )
@@ -219,16 +224,7 @@ class TelegramTicketFlowBridge:
                     asyncio.create_task(
                         self._notify_via_default_chat(
                             workspace_root,
-                            preferred_source=preferred_sources.get(str(workspace_root)),
-                        )
-                    )
-                )
-                tasks.append(
-                    asyncio.create_task(
-                        self._notify_recovery_for_workspace(
-                            workspace_root,
-                            [],
-                            preferred_source=preferred_sources.get(str(workspace_root)),
+                            preferred_source=preferred_source,
                         )
                     )
                 )
@@ -792,7 +788,7 @@ class TelegramTicketFlowBridge:
             return
         try:
             intents = await asyncio.to_thread(
-                self._load_current_recovery_notification_intents, workspace_root
+                list_active_ticket_flow_notification_intents, workspace_root
             )
         except (sqlite3.Error, OSError, RuntimeError, ValueError, TypeError) as exc:
             log_event(
@@ -858,7 +854,7 @@ class TelegramTicketFlowBridge:
                 },
             )
             await asyncio.to_thread(
-                self._mark_recovery_intent_delivered,
+                mark_ticket_flow_notification_intent_delivered,
                 workspace_root,
                 intent.intent_id,
                 transport_key=transport_key,
@@ -871,59 +867,6 @@ class TelegramTicketFlowBridge:
                 workspace_root=str(workspace_root),
                 run_id=intent.run_id,
                 intent_id=intent.intent_id,
-            )
-
-    def _load_current_recovery_notification_intents(self, workspace_root: Path) -> list:
-        db_path = workspace_root / ".codex-autorunner" / "flows.db"
-        if not db_path.exists():
-            return []
-        try:
-            config = load_repo_config(workspace_root)
-            durable_writes = config.durable_writes
-        except ConfigError:
-            durable_writes = False
-        active_intent_ids: set[str] = set()
-        with FlowStore(db_path, durable=durable_writes) as store:
-            for record in store.list_flow_runs(flow_type="ticket_flow"):
-                if record.status == FlowRunStatus.SUPERSEDED:
-                    continue
-                snapshot = build_flow_status_snapshot(workspace_root, record, store)
-                run_state = snapshot.get("run_state")
-                if not isinstance(run_state, dict):
-                    continue
-                for intent in run_state.get("notification_intents", []):
-                    if not isinstance(intent, dict):
-                        continue
-                    intent_id = intent.get("intent_id")
-                    if isinstance(intent_id, str) and intent_id.strip():
-                        active_intent_ids.add(intent_id)
-            return [
-                intent
-                for intent in store.list_notification_intents(resolved=False)
-                if intent.intent_id in active_intent_ids
-            ]
-
-    def _mark_recovery_intent_delivered(
-        self,
-        workspace_root: Path,
-        intent_id: str,
-        *,
-        transport_key: str,
-        record_id: str,
-    ) -> None:
-        db_path = workspace_root / ".codex-autorunner" / "flows.db"
-        if not db_path.exists():
-            return
-        try:
-            config = load_repo_config(workspace_root)
-            durable_writes = config.durable_writes
-        except ConfigError:
-            durable_writes = False
-        with FlowStore(db_path, durable=durable_writes) as store:
-            store.mark_notification_intent_delivered(
-                intent_id,
-                transport=transport_key,
-                attempt={"status": "enqueued", "record_id": record_id},
             )
 
     async def watch_ticket_flow_terminals(self, interval_seconds: float) -> None:

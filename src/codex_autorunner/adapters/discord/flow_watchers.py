@@ -17,7 +17,10 @@ from ...core.flows import (
     FlowStore,
     list_unseen_ticket_flow_dispatches,
 )
-from ...core.flows.ux_helpers import build_flow_status_snapshot
+from ...core.flows.recovery_notification_intents import (
+    list_active_ticket_flow_notification_intents,
+    mark_ticket_flow_notification_intent_delivered,
+)
 from ...core.logging_utils import log_event
 from ...core.ticket_flow_recovery import (
     format_recovery_notification_intent,
@@ -97,35 +100,6 @@ def _format_terminal_notification(
     elif status == FlowRunStatus.STOPPED.value:
         return f"Ticket flow stopped (run {run_id})."
     return f"Ticket flow ended (run {run_id}, status: {status})."
-
-
-def _load_ticket_flow_recovery_notifications(
-    workspace_root: Path,
-) -> list[Any]:
-    db_path = workspace_root / ".codex-autorunner" / "flows.db"
-    if not db_path.exists():
-        return []
-    config = load_repo_config(workspace_root)
-    active_intent_ids: set[str] = set()
-    with FlowStore(db_path, durable=config.durable_writes) as store:
-        for record in store.list_flow_runs(flow_type="ticket_flow"):
-            if record.status == FlowRunStatus.SUPERSEDED:
-                continue
-            snapshot = build_flow_status_snapshot(workspace_root, record, store)
-            run_state = snapshot.get("run_state")
-            if not isinstance(run_state, dict):
-                continue
-            for intent in run_state.get("notification_intents", []):
-                if not isinstance(intent, dict):
-                    continue
-                intent_id = intent.get("intent_id")
-                if isinstance(intent_id, str) and intent_id.strip():
-                    active_intent_ids.add(intent_id)
-        return [
-            intent
-            for intent in store.list_notification_intents(resolved=False)
-            if intent.intent_id in active_intent_ids
-        ]
 
 
 def _format_pause_notification_source(
@@ -367,7 +341,7 @@ async def _scan_and_enqueue_recovery_notifications(service: Any) -> int:
             continue
         try:
             notifications = await asyncio.to_thread(
-                _load_ticket_flow_recovery_notifications,
+                list_active_ticket_flow_notification_intents,
                 workspace_root,
             )
         except (ConfigError, OSError, RuntimeError, ValueError) as exc:
@@ -417,7 +391,7 @@ async def _scan_and_enqueue_recovery_notifications(service: Any) -> int:
                         "payload": dict(intent.payload),
                     },
                 )
-                _mark_ticket_flow_recovery_intent_delivered(
+                mark_ticket_flow_notification_intent_delivered(
                     workspace_root,
                     intent.intent_id,
                     transport_key=transport_key,
@@ -443,25 +417,6 @@ async def _scan_and_enqueue_recovery_notifications(service: Any) -> int:
             )
             notified += 1
     return notified
-
-
-def _mark_ticket_flow_recovery_intent_delivered(
-    workspace_root: Path,
-    intent_id: str,
-    *,
-    transport_key: str,
-    record_id: str,
-) -> None:
-    db_path = workspace_root / ".codex-autorunner" / "flows.db"
-    if not db_path.exists():
-        return
-    config = load_repo_config(workspace_root)
-    with FlowStore(db_path, durable=config.durable_writes) as store:
-        store.mark_notification_intent_delivered(
-            intent_id,
-            transport=transport_key,
-            attempt={"status": "enqueued", "record_id": record_id},
-        )
 
 
 async def _scan_and_enqueue_terminal_notifications(service: Any) -> int:
