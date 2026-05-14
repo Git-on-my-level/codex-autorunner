@@ -9,6 +9,15 @@ from typing import Any, Callable, Optional
 
 import typer
 
+from ....adapters.telegram.cli_chats import (
+    build_telegram_chat_rows,
+)
+from ....adapters.telegram.cli_chats import (
+    rows_to_json as telegram_chat_rows_to_json,
+)
+from ....adapters.telegram.cli_chats import (
+    rows_to_table as telegram_chat_rows_to_table,
+)
 from ....adapters.telegram.client import TelegramAPIError, TelegramBotClient
 from ....adapters.telegram.service import (
     TelegramBotConfig,
@@ -319,6 +328,41 @@ def register_telegram_commands(
             asyncio.run(_run())
         except TelegramAPIError as exc:
             raise_exit(f"Telegram health check failed: {exc}", cause=exc)
+
+    @telegram_app.command("chats")
+    def telegram_chats(
+        path: Optional[Path] = typer.Option(
+            None, "--path", help="Repo or hub root path"
+        ),
+        json_output: bool = typer.Option(False, "--json", help="Emit JSON output"),
+        bound_only: bool = typer.Option(
+            False,
+            "--bound-only",
+            help="Only show chats with active thread bindings",
+        ),
+    ) -> None:
+        """List Telegram chats known through PMA bindings."""
+        require_optional_feature(
+            feature="telegram",
+            deps=[("httpx", "httpx")],
+            extra="telegram",
+        )
+        try:
+            config = load_hub_config(path or Path.cwd())
+        except ConfigError as exc:
+            raise_exit(str(exc), cause=exc)
+        rows = asyncio.run(
+            build_telegram_chat_rows(
+                hub_root=config.root,
+                raw_config=config.raw if isinstance(config.raw, dict) else {},
+                bound_only=bound_only,
+            )
+        )
+        typer.echo(
+            telegram_chat_rows_to_json(rows)
+            if json_output
+            else telegram_chat_rows_to_table(rows)
+        )
 
     @telegram_app.command("state-check")
     def telegram_state_check(
