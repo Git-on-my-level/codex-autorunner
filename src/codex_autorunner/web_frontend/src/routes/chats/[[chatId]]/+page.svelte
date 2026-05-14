@@ -36,7 +36,7 @@
     planStartAndSendChat
   } from '$lib/application/pmaChatCommands';
   import { withRuntimeBasePath as href } from '$lib/runtime/basePath';
-  import { openPmaTailEventSource, type StreamSubscription } from '$lib/api/streaming';
+  import { openPmaTailEventSource, shouldUsePmaTailStream, type StreamSubscription } from '$lib/api/streaming';
   import {
     repoContextspaceRoute,
     repoRoute,
@@ -704,7 +704,6 @@
     const selected = loadedChats.find((chat) => chat.id === activeChatId);
     if (selected && isPmaChatArchived(selected)) filter = 'archived';
     syncSelectorsToActiveChat();
-    connectStream(selectedChatId);
     void refreshActive(selectedChatId, { quiet: hasCachedDetail(selectedChatId) });
   }
 
@@ -864,7 +863,6 @@
     activeError = null;
     syncSelectorsToActiveChat();
     markActiveChatRead();
-    connectStream(chatId);
     const urlPromise = syncDetailUrl(chatId);
     void refreshActive(chatId, { quiet: cached });
     await urlPromise;
@@ -917,7 +915,6 @@
         loadingActive = false;
         return;
       }
-      connectStream(detailId);
       void refreshActive(detailId);
       return;
     }
@@ -935,8 +932,7 @@
     activeError = loaderResult?.status === 'error' ? loaderResult.error : null;
     syncSelectorsToActiveChat();
     markActiveChatRead();
-    connectStream(chatId);
-    if (!loaderOwnsInitialDetail) void refreshActive(chatId, { quiet: cached });
+    void refreshActive(chatId, { quiet: cached || loaderOwnsInitialDetail });
   }
 
   function markActiveChatRead(): void {
@@ -1086,15 +1082,25 @@
       closeStream();
       return;
     }
+    ensureTailStreamAfterSnapshot(chatId);
     if (!options.quiet || loadingActive) loadingActive = false;
   }
 
   function connectStream(chatId: string): void {
     closeStream();
+    const seedProgress = currentProgress(chatId);
+    const seedChat = chats.find((chat) => chat.id === chatId) ?? null;
+    if (!shouldOpenTailStream(seedChat, seedProgress, currentQueueDepth(chatId))) {
+      streamState = 'idle';
+      streamError = null;
+      return;
+    }
     streamState = 'connecting';
     streamError = null;
     refreshedTerminalTurnId = null;
     streamSubscription = openPmaTailEventSource(chatId, {
+      sinceEventId: seedProgress?.lastEventId,
+      sinceManagedTurnId: seedProgress?.id,
       onStatus: (status) => {
         if (activeChatId !== chatId) return;
         if (status === 'connecting' && streamState !== 'connected') streamState = 'connecting';
@@ -1167,6 +1173,17 @@
         scheduleActiveRefresh(chatId, 900);
       }
     });
+  }
+
+  function ensureTailStreamAfterSnapshot(chatId: string): void {
+    if (activeChatId !== chatId || streamSubscription) return;
+    const seedProgress = currentProgress(chatId);
+    const seedChat = chats.find((chat) => chat.id === chatId) ?? null;
+    if (shouldOpenTailStream(seedChat, seedProgress, currentQueueDepth(chatId))) connectStream(chatId);
+  }
+
+  function shouldOpenTailStream(chat: PmaChatSummary | null, current: PmaRunProgress | null, queuedTurns = 0): boolean {
+    return shouldUsePmaTailStream(chat, current, queuedTurns);
   }
 
   function scheduleActiveRefresh(chatId: string, delayMs = 600): void {
@@ -1290,6 +1307,10 @@
 
   function currentProgress(chatId: string): PmaRunProgress | null {
     return selectPmaProgress(readModelEntityStore.snapshot(), chatId);
+  }
+
+  function currentQueueDepth(chatId: string): number {
+    return selectPmaQueue(readModelEntityStore.snapshot(), chatId).length;
   }
 
   function syncChatListStatusFromProgress(nextProgress: PmaRunProgress): void {
@@ -1653,7 +1674,6 @@
         localDraftChat = null;
         activeChatId = committedChatId;
         detailMode = 'detail';
-        connectStream(committedChatId);
         // Must complete before `sending` clears: the URL effect treats no `chatId`
         // segment as "list mode" unless we're still sending or on a local draft id.
         await syncDetailUrl(committedChatId);

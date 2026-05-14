@@ -36,7 +36,14 @@ export type JsonStreamOptions = {
   onEvent: (event: PmaTailStreamEvent) => void;
   onError?: (error: Event) => void;
   onStatus?: (status: 'connecting' | 'connected' | 'interrupted' | 'closed') => void;
+  sinceEventId?: string | number | null;
+  sinceManagedTurnId?: string | null;
   withCredentials?: boolean;
+};
+
+export type PmaTailStreamUseState = {
+  status?: string | null;
+  queueDepth?: number | null;
 };
 
 export type PmaChatStreamOptions = {
@@ -121,8 +128,8 @@ export function openPmaTailEventSource(
   let source: EventSource | null = null;
   let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   let attempt = 0;
-  let lastEventId: string | null = null;
-  let lastManagedTurnId: string | null = null;
+  let lastEventId: string | null = optionalString(options.sinceEventId);
+  let lastManagedTurnId: string | null = optionalString(options.sinceManagedTurnId);
   const handle = (message: MessageEvent) => {
     attempt = 0;
     const event = normalizePmaTailStreamEvent({
@@ -180,6 +187,15 @@ export function openPmaTailEventSource(
       options.onStatus?.('closed');
     }
   };
+}
+
+export function shouldUsePmaTailStream(
+  chat: PmaTailStreamUseState | null | undefined,
+  progress: PmaTailStreamUseState | null | undefined,
+  queuedTurns = 0
+): boolean {
+  if (queuedTurns > 0 || (progress?.queueDepth ?? 0) > 0) return true;
+  return isActivePmaTailStatus(progress?.status) || isActivePmaTailStatus(chat?.status);
 }
 
 export function openPmaChatEventSource(
@@ -335,7 +351,13 @@ function asRecord(value: unknown): Record<string, unknown> {
 }
 
 function optionalString(value: unknown): string | null {
-  return typeof value === 'string' && value.length > 0 ? value : null;
+  if (typeof value === 'string') return value.length > 0 ? value : null;
+  if (typeof value === 'number' && Number.isFinite(value)) return String(value);
+  return null;
+}
+
+function isActivePmaTailStatus(status: unknown): boolean {
+  return status === 'running' || status === 'waiting' || status === 'blocked';
 }
 
 function managedTurnIdFromPayload(payload: unknown): string | null {
