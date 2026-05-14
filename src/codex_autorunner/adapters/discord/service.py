@@ -39,6 +39,10 @@ from ...adapters.chat.agents import (
     resolve_chat_runtime_agent,
     valid_chat_agent_values,
 )
+from ...adapters.chat.artifact_delivery import (
+    LegacyArchivePolicy,
+    import_and_drain_legacy_outbox,
+)
 from ...adapters.chat.bound_live_progress import (
     bound_chat_progress_delivered_message_id,
     mark_bound_chat_progress_delivered,
@@ -105,6 +109,11 @@ from ...agents.opencode.supervisor_protocol import (
 )
 from ...agents.registry import AgentDescriptor
 from ...bootstrap import seed_repo_files
+from ...core.artifact_delivery import (
+    ArtifactDeliveryService,
+    ArtifactRecord,
+    DeliveryIntent,
+)
 from ...core.config import (
     ConfigError,
     ensure_hub_config_at,
@@ -609,6 +618,29 @@ class DiscordServiceDependencies:
     )
     prune_filebox_root: Callable[..., Any] = prune_filebox_root
     reap_managed_processes: Callable[[Path], Any] = _reap_managed_processes_core
+
+
+@dataclass(frozen=True)
+class _DiscordArtifactTransport:
+    rest: Any
+    channel_id: str
+
+    async def send_artifact(
+        self,
+        *,
+        artifact: ArtifactRecord,
+        intent: DeliveryIntent,
+    ) -> dict[str, Any]:
+        _ = intent
+        data = Path(artifact.storage_path).read_bytes()
+        return cast(
+            dict[str, Any],
+            await self.rest.create_channel_message_with_attachment(
+                channel_id=self.channel_id,
+                data=data,
+                filename=artifact.filename,
+            ),
+        )
 
 
 class _DiscordAppServerSupervisorAdapter:
@@ -7388,62 +7420,21 @@ class DiscordBotService(DiscordInteractionResponseMixin):
         workspace_root: Path,
         channel_id: str,
     ) -> None:
-        outbox_root = outbox_dir(workspace_root)
-        pending_dir = outbox_pending_dir(workspace_root)
-        candidates: list[tuple[Path, Path]] = []
-        if outbox_root.exists():
-            for path in self._list_paths_in_dir(outbox_root):
-                candidates.append((outbox_root, path))
-        if pending_dir.exists():
-            for path in self._list_paths_in_dir(pending_dir):
-                candidates.append((pending_dir, path))
-        if not candidates:
-            return
-
-        deduped: dict[str, tuple[Path, Path]] = {}
-        for source_dir, path in candidates:
-            key = str(path)
-            with contextlib.suppress(OSError, ValueError):
-                key = str(canonicalize_path(path))
-            existing = deduped.get(key)
-            if existing is None:
-                deduped[key] = (source_dir, path)
-                continue
-            existing_source, _existing_path = existing
-            existing_is_root = existing_source == outbox_root
-            current_is_root = source_dir == outbox_root
-            # Preserve outbox-root candidates over pending aliases that resolve
-            # to the same canonical target (e.g., pending symlink to root file).
-            if existing_is_root and not current_is_root:
-                continue
-            if current_is_root and not existing_is_root:
-                deduped[key] = (source_dir, path)
-
-        def _mtime(item: tuple[Path, Path]) -> float:
-            _source, path = item
-            with contextlib.suppress(OSError):
-                return path.stat().st_mtime
-            return 0.0
-
-        files = sorted(deduped.values(), key=_mtime, reverse=True)
-
-        sent_dir = outbox_sent_dir(workspace_root)
-        for source_dir, path in files:
-            if not _path_within(root=source_dir, target=path):
-                log_event(
-                    self._logger,
-                    logging.WARNING,
-                    "discord.files.outbox.skipped_outside_pending",
-                    channel_id=channel_id,
-                    path=str(path),
-                    pending_dir=str(source_dir),
-                )
-                continue
-            await self._send_outbox_file(
-                path,
-                sent_dir=sent_dir,
+        await import_and_drain_legacy_outbox(
+            service=ArtifactDeliveryService(workspace_root),
+            transport=_DiscordArtifactTransport(
+                rest=self._rest,
                 channel_id=channel_id,
-            )
+            ),
+            target_surface="discord",
+            target_conversation_key=f"channel:{channel_id}",
+            workspace_scope=f"repo:{workspace_root}",
+            archive_policy=LegacyArchivePolicy(
+                mode="move-to-sent",
+                sent_dir=outbox_sent_dir(workspace_root),
+            ),
+            logger=self._logger,
+        )
 
     async def _handle_files_inbox(
         self,
