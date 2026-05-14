@@ -19,6 +19,8 @@ from codex_autorunner.core.orchestration.managed_thread_timeline import (
 )
 from codex_autorunner.core.orchestration.turn_timeline import persist_turn_timeline
 from codex_autorunner.core.ports.run_event import (
+    RUN_EVENT_DELTA_TYPE_ASSISTANT_STREAM,
+    RUN_EVENT_DELTA_TYPE_LOG_LINE,
     ApprovalRequested,
     Completed,
     Failed,
@@ -103,7 +105,7 @@ def test_completed_timeline_separates_intermediate_and_final_output(
 
     kinds = _kinds(payload)
     assert kinds.count("user_message") == 1
-    assert kinds.count("intermediate") == 2
+    assert kinds.count("intermediate") == 1
     assert kinds.count("assistant_message") == 1
     assert kinds.count("artifact") == 2
     assert payload["items"][0]["item_id"] == f"turn:{turn_id}:user"
@@ -115,7 +117,59 @@ def test_completed_timeline_separates_intermediate_and_final_output(
     assert assistant["payload"]["text"] == "final answer"
     assert assistant["provenance"]["source_event_ids"] == [3]
     assert assistant["provenance"]["progress_event_ids"] == [3]
-    assert all(item["kind"] != "assistant_message" for item in payload["items"][1:3])
+    assert not any(
+        item["payload"].get("source_event_type") == "output_delta"
+        for item in payload["items"]
+    )
+
+
+def test_high_volume_assistant_and_log_deltas_do_not_expand_default_timeline(
+    tmp_path: Path,
+) -> None:
+    hub_root, store, thread_id = _store(tmp_path)
+    turn = store.create_turn(thread_id, prompt="stream a lot")
+    turn_id = str(turn["managed_turn_id"])
+    events = [
+        OutputDelta(
+            timestamp=f"2026-05-06T10:00:{index % 60:02d}Z",
+            delta_type=(
+                RUN_EVENT_DELTA_TYPE_ASSISTANT_STREAM
+                if index % 2
+                else RUN_EVENT_DELTA_TYPE_LOG_LINE
+            ),
+            content=f"chunk {index}",
+        )
+        for index in range(1000)
+    ]
+    events.append(
+        Completed(
+            timestamp="2026-05-06T10:20:00Z",
+            final_message="bounded final",
+        )
+    )
+    persist_turn_timeline(
+        hub_root,
+        execution_id=turn_id,
+        target_kind="thread_target",
+        target_id=thread_id,
+        events=events,
+    )
+    assert store.mark_turn_finished(
+        turn_id,
+        status="ok",
+        assistant_text="bounded final",
+    )
+
+    payload = build_managed_thread_timeline(
+        hub_root,
+        thread_store=store,
+        managed_thread_id=thread_id,
+    )
+
+    assert _kinds(payload) == ["user_message", "assistant_message", "status"]
+    assert payload["item_count"] == 3
+    assert payload["projection"]["kind"] == "transcript"
+    assert payload["projection"]["raw_trace_available"] is True
 
 
 def test_running_timeline_projects_progress_tool_group_and_approval(

@@ -97,11 +97,18 @@ class BoundChatLiveProgressSession:
             outcome = self.projector.apply_run_event(event)
             if not outcome.changed:
                 continue
+            now = time.monotonic()
             rendered = self.projector.render(
                 max_length=self.max_length,
-                now=time.monotonic(),
+                now=now,
                 render_mode=outcome.render_mode,
             )
+            if not self.projector.should_emit_render(
+                rendered,
+                now=now,
+                force=outcome.force,
+            ):
+                continue
             published = False
             for adapter in self.adapters:
                 try:
@@ -334,6 +341,19 @@ class _BaseBoundProgressAdapter:
             managed_turn_id=self._managed_turn_id,
         )
 
+    async def _pending_operation_record_id(self, operation_id: str) -> Optional[str]:
+        store = getattr(self, "_store", None)
+        list_outbox = getattr(store, "list_outbox", None)
+        if not callable(list_outbox):
+            return None
+        for record in await list_outbox():
+            if getattr(record, "operation_id", None) != operation_id:
+                continue
+            record_id = str(getattr(record, "record_id", "") or "").strip()
+            if record_id:
+                return record_id
+        return None
+
     async def complete_success(self) -> None:
         anchor_id = self._delivered_anchor_id()
         if anchor_id is None:
@@ -475,8 +495,9 @@ class _DiscordBoundProgressAdapter(_BaseBoundProgressAdapter):
                 )
             else:
                 return True
+        record_id = await self._pending_operation_record_id(self.edit_operation_id)
         record = DiscordOutboxRecord(
-            record_id=f"{self.edit_operation_id}:{uuid.uuid4().hex[:8]}",
+            record_id=record_id or f"{self.edit_operation_id}:{uuid.uuid4().hex[:8]}",
             channel_id=self._surface_key,
             message_id=anchor_id,
             operation=_EDIT_OPERATION,
@@ -640,8 +661,9 @@ class _TelegramBoundProgressAdapter(_BaseBoundProgressAdapter):
                 )
             else:
                 return bool(edit_ok)
+        record_id = await self._pending_operation_record_id(self.edit_operation_id)
         record = TelegramOutboxRecord(
-            record_id=f"{self.edit_operation_id}:{uuid.uuid4().hex[:8]}",
+            record_id=record_id or f"{self.edit_operation_id}:{uuid.uuid4().hex[:8]}",
             chat_id=self._chat_id,
             thread_id=self._thread_id,
             reply_to_message_id=None,

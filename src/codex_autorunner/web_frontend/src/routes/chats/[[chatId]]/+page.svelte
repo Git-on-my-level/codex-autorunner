@@ -134,6 +134,7 @@
   const COMPACT_SUMMARY_PROMPT =
     'Summarize the conversation so far into a concise context block I can paste into a new thread. Include goals, constraints, decisions, and current state.';
   const PINNED_CHATS_STORAGE_KEY = 'car.webHub.pinnedChats.v1';
+  const PMA_TRANSCRIPT_TIMELINE_LIMIT = 50;
 
   let readModelState = $state(readModelEntityStore.snapshot());
   let unsubscribeReadModels: (() => void) | null = null;
@@ -1042,7 +1043,7 @@
       activeError = null;
     }
     let missingThreadError: ApiError | null = null;
-    const timelineTask = pmaApi.pma.getTimeline(chatId).then((messageResult) => {
+    const timelineTask = pmaApi.pma.getTimeline(chatId, { limit: PMA_TRANSCRIPT_TIMELINE_LIMIT }).then((messageResult) => {
       if (activeChatId !== chatId || refreshSeq !== activeRefreshSeq) return;
       if (messageResult.ok) {
         readModelEntityStore.replacePmaTimeline(chatId, reconcilePmaTimeline(currentTimeline(chatId), messageResult.data));
