@@ -1090,7 +1090,7 @@
     closeStream();
     const seedProgress = currentProgress(chatId);
     const seedChat = chats.find((chat) => chat.id === chatId) ?? null;
-    if (!shouldOpenTailStream(seedChat, seedProgress, currentQueueDepth(chatId))) {
+    if (!shouldUsePmaTailStream(seedChat, seedProgress, currentQueueDepth(chatId))) {
       streamState = 'idle';
       streamError = null;
       return;
@@ -1179,11 +1179,7 @@
     if (activeChatId !== chatId || streamSubscription) return;
     const seedProgress = currentProgress(chatId);
     const seedChat = chats.find((chat) => chat.id === chatId) ?? null;
-    if (shouldOpenTailStream(seedChat, seedProgress, currentQueueDepth(chatId))) connectStream(chatId);
-  }
-
-  function shouldOpenTailStream(chat: PmaChatSummary | null, current: PmaRunProgress | null, queuedTurns = 0): boolean {
-    return shouldUsePmaTailStream(chat, current, queuedTurns);
+    if (shouldUsePmaTailStream(seedChat, seedProgress, currentQueueDepth(chatId))) connectStream(chatId);
   }
 
   function scheduleActiveRefresh(chatId: string, delayMs = 600): void {
