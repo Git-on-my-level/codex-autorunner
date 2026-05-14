@@ -70,6 +70,7 @@ from .stream_lifecycle import (
     LifecycleAction,
     StreamLifecycleController,
 )
+from .turn_lifecycle import OpenCodeTurnOutputSource, terminal_signal_from_event
 
 PermissionDecision = str
 PermissionHandler = Callable[[str, dict[str, Any]], Awaitable[PermissionDecision]]
@@ -82,6 +83,8 @@ class OpenCodeTurnOutput:
     text: str
     error: Optional[str] = None
     usage: Optional[dict[str, Any]] = None
+    output_source: OpenCodeTurnOutputSource = "none"
+    terminal_signal: Optional[str] = None
 
 
 def opencode_event_is_progress_signal(
@@ -229,7 +232,6 @@ async def collect_opencode_output_from_events(
     first_event_timeout_seconds: Optional[
         float
     ] = _OPENCODE_FIRST_EVENT_TIMEOUT_SECONDS,
-    prompt_response_awaitable: Optional[Awaitable[Any]] = None,
     logger: Optional[logging.Logger] = None,
 ) -> OpenCodeTurnOutput:
     seen_question_request_ids: set[tuple[Optional[str], str]] = set()
@@ -269,6 +271,7 @@ async def collect_opencode_output_from_events(
     else:
         raise ValueError("events or event_stream_factory must be provided")
 
+    terminal_signal: Optional[str] = None
     try:
         while True:
             if should_stop is not None and should_stop():
@@ -296,6 +299,7 @@ async def collect_opencode_output_from_events(
                 if decision.error is not None:
                     assembler.error = decision.error
                 if decision.action == LifecycleAction.BREAK:
+                    terminal_signal = terminal_signal or "stream_end"
                     break
                 continue
             except asyncio.TimeoutError:
@@ -310,6 +314,7 @@ async def collect_opencode_output_from_events(
                 if decision.error is not None:
                     assembler.error = decision.error
                 if decision.action == LifecycleAction.BREAK:
+                    terminal_signal = terminal_signal or "timeout"
                     break
                 continue
             now = time.monotonic()
@@ -335,9 +340,13 @@ async def collect_opencode_output_from_events(
                 if decision.error is not None:
                     assembler.error = decision.error
                 if decision.action == LifecycleAction.BREAK:
+                    terminal_signal = terminal_signal or "irrelevant_event_timeout"
                     break
                 continue
             lifecycle.on_relevant_event(now=now)
+            event_terminal_signal = terminal_signal_from_event(event.event, payload)
+            if event_terminal_signal is not None:
+                terminal_signal = event_terminal_signal
             is_primary_session = event_session_id == session_id or not event_session_id
             if event.event == "question.asked":
                 request_id, props = extract_question_request(payload)
@@ -640,22 +649,18 @@ async def collect_opencode_output_from_events(
                     assembler.flush_pending()
                 if grace_decision.error is not None:
                     assembler.error = grace_decision.error
+                terminal_signal = terminal_signal or "completion_grace_elapsed"
                 break
     finally:
         await lifecycle.close()
-
-    if prompt_response_awaitable is not None:
-        try:
-            prompt_response = await prompt_response_awaitable
-            assembler.on_prompt_response(prompt_response)
-        except Exception:
-            pass
 
     result = await assembler.build_result()
     return OpenCodeTurnOutput(
         text=result.text,
         error=result.error,
         usage=result.usage,
+        output_source=result.output_source,
+        terminal_signal=terminal_signal,
     )
 
 
@@ -678,7 +683,6 @@ async def collect_opencode_output(
     first_event_timeout_seconds: Optional[
         float
     ] = _OPENCODE_FIRST_EVENT_TIMEOUT_SECONDS,
-    prompt_response_awaitable: Optional[Awaitable[Any]] = None,
     logger: Optional[logging.Logger] = None,
 ) -> OpenCodeTurnOutput:
     async def _respond(request_id: str, reply: str) -> None:
@@ -739,7 +743,6 @@ async def collect_opencode_output(
         messages_fetcher=_fetch_messages,
         stall_timeout_seconds=stall_timeout_seconds,
         first_event_timeout_seconds=first_event_timeout_seconds,
-        prompt_response_awaitable=prompt_response_awaitable,
         logger=logger,
     )
 

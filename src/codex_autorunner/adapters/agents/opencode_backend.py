@@ -10,7 +10,6 @@ import httpx
 from ...agents.opencode.client import OpenCodeClient, OpenCodeProtocolError
 from ...agents.opencode.event_decoder import decode_sse_event
 from ...agents.opencode.logging import OpenCodeEventFormatter
-from ...agents.opencode.output_assembly import apply_prompt_response_fallback
 from ...agents.opencode.runtime import (
     build_turn_id,
     collect_opencode_output,
@@ -395,7 +394,6 @@ class OpenCodeBackend(AgentBackend):
                     )
                 )
 
-            prompt_response: Any = None
             prompt_task: Optional[asyncio.Task[Any]] = asyncio.create_task(
                 client.prompt_async(
                     self._session_id,
@@ -425,7 +423,7 @@ class OpenCodeBackend(AgentBackend):
 
                     if prompt_task is not None and prompt_task in done:
                         try:
-                            prompt_response = prompt_task.result()
+                            prompt_task.result()
                         except (
                             httpx.HTTPError,
                             OpenCodeProtocolError,
@@ -469,13 +467,6 @@ class OpenCodeBackend(AgentBackend):
                     timestamp=now_iso(), error_message="OpenCode output failed"
                 )
                 return
-
-            if prompt_response is not None:
-                output_result = apply_prompt_response_fallback(
-                    output_result,
-                    prompt_response,
-                    prompt=message,
-                )
 
             canonical_usage = output_result.usage or latest_usage_snapshot
             if isinstance(canonical_usage, dict):
