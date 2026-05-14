@@ -30,7 +30,6 @@ export default defineConfig(() => {
         }
       }
     },
-    build: {},
     test: {
       include: ['src/**/*.test.ts']
     }
