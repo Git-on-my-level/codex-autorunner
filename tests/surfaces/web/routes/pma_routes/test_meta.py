@@ -240,6 +240,7 @@ def test_pma_agents_does_not_default_to_unavailable_synthetic_hermes(
         "codex_autorunner.surfaces.web.routes.pma_routes.meta.get_agent_descriptor",
         lambda agent_id, _context: hermes_descriptor if agent_id == "hermes" else None,
     )
+
     def _mock_available_agents(_request):
         return (
             [
