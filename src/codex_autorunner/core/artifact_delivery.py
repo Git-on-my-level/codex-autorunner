@@ -483,7 +483,7 @@ class ArtifactDeliveryStore:
         if row is None:
             raise ValueError(f"Unknown delivery: {delivery_id}")
         intent = _intent_from_row(row)
-        if intent.state not in updates.values() and intent.state in allowed_states:
+        if intent.state != updates["state"] and intent.state in allowed_states:
             raise RuntimeError(f"Delivery transition failed: {delivery_id}")
         return intent
 
