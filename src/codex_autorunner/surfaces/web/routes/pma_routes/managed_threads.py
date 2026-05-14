@@ -6,7 +6,7 @@ import logging
 from pathlib import Path
 from typing import Annotated, Any, Optional, cast
 
-from fastapi import APIRouter, Body, HTTPException, Request
+from fastapi import APIRouter, Body, HTTPException, Query, Request
 
 from .....adapters.chat.execution_event_journal import list_chat_execution_journal
 from .....agents.registry import (
@@ -17,6 +17,7 @@ from .....agents.registry import (
 from .....core.orchestration import build_harness_backed_orchestration_service
 from .....core.orchestration.catalog import RuntimeAgentDescriptor
 from .....core.orchestration.managed_thread_timeline import (
+    MAX_MANAGED_THREAD_TIMELINE_LIMIT,
     build_managed_thread_timeline,
 )
 from .....core.orchestration.turn_timeline import list_turn_timeline
@@ -878,11 +879,17 @@ def build_managed_thread_crud_routes(
     def get_managed_thread_timeline(
         managed_thread_id: str,
         request: Request,
-        limit: int = 500,
+        limit: int = Query(
+            50,
+            ge=1,
+            description=(
+                "Maximum turns to include in the bounded transcript projection. "
+                f"Values above {MAX_MANAGED_THREAD_TIMELINE_LIMIT} are clamped. "
+                "Assistant/log output deltas are omitted from this default timeline; "
+                "use the per-turn debug endpoint for raw trace detail."
+            ),
+        ),
     ) -> dict[str, Any]:
-        if limit <= 0:
-            raise HTTPException(status_code=400, detail="limit must be greater than 0")
-
         context = get_pma_request_context(request)
         store = context.thread_store()
         try:
@@ -890,7 +897,7 @@ def build_managed_thread_crud_routes(
                 context.hub_root,
                 thread_store=store,
                 managed_thread_id=managed_thread_id,
-                limit=limit,
+                limit=min(limit, MAX_MANAGED_THREAD_TIMELINE_LIMIT),
             )
         except KeyError as exc:
             raise HTTPException(

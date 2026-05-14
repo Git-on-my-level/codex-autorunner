@@ -8,7 +8,14 @@ from tests.pma_support import _enable_pma, _repo_owner
 
 from codex_autorunner.core.managed_thread_store import ManagedThreadStore
 from codex_autorunner.core.orchestration import SQLiteChatSurfaceEventJournal
+from codex_autorunner.core.orchestration.cold_trace_store import ColdTraceWriter
 from codex_autorunner.core.orchestration.sqlite import open_orchestration_sqlite
+from codex_autorunner.core.orchestration.turn_timeline import (
+    append_turn_events_to_cold_trace,
+    list_turn_timeline,
+    persist_turn_timeline,
+)
+from codex_autorunner.core.ports.run_event import Completed, OutputDelta
 from codex_autorunner.server import create_hub_app
 
 
@@ -40,6 +47,8 @@ def test_managed_thread_timeline_endpoint_returns_canonical_items(hub_env) -> No
     assert timeline_resp.status_code == 200
     payload = timeline_resp.json()
     assert payload["contract_version"] == "managed_thread_timeline.v2"
+    assert payload["projection"]["kind"] == "transcript"
+    assert payload["projection"]["raw_trace_available"] is True
     assert [item["kind"] for item in payload["items"]] == [
         "user_message",
         "assistant_message",
@@ -53,6 +62,112 @@ def test_managed_thread_timeline_endpoint_returns_canonical_items(hub_env) -> No
         assert isinstance(item["identity"]["progress_item_ids"], list)
         assert isinstance(item["provenance"]["source_event_ids"], list)
         assert isinstance(item["provenance"]["progress_event_ids"], list)
+
+
+def test_managed_thread_timeline_endpoint_suppresses_output_deltas_but_keeps_raw_trace(
+    hub_env,
+) -> None:
+    _enable_pma(
+        hub_env.hub_root,
+        managed_thread_terminal_followup_default=False,
+    )
+    app = create_hub_app(hub_env.hub_root)
+
+    with TestClient(app) as client:
+        create_resp = client.post(
+            "/hub/pma/threads",
+            json={"agent": "codex", **_repo_owner(hub_env)},
+        )
+        assert create_resp.status_code == 200
+        managed_thread_id = create_resp.json()["thread"]["managed_thread_id"]
+
+        store = ManagedThreadStore(hub_env.hub_root)
+        turn = store.create_turn(managed_thread_id, prompt="stream chunks")
+        turn_id = str(turn["managed_turn_id"])
+        events = [
+            OutputDelta(
+                timestamp=f"2026-05-12T10:00:{index % 60:02d}Z",
+                delta_type="assistant_stream",
+                content=f"chunk {index}",
+            )
+            for index in range(750)
+        ]
+        events.append(
+            Completed(
+                timestamp="2026-05-12T10:15:00Z",
+                final_message="finished",
+            )
+        )
+        trace_writer = ColdTraceWriter(
+            hub_root=hub_env.hub_root,
+            execution_id=turn_id,
+        ).open()
+        try:
+            append_turn_events_to_cold_trace(trace_writer, events=events)
+            trace_writer.finalize()
+        finally:
+            trace_writer.close()
+        persist_turn_timeline(
+            hub_env.hub_root,
+            execution_id=turn_id,
+            target_kind="thread_target",
+            target_id=managed_thread_id,
+            events=events,
+        )
+        assert store.mark_turn_finished(
+            turn_id,
+            status="ok",
+            assistant_text="finished",
+        )
+
+        timeline_resp = client.get(f"/hub/pma/threads/{managed_thread_id}/timeline")
+        turn_resp = client.get(f"/hub/pma/threads/{managed_thread_id}/turns/{turn_id}")
+
+    assert timeline_resp.status_code == 200
+    payload = timeline_resp.json()
+    assert [item["kind"] for item in payload["items"]] == [
+        "user_message",
+        "assistant_message",
+        "status",
+    ]
+    assert payload["item_count"] == 3
+    hot_timeline = list_turn_timeline(hub_env.hub_root, execution_id=turn_id)
+    assert len(hot_timeline) > payload["item_count"]
+    assert any(entry["event_type"] == "output_delta" for entry in hot_timeline)
+    assert turn_resp.status_code == 200
+    turn_detail = turn_resp.json()
+    assert turn_detail["trace_metadata"]["hot_timeline_entries"] == len(hot_timeline)
+    assert turn_detail["trace_metadata"]["cold_trace_available"] is True
+    assert turn_detail["trace_metadata"]["cold_trace"]["event_count"] == 751
+
+
+def test_managed_thread_timeline_endpoint_validates_and_clamps_limit(hub_env) -> None:
+    _enable_pma(
+        hub_env.hub_root,
+        managed_thread_terminal_followup_default=False,
+    )
+    app = create_hub_app(hub_env.hub_root)
+
+    with TestClient(app) as client:
+        create_resp = client.post(
+            "/hub/pma/threads",
+            json={"agent": "codex", **_repo_owner(hub_env)},
+        )
+        assert create_resp.status_code == 200
+        managed_thread_id = create_resp.json()["thread"]["managed_thread_id"]
+
+        invalid_low = client.get(
+            f"/hub/pma/threads/{managed_thread_id}/timeline",
+            params={"limit": 0},
+        )
+        clamped_high = client.get(
+            f"/hub/pma/threads/{managed_thread_id}/timeline",
+            params={"limit": 201},
+        )
+
+    assert invalid_low.status_code == 422
+    assert clamped_high.status_code == 200
+    assert clamped_high.json()["projection"]["limit"] == 200
 
 
 def test_managed_thread_chat_events_endpoint_returns_snapshot(hub_env) -> None:

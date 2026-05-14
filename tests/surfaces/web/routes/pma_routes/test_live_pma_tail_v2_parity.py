@@ -144,7 +144,6 @@ def test_live_tail_frames_match_durable_timeline_identity_and_provenance(
 
     expected_item_ids = [
         f"turn:{turn_id}:intermediate:0001",
-        f"turn:{turn_id}:intermediate:0002",
         f"turn:{turn_id}:tool:3:pytest",
         f"turn:{turn_id}:approval:write-1",
         f"turn:{turn_id}:status:ok",

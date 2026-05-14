@@ -12,6 +12,8 @@ export type ChatRouteLoadData = {
   activeDetail: ReadModelLoaderResult | null;
 };
 
+const CHAT_DETAIL_TIMELINE_LIMIT = 50;
+
 /** Testable helper; must not live in `+page.ts` (SvelteKit allows only reserved route exports there). */
 export async function loadChatRoute(options: {
   chatId?: string;
@@ -27,7 +29,8 @@ export async function loadChatRoute(options: {
 
   const activeDetailPromise = ensureChatDetailLoaded(chatId, {
     ...options.loaderOptions,
-    depends: options.depends
+    depends: options.depends,
+    timelineLimit: CHAT_DETAIL_TIMELINE_LIMIT
   });
   const [chatIndex, activeDetail] = await Promise.all([chatIndexPromise, activeDetailPromise]);
 

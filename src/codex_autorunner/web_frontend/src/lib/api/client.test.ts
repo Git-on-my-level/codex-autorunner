@@ -374,7 +374,7 @@ describe('API client error handling', () => {
 
     const result = await client.pma.getTimeline('thread-1');
 
-    expect(fetcher).toHaveBeenCalledWith('/hub/pma/threads/thread-1/timeline', expect.any(Object));
+    expect(fetcher).toHaveBeenCalledWith('/hub/pma/threads/thread-1/timeline?limit=50', expect.any(Object));
     expect(result.ok).toBe(true);
     if (result.ok) {
       expect(result.data[0]).toMatchObject({
@@ -483,6 +483,20 @@ describe('API client error handling', () => {
         orderKey: '003'
       });
     }
+  });
+
+  it('requests PMA timelines with an explicit bounded limit', async () => {
+    const fetcher = vi.fn(async () =>
+      Response.json({
+        contract_version: 'managed_thread_timeline.v2',
+        items: []
+      })
+    ) as unknown as typeof fetch;
+    const client = new PmaApiClient(fetcher);
+
+    await client.pma.getTimeline('thread-1', { limit: 25 });
+
+    expect(fetcher).toHaveBeenCalledWith('/hub/pma/threads/thread-1/timeline?limit=25', expect.any(Object));
   });
 
   it('uploads PMA inbox files with multipart form data', async () => {

@@ -388,7 +388,7 @@ class ChatSurfaceScenarioRunner:
                 if task.done():
                     continue
                 task.cancel()
-                with contextlib.suppress(Exception):
+                with contextlib.suppress(asyncio.CancelledError, Exception):
                     await task
             if context.surface == SurfaceKind.WEB_PMA:
                 assert isinstance(context.harness, WebPmaSurfaceSimulator)
