@@ -588,9 +588,8 @@ def build_live_activity_projection(
     )
     coalesced_events: list[dict[str, Any]] = []
     for event in event_list:
-        if (
-            coalesced_events
-            and _can_coalesce_live_activity_event(coalesced_events[-1], event)
+        if coalesced_events and _can_coalesce_live_activity_event(
+            coalesced_events[-1], event
         ):
             coalesced_events[-1] = _merge_activity_events(coalesced_events[-1], event)
             continue
