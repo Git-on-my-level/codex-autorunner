@@ -232,13 +232,28 @@ def test_pma_agents_does_not_default_to_unavailable_synthetic_hermes(
         capabilities=frozenset(),
         make_harness=lambda _ctx: object(),
     )
+
+    def _available_only_opencode(_context):
+        return {"opencode": opencode_descriptor}
+
+    def _descriptor_for(agent_id, _context):
+        return hermes_descriptor if agent_id == "hermes" else None
+
     monkeypatch.setattr(
         "codex_autorunner.surfaces.web.routes.pma_routes.meta.get_available_agents",
-        lambda _context: {"opencode": opencode_descriptor},
+        _available_only_opencode,
+    )
+    monkeypatch.setattr(
+        "codex_autorunner.agents.registry.get_available_agents",
+        _available_only_opencode,
     )
     monkeypatch.setattr(
         "codex_autorunner.surfaces.web.routes.pma_routes.meta.get_agent_descriptor",
-        lambda agent_id, _context: hermes_descriptor if agent_id == "hermes" else None,
+        _descriptor_for,
+    )
+    monkeypatch.setattr(
+        "codex_autorunner.agents.registry.get_agent_descriptor",
+        _descriptor_for,
     )
 
     def _mock_available_agents(_request):
@@ -322,13 +337,12 @@ def test_pma_agents_default_uses_registry_availability_over_serialized_hint(
         capabilities=frozenset(),
         make_harness=lambda _ctx: object(),
     )
-    monkeypatch.setattr(
-        "codex_autorunner.surfaces.web.routes.pma_routes.meta.get_available_agents",
-        lambda _context: {"opencode": opencode_descriptor},
-    )
-    monkeypatch.setattr(
-        "codex_autorunner.surfaces.web.routes.pma_routes.meta._available_agents",
-        lambda _request: (
+
+    def _available_only_opencode(_context):
+        return {"opencode": opencode_descriptor}
+
+    def _mock_serialized_agents(_request):
+        return (
             [
                 {
                     "id": "codex",
@@ -344,7 +358,19 @@ def test_pma_agents_default_uses_registry_availability_over_serialized_hint(
                 },
             ],
             "codex",
-        ),
+        )
+
+    monkeypatch.setattr(
+        "codex_autorunner.surfaces.web.routes.pma_routes.meta.get_available_agents",
+        _available_only_opencode,
+    )
+    monkeypatch.setattr(
+        "codex_autorunner.agents.registry.get_available_agents",
+        _available_only_opencode,
+    )
+    monkeypatch.setattr(
+        "codex_autorunner.surfaces.web.routes.pma_routes.meta._available_agents",
+        _mock_serialized_agents,
     )
 
     app = FastAPI()
