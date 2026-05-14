@@ -11,6 +11,11 @@ from typing import Any, Awaitable, Callable, Optional
 
 import typer
 
+from ....adapters.discord.cli_channels import (
+    build_discord_channel_rows,
+    rows_to_json,
+    rows_to_table,
+)
 from ....adapters.discord.command_registry import sync_commands
 from ....adapters.discord.commands import build_application_commands
 from ....adapters.discord.config import DiscordBotConfig, DiscordBotConfigError
@@ -288,6 +293,43 @@ def register_discord_commands(
         """Run Discord health checks (placeholder; not implemented)."""
         _require_discord_feature(require_optional_feature)
         raise NotImplementedError("Discord health check is not implemented yet.")
+
+    @app.command("channels")
+    def discord_channels(
+        path: Optional[Path] = typer.Option(
+            None, "--path", help="Repo or hub root path"
+        ),
+        json_output: bool = typer.Option(False, "--json", help="Emit JSON output"),
+        bound_only: bool = typer.Option(
+            False,
+            "--bound-only",
+            help="Only show channels with active thread bindings",
+        ),
+        guild_id: Optional[str] = typer.Option(
+            None, "--guild", help="Filter by Discord guild ID"
+        ),
+    ) -> None:
+        """List Discord channels known through PMA bindings."""
+        _require_discord_feature(require_optional_feature)
+        try:
+            config = load_hub_config(path or Path.cwd())
+        except ConfigError as exc:
+            raise_exit(str(exc), cause=exc)
+
+        normalized_guild_id = (
+            str(guild_id).strip() if isinstance(guild_id, str) else None
+        )
+        if normalized_guild_id == "":
+            normalized_guild_id = None
+        rows = asyncio.run(
+            build_discord_channel_rows(
+                hub_root=config.root,
+                raw_config=config.raw if isinstance(config.raw, dict) else {},
+                bound_only=bound_only,
+                guild_id=normalized_guild_id,
+            )
+        )
+        typer.echo(rows_to_json(rows) if json_output else rows_to_table(rows))
 
     @app.command("trace")
     def discord_trace(
