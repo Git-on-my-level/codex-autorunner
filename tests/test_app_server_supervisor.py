@@ -268,3 +268,48 @@ async def test_prune_idle_skips_active_turn_handles(
 
     assert await supervisor.prune_idle() == 0
     assert "global" in supervisor._handles
+
+
+@pytest.mark.anyio
+async def test_lifecycle_snapshot_reports_global_handle_fields(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    class FakeProcess:
+        pid = 43210
+
+    class FakeClient:
+        active_turn_count = 2
+
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            self._process = FakeProcess()
+
+        async def start(self) -> None:
+            return
+
+        async def close(self) -> None:
+            return
+
+    monkeypatch.setattr(
+        "codex_autorunner.adapters.app_server.supervisor.CodexAppServerClient",
+        FakeClient,
+    )
+    monkeypatch.setattr("os.getpgid", lambda pid: pid)
+
+    supervisor = WorkspaceAppServerSupervisor(
+        [sys.executable, "-c", "print('noop')"],
+        state_root=tmp_path / "state",
+        env_builder=lambda _root, _id, _state: {},
+        server_scope="global",
+    )
+    workspace = tmp_path / "repo"
+    workspace.mkdir()
+
+    await supervisor.get_client(workspace)
+    snapshot = await supervisor.lifecycle_snapshot()
+
+    assert snapshot.runtime_kind == "codex_app_server"
+    assert snapshot.server_scope == "global"
+    assert snapshot.active_turns == 2
+    assert snapshot.handles[0].handle_id == "global"
+    assert snapshot.handles[0].pid == 43210
+    assert snapshot.handles[0].state_dir == str(tmp_path / "state" / "global")

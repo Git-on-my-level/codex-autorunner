@@ -26,6 +26,10 @@ Each JSON file stores one `ProcessRecord`:
 - `started_at` (`str`): ISO timestamp when process started
 - `metadata` (`object`): extra structured fields for feature-specific context
 
+New records also include top-level `handle_id`. Older records that only have
+`workspace_id` remain readable and reapable; CAR derives the record key from
+`handle_id`, then `workspace_id`, then PID-only records.
+
 Required metadata includes the server scope, runtime profile when present,
 initial cwd, state directory, and runtime-specific fields such as `base_url`.
 

@@ -899,6 +899,8 @@ def _parse_opencode_config(
             OPENCODE_FIELD_SCHEMAS["server_scope"],
         ),
     )
+    if not server_scope:
+        server_scope = "global"
     stall_timeout_seconds = cast(
         Optional[float],
         parse_schema_field(
@@ -941,6 +943,8 @@ def _parse_opencode_config(
             OPENCODE_FIELD_SCHEMAS["max_handles"],
         ),
     )
+    if server_scope == "global" and max_handles is None:
+        max_handles = 1
     idle_ttl_seconds = cast(
         Optional[int],
         parse_schema_field(

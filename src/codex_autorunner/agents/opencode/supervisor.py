@@ -85,14 +85,22 @@ class OpenCodeHandle:
 
 @dataclass(frozen=True)
 class OpenCodeHandleSnapshot:
+    runtime_kind: str
+    server_scope: str
+    handle_id: str
     workspace_id: str
     workspace_root: str
     mode: str
     base_url: Optional[str]
     process_pid: Optional[int]
+    process_pgid: Optional[int]
     managed_pid: Optional[int]
+    managed_pgid: Optional[int]
     active_turns: int
     started: bool
+    healthy: bool
+    last_used_at: float
+    state_dir: Optional[str]
 
 
 @dataclass(frozen=True)
@@ -187,6 +195,9 @@ class OpenCodeSupervisor:
             "active_turns": sum(handle.active_turns for handle in handles),
             "handles": [
                 {
+                    "runtime_kind": _PROCESS_KIND,
+                    "server_scope": self._server_scope,
+                    "handle_id": handle.workspace_id,
                     "workspace_id": handle.workspace_id,
                     "workspace_root": str(handle.workspace_root),
                     "mode": self._handle_mode(handle),
@@ -196,13 +207,31 @@ class OpenCodeSupervisor:
                         if handle.process is not None and handle.process.pid is not None
                         else None
                     ),
+                    "process_pgid": (
+                        self._record_pid_and_pgid(handle.process.pid)[1]
+                        if handle.process is not None and handle.process.pid is not None
+                        else None
+                    ),
                     "managed_pid": (
                         handle.managed_process_record.pid
                         if handle.managed_process_record is not None
                         else None
                     ),
+                    "managed_pgid": (
+                        handle.managed_process_record.pgid
+                        if handle.managed_process_record is not None
+                        else None
+                    ),
                     "active_turns": handle.active_turns,
                     "started": handle.started,
+                    "healthy": handle.started
+                    and (
+                        handle.health_info is not None
+                        or handle.client is not None
+                        or handle.base_url is not None
+                    ),
+                    "last_used_at": handle.last_used_at,
+                    "state_dir": str(self._state_dir_for(handle)),
                 }
                 for handle in handles
             ],
@@ -1139,6 +1168,7 @@ class OpenCodeSupervisor:
         pgid = self._record_pid_and_pgid(pid)[1]
         return ProcessRecord(
             kind=_PROCESS_KIND,
+            handle_id=handle.workspace_id,
             workspace_id=handle.workspace_id,
             pid=pid,
             pgid=pgid,
@@ -1158,6 +1188,7 @@ class OpenCodeSupervisor:
     ) -> ProcessRecord:
         return ProcessRecord(
             kind=record.kind,
+            handle_id=str(record.pid) if record.pid is not None else None,
             workspace_id=None,
             pid=record.pid,
             pgid=record.pgid,
@@ -1180,6 +1211,7 @@ class OpenCodeSupervisor:
                 pgid = None
         record = ProcessRecord(
             kind=_PROCESS_KIND,
+            handle_id=handle.workspace_id,
             workspace_id=handle.workspace_id,
             pid=process.pid,
             pgid=pgid,
@@ -1238,6 +1270,7 @@ class OpenCodeSupervisor:
     ) -> None:
         updated = ProcessRecord(
             kind=record.kind,
+            handle_id=record.handle_id or handle.workspace_id,
             workspace_id=record.workspace_id,
             pid=record.pid,
             pgid=record.pgid,
@@ -1269,6 +1302,7 @@ class OpenCodeSupervisor:
             return
         pid_record = ProcessRecord(
             kind=record.kind,
+            handle_id=str(record.pid),
             workspace_id=None,
             pid=record.pid,
             pgid=record.pgid,
@@ -1405,6 +1439,11 @@ class OpenCodeSupervisor:
             return workspace_root
         return resolve_global_state_root().resolve()
 
+    def _state_dir_for(self, handle: OpenCodeHandle) -> Path:
+        if self._server_scope == _SCOPE_GLOBAL:
+            return resolve_global_state_root().resolve() / "opencode" / "global"
+        return handle.workspace_root / ".codex-autorunner" / "opencode"
+
     def _opencode_auth_path_for_env(self, env: dict[str, str]) -> Optional[Path]:
         return resolve_opencode_auth_path(env=env)
 
@@ -1511,6 +1550,9 @@ class OpenCodeSupervisor:
 
     def _handle_snapshot(self, handle: OpenCodeHandle) -> OpenCodeHandleSnapshot:
         return OpenCodeHandleSnapshot(
+            runtime_kind=_PROCESS_KIND,
+            server_scope=self._server_scope,
+            handle_id=handle.workspace_id,
             workspace_id=handle.workspace_id,
             workspace_root=str(handle.workspace_root),
             mode=self._handle_mode(handle),
@@ -1520,13 +1562,31 @@ class OpenCodeSupervisor:
                 if handle.process is not None and handle.process.pid is not None
                 else None
             ),
+            process_pgid=(
+                self._record_pid_and_pgid(handle.process.pid)[1]
+                if handle.process is not None and handle.process.pid is not None
+                else None
+            ),
             managed_pid=(
                 handle.managed_process_record.pid
                 if handle.managed_process_record is not None
                 else None
             ),
+            managed_pgid=(
+                handle.managed_process_record.pgid
+                if handle.managed_process_record is not None
+                else None
+            ),
             active_turns=handle.active_turns,
             started=handle.started,
+            healthy=handle.started
+            and (
+                handle.health_info is not None
+                or handle.client is not None
+                or handle.base_url is not None
+            ),
+            last_used_at=handle.last_used_at,
+            state_dir=str(self._state_dir_for(handle)),
         )
 
 

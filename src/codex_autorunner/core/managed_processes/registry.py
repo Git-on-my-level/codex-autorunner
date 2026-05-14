@@ -83,9 +83,15 @@ class ProcessRecord:
     owner_pid: int
     started_at: str
     metadata: dict[str, Any] = field(default_factory=dict)
+    handle_id: Optional[str] = None
 
     def validate(self) -> None:
         self.kind = _validate_path_segment(self.kind, "kind")
+        self.handle_id = (
+            _validate_path_segment(self.handle_id, "handle_id")
+            if self.handle_id is not None
+            else None
+        )
         self.workspace_id = (
             _validate_path_segment(self.workspace_id, "workspace_id")
             if self.workspace_id is not None
@@ -101,16 +107,21 @@ class ProcessRecord:
         self.metadata = _validate_metadata(self.metadata)
 
     def record_key(self) -> str:
+        if self.handle_id:
+            return self.handle_id
         if self.workspace_id:
             return self.workspace_id
         if self.pid is not None:
             return str(self.pid)
-        raise ValueError("workspace_id or pid is required to derive record filename")
+        raise ValueError(
+            "handle_id, workspace_id, or pid is required to derive record filename"
+        )
 
     def to_dict(self) -> dict[str, Any]:
         self.validate()
         return {
             "kind": self.kind,
+            "handle_id": self.handle_id,
             "workspace_id": self.workspace_id,
             "pid": self.pid,
             "pgid": self.pgid,
@@ -135,6 +146,7 @@ class ProcessRecord:
             raise ValueError("process record missing required field: started_at")
         record = cls(
             kind=cast(str, data["kind"]),
+            handle_id=cast(Optional[str], data.get("handle_id")),
             workspace_id=cast(Optional[str], data.get("workspace_id")),
             pid=cast(Optional[int], data.get("pid")),
             pgid=cast(Optional[int], data.get("pgid")),

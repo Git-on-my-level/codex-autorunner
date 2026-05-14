@@ -25,6 +25,32 @@ class AppServerHandle:
     last_used_at: float = 0.0
 
 
+@dataclass(frozen=True)
+class AppServerHandleSnapshot:
+    runtime_kind: str
+    server_scope: str
+    handle_id: str
+    workspace_id: str
+    workspace_root: str
+    pid: Optional[int]
+    pgid: Optional[int]
+    base_url: Optional[str]
+    active_turns: int
+    started: bool
+    healthy: bool
+    last_used_at: float
+    state_dir: str
+
+
+@dataclass(frozen=True)
+class AppServerSupervisorSnapshot:
+    runtime_kind: str
+    server_scope: str
+    cached_handles: int
+    active_turns: int
+    handles: tuple[AppServerHandleSnapshot, ...] = ()
+
+
 class WorkspaceAppServerSupervisor:
     """Manages per-workspace Codex app-server subprocess handles.
 
@@ -105,6 +131,50 @@ class WorkspaceAppServerSupervisor:
         self._runtime_profile = runtime_profile
         self._handles: dict[str, AppServerHandle] = {}
         self._lock = asyncio.Lock()
+
+    async def lifecycle_snapshot(self) -> AppServerSupervisorSnapshot:
+        async with self._lock:
+            handles = tuple(
+                self._handle_snapshot(handle) for handle in self._handles.values()
+            )
+        return AppServerSupervisorSnapshot(
+            runtime_kind="codex_app_server",
+            server_scope=self._server_scope,
+            cached_handles=len(handles),
+            active_turns=sum(handle.active_turns for handle in handles),
+            handles=handles,
+        )
+
+    def observability_snapshot(self) -> dict[str, object]:
+        handles = list(self._handles.values())
+        return {
+            "runtime_kind": "codex_app_server",
+            "server_scope": self._server_scope,
+            "cached_handles": len(handles),
+            "active_turns": sum(
+                int(getattr(handle.client, "active_turn_count", 0))
+                for handle in handles
+            ),
+            "handles": [
+                {
+                    "runtime_kind": "codex_app_server",
+                    "server_scope": self._server_scope,
+                    "handle_id": handle.workspace_id,
+                    "workspace_id": handle.workspace_id,
+                    "workspace_root": str(handle.workspace_root),
+                    "pid": self._client_pid(handle.client),
+                    "pgid": self._client_pgid(handle.client),
+                    "base_url": None,
+                    "active_turns": int(getattr(handle.client, "active_turn_count", 0)),
+                    "started": handle.started,
+                    "healthy": handle.started
+                    and self._client_pid(handle.client) is not None,
+                    "last_used_at": handle.last_used_at,
+                    "state_dir": str(self._state_root / handle.workspace_id),
+                }
+                for handle in handles
+            ],
+        }
 
     async def get_client(self, workspace_root: Path) -> CodexAppServerClient:
         canonical_root = canonical_workspace_root(workspace_root)
@@ -281,3 +351,37 @@ class WorkspaceAppServerSupervisor:
         if self._server_scope == "global":
             return "global"
         return workspace_id_for_path(workspace_root)
+
+    def _handle_snapshot(self, handle: AppServerHandle) -> AppServerHandleSnapshot:
+        return AppServerHandleSnapshot(
+            runtime_kind="codex_app_server",
+            server_scope=self._server_scope,
+            handle_id=handle.workspace_id,
+            workspace_id=handle.workspace_id,
+            workspace_root=str(handle.workspace_root),
+            pid=self._client_pid(handle.client),
+            pgid=self._client_pgid(handle.client),
+            base_url=None,
+            active_turns=int(getattr(handle.client, "active_turn_count", 0)),
+            started=handle.started,
+            healthy=handle.started and self._client_pid(handle.client) is not None,
+            last_used_at=handle.last_used_at,
+            state_dir=str(self._state_root / handle.workspace_id),
+        )
+
+    def _client_pid(self, client: CodexAppServerClient) -> Optional[int]:
+        process = getattr(client, "_process", None)
+        pid = getattr(process, "pid", None)
+        return pid if isinstance(pid, int) else None
+
+    def _client_pgid(self, client: CodexAppServerClient) -> Optional[int]:
+        process = getattr(client, "_process", None)
+        pid = getattr(process, "pid", None)
+        if not isinstance(pid, int):
+            return None
+        try:
+            import os
+
+            return os.getpgid(pid) if os.name != "nt" else None
+        except OSError:
+            return None

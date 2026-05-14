@@ -658,7 +658,7 @@ OPENCODE_FIELD_SCHEMAS: dict[str, FieldSchema] = {
     "server_scope": FieldSchema(
         path="opencode.server_scope",
         kind="choice",
-        default="workspace",
+        default="global",
         allowed_values=tuple(OPENCODE_SERVER_SCOPE_VALUES),
         type_message="opencode.server_scope must be a string or null",
         value_message="opencode.server_scope must be 'workspace' or 'global'",
@@ -686,7 +686,7 @@ OPENCODE_FIELD_SCHEMAS: dict[str, FieldSchema] = {
     "max_handles": FieldSchema(
         path="opencode.max_handles",
         kind="int",
-        default=4,
+        default=1,
         allow_none=True,
         min_value=1,
         parse_policy="fallback_none",

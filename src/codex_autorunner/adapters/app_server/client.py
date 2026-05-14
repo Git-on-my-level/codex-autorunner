@@ -477,7 +477,9 @@ class CodexAppServerClient:
     async def thread_archive(self, thread_id: str, **kwargs: Any) -> Any:
         params: Dict[str, Any] = {"threadId": thread_id}
         params.update(kwargs)
-        return await self.request("thread/archive", params)
+        result = await self.request("thread/archive", params)
+        self.unregister_runtime_callbacks(thread_id=thread_id)
+        return result
 
     async def thread_name_set(self, thread_id: str, name: str) -> Any:
         return await self.request(
@@ -1902,6 +1904,7 @@ class CodexAppServerClient:
                 pgid = None
         record = ProcessRecord(
             kind="codex_app_server",
+            handle_id=self._handle_id or self._workspace_id,
             workspace_id=self._handle_id or self._workspace_id,
             pid=process.pid,
             pgid=pgid,

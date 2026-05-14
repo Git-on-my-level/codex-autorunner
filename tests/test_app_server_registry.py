@@ -69,6 +69,7 @@ async def test_app_server_spawn_registers_process_record(
     record = captured["record"]
     assert isinstance(record, ProcessRecord)
     assert record.kind == "codex_app_server"
+    assert record.handle_id == "ws-1"
     assert record.workspace_id == "ws-1"
     assert record.pid == 32101
     assert record.pgid == 32101
@@ -132,6 +133,51 @@ async def test_app_server_terminate_unregisters_and_prefers_group_kill(
     assert delete_calls == [(tmp_path, "codex_app_server", "ws-2")]
     assert killpg_calls == [(32102, signal.SIGTERM)]
     assert kill_calls == [(32102, signal.SIGTERM)]
+
+
+@pytest.mark.anyio
+async def test_thread_archive_unregisters_thread_runtime_callbacks(
+    tmp_path: Path,
+) -> None:
+    client = CodexAppServerClient(
+        ["python", "-m", "codex_autorunner"],
+        cwd=tmp_path,
+        workspace_id="ws-archive",
+    )
+    observed: dict[str, Any] = {}
+
+    async def _fake_request(method: str, params: dict[str, Any]) -> dict[str, str]:
+        observed["method"] = method
+        observed["params"] = params
+        return {"status": "ok"}
+
+    async def _approval(_request: dict[str, Any]) -> str:
+        return "cancel"
+
+    async def _question(_request: dict[str, Any]) -> dict[str, Any]:
+        return {}
+
+    async def _notification(_message: dict[str, Any]) -> None:
+        return None
+
+    client.request = _fake_request  # type: ignore[method-assign]
+    client.register_runtime_callbacks(
+        thread_id="thread-archive",
+        approval_handler=_approval,
+        question_handler=_question,
+        notification_handler=_notification,
+    )
+
+    result = await client.thread_archive("thread-archive")
+
+    assert result == {"status": "ok"}
+    assert observed == {
+        "method": "thread/archive",
+        "params": {"threadId": "thread-archive"},
+    }
+    assert "thread-archive" not in client._thread_approval_handlers
+    assert "thread-archive" not in client._thread_user_input_handlers
+    assert "thread-archive" not in client._thread_notification_handlers
 
 
 @pytest.mark.anyio
