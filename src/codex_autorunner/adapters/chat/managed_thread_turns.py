@@ -67,6 +67,14 @@ from ...core.orchestration.managed_thread_delivery import (
     build_managed_thread_delivery_id,
     build_managed_thread_delivery_idempotency_key,
 )
+from ...core.orchestration.managed_thread_side_effects import (
+    ManagedThreadSideEffectAttemptResult,
+    ManagedThreadSideEffectIntent,
+    ManagedThreadSideEffectOutcome,
+    SQLiteManagedThreadSideEffectEngine,
+    build_managed_thread_side_effect_id,
+    build_managed_thread_side_effect_idempotency_key,
+)
 from ...core.orchestration.models import MessageRequest
 from ...core.orchestration.runtime_thread_events import (
     RuntimeThreadRunEventState,
@@ -1959,24 +1967,117 @@ async def _best_effort_hub_call(
     error_level: int = logging.WARNING,
     hub_client: Any = None,
     require_hub_client: bool = False,
+    post_terminal_effect_kind: Optional[str] = None,
+    state_root: Optional[Path] = None,
 ) -> Any:
+    side_effect_claim: Any = None
+    side_effect_engine: Optional[SQLiteManagedThreadSideEffectEngine] = None
+    if post_terminal_effect_kind and state_root is not None:
+        try:
+            managed_thread_id = str(trace_fields.get("managed_thread_id") or "").strip()
+            managed_turn_id = str(trace_fields.get("managed_turn_id") or "").strip()
+            surface_kind = str(trace_fields.get("surface_kind") or "").strip()
+            surface_key = str(trace_fields.get("surface_key") or "").strip()
+            if managed_thread_id and managed_turn_id and surface_kind and surface_key:
+                side_effect_engine = SQLiteManagedThreadSideEffectEngine(state_root)
+                effect_id = build_managed_thread_side_effect_id(
+                    managed_thread_id=managed_thread_id,
+                    managed_turn_id=managed_turn_id,
+                    surface_kind=surface_kind,
+                    surface_key=surface_key,
+                    effect_kind=post_terminal_effect_kind,
+                )
+                idempotency_key = build_managed_thread_side_effect_idempotency_key(
+                    managed_thread_id=managed_thread_id,
+                    managed_turn_id=managed_turn_id,
+                    surface_kind=surface_kind,
+                    surface_key=surface_key,
+                    effect_kind=post_terminal_effect_kind,
+                )
+                registration = side_effect_engine.create_intent(
+                    ManagedThreadSideEffectIntent(
+                        effect_id=effect_id,
+                        managed_thread_id=managed_thread_id,
+                        managed_turn_id=managed_turn_id,
+                        idempotency_key=idempotency_key,
+                        effect_kind=post_terminal_effect_kind,
+                        surface_kind=surface_kind,
+                        surface_key=surface_key,
+                        payload=dict(extra_log_fields or {}),
+                    )
+                )
+                log_event(
+                    logger,
+                    logging.INFO,
+                    f"{event_prefix}_side_effect_enqueued",
+                    **trace_fields,
+                    effect_id=registration.record.effect_id,
+                    effect_kind=post_terminal_effect_kind,
+                    inserted=registration.inserted,
+                    state=registration.record.state.value,
+                    attempt_count=registration.record.attempt_count,
+                )
+                side_effect_claim = side_effect_engine.claim_effect(
+                    registration.record.effect_id
+                )
+                if side_effect_claim is None:
+                    close = getattr(awaitable, "close", None)
+                    if callable(close):
+                        close()
+                    return None
+        except Exception as exc:
+            log_event(
+                logger,
+                logging.WARNING,
+                f"{event_prefix}_side_effect_enqueue_failed",
+                **trace_fields,
+                effect_kind=post_terminal_effect_kind,
+                exc=exc,
+            )
     try:
         if require_hub_client and hub_client is None:
             close = getattr(awaitable, "close", None)
             if callable(close):
                 close()
             raise RuntimeError("Hub control-plane client unavailable")
-        return await awaitable
+        result = await awaitable
+        if side_effect_engine is not None and side_effect_claim is not None:
+            side_effect_engine.record_attempt_result(
+                side_effect_claim.record.effect_id,
+                claim_token=side_effect_claim.claim_token,
+                result=ManagedThreadSideEffectAttemptResult(
+                    outcome=ManagedThreadSideEffectOutcome.SUCCEEDED
+                ),
+            )
+        return result
     except asyncio.CancelledError:
         kw: dict[str, Any] = dict(trace_fields)
         if extra_log_fields:
             kw.update(extra_log_fields)
+        if side_effect_engine is not None and side_effect_claim is not None:
+            side_effect_engine.record_attempt_result(
+                side_effect_claim.record.effect_id,
+                claim_token=side_effect_claim.claim_token,
+                result=ManagedThreadSideEffectAttemptResult(
+                    outcome=ManagedThreadSideEffectOutcome.RETRY,
+                    error="cancelled",
+                ),
+            )
         log_event(logger, logging.WARNING, f"{event_prefix}_cancelled", **kw)
     except Exception as exc:
         kw = dict(trace_fields)
         if extra_log_fields:
             kw.update(extra_log_fields)
         kw["exc"] = exc
+        if side_effect_engine is not None and side_effect_claim is not None:
+            side_effect_engine.record_attempt_result(
+                side_effect_claim.record.effect_id,
+                claim_token=side_effect_claim.claim_token,
+                result=ManagedThreadSideEffectAttemptResult(
+                    outcome=ManagedThreadSideEffectOutcome.RETRY,
+                    error=str(exc) or exc.__class__.__name__,
+                ),
+            )
         log_event(logger, error_level, f"{event_prefix}_failed", **kw)
     return None
 
@@ -2778,17 +2879,18 @@ async def finalize_managed_thread_execution(
         events: list[Any],
     ) -> Optional[str]:
         if resolved_hub_client is None:
-            try:
+
+            async def _persist_local_final_timeline() -> None:
                 _persist_execution_timeline_locally(
                     metadata=metadata,
                     events=events,
                     start_index=live_timeline_count + 1,
                 )
-            except (OSError, RuntimeError, ValueError) as exc:
+
                 log_event(
                     logger,
-                    logging.ERROR,
-                    "chat.managed_thread.final_timeline_local_persist_failed",
+                    logging.INFO,
+                    "chat.managed_thread.final_timeline_persisted_locally",
                     **_managed_thread_trace_fields(
                         managed_thread_id=managed_thread_id,
                         managed_turn_id=managed_turn_id,
@@ -2798,22 +2900,25 @@ async def finalize_managed_thread_execution(
                     ),
                     persisted_event_count=len(events),
                     start_index=live_timeline_count + 1,
-                    exc=exc,
                 )
-                return None
-            log_event(
-                logger,
-                logging.INFO,
-                "chat.managed_thread.final_timeline_persisted_locally",
-                **_managed_thread_trace_fields(
+
+            await _best_effort_hub_call(
+                _persist_local_final_timeline(),
+                event_prefix="chat.managed_thread.final_timeline_local_persist",
+                trace_fields=_managed_thread_trace_fields(
                     managed_thread_id=managed_thread_id,
                     managed_turn_id=managed_turn_id,
                     backend_thread_id=current_backend_thread_id or None,
                     backend_turn_id=started.execution.backend_id,
                     surface=surface,
                 ),
-                persisted_event_count=len(events),
-                start_index=live_timeline_count + 1,
+                extra_log_fields={
+                    "persisted_event_count": len(events),
+                    "start_index": live_timeline_count + 1,
+                },
+                error_level=logging.ERROR,
+                post_terminal_effect_kind="final_timeline",
+                state_root=state_root,
             )
             return None
         manifest_id = str(metadata.get("trace_manifest_id") or "").strip() or None
@@ -2840,6 +2945,8 @@ async def finalize_managed_thread_execution(
                         surface=surface,
                     ),
                     error_level=logging.WARNING,
+                    post_terminal_effect_kind="cold_trace",
+                    state_root=state_root,
                 )
                 or None
             )
@@ -2879,6 +2986,8 @@ async def finalize_managed_thread_execution(
                 "start_index": live_timeline_count + 1,
             },
             error_level=logging.ERROR,
+            post_terminal_effect_kind="final_timeline",
+            state_root=state_root,
         )
         return manifest_id
 
@@ -3472,6 +3581,8 @@ async def finalize_managed_thread_execution(
                     "assistant_chars": len(resolved_assistant_text),
                     **runtime_trace_fields(event_state),
                 },
+                post_terminal_effect_kind="transcript",
+                state_root=state_root,
             )
             return ManagedThreadFinalizationResult(
                 status="interrupted" if finalized_status == "interrupted" else "error",
@@ -3543,8 +3654,9 @@ async def finalize_managed_thread_execution(
         raw_thread_metadata = getattr(started.thread, "metadata", None)
         if isinstance(raw_thread_metadata, Mapping):
             thread_payload = {"metadata": dict(raw_thread_metadata)}
+
         # Coordinator-level: PR-binding self-claim (best-effort, ok outcomes only).
-        try:
+        async def _self_claim_pr_binding() -> None:
             self_claim_and_arm_pr_binding(
                 hub_root=state_root,
                 workspace_root=started.workspace_root,
@@ -3558,13 +3670,21 @@ async def finalize_managed_thread_execution(
                 raw_config=resolved_polling_raw_config,
                 thread_payload=thread_payload,
             )
-        except Exception:
-            logger.exception(
-                "%s PR binding self-claim failed (thread=%s turn=%s)",
-                surface.log_label,
-                managed_thread_id,
-                managed_turn_id,
-            )
+
+        await _best_effort_hub_call(
+            _self_claim_pr_binding(),
+            event_prefix="chat.managed_thread.pr_binding",
+            trace_fields=_managed_thread_trace_fields(
+                managed_thread_id=managed_thread_id,
+                managed_turn_id=managed_turn_id,
+                backend_thread_id=resolved_backend_thread_id,
+                backend_turn_id=outcome.backend_turn_id or started.execution.backend_id,
+                surface=surface,
+            ),
+            error_level=logging.WARNING,
+            post_terminal_effect_kind="pr_binding",
+            state_root=state_root,
+        )
         # Hub control-plane: transcript write (best-effort, ok outcomes only).
         # Runs after terminal recording so queue advancement does not depend on it.
         transcript_metadata = {
@@ -3613,6 +3733,8 @@ async def finalize_managed_thread_execution(
                 "assistant_chars": len(resolved_assistant_text),
                 **runtime_trace_fields(event_state),
             },
+            post_terminal_effect_kind="transcript",
+            state_root=state_root,
         )
         # Hub control-plane: thread activity record (best-effort, ok outcomes only).
         await _best_effort_hub_call(
@@ -3631,6 +3753,8 @@ async def finalize_managed_thread_execution(
                 backend_turn_id=outcome.backend_turn_id or started.execution.backend_id,
                 surface=surface,
             ),
+            post_terminal_effect_kind="thread_activity",
+            state_root=state_root,
         )
         return ManagedThreadFinalizationResult(
             status="ok",
