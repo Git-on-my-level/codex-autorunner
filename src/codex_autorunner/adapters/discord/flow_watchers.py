@@ -99,69 +99,6 @@ def _format_terminal_notification(
     return f"Ticket flow ended (run {run_id}, status: {status})."
 
 
-def _recovery_fingerprint(run_id: str, run_state: dict[str, Any]) -> Optional[str]:
-    recovery_state = run_state.get("recovery_state") or run_state.get("state")
-    if not isinstance(recovery_state, str) or not recovery_state.strip():
-        return None
-    recovery_state = recovery_state.strip()
-    if recovery_state not in {
-        "recovering",
-        "restarted",
-        "failed",
-        "restart_exhausted",
-        "commit_barrier_pending",
-        "stale_alive",
-    }:
-        return None
-    attempts = run_state.get("restart_attempts")
-    last_action = run_state.get("last_recovery_action")
-    return ":".join(
-        str(part)
-        for part in (
-            run_id,
-            recovery_state,
-            attempts if isinstance(attempts, int) else "",
-            last_action if isinstance(last_action, str) else "",
-        )
-    )
-
-
-def _format_recovery_notification(
-    *,
-    run_id: str,
-    run_state: dict[str, Any],
-) -> str:
-    recovery_state = str(
-        run_state.get("recovery_state") or run_state.get("state") or "recovery"
-    ).strip()
-    lines = [f"Ticket flow recovery update (run {run_id}): {recovery_state}."]
-    worker_status = run_state.get("worker_status")
-    if isinstance(worker_status, str) and worker_status.strip():
-        lines.append(f"Worker: {worker_status.strip()}.")
-    attempts = run_state.get("restart_attempts")
-    max_attempts = run_state.get("restart_max_attempts")
-    if isinstance(attempts, int) and not isinstance(attempts, bool):
-        if isinstance(max_attempts, int) and not isinstance(max_attempts, bool):
-            lines.append(f"Restart attempts: {attempts}/{max_attempts}.")
-        else:
-            lines.append(f"Restart attempts: {attempts}.")
-    if run_state.get("commit_barrier_pending"):
-        lines.append("Commit barrier pending; preserving completed ticket work.")
-    stale_reason = run_state.get("stale_reason")
-    if isinstance(stale_reason, str) and stale_reason.strip():
-        lines.append(f"Stale reason: {stale_reason.strip()}.")
-    last_progress = run_state.get("last_semantic_progress_at")
-    if isinstance(last_progress, str) and last_progress.strip():
-        lines.append(f"Last semantic progress: {last_progress.strip()}.")
-    reason = run_state.get("blocking_reason") or run_state.get("crash_reason")
-    if isinstance(reason, str) and reason.strip():
-        lines.append(f"Reason: {_truncate_error(reason, limit=260)}")
-    recommended = run_state.get("recommended_action")
-    if isinstance(recommended, str) and recommended.strip():
-        lines.append(f"Recommended: `{recommended.strip()}`")
-    return "\n".join(lines)
-
-
 def _load_ticket_flow_recovery_notifications(
     workspace_root: Path,
 ) -> list[Any]:

@@ -10,6 +10,8 @@ from codex_autorunner.core.ticket_flow_operator import build_ticket_flow_run_sta
 from codex_autorunner.core.ticket_flow_recovery import (
     RecoveryIntentSeverity,
     RecoveryNotificationIntent,
+    build_recovery_notification_intents,
+    build_recovery_projection,
 )
 
 
@@ -79,6 +81,65 @@ def test_recovery_projection_exposes_facets_from_flow_record(
     assert run_state["notification_intents"][0]["event_type"] == (
         "ticket_flow.commit_barrier.active"
     )
+
+
+def test_commit_barrier_intent_id_ignores_volatile_restart_snapshot_fields() -> None:
+    base_kwargs = {
+        "run_id": "11111111-1111-4111-8111-111111111111",
+        "state": "running",
+        "recovery_state": "commit_barrier_pending",
+        "attention_required": True,
+        "recommended_actions": ["car ticket-flow status --repo /tmp/repo"],
+        "worker_status": "alive",
+        "blocking_reason": "done-current-ticket-has-uncommitted-worktree-changes",
+        "restart_attempts": 0,
+        "restart_max_attempts": 3,
+        "restart_exhausted": False,
+        "commit_barrier_pending": True,
+        "stale_alive": None,
+        "dispatch_pause_pending": False,
+        "terminal_failure": False,
+    }
+    first_projection = build_recovery_projection(
+        **base_kwargs,
+        commit_barrier={
+            "barrier_epoch": "ticket-001-done",
+            "current_ticket": ".codex-autorunner/tickets/TICKET-001.md",
+            "restart_attempts": 1,
+            "last_recovery_action": "restart_attempted",
+        },
+    )
+    second_projection = build_recovery_projection(
+        **base_kwargs,
+        commit_barrier={
+            "barrier_epoch": "ticket-001-done",
+            "current_ticket": ".codex-autorunner/tickets/TICKET-001.md",
+            "restart_attempts": 2,
+            "last_recovery_action": "commit_barrier_retry",
+        },
+    )
+    exhausted_projection = build_recovery_projection(
+        **{**base_kwargs, "recovery_state": "commit_barrier_exhausted"},
+        commit_barrier={
+            "barrier_epoch": "ticket-001-done",
+            "current_ticket": ".codex-autorunner/tickets/TICKET-001.md",
+            "restart_attempts": 3,
+            "last_recovery_action": "commit_barrier_exhausted",
+            "exhausted": True,
+        },
+    )
+
+    first_intents = build_recovery_notification_intents(first_projection)
+    second_intents = build_recovery_notification_intents(second_projection)
+    exhausted_intents = build_recovery_notification_intents(exhausted_projection)
+
+    assert len(first_intents) == 1
+    assert len(second_intents) == 1
+    assert len(exhausted_intents) == 1
+    assert first_intents[0].intent_id == second_intents[0].intent_id
+    assert first_intents[0].event_type == "ticket_flow.commit_barrier.active"
+    assert exhausted_intents[0].event_type == "ticket_flow.commit_barrier.exhausted"
+    assert exhausted_intents[0].intent_id != first_intents[0].intent_id
 
 
 def test_notification_intent_id_stable_when_restart_attempts_change(

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import logging
 from types import SimpleNamespace
 from typing import Any
@@ -210,12 +211,11 @@ async def test_pause_watcher_resets_backoff_on_productive_scan():
 
 
 @pytest.mark.anyio
-async def test_recovery_scan_updates_binding_cursor_after_enqueue(monkeypatch) -> None:
+async def test_recovery_scan_marks_core_ledger_after_enqueue(monkeypatch) -> None:
     binding = {
         "channel_id": "channel-1",
         "guild_id": "guild-1",
         "workspace_path": "/tmp/workspace",
-        "last_recovery_fingerprint": "fingerprint-1",
     }
     enqueued = []
     seen = []
@@ -228,7 +228,6 @@ async def test_recovery_scan_updates_binding_cursor_after_enqueue(monkeypatch) -
     service._store = MagicMock()
     service._store.list_bindings = AsyncMock(return_value=[binding])
     service._store.enqueue_outbox = AsyncMock(side_effect=_enqueue)
-    service._store.mark_recovery_seen = AsyncMock()
     service._hub_raw_config_cache = {}
     service._flow_run_mirror.return_value.mirror_outbound = MagicMock()
 
@@ -290,6 +289,18 @@ async def test_recovery_scan_updates_binding_cursor_after_enqueue(monkeypatch) -
     assert len(enqueued) == 1
     assert seen == ["intent-2"]
     assert enqueued[0].record_id == "recovery:channel-1:intent-2"
+
+
+def test_discord_recovery_watchers_do_not_reintroduce_snapshot_fingerprints() -> None:
+    from codex_autorunner.adapters.discord import flow_watchers
+
+    assert not hasattr(flow_watchers, "_recovery_fingerprint")
+    assert not hasattr(flow_watchers, "_format_recovery_notification")
+    source = inspect.getsource(flow_watchers)
+    assert "restart_attempts" not in source
+    assert "last_recovery_action" not in source
+    assert "last_recovery_fingerprint" not in source
+    assert "mark_recovery_seen" not in source
 
 
 @pytest.mark.anyio
