@@ -18,6 +18,7 @@ runner = CliRunner()
 class _FakeDiscordRestClient:
     channels: dict[str, dict[str, Any]] = {}
     guilds: dict[str, dict[str, Any]] = {}
+    channel_calls: list[str] = []
 
     def __init__(self, *, bot_token: str) -> None:
         self.bot_token = bot_token
@@ -29,6 +30,7 @@ class _FakeDiscordRestClient:
         return None
 
     async def get_channel(self, *, channel_id: str) -> dict[str, Any]:
+        self.channel_calls.append(channel_id)
         payload = self.channels.get(channel_id)
         if payload is None:
             raise RuntimeError("missing channel")
@@ -137,6 +139,7 @@ def test_discord_channels_outputs_resolved_table(hub_env, monkeypatch) -> None:
     _FakeDiscordRestClient.guilds = {
         "guild-1": {"id": "guild-1", "name": "David's Server"}
     }
+    _FakeDiscordRestClient.channel_calls = []
     monkeypatch.setattr(
         "codex_autorunner.adapters.chat.surface_resolver.DiscordRestClient",
         _FakeDiscordRestClient,
@@ -183,6 +186,7 @@ def test_discord_channels_json_and_bound_only_filters(hub_env, monkeypatch) -> N
     _FakeDiscordRestClient.guilds = {
         "guild-1": {"id": "guild-1", "name": "David's Server"}
     }
+    _FakeDiscordRestClient.channel_calls = []
     monkeypatch.setattr(
         "codex_autorunner.adapters.chat.surface_resolver.DiscordRestClient",
         _FakeDiscordRestClient,
@@ -208,6 +212,46 @@ def test_discord_channels_json_and_bound_only_filters(hub_env, monkeypatch) -> N
     assert [row["channel_id"] for row in payload] == ["1495134681929355404"]
     assert payload[0]["guild"] == "David's Server"
     assert payload[0]["type"] == "text"
+
+
+def test_discord_channels_excludes_notification_bindings(hub_env, monkeypatch) -> None:
+    _insert_discord_binding(
+        hub_env.hub_root,
+        channel_id="1495134681929355404",
+        thread_id="21ee4260-0000-0000-0000-000000000000",
+    )
+    _insert_discord_binding(
+        hub_env.hub_root,
+        channel_id="notification:notif-123",
+        thread_id="1a2a98a4-0000-0000-0000-000000000000",
+    )
+    _FakeDiscordRestClient.channels = {
+        "1495134681929355404": {
+            "id": "1495134681929355404",
+            "name": "discord-2",
+            "type": 0,
+            "guild_id": "guild-1",
+        },
+    }
+    _FakeDiscordRestClient.guilds = {
+        "guild-1": {"id": "guild-1", "name": "David's Server"}
+    }
+    _FakeDiscordRestClient.channel_calls = []
+    monkeypatch.setattr(
+        "codex_autorunner.adapters.chat.surface_resolver.DiscordRestClient",
+        _FakeDiscordRestClient,
+    )
+    monkeypatch.setenv("CAR_DISCORD_BOT_TOKEN", "token")
+
+    result = runner.invoke(
+        app, ["discord", "channels", "--json", "--path", str(hub_env.hub_root)]
+    )
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    assert [row["channel_id"] for row in payload] == ["1495134681929355404"]
+    assert "notification:notif-123" not in result.output
+    assert _FakeDiscordRestClient.channel_calls == ["1495134681929355404"]
 
 
 def test_discord_channels_degrades_when_token_missing(hub_env, monkeypatch) -> None:

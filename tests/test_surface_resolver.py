@@ -5,6 +5,7 @@ from typing import Optional
 import pytest
 
 from codex_autorunner.adapters.chat.surface_resolver import (
+    DiscordSurfaceResolver,
     SurfaceInfo,
     resolve_surface_bindings,
 )
@@ -45,3 +46,10 @@ async def test_surface_resolver_dispatches_by_surface_and_deduplicates() -> None
     assert resolved[("discord", "123")].name == "discord-123"
     assert resolved[("telegram", "-100:root")].name == "telegram--100:root"
     assert resolved[("unknown", "ignored")] is None
+
+
+@pytest.mark.asyncio
+async def test_discord_resolver_ignores_non_channel_keys() -> None:
+    resolver = DiscordSurfaceResolver(bot_token="token")
+
+    assert await resolver.resolve("notification:notif-123") is None

@@ -59,6 +59,11 @@ def _normalize_text(value: Any) -> Optional[str]:
     return text or None
 
 
+def is_discord_channel_key(value: Any) -> bool:
+    normalized = _normalize_text(value)
+    return normalized is not None and normalized.isdigit()
+
+
 def _token_env(raw_config: Mapping[str, Any], section_name: str, default: str) -> str:
     section = raw_config.get(section_name)
     if isinstance(section, Mapping):
@@ -113,7 +118,7 @@ class DiscordSurfaceResolver:
 
     async def resolve(self, key: str) -> Optional[SurfaceInfo]:
         channel_id = _normalize_text(key)
-        if channel_id is None:
+        if channel_id is None or not is_discord_channel_key(channel_id):
             return None
         if channel_id in self._channel_cache:
             return self._channel_cache[channel_id]
@@ -352,6 +357,7 @@ __all__ = [
     "TelegramSurfaceResolver",
     "build_surface_resolvers",
     "close_surface_resolvers",
+    "is_discord_channel_key",
     "resolve_surface_bindings",
     "resolve_surface_key",
     "surface_info_display",

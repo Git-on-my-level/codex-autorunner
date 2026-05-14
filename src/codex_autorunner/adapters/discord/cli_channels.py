@@ -14,6 +14,7 @@ from ..chat.surface_resolver import (
     SurfaceInfo,
     build_surface_resolvers,
     close_surface_resolvers,
+    is_discord_channel_key,
     resolve_surface_key,
 )
 
@@ -125,7 +126,7 @@ def list_discord_channel_bindings(hub_root: Path) -> list[DiscordChannelBinding]
     bindings: list[DiscordChannelBinding] = []
     for row in rows:
         channel_id = _normalize_text(row["channel_id"])
-        if channel_id is None:
+        if channel_id is None or not is_discord_channel_key(channel_id):
             continue
         bindings.append(
             DiscordChannelBinding(
