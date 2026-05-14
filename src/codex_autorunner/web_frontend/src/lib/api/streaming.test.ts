@@ -8,7 +8,8 @@ import {
   openPmaChatEventSource,
   openPmaTailEventSource,
   parseJsonSseFrame,
-  parseSseFrame
+  parseSseFrame,
+  shouldUsePmaTailStream
 } from './streaming';
 
 class FakeEventSource extends EventTarget {
@@ -151,6 +152,35 @@ describe('SSE helpers', () => {
       }
     ]);
     subscription.close();
+  });
+
+  it('opens PMA tail streams from a provided progress cursor', () => {
+    vi.stubGlobal('EventSource', FakeEventSource);
+
+    const subscription = openPmaTailEventSource(
+      'thread/1',
+      {
+        onEvent: vi.fn(),
+        sinceEventId: 42,
+        sinceManagedTurnId: 'turn-1'
+      },
+      '/car'
+    );
+
+    expect(FakeEventSource.instances[0].url).toBe(
+      '/car/hub/pma/threads/thread%2F1/tail/events?since_event_id=42&since_managed_turn_id=turn-1'
+    );
+    subscription.close();
+  });
+
+  it('does not open PMA tail streams for terminal snapshots with no queued follow-up', () => {
+    expect(shouldUsePmaTailStream({ status: 'completed' }, { status: 'completed', queueDepth: 0 }, 0)).toBe(false);
+  });
+
+  it('keeps PMA tail streams useful for live and queued turns', () => {
+    expect(shouldUsePmaTailStream({ status: 'completed' }, { status: 'running', queueDepth: 0 }, 0)).toBe(true);
+    expect(shouldUsePmaTailStream({ status: 'completed' }, { status: 'completed', queueDepth: 0 }, 1)).toBe(true);
+    expect(shouldUsePmaTailStream({ status: 'waiting' }, null, 0)).toBe(true);
   });
 
   it('resets PMA tail stream cursors when the managed turn changes', () => {

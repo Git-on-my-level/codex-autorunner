@@ -5,7 +5,7 @@ import json
 import logging
 import re
 import time
-from collections import defaultdict, deque
+from collections import Counter, defaultdict, deque
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, AsyncIterator, Awaitable, Callable, Optional, Sequence
@@ -143,6 +143,8 @@ class _PromptState:
     last_session_update_part_types: tuple[str, ...] = ()
     last_session_update_text_length: Optional[int] = None
     last_session_update_at: Optional[float] = None
+    session_update_counts: Counter[str] = field(default_factory=Counter)
+    missing_turn_id_fallback_counts: Counter[str] = field(default_factory=Counter)
     _assistant_text: AssistantOutputState = field(
         default_factory=AssistantOutputState,
         init=False,
@@ -1072,6 +1074,16 @@ class ACPClient:
             elapsed_ms=self._elapsed_ms(state.request_started_at),
             **self._prompt_trace_fields(state),
         )
+        if state.session_update_counts or state.missing_turn_id_fallback_counts:
+            self._log_trace_event(
+                "acp.prompt.stream_summary",
+                session_id=state.session_id,
+                turn_id=state.turn_id,
+                session_update_counts=dict(state.session_update_counts),
+                missing_turn_id_fallback_counts=dict(
+                    state.missing_turn_id_fallback_counts
+                ),
+            )
         if not state.future.done():
             final_output = event.final_output or state.final_output
             state.future.set_result(
@@ -1383,12 +1395,19 @@ class ACPClient:
                 )
             return message
         turn_id = decision.turn_id
-        self._log_trace_event(
-            "acp.prompt.missing_turn_id_fallback",
-            session_id=session_id,
-            turn_id=turn_id,
-            method=method,
-        )
+        state = self._prompts.get(turn_id)
+        method_key = method or "unknown"
+        count = 1
+        if state is not None:
+            state.missing_turn_id_fallback_counts[method_key] += 1
+            count = state.missing_turn_id_fallback_counts[method_key]
+        if count == 1:
+            self._log_trace_event(
+                "acp.prompt.missing_turn_id_fallback",
+                session_id=session_id,
+                turn_id=turn_id,
+                method=method,
+            )
         enriched = dict(message)
         enriched_params = dict(params)
         enriched_params["turnId"] = turn_id
@@ -1458,16 +1477,19 @@ class ACPClient:
             len(extracted_text) if extracted_text else 0
         )
         state.last_session_update_at = time.monotonic()
-        self._log_trace_event(
-            "acp.prompt.session_update",
-            session_id=state.session_id,
-            turn_id=state.turn_id,
-            session_update=state.last_session_update_kind,
-            text_excerpt=state.last_session_update_excerpt,
-            content_kind=state.last_session_update_content_kind,
-            content_part_types=state.last_session_update_part_types,
-            text_length=state.last_session_update_text_length,
-        )
+        session_update_key = state.last_session_update_kind or "unknown"
+        state.session_update_counts[session_update_key] += 1
+        if state.session_update_counts[session_update_key] == 1:
+            self._log_trace_event(
+                "acp.prompt.session_update",
+                session_id=state.session_id,
+                turn_id=state.turn_id,
+                session_update=state.last_session_update_kind,
+                text_excerpt=state.last_session_update_excerpt,
+                content_kind=state.last_session_update_content_kind,
+                content_part_types=state.last_session_update_part_types,
+                text_length=state.last_session_update_text_length,
+            )
         if (
             state.last_session_update_kind
             in {"agent_message_chunk", "agent_thought_chunk"}

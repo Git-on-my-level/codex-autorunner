@@ -549,6 +549,44 @@ def _tail_event_sse_frames(
     return frames
 
 
+def _sse_initial_replay_requested(
+    *,
+    request: Request,
+    replay: bool,
+    since: Optional[str],
+    since_event_id: Optional[int],
+    since_managed_turn_id: Optional[str],
+) -> bool:
+    if replay:
+        return True
+    if since is not None or since_event_id is not None:
+        return True
+    if normalize_optional_text(since_managed_turn_id) is not None:
+        return True
+    return bool(request.headers.get("Last-Event-ID"))
+
+
+def _tail_snapshot_without_replay(snapshot: dict[str, Any]) -> dict[str, Any]:
+    cheap_snapshot = dict(snapshot)
+    events = snapshot.get("events")
+    high_watermark = int(snapshot.get("last_event_id") or 0)
+    if isinstance(events, list):
+        for event in events:
+            if not isinstance(event, dict):
+                continue
+            high_watermark = max(high_watermark, int(event.get("event_id") or 0))
+    cheap_snapshot["events"] = []
+    cheap_snapshot["last_event_id"] = high_watermark
+    cheap_snapshot["last_event_at"] = None
+    diagnostics = cheap_snapshot.get("active_turn_diagnostics")
+    if isinstance(diagnostics, dict):
+        diagnostics = dict(diagnostics)
+        diagnostics["last_event_type"] = None
+        diagnostics["last_event_summary"] = None
+        cheap_snapshot["active_turn_diagnostics"] = diagnostics
+    return cheap_snapshot
+
+
 def _apply_sse_lifetime_to_snapshot(snapshot: dict[str, Any]) -> dict[str, Any]:
     """Rewrite per-turn close hints to reflect the SSE-lifetime contract.
 
@@ -690,6 +728,7 @@ def build_managed_thread_tail_routes(
         since_managed_turn_id: Optional[str] = None,
         level: str = "info",
         once: bool = False,
+        replay: bool = False,
     ):
         if limit <= 0:
             raise HTTPException(status_code=400, detail="limit must be greater than 0")
@@ -703,6 +742,14 @@ def build_managed_thread_tail_routes(
         harness = None
         if thread_target is not None:
             harness = _managed_thread_harness_for_thread(service, thread_target)
+        resume_after = resolve_resume_after(request, since_event_id)
+        replay_initial_events = _sse_initial_replay_requested(
+            request=request,
+            replay=replay,
+            since=since,
+            since_event_id=since_event_id,
+            since_managed_turn_id=since_managed_turn_id,
+        )
         snapshot = await _build_managed_thread_tail_snapshot(
             request=request,
             service=service,
@@ -711,7 +758,7 @@ def build_managed_thread_tail_routes(
             limit=min(limit, 200),
             level=normalized_level,
             since_ms=since_ms,
-            resume_after=resolve_resume_after(request, since_event_id),
+            resume_after=resume_after,
             resume_after_managed_turn_id=since_managed_turn_id,
             # Live UI needs harness-buffered deltas (OpenCode) while the durable
             # turn journal may lag; JSON GET /tail already uses the default True.
@@ -719,25 +766,34 @@ def build_managed_thread_tail_routes(
         )
 
         async def _stream() -> Any:
-            _apply_sse_lifetime_to_snapshot(snapshot)
-            yield f"event: state\ndata: {json.dumps(snapshot, ensure_ascii=True)}\n\n"
-            for frame in _tail_event_sse_frames(
-                managed_thread_id=managed_thread_id,
-                managed_turn_id=snapshot.get("managed_turn_id"),
-                events=snapshot.get("events", []),
-            ):
-                yield frame
-            last_event_id = int(snapshot.get("last_event_id") or 0)
+            initial_snapshot = (
+                snapshot
+                if replay_initial_events
+                else _tail_snapshot_without_replay(snapshot)
+            )
+            _apply_sse_lifetime_to_snapshot(initial_snapshot)
+            yield (
+                "event: state\ndata: "
+                f"{json.dumps(initial_snapshot, ensure_ascii=True)}\n\n"
+            )
+            if replay_initial_events:
+                for frame in _tail_event_sse_frames(
+                    managed_thread_id=managed_thread_id,
+                    managed_turn_id=initial_snapshot.get("managed_turn_id"),
+                    events=initial_snapshot.get("events", []),
+                ):
+                    yield frame
+            last_event_id = int(initial_snapshot.get("last_event_id") or 0)
             last_managed_turn_id = normalize_optional_text(
-                snapshot.get("managed_turn_id")
+                initial_snapshot.get("managed_turn_id")
             )
             yield (
                 "event: progress\ndata: "
-                f"{json.dumps(_progress_stream_payload(snapshot), ensure_ascii=True)}\n\n"
+                f"{json.dumps(_progress_stream_payload(initial_snapshot), ensure_ascii=True)}\n\n"
             )
             if once:
                 return
-            sse_close, _ = _sse_stream_should_terminate(snapshot)
+            sse_close, _ = _sse_stream_should_terminate(initial_snapshot)
             if sse_close:
                 return
 
