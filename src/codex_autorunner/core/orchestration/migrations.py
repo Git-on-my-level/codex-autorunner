@@ -9,7 +9,7 @@ from ..sqlite_utils import table_columns, table_exists
 from ..time_utils import now_iso
 from .models import OrchestrationTableDefinition
 
-ORCHESTRATION_SCHEMA_VERSION = 31
+ORCHESTRATION_SCHEMA_VERSION = 32
 
 
 @dataclass(frozen=True)
@@ -1640,6 +1640,58 @@ def _apply_v31(conn: sqlite3.Connection) -> None:
         )
 
 
+def _apply_v32(conn: sqlite3.Connection) -> None:
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS orch_managed_thread_side_effects (
+            effect_id TEXT PRIMARY KEY,
+            managed_thread_id TEXT NOT NULL,
+            managed_turn_id TEXT NOT NULL,
+            idempotency_key TEXT NOT NULL UNIQUE,
+            effect_kind TEXT NOT NULL,
+            surface_kind TEXT NOT NULL,
+            surface_key TEXT NOT NULL,
+            payload_json TEXT NOT NULL DEFAULT '{}',
+            state TEXT NOT NULL DEFAULT 'pending',
+            attempt_count INTEGER NOT NULL DEFAULT 0,
+            claim_token TEXT,
+            claimed_at TEXT,
+            claim_expires_at TEXT,
+            next_attempt_at TEXT,
+            completed_at TEXT,
+            last_error TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_orch_mtse_state_next_attempt
+            ON orch_managed_thread_side_effects(state, next_attempt_at, created_at)
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_orch_mtse_kind_state_next_attempt
+            ON orch_managed_thread_side_effects(effect_kind, state, next_attempt_at, created_at)
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_orch_mtse_thread_turn
+            ON orch_managed_thread_side_effects(managed_thread_id, managed_turn_id, state)
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_orch_mtse_claim_expiry
+            ON orch_managed_thread_side_effects(state, claim_expires_at)
+         WHERE state IN ('claimed', 'running')
+        """
+    )
+
+
 _MIGRATIONS = (
     _MigrationStep(1, "create_core_orchestration_schema", _apply_v1),
     _MigrationStep(2, "add_binding_and_flow_projection_scaffolding", _apply_v2),
@@ -1691,6 +1743,11 @@ _MIGRATIONS = (
         31,
         "enforce_one_running_execution_per_active_thread",
         _apply_v31,
+    ),
+    _MigrationStep(
+        32,
+        "add_managed_thread_post_terminal_side_effects",
+        _apply_v32,
     ),
 )
 
@@ -1795,6 +1852,11 @@ _TABLE_DEFINITIONS = (
         name="orch_managed_thread_deliveries",
         role="authoritative",
         description="Durable delivery ledger for managed-thread final delivery with claim, retry, replay, and idempotency support.",
+    ),
+    OrchestrationTableDefinition(
+        name="orch_managed_thread_side_effects",
+        role="authoritative",
+        description="Durable post-terminal managed-thread side-effect intents for retryable transcript, timeline, cold-trace, activity, PR-binding, and cleanup work.",
     ),
     OrchestrationTableDefinition(
         name="orch_thread_identity_bindings",

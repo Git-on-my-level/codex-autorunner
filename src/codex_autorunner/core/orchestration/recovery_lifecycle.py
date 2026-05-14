@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Callable, Optional
+from typing import Callable, Literal, Optional
 
+from ..freshness import parse_iso_datetime
 from ..logging_utils import log_event
 from .execution_lifecycle import (
     _is_missing_thread_error,
@@ -29,6 +31,208 @@ MISSING_BACKEND_THREAD_ERROR = (
 )
 _RESTART_WAIT_AND_SEE_AGENTS = frozenset({"codex"})
 logger = logging.getLogger(__name__)
+
+ManagedTurnRecoveryAction = Literal[
+    "none",
+    "recover_from_harness",
+    "record_error",
+    "recover_delivery",
+    "recover_side_effects",
+]
+
+_TERMINAL_STATUSES = frozenset({"ok", "error", "interrupted"})
+_LIVE_PHASE_RECOVERY_ACTIONS: dict[str, ManagedTurnRecoveryAction] = {
+    "accepted": "record_error",
+    "queued": "record_error",
+    "runtime_starting": "record_error",
+    "runtime_running": "recover_from_harness",
+    "runtime_terminal_observed": "recover_from_harness",
+    "terminal_recording": "recover_from_harness",
+}
+_POST_TERMINAL_PHASE_RECOVERY_ACTIONS: dict[str, ManagedTurnRecoveryAction] = {
+    "terminal_recorded": "none",
+    "delivery_enqueued": "recover_delivery",
+    "side_effects_pending": "recover_side_effects",
+    "side_effects_complete": "none",
+}
+
+
+@dataclass(frozen=True)
+class ManagedTurnRecoveryDecision:
+    """Auditable decision for one stale managed-thread lifecycle phase."""
+
+    managed_thread_id: str
+    execution_id: str
+    prior_phase: str
+    selected_action: ManagedTurnRecoveryAction
+    reason: str
+    age_seconds: Optional[float]
+    current_status: str
+    queue_depth: int = 0
+
+
+@dataclass(frozen=True)
+class ManagedTurnRecoveryResult:
+    decision: ManagedTurnRecoveryDecision
+    recovered_execution: Optional[ExecutionRecord] = None
+    changed: bool = False
+
+
+@dataclass(frozen=True)
+class ManagedTurnRecoveryScanResult:
+    scanned: int
+    changed: int
+    decisions: tuple[ManagedTurnRecoveryDecision, ...]
+
+
+def _utc_now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def _execution_age_seconds(
+    execution: ExecutionRecord, *, now: datetime
+) -> Optional[float]:
+    started_at = parse_iso_datetime(execution.started_at) or parse_iso_datetime(
+        execution.metadata.get("runtime_started_at")
+    )
+    if started_at is None:
+        return None
+    return max(0.0, (now - started_at).total_seconds())
+
+
+def _managed_turn_lifecycle_phase(execution: ExecutionRecord) -> str:
+    raw_phase = (
+        execution.metadata.get("managed_turn_lifecycle_phase")
+        or execution.metadata.get("lifecycle_phase")
+        or execution.metadata.get("phase")
+    )
+    phase = str(raw_phase or "").strip().lower()
+    if phase:
+        return phase
+    status = str(execution.status or "").strip().lower()
+    if status == "queued":
+        return "queued"
+    if status == "running":
+        return "runtime_running"
+    if status in _TERMINAL_STATUSES:
+        return "terminal_recorded"
+    return status or "unknown"
+
+
+def classify_stale_managed_turn_recovery(
+    *,
+    managed_thread_id: str,
+    execution: ExecutionRecord,
+    queue_depth: int,
+    now: Optional[datetime] = None,
+) -> ManagedTurnRecoveryDecision:
+    resolved_now = now or _utc_now()
+    phase = _managed_turn_lifecycle_phase(execution)
+    status = str(execution.status or "").strip().lower()
+    age_seconds = _execution_age_seconds(execution, now=resolved_now)
+    if status in _TERMINAL_STATUSES:
+        selected_action = _POST_TERMINAL_PHASE_RECOVERY_ACTIONS.get(phase, "none")
+        reason = (
+            "post_terminal_phase_recovery"
+            if selected_action != "none"
+            else "already_terminal"
+        )
+    else:
+        selected_action = _LIVE_PHASE_RECOVERY_ACTIONS.get(phase, "record_error")
+        reason = (
+            "runtime_outcome_may_be_recoverable"
+            if selected_action == "recover_from_harness"
+            else "live_phase_stale_without_terminal_record"
+        )
+    return ManagedTurnRecoveryDecision(
+        managed_thread_id=managed_thread_id,
+        execution_id=execution.execution_id,
+        prior_phase=phase,
+        selected_action=selected_action,
+        reason=reason,
+        age_seconds=age_seconds,
+        current_status=status,
+        queue_depth=queue_depth,
+    )
+
+
+@dataclass(frozen=True)
+class RecoveryScanner:
+    """Deterministic scanner for stale managed-thread orchestration state."""
+
+    recover_from_harness: Callable[[str], object]
+    record_lost_execution: Callable[[str], Optional[ExecutionRecord]]
+    get_running_execution: Callable[[str], Optional[ExecutionRecord]]
+    list_thread_ids_with_running_executions: Callable[..., list[str]]
+    get_queue_depth: Callable[[str], int]
+    stale_after_seconds: float
+    logger: logging.Logger = logger
+
+    async def scan(
+        self, *, now: Optional[datetime] = None
+    ) -> ManagedTurnRecoveryScanResult:
+        resolved_now = now or _utc_now()
+        decisions: list[ManagedTurnRecoveryDecision] = []
+        changed = 0
+        thread_ids = self.list_thread_ids_with_running_executions(limit=None)
+        for thread_id in thread_ids:
+            result = await self.scan_thread(thread_id, now=resolved_now)
+            if result is None:
+                continue
+            decisions.append(result.decision)
+            if result.changed:
+                changed += 1
+        return ManagedTurnRecoveryScanResult(
+            scanned=len(decisions),
+            changed=changed,
+            decisions=tuple(decisions),
+        )
+
+    async def scan_thread(
+        self, thread_target_id: str, *, now: Optional[datetime] = None
+    ) -> Optional[ManagedTurnRecoveryResult]:
+        execution = self.get_running_execution(thread_target_id)
+        if execution is None:
+            return None
+        resolved_now = now or _utc_now()
+        age_seconds = _execution_age_seconds(execution, now=resolved_now)
+        if age_seconds is not None and age_seconds < self.stale_after_seconds:
+            return None
+        decision = classify_stale_managed_turn_recovery(
+            managed_thread_id=thread_target_id,
+            execution=execution,
+            queue_depth=self.get_queue_depth(thread_target_id),
+            now=resolved_now,
+        )
+        log_event(
+            self.logger,
+            logging.WARNING,
+            "orchestration.thread.recovery_scanner.decision",
+            managed_thread_id=decision.managed_thread_id,
+            execution_id=decision.execution_id,
+            prior_phase=decision.prior_phase,
+            selected_action=decision.selected_action,
+            reason=decision.reason,
+            age_seconds=decision.age_seconds,
+            current_status=decision.current_status,
+            queue_depth=decision.queue_depth,
+        )
+        recovered: Optional[ExecutionRecord] = None
+        if decision.selected_action == "recover_from_harness":
+            maybe_recovered = self.recover_from_harness(thread_target_id)
+            if hasattr(maybe_recovered, "__await__"):
+                maybe_recovered = await maybe_recovered
+            if isinstance(maybe_recovered, ExecutionRecord):
+                recovered = maybe_recovered
+            if recovered is None:
+                recovered = self.record_lost_execution(thread_target_id)
+        elif decision.selected_action == "record_error":
+            recovered = self.record_lost_execution(thread_target_id)
+        return ManagedTurnRecoveryResult(
+            decision=decision,
+            recovered_execution=recovered,
+            changed=recovered is not None,
+        )
 
 
 class BusyInterruptFailedError(RuntimeError):
