@@ -553,6 +553,101 @@ async def test_discord_bound_live_progress_enqueues_send_edit_and_delete(
         await store.close()
 
 
+@pytest.mark.anyio
+async def test_bound_live_progress_coalesces_high_volume_surface_edits(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    discord_state_path = tmp_path / ".codex-autorunner" / "discord_state.sqlite3"
+    telegram_state_path = tmp_path / ".codex-autorunner" / "telegram_state.sqlite3"
+    discord_state_path.parent.mkdir(parents=True, exist_ok=True)
+    discord_store = DiscordStateStore(discord_state_path)
+    telegram_store = TelegramStateStore(telegram_state_path)
+    monkeypatch.setattr(progress_module.time, "monotonic", lambda: 100.0)
+    try:
+        await discord_store.initialize()
+        session = build_bound_chat_live_progress_session(
+            hub_root=tmp_path,
+            raw_config={
+                "discord_bot": {"state_file": str(discord_state_path)},
+                "telegram_bot": {"state_file": str(telegram_state_path)},
+            },
+            managed_thread_id="thread-high-volume",
+            managed_turn_id="turn-high-volume",
+            agent="codex",
+            model="gpt-5",
+            surface_targets=(("discord", "channel-1"), ("telegram", "123:77")),
+        )
+
+        await session.start()
+
+        notification_store = PmaNotificationStore(tmp_path)
+        discord_send_record_id = bound_chat_progress_send_record_id(
+            surface_kind="discord",
+            surface_key="channel-1",
+            managed_thread_id="thread-high-volume",
+            managed_turn_id="turn-high-volume",
+        )
+        telegram_send_record_id = bound_chat_progress_send_record_id(
+            surface_kind="telegram",
+            surface_key="123:77",
+            managed_thread_id="thread-high-volume",
+            managed_turn_id="turn-high-volume",
+        )
+        notification_store.mark_delivered(
+            delivery_record_id=discord_send_record_id,
+            delivered_message_id="discord-progress-1",
+        )
+        notification_store.mark_delivered(
+            delivery_record_id=telegram_send_record_id,
+            delivered_message_id="77",
+        )
+
+        await session.apply_run_events(
+            [
+                OutputDelta(
+                    timestamp=f"2026-01-01T00:00:{index % 60:02d}Z",
+                    content=f"chunk-{index} ",
+                    delta_type=RUN_EVENT_DELTA_TYPE_ASSISTANT_STREAM,
+                )
+                for index in range(1, 1001)
+            ]
+        )
+
+        discord_edit_operation_id = bound_chat_progress_edit_operation_id(
+            surface_kind="discord",
+            surface_key="channel-1",
+            managed_thread_id="thread-high-volume",
+            managed_turn_id="turn-high-volume",
+        )
+        telegram_edit_operation_id = bound_chat_progress_edit_operation_id(
+            surface_kind="telegram",
+            surface_key="123:77",
+            managed_thread_id="thread-high-volume",
+            managed_turn_id="turn-high-volume",
+        )
+        discord_edits = [
+            record
+            for record in await discord_store.list_outbox()
+            if record.operation_id == discord_edit_operation_id
+        ]
+        telegram_edits = [
+            record
+            for record in await telegram_store.list_outbox()
+            if record.operation_id == telegram_edit_operation_id
+        ]
+
+        assert len(discord_edits) == 1
+        assert len(telegram_edits) == 1
+        assert discord_edits[0].message_id == "discord-progress-1"
+        assert telegram_edits[0].message_id == 77
+        assert len(session.tracker.latest_output_text()) > len("chunk-1 ")
+        await session.close()
+    finally:
+        await discord_store.close()
+        await telegram_store.close()
+
+
 def _telegram_config(root: Path) -> TelegramBotConfig:
     return TelegramBotConfig.from_raw(
         {
