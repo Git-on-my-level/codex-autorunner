@@ -8,6 +8,7 @@ from fastapi.testclient import TestClient
 
 from codex_autorunner.adapters.chat.agents import ChatAgentProfileOption
 from codex_autorunner.agents.types import ModelCatalog, ModelSpec
+from codex_autorunner.surfaces.web.routes import agents as agents_routes
 from codex_autorunner.surfaces.web.routes.agents import build_agents_routes
 from codex_autorunner.surfaces.web.routes.agents_helpers import (
     normalize_path_agent_id,
@@ -222,9 +223,13 @@ def test_list_agents_includes_expected_capabilities() -> None:
 def test_list_agents_fallback_does_not_advertise_unavailable_capabilities(
     monkeypatch,
 ) -> None:
+    monkeypatch.setattr(agents_routes, "get_available_agents", lambda _state: {})
     monkeypatch.setattr(
-        "codex_autorunner.surfaces.web.routes.agents.get_available_agents",
-        lambda _state: {},
+        agents_routes,
+        "get_agent_descriptor",
+        lambda agent_id, _state=None: (
+            SimpleNamespace(id="codex", name="Codex") if agent_id == "codex" else None
+        ),
     )
     client = _build_client(with_supervisors=True)
 
