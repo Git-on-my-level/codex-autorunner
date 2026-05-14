@@ -1,0 +1,1 @@
+import{tt as e}from"./CO9mdSSY.js";import"./DDKF_67Z.js";var t=e(null);function n(e){return new Promise(n=>{t.set({...e,resolve:e=>n(!!e)})})}function r(e){return new Promise(n=>{t.set({...e,resolve:e=>n(typeof e==`string`?e:null)})})}export{r as n,t as r,n as t};
