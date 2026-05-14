@@ -16,7 +16,16 @@ from ...core.flows import FlowStore
 from ...core.flows.models import FlowRunRecord, FlowRunStatus
 from ...core.flows.pause_dispatch import load_latest_paused_ticket_flow_dispatch
 from ...core.logging_utils import log_event
+from ...core.recovery_notification_intents import (
+    list_active_ticket_flow_notification_intents,
+    mark_ticket_flow_notification_intent_delivered,
+)
 from ...core.runtime_services import RuntimeServices
+from ...core.ticket_flow_recovery import (
+    format_recovery_notification_intent,
+    recovery_notification_intent_should_deliver,
+    recovery_notification_transport_key,
+)
 from ...core.utils import canonicalize_path
 from ...flows.ticket_flow.runtime_helpers import (
     build_ticket_flow_controller,
@@ -181,21 +190,32 @@ class TelegramTicketFlowBridge:
             await asyncio.sleep(interval)
 
     async def _scan_and_notify_pauses(self) -> None:
-        if not self._pause_config.enabled:
-            return
         topics = await self._store.list_topics()
         workspace_topics = self._get_all_workspaces(topics or {})
         preferred_sources = self._preferred_bound_sources_by_workspace()
+        pause_enabled = self._pause_config.enabled
 
         tasks = []
         for workspace_root, entries in workspace_topics.items():
+            preferred_source = preferred_sources.get(str(workspace_root))
+            tasks.append(
+                asyncio.create_task(
+                    self._notify_recovery_for_workspace(
+                        workspace_root,
+                        entries,
+                        preferred_source=preferred_source,
+                    )
+                )
+            )
+            if not pause_enabled:
+                continue
             if entries:
                 tasks.append(
                     asyncio.create_task(
                         self._notify_ticket_flow_pause(
                             workspace_root,
                             entries,
-                            preferred_source=preferred_sources.get(str(workspace_root)),
+                            preferred_source=preferred_source,
                         )
                     )
                 )
@@ -204,7 +224,7 @@ class TelegramTicketFlowBridge:
                     asyncio.create_task(
                         self._notify_via_default_chat(
                             workspace_root,
-                            preferred_source=preferred_sources.get(str(workspace_root)),
+                            preferred_source=preferred_source,
                         )
                     )
                 )
@@ -746,6 +766,107 @@ class TelegramTicketFlowBridge:
                 f"Failed to send attachment {path.name}.",
                 thread_id=thread_id,
                 reply_to=None,
+            )
+
+    async def _notify_recovery_for_workspace(
+        self,
+        workspace_root: Path,
+        entries: list[tuple[str, object]],
+        *,
+        preferred_source: Optional[str] = None,
+    ) -> None:
+        if preferred_source is None:
+            preferred_source = self._preferred_bound_source_for_workspace(
+                workspace_root
+            )
+        if preferred_source == "discord":
+            return
+        if not entries and (
+            self._default_notification_chat_id is None
+            or preferred_source in {"telegram", "discord"}
+        ):
+            return
+        try:
+            intents = await asyncio.to_thread(
+                list_active_ticket_flow_notification_intents, workspace_root
+            )
+        except (sqlite3.Error, OSError, RuntimeError, ValueError, TypeError) as exc:
+            log_event(
+                self._logger,
+                logging.WARNING,
+                "telegram.ticket_flow.recovery_scan_failed",
+                exc=exc,
+                workspace_root=str(workspace_root),
+            )
+            return
+        if not intents:
+            return
+
+        if entries:
+            primary = self._select_ticket_flow_topic(entries)
+            if not primary:
+                return
+            primary_key, _primary_record = primary
+            try:
+                chat_id, thread_id, _scope = parse_topic_key(primary_key)
+            except (ValueError, TypeError) as exc:
+                self._logger.debug("Failed to parse topic key: %s", exc)
+                return
+            channel_id = primary_key
+        else:
+            chat_id = self._default_notification_chat_id
+            thread_id = None
+            channel_id = f"{chat_id}:root"
+            if chat_id is None:
+                return
+
+        transport_key = recovery_notification_transport_key(
+            transport="telegram", channel_id=channel_id
+        )
+        for intent in intents:
+            if not recovery_notification_intent_should_deliver(
+                intent, transport_key=transport_key
+            ):
+                continue
+            message = format_recovery_notification_intent(intent)
+            sent = await self._send_message_with_outbox(
+                chat_id,
+                message,
+                thread_id=thread_id,
+                reply_to=None,
+            )
+            if sent is False:
+                return
+            ChatRunMirror(workspace_root, logger_=self._logger).mirror_outbound(
+                run_id=intent.run_id,
+                platform="telegram",
+                event_type="flow_recovery_notice",
+                kind="notification",
+                actor="car",
+                text=message,
+                chat_id=chat_id,
+                thread_id=thread_id,
+                meta={
+                    "intent_id": intent.intent_id,
+                    "event_type": intent.event_type,
+                    "severity": intent.severity,
+                    "payload": dict(intent.payload),
+                },
+            )
+            await asyncio.to_thread(
+                mark_ticket_flow_notification_intent_delivered,
+                workspace_root,
+                intent.intent_id,
+                transport_key=transport_key,
+                record_id=f"recovery:{channel_id}:{intent.intent_id}",
+            )
+            log_event(
+                self._logger,
+                logging.INFO,
+                "telegram.ticket_flow.recovery_notified",
+                workspace_root=str(workspace_root),
+                run_id=intent.run_id,
+                intent_id=intent.intent_id,
             )
 
     async def watch_ticket_flow_terminals(self, interval_seconds: float) -> None:

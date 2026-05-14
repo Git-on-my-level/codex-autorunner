@@ -214,6 +214,8 @@ class ChannelBinding:
     last_pause_run_id: Optional[str]
     last_pause_dispatch_seq: Optional[str]
     last_terminal_run_id: Optional[str]
+    # Legacy read-only migration data. Recovery notification policy is owned by
+    # the core flow notification ledger, not by channel binding cursors.
     last_recovery_fingerprint: Optional[str]
     pending_compact_seed: Optional[str]
     pending_compact_session_key: Optional[str]
@@ -466,18 +468,6 @@ class DiscordStateStore:
             self._mark_terminal_run_seen_sync,
             channel_id,
             run_id,
-        )
-
-    async def mark_recovery_seen(
-        self,
-        *,
-        channel_id: str,
-        fingerprint: str,
-    ) -> None:
-        await self._run(
-            self._mark_recovery_seen_sync,
-            channel_id,
-            fingerprint,
         )
 
     async def update_pma_state(
@@ -1377,23 +1367,6 @@ class DiscordStateStore:
                 WHERE channel_id = ?
                 """,
                 (run_id, now_iso(), channel_id),
-            )
-
-    def _mark_recovery_seen_sync(
-        self,
-        channel_id: str,
-        fingerprint: str,
-    ) -> None:
-        conn = self._connection_sync()
-        with conn:
-            conn.execute(
-                """
-                UPDATE channel_bindings
-                SET last_recovery_fingerprint = ?,
-                    updated_at = ?
-                WHERE channel_id = ?
-                """,
-                (fingerprint, now_iso(), channel_id),
             )
 
     def _update_pma_state_sync(

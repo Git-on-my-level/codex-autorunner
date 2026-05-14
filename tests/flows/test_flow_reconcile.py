@@ -5,8 +5,30 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from codex_autorunner.core.flows.models import FlowEventType, FlowRunStatus
-from codex_autorunner.core.flows.reconciler import reconcile_flow_run
+from codex_autorunner.core.flows.reconciler import (
+    _with_commit_barrier_recovery,
+    reconcile_flow_run,
+)
 from codex_autorunner.core.flows.store import FlowStore
+from codex_autorunner.core.flows.supervisor import CommitBarrierObservation
+
+
+def test_commit_barrier_recovery_facet_clears_when_observation_clears() -> None:
+    state = {
+        "recovery": {
+            "commit_barrier": {
+                "pending": True,
+                "worktree_dirty": True,
+                "resolution_state": "exhausted",
+            },
+            "restart": {"count": 1, "max_attempts": 3},
+        }
+    }
+
+    updated = _with_commit_barrier_recovery(state, CommitBarrierObservation())
+
+    assert "commit_barrier" not in updated["recovery"]
+    assert "commit_barrier" in state["recovery"]
 
 
 def test_reconcile_pending_stop_requested_without_worker_marks_stopped(
