@@ -29,6 +29,7 @@ from ..ports.run_event import (
     RUN_EVENT_DELTA_TYPE_ASSISTANT_MESSAGE,
     RUN_EVENT_DELTA_TYPE_ASSISTANT_STREAM,
     RUN_EVENT_DELTA_TYPE_LOG_LINE,
+    RUN_EVENT_STREAM_MODE_SNAPSHOT,
     ApprovalRequested,
     Failed,
     OutputDelta,
@@ -310,6 +311,7 @@ def _assistant_stream_events(
     state: RuntimeThreadRunEventState,
     *,
     timestamp: Optional[str] = None,
+    stream_mode: str = RUN_EVENT_STREAM_MODE_SNAPSHOT,
 ) -> list[RunEvent]:
     phase = str(params.get("phase") or "").strip().lower()
     if phase == "commentary":
@@ -327,12 +329,16 @@ def _assistant_stream_events(
     content = _extract_output_delta(params)
     if not content:
         return []
-    state.note_stream_text(content)
+    state.note_stream_text(
+        content,
+        merge_snapshot=stream_mode == RUN_EVENT_STREAM_MODE_SNAPSHOT,
+    )
     return [
         OutputDelta(
             timestamp=timestamp or now_iso(),
             content=content,
             delta_type=RUN_EVENT_DELTA_TYPE_ASSISTANT_STREAM,
+            stream_mode=stream_mode,
         )
     ]
 
@@ -1071,6 +1077,7 @@ class SessionUpdateDecoder(MessageDecoder):
                 _extract_session_update_message_params(update),
                 state,
                 timestamp=ts,
+                stream_mode=RUN_EVENT_STREAM_MODE_SNAPSHOT,
             )
         if update_kind == "agent_thought_chunk":
             progress_message = _extract_session_update_text(update)

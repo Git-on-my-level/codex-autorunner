@@ -330,6 +330,36 @@ def test_live_tail_event_projects_to_canonical_timeline_item() -> None:
     assert item["payload"]["detail_available"] is True
 
 
+def test_live_tail_event_uses_progress_metadata_for_intermediate_titles() -> None:
+    item = timeline_item_from_tail_event(
+        managed_thread_id="thread-1",
+        managed_turn_id="turn-1",
+        tail_event={
+            "event_id": 3,
+            "event_type": "progress",
+            "summary": "Starting pytest",
+            "title": "Progress",
+            "phase": "testing",
+            "received_at": "2026-05-06T10:00:03Z",
+            "progress_item": {
+                "item_id": "progress:notice:0003",
+                "kind": "notice",
+                "state": "running",
+                "title": "Progress",
+                "summary": "Starting pytest",
+                "event_ids": [3],
+            },
+            "progress_kind": "notice",
+            "progress_state": "running",
+        },
+    )
+
+    assert item is not None
+    assert item["kind"] == "intermediate"
+    assert item["payload"]["title"] == "Starting pytest"
+    assert item["payload"]["intermediate_kind"] == "progress"
+
+
 def test_timeline_includes_delivery_state_items(tmp_path: Path) -> None:
     hub_root, store, thread_id = _store(tmp_path)
     turn = store.create_turn(thread_id, prompt="deliver this")

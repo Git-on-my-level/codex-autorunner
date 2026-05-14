@@ -1145,14 +1145,21 @@ function findMergeableIntermediate(
   event: SurfaceArtifact,
   fallbackTurnId: string | null
 ): Extract<PmaCard, { kind: 'intermediate' }> | null {
+  if (isCommentaryTraceEvent(event)) {
+    return null;
+  }
+  if (isTerminalTraceEvent(event)) {
+    return null;
+  }
   for (let index = cards.length - 1; index >= 0; index -= 1) {
     const card = cards[index];
     if (card.kind !== 'intermediate') {
       // Do not scan past tool / approval rows — later assistant deltas belong below.
-      if (card.kind === 'tool_group' || card.kind === 'approval') return null;
+      if (card.kind === 'tool_group' || card.kind === 'approval' || isTerminalTraceCard(card)) return null;
       continue;
     }
     if (shouldMergeIntermediate(card, event, fallbackTurnId)) return card;
+    if (isTerminalTraceCard(card)) return null;
     if (isCommentaryTraceCard(card)) continue;
     // Non-mergeable trace for another title/turn: keep scanning.
     continue;
@@ -1529,10 +1536,8 @@ function intermediateTitle(event: SurfaceArtifact): string {
   const kind = stringValue(item?.kind);
   if (kind === 'turn_failed') return 'Run failed';
   if (kind === 'turn_interrupted') return 'Interrupted';
-  if (kind === 'assistant_update') return 'Thinking';
-  const title = (stringValue(item?.title) || event.title).trim();
-  if (title && title.toLowerCase() !== assistantActivityText(event).toLowerCase()) return title;
-  return 'Update';
+  const fallback = traceLabelText(item?.title ?? item?.kind) || 'Update';
+  return traceTitleFromSources(fallback, [asRecord(item), recordValue(event.raw)]);
 }
 
 function shouldMergeIntermediate(
@@ -1540,10 +1545,7 @@ function shouldMergeIntermediate(
   event: SurfaceArtifact,
   fallbackTurnId: string | null = null
 ): boolean {
-  if (card.turnId !== activityTurnId(event, fallbackTurnId)) return false;
-  const item = canonicalProgressItem(event);
-  if (card.title === 'Thinking' && item?.kind === 'assistant_update') return true;
-  return item?.kind === 'notice' && card.title === intermediateTitle(event) && !isCommentaryTraceCard(card);
+  return card.turnId === activityTurnId(event, fallbackTurnId) && !isCommentaryTraceCard(card);
 }
 
 function mergeIntermediateText(current: string, incoming: string): string {
@@ -1552,6 +1554,12 @@ function mergeIntermediateText(current: string, incoming: string): string {
   if (incoming === current) return current;
   if (incoming.startsWith(current)) return incoming;
   if (current.endsWith(incoming)) return current;
+  const maxOverlap = Math.min(current.length, Math.max(incoming.length - 1, 0));
+  for (let overlap = maxOverlap; overlap > 0; overlap -= 1) {
+    if (current.slice(-overlap) === incoming.slice(0, overlap)) {
+      return `${current}${incoming.slice(overlap)}`;
+    }
+  }
   if (/\s$/.test(current) || /^\s/.test(incoming)) return `${current}${incoming}`;
   if (/^[,.;:!?)]/.test(incoming) || /[(]$/.test(current)) return `${current}${incoming}`;
   return `${current} ${incoming}`;
@@ -1572,41 +1580,45 @@ function shouldSupplementWithLiveActivity(cards: PmaCard[], progress: PmaRunProg
 
 function coalesceSequentialIntermediateTraceCards(cards: PmaCard[]): PmaCard[] {
   const output: PmaCard[] = [];
-  const intermediateByKey = new Map<string, Extract<PmaCard, { kind: 'intermediate' }>>();
-  let lastMergeKey: string | null = null;
-
   for (const card of cards) {
     if (!isMergeableTraceCard(card) || !card.turnId) {
       output.push(card);
-      intermediateByKey.clear();
-      lastMergeKey = null;
+      continue;
+    }
+    const existing = output[output.length - 1];
+    if (
+      existing &&
+      existing.kind === 'intermediate' &&
+      existing.turnId === card.turnId &&
+      !isCommentaryTraceCard(existing) &&
+      !isTerminalTraceCard(existing)
+    ) {
+      existing.text = mergeIntermediateText(existing.text, card.text);
+      existing.eventIds.push(...card.eventIds.filter((id) => !existing.eventIds.includes(id)));
+      existing.progressSourceIds.push(
+        ...card.progressSourceIds.filter((id) => !existing.progressSourceIds.includes(id))
+      );
+      existing.detail = traceDetailSummary(existing.title, existing.eventIds);
+      // Advance the merged card's anchor to the latest absorbed delta so the
+      // coalesced row keeps its position relative to neighboring tool calls
+      // and commentary as more chunks arrive.
+      if (card.orderKey && card.orderKey > existing.orderKey) {
+        existing.orderKey = card.orderKey;
+      }
+      if (card.timestamp && (!existing.timestamp || card.timestamp > existing.timestamp)) {
+        existing.timestamp = card.timestamp;
+      }
       continue;
     }
 
-    const mergeKey = `${card.turnId}:${card.title.trim().toLowerCase()}`;
-    const existing = lastMergeKey === mergeKey ? intermediateByKey.get(mergeKey) : null;
-    if (!existing) {
-      intermediateByKey.set(mergeKey, card);
-      lastMergeKey = mergeKey;
-      output.push(card);
-      continue;
-    }
-
-    existing.text = mergeIntermediateText(existing.text, card.text);
-    existing.eventIds.push(...card.eventIds.filter((id) => !existing.eventIds.includes(id)));
-    existing.progressSourceIds.push(
-      ...card.progressSourceIds.filter((id) => !existing.progressSourceIds.includes(id))
-    );
-    existing.detail = traceDetailSummary(existing.title, existing.eventIds);
+    output.push(card);
   }
 
   return output;
 }
 
 function isMergeableTraceCard(card: PmaCard): card is Extract<PmaCard, { kind: 'intermediate' }> {
-  if (card.kind !== 'intermediate' || isCommentaryTraceCard(card)) return false;
-  const title = card.title.trim().toLowerCase();
-  return title === 'thinking' || title === 'progress' || title === 'update';
+  return card.kind === 'intermediate' && !isCommentaryTraceCard(card) && !isTerminalTraceCard(card);
 }
 
 function isThinkingTraceCard(card: PmaCard): card is Extract<PmaCard, { kind: 'intermediate' }> {
@@ -1636,6 +1648,57 @@ function toolState(event: SurfaceArtifact): PmaToolCallCard['state'] {
   const rawState = stringValue(canonicalProgressItem(event)?.state).toLowerCase();
   if (rawState === 'started' || rawState === 'completed' || rawState === 'failed') return rawState;
   return 'unknown';
+}
+
+function traceLabelText(value: unknown): string {
+  return stringValue(value).replace(/[_.]+/g, ' ').replace(/\s+/g, ' ').trim();
+}
+
+function isGenericTraceLabel(value: string): boolean {
+  return ['progress', 'update', 'notice', 'assistant update'].includes(traceLabelText(value).toLowerCase());
+}
+
+function isSpecificTraceSummary(value: string): boolean {
+  const normalized = traceLabelText(value);
+  return normalized.includes(' ') || normalized.includes(':') || normalized.includes('/') || normalized.length > 12;
+}
+
+function traceTitleFromSources(
+  fallback: string,
+  sources: Array<Record<string, unknown> | null | undefined>,
+  options: { allowSummaryFallback?: boolean } = {}
+): string {
+  for (const source of sources) {
+    const title = traceLabelText(source?.title ?? source?.display_title ?? source?.name);
+    if (title && !isGenericTraceLabel(title)) return title;
+  }
+
+  if (
+    sources.some(
+      (source) => traceLabelText(source?.event_type ?? source?.progress_kind ?? source?.kind).toLowerCase() === 'assistant update'
+    )
+  ) {
+    return 'Thinking';
+  }
+
+  if (options.allowSummaryFallback !== false) {
+    for (const source of sources) {
+      const summary = traceLabelText(source?.summary ?? source?.message ?? source?.text);
+      if (summary && !isGenericTraceLabel(summary) && isSpecificTraceSummary(summary)) return summary;
+    }
+  }
+
+  for (const source of sources) {
+    const phase = traceLabelText(source?.phase ?? source?.assistant_phase ?? source?.tool_phase);
+    if (phase && !isGenericTraceLabel(phase)) return phase;
+  }
+
+  for (const source of sources) {
+    const eventType = traceLabelText(source?.event_type ?? source?.progress_kind ?? source?.kind);
+    if (eventType && !isGenericTraceLabel(eventType)) return eventType;
+  }
+
+  return fallback;
 }
 
 function isDecodeFailureActivity(event: SurfaceArtifact): boolean {
@@ -1754,8 +1817,11 @@ function toolCardFromTimeline(item: PmaTimelineItem): PmaToolCallCard {
 }
 
 function intermediateTimelineTitle(item: PmaTimelineItem): string {
-  const kind = stringValue(item.payload.intermediate_kind).replace(/_/g, ' ');
-  return kind || 'Update';
+  const payload = asRecord(item.payload);
+  const kind = traceLabelText(payload.intermediate_kind);
+  return traceTitleFromSources(kind || 'Update', [payload, asRecord(payload.progress_item), asRecord(payload.event)], {
+    allowSummaryFallback: false
+  });
 }
 
 function isDecodeFailureTimelineItem(item: PmaTimelineItem): boolean {
@@ -1809,15 +1875,41 @@ function mapTimelineArtifact(raw: Record<string, unknown>): SurfaceArtifact {
 
 function summarizeCompletedTurnActivity(cards: PmaCard[], progress: PmaRunProgress | null): PmaCard[] {
   // Only collapse trace cards into a "Worked for Xs" summary once a turn has
-  // finished. While a turn is still running, the user wants to see commentary,
-  // thinking, and tool calls stream inline as they arrive — collapsing them
-  // mid-flight is what made the chat look frozen until completion.
-  const runningTurnId = progress?.status === 'running' ? progress.id : null;
+  // truly finished. While a turn is still in flight, the user wants to see
+  // commentary, thinking, and tool calls stream inline as they arrive —
+  // collapsing them mid-flight is what made the chat look frozen until
+  // completion.
+  //
+  // "In flight" means either:
+  //   • progress matches this turn and is not yet terminal (status may flicker
+  //     between running/waiting/idle between tool calls — we treat all of
+  //     those as still streaming), OR
+  //   • no persisted assistant message has landed for the turn yet.
+  //
+  // The persisted-assistant gate matters because progress always tracks the
+  // latest run, so a prior turn whose progress object has rotated out can
+  // still be missing its final reply and should not be collapsed yet.
+  const activeProgressTurnId = progress && !progress.terminal ? progress.id : null;
+  const turnsWithTerminalSignal = new Set<string>();
+  for (const card of cards) {
+    if (!('turnId' in card) || !card.turnId) continue;
+    if (card.kind === 'message' && card.message.role === 'assistant') {
+      turnsWithTerminalSignal.add(card.turnId);
+    } else if (card.kind === 'intermediate' && isTerminalTraceCard(card)) {
+      turnsWithTerminalSignal.add(card.turnId);
+    }
+  }
+  const isTurnInFlight = (turnId: string): boolean => {
+    if (turnId === activeProgressTurnId) return true;
+    if (!turnsWithTerminalSignal.has(turnId)) return true;
+    return false;
+  };
+
   const byTurn = new Map<string, PmaCard[]>();
   for (const card of cards) {
     const turnId = cardTurnId(card);
     if (!turnId) continue;
-    if (turnId === runningTurnId) continue;
+    if (isTurnInFlight(turnId)) continue;
     const group = byTurn.get(turnId) ?? [];
     group.push(card);
     byTurn.set(turnId, group);
@@ -1874,6 +1966,22 @@ function isCommentaryTraceCard(card: PmaCard): boolean {
   if (card.kind !== 'intermediate') return false;
   const title = card.title.trim().toLowerCase();
   return title === 'commentary';
+}
+
+function isTerminalTraceCard(card: PmaCard): boolean {
+  if (card.kind !== 'intermediate') return false;
+  const title = card.title.trim().toLowerCase();
+  return title === 'run failed' || title === 'turn failed' || title === 'interrupted';
+}
+
+function isCommentaryTraceEvent(event: SurfaceArtifact): boolean {
+  const item = canonicalProgressItem(event);
+  return traceLabelText(item?.title ?? event.title).toLowerCase() === 'commentary';
+}
+
+function isTerminalTraceEvent(event: SurfaceArtifact): boolean {
+  const title = intermediateTitle(event).trim().toLowerCase();
+  return title === 'run failed' || title === 'turn failed' || title === 'interrupted';
 }
 
 function cardTurnId(card: PmaCard): string | null {

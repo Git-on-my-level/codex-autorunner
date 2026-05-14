@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 from typing import Any, Iterable, Optional
 
 from ..ports.run_event import (
+    RUN_EVENT_STREAM_MODE_SNAPSHOT,
     ApprovalRequested,
     Completed,
     Failed,
@@ -17,6 +18,7 @@ from ..ports.run_event import (
 )
 from ..redaction import redact_text
 from ..text_utils import _truncate_text
+from .stream_text_merge import merge_assistant_stream_text
 
 PROGRESS_PROJECTION_VERSION = "pma_progress_projection.v1"
 
@@ -42,6 +44,7 @@ class ProgressProjectionItem:
     tool_name: Optional[str] = None
     hidden: bool = False
     merge_key: Optional[str] = None
+    merge_strategy: str = "delta"
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -58,6 +61,7 @@ class ProgressProjectionItem:
             "group_kind": self.group_kind,
             "tool_name": self.tool_name,
             "hidden": self.hidden,
+            "merge_strategy": self.merge_strategy,
         }
 
 
@@ -87,6 +91,20 @@ def _summary(value: Any, fallback: str) -> str:
     return _truncate_text(redact_text(text), 220)
 
 
+def _notice_title(kind: Any, message: Any) -> str:
+    kind_text = str(kind or "").strip()
+    if kind_text == "thinking":
+        return "Thinking"
+    message_text = _truncate_text(redact_text(str(message or "").strip()), 120)
+    if (
+        kind_text in {"progress", "notice"}
+        and message_text
+        and message_text.lower() not in {"progress", "update", "notice"}
+    ):
+        return message_text
+    return kind_text.replace("_", " ").title() or "Update"
+
+
 def _failed_message_is_interruption(value: str) -> bool:
     lowered = value.lower()
     return "interrupt" in lowered or "cancel" in lowered or "abort" in lowered
@@ -96,18 +114,7 @@ def _with_merged_assistant_update(
     previous: ProgressProjectionItem,
     current: ProgressProjectionItem,
 ) -> ProgressProjectionItem:
-    previous_summary = previous.summary or ""
-    incoming_summary = current.summary or ""
-    if not previous_summary:
-        summary = incoming_summary
-    elif not incoming_summary or incoming_summary == previous_summary:
-        summary = previous_summary
-    elif incoming_summary.startswith(previous_summary):
-        summary = incoming_summary
-    elif previous_summary.endswith(incoming_summary):
-        summary = previous_summary
-    else:
-        summary = f"{previous_summary}{incoming_summary}"
+    summary = _merge_assistant_update_summary(previous, current)
     return ProgressProjectionItem(
         item_id=previous.item_id,
         kind=previous.kind,
@@ -121,7 +128,21 @@ def _with_merged_assistant_update(
         tool_name=previous.tool_name,
         hidden=previous.hidden,
         merge_key=previous.merge_key,
+        merge_strategy=current.merge_strategy,
     )
+
+
+def _merge_assistant_update_summary(
+    previous: ProgressProjectionItem,
+    current: ProgressProjectionItem,
+) -> str:
+    previous_summary = previous.summary or ""
+    incoming_summary = current.summary or ""
+    if current.merge_strategy == RUN_EVENT_STREAM_MODE_SNAPSHOT:
+        return merge_assistant_stream_text(previous_summary, incoming_summary)
+    if not previous_summary:
+        return incoming_summary
+    return f"{previous_summary}{incoming_summary}"
 
 
 def project_progress_events(
@@ -208,15 +229,12 @@ def reduce_progress_event(
             group_id=f"assistant:{event_key}",
             group_kind="assistant_updates",
             merge_key="assistant_update",
+            merge_strategy=str(event.stream_mode or "delta"),
         )
 
     if isinstance(event, RunNotice):
         kind = "assistant_update" if event.kind == "thinking" else "notice"
-        title = (
-            "Thinking"
-            if event.kind == "thinking"
-            else str(event.kind or "Notice").replace("_", " ").title()
-        )
+        title = _notice_title(event.kind, event.message)
         return ProgressProjectionItem(
             item_id=f"progress:{kind}:{event_key}",
             kind=kind,

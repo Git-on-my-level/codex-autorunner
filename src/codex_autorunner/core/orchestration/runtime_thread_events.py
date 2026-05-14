@@ -12,6 +12,7 @@ from ..ports.run_event import (
     RUN_EVENT_DELTA_TYPE_ASSISTANT_MESSAGE,
     RUN_EVENT_DELTA_TYPE_ASSISTANT_STREAM,
     RUN_EVENT_DELTA_TYPE_LOG_LINE,
+    RUN_EVENT_STREAM_MODE_SNAPSHOT,
     ApprovalRequested,
     Completed,
     Failed,
@@ -148,7 +149,10 @@ class RuntimeEventDriver:
                 }:
                     self.timeline_assistant_chunks.append(event.content)
                     if event.delta_type == RUN_EVENT_DELTA_TYPE_ASSISTANT_STREAM:
-                        self.assistant_output.note_stream_snapshot(event.content)
+                        if event.stream_mode == RUN_EVENT_STREAM_MODE_SNAPSHOT:
+                            self.assistant_output.note_stream_snapshot(event.content)
+                        else:
+                            self.assistant_output.note_stream_delta(event.content)
                     else:
                         self.assistant_output.note_final_message(event.content)
                     continue
@@ -269,7 +273,10 @@ def note_run_event_state(
     )
     if isinstance(run_event, OutputDelta):
         if run_event.delta_type == RUN_EVENT_DELTA_TYPE_ASSISTANT_STREAM:
-            event_state.note_stream_text(str(run_event.content or ""))
+            event_state.note_stream_text(
+                str(run_event.content or ""),
+                merge_snapshot=run_event.stream_mode == RUN_EVENT_STREAM_MODE_SNAPSHOT,
+            )
             return
         if run_event.delta_type == RUN_EVENT_DELTA_TYPE_ASSISTANT_MESSAGE:
             event_state.note_message_text(str(run_event.content or ""))
@@ -372,8 +379,11 @@ class RuntimeThreadRunEventState:
             final_text=self.assistant_message_text,
         )
 
-    def note_stream_text(self, text: str) -> None:
-        self._assistant_text.note_stream_snapshot(text)
+    def note_stream_text(self, text: str, *, merge_snapshot: bool = True) -> None:
+        if merge_snapshot:
+            self._assistant_text.note_stream_snapshot(text)
+        else:
+            self._assistant_text.note_stream_delta(text)
         self.assistant_stream_text = self._assistant_text.stream_text
 
     def note_message_text(self, text: str) -> None:
@@ -420,6 +430,7 @@ class RuntimeThreadRunEventState:
                     timestamp=event_timestamp,
                     content=pending,
                     delta_type=RUN_EVENT_DELTA_TYPE_ASSISTANT_STREAM,
+                    stream_mode=RUN_EVENT_STREAM_MODE_SNAPSHOT,
                 )
             )
         if self.pending_stream_no_id:
@@ -431,6 +442,7 @@ class RuntimeThreadRunEventState:
                     timestamp=event_timestamp,
                     content=pending_no_id,
                     delta_type=RUN_EVENT_DELTA_TYPE_ASSISTANT_STREAM,
+                    stream_mode=RUN_EVENT_STREAM_MODE_SNAPSHOT,
                 )
             )
         return events
@@ -453,6 +465,7 @@ class RuntimeThreadRunEventState:
                         timestamp=event_timestamp,
                         content=text,
                         delta_type=RUN_EVENT_DELTA_TYPE_ASSISTANT_STREAM,
+                        stream_mode=RUN_EVENT_STREAM_MODE_SNAPSHOT,
                     )
                 ]
             self.pending_stream_no_id = _merge_pending_stream_text(
@@ -470,6 +483,7 @@ class RuntimeThreadRunEventState:
                     timestamp=event_timestamp,
                     content=text,
                     delta_type=RUN_EVENT_DELTA_TYPE_ASSISTANT_STREAM,
+                    stream_mode=RUN_EVENT_STREAM_MODE_SNAPSHOT,
                 )
             ]
         self.pending_stream_by_message[message_id] = _merge_pending_stream_text(

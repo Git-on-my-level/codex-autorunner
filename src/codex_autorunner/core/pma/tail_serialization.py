@@ -347,6 +347,7 @@ def _run_event_from_timeline_entry(entry: dict[str, Any]) -> Any | None:
             timestamp=timestamp,
             content=str(event.get("content") or ""),
             delta_type=str(event.get("delta_type") or "text"),
+            stream_mode=str(event.get("stream_mode") or "delta"),
         )
     if event_type == "tool_call":
         return ToolCall(

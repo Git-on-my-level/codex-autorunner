@@ -9,6 +9,7 @@ from typing import Any, Iterable, Optional, Sequence
 from ..ports.run_event import (
     RUN_EVENT_DELTA_TYPE_ASSISTANT_MESSAGE,
     RUN_EVENT_DELTA_TYPE_ASSISTANT_STREAM,
+    RUN_EVENT_STREAM_MODE_SNAPSHOT,
     ApprovalRequested,
     Completed,
     Failed,
@@ -406,12 +407,18 @@ class _CheckpointAccumulator:
                 )
                 self.assistant_char_count = len(event.content)
             elif event.delta_type == RUN_EVENT_DELTA_TYPE_ASSISTANT_STREAM:
-                self.assistant_text_preview = _append_preview(
-                    self.assistant_text_preview,
-                    self.assistant_char_count,
-                    event.content,
-                )
-                self.assistant_char_count += len(event.content)
+                if event.stream_mode == RUN_EVENT_STREAM_MODE_SNAPSHOT:
+                    self.assistant_text_preview = _truncate_text(
+                        event.content, _CHECKPOINT_PREVIEW_CHARS
+                    )
+                    self.assistant_char_count = len(event.content)
+                else:
+                    self.assistant_text_preview = _append_preview(
+                        self.assistant_text_preview,
+                        self.assistant_char_count,
+                        event.content,
+                    )
+                    self.assistant_char_count += len(event.content)
             return
 
         if isinstance(event, RunNotice):

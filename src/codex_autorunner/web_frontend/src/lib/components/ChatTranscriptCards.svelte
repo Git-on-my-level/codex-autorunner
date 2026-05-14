@@ -31,6 +31,24 @@
     return card.title.trim().toLowerCase() === 'thinking';
   }
 
+  function isCommentaryTrace(card: Extract<PmaCard, { kind: 'intermediate' }>): boolean {
+    return card.title.trim().toLowerCase() === 'commentary';
+  }
+
+  function traceKindLabel(card: Extract<PmaCard, { kind: 'intermediate' }>): string {
+    const title = card.title.trim();
+    if (!title) return 'Update';
+    return title.charAt(0).toUpperCase() + title.slice(1);
+  }
+
+  function traceSummaryLabel(card: Extract<PmaCard, { kind: 'intermediate' }>): string {
+    const detail = card.detail?.split('·', 1)[0]?.trim();
+    if (detail) return detail;
+    const text = card.text.trim().replace(/\s+/g, ' ');
+    if (text) return text.length > 80 ? `${text.slice(0, 80).trimEnd()}…` : text;
+    return traceKindLabel(card);
+  }
+
   function thinkingTraceLabel(card: Extract<PmaCard, { kind: 'intermediate' }>): string {
     const detail = card.detail;
     if (detail) {
@@ -166,13 +184,23 @@
           {@html renderMarkdownToHtml(card.text, { openLinksInNewTab: true })}
         </div>
       </details>
-    {:else}
+    {:else if isCommentaryTrace(card)}
       <article class="message commentary">
         <span class="commentary-kind">{card.title}</span>
         <div class="message-markdown markdown-body">
           {@html renderMarkdownToHtml(card.text, { openLinksInNewTab: true })}
         </div>
       </article>
+    {:else}
+      <details class="tool-call-bar trace-update">
+        <summary>
+          <span>{traceKindLabel(card)}</span>
+          <strong>{traceSummaryLabel(card)}</strong>
+        </summary>
+        <div class="thinking-trace-body markdown-body">
+          {@html renderMarkdownToHtml(card.text, { openLinksInNewTab: true })}
+        </div>
+      </details>
     {/if}
   {:else if card.kind === 'tool_group'}
     {@const headlineTool = card.tools[0]}
@@ -216,13 +244,23 @@
                   {@html renderMarkdownToHtml(traceCard.text, { openLinksInNewTab: true })}
                 </div>
               </details>
-            {:else}
+            {:else if isCommentaryTrace(traceCard)}
               <article class="message commentary nested-commentary">
                 <span class="commentary-kind">{traceCard.title}</span>
                 <div class="message-markdown markdown-body">
                   {@html renderMarkdownToHtml(traceCard.text, { openLinksInNewTab: true })}
                 </div>
               </article>
+            {:else}
+              <details class="tool-call-bar trace-update nested-trace">
+                <summary>
+                  <span>{traceKindLabel(traceCard)}</span>
+                  <strong>{traceSummaryLabel(traceCard)}</strong>
+                </summary>
+                <div class="thinking-trace-body markdown-body">
+                  {@html renderMarkdownToHtml(traceCard.text, { openLinksInNewTab: true })}
+                </div>
+              </details>
             {/if}
           {:else if traceCard.kind === 'tool_group'}
             {@const traceHeadlineTool = traceCard.tools[0]}

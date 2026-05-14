@@ -203,6 +203,61 @@ def _normalize_optional_text(value: Any) -> Optional[str]:
     return text or None
 
 
+def _progress_label_text(value: Any) -> str:
+    text = _normalize_optional_text(value)
+    if text is None:
+        return ""
+    return " ".join(text.replace("_", " ").replace(".", " ").split())
+
+
+def _progress_display_title(
+    *,
+    fallback_kind: Any,
+    title: Any = None,
+    summary: Any = None,
+    phase: Any = None,
+    event_type: Any = None,
+    progress_kind: Any = None,
+) -> str:
+    title_text = _truncate_text(_progress_label_text(title), 120)
+    if title_text and title_text.lower() not in {
+        "progress",
+        "update",
+        "notice",
+        "assistant update",
+    }:
+        return title_text
+
+    if any(
+        _progress_label_text(candidate).lower() == "assistant update"
+        for candidate in (event_type, progress_kind, fallback_kind)
+    ):
+        return "Thinking"
+
+    for candidate in (summary, phase):
+        candidate_text = _truncate_text(_progress_label_text(candidate), 120)
+        if candidate_text and candidate_text.lower() not in {
+            "progress",
+            "update",
+            "notice",
+            "assistant update",
+        }:
+            return candidate_text
+
+    for candidate in (event_type, progress_kind):
+        candidate_text = _truncate_text(_progress_label_text(candidate), 120)
+        if candidate_text and candidate_text.lower() not in {
+            "progress",
+            "update",
+            "notice",
+            "assistant update",
+        }:
+            return candidate_text
+
+    fallback_text = _truncate_text(_progress_label_text(fallback_kind), 120)
+    return fallback_text or "Update"
+
+
 def _metadata(turn: dict[str, Any]) -> dict[str, Any]:
     value = turn.get("metadata")
     return dict(value) if isinstance(value, dict) else {}
@@ -259,6 +314,7 @@ def _progress_item_for_entry(
             timestamp=timestamp,
             content=str(event.get("content") or ""),
             delta_type=str(event.get("delta_type") or "text"),
+            stream_mode=str(event.get("stream_mode") or "delta"),
         )
     elif event_type == "run_notice":
         data = event.get("data")
@@ -782,7 +838,19 @@ def timeline_item_from_tail_event(
     ) or progress_kind in {"assistant_update", "notice"}:
         item_id = f"turn:{normalized_turn_id}:intermediate:{source_event_key}"
         text = str(tail_event.get("summary") or "")
-        title = str(tail_event.get("title") or progress.get("title") or "").strip()
+        title = _progress_display_title(
+            fallback_kind=progress_kind or event_type or "Update",
+            title=tail_event.get("title") or progress.get("title"),
+            summary=tail_event.get("summary") or progress.get("summary"),
+            phase=(
+                tail_event.get("phase")
+                or progress.get("phase")
+                or progress.get("assistant_phase")
+                or progress.get("tool_phase")
+            ),
+            event_type=event_type,
+            progress_kind=progress_kind,
+        )
         intermediate_kind = (
             "thinking"
             if progress_kind == "assistant_update" or title.lower() == "thinking"
@@ -794,6 +862,7 @@ def timeline_item_from_tail_event(
             "kind": "intermediate",
             "payload": {
                 "intermediate_kind": intermediate_kind,
+                "title": title,
                 "text": text,
                 "event_type": event_type,
                 "event": dict(tail_event),

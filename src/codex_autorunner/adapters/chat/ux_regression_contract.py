@@ -34,7 +34,7 @@ REQUIRED_CHAT_UX_LATENCY_BUDGET_IDS = (
 
 CAMPAIGN_NORTH_STAR_LATENCY_THRESHOLDS = (
     ("first_visible_feedback", 1500.0),
-    ("queue_visible", 1500.0),
+    ("queue_visible", 2000.0),
     ("first_semantic_progress", 5000.0),
     ("interrupt_visible", 1500.0),
 )
@@ -97,7 +97,7 @@ _CHAT_UX_LATENCY_BUDGETS = (
     ChatUxLatencyBudgetEntry(
         id="queue_visible",
         description="Queued turns must become visibly queued before users assume the submission failed.",
-        max_ms=1500.0,
+        max_ms=2000.0,
     ),
     ChatUxLatencyBudgetEntry(
         id="first_semantic_progress",

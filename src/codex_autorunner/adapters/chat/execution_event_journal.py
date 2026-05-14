@@ -201,7 +201,11 @@ def journal_events_from_run_events(
                 event_index=event_index,
                 event_type=event_type,
                 source_event_type="output_delta",
-                data={"delta_type": event.delta_type, "content": event.content},
+                data={
+                    "delta_type": event.delta_type,
+                    "stream_mode": event.stream_mode,
+                    "content": event.content,
+                },
             )
         elif isinstance(event, ToolCall):
             mapped = _standard_journal_event(
@@ -328,6 +332,7 @@ def _run_event_from_timeline_entry(entry: Mapping[str, Any]) -> Optional[RunEven
             timestamp=str(payload.get("timestamp") or ""),
             content=str(payload.get("content") or ""),
             delta_type=str(payload.get("delta_type") or "text"),
+            stream_mode=str(payload.get("stream_mode") or "delta"),
         )
     if event_type == "tool_call":
         return ToolCall(

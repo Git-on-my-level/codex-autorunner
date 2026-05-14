@@ -44,6 +44,53 @@ describe('ChatTranscriptCards', () => {
     expect(body).toContain('Visible progress update.');
   });
 
+  it('collapses non-commentary progress traces instead of rendering them as chat bubbles', () => {
+    const cards: PmaCard[] = [
+      {
+        ...baseTrace,
+        kind: 'intermediate',
+        id: 'progress-1',
+        title: 'progress',
+        text: 'Managed-thread execution accepted the request.',
+        detail: '1 progress update · source events turn:one:intermediate:progress-1'
+      },
+      {
+        ...baseTrace,
+        kind: 'intermediate',
+        id: 'commentary-1',
+        title: 'commentary',
+        text: 'Visible user-facing note.',
+        detail: null
+      }
+    ];
+
+    const { body } = render(ChatTranscriptCards, { props: { cards } });
+
+    expect(body).toContain('class="tool-call-bar trace-update"');
+    expect(body).toContain('<span>Progress</span>');
+    expect(body).toContain('<strong>1 progress update</strong>');
+    expect(body).not.toContain('class="message commentary"><span class="commentary-kind">progress</span>');
+    expect(body).toContain('class="message commentary"');
+    expect(body).toContain('Visible user-facing note.');
+  });
+
+  it('renders richer progress labels when the model supplies them', () => {
+    const cards: PmaCard[] = [
+      {
+        ...baseTrace,
+        kind: 'intermediate',
+        id: 'progress-2',
+        title: 'Starting pytest',
+        text: 'Managed-thread execution accepted the request.',
+        detail: '1 progress update · source events turn:one:intermediate:progress-2'
+      }
+    ];
+
+    const { body } = render(ChatTranscriptCards, { props: { cards } });
+
+    expect(body).toContain('<span>Starting pytest</span>');
+  });
+
   it('collapses thinking traces inside worked summaries', () => {
     const cards: PmaCard[] = [
       {

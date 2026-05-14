@@ -14,6 +14,14 @@ RUN_EVENT_DELTA_TYPE_USER_MESSAGE = "user_message"
 RUN_EVENT_DELTA_TYPE_ASSISTANT_STREAM = "assistant_stream"
 RUN_EVENT_DELTA_TYPE_ASSISTANT_MESSAGE = "assistant_message"
 RUN_EVENT_DELTA_TYPE_LOG_LINE = "log_line"
+RUN_EVENT_STREAM_MODE_DELTA = "delta"
+RUN_EVENT_STREAM_MODE_SNAPSHOT = "snapshot"
+RUN_EVENT_STREAM_MODES = frozenset(
+    {
+        RUN_EVENT_STREAM_MODE_DELTA,
+        RUN_EVENT_STREAM_MODE_SNAPSHOT,
+    }
+)
 RUN_EVENT_DELTA_TYPES = frozenset(
     {
         RUN_EVENT_DELTA_TYPE_USER_MESSAGE,
@@ -37,6 +45,7 @@ class OutputDelta:
     timestamp: str
     content: str
     delta_type: str = "text"
+    stream_mode: str = RUN_EVENT_STREAM_MODE_DELTA
 
 
 @dataclass(frozen=True)
@@ -112,6 +121,9 @@ __all__ = [
     "RUN_EVENT_DELTA_TYPE_LOG_LINE",
     "RUN_EVENT_DELTA_TYPE_USER_MESSAGE",
     "RUN_EVENT_DELTA_TYPES",
+    "RUN_EVENT_STREAM_MODE_DELTA",
+    "RUN_EVENT_STREAM_MODE_SNAPSHOT",
+    "RUN_EVENT_STREAM_MODES",
     "ApprovalRequested",
     "Completed",
     "Failed",

@@ -45,7 +45,12 @@
     worktreeRoute,
     worktreeTicketRoute
   } from '$lib/viewModels/routes';
-  import { mapPmaRunProgress, mapPmaTimelineItem, pmaTimelineContractFields } from '$lib/viewModels/domain';
+  import {
+    mapPmaRunProgress,
+    mapPmaTimelineItem,
+    mapSurfaceArtifact,
+    pmaTimelineContractFields
+  } from '$lib/viewModels/domain';
   import type {
     PmaChatSummary,
     PmaRunProgress,
@@ -1098,7 +1103,16 @@
           if (item.kind === 'user_message') dropOptimisticPlaceholders();
           return;
         }
-        if (event.kind === 'tail') return;
+        if (event.kind === 'tail') {
+          // Backend emits each new progress item as its own `tail` SSE frame
+          // mid-stream. The `progress` frame that follows each poll cycle
+          // does NOT carry the events list — only metadata (status/phase/
+          // elapsed). Without merging tail frames here the chat would stay
+          // empty until a full refresh fires on terminal, which is what
+          // made live commentary/tool-call updates appear only at the end.
+          appendLiveProgressEvent(chatId, event.payload);
+          return;
+        }
         if (event.kind === 'progress' || event.kind === 'state') {
           const nextProgress = mapPmaRunProgress(event.payload);
           updateProgress(nextProgress);
@@ -1202,6 +1216,22 @@
     } else {
       readModelEntityStore.setPmaProgress(chatId, nextProgress);
     }
+  }
+
+  function appendLiveProgressEvent(chatId: string, payload: Record<string, unknown>): void {
+    if (!payload || typeof payload !== 'object') return;
+    const artifact = mapSurfaceArtifact(payload);
+    if (!artifact.id) return;
+    const previous = currentProgress(chatId);
+    if (!previous) return;
+    if (previous.events.some((ev) => ev.id === artifact.id)) return;
+    const nowMs = Date.now();
+    readModelEntityStore.setPmaProgress(chatId, {
+      ...previous,
+      elapsedSeconds: progressElapsedWithLiveWall(previous, nowMs),
+      lastEventAt: artifact.createdAt ?? previous.lastEventAt,
+      events: [...previous.events, artifact]
+    });
   }
 
   function progressWithLiveElapsed(value: PmaRunProgress | null, nowMs: number): PmaRunProgress | null {

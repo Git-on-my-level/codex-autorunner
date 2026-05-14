@@ -5,6 +5,7 @@ from codex_autorunner.core.orchestration.progress_projection import (
     project_progress_events,
 )
 from codex_autorunner.core.ports.run_event import (
+    RUN_EVENT_STREAM_MODE_SNAPSHOT,
     ApprovalRequested,
     Failed,
     OutputDelta,
@@ -38,6 +39,44 @@ def test_progress_projection_merges_contiguous_assistant_updates() -> None:
     assert items[0].kind == "assistant_update"
     assert items[0].summary == "Reading files"
     assert items[0].event_ids == (1, 2)
+
+
+def test_progress_projection_replaces_cumulative_assistant_snapshots() -> None:
+    items = _project(
+        OutputDelta(
+            timestamp="2026-05-06T10:00:01Z",
+            content="Reading",
+            stream_mode=RUN_EVENT_STREAM_MODE_SNAPSHOT,
+        ),
+        OutputDelta(
+            timestamp="2026-05-06T10:00:02Z",
+            content="Reading files",
+            stream_mode=RUN_EVENT_STREAM_MODE_SNAPSHOT,
+        ),
+        OutputDelta(
+            timestamp="2026-05-06T10:00:03Z",
+            content="Reading files now",
+            stream_mode=RUN_EVENT_STREAM_MODE_SNAPSHOT,
+        ),
+    )
+
+    assert len(items) == 1
+    assert items[0].kind == "assistant_update"
+    assert items[0].summary == "Reading files now"
+    assert items[0].event_ids == (1, 2, 3)
+    assert items[0].merge_strategy == RUN_EVENT_STREAM_MODE_SNAPSHOT
+
+
+def test_progress_projection_keeps_strict_assistant_deltas_append_only() -> None:
+    items = _project(
+        OutputDelta(timestamp="2026-05-06T10:00:01Z", content="Reading"),
+        OutputDelta(timestamp="2026-05-06T10:00:02Z", content=" files"),
+        OutputDelta(timestamp="2026-05-06T10:00:03Z", content=" now"),
+    )
+
+    assert len(items) == 1
+    assert items[0].summary == "Reading files now"
+    assert items[0].merge_strategy == "delta"
 
 
 def test_progress_projection_groups_tool_call_and_result_pairs() -> None:
@@ -102,6 +141,20 @@ def test_progress_projection_suppresses_token_usage() -> None:
 
     assert [item.kind for item in items] == ["notice"]
     assert items[0].event_ids == (2,)
+
+
+def test_progress_projection_uses_notice_messages_for_titles() -> None:
+    items = _project(
+        RunNotice(
+            timestamp="2026-05-06T10:00:01Z",
+            kind="progress",
+            message="Starting pytest",
+        )
+    )
+
+    assert items[0].kind == "notice"
+    assert items[0].title == "Starting pytest"
+    assert items[0].summary == "Starting pytest"
 
 
 def test_progress_projection_keeps_approvals_and_notices_interleaved() -> None:

@@ -208,6 +208,49 @@ describe('PMA chat view helpers', () => {
     ]);
   });
 
+  it('merges overlapping live assistant progress without duplicating snapshots', () => {
+    const cards = buildPmaActivityCards([
+      {
+        ...baseArtifact,
+        id: 'progress-1',
+        kind: 'progress',
+        summary: 'Let me load the PMA skill',
+        raw: {
+          managed_turn_id: 'turn-1',
+          progress_item: {
+            item_id: 'progress:assistant_update:0001',
+            kind: 'assistant_update',
+            title: 'Thinking',
+            summary: 'Let me load the PMA skill',
+            event_ids: [1]
+          }
+        }
+      },
+      {
+        ...baseArtifact,
+        id: 'progress-2',
+        kind: 'progress',
+        summary: 'PMA skill first, then gather data',
+        raw: {
+          managed_turn_id: 'turn-1',
+          progress_item: {
+            item_id: 'progress:assistant_update:0002',
+            kind: 'assistant_update',
+            title: 'Thinking',
+            summary: 'PMA skill first, then gather data',
+            event_ids: [2]
+          }
+        }
+      }
+    ]);
+
+    expect(cards).toHaveLength(1);
+    expect(cards[0].kind).toBe('intermediate');
+    if (cards[0].kind === 'intermediate') {
+      expect(cards[0].text).toBe('Let me load the PMA skill first, then gather data');
+    }
+  });
+
   it('filters chat list by status and scoped search text', () => {
     const chats: PmaChatSummary[] = [
       baseChat,
@@ -807,6 +850,104 @@ describe('PMA chat view helpers', () => {
     expect(live?.steps.map((step) => step.id)).toEqual(['tool-started']);
   });
 
+  it('prefers specific progress labels over generic progress/update fallbacks', () => {
+    const activityCards = buildPmaActivityCards([
+      {
+        ...baseArtifact,
+        id: 'progress-1',
+        kind: 'progress',
+        title: 'Progress',
+        summary: 'Starting pytest',
+        raw: {
+          managed_turn_id: 'turn-1',
+          event_type: 'progress',
+          phase: 'testing',
+          progress_item: {
+            kind: 'notice',
+            title: 'Progress',
+            summary: 'Starting pytest',
+            event_ids: [21]
+          }
+        }
+      }
+    ]);
+
+    expect(activityCards).toHaveLength(1);
+    expect(activityCards[0]).toMatchObject({
+      kind: 'intermediate',
+      title: 'Starting pytest',
+      text: 'Starting pytest'
+    });
+
+    const transcriptCards = buildPmaCards(
+      [
+        timelineItem(
+          'turn:one:intermediate:21',
+          'intermediate',
+          {
+            intermediate_kind: 'progress',
+            title: 'Starting pytest',
+            text: 'Starting pytest',
+            event_type: 'progress',
+            event: {
+              event_type: 'progress',
+              title: 'Starting pytest',
+              summary: 'Starting pytest',
+              phase: 'testing',
+              progress_kind: 'notice'
+            },
+            progress_item: {
+              kind: 'notice',
+              title: 'Starting pytest',
+              summary: 'Starting pytest',
+              event_ids: [21]
+            }
+          },
+          '00000021'
+        )
+      ],
+      null,
+      []
+    );
+
+    expect(transcriptCards).toHaveLength(1);
+    expect(transcriptCards[0]).toMatchObject({
+      kind: 'intermediate',
+      title: 'Starting pytest',
+      text: 'Starting pytest'
+    });
+  });
+
+  it('falls back to phase metadata when the progress text is generic', () => {
+    const activityCards = buildPmaActivityCards([
+      {
+        ...baseArtifact,
+        id: 'progress-2',
+        kind: 'progress',
+        title: 'Progress',
+        summary: 'Progress',
+        raw: {
+          managed_turn_id: 'turn-1',
+          event_type: 'progress',
+          phase: 'testing',
+          progress_item: {
+            kind: 'notice',
+            title: 'Progress',
+            summary: 'Progress',
+            event_ids: [22]
+          }
+        }
+      }
+    ]);
+
+    expect(activityCards).toHaveLength(1);
+    expect(activityCards[0]).toMatchObject({
+      kind: 'intermediate',
+      title: 'testing',
+      text: 'Progress'
+    });
+  });
+
   it('builds a thin status bar from backend status fields', () => {
     expect(buildPmaStatusBar({ ...baseProgress, elapsedSeconds: 125, queueDepth: 2 }, baseChat)).toEqual({
       state: 'running',
@@ -1053,6 +1194,32 @@ describe('PMA chat view helpers', () => {
       kind: 'intermediate',
       text: 'Inspecting repo state.'
     });
+  });
+
+  it('keeps an in-flight turn expanded even when progress flickers to a non-running status mid-stream', () => {
+    // Repro for the streaming glitch where progress.status briefly leaves
+    // 'running' (e.g. 'waiting' between tool calls) and commentary leaks
+    // above/below a prematurely collapsed "Worked for Ns" group.
+    const cards = buildPmaTranscriptCards(
+      [
+        timelineItem('turn:one:user', 'user_message', { text: 'what does pma stand for?' }, '00000001'),
+        timelineItem('turn:one:intermediate:commentary-1', 'intermediate', { intermediate_kind: 'notice', title: 'Commentary', text: 'Checking docs.' }, '00000002'),
+        timelineItem('turn:one:tool:rg', 'tool_group', { tool_name: 'rg', call: { summary: 'rg PMA' } }, '00000003'),
+        timelineItem('turn:one:intermediate:commentary-2', 'intermediate', { intermediate_kind: 'notice', title: 'Commentary', text: 'Found the guide.' }, '00000004')
+      ],
+      null,
+      [],
+      { ...baseProgress, id: 'one', terminal: false, status: 'waiting', events: [] }
+    );
+
+    // No assistant_message has landed yet, so the turn must remain fully
+    // expanded — no turn_summary, no swallowed commentary.
+    expect(cards.map((card) => card.kind)).toEqual([
+      'message',
+      'intermediate',
+      'tool_group',
+      'intermediate'
+    ]);
   });
 
   it('inherits the active turn for raw tail progress and folds merged deltas under the work summary', () => {

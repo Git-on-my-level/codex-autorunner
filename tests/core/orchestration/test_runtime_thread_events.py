@@ -41,6 +41,7 @@ from codex_autorunner.core.orchestration.turn_assistant_output import (
 )
 from codex_autorunner.core.ports.run_event import (
     RUN_EVENT_DELTA_TYPE_ASSISTANT_STREAM,
+    RUN_EVENT_STREAM_MODE_SNAPSHOT,
     ApprovalRequested,
     Completed,
     Failed,
@@ -72,11 +73,13 @@ async def test_runtime_event_driver_keeps_timeline_chunks_and_reduced_output_sep
         timestamp="2026-05-07T00:00:00Z",
         content="Hel",
         delta_type=RUN_EVENT_DELTA_TYPE_ASSISTANT_STREAM,
+        stream_mode=RUN_EVENT_STREAM_MODE_SNAPSHOT,
     )
     cumulative_chunk = OutputDelta(
         timestamp="2026-05-07T00:00:01Z",
         content="Hello",
         delta_type=RUN_EVENT_DELTA_TYPE_ASSISTANT_STREAM,
+        stream_mode=RUN_EVENT_STREAM_MODE_SNAPSHOT,
     )
 
     await driver.consume_raw_event(first_chunk)
@@ -86,6 +89,28 @@ async def test_runtime_event_driver_keeps_timeline_chunks_and_reduced_output_sep
     assert driver.run_events == [first_chunk, cumulative_chunk]
     assert driver.assistant_parts == ["Hel", "Hello"]
     assert "".join(driver.assistant_parts) == "HelHello"
+    assert driver.best_assistant_text() == "Hello"
+
+
+async def test_runtime_event_driver_appends_strict_assistant_stream_deltas() -> None:
+    driver = RuntimeEventDriver()
+
+    await driver.consume_raw_event(
+        OutputDelta(
+            timestamp="2026-05-07T00:00:00Z",
+            content="Hel",
+            delta_type=RUN_EVENT_DELTA_TYPE_ASSISTANT_STREAM,
+        )
+    )
+    await driver.consume_raw_event(
+        OutputDelta(
+            timestamp="2026-05-07T00:00:01Z",
+            content="lo",
+            delta_type=RUN_EVENT_DELTA_TYPE_ASSISTANT_STREAM,
+        )
+    )
+
+    assert driver.assistant_parts == ["Hel", "lo"]
     assert driver.best_assistant_text() == "Hello"
 
 

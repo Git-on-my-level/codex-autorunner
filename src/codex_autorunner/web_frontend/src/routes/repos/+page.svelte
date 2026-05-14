@@ -28,8 +28,10 @@
       ticketsListLoaded: false
     })
   );
-  let loading = $state<boolean>(data.status === 'cold');
-  let error = $state<ApiError | null>(data.status === 'error' ? data.error : null);
+  let refreshing = $state<boolean>(false);
+  let refreshError = $state<ApiError | null>(null);
+  const loading = $derived(data.status === 'cold' || refreshing);
+  const error = $derived(refreshError ?? (data.status === 'error' ? data.error : null));
   let sectionIssues = $state<PartialPageIssue[]>([]);
   let notice = $state<ActionNotice | null>(null);
 
@@ -50,14 +52,14 @@
   });
 
   async function loadRepos(): Promise<void> {
-    loading = true;
-    error = null;
+    refreshing = true;
+    refreshError = null;
     sectionIssues = [];
     const result = await ensureRepoWorktreeIndexLoaded({ refresh: true });
     if (result.status === 'error') {
-      error = result.error;
+      refreshError = result.error;
     }
-    loading = false;
+    refreshing = false;
   }
 
   async function handleCleanupWorktree(target: Parameters<typeof confirmAndCleanupWorktree>[0]): Promise<void> {
