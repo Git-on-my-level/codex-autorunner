@@ -706,11 +706,12 @@ def test_managed_thread_tail_snapshot_prefers_persisted_live_timeline_for_openco
     assert resp.status_code == 200
     payload = resp.json()
     assert payload["stream_available"] is True
-    assert [event["event_id"] for event in payload["events"]] == [1]
-    assert payload["events"][0]["event_type"] == "assistant_update"
-    assert "Working through the issue" in str(payload["events"][0]["summary"] or "")
-    assert payload["last_event_id"] == 1
-    assert payload["last_event_at"] == "2026-04-06T10:00:00Z"
+    # The persisted OutputDelta(assistant_message) is hidden at the
+    # projection layer because the final assistant text is rendered as a
+    # dedicated assistant_message timeline row — surfacing it again as a
+    # tail card would duplicate the chat bubble. Commentary RunNotices
+    # remain visible (covered by other tests).
+    assert payload["events"] == []
 
 
 def test_managed_thread_tail_snapshot_stream_available_when_backend_binding_appears(

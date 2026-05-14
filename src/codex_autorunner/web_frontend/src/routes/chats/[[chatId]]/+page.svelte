@@ -481,7 +481,16 @@
   const streamingMessageId = $derived.by<string | null>(() => {
     if (displayedProgress?.status !== 'running') return null;
     const card = lastAssistantMessageCard;
-    return card?.kind === 'message' ? card.id : null;
+    if (card?.kind !== 'message') return null;
+    // Only mark the message as "streaming" (which suppresses markdown
+    // rendering) when it actually belongs to the running turn. Without this
+    // check, when the user kicks off a follow-up turn the prior turn's
+    // already-completed assistant reply gets re-flagged as streaming and
+    // its markdown collapses back to raw text until the next refresh.
+    if (card.turnId && displayedProgress?.id && card.turnId !== displayedProgress.id) {
+      return null;
+    }
+    return card.id;
   });
   const showTypingIndicator = $derived.by<boolean>(() => {
     if (displayedProgress?.status !== 'running') return false;
@@ -493,6 +502,7 @@
     if (displayedProgress?.status !== 'running') return '';
     const card = lastAssistantMessageCard;
     if (!card || card.kind !== 'message') return '';
+    if (card.turnId && displayedProgress?.id && card.turnId !== displayedProgress.id) return '';
     const text = (card.message.text ?? '').trim();
     return text.length > 120 ? text.slice(text.length - 120) : text;
   });

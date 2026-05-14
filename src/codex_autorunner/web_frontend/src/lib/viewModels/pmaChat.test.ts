@@ -1060,23 +1060,32 @@ describe('PMA chat view helpers', () => {
     });
   });
 
-  it('collapses completed turn activity into one worked summary before the assistant reply', () => {
+  it('collapses prior completed turn activity into one worked summary before the assistant reply', () => {
+    // The just-completed turn (most recent) stays fully expanded so its
+    // streamed layout doesn't shift; only earlier completed turns collapse.
     const cards = buildPmaTranscriptCards(
       [
         timelineItem('turn:one:user', 'user_message', { text: 'Create tickets' }, '001'),
         timelineItem('turn:one:intermediate:think-1', 'intermediate', { intermediate_kind: 'thinking', text: 'Inspecting repo state.' }, '002'),
         timelineItem('turn:one:tool:1:rg', 'tool_group', { tool_name: 'rg tickets', call: { summary: 'rg tickets' }, result: { status: 'completed' } }, '003'),
-        timelineItem('turn:one:assistant', 'assistant_message', { text: 'Done.' }, '004')
+        timelineItem('turn:one:assistant', 'assistant_message', { text: 'Done.' }, '004'),
+        timelineItem('turn:two:user', 'user_message', { text: 'Anything else?' }, '005'),
+        timelineItem('turn:two:assistant', 'assistant_message', { text: 'No.' }, '006')
       ],
       null,
       [],
-      { ...baseProgress, id: 'one', terminal: true, status: 'done', elapsedSeconds: 14, events: [] }
+      { ...baseProgress, id: 'two', terminal: true, status: 'done', elapsedSeconds: 14, events: [] }
     );
 
-    expect(cards.map((card) => card.kind)).toEqual(['message', 'turn_summary', 'message']);
+    expect(cards.map((card) => card.kind)).toEqual([
+      'message',
+      'turn_summary',
+      'message',
+      'message',
+      'message'
+    ]);
     expect(cards[1]).toMatchObject({
       kind: 'turn_summary',
-      title: 'Worked for 14s',
       cards: [{ kind: 'intermediate' }, { kind: 'tool_group' }]
     });
   });
@@ -1106,14 +1115,22 @@ describe('PMA chat view helpers', () => {
           }, '004'),
           ...pmaTimelineContractFields('turn:one:intermediate:think-3', { sourceEventIds: ['turn:one:intermediate:think-3'] })
         },
-        timelineItem('turn:one:assistant', 'assistant_message', { text: 'Done.' }, '005')
+        timelineItem('turn:one:assistant', 'assistant_message', { text: 'Done.' }, '005'),
+        timelineItem('turn:two:user', 'user_message', { text: 'Anything else?' }, '006'),
+        timelineItem('turn:two:assistant', 'assistant_message', { text: 'No.' }, '007')
       ],
       null,
       [],
-      { ...baseProgress, id: 'one', terminal: true, status: 'done', elapsedSeconds: 17, events: [] }
+      { ...baseProgress, id: 'two', terminal: true, status: 'done', elapsedSeconds: 17, events: [] }
     );
 
-    expect(cards.map((card) => card.kind)).toEqual(['message', 'turn_summary', 'message']);
+    expect(cards.map((card) => card.kind)).toEqual([
+      'message',
+      'turn_summary',
+      'message',
+      'message',
+      'message'
+    ]);
     expect(cards[1]).toMatchObject({
       kind: 'turn_summary',
       cards: [
@@ -1134,13 +1151,15 @@ describe('PMA chat view helpers', () => {
         timelineItem('turn:one:user', 'user_message', { text: 'Run tools' }, '001'),
         timelineItem('turn:one:intermediate:think-1', 'intermediate', { intermediate_kind: 'thinking', text: 'Reading files' }, '002'),
         timelineItem('turn:one:tool:1:rg', 'tool_group', { tool_name: 'rg', result: { status: 'completed' } }, '003'),
-        timelineItem('turn:one:assistant', 'assistant_message', { text: 'Done.' }, '004')
+        timelineItem('turn:one:assistant', 'assistant_message', { text: 'Done.' }, '004'),
+        timelineItem('turn:two:user', 'user_message', { text: 'Anything else?' }, '005'),
+        timelineItem('turn:two:assistant', 'assistant_message', { text: 'No.' }, '006')
       ],
       null,
       [],
       {
         ...baseProgress,
-        id: 'one',
+        id: 'two',
         terminal: true,
         status: 'done',
         elapsedSeconds: 17,
@@ -1171,7 +1190,13 @@ describe('PMA chat view helpers', () => {
       }
     );
 
-    expect(cards.map((card) => card.kind)).toEqual(['message', 'turn_summary', 'message']);
+    expect(cards.map((card) => card.kind)).toEqual([
+      'message',
+      'turn_summary',
+      'message',
+      'message',
+      'message'
+    ]);
     expect(cards[1]).toMatchObject({
       kind: 'turn_summary',
       cards: [{ kind: 'intermediate' }, { kind: 'tool_group' }]
@@ -1194,6 +1219,39 @@ describe('PMA chat view helpers', () => {
       kind: 'intermediate',
       text: 'Inspecting repo state.'
     });
+  });
+
+  it('keeps the most recent completed turn fully expanded so streamed cards stay visible', () => {
+    // After a turn finishes, the cards the user watched stream in must
+    // remain visible in the same shape — otherwise the live "Thinking" or
+    // tool cards appear to vanish and get replaced by a collapsed "Worked
+    // for Ns" summary, which is jarring. Only earlier turns collapse.
+    const cards = buildPmaTranscriptCards(
+      [
+        timelineItem('turn:one:user', 'user_message', { text: 'first turn' }, '00000001'),
+        timelineItem('turn:one:intermediate:think-1', 'intermediate', { intermediate_kind: 'thinking', text: 'Doing turn one.' }, '00000002'),
+        timelineItem('turn:one:assistant', 'assistant_message', { text: 'Done one.' }, '00000003'),
+        timelineItem('turn:two:user', 'user_message', { text: 'second turn' }, '00000004'),
+        timelineItem('turn:two:intermediate:think-1', 'intermediate', { intermediate_kind: 'thinking', text: 'Doing turn two.' }, '00000005'),
+        timelineItem('turn:two:tool:rg', 'tool_group', { tool_name: 'rg', result: { status: 'completed' } }, '00000006'),
+        timelineItem('turn:two:assistant', 'assistant_message', { text: 'Done two.' }, '00000007')
+      ],
+      null,
+      [],
+      { ...baseProgress, id: 'two', terminal: true, status: 'done', events: [] }
+    );
+
+    // turn:one collapses; turn:two (most recent) stays expanded so its
+    // thinking + tool cards remain visible alongside the assistant reply.
+    expect(cards.map((card) => card.kind)).toEqual([
+      'message',
+      'turn_summary',
+      'message',
+      'message',
+      'intermediate',
+      'tool_group',
+      'message'
+    ]);
   });
 
   it('keeps an in-flight turn expanded even when progress flickers to a non-running status mid-stream', () => {
@@ -1371,14 +1429,21 @@ describe('PMA chat view helpers', () => {
           'intermediate',
           { intermediate_kind: 'thinking', text: 'Collected failure context.' },
           '00000003'
-        )
+        ),
+        timelineItem('turn:next:user', 'user_message', { text: 'Try again' }, '00000004'),
+        timelineItem('turn:next:assistant', 'assistant_message', { text: 'OK.' }, '00000005')
       ],
       null,
       [],
-      { ...baseProgress, id: 'other-turn', terminal: true, status: 'done', events: [] }
+      { ...baseProgress, id: 'next', terminal: true, status: 'done', events: [] }
     );
 
-    expect(cards.map((card) => card.kind)).toEqual(['message', 'turn_summary']);
+    expect(cards.map((card) => card.kind)).toEqual([
+      'message',
+      'turn_summary',
+      'message',
+      'message'
+    ]);
     expect(cards[1]).toMatchObject({
       kind: 'turn_summary',
       cards: [

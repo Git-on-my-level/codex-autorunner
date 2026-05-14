@@ -71,25 +71,6 @@ def _redact_nested(value: Any) -> Any:
     return value
 
 
-def _should_suppress_tail_event(message: Any) -> bool:
-    payload = coerce_dict(message)
-    method = str(payload.get("method") or "").strip().lower()
-    params = coerce_dict(payload.get("params"))
-    item = coerce_dict(params.get("item"))
-
-    if method in {
-        "item/agentmessage/delta",
-        "item/plan/delta",
-        "turn/plan/updated",
-    }:
-        return True
-    if method == "item/completed":
-        item_type = str(item.get("type") or "").strip().lower()
-        if item_type == "agentmessage":
-            return True
-    return False
-
-
 _NO_STREAM_AVAILABLE_IDLE_SECONDS = 15
 _LIKELY_HUNG_IDLE_SECONDS = 90
 _STALL_IDLE_SECONDS = 30
@@ -849,9 +830,6 @@ async def _serialize_runtime_raw_tail_events(
         received_at = datetime.now(timezone.utc).isoformat()
     since_ms_from_buffered_timestamp = False
     if isinstance(raw_event, dict):
-        msg = raw_event.get("message")
-        if isinstance(msg, dict) and _should_suppress_tail_event(msg):
-            return []
         rim = int(raw_event.get("received_at") or 0)
         if rim > 0:
             since_ms_from_buffered_timestamp = True
@@ -1018,7 +996,6 @@ __all__ = [
     "_latest_token_usage_from_timeline_entries",
     "_serialize_persisted_timeline_tail_events",
     "_serialize_runtime_raw_tail_events",
-    "_should_suppress_tail_event",
     "_tail_event_from_run_event",
     "_truncate_tool_name",
 ]

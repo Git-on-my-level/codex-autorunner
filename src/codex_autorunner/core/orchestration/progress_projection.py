@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 from typing import Any, Iterable, Optional
 
 from ..ports.run_event import (
+    RUN_EVENT_DELTA_TYPE_ASSISTANT_MESSAGE,
     RUN_EVENT_STREAM_MODE_SNAPSHOT,
     ApprovalRequested,
     Completed,
@@ -194,6 +195,25 @@ def reduce_progress_event(
     if isinstance(event, OutputDelta):
         content = str(event.content or "")
         normalized = content.strip()
+        # The final-reply assistant message is rendered separately as a
+        # persisted timeline `assistant_message` row. Surfacing its deltas
+        # (or the eventual `item/completed` for the final agentMessage) as a
+        # second "Thinking" tail card would duplicate the chat bubble. Mark
+        # them hidden here at the projection layer so downstream consumers
+        # (tail serializer, runtime overlay, journal replay) all agree on
+        # what's user-visible, instead of having a wire-method blocklist in
+        # the serializer that can't distinguish commentary from final-reply.
+        if event.delta_type == RUN_EVENT_DELTA_TYPE_ASSISTANT_MESSAGE:
+            return ProgressProjectionItem(
+                item_id=f"progress:hidden:assistant_message:{event_key}",
+                kind="hidden",
+                state="hidden",
+                title="Hidden progress",
+                summary=None,
+                event_ids=(event_id,),
+                timestamp=timestamp,
+                hidden=True,
+            )
         title = "Thinking"
         summary = content or "Assistant update"
         kind = "assistant_update"
@@ -233,6 +253,22 @@ def reduce_progress_event(
         )
 
     if isinstance(event, RunNotice):
+        # decode_failure notices are operator/debug telemetry emitted when
+        # the decoder doesn't have a handler for a runtime method. They are
+        # logged via `_log_decode_failure`; surfacing them as user-visible
+        # cards would leak internal plumbing into the chat. Keep them in
+        # the projection (so journal replay sees them too) but hide them.
+        if event.kind == "decode_failure":
+            return ProgressProjectionItem(
+                item_id=f"progress:hidden:decode_failure:{event_key}",
+                kind="hidden",
+                state="hidden",
+                title="Hidden progress",
+                summary=None,
+                event_ids=(event_id,),
+                timestamp=timestamp,
+                hidden=True,
+            )
         kind = "assistant_update" if event.kind == "thinking" else "notice"
         title = _notice_title(event.kind, event.message)
         return ProgressProjectionItem(

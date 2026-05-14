@@ -1891,17 +1891,31 @@ function summarizeCompletedTurnActivity(cards: PmaCard[], progress: PmaRunProgre
   // still be missing its final reply and should not be collapsed yet.
   const activeProgressTurnId = progress && !progress.terminal ? progress.id : null;
   const turnsWithTerminalSignal = new Set<string>();
+  const turnOrder: string[] = [];
+  const seenTurnOrder = new Set<string>();
   for (const card of cards) {
-    if (!('turnId' in card) || !card.turnId) continue;
+    const turnId = cardTurnId(card);
+    if (!turnId) continue;
+    if (!seenTurnOrder.has(turnId)) {
+      seenTurnOrder.add(turnId);
+      turnOrder.push(turnId);
+    }
     if (card.kind === 'message' && card.message.role === 'assistant') {
-      turnsWithTerminalSignal.add(card.turnId);
+      turnsWithTerminalSignal.add(turnId);
     } else if (card.kind === 'intermediate' && isTerminalTraceCard(card)) {
-      turnsWithTerminalSignal.add(card.turnId);
+      turnsWithTerminalSignal.add(turnId);
     }
   }
+  // Keep the most recent turn fully expanded so the layout the user watched
+  // stream stays put once the turn completes — what was visible mid-stream
+  // remains visible after completion, with the final reply appended.
+  // Older completed turns still collapse so a long transcript doesn't get
+  // noisy.
+  const mostRecentTurnId = turnOrder.length ? turnOrder[turnOrder.length - 1] : null;
   const isTurnInFlight = (turnId: string): boolean => {
     if (turnId === activeProgressTurnId) return true;
     if (!turnsWithTerminalSignal.has(turnId)) return true;
+    if (turnId === mostRecentTurnId) return true;
     return false;
   };
 
