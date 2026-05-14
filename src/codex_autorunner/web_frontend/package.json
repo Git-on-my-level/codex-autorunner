@@ -22,7 +22,7 @@
     "svelte-check": "^4.3.4",
     "typescript": "^6.0.3",
     "vite": "^7.2.7",
-    "vitest": "^4.0.16"
+    "vitest": "^4.1.6"
   },
   "dependencies": {
     "isomorphic-dompurify": "^3.12.0",
