@@ -8,9 +8,11 @@ from pathlib import Path
 from typing import Any, Optional
 
 from .....core.artifact_delivery import (
+    ACTIVE_DELIVERY_STATES,
     ArtifactDeliveryService,
     ArtifactRecord,
     DeliveryIntent,
+    format_delivery_summary,
 )
 from .....core.filebox import delete_regular_files, list_regular_files
 from .....core.logging_utils import log_event
@@ -420,8 +422,25 @@ class FileBoxCommandsMixin:
             return
         if subcommand == "outbox":
             pending_items = self._list_files(pending_dir)
+            service_root = Path(record.workspace_path)
             if pma_enabled:
-                text = self._format_file_listing("Outbox", pending_items)
+                hub_root = getattr(self, "_hub_root", None)
+                if hub_root is not None:
+                    service_root = Path(hub_root)
+            deliveries = format_delivery_summary(
+                ArtifactDeliveryService(service_root),
+                target_surface="telegram",
+                target_conversation_key=self._artifact_target_key(
+                    chat_id=message.chat_id,
+                    thread_id=message.thread_id,
+                ),
+                states=ACTIVE_DELIVERY_STATES,
+                limit=10,
+            )
+            if pma_enabled:
+                text = "\n".join(
+                    [self._format_file_listing("Outbox", pending_items), "", deliveries]
+                )
             else:
                 sent_items = self._list_files(sent_dir)
                 text = "\n".join(
@@ -429,6 +448,8 @@ class FileBoxCommandsMixin:
                         self._format_file_listing("Outbox pending", pending_items),
                         "",
                         self._format_file_listing("Outbox sent", sent_items),
+                        "",
+                        deliveries,
                     ]
                 )
             await self._send_message(

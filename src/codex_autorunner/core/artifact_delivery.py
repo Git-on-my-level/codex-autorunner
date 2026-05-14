@@ -24,7 +24,12 @@ DeliveryState = Literal[
     "cancelled",
 ]
 
-ACTIVE_DELIVERY_STATES = ("pending", "claimed", "sending", "failed")
+ACTIVE_DELIVERY_STATES: tuple[DeliveryState, ...] = (
+    "pending",
+    "claimed",
+    "sending",
+    "failed",
+)
 
 
 @dataclass(frozen=True)
@@ -370,6 +375,8 @@ class ArtifactDeliveryStore:
         *,
         states: Iterable[DeliveryState] | None = None,
         target_surface: str | None = None,
+        target_conversation_key: str | None = None,
+        workspace_scope: str | None = None,
     ) -> list[DeliveryIntent]:
         where: list[str] = []
         params: list[Any] = []
@@ -381,6 +388,12 @@ class ArtifactDeliveryStore:
         if target_surface is not None:
             where.append("target_surface = ?")
             params.append(target_surface)
+        if target_conversation_key is not None:
+            where.append("target_conversation_key = ?")
+            params.append(target_conversation_key)
+        if workspace_scope is not None:
+            where.append("workspace_scope = ?")
+            params.append(workspace_scope)
         where_sql = "" if not where else "WHERE " + " AND ".join(where)
         with open_sqlite(self.db_path, readonly=True) as conn:
             rows = conn.execute(
@@ -633,8 +646,23 @@ class ArtifactDeliveryService:
         *,
         states: Iterable[DeliveryState] | None = None,
         target_surface: str | None = None,
+        target_conversation_key: str | None = None,
+        workspace_scope: str | None = None,
     ) -> list[DeliveryIntent]:
-        return self.store.list_deliveries(states=states, target_surface=target_surface)
+        return self.store.list_deliveries(
+            states=states,
+            target_surface=target_surface,
+            target_conversation_key=target_conversation_key,
+            workspace_scope=workspace_scope,
+        )
+
+    def inspect_with_artifact(
+        self, delivery_id: str
+    ) -> tuple[DeliveryIntent, ArtifactRecord | None] | None:
+        intent = self.inspect(delivery_id)
+        if intent is None:
+            return None
+        return intent, self.store.get_artifact(intent.artifact_id)
 
 
 def artifact_delivery_db_path(root: Path) -> Path:
@@ -729,6 +757,80 @@ def _intent_from_row(row: sqlite3.Row) -> DeliveryIntent:
     )
 
 
+def serialize_artifact(artifact: ArtifactRecord | None) -> dict[str, Any] | None:
+    if artifact is None:
+        return None
+    return {
+        "artifact_id": artifact.artifact_id,
+        "filename": artifact.filename,
+        "mime_type": artifact.mime_type,
+        "size": artifact.size,
+        "checksum_sha256": artifact.checksum_sha256,
+        "origin_root": artifact.origin_root,
+        "storage_path": str(artifact.storage_path),
+        "created_at": artifact.created_at,
+        "updated_at": artifact.updated_at,
+    }
+
+
+def serialize_delivery(
+    intent: DeliveryIntent,
+    *,
+    artifact: ArtifactRecord | None = None,
+) -> dict[str, Any]:
+    return {
+        "delivery_id": intent.delivery_id,
+        "artifact_id": intent.artifact_id,
+        "target_surface": intent.target_surface,
+        "target_conversation_key": intent.target_conversation_key,
+        "workspace_scope": intent.workspace_scope,
+        "state": intent.state,
+        "attempts": intent.attempts,
+        "receipt": intent.receipt_json,
+        "last_error": intent.last_error,
+        "next_attempt_at": intent.next_attempt_at,
+        "archived_path": intent.archived_path,
+        "metadata": intent.metadata_json,
+        "created_at": intent.created_at,
+        "updated_at": intent.updated_at,
+        "claimed_at": intent.claimed_at,
+        "sent_at": intent.sent_at,
+        "failed_at": intent.failed_at,
+        "cancelled_at": intent.cancelled_at,
+        "artifact": serialize_artifact(artifact),
+    }
+
+
+def format_delivery_summary(
+    service: ArtifactDeliveryService,
+    *,
+    target_surface: str | None = None,
+    target_conversation_key: str | None = None,
+    states: Iterable[DeliveryState] | None = None,
+    limit: int = 10,
+) -> str:
+    deliveries = service.list_deliveries(
+        states=states,
+        target_surface=target_surface,
+        target_conversation_key=target_conversation_key,
+    )
+    if not deliveries:
+        return "Artifact deliveries: (none)"
+    lines = [f"Artifact deliveries ({len(deliveries)}):"]
+    for intent in deliveries[:limit]:
+        artifact = service.store.get_artifact(intent.artifact_id)
+        name = artifact.filename if artifact is not None else intent.artifact_id
+        detail: str = intent.state
+        if intent.last_error:
+            detail = f"{detail}, {intent.last_error}"
+        lines.append(
+            f"- {name}: {detail} ({intent.delivery_id[:21]}, attempts {intent.attempts})"
+        )
+    if len(deliveries) > limit:
+        lines.append(f"... and {len(deliveries) - limit} more")
+    return "\n".join(lines)
+
+
 __all__ = [
     "ACTIVE_DELIVERY_STATES",
     "ArtifactDeliveryService",
@@ -739,4 +841,7 @@ __all__ = [
     "DeliveryState",
     "artifact_blob_path",
     "artifact_delivery_db_path",
+    "format_delivery_summary",
+    "serialize_artifact",
+    "serialize_delivery",
 ]
