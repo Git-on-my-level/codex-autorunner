@@ -3,9 +3,13 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 from tests.chat_surface_lab.web_responsiveness_budgets import (
     run_web_responsiveness_budget_smoke,
 )
+
+pytestmark = pytest.mark.slow
 
 
 def test_web_responsiveness_budget_smoke_writes_actionable_diagnostics(
