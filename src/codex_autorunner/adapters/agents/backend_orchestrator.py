@@ -85,6 +85,7 @@ class BackendOrchestrator:
         *,
         notification_handler: Optional[NotificationHandler] = None,
         logger: Optional[logging.Logger] = None,
+        shared_app_server_supervisor: Optional[Any] = None,
         shared_opencode_supervisor: Optional[Any] = None,
     ):
         from .wiring import build_agent_backend_factory
@@ -98,6 +99,7 @@ class BackendOrchestrator:
         self._backend_factory: BackendFactory = build_agent_backend_factory(
             repo_root,
             config,
+            shared_app_server_supervisor=shared_app_server_supervisor,
             shared_opencode_supervisor=shared_opencode_supervisor,
         )
 
@@ -315,7 +317,11 @@ class BackendOrchestrator:
 
 
 def build_backend_orchestrator(
-    repo_root: Path, config: RepoConfig
+    repo_root: Path,
+    config: RepoConfig,
+    *,
+    shared_app_server_supervisor: Optional[Any] = None,
+    shared_opencode_supervisor: Optional[Any] = None,
 ) -> BackendOrchestratorProtocol:
     """
     Build a BackendOrchestrator for protocol-agnostic backend management.
@@ -325,6 +331,8 @@ def build_backend_orchestrator(
         config=config,
         notification_handler=None,
         logger=logging.getLogger("codex_autorunner.backend"),
+        shared_app_server_supervisor=shared_app_server_supervisor,
+        shared_opencode_supervisor=shared_opencode_supervisor,
     )
 
 

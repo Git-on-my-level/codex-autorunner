@@ -64,6 +64,7 @@ def test_doctor_processes_json_includes_snapshot_and_registry(
     records = [
         ProcessRecord(
             kind="opencode",
+            handle_id="__global__",
             workspace_id="ws",
             pid=1234,
             pgid=1000,
@@ -71,7 +72,11 @@ def test_doctor_processes_json_includes_snapshot_and_registry(
             command=["opencode", "serve"],
             owner_pid=999,
             started_at="2025-01-01T00:00:00Z",
-            metadata={"workspace_root": str(repo / "repo")},
+            metadata={
+                "workspace_root": str(repo / "repo"),
+                "server_scope": "global",
+                "state_dir": str(repo / ".codex-autorunner" / "opencode"),
+            },
         )
     ]
     monkeypatch.setattr(doctor_cmd, "collect_processes", lambda: snapshot)
@@ -98,9 +103,11 @@ def test_doctor_processes_json_includes_snapshot_and_registry(
     assert payload["snapshot"]["counts"]["managed_runtimes"] == 1
     assert "registry" in payload
     assert payload["registry"]["counts_by_kind"]["opencode"] == 1
-    assert payload["registry"]["records"][0]["record_key"] == "ws"
+    assert payload["registry"]["records"][0]["handle_id"] == "__global__"
+    assert payload["registry"]["records"][0]["record_key"] == "__global__"
+    assert payload["registry"]["records"][0]["server_scope"] == "global"
     assert (
-        str(repo / ".codex-autorunner" / "processes" / "opencode" / "ws.json")
+        str(repo / ".codex-autorunner" / "processes" / "opencode" / "__global__.json")
         in payload["registry"]["records"][0]["path"]
     )
 

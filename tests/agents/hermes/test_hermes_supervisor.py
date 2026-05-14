@@ -1001,8 +1001,13 @@ async def test_hermes_supervisor_advertised_commands_returns_list(
     try:
         await supervisor.ensure_ready(tmp_path)
         commands = await supervisor.advertised_commands(tmp_path)
+        snapshot = await supervisor.lifecycle_snapshot()
 
         assert isinstance(commands, list)
+        assert snapshot[0].runtime_kind == "hermes"
+        assert snapshot[0].server_scope == "workspace"
+        assert snapshot[0].workspace_root == str(tmp_path.resolve())
+        assert snapshot[0].started is True
     finally:
         await supervisor.close_all()
 

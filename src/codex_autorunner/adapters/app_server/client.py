@@ -140,6 +140,14 @@ class CodexAppServerClient:
         notification_handler: Optional[NotificationHandler] = None,
         logger: Optional[logging.Logger] = None,
         workspace_id: Optional[str] = None,
+        handle_id: Optional[str] = None,
+        server_scope: str = "workspace",
+        runtime_profile: Optional[str] = None,
+        state_dir: Optional[Path] = None,
+        registry_root: Optional[Path] = None,
+        startup_timeout_seconds: Optional[float] = None,
+        terminate_grace_seconds: Optional[float] = None,
+        terminate_kill_seconds: Optional[float] = None,
     ) -> None:
         self._command = [str(arg) for arg in command]
         self._cwd = str(cwd) if cwd is not None else None
@@ -155,6 +163,28 @@ class CodexAppServerClient:
         self._notification_handler = notification_handler
         self._logger = logger or logging.getLogger(__name__)
         self._workspace_id = workspace_id
+        self._handle_id = handle_id or workspace_id
+        self._server_scope = (
+            server_scope if server_scope in {"global", "workspace"} else "workspace"
+        )
+        self._runtime_profile = runtime_profile
+        self._state_dir = str(state_dir) if state_dir is not None else None
+        self._registry_root = registry_root
+        self._startup_timeout_seconds = (
+            startup_timeout_seconds
+            if startup_timeout_seconds is not None and startup_timeout_seconds > 0
+            else None
+        )
+        self._terminate_grace_seconds = (
+            terminate_grace_seconds
+            if terminate_grace_seconds is not None and terminate_grace_seconds >= 0
+            else 1.0
+        )
+        self._terminate_kill_seconds = (
+            terminate_kill_seconds
+            if terminate_kill_seconds is not None and terminate_kill_seconds >= 0
+            else 1.0
+        )
         self._circuit_breaker = CircuitBreaker("App-Server", logger=self._logger)
         self._max_message_bytes = (
             max_message_bytes
@@ -221,6 +251,12 @@ class CodexAppServerClient:
             default_result_factory=self._default_user_input_result,
         )
         self._notification_adapter = RawNotificationAdapter(notification_handler)
+        self._thread_approval_handlers: dict[str, ApprovalHandler] = {}
+        self._turn_approval_handlers: dict[TurnKey, ApprovalHandler] = {}
+        self._thread_user_input_handlers: dict[str, UserInputHandler] = {}
+        self._turn_user_input_handlers: dict[TurnKey, UserInputHandler] = {}
+        self._thread_notification_handlers: dict[str, NotificationHandler] = {}
+        self._turn_notification_handlers: dict[TurnKey, NotificationHandler] = {}
         self._next_id: str = str(uuid.uuid4())
         self._initialized = False
         self._initializing = False
@@ -305,6 +341,52 @@ class CodexAppServerClient:
         self._notification_adapter = RawNotificationAdapter(
             self._notification_handler,
         )
+
+    def register_runtime_callbacks(
+        self,
+        *,
+        thread_id: str,
+        turn_id: Optional[str] = None,
+        approval_handler: Optional[ApprovalHandler] = None,
+        question_handler: Optional[UserInputHandler] = None,
+        notification_handler: Optional[NotificationHandler] = None,
+    ) -> None:
+        if not isinstance(thread_id, str) or not thread_id.strip():
+            return
+        thread_key = thread_id.strip()
+        if approval_handler is not None:
+            self._thread_approval_handlers[thread_key] = approval_handler
+        if question_handler is not None:
+            self._thread_user_input_handlers[thread_key] = question_handler
+        if notification_handler is not None:
+            self._thread_notification_handlers[thread_key] = notification_handler
+        if isinstance(turn_id, str) and turn_id.strip():
+            turn_key = (thread_key, turn_id.strip())
+            if approval_handler is not None:
+                self._turn_approval_handlers[turn_key] = approval_handler
+            if question_handler is not None:
+                self._turn_user_input_handlers[turn_key] = question_handler
+            if notification_handler is not None:
+                self._turn_notification_handlers[turn_key] = notification_handler
+
+    def unregister_runtime_callbacks(
+        self, *, thread_id: Optional[str] = None, turn_id: Optional[str] = None
+    ) -> None:
+        if not isinstance(thread_id, str) or not thread_id.strip():
+            return
+        thread_key = thread_id.strip()
+        self._thread_approval_handlers.pop(thread_key, None)
+        self._thread_user_input_handlers.pop(thread_key, None)
+        self._thread_notification_handlers.pop(thread_key, None)
+        if isinstance(turn_id, str) and turn_id.strip():
+            turn_key = (thread_key, turn_id.strip())
+            self._turn_approval_handlers.pop(turn_key, None)
+            self._turn_user_input_handlers.pop(turn_key, None)
+            self._turn_notification_handlers.pop(turn_key, None)
+
+    @property
+    def active_turn_count(self) -> int:
+        return len(self._turns) + len(self._pending_turns)
 
     @property
     def runtime_instance_id(self) -> Optional[str]:
@@ -395,7 +477,9 @@ class CodexAppServerClient:
     async def thread_archive(self, thread_id: str, **kwargs: Any) -> Any:
         params: Dict[str, Any] = {"threadId": thread_id}
         params.update(kwargs)
-        return await self.request("thread/archive", params)
+        result = await self.request("thread/archive", params)
+        self.unregister_runtime_callbacks(thread_id=thread_id)
+        return result
 
     async def thread_name_set(self, thread_id: str, name: str) -> Any:
         return await self.request(
@@ -423,9 +507,12 @@ class CodexAppServerClient:
         input_items: Optional[list[Dict[str, Any]]] = None,
         approval_policy: Optional[str] = None,
         sandbox_policy: Optional[str] = None,
+        cwd: Optional[str] = None,
         **kwargs: Any,
     ) -> TurnHandle:
         params: Dict[str, Any] = {"threadId": thread_id}
+        if cwd:
+            params["cwd"] = cwd
         if input_items is None:
             params["input"] = [{"type": "text", "text": text}]
         else:
@@ -584,15 +671,16 @@ class CodexAppServerClient:
     def _schedule_notification_handler(
         self, message: Dict[str, Any], *, method: str, handled: bool = True
     ) -> None:
-        if self._notification_handler is None:
-            return
         envelope = normalize_notification_envelope(message)
         if envelope is None:
             return
 
         async def _invoke_notification_handler() -> None:
             try:
-                await self._notification_adapter.notify(envelope)
+                adapter = self._notification_adapter_for(envelope)
+                if adapter is None:
+                    return
+                await adapter.notify(envelope)
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
@@ -624,8 +712,34 @@ class CodexAppServerClient:
                     and self._initialized
                 ):
                     return
-                await self._spawn_process()
-                await self._initialize_handshake()
+                try:
+                    startup = self._spawn_and_initialize()
+                    if self._startup_timeout_seconds is None:
+                        await startup
+                    else:
+                        await asyncio.wait_for(
+                            startup, timeout=self._startup_timeout_seconds
+                        )
+                except asyncio.TimeoutError as exc:
+                    log_event(
+                        self._logger,
+                        logging.ERROR,
+                        "app_server.startup_timeout",
+                        timeout_seconds=self._startup_timeout_seconds,
+                        workspace_id=self._workspace_id,
+                        handle_id=self._handle_id,
+                    )
+                    await self._terminate_process()
+                    self._fail_pending(
+                        CodexAppServerDisconnected("App-server startup timed out")
+                    )
+                    raise CodexAppServerDisconnected(
+                        "App-server startup timed out"
+                    ) from exc
+
+    async def _spawn_and_initialize(self) -> None:
+        await self._spawn_process()
+        await self._initialize_handshake()
 
     async def _spawn_process(self) -> None:
         await self._terminate_process()
@@ -1050,7 +1164,7 @@ class CodexAppServerClient:
                 turn_id=turn_id or approval.params.get("turnId"),
             )
             try:
-                decision = await self._approval_adapter.decide(approval)
+                decision = await self._approval_adapter_for(approval).decide(approval)
             except (
                 RuntimeError,
                 ValueError,
@@ -1102,7 +1216,9 @@ class CodexAppServerClient:
                 question_count=len(user_input.request.questions),
             )
             try:
-                result = await self._user_input_adapter.decide(user_input)
+                result = await self._user_input_adapter_for(user_input).decide(
+                    user_input
+                )
             except (
                 RuntimeError,
                 ValueError,
@@ -1215,9 +1331,10 @@ class CodexAppServerClient:
         handler = self._resolve_notification_handler(method)
         if handler is not None:
             handled = await handler(message, params, decoded_notification)
-        if self._notification_handler is not None:
+        adapter = self._notification_adapter_for(envelope)
+        if adapter is not None:
             try:
-                await self._notification_adapter.notify(envelope)
+                await adapter.notify(envelope)
             except (
                 RuntimeError,
                 ValueError,
@@ -1465,6 +1582,81 @@ class CodexAppServerClient:
     ) -> None:
         self._turn_state_manager.apply_turn_completed(state, message, params, decoded)
 
+    def _request_route_ids(
+        self, params: dict[str, Any], decoded: Any = None
+    ) -> tuple[Optional[str], Optional[str]]:
+        turn_id = (
+            getattr(decoded, "turn_id", None)
+            or extract_turn_id(params)
+            or extract_turn_id(params.get("item"))
+        )
+        thread_id = (
+            getattr(decoded, "thread_id", None)
+            or extract_thread_id_for_turn(params)
+            or params.get("threadId")
+            or params.get("thread_id")
+        )
+        if isinstance(thread_id, str):
+            thread_id = thread_id.strip() or None
+        else:
+            thread_id = None
+        if isinstance(turn_id, str):
+            turn_id = turn_id.strip() or None
+        else:
+            turn_id = None
+        return thread_id, turn_id
+
+    def _approval_adapter_for(self, envelope: Any) -> RawApprovalRequestAdapter:
+        thread_id, turn_id = self._request_route_ids(
+            envelope.params,
+            getattr(envelope, "request", None),
+        )
+        handler: Optional[ApprovalHandler] = None
+        if thread_id and turn_id:
+            handler = self._turn_approval_handlers.get((thread_id, turn_id))
+        if handler is None and thread_id:
+            handler = self._thread_approval_handlers.get(thread_id)
+        if handler is None:
+            handler = self._approval_handler
+        return RawApprovalRequestAdapter(
+            handler, default_decision=self._default_approval_decision
+        )
+
+    def _user_input_adapter_for(self, envelope: Any) -> RawUserInputRequestAdapter:
+        thread_id, turn_id = self._request_route_ids(
+            envelope.params,
+            getattr(envelope, "request", None),
+        )
+        handler: Optional[UserInputHandler] = None
+        if thread_id and turn_id:
+            handler = self._turn_user_input_handlers.get((thread_id, turn_id))
+        if handler is None and thread_id:
+            handler = self._thread_user_input_handlers.get(thread_id)
+        if handler is None:
+            handler = self._question_handler
+        return RawUserInputRequestAdapter(
+            handler,
+            default_result_factory=self._default_user_input_result,
+        )
+
+    def _notification_adapter_for(
+        self, envelope: Any
+    ) -> Optional[RawNotificationAdapter]:
+        thread_id, turn_id = self._request_route_ids(
+            envelope.params,
+            getattr(envelope, "notification", None),
+        )
+        handler: Optional[NotificationHandler] = None
+        if thread_id and turn_id:
+            handler = self._turn_notification_handlers.get((thread_id, turn_id))
+        if handler is None and thread_id:
+            handler = self._thread_notification_handlers.get(thread_id)
+        if handler is None:
+            handler = self._notification_handler
+        if handler is None:
+            return None
+        return RawNotificationAdapter(handler)
+
     async def _handle_disconnect(self) -> None:
         self._initialized = False
         self._initializing = False
@@ -1659,7 +1851,9 @@ class CodexAppServerClient:
                 except ProcessLookupError:
                     return
             try:
-                await asyncio.wait_for(process.wait(), timeout=1)
+                await asyncio.wait_for(
+                    process.wait(), timeout=self._terminate_grace_seconds
+                )
                 return
             except asyncio.TimeoutError:
                 pass
@@ -1688,7 +1882,10 @@ class CodexAppServerClient:
                 process.kill()
             except OSError:
                 return
-        await process.wait()
+        try:
+            await asyncio.wait_for(process.wait(), timeout=self._terminate_kill_seconds)
+        except asyncio.TimeoutError:
+            return
 
     def _register_process_record(self) -> None:
         process = self._process
@@ -1705,17 +1902,25 @@ class CodexAppServerClient:
                 pgid = None
         record = ProcessRecord(
             kind="codex_app_server",
-            workspace_id=self._workspace_id,
+            handle_id=self._handle_id or self._workspace_id,
+            workspace_id=self._handle_id or self._workspace_id,
             pid=process.pid,
             pgid=pgid,
             base_url=None,
             command=list(self._command),
             owner_pid=os.getpid(),
             started_at=datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
-            metadata={"cwd": self._cwd},
+            metadata={
+                "cwd": self._cwd,
+                "initial_cwd": self._cwd,
+                "handle_id": self._handle_id,
+                "server_scope": self._server_scope,
+                "runtime_profile": self._runtime_profile,
+                "state_dir": self._state_dir,
+            },
         )
         try:
-            write_process_record(workspace_root, record)
+            write_process_record(self._registry_root or workspace_root, record)
             self._process_registry_key = record.record_key()
         except OSError as exc:
             log_event(
@@ -1739,7 +1944,9 @@ class CodexAppServerClient:
         if not key:
             return
         try:
-            delete_process_record(workspace_root, "codex_app_server", key)
+            delete_process_record(
+                self._registry_root or workspace_root, "codex_app_server", key
+            )
         except OSError as exc:
             log_event(
                 self._logger,

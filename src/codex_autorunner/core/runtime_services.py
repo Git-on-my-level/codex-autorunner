@@ -35,8 +35,14 @@ class RuntimeServices:
         self.opencode_supervisor = opencode_supervisor
         self._flow_runtime_builder = flow_runtime_builder
         self._flow_runtimes: dict[Path, _FlowRuntimeResources] = {}
+        self._owned_supervisors: list[object] = []
         self._lock = asyncio.Lock()
         self._closed = False
+
+    def register_owned_supervisor(self, supervisor: object) -> None:
+        """Register an additional long-lived supervisor closed by this service."""
+        if not any(supervisor is owned for owned in self._owned_supervisors):
+            self._owned_supervisors.append(supervisor)
 
     def ensure_ticket_flow_controller(self, repo_root: Path) -> FlowController:
         repo_root = repo_root.resolve()
@@ -71,9 +77,20 @@ class RuntimeServices:
                 except Exception:  # intentional: cleanup must not propagate exceptions
                     logger.debug("error closing agent pool", exc_info=True)
 
-            for supervisor in {self.app_server_supervisor, self.opencode_supervisor}:
+            supervisors: list[object] = []
+            for supervisor in (
+                self.app_server_supervisor,
+                self.opencode_supervisor,
+                *self._owned_supervisors,
+            ):
                 if supervisor is None:
                     continue
+                if any(supervisor is existing for existing in supervisors):
+                    continue
+                supervisors.append(supervisor)
+            self._owned_supervisors.clear()
+
+            for supervisor in supervisors:
                 close_all = getattr(supervisor, "close_all", None)
                 if callable(close_all):
                     try:

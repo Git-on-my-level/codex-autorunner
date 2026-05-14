@@ -141,6 +141,8 @@ class CodexAppServerBackend(AgentBackend):
 
     def reset_session_state(self) -> None:
         """Clear cached session/thread ids so the next turn starts fresh."""
+        if self._client is not None and self._thread_id:
+            self._client.unregister_runtime_callbacks(thread_id=self._thread_id)
         self._session_id = None
         self._thread_id = None
         self._turn_id = None
@@ -212,7 +214,9 @@ class CodexAppServerBackend(AgentBackend):
         self._active_event_driver = None
         if isinstance(resume_session, str) and resume_session:
             try:
-                resume_result = await client.thread_resume(resume_session)
+                resume_result = await client.thread_resume(
+                    resume_session, cwd=str(repo_root)
+                )
                 if isinstance(resume_result, dict):
                     self._thread_info = resume_result
                 resumed_id = (
@@ -236,6 +240,11 @@ class CodexAppServerBackend(AgentBackend):
             raise RuntimeError("Failed to start thread: missing thread ID")
 
         self._session_id = self._thread_id
+        client.register_runtime_callbacks(
+            thread_id=self._thread_id,
+            approval_handler=self._handle_approval_request,
+            notification_handler=self._handle_notification,
+        )
         _logger.info("Started Codex app-server session: %s", self._session_id)
 
         return self._session_id
@@ -257,6 +266,12 @@ class CodexAppServerBackend(AgentBackend):
 
         if not self._thread_id:
             await self.start_session(target={}, context={})
+        if self._thread_id:
+            client.register_runtime_callbacks(
+                thread_id=self._thread_id,
+                approval_handler=self._handle_approval_request,
+                notification_handler=self._handle_notification,
+            )
 
         message_hash = hashlib.sha256(message.encode()).hexdigest()[:16]
         log_event(
@@ -279,9 +294,16 @@ class CodexAppServerBackend(AgentBackend):
             input_items=input_items,
             approval_policy=self._approval_policy,
             sandbox_policy=self._sandbox_policy,
+            cwd=str(self._workspace_root),
             **turn_kwargs,
         )
         self._turn_id = handle.turn_id
+        client.register_runtime_callbacks(
+            thread_id=handle.thread_id,
+            turn_id=handle.turn_id,
+            approval_handler=self._handle_approval_request,
+            notification_handler=self._handle_notification,
+        )
 
         yield AgentEvent.stream_delta(content=message, delta_type="user_message")
 
@@ -318,6 +340,12 @@ class CodexAppServerBackend(AgentBackend):
             actual_session_id = await self.start_session(target={}, context={})
         else:
             actual_session_id = self._thread_id
+        if actual_session_id:
+            client.register_runtime_callbacks(
+                thread_id=actual_session_id,
+                approval_handler=self._handle_approval_request,
+                notification_handler=self._handle_notification,
+            )
 
         message_hash = hashlib.sha256(message.encode()).hexdigest()[:16]
         log_event(
@@ -356,9 +384,16 @@ class CodexAppServerBackend(AgentBackend):
             input_items=input_items,
             approval_policy=self._approval_policy,
             sandbox_policy=self._sandbox_policy,
+            cwd=str(self._workspace_root),
             **turn_kwargs,
         )
         self._turn_id = handle.turn_id
+        client.register_runtime_callbacks(
+            thread_id=handle.thread_id,
+            turn_id=handle.turn_id,
+            approval_handler=self._handle_approval_request,
+            notification_handler=self._handle_notification,
+        )
 
         wait_task = asyncio.create_task(handle.wait(timeout=self._turn_timeout_seconds))
 
@@ -482,6 +517,8 @@ class CodexAppServerBackend(AgentBackend):
 
     async def close(self) -> None:
         self._active_event_driver = None
+        if self._client is not None and self._thread_id:
+            self._client.unregister_runtime_callbacks(thread_id=self._thread_id)
         self._client = None
 
     async def _handle_approval_request(

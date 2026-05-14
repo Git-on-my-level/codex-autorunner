@@ -28,7 +28,7 @@
       "app-server"
     ],
     "idle_ttl_seconds": 3600,
-    "max_handles": 20,
+    "max_handles": 1,
     "output": {
       "policy": "final_only"
     },
@@ -52,7 +52,11 @@
       }
     },
     "request_timeout": null,
+    "server_scope": "global",
+    "startup_timeout_seconds": 30,
     "state_root": "~/.codex-autorunner/workspaces",
+    "terminate_grace_seconds": 2,
+    "terminate_kill_seconds": 3,
     "turn_stall_max_recovery_attempts": 8,
     "turn_stall_poll_interval_seconds": 2,
     "turn_stall_recovery_min_interval_seconds": 10,
@@ -286,9 +290,9 @@
   },
   "opencode": {
     "idle_ttl_seconds": 900,
-    "max_handles": 4,
+    "max_handles": 1,
     "max_text_chars": 20000,
-    "server_scope": "workspace",
+    "server_scope": "global",
     "session_stall_timeout_seconds": 300
   },
   "prompt": {

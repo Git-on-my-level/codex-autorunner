@@ -48,11 +48,15 @@ def _default_agents_section() -> Dict[str, Any]:
 def _default_app_server_section() -> Dict[str, Any]:
     """Build the default app_server section."""
     return {
+        "server_scope": "global",
         "command": ["codex", "app-server"],
         "state_root": "~/.codex-autorunner/workspaces",
         "auto_restart": True,
-        "max_handles": 20,
+        "max_handles": 1,
         "idle_ttl_seconds": 3600,
+        "startup_timeout_seconds": 30,
+        "terminate_grace_seconds": 2,
+        "terminate_kill_seconds": 3,
         "turn_timeout_seconds": 7200,
         "turn_stall_timeout_seconds": 60,
         "turn_stall_poll_interval_seconds": 2,
@@ -231,10 +235,10 @@ def _default_terminal_section() -> Dict[str, Any]:
 def _default_opencode_section() -> Dict[str, Any]:
     """Build the default opencode section."""
     return {
-        "server_scope": "workspace",
+        "server_scope": "global",
         "session_stall_timeout_seconds": 300,
         "max_text_chars": 20000,
-        "max_handles": 4,
+        "max_handles": 1,
         "idle_ttl_seconds": 900,
     }
 

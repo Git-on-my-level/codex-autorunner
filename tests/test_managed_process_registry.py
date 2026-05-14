@@ -49,8 +49,43 @@ def test_write_process_record_is_atomic_and_uses_expected_path(
     assert seen["durable"] is True
     payload = json.loads(expected_path.read_text(encoding="utf-8"))
     assert payload["kind"] == "opencode"
+    assert payload["handle_id"] is None
     assert payload["workspace_id"] == "ws-001"
     assert payload["pid"] == 12345
+
+
+def test_process_record_handle_id_is_preferred_for_new_records(
+    tmp_path: Path,
+) -> None:
+    rec = _record(handle_id="__global__", workspace_id="legacy-workspace-id")
+
+    written_path = registry.write_process_record(tmp_path, rec)
+    loaded = registry.read_process_record(tmp_path, "opencode", "__global__")
+
+    assert written_path.name == "__global__.json"
+    assert loaded is not None
+    assert loaded.handle_id == "__global__"
+    assert loaded.workspace_id == "legacy-workspace-id"
+    assert loaded.record_key() == "__global__"
+
+
+def test_legacy_process_record_without_handle_id_stays_reapable(
+    tmp_path: Path,
+) -> None:
+    legacy_path = (
+        tmp_path / ".codex-autorunner" / "processes" / "opencode" / "ws-legacy.json"
+    )
+    legacy_path.parent.mkdir(parents=True, exist_ok=True)
+    legacy_path.write_text(
+        json.dumps(_record(workspace_id="ws-legacy").to_dict() | {"handle_id": None}),
+        encoding="utf-8",
+    )
+
+    loaded = registry.read_process_record(tmp_path, "opencode", "ws-legacy")
+
+    assert loaded is not None
+    assert loaded.handle_id is None
+    assert loaded.record_key() == "ws-legacy"
 
 
 def test_read_list_and_delete_round_trip(tmp_path: Path) -> None:
@@ -89,7 +124,7 @@ def test_read_list_and_delete_round_trip(tmp_path: Path) -> None:
 
 
 def test_schema_validation_and_invalid_json(tmp_path: Path) -> None:
-    with pytest.raises(ValueError, match="workspace_id or pid"):
+    with pytest.raises(ValueError, match="handle_id, workspace_id, or pid"):
         registry.write_process_record(
             tmp_path, _record(workspace_id=None, pid=None, pgid=None)
         )

@@ -24,8 +24,18 @@ PermissionHandler = Callable[[Path, ACPPermissionRequestEvent], Awaitable[Any]]
 
 @dataclass(frozen=True)
 class ACPSupervisorHandleSnapshot:
+    runtime_kind: str
+    server_scope: str
+    handle_id: str
     workspace_root: str
+    pid: Optional[int]
+    pgid: Optional[int]
+    base_url: Optional[str]
+    active_prompts: int
     started: bool
+    healthy: bool
+    last_used_at: float
+    state_dir: Optional[str]
 
 
 class ACPSubprocessSupervisor:
@@ -48,6 +58,7 @@ class ACPSubprocessSupervisor:
         self._permission_handler = permission_handler
         self._logger = logger or logging.getLogger(__name__)
         self._clients: dict[str, ACPClient] = {}
+        self._last_used_at: dict[str, float] = {}
         self._lock = asyncio.Lock()
 
     async def get_client(self, workspace_root: Path) -> ACPClient:
@@ -79,6 +90,7 @@ class ACPSubprocessSupervisor:
                     logger=self._logger,
                 )
                 self._clients[key] = client
+            self._last_used_at[key] = asyncio.get_running_loop().time()
         await client.start()
         return client
 
@@ -201,6 +213,7 @@ class ACPSubprocessSupervisor:
         key = str(canonical_root)
         async with self._lock:
             client = self._clients.pop(key, None)
+            self._last_used_at.pop(key, None)
         if client is not None:
             await client.close()
 
@@ -208,6 +221,7 @@ class ACPSubprocessSupervisor:
         async with self._lock:
             clients = list(self._clients.values())
             self._clients = {}
+            self._last_used_at = {}
         for client in clients:
             await client.close()
 
@@ -215,8 +229,19 @@ class ACPSubprocessSupervisor:
         async with self._lock:
             return tuple(
                 ACPSupervisorHandleSnapshot(
+                    runtime_kind="acp",
+                    server_scope="workspace",
+                    handle_id=workspace_root,
                     workspace_root=workspace_root,
+                    pid=_client_pid(client),
+                    pgid=_client_pgid(client),
+                    base_url=None,
+                    active_prompts=_client_active_prompts(client),
                     started=client.initialize_result is not None,
+                    healthy=client.initialize_result is not None
+                    and _client_returncode(client) is None,
+                    last_used_at=self._last_used_at.get(workspace_root, 0.0),
+                    state_dir=None,
                 )
                 for workspace_root, client in sorted(self._clients.items())
             )
@@ -240,6 +265,39 @@ def _workspace_permission_handler(
         return await handler(workspace_root, event)
 
     return _wrapped
+
+
+def _client_process(client: ACPClient) -> Any:
+    return getattr(client, "_process", None)
+
+
+def _client_pid(client: ACPClient) -> Optional[int]:
+    process = _client_process(client)
+    pid = getattr(process, "pid", None)
+    return pid if isinstance(pid, int) else None
+
+
+def _client_pgid(client: ACPClient) -> Optional[int]:
+    pid = _client_pid(client)
+    if pid is None:
+        return None
+    try:
+        import os
+
+        return os.getpgid(pid) if os.name != "nt" else None
+    except OSError:
+        return None
+
+
+def _client_returncode(client: ACPClient) -> Optional[int]:
+    process = _client_process(client)
+    returncode = getattr(process, "returncode", None)
+    return returncode if isinstance(returncode, int) else None
+
+
+def _client_active_prompts(client: ACPClient) -> int:
+    prompts = getattr(client, "_prompts", None)
+    return len(prompts) if isinstance(prompts, dict) else 0
 
 
 __all__ = [

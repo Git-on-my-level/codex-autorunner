@@ -504,3 +504,62 @@ async def test_workspace_supervisor_uses_resolved_repo_app_server_command(
         assert captured[0]["command"] == ["/custom/codex", "app-server", "--x"]
     finally:
         await store.close()
+
+
+@pytest.mark.anyio
+async def test_app_server_supervisor_is_shared_across_workspaces(
+    tmp_path: Path, monkeypatch
+) -> None:
+    captured: list[list[str]] = []
+
+    class _FakeSupervisor:
+        def __init__(self, command, **kwargs) -> None:
+            captured.append(list(command))
+
+        async def close_all(self) -> None:
+            return None
+
+    monkeypatch.setattr(
+        discord_service_module,
+        "load_repo_config",
+        lambda *args, **kwargs: SimpleNamespace(
+            app_server=SimpleNamespace(
+                command=["/custom/codex", "app-server"],
+                server_scope="global",
+                max_handles=1,
+                idle_ttl_seconds=3600,
+                startup_timeout_seconds=30,
+                terminate_grace_seconds=2,
+                terminate_kill_seconds=3,
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        discord_service_module, "WorkspaceAppServerSupervisor", _FakeSupervisor
+    )
+
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    service = DiscordBotService(
+        _config(tmp_path),
+        logger=logging.getLogger("test.discord.shared_app_server"),
+        rest_client=_FakeRest(),
+        gateway_client=_FakeGateway(),
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+    workspace_a = tmp_path / "workspace-a"
+    workspace_b = tmp_path / "workspace-b"
+    workspace_a.mkdir()
+    workspace_b.mkdir()
+
+    try:
+        supervisor_a = await service._app_server_supervisor_for_workspace(workspace_a)
+        supervisor_b = await service._app_server_supervisor_for_workspace(workspace_b)
+
+        assert supervisor_a is supervisor_b
+        assert supervisor_a is service._runtime_services.app_server_supervisor
+        assert captured == [["/custom/codex", "app-server"]]
+    finally:
+        await service._runtime_services.close()
+        await store.close()

@@ -235,9 +235,10 @@ class TestOpencodeServerScopeStrictness:
         with pytest.raises(ConfigError, match="must be 'workspace' or 'global'"):
             _parse_opencode_config({"server_scope": "invalid"}, tmp_path, {})
 
-    def test_default_is_workspace(self, tmp_path: Path) -> None:
+    def test_default_is_global(self, tmp_path: Path) -> None:
         cfg = _parse_opencode_config({}, tmp_path, {})
-        assert cfg.server_scope == "workspace"
+        assert cfg.server_scope == "global"
+        assert cfg.max_handles == 1
 
 
 class TestPmaNumericCompatibilityRepair:

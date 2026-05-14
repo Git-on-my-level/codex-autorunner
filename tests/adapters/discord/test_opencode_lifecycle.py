@@ -137,7 +137,7 @@ async def test_opencode_prune_sweep_evicts_idle_supervisors_and_logs_metrics(
         discord_service_module,
         "load_repo_config",
         lambda workspace_root, hub_path=None: SimpleNamespace(
-            opencode=SimpleNamespace(idle_ttl_seconds=120),
+            opencode=SimpleNamespace(idle_ttl_seconds=120, server_scope="workspace"),
         ),
     )
 
@@ -224,7 +224,7 @@ async def test_opencode_prune_sweep_defers_workspace_with_running_opencode_execu
         discord_service_module,
         "load_repo_config",
         lambda workspace_root, hub_path=None: SimpleNamespace(
-            opencode=SimpleNamespace(idle_ttl_seconds=120),
+            opencode=SimpleNamespace(idle_ttl_seconds=120, server_scope="workspace"),
         ),
     )
 
@@ -345,7 +345,7 @@ async def test_opencode_prune_sweep_defers_when_execution_state_lookup_fails(
         discord_service_module,
         "load_repo_config",
         lambda workspace_root, hub_path=None: SimpleNamespace(
-            opencode=SimpleNamespace(idle_ttl_seconds=120),
+            opencode=SimpleNamespace(idle_ttl_seconds=120, server_scope="workspace"),
         ),
     )
 
@@ -416,7 +416,7 @@ async def test_discord_opencode_adapter_resolves_stall_timeout_per_workspace(
         discord_service_module,
         "load_repo_config",
         lambda workspace_root, hub_path=None: SimpleNamespace(
-            opencode=SimpleNamespace(idle_ttl_seconds=120),
+            opencode=SimpleNamespace(idle_ttl_seconds=120, server_scope="workspace"),
         ),
     )
 
@@ -473,6 +473,62 @@ async def test_discord_opencode_adapter_resolves_stall_timeout_per_workspace(
 
 
 @pytest.mark.anyio
+async def test_discord_opencode_global_scope_reuses_one_supervisor(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace_a = tmp_path / "workspace-a"
+    workspace_b = tmp_path / "workspace-b"
+    workspace_a.mkdir()
+    workspace_b.mkdir()
+
+    monkeypatch.setattr(
+        discord_service_module,
+        "load_repo_config",
+        lambda workspace_root, hub_path=None: SimpleNamespace(
+            opencode=SimpleNamespace(idle_ttl_seconds=120, server_scope="global"),
+        ),
+    )
+
+    created_for: list[Path] = []
+    shared_supervisor = _StubOpenCodeSupervisor(
+        pruned_handles=0,
+        handles_after_prune=1,
+    )
+
+    def _build_supervisor(repo_config, *, workspace_root, logger, base_env=None):
+        created_for.append(workspace_root)
+        return shared_supervisor
+
+    monkeypatch.setattr(
+        discord_service_module,
+        "build_opencode_supervisor_from_repo_config",
+        _build_supervisor,
+    )
+
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    service = DiscordBotService(
+        _config(tmp_path),
+        logger=logging.getLogger("test.discord.opencode.global"),
+        rest_client=_FakeRest(),
+        gateway_client=_FakeGateway(),
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+
+    try:
+        supervisor_a = await service._opencode_supervisor_for_workspace(workspace_a)
+        supervisor_b = await service._opencode_supervisor_for_workspace(workspace_b)
+
+        assert supervisor_a is shared_supervisor
+        assert supervisor_b is shared_supervisor
+        assert created_for == [workspace_a]
+        assert set(service._opencode_supervisors.keys()) == {"global"}
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
 async def test_discord_opencode_adapter_forwards_turn_lifecycle_calls(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -483,7 +539,7 @@ async def test_discord_opencode_adapter_forwards_turn_lifecycle_calls(
         discord_service_module,
         "load_repo_config",
         lambda workspace_root, hub_path=None: SimpleNamespace(
-            opencode=SimpleNamespace(idle_ttl_seconds=120),
+            opencode=SimpleNamespace(idle_ttl_seconds=120, server_scope="workspace"),
         ),
     )
 
@@ -531,7 +587,7 @@ async def test_discord_orchestrator_shares_workspace_opencode_supervisor(
         discord_service_module,
         "load_repo_config",
         lambda workspace_root, hub_path=None: SimpleNamespace(
-            opencode=SimpleNamespace(idle_ttl_seconds=120),
+            opencode=SimpleNamespace(idle_ttl_seconds=120, server_scope="workspace"),
         ),
     )
 

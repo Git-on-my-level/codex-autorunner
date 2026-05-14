@@ -86,6 +86,7 @@ class AppServerOutputConfig:
 
 @dataclasses.dataclass
 class AppServerConfig:
+    server_scope: str
     command: List[str]
     command_source: str
     ignored_command_env: tuple[str, ...]
@@ -93,6 +94,9 @@ class AppServerConfig:
     auto_restart: Optional[bool]
     max_handles: Optional[int]
     idle_ttl_seconds: Optional[int]
+    startup_timeout_seconds: Optional[float]
+    terminate_grace_seconds: Optional[float]
+    terminate_kill_seconds: Optional[float]
     turn_timeout_seconds: Optional[float]
     turn_stall_timeout_seconds: Optional[float]
     turn_stall_poll_interval_seconds: Optional[float]
