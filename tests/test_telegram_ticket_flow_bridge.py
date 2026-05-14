@@ -639,6 +639,84 @@ async def test_terminal_scan_failure_sends_degraded_notice_once_until_recovery(
     assert len(calls) == 2
 
 
+@pytest.mark.anyio
+async def test_recovery_intent_sends_once_per_telegram_topic(tmp_path: Path) -> None:
+    workspace = tmp_path / "tg-recovery"
+    _init_repo(workspace)
+    record = _DummyRecord(workspace)
+    calls: list[tuple[int, str, Optional[int]]] = []
+    delivery_attempts: dict[str, object] = {}
+
+    async def send_message_with_outbox(
+        chat_id: int,
+        text: str,
+        *,
+        thread_id: Optional[int],
+        reply_to: Optional[int],
+    ) -> bool:
+        _ = reply_to
+        calls.append((chat_id, text, thread_id))
+        return True
+
+    async def send_document(*args, **kwargs) -> bool:
+        return True
+
+    bridge = TelegramTicketFlowBridge(
+        logger=logging.getLogger("test"),
+        store=_DummyStore({"123:456": record}),
+        pause_targets={},
+        send_message_with_outbox=send_message_with_outbox,
+        send_document=send_document,
+        pause_config=PauseDispatchNotifications(
+            enabled=True,
+            send_attachments=False,
+            max_file_size_bytes=1024,
+            chunk_long_messages=True,
+        ),
+        default_notification_chat_id=None,
+    )
+    intent = SimpleNamespace(
+        intent_id="intent-telegram-1",
+        run_id="run-1",
+        event_type="ticket_flow.commit_barrier.exhausted",
+        severity="warning",
+        reason="commit-barrier-retry-budget-exhausted",
+        recommended_actions=("car ticket-flow status --repo /tmp/repo",),
+        cooldown_seconds=3600,
+        resolved=False,
+        payload={
+            "primary_state": "commit_barrier_exhausted",
+            "facet": {
+                "name": "commit_barrier",
+                "status": "exhausted",
+                "data": {},
+            },
+        },
+        delivery_attempts=delivery_attempts,
+    )
+    bridge._load_current_recovery_notification_intents = lambda _path: [intent]  # type: ignore[assignment]
+
+    def _mark(
+        _workspace: Path,
+        _intent_id: str,
+        *,
+        transport_key: str,
+        record_id: str,
+    ) -> None:
+        delivery_attempts[transport_key] = {
+            "status": "enqueued",
+            "record_id": record_id,
+        }
+
+    bridge._mark_recovery_intent_delivered = _mark  # type: ignore[method-assign]
+
+    await bridge._notify_recovery_for_workspace(workspace, [("123:456", record)])
+    await bridge._notify_recovery_for_workspace(workspace, [("123:456", record)])
+
+    assert len(calls) == 1
+    assert "commit_barrier_exhausted" in calls[0][1]
+
+
 @pytest.mark.asyncio
 async def test_terminal_scan_skips_stale_run_when_newer_terminal_was_already_marked(
     tmp_path: Path,

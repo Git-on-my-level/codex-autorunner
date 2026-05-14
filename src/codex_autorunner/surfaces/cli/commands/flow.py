@@ -294,9 +294,35 @@ def register_flow_commands(
                 typer.echo(f"active_tool: {command.strip()}{suffix}")
         run_state = payload.get("run_state")
         if isinstance(run_state, dict):
-            recovery_state = run_state.get("recovery_state")
-            if isinstance(recovery_state, str) and recovery_state.strip():
-                typer.echo(f"recovery_state: {recovery_state.strip()}")
+            projection = run_state.get("recovery_projection")
+            printed_projection = False
+            if isinstance(projection, dict):
+                primary = projection.get("primary_state")
+                if isinstance(primary, str) and primary.strip():
+                    typer.echo(f"recovery_primary_state: {primary.strip()}")
+                    printed_projection = True
+                facets = projection.get("facets")
+                if isinstance(facets, dict):
+                    for name, raw_facet in facets.items():
+                        if not isinstance(raw_facet, dict):
+                            continue
+                        status_value = raw_facet.get("status")
+                        if not isinstance(status_value, str) or status_value == "clear":
+                            continue
+                        reason_value = raw_facet.get("reason")
+                        reason_suffix = (
+                            f" reason={reason_value.strip()}"
+                            if isinstance(reason_value, str) and reason_value.strip()
+                            else ""
+                        )
+                        typer.echo(
+                            f"recovery_facet: {name} status={status_value}{reason_suffix}"
+                        )
+                        printed_projection = True
+            if not printed_projection:
+                recovery_state = run_state.get("recovery_state")
+                if isinstance(recovery_state, str) and recovery_state.strip():
+                    typer.echo(f"recovery_state: {recovery_state.strip()}")
             worker_status = run_state.get("worker_status")
             if isinstance(worker_status, str) and worker_status.strip():
                 typer.echo(f"worker_status: {worker_status.strip()}")

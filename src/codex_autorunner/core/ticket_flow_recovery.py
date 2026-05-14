@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Mapping, Optional
 
@@ -383,6 +384,103 @@ def _normalize_optional_text(value: Any) -> Optional[str]:
     return text or None
 
 
+def recovery_notification_transport_key(*, transport: str, channel_id: Any) -> str:
+    normalized_transport = str(transport or "").strip().lower() or "unknown"
+    normalized_channel = str(channel_id or "").strip() or "unknown"
+    return f"{normalized_transport}:{normalized_channel}"
+
+
+def recovery_notification_intent_should_deliver(
+    record: RecoveryNotificationIntentRecord,
+    *,
+    transport_key: str,
+    now: Optional[str] = None,
+) -> bool:
+    if record.resolved:
+        return False
+    attempts = record.delivery_attempts
+    previous = attempts.get(transport_key) if isinstance(attempts, Mapping) else None
+    if not isinstance(previous, Mapping):
+        return True
+
+    status = _normalize_optional_text(previous.get("status"))
+    if status in {"enqueued", "delivered"}:
+        return False
+
+    last_attempted_at = _normalize_optional_text(previous.get("last_attempted_at"))
+    if last_attempted_at is None:
+        return False
+    last_attempted = _parse_iso(last_attempted_at)
+    current = _parse_iso(now) if now is not None else datetime.now(timezone.utc)
+    if last_attempted is None or current is None:
+        return False
+    return (current - last_attempted).total_seconds() >= record.cooldown_seconds
+
+
+def format_recovery_notification_intent(
+    record: RecoveryNotificationIntentRecord,
+) -> str:
+    payload = record.payload if isinstance(record.payload, Mapping) else {}
+    primary_state = _normalize_optional_text(payload.get("primary_state"))
+    facet_payload = payload.get("facet")
+    facet = facet_payload if isinstance(facet_payload, Mapping) else {}
+    facet_name = _normalize_optional_text(facet.get("name")) or record.event_type
+    facet_status = _normalize_optional_text(facet.get("status")) or "active"
+
+    lines = [
+        f"Ticket flow recovery update (run {record.run_id}): "
+        f"{primary_state or record.event_type}.",
+        f"Blocker: {facet_name} ({facet_status}).",
+        f"Severity: {record.severity}.",
+    ]
+    if record.reason:
+        lines.append(f"Reason: {record.reason}.")
+
+    raw_data = facet.get("data")
+    data: Mapping[str, Any] = raw_data if isinstance(raw_data, Mapping) else {}
+    if facet_name == RecoveryFacetName.RESTART.value:
+        attempts = data.get("attempts")
+        max_attempts = data.get("max_attempts")
+        if isinstance(attempts, int) and not isinstance(attempts, bool):
+            if isinstance(max_attempts, int) and not isinstance(max_attempts, bool):
+                lines.append(f"Restart attempts: {attempts}/{max_attempts}.")
+            else:
+                lines.append(f"Restart attempts: {attempts}.")
+    if facet_name == RecoveryFacetName.COMMIT_BARRIER.value:
+        ticket = _first_text(data, ("current_ticket", "ticket"), default="")
+        if ticket:
+            lines.append(f"Ticket: {ticket}.")
+        if facet_status == RecoveryFacetStatus.EXHAUSTED.value:
+            lines.append(
+                "Commit barrier retry budget is exhausted; the ticket remains pinned until the worktree is resolved."
+            )
+        else:
+            lines.append(
+                "Commit barrier pending; preserving completed ticket work before advancing."
+            )
+    if facet_name == RecoveryFacetName.STALE_ALIVE.value:
+        stale_reason = _normalize_optional_text(data.get("reason"))
+        if stale_reason:
+            lines.append(f"Stale reason: {stale_reason}.")
+
+    if record.recommended_actions:
+        lines.append("Recommended actions:")
+        lines.extend(f"- `{action}`" for action in record.recommended_actions)
+    return "\n".join(lines)
+
+
+def _parse_iso(raw: Optional[str]) -> Optional[datetime]:
+    if raw is None:
+        return None
+    try:
+        parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
 __all__ = [
     "RecoveryFacet",
     "RecoveryFacetName",
@@ -393,4 +491,7 @@ __all__ = [
     "RecoveryProjection",
     "build_recovery_notification_intents",
     "build_recovery_projection",
+    "format_recovery_notification_intent",
+    "recovery_notification_intent_should_deliver",
+    "recovery_notification_transport_key",
 ]

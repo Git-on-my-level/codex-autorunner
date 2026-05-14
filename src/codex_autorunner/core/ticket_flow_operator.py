@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import shlex
+import sqlite3
 import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -1805,6 +1806,17 @@ def build_ticket_flow_run_state(
         reap_reason=reap_reason,
     )
     notification_intents = build_recovery_notification_intents(recovery_projection)
+    if store is not None:
+        for intent in notification_intents:
+            try:
+                store.upsert_notification_intent(
+                    intent, observed_at=recovery_projection.observed_at
+                )
+            except (OSError, RuntimeError, ValueError, TypeError, sqlite3.Error):
+                logger.debug(
+                    "Failed to persist ticket-flow recovery notification intent",
+                    exc_info=True,
+                )
 
     return {
         "state": state,

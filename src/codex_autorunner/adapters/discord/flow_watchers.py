@@ -19,6 +19,11 @@ from ...core.flows import (
 )
 from ...core.flows.ux_helpers import build_flow_status_snapshot
 from ...core.logging_utils import log_event
+from ...core.ticket_flow_recovery import (
+    format_recovery_notification_intent,
+    recovery_notification_intent_should_deliver,
+    recovery_notification_transport_key,
+)
 from ...core.utils import canonicalize_path
 from ..chat.pause_notifications import (
     format_pause_notification_source,
@@ -159,12 +164,12 @@ def _format_recovery_notification(
 
 def _load_ticket_flow_recovery_notifications(
     workspace_root: Path,
-) -> list[tuple[str, str, str, dict[str, Any]]]:
+) -> list[Any]:
     db_path = workspace_root / ".codex-autorunner" / "flows.db"
     if not db_path.exists():
         return []
     config = load_repo_config(workspace_root)
-    notifications: list[tuple[str, str, str, dict[str, Any]]] = []
+    active_intent_ids: set[str] = set()
     with FlowStore(db_path, durable=config.durable_writes) as store:
         for record in store.list_flow_runs(flow_type="ticket_flow"):
             if record.status == FlowRunStatus.SUPERSEDED:
@@ -173,15 +178,17 @@ def _load_ticket_flow_recovery_notifications(
             run_state = snapshot.get("run_state")
             if not isinstance(run_state, dict):
                 continue
-            fingerprint = _recovery_fingerprint(record.id, run_state)
-            if fingerprint is None:
-                continue
-            message = _format_recovery_notification(
-                run_id=record.id,
-                run_state=run_state,
-            )
-            notifications.append((record.id, fingerprint, message, run_state))
-    return notifications
+            for intent in run_state.get("notification_intents", []):
+                if not isinstance(intent, dict):
+                    continue
+                intent_id = intent.get("intent_id")
+                if isinstance(intent_id, str) and intent_id.strip():
+                    active_intent_ids.add(intent_id)
+        return [
+            intent
+            for intent in store.list_notification_intents(resolved=False)
+            if intent.intent_id in active_intent_ids
+        ]
 
 
 def _format_pause_notification_source(
@@ -435,10 +442,16 @@ async def _scan_and_enqueue_recovery_notifications(service: Any) -> int:
                 channel_id=channel_id,
             )
             continue
-        for run_id, fingerprint, message, run_state in notifications:
-            if binding.get("last_recovery_fingerprint") == fingerprint:
+        for intent in notifications:
+            transport_key = recovery_notification_transport_key(
+                transport="discord", channel_id=channel_id
+            )
+            if not recovery_notification_intent_should_deliver(
+                intent, transport_key=transport_key
+            ):
                 continue
-            record_id = f"recovery:{channel_id}:{fingerprint}"
+            message = format_recovery_notification_intent(intent)
+            record_id = f"recovery:{channel_id}:{intent.intent_id}"
             try:
                 await service._store.enqueue_outbox(
                     OutboxRecord(
@@ -451,7 +464,7 @@ async def _scan_and_enqueue_recovery_notifications(service: Any) -> int:
                 )
                 run_mirror = service._flow_run_mirror(workspace_root)
                 run_mirror.mirror_outbound(
-                    run_id=run_id,
+                    run_id=intent.run_id,
                     platform="discord",
                     event_type="flow_recovery_notice",
                     kind="notification",
@@ -460,21 +473,27 @@ async def _scan_and_enqueue_recovery_notifications(service: Any) -> int:
                     chat_id=channel_id,
                     thread_id=binding.get("guild_id"),
                     message_id=record_id,
-                    meta={"run_state": run_state},
+                    meta={
+                        "intent_id": intent.intent_id,
+                        "event_type": intent.event_type,
+                        "severity": intent.severity,
+                        "payload": dict(intent.payload),
+                    },
                 )
-                await service._store.mark_recovery_seen(
-                    channel_id=channel_id,
-                    fingerprint=fingerprint,
+                _mark_ticket_flow_recovery_intent_delivered(
+                    workspace_root,
+                    intent.intent_id,
+                    transport_key=transport_key,
+                    record_id=record_id,
                 )
-                binding["last_recovery_fingerprint"] = fingerprint
-            except (OSError, ValueError, KeyError, TypeError) as exc:
+            except (OSError, RuntimeError, ValueError, KeyError, TypeError) as exc:
                 log_event(
                     service._logger,
                     logging.WARNING,
                     "discord.recovery_watch.enqueue_failed",
                     exc=exc,
                     channel_id=channel_id,
-                    run_id=run_id,
+                    run_id=intent.run_id,
                 )
                 continue
             log_event(
@@ -482,11 +501,30 @@ async def _scan_and_enqueue_recovery_notifications(service: Any) -> int:
                 logging.INFO,
                 "discord.recovery_watch.notified",
                 channel_id=channel_id,
-                run_id=run_id,
-                fingerprint=fingerprint,
+                run_id=intent.run_id,
+                intent_id=intent.intent_id,
             )
             notified += 1
     return notified
+
+
+def _mark_ticket_flow_recovery_intent_delivered(
+    workspace_root: Path,
+    intent_id: str,
+    *,
+    transport_key: str,
+    record_id: str,
+) -> None:
+    db_path = workspace_root / ".codex-autorunner" / "flows.db"
+    if not db_path.exists():
+        return
+    config = load_repo_config(workspace_root)
+    with FlowStore(db_path, durable=config.durable_writes) as store:
+        store.mark_notification_intent_delivered(
+            intent_id,
+            transport=transport_key,
+            attempt={"status": "enqueued", "record_id": record_id},
+        )
 
 
 async def _scan_and_enqueue_terminal_notifications(service: Any) -> int:
