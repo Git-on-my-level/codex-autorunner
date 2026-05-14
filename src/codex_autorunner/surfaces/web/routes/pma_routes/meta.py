@@ -185,12 +185,7 @@ def build_pma_meta_routes(
         effective_default_agent = (
             configured_default_agent
             if configured_default_agent in default_eligible_agent_id_set
-            else (
-                default_agent
-                if str(default_agent or "").strip().lower()
-                in default_eligible_agent_id_set
-                else fallback_default_agent
-            )
+            else fallback_default_agent
         )
         try:
             state = load_state(request.app.state.engine.state_path)
