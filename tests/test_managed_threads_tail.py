@@ -420,7 +420,7 @@ def test_managed_thread_tail_events_streams_persisted_timeline_events(
         )
         resp = client.get(
             f"/hub/pma/threads/{managed_thread_id}/tail/events",
-            params={"once": "true"},
+            params={"once": "true", "replay": "true"},
         )
 
     assert resp.status_code == 200
@@ -506,7 +506,7 @@ def test_managed_thread_tail_events_ignores_harness_runtime_stream(
         )
         resp = client.get(
             f"/hub/pma/threads/{managed_thread_id}/tail/events",
-            params={"once": "true"},
+            params={"once": "true", "replay": "true"},
         )
 
     assert resp.status_code == 200
@@ -561,7 +561,7 @@ def test_managed_thread_tail_events_picks_up_newly_persisted_timeline(
 
         resp = client.get(
             f"/hub/pma/threads/{managed_thread_id}/tail/events",
-            params={"once": True},
+            params={"once": True, "replay": True},
         )
 
     assert resp.status_code == 200
@@ -569,6 +569,66 @@ def test_managed_thread_tail_events_picks_up_newly_persisted_timeline(
     assert "event: timeline" in body
     assert "assistant_update" in body
     assert "arrived-after-open" in body
+
+
+def test_managed_thread_tail_events_default_attach_does_not_replay_history(
+    hub_env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _enable_pma(hub_env.hub_root)
+    monkeypatch.setattr(tail_stream, "_managed_thread_harness", lambda *args: None)
+    app = create_hub_app(hub_env.hub_root)
+
+    with TestClient(app) as client:
+        managed_thread_id, managed_turn_id = _seed_running_managed_thread(
+            hub_env,
+            app,
+            agent="codex",
+            backend_thread_id="codex-session-idle",
+            backend_turn_id="codex-turn-idle",
+            name="completed idle stream",
+        )
+        persist_turn_timeline(
+            hub_env.hub_root,
+            execution_id=managed_turn_id,
+            target_kind="thread_target",
+            target_id=managed_thread_id,
+            repo_id=hub_env.repo_id,
+            metadata={"agent": "codex", "status": "ok"},
+            events=[
+                OutputDelta(
+                    timestamp="2026-04-06T10:00:00Z",
+                    content="historical output",
+                    delta_type="assistant_stream",
+                )
+            ],
+        )
+        store = ManagedThreadStore(hub_env.hub_root)
+        store.mark_turn_finished(
+            managed_turn_id,
+            status="ok",
+            assistant_text="done",
+            backend_turn_id="codex-turn-idle",
+        )
+
+        resp = client.get(
+            f"/hub/pma/threads/{managed_thread_id}/tail/events",
+            params={"once": True},
+        )
+
+    assert resp.status_code == 200
+    assert resp.headers["content-type"].startswith("text/event-stream")
+    state = json.loads(
+        next(
+            line.removeprefix("data: ")
+            for line in resp.text.splitlines()
+            if line.startswith("data: ")
+        )
+    )
+    assert state["events"] == []
+    assert state["last_event_id"] == 1
+    assert "event: tail" not in resp.text
+    assert "event: timeline" not in resp.text
+    assert "historical output" not in resp.text
 
 
 def test_managed_thread_tail_snapshot_includes_opencode_list_progress_events(

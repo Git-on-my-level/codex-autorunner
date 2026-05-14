@@ -674,6 +674,29 @@ async def test_client_logs_official_prompt_lifecycle_trace(
 
 
 @pytest.mark.asyncio
+async def test_client_aggregates_repetitive_official_stream_trace(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    client = ACPClient(
+        fixture_command("official_cumulative_stream_chunks"), cwd=tmp_path
+    )
+    try:
+        caplog.set_level("INFO")
+        created = await client.create_session(cwd=str(tmp_path))
+        handle = await client.start_prompt(created.session_id, "Reply with exactly OK.")
+        await handle.wait()
+
+        assert caplog.text.count('"event":"acp.prompt.session_update"') == 2
+        assert '"event":"acp.prompt.stream_summary"' in caplog.text
+        assert '"agent_message_chunk":2' in caplog.text
+        assert '"agent_thought_chunk":1' in caplog.text
+        assert '"session/update":3' in caplog.text
+    finally:
+        await client.close()
+
+
+@pytest.mark.asyncio
 async def test_client_prompt_streams_updates_and_calls_permission_hook(
     tmp_path: Path,
 ) -> None:
