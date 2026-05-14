@@ -60,6 +60,90 @@ describe('chat index session', () => {
     expect(rows.map((chat) => chat.id)).toEqual(['chat-active', 'chat-archived', 'chat-new']);
     expect(rows[0].title).toBe('Active chat renamed');
   });
+
+  it('ignores incremental chat events already covered by the latest snapshot cursor', async () => {
+    const store = new ReadModelEntityStore();
+    const streamOptions: ChatSurfaceStreamOptions[] = [];
+    const openStream = vi.fn((options: ChatSurfaceStreamOptions): StreamSubscription => {
+      streamOptions.push(options);
+      return { close: vi.fn() };
+    });
+    const session = createChatIndexSession({ api: mockApi(), store, openStream });
+
+    session.start();
+    await session.refresh();
+
+    const options = streamOptions[0];
+    if (!options) throw new Error('stream was not opened');
+    options.onEvent({
+      kind: 'chat_snapshot',
+      lastEventId: '12',
+      payload: {
+        cursor: 12,
+        surfaces: [chatSurface('chat-active', 'Snapshot title')]
+      }
+    });
+    options.onEvent({
+      kind: 'chat_event',
+      lastEventId: '11',
+      payload: {
+        cursor: 11,
+        event_type: 'queue.state_changed',
+        surface: { surface_kind: 'pma', surface_key: 'chat-active' },
+        managed_thread_id: 'chat-active',
+        lifecycle: 'queued',
+        lifecycle_status: 'active',
+        status: 'queued',
+        occurred_at: '2026-05-13T00:00:00Z'
+      }
+    });
+
+    const rows = selectPmaChats(store.snapshot());
+    expect(rows[0]).toMatchObject({
+      id: 'chat-active',
+      title: 'Snapshot title',
+      status: 'idle',
+      updatedAt: '2026-05-12T00:00:00Z'
+    });
+  });
+
+  it('lets metadata-only chat events update titles without changing activity time', async () => {
+    const store = new ReadModelEntityStore();
+    const streamOptions: ChatSurfaceStreamOptions[] = [];
+    const openStream = vi.fn((options: ChatSurfaceStreamOptions): StreamSubscription => {
+      streamOptions.push(options);
+      return { close: vi.fn() };
+    });
+    const session = createChatIndexSession({ api: mockApi(), store, openStream });
+
+    session.start();
+    await session.refresh();
+
+    const options = streamOptions[0];
+    if (!options) throw new Error('stream was not opened');
+    options.onEvent({
+      kind: 'chat_event',
+      lastEventId: '13',
+      payload: {
+        cursor: 13,
+        event_type: 'channel_directory.discovered',
+        surface: { surface_kind: 'pma', surface_key: 'chat-active' },
+        managed_thread_id: 'chat-active',
+        lifecycle: 'discovered',
+        lifecycle_status: 'active',
+        status: 'discovered',
+        occurred_at: '2026-05-13T00:00:00Z',
+        details: { channel: { display: 'Agent Nexus / #codex' } }
+      }
+    });
+
+    const rows = selectPmaChats(store.snapshot());
+    expect(rows[0]).toMatchObject({
+      id: 'chat-active',
+      title: 'Agent Nexus / #codex',
+      updatedAt: '2026-05-12T00:00:00Z'
+    });
+  });
 });
 
 function mockApi(): PmaApiClient {

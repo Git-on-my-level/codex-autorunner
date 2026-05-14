@@ -240,9 +240,9 @@ def test_pma_agents_does_not_default_to_unavailable_synthetic_hermes(
         "codex_autorunner.surfaces.web.routes.pma_routes.meta.get_agent_descriptor",
         lambda agent_id, _context: hermes_descriptor if agent_id == "hermes" else None,
     )
-    monkeypatch.setattr(
-        "codex_autorunner.surfaces.web.routes.pma_routes.meta._available_agents",
-        lambda _request: (
+
+    def _mock_available_agents(_request):
+        return (
             [
                 {
                     "id": "opencode",
@@ -251,8 +251,18 @@ def test_pma_agents_does_not_default_to_unavailable_synthetic_hermes(
                     "capability_projection": {},
                 }
             ],
-            "codex",
-        ),
+            "opencode",
+        )
+
+    # Patch both modules: `meta` keeps its own binding from `from ..agents import
+    # _available_agents`, so patching only `agents` is not enough under xdist.
+    monkeypatch.setattr(
+        "codex_autorunner.surfaces.web.routes.pma_routes.meta._available_agents",
+        _mock_available_agents,
+    )
+    monkeypatch.setattr(
+        "codex_autorunner.surfaces.web.routes.agents._available_agents",
+        _mock_available_agents,
     )
 
     app = FastAPI()
@@ -299,6 +309,85 @@ def test_pma_agents_does_not_default_to_unavailable_synthetic_hermes(
     payload = response.json()
     agent_ids = {agent["id"] for agent in payload["agents"]}
     assert "hermes" in agent_ids
+    assert payload["default"] == "opencode"
+    assert payload["defaults"]["agent"] == "opencode"
+
+
+def test_pma_agents_default_uses_registry_availability_over_serialized_hint(
+    monkeypatch, tmp_path
+) -> None:
+    opencode_descriptor = AgentDescriptor(
+        id="opencode",
+        name="OpenCode",
+        capabilities=frozenset(),
+        make_harness=lambda _ctx: object(),
+    )
+    monkeypatch.setattr(
+        "codex_autorunner.surfaces.web.routes.pma_routes.meta.get_available_agents",
+        lambda _context: {"opencode": opencode_descriptor},
+    )
+    monkeypatch.setattr(
+        "codex_autorunner.surfaces.web.routes.pma_routes.meta._available_agents",
+        lambda _request: (
+            [
+                {
+                    "id": "codex",
+                    "name": "Codex",
+                    "capabilities": [],
+                    "capability_projection": {},
+                },
+                {
+                    "id": "opencode",
+                    "name": "OpenCode",
+                    "capabilities": [],
+                    "capability_projection": {},
+                },
+            ],
+            "codex",
+        ),
+    )
+
+    app = FastAPI()
+    router = app.router
+    state_path = tmp_path / "state.sqlite3"
+    save_state(
+        state_path,
+        RunnerState(
+            last_run_id=None,
+            status="idle",
+            last_exit_code=None,
+            last_run_started_at=None,
+            last_run_finished_at=None,
+        ),
+    )
+    app.state.app_server_supervisor = MagicMock()
+    app.state.opencode_supervisor = MagicMock()
+    app.state.app_server_events = MagicMock()
+    app.state.config = SimpleNamespace(
+        root=_TEST_HUB_ROOT,
+        raw={"pma": {"enabled": True, "default_agent": "hermes"}},
+        agent_binary=lambda _agent_id: "opencode",
+    )
+    app.state.engine = SimpleNamespace(
+        repo_root=_TEST_REPO_ROOT,
+        state_path=state_path,
+    )
+
+    def get_runtime_state():
+        return SimpleNamespace(
+            get_safety_checker=lambda _hub_root, _request: MagicMock(
+                _audit_log=MagicMock(list_recent=lambda limit: []),
+                get_stats=lambda: {},
+            )
+        )
+
+    build_pma_meta_routes(router, get_runtime_state)
+
+    with TestClient(app) as client:
+        response = client.get("/agents")
+
+    assert response.status_code == 200
+    payload = response.json()
     assert payload["default"] == "opencode"
     assert payload["defaults"]["agent"] == "opencode"
 

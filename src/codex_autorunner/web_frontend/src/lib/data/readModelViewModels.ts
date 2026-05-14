@@ -71,7 +71,7 @@ export function legacyChatIndexRecordToChatIndexRow(raw: JsonRecord): ChatIndexR
     title: stringValue(raw.title ?? raw.display_name, chatId) ?? chatId,
     status: legacyChatIndexStatus(lifecycle, lifecycleStatus, runtimeStatus, queueDepth),
     unreadCount: numberValue(raw.unread_count ?? raw.unreadCount) || (raw.unread === true ? 1 : 0),
-    lastActivityAt: stringValue(raw.updated_at ?? raw.created_at),
+    lastActivityAt: stringValue(raw.last_activity_at ?? raw.updated_at ?? raw.created_at),
     repoId: stringValue(raw.repo_id),
     worktreeId: stringValue(raw.worktree_id ?? raw.worktree_repo_id),
     ticketId: resourceKind === 'ticket' ? resourceId : stringValue(raw.ticket_id ?? raw.current_ticket_id),

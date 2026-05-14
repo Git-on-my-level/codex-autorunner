@@ -122,8 +122,15 @@ def build_pma_meta_routes(
     @router.get("/agents")
     async def list_pma_agents(request: Request) -> dict[str, Any]:
         context = get_pma_request_context(request)
-        if not get_available_agents(context.agent_context):
+        available_descriptors = get_available_agents(context.agent_context)
+        if not available_descriptors:
             raise HTTPException(status_code=404, detail="PMA unavailable")
+        default_eligible_agent_ids = [
+            str(agent_id or "").strip().lower()
+            for agent_id in available_descriptors.keys()
+            if str(agent_id or "").strip().lower()
+        ]
+        default_eligible_agent_id_set = set(default_eligible_agent_ids)
         agents, default_agent = _available_agents(request)
         defaults = _get_pma_config(request)
         configured_default_agent = (
@@ -167,15 +174,21 @@ def build_pma_meta_routes(
                 for agent in agents
                 if isinstance(agent, dict)
                 and str(agent.get("id") or "").strip().lower()
+                in default_eligible_agent_id_set
             ),
-            default_agent,
+            (
+                default_eligible_agent_ids[0]
+                if default_eligible_agent_ids
+                else default_agent
+            ),
         )
         effective_default_agent = (
             configured_default_agent
-            if configured_default_agent in available_agent_ids
+            if configured_default_agent in default_eligible_agent_id_set
             else (
                 default_agent
-                if str(default_agent or "").strip().lower() in available_agent_ids
+                if str(default_agent or "").strip().lower()
+                in default_eligible_agent_id_set
                 else fallback_default_agent
             )
         )

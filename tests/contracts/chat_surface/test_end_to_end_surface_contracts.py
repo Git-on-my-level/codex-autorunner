@@ -436,16 +436,7 @@ def test_end_to_end_chat_surface_contracts_keep_routes_in_sync(hub_env) -> None:
             == pma_threads[thread_id]["normalized_status"]
         )
 
-    event_payloads = _event_payloads(generic_response.text, "chat.event")
-    assert {event["event_type"] for event in event_payloads} >= {
-        "surface.bound",
-        "surface.rebound",
-        "surface.archived",
-        "queue.state_changed",
-        "delivery.status_changed",
-        "notification.reply_context_changed",
-        "channel_directory.discovered",
-    }
+    assert _event_payloads(generic_response.text, "chat.event") == []
 
 
 def test_pma_chat_events_use_numeric_resume_ids_and_tolerate_revision_ids(
@@ -514,6 +505,7 @@ def test_chat_surface_contract_stream_resumes_after_startup_recovery(hub_env) ->
     assert [
         event["event_type"] for event in recovered_service.events_since(first_cursor)
     ] == ["execution.progress"]
+    route_snapshot = _event_payloads(response.text, "chat.snapshot")[0]
     route_events = _event_payloads(response.text, "chat.event")
-    assert [event["event_type"] for event in route_events] == ["execution.progress"]
-    assert route_events[0]["lifecycle"] == "running"
+    assert route_snapshot["cursor"] == first_cursor + 1
+    assert route_events == []
