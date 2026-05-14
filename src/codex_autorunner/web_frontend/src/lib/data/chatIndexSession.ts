@@ -48,6 +48,7 @@ export function createChatIndexSession(deps: ChatIndexSessionDeps = {}): ChatInd
   const state = writable<ChatIndexSessionState>({ status: 'idle', error: null });
   let streamSubscription: StreamSubscription | null = null;
   let refreshPromise: Promise<void> | null = null;
+  let streamCursor = 0;
 
   function start(): void {
     if (streamSubscription) return;
@@ -108,10 +109,16 @@ export function createChatIndexSession(deps: ChatIndexSessionDeps = {}): ChatInd
       const nextChats = mapChatSurfaceSnapshotToPmaChats(event.payload);
       const reconciled = reconcileChatSurfaceSnapshot(currentChats, nextChats, null);
       replacePmaChatList(preserveExistingChatOrder(currentChats, reconciled.chats));
+      streamCursor = Math.max(streamCursor, streamCursorFromPayload(event.payload), streamCursorFromId(event.lastEventId));
       return;
     }
     if (event.kind === 'chat_event') {
-      replacePmaChatList(reconcileChatSurfaceEvent(selectPmaChats(store.snapshot()), event.payload));
+      const eventCursor = streamCursorFromPayload(event.payload) || streamCursorFromId(event.lastEventId);
+      if (eventCursor > 0 && eventCursor <= streamCursor) return;
+      const currentChats = selectPmaChats(store.snapshot());
+      const nextChats = reconcileChatSurfaceEvent(currentChats, event.payload);
+      replacePmaChatList(preserveMetadataOnlyEventActivity(currentChats, nextChats, event.payload));
+      if (eventCursor > 0) streamCursor = Math.max(streamCursor, eventCursor);
     }
   }
 
@@ -150,6 +157,52 @@ function preserveExistingChatOrder(currentChats: ReturnType<typeof selectPmaChat
     ordered.push(next);
   }
   return ordered;
+}
+
+function preserveMetadataOnlyEventActivity(
+  currentChats: ReturnType<typeof selectPmaChats>,
+  nextChats: ReturnType<typeof selectPmaChats>,
+  eventPayload: JsonRecord
+): ReturnType<typeof selectPmaChats> {
+  if (chatEventMovesRows(eventPayload)) return nextChats;
+  const currentById = new Map(currentChats.map((chat) => [chat.id, chat]));
+  return nextChats.map((chat) => {
+    const current = currentById.get(chat.id);
+    if (!current || !current.updatedAt) return chat;
+    return {
+      ...chat,
+      updatedAt: current.updatedAt,
+      raw: {
+        ...chat.raw,
+        last_activity_at: current.updatedAt
+      }
+    };
+  });
+}
+
+function chatEventMovesRows(eventPayload: JsonRecord): boolean {
+  const eventType = typeof eventPayload.event_type === 'string' ? eventPayload.event_type : '';
+  return !new Set([
+    'channel_directory.discovered',
+    'notification.reply_context_changed',
+    'surface.bound',
+    'surface.rebound'
+  ]).has(eventType);
+}
+
+function streamCursorFromPayload(payload: JsonRecord): number {
+  return streamCursorFromUnknown(payload.cursor);
+}
+
+function streamCursorFromId(id: string | null): number {
+  return streamCursorFromUnknown(id);
+}
+
+function streamCursorFromUnknown(value: unknown): number {
+  const raw = typeof value === 'number' ? String(value) : typeof value === 'string' ? value.trim() : '';
+  if (!/^\d+$/.test(raw)) return 0;
+  const parsed = Number(raw);
+  return Number.isSafeInteger(parsed) && parsed >= 0 ? parsed : 0;
 }
 
 function asRecords(value: unknown): JsonRecord[] {

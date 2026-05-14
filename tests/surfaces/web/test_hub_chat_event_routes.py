@@ -59,7 +59,9 @@ def _event_payloads(text: str, event_name: str) -> list[dict]:
     return payloads
 
 
-def test_hub_chat_events_streams_snapshot_and_incremental_events(hub_env) -> None:
+def test_hub_chat_events_streams_authoritative_snapshot_without_stale_replay(
+    hub_env,
+) -> None:
     _seed_thread(hub_env.hub_root)
     journal = SQLiteChatSurfaceEventJournal(hub_env.hub_root, durable=True)
     first = journal.append_event(
@@ -96,8 +98,8 @@ def test_hub_chat_events_streams_snapshot_and_incremental_events(hub_env) -> Non
         (surface["surface_kind"], surface["surface_key"])
         for surface in snapshots[0]["surfaces"]
     }
-    assert [event["cursor"] for event in events] == [second.cursor]
-    assert events[0]["lifecycle"] == "queued"
+    assert snapshots[0]["cursor"] == second.cursor
+    assert events == []
 
 
 def test_hub_chat_events_accepts_last_event_id_cursor(hub_env) -> None:
@@ -125,7 +127,9 @@ def test_hub_chat_events_accepts_last_event_id_cursor(hub_env) -> None:
 
     assert resp.status_code == 200
     events = _event_payloads(resp.text, "chat.event")
-    assert [event["cursor"] for event in events] == [second.cursor]
+    snapshots = _event_payloads(resp.text, "chat.snapshot")
+    assert snapshots[0]["cursor"] == second.cursor
+    assert events == []
 
 
 def test_hub_chat_events_rejects_malformed_cursor(hub_env) -> None:
@@ -137,8 +141,7 @@ def test_hub_chat_events_rejects_malformed_cursor(hub_env) -> None:
     assert resp.json()["detail"] == "cursor must be a non-negative integer"
 
 
-def test_hub_chat_surface_event_includes_thread_agent_id_in_details(hub_env) -> None:
-    """Incremental SSE events for managed threads expose agent_id for client reconciliation."""
+def test_hub_chat_surface_snapshot_includes_thread_agent_id(hub_env) -> None:
     _seed_thread(hub_env.hub_root)
     journal = SQLiteChatSurfaceEventJournal(hub_env.hub_root, durable=True)
     journal.append_event(
@@ -164,12 +167,13 @@ def test_hub_chat_surface_event_includes_thread_agent_id_in_details(hub_env) -> 
     client = TestClient(create_hub_app(hub_env.hub_root))
     resp = client.get("/hub/chat/events", params={"cursor": "0", "once": "true"})
     assert resp.status_code == 200
-    events = _event_payloads(resp.text, "chat.event")
-    assert events
-    agent_ids = {
-        event.get("details", {}).get("thread", {}).get("agent_id") for event in events
-    }
-    assert "codex" in agent_ids
+    snapshots = _event_payloads(resp.text, "chat.snapshot")
+    surface = next(
+        item
+        for item in snapshots[0]["surfaces"]
+        if item["surface_kind"] == "pma" and item["surface_key"] == "thread-1"
+    )
+    assert surface["metadata"]["agent_id"] == "codex"
 
 
 def test_hub_chat_events_can_emit_heartbeat_frame(hub_env) -> None:

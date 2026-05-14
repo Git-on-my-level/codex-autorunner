@@ -653,6 +653,10 @@ class ChatSurfaceReadService:
             lifecycle_status = _normalize_text(row["lifecycle_status"]) or "active"
             metadata = _json_object(_row_get(row, "metadata_json"))
             chat_kind = _normalize_text(metadata.get("chat_kind"))
+            last_activity_at = _max_iso(
+                _normalize_text(row["updated_at"]),
+                _normalize_text(execution["created_at"]) if execution else None,
+            )
             projection.merge(
                 lifecycle=lifecycle,
                 lifecycle_status=lifecycle_status,
@@ -663,10 +667,7 @@ class ChatSurfaceReadService:
                 managed_thread_id=thread_id,
                 display_name=_normalize_text(row["display_name"]) or thread_id,
                 created_at=_normalize_text(row["created_at"]),
-                updated_at=_max_iso(
-                    _normalize_text(row["updated_at"]),
-                    _normalize_text(execution["created_at"]) if execution else None,
-                ),
+                updated_at=last_activity_at,
                 archived_at=(
                     _normalize_text(row["updated_at"])
                     if lifecycle_status == "archived"
@@ -682,6 +683,7 @@ class ChatSurfaceReadService:
                     ),
                     "model": _normalize_text(metadata.get("model")),
                     "thread_kind": _normalize_text(metadata.get("thread_kind")),
+                    "last_activity_at": last_activity_at,
                     "runtime_status": _normalize_text(row["runtime_status"]),
                     "target_runtime_status": _normalize_text(row["runtime_status"]),
                     "queue_depth": queue_depth_by_thread.get(thread_id, 0),
@@ -728,6 +730,10 @@ class ChatSurfaceReadService:
                 lifecycle = _choose_lifecycle(
                     lifecycle, _status_to_lifecycle(delivery["state"])
                 )
+            binding_last_activity_at = _max_iso(
+                _normalize_text(_row_get(owner, "updated_at")),
+                _normalize_text(execution["created_at"]) if execution else None,
+            )
             projection = _projection(projections, surface_kind, surface_key)
             projection.merge(
                 lifecycle=lifecycle,
@@ -752,6 +758,7 @@ class ChatSurfaceReadService:
                 metadata={
                     "mode": _normalize_text(row["mode"]),
                     "agent_id": _normalize_text(row["agent_id"]),
+                    "last_activity_at": binding_last_activity_at,
                     "queue_depth": queue_depth_by_thread.get(
                         binding_thread_id or "", 0
                     ),
@@ -924,6 +931,7 @@ def _chat_index_rows_from_surfaces(
                     "lifecycle_status": surface.get("lifecycle_status"),
                     "runtime_status": metadata_map.get("runtime_status"),
                     "latest_event_cursor": surface.get("latest_event_cursor"),
+                    "last_activity_at": metadata_map.get("last_activity_at"),
                     "updated_at": surface.get("updated_at"),
                     "created_at": surface.get("created_at"),
                     "last_message_preview": metadata_map.get("last_message_preview"),
@@ -953,6 +961,8 @@ def _chat_index_rows_from_surfaces(
                 "runtime_status": metadata_map.get("runtime_status"),
                 "target_runtime_status": metadata_map.get("target_runtime_status"),
                 "latest_event_cursor": surface.get("latest_event_cursor"),
+                "last_activity_at": metadata_map.get("last_activity_at")
+                or surface.get("updated_at"),
                 "updated_at": surface.get("updated_at"),
                 "created_at": surface.get("created_at"),
                 "last_message_preview": metadata_map.get("last_message_preview"),
@@ -968,6 +978,9 @@ def _chat_index_rows_from_surfaces(
         row["surfaces"].append(base_surface)
         row["lifecycle"] = _choose_lifecycle(
             str(row["lifecycle"] or "bound"), surface.get("lifecycle")
+        )
+        row["last_activity_at"] = _max_iso(
+            row.get("last_activity_at"), metadata_map.get("last_activity_at")
         )
         row["updated_at"] = _max_iso(row.get("updated_at"), surface.get("updated_at"))
         row["latest_event_cursor"] = (
@@ -1158,7 +1171,12 @@ def _filter_chat_index_rows(
 
 def _chat_index_sort_key(row: Mapping[str, Any]) -> tuple[int, float, str]:
     priority = 1 if row.get("unread") else 0
-    raw = str(row.get("updated_at") or row.get("created_at") or "")
+    raw = str(
+        row.get("last_activity_at")
+        or row.get("updated_at")
+        or row.get("created_at")
+        or ""
+    )
     parsed = _parse_iso_timestamp(raw)
     updated_key = float("inf") if parsed is None else -parsed.timestamp()
     return (

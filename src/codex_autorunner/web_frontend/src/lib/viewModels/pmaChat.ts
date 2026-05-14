@@ -506,7 +506,7 @@ export function reconcileChatSurfaceEvent(
       agentId: eventChat.agentId ?? chat.agentId,
       agentProfile: eventChat.agentProfile ?? chat.agentProfile,
       model: eventChat.model ?? chat.model,
-      title: eventChat.title.includes(':') ? chat.title : eventChat.title,
+      title: isProtocolIdTitle(eventChat.title) ? chat.title : eventChat.title,
       raw: {
         ...chat.raw,
         ...eventChat.raw
@@ -515,6 +515,10 @@ export function reconcileChatSurfaceEvent(
   });
   if (!found) nextChats.push(eventChat);
   return nextChats;
+}
+
+function isProtocolIdTitle(title: string): boolean {
+  return /^(discord|telegram):\S+$/i.test(title.trim());
 }
 
 export function reconcileChatSurfaceSnapshot(

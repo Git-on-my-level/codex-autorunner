@@ -50,6 +50,7 @@ def build_hub_chat_event_routes(context: HubAppContext) -> APIRouter:
 
         async def _stream() -> Any:
             snapshot = await asyncio.to_thread(service.snapshot, limit=limit)
+            last_cursor = max(parsed_cursor, int(snapshot.get("cursor") or 0))
             yield _sse_frame(
                 "chat.snapshot",
                 snapshot,
@@ -58,10 +59,9 @@ def build_hub_chat_event_routes(context: HubAppContext) -> APIRouter:
             if include_heartbeat:
                 yield ": keep-alive\n\n"
 
-            last_cursor = parsed_cursor
             pending = await asyncio.to_thread(
                 service.events_since,
-                parsed_cursor,
+                last_cursor,
                 limit=event_limit,
             )
             for event_payload in pending:

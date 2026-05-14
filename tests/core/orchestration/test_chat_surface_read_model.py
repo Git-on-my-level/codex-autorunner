@@ -318,6 +318,56 @@ def test_chat_surface_read_model_keeps_queued_execution_when_runtime_completed(
     assert surface["metadata"]["active_turn_id"] == f"{thread_id}-turn-b"
 
 
+def test_chat_index_sorts_by_conversation_activity_not_metadata_hydration(
+    tmp_path: Path,
+) -> None:
+    hub_root = tmp_path / "hub"
+    _seed_thread(hub_root, thread_id="thread-older")
+    _seed_thread(hub_root, thread_id="thread-newer")
+    with open_orchestration_sqlite(hub_root, durable=False, migrate=True) as conn:
+        conn.execute(
+            "UPDATE orch_thread_targets SET updated_at = ? WHERE thread_target_id = ?",
+            ("2026-05-11T00:00:10Z", "thread-older"),
+        )
+        conn.execute(
+            "UPDATE orch_thread_targets SET display_name = ? WHERE thread_target_id = ?",
+            ("discord:channel-older", "thread-older"),
+        )
+        conn.execute(
+            "UPDATE orch_thread_targets SET updated_at = ? WHERE thread_target_id = ?",
+            ("2026-05-11T00:05:00Z", "thread-newer"),
+        )
+    OrchestrationBindingStore(hub_root, durable=False).upsert_binding(
+        surface_kind="discord",
+        surface_key="channel-older",
+        thread_target_id="thread-older",
+        repo_id="repo-1",
+        resource_kind="repo",
+        resource_id="repo-1",
+        metadata={"display_name": "discord:channel-older"},
+    )
+    ChannelDirectoryStore(hub_root).record_seen(
+        "discord",
+        "channel-older",
+        None,
+        "Agent Nexus / #codex",
+    )
+
+    index = ChatSurfaceReadService(hub_root, durable=False).chat_index_snapshot(
+        limit=20
+    )
+
+    assert [row["managed_thread_id"] for row in index["rows"][:2]] == [
+        "thread-newer",
+        "thread-older",
+    ]
+    older = next(
+        row for row in index["rows"] if row["managed_thread_id"] == "thread-older"
+    )
+    assert older["title"] == "Agent Nexus / #codex"
+    assert older["last_activity_at"] == "2026-05-11T00:00:10Z"
+
+
 def test_chat_index_and_detail_prefer_bound_chat_display_for_fallback_titles(
     tmp_path: Path,
 ) -> None:

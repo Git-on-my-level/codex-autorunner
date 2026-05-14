@@ -538,6 +538,54 @@ describe('PMA chat view helpers', () => {
     });
   });
 
+  it('accepts human channel titles that contain colons during event reconciliation', () => {
+    const current: PmaChatSummary[] = [
+      {
+        ...baseChat,
+        id: 'thread-1',
+        title: 'discord:1495134681929355404',
+        raw: { binding_kind: 'discord', binding_id: '1495134681929355404', surface_kind: 'discord', surface_key: '1495134681929355404' }
+      }
+    ];
+
+    const next = reconcileChatSurfaceEvent(current, {
+      event_type: 'channel_directory.discovered',
+      surface: { surface_kind: 'discord', surface_key: '1495134681929355404' },
+      managed_thread_id: 'thread-1',
+      lifecycle: 'discovered',
+      lifecycle_status: 'active',
+      status: 'discovered',
+      occurred_at: '2026-05-04T01:00:00Z',
+      details: { channel: { display: 'guild:149 / #codex' } }
+    });
+
+    expect(next[0]?.title).toBe('guild:149 / #codex');
+  });
+
+  it('does not replace a chat title with a protocol id fallback from events', () => {
+    const current: PmaChatSummary[] = [
+      {
+        ...baseChat,
+        id: 'thread-1',
+        title: 'Agent Nexus / #codex',
+        raw: { binding_kind: 'discord', binding_id: '1495134681929355404', surface_kind: 'discord', surface_key: '1495134681929355404' }
+      }
+    ];
+
+    const next = reconcileChatSurfaceEvent(current, {
+      event_type: 'surface.bound',
+      surface: { surface_kind: 'discord', surface_key: '1495134681929355404' },
+      managed_thread_id: 'thread-1',
+      lifecycle: 'bound',
+      lifecycle_status: 'active',
+      status: 'bound',
+      occurred_at: '2026-05-04T01:00:00Z',
+      details: { channel: { display: 'discord:1495134681929355404' } }
+    });
+
+    expect(next[0]?.title).toBe('Agent Nexus / #codex');
+  });
+
   it('maps chat surface event thread details into metadata.agent_id', () => {
     const chat = mapChatSurfaceEventToPmaChatSummary({
       event_type: 'lifecycle.status_changed',
