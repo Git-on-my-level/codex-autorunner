@@ -7,8 +7,10 @@ from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Mapping, Optional
 
-from .notification_intent_records import FlowNotificationIntentRecord
+from .flows.notification_intent_records import FlowNotificationIntentRecord
 from .text_utils import _iso_now
+
+RecoveryNotificationIntentRecord = FlowNotificationIntentRecord
 
 
 class RecoveryFacetName(str, Enum):
@@ -451,6 +453,7 @@ __all__ = [
     "RecoveryIntentSeverity",
     "RecoveryNotificationIntent",
     "FlowNotificationIntentRecord",
+    "RecoveryNotificationIntentRecord",
     "RecoveryProjection",
     "build_recovery_notification_intents",
     "build_recovery_projection",

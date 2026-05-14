@@ -640,7 +640,9 @@ async def test_terminal_scan_failure_sends_degraded_notice_once_until_recovery(
 
 
 @pytest.mark.anyio
-async def test_recovery_intent_sends_once_per_telegram_topic(tmp_path: Path) -> None:
+async def test_recovery_intent_sends_once_per_telegram_topic(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     workspace = tmp_path / "tg-recovery"
     _init_repo(workspace)
     record = _DummyRecord(workspace)
@@ -694,7 +696,10 @@ async def test_recovery_intent_sends_once_per_telegram_topic(tmp_path: Path) -> 
         },
         delivery_attempts=delivery_attempts,
     )
-    bridge._load_current_recovery_notification_intents = lambda _path: [intent]  # type: ignore[assignment]
+    monkeypatch.setattr(
+        "codex_autorunner.adapters.telegram.ticket_flow_bridge.list_active_ticket_flow_notification_intents",
+        lambda _path: [intent],
+    )
 
     def _mark(
         _workspace: Path,
@@ -708,7 +713,10 @@ async def test_recovery_intent_sends_once_per_telegram_topic(tmp_path: Path) -> 
             "record_id": record_id,
         }
 
-    bridge._mark_recovery_intent_delivered = _mark  # type: ignore[method-assign]
+    monkeypatch.setattr(
+        "codex_autorunner.adapters.telegram.ticket_flow_bridge.mark_ticket_flow_notification_intent_delivered",
+        _mark,
+    )
 
     await bridge._notify_recovery_for_workspace(workspace, [("123:456", record)])
     await bridge._notify_recovery_for_workspace(workspace, [("123:456", record)])

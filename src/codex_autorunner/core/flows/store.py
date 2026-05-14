@@ -6,10 +6,9 @@ import sqlite3
 import threading
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Dict, Generator, List, Mapping, Optional, cast
+from typing import Any, Dict, Generator, List, Optional, cast
 
 from ..config import ConfigError, load_repo_config
-from ..notification_intent_records import FlowNotificationIntentRecord
 from ..sqlite_utils import (
     DEFAULT_SQLITE_BUSY_TIMEOUT_MS,
     SqliteMigrationStep,
@@ -28,6 +27,7 @@ from .models import (
     FlowRunRecord,
     FlowRunStatus,
 )
+from .notification_intent_records import FlowNotificationIntentRecord
 
 _logger = logging.getLogger(__name__)
 

@@ -9,8 +9,8 @@ from codex_autorunner.core.flows.reconciler import (
     _with_commit_barrier_recovery,
     reconcile_flow_run,
 )
-from codex_autorunner.core.flows.supervisor import CommitBarrierObservation
 from codex_autorunner.core.flows.store import FlowStore
+from codex_autorunner.core.flows.supervisor import CommitBarrierObservation
 
 
 def test_commit_barrier_recovery_facet_clears_when_observation_clears() -> None:

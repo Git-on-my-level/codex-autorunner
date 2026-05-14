@@ -11,10 +11,6 @@ from ...core.chat_bindings import (
 )
 from ...core.config import ConfigError, load_hub_config, load_repo_config
 from ...core.diagnostics.loop_attribution import track_loop
-from ...core.flow_notification_intents import (
-    load_current_ticket_flow_recovery_notification_intents,
-    mark_ticket_flow_recovery_notification_intent_delivered,
-)
 from ...core.flows import (
     FlowRunRecord,
     FlowRunStatus,
@@ -22,6 +18,10 @@ from ...core.flows import (
     list_unseen_ticket_flow_dispatches,
 )
 from ...core.logging_utils import log_event
+from ...core.recovery_notification_intents import (
+    list_active_ticket_flow_notification_intents,
+    mark_ticket_flow_notification_intent_delivered,
+)
 from ...core.ticket_flow_recovery import (
     format_recovery_notification_intent,
     recovery_notification_intent_should_deliver,
@@ -100,12 +100,6 @@ def _format_terminal_notification(
     elif status == FlowRunStatus.STOPPED.value:
         return f"Ticket flow stopped (run {run_id})."
     return f"Ticket flow ended (run {run_id}, status: {status})."
-
-
-def _load_ticket_flow_recovery_notifications(
-    workspace_root: Path,
-) -> list[Any]:
-    return load_current_ticket_flow_recovery_notification_intents(workspace_root)
 
 
 def _format_pause_notification_source(
@@ -347,7 +341,7 @@ async def _scan_and_enqueue_recovery_notifications(service: Any) -> int:
             continue
         try:
             notifications = await asyncio.to_thread(
-                _load_ticket_flow_recovery_notifications,
+                list_active_ticket_flow_notification_intents,
                 workspace_root,
             )
         except (ConfigError, OSError, RuntimeError, ValueError) as exc:
@@ -397,7 +391,7 @@ async def _scan_and_enqueue_recovery_notifications(service: Any) -> int:
                         "payload": dict(intent.payload),
                     },
                 )
-                _mark_ticket_flow_recovery_intent_delivered(
+                mark_ticket_flow_notification_intent_delivered(
                     workspace_root,
                     intent.intent_id,
                     transport_key=transport_key,
@@ -423,21 +417,6 @@ async def _scan_and_enqueue_recovery_notifications(service: Any) -> int:
             )
             notified += 1
     return notified
-
-
-def _mark_ticket_flow_recovery_intent_delivered(
-    workspace_root: Path,
-    intent_id: str,
-    *,
-    transport_key: str,
-    record_id: str,
-) -> None:
-    mark_ticket_flow_recovery_notification_intent_delivered(
-        workspace_root,
-        intent_id,
-        transport_key=transport_key,
-        record_id=record_id,
-    )
 
 
 async def _scan_and_enqueue_terminal_notifications(service: Any) -> int:

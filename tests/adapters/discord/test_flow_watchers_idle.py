@@ -240,7 +240,7 @@ async def test_recovery_scan_marks_core_ledger_after_enqueue(monkeypatch) -> Non
         lambda _service, _workspace_root: None,
     )
     monkeypatch.setattr(
-        "codex_autorunner.adapters.discord.flow_watchers._load_ticket_flow_recovery_notifications",
+        "codex_autorunner.adapters.discord.flow_watchers.list_active_ticket_flow_notification_intents",
         lambda _workspace_root: [
             SimpleNamespace(
                 intent_id="intent-1",
@@ -279,7 +279,7 @@ async def test_recovery_scan_marks_core_ledger_after_enqueue(monkeypatch) -> Non
         ],
     )
     monkeypatch.setattr(
-        "codex_autorunner.adapters.discord.flow_watchers._mark_ticket_flow_recovery_intent_delivered",
+        "codex_autorunner.adapters.discord.flow_watchers.mark_ticket_flow_notification_intent_delivered",
         lambda _workspace_root, intent_id, **_kwargs: seen.append(intent_id),
     )
 
@@ -363,11 +363,11 @@ async def test_recovery_scan_dedupes_issue1788_when_restart_attempts_change(
         delivery_attempts[transport_key] = {"status": "enqueued"}
 
     monkeypatch.setattr(
-        "codex_autorunner.adapters.discord.flow_watchers._load_ticket_flow_recovery_notifications",
+        "codex_autorunner.adapters.discord.flow_watchers.list_active_ticket_flow_notification_intents",
         _load,
     )
     monkeypatch.setattr(
-        "codex_autorunner.adapters.discord.flow_watchers._mark_ticket_flow_recovery_intent_delivered",
+        "codex_autorunner.adapters.discord.flow_watchers.mark_ticket_flow_notification_intent_delivered",
         _mark,
     )
 

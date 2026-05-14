@@ -1,19 +1,19 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
 
 from .config import ConfigError, load_repo_config
 from .flows.models import FlowRunStatus
+from .flows.notification_intent_records import FlowNotificationIntentRecord
 from .flows.store import FlowStore
 from .flows.ux_helpers import build_flow_status_snapshot
-from .notification_intent_records import FlowNotificationIntentRecord
 
 
-def load_current_ticket_flow_recovery_notification_intents(
+def list_active_ticket_flow_notification_intents(
     workspace_root: Path,
 ) -> list[FlowNotificationIntentRecord]:
-    db_path = workspace_root / ".codex-autorunner" / "flows.db"
+    """Return unresolved ledger rows for intents still present on a flow snapshot."""
+    db_path = FlowStore.default_path(workspace_root)
     if not db_path.exists():
         return []
     try:
@@ -21,7 +21,6 @@ def load_current_ticket_flow_recovery_notification_intents(
         durable_writes = config.durable_writes
     except ConfigError:
         durable_writes = False
-
     active_intent_ids: set[str] = set()
     with FlowStore(db_path, durable=durable_writes) as store:
         for record in store.list_flow_runs(flow_type="ticket_flow"):
@@ -44,14 +43,14 @@ def load_current_ticket_flow_recovery_notification_intents(
         ]
 
 
-def mark_ticket_flow_recovery_notification_intent_delivered(
+def mark_ticket_flow_notification_intent_delivered(
     workspace_root: Path,
     intent_id: str,
     *,
     transport_key: str,
     record_id: str,
 ) -> None:
-    db_path = workspace_root / ".codex-autorunner" / "flows.db"
+    db_path = FlowStore.default_path(workspace_root)
     if not db_path.exists():
         return
     try:
