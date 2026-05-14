@@ -110,13 +110,10 @@ def test_managed_thread_timeline_v2_authors_identity_and_provenance_for_core_ite
     assert notice["provenance"]["source_event_ids"] == [1]
     assert notice["provenance"]["progress_event_ids"] == [1]
 
-    assistant_update = _by_kind(timeline["items"], "intermediate")[1]
-    assert assistant_update["payload"]["intermediate_kind"] == "assistant_stream"
-    assert assistant_update["identity"]["progress_item_ids"] == [
-        "progress:assistant_update:0002"
-    ]
-    assert assistant_update["provenance"]["source_event_ids"] == [2]
-    assert assistant_update["provenance"]["progress_event_ids"] == [2]
+    assert all(
+        item["payload"].get("source_event_type") != "output_delta"
+        for item in timeline["items"]
+    )
 
     tool_group = _by_kind(timeline["items"], "tool_group")[0]
     assert tool_group["identity"]["progress_item_ids"] == [
