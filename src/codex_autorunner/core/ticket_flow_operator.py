@@ -1200,6 +1200,10 @@ def _derive_recovery_state(
     stale_alive_is_live: bool = False,
 ) -> Optional[str]:
     if isinstance(commit_barrier, dict) and commit_barrier.get("pending"):
+        if commit_barrier.get("exhausted") or (
+            commit_barrier.get("resolution_state") == "exhausted"
+        ):
+            return "commit_barrier_exhausted"
         return "commit_barrier_pending"
     if isinstance(restart_status, dict) and restart_status.get("exhausted"):
         return "restart_exhausted"
@@ -1504,7 +1508,7 @@ def _ticket_flow_recommended_actions(
     if recovery_state == "restart_exhausted":
         crash_cmd = f"open {shlex.quote(str(repo_root / '.codex-autorunner' / 'flows' / run_id / 'crash.json'))}"
         return [crash_cmd, status_cmd, f"{resume_cmd} --force-new"]
-    if recovery_state == "commit_barrier_pending":
+    if recovery_state in {"commit_barrier_pending", "commit_barrier_exhausted"}:
         return [status_cmd, stop_cmd]
     if state == "completed":
         return [start_cmd]
@@ -1662,6 +1666,8 @@ def build_ticket_flow_run_state(
         state = "restart_exhausted"
     elif recovery_state == "stale_alive":
         state = "stale_alive"
+    elif recovery_state == "commit_barrier_exhausted":
+        state = "commit_barrier_exhausted"
     elif recovery_state == "commit_barrier_pending":
         state = "commit_barrier_pending"
     elif dead_worker:
@@ -1673,7 +1679,14 @@ def build_ticket_flow_run_state(
 
     is_terminal = record.status.is_terminal()
     attention_required = not is_terminal and (
-        state in ("dead", "blocked", "restart_exhausted", "commit_barrier_pending")
+        state
+        in (
+            "dead",
+            "blocked",
+            "restart_exhausted",
+            "commit_barrier_pending",
+            "commit_barrier_exhausted",
+        )
         or state == "stale_alive"
         or record.status == FlowRunStatus.PAUSED
     )
@@ -1714,6 +1727,11 @@ def build_ticket_flow_run_state(
             )
     elif state == "stale_alive":
         blocking_reason = "Worker is alive but no active tool is running and semantic progress is stale."
+    elif state == "commit_barrier_exhausted":
+        blocking_reason = (
+            "Commit barrier retry budget is exhausted. Manual commit or rescue is "
+            "required before ticket-flow can advance."
+        )
     elif state == "commit_barrier_pending":
         blocking_reason = "Recovery is preserving completed ticket work while the commit barrier is pending."
     elif state == "blocked":
@@ -1753,8 +1771,8 @@ def build_ticket_flow_run_state(
         restart_status.get("exhausted") if isinstance(restart_status, dict) else False
     )
     last_recovery_action = None
-    if recovery_state == "commit_barrier_pending":
-        last_recovery_action = "commit_barrier_pending"
+    if recovery_state in {"commit_barrier_pending", "commit_barrier_exhausted"}:
+        last_recovery_action = recovery_state
     elif isinstance(restart_status, dict):
         last_recovery_action = _normalize_optional_text(
             restart_status.get("last_reason")

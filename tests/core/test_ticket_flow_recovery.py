@@ -148,6 +148,62 @@ def test_notification_intent_id_stable_when_restart_attempts_change(
     assert first_intent["intent_id"] == second_intent["intent_id"]
 
 
+def test_exhausted_commit_barrier_projects_escalation_intent(
+    tmp_path: Path, monkeypatch
+) -> None:
+    repo_root = tmp_path / "repo"
+    db_path = repo_root / ".codex-autorunner" / "flows.db"
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    run_id = "44444444-4444-4444-8444-444444444444"
+    monkeypatch.setattr(
+        operator_module,
+        "check_worker_health",
+        lambda *_args, **_kwargs: FlowWorkerHealth(
+            status="alive",
+            pid=4242,
+            cmdline=["car", "flow", "worker"],
+            artifact_path=repo_root / ".codex-autorunner" / "flows" / run_id,
+        ),
+    )
+
+    with FlowStore(db_path) as store:
+        _create_running_ticket_flow(
+            store,
+            repo_root,
+            run_id,
+            {
+                "recovery": {
+                    "commit_barrier": {
+                        "pending": True,
+                        "barrier_epoch": "ticket-001-done",
+                        "current_ticket": ".codex-autorunner/tickets/TICKET-001.md",
+                        "retries": 2,
+                        "max_retries": 2,
+                        "exhausted": True,
+                        "resolution_state": "exhausted",
+                    }
+                }
+            },
+        )
+        record = store.get_flow_run(run_id)
+        assert record is not None
+
+        run_state = build_ticket_flow_run_state(
+            repo_root=repo_root,
+            repo_id="repo",
+            record=record,
+            store=store,
+            has_pending_dispatch=False,
+        )
+
+    assert run_state["recovery_state"] == "commit_barrier_exhausted"
+    projection = run_state["recovery_projection"]
+    assert projection["facets"]["commit_barrier"]["status"] == "exhausted"
+    assert run_state["notification_intents"][0]["event_type"] == (
+        "ticket_flow.commit_barrier.exhausted"
+    )
+
+
 def test_notification_intent_ledger_upserts_observation_without_duplicate(
     tmp_path: Path,
 ) -> None:

@@ -15,6 +15,7 @@ from .files import (
 from .frontmatter import parse_markdown_frontmatter
 from .lint import lint_ticket_directory
 from .models import TicketContextEntry, TicketDoc, TicketFrontmatter, TicketRunConfig
+from .runner_commit import process_commit_required
 from .runner_prompt import _truncate_text_by_bytes, build_prompt
 from .runner_step_support import (
     build_reply_context as render_new_reply_context,
@@ -108,14 +109,57 @@ def select_ticket(
         state_updates["commit"] = None
         commit_pending = False
 
+    if current_path and current_ticket_done and commit_pending:
+        dirty_status = _git_status_porcelain(workspace_root)
+        if not (dirty_status is not None and dirty_status.strip()):
+            state_updates["commit"] = None
+            commit_pending = False
+        elif bool(commit_state.get("exhausted")) or (
+            str(commit_state.get("resolution_state") or "") == "exhausted"
+        ):
+            raw_worktree_summary = commit_state.get("worktree_summary")
+            worktree_summary: dict[str, Any] = (
+                dict(raw_worktree_summary)
+                if isinstance(raw_worktree_summary, dict)
+                else {}
+            )
+            state_updates["commit"] = {
+                **commit_state,
+                "status_porcelain": dirty_status,
+                "worktree_summary": {
+                    **worktree_summary,
+                    "status_porcelain": dirty_status,
+                },
+            }
+            return TicketSelectionResult(
+                status="paused",
+                state_updates=state_updates,
+                pause_reason="Commit barrier exhausted. Manual commit required.",
+                pause_reason_code="needs_user_fix",
+                pause_reason_details=(
+                    "The current done ticket is still pinned because the worktree "
+                    "has uncommitted changes and commit-resolution retries are exhausted.\n\n"
+                    "Working tree status (git status --porcelain):\n- "
+                    + "\n- ".join(dirty_status.splitlines()[:20])
+                ),
+            )
+
     if current_path and current_ticket_done and not commit_pending:
         dirty_status = _git_status_porcelain(workspace_root)
         if dirty_status is not None and dirty_status.strip():
-            state_updates["commit"] = {
-                "pending": True,
-                "retries": 0,
-                "status_porcelain": dirty_status,
-            }
+            commit_state_update, *_ = process_commit_required(
+                clean_after_agent=False,
+                commit_pending=False,
+                commit_retries=0,
+                head_before_turn=None,
+                head_after_agent=None,
+                agent_committed_this_turn=None,
+                status_after_agent=dirty_status,
+                max_commit_retries=config.max_commit_retries,
+                current_ticket=safe_relpath(current_path, workspace_root),
+                existing_commit_state=commit_state,
+            )
+            state_updates["commit"] = commit_state_update
             commit_pending = True
         else:
             current_path = None

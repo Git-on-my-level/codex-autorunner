@@ -168,18 +168,34 @@ def build_recovery_projection(
     primary_state = recovery_state or state
     facets: dict[str, RecoveryFacet] = {}
 
+    commit_barrier_exhausted = bool(
+        commit_barrier_pending
+        and isinstance(commit_barrier, Mapping)
+        and (
+            commit_barrier.get("exhausted")
+            or commit_barrier.get("resolution_state") == "exhausted"
+        )
+    )
     facets[RecoveryFacetName.COMMIT_BARRIER.value] = RecoveryFacet(
         RecoveryFacetName.COMMIT_BARRIER,
         (
-            RecoveryFacetStatus.ACTIVE
-            if commit_barrier_pending
-            else RecoveryFacetStatus.CLEAR
+            RecoveryFacetStatus.EXHAUSTED
+            if commit_barrier_exhausted
+            else (
+                RecoveryFacetStatus.ACTIVE
+                if commit_barrier_pending
+                else RecoveryFacetStatus.CLEAR
+            )
         ),
         attention_required=commit_barrier_pending,
         reason=(
-            "done-current-ticket-has-uncommitted-worktree-changes"
-            if commit_barrier_pending
-            else None
+            "commit-barrier-retry-budget-exhausted"
+            if commit_barrier_exhausted
+            else (
+                "done-current-ticket-has-uncommitted-worktree-changes"
+                if commit_barrier_pending
+                else None
+            )
         ),
         recommended_actions=actions if commit_barrier_pending else (),
         data=dict(commit_barrier or {}),

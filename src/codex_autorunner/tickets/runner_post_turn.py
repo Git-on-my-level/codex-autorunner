@@ -482,6 +482,7 @@ def reconcile_post_turn(
     emit_event: Optional[Any],
 ) -> TicketResult:
     from .runner_commit import process_commit_required as _process_commit_required
+    from .runner_commit import resolved_commit_barrier_state
     from .runner_execution import compute_loop_guard, should_pause_for_loop
     from .runner_thread_bindings import clear_ticket_thread_binding
 
@@ -670,6 +671,12 @@ def reconcile_post_turn(
                 agent_committed_this_turn=agent_committed_this_turn,
                 status_after_agent=status_after_agent,
                 max_commit_retries=max_commit_retries,
+                current_ticket=current_ticket_path,
+                existing_commit_state=(
+                    state.get("commit")
+                    if isinstance(state.get("commit"), dict)
+                    else None
+                ),
             )
             if commit_state_update:
                 state["commit"] = commit_state_update
@@ -700,7 +707,13 @@ def reconcile_post_turn(
                 agent_turn_id=result.turn_id,
             )
 
-        state.pop("commit", None)
+        resolved_commit = resolved_commit_barrier_state(
+            state.get("commit") if isinstance(state.get("commit"), dict) else None
+        )
+        if resolved_commit is not None:
+            state["commit"] = resolved_commit
+        else:
+            state.pop("commit", None)
         clear_ticket_thread_binding(
             state,
             ticket_id=current_ticket_id,
