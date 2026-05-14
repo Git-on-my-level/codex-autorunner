@@ -290,9 +290,9 @@
   },
   "opencode": {
     "idle_ttl_seconds": 900,
-    "max_handles": 4,
+    "max_handles": 1,
     "max_text_chars": 20000,
-    "server_scope": "workspace",
+    "server_scope": "global",
     "session_stall_timeout_seconds": 300
   },
   "prompt": {

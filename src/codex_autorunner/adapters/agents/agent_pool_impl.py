@@ -169,8 +169,9 @@ def _raw_message_should_emit_agent_delta(message: dict[str, Any]) -> bool:
 class DefaultAgentPool:
     """Default ticket-flow adapter backed by orchestration-owned thread targets."""
 
-    def __init__(self, config: Any):
+    def __init__(self, config: Any, *, runtime_services: Optional[Any] = None):
         self._config = config
+        self._runtime_services = runtime_services
         self._repo_root = Path(getattr(config, "root", Path.cwd())).resolve()
         self._hub_root = _find_hub_root(self._repo_root)
         self._repo_id = self._resolve_repo_id()
@@ -234,9 +235,18 @@ class DefaultAgentPool:
             app_server_events=app_server_events,
             opencode_supervisor=None,
         )
+        runtime_services = self._runtime_services
+        if runtime_services is not None:
+            context.app_server_supervisor = getattr(
+                runtime_services, "app_server_supervisor", None
+            )
+            context.opencode_supervisor = getattr(
+                runtime_services, "opencode_supervisor", None
+            )
         app_server_config = getattr(self._config, "app_server", None)
         if (
-            app_server_config is not None
+            context.app_server_supervisor is None
+            and app_server_config is not None
             and getattr(app_server_config, "command", None) is not None
         ):
 
@@ -253,20 +263,23 @@ class DefaultAgentPool:
                 "autorunner",
                 cast(Any, _handle_notification),
             )
-        try:
-            context.opencode_supervisor = build_opencode_supervisor_from_repo_config(
-                self._config,
-                workspace_root=self._repo_root,
-                logger=logging.getLogger("codex_autorunner.backend"),
-                base_env=None,
-                command_override=None,
-            )
-        except (RuntimeError, ValueError, OSError, TypeError):
-            _logger.debug(
-                "OpenCode supervisor unavailable for agent pool runtime context.",
-                exc_info=True,
-            )
-            context.opencode_supervisor = None
+        if context.opencode_supervisor is None:
+            try:
+                context.opencode_supervisor = (
+                    build_opencode_supervisor_from_repo_config(
+                        self._config,
+                        workspace_root=self._repo_root,
+                        logger=logging.getLogger("codex_autorunner.backend"),
+                        base_env=None,
+                        command_override=None,
+                    )
+                )
+            except (RuntimeError, ValueError, OSError, TypeError):
+                _logger.debug(
+                    "OpenCode supervisor unavailable for agent pool runtime context.",
+                    exc_info=True,
+                )
+                context.opencode_supervisor = None
         self._runtime_context = context
         return context
 
@@ -342,11 +355,18 @@ class DefaultAgentPool:
         self._runtime_context = None
         if context is None:
             return
-        for supervisor in {
+        runtime_owned = [
+            getattr(self._runtime_services, "app_server_supervisor", None),
+            getattr(self._runtime_services, "opencode_supervisor", None),
+        ]
+        supervisors = [
             getattr(context, "app_server_supervisor", None),
             getattr(context, "opencode_supervisor", None),
             getattr(context, "hermes_supervisor", None),
-        }:
+        ]
+        for supervisor in supervisors:
+            if any(supervisor is owned for owned in runtime_owned):
+                continue
             close_all = getattr(supervisor, "close_all", None)
             if callable(close_all):
                 await close_all()

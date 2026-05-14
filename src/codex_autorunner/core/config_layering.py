@@ -235,10 +235,10 @@ def _default_terminal_section() -> Dict[str, Any]:
 def _default_opencode_section() -> Dict[str, Any]:
     """Build the default opencode section."""
     return {
-        "server_scope": "workspace",
+        "server_scope": "global",
         "session_stall_timeout_seconds": 300,
         "max_text_chars": 20000,
-        "max_handles": 4,
+        "max_handles": 1,
         "idle_ttl_seconds": 900,
     }
 

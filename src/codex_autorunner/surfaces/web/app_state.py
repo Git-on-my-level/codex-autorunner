@@ -498,6 +498,12 @@ def build_app_context(
         app_server_supervisor=app_server_supervisor,
         opencode_supervisor=opencode_supervisor,
     )
+    engine._backend_orchestrator = build_backend_orchestrator(
+        config.root,
+        config,
+        shared_app_server_supervisor=app_server_supervisor,
+        shared_opencode_supervisor=opencode_supervisor,
+    )
     voice_service: Optional[VoiceService]
     if voice_missing_reason:
         voice_service = None

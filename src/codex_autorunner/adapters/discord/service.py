@@ -176,6 +176,7 @@ from ...core.orchestration.chat_operation_scheduler_projection import (
 from ...core.orchestration.managed_thread_delivery_ledger import (
     SQLiteManagedThreadDeliveryEngine,
 )
+from ...core.runtime_services import RuntimeServices
 from ...core.state import now_iso
 from ...core.state_roots import resolve_global_state_root
 from ...core.utils import (
@@ -809,24 +810,6 @@ class DiscordBotService(DiscordInteractionResponseMixin):
                 config.dispatch.handler_stalled_warning_seconds
             ),
         )
-        self._app_server_supervisors: dict[str, WorkspaceAppServerSupervisor] = {}
-        self._app_server_lock = asyncio.Lock()
-        self._opencode_supervisors: dict[str, _OpenCodeSupervisorCacheEntry] = {}
-        self._opencode_lock = asyncio.Lock()
-        self.app_server_events = AppServerEventBuffer()
-        self.app_server_supervisor = _DiscordAppServerSupervisorAdapter(self)
-        self.opencode_supervisor: OpenCodeHarnessSupervisorProtocol = (
-            _DiscordOpenCodeSupervisorAdapter(self)
-        )
-        self._opencode_prune_task: Optional[asyncio.Task[None]] = None
-        self._filebox_prune_task: Optional[asyncio.Task[None]] = None
-        self._app_server_state_root = resolve_global_state_root() / "workspaces"
-        self._channel_directory_store = ChannelDirectoryStore(self._config.root)
-        self._guild_name_cache: dict[str, str] = {}
-        self._channel_name_cache: dict[str, str] = {}
-        self._guild_name_lookups: dict[str, asyncio.Task[Optional[str]]] = {}
-        self._channel_name_lookups: dict[str, asyncio.Task[Optional[str]]] = {}
-        self._hub_raw_config_cache: Optional[dict[str, Any]] = None
         self._hub_config_path: Optional[Path] = None
         generated_hub_config = self._config.root / ".codex-autorunner" / "config.yml"
         if generated_hub_config.exists():
@@ -835,6 +818,59 @@ class DiscordBotService(DiscordInteractionResponseMixin):
             root_hub_config = self._config.root / "codex-autorunner.yml"
             if root_hub_config.exists():
                 self._hub_config_path = root_hub_config
+
+        self._app_server_lock = asyncio.Lock()
+        self._opencode_supervisors: dict[str, _OpenCodeSupervisorCacheEntry] = {}
+        self._opencode_lock = asyncio.Lock()
+        self.app_server_events = AppServerEventBuffer()
+        self._app_server_state_root = resolve_global_state_root() / "workspaces"
+        root_repo_config = load_repo_config(
+            self._config.root,
+            hub_path=self._hub_config_path,
+        )
+        root_app_server_config = getattr(root_repo_config, "app_server", None)
+        root_app_server_command = list(
+            getattr(root_app_server_config, "command", None) or ["codex", "app-server"]
+        )
+        self._app_server_supervisor = WorkspaceAppServerSupervisor(
+            root_app_server_command,
+            state_root=self._app_server_state_root,
+            env_builder=self._build_workspace_env,
+            notification_handler=cast(
+                Callable[[Mapping[str, object]], Awaitable[None]],
+                self.app_server_events.handle_notification,
+            ),
+            logger=self._logger,
+            server_scope=getattr(root_app_server_config, "server_scope", "global"),
+            max_handles=getattr(root_app_server_config, "max_handles", 1),
+            idle_ttl_seconds=getattr(root_app_server_config, "idle_ttl_seconds", 3600),
+            startup_timeout_seconds=getattr(
+                root_app_server_config, "startup_timeout_seconds", 30
+            ),
+            terminate_grace_seconds=getattr(
+                root_app_server_config, "terminate_grace_seconds", 2
+            ),
+            terminate_kill_seconds=getattr(
+                root_app_server_config, "terminate_kill_seconds", 3
+            ),
+            registry_root=getattr(self, "_hub_root", None) or self._config.root,
+        )
+        self._runtime_services = RuntimeServices(
+            app_server_supervisor=self._app_server_supervisor,
+            opencode_supervisor=None,
+        )
+        self.app_server_supervisor = _DiscordAppServerSupervisorAdapter(self)
+        self.opencode_supervisor: OpenCodeHarnessSupervisorProtocol = (
+            _DiscordOpenCodeSupervisorAdapter(self)
+        )
+        self._opencode_prune_task: Optional[asyncio.Task[None]] = None
+        self._filebox_prune_task: Optional[asyncio.Task[None]] = None
+        self._channel_directory_store = ChannelDirectoryStore(self._config.root)
+        self._guild_name_cache: dict[str, str] = {}
+        self._channel_name_cache: dict[str, str] = {}
+        self._guild_name_lookups: dict[str, asyncio.Task[Optional[str]]] = {}
+        self._channel_name_lookups: dict[str, asyncio.Task[Optional[str]]] = {}
+        self._hub_raw_config_cache: Optional[dict[str, Any]] = None
 
         self._hub_supervisor = None
         self._hub_client: Optional[HttpHubControlPlaneClient] = None
@@ -3204,71 +3240,8 @@ class DiscordBotService(DiscordInteractionResponseMixin):
     async def _app_server_supervisor_for_workspace(
         self, workspace_root: Path
     ) -> WorkspaceAppServerSupervisor:
-        repo_config = load_repo_config(
-            workspace_root,
-            hub_path=self._hub_config_path,
-        )
-        server_scope = (
-            repo_config.app_server.server_scope
-            if repo_config and repo_config.app_server
-            else "global"
-        )
-        key = "global" if server_scope == "global" else str(workspace_root)
-        async with self._app_server_lock:
-            existing = self._app_server_supervisors.get(key)
-            if existing is not None:
-                return existing
-            command = (
-                list(repo_config.app_server.command)
-                if repo_config
-                and repo_config.app_server
-                and repo_config.app_server.command
-                else []
-            )
-            supervisor = WorkspaceAppServerSupervisor(
-                command,
-                state_root=self._app_server_state_root,
-                env_builder=self._build_workspace_env,
-                notification_handler=cast(
-                    Callable[[Mapping[str, object]], Awaitable[None]],
-                    self.app_server_events.handle_notification,
-                ),
-                logger=self._logger,
-                server_scope=server_scope,
-                max_handles=(
-                    repo_config.app_server.max_handles if repo_config else None
-                ),
-                idle_ttl_seconds=(
-                    repo_config.app_server.idle_ttl_seconds if repo_config else None
-                ),
-                startup_timeout_seconds=(
-                    repo_config.app_server.startup_timeout_seconds
-                    if repo_config
-                    else None
-                ),
-                terminate_grace_seconds=(
-                    repo_config.app_server.terminate_grace_seconds
-                    if repo_config
-                    else None
-                ),
-                terminate_kill_seconds=(
-                    repo_config.app_server.terminate_kill_seconds
-                    if repo_config
-                    else None
-                ),
-                registry_root=getattr(self, "_hub_root", None) or self._config.root,
-            )
-            self._app_server_supervisors[key] = supervisor
-            log_event(
-                self._logger,
-                logging.INFO,
-                "discord.app_server.supervisor.created",
-                workspace_path=str(workspace_root),
-                command=command,
-                service_uptime_ms=self._service_uptime_ms(),
-                cold_start_window=self._is_within_cold_start_window(),
-            )
-            return supervisor
+        _ = workspace_root
+        return self._app_server_supervisor
 
     async def _client_for_workspace(
         self, workspace_path: Optional[str]
@@ -3329,16 +3302,18 @@ class DiscordBotService(DiscordInteractionResponseMixin):
     async def _opencode_supervisor_for_workspace(
         self, workspace_root: Path
     ) -> Optional[OpenCodeSupervisor]:
-        key = str(workspace_root)
         async with self._opencode_lock:
-            existing = self._opencode_supervisors.get(key)
-            if existing is not None:
-                existing.last_requested_at = time.monotonic()
-                return existing.supervisor
             repo_config = load_repo_config(
                 workspace_root,
                 hub_path=self._hub_config_path,
             )
+            opencode_config = getattr(repo_config, "opencode", None)
+            server_scope = getattr(opencode_config, "server_scope", "global")
+            key = "global" if server_scope == "global" else str(workspace_root)
+            existing = self._opencode_supervisors.get(key)
+            if existing is not None:
+                existing.last_requested_at = time.monotonic()
+                return existing.supervisor
             supervisor = build_opencode_supervisor_from_repo_config(
                 repo_config,
                 workspace_root=workspace_root,
@@ -3347,13 +3322,15 @@ class DiscordBotService(DiscordInteractionResponseMixin):
             )
             if supervisor is None:
                 return None
+            prune_ttl = getattr(opencode_config, "idle_ttl_seconds", None)
             self._opencode_supervisors[key] = _OpenCodeSupervisorCacheEntry(
                 supervisor=supervisor,
-                prune_interval_seconds=_opencode_prune_interval(
-                    repo_config.opencode.idle_ttl_seconds
-                ),
+                prune_interval_seconds=_opencode_prune_interval(prune_ttl),
                 last_requested_at=time.monotonic(),
             )
+            if key == "global":
+                self._runtime_services.opencode_supervisor = supervisor
+            self._runtime_services.register_owned_supervisor(supervisor)
             return supervisor
 
     def _reap_managed_processes(self, *, stage: str) -> None:

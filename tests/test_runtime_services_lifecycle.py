@@ -109,6 +109,19 @@ def test_runtime_services_close_is_idempotent(tmp_path: Path) -> None:
     assert opencode_supervisor.closed == 1
 
 
+def test_runtime_services_close_deduplicates_supervisors() -> None:
+    supervisor = _FakeSupervisor()
+    services = RuntimeServices(
+        app_server_supervisor=supervisor,
+        opencode_supervisor=supervisor,
+    )
+    services.register_owned_supervisor(supervisor)
+
+    asyncio.run(services.close())
+
+    assert supervisor.closed == 1
+
+
 @pytest.mark.asyncio
 async def test_repo_app_lifespan_closes_runtime_services(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch

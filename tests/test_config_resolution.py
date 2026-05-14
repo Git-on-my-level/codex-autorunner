@@ -165,8 +165,8 @@ def test_load_repo_config_uses_tighter_default_opencode_retention(
 
     config = load_repo_config(repo_root, hub_path=hub_root)
 
-    assert config.opencode.server_scope == "workspace"
-    assert config.opencode.max_handles == 4
+    assert config.opencode.server_scope == "global"
+    assert config.opencode.max_handles == 1
     assert config.opencode.idle_ttl_seconds == 900
 
 

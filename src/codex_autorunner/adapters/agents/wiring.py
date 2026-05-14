@@ -43,6 +43,7 @@ class AgentBackendFactory:
         repo_root: Path,
         config: RepoConfig,
         *,
+        shared_app_server_supervisor: Optional[Any] = None,
         shared_opencode_supervisor: Optional[Any] = None,
     ) -> None:
         self._repo_root = repo_root
@@ -55,7 +56,11 @@ class AgentBackendFactory:
         self._opencode_supervisor: Optional[Any] = shared_opencode_supervisor
         self._opencode_supervisors: dict[tuple[str, str], Any] = {}
         self._owns_opencode_supervisor = shared_opencode_supervisor is None
-        self._codex_supervisor: Optional[WorkspaceAppServerSupervisor] = None
+        self._codex_supervisor: Optional[WorkspaceAppServerSupervisor] = cast(
+            Optional[WorkspaceAppServerSupervisor],
+            shared_app_server_supervisor,
+        )
+        self._owns_codex_supervisor = shared_app_server_supervisor is None
 
     def _runtime_cache_key(
         self, runtime_agent_id: str, runtime_profile: Optional[str] = None
@@ -322,10 +327,13 @@ class AgentBackendFactory:
                 )
         self._opencode_supervisors = {}
         if self._codex_supervisor is not None:
-            try:
-                await self._codex_supervisor.close_all()
-            except Exception:  # intentional: best-effort supervisor cleanup
-                self._logger.warning("Failed closing codex supervisor", exc_info=True)
+            if self._owns_codex_supervisor:
+                try:
+                    await self._codex_supervisor.close_all()
+                except Exception:  # intentional: best-effort supervisor cleanup
+                    self._logger.warning(
+                        "Failed closing codex supervisor", exc_info=True
+                    )
             self._codex_supervisor = None
 
     def _ensure_codex_supervisor(self) -> WorkspaceAppServerSupervisor:
@@ -404,11 +412,13 @@ def build_agent_backend_factory(
     repo_root: Path,
     config: RepoConfig,
     *,
+    shared_app_server_supervisor: Optional[Any] = None,
     shared_opencode_supervisor: Optional[Any] = None,
 ) -> BackendFactory:
     return AgentBackendFactory(
         repo_root,
         config,
+        shared_app_server_supervisor=shared_app_server_supervisor,
         shared_opencode_supervisor=shared_opencode_supervisor,
     )
 
