@@ -2096,7 +2096,7 @@ async def _shutdown_progress_pump(
 ) -> None:
     if stream_task.done():
         try:
-            stream_task.result()
+            stream_task.exception()
         except asyncio.CancelledError:
             log_event(
                 logger,
@@ -2114,7 +2114,7 @@ async def _shutdown_progress_pump(
     )
     if stream_task in done:
         try:
-            stream_task.result()
+            stream_task.exception()
         except asyncio.CancelledError:
             log_event(
                 logger,
