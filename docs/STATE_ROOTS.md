@@ -28,13 +28,13 @@ All durable artifacts must live under one of these roots:
 - `bin/` - Generated helper scripts
 - `workspace/` - **Compatibility-only input** (not a canonical store). CAR reads durable context from `contextspace/`. The `workspace/` fallback is used during archive/reset operations only, and has a single owner: `_contextspace_source()` in `core/archive.py`. No new runtime code may read from `workspace/` directly. If this directory still exists, `car doctor` may warn until you migrate or remove it. See [workspace → contextspace migration](migrations/workspace-to-contextspace.md).
 - `app_server_workspaces/` - App-server supervisor/workspace state when the effective destination is `docker`
-- `filebox/` - Shared inbox/outbox attachment root (`filebox/inbox`, `filebox/outbox`)
+- `filebox/` - Shared attachment ingress/compatibility root (`filebox/inbox`, `filebox/outbox`)
 
 **Notable repo-local artifacts**:
 - `flows/<run_id>/chat/inbound.jsonl` - Mirrored inbound chat events for a flow run
 - `flows/<run_id>/chat/outbound.jsonl` - Mirrored outbound chat events for a flow run
 - `tickets/ingest_state.json` - Canonical ticket-ingest receipt (`ingested`, `ingested_at`, `source`)
-- `filebox/outbox/` - Agent-produced artifacts, including `car render` screenshot/observe/demo outputs
+- `filebox/outbox/` - Legacy artifact ingress for the active target scope, including `car render` screenshot/observe/demo outputs; journal-backed delivery records are the source of truth
 - `usage/opencode_turn_usage.jsonl` - Per-turn OpenCode usage snapshots (canonical, high-confidence source for repo usage reports)
 
 **Resolution**: `resolve_repo_state_root(repo_root)` in `core/state_roots.py`

@@ -47,6 +47,7 @@ from ...adapters.chat.runtime_thread_errors import (
     sanitize_runtime_thread_error,
 )
 from ...core.context_awareness import (
+    format_artifact_delivery_hint,
     maybe_inject_car_awareness,
     maybe_inject_filebox_hint,
     maybe_inject_prompt_writing_hint,
@@ -309,15 +310,18 @@ def _maybe_inject_discord_filebox_hint(
     *,
     user_text: str,
     workspace_root: Path,
+    channel_id: str,
 ) -> tuple[str, bool]:
     hint_text = wrap_injected_context(
-        "\n".join(
-            [
-                f"Inbox: {inbox_dir(workspace_root)}",
-                f"Outbox: {outbox_dir(workspace_root)}",
-                f"Outbox (pending): {outbox_pending_dir(workspace_root)}",
-                "Use inbox files as local inputs and place reply files in outbox.",
-            ]
+        format_artifact_delivery_hint(
+            root=workspace_root,
+            target_surface="discord",
+            target_conversation_key=f"channel:{channel_id}",
+            workspace_scope=f"repo:{workspace_root}",
+            scope_label="repo/worktree FileBox for this Discord channel",
+            inbox_path=inbox_dir(workspace_root),
+            legacy_outbox_path=outbox_dir(workspace_root),
+            legacy_pending_path=outbox_pending_dir(workspace_root),
         )
     )
     return maybe_inject_filebox_hint(
@@ -972,6 +976,7 @@ async def _execute_discord_thread_message(
             prompt_text,
             user_text=dispatch.text,
             workspace_root=request_workspace_root,
+            channel_id=dispatch.channel_id,
         )
         if injected:
             dispatch.log_event_fn(

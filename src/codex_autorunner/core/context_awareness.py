@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Sequence
+from pathlib import Path
 from typing import Literal
 
 from .car_context import (
@@ -11,6 +12,7 @@ from .car_context import (
     build_car_context_bundle,
     render_injected_car_context,
 )
+from .filebox import inbox_dir, outbox_dir, outbox_pending_dir
 from .injected_context import wrap_injected_context
 
 CAR_AWARENESS_BLOCK = render_injected_car_context(
@@ -129,6 +131,51 @@ def maybe_inject_filebox_hint(
     ):
         return prompt_text, False
     return _append_injected_context(prompt_text, hint_text)
+
+
+def format_artifact_delivery_hint(
+    *,
+    root: Path,
+    target_surface: str,
+    target_conversation_key: str,
+    workspace_scope: str | None,
+    scope_label: str,
+    inbox_path: Path | None = None,
+    legacy_outbox_path: Path | None = None,
+    legacy_pending_path: Path | None = None,
+    extra_lines: Sequence[str] | None = None,
+) -> str:
+    """Render the canonical send-back contract plus scoped FileBox fallback paths."""
+    root = Path(root)
+    inbox = inbox_path or inbox_dir(root)
+    outbox = legacy_outbox_path or outbox_dir(root)
+    pending = legacy_pending_path or outbox_pending_dir(root)
+    explicit_command = (
+        "car artifacts send <file> --to explicit "
+        f"--surface {target_surface} "
+        f"--conversation {target_conversation_key}"
+    )
+    if workspace_scope:
+        explicit_command += f" --workspace-scope {workspace_scope}"
+    lines = [
+        "Artifact delivery target:",
+        f"- Active scope: {scope_label}",
+        f"- Target surface: {target_surface}",
+        f"- Target conversation: {target_conversation_key}",
+        f"- Workspace scope: {workspace_scope or '(none)'}",
+        "- Canonical send-back command: `car artifacts send <file> --to current`.",
+        "- If current-target environment variables are unavailable, use: "
+        f"`{explicit_command}`.",
+        "- Compatibility FileBox paths for this active target only:",
+        f"  - Inbox: {inbox}",
+        f"  - Legacy outbox: {outbox}",
+        f"  - Legacy pending outbox: {pending}",
+        "- Files placed in a different hub/repo FileBox outbox are not implied to "
+        "belong to this conversation; run `car artifacts diagnose` to find them.",
+    ]
+    if extra_lines:
+        lines.extend(str(line) for line in extra_lines if str(line).strip())
+    return "\n".join(lines)
 
 
 def _append_injected_context(prompt_text: str, injection: str) -> tuple[str, bool]:

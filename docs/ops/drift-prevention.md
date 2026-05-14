@@ -2,9 +2,10 @@
 
 Keep long-running repos from diverging between control surfaces (web, PMA, Telegram) and filesystem state.
 
-- **FileBox first.** Upload and fetch files through the shared FileBox (`/api/filebox` or `/hub/filebox/{repo_id}`) only. `tests/test_filebox.py` guards the canonical `.codex-autorunner/filebox/` contract.
+- **Artifact delivery first.** Send files through `car artifacts send <file> --to current` when the active target is available. FileBox outbox paths are compatibility ingress for the active hub/repo scope, not a global delivery contract.
+- **FileBox compatibility.** Upload and fetch files through the shared FileBox (`/api/filebox` or `/hub/filebox/{repo_id}`) only. `tests/test_filebox.py` guards the `.codex-autorunner/filebox/` compatibility contract.
 - **Pending turns.** Client turn IDs are persisted per ticket/workspace; refresh pages resume streams and clear pending state on completion so thinking UI stays aligned with backend turns.
-- **Checks.** Run `make check` (includes `pytest`) before opening PRs; the FileBox tests ensure inbox/outbox behavior stays stable across surfaces.
+- **Checks.** Run `make check` (includes `pytest`) before opening PRs; FileBox and artifact-delivery tests ensure inbox/outbox compatibility and journal behavior stay stable across surfaces.
 
 ## Managed-Thread Cutover Smoke
 
