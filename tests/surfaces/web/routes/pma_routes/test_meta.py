@@ -240,9 +240,8 @@ def test_pma_agents_does_not_default_to_unavailable_synthetic_hermes(
         "codex_autorunner.surfaces.web.routes.pma_routes.meta.get_agent_descriptor",
         lambda agent_id, _context: hermes_descriptor if agent_id == "hermes" else None,
     )
-    monkeypatch.setattr(
-        "codex_autorunner.surfaces.web.routes.pma_routes.meta._available_agents",
-        lambda _request: (
+    def _mock_available_agents(_request):
+        return (
             [
                 {
                     "id": "opencode",
@@ -251,8 +250,18 @@ def test_pma_agents_does_not_default_to_unavailable_synthetic_hermes(
                     "capability_projection": {},
                 }
             ],
-            "codex",
-        ),
+            "opencode",
+        )
+
+    # Patch both modules: `meta` keeps its own binding from `from ..agents import
+    # _available_agents`, so patching only `agents` is not enough under xdist.
+    monkeypatch.setattr(
+        "codex_autorunner.surfaces.web.routes.pma_routes.meta._available_agents",
+        _mock_available_agents,
+    )
+    monkeypatch.setattr(
+        "codex_autorunner.surfaces.web.routes.agents._available_agents",
+        _mock_available_agents,
     )
 
     app = FastAPI()
