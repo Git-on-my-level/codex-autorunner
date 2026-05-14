@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import logging
+from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
@@ -209,12 +211,11 @@ async def test_pause_watcher_resets_backoff_on_productive_scan():
 
 
 @pytest.mark.anyio
-async def test_recovery_scan_updates_binding_cursor_after_enqueue(monkeypatch) -> None:
+async def test_recovery_scan_marks_core_ledger_after_enqueue(monkeypatch) -> None:
     binding = {
         "channel_id": "channel-1",
         "guild_id": "guild-1",
         "workspace_path": "/tmp/workspace",
-        "last_recovery_fingerprint": "fingerprint-1",
     }
     enqueued = []
     seen = []
@@ -222,15 +223,11 @@ async def test_recovery_scan_updates_binding_cursor_after_enqueue(monkeypatch) -
     async def _enqueue(record: Any) -> None:
         enqueued.append(record)
 
-    async def _mark_seen(*, channel_id: str, fingerprint: str) -> None:
-        seen.append((channel_id, fingerprint))
-
     service = MagicMock()
     service._logger = logging.getLogger("test")
     service._store = MagicMock()
     service._store.list_bindings = AsyncMock(return_value=[binding])
     service._store.enqueue_outbox = AsyncMock(side_effect=_enqueue)
-    service._store.mark_recovery_seen = AsyncMock(side_effect=_mark_seen)
     service._hub_raw_config_cache = {}
     service._flow_run_mirror.return_value.mirror_outbound = MagicMock()
 
@@ -243,16 +240,138 @@ async def test_recovery_scan_updates_binding_cursor_after_enqueue(monkeypatch) -
         lambda _service, _workspace_root: None,
     )
     monkeypatch.setattr(
-        "codex_autorunner.adapters.discord.flow_watchers._load_ticket_flow_recovery_notifications",
+        "codex_autorunner.adapters.discord.flow_watchers.list_active_ticket_flow_notification_intents",
         lambda _workspace_root: [
-            ("run-1", "fingerprint-1", "already seen", {}),
-            ("run-2", "fingerprint-2", "new recovery", {}),
+            SimpleNamespace(
+                intent_id="intent-1",
+                run_id="run-1",
+                event_type="ticket_flow.commit_barrier.active",
+                severity="warning",
+                reason="already-seen",
+                recommended_actions=(),
+                cooldown_seconds=3600,
+                resolved=False,
+                payload={
+                    "primary_state": "commit_barrier_pending",
+                    "facet": {"name": "commit_barrier", "status": "active", "data": {}},
+                },
+                delivery_attempts={"discord:channel-1": {"status": "enqueued"}},
+            ),
+            SimpleNamespace(
+                intent_id="intent-2",
+                run_id="run-2",
+                event_type="ticket_flow.commit_barrier.exhausted",
+                severity="warning",
+                reason="commit-barrier-retry-budget-exhausted",
+                recommended_actions=("car ticket-flow status --repo /tmp/workspace",),
+                cooldown_seconds=3600,
+                resolved=False,
+                payload={
+                    "primary_state": "commit_barrier_exhausted",
+                    "facet": {
+                        "name": "commit_barrier",
+                        "status": "exhausted",
+                        "data": {},
+                    },
+                },
+                delivery_attempts={},
+            ),
         ],
+    )
+    monkeypatch.setattr(
+        "codex_autorunner.adapters.discord.flow_watchers.mark_ticket_flow_notification_intent_delivered",
+        lambda _workspace_root, intent_id, **_kwargs: seen.append(intent_id),
     )
 
     notified = await _scan_and_enqueue_recovery_notifications(service)
 
     assert notified == 1
     assert len(enqueued) == 1
-    assert seen == [("channel-1", "fingerprint-2")]
-    assert binding["last_recovery_fingerprint"] == "fingerprint-2"
+    assert seen == ["intent-2"]
+    assert enqueued[0].record_id == "recovery:channel-1:intent-2"
+
+
+def test_discord_recovery_watchers_do_not_reintroduce_snapshot_fingerprints() -> None:
+    from codex_autorunner.adapters.discord import flow_watchers
+
+    assert not hasattr(flow_watchers, "_recovery_fingerprint")
+    assert not hasattr(flow_watchers, "_format_recovery_notification")
+    source = inspect.getsource(flow_watchers)
+    assert "restart_attempts" not in source
+    assert "last_recovery_action" not in source
+    assert "last_recovery_fingerprint" not in source
+    assert "mark_recovery_seen" not in source
+
+
+@pytest.mark.anyio
+async def test_recovery_scan_dedupes_issue1788_when_restart_attempts_change(
+    monkeypatch,
+) -> None:
+    binding = {
+        "channel_id": "channel-1",
+        "guild_id": "guild-1",
+        "workspace_path": "/tmp/workspace",
+    }
+    enqueued = []
+    delivery_attempts: dict[str, Any] = {}
+    restart_attempts = 1
+
+    async def _enqueue(record: Any) -> None:
+        enqueued.append(record)
+
+    service = MagicMock()
+    service._logger = logging.getLogger("test")
+    service._store = MagicMock()
+    service._store.list_bindings = AsyncMock(return_value=[binding])
+    service._store.enqueue_outbox = AsyncMock(side_effect=_enqueue)
+    service._hub_raw_config_cache = {}
+    service._flow_run_mirror.return_value.mirror_outbound = MagicMock()
+
+    monkeypatch.setattr(
+        "codex_autorunner.adapters.discord.flow_watchers._preferred_bound_sources_by_workspace",
+        lambda _service: {},
+    )
+    monkeypatch.setattr(
+        "codex_autorunner.adapters.discord.flow_watchers._preferred_bound_source_for_workspace",
+        lambda _service, _workspace_root: None,
+    )
+
+    def _load(_workspace_root: Any) -> list[Any]:
+        return [
+            SimpleNamespace(
+                intent_id="stable-commit-barrier-intent",
+                run_id="run-1",
+                event_type="ticket_flow.commit_barrier.active",
+                severity="warning",
+                reason="done-current-ticket-has-uncommitted-worktree-changes",
+                recommended_actions=(),
+                cooldown_seconds=3600,
+                resolved=False,
+                payload={
+                    "primary_state": "commit_barrier_pending",
+                    "facet": {
+                        "name": "commit_barrier",
+                        "status": "active",
+                        "data": {"restart_attempts": restart_attempts},
+                    },
+                },
+                delivery_attempts=delivery_attempts,
+            )
+        ]
+
+    def _mark(_workspace_root: Any, _intent_id: str, *, transport_key: str, **_: Any):
+        delivery_attempts[transport_key] = {"status": "enqueued"}
+
+    monkeypatch.setattr(
+        "codex_autorunner.adapters.discord.flow_watchers.list_active_ticket_flow_notification_intents",
+        _load,
+    )
+    monkeypatch.setattr(
+        "codex_autorunner.adapters.discord.flow_watchers.mark_ticket_flow_notification_intent_delivered",
+        _mark,
+    )
+
+    assert await _scan_and_enqueue_recovery_notifications(service) == 1
+    restart_attempts = 2
+    assert await _scan_and_enqueue_recovery_notifications(service) == 0
+    assert len(enqueued) == 1

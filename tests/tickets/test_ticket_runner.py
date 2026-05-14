@@ -1692,6 +1692,9 @@ async def test_ticket_runner_requires_commit_before_advancing_done_ticket(
     assert first.status == "continue"
     assert isinstance(first.state.get("commit"), dict)
     assert first.state["commit"]["pending"] is True
+    assert first.state["commit"]["barrier_epoch"].startswith("commit-barrier:")
+    assert first.state["commit"]["resolution_state"] == "pending"
+    assert first.state["commit"]["first_seen_at"]
     assert (
         first.state.get("current_ticket") == ".codex-autorunner/tickets/TICKET-001.md"
     )
@@ -1816,7 +1819,96 @@ async def test_ticket_runner_pauses_when_commit_retries_exhausted(
     assert second.reason == "Commit failed after 1 attempts. Manual commit required."
     assert "Working tree status" in (second.reason_details or "")
     assert second.state.get("commit", {}).get("retries") == 1
+    assert second.state.get("commit", {}).get("exhausted") is True
+    assert second.state.get("commit", {}).get("resolution_state") == "exhausted"
     assert len(pool.requests) == 2
+
+
+@pytest.mark.asyncio
+async def test_ticket_runner_treats_zero_commit_retry_budget_as_exhausted(
+    tmp_path: Path,
+) -> None:
+    workspace_root = tmp_path
+    _init_git_repo(workspace_root)
+    ticket_dir = workspace_root / ".codex-autorunner" / "tickets"
+    ticket_dir.mkdir(parents=True, exist_ok=True)
+    ticket_path = ticket_dir / "TICKET-001.md"
+    _write_ticket(ticket_path, done=False)
+
+    def handler(req: AgentTurnRequest) -> AgentTurnResult:
+        _set_ticket_done(ticket_path, done=True)
+        (workspace_root / "work.txt").write_text("dirty\n", encoding="utf-8")
+        return AgentTurnResult(
+            agent_id=req.agent_id,
+            conversation_id="conv1",
+            turn_id="t1",
+            text="done but dirty",
+        )
+
+    pool = FakeAgentPool(handler)
+    runner = TicketRunner(
+        workspace_root=workspace_root,
+        run_id="run-1",
+        config=TicketRunConfig(
+            ticket_dir=Path(".codex-autorunner/tickets"),
+            max_commit_retries=0,
+            auto_commit=False,
+        ),
+        agent_pool=pool,
+    )
+
+    first = await runner.step({})
+    assert first.status == "continue"
+    assert first.state.get("commit", {}).get("exhausted") is True
+    assert first.state.get("commit", {}).get("resolution_state") == "exhausted"
+
+    second = await runner.step(first.state)
+    assert second.status == "paused"
+    assert second.reason == "Commit barrier exhausted. Manual commit required."
+    assert len(pool.requests) == 1
+
+
+@pytest.mark.asyncio
+async def test_ticket_runner_does_not_retry_exhausted_commit_barrier(
+    tmp_path: Path,
+) -> None:
+    workspace_root = tmp_path
+    _init_git_repo(workspace_root)
+    ticket_dir = workspace_root / ".codex-autorunner" / "tickets"
+    ticket_dir.mkdir(parents=True, exist_ok=True)
+    ticket_path = ticket_dir / "TICKET-001.md"
+    _write_ticket(ticket_path, done=True)
+    (workspace_root / "work.txt").write_text("dirty\n", encoding="utf-8")
+
+    pool = FakeAgentPool(lambda req: pytest.fail("agent should not be called"))
+    runner = TicketRunner(
+        workspace_root=workspace_root,
+        run_id="run-1",
+        config=TicketRunConfig(
+            ticket_dir=Path(".codex-autorunner/tickets"),
+            max_commit_retries=1,
+            auto_commit=False,
+        ),
+        agent_pool=pool,
+    )
+    state = {
+        "current_ticket": ".codex-autorunner/tickets/TICKET-001.md",
+        "commit": {
+            "pending": True,
+            "barrier_epoch": "commit-barrier:test",
+            "retries": 1,
+            "max_retries": 1,
+            "exhausted": True,
+            "resolution_state": "exhausted",
+        },
+    }
+
+    result = await runner.step(state)
+
+    assert result.status == "paused"
+    assert result.reason == "Commit barrier exhausted. Manual commit required."
+    assert result.state.get("commit", {}).get("barrier_epoch") == "commit-barrier:test"
+    assert pool.requests == []
 
 
 @pytest.mark.asyncio

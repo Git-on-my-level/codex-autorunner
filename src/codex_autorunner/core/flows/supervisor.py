@@ -48,6 +48,7 @@ class RecoveryIntentKind(str, Enum):
     STALE_ALIVE_WORKER = "stale_alive_worker"
     BACKEND_DISCONNECT = "backend_disconnect"
     COMMIT_BARRIER_REQUIRED = "commit_barrier_required"
+    COMMIT_BARRIER_EXHAUSTED = "commit_barrier_exhausted"
     RESTART_ATTEMPTED = "restart_attempted"
     RESTART_EXHAUSTED = "restart_exhausted"
 
@@ -123,6 +124,10 @@ class CommitBarrierObservation:
     current_ticket_done: bool = False
     worktree_dirty: bool = False
     commit_pending: bool = False
+    barrier_epoch: Optional[str] = None
+    retries: int = 0
+    max_retries: Optional[int] = None
+    exhausted: bool = False
 
     @property
     def required(self) -> bool:
@@ -544,15 +549,28 @@ def _append_commit_barrier_intent(
     intents: List[RecoveryIntent],
     effects: List[SupervisorEffectIntent],
 ) -> None:
+    exhausted = bool(observation.commit_barrier.exhausted)
     intents.append(
         RecoveryIntent(
-            RecoveryIntentKind.COMMIT_BARRIER_REQUIRED,
-            "done-current-ticket-has-uncommitted-worktree-changes",
+            (
+                RecoveryIntentKind.COMMIT_BARRIER_EXHAUSTED
+                if exhausted
+                else RecoveryIntentKind.COMMIT_BARRIER_REQUIRED
+            ),
+            (
+                "commit-barrier-retry-budget-exhausted"
+                if exhausted
+                else "done-current-ticket-has-uncommitted-worktree-changes"
+            ),
             {
                 "current_ticket": observation.commit_barrier.current_ticket,
                 "current_ticket_done": observation.commit_barrier.current_ticket_done,
                 "worktree_dirty": observation.commit_barrier.worktree_dirty,
                 "commit_pending": observation.commit_barrier.commit_pending,
+                "barrier_epoch": observation.commit_barrier.barrier_epoch,
+                "retries": observation.commit_barrier.retries,
+                "max_retries": observation.commit_barrier.max_retries,
+                "exhausted": exhausted,
             },
         )
     )

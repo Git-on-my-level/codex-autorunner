@@ -639,6 +639,140 @@ async def test_terminal_scan_failure_sends_degraded_notice_once_until_recovery(
     assert len(calls) == 2
 
 
+@pytest.mark.anyio
+async def test_recovery_intent_sends_once_per_telegram_topic(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace = tmp_path / "tg-recovery"
+    _init_repo(workspace)
+    record = _DummyRecord(workspace)
+    calls: list[tuple[int, str, Optional[int]]] = []
+    delivery_attempts: dict[str, object] = {}
+
+    async def send_message_with_outbox(
+        chat_id: int,
+        text: str,
+        *,
+        thread_id: Optional[int],
+        reply_to: Optional[int],
+    ) -> bool:
+        _ = reply_to
+        calls.append((chat_id, text, thread_id))
+        return True
+
+    async def send_document(*args, **kwargs) -> bool:
+        return True
+
+    bridge = TelegramTicketFlowBridge(
+        logger=logging.getLogger("test"),
+        store=_DummyStore({"123:456": record}),
+        pause_targets={},
+        send_message_with_outbox=send_message_with_outbox,
+        send_document=send_document,
+        pause_config=PauseDispatchNotifications(
+            enabled=True,
+            send_attachments=False,
+            max_file_size_bytes=1024,
+            chunk_long_messages=True,
+        ),
+        default_notification_chat_id=None,
+    )
+    intent = SimpleNamespace(
+        intent_id="intent-telegram-1",
+        run_id="run-1",
+        event_type="ticket_flow.commit_barrier.exhausted",
+        severity="warning",
+        reason="commit-barrier-retry-budget-exhausted",
+        recommended_actions=("car ticket-flow status --repo /tmp/repo",),
+        cooldown_seconds=3600,
+        resolved=False,
+        payload={
+            "primary_state": "commit_barrier_exhausted",
+            "facet": {
+                "name": "commit_barrier",
+                "status": "exhausted",
+                "data": {},
+            },
+        },
+        delivery_attempts=delivery_attempts,
+    )
+    monkeypatch.setattr(
+        "codex_autorunner.adapters.telegram.ticket_flow_bridge.list_active_ticket_flow_notification_intents",
+        lambda _path: [intent],
+    )
+
+    def _mark(
+        _workspace: Path,
+        _intent_id: str,
+        *,
+        transport_key: str,
+        record_id: str,
+    ) -> None:
+        delivery_attempts[transport_key] = {
+            "status": "enqueued",
+            "record_id": record_id,
+        }
+
+    monkeypatch.setattr(
+        "codex_autorunner.adapters.telegram.ticket_flow_bridge.mark_ticket_flow_notification_intent_delivered",
+        _mark,
+    )
+
+    await bridge._notify_recovery_for_workspace(workspace, [("123:456", record)])
+    await bridge._notify_recovery_for_workspace(workspace, [("123:456", record)])
+
+    assert len(calls) == 1
+    assert "commit_barrier_exhausted" in calls[0][1]
+
+
+@pytest.mark.anyio
+async def test_recovery_scan_runs_when_pause_notifications_disabled(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "tg-recovery-no-pause"
+    _init_repo(workspace)
+    record = _DummyRecord(workspace)
+    recovery_calls: list[tuple[Path, list[tuple[str, object]]]] = []
+    pause_calls: list[Path] = []
+
+    async def send_message_with_outbox(*args, **kwargs) -> bool:
+        return True
+
+    async def send_document(*args, **kwargs) -> bool:
+        return True
+
+    bridge = TelegramTicketFlowBridge(
+        logger=logging.getLogger("test"),
+        store=_DummyStore({"123:456": record}),
+        pause_targets={},
+        send_message_with_outbox=send_message_with_outbox,
+        send_document=send_document,
+        pause_config=PauseDispatchNotifications(
+            enabled=False,
+            send_attachments=False,
+            max_file_size_bytes=1024,
+            chunk_long_messages=True,
+        ),
+        default_notification_chat_id=None,
+    )
+
+    async def _notify_pause(workspace_root: Path, *_args, **_kwargs) -> None:
+        pause_calls.append(workspace_root)
+
+    async def _notify_recovery(
+        workspace_root: Path, entries: list[tuple[str, object]], **_kwargs
+    ) -> None:
+        recovery_calls.append((workspace_root, entries))
+
+    bridge._notify_ticket_flow_pause = _notify_pause  # type: ignore[method-assign]
+    bridge._notify_recovery_for_workspace = _notify_recovery  # type: ignore[method-assign]
+
+    await bridge._scan_and_notify_pauses()
+
+    assert pause_calls == []
+    assert recovery_calls == [(workspace, [("123:456", record)])]
+
+
 @pytest.mark.asyncio
 async def test_terminal_scan_skips_stale_run_when_newer_terminal_was_already_marked(
     tmp_path: Path,

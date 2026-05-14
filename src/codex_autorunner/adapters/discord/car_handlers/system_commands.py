@@ -652,6 +652,11 @@ async def handle_files_outbox(
     *,
     workspace_root: Path,
 ) -> None:
+    from ....core.artifact_delivery import (
+        ACTIVE_DELIVERY_STATES,
+        ArtifactDeliveryService,
+        format_delivery_summary,
+    )
     from ....core.filebox import (
         outbox_dir,
         outbox_pending_dir,
@@ -690,6 +695,14 @@ async def handle_files_outbox(
             lines.append(f"... and {len(sent_files) - 10} more")
     else:
         lines.append("Outbox sent: (empty)")
+    lines.append("")
+    lines.append(
+        format_delivery_summary(
+            ArtifactDeliveryService(workspace_root),
+            states=ACTIVE_DELIVERY_STATES,
+            limit=10,
+        )
+    )
     await service.respond_ephemeral(interaction_id, interaction_token, "\n".join(lines))
 
 

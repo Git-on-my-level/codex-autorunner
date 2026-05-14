@@ -27,10 +27,11 @@ from .models import (
     FlowRunRecord,
     FlowRunStatus,
 )
+from .notification_intent_records import FlowNotificationIntentRecord
 
 _logger = logging.getLogger(__name__)
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 UNSET = object()
 
 
@@ -124,6 +125,8 @@ class FlowStore:
         required_tables = set(_REQUIRED_SCHEMA_TABLES)
         if schema_version >= 3:
             required_tables.add("flow_telemetry")
+        if schema_version >= 4:
+            required_tables.add("flow_notification_intents")
         present_tables = {
             table_name
             for table_name in (
@@ -132,6 +135,7 @@ class FlowStore:
                 "flow_events",
                 "flow_artifacts",
                 "flow_telemetry",
+                "flow_notification_intents",
             )
             if table_exists(conn, table_name)
         }
@@ -214,6 +218,29 @@ class FlowStore:
         )
 
         conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS flow_notification_intents (
+                intent_id TEXT PRIMARY KEY,
+                run_id TEXT NOT NULL,
+                event_type TEXT NOT NULL,
+                severity TEXT NOT NULL,
+                reason TEXT NOT NULL,
+                recommended_actions TEXT NOT NULL DEFAULT '[]',
+                cooldown_seconds INTEGER NOT NULL DEFAULT 3600,
+                resolved INTEGER NOT NULL DEFAULT 0,
+                first_seen_at TEXT NOT NULL,
+                last_observed_at TEXT NOT NULL,
+                last_notified_at TEXT,
+                resolved_at TEXT,
+                observed_count INTEGER NOT NULL DEFAULT 1,
+                payload TEXT NOT NULL DEFAULT '{}',
+                delivery_attempts TEXT NOT NULL DEFAULT '{}',
+                FOREIGN KEY (run_id) REFERENCES flow_runs(id) ON DELETE CASCADE
+            )
+        """
+        )
+
+        conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_flow_runs_status ON flow_runs(status)"
         )
         conn.execute(
@@ -230,6 +257,10 @@ class FlowStore:
         )
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_flow_telemetry_run_type ON flow_telemetry(run_id, event_type, seq)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_flow_notification_intents_run_type "
+            "ON flow_notification_intents(run_id, event_type, resolved)"
         )
 
     def _ensure_schema_version(self, conn: sqlite3.Connection) -> None:
@@ -250,6 +281,11 @@ class FlowStore:
                     version=3,
                     name="flow_telemetry_table",
                     apply=self._apply_v3_migration,
+                ),
+                SqliteMigrationStep(
+                    version=4,
+                    name="flow_notification_intents_table",
+                    apply=self._apply_v4_migration,
                 ),
             ),
         )
@@ -307,6 +343,35 @@ class FlowStore:
         )
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_flow_telemetry_run_type ON flow_telemetry(run_id, event_type, seq)"
+        )
+
+    def _apply_v4_migration(self, conn: sqlite3.Connection) -> None:
+        _logger.info("Migrating FlowStore schema to version 4")
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS flow_notification_intents (
+                intent_id TEXT PRIMARY KEY,
+                run_id TEXT NOT NULL,
+                event_type TEXT NOT NULL,
+                severity TEXT NOT NULL,
+                reason TEXT NOT NULL,
+                recommended_actions TEXT NOT NULL DEFAULT '[]',
+                cooldown_seconds INTEGER NOT NULL DEFAULT 3600,
+                resolved INTEGER NOT NULL DEFAULT 0,
+                first_seen_at TEXT NOT NULL,
+                last_observed_at TEXT NOT NULL,
+                last_notified_at TEXT,
+                resolved_at TEXT,
+                observed_count INTEGER NOT NULL DEFAULT 1,
+                payload TEXT NOT NULL DEFAULT '{}',
+                delivery_attempts TEXT NOT NULL DEFAULT '{}',
+                FOREIGN KEY (run_id) REFERENCES flow_runs(id) ON DELETE CASCADE
+            )
+            """
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_flow_notification_intents_run_type "
+            "ON flow_notification_intents(run_id, event_type, resolved)"
         )
 
     def _prune_rows_for_run_event_type(
@@ -1057,6 +1122,138 @@ class FlowStore:
     def delete_telemetry_by_seqs(self, seqs: List[int]) -> int:
         return self._delete_rows_by_seqs("flow_telemetry", seqs)
 
+    def upsert_notification_intent(
+        self,
+        intent: Any,
+        *,
+        observed_at: Optional[str] = None,
+    ) -> FlowNotificationIntentRecord:
+        """Create or refresh a domain-owned notification intent idempotently."""
+
+        timestamp = observed_at or now_iso()
+        actions = json.dumps(list(intent.recommended_actions))
+        payload = json.dumps(dict(intent.payload))
+        with self.transaction() as conn:
+            conn.execute(
+                """
+                INSERT INTO flow_notification_intents (
+                    intent_id, run_id, event_type, severity, reason,
+                    recommended_actions, cooldown_seconds, resolved,
+                    first_seen_at, last_observed_at, resolved_at, observed_count,
+                    payload, delivery_attempts
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(intent_id) DO UPDATE SET
+                    severity = excluded.severity,
+                    reason = excluded.reason,
+                    recommended_actions = excluded.recommended_actions,
+                    cooldown_seconds = excluded.cooldown_seconds,
+                    resolved = excluded.resolved,
+                    last_observed_at = excluded.last_observed_at,
+                    resolved_at = CASE
+                        WHEN excluded.resolved = 1
+                        THEN COALESCE(flow_notification_intents.resolved_at, excluded.resolved_at)
+                        ELSE NULL
+                    END,
+                    observed_count = flow_notification_intents.observed_count + 1,
+                    payload = excluded.payload
+                """,
+                (
+                    intent.intent_id,
+                    intent.run_id,
+                    intent.event_type,
+                    intent.severity.value,
+                    intent.reason,
+                    actions,
+                    intent.cooldown_seconds,
+                    1 if intent.resolved else 0,
+                    timestamp,
+                    timestamp,
+                    timestamp if intent.resolved else None,
+                    1,
+                    payload,
+                    json.dumps({}),
+                ),
+            )
+            row = conn.execute(
+                "SELECT * FROM flow_notification_intents WHERE intent_id = ?",
+                (intent.intent_id,),
+            ).fetchone()
+        if row is None:
+            raise RuntimeError("Failed to persist notification intent")
+        return self._row_to_notification_intent(row)
+
+    def get_notification_intent(
+        self, intent_id: str
+    ) -> Optional[FlowNotificationIntentRecord]:
+        conn = self._get_conn()
+        row = conn.execute(
+            "SELECT * FROM flow_notification_intents WHERE intent_id = ?",
+            (intent_id,),
+        ).fetchone()
+        if row is None:
+            return None
+        return self._row_to_notification_intent(row)
+
+    def list_notification_intents(
+        self,
+        *,
+        run_id: Optional[str] = None,
+        resolved: Optional[bool] = None,
+    ) -> List[FlowNotificationIntentRecord]:
+        conn = self._get_conn()
+        query = "SELECT * FROM flow_notification_intents WHERE 1=1"
+        params: List[Any] = []
+        if run_id is not None:
+            query += " AND run_id = ?"
+            params.append(run_id)
+        if resolved is not None:
+            query += " AND resolved = ?"
+            params.append(1 if resolved else 0)
+        query += " ORDER BY last_observed_at DESC, first_seen_at DESC, intent_id ASC"
+        rows = conn.execute(query, params).fetchall()
+        return [self._row_to_notification_intent(row) for row in rows]
+
+    def mark_notification_intent_delivered(
+        self,
+        intent_id: str,
+        *,
+        transport: str,
+        delivered_at: Optional[str] = None,
+        attempt: Optional[dict[str, Any]] = None,
+    ) -> Optional[FlowNotificationIntentRecord]:
+        timestamp = delivered_at or now_iso()
+        with self.transaction() as conn:
+            row = conn.execute(
+                "SELECT delivery_attempts FROM flow_notification_intents WHERE intent_id = ?",
+                (intent_id,),
+            ).fetchone()
+            if row is None:
+                return None
+            try:
+                delivery_attempts = json.loads(row["delivery_attempts"] or "{}")
+            except (json.JSONDecodeError, TypeError):
+                delivery_attempts = {}
+            attempts = dict(delivery_attempts)
+            attempts[transport] = {
+                "last_attempted_at": timestamp,
+                **dict(attempt or {}),
+            }
+            conn.execute(
+                """
+                UPDATE flow_notification_intents
+                SET last_notified_at = ?, delivery_attempts = ?
+                WHERE intent_id = ?
+                """,
+                (timestamp, json.dumps(attempts), intent_id),
+            )
+            updated = conn.execute(
+                "SELECT * FROM flow_notification_intents WHERE intent_id = ?",
+                (intent_id,),
+            ).fetchone()
+        if updated is None:
+            return None
+        return self._row_to_notification_intent(updated)
+
     def _row_to_flow_run(self, row: sqlite3.Row) -> FlowRunRecord:
         return FlowRunRecord(
             id=row["id"],
@@ -1103,6 +1300,47 @@ class FlowStore:
             timestamp=row["timestamp"],
             data=json.loads(row["data"]),
             step_id=None,
+        )
+
+    def _row_to_notification_intent(
+        self, row: sqlite3.Row
+    ) -> FlowNotificationIntentRecord:
+        try:
+            recommended_actions = json.loads(row["recommended_actions"] or "[]")
+        except (json.JSONDecodeError, TypeError):
+            recommended_actions = []
+        if not isinstance(recommended_actions, list):
+            recommended_actions = []
+        try:
+            payload = json.loads(row["payload"] or "{}")
+        except (json.JSONDecodeError, TypeError):
+            payload = {}
+        if not isinstance(payload, dict):
+            payload = {}
+        try:
+            delivery_attempts = json.loads(row["delivery_attempts"] or "{}")
+        except (json.JSONDecodeError, TypeError):
+            delivery_attempts = {}
+        if not isinstance(delivery_attempts, dict):
+            delivery_attempts = {}
+        return FlowNotificationIntentRecord(
+            intent_id=row["intent_id"],
+            run_id=row["run_id"],
+            event_type=row["event_type"],
+            severity=row["severity"],
+            reason=row["reason"],
+            recommended_actions=tuple(
+                str(action) for action in recommended_actions if action is not None
+            ),
+            cooldown_seconds=int(row["cooldown_seconds"]),
+            resolved=bool(row["resolved"]),
+            first_seen_at=row["first_seen_at"],
+            last_observed_at=row["last_observed_at"],
+            last_notified_at=row["last_notified_at"],
+            resolved_at=row["resolved_at"],
+            observed_count=int(row["observed_count"]),
+            payload=payload,
+            delivery_attempts=delivery_attempts,
         )
 
     def close(self) -> None:

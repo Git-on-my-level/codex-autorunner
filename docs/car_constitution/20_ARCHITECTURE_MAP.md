@@ -85,6 +85,13 @@ Mapping the conceptual layers to the codebase:
   CLI, Web, Telegram, and Discord should show projection/run-state recovery
   fields and crash artifacts instead of inventing surface-specific crash
   classifications.
+- **Recovery notifications are core-owned**:
+  ticket-flow recovery classification, notification intent ids, cooldowns, and
+  delivery idempotency live in the core flow notification ledger. Discord,
+  Telegram, Web, and CLI may format or deliver canonical intents, but must not
+  derive notification dedupe keys from mutable snapshots such as
+  `restart_attempts`, `last_recovery_action`, or adapter binding cursors like
+  `channel_bindings.last_recovery_fingerprint`.
 
 ### Ticket-flow runner seam structure
 The ticket-flow orchestration hot path is split across focused submodules under `src/codex_autorunner/tickets/`:

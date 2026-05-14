@@ -12,6 +12,7 @@ from ...adapters.chat.media import (
     normalize_mime_type,
 )
 from ...adapters.chat.update_notifier import format_update_status_message
+from ...core.context_awareness import format_artifact_delivery_hint
 from ...core.flows.ux_helpers import summarize_flow_freshness
 from ...core.injected_context import wrap_injected_context
 from ...core.ticket_flow_summary import build_ticket_flow_display
@@ -199,6 +200,9 @@ def build_attachment_context_payload(
     max_message_length: int,
     voice_provider_name: Optional[str],
     whisper_transcript_disclaimer: Optional[str],
+    target_surface: str = "discord",
+    target_conversation_key: Optional[str] = None,
+    workspace_scope: Optional[str] = None,
 ) -> AttachmentContextPayload:
     transcript_lines: list[str] = []
     transcript_items = [item for item in saved if item.transcript_text]
@@ -243,13 +247,21 @@ def build_attachment_context_payload(
         details.append("")
         details.append(
             wrap_injected_context(
-                "\n".join(
-                    [
-                        f"Inbox: {inbox_path}",
-                        f"Outbox: {outbox_path}",
-                        f"Outbox (pending): {outbox_pending_path}",
-                        "Use inbox files as local inputs and place reply files in outbox.",
-                    ]
+                format_artifact_delivery_hint(
+                    root=(
+                        inbox_path.parents[2]
+                        if len(inbox_path.parents) > 2
+                        else inbox_path.parent
+                    ),
+                    target_surface=target_surface,
+                    target_conversation_key=(
+                        target_conversation_key or "current-conversation"
+                    ),
+                    workspace_scope=workspace_scope,
+                    scope_label="repo/worktree FileBox for this attachment turn",
+                    inbox_path=inbox_path,
+                    legacy_outbox_path=outbox_path,
+                    legacy_pending_path=outbox_pending_path,
                 )
             )
         )

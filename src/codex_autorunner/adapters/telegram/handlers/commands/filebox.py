@@ -2,12 +2,26 @@ from __future__ import annotations
 
 import logging
 import secrets
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional
 
+from .....core.artifact_delivery import (
+    ACTIVE_DELIVERY_STATES,
+    ArtifactDeliveryService,
+    ArtifactRecord,
+    DeliveryIntent,
+    delivery_filename,
+    format_delivery_summary,
+)
 from .....core.filebox import delete_regular_files, list_regular_files
 from .....core.logging_utils import log_event
+from ....chat.artifact_delivery import (
+    LegacyArchivePolicy,
+    drain_artifact_deliveries,
+    enqueue_legacy_paths,
+)
 from ....chat.constants import TOPIC_NOT_BOUND_MESSAGE
 from ...adapter import TelegramAPIError, TelegramMessage
 from ...helpers import _path_within
@@ -15,7 +29,41 @@ from ...state import TelegramTopicRecord
 from ..media_ingress import record_with_media_workspace as _record_with_media_workspace
 
 
+@dataclass(frozen=True)
+class _TelegramArtifactTransport:
+    bot: Any
+    chat_id: int
+    thread_id: Optional[int]
+    reply_to: Optional[int]
+
+    async def send_artifact(
+        self,
+        *,
+        artifact: ArtifactRecord,
+        intent: DeliveryIntent,
+    ) -> dict[str, Any]:
+        data = Path(artifact.storage_path).read_bytes()
+        receipt = await self.bot.send_document(
+            self.chat_id,
+            data,
+            filename=delivery_filename(intent, artifact),
+            message_thread_id=self.thread_id,
+            reply_to_message_id=self.reply_to,
+        )
+        return receipt if isinstance(receipt, dict) else {}
+
+
 class FileBoxCommandsMixin:
+    def _artifact_target_key(
+        self,
+        *,
+        chat_id: int,
+        thread_id: Optional[int],
+    ) -> str:
+        if thread_id is None:
+            return f"chat:{chat_id}"
+        return f"chat:{chat_id}/thread:{thread_id}"
+
     def _files_usage(self, *, pma: bool) -> str:
         header = "Usage:"
         lines = [
@@ -178,20 +226,30 @@ class FileBoxCommandsMixin:
         else:
             key = await self._resolve_topic_key(chat_id, thread_id)
         pma_enabled = bool(getattr(record, "pma_enabled", False))
+        service_root = Path(record.workspace_path)
         pending_dir = self._files_outbox_pending_dir(record.workspace_path, key)
         if pma_enabled:
             pma_outbox = self._pma_outbox_dir()
             if pma_outbox is not None:
                 pending_dir = pma_outbox
+                hub_root = getattr(self, "_hub_root", None)
+                if hub_root is not None:
+                    service_root = Path(hub_root)
         if not pending_dir.exists():
             return
         files = self._list_files(pending_dir)
+        if pma_enabled:
+            files.extend(self._list_files(pending_dir / "pending"))
         if not files:
             return
         sent_dir = self._files_outbox_sent_dir(record.workspace_path, key)
         max_bytes = self._config.media.max_file_bytes
+        deliverable: list[Path] = []
         for path in files:
-            if not _path_within(root=pending_dir, target=path):
+            source_dir = pending_dir
+            if pma_enabled and path.parent == pending_dir / "pending":
+                source_dir = pending_dir / "pending"
+            if not _path_within(root=source_dir, target=path):
                 continue
             try:
                 size = path.stat().st_size
@@ -205,34 +263,50 @@ class FileBoxCommandsMixin:
                     reply_to=reply_to,
                 )
                 continue
-            if pma_enabled:
-                success = await self._send_pma_outbox_file(
-                    path,
+            deliverable.append(path)
+        if not deliverable:
+            return
+        service = ArtifactDeliveryService(service_root)
+        target_key = self._artifact_target_key(chat_id=chat_id, thread_id=thread_id)
+        enqueue_legacy_paths(
+            service=service,
+            paths=deliverable,
+            target_surface="telegram",
+            target_conversation_key=target_key,
+            workspace_scope=f"repo:{record.workspace_path}",
+            legacy_source="pma-outbox" if pma_enabled else "outbox/pending",
+        )
+        if pma_enabled:
+            await drain_artifact_deliveries(
+                service=service,
+                transport=_TelegramArtifactTransport(
+                    bot=self._bot,
                     chat_id=chat_id,
                     thread_id=thread_id,
                     reply_to=reply_to,
-                )
-                if success:
-                    try:
-                        path.unlink()
-                    except OSError as exc:
-                        log_event(
-                            self._logger,
-                            logging.WARNING,
-                            "telegram.files.pma_outbox.delete_failed",
-                            chat_id=chat_id,
-                            thread_id=thread_id,
-                            path=str(path),
-                            exc=exc,
-                        )
-            else:
-                await self._send_outbox_file(
-                    path,
-                    sent_dir=sent_dir,
-                    chat_id=chat_id,
-                    thread_id=thread_id,
-                    reply_to=reply_to,
-                )
+                ),
+                target_surface="telegram",
+                target_conversation_key=target_key,
+                archive_policy=LegacyArchivePolicy(mode="delete"),
+                logger=self._logger,
+            )
+            return
+        await drain_artifact_deliveries(
+            service=service,
+            transport=_TelegramArtifactTransport(
+                bot=self._bot,
+                chat_id=chat_id,
+                thread_id=thread_id,
+                reply_to=reply_to,
+            ),
+            target_surface="telegram",
+            target_conversation_key=target_key,
+            archive_policy=LegacyArchivePolicy(
+                mode="move-to-sent",
+                sent_dir=sent_dir,
+            ),
+            logger=self._logger,
+        )
 
     def _format_file_listing(self, title: str, files: list[Path]) -> str:
         if not files:
@@ -348,8 +422,25 @@ class FileBoxCommandsMixin:
             return
         if subcommand == "outbox":
             pending_items = self._list_files(pending_dir)
+            service_root = Path(record.workspace_path)
             if pma_enabled:
-                text = self._format_file_listing("Outbox", pending_items)
+                hub_root = getattr(self, "_hub_root", None)
+                if hub_root is not None:
+                    service_root = Path(hub_root)
+            deliveries = format_delivery_summary(
+                ArtifactDeliveryService(service_root),
+                target_surface="telegram",
+                target_conversation_key=self._artifact_target_key(
+                    chat_id=message.chat_id,
+                    thread_id=message.thread_id,
+                ),
+                states=ACTIVE_DELIVERY_STATES,
+                limit=10,
+            )
+            if pma_enabled:
+                text = "\n".join(
+                    [self._format_file_listing("Outbox", pending_items), "", deliveries]
+                )
             else:
                 sent_items = self._list_files(sent_dir)
                 text = "\n".join(
@@ -357,6 +448,8 @@ class FileBoxCommandsMixin:
                         self._format_file_listing("Outbox pending", pending_items),
                         "",
                         self._format_file_listing("Outbox sent", sent_items),
+                        "",
+                        deliveries,
                     ]
                 )
             await self._send_message(
