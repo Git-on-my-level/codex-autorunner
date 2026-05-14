@@ -259,6 +259,30 @@ def test_policy_classifies_done_current_ticket_dirty_worktree_as_commit_barrier(
     assert decision.first_lifecycle_trigger() is None
 
 
+def test_policy_classifies_exhausted_commit_barrier() -> None:
+    decision = supervise_flow_recovery(
+        FlowSupervisorObservation(
+            run=_run(),
+            worker=_worker(WorkerHealthStatus.ALIVE, pid=123),
+            commit_barrier=CommitBarrierObservation(
+                current_ticket=".codex-autorunner/tickets/TICKET-001.md",
+                current_ticket_done=True,
+                worktree_dirty=True,
+                commit_pending=True,
+                barrier_epoch="commit-barrier:abc",
+                retries=2,
+                max_retries=2,
+                exhausted=True,
+            ),
+        )
+    )
+
+    assert _intent_kinds(decision) == [RecoveryIntentKind.COMMIT_BARRIER_EXHAUSTED]
+    assert decision.intents[0].data["barrier_epoch"] == "commit-barrier:abc"
+    assert decision.intents[0].data["exhausted"] is True
+    assert decision.first_lifecycle_trigger() is None
+
+
 def test_policy_classifies_restart_attempts_exhausted() -> None:
     decision = supervise_flow_recovery(
         FlowSupervisorObservation(

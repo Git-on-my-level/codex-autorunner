@@ -232,20 +232,25 @@ def test_pma_agents_does_not_default_to_unavailable_synthetic_hermes(
         capabilities=frozenset(),
         make_harness=lambda _ctx: object(),
     )
+    _only_opencode = {"opencode": opencode_descriptor}
 
-    def _available_only_opencode(_context):
-        return {"opencode": opencode_descriptor}
+    def _mock_get_available(_context):
+        return _only_opencode
 
     def _descriptor_for(agent_id, _context):
         return hermes_descriptor if agent_id == "hermes" else None
 
     monkeypatch.setattr(
         "codex_autorunner.surfaces.web.routes.pma_routes.meta.get_available_agents",
-        _available_only_opencode,
+        _mock_get_available,
+    )
+    monkeypatch.setattr(
+        "codex_autorunner.surfaces.web.routes.agents.get_available_agents",
+        _mock_get_available,
     )
     monkeypatch.setattr(
         "codex_autorunner.agents.registry.get_available_agents",
-        _available_only_opencode,
+        _mock_get_available,
     )
     monkeypatch.setattr(
         "codex_autorunner.surfaces.web.routes.pma_routes.meta.get_agent_descriptor",
@@ -337,9 +342,23 @@ def test_pma_agents_default_uses_registry_availability_over_serialized_hint(
         capabilities=frozenset(),
         make_harness=lambda _ctx: object(),
     )
+    _only_opencode = {"opencode": opencode_descriptor}
 
-    def _available_only_opencode(_context):
-        return {"opencode": opencode_descriptor}
+    def _mock_get_available(_context):
+        return _only_opencode
+
+    monkeypatch.setattr(
+        "codex_autorunner.surfaces.web.routes.pma_routes.meta.get_available_agents",
+        _mock_get_available,
+    )
+    monkeypatch.setattr(
+        "codex_autorunner.surfaces.web.routes.agents.get_available_agents",
+        _mock_get_available,
+    )
+    monkeypatch.setattr(
+        "codex_autorunner.agents.registry.get_available_agents",
+        _mock_get_available,
+    )
 
     def _mock_serialized_agents(_request):
         return (
@@ -361,15 +380,11 @@ def test_pma_agents_default_uses_registry_availability_over_serialized_hint(
         )
 
     monkeypatch.setattr(
-        "codex_autorunner.surfaces.web.routes.pma_routes.meta.get_available_agents",
-        _available_only_opencode,
-    )
-    monkeypatch.setattr(
-        "codex_autorunner.agents.registry.get_available_agents",
-        _available_only_opencode,
-    )
-    monkeypatch.setattr(
         "codex_autorunner.surfaces.web.routes.pma_routes.meta._available_agents",
+        _mock_serialized_agents,
+    )
+    monkeypatch.setattr(
+        "codex_autorunner.surfaces.web.routes.agents._available_agents",
         _mock_serialized_agents,
     )
 
