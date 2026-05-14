@@ -3204,15 +3204,20 @@ class DiscordBotService(DiscordInteractionResponseMixin):
     async def _app_server_supervisor_for_workspace(
         self, workspace_root: Path
     ) -> WorkspaceAppServerSupervisor:
-        key = str(workspace_root)
+        repo_config = load_repo_config(
+            workspace_root,
+            hub_path=self._hub_config_path,
+        )
+        server_scope = (
+            repo_config.app_server.server_scope
+            if repo_config and repo_config.app_server
+            else "global"
+        )
+        key = "global" if server_scope == "global" else str(workspace_root)
         async with self._app_server_lock:
             existing = self._app_server_supervisors.get(key)
             if existing is not None:
                 return existing
-            repo_config = load_repo_config(
-                workspace_root,
-                hub_path=self._hub_config_path,
-            )
             command = (
                 list(repo_config.app_server.command)
                 if repo_config
@@ -3229,6 +3234,29 @@ class DiscordBotService(DiscordInteractionResponseMixin):
                     self.app_server_events.handle_notification,
                 ),
                 logger=self._logger,
+                server_scope=server_scope,
+                max_handles=(
+                    repo_config.app_server.max_handles if repo_config else None
+                ),
+                idle_ttl_seconds=(
+                    repo_config.app_server.idle_ttl_seconds if repo_config else None
+                ),
+                startup_timeout_seconds=(
+                    repo_config.app_server.startup_timeout_seconds
+                    if repo_config
+                    else None
+                ),
+                terminate_grace_seconds=(
+                    repo_config.app_server.terminate_grace_seconds
+                    if repo_config
+                    else None
+                ),
+                terminate_kill_seconds=(
+                    repo_config.app_server.terminate_kill_seconds
+                    if repo_config
+                    else None
+                ),
+                registry_root=getattr(self, "_hub_root", None) or self._config.root,
             )
             self._app_server_supervisors[key] = supervisor
             log_event(

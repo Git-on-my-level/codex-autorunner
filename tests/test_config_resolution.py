@@ -170,6 +170,25 @@ def test_load_repo_config_uses_tighter_default_opencode_retention(
     assert config.opencode.idle_ttl_seconds == 900
 
 
+def test_load_repo_config_uses_global_codex_app_server_defaults(
+    tmp_path: Path,
+) -> None:
+    hub_root = tmp_path / "hub"
+    hub_root.mkdir()
+    write_test_config(hub_root / CONFIG_FILENAME, {"mode": "hub"})
+
+    repo_root = hub_root / "repo"
+    repo_root.mkdir()
+
+    config = load_repo_config(repo_root, hub_path=hub_root)
+
+    assert config.app_server.server_scope == "global"
+    assert config.app_server.max_handles == 1
+    assert config.app_server.startup_timeout_seconds == 30
+    assert config.app_server.terminate_grace_seconds == 2
+    assert config.app_server.terminate_kill_seconds == 3
+
+
 def test_load_repo_config_parses_typed_core_sections(tmp_path: Path) -> None:
     hub_root = tmp_path / "hub"
     hub_root.mkdir()

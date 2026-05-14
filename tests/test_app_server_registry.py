@@ -204,3 +204,124 @@ async def test_force_kill_process_escalates_to_process_group(
 
     assert killpg_calls == [(32103, signal.SIGKILL)]
     assert kill_calls == [(32103, signal.SIGKILL)]
+
+
+@pytest.mark.anyio
+async def test_startup_timeout_terminates_process_and_unregisters(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    class _FakeProcess:
+        pid = 32104
+        returncode = None
+        stdin = object()
+        stdout = object()
+        stderr = object()
+
+        async def wait(self) -> int:
+            return 0
+
+        def terminate(self) -> None:
+            return
+
+        def kill(self) -> None:
+            return
+
+    delete_calls: list[tuple[Path, str, str]] = []
+    client = CodexAppServerClient(
+        ["python", "-m", "codex_autorunner"],
+        cwd=tmp_path,
+        workspace_id="ws-timeout",
+        startup_timeout_seconds=0.01,
+        terminate_grace_seconds=0,
+        terminate_kill_seconds=0,
+    )
+
+    async def _fake_spawn() -> None:
+        client._process = _FakeProcess()
+        client._process_registry_key = "ws-timeout"
+
+    async def _hang_initialize() -> None:
+        await asyncio.sleep(10)
+
+    monkeypatch.setattr(client, "_spawn_process", _fake_spawn)
+    monkeypatch.setattr(client, "_initialize_handshake", _hang_initialize)
+    monkeypatch.setattr(
+        app_server_client,
+        "delete_process_record",
+        lambda repo_root, kind, key: delete_calls.append((repo_root, kind, key))
+        or True,
+    )
+    monkeypatch.setattr(app_server_client.os, "killpg", lambda *_args: None)
+    monkeypatch.setattr(app_server_client.os, "kill", lambda *_args: None)
+
+    with pytest.raises(app_server_client.CodexAppServerDisconnected):
+        await client.start()
+
+    assert delete_calls == [(tmp_path, "codex_app_server", "ws-timeout")]
+    assert client._process is None
+
+
+@pytest.mark.anyio
+async def test_thread_scoped_approval_and_notification_routing() -> None:
+    client = CodexAppServerClient(["python", "-m", "codex_autorunner"])
+    approvals: list[str] = []
+    notifications: list[str] = []
+    sent: list[dict[str, Any]] = []
+
+    async def approval_one(_request: dict[str, Any]) -> str:
+        approvals.append("one")
+        return "accept"
+
+    async def approval_two(_request: dict[str, Any]) -> str:
+        approvals.append("two")
+        return "cancel"
+
+    async def notify_one(_request: dict[str, Any]) -> None:
+        notifications.append("one")
+
+    async def notify_two(_request: dict[str, Any]) -> None:
+        notifications.append("two")
+
+    async def capture_send(message: dict[str, Any]) -> None:
+        sent.append(message)
+
+    client.register_runtime_callbacks(
+        thread_id="thread-one",
+        approval_handler=approval_one,
+        notification_handler=notify_one,
+    )
+    client.register_runtime_callbacks(
+        thread_id="thread-two",
+        approval_handler=approval_two,
+        notification_handler=notify_two,
+    )
+    client._send_message = capture_send  # type: ignore[method-assign]
+
+    await client._handle_server_request(
+        {
+            "jsonrpc": "2.0",
+            "id": "approval-2",
+            "method": "item/commandExecution/requestApproval",
+            "params": {
+                "threadId": "thread-two",
+                "turnId": "turn-two",
+                "itemId": "item-two",
+            },
+        }
+    )
+    await client._handle_notification(
+        {
+            "jsonrpc": "2.0",
+            "method": "item/agentMessage/delta",
+            "params": {
+                "threadId": "thread-one",
+                "turnId": "turn-one",
+                "itemId": "item-one",
+                "delta": "hello",
+            },
+        }
+    )
+
+    assert approvals == ["two"]
+    assert sent[-1]["result"] == {"decision": "cancel"}
+    assert notifications == ["one"]

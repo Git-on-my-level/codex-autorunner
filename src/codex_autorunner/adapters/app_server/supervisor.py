@@ -59,6 +59,12 @@ class WorkspaceAppServerSupervisor:
         default_approval_decision: str = "cancel",
         max_handles: Optional[int] = None,
         idle_ttl_seconds: Optional[float] = None,
+        server_scope: str = "global",
+        startup_timeout_seconds: Optional[float] = None,
+        terminate_grace_seconds: Optional[float] = None,
+        terminate_kill_seconds: Optional[float] = None,
+        registry_root: Optional[Path] = None,
+        runtime_profile: Optional[str] = None,
     ) -> None:
         self._command = [str(arg) for arg in command]
         self._state_root = state_root
@@ -85,14 +91,24 @@ class WorkspaceAppServerSupervisor:
         self._restart_backoff_jitter_ratio = restart_backoff_jitter_ratio
         self._output_policy = output_policy
         self._default_approval_decision = default_approval_decision
-        self._max_handles = max_handles
+        self._server_scope = (
+            server_scope if server_scope in {"global", "workspace"} else "global"
+        )
+        self._max_handles = (
+            1 if self._server_scope == "global" and max_handles is None else max_handles
+        )
         self._idle_ttl_seconds = idle_ttl_seconds
+        self._startup_timeout_seconds = startup_timeout_seconds
+        self._terminate_grace_seconds = terminate_grace_seconds
+        self._terminate_kill_seconds = terminate_kill_seconds
+        self._registry_root = registry_root
+        self._runtime_profile = runtime_profile
         self._handles: dict[str, AppServerHandle] = {}
         self._lock = asyncio.Lock()
 
     async def get_client(self, workspace_root: Path) -> CodexAppServerClient:
         canonical_root = canonical_workspace_root(workspace_root)
-        workspace_id = workspace_id_for_path(canonical_root)
+        workspace_id = self._handle_id_for(canonical_root)
         handle = await self._ensure_handle(workspace_id, canonical_root)
         await self._ensure_started(handle)
         handle.last_used_at = time.monotonic()
@@ -185,6 +201,14 @@ class WorkspaceAppServerSupervisor:
                 output_policy=self._output_policy,
                 notification_handler=self._notification_handler,
                 logger=self._logger,
+                handle_id=workspace_id,
+                server_scope=self._server_scope,
+                runtime_profile=self._runtime_profile,
+                state_dir=state_dir,
+                registry_root=self._registry_root,
+                startup_timeout_seconds=self._startup_timeout_seconds,
+                terminate_grace_seconds=self._terminate_grace_seconds,
+                terminate_kill_seconds=self._terminate_kill_seconds,
             )
             handle = AppServerHandle(
                 workspace_id=workspace_id,
@@ -234,6 +258,7 @@ class WorkspaceAppServerSupervisor:
             self._logger,
             "app_server",
             last_used_at_getter=lambda h: h.last_used_at,
+            active_getter=lambda h: getattr(h.client, "active_turn_count", 0) > 0,
         )
 
     def _evict_lru_handle_locked(self) -> Optional[AppServerHandle]:
@@ -243,6 +268,7 @@ class WorkspaceAppServerSupervisor:
             self._logger,
             "app_server",
             last_used_at_getter=lambda h: h.last_used_at or 0.0,
+            active_getter=lambda h: getattr(h.client, "active_turn_count", 0) > 0,
         )
 
     def active_workspace_ids(self) -> set[str]:
@@ -250,3 +276,8 @@ class WorkspaceAppServerSupervisor:
 
     def state_root(self) -> Path:
         return self._state_root
+
+    def _handle_id_for(self, workspace_root: Path) -> str:
+        if self._server_scope == "global":
+            return "global"
+        return workspace_id_for_path(workspace_root)

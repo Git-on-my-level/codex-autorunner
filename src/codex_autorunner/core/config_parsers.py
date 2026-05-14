@@ -623,6 +623,22 @@ def _parse_app_server_config(
             fallback_source="empty-config",
         )
     command = resolved_command.command
+    server_scope = cast(
+        str,
+        parse_schema_field(
+            cfg.get(
+                "server_scope",
+                default_from_mapping(
+                    defaults,
+                    "server_scope",
+                    APP_SERVER_FIELD_SCHEMAS["server_scope"],
+                ),
+            ),
+            APP_SERVER_FIELD_SCHEMAS["server_scope"],
+        ),
+    )
+    if not server_scope:
+        server_scope = "global"
     state_root = cast(
         Path,
         parse_schema_field(
@@ -676,6 +692,48 @@ def _parse_app_server_config(
                 ),
             ),
             APP_SERVER_FIELD_SCHEMAS["idle_ttl_seconds"],
+        ),
+    )
+    startup_timeout_seconds = cast(
+        Optional[float],
+        parse_schema_field(
+            cfg.get(
+                "startup_timeout_seconds",
+                default_from_mapping(
+                    defaults,
+                    "startup_timeout_seconds",
+                    APP_SERVER_FIELD_SCHEMAS["startup_timeout_seconds"],
+                ),
+            ),
+            APP_SERVER_FIELD_SCHEMAS["startup_timeout_seconds"],
+        ),
+    )
+    terminate_grace_seconds = cast(
+        Optional[float],
+        parse_schema_field(
+            cfg.get(
+                "terminate_grace_seconds",
+                default_from_mapping(
+                    defaults,
+                    "terminate_grace_seconds",
+                    APP_SERVER_FIELD_SCHEMAS["terminate_grace_seconds"],
+                ),
+            ),
+            APP_SERVER_FIELD_SCHEMAS["terminate_grace_seconds"],
+        ),
+    )
+    terminate_kill_seconds = cast(
+        Optional[float],
+        parse_schema_field(
+            cfg.get(
+                "terminate_kill_seconds",
+                default_from_mapping(
+                    defaults,
+                    "terminate_kill_seconds",
+                    APP_SERVER_FIELD_SCHEMAS["terminate_kill_seconds"],
+                ),
+            ),
+            APP_SERVER_FIELD_SCHEMAS["terminate_kill_seconds"],
         ),
     )
     turn_timeout_seconds = cast(
@@ -782,6 +840,7 @@ def _parse_app_server_config(
     prompt_defaults = defaults.get("prompts")
     prompts = _parse_app_server_prompts_config(cfg.get("prompts"), prompt_defaults)
     return AppServerConfig(
+        server_scope=server_scope,
         command=command,
         command_source=resolved_command.source,
         ignored_command_env=resolved_command.ignored_env,
@@ -789,6 +848,9 @@ def _parse_app_server_config(
         auto_restart=auto_restart,
         max_handles=max_handles,
         idle_ttl_seconds=idle_ttl_seconds,
+        startup_timeout_seconds=startup_timeout_seconds,
+        terminate_grace_seconds=terminate_grace_seconds,
+        terminate_kill_seconds=terminate_kill_seconds,
         turn_timeout_seconds=turn_timeout_seconds,
         turn_stall_timeout_seconds=turn_stall_timeout_seconds,
         turn_stall_poll_interval_seconds=turn_stall_poll_interval_seconds,

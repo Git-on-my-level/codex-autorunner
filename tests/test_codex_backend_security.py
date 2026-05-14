@@ -214,3 +214,4 @@ async def test_run_turn_events_forwards_input_items_to_app_server():
         assert call is not None
         kwargs = dict(call.kwargs)
         assert kwargs.get("input_items") == input_items
+        assert kwargs.get("cwd") == str(Path.cwd())
