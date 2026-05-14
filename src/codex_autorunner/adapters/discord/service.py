@@ -856,11 +856,13 @@ class DiscordBotService(DiscordInteractionResponseMixin):
         self._opencode_lock = asyncio.Lock()
         self.app_server_events = AppServerEventBuffer()
         self._app_server_state_root = resolve_global_state_root() / "workspaces"
-        root_repo_config = load_repo_config(
-            self._config.root,
-            hub_path=self._hub_config_path,
-        )
-        root_app_server_config = getattr(root_repo_config, "app_server", None)
+        root_app_server_config = None
+        if self._hub_config_path is not None:
+            root_repo_config = load_repo_config(
+                self._config.root,
+                hub_path=self._hub_config_path,
+            )
+            root_app_server_config = getattr(root_repo_config, "app_server", None)
         root_app_server_command = list(
             getattr(root_app_server_config, "command", None) or ["codex", "app-server"]
         )
