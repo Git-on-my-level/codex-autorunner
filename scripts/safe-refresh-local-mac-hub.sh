@@ -560,6 +560,22 @@ print(Path(sys.argv[1]).resolve().as_uri())
 PY
 }
 
+_build_web_static_assets() {
+  if [[ ! -f "${PACKAGE_SRC}/package.json" ]]; then
+    fail "Package source ${PACKAGE_SRC} is missing package.json; cannot build Web Hub static assets."
+  fi
+  if ! command -v pnpm >/dev/null 2>&1; then
+    fail "pnpm is required to build Web Hub static assets before packaging."
+  fi
+
+  echo "Building Web Hub static assets from ${PACKAGE_SRC}..."
+  (
+    cd "${PACKAGE_SRC}"
+    pnpm install --frozen-lockfile
+    pnpm run build
+  )
+}
+
 _build_package_wheel() {
   local python_bin wheel_dir wheel_path
   python_bin="$1"
@@ -567,6 +583,8 @@ _build_package_wheel() {
 
   rm -rf "${wheel_dir}"
   mkdir -p "${wheel_dir}"
+
+  _build_web_static_assets
 
   echo "Building codex-autorunner wheel from ${PACKAGE_SRC} into ${wheel_dir}..." >&2
   "${python_bin}" -m pip -q wheel --no-deps --no-cache-dir --wheel-dir "${wheel_dir}" "${PACKAGE_SRC}" >&2
@@ -597,6 +615,9 @@ required_prefixes = {
     "codex_autorunner/tickets/",
     "codex_autorunner/adapters/docker/",
 }
+required_files = {
+    "codex_autorunner/web_static/index.html",
+}
 with zipfile.ZipFile(wheel_path) as zf:
     names = set(PurePosixPath(name).as_posix() for name in zf.namelist())
 missing = sorted(
@@ -604,6 +625,7 @@ missing = sorted(
     for prefix in required_prefixes
     if not any(name.startswith(prefix) for name in names)
 )
+missing.extend(sorted(path for path in required_files if path not in names))
 if missing:
     raise SystemExit(
         "built wheel is missing required packages: " + ", ".join(missing)

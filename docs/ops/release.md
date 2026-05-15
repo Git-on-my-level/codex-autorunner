@@ -18,6 +18,7 @@ git push origin v0.1.1
 ```
 
 ## What the workflow does
+- Builds Web Hub static assets from `src/codex_autorunner/web_frontend/`.
 - Builds sdist/wheel.
 - Verifies the tag version matches `pyproject.toml`.
 - Smoke-tests the wheel for static assets.

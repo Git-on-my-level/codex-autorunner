@@ -171,11 +171,6 @@ if [[ "${CODEX_CHECK_REQUIRE_NODE:-0}" != "1" ]] && [[ "$LANE" == "aggregate" ]]
   fi
 fi
 
-if [[ "$RUN_WEB_UI" == true && -n "$STAGED_FILES" ]]; then
-  echo "Checking Web static asset preflight..."
-  printf '%s\n' "$STAGED_FILES" | "$PYTHON_BIN" scripts/check_web_static_preflight.py
-fi
-
 # --- Always-on guardrails (non-negotiable safety checks) ---------------------
 _run_guardrails() {
   echo "Checking staged .codex-autorunner paths..."
@@ -359,15 +354,6 @@ _run_web_ui_lane() {
 
   echo "Checking Web Hub SPA shell routes vs SvelteKit pages..."
   "$PYTHON_BIN" scripts/check_web_hub_spa_shell.py
-
-  echo "Checking Web static assets are committed..."
-  if [ -d src/codex_autorunner/web_static ]; then
-    if ! git diff --exit-code -- src/codex_autorunner/web_static >/dev/null 2>&1; then
-      echo "Web static assets are out of date. Run 'pnpm run build' and commit updated web_static output." >&2
-      git diff --stat -- src/codex_autorunner/web_static >&2
-      exit 1
-    fi
-  fi
 }
 
 _run_chat_apps_lane() {
