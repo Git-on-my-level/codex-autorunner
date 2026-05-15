@@ -1789,7 +1789,6 @@
   /* Worktree children — Linear-style nested list with rail */
   .worktree-list {
     --virtual-list-gap: 0;
-    max-height: min(520px, 54vh);
     margin: 0;
     padding: 0 var(--space-5) var(--space-3);
     background: linear-gradient(180deg, transparent, var(--color-surface-sunken) 8%);

@@ -333,7 +333,7 @@
     <div class="state-panel error">Could not load tickets. {errorMessage}</div>
   </section>
 {:else if mode === 'list' && list}
-  <section class="page-stack ticket-page">
+  <section class="page-stack ticket-page ticket-list-page">
     <PageHero title={heroPageTitle}>
       {#snippet stats()}
         {#if list.scopedOwner && heroFlowActive}
@@ -823,14 +823,28 @@
     }
   }
 
+  /* List mode fills the available viewport height so the ticket list owns a
+     single, generous scroll region instead of a cramped fixed-height box. */
+  .ticket-list-page {
+    flex: 1 1 auto;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3);
+  }
+
   .ticket-list-section {
-    display: grid;
+    flex: 1 1 auto;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
     gap: var(--space-3);
   }
 
   .ticket-card-list {
     --virtual-list-gap: var(--space-2);
-    height: min(72vh, 980px);
+    flex: 1 1 auto;
+    min-height: 240px;
   }
 
   .ticket-queue-actions {

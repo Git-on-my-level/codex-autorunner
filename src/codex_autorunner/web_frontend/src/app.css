@@ -527,7 +527,8 @@ a {
   padding: var(--space-5);
 }
 
-.content-shell:has(.repos-index-v2) {
+.content-shell:has(.repos-index-v2),
+.content-shell:has(.ticket-list-page) {
   display: flex;
   flex-direction: column;
   overflow: hidden;
