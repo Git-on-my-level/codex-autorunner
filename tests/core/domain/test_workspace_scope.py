@@ -86,6 +86,28 @@ def test_unknown_repo_id_preserves_supplied_workspace_path(tmp_path: Path) -> No
     assert resolution.owner_fields()["workspace_root"] == str(stale_path)
 
 
+def test_unknown_review_resource_repo_id_preserves_owner_context(
+    tmp_path: Path,
+) -> None:
+    review_checkout = tmp_path / "review-checkout"
+    review_checkout.mkdir()
+    index = workspace_scope_index_from_snapshots([])
+
+    resolution = index.resolve(
+        raw_repo_id="repo-from-review-diff",
+        workspace_path=str(review_checkout),
+        resource_kind="file",
+        resource_id="src/example.py",
+    )
+
+    assert resolution is not None
+    assert resolution.scope == ScopeRef(kind="repo", id="repo-from-review-diff")
+    fields = resolution.owner_fields()
+    assert fields["repo_id"] == "repo-from-review-diff"
+    assert fields["workspace_root"] == str(review_checkout.resolve())
+    assert fields["scope_urn"] == "repo:repo-from-review-diff"
+
+
 def test_scope_urn_miss_preserves_workspace_path_for_repo_urn(tmp_path: Path) -> None:
     """Stale rows may carry a scope URN that no longer maps into topology."""
     checkout = tmp_path / "orphan-checkout"
