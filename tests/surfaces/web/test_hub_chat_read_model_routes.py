@@ -318,6 +318,114 @@ def test_hub_read_models_chats_contract_active_filter_matches_index_window(
     assert snapshot.rows[0].surface == "discord"
 
 
+def test_hub_read_models_chats_derives_rows_before_window_limit(hub_env) -> None:
+    _seed_thread_rows(hub_env.hub_root, 1200)
+
+    client = TestClient(create_hub_app(hub_env.hub_root))
+    response = client.get(
+        "/hub/read-models/chats", params={"filter": "all", "limit": 200}
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["window"]["totalEstimate"] == 1199
+    assert len(body["rows"]) == 200
+
+
+def test_hub_read_models_chats_includes_binding_display_contract_fields(
+    hub_env,
+) -> None:
+    _seed_thread_rows(hub_env.hub_root, 4)
+    OrchestrationBindingStore(hub_env.hub_root, durable=True).upsert_binding(
+        surface_kind="telegram",
+        surface_key="chat-42",
+        thread_target_id="thread-0003",
+        repo_id="repo",
+        resource_kind="ticket",
+        resource_id="TICKET-900",
+        metadata={"display_name": "Release room"},
+    )
+
+    client = TestClient(create_hub_app(hub_env.hub_root))
+    response = client.get(
+        "/hub/read-models/chats", params={"filter": "active", "limit": 25}
+    )
+
+    assert response.status_code == 200
+    row = response.json()["rows"][0]
+    assert row["chatId"] == "thread-0003"
+    assert row["displayTitle"] == "Release room"
+    assert row["technicalTitle"] == "thread-0003"
+    assert row["primarySurface"]["surface_kind"] == "pma"
+    assert "Release room" in row["bindingDisplayNames"]
+    assert row["archiveState"] == "active"
+    assert row["resourceKind"] == "ticket"
+    assert row["sortKey"]["row_id"] == "thread:thread-0003"
+
+
+def test_hub_read_models_chats_patch_stream_replays_typed_events(hub_env) -> None:
+    _seed_thread_rows(hub_env.hub_root, 2)
+    journal = SQLiteChatSurfaceEventJournal(hub_env.hub_root, durable=True)
+    first = journal.append_event(
+        idempotency_key="index-patch-1",
+        event_type="queue.state_changed",
+        surface_kind="pma",
+        surface_key="thread-0000",
+        managed_thread_id="thread-0000",
+        repo_id="repo",
+        status="queued",
+    ).event
+    second = journal.append_event(
+        idempotency_key="index-patch-2",
+        event_type="delivery.status_changed",
+        surface_kind="discord",
+        surface_key="guild:channel",
+        managed_thread_id="thread-0001",
+        repo_id="repo",
+        status="delivered",
+        payload={"display": {"display_name": "Ops channel"}},
+    ).event
+
+    client = TestClient(create_hub_app(hub_env.hub_root))
+    response = client.get(
+        "/hub/read-models/chats/patches",
+        params={"cursor": str(first.cursor), "once": "true"},
+    )
+
+    assert response.status_code == 200
+    patches = _event_payloads(response.text, "chat.index.patch")
+    assert [patch["envelope"]["cursor"]["sequence"] for patch in patches] == [
+        second.cursor
+    ]
+    assert patches[0]["envelope"]["eventType"] == "chat.index.patch"
+    assert patches[0]["patch"]["rows"][0]["chatId"] == "thread-0001"
+    assert patches[0]["patch"]["order"]
+
+
+def test_hub_read_models_chats_patch_stream_repairs_future_cursor(hub_env) -> None:
+    _seed_thread_rows(hub_env.hub_root, 1)
+    SQLiteChatSurfaceEventJournal(hub_env.hub_root, durable=True).append_event(
+        idempotency_key="index-gap-1",
+        event_type="surface.bound",
+        surface_kind="pma",
+        surface_key="thread-0000",
+        managed_thread_id="thread-0000",
+        repo_id="repo",
+        status="bound",
+    )
+
+    client = TestClient(create_hub_app(hub_env.hub_root))
+    response = client.get(
+        "/hub/read-models/chats/patches",
+        params={"cursor": "999", "once": "true"},
+    )
+
+    assert response.status_code == 200
+    repairs = _event_payloads(response.text, "projection.cursor_gap")
+    assert repairs[0]["envelope"]["operation"] == "invalidate"
+    assert repairs[0]["envelope"]["eventType"] == "projection.cursor_gap"
+
+
 def test_hub_read_models_chat_detail_contract_snapshot(hub_env) -> None:
     store = ManagedThreadStore(hub_env.hub_root, durable=True)
     thread = store.create_thread(

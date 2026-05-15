@@ -77,9 +77,28 @@ def chat_row() -> ChatIndexRow:
         chat_id="chat-1",
         surface="pma",
         title="Ticket chat",
+        display_title="Release room",
+        technical_title="thread:chat-1",
+        primary_surface={"surface_kind": "pma", "surface_key": "chat-1"},
+        surface_bindings=[
+            {
+                "surface_kind": "discord",
+                "surface_key": "channel-1",
+                "display_name": "Release room",
+            }
+        ],
+        binding_display_name="Release room",
+        binding_display_names=["Release room"],
+        lifecycle="running",
+        runtime_status="running",
+        archive_state="active",
         status="running",
         unread_count=2,
         last_activity_at=NOW,
+        sort_key={"last_activity_desc": -1, "row_id": "thread:chat-1"},
+        resource_kind="ticket",
+        resource_id="TICKET-001",
+        workspace_root="/work/repo",
         repo_id="repo-1",
         worktree_id="wt-1",
         ticket_id="TICKET-001",
@@ -105,6 +124,8 @@ def test_chat_index_snapshot_and_patch_round_trip_with_camel_case_payloads() -> 
 
     assert payload["contractVersion"] == "web-read-models.v1"
     assert payload["rows"][0]["chatId"] == "chat-1"
+    assert payload["rows"][0]["displayTitle"] == "Release room"
+    assert payload["rows"][0]["surfaceBindings"][0]["surface_kind"] == "discord"
     assert load_read_model_contract(ChatIndexSnapshot, payload) == snapshot
 
     event = ChatIndexPatchEvent(

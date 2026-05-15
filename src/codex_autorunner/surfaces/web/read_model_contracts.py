@@ -114,9 +114,22 @@ class ChatIndexRow(ReadModelContract):
     chat_id: str
     surface: Literal["pma", "file_chat", "telegram", "discord", "app_server", "other"]
     title: str
+    display_title: Optional[str] = None
+    technical_title: Optional[str] = None
+    primary_surface: Optional[dict[str, Any]] = None
+    surface_bindings: list[dict[str, Any]] = Field(default_factory=list)
+    binding_display_name: Optional[str] = None
+    binding_display_names: list[str] = Field(default_factory=list)
+    lifecycle: Optional[str] = None
+    runtime_status: Optional[str] = None
+    archive_state: Optional[Literal["active", "archived"]] = None
     status: Literal["waiting", "running", "idle", "archived", "failed"]
     unread_count: int = Field(ge=0)
     last_activity_at: Optional[datetime] = None
+    sort_key: Optional[dict[str, Any]] = None
+    resource_kind: Optional[str] = None
+    resource_id: Optional[str] = None
+    workspace_root: Optional[str] = None
     repo_id: Optional[str] = None
     worktree_id: Optional[str] = None
     ticket_id: Optional[str] = None
