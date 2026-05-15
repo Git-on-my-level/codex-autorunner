@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import MemoryView from '$lib/components/MemoryView.svelte';
-  import { pmaApi, type ApiError } from '$lib/api/client';
+  import { webApi, type ApiError } from '$lib/api/client';
   import { buildMemoryViewModel, type MemoryViewModel } from '$lib/viewModels/memory';
   import type { ScopeRef } from '$lib/viewModels/scope';
 
@@ -30,7 +30,7 @@
   async function loadMemory(): Promise<void> {
     loading = true;
     error = null;
-    const docs = await pmaApi.pma.listDocsWithContent();
+    const docs = await webApi.pma.listDocsWithContent();
     if (!docs.ok) {
       error = docs.error;
       vm = null;
@@ -42,7 +42,7 @@
   }
 
   async function saveDoc(docId: string, content: string): Promise<boolean> {
-    const result = await pmaApi.pma.updateDoc(docId, content);
+    const result = await webApi.pma.updateDoc(docId, content);
     if (!result.ok) {
       error = result.error;
       return false;

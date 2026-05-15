@@ -117,6 +117,12 @@ def format_update_status_message(status: Optional[dict[str, Any]]) -> str:
     target = status.get("update_target")
     if isinstance(target, str) and target.strip():
         lines.append(f"Target: {get_update_target_label(target)}")
+    phase = status.get("phase")
+    if isinstance(phase, str) and phase.strip():
+        lines.append(f"Phase: {phase.strip()}")
+    error_type = status.get("error_type")
+    if isinstance(error_type, str) and error_type.strip():
+        lines.append(f"Error: {error_type.strip()}")
     if message:
         lines.append(f"Message: {message}")
     if rendered_time:

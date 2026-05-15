@@ -7,7 +7,7 @@
   import NewWorktreeDialog from '$lib/components/NewWorktreeDialog.svelte';
   import RepoSettingsDialog, { type RepoSettingsTarget } from '$lib/components/RepoSettingsDialog.svelte';
   import { confirmAndArchiveState, confirmAndCleanupWorktree, type ActionNotice } from '$lib/actions/repoWorktreeActions';
-  import { pmaApi, type ApiError, type PartialPageIssue } from '$lib/api/client';
+  import { webApi, type ApiError, type PartialPageIssue } from '$lib/api/client';
   import { ensureRepoWorktreeIndexLoaded, invalidateReadModelTags, readModelEntityStore, readModelEntityTags, selectRepoSummaries, selectWorktreeSummaries } from '$lib/data';
   import {
     buildRepoWorktreeIndexViewModel,
@@ -77,7 +77,7 @@
   }
 
   async function handleRepoPin(target: { id: string; pinned: boolean }): Promise<void> {
-    const result = await pmaApi.hub.setRepoPinned(target.id, target.pinned);
+    const result = await webApi.hub.setRepoPinned(target.id, target.pinned);
     if (!result.ok) {
       notice = { tone: 'danger', message: result.error.message };
       return;

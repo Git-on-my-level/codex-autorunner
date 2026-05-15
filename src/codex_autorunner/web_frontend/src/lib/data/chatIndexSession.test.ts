@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { ApiResult, JsonRecord, PmaApiClient } from '$lib/api/client';
+import type { ApiResult, JsonRecord, WebApiClient } from '$lib/api/client';
 import {
   READ_MODEL_CONTRACT_VERSION,
   type ChatIndexRow,
@@ -219,7 +219,7 @@ describe('chat index session', () => {
   });
 });
 
-function mockApi(): PmaApiClient {
+function mockApi(): WebApiClient {
   return {
     getJson: vi.fn(async (path: string): Promise<ApiResult<JsonRecord>> => {
       if (path.includes('filter=archived')) {
@@ -236,7 +236,7 @@ function mockApi(): PmaApiClient {
       }
       return ok({ rows: [] });
     })
-  } as unknown as PmaApiClient;
+  } as unknown as WebApiClient;
 }
 
 function ok<T>(data: T): ApiResult<T> {

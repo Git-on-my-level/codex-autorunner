@@ -1,4 +1,4 @@
-import { mapResult, pmaApi, type ApiResult, type PmaApiClient } from '$lib/api/client';
+import { mapResult, webApi, type ApiResult, type WebApiClient } from '$lib/api/client';
 import type { TicketSummary } from '$lib/viewModels/domain';
 import {
   mapReadModelContract,
@@ -30,7 +30,7 @@ export type ReadModelSnapshotClient = {
   ticketIndex(owner?: { repo?: string; worktree?: string }): Promise<ApiResult<TicketSummary[]>>;
 };
 
-export function createReadModelSnapshotClient(api: PmaApiClient = pmaApi): ReadModelSnapshotClient {
+export function createReadModelSnapshotClient(api: WebApiClient = webApi): ReadModelSnapshotClient {
   return {
     chatIndex: async (request = {}) => {
       const params = new URLSearchParams({

@@ -1,7 +1,7 @@
 <script lang="ts">
   import { goto } from '$app/navigation';
   import { onMount, tick } from 'svelte';
-  import { pmaApi } from '$lib/api/client';
+  import { webApi } from '$lib/api/client';
   import AutoDismissNotice from '$lib/components/AutoDismissNotice.svelte';
   import { invalidateReadModelTags, readModelEntityTags } from '$lib/data';
   import { createScopedTicket, type ScopedTicketQueueConfig } from '$lib/viewModels/scopedTicketQueue';
@@ -31,7 +31,7 @@
     if (!trimmed || submitting) return;
     submitting = true;
     apiError = null;
-    const result = await createScopedTicket(pmaApi, queueConfig, { title: trimmed, body });
+    const result = await createScopedTicket(webApi, queueConfig, { title: trimmed, body });
     submitting = false;
     if (!result.ok) {
       apiError = result.status;

@@ -4,7 +4,7 @@
   import { onDestroy, onMount } from 'svelte';
   import TicketViews from '$lib/components/TicketViews.svelte';
   import { confirmDialog } from '$lib/components/confirmDialog';
-  import { dataOr, partialPageIssue, pmaApi, type ApiError, type PartialPageIssue } from '$lib/api/client';
+  import { dataOr, partialPageIssue, webApi, type ApiError, type PartialPageIssue } from '$lib/api/client';
   import {
     invalidateReadModelTags,
     pmaChatSummaryToChatIndexRow,
@@ -67,7 +67,7 @@
     if (showLoading) loading = true;
     error = null;
     sectionIssues = [];
-    const detail = await pmaApi.readModels.worktreeDetail(worktreeId);
+    const detail = await webApi.readModels.worktreeDetail(worktreeId);
     if (!detail.ok) {
       error = detail.error;
       loading = false;
@@ -90,7 +90,7 @@
     readModelEntityStore.upsertChatIndexRows(chats.map(pmaChatSummaryToChatIndexRow));
     selectedFilter = 'all';
     loading = false;
-    const manifest = await loadScopedActionManifest(pmaApi, queueConfig);
+    const manifest = await loadScopedActionManifest(webApi, queueConfig);
     actionManifest = dataOr(manifest, null);
     sectionIssues = [
       !manifest.ok ? partialPageIssue('action_manifest', 'Action manifest unavailable', manifest.error) : null
@@ -100,7 +100,7 @@
   }
 
   async function reorderTicket(sourceRouteId: string, destinationRouteId: string, placeAfter: boolean): Promise<boolean> {
-    const result = await reorderScopedTicket(pmaApi, queueConfig, sourceRouteId, destinationRouteId, placeAfter);
+    const result = await reorderScopedTicket(webApi, queueConfig, sourceRouteId, destinationRouteId, placeAfter);
     actionStatus = result.status;
     if (result.ok) {
       await invalidateReadModelTags([
@@ -117,7 +117,7 @@
     const action = list?.queueActions.find((candidate) => candidate.action === command) ?? null;
     actionStatus = scopedTicketActionStatus(command, queueConfig);
     const result = await runScopedTicketQueueCommand(
-      pmaApi,
+      webApi,
       queueConfig,
       command,
       runId,

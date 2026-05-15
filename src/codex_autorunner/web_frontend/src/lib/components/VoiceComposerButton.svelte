@@ -11,7 +11,7 @@
 
 <script lang="ts">
   import { onDestroy, onMount } from 'svelte';
-  import { pmaApi } from '$lib/api/client';
+  import { webApi } from '$lib/api/client';
 
   let {
     disabled = false,
@@ -65,7 +65,7 @@
   });
 
   async function loadConfig(): Promise<void> {
-    const result = await pmaApi.voice.getConfig();
+    const result = await webApi.voice.getConfig();
     if (result.ok) {
       config = result.data as VoiceConfigPayload;
     } else {
@@ -179,7 +179,7 @@
       return;
     }
     const filename = `voice.${extensionFor(recorderMime)}`;
-    const result = await pmaApi.voice.transcribe(blob, filename);
+    const result = await webApi.voice.transcribe(blob, filename);
     sending = false;
     if (!result.ok) {
       onError?.(result.error.message || 'Voice transcription failed');

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { PmaRunProgress, SurfaceArtifact } from '$lib/viewModels/domain';
-import type { PmaCard } from '$lib/viewModels/pmaChat';
+import type { ChatTranscriptCard } from '$lib/viewModels/pmaChat';
 import { ReadModelEntityStore, type ReadModelEntityState } from './readModelStore';
 
 const runProfile = process.env.RUN_WEB_STORE_PROFILE === '1';
@@ -15,7 +15,7 @@ describeProfile('manual read model store profile', () => {
     const iterations = numberFromEnv('WEB_STORE_PROFILE_ITERATIONS', 80);
 
     for (let chatIndex = 0; chatIndex < chatCount; chatIndex += 1) {
-      store.replacePmaTranscript(`chat-${chatIndex}`, cardsForChat(`chat-${chatIndex}`, cardsPerChat));
+      store.replaceChatTranscript(`chat-${chatIndex}`, cardsForChat(`chat-${chatIndex}`, cardsPerChat));
     }
 
     const legacySamples: number[] = [];
@@ -70,7 +70,7 @@ function legacyDeepCloneState(state: ReadModelEntityState): ReadModelEntityState
     chatCounters: { ...state.chatCounters },
     chatDetails: legacyCloneRecord(state.chatDetails),
     timelines: legacyCloneRecord(state.timelines),
-    pmaTranscripts: legacyCloneRecord(state.pmaTranscripts),
+    chatTranscripts: legacyCloneRecord(state.chatTranscripts),
     pmaProgress: { ...state.pmaProgress },
     pmaQueues: legacyCloneRecord(state.pmaQueues),
     pmaArtifacts: legacyCloneRecord(state.pmaArtifacts),
@@ -122,8 +122,8 @@ function round(value: number): number {
   return Math.round(value * 1000) / 1000;
 }
 
-function cardsForChat(chatId: string, count: number): PmaCard[] {
-  const cards: PmaCard[] = [];
+function cardsForChat(chatId: string, count: number): ChatTranscriptCard[] {
+  const cards: ChatTranscriptCard[] = [];
   for (let index = 0; index < count; index += 1) {
     cards.push({
       kind: 'message',

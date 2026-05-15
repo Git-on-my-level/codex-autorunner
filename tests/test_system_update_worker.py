@@ -355,6 +355,7 @@ def test_spawn_update_process_writes_status(tmp_path: Path, monkeypatch) -> None
     status_path = system._update_status_path()
     payload = json.loads(status_path.read_text(encoding="utf-8"))
     assert payload["status"] == "running"
+    assert payload["phase"] == "spawned"
     assert payload["notify_platform"] == "discord"
     assert payload["notify_context"] == {"chat_id": "channel-1"}
     assert "log_path" in payload

@@ -62,7 +62,7 @@ SNAPSHOT_CHAT_INDEX_ROUTE = "/hub/read-models/chats"
 def build_hub_chat_read_model_router(context: HubAppContext) -> APIRouter:
     router = APIRouter()
 
-    service = HubChatReadModelService(context.config.root)
+    service = ChatReadModelService(context.config.root)
 
     @router.get(SNAPSHOT_CHAT_INDEX_ROUTE)
     def chat_read_model_index(
@@ -111,7 +111,7 @@ def build_hub_chat_read_model_router(context: HubAppContext) -> APIRouter:
     return router
 
 
-class HubChatReadModelService:
+class ChatReadModelService:
     """Thin read-model façade over ChatSurfaceReadService."""
 
     def __init__(self, hub_root):

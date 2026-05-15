@@ -11,7 +11,7 @@
   import VoiceComposerButton from '$lib/components/VoiceComposerButton.svelte';
   import ContentSkeleton from '$lib/components/ContentSkeleton.svelte';
   import { confirmDialog } from '$lib/components/confirmDialog';
-  import { pmaApi, type ApiError, type JsonRecord, type PmaQueuedTurn } from '$lib/api/client';
+  import { webApi, type ApiError, type JsonRecord, type PmaQueuedTurn } from '$lib/api/client';
   import {
     pmaChatSummaryToChatIndexRow,
     chatIndexSession,
@@ -24,7 +24,7 @@
     selectPmaChats,
     selectPmaProgress,
     selectPmaQueue,
-    selectPmaTranscript,
+    selectChatTranscript,
     selectWorktreeSummaries,
     selectReadMarkers
   } from '$lib/data';
@@ -36,7 +36,7 @@
     planStartAndSendChat
   } from '$lib/application/pmaChatCommands';
   import { withRuntimeBasePath as href } from '$lib/runtime/basePath';
-  import { openPmaTranscriptEventSource, shouldUsePmaTranscriptStream, type StreamSubscription } from '$lib/api/streaming';
+  import { openChatTranscriptEventSource, shouldUseChatTranscriptStream, type StreamSubscription } from '$lib/api/streaming';
   import {
     repoContextspaceRoute,
     repoRoute,
@@ -52,7 +52,7 @@
     SurfaceArtifact
   } from '$lib/viewModels/domain';
   import {
-    buildPmaChatListEntries,
+    buildChatListEntries,
     buildPmaChatScopeOptions,
     buildPmaLiveActivity,
     buildManagedThreadMessagePayload,
@@ -60,33 +60,33 @@
     chooseActiveChatId,
     composeMessageWithAttachments,
     countTicketRunGroups,
-    filterPmaChatEntries,
+    filterChatEntries,
     formatBytes,
     formatRelativeTime,
     isPmaChatArchived,
     localPmaChatScopeOption,
-    PMA_CHAT_FILTER_ORDER,
-    PMA_CHAT_TICKET_RUNS_FILTER,
+    CHAT_FILTER_ORDER,
+    CHAT_TICKET_RUNS_FILTER,
     pmaChatKind,
     pmaChatKindLabel,
     pmaChatBindingKey,
     pmaChatHeaderScopeLine,
-    pmaChatMessengerSurface,
+    chatMessengerSurface,
     pmaChatScopeTagView,
-    pmaChatSurfaceFilterOptions,
-    pmaChatSurfaceFilterToken,
+    chatSurfaceFilterOptions,
+    chatSurfaceFilterToken,
     progressPercent,
-    mapPmaTranscriptRows,
+    mapChatTranscriptRows,
     removePendingAttachment,
     statusLabel,
     summarizeFilterCounts,
     type DocumentFileIntentPayload,
     type PendingAttachment,
-    type PmaCard,
-    type PmaChatFilter,
-    type PmaChatStatusFilter,
-    type PmaChatListEntry,
-    type PmaChatRunGroup,
+    type ChatTranscriptCard,
+    type ChatFilter,
+    type ChatStatusFilter,
+    type ChatListEntry,
+    type ChatRunGroup,
     type PmaChatScopeOption
   } from '$lib/viewModels/pmaChat';
   import {
@@ -137,7 +137,7 @@
   let localDraftChat = $state<PmaChatSummary | null>(null);
   const persistedChats = $derived<PmaChatSummary[]>(selectPmaChats(readModelState));
   const chats = $derived<PmaChatSummary[]>(localDraftChat ? [localDraftChat, ...persistedChats] : persistedChats);
-  const transcriptCards = $derived<PmaCard[]>(selectPmaTranscript(readModelState, activeChatId));
+  const transcriptCards = $derived<ChatTranscriptCard[]>(selectChatTranscript(readModelState, activeChatId));
   const progress = $derived<PmaRunProgress | null>(selectPmaProgress(readModelState, activeChatId));
   const artifacts = $derived<SurfaceArtifact[]>(selectPmaArtifacts(readModelState, activeChatId));
   const queuedTurns = $derived<PmaQueuedTurn[]>(selectPmaQueue(readModelState, activeChatId));
@@ -156,7 +156,7 @@
   let selectedProfile = $state('');
   let selectedScopeId = $state('local');
   let newChatKind = $state<'pma' | 'agent'>('pma');
-  let filter = $state<PmaChatFilter>('all');
+  let filter = $state<ChatFilter>('all');
   let detailMode = $state<'list' | 'detail'>('list');
   let search = $state('');
   let draft = $state('');
@@ -305,16 +305,16 @@
   let expandedRunGroups = $state<Record<string, boolean>>({});
   let pinnedChatIds = $state<Record<string, true>>({});
   const chatListEntries = $derived(
-    buildPmaChatListEntries(chats, {
+    buildChatListEntries(chats, {
       lastSeen: lastSeenMap,
       repoLabel: repoLabelForRepoId,
       worktreeLabel: (wid) => worktreeScopeOption(wid)?.label ?? null,
       groupRuns: true
     })
   );
-  const filteredEntries = $derived(sortEntriesForPins(filterPmaChatEntries(chatListEntries, filter, search, lastSeenMap), pinnedChatIds));
+  const filteredEntries = $derived(sortEntriesForPins(filterChatEntries(chatListEntries, filter, search, lastSeenMap), pinnedChatIds));
   const filterCounts = $derived(summarizeFilterCounts(chats, lastSeenMap));
-  const surfaceFilterChips = $derived(pmaChatSurfaceFilterOptions(chats));
+  const surfaceFilterChips = $derived(chatSurfaceFilterOptions(chats));
   const ticketRunGroupCount = $derived(countTicketRunGroups(chats));
   const activeChatCount = $derived(chats.filter((chat) => !isPmaChatArchived(chat)).length);
   const hasUsableChatIndex = $derived(Boolean(readModelState.chatIndexCursor || readModelState.chatOrder.length > 0));
@@ -322,14 +322,14 @@
   const visibleChatError = $derived(chatError ?? (!hasUsableChatIndex ? initialChatIndexError : null));
   const showChatListSkeleton = $derived(loadingChats && !hasUsableChatIndex && !visibleChatError);
 
-  function isGroupExpanded(group: PmaChatRunGroup): boolean {
+  function isGroupExpanded(group: ChatRunGroup): boolean {
     if (group.key in expandedRunGroups) return expandedRunGroups[group.key];
     // Default collapsed; expand only when the active chat lives inside this group.
     if (activeChatId && group.chats.some((chat) => chat.id === activeChatId)) return true;
     return false;
   }
 
-  function toggleGroup(group: PmaChatRunGroup): void {
+  function toggleGroup(group: ChatRunGroup): void {
     expandedRunGroups = { ...expandedRunGroups, [group.key]: !isGroupExpanded(group) };
   }
 
@@ -364,7 +364,7 @@
   }
 
   /** VirtualList keys must change when pin state or pin-driven order changes, or keyed {#each} reuses stale row DOM. */
-  function chatListVirtualKey(entry: PmaChatListEntry): string {
+  function chatListVirtualKey(entry: ChatListEntry): string {
     if (entry.kind === 'group') {
       const pinOrder = entry.group.chats
         .map((c) => `${c.id}:${pinnedChatIds[c.id] ? 1 : 0}`)
@@ -378,7 +378,7 @@
     return `${chat.id}:${pinnedChatIds[chat.id] ? 1 : 0}`;
   }
 
-  function sortEntriesForPins(entries: PmaChatListEntry[], pinned: Record<string, true>): PmaChatListEntry[] {
+  function sortEntriesForPins(entries: ChatListEntry[], pinned: Record<string, true>): ChatListEntry[] {
     const decorated = entries.map((entry) => {
       if (entry.kind === 'chat') {
         return { entry, pinned: pinned[entry.chat.id] === true, sort: entry.chat.updatedAt ?? '', id: entry.chat.id };
@@ -405,7 +405,7 @@
     return decorated.map((item) => item.entry);
   }
 
-  function markGroupRead(group: PmaChatRunGroup): void {
+  function markGroupRead(group: ChatRunGroup): void {
     let next = lastSeenMap;
     const now = new Date().toISOString();
     for (const chat of group.chats) {
@@ -422,11 +422,11 @@
     saveLastSeenMap(next);
   }
 
-  function groupBadgeClass(group: PmaChatRunGroup): string {
+  function groupBadgeClass(group: ChatRunGroup): string {
     return `chat-run-status-pill ${group.status}`;
   }
 
-  function groupSummaryParts(group: PmaChatRunGroup): string[] {
+  function groupSummaryParts(group: ChatRunGroup): string[] {
     const parts: string[] = [];
     if (group.waitingCount > 0) parts.push(`${group.waitingCount} waiting`);
     if (group.activeCount > 0) parts.push(`${group.activeCount} active`);
@@ -436,8 +436,8 @@
   }
   const displayedProgress = $derived(progressWithLiveElapsed(progress, clockNowMs));
   const liveActivity = $derived(buildPmaLiveActivity(displayedProgress));
-  const activeCards = $derived<PmaCard[]>(transcriptCards);
-  const lastAssistantMessageCard = $derived.by<PmaCard | null>(() => {
+  const activeCards = $derived<ChatTranscriptCard[]>(transcriptCards);
+  const lastAssistantMessageCard = $derived.by<ChatTranscriptCard | null>(() => {
     for (let i = activeCards.length - 1; i >= 0; i -= 1) {
       const card = activeCards[i];
       if (card.kind === 'message' && card.message.role === 'assistant') {
@@ -499,7 +499,7 @@
     const text = (card.message.text ?? '').trim();
     return text.length > 120 ? text.slice(text.length - 120) : text;
   });
-  const activeMessengerSurface = $derived(pmaChatMessengerSurface(activeChat));
+  const activeMessengerSurface = $derived(chatMessengerSurface(activeChat));
   const activeRepoIngress = $derived(repoIngressForChat(activeChat));
   const createChatLabel = $derived(
     creating ? 'Creating...' : newChatKind === 'agent' && canStartCodingAgentChat ? '+ Coding agent' : '+ Chat'
@@ -567,7 +567,7 @@
     return null;
   }
 
-  function filterChipLabel(key: PmaChatStatusFilter): string {
+  function filterChipLabel(key: ChatStatusFilter): string {
     return key === 'all' ? 'All' : key.charAt(0).toUpperCase() + key.slice(1);
   }
 
@@ -614,10 +614,10 @@
     loadingChats = !hasChatIndexProjection(readModelEntityStore.snapshot());
     if (!loadingChats) activateRequestedChatFromCurrentRows();
     void loadInitialSupportingData(
-      pmaApi.pma.listFiles(),
-      pmaApi.pma.listAgents(),
-      pmaApi.readModels.repoWorktreeTopology('all', 200),
-      pmaApi.readModels.repoWorktreeRuntime('all', 200)
+      webApi.pma.listFiles(),
+      webApi.pma.listAgents(),
+      webApi.readModels.repoWorktreeTopology('all', 200),
+      webApi.readModels.repoWorktreeRuntime('all', 200)
     );
     activeClockInterval = window.setInterval(() => {
       if (progress?.status === 'running') clockNowMs = Date.now();
@@ -722,10 +722,10 @@
   }
 
   async function loadInitialSupportingData(
-    artifactPromise: ReturnType<typeof pmaApi.pma.listFiles>,
-    agentPromise: ReturnType<typeof pmaApi.pma.listAgents>,
-    topologyPromise: ReturnType<typeof pmaApi.readModels.repoWorktreeTopology>,
-    runtimePromise: ReturnType<typeof pmaApi.readModels.repoWorktreeRuntime>
+    artifactPromise: ReturnType<typeof webApi.pma.listFiles>,
+    agentPromise: ReturnType<typeof webApi.pma.listAgents>,
+    topologyPromise: ReturnType<typeof webApi.readModels.repoWorktreeTopology>,
+    runtimePromise: ReturnType<typeof webApi.readModels.repoWorktreeRuntime>
   ): Promise<void> {
     const [artifactResult, agentResult, topologyResult, runtimeResult] = await Promise.all([
       artifactPromise,
@@ -826,7 +826,7 @@
     selectedModel = '';
     selectedReasoning = '';
 
-    const result = await pmaApi.pma.listAgentModels(agentId);
+    const result = await webApi.pma.listAgentModels(agentId);
     if (seq !== loadModelsSeq) return;
 
     if (!result.ok) {
@@ -972,7 +972,7 @@
     composeError = null;
     const reconciliationId = `archive:${chatId}:${Date.now()}`;
     readModelEntityStore.optimisticArchiveChat(chatId, reconciliationId);
-    const result = await pmaApi.pma.archiveThread(chatId);
+    const result = await webApi.pma.archiveThread(chatId);
     if (result.ok) {
       await invalidateChatMutation(chatId);
       upsertPmaChats([result.data]);
@@ -1000,7 +1000,7 @@
     if (!ok) return;
     archiving = true;
     composeError = null;
-    const result = await pmaApi.pma.archiveThreads(targets);
+    const result = await webApi.pma.archiveThreads(targets);
     if (result.ok) {
       await invalidateReadModelTags([
         readModelEntityTags.chatIndex,
@@ -1039,19 +1039,19 @@
       activeError = null;
     }
     let missingThreadError: ApiError | null = null;
-    const transcriptTask = pmaApi.pma.getTranscript(chatId, { limit: PMA_TRANSCRIPT_LIMIT }).then((messageResult) => {
+    const transcriptTask = webApi.pma.getTranscript(chatId, { limit: PMA_TRANSCRIPT_LIMIT }).then((messageResult) => {
       if (activeChatId !== chatId || refreshSeq !== activeRefreshSeq) return;
       if (messageResult.ok) {
-        replacePmaTranscriptPreservingPendingOptimistic(chatId, messageResult.data.rows);
+        replaceChatTranscriptPreservingPendingOptimistic(chatId, messageResult.data.rows);
         if (messageResult.data.status) updateProgress(messageResult.data.status);
       } else if (isMissingManagedThreadError(messageResult.error)) {
         missingThreadError = messageResult.error;
-        readModelEntityStore.replacePmaTranscript(chatId, []);
+        readModelEntityStore.replaceChatTranscript(chatId, []);
       } else if (!options.quiet) {
         activeError = messageResult.error;
       }
     });
-    const queueTask = pmaApi.pma.getQueue(chatId).then((queueResult) => {
+    const queueTask = webApi.pma.getQueue(chatId).then((queueResult) => {
       if (activeChatId !== chatId || refreshSeq !== activeRefreshSeq) return;
       if (queueResult.ok) {
         readModelEntityStore.setPmaQueue(chatId, queueResult.data.queuedTurns);
@@ -1077,7 +1077,7 @@
     closeStream();
     const seedProgress = currentProgress(chatId);
     const seedChat = chats.find((chat) => chat.id === chatId) ?? null;
-    if (!shouldUsePmaTranscriptStream(seedChat, seedProgress, currentQueueDepth(chatId))) {
+    if (!shouldUseChatTranscriptStream(seedChat, seedProgress, currentQueueDepth(chatId))) {
       streamState = 'idle';
       streamError = null;
       return;
@@ -1085,7 +1085,7 @@
     streamState = 'connecting';
     streamError = null;
     refreshedTerminalTurnId = null;
-    streamSubscription = openPmaTranscriptEventSource(chatId, {
+    streamSubscription = openChatTranscriptEventSource(chatId, {
       sinceEventId: seedProgress?.lastEventId,
       sinceManagedTurnId: seedProgress?.id,
       onStatus: (status) => {
@@ -1101,15 +1101,15 @@
         if (activeChatId !== chatId) return;
         streamState = 'connected';
         if (event.kind === 'transcript_snapshot') {
-          const rows = mapPmaTranscriptRows(event.payload.rows);
-          replacePmaTranscriptPreservingPendingOptimistic(chatId, rows);
+          const rows = mapChatTranscriptRows(event.payload.rows);
+          replaceChatTranscriptPreservingPendingOptimistic(chatId, rows);
           const status = event.payload.status;
           if (status && typeof status === 'object' && !Array.isArray(status)) updateProgress(mapPmaRunProgress(status as JsonRecord));
           return;
         }
         if (event.kind === 'transcript_append') {
-          const rows = mapPmaTranscriptRows(event.payload.rows);
-          readModelEntityStore.upsertPmaTranscriptCards(chatId, rows);
+          const rows = mapChatTranscriptRows(event.payload.rows);
+          readModelEntityStore.upsertChatTranscriptCards(chatId, rows);
           return;
         }
         if (event.kind === 'transcript_patch') {
@@ -1148,7 +1148,7 @@
     if (activeChatId !== chatId || streamSubscription) return;
     const seedProgress = currentProgress(chatId);
     const seedChat = chats.find((chat) => chat.id === chatId) ?? null;
-    if (shouldUsePmaTranscriptStream(seedChat, seedProgress, currentQueueDepth(chatId))) connectStream(chatId);
+    if (shouldUseChatTranscriptStream(seedChat, seedProgress, currentQueueDepth(chatId))) connectStream(chatId);
   }
 
   function scheduleActiveRefresh(chatId: string, delayMs = 600): void {
@@ -1219,7 +1219,7 @@
   function hasCachedDetail(chatId: string): boolean {
     const state = readModelEntityStore.snapshot();
     return Boolean(
-      state.pmaTranscripts[chatId]?.order.length ||
+      state.chatTranscripts[chatId]?.order.length ||
       state.pmaProgress[chatId] ||
       state.pmaQueues[chatId]?.length ||
       state.timelines[chatId]?.order.length ||
@@ -1227,21 +1227,21 @@
     );
   }
 
-  function replacePmaTranscriptPreservingPendingOptimistic(chatId: string, rows: PmaCard[]): void {
-    const transcript = readModelEntityStore.snapshot().pmaTranscripts[chatId];
+  function replaceChatTranscriptPreservingPendingOptimistic(chatId: string, rows: ChatTranscriptCard[]): void {
+    const transcript = readModelEntityStore.snapshot().chatTranscripts[chatId];
     if (!transcript) {
-      readModelEntityStore.replacePmaTranscript(chatId, rows);
+      readModelEntityStore.replaceChatTranscript(chatId, rows);
       return;
     }
     const retainedOptimistic = transcript.order
       .filter((id) => id.startsWith('optimistic:'))
       .map((id) => transcript.cardsById[id])
-      .filter((card): card is PmaCard => Boolean(card))
+      .filter((card): card is ChatTranscriptCard => Boolean(card))
       .filter((card) => !transcriptRowsConfirmOptimistic(rows, card));
-    readModelEntityStore.replacePmaTranscript(chatId, [...rows, ...retainedOptimistic]);
+    readModelEntityStore.replaceChatTranscript(chatId, [...rows, ...retainedOptimistic]);
   }
 
-  function transcriptRowsConfirmOptimistic(rows: PmaCard[], optimistic: PmaCard): boolean {
+  function transcriptRowsConfirmOptimistic(rows: ChatTranscriptCard[], optimistic: ChatTranscriptCard): boolean {
     if (optimistic.kind !== 'message' || optimistic.message.role !== 'user') return true;
     const optimisticCorrelationId = transcriptCardCorrelationId(optimistic);
     if (!optimisticCorrelationId) return false;
@@ -1252,7 +1252,7 @@
     });
   }
 
-  function transcriptCardCorrelationId(card: PmaCard): string | null {
+  function transcriptCardCorrelationId(card: ChatTranscriptCard): string | null {
     if (card.kind !== 'message') return null;
     const raw = card.message.raw;
     const direct = raw.correlation_id ?? raw.client_turn_id;
@@ -1527,7 +1527,7 @@
     const optimisticChatId = activeChatId;
     const optimisticId = `optimistic:user:${Date.now()}:${Math.random().toString(36).slice(2, 8)}`;
     const optimisticTimestamp = new Date().toISOString();
-    const optimisticPlaceholder: PmaCard = {
+    const optimisticPlaceholder: ChatTranscriptCard = {
       kind: 'message',
       id: optimisticId,
       turnId: null,
@@ -1570,7 +1570,7 @@
       },
       optimisticId
     );
-    readModelEntityStore.upsertPmaTranscriptCards(optimisticChatId, [optimisticPlaceholder]);
+    readModelEntityStore.upsertChatTranscriptCards(optimisticChatId, [optimisticPlaceholder]);
     draft = '';
     pendingAttachments = [];
     const composerVersionAtClear = composerEditVersion;
@@ -1579,7 +1579,7 @@
 
     const moveOptimisticToCommittedChat = (committedChatId: string) => {
       if (committedChatId === optimisticChatId) return;
-      readModelEntityStore.upsertPmaTranscriptCards(committedChatId, [
+      readModelEntityStore.upsertChatTranscriptCards(committedChatId, [
         {
           ...optimisticPlaceholder,
           message: {
@@ -1588,10 +1588,10 @@
           }
         }
       ]);
-      readModelEntityStore.removeOptimisticPmaTranscriptCards(optimisticChatId);
+      readModelEntityStore.removeOptimisticChatTranscriptCards(optimisticChatId);
     };
     const transcriptHasBackendUserRow = (chatId: string) => {
-      const transcript = readModelEntityStore.snapshot().pmaTranscripts[chatId];
+      const transcript = readModelEntityStore.snapshot().chatTranscripts[chatId];
       if (!transcript) return false;
       return transcript.order.some((id) => {
         if (id.startsWith('optimistic:')) return false;
@@ -1602,7 +1602,7 @@
     };
     const removeOptimistic = (chatId = optimisticChatId, options: { requireBackendRow?: boolean } = {}) => {
       if (options.requireBackendRow && !transcriptHasBackendUserRow(chatId)) return false;
-      readModelEntityStore.removeOptimisticPmaTranscriptCards(chatId);
+      readModelEntityStore.removeOptimisticChatTranscriptCards(chatId);
       return true;
     };
     const restoreDraft = () => {
@@ -1665,7 +1665,7 @@
               profile: profileForSend,
               clientTurnId: optimisticId
             });
-    const result = await executePmaChatCommandPlan(pmaApi, commandPlan);
+    const result = await executePmaChatCommandPlan(webApi, commandPlan);
     if (result.ok) {
       const committedChatId = targetIsDraft ? result.data.chatId : targetChatId;
       if (!committedChatId) {
@@ -1720,7 +1720,7 @@
       if (!ok) return;
     }
     composeError = null;
-    const result = await pmaApi.pma.cancelQueuedTurn(activeChatId, turn.managedTurnId);
+    const result = await webApi.pma.cancelQueuedTurn(activeChatId, turn.managedTurnId);
     if (result.ok) {
       readModelEntityStore.setPmaQueue(
         activeChatId,
@@ -1736,7 +1736,7 @@
     if (!activeChatId || !turn.prompt.trim()) return;
     const chatId = activeChatId;
     composeError = null;
-    const cancelResult = await pmaApi.pma.cancelQueuedTurn(chatId, turn.managedTurnId);
+    const cancelResult = await webApi.pma.cancelQueuedTurn(chatId, turn.managedTurnId);
     if (!cancelResult.ok) {
       composeError = cancelResult.error;
       return;
@@ -1748,7 +1748,7 @@
     const profileForSend =
       activeChat?.agentProfile?.trim() || selectedProfile?.trim() || '';
     const result = await executePmaChatCommandPlan(
-      pmaApi,
+      webApi,
       planInterruptExistingChat(chatId, turn.prompt, {
         model: turn.model ?? selectedModel,
         attachments: turn.attachments as DocumentFileIntentPayload[],
@@ -1771,7 +1771,7 @@
     }
     sending = true;
     showCommandNotice('Generating compact summary...');
-    const summaryResult = await pmaApi.pma.sendMessage(
+    const summaryResult = await webApi.pma.sendMessage(
       chatId,
       {
         ...buildManagedThreadMessagePayload(
@@ -1800,7 +1800,7 @@
       await refreshActive(chatId, { quiet: true });
       return;
     }
-    const compactResult = await pmaApi.pma.compactThread(chatId, summary);
+    const compactResult = await webApi.pma.compactThread(chatId, summary);
     if (!compactResult.ok) {
       composeError = compactResult.error;
       sending = false;
@@ -1956,7 +1956,7 @@
       return true;
     }
     if (spec.id === 'files') {
-      const result = await pmaApi.pma.listFiles();
+      const result = await webApi.pma.listFiles();
       if (!result.ok) composeError = result.error;
       else {
         readModelEntityStore.setPmaArtifacts(activeChatId ?? '__global__', result.data);
@@ -1966,7 +1966,7 @@
       return true;
     }
     if (spec.id === 'interrupt') {
-      const result = await pmaApi.pma.interruptThread(activeChatId);
+      const result = await webApi.pma.interruptThread(activeChatId);
       if (!result.ok) composeError = result.error;
       else {
         showCommandNotice('Interrupt requested.');
@@ -1976,7 +1976,7 @@
       return true;
     }
     if (spec.id === 'resume') {
-      const result = await pmaApi.pma.resumeThread(activeChatId);
+      const result = await webApi.pma.resumeThread(activeChatId);
       if (!result.ok) composeError = result.error;
       else {
         await invalidateChatMutation(activeChatId);
@@ -1992,7 +1992,7 @@
         await autoCompactActiveThread(activeChatId);
         return true;
       }
-      const result = await pmaApi.pma.compactThread(activeChatId, args);
+      const result = await webApi.pma.compactThread(activeChatId, args);
       if (!result.ok) composeError = result.error;
       else {
         await invalidateChatMutation(activeChatId);
@@ -2020,7 +2020,7 @@
       return true;
     }
     if (spec.id === 'clearqueue') {
-      const result = await pmaApi.pma.clearQueue(activeChatId);
+      const result = await webApi.pma.clearQueue(activeChatId);
       if (!result.ok) composeError = result.error;
       else {
         readModelEntityStore.setPmaQueue(activeChatId, []);
@@ -2126,7 +2126,7 @@
         uploaded.push(attachment);
         continue;
       }
-      const result = await pmaApi.pma.uploadInboxFile(file);
+      const result = await webApi.pma.uploadInboxFile(file);
       if (!result.ok || !result.data[0]) {
         composeError = result.ok
           ? { kind: 'parse', status: null, code: 'upload_missing_file', message: 'Upload did not return a file name.' }
@@ -2173,7 +2173,7 @@
         rootClass="chat-filter-chips-row"
         ariaLabel="Chat filters"
         items={[
-          ...PMA_CHAT_FILTER_ORDER.filter(
+          ...CHAT_FILTER_ORDER.filter(
             (item) => item !== 'unread' || filterCounts.unread > 0 || filter === 'unread'
           ).map((item) => ({
             key: `status:${item}`,
@@ -2182,24 +2182,24 @@
             active: filter === item,
             onSelect: () => (filter = item)
           })),
-          ...(ticketRunGroupCount > 0 || filter === PMA_CHAT_TICKET_RUNS_FILTER
+          ...(ticketRunGroupCount > 0 || filter === CHAT_TICKET_RUNS_FILTER
             ? [
                 {
                   key: 'ticket-runs',
                   label: 'Ticket Runs',
                   count: ticketRunGroupCount,
-                  active: filter === PMA_CHAT_TICKET_RUNS_FILTER,
-                  onSelect: () => (filter = PMA_CHAT_TICKET_RUNS_FILTER)
+                  active: filter === CHAT_TICKET_RUNS_FILTER,
+                  onSelect: () => (filter = CHAT_TICKET_RUNS_FILTER)
                 }
               ]
             : []),
           ...surfaceFilterChips
-            .filter((surf) => surf.count > 0 || filter === pmaChatSurfaceFilterToken(surf.slug))
+            .filter((surf) => surf.count > 0 || filter === chatSurfaceFilterToken(surf.slug))
             // Suppress the surface chip when it is the only surface available and its
             // count duplicates the All count — the chip would communicate nothing new
             // and forces the filter row onto a second line.
             .filter((surf, _idx, arr) => {
-              if (filter === pmaChatSurfaceFilterToken(surf.slug)) return true;
+              if (filter === chatSurfaceFilterToken(surf.slug)) return true;
               if (arr.length !== 1) return true;
               return surf.count !== filterCounts.all;
             })
@@ -2207,8 +2207,8 @@
               key: `surface:${surf.slug}`,
               label: surf.label,
               count: surf.count,
-              active: filter === pmaChatSurfaceFilterToken(surf.slug),
-              onSelect: () => (filter = pmaChatSurfaceFilterToken(surf.slug))
+              active: filter === chatSurfaceFilterToken(surf.slug),
+              onSelect: () => (filter = chatSurfaceFilterToken(surf.slug))
             }))
         ]}
       />
@@ -2240,7 +2240,7 @@
         repoLabel: repoLabelForRepoId,
         worktreeLabel: (wid) => worktreeScopeOption(wid)?.label ?? null
       })}
-      {@const messengerSurface = pmaChatMessengerSurface(chat)}
+      {@const messengerSurface = chatMessengerSurface(chat)}
       {@const listScopeAccent = chatListScopeAccentLabel(chat, scopeTags)}
       {@const listScopeAccentHex = listScopeAccent ? repoAccent(listScopeAccent) : null}
       {@const listAgentLabel = agentDisplayForChat(agents, chat)}

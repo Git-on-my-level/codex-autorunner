@@ -149,7 +149,7 @@ def emit_binding_event(
     )
 
 
-def pma_surface_key(managed_thread_id: Any) -> Optional[str]:
+def chat_surface_key(managed_thread_id: Any) -> Optional[str]:
     normalized = _normalize_optional_text(managed_thread_id)
     return normalized
 
@@ -169,5 +169,5 @@ def _hub_operation_from_chat_surface_event(event_type: str) -> str:
 __all__ = [
     "emit_binding_event",
     "emit_chat_surface_event",
-    "pma_surface_key",
+    "chat_surface_key",
 ]

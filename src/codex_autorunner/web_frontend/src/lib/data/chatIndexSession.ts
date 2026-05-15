@@ -1,5 +1,5 @@
 import { writable, type Readable } from 'svelte/store';
-import { pmaApi, type ApiError, type JsonRecord, type PmaApiClient } from '$lib/api/client';
+import { webApi, type ApiError, type JsonRecord, type WebApiClient } from '$lib/api/client';
 import {
   mapReadModelContract,
   type ChatIndexRow,
@@ -40,7 +40,7 @@ export type ChatIndexSession = {
 };
 
 type ChatIndexSessionDeps = {
-  api?: PmaApiClient;
+  api?: WebApiClient;
   store?: ReadModelEntityStore;
   openStream?: (options: ChatSurfaceStreamOptions) => StreamSubscription;
 };
@@ -57,7 +57,7 @@ function mergeUniqueChatIndexRows(primary: ChatIndexRow[], secondary: ChatIndexR
 }
 
 export function createChatIndexSession(deps: ChatIndexSessionDeps = {}): ChatIndexSession {
-  const api = deps.api ?? pmaApi;
+  const api = deps.api ?? webApi;
   const store = deps.store ?? readModelEntityStore;
   const openStream = deps.openStream ?? openChatSurfaceEventSource;
   const state = writable<ChatIndexSessionState>({ status: 'idle', error: null });

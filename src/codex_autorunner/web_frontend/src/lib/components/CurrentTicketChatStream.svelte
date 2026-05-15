@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onDestroy } from 'svelte';
-  import { openPmaTranscriptEventSource, type StreamSubscription } from '$lib/api/streaming';
+  import { openChatTranscriptEventSource, type StreamSubscription } from '$lib/api/streaming';
   import { withRuntimeBasePath as href } from '$lib/runtime/basePath';
 
   let {
@@ -39,7 +39,7 @@
   onDestroy(() => teardown());
 
   function connect(id: string): void {
-    subscription = openPmaTranscriptEventSource(id, {
+    subscription = openChatTranscriptEventSource(id, {
       onEvent: (event) => {
         if (activeChatId !== id) return;
         streamState = 'connected';
