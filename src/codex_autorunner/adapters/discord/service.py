@@ -863,6 +863,9 @@ class DiscordBotService(DiscordInteractionResponseMixin):
                 hub_path=self._hub_config_path,
             )
             root_app_server_config = getattr(root_repo_config, "app_server", None)
+        self._app_server_workspace_supervisors: dict[
+            str, WorkspaceAppServerSupervisor
+        ] = {}
         root_app_server_command = list(
             getattr(root_app_server_config, "command", None) or ["codex", "app-server"]
         )
@@ -3276,8 +3279,40 @@ class DiscordBotService(DiscordInteractionResponseMixin):
     async def _app_server_supervisor_for_workspace(
         self, workspace_root: Path
     ) -> WorkspaceAppServerSupervisor:
-        _ = workspace_root
-        return self._app_server_supervisor
+        repo_config = load_repo_config(
+            workspace_root,
+            hub_path=self._hub_config_path,
+        )
+        app_cfg = getattr(repo_config, "app_server", None)
+        scope = getattr(app_cfg, "server_scope", "global") if app_cfg else "global"
+        if scope != "workspace":
+            return self._app_server_supervisor
+        key = str(canonicalize_path(workspace_root))
+        async with self._app_server_lock:
+            existing = self._app_server_workspace_supervisors.get(key)
+            if existing is not None:
+                return existing
+            command = list(getattr(app_cfg, "command", None) or ["codex", "app-server"])
+            supervisor = WorkspaceAppServerSupervisor(
+                command,
+                state_root=self._app_server_state_root,
+                env_builder=self._build_workspace_env,
+                notification_handler=cast(
+                    Callable[[Mapping[str, object]], Awaitable[None]],
+                    self.app_server_events.handle_notification,
+                ),
+                logger=self._logger,
+                server_scope="workspace",
+                max_handles=getattr(app_cfg, "max_handles", 1),
+                idle_ttl_seconds=getattr(app_cfg, "idle_ttl_seconds", 3600),
+                startup_timeout_seconds=getattr(app_cfg, "startup_timeout_seconds", 30),
+                terminate_grace_seconds=getattr(app_cfg, "terminate_grace_seconds", 2),
+                terminate_kill_seconds=getattr(app_cfg, "terminate_kill_seconds", 3),
+                registry_root=getattr(self, "_hub_root", None) or self._config.root,
+            )
+            self._app_server_workspace_supervisors[key] = supervisor
+            self._runtime_services.register_owned_supervisor(supervisor)
+            return supervisor
 
     async def _client_for_workspace(
         self, workspace_path: Optional[str]
@@ -3338,14 +3373,14 @@ class DiscordBotService(DiscordInteractionResponseMixin):
     async def _opencode_supervisor_for_workspace(
         self, workspace_root: Path
     ) -> Optional[OpenCodeSupervisor]:
+        repo_config = load_repo_config(
+            workspace_root,
+            hub_path=self._hub_config_path,
+        )
+        opencode_config = getattr(repo_config, "opencode", None)
+        server_scope = getattr(opencode_config, "server_scope", "global")
+        key = "global" if server_scope == "global" else str(workspace_root)
         async with self._opencode_lock:
-            repo_config = load_repo_config(
-                workspace_root,
-                hub_path=self._hub_config_path,
-            )
-            opencode_config = getattr(repo_config, "opencode", None)
-            server_scope = getattr(opencode_config, "server_scope", "global")
-            key = "global" if server_scope == "global" else str(workspace_root)
             existing = self._opencode_supervisors.get(key)
             if existing is not None:
                 existing.last_requested_at = time.monotonic()

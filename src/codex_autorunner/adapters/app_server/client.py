@@ -383,6 +383,15 @@ class CodexAppServerClient:
             self._turn_approval_handlers.pop(turn_key, None)
             self._turn_user_input_handlers.pop(turn_key, None)
             self._turn_notification_handlers.pop(turn_key, None)
+        else:
+            for handler_map in (
+                self._turn_approval_handlers,
+                self._turn_user_input_handlers,
+                self._turn_notification_handlers,
+            ):
+                for key in tuple(handler_map):
+                    if key[0] == thread_key:
+                        handler_map.pop(key, None)
 
     @property
     def active_turn_count(self) -> int:
@@ -673,6 +682,8 @@ class CodexAppServerClient:
     ) -> None:
         envelope = normalize_notification_envelope(message)
         if envelope is None:
+            return
+        if self._notification_adapter_for(envelope) is None:
             return
 
         async def _invoke_notification_handler() -> None:
