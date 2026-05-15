@@ -1122,6 +1122,10 @@ function shouldAppendIntermediateDelta(
   if (isCommentaryTraceCard(left) || isCommentaryTraceCard(right)) return false;
   if (isTerminalTraceCard(left) || isTerminalTraceCard(right)) return false;
   if (isThinkingTraceTitle(left.title) && isThinkingTraceTitle(right.title)) return true;
+  if (isThinkingTraceTitle(left.title) && isTokenLikeIntermediate(right) && !isTokenLikeProgressIntermediate(right)) return true;
+  if (isThinkingTraceTitle(right.title) && isTokenLikeIntermediate(left) && !isTokenLikeProgressIntermediate(left)) return true;
+  if (isProgressTraceTitle(left.title) && isTokenLikeProgressIntermediate(right)) return true;
+  if (isProgressTraceTitle(right.title) && isTokenLikeProgressIntermediate(left)) return true;
   if (traceLabelText(left.title).toLowerCase() === traceLabelText(right.title).toLowerCase()) return true;
   return isTokenLikeIntermediate(left) && isTokenLikeIntermediate(right);
 }
@@ -1155,6 +1159,10 @@ function uniqueStrings(values: string[]): string[] {
 
 function isThinkingTraceTitle(title: string): boolean {
   return traceLabelText(title).toLowerCase() === 'thinking';
+}
+
+function isProgressTraceTitle(title: string): boolean {
+  return traceLabelText(title).toLowerCase() === 'progress';
 }
 
 function isTokenLikeProgressIntermediate(card: Extract<PmaCard, { kind: 'intermediate' }>): boolean {

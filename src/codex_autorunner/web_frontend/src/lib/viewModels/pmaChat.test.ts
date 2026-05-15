@@ -1600,6 +1600,28 @@ describe('PMA chat view helpers', () => {
     });
   });
 
+  it('keeps compact transcript ids stable as streaming activity grows', () => {
+    const first = compactPmaTranscriptCards([
+      baseArtifactCardTrace('thinking-1', 'Need', ['401']),
+      baseArtifactCardTrace('thinking-2', 'to', ['402'])
+    ]);
+    const second = compactPmaTranscriptCards([
+      baseArtifactCardTrace('thinking-1', 'Need', ['401']),
+      baseArtifactCardTrace('thinking-2', 'to', ['402']),
+      baseArtifactCardTrace('thinking-3', 'check', ['403'])
+    ]);
+
+    expect(first[0]).toMatchObject({ kind: 'turn_summary', id: 'turn:one:activity:thinking-1' });
+    expect(second[0]).toMatchObject({ kind: 'turn_summary', id: 'turn:one:activity:thinking-1' });
+    const firstSummary = first[0];
+    const secondSummary = second[0];
+    if (firstSummary.kind !== 'turn_summary' || secondSummary.kind !== 'turn_summary') {
+      throw new Error('expected turn summaries');
+    }
+    expect(firstSummary.cards[0]).toMatchObject({ id: 'thinking-1', text: 'Need to' });
+    expect(secondSummary.cards[0]).toMatchObject({ id: 'thinking-1', text: 'Need to check' });
+  });
+
   it('merges streamed activity events without dropping older transcript activity', () => {
     const merged = mergePmaActivityEvents(
       [
