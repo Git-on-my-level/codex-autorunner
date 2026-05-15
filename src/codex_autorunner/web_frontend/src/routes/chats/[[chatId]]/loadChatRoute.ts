@@ -13,6 +13,7 @@ export type ChatRouteLoadData = {
 };
 
 const CHAT_DETAIL_TIMELINE_LIMIT = 50;
+const CHAT_INDEX_WINDOW_LIMIT = 200;
 
 /** Testable helper; must not live in `+page.ts` (SvelteKit allows only reserved route exports there). */
 export async function loadChatRoute(options: {
@@ -21,11 +22,14 @@ export async function loadChatRoute(options: {
   loaderOptions?: ReadModelLoaderOptions;
 }): Promise<ChatRouteLoadData> {
   const chatId = options.chatId?.trim() || null;
-  const chatIndexPromise = ensureChatIndexLoaded({}, {
-    ...options.loaderOptions,
-    depends: options.depends,
-    refresh: true
-  });
+  const chatIndexPromise = ensureChatIndexLoaded(
+    { limit: CHAT_INDEX_WINDOW_LIMIT },
+    {
+      ...options.loaderOptions,
+      depends: options.depends,
+      refresh: true
+    }
+  );
   if (!chatId) return { chatId: null, chatIndex: await chatIndexPromise, activeDetail: null };
 
   const activeDetailPromise = ensureChatDetailLoaded(chatId, {

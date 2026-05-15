@@ -18,6 +18,9 @@ from codex_autorunner.surfaces.web.read_model_contracts import (
     ChatIndexSnapshot,
     load_read_model_contract,
 )
+from codex_autorunner.surfaces.web.routes.hub_chat_read_models import (
+    hub_group_dict_to_contract,
+)
 
 
 def _seed_thread_rows(hub_root: Path, count: int) -> None:
@@ -146,6 +149,184 @@ def test_chat_index_snapshot_filters_groups_and_bounds_large_windows(hub_env) ->
     assert children["window"]["returned"] == 5
     assert children["window"]["has_more"] is True
     assert {row["group_id"] for row in children["rows"]} == {"ticket:TICKET-900"}
+
+
+def test_chat_index_group_contract_accepts_legacy_ticket_run_prefix() -> None:
+    group = hub_group_dict_to_contract(
+        {
+            "group_id": "ticket-run:run-1",
+            "title": "Legacy ticket run",
+            "child_count": 3,
+        }
+    )
+
+    assert group.kind == "ticket_run"
+    assert group.group_id == "ticket-run:run-1"
+
+
+def test_chat_index_contract_uses_terminal_thread_status_and_ticket_flow_metadata(
+    hub_env,
+) -> None:
+    thread_id = "thread-ticket-flow-complete"
+    with open_orchestration_sqlite(
+        hub_env.hub_root, durable=True, migrate=True
+    ) as conn:
+        with conn:
+            conn.execute(
+                """
+                INSERT INTO orch_thread_targets (
+                    thread_target_id,
+                    agent_id,
+                    repo_id,
+                    resource_kind,
+                    resource_id,
+                    display_name,
+                    lifecycle_status,
+                    runtime_status,
+                    metadata_json,
+                    created_at,
+                    updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    thread_id,
+                    "codex",
+                    "repo",
+                    "worktree",
+                    "repo--discord-4",
+                    "ticket-flow:codex",
+                    "active",
+                    "completed",
+                    json.dumps(
+                        {
+                            "flow_type": "ticket_flow",
+                            "thread_kind": "ticket_flow",
+                            "ticket_id": "TICKET-015",
+                            "run_id": "run-015",
+                        }
+                    ),
+                    "2026-05-15T11:57:27Z",
+                    "2026-05-15T12:08:56Z",
+                ),
+            )
+            conn.execute(
+                """
+                INSERT INTO orch_thread_executions (
+                    execution_id,
+                    thread_target_id,
+                    request_kind,
+                    status,
+                    created_at,
+                    started_at,
+                    finished_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    "turn-ticket-flow-complete",
+                    thread_id,
+                    "message",
+                    "ok",
+                    "2026-05-15T12:03:18Z",
+                    "2026-05-15T12:03:18Z",
+                    "2026-05-15T12:08:56Z",
+                ),
+            )
+    SQLiteChatSurfaceEventJournal(hub_env.hub_root, durable=True).append_event(
+        idempotency_key="stale-running-progress",
+        event_type="execution.progress",
+        surface_kind="pma",
+        surface_key=thread_id,
+        managed_thread_id=thread_id,
+        repo_id="repo",
+        resource_kind="worktree",
+        resource_id="repo--discord-4",
+        status="running",
+        occurred_at="2026-05-15T12:08:56Z",
+    )
+
+    client = TestClient(create_hub_app(hub_env.hub_root))
+    response = client.get(
+        "/hub/read-models/chats", params={"filter": "all", "limit": 20}
+    )
+
+    assert response.status_code == 200
+    snapshot = load_read_model_contract(ChatIndexSnapshot, response.json())
+    row = next(item for item in snapshot.rows if item.chat_id == thread_id)
+    assert row.status == "idle"
+    assert row.ticket_id == "TICKET-015"
+    assert row.run_id == "run-015"
+    assert row.group_id == "ticket:TICKET-015"
+
+    active_response = client.get(
+        "/hub/read-models/chats", params={"filter": "active", "limit": 20}
+    )
+    assert active_response.status_code == 200
+    active_snapshot = load_read_model_contract(
+        ChatIndexSnapshot, active_response.json()
+    )
+    assert all(item.chat_id != thread_id for item in active_snapshot.rows)
+
+
+def test_chat_index_contract_prioritizes_failed_runtime_over_running_lifecycle(
+    hub_env,
+) -> None:
+    thread_id = "thread-failed-stale-running"
+    with open_orchestration_sqlite(
+        hub_env.hub_root, durable=True, migrate=True
+    ) as conn:
+        with conn:
+            conn.execute(
+                """
+                INSERT INTO orch_thread_targets (
+                    thread_target_id,
+                    agent_id,
+                    repo_id,
+                    resource_kind,
+                    resource_id,
+                    display_name,
+                    lifecycle_status,
+                    runtime_status,
+                    metadata_json,
+                    created_at,
+                    updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    thread_id,
+                    "codex",
+                    "repo",
+                    "worktree",
+                    "repo--discord-4",
+                    "failed flow",
+                    "active",
+                    "failed",
+                    "{}",
+                    "2026-05-15T11:57:27Z",
+                    "2026-05-15T12:08:56Z",
+                ),
+            )
+    SQLiteChatSurfaceEventJournal(hub_env.hub_root, durable=True).append_event(
+        idempotency_key="failed-stale-running",
+        event_type="execution.progress",
+        surface_kind="pma",
+        surface_key=thread_id,
+        managed_thread_id=thread_id,
+        repo_id="repo",
+        resource_kind="worktree",
+        resource_id="repo--discord-4",
+        status="running",
+        occurred_at="2026-05-15T12:08:56Z",
+    )
+
+    client = TestClient(create_hub_app(hub_env.hub_root))
+    response = client.get(
+        "/hub/read-models/chats", params={"filter": "all", "limit": 20}
+    )
+
+    assert response.status_code == 200
+    snapshot = load_read_model_contract(ChatIndexSnapshot, response.json())
+    row = next(item for item in snapshot.rows if item.chat_id == thread_id)
+    assert row.status == "failed"
 
 
 def test_chat_detail_snapshot_contains_timeline_queue_and_cursor(hub_env) -> None:
@@ -291,6 +472,21 @@ def test_hub_read_models_chats_returns_web_contract_snapshot(hub_env) -> None:
     assert len(snapshot.rows) == 10
 
 
+def test_hub_read_models_chats_counters_cover_full_filtered_set(hub_env) -> None:
+    _seed_thread_rows(hub_env.hub_root, 30)
+    client = TestClient(create_hub_app(hub_env.hub_root))
+    response = client.get(
+        "/hub/read-models/chats", params={"filter": "all", "limit": 1}
+    )
+
+    assert response.status_code == 200
+    snapshot = load_read_model_contract(ChatIndexSnapshot, response.json())
+    assert len(snapshot.rows) == 1
+    assert snapshot.counters.total == 29
+    assert snapshot.counters.running == 1
+    assert snapshot.rows[0].status != "running"
+
+
 def test_hub_read_models_chats_contract_active_filter_matches_index_window(
     hub_env,
 ) -> None:
@@ -400,6 +596,36 @@ def test_hub_read_models_chats_patch_stream_replays_typed_events(hub_env) -> Non
     assert patches[0]["envelope"]["eventType"] == "chat.index.patch"
     assert patches[0]["patch"]["rows"][0]["chatId"] == "thread-0001"
     assert patches[0]["patch"]["order"]
+
+
+def test_hub_read_models_chats_patch_counters_cover_full_filtered_set(
+    hub_env,
+) -> None:
+    _seed_thread_rows(hub_env.hub_root, 30)
+    event = (
+        SQLiteChatSurfaceEventJournal(hub_env.hub_root, durable=True)
+        .append_event(
+            idempotency_key="index-patch-windowed-counters",
+            event_type="delivery.status_changed",
+            surface_kind="pma",
+            surface_key="thread-0029",
+            managed_thread_id="thread-0029",
+            repo_id="repo",
+            status="delivered",
+        )
+        .event
+    )
+
+    client = TestClient(create_hub_app(hub_env.hub_root))
+    response = client.get(
+        "/hub/read-models/chats/patches",
+        params={"cursor": str(event.cursor - 1), "once": "true", "window_limit": 1},
+    )
+
+    assert response.status_code == 200
+    patches = _event_payloads(response.text, "chat.index.patch")
+    assert patches[0]["patch"]["counters"]["total"] == 29
+    assert patches[0]["patch"]["counters"]["running"] == 1
 
 
 def test_hub_read_models_chats_patch_stream_repairs_future_cursor(hub_env) -> None:

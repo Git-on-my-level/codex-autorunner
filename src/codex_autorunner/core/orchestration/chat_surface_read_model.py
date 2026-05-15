@@ -30,7 +30,14 @@ DEFAULT_CHAT_TIMELINE_LIMIT = 50
 MAX_CHAT_TIMELINE_LIMIT = 200
 MAX_CHAT_TIMELINE_PAGE_SOURCE_LIMIT = 1000
 
-_TERMINAL_SUCCESS_STATUSES = {"completed", "succeeded", "success", "delivered"}
+_TERMINAL_SUCCESS_STATUSES = {
+    "completed",
+    "complete",
+    "ok",
+    "succeeded",
+    "success",
+    "delivered",
+}
 _TERMINAL_FAILED_STATUSES = {"failed", "error", "cancelled", "canceled", "timeout"}
 _RUNNING_STATUSES = {"running", "in_progress", "started", "claimed", "delivering"}
 _QUEUED_STATUSES = {"queued", "pending"}
@@ -270,6 +277,7 @@ class ChatSurfaceReadService:
             parent_group_id=parent_group_id,
         )
         rows = sorted(rows, key=_chat_index_sort_key)
+        counters = _chat_index_counters(rows)
         total_count = len(rows)
         bounded_offset = max(0, int(offset or 0))
         bounded_limit = _bounded_limit(limit, MAX_CHAT_INDEX_LIMIT)
@@ -316,6 +324,7 @@ class ChatSurfaceReadService:
             },
             "rows": window,
             "groups": groups if group_by == "ticket_run" else [],
+            "counters": counters,
         }
         _log_read_model_metric(
             "snapshot_query_latency",
@@ -805,6 +814,9 @@ class ChatSurfaceReadService:
                     "agent_id": _normalize_text(row["agent_id"]),
                     "agent_profile": _normalize_text(metadata.get("agent_profile")),
                     "chat_kind": chat_kind,
+                    "flow_type": _normalize_text(metadata.get("flow_type")),
+                    "run_id": _normalize_text(metadata.get("run_id")),
+                    "ticket_id": _normalize_text(metadata.get("ticket_id")),
                     "backend_thread_id": _normalize_text(
                         _row_get(row, "backend_thread_id")
                     ),
@@ -1137,6 +1149,9 @@ def _chat_index_rows_from_surfaces(
                 "unread": bool(metadata_map.get("unread")),
                 "unread_count": int(metadata_map.get("unread_count") or 0),
                 "cleanup_protected": bool(metadata_map.get("cleanup_protected")),
+                "flow_type": metadata_map.get("flow_type"),
+                "ticket_id": metadata_map.get("ticket_id"),
+                "run_id": metadata_map.get("run_id"),
             }
             by_thread[managed_thread_id] = row
         row["surfaces"].append(base_surface)
@@ -1176,8 +1191,11 @@ def _chat_index_rows_from_surfaces(
                 "agent_id",
                 "agent_profile",
                 "chat_kind",
+                "flow_type",
                 "model",
                 "active_turn_id",
+                "ticket_id",
+                "run_id",
             ):
                 if metadata_map.get(key) is not None:
                     row["agent" if key == "agent_id" else key] = metadata_map.get(key)
@@ -1421,10 +1439,12 @@ def _filter_chat_index_rows(
             row.get("surface_kinds") or []
         ):
             continue
-        lifecycle = str(row.get("lifecycle") or "")
         if normalized_view == "waiting" and int(row.get("queue_depth") or 0) <= 0:
             continue
-        if normalized_view == "active" and lifecycle != "running":
+        if (
+            normalized_view == "active"
+            and _chat_index_effective_status(row) != "running"
+        ):
             continue
         if normalized_view == "unread" and not row.get("unread"):
             continue
@@ -1471,6 +1491,41 @@ def _chat_index_sort_key(row: Mapping[str, Any]) -> tuple[int, float, str]:
     )
 
 
+def _chat_index_effective_status(row: Mapping[str, Any]) -> str:
+    lifecycle = _normalize_kind(row.get("lifecycle"))
+    lifecycle_status = _normalize_kind(row.get("lifecycle_status"))
+    runtime = _status_to_lifecycle(
+        row.get("runtime_status") or row.get("target_runtime_status")
+    )
+    if (
+        lifecycle_status == "archived"
+        or lifecycle == "archived"
+        or runtime == "archived"
+    ):
+        return "archived"
+    if int(row.get("queue_depth") or 0) > 0:
+        return "waiting"
+    if runtime == "idle":
+        return "idle"
+    if runtime == "failed":
+        return "failed"
+    if runtime == "running" or lifecycle == "running":
+        return "running"
+    return "idle"
+
+
+def _chat_index_counters(rows: list[dict[str, Any]]) -> dict[str, int]:
+    return {
+        "total": len(rows),
+        "waiting": sum(1 for row in rows if int(row.get("queue_depth") or 0) > 0),
+        "running": sum(
+            1 for row in rows if _chat_index_effective_status(row) == "running"
+        ),
+        "unread": sum(int(row.get("unread_count") or 0) for row in rows),
+        "archived": sum(1 for row in rows if row.get("lifecycle_status") == "archived"),
+    }
+
+
 def _chat_index_sort_key_parts(row: Mapping[str, Any]) -> dict[str, Any]:
     key = _chat_index_sort_key(row)
     last_activity_desc: Any = key[1]
@@ -1484,6 +1539,12 @@ def _chat_index_sort_key_parts(row: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def _chat_ticket_group_id(row: Mapping[str, Any]) -> Optional[str]:
+    ticket_id = _normalize_text(row.get("ticket_id") or row.get("current_ticket_id"))
+    if ticket_id is not None:
+        return f"ticket:{ticket_id}"
+    run_id = _normalize_text(row.get("run_id"))
+    if run_id is not None:
+        return f"run:{run_id}"
     kind = _normalize_kind(row.get("resource_kind"))
     identifier = _normalize_text(row.get("resource_id"))
     if kind in {"ticket", "ticket_run", "run"} and identifier is not None:
@@ -1514,7 +1575,9 @@ def _ticket_run_groups(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
                     1 for child in children if int(child.get("queue_depth") or 0) > 0
                 ),
                 "running_count": sum(
-                    1 for child in children if child.get("lifecycle") == "running"
+                    1
+                    for child in children
+                    if _chat_index_effective_status(child) == "running"
                 ),
                 "unread_count": sum(1 for child in children if child.get("unread")),
                 "updated_at": latest,
@@ -1793,10 +1856,21 @@ def _chat_id_for_event(event: ChatSurfaceEvent) -> str:
 def _chat_index_patch_counters(
     snapshot: Mapping[str, Any], rows: list[Mapping[str, Any]]
 ) -> dict[str, int]:
+    counters = snapshot.get("counters")
+    if isinstance(counters, Mapping):
+        return {
+            "total": max(0, int(counters.get("total") or 0)),
+            "waiting": max(0, int(counters.get("waiting") or 0)),
+            "running": max(0, int(counters.get("running") or 0)),
+            "unread": max(0, int(counters.get("unread") or 0)),
+            "archived": max(0, int(counters.get("archived") or 0)),
+        }
     return {
         "total": int((snapshot.get("window") or {}).get("total_count") or 0),
         "waiting": sum(1 for row in rows if int(row.get("queue_depth") or 0) > 0),
-        "running": sum(1 for row in rows if row.get("lifecycle") == "running"),
+        "running": sum(
+            1 for row in rows if _chat_index_effective_status(row) == "running"
+        ),
         "unread": sum(int(row.get("unread_count") or 0) for row in rows),
         "archived": sum(1 for row in rows if row.get("lifecycle_status") == "archived"),
     }
@@ -2133,11 +2207,18 @@ def _pma_thread_from_surface(surface: Mapping[str, Any]) -> dict[str, Any]:
     projected_runtime_status = (
         lifecycle if lifecycle in {"idle", "queued", "running", "failed"} else None
     )
+    metadata_runtime_status = _normalize_text(metadata.get("runtime_status"))
+    terminal_runtime_status = (
+        metadata_runtime_status
+        if _normalize_kind(metadata_runtime_status) in _TERMINAL_SUCCESS_STATUSES
+        else None
+    )
     runtime_status = (
         (lifecycle if lifecycle_status == "archived" else None)
+        or terminal_runtime_status
         or projected_runtime_status
         or _normalize_text(metadata.get("latest_execution_status"))
-        or _normalize_text(metadata.get("runtime_status"))
+        or metadata_runtime_status
         or lifecycle
         or ""
     )

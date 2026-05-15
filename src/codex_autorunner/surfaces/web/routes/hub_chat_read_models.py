@@ -254,7 +254,7 @@ class ChatReadModelService:
         returned_len = len(hub_rows)
         win_limit = max(1, _int_fallback(hub_window.get("limit"), limit))
         proj_cursor = projection_cursor_chat_index(self._surface.latest_cursor())
-        counters = counters_from_contract_rows(rows, total)
+        counters = counters_from_hub_payload(payload.get("counters"), rows, total)
 
         return ChatIndexSnapshot(
             cursor=proj_cursor,
@@ -591,10 +591,19 @@ def _chat_surface_status_from_row(row: Mapping[str, Any]) -> ChatSurfaceStatus:
     queue_depth = _int_fallback(row.get("queue_depth"), 0)
     if queue_depth > 0:
         return "waiting"
-    if lifecycle == "running" or runtime_l == "running":
-        return "running"
+    if runtime_l in {
+        "completed",
+        "complete",
+        "ok",
+        "succeeded",
+        "success",
+        "delivered",
+    }:
+        return "idle"
     if runtime_l in {"failed", "error", "blocked", "invalid"}:
         return "failed"
+    if lifecycle == "running" or runtime_l == "running":
+        return "running"
     return "idle"
 
 
@@ -707,7 +716,9 @@ def hub_chat_row_to_chat_index_row(raw: Mapping[str, Any]) -> ChatIndexRow:
 def hub_group_dict_to_contract(raw: Mapping[str, Any]) -> ChatIndexGroup:
     group_id = str(raw.get("group_id") or raw.get("row_id") or "").strip()
     kind: Literal["ticket_run", "surface", "repo", "worktree"] = (
-        "ticket_run" if group_id.startswith(("ticket:", "run:")) else "surface"
+        "ticket_run"
+        if group_id.startswith(("ticket:", "run:", "ticket-run:"))
+        else "surface"
     )
     label = str(raw.get("title") or group_id)
     child_count = max(0, _int_fallback(raw.get("child_count"), 0))
@@ -731,6 +742,20 @@ def counters_from_contract_rows(
         unread=sum(r.unread_count for r in rows),
         archived=sum(1 for r in rows if r.status == "archived"),
     )
+
+
+def counters_from_hub_payload(
+    raw: Any, rows: list[ChatIndexRow], total: int
+) -> ChatIndexCounters:
+    if isinstance(raw, Mapping):
+        return ChatIndexCounters(
+            total=max(0, _int_fallback(raw.get("total"), total)),
+            waiting=max(0, _int_fallback(raw.get("waiting"), 0)),
+            running=max(0, _int_fallback(raw.get("running"), 0)),
+            unread=max(0, _int_fallback(raw.get("unread"), 0)),
+            archived=max(0, _int_fallback(raw.get("archived"), 0)),
+        )
+    return counters_from_contract_rows(rows, total)
 
 
 def projection_cursor_chat_index(sequence: Union[int, str]) -> ProjectionCursor:
