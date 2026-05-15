@@ -7,8 +7,8 @@ import {
   type ChatIndexRequest,
   type ReadModelSnapshotClient
 } from './readModelClients';
-import { readModelEntityStore, type ReadModelEntityStore } from './readModelStore';
-import { openReadModelStream, type ReadModelStreamManager, type ReadModelStreamOptions } from './readModelStream';
+import { canonicalChatIndexWindowKey, readModelEntityStore, type ReadModelEntityStore } from './readModelStore';
+import { openReadModelStream, type CursorStorage, type ReadModelStreamManager, type ReadModelStreamOptions } from './readModelStream';
 
 export type ChatIndexSessionStatus = 'idle' | 'loading' | 'connected' | 'interrupted' | 'closed';
 
@@ -49,7 +49,10 @@ export function createChatIndexSession(deps: ChatIndexSessionDeps = {}): ChatInd
     if (started) return;
     started = true;
     const cached = Boolean(store.snapshot().chatIndexCursor);
-    if (!cached) void refresh();
+    if (!cached) {
+      void refresh();
+      return;
+    }
     openStream();
   }
 
@@ -99,12 +102,23 @@ export function createChatIndexSession(deps: ChatIndexSessionDeps = {}): ChatInd
       key: 'chat.index.entity',
       path: '/hub/read-models/chats/patches',
       eventTypes: ['chat.index.patch', 'projection.cursor_gap'],
+      cursorStorage: seededCursorStorage(
+        store.snapshot().chatIndexCursor?.sequence
+          ? String(store.snapshot().chatIndexCursor?.sequence)
+          : null
+      ),
       parse: parseChatIndexPatchEvent,
       onEvent: (event) => {
         const result = store.applyChatIndexPatchEvent(event);
         if (result === 'repair_required') {
           stream?.resetCursor();
           void refresh();
+          return;
+        }
+        if (result === 'applied') {
+          const key = canonicalChatIndexWindowKey(currentRequest);
+          const window = store.snapshot().chatWindows[key];
+          if (window?.status === 'interrupted') void refresh(currentRequest);
         }
       },
       onStatus: (status) => {
@@ -125,6 +139,37 @@ export function createChatIndexSession(deps: ChatIndexSessionDeps = {}): ChatInd
 }
 
 export const chatIndexSession = createChatIndexSession();
+
+const fallbackCursorMemory = new Map<string, string>();
+const fallbackCursorStorage: CursorStorage = {
+  getItem: (key) => fallbackCursorMemory.get(key) ?? null,
+  setItem: (key, value) => {
+    fallbackCursorMemory.set(key, value);
+  },
+  removeItem: (key) => {
+    fallbackCursorMemory.delete(key);
+  }
+};
+
+function seededCursorStorage(seed: string | null): CursorStorage {
+  const backing = typeof localStorage !== 'undefined' ? localStorage : fallbackCursorStorage;
+  return {
+    getItem: (key) => {
+      const current = backing.getItem(key);
+      if (cursorSequence(current) >= cursorSequence(seed)) return current;
+      return seed;
+    },
+    setItem: (key, value) => backing.setItem(key, value),
+    removeItem: (key) => backing.removeItem(key)
+  };
+}
+
+function cursorSequence(value: string | null): number {
+  if (!value) return 0;
+  const raw = value.startsWith('chat.index:') ? value.slice('chat.index:'.length) : value;
+  const parsed = Number.parseInt(raw, 10);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : 0;
+}
 
 function parseChatIndexPatchEvent(event: SseEvent<unknown>): ChatIndexPatchEvent | null {
   if (event.event !== 'chat.index.patch' && event.event !== 'projection.cursor_gap' && event.event !== 'message') {

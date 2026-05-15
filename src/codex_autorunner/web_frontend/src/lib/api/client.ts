@@ -380,6 +380,19 @@ export class WebApiClient {
           errors: asArray(payload.errors)
         })
       ),
+    archiveActiveThreads: async (): Promise<ApiResult<PmaBulkArchiveResult>> =>
+      mapResult(
+        await this.requestJson<JsonRecord>('/hub/pma/threads/archive-active', {
+          method: 'POST'
+        }),
+        (payload) => ({
+          threads: asArray(payload.threads).map(mapPmaChatSummary),
+          archivedCount: numberValue(payload.archived_count ?? payload.archivedCount, 0),
+          requestedCount: numberValue(payload.requested_count ?? payload.requestedCount, 0),
+          errorCount: numberValue(payload.error_count ?? payload.errorCount, 0),
+          errors: asArray(payload.errors)
+        })
+      ),
     cancelQueuedTurn: async (chatId: string, turnId: string): Promise<ApiResult<JsonRecord>> =>
       this.requestJson<JsonRecord>(
         `/hub/pma/threads/${encodeURIComponent(chatId)}/queue/${encodeURIComponent(turnId)}/cancel`,

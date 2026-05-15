@@ -633,6 +633,43 @@ describe('read model entity store', () => {
     expect(store.snapshot().cursors['chat.index'].sequence).toBe(2);
   });
 
+  it('marks the default chat window interrupted when archive patches under-fill it', () => {
+    const store = new ReadModelEntityStore();
+    store.applyChatIndexSnapshot({
+      cursor: cursor(1),
+      rows: [chat('chat-visible'), chat('chat-next-page')],
+      groups: [],
+      counters: { total: 3, waiting: 0, running: 0, unread: 0, archived: 0 },
+      filter: 'all',
+      query: null,
+      window: { limit: 2, totalIsExact: true, totalEstimate: 3 }
+    }, { filter: 'all', limit: 2 });
+
+    expect(store.applyChatIndexPatchEvent({
+      envelope: {
+        contractVersion: READ_MODEL_CONTRACT_VERSION,
+        eventType: 'chat.index.patch',
+        cursor: cursor(2),
+        entityKind: 'chat',
+        entityId: 'chat-visible',
+        operation: 'patch',
+        generatedAt: now
+      },
+      patch: {
+        rows: [],
+        groups: [],
+        removedRowIds: ['chat-visible'],
+        removedGroupIds: [],
+        counters: { total: 2, waiting: 0, running: 0, unread: 0, archived: 1 }
+      }
+    })).toBe('applied');
+
+    const allWindow = selectChatIndexWindowView(store.snapshot(), { filter: 'all', limit: 2 });
+    expect(allWindow.rows.map((row) => row.chatId)).toEqual(['chat-next-page']);
+    expect(allWindow.window?.status).toBe('interrupted');
+    expect(allWindow.window?.refreshing).toBe(true);
+  });
+
   it('preserves chat kind when detail snapshots omit the durable field', () => {
     const store = new ReadModelEntityStore();
     const row = chat('chat-1');

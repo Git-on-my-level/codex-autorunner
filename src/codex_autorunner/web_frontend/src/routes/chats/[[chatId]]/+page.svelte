@@ -319,7 +319,7 @@
   const filterCounts = $derived(chatStatusFilterCounts());
   const surfaceFilterChips = $derived(chatSurfaceFilterOptions(chats));
   const ticketRunGroupCount = $derived(countTicketRunGroups(chats));
-  const activeChatCount = $derived(chats.filter((chat) => !isPmaChatArchived(chat)).length);
+  const activeChatCount = $derived(readModelState.chatCounters.total + (localDraftChat && !isPmaChatArchived(localDraftChat) ? 1 : 0));
   const hasUsableChatIndex = $derived(Boolean(readModelState.chatIndexCursor || readModelState.chatOrder.length > 0));
   const hasSelectedChatWindow = $derived(Boolean(readModelState.chatWindows[canonicalChatIndexWindowKey(currentChatIndexRequest)]));
   const initialChatIndexError = $derived(chatIndexLoadError());
@@ -1044,19 +1044,19 @@
   }
 
   async function archiveAllActiveChats(): Promise<void> {
-    const targets = chats.filter((chat) => !isPmaChatArchived(chat)).map((chat) => chat.id);
-    if (!targets.length || archiving) return;
+    if (activeChatCount <= 0 || archiving) return;
     const ok = await confirmDialog({
       title: 'Archive active chats',
-      message: `Archive ${targets.length} active chat${targets.length === 1 ? '' : 's'}?`,
+      message: `Archive ${activeChatCount} active chat${activeChatCount === 1 ? '' : 's'}?`,
       confirmText: 'Archive',
       danger: true
     });
     if (!ok) return;
     archiving = true;
     composeError = null;
-    const result = await webApi.pma.archiveThreads(targets);
+    const result = await webApi.pma.archiveActiveThreads();
     if (result.ok) {
+      const targets = result.data.threads.map((chat) => chat.id);
       await invalidateChatMutations(targets);
       showCommandNotice(
         result.data.errorCount > 0

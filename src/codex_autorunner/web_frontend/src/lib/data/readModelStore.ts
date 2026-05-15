@@ -906,12 +906,14 @@ function reconcileChatIndexWindowsAfterEntityPatch(next: ReadModelEntityState, e
       return Boolean(row && chatIndexRowMatchesWindow(row, window.request));
     });
     window.groupIds = window.groupIds.filter((groupId) => Boolean(next.chatGroups[groupId]));
-    if (defaultWindow && event.patch.order) window.rowIds = event.patch.order.filter((rowId) => Boolean(next.chats[rowId]));
-    if (defaultWindow && event.patch.counters) window.counters = event.patch.counters;
     if (defaultWindow) {
+      if (event.patch.order) window.rowIds = event.patch.order.filter((rowId) => Boolean(next.chats[rowId]));
+      if (event.patch.counters) window.counters = event.patch.counters;
       window.cursor = event.envelope.cursor;
-      window.status = 'ready';
-      window.refreshing = false;
+      const affected = event.patch.removedRowIds.some((rowId) => existingIds.has(rowId)) || event.patch.rows.some((row) => existingIds.has(row.chatId) || chatIndexRowMatchesWindow(row, window.request));
+      const needsBackfill = affected && !event.patch.order && (window.window?.totalEstimate ?? window.rowIds.length) > window.rowIds.length;
+      window.status = needsBackfill ? 'interrupted' : 'ready';
+      window.refreshing = needsBackfill;
       window.lastLoadedAt = new Date().toISOString();
       window.error = null;
       rememberCursor(next, `chat.index.window:${key}`, event.envelope.cursor);

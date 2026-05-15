@@ -89,6 +89,7 @@ describe('chat index session', () => {
     const session = createChatIndexSession({ client, store, streamFactory });
 
     session.start();
+    expect(streamFactory).not.toHaveBeenCalled();
     await session.refresh();
 
     const firstPage = store.subscribe(() => {});
@@ -104,6 +105,8 @@ describe('chat index session', () => {
       path: '/hub/read-models/chats/patches',
       eventTypes: ['chat.index.patch', 'projection.cursor_gap']
     }));
+    const streamOptions = streamFactory.mock.calls[0]?.[0] as ReadModelStreamOptions<ChatIndexPatchEvent>;
+    expect(streamOptions.cursorStorage?.getItem('car.readModel.cursor.chat.index.entity')).toBe('1');
     expect(selectPmaChats(store.snapshot()).map((chat) => chat.id)).toEqual(['chat-active']);
     expect(session.isStarted()).toBe(true);
 
@@ -187,6 +190,84 @@ describe('chat index session', () => {
       key: 'chat.index.entity',
       path: '/hub/read-models/chats/patches'
     }));
+  });
+
+  it('refreshes the current window when stream patches leave it under-filled', async () => {
+    const store = new ReadModelEntityStore();
+    let streamOptions: ReadModelStreamOptions<ChatIndexPatchEvent> | null = null;
+    const streamFactory = vi.fn((options: ReadModelStreamOptions<ChatIndexPatchEvent>) => {
+      streamOptions = options;
+      return {
+        open: vi.fn(),
+        close: vi.fn(),
+        cursor: vi.fn(() => null),
+        resetCursor: vi.fn()
+      } as unknown as ReadModelStreamManager<ChatIndexPatchEvent>;
+    }) as ReturnType<typeof vi.fn> & ChatIndexStreamFactory;
+    const client = {
+      chatIndex: vi
+        .fn()
+        .mockResolvedValueOnce(ok({
+          ...chatIndexSnapshot('all', [
+            indexRow('chat-visible', 'Visible chat', 'idle'),
+            indexRow('chat-window', 'Window chat', 'idle')
+          ]),
+          window: {
+            limit: 2,
+            nextCursor: null,
+            previousCursor: null,
+            totalEstimate: 3,
+            totalIsExact: true
+          },
+          counters: { total: 3, waiting: 0, running: 0, unread: 0, archived: 0 }
+        }))
+        .mockResolvedValue(ok({
+          ...chatIndexSnapshot('all', [
+            indexRow('chat-window', 'Window chat', 'idle'),
+            indexRow('chat-backfill', 'Backfill chat', 'idle')
+          ]),
+          window: {
+            limit: 2,
+            nextCursor: null,
+            previousCursor: null,
+            totalEstimate: 2,
+            totalIsExact: true
+          },
+          counters: { total: 2, waiting: 0, running: 0, unread: 0, archived: 1 }
+        }))
+    } as unknown as ReadModelSnapshotClient;
+    const session = createChatIndexSession({ client, store, streamFactory });
+
+    session.start();
+    await session.refresh({ filter: 'all', limit: 2 });
+    expect(streamOptions).not.toBeNull();
+    const options = streamOptions as unknown as ReadModelStreamOptions<ChatIndexPatchEvent>;
+    options.onEvent?.({
+      envelope: {
+        contractVersion: READ_MODEL_CONTRACT_VERSION,
+        eventType: 'chat.index.patch',
+        cursor: projCursor(2, 'test.chat.index'),
+        entityKind: 'chat',
+        entityId: 'chat-visible',
+        operation: 'patch',
+        generatedAt: issuedAt
+      },
+      patch: {
+        rows: [],
+        groups: [],
+        removedRowIds: ['chat-visible'],
+        removedGroupIds: [],
+        counters: { total: 2, waiting: 0, running: 0, unread: 0, archived: 1 }
+      }
+    }, null);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(client.chatIndex).toHaveBeenCalledTimes(2);
+    expect(client.chatIndex).toHaveBeenNthCalledWith(2, { filter: 'all', limit: 2 });
+    expect(selectChatIndexWindowView(store.snapshot(), { filter: 'all', limit: 2 }).rows.map((row) => row.chatId)).toEqual([
+      'chat-window',
+      'chat-backfill'
+    ]);
   });
 });
 

@@ -855,6 +855,53 @@ def build_managed_thread_crud_routes(
             "error_count": len(errors),
         }
 
+    @router.post("/threads/archive-active")
+    def archive_active_managed_threads(request: Request) -> dict[str, Any]:
+        service = build_managed_thread_orchestration_service(request)
+        context = get_pma_request_context(request)
+        store = context.thread_store()
+        active_thread_ids = [
+            str(thread["managed_thread_id"])
+            for thread in store.list_threads(status="active", limit=None)
+        ]
+        archived_threads: list[Any] = []
+        errors: list[dict[str, str]] = []
+
+        for managed_thread_id in active_thread_ids:
+            thread = service.get_thread_target(managed_thread_id)
+            if thread is None:
+                errors.append(
+                    {
+                        "thread_id": managed_thread_id,
+                        "detail": "Managed thread not found",
+                    }
+                )
+                continue
+
+            old_status = normalize_optional_text(thread.lifecycle_status)
+            updated = service.archive_thread_target(managed_thread_id)
+            store.append_action(
+                "managed_thread_archive",
+                managed_thread_id=managed_thread_id,
+                payload_json=json.dumps({"old_status": old_status}, ensure_ascii=True),
+            )
+            archived_threads.append(updated)
+
+        binding_metadata = _load_chat_binding_metadata_by_thread(context.hub_root)
+        return {
+            "threads": [
+                _serialize_thread_target(
+                    thread,
+                    binding_metadata_by_thread=binding_metadata,
+                )
+                for thread in archived_threads
+            ],
+            "archived_count": len(archived_threads),
+            "requested_count": len(active_thread_ids),
+            "errors": errors,
+            "error_count": len(errors),
+        }
+
     @router.get("/threads/{managed_thread_id}/turns")
     def list_managed_thread_turns(
         managed_thread_id: str,
