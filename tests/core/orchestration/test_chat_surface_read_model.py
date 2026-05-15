@@ -583,6 +583,7 @@ def test_chat_index_snapshot_reads_rebuilt_sql_projection_without_reprojecting(
     assert len(all_rows["rows"]) == 1
     assert all_rows["counters"]["total"] == 2
     assert all_rows["counters"]["running"] == 1
+    assert all_rows["counters"]["archived"] == 1
     assert all_rows["window"]["total_count"] == 2
 
     active = service.chat_index_snapshot(view="active", limit=20)

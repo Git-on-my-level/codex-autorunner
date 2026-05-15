@@ -774,20 +774,41 @@ class ChatSurfaceReadService:
             surface_kind=surface_kind,
             parent_group_id=parent_group_id,
         )
-        with open_orchestration_sqlite(
-            self._hub_root, durable=self._durable, migrate=True
-        ) as conn:
-            counters_row = conn.execute(
-                f"""
+        normalized_view = (view or "all").strip().lower()
+        if normalized_view == "all":
+            where_counters_sql, counters_params = _chat_index_projection_where(
+                view=view,
+                query=query,
+                surface_kind=surface_kind,
+                parent_group_id=parent_group_id,
+                include_archived_rows=True,
+            )
+            counters_sql = f"""
+                SELECT COALESCE(SUM(CASE WHEN (lifecycle_status IS NULL OR lifecycle_status != 'archived') THEN 1 ELSE 0 END), 0) AS total,
+                       COALESCE(SUM(CASE WHEN (lifecycle_status IS NULL OR lifecycle_status != 'archived') AND queue_depth > 0 THEN 1 ELSE 0 END), 0) AS waiting,
+                       COALESCE(SUM(CASE WHEN (lifecycle_status IS NULL OR lifecycle_status != 'archived') AND effective_status = 'running' THEN 1 ELSE 0 END), 0) AS running,
+                       COALESCE(SUM(CASE WHEN (lifecycle_status IS NULL OR lifecycle_status != 'archived') THEN unread_count ELSE 0 END), 0) AS unread,
+                       COALESCE(SUM(CASE WHEN lifecycle_status = 'archived' THEN 1 ELSE 0 END), 0) AS archived
+                  FROM orch_chat_index_projection
+                 WHERE {where_counters_sql}
+                """
+        else:
+            where_counters_sql, counters_params = where_sql, params
+            counters_sql = f"""
                 SELECT COUNT(*) AS total,
                        COALESCE(SUM(CASE WHEN queue_depth > 0 THEN 1 ELSE 0 END), 0) AS waiting,
                        COALESCE(SUM(CASE WHEN effective_status = 'running' THEN 1 ELSE 0 END), 0) AS running,
                        COALESCE(SUM(unread_count), 0) AS unread,
                        COALESCE(SUM(CASE WHEN lifecycle_status = 'archived' THEN 1 ELSE 0 END), 0) AS archived
                   FROM orch_chat_index_projection
-                 WHERE {where_sql}
-                """,
-                params,
+                 WHERE {where_counters_sql}
+                """
+        with open_orchestration_sqlite(
+            self._hub_root, durable=self._durable, migrate=True
+        ) as conn:
+            counters_row = conn.execute(
+                counters_sql,
+                counters_params,
             ).fetchone()
             counters = {
                 "total": int(counters_row["total"] or 0),
@@ -1811,6 +1832,7 @@ def _chat_index_projection_where(
     query: Optional[str],
     surface_kind: Optional[str],
     parent_group_id: Optional[str],
+    include_archived_rows: bool = False,
 ) -> tuple[str, list[Any]]:
     normalized_view = (view or "all").strip().lower()
     normalized_query = _normalize_text(query)
@@ -1841,7 +1863,9 @@ def _chat_index_projection_where(
         clauses.append("group_id IS NOT NULL")
     elif normalized_view != "all":
         clauses.append("0 = 1")
-    if normalized_view != "archived":
+    if normalized_view != "archived" and not (
+        include_archived_rows and normalized_view == "all"
+    ):
         clauses.append("(lifecycle_status IS NULL OR lifecycle_status != 'archived')")
     if normalized_query is not None:
         clauses.append("search_text LIKE ?")

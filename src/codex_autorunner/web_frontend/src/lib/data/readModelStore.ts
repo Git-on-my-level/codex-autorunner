@@ -897,29 +897,7 @@ function cloneChatIndexWindow(window: ChatIndexWindow): ChatIndexWindow {
   };
 }
 
-function emptyChatIndexWindow(request: Required<Pick<ChatIndexWindowRequest, 'filter'>> & {
-  query: string | null;
-  surfaceKind: string | null;
-  limit: number;
-}): ChatIndexWindow {
-  const key = canonicalChatIndexWindowKey(request);
-  return {
-    key,
-    request,
-    rowIds: [],
-    groupIds: [],
-    counters: emptyChatCounters,
-    cursor: null,
-    window: null,
-    status: 'idle',
-    refreshing: false,
-    lastLoadedAt: null,
-    error: null
-  };
-}
-
 function reconcileChatIndexWindowsAfterEntityPatch(next: ReadModelEntityState, event: ChatIndexPatchEvent): void {
-  const changedRowIds = new Set([...event.patch.rows.map((row) => row.chatId), ...event.patch.removedRowIds]);
   for (const [key, window] of Object.entries(next.chatWindows)) {
     const defaultWindow = isDefaultChatIndexWindow(window.request);
     const existingIds = new Set(window.rowIds);
@@ -940,7 +918,7 @@ function reconcileChatIndexWindowsAfterEntityPatch(next: ReadModelEntityState, e
       continue;
     }
     const affected = event.patch.removedRowIds.some((rowId) => existingIds.has(rowId)) || event.patch.rows.some((row) => existingIds.has(row.chatId) || chatIndexRowMatchesWindow(row, window.request));
-    if (affected || changedRowIds.size > 0) {
+    if (affected) {
       window.status = 'interrupted';
       window.refreshing = true;
       window.error = null;
