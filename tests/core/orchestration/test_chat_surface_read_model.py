@@ -382,6 +382,99 @@ def test_chat_surface_read_model_keeps_queued_execution_when_runtime_completed(
     assert surface["metadata"]["active_turn_id"] == f"{thread_id}-turn-b"
 
 
+def test_pma_compat_snapshot_keeps_completed_runtime_over_stale_running_event(
+    tmp_path: Path,
+) -> None:
+    hub_root = tmp_path / "hub"
+    _seed_thread(
+        hub_root,
+        thread_id="thread-completed-stale-running",
+        runtime_status="completed",
+    )
+    SQLiteChatSurfaceEventJournal(hub_root, durable=False).append_event(
+        idempotency_key="completed-stale-running",
+        event_type="execution.progress",
+        surface_kind="pma",
+        surface_key="thread-completed-stale-running",
+        managed_thread_id="thread-completed-stale-running",
+        repo_id="repo-1",
+        status="running",
+        occurred_at="2026-05-11T00:00:10Z",
+    )
+
+    snapshot = ChatSurfaceReadService(hub_root, durable=False).pma_compat_snapshot()
+    by_thread_id = {
+        thread["managed_thread_id"]: thread for thread in snapshot["threads"]
+    }
+
+    thread = by_thread_id["thread-completed-stale-running"]
+    assert thread["runtime_status"] == "completed"
+    assert thread["normalized_status"] == "completed"
+    assert thread["status"] == "completed"
+
+
+def test_chat_index_carries_ticket_flow_metadata_for_grouping(
+    tmp_path: Path,
+) -> None:
+    hub_root = tmp_path / "hub"
+    _seed_thread(
+        hub_root,
+        thread_id="thread-ticket-flow",
+        repo_id="repo-1",
+        resource_kind="worktree",
+        resource_id="repo-1--ticket-flow",
+        runtime_status="completed",
+        metadata={
+            "flow_type": "ticket_flow",
+            "thread_kind": "ticket_flow",
+            "ticket_id": "TICKET-015",
+            "run_id": "run-015",
+        },
+    )
+    SQLiteChatSurfaceEventJournal(hub_root, durable=False).append_event(
+        idempotency_key="stale-running-progress",
+        event_type="execution.progress",
+        surface_kind="pma",
+        surface_key="thread-ticket-flow",
+        managed_thread_id="thread-ticket-flow",
+        repo_id="repo-1",
+        resource_kind="worktree",
+        resource_id="repo-1--ticket-flow",
+        status="running",
+        occurred_at="2026-05-11T00:00:10Z",
+    )
+
+    index = ChatSurfaceReadService(hub_root, durable=False).chat_index_snapshot(
+        view="all",
+        limit=20,
+    )
+
+    row = next(
+        item
+        for item in index["rows"]
+        if item["managed_thread_id"] == "thread-ticket-flow"
+    )
+    assert row["ticket_id"] == "TICKET-015"
+    assert row["run_id"] == "run-015"
+    assert row["group_id"] == "ticket:TICKET-015"
+
+    grouped = ChatSurfaceReadService(hub_root, durable=False).chat_index_snapshot(
+        view="ticket_run",
+        group_by="ticket_run",
+        limit=20,
+    )
+
+    assert grouped["rows"][0]["row_type"] == "group"
+    assert grouped["rows"][0]["group_id"] == "ticket:TICKET-015"
+
+    active = ChatSurfaceReadService(hub_root, durable=False).chat_index_snapshot(
+        view="active",
+        group_by="ticket_run",
+        limit=20,
+    )
+    assert active["rows"] == []
+
+
 def test_chat_index_sorts_by_conversation_activity_not_metadata_hydration(
     tmp_path: Path,
 ) -> None:
