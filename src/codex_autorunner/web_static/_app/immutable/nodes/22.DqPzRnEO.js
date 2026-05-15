@@ -1,0 +1,1 @@
+import{t as e}from"../chunks/C4Nrcka_2.js";export{e as component};

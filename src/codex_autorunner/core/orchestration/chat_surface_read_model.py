@@ -9,6 +9,11 @@ from pathlib import Path
 from typing import Any, Iterable, Mapping, Optional
 
 from ..domain.refs import SurfaceRef
+from ..domain.workspace_scope import (
+    WorkspaceScopeIndex,
+    workspace_scope_index_from_snapshots,
+)
+from ..hub_topology import load_hub_state
 from ..text_utils import _normalize_optional_text, _parse_iso_timestamp
 from .chat_surface_events import ChatSurfaceEvent, SQLiteChatSurfaceEventJournal
 from .sqlite import open_orchestration_sqlite
@@ -170,6 +175,10 @@ class ChatSurfaceReadService:
         self._durable = durable
         self._journal = SQLiteChatSurfaceEventJournal(
             self._hub_root, durable=self._durable
+        )
+        state_path = self._hub_root / ".codex-autorunner" / "hub_state.json"
+        self._scope_index = workspace_scope_index_from_snapshots(
+            load_hub_state(state_path, self._hub_root).repos
         )
 
     def snapshot(
@@ -541,6 +550,14 @@ class ChatSurfaceReadService:
             chat_id = _normalize_text(entry.get("chat_id"))
             if surface_kind is None or chat_id is None:
                 continue
+            owner_fields = _canonical_owner_fields(
+                self._scope_index,
+                repo_id=entry.get("repo_id"),
+                resource_kind=entry.get("resource_kind"),
+                resource_id=entry.get("resource_id"),
+                workspace_root=entry.get("workspace_path"),
+                scope_urn=entry.get("scope_urn"),
+            )
             thread_id = _normalize_text(entry.get("thread_id"))
             surface_key = f"{chat_id}:{thread_id}" if thread_id else chat_id
             projection = _projection(projections, surface_kind, surface_key)
@@ -551,6 +568,11 @@ class ChatSurfaceReadService:
                 ),
                 external_provider=surface_kind,
                 external_kind="channel",
+                repo_id=owner_fields.get("repo_id"),
+                resource_kind=owner_fields.get("resource_kind"),
+                resource_id=owner_fields.get("resource_id"),
+                workspace_root=owner_fields.get("workspace_root"),
+                scope_urn=owner_fields.get("scope_urn"),
                 display_name=_normalize_text(entry.get("display")),
                 updated_at=_normalize_text(entry.get("seen_at")),
                 fact="channel_directory",
@@ -637,6 +659,13 @@ class ChatSurfaceReadService:
         for row in thread_rows:
             thread_id = str(row["thread_target_id"])
             thread_owner[thread_id] = row
+            owner_fields = _canonical_owner_fields(
+                self._scope_index,
+                repo_id=row["repo_id"],
+                resource_kind=_row_get(row, "resource_kind"),
+                resource_id=_row_get(row, "resource_id"),
+                workspace_root=row["workspace_root"],
+            )
             execution = _thread_execution_for_projection(
                 row, execution_by_thread.get(thread_id)
             )
@@ -660,10 +689,11 @@ class ChatSurfaceReadService:
             projection.merge(
                 lifecycle=lifecycle,
                 lifecycle_status=lifecycle_status,
-                repo_id=_normalize_text(row["repo_id"]),
-                resource_kind=_normalize_text(_row_get(row, "resource_kind")),
-                resource_id=_normalize_text(_row_get(row, "resource_id")),
-                workspace_root=_normalize_text(row["workspace_root"]),
+                repo_id=owner_fields.get("repo_id"),
+                resource_kind=owner_fields.get("resource_kind"),
+                resource_id=owner_fields.get("resource_id"),
+                workspace_root=owner_fields.get("workspace_root"),
+                scope_urn=owner_fields.get("scope_urn"),
                 managed_thread_id=thread_id,
                 display_name=_normalize_text(row["display_name"]) or thread_id,
                 created_at=_normalize_text(row["created_at"]),
@@ -717,6 +747,16 @@ class ChatSurfaceReadService:
             if surface_kind is None or surface_key is None:
                 continue
             owner = thread_owner.get(binding_thread_id or "")
+            owner_fields = _canonical_owner_fields(
+                self._scope_index,
+                repo_id=_normalize_text(row["repo_id"])
+                or _normalize_text(_row_get(owner, "repo_id")),
+                resource_kind=_normalize_text(_row_get(row, "resource_kind"))
+                or _normalize_text(_row_get(owner, "resource_kind")),
+                resource_id=_normalize_text(_row_get(row, "resource_id"))
+                or _normalize_text(_row_get(owner, "resource_id")),
+                workspace_root=_normalize_text(_row_get(owner, "workspace_root")),
+            )
             execution = _thread_execution_for_projection(
                 owner, execution_by_thread.get(binding_thread_id or "")
             )
@@ -743,13 +783,11 @@ class ChatSurfaceReadService:
                     else "active"
                 )
                 or "active",
-                repo_id=_normalize_text(row["repo_id"])
-                or _normalize_text(_row_get(owner, "repo_id")),
-                resource_kind=_normalize_text(_row_get(row, "resource_kind"))
-                or _normalize_text(_row_get(owner, "resource_kind")),
-                resource_id=_normalize_text(_row_get(row, "resource_id"))
-                or _normalize_text(_row_get(owner, "resource_id")),
-                workspace_root=_normalize_text(_row_get(owner, "workspace_root")),
+                repo_id=owner_fields.get("repo_id"),
+                resource_kind=owner_fields.get("resource_kind"),
+                resource_id=owner_fields.get("resource_id"),
+                workspace_root=owner_fields.get("workspace_root"),
+                scope_urn=owner_fields.get("scope_urn"),
                 managed_thread_id=binding_thread_id,
                 display_name=_binding_display(row),
                 created_at=_normalize_text(row["created_at"]),
@@ -924,6 +962,7 @@ def _chat_index_rows_from_surfaces(
                     "surfaces": [base_surface],
                     "title": _display_title(display_map, surface_key),
                     "repo_id": resource_owner.get("repo_id"),
+                    "worktree_id": _worktree_id_from_owner(resource_owner),
                     "resource_kind": resource_owner.get("resource_kind"),
                     "resource_id": resource_owner.get("resource_id"),
                     "workspace_root": resource_owner.get("workspace_root"),
@@ -953,6 +992,7 @@ def _chat_index_rows_from_surfaces(
                 "surfaces": [],
                 "title": managed_thread_id,
                 "repo_id": resource_owner.get("repo_id"),
+                "worktree_id": _worktree_id_from_owner(resource_owner),
                 "resource_kind": resource_owner.get("resource_kind"),
                 "resource_id": resource_owner.get("resource_id"),
                 "workspace_root": resource_owner.get("workspace_root"),
@@ -995,12 +1035,16 @@ def _chat_index_rows_from_surfaces(
             row["title"] = _display_title(display_map, managed_thread_id)
             for key in (
                 "repo_id",
+                "worktree_id",
                 "resource_kind",
                 "resource_id",
                 "workspace_root",
                 "lifecycle_status",
             ):
-                row[key] = resource_owner.get(key) or row.get(key)
+                if key == "worktree_id":
+                    row[key] = _worktree_id_from_owner(resource_owner) or row.get(key)
+                else:
+                    row[key] = resource_owner.get(key) or row.get(key)
             for key in (
                 "runtime_status",
                 "target_runtime_status",
@@ -1042,6 +1086,63 @@ def _display_title(display: Mapping[str, Any], fallback: str) -> str:
         or _normalize_text(display.get("display_name"))
         or fallback
     )
+
+
+def _canonical_owner_fields(
+    scope_index: WorkspaceScopeIndex,
+    *,
+    repo_id: Any = None,
+    resource_kind: Any = None,
+    resource_id: Any = None,
+    workspace_root: Any = None,
+    scope_urn: Any = None,
+) -> dict[str, Optional[str]]:
+    normalized_resource_kind = _normalize_kind(resource_kind)
+    normalized_resource_id = _normalize_text(resource_id)
+    if normalized_resource_kind not in {None, "repo", "worktree", "filesystem"}:
+        resolution = scope_index.resolve(
+            raw_repo_id=repo_id,
+            workspace_path=workspace_root,
+            scope_urn=scope_urn,
+        )
+        fields = (
+            resolution.owner_fields()
+            if resolution is not None
+            else {
+                "repo_id": _normalize_text(repo_id),
+                "worktree_id": None,
+                "resource_kind": None,
+                "resource_id": None,
+                "workspace_root": _normalize_text(workspace_root),
+                "scope_urn": _normalize_text(scope_urn),
+            }
+        )
+        fields["resource_kind"] = normalized_resource_kind
+        fields["resource_id"] = normalized_resource_id
+        return fields
+    resolution = scope_index.resolve(
+        raw_repo_id=repo_id,
+        workspace_path=workspace_root,
+        resource_kind=resource_kind,
+        resource_id=resource_id,
+        scope_urn=scope_urn,
+    )
+    if resolution is not None:
+        return resolution.owner_fields()
+    return {
+        "repo_id": _normalize_text(repo_id),
+        "worktree_id": None,
+        "resource_kind": _normalize_text(resource_kind),
+        "resource_id": _normalize_text(resource_id),
+        "workspace_root": _normalize_text(workspace_root),
+        "scope_urn": _normalize_text(scope_urn),
+    }
+
+
+def _worktree_id_from_owner(owner: Mapping[str, Any]) -> Optional[str]:
+    if _normalize_kind(owner.get("resource_kind")) == "worktree":
+        return _normalize_text(owner.get("resource_id"))
+    return _normalize_text(owner.get("worktree_id"))
 
 
 def _friendly_chat_title(row: Mapping[str, Any]) -> Optional[str]:

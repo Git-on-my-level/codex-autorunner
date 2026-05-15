@@ -25,6 +25,8 @@ def _seed_thread(
     *,
     thread_id: str,
     repo_id: str = "repo-1",
+    resource_kind: str = "repo",
+    resource_id: str | None = None,
     lifecycle_status: str = "active",
     runtime_status: str = "idle",
     metadata: dict[str, object] | None = None,
@@ -50,8 +52,8 @@ def _seed_thread(
                 thread_id,
                 "codex",
                 repo_id,
-                "repo",
-                repo_id,
+                resource_kind,
+                resource_id or repo_id,
                 f"Thread {thread_id}",
                 lifecycle_status,
                 runtime_status,
@@ -205,6 +207,57 @@ def test_chat_index_omits_stale_bound_surfaces_without_managed_thread(
 
     index = service.chat_index_snapshot(view="all", limit=20)
     assert [row["managed_thread_id"] for row in index["rows"]] == ["live-thread"]
+
+
+def test_chat_index_canonicalizes_legacy_worktree_repo_id_from_hub_topology(
+    tmp_path: Path,
+) -> None:
+    hub_root = tmp_path / "hub"
+    worktree_root = hub_root / "worktrees" / "repo--discord-1"
+    worktree_root.mkdir(parents=True)
+    state_dir = hub_root / ".codex-autorunner"
+    state_dir.mkdir()
+    (state_dir / "hub_state.json").write_text(
+        json.dumps(
+            {
+                "last_scan_at": "2026-05-11T00:00:00Z",
+                "repos": [
+                    {
+                        "id": "repo",
+                        "path": "repos/repo",
+                        "kind": "base",
+                        "status": "uninitialized",
+                    },
+                    {
+                        "id": "repo--discord-1",
+                        "path": "worktrees/repo--discord-1",
+                        "kind": "worktree",
+                        "worktree_of": "repo",
+                        "status": "uninitialized",
+                    },
+                ],
+                "pinned_parent_repo_ids": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    _seed_thread(
+        hub_root,
+        thread_id="discord-thread",
+        repo_id="repo--discord-1",
+        resource_kind="repo",
+        resource_id="repo--discord-1",
+    )
+
+    index = ChatSurfaceReadService(hub_root, durable=False).chat_index_snapshot(
+        view="all",
+        limit=20,
+    )
+
+    assert index["rows"][0]["repo_id"] == "repo"
+    assert index["rows"][0]["worktree_id"] == "repo--discord-1"
+    assert index["rows"][0]["resource_kind"] == "worktree"
+    assert index["rows"][0]["resource_id"] == "repo--discord-1"
 
 
 def test_chat_surface_read_model_orders_and_limits_snapshot(tmp_path: Path) -> None:

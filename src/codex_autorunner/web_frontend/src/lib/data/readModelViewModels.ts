@@ -61,6 +61,7 @@ export function legacyChatIndexRecordToChatIndexRow(raw: JsonRecord): ChatIndexR
   const chatId = managedThreadId ?? rowId ?? 'unknown-chat-row';
   const resourceKind = stringValue(raw.resource_kind);
   const resourceId = stringValue(raw.resource_id);
+  const worktreeId = stringValue(raw.worktree_id ?? raw.worktree_repo_id) ?? (resourceKind === 'worktree' ? resourceId : null);
   const queueDepth = numberValue(raw.queue_depth);
   const lifecycle = stringValue(raw.lifecycle)?.toLowerCase() ?? '';
   const lifecycleStatus = stringValue(raw.lifecycle_status)?.toLowerCase() ?? '';
@@ -73,7 +74,7 @@ export function legacyChatIndexRecordToChatIndexRow(raw: JsonRecord): ChatIndexR
     unreadCount: numberValue(raw.unread_count ?? raw.unreadCount) || (raw.unread === true ? 1 : 0),
     lastActivityAt: stringValue(raw.last_activity_at ?? raw.updated_at ?? raw.created_at),
     repoId: stringValue(raw.repo_id),
-    worktreeId: stringValue(raw.worktree_id ?? raw.worktree_repo_id),
+    worktreeId,
     ticketId: resourceKind === 'ticket' ? resourceId : stringValue(raw.ticket_id ?? raw.current_ticket_id),
     runId: resourceKind === 'run' || resourceKind === 'ticket_run' ? resourceId : stringValue(raw.run_id),
     agent: stringValue(raw.agent ?? raw.agent_id),
