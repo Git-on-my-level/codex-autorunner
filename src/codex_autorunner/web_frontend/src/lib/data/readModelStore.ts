@@ -312,54 +312,40 @@ export class ReadModelEntityStore implements Readable<ReadModelEntityState> {
     this.commit(next);
   }
 
-  applyChatIndexPatchEvent(event: ChatIndexPatchEvent, request: ChatIndexWindowRequest = {}): 'applied' | 'ignored' | 'repair_required' {
+  applyChatIndexPatchEvent(event: ChatIndexPatchEvent): 'applied' | 'ignored' | 'repair_required' {
     if (isRepairEvent(event.envelope.eventType, event.envelope.operation)) {
       this.markRepairRequired(event.envelope.cursor);
       return 'repair_required';
     }
-    const windowRequest = normalizeChatIndexWindowRequest(request);
-    const windowKey = canonicalChatIndexWindowKey(windowRequest);
-    const cursorKey = `chat.index.window:${windowKey}`;
-    if (!isNewer(this.state.cursors[cursorKey] ?? this.state.cursors['chat.index'], event.envelope.cursor)) return 'ignored';
+    if (!isNewer(this.state.cursors['chat.index'], event.envelope.cursor)) return 'ignored';
     const next = cloneState(this.state);
-    const existingWindow = cloneChatIndexWindow(next.chatWindows[windowKey] ?? emptyChatIndexWindow(windowRequest));
     for (const row of event.patch.rows) {
       next.chats[row.chatId] = row;
       if (!next.chatOrder.includes(row.chatId)) next.chatOrder.push(row.chatId);
-      if (!existingWindow.rowIds.includes(row.chatId)) existingWindow.rowIds.push(row.chatId);
       bump(next, 'chat', row.chatId);
     }
     for (const id of event.patch.removedRowIds) {
+      delete next.chats[id];
       next.chatOrder = next.chatOrder.filter((rowId) => rowId !== id);
-      existingWindow.rowIds = existingWindow.rowIds.filter((rowId) => rowId !== id);
       bump(next, 'chat', id);
     }
     for (const group of event.patch.groups) {
       next.chatGroups[group.groupId] = group;
       if (!next.chatGroupOrder.includes(group.groupId)) next.chatGroupOrder.push(group.groupId);
-      if (!existingWindow.groupIds.includes(group.groupId)) existingWindow.groupIds.push(group.groupId);
       bump(next, 'chatGroup', group.groupId);
     }
     for (const id of event.patch.removedGroupIds) {
+      delete next.chatGroups[id];
       next.chatGroupOrder = next.chatGroupOrder.filter((groupId) => groupId !== id);
-      existingWindow.groupIds = existingWindow.groupIds.filter((groupId) => groupId !== id);
       bump(next, 'chatGroup', id);
     }
     if (event.patch.order) {
       next.chatOrder = event.patch.order.filter((id) => Boolean(next.chats[id]));
-      existingWindow.rowIds = event.patch.order.filter((id) => Boolean(next.chats[id]));
     }
-    if (event.patch.counters && isDefaultChatIndexWindow(windowRequest)) next.chatCounters = event.patch.counters;
-    if (event.patch.counters) existingWindow.counters = event.patch.counters;
-    existingWindow.cursor = event.envelope.cursor;
-    existingWindow.status = 'ready';
-    existingWindow.refreshing = false;
-    existingWindow.lastLoadedAt = new Date().toISOString();
-    existingWindow.error = null;
-    next.chatWindows[windowKey] = existingWindow;
+    if (event.patch.counters) next.chatCounters = event.patch.counters;
+    reconcileChatIndexWindowsAfterEntityPatch(next, event);
     next.chatIndexCursor = event.envelope.cursor;
     rememberCursor(next, 'chat.index', event.envelope.cursor);
-    rememberCursor(next, cursorKey, event.envelope.cursor);
     this.commit(next);
     return 'applied';
   }
@@ -930,6 +916,55 @@ function emptyChatIndexWindow(request: Required<Pick<ChatIndexWindowRequest, 'fi
     lastLoadedAt: null,
     error: null
   };
+}
+
+function reconcileChatIndexWindowsAfterEntityPatch(next: ReadModelEntityState, event: ChatIndexPatchEvent): void {
+  const changedRowIds = new Set([...event.patch.rows.map((row) => row.chatId), ...event.patch.removedRowIds]);
+  for (const [key, window] of Object.entries(next.chatWindows)) {
+    const defaultWindow = isDefaultChatIndexWindow(window.request);
+    const existingIds = new Set(window.rowIds);
+    window.rowIds = window.rowIds.filter((rowId) => {
+      const row = next.chats[rowId];
+      return Boolean(row && chatIndexRowMatchesWindow(row, window.request));
+    });
+    window.groupIds = window.groupIds.filter((groupId) => Boolean(next.chatGroups[groupId]));
+    if (defaultWindow && event.patch.order) window.rowIds = event.patch.order.filter((rowId) => Boolean(next.chats[rowId]));
+    if (defaultWindow && event.patch.counters) window.counters = event.patch.counters;
+    if (defaultWindow) {
+      window.cursor = event.envelope.cursor;
+      window.status = 'ready';
+      window.refreshing = false;
+      window.lastLoadedAt = new Date().toISOString();
+      window.error = null;
+      rememberCursor(next, `chat.index.window:${key}`, event.envelope.cursor);
+      continue;
+    }
+    const affected = event.patch.removedRowIds.some((rowId) => existingIds.has(rowId)) || event.patch.rows.some((row) => existingIds.has(row.chatId) || chatIndexRowMatchesWindow(row, window.request));
+    if (affected || changedRowIds.size > 0) {
+      window.status = 'interrupted';
+      window.refreshing = true;
+      window.error = null;
+    }
+  }
+}
+
+function chatIndexRowMatchesWindow(row: ChatIndexRow, request: ChatIndexWindow['request']): boolean {
+  if (request.surfaceKind && row.surface !== request.surfaceKind) return false;
+  if (!chatIndexRowMatchesFilter(row, request.filter)) return false;
+  if (!request.query) return true;
+  const query = request.query.toLocaleLowerCase();
+  return [row.title, row.repoId, row.worktreeId, row.ticketId, row.runId, row.agent, row.agentProfile, row.model]
+    .some((value) => (value ?? '').toLocaleLowerCase().includes(query));
+}
+
+function chatIndexRowMatchesFilter(row: ChatIndexRow, filter: ChatIndexSnapshot['filter']): boolean {
+  if (filter === 'waiting') return row.status === 'waiting';
+  if (filter === 'active') return row.status === 'running';
+  if (filter === 'unread') return row.unreadCount > 0;
+  if (filter === 'archived') return row.status === 'archived';
+  if (filter === 'ticket_runs') return Boolean(row.groupId);
+  if (filter === 'external') return row.surface !== 'pma';
+  return true;
 }
 
 export function canonicalChatIndexWindowKey(request: ChatIndexWindowRequest = {}): string {

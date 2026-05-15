@@ -100,7 +100,8 @@ describe('chat index session', () => {
     expect(client.chatIndex).toHaveBeenCalledTimes(1);
     expect(client.chatIndex).toHaveBeenNthCalledWith(1, { filter: 'all', limit: 200 });
     expect(streamFactory).toHaveBeenCalledWith(expect.objectContaining({
-      path: '/hub/read-models/chats/patches?filter=all&window_limit=200',
+      key: 'chat.index.entity',
+      path: '/hub/read-models/chats/patches',
       eventTypes: ['chat.index.patch', 'projection.cursor_gap']
     }));
     expect(selectPmaChats(store.snapshot()).map((chat) => chat.id)).toEqual(['chat-active']);
@@ -169,6 +170,23 @@ describe('chat index session', () => {
     expect(Object.keys(store.snapshot().chats).sort()).toEqual(['chat-active', 'chat-archived']);
     expect(selectChatIndexWindowView(store.snapshot(), { filter: 'all', limit: 200 }).rows.map((row) => row.chatId)).toEqual(['chat-active']);
     expect(selectChatIndexWindowView(store.snapshot(), { filter: 'archived', limit: 200 }).rows.map((row) => row.chatId)).toEqual(['chat-archived']);
+  });
+
+  it('keeps the chat-index entity stream stable across filter refreshes', async () => {
+    const store = new ReadModelEntityStore();
+    const client = mockClient();
+    const streamFactory = mockStreamFactory();
+    const session = createChatIndexSession({ client, store, streamFactory });
+
+    session.start();
+    await session.refresh({ filter: 'all', limit: 200 });
+    await session.refresh({ filter: 'archived', limit: 200 });
+
+    expect(streamFactory).toHaveBeenCalledTimes(1);
+    expect(streamFactory).toHaveBeenNthCalledWith(1, expect.objectContaining({
+      key: 'chat.index.entity',
+      path: '/hub/read-models/chats/patches'
+    }));
   });
 });
 

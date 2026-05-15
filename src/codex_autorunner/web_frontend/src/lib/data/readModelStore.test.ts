@@ -591,6 +591,48 @@ describe('read model entity store', () => {
     expect(selectChatIndexWindowView(store.snapshot(), { filter: 'waiting', limit: 200 }).rows).toEqual([]);
   });
 
+  it('applies entity chat-index patches once and marks affected cached windows stale', () => {
+    const store = new ReadModelEntityStore();
+    store.applyChatIndexSnapshot({
+      cursor: cursor(1),
+      rows: [chat('chat-active', 'running'), chat('chat-waiting', 'waiting')],
+      groups: [],
+      counters: { total: 2, waiting: 1, running: 1, unread: 0, archived: 0 },
+      filter: 'all',
+      query: null,
+      window: { limit: 200, totalIsExact: true, totalEstimate: 2 }
+    }, { filter: 'all', limit: 200 });
+    store.applyChatIndexSnapshot({
+      cursor: cursor(1),
+      rows: [chat('chat-active', 'running')],
+      groups: [],
+      counters: { total: 1, waiting: 0, running: 1, unread: 0, archived: 0 },
+      filter: 'active',
+      query: null,
+      window: { limit: 200, totalIsExact: true, totalEstimate: 1 }
+    }, { filter: 'active', limit: 200 });
+
+    const archived = chat('chat-active', 'archived');
+    expect(store.applyChatIndexPatchEvent({
+      ...chatPatch(2, archived),
+      patch: {
+        ...chatPatch(2, archived).patch,
+        order: ['chat-active', 'chat-waiting'],
+        counters: { total: 2, waiting: 1, running: 0, unread: 0, archived: 1 }
+      }
+    })).toBe('applied');
+
+    const activeWindow = selectChatIndexWindowView(store.snapshot(), { filter: 'active', limit: 200 });
+    expect(selectChatIndexWindowView(store.snapshot(), { filter: 'all', limit: 200 }).rows.map((row) => row.chatId)).toEqual([
+      'chat-active',
+      'chat-waiting'
+    ]);
+    expect(activeWindow.rows.map((row) => row.chatId)).toEqual([]);
+    expect(activeWindow.window?.status).toBe('interrupted');
+    expect(activeWindow.window?.refreshing).toBe(true);
+    expect(store.snapshot().cursors['chat.index'].sequence).toBe(2);
+  });
+
   it('preserves chat kind when detail snapshots omit the durable field', () => {
     const store = new ReadModelEntityStore();
     const row = chat('chat-1');

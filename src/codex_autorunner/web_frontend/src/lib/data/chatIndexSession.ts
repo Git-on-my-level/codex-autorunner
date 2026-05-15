@@ -70,7 +70,7 @@ export function createChatIndexSession(deps: ChatIndexSessionDeps = {}): ChatInd
     refreshPromise = refreshChatListUntilSettled()
       .then(() => {
         state.set({ status: started ? 'connected' : 'idle', error: null });
-        if (started) openStream();
+        if (started && !stream) openStream();
       })
       .catch((error: ApiError) => {
         state.set({ status: 'interrupted', error });
@@ -94,20 +94,14 @@ export function createChatIndexSession(deps: ChatIndexSessionDeps = {}): ChatInd
   }
 
   function openStream(): void {
-    stream?.close();
-    const params = new URLSearchParams({
-      filter: currentRequest.filter ?? 'all',
-      window_limit: String(currentRequest.limit ?? 200)
-    });
-    if (currentRequest.query) params.set('search', currentRequest.query);
-    if (currentRequest.surfaceKind) params.set('surface_kind', currentRequest.surfaceKind);
+    if (stream) return;
     stream = streamFactory({
-      key: `chat.index.${params.toString()}`,
-      path: `/hub/read-models/chats/patches?${params.toString()}`,
+      key: 'chat.index.entity',
+      path: '/hub/read-models/chats/patches',
       eventTypes: ['chat.index.patch', 'projection.cursor_gap'],
       parse: parseChatIndexPatchEvent,
       onEvent: (event) => {
-        const result = store.applyChatIndexPatchEvent(event, currentRequest);
+        const result = store.applyChatIndexPatchEvent(event);
         if (result === 'repair_required') {
           stream?.resetCursor();
           void refresh();
