@@ -6,7 +6,6 @@
   import { dataOr, partialPageIssue, webApi, type ApiError, type PartialPageIssue } from '$lib/api/client';
   import {
     invalidateReadModelTags,
-    pmaChatSummaryToChatIndexRow,
     readModelEntityStore,
     readModelEntityTags,
     scopedOwnerKey,
@@ -24,7 +23,7 @@
   import type { SurfaceActionManifest } from '$lib/viewModels/ticket';
   import type { TicketFilter, TicketListViewModel } from '$lib/viewModels/ticket';
   import { rememberTickets } from '$lib/viewModels/ticketCache';
-  import { mapPmaChatSummary, mapPmaRunProgress, mapTicketSummary } from '$lib/viewModels/domain';
+  import { mapPmaRunProgress, mapTicketSummary } from '$lib/viewModels/domain';
 
   const repoId = $derived(page.params.repoId ?? 'unknown-repo');
   const queueConfig = $derived<ScopedTicketQueueConfig>({
@@ -69,11 +68,9 @@
     }
     const tickets = snapshot.data.scopedTickets.map(mapTicketSummary);
     const runs = snapshot.data.scopedRuns.map(mapPmaRunProgress);
-    const chats = snapshot.data.scopedChats.map(mapPmaChatSummary);
     rememberTickets(owner, tickets);
     readModelEntityStore.replaceScopedTicketSummaries(ownerKey, tickets);
     readModelEntityStore.replaceScopedRuns(ownerKey, runs);
-    readModelEntityStore.upsertChatIndexRows(chats.map(pmaChatSummaryToChatIndexRow));
     selectedFilter = 'all';
     loading = false;
     const manifest = await loadScopedActionManifest(webApi, queueConfig);

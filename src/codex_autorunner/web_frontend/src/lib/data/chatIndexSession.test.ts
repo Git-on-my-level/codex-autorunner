@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import type { ApiResult } from '$lib/api/client';
 import {
   READ_MODEL_CONTRACT_VERSION,
+  type ChatIndexPatchEvent,
   type ChatIndexRow,
   type ChatIndexSnapshot,
   type ProjectionCursor
@@ -10,6 +11,8 @@ import { ReadModelEntityStore } from './readModelStore';
 import { selectPmaChats } from './readModelViewModels';
 import { createChatIndexSession } from './chatIndexSession';
 import type { ReadModelSnapshotClient } from './readModelClients';
+import type { ChatIndexStreamFactory } from './chatIndexSession';
+import type { ReadModelStreamManager, ReadModelStreamOptions } from './readModelStream';
 
 const issuedAt = '2026-05-12T00:00:00.000Z';
 
@@ -82,7 +85,8 @@ describe('chat index session', () => {
   it('starts once and refreshes the chat index from the canonical snapshot client', async () => {
     const store = new ReadModelEntityStore();
     const client = mockClient();
-    const session = createChatIndexSession({ client, store });
+    const streamFactory = mockStreamFactory();
+    const session = createChatIndexSession({ client, store, streamFactory });
 
     session.start();
     await session.refresh();
@@ -93,10 +97,13 @@ describe('chat index session', () => {
     secondPage();
     session.start();
 
-    expect(client.chatIndex).toHaveBeenCalledTimes(2);
+    expect(client.chatIndex).toHaveBeenCalledTimes(1);
     expect(client.chatIndex).toHaveBeenNthCalledWith(1, { filter: 'all', limit: 200 });
-    expect(client.chatIndex).toHaveBeenNthCalledWith(2, { filter: 'archived', limit: 200 });
-    expect(selectPmaChats(store.snapshot()).map((chat) => chat.id)).toEqual(['chat-active', 'chat-archived']);
+    expect(streamFactory).toHaveBeenCalledWith(expect.objectContaining({
+      path: '/hub/read-models/chats/patches?filter=all&window_limit=200',
+      eventTypes: ['chat.index.patch', 'projection.cursor_gap']
+    }));
+    expect(selectPmaChats(store.snapshot()).map((chat) => chat.id)).toEqual(['chat-active']);
     expect(session.isStarted()).toBe(true);
 
     session.stop();
@@ -106,7 +113,7 @@ describe('chat index session', () => {
   it('has no production surface-event writer that can replace chat order', async () => {
     const store = new ReadModelEntityStore();
     const client = mockClient();
-    const session = createChatIndexSession({ client, store });
+    const session = createChatIndexSession({ client, store, streamFactory: mockStreamFactory() });
 
     session.start();
     await session.refresh();
@@ -116,7 +123,7 @@ describe('chat index session', () => {
     session.start();
 
     const rows = selectPmaChats(store.snapshot());
-    expect(rows.map((chat) => chat.id)).toEqual(['chat-active', 'chat-archived']);
+    expect(rows.map((chat) => chat.id)).toEqual(['chat-active']);
     expect(replaceSpy).not.toHaveBeenCalled();
     expect(applySpy).not.toHaveBeenCalled();
   });
@@ -133,7 +140,7 @@ describe('chat index session', () => {
     const second = store.snapshot().chatOrder.map((id) => store.snapshot().chats[id]?.title);
 
     expect(second).toEqual(first);
-    expect(store.snapshot().chatOrder).toEqual(['chat-active', 'chat-archived']);
+    expect(store.snapshot().chatOrder).toEqual(['chat-active']);
   });
 });
 
@@ -150,4 +157,13 @@ function mockClient(): ReadModelSnapshotClient {
 
 function ok<T>(data: T): ApiResult<T> {
   return { ok: true, data };
+}
+
+function mockStreamFactory(): ReturnType<typeof vi.fn> & ChatIndexStreamFactory {
+  return vi.fn((_options: ReadModelStreamOptions<ChatIndexPatchEvent>) => ({
+    open: vi.fn(),
+    close: vi.fn(),
+    cursor: vi.fn(() => null),
+    resetCursor: vi.fn()
+  } as unknown as ReadModelStreamManager<ChatIndexPatchEvent>)) as ReturnType<typeof vi.fn> & ChatIndexStreamFactory;
 }

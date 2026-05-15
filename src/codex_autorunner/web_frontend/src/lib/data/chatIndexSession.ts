@@ -1,11 +1,14 @@
 import { writable, type Readable } from 'svelte/store';
 import type { ApiError } from '$lib/api/client';
-import type { ChatIndexCounters, ChatIndexRow, ChatIndexSnapshot } from '$lib/api/readModelContracts';
+import { mapReadModelContract, type ChatIndexPatchEvent } from '$lib/api/readModelContracts';
+import type { SseEvent } from '$lib/api/streaming';
 import {
   readModelSnapshotClient,
+  type ChatIndexRequest,
   type ReadModelSnapshotClient
 } from './readModelClients';
 import { readModelEntityStore, type ReadModelEntityStore } from './readModelStore';
+import { openReadModelStream, type ReadModelStreamManager, type ReadModelStreamOptions } from './readModelStream';
 
 export type ChatIndexSessionStatus = 'idle' | 'loading' | 'connected' | 'interrupted' | 'closed';
 
@@ -18,51 +21,51 @@ export type ChatIndexSession = {
   state: Readable<ChatIndexSessionState>;
   start: () => void;
   stop: () => void;
-  refresh: () => Promise<void>;
+  refresh: (request?: ChatIndexRequest) => Promise<void>;
   isStarted: () => boolean;
 };
 
 type ChatIndexSessionDeps = {
   client?: ReadModelSnapshotClient;
   store?: ReadModelEntityStore;
+  streamFactory?: ChatIndexStreamFactory;
 };
 
-/** Same merge semantics as merging two sequential index windows (last occurrence wins order). */
-function mergeUniqueChatIndexRows(primary: ChatIndexRow[], secondary: ChatIndexRow[]): ChatIndexRow[] {
-  const order: string[] = [];
-  const byChatId = new Map<string, ChatIndexRow>();
-  for (const row of [...primary, ...secondary]) {
-    if (!byChatId.has(row.chatId)) order.push(row.chatId);
-    byChatId.set(row.chatId, row);
-  }
-  return order.map((id) => byChatId.get(id)).filter((row): row is ChatIndexRow => Boolean(row));
-}
+export type ChatIndexStreamFactory = (options: ReadModelStreamOptions<ChatIndexPatchEvent>) => ReadModelStreamManager<ChatIndexPatchEvent>;
 
 export function createChatIndexSession(deps: ChatIndexSessionDeps = {}): ChatIndexSession {
   const client = deps.client ?? readModelSnapshotClient;
   const store = deps.store ?? readModelEntityStore;
+  const streamFactory = deps.streamFactory ?? openReadModelStream<ChatIndexPatchEvent>;
   const state = writable<ChatIndexSessionState>({ status: 'idle', error: null });
   let refreshPromise: Promise<void> | null = null;
   let started = false;
+  let stream: ReadModelStreamManager<ChatIndexPatchEvent> | null = null;
+  let currentRequest: ChatIndexRequest = { filter: 'all', limit: 200 };
 
   function start(): void {
     if (started) return;
     started = true;
     const cached = Boolean(store.snapshot().chatIndexCursor);
     if (!cached) void refresh();
+    openStream();
   }
 
   function stop(): void {
     started = false;
+    stream?.close();
+    stream = null;
     state.set({ status: 'closed', error: null });
   }
 
-  async function refresh(): Promise<void> {
+  async function refresh(request: ChatIndexRequest = currentRequest): Promise<void> {
+    currentRequest = { ...currentRequest, ...request };
     if (refreshPromise) return refreshPromise;
     state.set({ status: 'loading', error: null });
     refreshPromise = refreshChatList()
       .then(() => {
         state.set({ status: started ? 'connected' : 'idle', error: null });
+        if (started) openStream();
       })
       .catch((error: ApiError) => {
         state.set({ status: 'interrupted', error });
@@ -74,18 +77,36 @@ export function createChatIndexSession(deps: ChatIndexSessionDeps = {}): ChatInd
   }
 
   async function refreshChatList(): Promise<void> {
-    const [activeRes, archivedRes] = await Promise.all([
-      client.chatIndex({ filter: 'all', limit: 200 }),
-      client.chatIndex({ filter: 'archived', limit: 200 })
-    ]);
-    if (!activeRes.ok) throw activeRes.error;
-    const active = activeRes.data;
-    const archivedRows = archivedRes.ok ? archivedRes.data.rows : [];
-    const rows = mergeUniqueChatIndexRows(active.rows, archivedRows);
-    store.applyChatIndexSnapshot({
-      ...active,
-      rows,
-      counters: mergeCounters(active, archivedRes.ok ? archivedRes.data : null, rows)
+    const result = await client.chatIndex(currentRequest);
+    if (!result.ok) throw result.error;
+    store.applyChatIndexSnapshot(result.data);
+  }
+
+  function openStream(): void {
+    stream?.close();
+    const params = new URLSearchParams({
+      filter: currentRequest.filter ?? 'all',
+      window_limit: String(currentRequest.limit ?? 200)
+    });
+    if (currentRequest.query) params.set('search', currentRequest.query);
+    if (currentRequest.surfaceKind) params.set('surface_kind', currentRequest.surfaceKind);
+    stream = streamFactory({
+      key: `chat.index.${params.toString()}`,
+      path: `/hub/read-models/chats/patches?${params.toString()}`,
+      eventTypes: ['chat.index.patch', 'projection.cursor_gap'],
+      parse: parseChatIndexPatchEvent,
+      onEvent: (event) => {
+        const result = store.applyChatIndexPatchEvent(event);
+        if (result === 'repair_required') {
+          stream?.resetCursor();
+          void refresh();
+        }
+      },
+      onStatus: (status) => {
+        if (status === 'connecting') state.set({ status: 'loading', error: null });
+        if (status === 'connected') state.set({ status: 'connected', error: null });
+        if (status === 'interrupted') state.set({ status: 'interrupted', error: null });
+      }
     });
   }
 
@@ -100,17 +121,9 @@ export function createChatIndexSession(deps: ChatIndexSessionDeps = {}): ChatInd
 
 export const chatIndexSession = createChatIndexSession();
 
-function mergeCounters(
-  active: ChatIndexSnapshot,
-  archived: ChatIndexSnapshot | null,
-  rows: ChatIndexRow[]
-): ChatIndexCounters {
-  if (!archived) return active.counters;
-  return {
-    total: rows.length,
-    waiting: rows.filter((row) => row.status === 'waiting').length,
-    running: rows.filter((row) => row.status === 'running').length,
-    unread: rows.reduce((total, row) => total + Math.max(0, row.unreadCount), 0),
-    archived: archived.counters.archived
-  };
+function parseChatIndexPatchEvent(event: SseEvent<unknown>): ChatIndexPatchEvent | null {
+  if (event.event !== 'chat.index.patch' && event.event !== 'projection.cursor_gap' && event.event !== 'message') {
+    return null;
+  }
+  return mapReadModelContract<ChatIndexPatchEvent>(event.data);
 }

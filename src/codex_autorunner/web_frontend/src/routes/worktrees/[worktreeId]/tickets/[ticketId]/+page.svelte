@@ -7,11 +7,9 @@
   import { openFlowRunEventSource, type StreamSubscription } from '$lib/api/streaming';
   import {
     invalidateReadModelTags,
-    pmaChatSummaryToChatIndexRow,
     readModelEntityStore,
     readModelEntityTags,
     scopedOwnerKey,
-    selectPmaChats,
     selectPmaRuns,
     selectTicketSummaries
   } from '$lib/data';
@@ -153,16 +151,14 @@
     rememberTickets({ worktree: ownerId }, loadedTicketList);
     readModelEntityStore.replaceScopedTicketSummaries(ownerKey, loadedTicketList);
     readModelEntityStore.replaceScopedRuns(ownerKey, loadedRuns);
-    readModelEntityStore.upsertChatIndexRows(loadedChats.map(pmaChatSummaryToChatIndexRow));
     const ticketList = selectTicketSummaries(readModelState, ownerKey);
     const ticketDetail = mapTicketDetail(legacyTicket);
     detail = buildTicketDetailViewModel(ticketDetail, { tickets: ticketList, runs: [], chats: [], artifacts: [] });
     sectionIssues = [];
     loading = false;
     const runs = selectPmaRuns(readModelState, ownerKey);
-    const chats = selectPmaChats(readModelState);
     if (!isCurrentRequest()) return;
-    renderTicketDetail(ticketDetail, ticketList, runs, chats, snapshot.data.dispatches ?? [], [], ownerId, isCurrentRequest);
+    renderTicketDetail(ticketDetail, ticketList, runs, loadedChats, snapshot.data.dispatches ?? [], [], ownerId, isCurrentRequest);
   }
 
   function renderCachedTicket(ticketList: TicketSummary[], ownerId: string, routeTicketId: string): void {

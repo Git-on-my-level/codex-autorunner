@@ -48,13 +48,11 @@
       /* private mode / quota */
     }
     void loadHubState();
-    chatIndexSession.start();
   });
 
   onDestroy(() => {
     paletteStore.destroy();
     detachThemeSchemeListener();
-    chatIndexSession.stop();
   });
 
   const closeMobile = () => {

@@ -85,7 +85,8 @@ describe('read model view-model selectors', () => {
       unreadCount: 0,
       lastActivityAt: now,
       repoId: 'repo-1',
-      worktreeId: 'repo-1--ticket-flow'
+      worktreeId: 'repo-1--ticket-flow',
+      groupId: 'ticket:chat-ticket-flow'
     });
 
     expect(summary.isTicketFlow).toBe(true);

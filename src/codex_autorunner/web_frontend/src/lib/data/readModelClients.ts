@@ -15,6 +15,7 @@ type JsonRecord = Record<string, unknown>;
 export type ChatIndexRequest = {
   filter?: ChatIndexSnapshot['filter'];
   query?: string | null;
+  surfaceKind?: string | null;
   cursor?: string | null;
   limit?: number;
 };
@@ -38,6 +39,7 @@ export function createReadModelSnapshotClient(api: WebApiClient = webApi): ReadM
         limit: String(request.limit ?? 50)
       });
       if (request.query) params.set('search', request.query);
+      if (request.surfaceKind) params.set('surface_kind', request.surfaceKind);
       if (request.cursor) params.set('offset', request.cursor);
       return mapResult(await api.getJson<JsonRecord>(`/hub/read-models/chats?${params.toString()}`), (payload) =>
         mapReadModelContract<ChatIndexSnapshot>(payload)

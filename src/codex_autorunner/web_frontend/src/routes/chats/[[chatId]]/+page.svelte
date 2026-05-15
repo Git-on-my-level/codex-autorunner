@@ -13,7 +13,6 @@
   import { confirmDialog } from '$lib/components/confirmDialog';
   import { webApi, type ApiError, type JsonRecord, type PmaQueuedTurn } from '$lib/api/client';
   import {
-    pmaChatSummaryToChatIndexRow,
     chatIndexSession,
     invalidateReadModelTags,
     readModelEntityStore,
@@ -131,6 +130,7 @@
   let readModelState = $state(readModelEntityStore.snapshot());
   let unsubscribeReadModels: (() => void) | null = null;
   let unsubscribeChatIndexSession: (() => void) | null = null;
+  let chatIndexFilterRefreshTimer: number | null = null;
   let activeChatId = $state<string | null>(null);
   // New chats are local drafts until the first send commits agent/scope/model
   // and message in one backend call.
@@ -571,6 +571,13 @@
     return key === 'all' ? 'All' : key.charAt(0).toUpperCase() + key.slice(1);
   }
 
+  function readModelChatIndexFilter(value: PmaChatFilter): 'all' | 'waiting' | 'active' | 'unread' | 'archived' | 'ticket_runs' | 'external' {
+    if (value === 'ticket_runs') return 'ticket_runs';
+    if (value.startsWith('surface:')) return 'external';
+    if (value === 'all' || value === 'waiting' || value === 'active' || value === 'unread' || value === 'archived') return value;
+    return 'all';
+  }
+
   function composerRecipientLabel(chat: PmaChatSummary | null): string {
     if (!chat) return 'Chat';
     if (chat.repoId) {
@@ -608,6 +615,7 @@
         loadingChats = false;
       }
     });
+    chatIndexSession.start();
     readModelEntityStore.setReadMarkers(loadLastSeenMap());
     pinnedChatIds = loadPinnedChats();
     draft = page.url.searchParams.get('draft') ?? draft;
@@ -648,6 +656,22 @@
   });
 
   $effect(() => {
+    const requestedFilter = readModelChatIndexFilter(filter);
+    const requestedSurfaceKind = filter.startsWith('surface:') ? filter.slice('surface:'.length) : null;
+    const requestedQuery = search.trim() || null;
+    if (chatIndexFilterRefreshTimer) window.clearTimeout(chatIndexFilterRefreshTimer);
+    chatIndexFilterRefreshTimer = window.setTimeout(() => {
+      chatIndexFilterRefreshTimer = null;
+      void chatIndexSession.refresh({
+        filter: requestedFilter,
+        query: requestedQuery,
+        surfaceKind: requestedSurfaceKind,
+        limit: 200
+      });
+    }, 180);
+  });
+
+  $effect(() => {
     if (selectedReasoning && !reasoningOptions.includes(selectedReasoning)) selectedReasoning = '';
   });
 
@@ -667,7 +691,9 @@
     removeDocumentChatPointerCapture?.();
     unsubscribeReadModels?.();
     unsubscribeChatIndexSession?.();
+    chatIndexSession.stop();
     if (pendingRefreshTimer) window.clearTimeout(pendingRefreshTimer);
+    if (chatIndexFilterRefreshTimer) window.clearTimeout(chatIndexFilterRefreshTimer);
     if (activeClockInterval) window.clearInterval(activeClockInterval);
     closeStream();
   });
@@ -1169,10 +1195,6 @@
     return error.status === 404 && error.message.toLowerCase().includes('managed thread not found');
   }
 
-  function upsertPmaChats(nextChats: PmaChatSummary[]): void {
-    readModelEntityStore.upsertChatIndexRows(nextChats.map(pmaChatSummaryToChatIndexRow));
-  }
-
   /** Elapsed seconds capped by wall clock while status is running (matches live UI). */
   function progressElapsedWithLiveWall(value: PmaRunProgress, nowMs: number): number {
     const base = value.elapsedSeconds ?? 0;
@@ -1184,7 +1206,6 @@
   }
 
   function updateProgress(nextProgress: PmaRunProgress): void {
-    syncChatListStatusFromProgress(nextProgress);
     const chatId = nextProgress.chatId ?? activeChatId;
     if (!chatId) return;
     const nowMs = Date.now();
@@ -1294,32 +1315,6 @@
 
   function currentQueueDepth(chatId: string): number {
     return selectPmaQueue(readModelEntityStore.snapshot(), chatId).length;
-  }
-
-  function syncChatListStatusFromProgress(nextProgress: PmaRunProgress): void {
-    const chatId = nextProgress.chatId ?? activeChatId;
-    if (!chatId) return;
-    const chat = chats.find((item) => item.id === chatId);
-    if (!chat) return;
-    upsertPmaChats([
-      {
-        ...chat,
-        status: nextProgress.status,
-        progressPercent: nextProgress.progressPercent ?? chat.progressPercent,
-        updatedAt:
-          nextProgress.lastEventAt && (!chat.updatedAt || nextProgress.lastEventAt > chat.updatedAt)
-            ? nextProgress.lastEventAt
-            : chat.updatedAt,
-        raw: {
-          ...chat.raw,
-          execution_status: nextProgress.status,
-          normalized_status: nextProgress.status,
-          status: nextProgress.status,
-          active_turn_id: nextProgress.id,
-          queued_count: nextProgress.queueDepth
-        }
-      }
-    ]);
   }
 
   function retryStream(): void {

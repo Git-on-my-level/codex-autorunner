@@ -88,16 +88,27 @@ export function legacyChatIndexRecordToChatIndexRow(raw: JsonRecord): ChatIndexR
 }
 
 export function chatIndexRowToPmaChatSummary(row: ChatIndexRow): PmaChatSummary {
+  const title = row.displayTitle ?? row.bindingDisplayName ?? row.title;
   const raw: JsonRecord = {
     row,
     id: row.chatId,
     managed_thread_id: row.chatId,
-    title: row.title,
-    display_name: row.title,
-    normalized_status: row.status,
-    runtime_status: row.status,
+    title,
+    display_name: title,
+    technical_title: row.technicalTitle,
+    binding_display_name: row.bindingDisplayName,
+    binding_display_names: row.bindingDisplayNames ?? [],
+    primary_surface: row.primarySurface,
+    surface_bindings: row.surfaceBindings ?? [],
+    normalized_status: row.runtimeStatus ?? row.status,
+    runtime_status: row.runtimeStatus ?? row.status,
     status: row.status,
-    lifecycle_status: row.status === 'archived' ? 'archived' : 'active',
+    lifecycle: row.lifecycle,
+    lifecycle_status: row.archiveState ?? (row.status === 'archived' ? 'archived' : 'active'),
+    archive_state: row.archiveState,
+    resource_kind: row.resourceKind,
+    resource_id: row.resourceId,
+    workspace_root: row.workspaceRoot,
     repo_id: row.repoId,
     worktree_id: row.worktreeId,
     current_ticket_id: row.ticketId,
@@ -110,12 +121,13 @@ export function chatIndexRowToPmaChatSummary(row: ChatIndexRow): PmaChatSummary 
     model: row.model,
     unreadCount: row.unreadCount,
     last_activity_at: row.lastActivityAt,
-    surface_kind: row.surface
+    surface_kind: row.surface,
+    sort_key: row.sortKey
   };
   return {
     id: row.chatId,
-    title: row.title,
-    lifecycleStatus: row.status === 'archived' ? 'archived' : 'active',
+    title,
+    lifecycleStatus: row.archiveState ?? (row.status === 'archived' ? 'archived' : 'active'),
     status: normalizeWorkStatus(row.status),
     agentId: row.agent ?? null,
     chatKind: row.chatKind ?? null,
@@ -131,8 +143,7 @@ export function chatIndexRowToPmaChatSummary(row: ChatIndexRow): PmaChatSummary 
       row.ticketId ||
         row.runId ||
         row.groupId?.startsWith('ticket') ||
-        row.groupId?.startsWith('run') ||
-        /^ticket-flow(?::\S+)?$/i.test(row.title.trim())
+        row.groupId?.startsWith('run')
     ),
     progressPercent: null,
     updatedAt: row.lastActivityAt ?? null,

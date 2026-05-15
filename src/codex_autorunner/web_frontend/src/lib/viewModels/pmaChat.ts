@@ -95,13 +95,6 @@ export function chatMessengerSurface(
     const slug = normalizeMessengerSlug(kindOnly);
     return { slug, label: messengerSurfaceLabel(slug), badgeClass: messengerBadgeClass(slug) };
   }
-  const title = chat.title.trim().toLowerCase();
-  if (title.startsWith('discord:')) {
-    return { slug: 'discord', label: 'Discord', badgeClass: 'surface-discord' };
-  }
-  if (title.startsWith('telegram:')) {
-    return { slug: 'telegram', label: 'Telegram', badgeClass: 'surface-telegram' };
-  }
   return null;
 }
 
@@ -412,7 +405,10 @@ export function mapChatSurfaceToPmaChatSummary(surface: Record<string, unknown>)
   };
 }
 
-/** Normalize the `/hub/chat/events` snapshot payload into sidebar rows. */
+/**
+ * Legacy diagnostics/test helper for `/hub/chat/events` snapshots.
+ * Production chat-list rows come from the typed chat-index read model.
+ */
 export function mapChatSurfaceSnapshotToPmaChats(payload: Record<string, unknown>): PmaChatSummary[] {
   const surfaces = Array.isArray(payload.surfaces) ? payload.surfaces : [];
   const mapped = surfaces
@@ -484,6 +480,7 @@ export function mapChatSurfaceEventToPmaChatSummary(payload: Record<string, unkn
   });
 }
 
+/** Legacy diagnostics/test helper; do not use as a production chat-index writer. */
 export function pmaChatBindingKey(chat: PmaChatSummary | null): string | null {
   if (!chat) return null;
   const raw = chat.raw as Record<string, unknown>;
@@ -493,10 +490,10 @@ export function pmaChatBindingKey(chat: PmaChatSummary | null): string | null {
   const surfaceKind = typeof raw.surface_kind === 'string' ? raw.surface_kind.trim() : '';
   const surfaceKey = typeof raw.surface_key === 'string' ? raw.surface_key.trim() : '';
   if (surfaceKind && surfaceKey) return `${surfaceKind}:${surfaceKey}`;
-  const titleMatch = /^(telegram|discord):(.+)$/.exec(chat.title.trim());
-  return titleMatch ? `${titleMatch[1]}:${titleMatch[2]}` : null;
+  return null;
 }
 
+/** Legacy diagnostics/test helper; production list updates use chat.index.patch. */
 export function reconcileChatSurfaceEvent(
   currentChats: PmaChatSummary[],
   eventPayload: Record<string, unknown>
@@ -529,6 +526,7 @@ function isProtocolIdTitle(title: string): boolean {
   return /^(discord|telegram):\S+$/i.test(title.trim());
 }
 
+/** Legacy diagnostics/test helper; production list repair uses chat.index.snapshot. */
 export function reconcileChatSurfaceSnapshot(
   currentChats: PmaChatSummary[],
   nextChats: PmaChatSummary[],

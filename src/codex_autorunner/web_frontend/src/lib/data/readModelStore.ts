@@ -207,9 +207,6 @@ export class ReadModelEntityStore implements Readable<ReadModelEntityState> {
   }): void {
     const rows = uniqueChatIndexRows(snapshot.rows);
     const next = cloneState(this.state);
-    const detailThreads = Object.values(next.chatDetails)
-      .map((detail) => detail.thread)
-      .filter((thread): thread is ChatThreadProjection => thread !== null);
     for (const id of Object.keys(next.chats)) bump(next, 'chat', id);
     for (const id of Object.keys(next.chatGroups)) bump(next, 'chatGroup', id);
     next.chats = keyed(rows, (row) => row.chatId);
@@ -218,23 +215,19 @@ export class ReadModelEntityStore implements Readable<ReadModelEntityState> {
     next.chatGroupOrder = snapshot.groups.map((group) => group.groupId);
     next.chatCounters = snapshot.counters;
     next.chatIndexCursor = snapshot.cursor;
+    next.repairRequired = false;
     rememberCursor(next, 'chat.index', snapshot.cursor);
     for (const row of rows) bump(next, 'chat', row.chatId);
     for (const group of snapshot.groups) bump(next, 'chatGroup', group.groupId);
-    // The index snapshot is a bounded list window. Do not let a late index
-    // response erase a detail-backed row loaded from a refreshable /chats/:id URL.
-    for (const thread of detailThreads) {
-      if (next.chats[thread.chatId]) continue;
-      upsertChatThread(next, thread);
-      bump(next, 'chat', thread.chatId);
-    }
     this.commit(next);
   }
 
+  /** @deprecated Tests and transitional fixtures only. Production list rows come from chat-index snapshots/patches. */
   replaceChatIndexRows(rows: ChatIndexRow[], cursor: ProjectionCursor, counters = countersFromRows(rows)): void {
     this.applyChatIndexSnapshot({ cursor, rows, groups: [], counters });
   }
 
+  /** @deprecated Tests and transitional fixtures only. Production list rows come from chat-index snapshots/patches. */
   upsertChatIndexRows(rows: ChatIndexRow[]): void {
     if (!rows.length) return;
     const next = cloneState(this.state);
@@ -286,7 +279,6 @@ export class ReadModelEntityStore implements Readable<ReadModelEntityState> {
 
   applyChatDetailSnapshot(snapshot: ChatDetailSnapshot): void {
     const next = cloneState(this.state);
-    upsertChatThread(next, snapshot.thread);
     next.chatDetails[snapshot.thread.chatId] = {
       thread: snapshot.thread,
       queue: snapshot.queue,
@@ -314,7 +306,6 @@ export class ReadModelEntityStore implements Readable<ReadModelEntityState> {
       next.artifacts[artifact.artifactId] = artifact;
       bump(next, 'artifact', artifact.artifactId);
     }
-    bump(next, 'chat', snapshot.thread.chatId);
     bump(next, 'timeline', snapshot.thread.chatId);
     rememberCursor(next, `chat.detail:${snapshot.thread.chatId}`, snapshot.cursor);
     this.commit(next);
@@ -349,7 +340,6 @@ export class ReadModelEntityStore implements Readable<ReadModelEntityState> {
     const detail = cloneChatDetailProjection(next.chatDetails[chatId] ?? { thread: null, queue: null, artifactIds: [] });
     if (event.patch.thread) {
       detail.thread = event.patch.thread;
-      upsertChatThread(next, event.patch.thread);
     }
     if (event.patch.queue) detail.queue = event.patch.queue;
     if (event.patch.artifacts.length) {
@@ -360,7 +350,6 @@ export class ReadModelEntityStore implements Readable<ReadModelEntityState> {
       }
     }
     next.chatDetails[chatId] = detail;
-    bump(next, 'chat', chatId);
     bump(next, 'timeline', chatId);
     rememberCursor(next, cursorKey, event.envelope.cursor);
     this.commit(next);
@@ -534,11 +523,6 @@ export class ReadModelEntityStore implements Readable<ReadModelEntityState> {
     next.tickets[snapshot.ticket.ticketId] = snapshot.ticket;
     next.ticketSiblings[snapshot.ticket.ticketId] = snapshot.siblings;
     if (snapshot.linkedRun) next.runs[snapshot.linkedRun.runId] = snapshot.linkedRun;
-    for (const chat of snapshot.linkedChats) {
-      next.chats[chat.chatId] = chat;
-      if (!next.chatOrder.includes(chat.chatId)) next.chatOrder.push(chat.chatId);
-      bump(next, 'chat', chat.chatId);
-    }
     for (const artifact of snapshot.artifacts) {
       next.artifacts[artifact.artifactId] = artifact;
       bump(next, 'artifact', artifact.artifactId);
@@ -584,11 +568,6 @@ export class ReadModelEntityStore implements Readable<ReadModelEntityState> {
     if (event.patch.linkedRun) {
       next.runs[event.patch.linkedRun.runId] = event.patch.linkedRun;
       bump(next, 'run', event.patch.linkedRun.runId);
-    }
-    for (const chat of event.patch.linkedChats) {
-      next.chats[chat.chatId] = chat;
-      if (!next.chatOrder.includes(chat.chatId)) next.chatOrder.push(chat.chatId);
-      bump(next, 'chat', chat.chatId);
     }
     for (const artifact of event.patch.artifacts) {
       next.artifacts[artifact.artifactId] = artifact;
@@ -912,28 +891,6 @@ function isNewer(previous: ProjectionCursor | undefined | null, next: Projection
 
 function isRepairEvent(eventType: string, operation: string): boolean {
   return eventType === 'projection.cursor_gap' || operation === 'reset';
-}
-
-function upsertChatThread(state: ReadModelEntityState, thread: ChatThreadProjection): void {
-  const existing = state.chats[thread.chatId];
-  state.chats[thread.chatId] = {
-    chatId: thread.chatId,
-    surface: thread.surface === 'pma' ? 'pma' : 'other',
-    title: thread.title,
-    status: thread.archived ? 'archived' : thread.status,
-    unreadCount: existing?.unreadCount ?? 0,
-    repoId: thread.repoId,
-    worktreeId: thread.worktreeId,
-    ticketId: thread.ticketId,
-    runId: thread.runId,
-    agent: thread.agent,
-    agentProfile: thread.agentProfile,
-    chatKind: thread.chatKind ?? existing?.chatKind ?? null,
-    model: thread.model,
-    lastActivityAt: existing?.lastActivityAt ?? null,
-    groupId: existing?.groupId ?? null
-  };
-  if (!state.chatOrder.includes(thread.chatId)) state.chatOrder.push(thread.chatId);
 }
 
 function countersFromRows(rows: ChatIndexRow[]): ChatIndexCounters {
