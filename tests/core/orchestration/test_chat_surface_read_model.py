@@ -558,6 +558,41 @@ def test_chat_index_sorts_by_conversation_activity_not_metadata_hydration(
     assert older["last_activity_at"] == "2026-05-11T00:00:10Z"
 
 
+def test_chat_index_snapshot_reads_rebuilt_sql_projection_without_reprojecting(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    hub_root = tmp_path / "hub"
+    _seed_thread(hub_root, thread_id="thread-idle")
+    _seed_thread(hub_root, thread_id="thread-running", runtime_status="running")
+    _seed_thread(
+        hub_root,
+        thread_id="thread-archived",
+        lifecycle_status="archived",
+        runtime_status="completed",
+    )
+    service = ChatSurfaceReadService(hub_root, durable=False)
+    service.rebuild_chat_index_projection()
+
+    def fail_projected_surfaces(*_args, **_kwargs):
+        raise AssertionError("chat index snapshot should read SQL projection")
+
+    monkeypatch.setattr(service, "_projected_surfaces", fail_projected_surfaces)
+
+    all_rows = service.chat_index_snapshot(view="all", limit=1)
+    assert len(all_rows["rows"]) == 1
+    assert all_rows["counters"]["total"] == 2
+    assert all_rows["counters"]["running"] == 1
+    assert all_rows["counters"]["archived"] == 1
+    assert all_rows["window"]["total_count"] == 2
+
+    active = service.chat_index_snapshot(view="active", limit=20)
+    assert [row["managed_thread_id"] for row in active["rows"]] == ["thread-running"]
+
+    archived = service.chat_index_snapshot(view="archived", limit=20)
+    assert [row["managed_thread_id"] for row in archived["rows"]] == ["thread-archived"]
+
+
 def test_chat_index_and_detail_prefer_bound_chat_display_for_fallback_titles(
     tmp_path: Path,
 ) -> None:

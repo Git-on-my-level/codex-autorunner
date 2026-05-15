@@ -267,28 +267,21 @@ class ChatSurfaceReadService:
         """
 
         started_at = time.perf_counter()
-        surfaces = self._projected_surfaces(limit=None)
-        rows = _chat_index_rows_from_surfaces(surfaces)
-        rows = _filter_chat_index_rows(
-            rows,
+        projection = self._query_chat_index_projection(
             view=view,
             query=query,
             surface_kind=surface_kind,
+            group_by=group_by,
             parent_group_id=parent_group_id,
+            offset=offset,
+            limit=limit,
         )
-        rows = sorted(rows, key=_chat_index_sort_key)
-        counters = _chat_index_counters(rows)
-        total_count = len(rows)
-        bounded_offset = max(0, int(offset or 0))
-        bounded_limit = _bounded_limit(limit, MAX_CHAT_INDEX_LIMIT)
-
-        groups = _ticket_run_groups(rows) if group_by == "ticket_run" else []
-        if group_by == "ticket_run" and parent_group_id is None:
-            group_rows = _filter_chat_index_groups(groups, view=view, query=query)
-            total_count = len(group_rows)
-            window = group_rows[bounded_offset : bounded_offset + bounded_limit]
-        else:
-            window = rows[bounded_offset : bounded_offset + bounded_limit]
+        window = projection["window"]
+        groups = projection["groups"]
+        counters = projection["counters"]
+        total_count = int(projection["total_count"])
+        bounded_offset = int(projection["offset"])
+        bounded_limit = int(projection["limit"])
 
         cursor = self.latest_cursor()
         payload = {
@@ -637,6 +630,260 @@ class ChatSurfaceReadService:
 
     def latest_cursor(self) -> int:
         return self._journal.latest_cursor()
+
+    def rebuild_chat_index_projection(self) -> None:
+        source_signature = self._chat_index_source_signature()
+        surfaces = self._projected_surfaces(limit=None)
+        rows = sorted(
+            _chat_index_rows_from_surfaces(surfaces), key=_chat_index_sort_key
+        )
+        rebuilt_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        with open_orchestration_sqlite(
+            self._hub_root, durable=self._durable, migrate=True
+        ) as conn:
+            with conn:
+                conn.execute("DELETE FROM orch_chat_index_projection")
+                conn.executemany(
+                    """
+                    INSERT INTO orch_chat_index_projection (
+                        row_id,
+                        chat_id,
+                        managed_thread_id,
+                        surface_kinds_json,
+                        surface_kind_list,
+                        lifecycle_status,
+                        runtime_status,
+                        effective_status,
+                        queue_depth,
+                        unread_count,
+                        unread,
+                        last_activity_at,
+                        updated_at,
+                        created_at,
+                        repo_id,
+                        worktree_id,
+                        resource_kind,
+                        resource_id,
+                        ticket_id,
+                        run_id,
+                        group_id,
+                        search_text,
+                        sort_unread_priority,
+                        sort_last_activity_desc,
+                        row_json,
+                        source_signature,
+                        rebuilt_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    [
+                        _chat_index_projection_params(
+                            row,
+                            source_signature=source_signature,
+                            rebuilt_at=rebuilt_at,
+                        )
+                        for row in rows
+                    ],
+                )
+                conn.execute(
+                    """
+                    INSERT OR REPLACE INTO orch_chat_index_projection_meta (
+                        key,
+                        value,
+                        updated_at
+                    ) VALUES ('source_signature', ?, ?)
+                    """,
+                    (source_signature, rebuilt_at),
+                )
+
+    def _ensure_chat_index_projection_current(self) -> None:
+        source_signature = self._chat_index_source_signature()
+        with open_orchestration_sqlite(
+            self._hub_root, durable=self._durable, migrate=True
+        ) as conn:
+            if not _table_exists(
+                conn, "orch_chat_index_projection"
+            ) or not _table_exists(conn, "orch_chat_index_projection_meta"):
+                needs_rebuild = True
+            else:
+                row = conn.execute(
+                    """
+                    SELECT value
+                      FROM orch_chat_index_projection_meta
+                     WHERE key = 'source_signature'
+                    """
+                ).fetchone()
+                needs_rebuild = row is None or row["value"] != source_signature
+        if needs_rebuild:
+            self.rebuild_chat_index_projection()
+
+    def _chat_index_source_signature(self) -> str:
+        with open_orchestration_sqlite(
+            self._hub_root, durable=self._durable, migrate=True
+        ) as conn:
+            table_updated_exprs = {
+                "orch_thread_targets": "MAX(COALESCE(updated_at, created_at))",
+                "orch_thread_executions": "MAX(COALESCE(finished_at, started_at, created_at))",
+                "orch_bindings": "MAX(COALESCE(updated_at, created_at))",
+                "orch_managed_thread_deliveries": "MAX(COALESCE(updated_at, delivered_at, created_at))",
+                "orch_notification_conversations": "MAX(COALESCE(updated_at, created_at))",
+                "orch_chat_surface_events": "MAX(COALESCE(created_at, occurred_at, event_id))",
+            }
+            facts: dict[str, Any] = {}
+            for table, updated_expr in table_updated_exprs.items():
+                if not _table_exists(conn, table):
+                    facts[table] = None
+                    continue
+                row = conn.execute(
+                    f"SELECT COUNT(*) AS count, {updated_expr} AS max_updated FROM {table}"
+                ).fetchone()
+                facts[table] = {
+                    "count": int(row["count"] or 0),
+                    "max_updated": row["max_updated"],
+                }
+        directory_path = (
+            self._hub_root / ".codex-autorunner" / "chat" / "channel_directory.json"
+        )
+        try:
+            stat = directory_path.stat()
+            facts["channel_directory"] = {
+                "mtime_ns": stat.st_mtime_ns,
+                "size": stat.st_size,
+            }
+        except OSError:
+            facts["channel_directory"] = None
+        basis = json.dumps(facts, sort_keys=True, separators=(",", ":"), default=str)
+        return hashlib.sha256(basis.encode("utf-8")).hexdigest()
+
+    def _query_chat_index_projection(
+        self,
+        *,
+        view: str,
+        query: Optional[str],
+        surface_kind: Optional[str],
+        group_by: Optional[str],
+        parent_group_id: Optional[str],
+        offset: int,
+        limit: int,
+    ) -> dict[str, Any]:
+        self._ensure_chat_index_projection_current()
+        bounded_offset = max(0, int(offset or 0))
+        bounded_limit = _bounded_limit(limit, MAX_CHAT_INDEX_LIMIT)
+        where_sql, params = _chat_index_projection_where(
+            view=view,
+            query=query,
+            surface_kind=surface_kind,
+            parent_group_id=parent_group_id,
+        )
+        normalized_view = (view or "all").strip().lower()
+        if normalized_view == "all":
+            where_counters_sql, counters_params = _chat_index_projection_where(
+                view=view,
+                query=query,
+                surface_kind=surface_kind,
+                parent_group_id=parent_group_id,
+                include_archived_rows=True,
+            )
+            counters_sql = f"""
+                SELECT COALESCE(SUM(CASE WHEN (lifecycle_status IS NULL OR lifecycle_status != 'archived') THEN 1 ELSE 0 END), 0) AS total,
+                       COALESCE(SUM(CASE WHEN (lifecycle_status IS NULL OR lifecycle_status != 'archived') AND queue_depth > 0 THEN 1 ELSE 0 END), 0) AS waiting,
+                       COALESCE(SUM(CASE WHEN (lifecycle_status IS NULL OR lifecycle_status != 'archived') AND effective_status = 'running' THEN 1 ELSE 0 END), 0) AS running,
+                       COALESCE(SUM(CASE WHEN (lifecycle_status IS NULL OR lifecycle_status != 'archived') THEN unread_count ELSE 0 END), 0) AS unread,
+                       COALESCE(SUM(CASE WHEN lifecycle_status = 'archived' THEN 1 ELSE 0 END), 0) AS archived
+                  FROM orch_chat_index_projection
+                 WHERE {where_counters_sql}
+                """
+        else:
+            where_counters_sql, counters_params = where_sql, params
+            counters_sql = f"""
+                SELECT COUNT(*) AS total,
+                       COALESCE(SUM(CASE WHEN queue_depth > 0 THEN 1 ELSE 0 END), 0) AS waiting,
+                       COALESCE(SUM(CASE WHEN effective_status = 'running' THEN 1 ELSE 0 END), 0) AS running,
+                       COALESCE(SUM(unread_count), 0) AS unread,
+                       COALESCE(SUM(CASE WHEN lifecycle_status = 'archived' THEN 1 ELSE 0 END), 0) AS archived
+                  FROM orch_chat_index_projection
+                 WHERE {where_counters_sql}
+                """
+        with open_orchestration_sqlite(
+            self._hub_root, durable=self._durable, migrate=True
+        ) as conn:
+            counters_row = conn.execute(
+                counters_sql,
+                counters_params,
+            ).fetchone()
+            counters = {
+                "total": int(counters_row["total"] or 0),
+                "waiting": int(counters_row["waiting"] or 0),
+                "running": int(counters_row["running"] or 0),
+                "unread": int(counters_row["unread"] or 0),
+                "archived": int(counters_row["archived"] or 0),
+            }
+            if group_by == "ticket_run" and parent_group_id is None:
+                all_rows = [
+                    _chat_index_row_from_projection(row)
+                    for row in conn.execute(
+                        f"""
+                        SELECT row_json
+                          FROM orch_chat_index_projection
+                         WHERE {where_sql}
+                         ORDER BY sort_unread_priority DESC,
+                                  sort_last_activity_desc ASC,
+                                  row_id ASC
+                        """,
+                        params,
+                    ).fetchall()
+                ]
+                groups = _filter_chat_index_groups(
+                    _ticket_run_groups(all_rows),
+                    view=view,
+                    query=query,
+                )
+                window_rows = groups[bounded_offset : bounded_offset + bounded_limit]
+                total_count = len(groups)
+            else:
+                total_count = counters["total"]
+                page_params = [*params, bounded_limit, bounded_offset]
+                window_rows = [
+                    _chat_index_row_from_projection(row)
+                    for row in conn.execute(
+                        f"""
+                        SELECT row_json
+                          FROM orch_chat_index_projection
+                         WHERE {where_sql}
+                         ORDER BY sort_unread_priority DESC,
+                                  sort_last_activity_desc ASC,
+                                  row_id ASC
+                         LIMIT ? OFFSET ?
+                        """,
+                        page_params,
+                    ).fetchall()
+                ]
+                if group_by == "ticket_run":
+                    all_rows = [
+                        _chat_index_row_from_projection(row)
+                        for row in conn.execute(
+                            f"""
+                            SELECT row_json
+                              FROM orch_chat_index_projection
+                             WHERE {where_sql}
+                             ORDER BY sort_unread_priority DESC,
+                                      sort_last_activity_desc ASC,
+                                      row_id ASC
+                            """,
+                            params,
+                        ).fetchall()
+                    ]
+                    groups = _ticket_run_groups(all_rows)
+                else:
+                    groups = []
+        return {
+            "offset": bounded_offset,
+            "limit": bounded_limit,
+            "rows": window_rows,
+            "groups": groups,
+            "counters": counters,
+            "total_count": total_count,
+            "window": window_rows,
+        }
 
     def _projected_surfaces(self, *, limit: Optional[int]) -> list[dict[str, Any]]:
         projections: dict[tuple[str, str], ChatSurfaceProjection] = {}
@@ -1417,63 +1664,6 @@ def _chat_row_search_text(row: Mapping[str, Any]) -> str:
     return " ".join(str(value).lower() for value in values if value)
 
 
-def _filter_chat_index_rows(
-    rows: list[dict[str, Any]],
-    *,
-    view: str,
-    query: Optional[str],
-    surface_kind: Optional[str],
-    parent_group_id: Optional[str],
-) -> list[dict[str, Any]]:
-    normalized_view = (view or "all").strip().lower()
-    normalized_query = _normalize_text(query)
-    normalized_query = normalized_query.lower() if normalized_query else None
-    normalized_surface = _normalize_kind(surface_kind)
-    filtered: list[dict[str, Any]] = []
-    for row in rows:
-        if parent_group_id is not None and row.get("group_id") != parent_group_id:
-            continue
-        if normalized_view != "external" and row.get("managed_thread_id") is None:
-            continue
-        if normalized_surface is not None and normalized_surface not in set(
-            row.get("surface_kinds") or []
-        ):
-            continue
-        if normalized_view == "waiting" and int(row.get("queue_depth") or 0) <= 0:
-            continue
-        if (
-            normalized_view == "active"
-            and _chat_index_effective_status(row) != "running"
-        ):
-            continue
-        if normalized_view == "unread" and not row.get("unread"):
-            continue
-        if normalized_view == "archived" and row.get("lifecycle_status") != "archived":
-            continue
-        if normalized_view == "external" and set(row.get("surface_kinds") or []) <= {
-            "pma"
-        }:
-            continue
-        if normalized_view == "ticket_run" and row.get("group_id") is None:
-            continue
-        if normalized_view not in {
-            "all",
-            "waiting",
-            "active",
-            "unread",
-            "archived",
-            "external",
-            "ticket_run",
-        }:
-            continue
-        if normalized_view != "archived" and row.get("lifecycle_status") == "archived":
-            continue
-        if normalized_query is not None and normalized_query not in row["search_text"]:
-            continue
-        filtered.append(row)
-    return filtered
-
-
 def _chat_index_sort_key(row: Mapping[str, Any]) -> tuple[int, float, str]:
     priority = 1 if row.get("unread") else 0
     raw = str(
@@ -1514,16 +1704,104 @@ def _chat_index_effective_status(row: Mapping[str, Any]) -> str:
     return "idle"
 
 
-def _chat_index_counters(rows: list[dict[str, Any]]) -> dict[str, int]:
-    return {
-        "total": len(rows),
-        "waiting": sum(1 for row in rows if int(row.get("queue_depth") or 0) > 0),
-        "running": sum(
-            1 for row in rows if _chat_index_effective_status(row) == "running"
-        ),
-        "unread": sum(int(row.get("unread_count") or 0) for row in rows),
-        "archived": sum(1 for row in rows if row.get("lifecycle_status") == "archived"),
-    }
+def _chat_index_projection_params(
+    row: Mapping[str, Any],
+    *,
+    source_signature: str,
+    rebuilt_at: str,
+) -> tuple[Any, ...]:
+    surface_kinds = sorted(str(kind) for kind in row.get("surface_kinds") or [])
+    raw_sort_key = row.get("sort_key")
+    sort_key: Mapping[str, Any] = (
+        raw_sort_key if isinstance(raw_sort_key, Mapping) else {}
+    )
+    last_activity_desc = sort_key.get("last_activity_desc")
+    if last_activity_desc is not None:
+        last_activity_desc = float(last_activity_desc)
+    return (
+        str(row.get("row_id") or row.get("chat_id")),
+        str(row.get("chat_id") or row.get("row_id")),
+        _normalize_text(row.get("managed_thread_id")),
+        json.dumps(surface_kinds, sort_keys=True, separators=(",", ":")),
+        "|" + "|".join(surface_kinds) + "|" if surface_kinds else "",
+        _normalize_text(row.get("lifecycle_status")),
+        _normalize_text(row.get("runtime_status")),
+        _chat_index_effective_status(row),
+        int(row.get("queue_depth") or 0),
+        int(row.get("unread_count") or 0),
+        1 if row.get("unread") else 0,
+        _normalize_text(row.get("last_activity_at")),
+        _normalize_text(row.get("updated_at")),
+        _normalize_text(row.get("created_at")),
+        _normalize_text(row.get("repo_id")),
+        _normalize_text(row.get("worktree_id")),
+        _normalize_text(row.get("resource_kind")),
+        _normalize_text(row.get("resource_id")),
+        _normalize_text(row.get("ticket_id")),
+        _normalize_text(row.get("run_id")),
+        _normalize_text(row.get("group_id")),
+        str(row.get("search_text") or ""),
+        int(sort_key.get("unread_priority") or 0),
+        last_activity_desc,
+        json.dumps(dict(row), sort_keys=True, separators=(",", ":"), default=str),
+        source_signature,
+        rebuilt_at,
+    )
+
+
+def _chat_index_row_from_projection(row: Mapping[str, Any]) -> dict[str, Any]:
+    try:
+        parsed = json.loads(str(row["row_json"]))
+    except (KeyError, TypeError, json.JSONDecodeError):
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def _chat_index_projection_where(
+    *,
+    view: str,
+    query: Optional[str],
+    surface_kind: Optional[str],
+    parent_group_id: Optional[str],
+    include_archived_rows: bool = False,
+) -> tuple[str, list[Any]]:
+    normalized_view = (view or "all").strip().lower()
+    normalized_query = _normalize_text(query)
+    normalized_query = normalized_query.lower() if normalized_query else None
+    normalized_surface = _normalize_kind(surface_kind)
+    clauses = ["1 = 1"]
+    params: list[Any] = []
+    if parent_group_id is not None:
+        clauses.append("group_id = ?")
+        params.append(parent_group_id)
+    if normalized_view != "external":
+        clauses.append("managed_thread_id IS NOT NULL")
+    if normalized_surface is not None:
+        clauses.append("surface_kind_list LIKE ?")
+        params.append(f"%|{normalized_surface}|%")
+    if normalized_view == "waiting":
+        clauses.append("queue_depth > 0")
+    elif normalized_view == "active":
+        clauses.append("effective_status = 'running'")
+    elif normalized_view == "unread":
+        clauses.append("unread != 0")
+    elif normalized_view == "archived":
+        clauses.append("lifecycle_status = 'archived'")
+    elif normalized_view == "external":
+        clauses.append("surface_kind_list != ''")
+        clauses.append("surface_kind_list != '|pma|'")
+    elif normalized_view == "ticket_run":
+        clauses.append("group_id IS NOT NULL")
+    elif normalized_view != "all":
+        clauses.append("0 = 1")
+    if normalized_view != "archived" and not (
+        include_archived_rows and normalized_view == "all"
+    ):
+        clauses.append("(lifecycle_status IS NULL OR lifecycle_status != 'archived')")
+    if normalized_query is not None:
+        clauses.append("search_text LIKE ?")
+        params.append(f"%{normalized_query}%")
+    return " AND ".join(clauses), params
 
 
 def _chat_index_sort_key_parts(row: Mapping[str, Any]) -> dict[str, Any]:

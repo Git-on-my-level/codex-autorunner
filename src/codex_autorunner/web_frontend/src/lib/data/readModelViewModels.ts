@@ -22,7 +22,7 @@ import {
 import { normalizeManagedThreadChatKind } from '$lib/viewModels/managedThreadChatKind';
 import type { PmaQueuedTurn } from '$lib/api/client';
 import type { ChatTranscriptCard } from '$lib/viewModels/pmaChat';
-import type { ReadModelEntityState } from './readModelStore';
+import { selectChatIndexWindowView, type ChatIndexWindowRequest, type ReadModelEntityState } from './readModelStore';
 
 type JsonRecord = Record<string, unknown>;
 
@@ -151,7 +151,10 @@ export function chatIndexRowToPmaChatSummary(row: ChatIndexRow): PmaChatSummary 
   };
 }
 
-export function selectPmaChats(state: ReadModelEntityState): PmaChatSummary[] {
+export function selectPmaChats(state: ReadModelEntityState, request?: ChatIndexWindowRequest): PmaChatSummary[] {
+  if (request) {
+    return selectChatIndexWindowView(state, request).rows.map(chatIndexRowToPmaChatSummary);
+  }
   return state.chatOrder.map((id) => state.chats[id]).filter(Boolean).map(chatIndexRowToPmaChatSummary);
 }
 

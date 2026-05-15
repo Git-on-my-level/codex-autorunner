@@ -9,7 +9,7 @@ from ..sqlite_utils import table_columns, table_exists
 from ..time_utils import now_iso
 from .models import OrchestrationTableDefinition
 
-ORCHESTRATION_SCHEMA_VERSION = 32
+ORCHESTRATION_SCHEMA_VERSION = 33
 
 
 @dataclass(frozen=True)
@@ -1692,6 +1692,87 @@ def _apply_v32(conn: sqlite3.Connection) -> None:
     )
 
 
+def _apply_v33(conn: sqlite3.Connection) -> None:
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS orch_chat_index_projection (
+            row_id TEXT PRIMARY KEY,
+            chat_id TEXT NOT NULL,
+            managed_thread_id TEXT,
+            surface_kinds_json TEXT NOT NULL DEFAULT '[]',
+            surface_kind_list TEXT NOT NULL DEFAULT '',
+            lifecycle_status TEXT,
+            runtime_status TEXT,
+            effective_status TEXT NOT NULL DEFAULT 'idle',
+            queue_depth INTEGER NOT NULL DEFAULT 0,
+            unread_count INTEGER NOT NULL DEFAULT 0,
+            unread INTEGER NOT NULL DEFAULT 0,
+            last_activity_at TEXT,
+            updated_at TEXT,
+            created_at TEXT,
+            repo_id TEXT,
+            worktree_id TEXT,
+            resource_kind TEXT,
+            resource_id TEXT,
+            ticket_id TEXT,
+            run_id TEXT,
+            group_id TEXT,
+            search_text TEXT NOT NULL DEFAULT '',
+            sort_unread_priority INTEGER NOT NULL DEFAULT 0,
+            sort_last_activity_desc REAL,
+            row_json TEXT NOT NULL,
+            source_signature TEXT NOT NULL,
+            rebuilt_at TEXT NOT NULL
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS orch_chat_index_projection_meta (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_orch_chat_index_projection_status
+            ON orch_chat_index_projection(lifecycle_status, effective_status)
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_orch_chat_index_projection_surface
+            ON orch_chat_index_projection(surface_kind_list)
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_orch_chat_index_projection_group
+            ON orch_chat_index_projection(group_id)
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_orch_chat_index_projection_activity
+            ON orch_chat_index_projection(sort_unread_priority DESC, sort_last_activity_desc ASC, row_id ASC)
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_orch_chat_index_projection_owner
+            ON orch_chat_index_projection(repo_id, worktree_id, ticket_id, run_id)
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_orch_chat_index_projection_search
+            ON orch_chat_index_projection(search_text)
+        """
+    )
+
+
 _MIGRATIONS = (
     _MigrationStep(1, "create_core_orchestration_schema", _apply_v1),
     _MigrationStep(2, "add_binding_and_flow_projection_scaffolding", _apply_v2),
@@ -1748,6 +1829,11 @@ _MIGRATIONS = (
         32,
         "add_managed_thread_post_terminal_side_effects",
         _apply_v32,
+    ),
+    _MigrationStep(
+        33,
+        "add_chat_index_projection",
+        _apply_v33,
     ),
 )
 
@@ -1857,6 +1943,16 @@ _TABLE_DEFINITIONS = (
         name="orch_managed_thread_side_effects",
         role="authoritative",
         description="Durable post-terminal managed-thread side-effect intents for retryable transcript, timeline, cold-trace, activity, PR-binding, and cleanup work.",
+    ),
+    OrchestrationTableDefinition(
+        name="orch_chat_index_projection",
+        role="projection",
+        description="Materialized chat index rows for indexed filtering, sorting, grouping, and windowed web read-model snapshots.",
+    ),
+    OrchestrationTableDefinition(
+        name="orch_chat_index_projection_meta",
+        role="projection",
+        description="Metadata for chat index projection rebuild freshness and source signatures.",
     ),
     OrchestrationTableDefinition(
         name="orch_thread_identity_bindings",

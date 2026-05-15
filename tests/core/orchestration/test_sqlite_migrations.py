@@ -33,6 +33,34 @@ def test_apply_orchestration_migrations_sets_latest_schema_version(
     assert runs[0]["target_version"] == ORCHESTRATION_SCHEMA_VERSION
 
 
+def test_apply_orchestration_migrations_adds_chat_index_projection(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "orchestration.sqlite3"
+
+    with _connect(db_path) as conn:
+        apply_orchestration_migrations(conn)
+        table_names = {
+            row["name"]
+            for row in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table'"
+            ).fetchall()
+        }
+        index_names = {
+            row["name"]
+            for row in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'index'"
+            ).fetchall()
+        }
+
+    assert "orch_chat_index_projection" in table_names
+    assert "orch_chat_index_projection_meta" in table_names
+    assert "idx_orch_chat_index_projection_status" in index_names
+    assert "idx_orch_chat_index_projection_surface" in index_names
+    assert "idx_orch_chat_index_projection_group" in index_names
+    assert "idx_orch_chat_index_projection_activity" in index_names
+
+
 def test_apply_orchestration_migrations_copies_legacy_backfill_flags_into_operation_flags(
     tmp_path: Path,
 ) -> None:

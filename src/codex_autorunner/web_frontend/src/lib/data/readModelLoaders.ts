@@ -67,7 +67,7 @@ export async function ensureChatIndexLoaded(
   const client = options.client ?? readModelSnapshotClient;
   const result = await client.chatIndex(request);
   if (!result.ok) return { status: 'error', tags, error: result.error };
-  store.applyChatIndexSnapshot(result.data);
+  store.applyChatIndexSnapshot(result.data, request);
   return { status: 'fetched', tags };
 }
 
