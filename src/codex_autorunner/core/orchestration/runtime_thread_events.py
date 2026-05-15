@@ -597,12 +597,16 @@ def terminal_run_event_from_outcome(
             reason="Runtime thread interrupted",
         )
     _error_detail = str(outcome.error or "").strip()
+    if _error_detail == "Runtime thread interrupted":
+        return Interrupted(
+            timestamp=now_iso(),
+            reason="Runtime thread interrupted",
+        )
     return Failed(
         timestamp=now_iso(),
         error_message=(
             _error_detail
-            if _error_detail
-            in {"Runtime thread timed out", "Runtime thread interrupted"}
+            if _error_detail in {"Runtime thread timed out"}
             else "Runtime thread failed"
         ),
     )
