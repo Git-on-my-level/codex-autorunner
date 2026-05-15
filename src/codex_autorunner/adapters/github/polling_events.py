@@ -119,6 +119,17 @@ def _ingest_created_enqueue(result: Any) -> bool:
     return False
 
 
+def _check_targets_current_head(
+    payload: Mapping[str, Any],
+    *,
+    current_head_sha: str | None,
+) -> bool:
+    if current_head_sha is None:
+        return True
+    check_head_sha = _normalize_text(payload.get("head_sha"))
+    return check_head_sha == current_head_sha
+
+
 def emit_new_conditions(
     *,
     event_store: ScmEventStore,
@@ -156,10 +167,14 @@ def emit_new_conditions(
             has_new = True
             break
     if not has_new:
-        for key in current_checks:
+        for key, payload in current_checks.items():
             if key not in previous_checks:
-                has_new = True
-                break
+                has_new = _check_targets_current_head(
+                    _mapping(payload),
+                    current_head_sha=current_head_sha,
+                )
+                if has_new:
+                    break
     if not has_new:
         for key in current_issue_comments:
             if key not in previous_issue_comments:
@@ -204,11 +219,9 @@ def emit_new_conditions(
     for key, payload in current_checks.items():
         if key in previous_checks:
             continue
-        check_head_sha = _normalize_text(payload.get("head_sha"))
-        if (
-            current_head_sha is not None
-            and check_head_sha is not None
-            and check_head_sha != current_head_sha
+        if not _check_targets_current_head(
+            _mapping(payload),
+            current_head_sha=current_head_sha,
         ):
             continue
         event = event_store.record_event(

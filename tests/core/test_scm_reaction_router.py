@@ -97,6 +97,25 @@ def test_route_scm_reactions_returns_threaded_ci_failure_intent() -> None:
     }
 
 
+def test_route_scm_reactions_ignores_stale_check_run_when_pr_head_is_known() -> None:
+    event = _event(
+        "check_run",
+        payload={
+            "action": "completed",
+            "status": "completed",
+            "conclusion": "failure",
+            "name": "ci / test",
+            "head_sha": "oldsha",
+            "pr_head_sha": "newsha",
+        },
+    )
+
+    assert (
+        route_scm_reactions(event, binding=_binding(thread_target_id="thread-123"))
+        == []
+    )
+
+
 def test_route_scm_reactions_returns_notify_intent_for_changes_requested_without_thread() -> (
     None
 ):

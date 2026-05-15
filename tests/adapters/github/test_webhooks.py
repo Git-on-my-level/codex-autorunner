@@ -304,7 +304,7 @@ def test_normalize_webhook_accepts_unsigned_when_allowed() -> None:
             "head_sha": "deadbeef",
             "started_at": "2026-03-24T15:00:00+00:00",
             "completed_at": "2026-03-24T15:02:00+00:00",
-            "pull_requests": [{"number": 42}],
+            "pull_requests": [{"number": 42, "head": {"sha": "deadbeef"}}],
             "app": {"slug": "github-actions"},
         },
     }
@@ -323,4 +323,5 @@ def test_normalize_webhook_accepts_unsigned_when_allowed() -> None:
     assert result.event.pr_number == 42
     assert result.event.occurred_at == "2026-03-24T15:02:00Z"
     assert result.event.payload["conclusion"] == "failure"
+    assert result.event.payload["pr_head_sha"] == "deadbeef"
     assert result.event.payload["app_slug"] == "github-actions"

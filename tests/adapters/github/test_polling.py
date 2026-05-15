@@ -784,6 +784,7 @@ def test_arm_watch_captures_baseline_and_minimal_noise_profile(
                     "status": "COMPLETED",
                     "conclusion": "FAILURE",
                     "details_url": "https://example.invalid/checks/1",
+                    "head_sha": "abc123",
                 }
             ],
             issue_comments_payload=[
@@ -1464,6 +1465,7 @@ def test_process_due_watches_emits_only_new_review_and_check_transitions(
                     "status": "COMPLETED",
                     "conclusion": "FAILURE",
                     "details_url": "https://example.invalid/checks/2",
+                    "head_sha": "newsha",
                 }
             ],
         )
@@ -1559,6 +1561,143 @@ def test_emit_new_conditions_skips_failed_checks_from_stale_head(
     assert _AutomationServiceFake.ingested_events == []
     assert _AutomationServiceFake.process_calls == 0
     assert event_store.list_events(limit=10) == []
+
+
+def test_emit_new_conditions_skips_failed_checks_with_missing_head_when_head_known(
+    tmp_path: Path,
+) -> None:
+    binding = PrBindingStore(tmp_path).upsert_binding(
+        provider="github",
+        repo_slug="acme/widgets",
+        pr_number=17,
+        pr_state="open",
+        head_branch="feature/scm-polling",
+        base_branch="main",
+    )
+    watch = ScmPollingWatchStore(tmp_path).upsert_watch(
+        provider="github",
+        binding_id=binding.binding_id,
+        repo_slug=binding.repo_slug,
+        pr_number=binding.pr_number,
+        workspace_root=str((tmp_path / "repo").resolve()),
+        poll_interval_seconds=90,
+        next_poll_at="2026-03-30T00:00:00Z",
+        expires_at="2099-03-30T01:00:00Z",
+        reaction_config={"enabled": True},
+        snapshot={"head_sha": "oldsha"},
+    )
+    event_store = ScmEventStore(tmp_path)
+    _AutomationServiceFake.ingested_events = []
+    _AutomationServiceFake.process_calls = 0
+
+    emitted = emit_new_conditions(
+        event_store=event_store,
+        watch=watch,
+        binding=binding,
+        previous_snapshot={"head_sha": "oldsha", "failed_checks": {}},
+        snapshot={
+            "head_sha": "newsha",
+            "failed_checks": {
+                "-:unit-tests:failure:https://example.invalid/checks/1": {
+                    "action": "completed",
+                    "name": "unit-tests",
+                    "status": "completed",
+                    "conclusion": "failure",
+                    "details_url": "https://example.invalid/checks/1",
+                }
+            },
+        },
+        automation_service_factory=lambda: _AutomationServiceFake(tmp_path),
+        now_iso_fn=lambda: "2026-03-30T00:00:00Z",
+    )
+
+    assert emitted == 0
+    assert _AutomationServiceFake.ingested_events == []
+    assert _AutomationServiceFake.process_calls == 0
+    assert event_store.list_events(limit=10) == []
+
+
+def test_process_due_watches_ignores_ambiguous_old_check_failure_on_new_head(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    binding = PrBindingStore(tmp_path).upsert_binding(
+        provider="github",
+        repo_slug="acme/widgets",
+        pr_number=17,
+        pr_state="open",
+        head_branch="feature/scm-polling",
+        base_branch="main",
+    )
+    watch_store = ScmPollingWatchStore(tmp_path)
+    watch_store.upsert_watch(
+        provider="github",
+        binding_id=binding.binding_id,
+        repo_slug=binding.repo_slug,
+        pr_number=binding.pr_number,
+        workspace_root=str((tmp_path / "repo").resolve()),
+        poll_interval_seconds=90,
+        next_poll_at="2026-03-30T00:00:00Z",
+        expires_at="2099-03-30T01:00:00Z",
+        reaction_config={"enabled": True},
+        snapshot={"head_sha": "oldsha", "failed_checks": {}},
+    )
+
+    def _factory(repo_root: Path, raw_config=None) -> _GitHubServiceStub:
+        return _GitHubServiceStub(
+            repo_root,
+            raw_config,
+            pr_view_payload={
+                "state": "OPEN",
+                "isDraft": False,
+                "headRefOid": "newsha",
+            },
+            reviews_payload=[],
+            checks_payload=[
+                {
+                    "name": "unit-tests",
+                    "status": "COMPLETED",
+                    "conclusion": "FAILURE",
+                    "details_url": "https://example.invalid/checks/old",
+                },
+                {
+                    "name": "unit-tests",
+                    "status": "IN_PROGRESS",
+                    "conclusion": None,
+                    "details_url": "https://example.invalid/checks/new",
+                    "head_sha": "newsha",
+                },
+            ],
+        )
+
+    _AutomationServiceFake.ingested_events = []
+    _AutomationServiceFake.process_calls = 0
+    monkeypatch.setattr(
+        GitHubScmPollingService,
+        "_build_automation_service",
+        lambda self, reaction_config=None: _AutomationServiceFake(  # type: ignore[misc]
+            tmp_path,
+            reaction_config=reaction_config,
+        ),
+    )
+
+    service = GitHubScmPollingService(
+        tmp_path,
+        raw_config=_polling_config(),
+        github_service_factory=_factory,
+        watch_store=watch_store,
+        event_store=ScmEventStore(tmp_path),
+    )
+
+    result = service.process_due_watches(limit=10)
+
+    assert result["events_emitted"] == 0
+    assert _AutomationServiceFake.ingested_events == []
+    assert _AutomationServiceFake.process_calls == 0
+    refreshed = watch_store.get_watch(provider="github", binding_id=binding.binding_id)
+    assert refreshed is not None
+    assert refreshed.snapshot["head_sha"] == "newsha"
+    assert refreshed.snapshot["failed_checks"] == {}
 
 
 def test_process_due_watches_emits_new_pr_comment_and_inline_review_comment(

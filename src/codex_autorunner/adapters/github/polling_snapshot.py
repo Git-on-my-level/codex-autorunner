@@ -240,13 +240,16 @@ def build_snapshot(
         conclusion = _normalize_lower_text(check.get("conclusion"))
         if status != "completed" or conclusion not in _FAILED_CHECK_CONCLUSIONS:
             continue
+        check_head_sha = _normalize_text(check.get("head_sha"))
+        if head_sha is not None and check_head_sha != head_sha:
+            continue
         payload = {
             "action": "completed",
             "name": _normalize_text(check.get("name")),
             "status": status,
             "conclusion": conclusion,
             "details_url": _normalize_text(check.get("details_url")),
-            "head_sha": _normalize_text(check.get("head_sha")) or head_sha,
+            "head_sha": check_head_sha,
         }
         failed_checks[_check_key(payload)] = {
             key: value for key, value in payload.items() if value is not None
