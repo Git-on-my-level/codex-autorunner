@@ -1790,6 +1790,45 @@ def test_archive_managed_threads_bulk_route_archives_multiple_threads(
     assert store.get_thread(second_id)["lifecycle_status"] == "archived"
 
 
+def test_archive_active_managed_threads_route_archives_beyond_list_window(
+    hub_env,
+) -> None:
+    app = create_hub_app(hub_env.hub_root)
+    store = ManagedThreadStore(hub_env.hub_root)
+    active_ids = [
+        store.create_thread(
+            "codex",
+            hub_env.repo_root.resolve(),
+            repo_id=hub_env.repo_id,
+            name=f"Thread {index}",
+        )["managed_thread_id"]
+        for index in range(205)
+    ]
+    archived = store.create_thread(
+        "codex",
+        hub_env.repo_root.resolve(),
+        repo_id=hub_env.repo_id,
+        name="Already archived",
+    )["managed_thread_id"]
+    store.archive_thread(archived)
+
+    with TestClient(app) as client:
+        archive_resp = client.post("/hub/pma/threads/archive-active")
+
+    assert archive_resp.status_code == 200
+    payload = archive_resp.json()
+    assert payload["requested_count"] == 205
+    assert payload["archived_count"] == 205
+    assert payload["error_count"] == 0
+
+    refreshed = ManagedThreadStore(hub_env.hub_root)
+    assert all(
+        refreshed.get_thread(managed_thread_id)["lifecycle_status"] == "archived"
+        for managed_thread_id in active_ids
+    )
+    assert refreshed.get_thread(archived)["lifecycle_status"] == "archived"
+
+
 def test_managed_thread_queue_routes_list_cancel_and_clear(hub_env) -> None:
     store = ManagedThreadStore(hub_env.hub_root)
     created = store.create_thread(

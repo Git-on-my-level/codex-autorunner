@@ -229,6 +229,28 @@ WEB_UI_SCENARIOS: tuple[WebUiScenario, ...] = (
         tags=(ScenarioTag.FAST, ScenarioTag.BROWSER, ScenarioTag.CRITICAL),
     ),
     _scenario(
+        scenario_id="chat_index_high_history_bounded_startup",
+        title="Chat list with high archived history",
+        route_name="chat",
+        seed_fixture=SeedFixtureKind.CHAT_INDEX_HIGH_HISTORY,
+        visible_landmarks=(
+            "Chats",
+            "Search chats, repos, tickets",
+            "Visible active chat",
+        ),
+        read_model_routes=(
+            "/hub/read-models/chats?filter=all&limit=200",
+            "/hub/read-models/chats/patches",
+        ),
+        api_routes=("/hub/pma/threads",),
+        frontend_mappers=("pmaChat.ts", "readModelClients.ts", "readModelStore.ts"),
+        tags=(ScenarioTag.FAST, ScenarioTag.BROWSER, ScenarioTag.LARGE_STATE),
+        notes=(
+            "Regression seed: thousands of archived chat-index events with one visible "
+            "active chat; startup should use the snapshot cursor and avoid patch replay."
+        ),
+    ),
+    _scenario(
         scenario_id="pma_new_chat_creation",
         title="PMA new chat creation",
         route_name="chat",

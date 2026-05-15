@@ -283,7 +283,7 @@ class ChatSurfaceReadService:
         bounded_offset = int(projection["offset"])
         bounded_limit = int(projection["limit"])
 
-        cursor = self.latest_cursor()
+        cursor = self.latest_chat_index_projection_revision()
         payload = {
             "contract_version": "chat_index_read.v1",
             "cursor": cursor,
@@ -341,12 +341,17 @@ class ChatSurfaceReadService:
         limit: int = DEFAULT_CHAT_SURFACE_EVENT_LIMIT,
         window_limit: int = DEFAULT_CHAT_INDEX_LIMIT,
     ) -> dict[str, Any]:
-        """Return typed chat-index patches backed by the chat-surface journal."""
+        """Return compact chat-index projection revision patches.
+
+        The browser stream cursor is intentionally the chat-index projection
+        revision, not the raw chat-surface journal offset.  Raw events remain the
+        reconstruction source, but stale clients repair from a bounded snapshot
+        instead of replaying historical journal rows.
+        """
 
         started_at = time.perf_counter()
         after_cursor = max(0, int(cursor or 0))
-        latest_cursor = self.latest_cursor()
-        event_limit = _bounded_limit(limit, MAX_CHAT_SURFACE_EVENT_LIMIT)
+        latest_cursor = self.latest_chat_index_projection_revision()
         if after_cursor > latest_cursor:
             gap_cursor = latest_cursor
             return {
@@ -366,18 +371,7 @@ class ChatSurfaceReadService:
                 },
             }
 
-        events = self._journal.read_events_since(after_cursor, limit=event_limit)
-        if events and events[0].cursor > after_cursor + 1:
-            gap_cursor = events[0].cursor
-            payload_events = [
-                _chat_index_cursor_gap_event(
-                    cursor=gap_cursor,
-                    requested_cursor=after_cursor,
-                    latest_cursor=latest_cursor,
-                )
-            ]
-            next_cursor = gap_cursor
-        else:
+        if after_cursor < latest_cursor:
             snapshot = self.chat_index_snapshot(
                 view=view,
                 query=query,
@@ -388,13 +382,16 @@ class ChatSurfaceReadService:
                 limit=window_limit,
             )
             payload_events = [
-                _chat_index_patch_event_from_surface_event(
-                    event,
+                _chat_index_projection_invalidated_event(
+                    cursor=latest_cursor,
+                    requested_cursor=after_cursor,
                     snapshot=snapshot,
                 )
-                for event in events
             ]
-            next_cursor = events[-1].cursor if events else after_cursor
+            next_cursor = latest_cursor
+        else:
+            payload_events = []
+            next_cursor = after_cursor
 
         payload = {
             "contract_version": "chat_index_patch_stream.v1",
@@ -631,6 +628,25 @@ class ChatSurfaceReadService:
     def latest_cursor(self) -> int:
         return self._journal.latest_cursor()
 
+    def latest_chat_index_projection_revision(self) -> int:
+        self._ensure_chat_index_projection_current()
+        with open_orchestration_sqlite(
+            self._hub_root, durable=self._durable, migrate=True
+        ) as conn:
+            row = conn.execute(
+                """
+                SELECT value
+                  FROM orch_chat_index_projection_meta
+                 WHERE key = 'projection_revision'
+                """
+            ).fetchone()
+        if row is None:
+            return 0
+        try:
+            return max(0, int(row["value"] or 0))
+        except (TypeError, ValueError):
+            return 0
+
     def rebuild_chat_index_projection(self) -> None:
         source_signature = self._chat_index_source_signature()
         surfaces = self._projected_surfaces(limit=None)
@@ -642,6 +658,24 @@ class ChatSurfaceReadService:
             self._hub_root, durable=self._durable, migrate=True
         ) as conn:
             with conn:
+                existing_meta = {
+                    str(row["key"]): str(row["value"])
+                    for row in conn.execute(
+                        """
+                        SELECT key, value
+                          FROM orch_chat_index_projection_meta
+                         WHERE key IN ('source_signature', 'projection_revision')
+                        """
+                    ).fetchall()
+                }
+                if existing_meta.get("source_signature") == source_signature:
+                    projection_revision = max(
+                        1, _safe_int(existing_meta.get("projection_revision"), 1)
+                    )
+                else:
+                    projection_revision = (
+                        _safe_int(existing_meta.get("projection_revision"), 0) + 1
+                    )
                 conn.execute("DELETE FROM orch_chat_index_projection")
                 conn.executemany(
                     """
@@ -693,6 +727,16 @@ class ChatSurfaceReadService:
                     ) VALUES ('source_signature', ?, ?)
                     """,
                     (source_signature, rebuilt_at),
+                )
+                conn.execute(
+                    """
+                    INSERT OR REPLACE INTO orch_chat_index_projection_meta (
+                        key,
+                        value,
+                        updated_at
+                    ) VALUES ('projection_revision', ?, ?)
+                    """,
+                    (str(projection_revision), rebuilt_at),
                 )
 
     def _ensure_chat_index_projection_current(self) -> None:
@@ -2042,57 +2086,6 @@ def _chat_patch_from_event(event: ChatSurfaceEvent) -> dict[str, Any]:
     }
 
 
-def _chat_index_patch_event_from_surface_event(
-    event: ChatSurfaceEvent,
-    *,
-    snapshot: Mapping[str, Any],
-) -> dict[str, Any]:
-    rows_raw = snapshot.get("rows") or []
-    rows = [row for row in rows_raw if isinstance(row, Mapping)]
-    chat_id = _chat_id_for_event(event)
-    matching_rows = [
-        dict(row)
-        for row in rows
-        if _normalize_text(row.get("managed_thread_id")) == event.managed_thread_id
-        or _normalize_text(row.get("chat_id")) == chat_id
-        or _normalize_text(row.get("row_id"))
-        == f"surface:{event.surface_kind}:{event.surface_key}"
-    ]
-    removed = [] if matching_rows else [chat_id]
-    return {
-        "envelope": {
-            "event_type": "chat.index.patch",
-            "cursor": event.cursor,
-            "entity_kind": "chat",
-            "entity_id": chat_id,
-            "operation": "patch" if matching_rows else "delete",
-            "generated_at": event.created_at,
-        },
-        "patch": {
-            "rows": matching_rows,
-            "groups": [
-                dict(group)
-                for group in snapshot.get("groups") or []
-                if isinstance(group, Mapping)
-            ],
-            "removed_row_ids": removed,
-            "removed_group_ids": [],
-            "order": [
-                str(
-                    row.get("managed_thread_id")
-                    or row.get("chat_id")
-                    or row.get("row_id")
-                )
-                for row in rows
-                if row.get("managed_thread_id")
-                or row.get("chat_id")
-                or row.get("row_id")
-            ],
-            "counters": _chat_index_patch_counters(snapshot, rows),
-        },
-    }
-
-
 def _chat_index_cursor_gap_event(
     *,
     cursor: int,
@@ -2125,10 +2118,38 @@ def _chat_index_cursor_gap_event(
     }
 
 
-def _chat_id_for_event(event: ChatSurfaceEvent) -> str:
-    if event.managed_thread_id:
-        return event.managed_thread_id
-    return f"surface:{event.surface_kind}:{event.surface_key}"
+def _chat_index_projection_invalidated_event(
+    *,
+    cursor: int,
+    requested_cursor: int,
+    snapshot: Mapping[str, Any],
+) -> dict[str, Any]:
+    rows_raw = snapshot.get("rows") or []
+    rows = [row for row in rows_raw if isinstance(row, Mapping)]
+    now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    return {
+        "envelope": {
+            "event_type": "projection.cursor_gap",
+            "cursor": cursor,
+            "entity_kind": "chat",
+            "entity_id": "chat.index",
+            "operation": "invalidate",
+            "generated_at": now,
+        },
+        "patch": {
+            "rows": [],
+            "groups": [],
+            "removed_row_ids": [],
+            "removed_group_ids": [],
+            "order": None,
+            "counters": _chat_index_patch_counters(snapshot, rows),
+        },
+        "repair": {
+            "requested_cursor": requested_cursor,
+            "latest_cursor": cursor,
+            "snapshot_route": "/hub/read-models/chats",
+        },
+    }
 
 
 def _chat_index_patch_counters(
@@ -2152,6 +2173,13 @@ def _chat_index_patch_counters(
         "unread": sum(int(row.get("unread_count") or 0) for row in rows),
         "archived": sum(1 for row in rows if row.get("lifecycle_status") == "archived"),
     }
+
+
+def _safe_int(value: Any, fallback: int = 0) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return fallback
 
 
 def _projection(

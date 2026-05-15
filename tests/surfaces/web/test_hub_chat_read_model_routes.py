@@ -87,6 +87,44 @@ def _seed_thread_rows(hub_root: Path, count: int) -> None:
                     )
 
 
+def _seed_archived_surface_events(hub_root: Path, count: int, *, prefix: str) -> None:
+    with open_orchestration_sqlite(hub_root, durable=True, migrate=True) as conn:
+        with conn:
+            conn.executemany(
+                """
+                INSERT INTO orch_chat_surface_events (
+                    idempotency_key,
+                    event_type,
+                    surface_kind,
+                    surface_key,
+                    managed_thread_id,
+                    repo_id,
+                    lifecycle_status,
+                    status,
+                    occurred_at,
+                    created_at,
+                    payload_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    (
+                        f"{prefix}-{index}",
+                        "surface.archived",
+                        "pma",
+                        f"old-thread-{index}",
+                        f"old-thread-{index}",
+                        "repo",
+                        "archived",
+                        "archived",
+                        "2026-05-11T00:00:00Z",
+                        "2026-05-11T00:00:00Z",
+                        "{}",
+                    )
+                    for index in range(count)
+                ),
+            )
+
+
 def _event_payloads(text: str, event_name: str) -> list[dict]:
     payloads: list[dict] = []
     current_event: str | None = None
@@ -559,10 +597,10 @@ def test_hub_read_models_chats_includes_binding_display_contract_fields(
     assert row["sortKey"]["row_id"] == "thread:thread-0003"
 
 
-def test_hub_read_models_chats_patch_stream_replays_typed_events(hub_env) -> None:
+def test_hub_read_models_chats_patch_stream_uses_projection_revisions(hub_env) -> None:
     _seed_thread_rows(hub_env.hub_root, 2)
     journal = SQLiteChatSurfaceEventJournal(hub_env.hub_root, durable=True)
-    first = journal.append_event(
+    journal.append_event(
         idempotency_key="index-patch-1",
         event_type="queue.state_changed",
         surface_kind="pma",
@@ -570,8 +608,13 @@ def test_hub_read_models_chats_patch_stream_replays_typed_events(hub_env) -> Non
         managed_thread_id="thread-0000",
         repo_id="repo",
         status="queued",
-    ).event
-    second = journal.append_event(
+    )
+
+    client = TestClient(create_hub_app(hub_env.hub_root))
+    snapshot = client.get("/hub/read-models/chats").json()
+    snapshot_cursor = snapshot["cursor"]["sequence"]
+
+    journal.append_event(
         idempotency_key="index-patch-2",
         event_type="delivery.status_changed",
         surface_kind="discord",
@@ -580,52 +623,74 @@ def test_hub_read_models_chats_patch_stream_replays_typed_events(hub_env) -> Non
         repo_id="repo",
         status="delivered",
         payload={"display": {"display_name": "Ops channel"}},
-    ).event
+    )
 
-    client = TestClient(create_hub_app(hub_env.hub_root))
     response = client.get(
         "/hub/read-models/chats/patches",
-        params={"cursor": str(first.cursor), "once": "true"},
+        params={"cursor": str(snapshot_cursor), "once": "true"},
     )
 
     assert response.status_code == 200
-    patches = _event_payloads(response.text, "chat.index.patch")
-    assert [patch["envelope"]["cursor"]["sequence"] for patch in patches] == [
-        second.cursor
-    ]
-    assert patches[0]["envelope"]["eventType"] == "chat.index.patch"
-    assert patches[0]["patch"]["rows"][0]["chatId"] == "thread-0001"
-    assert patches[0]["patch"]["order"]
+    repairs = _event_payloads(response.text, "projection.cursor_gap")
+    assert len(repairs) == 1
+    assert repairs[0]["envelope"]["cursor"]["sequence"] == snapshot_cursor + 1
+    assert repairs[0]["envelope"]["eventType"] == "projection.cursor_gap"
+    assert repairs[0]["patch"]["rows"] == []
+    assert repairs[0]["patch"]["counters"]["total"] == 2
 
 
-def test_hub_read_models_chats_patch_counters_cover_full_filtered_set(
+def test_hub_read_models_chats_patch_stream_does_not_replay_historical_events(
     hub_env,
 ) -> None:
-    _seed_thread_rows(hub_env.hub_root, 30)
-    event = (
-        SQLiteChatSurfaceEventJournal(hub_env.hub_root, durable=True)
-        .append_event(
-            idempotency_key="index-patch-windowed-counters",
-            event_type="delivery.status_changed",
-            surface_kind="pma",
-            surface_key="thread-0029",
-            managed_thread_id="thread-0029",
-            repo_id="repo",
-            status="delivered",
-        )
-        .event
-    )
+    _seed_thread_rows(hub_env.hub_root, 1)
+    _seed_archived_surface_events(hub_env.hub_root, 1200, prefix="historical-archive")
 
     client = TestClient(create_hub_app(hub_env.hub_root))
     response = client.get(
         "/hub/read-models/chats/patches",
-        params={"cursor": str(event.cursor - 1), "once": "true", "window_limit": 1},
+        params={"cursor": "0", "once": "true", "event_limit": 1000},
     )
 
     assert response.status_code == 200
-    patches = _event_payloads(response.text, "chat.index.patch")
-    assert patches[0]["patch"]["counters"]["total"] == 29
-    assert patches[0]["patch"]["counters"]["running"] == 1
+    assert _event_payloads(response.text, "chat.index.patch") == []
+    repairs = _event_payloads(response.text, "projection.cursor_gap")
+    assert len(repairs) == 1
+    assert repairs[0]["envelope"]["operation"] == "invalidate"
+    assert repairs[0]["envelope"]["cursor"]["sequence"] > 0
+
+
+def test_hub_read_models_chats_patch_stream_bulk_archive_is_bounded(
+    hub_env,
+) -> None:
+    _seed_thread_rows(hub_env.hub_root, 300)
+    client = TestClient(create_hub_app(hub_env.hub_root))
+    snapshot = client.get("/hub/read-models/chats").json()
+    snapshot_cursor = snapshot["cursor"]["sequence"]
+
+    journal = SQLiteChatSurfaceEventJournal(hub_env.hub_root, durable=True)
+    for index in range(300):
+        journal.append_event(
+            idempotency_key=f"bulk-archive-{index}",
+            event_type="surface.archived",
+            surface_kind="pma",
+            surface_key=f"thread-{index:04d}",
+            managed_thread_id=f"thread-{index:04d}",
+            repo_id="repo",
+            lifecycle_status="archived",
+            status="archived",
+        )
+
+    response = client.get(
+        "/hub/read-models/chats/patches",
+        params={"cursor": str(snapshot_cursor), "once": "true", "event_limit": 1000},
+    )
+
+    assert response.status_code == 200
+    assert _event_payloads(response.text, "chat.index.patch") == []
+    repairs = _event_payloads(response.text, "projection.cursor_gap")
+    assert len(repairs) == 1
+    assert repairs[0]["envelope"]["cursor"]["sequence"] == snapshot_cursor + 1
+    assert repairs[0]["patch"]["counters"]["archived"] >= 300
 
 
 def test_hub_read_models_chats_patch_stream_repairs_future_cursor(hub_env) -> None:

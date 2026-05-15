@@ -28,6 +28,7 @@ def build_fixture_payload(fixture_kind: SeedFixtureKind) -> JsonDict:
         SeedFixtureKind.PMA_DUPLICATE_REPAIR: _pma_duplicate_repair,
         SeedFixtureKind.PMA_DISCORD_WEB_HANDOFF: _pma_discord_web_handoff,
         SeedFixtureKind.PMA_GROUPED_TOOLS: _pma_grouped_tools,
+        SeedFixtureKind.CHAT_INDEX_HIGH_HISTORY: _chat_index_high_history,
     }
     return builders[fixture_kind]()
 
@@ -132,6 +133,29 @@ def _chat_list_detail() -> JsonDict:
             "last_activity_at": "2026-05-01T10:09:00Z",
         },
     ]
+    return payload
+
+
+def _chat_index_high_history() -> JsonDict:
+    payload = _seeded_repo_worktree_ticket()
+    payload["chats"] = [
+        {
+            "thread_target_id": "chat-visible-active",
+            "title": "Visible active chat",
+            "status": "idle",
+            "agent_id": "codex",
+            "repo_id": "smoke-repo",
+            "worktree_id": "smoke-repo--review",
+            "last_activity_at": "2026-05-01T10:10:00Z",
+            "progress_percent": 0,
+        }
+    ]
+    payload["chat_index_history"] = {
+        "archived_event_count": 4000,
+        "visible_active_chat_count": 1,
+        "expected_patch_stream_startup_events_max": 1,
+        "patch_route": "/hub/read-models/chats/patches",
+    }
     return payload
 
 

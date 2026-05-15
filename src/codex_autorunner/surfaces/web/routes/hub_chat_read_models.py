@@ -253,7 +253,9 @@ class ChatReadModelService:
         hub_off = _int_fallback(hub_window.get("offset"), offset)
         returned_len = len(hub_rows)
         win_limit = max(1, _int_fallback(hub_window.get("limit"), limit))
-        proj_cursor = projection_cursor_chat_index(self._surface.latest_cursor())
+        proj_cursor = projection_cursor_chat_index(
+            _int_fallback(payload.get("cursor"), 0)
+        )
         counters = counters_from_hub_payload(payload.get("counters"), rows, total)
 
         return ChatIndexSnapshot(
@@ -768,7 +770,7 @@ def projection_cursor_chat_index(sequence: Union[int, str]) -> ProjectionCursor:
     return ProjectionCursor(
         value=f"chat.index:{seq_eff}",
         sequence=seq_eff,
-        source="chat.surface.journal",
+        source="chat.index.projection",
         issued_at=read_model_now(),
     )
 

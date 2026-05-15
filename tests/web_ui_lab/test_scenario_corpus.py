@@ -80,6 +80,7 @@ def test_high_signal_seed_states_are_present() -> None:
         SeedFixtureKind.PMA_DUPLICATE_REPAIR,
         SeedFixtureKind.PMA_DISCORD_WEB_HANDOFF,
         SeedFixtureKind.PMA_GROUPED_TOOLS,
+        SeedFixtureKind.CHAT_INDEX_HIGH_HISTORY,
     }
     missing = required.difference(fixture_kinds)
     assert not missing, f"high-signal fixture coverage missing: {missing}"
@@ -145,6 +146,24 @@ def test_unknown_status_invariant_uses_normalized_screen_model() -> None:
         for chat in screen_model["cursor_snapshot"]["normalized_records"]["chats"]
         if chat.get("status") == "mystery-new-state"
     )
+
+
+def test_chat_index_high_history_regression_seed_is_bounded() -> None:
+    scenario = next(
+        item
+        for item in WEB_UI_SCENARIOS
+        if item.seed_fixture is SeedFixtureKind.CHAT_INDEX_HIGH_HISTORY
+    )
+    payload = build_fixture_payload(scenario.seed_fixture)
+    screen_model = _normalize_screen_model(scenario, payload)
+
+    assert payload["chat_index_history"]["archived_event_count"] >= 4000
+    assert (
+        payload["chat_index_history"]["expected_patch_stream_startup_events_max"] == 1
+    )
+    assert screen_model["row_count"] == 1
+    assert screen_model["visible_rows"] == 1
+    assert "/hub/read-models/chats/patches" in scenario.read_models.read_model_routes
 
 
 def test_missing_optional_fields_invariant_reruns_screen_normalization() -> None:
