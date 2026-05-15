@@ -579,6 +579,25 @@ class FakeACPServer:
                 {"stopReason": "end_turn", "userMessageId": turn_id},
             )
             return
+        if self._scenario == "official_cumulative_terminal_final_output":
+            self.send(
+                {
+                    "method": "prompt/completed",
+                    "params": {
+                        "sessionId": session_id,
+                        "turnId": turn_id,
+                        "status": "completed",
+                        "finalOutput": "prior reply\n\nfixture reply",
+                    },
+                }
+            )
+            time.sleep(0.05)
+            cancel_event.clear()
+            self._send_result(
+                request_id,
+                {"stopReason": "end_turn", "userMessageId": turn_id},
+            )
+            return
         if self._scenario == "official_terminal_without_turn_id":
             self.send(
                 {
