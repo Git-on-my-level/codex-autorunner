@@ -814,26 +814,33 @@ function orderPmaTranscriptCards(cards: PmaCard[]): PmaCard[] {
 }
 
 function comparePmaTranscriptCards(left: PmaCard, right: PmaCard): number {
-  const byKey = pmaTranscriptCardSortKey(left).localeCompare(pmaTranscriptCardSortKey(right));
-  if (byKey !== 0) return byKey;
-  return pmaCardEntityId(left).localeCompare(pmaCardEntityId(right));
-}
-
-function pmaTranscriptCardSortKey(card: PmaCard): string {
-  const orderKey = transcriptCardOrderKey(card);
-  if (orderKey && !orderKey.startsWith('optimistic|')) {
-    const roleRank = card.kind === 'message' && card.message.role === 'user' ? '0' : '2';
-    return `${orderKey}|${roleRank}`;
+  const leftTimestamp = transcriptCardTimestamp(left) ?? '';
+  const rightTimestamp = transcriptCardTimestamp(right) ?? '';
+  if (leftTimestamp && rightTimestamp && leftTimestamp !== rightTimestamp) return leftTimestamp.localeCompare(rightTimestamp);
+  const sameTurn = transcriptCardTurnId(left) && transcriptCardTurnId(left) === transcriptCardTurnId(right);
+  if (sameTurn) {
+    const byRole = transcriptCardRoleRank(left).localeCompare(transcriptCardRoleRank(right));
+    if (byRole !== 0) return byRole;
   }
-  const timestamp = transcriptCardTimestamp(card) ?? '';
-  const roleRank = card.kind === 'message' && card.message.role === 'user' ? '0' : '1';
-  if (orderKey.startsWith('optimistic|')) return `00000000|optimistic|${timestamp}|${roleRank}|${orderKey}`;
-  return `1|${timestamp}|${roleRank}|${orderKey || card.id}`;
+  const byKey = transcriptCardOrderKey(left).localeCompare(transcriptCardOrderKey(right));
+  if (byKey !== 0) return byKey;
+  const byRole = transcriptCardRoleRank(left).localeCompare(transcriptCardRoleRank(right));
+  if (byRole !== 0) return byRole;
+  return pmaCardEntityId(left).localeCompare(pmaCardEntityId(right));
 }
 
 function transcriptCardOrderKey(card: PmaCard): string {
   if ('orderKey' in card && typeof card.orderKey === 'string') return card.orderKey.trim();
   return '';
+}
+
+function transcriptCardRoleRank(card: PmaCard): string {
+  if (card.kind === 'message') return card.message.role === 'user' ? '0' : '2';
+  return '1';
+}
+
+function transcriptCardTurnId(card: PmaCard): string | null {
+  return 'turnId' in card ? card.turnId : null;
 }
 
 function transcriptCardTimestamp(card: PmaCard): string | null {

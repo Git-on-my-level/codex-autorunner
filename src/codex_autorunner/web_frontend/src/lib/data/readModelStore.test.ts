@@ -349,6 +349,97 @@ describe('read model entity store', () => {
     expect(store.snapshot().pmaTranscripts['chat-1'].order).toEqual(['turn:1:user', 'turn:1:intermediate:0001']);
   });
 
+  it('keeps live progress below the same-turn user when event sequence ties', () => {
+    const store = new ReadModelEntityStore();
+    const user: PmaCard = {
+      kind: 'message',
+      id: 'turn:1:user',
+      turnId: '1',
+      orderKey: '00000001|2026-05-11T12:00:00.000Z|turn:1:user',
+      timestamp: '2026-05-11T12:00:00.000Z',
+      message: {
+        id: 'turn:1:user',
+        chatId: 'chat-1',
+        role: 'user',
+        text: 'What model are you?',
+        createdAt: '2026-05-11T12:00:00.000Z',
+        status: null,
+        artifacts: [],
+        raw: {}
+      }
+    };
+    const progress: PmaCard = {
+      kind: 'intermediate',
+      id: 'turn:1:intermediate:0001',
+      title: 'Chat Execution Journal',
+      text: 'Execution started.',
+      eventIds: ['1'],
+      progressSourceIds: ['1'],
+      detail: null,
+      turnId: '1',
+      orderKey: '00000001|2026-05-11T12:00:00.000Z|progress:notice:0001',
+      timestamp: '2026-05-11T12:00:00.000Z'
+    };
+
+    store.replacePmaTranscript('chat-1', [progress, user]);
+
+    expect(store.snapshot().pmaTranscripts['chat-1'].order).toEqual(['turn:1:user', 'turn:1:intermediate:0001']);
+  });
+
+  it('orders later live progress after an earlier assistant despite low live event sequence', () => {
+    const store = new ReadModelEntityStore();
+    const firstUser: PmaCard = {
+      kind: 'message',
+      id: 'turn:1:user',
+      turnId: '1',
+      orderKey: '00000001|2026-05-11T12:00:00.000Z|turn:1:user',
+      timestamp: '2026-05-11T12:00:00.000Z',
+      message: {
+        id: 'turn:1:user',
+        chatId: 'chat-1',
+        role: 'user',
+        text: 'What model are you?',
+        createdAt: '2026-05-11T12:00:00.000Z',
+        status: null,
+        artifacts: [],
+        raw: {}
+      }
+    };
+    const firstAssistant: PmaCard = {
+      ...firstUser,
+      id: 'turn:1:assistant',
+      orderKey: '00000003|2026-05-11T12:00:08.000Z|turn:1:assistant',
+      timestamp: '2026-05-11T12:00:08.000Z',
+      message: {
+        ...firstUser.message,
+        id: 'turn:1:assistant',
+        role: 'assistant',
+        text: 'I am Codex.',
+        createdAt: '2026-05-11T12:00:08.000Z'
+      }
+    };
+    const secondProgress: PmaCard = {
+      kind: 'intermediate',
+      id: 'turn:2:intermediate:0001',
+      title: 'Chat Execution Journal',
+      text: 'Execution started.',
+      eventIds: ['1'],
+      progressSourceIds: ['1'],
+      detail: null,
+      turnId: '2',
+      orderKey: '00000001|2026-05-11T12:00:27.000Z|progress:notice:0001',
+      timestamp: '2026-05-11T12:00:27.000Z'
+    };
+
+    store.replacePmaTranscript('chat-1', [secondProgress, firstAssistant, firstUser]);
+
+    expect(store.snapshot().pmaTranscripts['chat-1'].order).toEqual([
+      'turn:1:user',
+      'turn:1:assistant',
+      'turn:2:intermediate:0001'
+    ]);
+  });
+
   it('keeps detail-backed chats when a bounded index snapshot arrives later', () => {
     const store = new ReadModelEntityStore();
     store.applyChatDetailSnapshot(detailSnapshot('deep-linked-chat'));
