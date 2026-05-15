@@ -324,10 +324,17 @@ def _build_check_run_payload(
         return None, None, {}
     pull_requests = check_run.get("pull_requests")
     pr_number = None
+    pr_head_sha = None
     if isinstance(pull_requests, list):
         for item in pull_requests:
             if isinstance(item, Mapping):
                 pr_number = _normalize_optional_int(item.get("number"))
+                head = item.get("head")
+                pr_head_sha = (
+                    _normalize_optional_text(head.get("sha"))
+                    if isinstance(head, Mapping)
+                    else None
+                )
                 if pr_number is not None:
                     break
     app = check_run.get("app")
@@ -343,6 +350,7 @@ def _build_check_run_payload(
         "html_url": _normalize_optional_text(check_run.get("html_url")),
         "details_url": _normalize_optional_text(check_run.get("details_url")),
         "head_sha": _normalize_optional_text(check_run.get("head_sha")),
+        "pr_head_sha": pr_head_sha,
         "app_slug": app_slug,
         "started_at": _normalize_iso_timestamp(check_run.get("started_at")),
         "completed_at": _normalize_iso_timestamp(check_run.get("completed_at")),

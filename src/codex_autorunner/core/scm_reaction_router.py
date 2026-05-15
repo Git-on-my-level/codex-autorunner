@@ -209,6 +209,14 @@ def _match_reaction_kind(
     if event.event_type == "check_run":
         status = _normalize_lower_text(payload.get("status"))
         conclusion = _normalize_lower_text(payload.get("conclusion"))
+        check_head_sha = _normalize_text(payload.get("head_sha"))
+        pr_head_sha = _normalize_text(payload.get("pr_head_sha"))
+        if (
+            check_head_sha is not None
+            and pr_head_sha is not None
+            and check_head_sha != pr_head_sha
+        ):
+            return None
         if status == "completed" and conclusion in _FAILED_CHECK_CONCLUSIONS:
             return "ci_failed"
         return None
