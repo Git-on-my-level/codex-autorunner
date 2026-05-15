@@ -863,9 +863,9 @@ class DiscordBotService(DiscordInteractionResponseMixin):
                 hub_path=self._hub_config_path,
             )
             root_app_server_config = getattr(root_repo_config, "app_server", None)
-        self._app_server_workspace_supervisors: dict[str, WorkspaceAppServerSupervisor] = (
-            {}
-        )
+        self._app_server_workspace_supervisors: dict[
+            str, WorkspaceAppServerSupervisor
+        ] = {}
         root_app_server_command = list(
             getattr(root_app_server_config, "command", None) or ["codex", "app-server"]
         )
@@ -3305,9 +3305,7 @@ class DiscordBotService(DiscordInteractionResponseMixin):
                 server_scope="workspace",
                 max_handles=getattr(app_cfg, "max_handles", 1),
                 idle_ttl_seconds=getattr(app_cfg, "idle_ttl_seconds", 3600),
-                startup_timeout_seconds=getattr(
-                    app_cfg, "startup_timeout_seconds", 30
-                ),
+                startup_timeout_seconds=getattr(app_cfg, "startup_timeout_seconds", 30),
                 terminate_grace_seconds=getattr(app_cfg, "terminate_grace_seconds", 2),
                 terminate_kill_seconds=getattr(app_cfg, "terminate_kill_seconds", 3),
                 registry_root=getattr(self, "_hub_root", None) or self._config.root,
