@@ -318,6 +318,33 @@ def summarize_flow_freshness(payload: Any) -> Optional[str]:
     return " · ".join(parts)
 
 
+def _format_recovery_facets(run_state: Mapping[str, Any]) -> list[str]:
+    projection = run_state.get("recovery_projection")
+    if not isinstance(projection, Mapping):
+        return []
+    lines: list[str] = []
+    primary_state = projection.get("primary_state")
+    if isinstance(primary_state, str) and primary_state.strip():
+        lines.append(f"Recovery primary: {primary_state.strip()}")
+    facets = projection.get("facets")
+    if not isinstance(facets, Mapping):
+        return lines
+    active: list[str] = []
+    for name, raw_facet in facets.items():
+        if not isinstance(raw_facet, Mapping):
+            continue
+        status = raw_facet.get("status")
+        if not isinstance(status, str) or status == "clear":
+            continue
+        label = str(name).replace("_", " ")
+        reason = raw_facet.get("reason")
+        suffix = f" ({reason})" if isinstance(reason, str) and reason.strip() else ""
+        active.append(f"{label}: {status}{suffix}")
+    if active:
+        lines.append(f"Recovery facets: {', '.join(active)}")
+    return lines
+
+
 def _format_ticket_flow_archive_status(record: FlowRunRecord) -> str:
     mode = resolve_ticket_flow_archive_mode(record)
     if mode == "ready":
@@ -404,9 +431,13 @@ def format_ticket_flow_status_lines(
 
     run_state = snapshot.get("run_state")
     if isinstance(run_state, Mapping):
-        recovery_state = run_state.get("recovery_state")
-        if isinstance(recovery_state, str) and recovery_state.strip():
-            lines.append(f"Recovery: {recovery_state.strip()}")
+        facet_lines = _format_recovery_facets(run_state)
+        if facet_lines:
+            lines.extend(facet_lines)
+        else:
+            recovery_state = run_state.get("recovery_state")
+            if isinstance(recovery_state, str) and recovery_state.strip():
+                lines.append(f"Recovery: {recovery_state.strip()}")
         worker_projection = run_state.get("worker_status")
         if isinstance(worker_projection, str) and worker_projection.strip():
             lines.append(f"Worker status: {worker_projection.strip()}")

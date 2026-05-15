@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Mapping, Optional
 
+from .artifact_instructions import render_human_artifact_overview
 from .config import (
     REPO_OVERRIDE_FILENAME,
     ROOT_CONFIG_FILENAME,
@@ -114,12 +115,7 @@ def build_about_car_markdown(
         "- Tabs: **Contextspace** = edit `active_context.md`, `spec.md`, `decisions.md`.\n"
         "- Tabs: **Terminal** = launches the configured `codex` binary in a PTY.\n"
         "- Tabs: **Archive** = browse worktree snapshots.\n\n"
-        "## FileBox (attachments)\n"
-        "- Repo FileBox root: `.codex-autorunner/filebox/`.\n"
-        "- User uploads: `.codex-autorunner/filebox/inbox/`.\n"
-        "- Files to send back: `.codex-autorunner/filebox/outbox/`.\n"
-        "- Browser render outputs from `car render` are written to outbox by default.\n"
-        "- Note: ticket_flow uses per-run dispatch directories; do not confuse dispatch with FileBox.\n\n"
+        f"{render_human_artifact_overview(include_upload_inbox=True)}\n\n"
         "## Critical rules\n"
         "- Do **not** create new copies of contextspace docs elsewhere in the repo.\n"
         "- Treat `.codex-autorunner/` as intentional project structure even though it is hidden/gitignored.\n\n"

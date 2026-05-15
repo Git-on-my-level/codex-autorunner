@@ -149,7 +149,7 @@ def render_car_context_text(bundle: CarContextBundle) -> str:
         "  - `active_context.md` -- current north-star context.",
         "  - `spec.md` -- longer requirements and acceptance criteria.",
         "  - `decisions.md` -- durable tradeoffs and constraints.",
-        "- `.codex-autorunner/filebox/` -- CAR attachment inbox/outbox when present.",
+        "- `.codex-autorunner/filebox/inbox/` -- CAR attachment uploads when present.",
         "",
         "Intent signals: if the user mentions tickets, dispatch, resume, contextspace docs, or `.codex-autorunner/`, they are likely referring to CAR workflow artifacts.",
         "",

@@ -200,7 +200,7 @@ function chatIndexSnapshot(): ChatIndexSnapshot {
     }],
     groups: [],
     counters: { total: 1, waiting: 0, running: 0, unread: 0, archived: 0 },
-    repair: repair('/hub/chat/index')
+    repair: repair('/hub/read-models/chats')
   };
 }
 
@@ -230,7 +230,17 @@ function chatDetailSnapshot(chatId = 'chat-1'): ChatDetailSnapshot {
       role: 'user',
       createdAt: now,
       text: 'hello',
-      artifactIds: []
+      artifactIds: [],
+      identity: {
+        timelineItemId: 'item-1',
+        progressItemIds: [],
+        correlationId: null
+      },
+      provenance: {
+        sourceEventIds: [],
+        progressEventIds: [],
+        cursorEventId: null
+      }
     }],
     queue: { depth: 0, queuedTurnIds: [] },
     artifacts: [],

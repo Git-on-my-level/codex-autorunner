@@ -3397,6 +3397,7 @@ async def test_finalize_managed_thread_execution_flushes_live_timeline_on_delay_
 
     async def _successful_outcome(*args: Any, **kwargs: Any) -> RuntimeThreadOutcome:
         _ = args, kwargs
+        await asyncio.sleep(0.2)
         return RuntimeThreadOutcome(
             status="ok",
             assistant_text="fixture reply",
@@ -3543,6 +3544,97 @@ async def test_finalize_managed_thread_execution_continues_when_progress_pump_is
     assert "chat.managed_thread.turn_finalized" in caplog.text
     assert "chat.managed_thread.progress_pump_cancelled" in caplog.text
     assert len(fake_hub_client.timeline_requests) == 2
+
+
+@pytest.mark.anyio
+async def test_finalize_managed_thread_execution_does_not_wait_forever_when_progress_pump_suppresses_cancel(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    started = _started_execution_with_backend_ids(tmp_path)
+    fake_hub_client = _FakeHubPersistenceClient()
+    record_calls: list[str] = []
+    monkeypatch.setattr(
+        managed_thread_turns_module,
+        "harness_supports_event_streaming",
+        lambda _harness: True,
+    )
+    monkeypatch.setattr(
+        managed_thread_turns_module,
+        "_PROGRESS_PUMP_SHUTDOWN_SECONDS",
+        0.01,
+    )
+
+    async def _stubborn_stream(*args: Any, **kwargs: Any):
+        _ = args, kwargs
+        yield {"message": {"method": "session/update"}}
+        try:
+            await asyncio.sleep(10)
+        except asyncio.CancelledError:
+            await asyncio.sleep(0.2)
+
+    async def _successful_outcome(*args: Any, **kwargs: Any) -> RuntimeThreadOutcome:
+        _ = args, kwargs
+        return RuntimeThreadOutcome(
+            status="ok",
+            assistant_text="fixture reply",
+            error=None,
+            backend_thread_id="session-1",
+            backend_turn_id="turn-1",
+        )
+
+    monkeypatch.setattr(
+        managed_thread_turns_module,
+        "harness_progress_event_stream",
+        _stubborn_stream,
+    )
+    monkeypatch.setattr(
+        managed_thread_turns_module,
+        "await_runtime_thread_outcome",
+        _successful_outcome,
+    )
+
+    orchestration_service = SimpleNamespace(
+        get_thread_target=lambda managed_thread_id: SimpleNamespace(
+            backend_thread_id="session-1"
+        ),
+        get_thread_runtime_binding=lambda managed_thread_id: SimpleNamespace(
+            backend_thread_id="session-1"
+        ),
+        record_execution_result=lambda *args, **kwargs: (
+            record_calls.append("recorded") or SimpleNamespace(status="ok", error=None)
+        ),
+    )
+
+    caplog.set_level(logging.INFO)
+    result = await asyncio.wait_for(
+        managed_thread_turns_module.finalize_managed_thread_execution(
+            orchestration_service=orchestration_service,
+            started=started,
+            state_root=tmp_path,
+            hub_client=fake_hub_client,
+            surface=managed_thread_turns_module.ManagedThreadSurfaceInfo(
+                log_label="Discord",
+                surface_kind="discord",
+                surface_key="discord:chan-1:msg-1",
+            ),
+            errors=managed_thread_turns_module.ManagedThreadErrorMessages(
+                public_execution_error="Discord PMA execution failed",
+                timeout_error="Discord PMA turn timed out",
+                interrupted_error="Discord PMA turn interrupted",
+                timeout_seconds=5,
+            ),
+            logger=logging.getLogger("test.managed_thread.pump_suppresses_cancel"),
+            turn_preview="preview",
+        ),
+        timeout=1.0,
+    )
+
+    assert result.status == "ok"
+    assert record_calls == ["recorded"]
+    assert "chat.managed_thread.progress_pump_shutdown_timed_out" in caplog.text
+    assert "chat.managed_thread.terminal_recorded" in caplog.text
     assert len(fake_hub_client.trace_requests) == 1
 
 

@@ -95,6 +95,10 @@ from .....agents.registry import (
     resolve_agent_runtime,
     wrap_requested_agent_context,
 )
+from .....core.artifact_instructions import (
+    ArtifactDeliveryContext,
+    render_agent_artifact_instructions,
+)
 from .....core.config import load_hub_config
 from .....core.config_contract import ConfigError
 from .....core.context_awareness import (
@@ -164,6 +168,7 @@ from ...helpers import (
     _with_conversation_id,
 )
 from ...immediate_feedback_bridge import telegram_create_or_reuse_working_anchor
+from ...state import parse_topic_key
 from ...state import topic_key as build_topic_key
 
 if TYPE_CHECKING:
@@ -171,7 +176,7 @@ if TYPE_CHECKING:
 
 from .command_utils import _format_opencode_exception
 from .opencode_stream_parts import OpenCodeStreamPartHandler
-from .shared import FILES_HINT_TEMPLATE, TelegramCommandSupportMixin
+from .shared import TelegramCommandSupportMixin
 from .turn_lifecycle import (
     clear_turn_runtime_state,
     compose_interrupt_aware_response,
@@ -188,6 +193,16 @@ TELEGRAM_REPO_INTERRUPTED_ERROR = "Telegram turn interrupted"
 TELEGRAM_PMA_IDLE_TIMEOUT_SECONDS = 1800
 _DEFAULT_TELEGRAM_PMA_IDLE_TIMEOUT_SECONDS = 1800
 _DEFAULT_TELEGRAM_REPO_TURN_TIMEOUT_SECONDS = 7200
+
+
+def _artifact_conversation_key_from_topic(topic_key: str) -> str:
+    try:
+        chat_id, thread_id, _scope = parse_topic_key(topic_key)
+    except ValueError:
+        return f"topic:{topic_key}"
+    if thread_id is None:
+        return f"chat:{chat_id}"
+    return f"chat:{chat_id}/thread:{thread_id}"
 
 
 @dataclass
@@ -1732,17 +1747,25 @@ class ExecutionCommands(TelegramCommandSupportMixin):
         user_input_text: Optional[str] = None,
     ) -> tuple[str, bool]:
         inbox_dir = self._files_inbox_dir(record.workspace_path, topic_key)
-        outbox_dir = self._files_outbox_pending_dir(record.workspace_path, topic_key)
         topic_dir = self._files_topic_dir(record.workspace_path, topic_key)
         return maybe_inject_filebox_hint(
             prompt_text,
             hint_text=wrap_injected_context(
-                FILES_HINT_TEMPLATE.format(
-                    inbox=str(inbox_dir),
-                    outbox=str(outbox_dir),
-                    topic_key=topic_key,
-                    topic_dir=str(topic_dir),
-                    max_bytes=self._config.media.max_file_bytes,
+                render_agent_artifact_instructions(
+                    ArtifactDeliveryContext(
+                        surface="telegram",
+                        conversation_key=_artifact_conversation_key_from_topic(
+                            topic_key
+                        ),
+                        workspace_scope=f"repo:{record.workspace_path}",
+                        scope_label="repo/worktree artifact target for this Telegram topic",
+                        user_upload_inbox=inbox_dir,
+                        extra_agent_lines=(
+                            f"Topic key: {topic_key}",
+                            f"Topic dir: {topic_dir}",
+                            f"Max file size: {self._config.media.max_file_bytes} bytes.",
+                        ),
+                    )
                 )
             ),
             has_file_context=has_file_context,

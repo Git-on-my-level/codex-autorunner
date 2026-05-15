@@ -51,16 +51,6 @@ from .command_utils import (
     _format_opencode_exception,
 )
 
-FILES_HINT_TEMPLATE = (
-    "Inbox: {inbox}\n"
-    "Outbox (pending): {outbox}\n"
-    "Topic key: {topic_key}\n"
-    "Topic dir: {topic_dir}\n"
-    "Place files in outbox pending to send after this turn finishes.\n"
-    "Check delivery with /files outbox.\n"
-    "Max file size: {max_bytes} bytes."
-)
-
 
 @dataclass
 class _RuntimeStub:

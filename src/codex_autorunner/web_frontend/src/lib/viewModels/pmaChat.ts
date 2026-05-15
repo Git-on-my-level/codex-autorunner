@@ -8,7 +8,7 @@ import type {
   WorktreeSummary,
   WorkStatus
 } from './domain';
-import { normalizeOptionalWorkStatus, pmaTimelineContractFields } from './domain';
+import { normalizeOptionalWorkStatus, pmaChatArchivedFromRawSignals, pmaLifecycleTokenIsArchived, pmaTimelineContractFields } from './domain';
 import { surfaceRefFromThreadRaw } from './thread';
 import { isChatUnread } from './unread';
 
@@ -338,7 +338,9 @@ export function mapChatSurfaceToPmaChatSummary(surface: Record<string, unknown>)
     return null;
   }
   const lifecycle = firstRawString(surface.lifecycle);
-  const lifecycleStatus = firstRawString(surface.lifecycle_status) ?? 'active';
+  const lcField = firstRawString(surface.lifecycle_status);
+  const lifecycleStatus =
+    pmaLifecycleTokenIsArchived(lcField) || pmaLifecycleTokenIsArchived(lifecycle) ? 'archived' : (lcField ?? 'active');
   const id = managedThreadId;
   const resourceKind = firstRawString(owner.resource_kind);
   const resourceId = firstRawString(owner.resource_id);
@@ -557,7 +559,7 @@ const activeStatuses: WorkStatus[] = ['running'];
 const waitingStatuses: WorkStatus[] = ['waiting', 'blocked'];
 
 export function isPmaChatArchived(chat: PmaChatSummary): boolean {
-  return chat.lifecycleStatus === 'archived';
+  return pmaLifecycleTokenIsArchived(chat.lifecycleStatus) || pmaChatArchivedFromRawSignals(chat.raw);
 }
 
 export function filterPmaChats(

@@ -12,6 +12,10 @@ from ...adapters.chat.media import (
     normalize_mime_type,
 )
 from ...adapters.chat.update_notifier import format_update_status_message
+from ...core.artifact_instructions import (
+    ArtifactDeliveryContext,
+    render_agent_artifact_instructions,
+)
 from ...core.flows.ux_helpers import summarize_flow_freshness
 from ...core.injected_context import wrap_injected_context
 from ...core.ticket_flow_summary import build_ticket_flow_display
@@ -199,6 +203,9 @@ def build_attachment_context_payload(
     max_message_length: int,
     voice_provider_name: Optional[str],
     whisper_transcript_disclaimer: Optional[str],
+    target_surface: str = "discord",
+    target_conversation_key: Optional[str] = None,
+    workspace_scope: Optional[str] = None,
 ) -> AttachmentContextPayload:
     transcript_lines: list[str] = []
     transcript_items = [item for item in saved if item.transcript_text]
@@ -243,13 +250,16 @@ def build_attachment_context_payload(
         details.append("")
         details.append(
             wrap_injected_context(
-                "\n".join(
-                    [
-                        f"Inbox: {inbox_path}",
-                        f"Outbox: {outbox_path}",
-                        f"Outbox (pending): {outbox_pending_path}",
-                        "Use inbox files as local inputs and place reply files in outbox.",
-                    ]
+                render_agent_artifact_instructions(
+                    ArtifactDeliveryContext(
+                        surface=target_surface,
+                        conversation_key=(
+                            target_conversation_key or "current-conversation"
+                        ),
+                        workspace_scope=workspace_scope,
+                        scope_label="repo/worktree artifact target for this attachment turn",
+                        user_upload_inbox=inbox_path,
+                    )
                 )
             )
         )

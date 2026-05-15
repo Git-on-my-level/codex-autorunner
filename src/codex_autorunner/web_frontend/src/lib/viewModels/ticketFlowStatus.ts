@@ -244,7 +244,9 @@ function reasonFromRun(run: PmaRunProgress | null): string | null {
 function recoveryStateFromRun(run: PmaRunProgress | null): string | null {
   if (!run) return null;
   return (
+    stringFromRaw(run.raw, 'run_state.recovery_projection.primary_state') ??
     stringFromRaw(run.raw, 'run_state.recovery_state') ??
+    stringFromRaw(run.raw, 'canonical_state_v1.recovery_projection.primary_state') ??
     stringFromRaw(run.raw, 'canonical_state_v1.recovery_state') ??
     stringFromRaw(run.raw, 'recovery_state')
   );
@@ -253,8 +255,13 @@ function recoveryStateFromRun(run: PmaRunProgress | null): string | null {
 function recoveryReasonFromRun(run: PmaRunProgress | null): string | null {
   if (!run) return null;
   const state = recoveryStateFromRun(run);
-  if (state === 'commit_barrier_pending') {
-    return 'Committing or preserving completed ticket work before advancing';
+  if (state === 'commit_barrier_pending' || state === 'commit_barrier_exhausted') {
+    return (
+      stringFromRaw(run.raw, 'run_state.recovery_projection.facets.commit_barrier.reason') ??
+      (state === 'commit_barrier_exhausted'
+        ? 'Commit barrier retry budget exhausted; resolve the worktree before resuming'
+        : 'Committing or preserving completed ticket work before advancing')
+    );
   }
   if (state === 'restart_exhausted') {
     return (
@@ -280,6 +287,7 @@ function recoveryReasonFromRun(run: PmaRunProgress | null): string | null {
 
 function recoveryStatusLabel(state: string | null): string | null {
   if (state === 'commit_barrier_pending') return 'Preserving work';
+  if (state === 'commit_barrier_exhausted') return 'Commit blocked';
   if (state === 'restart_exhausted') return 'Recovery exhausted';
   if (state === 'stale_alive') return 'Needs attention';
   if (state === 'recovering') return 'Recovering';
@@ -291,6 +299,7 @@ function recoveryStatusLabel(state: string | null): string | null {
 function recoverySignal(state: string | null): TicketFlowStatusViewModel['signal'] | null {
   if (state === 'restarted') return 'active';
   if (state === 'recovering' || state === 'commit_barrier_pending') return 'waiting';
+  if (state === 'commit_barrier_exhausted') return 'blocked';
   if (state === 'stale_alive') return 'blocked';
   if (state === 'restart_exhausted') return 'failed';
   if (state === 'failed') return 'failed';

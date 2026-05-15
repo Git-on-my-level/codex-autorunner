@@ -97,6 +97,12 @@ Contract fixtures live in
 channel discovery, Discord, Telegram, Web-originated, PMA managed-thread, and
 notification continuation scenarios.
 
+Managed-thread turn finalization has a stricter orchestration contract in
+`docs/architecture/managed-turn-lifecycle-contract.md`: only durable
+`terminal_recorded` state unblocks the next queued turn, while delivery,
+timeline, transcript, trace, PR binding, activity, and cleanup work are
+post-terminal side effects.
+
 ## Delivery Ledger
 
 Final delivery is durable orchestration state, not adapter-local state.

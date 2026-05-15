@@ -33,6 +33,11 @@ PMA_PROMPT_SECTION_META: dict[str, dict[str, str]] = {
 PMA_FASTPATH = """<pma_fastpath>
 You are PMA (Project Management Agent) inside Codex Autorunner (CAR). Treat the filesystem as truth; prefer creating/updating CAR artifacts over "chat-only" plans.
 
+Artifact delivery contract:
+- Send user-facing files with `car artifacts send <file> --to current` when an artifact delivery target is active.
+- Use the injected artifact delivery context for the active surface and conversation target.
+- Use `car artifacts list`, `car artifacts inspect`, `car artifacts retry`, and `car artifacts cancel` for journal-backed lifecycle.
+
 First-turn routine:
 1) Read <user_message> and <hub_snapshot>.
 2) BRANCH A - Run Dispatches (paused runs needing attention):
@@ -75,7 +80,7 @@ First-turn routine:
       - Assets: suggest destination (repo docs, archive)
     - If PMA File Inbox shows next_action="review_stale_uploaded_file":
       - Treat the file as a likely leftover, not urgent new work.
-      - First verify whether it was already handled by checking the user request, recent PMA history, and nearby outbox/repo activity.
+      - First verify whether it was already handled by checking the user request, recent PMA history, and nearby artifact-delivery or repo activity.
       - If it was already consumed or is no longer relevant, move it out of the active inbox with `car pma file consume <filename> --path <hub_root>` or `car pma file dismiss <filename> --path <hub_root>`.
       - Only route it like a fresh upload when evidence says it is still pending work.
     - Only ask the user "which file first?" or "which repo?" when routing is truly ambiguous.
@@ -167,7 +172,7 @@ def render_pma_discoverability_preamble(
             "Automation quickstart: `/hub/pma/subscriptions` (event triggers) and `/hub/pma/timers` (one-shot/watchdog).\n"
             f'Automation recipes: `{pma_docs_dir / "ABOUT_CAR.md"}` -> "PMA automation wake-ups".\n'
             "Ticket templates: pass `--repo <path>` (a git worktree) for every `car templates` subcommand; add `--path <hub_root>` when the shell cwd is not inside the hub tree. Examples: `car templates list --repo <path>`, `car templates search <query> --repo <path>`, `car templates show <id> --repo <path>`, `car templates apply <id> --repo <path>`.\n"
-            f"To send a file to the user, write it to `{resolved_hub / '.codex-autorunner' / 'filebox' / 'outbox'}`.\n"
+            "To send a file to the user, use `car artifacts send <file> --to current` when an artifact delivery target is active.\n"
             f"User uploaded files are in `{resolved_hub / '.codex-autorunner' / 'filebox' / 'inbox'}`.\n\n"
         )
     else:
@@ -182,7 +187,7 @@ def render_pma_discoverability_preamble(
             "Automation quickstart: `/hub/pma/subscriptions` (event triggers) and `/hub/pma/timers` (one-shot/watchdog).\n"
             'Automation recipes: `<hub_root>/.codex-autorunner/pma/docs/ABOUT_CAR.md` -> "PMA automation wake-ups".\n'
             "Ticket templates: pass `--repo <path>` (a git worktree) for every `car templates` subcommand; add `--path <hub_root>` when the shell cwd is not inside the hub tree. Examples: `car templates list --repo <path>`, `car templates search <query>`, `car templates show <id>`, `car templates apply <id>`.\n"
-            "To send a file to the user, write it to `<hub_root>/.codex-autorunner/filebox/outbox/`.\n"
+            "To send a file to the user, use `car artifacts send <file> --to current` when an artifact delivery target is active.\n"
             "User uploaded files are in `<hub_root>/.codex-autorunner/filebox/inbox/`.\n\n"
         )
     if pma_docs:

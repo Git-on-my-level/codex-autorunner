@@ -10,6 +10,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Optional, Sequence
 
+from .....core.artifact_instructions import (
+    ArtifactDeliveryContext,
+    render_agent_artifact_instructions,
+)
 from .....core.filebox import (
     inbox_dir as filebox_inbox_dir,
 )
@@ -24,7 +28,7 @@ from ....chat.media import IMAGE_CONTENT_TYPES, IMAGE_EXTS
 from ...adapter import TelegramAPIError, TelegramMessage
 from ...config import TelegramMediaCandidate
 from ...forwarding import format_forwarded_telegram_message_text
-from ...state import PendingVoiceRecord, TelegramTopicRecord
+from ...state import PendingVoiceRecord, TelegramTopicRecord, parse_topic_key
 from ..media_ingress import record_with_media_workspace as _record_with_media_workspace
 from ..media_ingress import select_file_candidate, select_image_candidate
 from .command_utils import (
@@ -32,15 +36,7 @@ from .command_utils import (
     _format_telegram_download_error,
 )
 from .filebox import FileBoxCommandsMixin
-from .shared import FILES_HINT_TEMPLATE, TelegramCommandSupportMixin
-
-PMA_FILES_HINT_TEMPLATE = (
-    "PMA inbox: {inbox}\n"
-    "PMA outbox (pending): {outbox}\n"
-    "Place files in outbox pending to send after this turn finishes.\n"
-    "Check delivery with /files outbox.\n"
-    "Max file size: {max_bytes} bytes."
-)
+from .shared import TelegramCommandSupportMixin
 
 
 @dataclass
@@ -1172,24 +1168,47 @@ class FilesCommands(FileBoxCommandsMixin, TelegramCommandSupportMixin):
     ) -> str:
         if pma_enabled:
             pma_inbox = self._pma_inbox_dir()
-            pma_outbox = self._pma_outbox_dir()
-            if pma_inbox is not None and pma_outbox is not None:
+            if pma_inbox is not None:
                 return wrap_injected_context(
-                    PMA_FILES_HINT_TEMPLATE.format(
-                        inbox=str(pma_inbox),
-                        outbox=str(pma_outbox),
-                        max_bytes=self._config.media.max_file_bytes,
+                    render_agent_artifact_instructions(
+                        ArtifactDeliveryContext(
+                            surface="telegram",
+                            conversation_key=_artifact_conversation_key_from_topic(
+                                topic_key
+                            ),
+                            scope_label="hub PMA artifact target for this Telegram PMA chat",
+                            user_upload_inbox=pma_inbox,
+                            extra_agent_lines=(
+                                f"Max file size: {self._config.media.max_file_bytes} bytes.",
+                            ),
+                        ),
                     )
                 )
         inbox_dir = self._files_inbox_dir(workspace_path, topic_key)
-        outbox_dir = self._files_outbox_pending_dir(workspace_path, topic_key)
         topic_dir = self._files_topic_dir(workspace_path, topic_key)
         return wrap_injected_context(
-            FILES_HINT_TEMPLATE.format(
-                inbox=str(inbox_dir),
-                outbox=str(outbox_dir),
-                topic_key=topic_key,
-                topic_dir=str(topic_dir),
-                max_bytes=self._config.media.max_file_bytes,
+            render_agent_artifact_instructions(
+                ArtifactDeliveryContext(
+                    surface="telegram",
+                    conversation_key=_artifact_conversation_key_from_topic(topic_key),
+                    workspace_scope=f"repo:{workspace_path}",
+                    scope_label="repo/worktree artifact target for this Telegram topic",
+                    user_upload_inbox=inbox_dir,
+                    extra_agent_lines=(
+                        f"Topic key: {topic_key}",
+                        f"Topic dir: {topic_dir}",
+                        f"Max file size: {self._config.media.max_file_bytes} bytes.",
+                    ),
+                )
             )
         )
+
+
+def _artifact_conversation_key_from_topic(topic_key: str) -> str:
+    try:
+        chat_id, thread_id, _scope = parse_topic_key(topic_key)
+    except ValueError:
+        return f"topic:{topic_key}"
+    if thread_id is None:
+        return f"chat:{chat_id}"
+    return f"chat:{chat_id}/thread:{thread_id}"

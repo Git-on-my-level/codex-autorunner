@@ -39,6 +39,10 @@ from ...adapters.chat.agents import (
     resolve_chat_runtime_agent,
     valid_chat_agent_values,
 )
+from ...adapters.chat.artifact_delivery import (
+    LegacyArchivePolicy,
+    import_and_drain_legacy_outbox,
+)
 from ...adapters.chat.bound_live_progress import (
     bound_chat_progress_delivered_message_id,
     mark_bound_chat_progress_delivered,
@@ -105,6 +109,12 @@ from ...agents.opencode.supervisor_protocol import (
 )
 from ...agents.registry import AgentDescriptor
 from ...bootstrap import seed_repo_files
+from ...core.artifact_delivery import (
+    ArtifactDeliveryService,
+    ArtifactRecord,
+    DeliveryIntent,
+    delivery_filename,
+)
 from ...core.config import (
     ConfigError,
     ensure_hub_config_at,
@@ -612,6 +622,28 @@ class DiscordServiceDependencies:
     reap_managed_processes: Callable[[Path], Any] = _reap_managed_processes_core
 
 
+@dataclass(frozen=True)
+class _DiscordArtifactTransport:
+    rest: Any
+    channel_id: str
+
+    async def send_artifact(
+        self,
+        *,
+        artifact: ArtifactRecord,
+        intent: DeliveryIntent,
+    ) -> dict[str, Any]:
+        data = Path(artifact.storage_path).read_bytes()
+        return cast(
+            dict[str, Any],
+            await self.rest.create_channel_message_with_attachment(
+                channel_id=self.channel_id,
+                data=data,
+                filename=delivery_filename(intent, artifact),
+            ),
+        )
+
+
 class _DiscordAppServerSupervisorAdapter:
     def __init__(self, service: "DiscordBotService") -> None:
         self._service = service
@@ -824,11 +856,16 @@ class DiscordBotService(DiscordInteractionResponseMixin):
         self._opencode_lock = asyncio.Lock()
         self.app_server_events = AppServerEventBuffer()
         self._app_server_state_root = resolve_global_state_root() / "workspaces"
-        root_repo_config = load_repo_config(
-            self._config.root,
-            hub_path=self._hub_config_path,
+        root_app_server_config = None
+        if self._hub_config_path is not None:
+            root_repo_config = load_repo_config(
+                self._config.root,
+                hub_path=self._hub_config_path,
+            )
+            root_app_server_config = getattr(root_repo_config, "app_server", None)
+        self._app_server_workspace_supervisors: dict[str, WorkspaceAppServerSupervisor] = (
+            {}
         )
-        root_app_server_config = getattr(root_repo_config, "app_server", None)
         root_app_server_command = list(
             getattr(root_app_server_config, "command", None) or ["codex", "app-server"]
         )
@@ -2704,6 +2741,8 @@ class DiscordBotService(DiscordInteractionResponseMixin):
             max_message_length=int(self._config.max_message_length),
             voice_provider_name=provider_name,
             whisper_transcript_disclaimer=DISCORD_WHISPER_TRANSCRIPT_DISCLAIMER,
+            target_conversation_key=f"channel:{channel_id}",
+            workspace_scope=f"repo:{workspace_root}",
         )
         return (
             payload.prompt_text,
@@ -3240,8 +3279,42 @@ class DiscordBotService(DiscordInteractionResponseMixin):
     async def _app_server_supervisor_for_workspace(
         self, workspace_root: Path
     ) -> WorkspaceAppServerSupervisor:
-        _ = workspace_root
-        return self._app_server_supervisor
+        repo_config = load_repo_config(
+            workspace_root,
+            hub_path=self._hub_config_path,
+        )
+        app_cfg = getattr(repo_config, "app_server", None)
+        scope = getattr(app_cfg, "server_scope", "global") if app_cfg else "global"
+        if scope != "workspace":
+            return self._app_server_supervisor
+        key = str(canonicalize_path(workspace_root))
+        async with self._app_server_lock:
+            existing = self._app_server_workspace_supervisors.get(key)
+            if existing is not None:
+                return existing
+            command = list(getattr(app_cfg, "command", None) or ["codex", "app-server"])
+            supervisor = WorkspaceAppServerSupervisor(
+                command,
+                state_root=self._app_server_state_root,
+                env_builder=self._build_workspace_env,
+                notification_handler=cast(
+                    Callable[[Mapping[str, object]], Awaitable[None]],
+                    self.app_server_events.handle_notification,
+                ),
+                logger=self._logger,
+                server_scope="workspace",
+                max_handles=getattr(app_cfg, "max_handles", 1),
+                idle_ttl_seconds=getattr(app_cfg, "idle_ttl_seconds", 3600),
+                startup_timeout_seconds=getattr(
+                    app_cfg, "startup_timeout_seconds", 30
+                ),
+                terminate_grace_seconds=getattr(app_cfg, "terminate_grace_seconds", 2),
+                terminate_kill_seconds=getattr(app_cfg, "terminate_kill_seconds", 3),
+                registry_root=getattr(self, "_hub_root", None) or self._config.root,
+            )
+            self._app_server_workspace_supervisors[key] = supervisor
+            self._runtime_services.register_owned_supervisor(supervisor)
+            return supervisor
 
     async def _client_for_workspace(
         self, workspace_path: Optional[str]
@@ -7393,62 +7466,21 @@ class DiscordBotService(DiscordInteractionResponseMixin):
         workspace_root: Path,
         channel_id: str,
     ) -> None:
-        outbox_root = outbox_dir(workspace_root)
-        pending_dir = outbox_pending_dir(workspace_root)
-        candidates: list[tuple[Path, Path]] = []
-        if outbox_root.exists():
-            for path in self._list_paths_in_dir(outbox_root):
-                candidates.append((outbox_root, path))
-        if pending_dir.exists():
-            for path in self._list_paths_in_dir(pending_dir):
-                candidates.append((pending_dir, path))
-        if not candidates:
-            return
-
-        deduped: dict[str, tuple[Path, Path]] = {}
-        for source_dir, path in candidates:
-            key = str(path)
-            with contextlib.suppress(OSError, ValueError):
-                key = str(canonicalize_path(path))
-            existing = deduped.get(key)
-            if existing is None:
-                deduped[key] = (source_dir, path)
-                continue
-            existing_source, _existing_path = existing
-            existing_is_root = existing_source == outbox_root
-            current_is_root = source_dir == outbox_root
-            # Preserve outbox-root candidates over pending aliases that resolve
-            # to the same canonical target (e.g., pending symlink to root file).
-            if existing_is_root and not current_is_root:
-                continue
-            if current_is_root and not existing_is_root:
-                deduped[key] = (source_dir, path)
-
-        def _mtime(item: tuple[Path, Path]) -> float:
-            _source, path = item
-            with contextlib.suppress(OSError):
-                return path.stat().st_mtime
-            return 0.0
-
-        files = sorted(deduped.values(), key=_mtime, reverse=True)
-
-        sent_dir = outbox_sent_dir(workspace_root)
-        for source_dir, path in files:
-            if not _path_within(root=source_dir, target=path):
-                log_event(
-                    self._logger,
-                    logging.WARNING,
-                    "discord.files.outbox.skipped_outside_pending",
-                    channel_id=channel_id,
-                    path=str(path),
-                    pending_dir=str(source_dir),
-                )
-                continue
-            await self._send_outbox_file(
-                path,
-                sent_dir=sent_dir,
+        await import_and_drain_legacy_outbox(
+            service=ArtifactDeliveryService(workspace_root),
+            transport=_DiscordArtifactTransport(
+                rest=self._rest,
                 channel_id=channel_id,
-            )
+            ),
+            target_surface="discord",
+            target_conversation_key=f"channel:{channel_id}",
+            workspace_scope=f"repo:{workspace_root}",
+            archive_policy=LegacyArchivePolicy(
+                mode="move-to-sent",
+                sent_dir=outbox_sent_dir(workspace_root),
+            ),
+            logger=self._logger,
+        )
 
     async def _handle_files_inbox(
         self,

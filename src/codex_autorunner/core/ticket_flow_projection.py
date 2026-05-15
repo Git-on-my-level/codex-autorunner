@@ -450,6 +450,20 @@ def build_canonical_state_v1(
         "crash_reason": _normalize_optional_str(run_state_payload.get("crash_reason")),
         "reap_reason": _normalize_optional_str(run_state_payload.get("reap_reason")),
         "commit_barrier_pending": bool(run_state_payload.get("commit_barrier_pending")),
+        "recovery_projection": (
+            dict(run_state_payload["recovery_projection"])
+            if isinstance(run_state_payload.get("recovery_projection"), dict)
+            else None
+        ),
+        "notification_intents": (
+            [
+                dict(intent)
+                for intent in run_state_payload.get("notification_intents", [])
+                if isinstance(intent, dict)
+            ]
+            if isinstance(run_state_payload.get("notification_intents"), list)
+            else []
+        ),
         "recommended_action": recommended_action,
         "recommended_actions": recommended_actions,
         "recommendation_generated_at": observed_at,

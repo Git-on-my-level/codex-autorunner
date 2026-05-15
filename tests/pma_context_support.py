@@ -1682,12 +1682,15 @@ def test_render_hub_snapshot_empty_both(tmp_path: Path) -> None:
     assert "next_action: process_uploaded_file" not in result
 
 
-def test_format_pma_prompt_includes_filebox_paths(tmp_path: Path) -> None:
+def test_format_pma_prompt_includes_artifact_delivery_contract(tmp_path: Path) -> None:
     result = _format_seeded_pma_prompt(tmp_path)
 
     hub = tmp_path.expanduser().resolve()
-    assert str(hub / ".codex-autorunner/filebox/outbox") in result
+    assert "Artifact delivery contract:" in result
+    assert "car artifacts send <file> --to current" in result
+    assert str(hub / ".codex-autorunner/filebox/outbox") not in result
     assert str(hub / ".codex-autorunner/filebox/inbox") in result
+    assert "--to explicit" not in result
 
 
 def test_format_pma_prompt_includes_ticket_template_discoverability(

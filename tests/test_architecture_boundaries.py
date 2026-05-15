@@ -470,20 +470,25 @@ def test_core_runtime_does_not_import_web_modules(monkeypatch):
     import importlib
     import sys
 
-    for name in list(sys.modules):
-        if name.startswith("codex_autorunner.surfaces.web"):
-            sys.modules.pop(name, None)
-
-    importlib.invalidate_caches()
-
-    import codex_autorunner.core.runtime  # noqa: F401
-
-    leaked = [
+    to_remove = [
         name for name in sys.modules if name.startswith("codex_autorunner.surfaces.web")
     ]
-    assert (
-        not leaked
-    ), f"core.runtime should not import web/surfaces modules, found {leaked}"
+    saved = {name: sys.modules.pop(name) for name in to_remove}
+    try:
+        importlib.invalidate_caches()
+
+        import codex_autorunner.core.runtime  # noqa: F401
+
+        leaked = [
+            name
+            for name in sys.modules
+            if name.startswith("codex_autorunner.surfaces.web")
+        ]
+        assert (
+            not leaked
+        ), f"core.runtime should not import web/surfaces modules, found {leaked}"
+    finally:
+        sys.modules.update(saved)
 
 
 def test_engine_does_not_import_control_plane():
