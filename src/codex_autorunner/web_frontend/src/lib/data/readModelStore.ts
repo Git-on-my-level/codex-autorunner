@@ -402,6 +402,7 @@ export class ReadModelEntityStore implements Readable<ReadModelEntityState> {
       if (id.startsWith('optimistic:')) delete target.cardsById[id];
     }
     target.order = target.order.filter((id) => !id.startsWith('optimistic:'));
+    next.pmaTranscripts[chatId] = target;
     bump(next, 'timeline', chatId);
     this.commit(next);
   }
