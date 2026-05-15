@@ -256,13 +256,15 @@ export function buildTicketListViewModel(
   owner: TicketOwnerScope = null,
   actionManifest: SurfaceActionManifest | null = null
 ): TicketListViewModel {
-  const rows = source.tickets.map((ticket) => ticketToListRow(ticket, source)).sort(owner ? byTicketNumberThenTitle : bySignalThenRecent);
+  const scopedSource = owner ? scopeTicketSource(source, owner) : source;
+  const lookup = buildTicketLookup(scopedSource);
+  const rows = scopedSource.tickets.map((ticket) => ticketToListRow(ticket, scopedSource, lookup)).sort(owner ? byTicketNumberThenTitle : bySignalThenRecent);
   const ownerLabel = owner?.label || owner?.id;
-  const queueRun = owner ? findQueueRun(source.runs, owner) ?? findQueueRunFromRows(rows) : null;
-  const flowStatus = buildTicketFlowStatusViewModel(source.tickets, source.runs, owner);
+  const queueRun = owner ? findQueueRun(scopedSource.runs, owner) ?? findQueueRunFromRows(rows) : null;
+  const flowStatus = buildTicketFlowStatusViewModel(scopedSource.tickets, scopedSource.runs, owner);
   const activeCurrentTicketId = isTicketFlowActuallyWorking(flowStatus.status) ? flowStatus.currentTicketId : null;
   const rowsWithCurrent = rows.map((row) => ({ ...row, isCurrent: row.id === activeCurrentTicketId || row.routeId === activeCurrentTicketId }));
-  const currentChatId = pickCurrentChatId(source.chats, flowStatus.currentTicketId);
+  const currentChatId = pickCurrentChatId(scopedSource.chats, flowStatus.currentTicketId);
   return {
     title: owner ? `${ownerLabel} tickets` : 'Tickets',
     eyebrow: owner ? `${owner.kind === 'repo' ? 'Repo' : 'Worktree'} ticket queue` : 'All-ticket projection',
@@ -285,6 +287,27 @@ export function buildTicketListViewModel(
     currentChatId,
     rows: rowsWithCurrent
   };
+}
+
+function scopeTicketSource(source: TicketSourceData, owner: Exclude<TicketOwnerScope, null>): TicketSourceData {
+  return {
+    tickets: source.tickets.filter((ticket) => ticketMatchesOwner(ticket, owner)),
+    runs: source.runs.filter((run) => runMatchesOwner(run, owner)),
+    chats: source.chats.filter((chat) => chatMatchesOwner(chat, owner)),
+    artifacts: source.artifacts,
+    timeline: source.timeline
+  };
+}
+
+function ticketMatchesOwner(ticket: TicketSummary, owner: Exclude<TicketOwnerScope, null>): boolean {
+  const scope = workspaceScope(ticket);
+  return scope.kind === owner.kind && scope.id === owner.id;
+}
+
+function chatMatchesOwner(chat: PmaChatSummary, owner: Exclude<TicketOwnerScope, null>): boolean {
+  return owner.kind === 'repo'
+    ? chat.repoId === owner.id && !chat.worktreeId
+    : chat.worktreeId === owner.id;
 }
 
 function pickCurrentChatId(chats: PmaChatSummary[], currentTicketId: string | null): string | null {
@@ -425,8 +448,9 @@ export function buildTicketDetailViewModel(
   source: TicketSourceData,
   now = new Date()
 ): TicketDetailViewModel {
-  const run = findTicketRun(detail, source.runs);
-  const allLinkedChats = findTicketChats(detail, source.chats, run);
+  const lookup = buildTicketLookup(source);
+  const run = findTicketRun(detail, source.runs, lookup);
+  const allLinkedChats = findTicketChats(detail, source.chats, run, lookup);
   const chat = allLinkedChats[0] ?? null;
   const runArtifacts = [...detail.artifacts, ...source.artifacts, ...(run?.events ?? [])];
   const sections = parseTicketContract(detail.body);
@@ -437,7 +461,7 @@ export function buildTicketDetailViewModel(
   const debugHref = run ? `/api/flows/${encodeURIComponent(run.id)}/dispatch_history` : null;
   const chatHref = chat ? `/chats?chat=${encodeURIComponent(chat.id)}` : detail.chatKey ? `/chats?chat=${encodeURIComponent(detail.chatKey)}` : null;
   const linkedChatId = chat?.id ?? null;
-  const sourceTickets = source.tickets.map((ticket) => ticketToListRow(ticket, source)).sort(byTicketNumberThenTitle);
+  const sourceTickets = source.tickets.map((ticket) => ticketToListRow(ticket, source, lookup)).sort(byTicketNumberThenTitle);
   const routeId = routeIdForTicket(detail);
   const selectedIndex = sourceTickets.findIndex((row) => row.routeId === routeId || row.id === detail.id);
   const frontmatter = asRecord(detail.raw.frontmatter);
@@ -661,14 +685,57 @@ export function rowRelativeTime(row: { updatedAt?: string | null; createdAt?: st
   return formatRelativeTime(row.updatedAt ?? row.createdAt ?? null, now);
 }
 
-function ticketToListRow(ticket: TicketSummary, source: TicketSourceData): TicketListRow {
-  const run = findTicketRun(ticket, source.runs);
-  const chat = findTicketChat(ticket, source.chats, run);
+type TicketLookup = {
+  ticketAliasesById: Map<string, Set<string>>;
+  runsByAlias: Map<string, PmaRunProgress[]>;
+  runOrder: Map<string, number>;
+  chatsByAlias: Map<string, PmaChatSummary[]>;
+  chatById: Map<string, PmaChatSummary>;
+};
+
+function buildTicketLookup(source: TicketSourceData): TicketLookup {
+  const ticketAliasesById = new Map(source.tickets.map((ticket) => [ticket.id, ticketAliases(ticket)]));
+  const runsByAlias = new Map<string, PmaRunProgress[]>();
+  const runOrder = new Map<string, number>();
+  source.runs.forEach((run, index) => {
+    runOrder.set(run.id, index);
+    for (const alias of ticketAliasesFromRun(run)) appendMapList(runsByAlias, alias, run);
+  });
+  const chatsByAlias = new Map<string, PmaChatSummary[]>();
+  const chatById = new Map<string, PmaChatSummary>();
+  for (const chat of source.chats) {
+    chatById.set(chat.id, chat);
+    for (const alias of ticketAliasesFromChat(chat)) appendMapList(chatsByAlias, alias, chat);
+  }
+  return { ticketAliasesById, runsByAlias, runOrder, chatsByAlias, chatById };
+}
+
+function appendMapList<T>(map: Map<string, T[]>, key: string, value: T): void {
+  const existing = map.get(key);
+  if (existing) existing.push(value);
+  else map.set(key, [value]);
+}
+
+function ticketAliasesFromChat(chat: PmaChatSummary): Set<string> {
+  const aliases = new Set<string>();
+  for (const value of [
+    chat.ticketId,
+    stringFromRaw(chat.raw, ['chat_key', 'ticket_path', 'current_ticket'])
+  ]) {
+    if (typeof value === 'string' && value.length > 0) aliases.add(normalizeAlias(value));
+  }
+  return aliases;
+}
+
+function ticketToListRow(ticket: TicketSummary, source: TicketSourceData, lookup: TicketLookup = buildTicketLookup(source)): TicketListRow {
+  const run = findTicketRun(ticket, source.runs, lookup);
+  const chat = findTicketChat(ticket, source.chats, run, lookup);
   const status = run?.status ?? ticket.status;
   const scope = workspaceScope(ticket);
   const modelFromTicket = ticketModelRawFromSummary(ticket).trim();
   const modelFromChat = chat?.model?.trim() ?? '';
   const modelResolved = modelFromTicket || modelFromChat;
+  const ownerHref = ownerTicketListHrefFromScope(scope);
   return {
     id: ticket.id,
     routeId: routeIdForTicket(ticket),
@@ -677,8 +744,8 @@ function ticketToListRow(ticket: TicketSummary, source: TicketSourceData): Ticke
     repoLabel: scope.label,
     workspaceKind: scope.kind,
     workspaceId: scope.id,
-    workspaceHref: workspaceHref(ticket),
-    ownerTicketHref: scopedTicketHref(ticket),
+    workspaceHref: workspaceHrefFromScope(scope),
+    ownerTicketHref: scopedTicketHrefFromBase(ownerHref, ticket),
     pathLabel: ticket.path,
     agentLabel: ticket.agentId ?? chat?.agentId ?? 'Unassigned',
     modelLabel: modelResolved ? modelResolved : null,
@@ -690,7 +757,7 @@ function ticketToListRow(ticket: TicketSummary, source: TicketSourceData): Ticke
     currentRunId: run?.id ?? null,
     updatedAt: ticket.updatedAt ?? run?.lastEventAt ?? chat?.updatedAt ?? null,
     chatHref: chat ? `/chats?chat=${encodeURIComponent(chat.id)}` : ticket.chatKey ? `/chats?chat=${encodeURIComponent(ticket.chatKey)}` : null,
-    href: scopedTicketHref(ticket) ?? '/chats',
+    href: scopedTicketHrefFromBase(ownerHref, ticket) ?? '/chats',
     needsAttention: ticket.errors.length > 0 || ['waiting', 'failed', 'blocked', 'invalid'].includes(status),
     isCurrent: false
   };
@@ -1003,16 +1070,36 @@ function linkedChatToVm(chat: PmaChatSummary): TicketLinkedChat {
   };
 }
 
-function findTicketRun(ticket: TicketSummary, runs: PmaRunProgress[]): PmaRunProgress | null {
+function findTicketRun(ticket: TicketSummary, runs: PmaRunProgress[], lookup: TicketLookup | null = null): PmaRunProgress | null {
+  if (lookup) {
+    const candidates = new Map<string, PmaRunProgress>();
+    for (const alias of lookup.ticketAliasesById.get(ticket.id) ?? ticketAliases(ticket)) {
+      for (const run of lookup.runsByAlias.get(alias) ?? []) candidates.set(run.id, run);
+    }
+    if (candidates.size > 0) {
+      return [...candidates.values()].sort((a, b) => (lookup.runOrder.get(a.id) ?? 0) - (lookup.runOrder.get(b.id) ?? 0))[0] ?? null;
+    }
+  }
   const aliases = ticketAliases(ticket);
   return runs.find((run) => aliasesOverlap(aliases, ticketAliasesFromRun(run))) ?? null;
 }
 
-function findTicketChat(ticket: TicketSummary, chats: PmaChatSummary[], run: PmaRunProgress | null): PmaChatSummary | null {
-  return findTicketChats(ticket, chats, run)[0] ?? null;
+function findTicketChat(ticket: TicketSummary, chats: PmaChatSummary[], run: PmaRunProgress | null, lookup: TicketLookup | null = null): PmaChatSummary | null {
+  return findTicketChats(ticket, chats, run, lookup)[0] ?? null;
 }
 
-function findTicketChats(ticket: TicketSummary, chats: PmaChatSummary[], run: PmaRunProgress | null): PmaChatSummary[] {
+function findTicketChats(ticket: TicketSummary, chats: PmaChatSummary[], run: PmaRunProgress | null, lookup: TicketLookup | null = null): PmaChatSummary[] {
+  if (lookup) {
+    const matchedById = new Map<string, PmaChatSummary>();
+    if (run?.chatId) {
+      const runChat = lookup.chatById.get(run.chatId);
+      if (runChat) matchedById.set(runChat.id, runChat);
+    }
+    for (const alias of lookup.ticketAliasesById.get(ticket.id) ?? ticketAliases(ticket)) {
+      for (const chat of lookup.chatsByAlias.get(alias) ?? []) matchedById.set(chat.id, chat);
+    }
+    if (matchedById.size > 0) return orderTicketChats([...matchedById.values()], run);
+  }
   const aliases = ticketAliases(ticket);
   const matched = chats.filter((chat) => {
     if (run?.chatId && chat.id === run.chatId) return true;
@@ -1021,8 +1108,12 @@ function findTicketChats(ticket: TicketSummary, chats: PmaChatSummary[], run: Pm
       .map(normalizeAlias);
     return chatAliases.some((alias) => aliases.has(alias));
   });
+  return orderTicketChats(matched, run);
+}
+
+function orderTicketChats(chats: PmaChatSummary[], run: PmaRunProgress | null): PmaChatSummary[] {
   // Active run's chat first, then by recency, with the active chat retained as the canonical primary.
-  return matched.sort((a, b) => {
+  return chats.sort((a, b) => {
     const aRun = run?.chatId === a.id ? 0 : 1;
     const bRun = run?.chatId === b.id ? 0 : 1;
     if (aRun !== bRun) return aRun - bRun;
@@ -1113,6 +1204,10 @@ function workspaceScope(ticket: TicketSummary): {
 
 function workspaceHref(ticket: TicketSummary): string | null {
   const scope = workspaceScope(ticket);
+  return workspaceHrefFromScope(scope);
+}
+
+function workspaceHrefFromScope(scope: ReturnType<typeof workspaceScope>): string | null {
   if (scope.kind === 'repo' && scope.id) return repoRoute(scope.id);
   if (scope.kind === 'worktree' && scope.id) return worktreeRoute(scope.id, scope.parentRepoId);
   return null;
@@ -1120,13 +1215,20 @@ function workspaceHref(ticket: TicketSummary): string | null {
 
 function ownerTicketListHref(ticket: TicketSummary): string | null {
   const scope = workspaceScope(ticket);
+  return ownerTicketListHrefFromScope(scope);
+}
+
+function ownerTicketListHrefFromScope(scope: ReturnType<typeof workspaceScope>): string | null {
   if (scope.kind === 'repo' && scope.id) return repoTicketRoute(scope.id);
   if (scope.kind === 'worktree' && scope.id) return worktreeTicketRoute(scope.id, scope.parentRepoId);
   return null;
 }
 
 function scopedTicketHref(ticket: TicketSummary): string | null {
-  const base = ownerTicketListHref(ticket);
+  return scopedTicketHrefFromBase(ownerTicketListHref(ticket), ticket);
+}
+
+function scopedTicketHrefFromBase(base: string | null, ticket: TicketSummary): string | null {
   return base ? `${base}/${encodeURIComponent(routeIdForTicket(ticket))}` : null;
 }
 

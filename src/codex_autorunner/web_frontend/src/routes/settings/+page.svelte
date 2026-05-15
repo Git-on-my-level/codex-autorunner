@@ -21,6 +21,9 @@
   let saveError = $state<ApiError | null>(null);
   let saving = $state(false);
   let memoryOpen = $state(false);
+  let settingsLoadSeq = 0;
+  let settingsSessionRaw = $state<JsonRecord | null>(null);
+  let settingsVoiceRaw = $state<JsonRecord | null>(null);
   const hubScope = { kind: 'hub' as const };
   type SetupPromptKind = 'telegram' | 'discord' | 'notifications' | 'github' | 'voice';
 
@@ -43,6 +46,7 @@
   });
 
   async function loadSettings(): Promise<void> {
+    const loadSeq = ++settingsLoadSeq;
     loading = true;
     error = null;
     saveError = null;
@@ -59,24 +63,39 @@
     }
 
     const agentRows = agents.ok ? agents.data.agents : [];
-    const modelCatalogs: Record<string, JsonRecord[] | null> = {};
-    await Promise.all(
-      agentRows.map(async (agent) => {
-        if (!agentCanListModels(agent)) return;
-        const id = agentId(agent);
-        const result = await webApi.pma.listAgentModels(id);
-        modelCatalogs[id] = result.ok ? result.data : null;
-      })
-    );
-
+    settingsSessionRaw = session.ok ? session.data : null;
+    settingsVoiceRaw = voice.ok ? voice.data : null;
     view = buildSettingsViewModel({
-      session: session.ok ? session.data : null,
+      session: settingsSessionRaw,
       agents: agentRows,
-      modelCatalogs,
-      voiceConfig: voice.ok ? voice.data : null
+      modelCatalogs: {},
+      voiceConfig: settingsVoiceRaw
     });
     sessionBaselineEpoch += 1;
     loading = false;
+    void loadModelCatalogs(agentRows, loadSeq);
+  }
+
+  async function loadModelCatalogs(agentRows: JsonRecord[], loadSeq: number): Promise<void> {
+    const catalogEntries = await Promise.all(
+      agentRows.map(async (agent) => {
+        if (!agentCanListModels(agent)) return null;
+        const id = agentId(agent);
+        const result = await webApi.pma.listAgentModels(id);
+        return [id, result.ok ? result.data : null] as const;
+      })
+    );
+    if (loadSeq !== settingsLoadSeq || !view) return;
+    const currentSession = view.session;
+    const modelCatalogs = Object.fromEntries(
+      catalogEntries.filter((entry): entry is readonly [string, JsonRecord[] | null] => entry !== null)
+    );
+    view = buildSettingsViewModel({
+      session: buildSessionUpdatePayload(currentSession),
+      agents: agentRows,
+      modelCatalogs,
+      voiceConfig: settingsVoiceRaw
+    });
   }
 
   function updateSession(session: SettingsSessionState): void {

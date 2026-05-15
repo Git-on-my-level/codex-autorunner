@@ -305,28 +305,31 @@ export function buildRepoWorktreeIndexViewModel(
   source: RepoWorktreeSourceData,
   kind: 'all' | RepoWorktreeKind = 'all'
 ): RepoWorktreeIndexViewModel {
+  const lookup = buildRepoWorktreeLookup(source);
   const ticketIndexMetricsAvailable = source.ticketsListLoaded !== false;
   const repoIds = new Set(source.repos.map((repo) => repo.id));
   const orphanWorktrees = source.worktrees.filter((worktree) => !worktree.repoId || !repoIds.has(worktree.repoId));
   const rows =
     kind === 'worktree'
       ? source.worktrees
-          .map((worktree) => enrichIndexRowSignals(worktreeToIndexRow(worktree, source), source))
+          .map((worktree) => enrichIndexRowSignals(worktreeToIndexRow(worktree, source, lookup), source, lookup))
           .sort(bySignalsThenActiveThenRecent)
       : [
           ...source.repos.map((repo) =>
             enrichIndexRowSignals(
               repoToIndexRow(
                 repo,
-                source.worktrees.filter((worktree) => worktree.repoId === repo.id),
-                source
+                lookup.worktreesByRepo.get(repo.id) ?? [],
+                source,
+                lookup
               ),
-              source
+              source,
+              lookup
             )
           ),
           ...(kind === 'all'
             ? orphanWorktrees.map((worktree) =>
-                enrichIndexRowSignals(worktreeToIndexRow(worktree, source), source)
+                enrichIndexRowSignals(worktreeToIndexRow(worktree, source, lookup), source, lookup)
               )
             : [])
         ].sort(bySignalsThenActiveThenRecent);
@@ -352,6 +355,7 @@ export function buildRepoWorktreeDetailViewModel(
   kind: RepoWorktreeKind,
   id: string
 ): RepoWorktreeDetailViewModel {
+  const lookup = buildRepoWorktreeLookup(source);
   const resource =
     kind === 'repo'
       ? source.repos.find((repo) => repo.id === id) ?? null
@@ -360,19 +364,19 @@ export function buildRepoWorktreeDetailViewModel(
   const title = resource?.name ?? id;
   const branch = kind === 'repo' ? (resource as RepoSummary | null)?.defaultBranch ?? null : (resource as WorktreeSummary | null)?.branch ?? null;
   const path = resource?.path ?? null;
-  const childWorktreeSummaries = kind === 'repo' ? source.worktrees.filter((worktree) => worktree.repoId === id) : [];
+  const childWorktreeSummaries = kind === 'repo' ? lookup.worktreesByRepo.get(id) ?? [] : [];
   const baseRepo =
     kind === 'worktree'
       ? source.repos.find((repo) => repo.id === (resource as WorktreeSummary | null)?.repoId) ?? null
       : null;
   const parentRepoId = kind === 'worktree' ? (resource as WorktreeSummary | null)?.repoId ?? null : null;
-  const primaryRuns = source.runs.filter((run) => runMatchesResource(run, kind, id));
-  const primaryChats = source.chats.filter((chat) => chatMatchesResource(chat, kind, id));
+  const primaryRuns = lookup.runsByResource.get(resourceKey(kind, id)) ?? [];
+  const primaryChats = lookup.chatsByResource.get(resourceKey(kind, id)) ?? [];
   const runCards = mergeRunCards(primaryRuns, primaryChats, kind, id, parentRepoId);
   const activeRunCards = runCards.filter((run) => ['running', 'waiting', 'blocked'].includes(run.status));
   const visibleRuns = activeRunCards.length ? activeRunCards : runCards.slice(0, 1);
   const currentTicketIds = new Set(visibleRuns.map((run) => run.ticketId).filter((ticketId): ticketId is string => Boolean(ticketId)));
-  const scopedTickets = ticketsForResource(source.tickets, kind, id);
+  const scopedTickets = ticketsForResource(source.tickets, kind, id, lookup);
   const flowStatus = buildTicketFlowStatusViewModel(scopedTickets, primaryRuns, { kind, id });
   const activeCurrentTicketId = isActiveTicketFlowStatus(flowStatus.status) ? flowStatus.currentTicketId : null;
   const currentTickets = ticketsForIds(scopedTickets, currentTicketIds, activeCurrentTicketId);
@@ -416,7 +420,7 @@ export function buildRepoWorktreeDetailViewModel(
     ticketIndexHref: scopedTicketHref(kind, id, parentRepoId),
     ticketIndexLabel: kind === 'repo' ? 'Repo tickets' : 'Worktree tickets',
     ticketOverview,
-    childWorktrees: childWorktreeSummaries.map((worktree) => worktreeToNavChildRow(worktree, baseRepo?.name ?? null)),
+    childWorktrees: childWorktreeSummaries.map((worktree) => worktreeToNavChildRow(worktree, baseRepo?.name ?? null, source, lookup)),
     baseRepoLabel: baseRepo?.name ?? (kind === 'worktree' ? (resource as WorktreeSummary | null)?.repoId ?? null : null),
     baseRepoHref: kind === 'worktree' && (resource as WorktreeSummary | null)?.repoId ? repoRoute((resource as WorktreeSummary).repoId as string) : null,
     hasActiveRun: activeRunCards.length > 0,
@@ -513,12 +517,98 @@ function ticketIndexRollup(scoped: TicketSummary[]): { open: number; total: numb
   return { open, total, done };
 }
 
-function repoToIndexRow(repo: RepoSummary, worktrees: WorktreeSummary[], source: RepoWorktreeSourceData): RepoWorktreeIndexRow {
+type RepoWorktreeLookup = {
+  worktreesByRepo: Map<string, WorktreeSummary[]>;
+  ticketsByResource: Map<string, TicketSummary[]>;
+  chatsByResource: Map<string, PmaChatSummary[]>;
+  runsByResource: Map<string, PmaRunProgress[]>;
+};
+
+function buildRepoWorktreeLookup(source: RepoWorktreeSourceData): RepoWorktreeLookup {
+  const worktreesByRepo = new Map<string, WorktreeSummary[]>();
+  for (const worktree of source.worktrees) {
+    if (worktree.repoId) appendResource(worktreesByRepo, worktree.repoId, worktree);
+  }
+  const ticketsByResource = new Map<string, TicketSummary[]>();
+  for (const ticket of source.tickets) {
+    for (const key of ticketResourceKeys(ticket)) appendResource(ticketsByResource, key, ticket);
+  }
+  const chatsByResource = new Map<string, PmaChatSummary[]>();
+  for (const chat of source.chats) {
+    if (chat.worktreeId) appendResource(chatsByResource, resourceKey('worktree', chat.worktreeId), chat);
+    else if (chat.repoId) appendResource(chatsByResource, resourceKey('repo', chat.repoId), chat);
+  }
+  const runsByResource = new Map<string, PmaRunProgress[]>();
+  for (const run of source.runs) {
+    for (const key of runResourceKeys(run)) appendResource(runsByResource, key, run);
+  }
+  return { worktreesByRepo, ticketsByResource, chatsByResource, runsByResource };
+}
+
+function appendResource<T>(map: Map<string, T[]>, key: string, value: T): void {
+  const existing = map.get(key);
+  if (existing) existing.push(value);
+  else map.set(key, [value]);
+}
+
+function resourceKey(kind: RepoWorktreeKind, id: string): string {
+  return `${kind}:${id}`;
+}
+
+function ticketResourceKeys(ticket: TicketSummary): Set<string> {
+  const keys = new Set<string>();
+  if (ticket.workspaceKind === 'worktree' && ticket.workspaceId) keys.add(resourceKey('worktree', ticket.workspaceId));
+  else if (ticket.workspaceKind === 'repo' && ticket.workspaceId) keys.add(resourceKey('repo', ticket.workspaceId));
+  if (ticket.worktreeId) keys.add(resourceKey('worktree', ticket.worktreeId));
+  else if (ticket.repoId) keys.add(resourceKey('repo', ticket.repoId));
+  const raw = ticket.raw;
+  const frontmatter = asRecord(raw.frontmatter);
+  const rawResourceKind = stringFromRaw(raw, ['resource_kind']);
+  const frontmatterResourceKind = stringFromRaw(frontmatter, ['resource_kind']);
+  const rawResourceId = stringFromRaw(raw, ['resource_id']);
+  const frontmatterResourceId = stringFromRaw(frontmatter, ['resource_id']);
+  const worktreeId =
+    stringFromRaw(raw, ['worktree_id', 'worktree_repo_id']) ??
+    stringFromRaw(frontmatter, ['worktree_id', 'worktree_repo_id']);
+  const repoId =
+    stringFromRaw(raw, ['repo_id', 'base_repo_id']) ??
+    stringFromRaw(frontmatter, ['repo_id', 'base_repo_id']);
+  if (worktreeId) keys.add(resourceKey('worktree', worktreeId));
+  else if (repoId) keys.add(resourceKey('repo', repoId));
+  if (rawResourceKind === 'worktree' && rawResourceId) keys.add(resourceKey('worktree', rawResourceId));
+  if (frontmatterResourceKind === 'worktree' && frontmatterResourceId) keys.add(resourceKey('worktree', frontmatterResourceId));
+  if (rawResourceKind === 'repo' && rawResourceId) keys.add(resourceKey('repo', rawResourceId));
+  if (frontmatterResourceKind === 'repo' && frontmatterResourceId) keys.add(resourceKey('repo', frontmatterResourceId));
+  return keys;
+}
+
+function runResourceKeys(run: PmaRunProgress): Set<string> {
+  const keys = new Set<string>();
+  const state = asRecord(run.raw.state);
+  const ticketEngine = asRecord(state.ticket_engine);
+  const resourceKind = stringFromRaw(run.raw, ['resource_kind']) ?? stringFromRaw(state, ['resource_kind']) ?? stringFromRaw(ticketEngine, ['resource_kind']);
+  const resourceId = stringFromRaw(run.raw, ['resource_id']) ?? stringFromRaw(state, ['resource_id']) ?? stringFromRaw(ticketEngine, ['resource_id']);
+  const worktreeId =
+    stringFromRaw(run.raw, ['worktree_id', 'worktree_repo_id']) ??
+    stringFromRaw(state, ['worktree_id', 'worktree_repo_id']) ??
+    stringFromRaw(ticketEngine, ['worktree_id', 'worktree_repo_id']);
+  const repoId =
+    stringFromRaw(run.raw, ['repo_id']) ??
+    stringFromRaw(state, ['repo_id']) ??
+    stringFromRaw(ticketEngine, ['repo_id']);
+  if (worktreeId) keys.add(resourceKey('worktree', worktreeId));
+  else if (repoId) keys.add(resourceKey('repo', repoId));
+  if (resourceKind === 'worktree' && resourceId) keys.add(resourceKey('worktree', resourceId));
+  if (resourceKind === 'repo' && resourceId && !worktreeId) keys.add(resourceKey('repo', resourceId));
+  return keys;
+}
+
+function repoToIndexRow(repo: RepoSummary, worktrees: WorktreeSummary[], source: RepoWorktreeSourceData, lookup: RepoWorktreeLookup): RepoWorktreeIndexRow {
   const listLoaded = hubTicketListLoaded(source);
   const childWorktrees = worktrees
-    .map((worktree) => worktreeToNavChildRow(worktree, repo.name, source))
+    .map((worktree) => worktreeToNavChildRow(worktree, repo.name, source, lookup))
     .sort(byChildActiveThenLabel);
-  const repoScoped = ticketsForResource(source.tickets, 'repo', repo.id);
+  const repoScoped = ticketsForResource(source.tickets, 'repo', repo.id, lookup);
   const rollup = listLoaded ? ticketIndexRollup(repoScoped) : { open: 0, total: 0, done: 0 };
   let dirtyWorktrees = 0;
   let inUseWorktrees = 0;
@@ -527,7 +617,7 @@ function repoToIndexRow(repo: RepoSummary, worktrees: WorktreeSummary[], source:
     if (dirty) dirtyWorktrees += 1;
     let inUse = dirty || (worktree.activeRuns ?? 0) > 0 || worktree.status === 'running';
     if (!inUse) {
-      const sig = scopedSignals(source, 'worktree', worktree.id);
+      const sig = scopedSignals(source, 'worktree', worktree.id, [], lookup);
       inUse = sig.active > 0 || sig.waiting > 0 || sig.failed > 0;
     }
     if (inUse) inUseWorktrees += 1;
@@ -571,17 +661,18 @@ function repoToIndexRow(repo: RepoSummary, worktrees: WorktreeSummary[], source:
 function worktreeToNavChildRow(
   worktree: WorktreeSummary,
   repoName: string | null = null,
-  source: RepoWorktreeSourceData | null = null
+  source: RepoWorktreeSourceData | null = null,
+  lookup: RepoWorktreeLookup | null = source ? buildRepoWorktreeLookup(source) : null
 ): RepoWorktreeChildRow {
   const listLoaded = source ? hubTicketListLoaded(source) : false;
-  const scoped = source ? ticketsForResource(source.tickets, 'worktree', worktree.id) : [];
+  const scoped = source ? ticketsForResource(source.tickets, 'worktree', worktree.id, lookup ?? undefined) : [];
   const rollup = listLoaded ? ticketIndexRollup(scoped) : { open: 0, total: 0, done: 0 };
-  const primaryRuns = source ? source.runs.filter((run) => runMatchesResource(run, 'worktree', worktree.id)) : [];
-  const primaryChats = source ? source.chats.filter((chat) => chatMatchesResource(chat, 'worktree', worktree.id)) : [];
+  const primaryRuns = lookup?.runsByResource.get(resourceKey('worktree', worktree.id)) ?? (source ? source.runs.filter((run) => runMatchesResource(run, 'worktree', worktree.id)) : []);
+  const primaryChats = lookup?.chatsByResource.get(resourceKey('worktree', worktree.id)) ?? (source ? source.chats.filter((chat) => chatMatchesResource(chat, 'worktree', worktree.id)) : []);
   const currentRun =
     mergeRunCards(primaryRuns, primaryChats, 'worktree', worktree.id, worktree.repoId)
       .find((run) => run.status === 'running' || run.status === 'waiting' || run.status === 'blocked') ?? null;
-  const signals = source ? scopedSignals(source, 'worktree', worktree.id) : { waiting: 0, failed: 0, active: 0 };
+  const signals = source ? scopedSignals(source, 'worktree', worktree.id, [], lookup ?? undefined) : { waiting: 0, failed: 0, active: 0 };
   return {
     id: worktree.id,
     label: shortenWorktreeLabel(worktree.name, repoName),
@@ -609,9 +700,9 @@ function worktreeToNavChildRow(
   };
 }
 
-function worktreeToIndexRow(worktree: WorktreeSummary, source: RepoWorktreeSourceData): RepoWorktreeIndexRow {
+function worktreeToIndexRow(worktree: WorktreeSummary, source: RepoWorktreeSourceData, lookup: RepoWorktreeLookup): RepoWorktreeIndexRow {
   const listLoaded = hubTicketListLoaded(source);
-  const scoped = ticketsForResource(source.tickets, 'worktree', worktree.id);
+  const scoped = ticketsForResource(source.tickets, 'worktree', worktree.id, lookup);
   const rollup = listLoaded ? ticketIndexRollup(scoped) : { open: 0, total: 0, done: 0 };
   return {
     id: worktree.id,
@@ -968,7 +1059,9 @@ function ticketsForIds(tickets: TicketSummary[], ids: Set<string>, currentTicket
     .map((ticket) => ticketToRow(ticket, currentTicketId));
 }
 
-function ticketsForResource(tickets: TicketSummary[], kind: RepoWorktreeKind, id: string): TicketSummary[] {
+function ticketsForResource(tickets: TicketSummary[], kind: RepoWorktreeKind, id: string, lookup?: RepoWorktreeLookup | null): TicketSummary[] {
+  const indexed = lookup?.ticketsByResource.get(resourceKey(kind, id));
+  if (indexed) return indexed;
   return tickets.filter((ticket) => ticketMatchesResource(ticket, kind, id));
 }
 
@@ -1116,8 +1209,8 @@ function bySignalsThenActiveThenRecent(left: RepoWorktreeIndexRow, right: RepoWo
   return byActiveThenRecent(left, right);
 }
 
-function enrichIndexRowSignals(row: RepoWorktreeIndexRow, source: RepoWorktreeSourceData): RepoWorktreeIndexRow {
-  const signals = scopedSignals(source, row.kind, row.id, row.childWorktrees.map((child) => child.id));
+function enrichIndexRowSignals(row: RepoWorktreeIndexRow, source: RepoWorktreeSourceData, lookup?: RepoWorktreeLookup): RepoWorktreeIndexRow {
+  const signals = scopedSignals(source, row.kind, row.id, row.childWorktrees.map((child) => child.id), lookup);
   return {
     ...row,
     signalWaiting: signals.waiting,
@@ -1130,14 +1223,17 @@ function scopedSignals(
   source: RepoWorktreeSourceData,
   kind: RepoWorktreeKind,
   id: string,
-  childIds: string[] = []
+  childIds: string[] = [],
+  lookup?: RepoWorktreeLookup | null
 ): { waiting: number; failed: number; active: number } {
-  const scopedChats = source.chats.filter((chat) =>
+  const key = resourceKey(kind, id);
+  const scopedChats = lookup?.chatsByResource.get(key) ?? source.chats.filter((chat) =>
     kind === 'repo'
       ? Boolean(chat.repoId === id && !chat.worktreeId)
       : chat.worktreeId === id
   );
-  const scopedRuns = source.runs.filter((run) =>
+  const indexedRuns = lookup?.runsByResource.get(key);
+  const scopedRuns = indexedRuns ?? source.runs.filter((run) =>
     kind === 'repo'
       ? runMatchesResource(run, 'repo', id) &&
         !childIds.some((wid) => runMatchesResource(run, 'worktree', wid))

@@ -329,12 +329,14 @@ export class ReadModelEntityStore implements Readable<ReadModelEntityState> {
     }
     if (!isNewer(this.state.cursors[cursorKey], event.envelope.cursor)) return 'ignored';
     const next = cloneState(this.state);
-    const existingTimeline = next.timelines[chatId] ?? {
-      chatId,
-      itemsById: {},
-      order: [],
-      windowLimit: 50
-    };
+    const existingTimeline = cloneTimelineProjection(
+      next.timelines[chatId] ?? {
+        chatId,
+        itemsById: {},
+        order: [],
+        windowLimit: 50
+      }
+    );
     for (const item of [...event.patch.appendedTimeline, ...event.patch.patchedTimeline]) {
       existingTimeline.itemsById[item.itemId] = item;
       if (!existingTimeline.order.includes(item.itemId)) existingTimeline.order.push(item.itemId);
@@ -344,7 +346,7 @@ export class ReadModelEntityStore implements Readable<ReadModelEntityState> {
       existingTimeline.order = existingTimeline.order.filter((itemId) => itemId !== id);
     }
     next.timelines[chatId] = existingTimeline;
-    const detail = next.chatDetails[chatId] ?? { thread: null, queue: null, artifactIds: [] };
+    const detail = cloneChatDetailProjection(next.chatDetails[chatId] ?? { thread: null, queue: null, artifactIds: [] });
     if (event.patch.thread) {
       detail.thread = event.patch.thread;
       upsertChatThread(next, event.patch.thread);
@@ -379,7 +381,7 @@ export class ReadModelEntityStore implements Readable<ReadModelEntityState> {
   upsertChatTranscriptCards(chatId: string, cards: ChatTranscriptCard[]): void {
     if (!cards.length) return;
     const next = cloneState(this.state);
-    const transcript = next.chatTranscripts[chatId] ?? { cardsById: {}, order: [] };
+    const transcript = cloneChatTranscript(next.chatTranscripts[chatId] ?? { cardsById: {}, order: [] });
     for (const card of cards) {
       const id = chatTranscriptCardEntityId(card);
       transcript.cardsById[id] = card;
@@ -395,11 +397,12 @@ export class ReadModelEntityStore implements Readable<ReadModelEntityState> {
     const transcript = this.state.chatTranscripts[chatId];
     if (!transcript || !transcript.order.some((id) => id.startsWith('optimistic:'))) return;
     const next = cloneState(this.state);
-    const target = next.chatTranscripts[chatId];
+    const target = cloneChatTranscript(next.chatTranscripts[chatId]);
     for (const id of target.order) {
       if (id.startsWith('optimistic:')) delete target.cardsById[id];
     }
     target.order = target.order.filter((id) => !id.startsWith('optimistic:'));
+    next.chatTranscripts[chatId] = target;
     bump(next, 'timeline', chatId);
     this.commit(next);
   }
@@ -598,7 +601,7 @@ export class ReadModelEntityStore implements Readable<ReadModelEntityState> {
 
   optimisticSend(chatId: string, item: ChatTimelineItem, reconciliationId: string): void {
     const next = cloneState(this.state);
-    const timeline = next.timelines[chatId] ?? { chatId, itemsById: {}, order: [], windowLimit: 50 };
+    const timeline = cloneTimelineProjection(next.timelines[chatId] ?? { chatId, itemsById: {}, order: [], windowLimit: 50 });
     timeline.itemsById[item.itemId] = item;
     if (!timeline.order.includes(item.itemId)) timeline.order.push(item.itemId);
     next.timelines[chatId] = timeline;
@@ -618,13 +621,14 @@ export class ReadModelEntityStore implements Readable<ReadModelEntityState> {
   reconcileOptimisticTimelineItem(chatId: string, reconciliationId: string, backendItem: ChatTimelineItem): void {
     const next = cloneState(this.state);
     const mutation = next.optimistic[reconciliationId];
-    const timeline = next.timelines[chatId];
+    const timeline = next.timelines[chatId] ? cloneTimelineProjection(next.timelines[chatId]) : undefined;
     const optimisticItemId = (mutation?.previousValue as { itemId?: string } | undefined)?.itemId;
     if (timeline && optimisticItemId) {
       delete timeline.itemsById[optimisticItemId];
       timeline.itemsById[backendItem.itemId] = backendItem;
       timeline.order = timeline.order.map((id) => (id === optimisticItemId ? backendItem.itemId : id));
       if (!timeline.order.includes(backendItem.itemId)) timeline.order.push(backendItem.itemId);
+      next.timelines[chatId] = timeline;
     }
     if (mutation) next.optimistic[reconciliationId] = { ...mutation, status: 'reconciled' };
     bump(next, 'timeline', chatId);
@@ -638,10 +642,11 @@ export class ReadModelEntityStore implements Readable<ReadModelEntityState> {
       const chatId = mutation.entityId;
       const itemId = (mutation.previousValue as { itemId?: string } | undefined)?.itemId;
       const next = cloneState(this.state);
-      const timeline = next.timelines[chatId];
+      const timeline = next.timelines[chatId] ? cloneTimelineProjection(next.timelines[chatId]) : undefined;
       if (timeline && itemId) {
         delete timeline.itemsById[itemId];
         timeline.order = timeline.order.filter((id) => id !== itemId);
+        next.timelines[chatId] = timeline;
       }
       next.optimistic[reconciliationId] = { ...mutation, status: 'failed' };
       bump(next, 'timeline', chatId);
@@ -681,10 +686,11 @@ export class ReadModelEntityStore implements Readable<ReadModelEntityState> {
     }
     if (mutation.kind === 'send' && mutation.entityKind === 'timeline') {
       const itemId = (mutation.previousValue as { itemId?: string } | undefined)?.itemId;
-      const timeline = next.timelines[mutation.entityId];
+      const timeline = next.timelines[mutation.entityId] ? cloneTimelineProjection(next.timelines[mutation.entityId]) : undefined;
       if (timeline && itemId) {
         delete timeline.itemsById[itemId];
         timeline.order = timeline.order.filter((id) => id !== itemId);
+        next.timelines[mutation.entityId] = timeline;
         bump(next, 'timeline', mutation.entityId);
       }
     }
@@ -745,12 +751,12 @@ function cloneState(state: ReadModelEntityState): ReadModelEntityState {
     chatGroups: { ...state.chatGroups },
     chatGroupOrder: [...state.chatGroupOrder],
     chatCounters: { ...state.chatCounters },
-    chatDetails: cloneRecord(state.chatDetails),
-    timelines: cloneRecord(state.timelines),
-    chatTranscripts: cloneRecord(state.chatTranscripts),
+    chatDetails: { ...state.chatDetails },
+    timelines: { ...state.timelines },
+    chatTranscripts: { ...state.chatTranscripts },
     pmaProgress: { ...state.pmaProgress },
-    pmaQueues: cloneRecord(state.pmaQueues),
-    pmaArtifacts: cloneRecord(state.pmaArtifacts),
+    pmaQueues: { ...state.pmaQueues },
+    pmaArtifacts: { ...state.pmaArtifacts },
     readMarkers: { ...state.readMarkers },
     artifacts: { ...state.artifacts },
     repos: { ...state.repos },
@@ -760,13 +766,13 @@ function cloneState(state: ReadModelEntityState): ReadModelEntityState {
     runtime: { ...state.runtime },
     tickets: { ...state.tickets },
     ticketSummaries: { ...state.ticketSummaries },
-    ticketOrderByOwner: cloneRecord(state.ticketOrderByOwner),
-    ticketSiblings: cloneRecord(state.ticketSiblings),
+    ticketOrderByOwner: { ...state.ticketOrderByOwner },
+    ticketSiblings: { ...state.ticketSiblings },
     runs: { ...state.runs },
     pmaRuns: { ...state.pmaRuns },
-    pmaRunOrderByOwner: cloneRecord(state.pmaRunOrderByOwner),
-    repoDetails: cloneRecord(state.repoDetails),
-    worktreeDetails: cloneRecord(state.worktreeDetails),
+    pmaRunOrderByOwner: { ...state.pmaRunOrderByOwner },
+    repoDetails: { ...state.repoDetails },
+    worktreeDetails: { ...state.worktreeDetails },
     agents: { ...state.agents },
     models: { ...state.models },
     optimistic: { ...state.optimistic },
@@ -785,8 +791,28 @@ function cloneState(state: ReadModelEntityState): ReadModelEntityState {
   };
 }
 
-function cloneRecord<T>(record: Record<string, T>): Record<string, T> {
-  return Object.fromEntries(Object.entries(record).map(([key, value]) => [key, structuredClone(value)]));
+function cloneChatDetailProjection(detail: ChatDetailProjection): ChatDetailProjection {
+  return {
+    thread: detail.thread,
+    queue: detail.queue,
+    artifactIds: [...detail.artifactIds]
+  };
+}
+
+function cloneTimelineProjection(timeline: TimelineProjection): TimelineProjection {
+  return {
+    chatId: timeline.chatId,
+    itemsById: { ...timeline.itemsById },
+    order: [...timeline.order],
+    windowLimit: timeline.windowLimit
+  };
+}
+
+function cloneChatTranscript(transcript: { cardsById: Record<string, ChatTranscriptCard>; order: string[] }): { cardsById: Record<string, ChatTranscriptCard>; order: string[] } {
+  return {
+    cardsById: { ...transcript.cardsById },
+    order: [...transcript.order]
+  };
 }
 
 function keyed<T>(items: T[], key: (item: T) => string): Record<string, T> {

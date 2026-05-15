@@ -254,6 +254,59 @@ describe('read model entity store', () => {
     });
   });
 
+  it('does not clone untouched cached transcripts when progress updates', () => {
+    const store = new ReadModelEntityStore();
+    const active = pmaMessageCard('chat-1', 'turn:1:user', 'hello');
+    const inactive = pmaMessageCard('chat-2', 'turn:2:user', 'cached transcript');
+    store.replaceChatTranscript('chat-1', [active]);
+    store.replaceChatTranscript('chat-2', [inactive]);
+    const inactiveBefore = store.snapshot().chatTranscripts['chat-2'];
+
+    store.setPmaProgress('chat-1', progress('chat-1', 1));
+
+    expect(store.snapshot().chatTranscripts['chat-2']).toBe(inactiveBefore);
+  });
+
+  it('does not clone untouched cached details when another detail patches', () => {
+    const store = new ReadModelEntityStore();
+    store.applyChatDetailSnapshot(detailSnapshot('chat-1'));
+    store.applyChatDetailSnapshot(detailSnapshot('chat-2'));
+    const detailBefore = store.snapshot().chatDetails['chat-2'];
+    const timelineBefore = store.snapshot().timelines['chat-2'];
+
+    store.applyChatDetailPatchEvent({
+      envelope: {
+        contractVersion: READ_MODEL_CONTRACT_VERSION,
+        eventType: 'chat.detail.patch',
+        cursor: cursor(2),
+        entityKind: 'chat',
+        entityId: 'chat-1',
+        operation: 'patch',
+        generatedAt: now
+      },
+      patch: {
+        thread: null,
+        appendedTimeline: [
+          {
+            itemId: 'item-2',
+            kind: 'assistant_message',
+            role: 'assistant',
+            createdAt: now,
+            text: 'hi',
+            artifactIds: []
+          }
+        ],
+        patchedTimeline: [],
+        removedTimelineIds: [],
+        queue: null,
+        artifacts: []
+      }
+    });
+
+    expect(store.snapshot().chatDetails['chat-2']).toBe(detailBefore);
+    expect(store.snapshot().timelines['chat-2']).toBe(timelineBefore);
+  });
+
   it('orders backend-owned PMA transcript cards by backend order key across turns', () => {
     const store = new ReadModelEntityStore();
     const userOne: ChatTranscriptCard = {
@@ -596,6 +649,50 @@ describe('read model entity store', () => {
     expect(retained[0].id).toBe('visible-5');
   });
 });
+
+function pmaMessageCard(chatId: string, id: string, text: string): ChatTranscriptCard {
+  return {
+    kind: 'message',
+    id,
+    turnId: id,
+    orderKey: id,
+    timestamp: now,
+    message: {
+      id,
+      chatId,
+      role: 'user',
+      text,
+      createdAt: now,
+      status: null,
+      artifacts: [],
+      raw: {}
+    }
+  };
+}
+
+function progress(chatId: string, sequence: number): PmaRunProgress {
+  return {
+    id: `turn-${sequence}`,
+    chatId,
+    status: 'running',
+    workStatus: 'running',
+    operatorStatus: null,
+    streamShouldClose: false,
+    streamCloseReason: null,
+    terminal: false,
+    phase: null,
+    guidance: null,
+    queueDepth: 0,
+    elapsedSeconds: sequence,
+    startedAt: now,
+    idleSeconds: null,
+    lastEventId: sequence,
+    lastEventAt: now,
+    progressPercent: null,
+    events: [],
+    raw: {}
+  };
+}
 
 function progressArtifact(id: string, progressItem: Record<string, unknown>): SurfaceArtifact {
   return {

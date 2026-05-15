@@ -32,7 +32,8 @@ export function buildTicketFlowStatusViewModel(
   const activeRun = selectPrimaryRun(scopedRuns);
   const recentRun = activeRun ?? mostRecentRun(scopedRuns);
   const run = activeRun ?? recentRun;
-  const currentTicket = run ? findTicketForRun(scopedTickets, run) : scopedTickets.find((ticket) => ticket.status !== 'done') ?? null;
+  const ticketLookup = run ? buildTicketAliasLookup(scopedTickets) : null;
+  const currentTicket = run ? findTicketForRun(scopedTickets, run, ticketLookup) : scopedTickets.find((ticket) => ticket.status !== 'done') ?? null;
   const doneCount = scopedTickets.filter((ticket) => ticket.status === 'done').length;
   const totalCount = scopedTickets.length;
   const status = activeRun?.status ?? currentTicket?.status ?? (doneCount > 0 && doneCount === totalCount ? 'done' : 'idle');
@@ -174,8 +175,28 @@ function dateFromRaw(raw: Record<string, unknown> | undefined, keys: string[]): 
   return null;
 }
 
-function findTicketForRun(tickets: TicketSummary[], run: PmaRunProgress): TicketSummary | null {
+type TicketAliasLookup = Map<string, TicketSummary[]>;
+
+function buildTicketAliasLookup(tickets: TicketSummary[]): TicketAliasLookup {
+  const lookup = new Map<string, TicketSummary[]>();
+  for (const ticket of tickets) {
+    for (const alias of ticketAliases(ticket)) {
+      const existing = lookup.get(alias);
+      if (existing) existing.push(ticket);
+      else lookup.set(alias, [ticket]);
+    }
+  }
+  return lookup;
+}
+
+function findTicketForRun(tickets: TicketSummary[], run: PmaRunProgress, lookup: TicketAliasLookup | null = null): TicketSummary | null {
   const runAliases = ticketAliasesFromRun(run);
+  if (lookup) {
+    for (const alias of runAliases) {
+      const matches = lookup.get(alias);
+      if (matches?.length) return matches[0] ?? null;
+    }
+  }
   return tickets.find((ticket) => aliasesOverlap(ticketAliases(ticket), runAliases)) ?? null;
 }
 
