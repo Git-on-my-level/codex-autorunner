@@ -1856,6 +1856,15 @@ def _chat_id_for_event(event: ChatSurfaceEvent) -> str:
 def _chat_index_patch_counters(
     snapshot: Mapping[str, Any], rows: list[Mapping[str, Any]]
 ) -> dict[str, int]:
+    counters = snapshot.get("counters")
+    if isinstance(counters, Mapping):
+        return {
+            "total": max(0, int(counters.get("total") or 0)),
+            "waiting": max(0, int(counters.get("waiting") or 0)),
+            "running": max(0, int(counters.get("running") or 0)),
+            "unread": max(0, int(counters.get("unread") or 0)),
+            "archived": max(0, int(counters.get("archived") or 0)),
+        }
     return {
         "total": int((snapshot.get("window") or {}).get("total_count") or 0),
         "waiting": sum(1 for row in rows if int(row.get("queue_depth") or 0) > 0),

@@ -600,10 +600,10 @@ def _chat_surface_status_from_row(row: Mapping[str, Any]) -> ChatSurfaceStatus:
         "delivered",
     }:
         return "idle"
-    if lifecycle == "running" or runtime_l == "running":
-        return "running"
     if runtime_l in {"failed", "error", "blocked", "invalid"}:
         return "failed"
+    if lifecycle == "running" or runtime_l == "running":
+        return "running"
     return "idle"
 
 

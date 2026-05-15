@@ -413,6 +413,39 @@ def test_pma_compat_snapshot_keeps_completed_runtime_over_stale_running_event(
     assert thread["status"] == "completed"
 
 
+def test_chat_index_treats_ok_runtime_as_terminal_over_stale_running_event(
+    tmp_path: Path,
+) -> None:
+    hub_root = tmp_path / "hub"
+    _seed_thread(
+        hub_root,
+        thread_id="thread-ok-stale-running",
+        runtime_status="ok",
+    )
+    SQLiteChatSurfaceEventJournal(hub_root, durable=False).append_event(
+        idempotency_key="ok-stale-running",
+        event_type="execution.progress",
+        surface_kind="pma",
+        surface_key="thread-ok-stale-running",
+        managed_thread_id="thread-ok-stale-running",
+        repo_id="repo-1",
+        status="running",
+        occurred_at="2026-05-11T00:00:10Z",
+    )
+
+    active = ChatSurfaceReadService(hub_root, durable=False).chat_index_snapshot(
+        view="active",
+        limit=20,
+    )
+    pma_snapshot = ChatSurfaceReadService(hub_root, durable=False).pma_compat_snapshot()
+    by_thread_id = {
+        thread["managed_thread_id"]: thread for thread in pma_snapshot["threads"]
+    }
+
+    assert active["rows"] == []
+    assert by_thread_id["thread-ok-stale-running"]["runtime_status"] == "ok"
+
+
 def test_chat_index_carries_ticket_flow_metadata_for_grouping(
     tmp_path: Path,
 ) -> None:
