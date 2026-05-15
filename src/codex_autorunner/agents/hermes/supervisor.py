@@ -17,6 +17,10 @@ from ...core.acp_lifecycle import (
 )
 from ...core.config import HubConfig, RepoConfig
 from ...core.logging_utils import log_event
+from ...core.orchestration.runtime_thread_events import (
+    RuntimeThreadRunEventState,
+    normalize_runtime_progress_event,
+)
 from ...core.orchestration.turn_event_buffer import TurnEventBuffer
 from ...core.text_utils import _normalize_optional_text
 from ...core.time_utils import now_iso
@@ -100,6 +104,22 @@ def _extract_session_summary(payload: Mapping[str, Any]) -> Optional[str]:
         if value:
             return value
     return None
+
+
+async def _assistant_text_from_turn_events(
+    raw_events: Sequence[Mapping[str, Any]],
+) -> str:
+    """Reduce only this turn's ACP stream into assistant text.
+
+    Hermes terminal `finalOutput` may be transcript-level for a durable session.
+    `session/update` chunks are scoped to the active prompt, so they are the
+    safer current-turn source when present.
+    """
+
+    state = RuntimeThreadRunEventState()
+    for raw_event in raw_events:
+        await normalize_runtime_progress_event(dict(raw_event), state)
+    return state.assistant_stream_text.strip() or state.assistant_message_text.strip()
 
 
 class HermesSupervisorError(RuntimeError):
@@ -549,6 +569,22 @@ class HermesSupervisor:
                 self._session_turns.pop((workspace, session_id), None)
         errors = [result.error_message] if result.error_message else []
         raw_events = state.event_buffer.snapshot()
+        assistant_text = result.final_output
+        try:
+            stream_assistant_text = await _assistant_text_from_turn_events(raw_events)
+        except Exception as exc:
+            log_event(
+                self._logger,
+                logging.WARNING,
+                "hermes.turn.stream_output_reduce_failed",
+                workspace_root=workspace,
+                session_id=session_id,
+                turn_id=resolved_turn_id,
+                exc=exc,
+            )
+        else:
+            if stream_assistant_text:
+                assistant_text = stream_assistant_text
         log_event(
             self._logger,
             logging.INFO,
@@ -567,7 +603,7 @@ class HermesSupervisor:
         )
         return TerminalTurnResult(
             status=result.status,
-            assistant_text=result.final_output,
+            assistant_text=assistant_text,
             errors=errors,
             raw_events=raw_events,
         )

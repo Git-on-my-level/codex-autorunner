@@ -228,6 +228,40 @@ async def test_hermes_supervisor_can_complete_from_idle_status_before_prompt_ret
         await supervisor.close_all()
 
 
+@pytest.mark.slow
+@pytest.mark.asyncio
+async def test_hermes_supervisor_prefers_turn_stream_over_cumulative_terminal_output(
+    tmp_path: Path,
+) -> None:
+    supervisor = HermesSupervisor(
+        fixture_command("official_cumulative_terminal_final_output")
+    )
+    try:
+        await supervisor.ensure_ready(tmp_path)
+        session = await supervisor.create_session(tmp_path, title="Cumulative output")
+        turn_id = await supervisor.start_turn(
+            tmp_path,
+            session.session_id,
+            "hello from hermes",
+        )
+
+        result = await asyncio.wait_for(
+            supervisor.wait_for_turn(tmp_path, session.session_id, turn_id),
+            timeout=2.0,
+        )
+
+        assert result.status == "completed"
+        assert result.assistant_text == "fixture reply"
+        assert any(
+            event.get("method") == "prompt/completed"
+            and event.get("params", {}).get("finalOutput")
+            == "prior reply\n\nfixture reply"
+            for event in result.raw_events
+        )
+    finally:
+        await supervisor.close_all()
+
+
 def test_hermes_supervisor_shared_lifecycle_fixture_buffer_closing() -> None:
     for case in load_acp_lifecycle_corpus():
         raw = dict(case["raw"])
