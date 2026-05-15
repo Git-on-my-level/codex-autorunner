@@ -687,7 +687,8 @@
 
   $effect(() => {
     const request = currentChatIndexRequest;
-    loadingChats = !readModelState.chatWindows[canonicalChatIndexWindowKey(request)] && !hasChatIndexProjection(readModelState);
+    const snapshot = readModelEntityStore.snapshot();
+    loadingChats = !snapshot.chatWindows[canonicalChatIndexWindowKey(request)] && !hasChatIndexProjection(snapshot);
     if (chatIndexFilterRefreshTimer) window.clearTimeout(chatIndexFilterRefreshTimer);
     chatIndexFilterRefreshTimer = window.setTimeout(() => {
       chatIndexFilterRefreshTimer = null;
