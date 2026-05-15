@@ -61,6 +61,28 @@ describe('/chats route load', () => {
     expect(client.chatDetail).not.toHaveBeenCalled();
   });
 
+  it('fetches a fresh deterministic chat index on repeated route loads', async () => {
+    const store = new ReadModelEntityStore();
+    const rows = [
+      chatIndexRow('chat-b', 'Chat B', '2026-05-11T12:01:00Z'),
+      chatIndexRow('chat-a', 'Chat A', '2026-05-11T12:00:00Z')
+    ];
+    const client = mockClient({
+      chatIndex: vi.fn().mockResolvedValue(ok(chatIndexSnapshot(rows)))
+    });
+    const { loadChatRoute } = await importPageLoad(true);
+
+    await loadChatRoute({ loaderOptions: { store, client } });
+    const firstOrder = [...store.snapshot().chatOrder];
+    const firstTitles = firstOrder.map((id) => store.snapshot().chats[id]?.title);
+    await loadChatRoute({ loaderOptions: { store, client } });
+
+    expect(client.chatIndex).toHaveBeenCalledTimes(2);
+    expect(store.snapshot().chatOrder).toEqual(firstOrder);
+    expect(store.snapshot().chatOrder).toEqual(['chat-b', 'chat-a']);
+    expect(store.snapshot().chatOrder.map((id) => store.snapshot().chats[id]?.title)).toEqual(firstTitles);
+  });
+
   it('fetches and hydrates a missing active chat detail', async () => {
     const store = new ReadModelEntityStore();
     const client = mockClient({
@@ -130,7 +152,7 @@ function cursor(sequence: number, source = 'test'): ProjectionCursor {
   return { value: `${source}:${sequence}`, sequence, source, issuedAt: now };
 }
 
-function chatIndexSnapshot(): ChatIndexSnapshot {
+function chatIndexSnapshot(rows: ChatIndexSnapshot['rows'] = []): ChatIndexSnapshot {
   return {
     contractVersion: READ_MODEL_CONTRACT_VERSION,
     kind: 'chat.index.snapshot',
@@ -138,10 +160,35 @@ function chatIndexSnapshot(): ChatIndexSnapshot {
     window: { limit: 50, totalEstimate: 1, totalIsExact: true },
     filter: 'all',
     query: null,
-    rows: [],
+    rows,
     groups: [],
-    counters: { total: 0, waiting: 0, running: 0, unread: 0, archived: 0 },
+    counters: {
+      total: rows.length,
+      waiting: rows.filter((row) => row.status === 'waiting').length,
+      running: rows.filter((row) => row.status === 'running').length,
+      unread: rows.filter((row) => row.unreadCount > 0).length,
+      archived: rows.filter((row) => row.status === 'archived').length
+    },
     repair: repair('/hub/read-models/chats')
+  };
+}
+
+function chatIndexRow(chatId: string, title: string, lastActivityAt: string): ChatIndexSnapshot['rows'][number] {
+  return {
+    chatId,
+    surface: 'pma',
+    title,
+    status: 'idle',
+    unreadCount: 0,
+    lastActivityAt,
+    repoId: null,
+    worktreeId: null,
+    ticketId: null,
+    runId: null,
+    agent: 'codex',
+    chatKind: 'pma',
+    model: 'gpt-5.5',
+    groupId: null
   };
 }
 

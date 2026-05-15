@@ -1,15 +1,15 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { ApiResult, JsonRecord, WebApiClient } from '$lib/api/client';
+import type { ApiResult } from '$lib/api/client';
 import {
   READ_MODEL_CONTRACT_VERSION,
   type ChatIndexRow,
   type ChatIndexSnapshot,
   type ProjectionCursor
 } from '$lib/api/readModelContracts';
-import type { ChatSurfaceStreamOptions, StreamSubscription } from '$lib/api/streaming';
 import { ReadModelEntityStore } from './readModelStore';
 import { selectPmaChats } from './readModelViewModels';
 import { createChatIndexSession } from './chatIndexSession';
+import type { ReadModelSnapshotClient } from './readModelClients';
 
 const issuedAt = '2026-05-12T00:00:00.000Z';
 
@@ -79,12 +79,10 @@ function indexRow(
 }
 
 describe('chat index session', () => {
-  it('keeps one chat index stream while chat pages mount and unmount inside a layout session', async () => {
+  it('starts once and refreshes the chat index from the canonical snapshot client', async () => {
     const store = new ReadModelEntityStore();
-    const close = vi.fn();
-    const openStream = vi.fn((_options: ChatSurfaceStreamOptions): StreamSubscription => ({ close }));
-    const api = mockApi();
-    const session = createChatIndexSession({ api, store, openStream });
+    const client = mockClient();
+    const session = createChatIndexSession({ client, store });
 
     session.start();
     await session.refresh();
@@ -95,164 +93,61 @@ describe('chat index session', () => {
     secondPage();
     session.start();
 
-    expect(openStream).toHaveBeenCalledTimes(1);
-    expect(close).not.toHaveBeenCalled();
+    expect(client.chatIndex).toHaveBeenCalledTimes(2);
+    expect(client.chatIndex).toHaveBeenNthCalledWith(1, { filter: 'all', limit: 200 });
+    expect(client.chatIndex).toHaveBeenNthCalledWith(2, { filter: 'archived', limit: 200 });
     expect(selectPmaChats(store.snapshot()).map((chat) => chat.id)).toEqual(['chat-active', 'chat-archived']);
+    expect(session.isStarted()).toBe(true);
 
     session.stop();
-    expect(close).toHaveBeenCalledTimes(1);
+    expect(session.isStarted()).toBe(false);
   });
 
-  it('keeps live stream updates from reordering existing chat rows under the cursor', async () => {
+  it('has no production surface-event writer that can replace chat order', async () => {
     const store = new ReadModelEntityStore();
-    const streamOptions: ChatSurfaceStreamOptions[] = [];
-    const openStream = vi.fn((options: ChatSurfaceStreamOptions): StreamSubscription => {
-      streamOptions.push(options);
-      return { close: vi.fn() };
-    });
-    const session = createChatIndexSession({ api: mockApi(), store, openStream });
+    const client = mockClient();
+    const session = createChatIndexSession({ client, store });
 
     session.start();
     await session.refresh();
-
-    const options = streamOptions[0];
-    if (!options) throw new Error('stream was not opened');
-    options.onEvent({
-      kind: 'chat_snapshot',
-      lastEventId: 'evt-1',
-      payload: {
-        surfaces: [
-          chatSurface('chat-new', 'New chat'),
-          chatSurface('chat-active', 'Active chat renamed'),
-          chatSurface('chat-archived', 'Archived chat')
-        ]
-      }
-    });
-
-    const rows = selectPmaChats(store.snapshot());
-    expect(rows.map((chat) => chat.id)).toEqual(['chat-active', 'chat-archived', 'chat-new']);
-    expect(rows[0].title).toBe('Active chat renamed');
-  });
-
-  it('ignores incremental chat events already covered by the latest snapshot cursor', async () => {
-    const store = new ReadModelEntityStore();
-    const streamOptions: ChatSurfaceStreamOptions[] = [];
-    const openStream = vi.fn((options: ChatSurfaceStreamOptions): StreamSubscription => {
-      streamOptions.push(options);
-      return { close: vi.fn() };
-    });
-    const session = createChatIndexSession({ api: mockApi(), store, openStream });
+    const replaceSpy = vi.spyOn(store, 'replaceChatIndexRows');
+    const applySpy = vi.spyOn(store, 'applyChatIndexSnapshot');
 
     session.start();
-    await session.refresh();
-
-    const options = streamOptions[0];
-    if (!options) throw new Error('stream was not opened');
-    options.onEvent({
-      kind: 'chat_snapshot',
-      lastEventId: '12',
-      payload: {
-        cursor: 12,
-        surfaces: [chatSurface('chat-active', 'Snapshot title')]
-      }
-    });
-    options.onEvent({
-      kind: 'chat_event',
-      lastEventId: '11',
-      payload: {
-        cursor: 11,
-        event_type: 'queue.state_changed',
-        surface: { surface_kind: 'pma', surface_key: 'chat-active' },
-        managed_thread_id: 'chat-active',
-        lifecycle: 'queued',
-        lifecycle_status: 'active',
-        status: 'queued',
-        occurred_at: '2026-05-13T00:00:00Z'
-      }
-    });
 
     const rows = selectPmaChats(store.snapshot());
-    expect(rows[0]).toMatchObject({
-      id: 'chat-active',
-      title: 'Snapshot title',
-      status: 'idle',
-      updatedAt: '2026-05-12T00:00:00Z'
-    });
+    expect(rows.map((chat) => chat.id)).toEqual(['chat-active', 'chat-archived']);
+    expect(replaceSpy).not.toHaveBeenCalled();
+    expect(applySpy).not.toHaveBeenCalled();
   });
 
-  it('lets metadata-only chat events update titles without changing activity time', async () => {
+  it('manual refreshes are deterministic for identical backend snapshots', async () => {
     const store = new ReadModelEntityStore();
-    const streamOptions: ChatSurfaceStreamOptions[] = [];
-    const openStream = vi.fn((options: ChatSurfaceStreamOptions): StreamSubscription => {
-      streamOptions.push(options);
-      return { close: vi.fn() };
-    });
-    const session = createChatIndexSession({ api: mockApi(), store, openStream });
+    const client = mockClient();
+    const session = createChatIndexSession({ client, store });
 
-    session.start();
     await session.refresh();
+    const first = store.snapshot().chatOrder.map((id) => store.snapshot().chats[id]?.title);
 
-    const options = streamOptions[0];
-    if (!options) throw new Error('stream was not opened');
-    options.onEvent({
-      kind: 'chat_event',
-      lastEventId: '13',
-      payload: {
-        cursor: 13,
-        event_type: 'channel_directory.discovered',
-        surface: { surface_kind: 'pma', surface_key: 'chat-active' },
-        managed_thread_id: 'chat-active',
-        lifecycle: 'discovered',
-        lifecycle_status: 'active',
-        status: 'discovered',
-        occurred_at: '2026-05-13T00:00:00Z',
-        details: { channel: { display: 'Agent Nexus / #codex' } }
-      }
-    });
+    await session.refresh();
+    const second = store.snapshot().chatOrder.map((id) => store.snapshot().chats[id]?.title);
 
-    const rows = selectPmaChats(store.snapshot());
-    expect(rows[0]).toMatchObject({
-      id: 'chat-active',
-      title: 'Agent Nexus / #codex',
-      updatedAt: '2026-05-12T00:00:00.000Z'
-    });
+    expect(second).toEqual(first);
+    expect(store.snapshot().chatOrder).toEqual(['chat-active', 'chat-archived']);
   });
 });
 
-function mockApi(): WebApiClient {
+function mockClient(): ReadModelSnapshotClient {
   return {
-    getJson: vi.fn(async (path: string): Promise<ApiResult<JsonRecord>> => {
-      if (path.includes('filter=archived')) {
-        return ok(
-          chatIndexSnapshot('archived', [
-            indexRow('chat-archived', 'Archived chat', 'archived')
-          ]) as unknown as JsonRecord
-        );
+    chatIndex: vi.fn(async (request = {}) => {
+      if (request.filter === 'archived') {
+        return ok(chatIndexSnapshot('archived', [indexRow('chat-archived', 'Archived chat', 'archived')]));
       }
-      if (path.includes('filter=all')) {
-        return ok(
-          chatIndexSnapshot('all', [indexRow('chat-active', 'Active chat', 'running')]) as unknown as JsonRecord
-        );
-      }
-      return ok({ rows: [] });
+      return ok(chatIndexSnapshot('all', [indexRow('chat-active', 'Active chat', 'running')]));
     })
-  } as unknown as WebApiClient;
+  } as unknown as ReadModelSnapshotClient;
 }
 
 function ok<T>(data: T): ApiResult<T> {
   return { ok: true, data };
-}
-
-function chatSurface(id: string, title: string): JsonRecord {
-  return {
-    surface_kind: 'pma',
-    surface_key: id,
-    managed_thread_id: id,
-    facts: ['managed_thread'],
-    lifecycle_status: 'active',
-    resource_owner: {},
-    display: { display_name: title },
-    metadata: { runtime_status: 'idle' },
-    updated_at: '2026-05-12T00:00:00Z'
-  };
 }

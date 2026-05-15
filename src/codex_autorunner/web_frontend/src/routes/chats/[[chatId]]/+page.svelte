@@ -950,10 +950,15 @@
   }
 
   function invalidateChatMutation(chatId: string): Promise<void> {
-    return invalidateReadModelTags([
+    return invalidateChatMutations([chatId]);
+  }
+
+  async function invalidateChatMutations(chatIds: string[]): Promise<void> {
+    await invalidateReadModelTags([
       readModelEntityTags.chatIndex,
-      readModelEntityTags.chat(chatId)
+      ...chatIds.map((chatId) => readModelEntityTags.chat(chatId))
     ]);
+    await chatIndexSession.refresh();
   }
 
   async function archiveChat(chatId: string, options: { confirmed?: boolean } = {}): Promise<void> {
@@ -975,7 +980,6 @@
     const result = await webApi.pma.archiveThread(chatId);
     if (result.ok) {
       await invalidateChatMutation(chatId);
-      upsertPmaChats([result.data]);
       showCommandNotice('Chat archived.');
       if (activeChatId === chatId) {
         closeStream();
@@ -1002,11 +1006,7 @@
     composeError = null;
     const result = await webApi.pma.archiveThreads(targets);
     if (result.ok) {
-      await invalidateReadModelTags([
-        readModelEntityTags.chatIndex,
-        ...targets.map((chatId) => readModelEntityTags.chat(chatId))
-      ]);
-      upsertPmaChats(result.data.threads);
+      await invalidateChatMutations(targets);
       showCommandNotice(
         result.data.errorCount > 0
           ? `Archived ${result.data.archivedCount}; ${result.data.errorCount} failed.`
@@ -1691,11 +1691,6 @@
       await invalidateChatMutation(committedChatId);
       await refreshActive(committedChatId, { quiet: true });
       removeOptimistic(committedChatId, { requireBackendRow: true });
-      if (activeChat?.agentId === 'hermes' && profileForSend.trim()) {
-        const stamped = profileForSend.trim();
-        const chat = chats.find((row) => row.id === committedChatId);
-        if (chat) upsertPmaChats([{ ...chat, agentProfile: stamped }]);
-      }
     } else {
       restoreDraft();
       composeError = result.error;
@@ -1807,7 +1802,6 @@
       return;
     }
     await invalidateChatMutation(chatId);
-    upsertPmaChats([compactResult.data]);
     showCommandNotice('Compact summary generated and saved.');
     sending = false;
     await refreshActive(chatId, { quiet: true });
@@ -1980,7 +1974,6 @@
       if (!result.ok) composeError = result.error;
       else {
         await invalidateChatMutation(activeChatId);
-        upsertPmaChats([result.data]);
         showCommandNotice('Thread resumed.');
         await refreshActive(activeChatId, { quiet: true });
         clearSlashDraft();
@@ -1996,7 +1989,6 @@
       if (!result.ok) composeError = result.error;
       else {
         await invalidateChatMutation(activeChatId);
-        upsertPmaChats([result.data]);
         showCommandNotice('Compaction seed saved.');
         await refreshActive(activeChatId, { quiet: true });
         clearSlashDraft();
