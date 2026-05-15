@@ -621,7 +621,7 @@ _build_package_wheel() {
   rm -rf "${wheel_dir}"
   mkdir -p "${wheel_dir}"
 
-  _build_web_static_assets
+  _build_web_static_assets >&2
 
   echo "Building codex-autorunner wheel from ${PACKAGE_SRC} into ${wheel_dir}..." >&2
   "${python_bin}" -m pip -q wheel --no-deps --no-cache-dir --wheel-dir "${wheel_dir}" "${PACKAGE_SRC}" >&2
@@ -677,6 +677,9 @@ _install_package_from_wheel() {
   local python_bin wheel_path wheel_uri install_spec
   python_bin="$1"
   wheel_path="$2"
+  if [[ -z "${wheel_path}" || "${wheel_path}" == *$'\n'* || "${wheel_path}" != *.whl || ! -f "${wheel_path}" ]]; then
+    fail "Invalid staged wheel path for pip install: ${wheel_path:0:200}"
+  fi
   wheel_uri="$(_path_to_file_uri "${wheel_path}")"
   install_spec="codex-autorunner${PACKAGE_EXTRAS} @ ${wheel_uri}"
 
