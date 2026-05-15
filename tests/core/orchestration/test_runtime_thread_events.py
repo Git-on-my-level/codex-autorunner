@@ -960,6 +960,26 @@ async def test_terminal_run_event_from_outcome_canonicalizes_surface_interrupts(
         assert event.reason == "Runtime thread interrupted"
 
 
+async def test_terminal_run_event_from_outcome_canonicalizes_stale_interrupt_error() -> (
+    None
+):
+    state = RuntimeThreadRunEventState()
+
+    event = terminal_run_event_from_outcome(
+        RuntimeThreadOutcome(
+            status="error",
+            assistant_text="",
+            error="Runtime thread interrupted",
+            backend_thread_id="thread-1",
+            backend_turn_id="turn-1",
+        ),
+        state,
+    )
+
+    assert isinstance(event, Interrupted)
+    assert event.reason == "Runtime thread interrupted"
+
+
 async def test_normalize_runtime_thread_raw_event_deduplicates_identical_stream_chunks() -> (
     None
 ):
