@@ -49,7 +49,11 @@ class TicketFlowRuntimeResources:
     agent_pool: Any
 
 
-def build_ticket_flow_runtime_resources(repo_root: Path) -> TicketFlowRuntimeResources:
+def build_ticket_flow_runtime_resources(
+    repo_root: Path,
+    *,
+    runtime_services: Optional[Any] = None,
+) -> TicketFlowRuntimeResources:
     repo_root = repo_root.resolve()
     state_root = resolve_repo_state_root(repo_root)
     db_path = resolve_repo_flows_db_path(repo_root)
@@ -62,7 +66,7 @@ def build_ticket_flow_runtime_resources(repo_root: Path) -> TicketFlowRuntimeRes
         config=config,
         backend_orchestrator=backend_orchestrator,
     )
-    agent_pool = build_agent_pool(engine.config)
+    agent_pool = build_agent_pool(engine.config, runtime_services=runtime_services)
     definition = build_ticket_flow_definition(
         agent_pool=agent_pool,
         auto_commit_default=config.git_auto_commit,

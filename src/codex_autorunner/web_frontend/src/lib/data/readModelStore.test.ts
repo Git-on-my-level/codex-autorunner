@@ -9,7 +9,10 @@ import {
   type PageWindow,
   type ProjectionCursor
 } from '$lib/api/readModelContracts';
+import { pmaTimelineContractFields, type PmaRunProgress, type PmaTimelineItem, type SurfaceArtifact } from '$lib/viewModels/domain';
 import {
+  PMA_LIVE_PROGRESS_EVENT_LIMIT,
+  PMA_TIMELINE_RETAIN_LIMIT,
   ReadModelEntityStore,
   selectChatDetailView,
   selectChatIndexView,
@@ -350,4 +353,89 @@ describe('read model entity store', () => {
     expect(store.applyChatDetailPatchEvent(event)).toBe('ignored');
     expect(selectChatDetailView(store.snapshot(), 'chat-1').timeline.filter((item) => item.itemId === 'item-2')).toHaveLength(1);
   });
+
+  it('retains only a bounded visible PMA timeline window', () => {
+    const store = new ReadModelEntityStore();
+    const noisyItems = Array.from({ length: 1_000 }, (_, index) => pmaTimelineItem(`stream-${index}`, {
+      intermediate_kind: 'assistant_stream',
+      event_type: 'output_delta',
+      text: `chunk ${index}`
+    }));
+    const visibleItems = Array.from({ length: PMA_TIMELINE_RETAIN_LIMIT + 10 }, (_, index) =>
+      pmaTimelineItem(`visible-${index}`, { text: `visible ${index}` })
+    );
+
+    store.replacePmaTimeline('chat-1', [...noisyItems, ...visibleItems]);
+
+    const timeline = store.snapshot().pmaTimelines['chat-1'];
+    expect(timeline.order).toHaveLength(PMA_TIMELINE_RETAIN_LIMIT);
+    expect(timeline.order.every((id) => id.startsWith('visible-'))).toBe(true);
+    expect(timeline.order[0]).toBe('visible-10');
+  });
+
+  it('caps retained PMA live progress events and drops hidden/debug-only progress', () => {
+    const store = new ReadModelEntityStore();
+    const events = [
+      ...Array.from({ length: 1_000 }, (_, index) => progressArtifact(`hidden-${index}`, { kind: 'hidden', hidden: true })),
+      ...Array.from({ length: PMA_LIVE_PROGRESS_EVENT_LIMIT + 5 }, (_, index) => progressArtifact(`visible-${index}`, { kind: 'tool' }))
+    ];
+
+    store.setPmaProgress('chat-1', pmaProgress(events));
+
+    const retained = store.snapshot().pmaProgress['chat-1'].events;
+    expect(retained).toHaveLength(PMA_LIVE_PROGRESS_EVENT_LIMIT);
+    expect(retained.every((event) => event.id.startsWith('visible-'))).toBe(true);
+    expect(retained[0].id).toBe('visible-5');
+  });
 });
+
+function pmaTimelineItem(id: string, payload: Record<string, unknown>): PmaTimelineItem {
+  return {
+    id,
+    kind: 'intermediate',
+    orderKey: id,
+    timestamp: now,
+    chatId: 'chat-1',
+    turnId: 'turn-1',
+    status: 'running',
+    ...pmaTimelineContractFields(id),
+    payload,
+    raw: { item_id: id, payload }
+  };
+}
+
+function progressArtifact(id: string, progressItem: Record<string, unknown>): SurfaceArtifact {
+  return {
+    id,
+    kind: 'progress',
+    title: id,
+    summary: null,
+    url: null,
+    createdAt: now,
+    raw: { progress_item: { item_id: id, title: id, ...progressItem } }
+  };
+}
+
+function pmaProgress(events: SurfaceArtifact[]): PmaRunProgress {
+  return {
+    id: 'run-1',
+    chatId: 'chat-1',
+    status: 'running',
+    workStatus: 'running',
+    operatorStatus: 'running',
+    terminal: false,
+    streamShouldClose: false,
+    streamCloseReason: null,
+    phase: 'running',
+    guidance: null,
+    queueDepth: 0,
+    elapsedSeconds: 1,
+    startedAt: now,
+    idleSeconds: null,
+    lastEventId: 1,
+    lastEventAt: now,
+    progressPercent: null,
+    events,
+    raw: {}
+  };
+}

@@ -60,6 +60,10 @@ export type PartialPageIssue = {
 
 export type JsonRecord = Record<string, unknown>;
 
+export type PmaTimelineRequest = {
+  limit?: number;
+};
+
 export type PmaQueuedTurn = {
   managedTurnId: string;
   position: number;
@@ -313,10 +317,12 @@ export class PmaApiClient {
         }),
         (payload) => mapPmaChatSummary(asRecord(payload.thread ?? payload))
       ),
-    getTimeline: async (chatId: string): Promise<ApiResult<PmaTimelineItem[]>> =>
-      mapResult(await this.getJson<JsonRecord>(`/hub/pma/threads/${encodeURIComponent(chatId)}/timeline`), (payload) =>
+    getTimeline: async (chatId: string, request: PmaTimelineRequest = {}): Promise<ApiResult<PmaTimelineItem[]>> => {
+      const params = new URLSearchParams({ limit: String(request.limit ?? 50) });
+      return mapResult(await this.getJson<JsonRecord>(`/hub/pma/threads/${encodeURIComponent(chatId)}/timeline?${params.toString()}`), (payload) =>
         asArray(payload.items).map(mapPmaTimelineItem)
-      ),
+      );
+    },
     getTail: async (chatId: string): Promise<ApiResult<PmaRunProgress>> =>
       mapResult(await this.getJson<JsonRecord>(`/hub/pma/threads/${encodeURIComponent(chatId)}/tail`), mapPmaRunProgress),
     getStatus: async (chatId: string): Promise<ApiResult<PmaRunProgress>> =>

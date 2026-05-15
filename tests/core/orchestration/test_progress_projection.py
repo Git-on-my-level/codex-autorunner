@@ -5,6 +5,8 @@ from codex_autorunner.core.orchestration.progress_projection import (
     project_progress_events,
 )
 from codex_autorunner.core.ports.run_event import (
+    RUN_EVENT_DELTA_TYPE_ASSISTANT_STREAM,
+    RUN_EVENT_DELTA_TYPE_LOG_LINE,
     RUN_EVENT_STREAM_MODE_SNAPSHOT,
     ApprovalRequested,
     Failed,
@@ -173,3 +175,30 @@ def test_progress_projection_keeps_approvals_and_notices_interleaved() -> None:
 
     assert [item.kind for item in items] == ["notice", "approval", "notice"]
     assert [item.event_ids for item in items] == [(1,), (2,), (3,)]
+
+
+def test_high_volume_stream_deltas_reduce_to_bounded_visible_projection() -> None:
+    events = [
+        ProgressProjectionInput(
+            event_id=index,
+            timestamp=f"2026-05-06T10:00:{index % 60:02d}Z",
+            event=OutputDelta(
+                timestamp=f"2026-05-06T10:00:{index % 60:02d}Z",
+                content=f"chunk-{index} ",
+                delta_type=(
+                    RUN_EVENT_DELTA_TYPE_LOG_LINE
+                    if index % 100 == 0
+                    else RUN_EVENT_DELTA_TYPE_ASSISTANT_STREAM
+                ),
+            ),
+        )
+        for index in range(1, 1001)
+    ]
+
+    items = project_progress_events(events)
+
+    assert len(items) == 1
+    assert items[0].kind == "assistant_update"
+    assert len(items[0].event_ids) == 1000
+    assert items[0].event_ids[0] == 1
+    assert items[0].event_ids[-1] == 1000

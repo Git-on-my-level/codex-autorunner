@@ -1,0 +1,128 @@
+from __future__ import annotations
+
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+
+from codex_autorunner.core.orchestration import initialize_orchestration_sqlite
+from codex_autorunner.core.orchestration.managed_thread_side_effects import (
+    ManagedThreadSideEffectAttemptResult,
+    ManagedThreadSideEffectIntent,
+    ManagedThreadSideEffectOutcome,
+    ManagedThreadSideEffectState,
+    SQLiteManagedThreadSideEffectEngine,
+    build_managed_thread_side_effect_id,
+    build_managed_thread_side_effect_idempotency_key,
+)
+
+
+def _hub_root(tmp_path: Path) -> Path:
+    hub_root = tmp_path / "hub"
+    initialize_orchestration_sqlite(hub_root, durable=False)
+    return hub_root
+
+
+def _engine(tmp_path: Path) -> SQLiteManagedThreadSideEffectEngine:
+    return SQLiteManagedThreadSideEffectEngine(
+        _hub_root(tmp_path),
+        durable=False,
+        retry_backoff=timedelta(seconds=0),
+    )
+
+
+def _intent(
+    *,
+    effect_kind: str = "transcript",
+    managed_thread_id: str = "thread-1",
+    managed_turn_id: str = "turn-1",
+    surface_kind: str = "telegram",
+    surface_key: str = "chat-1",
+) -> ManagedThreadSideEffectIntent:
+    return ManagedThreadSideEffectIntent(
+        effect_id=build_managed_thread_side_effect_id(
+            managed_thread_id=managed_thread_id,
+            managed_turn_id=managed_turn_id,
+            surface_kind=surface_kind,
+            surface_key=surface_key,
+            effect_kind=effect_kind,
+        ),
+        managed_thread_id=managed_thread_id,
+        managed_turn_id=managed_turn_id,
+        idempotency_key=build_managed_thread_side_effect_idempotency_key(
+            managed_thread_id=managed_thread_id,
+            managed_turn_id=managed_turn_id,
+            surface_kind=surface_kind,
+            surface_key=surface_key,
+            effect_kind=effect_kind,
+        ),
+        effect_kind=effect_kind,
+        surface_kind=surface_kind,
+        surface_key=surface_key,
+        payload={"status": "ok"},
+    )
+
+
+def test_registers_side_effect_intent_idempotently(tmp_path: Path) -> None:
+    engine = _engine(tmp_path)
+
+    first = engine.create_intent(_intent())
+    second = engine.create_intent(_intent())
+
+    assert first.inserted is True
+    assert second.inserted is False
+    assert second.record.effect_id == first.record.effect_id
+    assert second.record.state is ManagedThreadSideEffectState.PENDING
+
+
+def test_retryable_persistence_failure_can_be_claimed_again(tmp_path: Path) -> None:
+    engine = _engine(tmp_path)
+    registration = engine.create_intent(_intent(effect_kind="final_timeline"))
+
+    first_claim = engine.claim_effect(registration.record.effect_id)
+    assert first_claim is not None
+    failed = engine.record_attempt_result(
+        registration.record.effect_id,
+        claim_token=first_claim.claim_token,
+        result=ManagedThreadSideEffectAttemptResult(
+            outcome=ManagedThreadSideEffectOutcome.RETRY,
+            error="timeline store unavailable",
+        ),
+    )
+    assert failed is not None
+    assert failed.state is ManagedThreadSideEffectState.RETRY_SCHEDULED
+    assert failed.last_error == "timeline store unavailable"
+
+    second_claim = engine.claim_next(effect_kind="final_timeline")
+    assert second_claim is not None
+    assert second_claim.record.effect_id == registration.record.effect_id
+
+    completed = engine.record_attempt_result(
+        registration.record.effect_id,
+        claim_token=second_claim.claim_token,
+        result=ManagedThreadSideEffectAttemptResult(
+            outcome=ManagedThreadSideEffectOutcome.SUCCEEDED
+        ),
+    )
+    assert completed is not None
+    assert completed.state is ManagedThreadSideEffectState.SUCCEEDED
+    assert completed.completed_at is not None
+
+
+def test_expired_side_effect_claim_recovers_to_retry(tmp_path: Path) -> None:
+    engine = _engine(tmp_path)
+    registration = engine.create_intent(_intent(effect_kind="thread_activity"))
+    claim = engine.claim_effect(registration.record.effect_id)
+    assert claim is not None
+
+    expired_at = datetime(2026, 5, 14, 1, 0, tzinfo=timezone.utc)
+    engine._ledger.patch(
+        registration.record.effect_id,
+        claim_expires_at=(expired_at - timedelta(minutes=1)).isoformat(),
+    )
+
+    recovered = engine.recover_expired_claims(now=expired_at)
+
+    assert recovered == 1
+    record = engine._ledger.get_effect(registration.record.effect_id)
+    assert record is not None
+    assert record.state is ManagedThreadSideEffectState.RETRY_SCHEDULED
+    assert record.last_error == "claim_expired"

@@ -302,8 +302,12 @@ def _build_app_server_supervisor(
         env_builder=_env_builder,
         logger=logger,
         auto_restart=config.auto_restart,
+        server_scope=config.server_scope,
         max_handles=config.max_handles,
         idle_ttl_seconds=config.idle_ttl_seconds,
+        startup_timeout_seconds=config.startup_timeout_seconds,
+        terminate_grace_seconds=config.terminate_grace_seconds,
+        terminate_kill_seconds=config.terminate_kill_seconds,
         request_timeout=config.request_timeout,
         turn_stall_timeout_seconds=config.turn_stall_timeout_seconds,
         turn_stall_poll_interval_seconds=config.turn_stall_poll_interval_seconds,
@@ -493,6 +497,12 @@ def build_app_context(
     runtime_services = RuntimeServices(
         app_server_supervisor=app_server_supervisor,
         opencode_supervisor=opencode_supervisor,
+    )
+    engine._backend_orchestrator = build_backend_orchestrator(
+        config.root,
+        config,
+        shared_app_server_supervisor=app_server_supervisor,
+        shared_opencode_supervisor=opencode_supervisor,
     )
     voice_service: Optional[VoiceService]
     if voice_missing_reason:

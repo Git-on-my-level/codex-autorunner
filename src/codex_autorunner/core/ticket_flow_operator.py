@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import shlex
+import sqlite3
 import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -46,6 +47,10 @@ from .ticket_flow_projection import (
     build_canonical_state_v1,
     collect_ticket_flow_census,
     select_authoritative_run_record,
+)
+from .ticket_flow_recovery import (
+    build_recovery_notification_intents,
+    build_recovery_projection,
 )
 from .utils import resolve_executable
 
@@ -136,6 +141,8 @@ class TicketFlowRunState(TypedDict, total=False):
     reap_reason: Optional[str]
     commit_barrier_pending: bool
     commit_barrier: Optional[dict[str, Any]]
+    recovery_projection: dict[str, Any]
+    notification_intents: list[dict[str, Any]]
     crash: Optional[TicketFlowWorkerCrash]
     flow_status: str
     duration_seconds: Optional[float]
@@ -1194,6 +1201,10 @@ def _derive_recovery_state(
     stale_alive_is_live: bool = False,
 ) -> Optional[str]:
     if isinstance(commit_barrier, dict) and commit_barrier.get("pending"):
+        if commit_barrier.get("exhausted") or (
+            commit_barrier.get("resolution_state") == "exhausted"
+        ):
+            return "commit_barrier_exhausted"
         return "commit_barrier_pending"
     if isinstance(restart_status, dict) and restart_status.get("exhausted"):
         return "restart_exhausted"
@@ -1498,7 +1509,7 @@ def _ticket_flow_recommended_actions(
     if recovery_state == "restart_exhausted":
         crash_cmd = f"open {shlex.quote(str(repo_root / '.codex-autorunner' / 'flows' / run_id / 'crash.json'))}"
         return [crash_cmd, status_cmd, f"{resume_cmd} --force-new"]
-    if recovery_state == "commit_barrier_pending":
+    if recovery_state in {"commit_barrier_pending", "commit_barrier_exhausted"}:
         return [status_cmd, stop_cmd]
     if state == "completed":
         return [start_cmd]
@@ -1656,6 +1667,8 @@ def build_ticket_flow_run_state(
         state = "restart_exhausted"
     elif recovery_state == "stale_alive":
         state = "stale_alive"
+    elif recovery_state == "commit_barrier_exhausted":
+        state = "commit_barrier_exhausted"
     elif recovery_state == "commit_barrier_pending":
         state = "commit_barrier_pending"
     elif dead_worker:
@@ -1667,7 +1680,14 @@ def build_ticket_flow_run_state(
 
     is_terminal = record.status.is_terminal()
     attention_required = not is_terminal and (
-        state in ("dead", "blocked", "restart_exhausted", "commit_barrier_pending")
+        state
+        in (
+            "dead",
+            "blocked",
+            "restart_exhausted",
+            "commit_barrier_pending",
+            "commit_barrier_exhausted",
+        )
         or state == "stale_alive"
         or record.status == FlowRunStatus.PAUSED
     )
@@ -1708,6 +1728,11 @@ def build_ticket_flow_run_state(
             )
     elif state == "stale_alive":
         blocking_reason = "Worker is alive but no active tool is running and semantic progress is stale."
+    elif state == "commit_barrier_exhausted":
+        blocking_reason = (
+            "Commit barrier retry budget is exhausted. Manual commit or rescue is "
+            "required before ticket-flow can advance."
+        )
     elif state == "commit_barrier_pending":
         blocking_reason = "Recovery is preserving completed ticket work while the commit barrier is pending."
     elif state == "blocked":
@@ -1747,8 +1772,8 @@ def build_ticket_flow_run_state(
         restart_status.get("exhausted") if isinstance(restart_status, dict) else False
     )
     last_recovery_action = None
-    if recovery_state == "commit_barrier_pending":
-        last_recovery_action = "commit_barrier_pending"
+    if recovery_state in {"commit_barrier_pending", "commit_barrier_exhausted"}:
+        last_recovery_action = recovery_state
     elif isinstance(restart_status, dict):
         last_recovery_action = _normalize_optional_text(
             restart_status.get("last_reason")
@@ -1757,6 +1782,41 @@ def build_ticket_flow_run_state(
             last_recovery_action = "restart_attempted"
     elif recovery_state:
         last_recovery_action = recovery_state
+
+    stale_alive_payload = stale_alive if isinstance(stale_alive, dict) else None
+    recovery_projection = build_recovery_projection(
+        run_id=run_id,
+        state=state,
+        recovery_state=recovery_state,
+        attention_required=attention_required,
+        recommended_actions=recommended_actions,
+        worker_status=worker_status,
+        blocking_reason=blocking_reason,
+        restart_attempts=restart_attempts,
+        restart_max_attempts=restart_max_attempts,
+        restart_exhausted=restart_exhausted,
+        commit_barrier_pending=bool(
+            isinstance(commit_barrier, dict) and commit_barrier.get("pending")
+        ),
+        commit_barrier=commit_barrier,
+        stale_alive=stale_alive_payload,
+        dispatch_pause_pending=bool(record.status == FlowRunStatus.PAUSED),
+        terminal_failure=bool(record.status == FlowRunStatus.FAILED),
+        crash_reason=crash_reason,
+        reap_reason=reap_reason,
+    )
+    notification_intents = build_recovery_notification_intents(recovery_projection)
+    if store is not None:
+        for intent in notification_intents:
+            try:
+                store.upsert_notification_intent(
+                    intent, observed_at=recovery_projection.observed_at
+                )
+            except (OSError, RuntimeError, ValueError, TypeError, sqlite3.Error):
+                logger.debug(
+                    "Failed to persist ticket-flow recovery notification intent",
+                    exc_info=True,
+                )
 
     return {
         "state": state,
@@ -1799,6 +1859,8 @@ def build_ticket_flow_run_state(
             isinstance(commit_barrier, dict) and commit_barrier.get("pending")
         ),
         "commit_barrier": commit_barrier,
+        "recovery_projection": recovery_projection.to_dict(),
+        "notification_intents": [intent.to_dict() for intent in notification_intents],
         "crash": (
             {
                 "summary": crash_summary,

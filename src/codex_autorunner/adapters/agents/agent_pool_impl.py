@@ -169,8 +169,9 @@ def _raw_message_should_emit_agent_delta(message: dict[str, Any]) -> bool:
 class DefaultAgentPool:
     """Default ticket-flow adapter backed by orchestration-owned thread targets."""
 
-    def __init__(self, config: Any):
+    def __init__(self, config: Any, *, runtime_services: Optional[Any] = None):
         self._config = config
+        self._runtime_services = runtime_services
         self._repo_root = Path(getattr(config, "root", Path.cwd())).resolve()
         self._hub_root = _find_hub_root(self._repo_root)
         self._repo_id = self._resolve_repo_id()
@@ -234,9 +235,18 @@ class DefaultAgentPool:
             app_server_events=app_server_events,
             opencode_supervisor=None,
         )
+        runtime_services = self._runtime_services
+        if runtime_services is not None:
+            context.app_server_supervisor = getattr(
+                runtime_services, "app_server_supervisor", None
+            )
+            context.opencode_supervisor = getattr(
+                runtime_services, "opencode_supervisor", None
+            )
         app_server_config = getattr(self._config, "app_server", None)
         if (
-            app_server_config is not None
+            context.app_server_supervisor is None
+            and app_server_config is not None
             and getattr(app_server_config, "command", None) is not None
         ):
 
@@ -253,20 +263,23 @@ class DefaultAgentPool:
                 "autorunner",
                 cast(Any, _handle_notification),
             )
-        try:
-            context.opencode_supervisor = build_opencode_supervisor_from_repo_config(
-                self._config,
-                workspace_root=self._repo_root,
-                logger=logging.getLogger("codex_autorunner.backend"),
-                base_env=None,
-                command_override=None,
-            )
-        except (RuntimeError, ValueError, OSError, TypeError):
-            _logger.debug(
-                "OpenCode supervisor unavailable for agent pool runtime context.",
-                exc_info=True,
-            )
-            context.opencode_supervisor = None
+        if context.opencode_supervisor is None:
+            try:
+                context.opencode_supervisor = (
+                    build_opencode_supervisor_from_repo_config(
+                        self._config,
+                        workspace_root=self._repo_root,
+                        logger=logging.getLogger("codex_autorunner.backend"),
+                        base_env=None,
+                        command_override=None,
+                    )
+                )
+            except (RuntimeError, ValueError, OSError, TypeError):
+                _logger.debug(
+                    "OpenCode supervisor unavailable for agent pool runtime context.",
+                    exc_info=True,
+                )
+                context.opencode_supervisor = None
         self._runtime_context = context
         return context
 
@@ -342,11 +355,18 @@ class DefaultAgentPool:
         self._runtime_context = None
         if context is None:
             return
-        for supervisor in {
+        runtime_owned = [
+            getattr(self._runtime_services, "app_server_supervisor", None),
+            getattr(self._runtime_services, "opencode_supervisor", None),
+        ]
+        supervisors = [
             getattr(context, "app_server_supervisor", None),
             getattr(context, "opencode_supervisor", None),
             getattr(context, "hermes_supervisor", None),
-        }:
+        ]
+        for supervisor in supervisors:
+            if any(supervisor is owned for owned in runtime_owned):
+                continue
             close_all = getattr(supervisor, "close_all", None)
             if callable(close_all):
                 await close_all()
@@ -817,17 +837,25 @@ class DefaultAgentPool:
             else None
         )
 
-        if req.additional_messages:
-            merged: list[str] = [req.prompt]
+        def _with_additional_messages(base_prompt: str) -> str:
+            if not req.additional_messages:
+                return base_prompt
+            merged: list[str] = [base_prompt]
             for msg in req.additional_messages:
                 if not isinstance(msg, dict):
                     continue
                 text = msg.get("text")
                 if isinstance(text, str) and text.strip():
                     merged.append(text)
-            prompt = "\n\n".join(merged)
-        else:
-            prompt = req.prompt
+            return "\n\n".join(merged)
+
+        prompt = _with_additional_messages(req.prompt)
+        existing_session_prompt = (
+            _with_additional_messages(req.existing_session_prompt)
+            if isinstance(req.existing_session_prompt, str)
+            and req.existing_session_prompt.strip()
+            else None
+        )
 
         state = self._ticket_flow_runner_state()
         service = self._get_orchestration_service()
@@ -853,6 +881,15 @@ class DefaultAgentPool:
                 "ticket_path": ticket_path,
             },
         )
+        request_metadata = {
+            "execution_error_message": _DEFAULT_EXECUTION_ERROR,
+            "runtime_prompt": prompt,
+        }
+        if existing_session_prompt is not None:
+            request_metadata["existing_session_runtime_prompt"] = (
+                existing_session_prompt
+            )
+
         request = MessageRequest(
             target_id=thread.thread_target_id,
             target_kind="thread",
@@ -862,7 +899,7 @@ class DefaultAgentPool:
             model=model,
             reasoning=reasoning,
             approval_mode=state.autorunner_approval_policy,
-            metadata={"execution_error_message": _DEFAULT_EXECUTION_ERROR},
+            metadata=request_metadata,
         )
         execution, harness = await service.send_message_with_started_harness(
             request,

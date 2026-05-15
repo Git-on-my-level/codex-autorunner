@@ -5,6 +5,9 @@ from dataclasses import dataclass, field
 from typing import Any, Iterable, Optional
 
 from ..ports.run_event import (
+    RUN_EVENT_DELTA_TYPE_ASSISTANT_MESSAGE,
+    RUN_EVENT_DELTA_TYPE_ASSISTANT_STREAM,
+    RUN_EVENT_DELTA_TYPE_LOG_LINE,
     ApprovalRequested,
     OutputDelta,
     RunEvent,
@@ -23,6 +26,14 @@ from .progress_projection import (
 from .turn_timeline import list_turn_timeline, list_turn_timelines
 
 TIMELINE_CONTRACT_VERSION = "managed_thread_timeline.v2"
+MAX_MANAGED_THREAD_TIMELINE_LIMIT = 200
+DEFAULT_SUPPRESSED_OUTPUT_DELTA_TYPES = frozenset(
+    {
+        RUN_EVENT_DELTA_TYPE_ASSISTANT_MESSAGE,
+        RUN_EVENT_DELTA_TYPE_ASSISTANT_STREAM,
+        RUN_EVENT_DELTA_TYPE_LOG_LINE,
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -285,6 +296,13 @@ def _event_timestamp(entry: dict[str, Any]) -> Optional[str]:
 def _event_payload(entry: dict[str, Any]) -> dict[str, Any]:
     event = entry.get("event")
     return dict(event) if isinstance(event, dict) else {}
+
+
+def _is_default_timeline_suppressed_output_delta(event: dict[str, Any]) -> bool:
+    return (
+        str(event.get("delta_type") or "").strip()
+        in DEFAULT_SUPPRESSED_OUTPUT_DELTA_TYPES
+    )
 
 
 def _event_index(entry: dict[str, Any], fallback: int) -> int:
@@ -665,6 +683,8 @@ def _append_timeline_event_items(
             continue
 
         if event_type == "output_delta":
+            if _is_default_timeline_suppressed_output_delta(event):
+                continue
             item_id = f"turn:{managed_turn_id}:intermediate:{event_stable_id}"
             progress_item_ids, progress_event_ids = _progress_item_metadata(
                 progress_item
@@ -1213,7 +1233,7 @@ def build_managed_thread_timeline(
     normalized_thread_id = str(managed_thread_id or "").strip()
     if not normalized_thread_id:
         raise ValueError("managed_thread_id is required")
-    bounded_limit = min(max(int(limit or 500), 1), 1000)
+    bounded_limit = max(int(limit or 500), 1)
     thread = thread_store.get_thread(normalized_thread_id)
     if thread is None:
         raise KeyError(normalized_thread_id)
@@ -1290,6 +1310,15 @@ def build_managed_thread_timeline(
     return {
         "managed_thread_id": normalized_thread_id,
         "contract_version": TIMELINE_CONTRACT_VERSION,
+        "projection": {
+            "kind": "transcript",
+            "limit": bounded_limit,
+            "omits_output_delta_types": sorted(DEFAULT_SUPPRESSED_OUTPUT_DELTA_TYPES),
+            "raw_trace_available": True,
+            "raw_trace_route": (
+                f"/hub/pma/threads/{normalized_thread_id}/turns/{{managed_turn_id}}"
+            ),
+        },
         "items": [item.to_dict() for item in ordered],
         "item_count": len(ordered),
     }
@@ -1300,6 +1329,7 @@ __all__ = [
     "ManagedThreadTimelineIdentity",
     "ManagedThreadTimelineItem",
     "ManagedThreadTimelineProvenance",
+    "MAX_MANAGED_THREAD_TIMELINE_LIMIT",
     "build_managed_thread_timeline",
     "timeline_item_from_tail_event",
 ]

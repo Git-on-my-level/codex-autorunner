@@ -418,10 +418,13 @@ def on_background_task_done(service: Any, task: asyncio.Task[Any]) -> None:
 
 
 async def close_all_app_server_supervisors(service: Any) -> None:
-    async with service._app_server_lock:
-        supervisors = list(service._app_server_supervisors.values())
-        service._app_server_supervisors.clear()
-    for supervisor in supervisors:
+    runtime_services = getattr(service, "_runtime_services", None)
+    if runtime_services is not None:
+        with contextlib.suppress(Exception):
+            await runtime_services.close()
+        return
+    supervisor = getattr(service, "_app_server_supervisor", None)
+    if supervisor is not None:
         with contextlib.suppress(Exception):
             await supervisor.close_all()
 
@@ -530,8 +533,15 @@ async def shutdown_service(service: Any) -> None:
     if service._owns_store:
         with contextlib.suppress(Exception):
             await service._store.close()
-    await close_all_app_server_supervisors(service)
-    await close_all_opencode_supervisors(service)
+    runtime_services = getattr(service, "_runtime_services", None)
+    if runtime_services is not None:
+        with contextlib.suppress(Exception):
+            await runtime_services.close()
+        async with service._opencode_lock:
+            service._opencode_supervisors.clear()
+    else:
+        await close_all_app_server_supervisors(service)
+        await close_all_opencode_supervisors(service)
     await close_all_agent_runtime_supervisors(service)
     if service._hub_client is not None:
         with contextlib.suppress(Exception):

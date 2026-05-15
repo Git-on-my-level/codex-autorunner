@@ -18,6 +18,10 @@ or restart:
   restarts, hits the commit barrier, or needs user action.
 - If a done ticket has dirty worktree changes, the commit barrier should keep
   the flow on that ticket until the work is committed or explicitly handled.
+- Recovery notification policy is shared across surfaces through the core flow
+  notification ledger. Telegram and Discord deliver canonical intents; they do
+  not classify recovery snapshots or dedupe notices using restart counters or
+  transport-local cursors.
 
 ## Quick Triage
 

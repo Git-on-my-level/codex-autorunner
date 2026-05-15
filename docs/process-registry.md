@@ -1,10 +1,10 @@
 # Managed Process Registry
 
-CAR writes durable metadata for long-lived subprocesses under:
+CAR writes durable metadata for long-lived subprocesses under the hub root when
+one is available:
 
-- `.codex-autorunner/processes/<kind>/<workspace_id>.json`
-- `.codex-autorunner/processes/<kind>/<pid>.json` (for the same process, with
-  `workspace_id` in `metadata.workspace_id`)
+- `.codex-autorunner/processes/<kind>/<handle_id>.json`
+- repo/workspace fallback locations are used only for non-hub contexts
 
 This registry is local state (not source code) and is intended for:
 
@@ -17,7 +17,7 @@ This registry is local state (not source code) and is intended for:
 Each JSON file stores one `ProcessRecord`:
 
 - `kind` (`str`): process class (for example `opencode`, `codex_app_server`)
-- `workspace_id` (`str | null`): optional workspace identifier
+- `handle_id` / `workspace_id` (`str | null`): runtime process handle identifier
 - `pid` (`int | null`): subprocess PID
 - `pgid` (`int | null`): subprocess process-group id (preferred on Unix)
 - `base_url` (`str | null`): optional service URL exposed by the process
@@ -26,14 +26,25 @@ Each JSON file stores one `ProcessRecord`:
 - `started_at` (`str`): ISO timestamp when process started
 - `metadata` (`object`): extra structured fields for feature-specific context
 
+New records also include top-level `handle_id`. Older records that only have
+`workspace_id` remain readable and reapable; CAR derives the record key from
+`handle_id`, then `workspace_id`, then PID-only records.
+
+Required metadata includes the server scope, runtime profile when present,
+initial cwd, state directory, and runtime-specific fields such as `base_url`.
+
 ## Behavior
 
 - Writes are atomic via temp-file replace.
-- Workspace-keyed and pid-keyed records are written for OpenCode processes so either
-  key can be used by cleanup paths.
+- Runtime handles are keyed by process ownership scope, not by surface routing
+  state. A Discord channel, Telegram chat, web tab, PMA thread, Codex thread,
+  OpenCode session, or ticket id must not become a process registry ownership key.
 - Reads and list operations validate schema.
 - Delete removes only the target record file.
 - All state is isolated under `.codex-autorunner/` (no shadow registry elsewhere).
+- Surface/service startup runs the managed-process reaper before accepting runtime
+  work. Reaping skips live CAR owners, terminates stale process groups, and
+  deletes stale records.
 
 ## Diagnostic Workflow
 
@@ -50,16 +61,19 @@ OS processes are still running?
 Example output from `car cleanup processes --force` should show whether each record
 was killed and whether process records were removed.
 
-Recommended global defaults for long-lived OpenCode processes:
+Recommended defaults for long-lived runtime processes:
 
-- `opencode.server_scope`: default `workspace`
-- `opencode.max_handles`: default `4`
+- `app_server.server_scope`: default `global`
+- `app_server.max_handles`: default `1`
+- `app_server.idle_ttl_seconds`: default `3600`
+- `opencode.server_scope`: default `global`
+- `opencode.max_handles`: default `1`
 - `opencode.idle_ttl_seconds`: default `900`
 
-This keeps reuse on by default without letting long-running CAR hosts accumulate
-dozens of idle workspace-scoped OpenCode servers. Operators that prefer fewer
-processes across many repos can opt into `opencode.server_scope: global`; operators
-that want hotter reuse can raise `max_handles` and `idle_ttl_seconds` explicitly.
+This keeps one governed Codex app-server and one governed OpenCode server per
+hub/runtime profile by default. Operators that need workspace isolation can opt
+into `server_scope: workspace`; operators that want hotter reuse can raise
+`max_handles` and `idle_ttl_seconds` explicitly.
 
 If a process becomes orphaned or a previous run crashed before cleanup, these
 commands let operators confirm ownership and recover without resorting to manual

@@ -43,6 +43,7 @@ class AgentBackendFactory:
         repo_root: Path,
         config: RepoConfig,
         *,
+        shared_app_server_supervisor: Optional[Any] = None,
         shared_opencode_supervisor: Optional[Any] = None,
     ) -> None:
         self._repo_root = repo_root
@@ -55,7 +56,11 @@ class AgentBackendFactory:
         self._opencode_supervisor: Optional[Any] = shared_opencode_supervisor
         self._opencode_supervisors: dict[tuple[str, str], Any] = {}
         self._owns_opencode_supervisor = shared_opencode_supervisor is None
-        self._codex_supervisor: Optional[WorkspaceAppServerSupervisor] = None
+        self._codex_supervisor: Optional[WorkspaceAppServerSupervisor] = cast(
+            Optional[WorkspaceAppServerSupervisor],
+            shared_app_server_supervisor,
+        )
+        self._owns_codex_supervisor = shared_app_server_supervisor is None
 
     def _runtime_cache_key(
         self, runtime_agent_id: str, runtime_profile: Optional[str] = None
@@ -322,10 +327,13 @@ class AgentBackendFactory:
                 )
         self._opencode_supervisors = {}
         if self._codex_supervisor is not None:
-            try:
-                await self._codex_supervisor.close_all()
-            except Exception:  # intentional: best-effort supervisor cleanup
-                self._logger.warning("Failed closing codex supervisor", exc_info=True)
+            if self._owns_codex_supervisor:
+                try:
+                    await self._codex_supervisor.close_all()
+                except Exception:  # intentional: best-effort supervisor cleanup
+                    self._logger.warning(
+                        "Failed closing codex supervisor", exc_info=True
+                    )
             self._codex_supervisor = None
 
     def _ensure_codex_supervisor(self) -> WorkspaceAppServerSupervisor:
@@ -377,8 +385,13 @@ class AgentBackendFactory:
             env_builder=_env_builder,
             logger=self._logger,
             auto_restart=self._config.app_server.auto_restart,
+            server_scope=self._config.app_server.server_scope,
             max_handles=self._config.app_server.max_handles,
             idle_ttl_seconds=self._config.app_server.idle_ttl_seconds,
+            startup_timeout_seconds=self._config.app_server.startup_timeout_seconds,
+            terminate_grace_seconds=self._config.app_server.terminate_grace_seconds,
+            terminate_kill_seconds=self._config.app_server.terminate_kill_seconds,
+            registry_root=self._repo_root,
             request_timeout=self._config.app_server.request_timeout,
             turn_stall_timeout_seconds=self._config.app_server.turn_stall_timeout_seconds,
             turn_stall_poll_interval_seconds=self._config.app_server.turn_stall_poll_interval_seconds,
@@ -399,11 +412,13 @@ def build_agent_backend_factory(
     repo_root: Path,
     config: RepoConfig,
     *,
+    shared_app_server_supervisor: Optional[Any] = None,
     shared_opencode_supervisor: Optional[Any] = None,
 ) -> BackendFactory:
     return AgentBackendFactory(
         repo_root,
         config,
+        shared_app_server_supervisor=shared_app_server_supervisor,
         shared_opencode_supervisor=shared_opencode_supervisor,
     )
 
@@ -455,8 +470,13 @@ def build_app_server_supervisor_factory(
             logger=app_logger,
             notification_handler=notification_handler,
             auto_restart=config.app_server.auto_restart,
+            server_scope=config.app_server.server_scope,
             max_handles=config.app_server.max_handles,
             idle_ttl_seconds=config.app_server.idle_ttl_seconds,
+            startup_timeout_seconds=config.app_server.startup_timeout_seconds,
+            terminate_grace_seconds=config.app_server.terminate_grace_seconds,
+            terminate_kill_seconds=config.app_server.terminate_kill_seconds,
+            registry_root=config.root,
             request_timeout=config.app_server.request_timeout,
             turn_stall_timeout_seconds=config.app_server.turn_stall_timeout_seconds,
             turn_stall_poll_interval_seconds=config.app_server.turn_stall_poll_interval_seconds,

@@ -46,7 +46,12 @@ from .models import (
     ThreadStopOutcome,
     ThreadTarget,
 )
-from .recovery_lifecycle import BusyInterruptFailedError, _ThreadRecoveryHelper
+from .recovery_lifecycle import (
+    BusyInterruptFailedError,
+    ManagedTurnRecoveryScanResult,
+    RecoveryScanner,
+    _ThreadRecoveryHelper,
+)
 from .runtime_bindings import RuntimeThreadBinding
 from .thread_titles import choose_owned_thread_title
 from .threads import SurfaceThreadMessageRequest, ThreadControlRequest
@@ -1352,6 +1357,68 @@ class HarnessBackedOrchestrationService(OrchestrationThreadService):
             if refreshed is not None:
                 return refreshed
             raise
+
+    def record_stale_running_execution_error(
+        self, thread_target_id: str
+    ) -> Optional[ExecutionRecord]:
+        thread = self.get_thread_target(thread_target_id)
+        if thread is None:
+            raise KeyError(f"Unknown thread target '{thread_target_id}'")
+        execution = self.get_running_execution(thread_target_id)
+        if execution is None:
+            return None
+        runtime_binding = _resolve_thread_runtime_binding(
+            self.thread_store, thread_target_id
+        )
+        backend_thread_id = (
+            runtime_binding.backend_thread_id
+            if runtime_binding is not None and runtime_binding.backend_thread_id
+            else (
+                thread.backend_thread_id.strip()
+                if isinstance(thread.backend_thread_id, str)
+                and thread.backend_thread_id.strip()
+                else None
+            )
+        )
+        return self._recovery_helper.recover_lost_backend_execution(
+            thread_target_id=thread_target_id,
+            execution=execution,
+            backend_thread_id=backend_thread_id,
+            error_message="Running execution could not be reattached after restart",
+            reason="stale_managed_turn_recovery_scanner",
+        )
+
+    async def recover_stale_managed_thread_turns(
+        self,
+        *,
+        stale_after_seconds: float,
+    ) -> ManagedTurnRecoveryScanResult:
+        """Scan stale managed-thread turns and record terminal state.
+
+        This recovery path uses durable orchestration rows as the source of truth.
+        If a live backend can provide a terminal result, that result is recorded;
+        otherwise the stale execution is terminal-recorded as an error so queued
+        work can advance.
+        """
+        list_running = getattr(
+            self.thread_store, "list_thread_ids_with_running_executions", None
+        )
+        if not callable(list_running):
+            return ManagedTurnRecoveryScanResult(
+                scanned=0,
+                changed=0,
+                decisions=(),
+            )
+        scanner = RecoveryScanner(
+            recover_from_harness=self.recover_running_execution_from_harness,
+            record_lost_execution=self.record_stale_running_execution_error,
+            get_running_execution=self.get_running_execution,
+            list_thread_ids_with_running_executions=list_running,
+            get_queue_depth=self.get_queue_depth,
+            stale_after_seconds=stale_after_seconds,
+            logger=logger,
+        )
+        return await scanner.scan()
 
     def get_execution(
         self, thread_target_id: str, execution_id: str

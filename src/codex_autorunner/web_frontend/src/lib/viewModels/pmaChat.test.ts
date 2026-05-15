@@ -281,6 +281,34 @@ describe('PMA chat view helpers', () => {
     expect(summarizeFilterCounts(chats)).toEqual({ all: 2, active: 1, waiting: 1, unread: 2, archived: 1 });
   });
 
+  it('drops archived ticket-flow chats from grouped run rows when not on the archived filter', () => {
+    const active = {
+      ...baseChat,
+      id: 'tf-active',
+      isTicketFlow: true,
+      worktreeId: 'wt-collab',
+      repoId: 'repo-1'
+    };
+    const archivedViaRaw: PmaChatSummary = {
+      ...baseChat,
+      id: 'tf-archived',
+      isTicketFlow: true,
+      worktreeId: 'wt-collab',
+      repoId: 'repo-1',
+      lifecycleStatus: null,
+      status: 'done',
+      raw: { lifecycle: 'archived' }
+    };
+    const chats: PmaChatSummary[] = [active, archivedViaRaw];
+    const entries = buildPmaChatListEntries(chats, { groupRuns: true });
+    expect(entries).toHaveLength(1);
+    const filtered = filterPmaChatEntries(entries, 'all', '', {});
+    expect(filtered).toHaveLength(1);
+    if (filtered[0].kind !== 'group') throw new Error('expected group row');
+    expect(filtered[0].group.chats.map((c) => c.id)).toEqual(['tf-active']);
+    expect(filtered[0].group.totalCount).toBe(1);
+  });
+
   it('detects messenger surface from API fields and title prefix', () => {
     expect(
       pmaChatMessengerSurface({
@@ -1973,6 +2001,49 @@ describe('PMA chat view helpers', () => {
         }
       ])
     ).toEqual([]);
+  });
+
+  it('keeps rendered card counts stable for high-volume hidden assistant streams', () => {
+    const noisyTimeline = Array.from({ length: 1_000 }, (_, index) =>
+      timelineItem(`turn:one:intermediate:stream:${index}`, 'intermediate', {
+        intermediate_kind: 'assistant_stream',
+        event_type: 'output_delta',
+        text: `chunk ${index}`
+      })
+    );
+
+    const baseInput = [
+      timelineItem('turn:one:intermediate:thinking', 'intermediate', {
+        intermediate_kind: 'thinking',
+        text: 'Reading files'
+      })
+    ];
+    const smallCards = buildPmaTranscriptCards(
+      [
+        timelineItem('turn:one:intermediate:stream:baseline', 'intermediate', {
+          intermediate_kind: 'assistant_stream',
+          event_type: 'output_delta',
+          text: 'baseline chunk'
+        }),
+        ...baseInput
+      ],
+      baseChat,
+      [],
+      null
+    );
+    const cards = buildPmaTranscriptCards(
+      [
+        ...noisyTimeline,
+        ...baseInput
+      ],
+      baseChat,
+      [],
+      null
+    );
+
+    expect(cards).toHaveLength(smallCards.length);
+    expect(cards.some((card) => card.kind === 'intermediate' && card.text === 'Reading files')).toBe(true);
+    expect(cards.some((card) => card.kind === 'intermediate' && card.text?.startsWith('chunk '))).toBe(false);
   });
 
   it('renders compaction lifecycle timeline items as visible dividers', () => {

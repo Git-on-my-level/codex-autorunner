@@ -228,11 +228,33 @@ def _commit_barrier_observation(
     ticket_path = repo_root / current_ticket
     current_ticket_done = ticket_path.exists() and _ticket_marked_done(ticket_path)
     dirty_status = _git_status_porcelain(repo_root) if current_ticket_done else None
+    raw_retries = commit.get("retries")
+    retries = (
+        raw_retries
+        if isinstance(raw_retries, int) and not isinstance(raw_retries, bool)
+        else 0
+    )
+    raw_max_retries = commit.get("max_retries")
+    max_retries = (
+        raw_max_retries
+        if isinstance(raw_max_retries, int) and not isinstance(raw_max_retries, bool)
+        else None
+    )
     return CommitBarrierObservation(
         current_ticket=current_ticket,
         current_ticket_done=current_ticket_done,
         worktree_dirty=bool(dirty_status),
         commit_pending=bool(commit.get("pending")),
+        barrier_epoch=(
+            commit.get("barrier_epoch")
+            if isinstance(commit.get("barrier_epoch"), str)
+            else None
+        ),
+        retries=retries,
+        max_retries=max_retries,
+        exhausted=bool(
+            commit.get("exhausted") or commit.get("resolution_state") == "exhausted"
+        ),
     )
 
 
@@ -409,6 +431,46 @@ def _with_restart_exhausted(
     recovery["restart"] = restart
     if health is not None and getattr(health, "status", None) == "stale_alive":
         recovery["stale_alive"] = stale_alive_recovery_payload(health)
+    updated["recovery"] = recovery
+    return updated
+
+
+def _with_commit_barrier_recovery(
+    state: dict[str, Any],
+    observation: CommitBarrierObservation,
+) -> dict[str, Any]:
+    updated = dict(state)
+    recovery = updated.get("recovery")
+    recovery = dict(recovery) if isinstance(recovery, dict) else {}
+    if not observation.required:
+        recovery.pop("commit_barrier", None)
+        if recovery:
+            updated["recovery"] = recovery
+        else:
+            updated.pop("recovery", None)
+        return updated
+    engine = updated.get("ticket_engine")
+    engine = engine if isinstance(engine, dict) else {}
+    commit = engine.get("commit")
+    commit = dict(commit) if isinstance(commit, dict) else {}
+    payload = {
+        **commit,
+        "pending": True,
+        "current_ticket": observation.current_ticket,
+        "current_ticket_done": observation.current_ticket_done,
+        "worktree_dirty": observation.worktree_dirty,
+        "commit_pending": observation.commit_pending,
+        "barrier_epoch": observation.barrier_epoch or commit.get("barrier_epoch"),
+        "retries": observation.retries,
+        "max_retries": observation.max_retries,
+        "exhausted": observation.exhausted,
+        "resolution_state": (
+            "exhausted"
+            if observation.exhausted
+            else commit.get("resolution_state") or "pending"
+        ),
+    }
+    recovery["commit_barrier"] = payload
     updated["recovery"] = recovery
     return updated
 
@@ -749,6 +811,25 @@ def reconcile_flow_run(
                     return (updated or record), bool(updated), False
 
             if trigger is None:
+                if commit_barrier.required:
+                    state = _with_commit_barrier_recovery(
+                        dict(record.state or {}),
+                        commit_barrier,
+                    )
+                    if state != (record.state or {}):
+                        updated = store.update_flow_run_status(
+                            run_id=record.id,
+                            status=record.status,
+                            state=state,
+                        )
+                        emit_reconcile_noop(
+                            store=store,
+                            run_id=record.id,
+                            status=record.status,
+                            note=decision.note,
+                            worker_status=health.status,
+                        )
+                        return (updated or record), bool(updated), False
                 if record.status == FlowRunStatus.PAUSED and health.status in {
                     "dead",
                     "invalid",
@@ -818,6 +899,7 @@ def reconcile_flow_run(
                     reason="restart-attempts-exhausted",
                     health=health,
                 )
+            state = _with_commit_barrier_recovery(state, commit_barrier)
             for effect in result.effects:
                 if effect.kind == EffectKind.ENRICH_FAILURE_PAYLOAD:
                     reconcile_ctx = ReconcileContext(

@@ -30,6 +30,7 @@ SchemaValidateFn = Callable[[Any, "FieldValidationContext"], None]
 SchemaDefaultFactory = Callable[[], Any]
 
 SCHEMA_MISSING = object()
+APP_SERVER_SCOPE_VALUES = ("global", "workspace")
 
 
 @dataclasses.dataclass(frozen=True)
@@ -332,6 +333,15 @@ TICKET_FLOW_FIELD_SCHEMAS: dict[str, FieldSchema] = {
 }
 
 APP_SERVER_FIELD_SCHEMAS: dict[str, FieldSchema] = {
+    "server_scope": FieldSchema(
+        path="app_server.server_scope",
+        kind="choice",
+        default="global",
+        allow_none=True,
+        allowed_values=APP_SERVER_SCOPE_VALUES,
+        type_message="app_server.server_scope must be a string or null",
+        value_message="app_server.server_scope must be 'global' or 'workspace'",
+    ),
     "command": FieldSchema(
         path="app_server.command",
         kind="command",
@@ -356,7 +366,7 @@ APP_SERVER_FIELD_SCHEMAS: dict[str, FieldSchema] = {
     "max_handles": FieldSchema(
         path="app_server.max_handles",
         kind="int",
-        default=20,
+        default=1,
         allow_none=True,
         min_value=1,
         parse_policy="fallback_none",
@@ -372,6 +382,36 @@ APP_SERVER_FIELD_SCHEMAS: dict[str, FieldSchema] = {
         parse_policy="fallback_none",
         type_message="app_server.idle_ttl_seconds must be an integer or null",
         range_message="app_server.idle_ttl_seconds must be > 0 or null",
+    ),
+    "startup_timeout_seconds": FieldSchema(
+        path="app_server.startup_timeout_seconds",
+        kind="number",
+        default=30,
+        allow_none=True,
+        min_value=1,
+        parse_policy="fallback_none",
+        type_message="app_server.startup_timeout_seconds must be a number or null",
+        range_message="app_server.startup_timeout_seconds must be > 0 or null",
+    ),
+    "terminate_grace_seconds": FieldSchema(
+        path="app_server.terminate_grace_seconds",
+        kind="number",
+        default=2,
+        allow_none=True,
+        min_value=0,
+        parse_policy="fallback_none",
+        type_message="app_server.terminate_grace_seconds must be a number or null",
+        range_message="app_server.terminate_grace_seconds must be >= 0 or null",
+    ),
+    "terminate_kill_seconds": FieldSchema(
+        path="app_server.terminate_kill_seconds",
+        kind="number",
+        default=3,
+        allow_none=True,
+        min_value=0,
+        parse_policy="fallback_none",
+        type_message="app_server.terminate_kill_seconds must be a number or null",
+        range_message="app_server.terminate_kill_seconds must be >= 0 or null",
     ),
     "turn_timeout_seconds": FieldSchema(
         path="app_server.turn_timeout_seconds",
@@ -618,7 +658,7 @@ OPENCODE_FIELD_SCHEMAS: dict[str, FieldSchema] = {
     "server_scope": FieldSchema(
         path="opencode.server_scope",
         kind="choice",
-        default="workspace",
+        default="global",
         allowed_values=tuple(OPENCODE_SERVER_SCOPE_VALUES),
         type_message="opencode.server_scope must be a string or null",
         value_message="opencode.server_scope must be 'workspace' or 'global'",
@@ -646,7 +686,7 @@ OPENCODE_FIELD_SCHEMAS: dict[str, FieldSchema] = {
     "max_handles": FieldSchema(
         path="opencode.max_handles",
         kind="int",
-        default=4,
+        default=1,
         allow_none=True,
         min_value=1,
         parse_policy="fallback_none",

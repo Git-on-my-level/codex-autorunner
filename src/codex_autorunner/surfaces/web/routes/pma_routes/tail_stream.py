@@ -30,6 +30,7 @@ from .managed_thread_tail_serializers import (
     _running_turn_stall_flags,
     _serialize_persisted_timeline_tail_events,
     _serialize_runtime_raw_tail_events,
+    build_live_activity_projection,
     build_managed_thread_status_response,
     build_managed_thread_stream_lifecycle,
     parse_iso_datetime,
@@ -306,6 +307,18 @@ async def _build_managed_thread_tail_snapshot(
             "stream_should_close": lifecycle["stream_should_close"],
             "stream_close_reason": lifecycle["stream_close_reason"],
             "stream_lifecycle": lifecycle,
+            "live_activity": build_live_activity_projection(
+                snapshot={
+                    "managed_thread_id": managed_thread_id,
+                    "managed_turn_id": None,
+                    "activity": "idle",
+                    "events": [],
+                    "elapsed_seconds": None,
+                    "idle_seconds": None,
+                    "stream_available": False,
+                    "terminal": lifecycle["terminal"],
+                }
+            ),
         }
 
     managed_turn_id = str(turn.execution_id or "")
@@ -513,6 +526,7 @@ async def _build_managed_thread_tail_snapshot(
             "stream_lifecycle": lifecycle,
         }
     )
+    snapshot["live_activity"] = build_live_activity_projection(snapshot=snapshot)
     snapshot["active_turn_diagnostics"] = _derive_active_turn_diagnostics(
         snapshot=snapshot,
         turn_record=turn_record,
@@ -624,6 +638,7 @@ def _progress_stream_payload(snapshot: dict[str, Any]) -> dict[str, Any]:
         "phase_source": snapshot.get("phase_source"),
         "guidance": snapshot.get("guidance"),
         "last_tool": snapshot.get("last_tool"),
+        "live_activity": snapshot.get("live_activity"),
         "active_turn_diagnostics": snapshot.get("active_turn_diagnostics"),
         **lifecycle_fields,
     }

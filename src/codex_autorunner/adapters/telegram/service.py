@@ -368,7 +368,10 @@ class TelegramBotService(
         self._runtime_services = RuntimeServices(
             app_server_supervisor=self._app_server_supervisor,
             opencode_supervisor=self._opencode_supervisor,
-            flow_runtime_builder=build_ticket_flow_runtime_resources,
+            flow_runtime_builder=lambda repo_root: build_ticket_flow_runtime_resources(
+                repo_root,
+                runtime_services=self._runtime_services,
+            ),
         )
         poll_timeout = float(config.poll_timeout_seconds)
         request_timeout = config.poll_request_timeout_seconds

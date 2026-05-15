@@ -680,8 +680,14 @@ _SIDE_PROCESS_BOUNDARY_ALLOWLIST: dict[str, list[str]] = {
         "build_ticket_flow_orchestration_service -- ALLOWED: ticket flow uses per-workspace orchestration SQLite",
         "seed_repo_files -- ALLOWED: bootstrap seeding runs during startup before hub handshake completes",
     ],
+    "adapters/discord/cli_channels.py": [
+        "open_orchestration_sqlite -- ALLOWED: CLI-only diagnostic reads hub binding rows",
+    ],
     "adapters/telegram/service.py": [
         "AppServerThreadRegistry -- ALLOWED: protocol-local PMA thread ID mapping for topic routing",
+    ],
+    "adapters/telegram/cli_chats.py": [
+        "open_orchestration_sqlite -- ALLOWED: CLI-only diagnostic reads hub binding rows",
     ],
     "adapters/telegram/handlers/commands/execution.py": [
         "AppServerThreadRegistry -- ALLOWED: protocol-local PMA thread ID mapping for topic routing",

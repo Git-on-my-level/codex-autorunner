@@ -29,7 +29,13 @@ async def test_supervisor_reuses_workspace_client_and_closes_all(
 
         assert client_a is client_b
         assert session.session_id == listed[0].session_id
+        assert snapshot[0].runtime_kind == "acp"
+        assert snapshot[0].server_scope == "workspace"
+        assert snapshot[0].handle_id == str(tmp_path.resolve())
         assert snapshot[0].workspace_root == str(tmp_path.resolve())
+        assert snapshot[0].pid is not None
+        assert snapshot[0].base_url is None
         assert snapshot[0].started is True
+        assert snapshot[0].healthy is True
     finally:
         await supervisor.close_all()

@@ -1,5 +1,13 @@
 from __future__ import annotations
 
+from pathlib import Path
+
+import pytest
+
+from codex_autorunner.tickets.agent_pool import AgentTurnRequest, AgentTurnResult
+from codex_autorunner.tickets.runner_step_support import (
+    execute_turn_with_thread_binding_retry,
+)
 from codex_autorunner.tickets.runner_thread_bindings import (
     clear_previous_ticket_binding,
     clear_ticket_thread_binding,
@@ -8,6 +16,22 @@ from codex_autorunner.tickets.runner_thread_bindings import (
     store_ticket_thread_binding,
     validate_lint_retry_conversation_id,
 )
+
+
+class _CapturingAgentPool:
+    def __init__(self) -> None:
+        self.requests: list[AgentTurnRequest] = []
+
+    async def run_turn(self, req: AgentTurnRequest) -> AgentTurnResult:
+        self.requests.append(req)
+        if req.conversation_id == "stale-thread":
+            raise KeyError("Unknown thread target stale-thread")
+        return AgentTurnResult(
+            agent_id=req.agent_id,
+            conversation_id=req.conversation_id or "fresh-thread",
+            turn_id="turn-1",
+            text="ok",
+        )
 
 
 class TestNormalizeProfile:
@@ -175,6 +199,56 @@ class TestResolveTicketThreadBinding:
         )
         assert result == "bound-thread"
         assert debug["action"] == "reuse"
+
+
+@pytest.mark.asyncio
+async def test_thread_binding_retry_carries_compact_prompt_without_replacing_full(
+    tmp_path: Path,
+) -> None:
+    state: dict = {
+        "ticket_thread_bindings": {
+            "tkt-1": {
+                "thread_target_id": "stale-thread",
+                "agent_id": "codex",
+                "profile": None,
+                "ticket_path": ".codex-autorunner/tickets/TICKET-001.md",
+            }
+        }
+    }
+    pool = _CapturingAgentPool()
+
+    result, binding_decision = await execute_turn_with_thread_binding_retry(
+        agent_pool=pool,
+        workspace_root=tmp_path,
+        state=state,
+        ticket_id="tkt-1",
+        ticket_path=".codex-autorunner/tickets/TICKET-001.md",
+        agent_id="codex",
+        profile=None,
+        prompt="full bootstrap prompt",
+        existing_session_prompt="compact same-thread prompt",
+        lint_retry_conversation_id=None,
+        turn_options=None,
+        emit_event=None,
+        max_network_retries=0,
+        current_network_retries=0,
+    )
+
+    assert result.success is True
+    assert binding_decision["action"] == "reset"
+    assert binding_decision["reason"] == "stale_or_missing_thread_target"
+    assert [request.prompt for request in pool.requests] == [
+        "full bootstrap prompt",
+        "full bootstrap prompt",
+    ]
+    assert [request.existing_session_prompt for request in pool.requests] == [
+        "compact same-thread prompt",
+        "compact same-thread prompt",
+    ]
+    assert [request.conversation_id for request in pool.requests] == [
+        "stale-thread",
+        None,
+    ]
 
 
 class TestStoreTicketThreadBinding:

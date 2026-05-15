@@ -13,6 +13,11 @@ from codex_autorunner.core.orchestration import (
 )
 from codex_autorunner.core.orchestration.sqlite import open_orchestration_sqlite
 from codex_autorunner.server import create_hub_app
+from codex_autorunner.surfaces.web.read_model_contracts import (
+    ChatDetailSnapshot,
+    ChatIndexSnapshot,
+    load_read_model_contract,
+)
 
 
 def _seed_thread_rows(hub_root: Path, count: int) -> None:
@@ -266,3 +271,94 @@ def test_chat_patch_stream_replays_cursor_ordered_patches(hub_env) -> None:
     patches = _event_payloads(response.text, "chat.patch")
     assert [patch["cursor"] for patch in patches] == [second.cursor]
     assert patches[0]["patch_type"] == "delivery_lifecycle_change"
+
+
+def test_hub_read_models_chats_returns_web_contract_snapshot(hub_env) -> None:
+    _seed_thread_rows(hub_env.hub_root, 30)
+    client = TestClient(create_hub_app(hub_env.hub_root))
+    response = client.get(
+        "/hub/read-models/chats", params={"filter": "all", "limit": 10}
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["contractVersion"] == "web-read-models.v1"
+    assert body["kind"] == "chat.index.snapshot"
+    assert body["repair"]["snapshotRoute"] == "/hub/read-models/chats"
+    assert "chatId" in body["rows"][0]
+    snapshot = load_read_model_contract(ChatIndexSnapshot, body)
+    assert snapshot.rows[0].chat_id.startswith("thread-")
+    assert len(snapshot.rows) == 10
+
+
+def test_hub_read_models_chats_contract_active_filter_matches_index_window(
+    hub_env,
+) -> None:
+    _seed_thread_rows(hub_env.hub_root, 1000)
+    OrchestrationBindingStore(hub_env.hub_root, durable=True).upsert_binding(
+        surface_kind="discord",
+        surface_key="guild:channel",
+        thread_target_id="thread-0003",
+        repo_id="repo",
+        resource_kind="ticket",
+        resource_id="TICKET-900",
+        metadata={"display_name": "Discord channel"},
+    )
+
+    client = TestClient(create_hub_app(hub_env.hub_root))
+    response = client.get(
+        "/hub/read-models/chats", params={"filter": "active", "limit": 25}
+    )
+    assert response.status_code == 200
+    snapshot = load_read_model_contract(ChatIndexSnapshot, response.json())
+    assert len(snapshot.rows) == 1
+    assert snapshot.rows[0].chat_id == "thread-0003"
+    assert snapshot.rows[0].agent_profile == "m4-pma"
+    assert snapshot.rows[0].chat_kind == "coding_agent"
+    assert snapshot.rows[0].surface == "discord"
+
+
+def test_hub_read_models_chat_detail_contract_snapshot(hub_env) -> None:
+    store = ManagedThreadStore(hub_env.hub_root, durable=True)
+    thread = store.create_thread(
+        "hermes",
+        hub_env.repo_root,
+        repo_id="repo",
+        resource_kind="repo",
+        resource_id="repo",
+        name="Detail thread",
+        metadata={"model": "gpt-5.5", "agent_profile": "m4-pma"},
+    )
+    thread_id = str(thread["managed_thread_id"])
+    running = store.create_turn(thread_id, prompt="hello detail")
+    store.create_turn(
+        thread_id,
+        prompt="queued follow-up",
+        busy_policy="queue",
+        force_queue=True,
+    )
+    SQLiteChatSurfaceEventJournal(hub_env.hub_root, durable=True).append_event(
+        idempotency_key="progress-contract-1",
+        event_type="execution.progress",
+        surface_kind="pma",
+        surface_key=thread_id,
+        managed_thread_id=thread_id,
+        repo_id="repo",
+        status="running",
+        payload={"patch_type": "timeline_append"},
+    )
+
+    client = TestClient(create_hub_app(hub_env.hub_root))
+    response = client.get(f"/hub/read-models/chats/{thread_id}")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["contractVersion"] == "web-read-models.v1"
+    assert body["kind"] == "chat.detail.snapshot"
+    assert body["repair"]["snapshotRoute"] == f"/hub/read-models/chats/{thread_id}"
+    snapshot = load_read_model_contract(ChatDetailSnapshot, body)
+    assert snapshot.thread.chat_id == thread_id
+    assert snapshot.thread.agent_profile == "m4-pma"
+    assert snapshot.queue.active_turn_id == running["managed_turn_id"]
+    assert snapshot.queue.depth == 1
+    assert snapshot.timeline[0].kind == "user_message"

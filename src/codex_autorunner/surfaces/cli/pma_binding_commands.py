@@ -1,11 +1,19 @@
 """PMA binding CLI commands (non-thread binding queries)."""
 
+import asyncio
 from pathlib import Path
-from typing import Optional
+from typing import Any, Mapping, Optional
 
 import httpx
 import typer
 
+from ...adapters.chat.surface_resolver import (
+    SurfaceInfo,
+    build_surface_resolvers,
+    close_surface_resolvers,
+    resolve_surface_bindings,
+    surface_info_display,
+)
 from ...core.config import load_hub_config
 from .hub_control_plane_client import (
     build_hub_control_plane_url,
@@ -40,6 +48,11 @@ def pma_binding_list(
         False, "--include-disabled", help="Include disabled bindings"
     ),
     limit: int = typer.Option(200, "--limit", min=1, help="Maximum rows to return"),
+    resolve: bool = typer.Option(
+        False,
+        "--resolve",
+        help="Resolve surface keys to human-readable channel/chat names",
+    ),
     output_json: bool = typer.Option(False, "--json", help="Emit JSON output"),
     path: Optional[Path] = hub_root_path_option(),
 ):
@@ -79,11 +92,30 @@ def pma_binding_list(
     except (ValueError, OSError) as exc:  # intentional: top-level error handler
         exit_with_error(f"Error: {exc}", cause=None)
 
+    bindings = data.get("bindings", []) if isinstance(data, dict) else []
+    resolved: dict[tuple[str, str], Optional[SurfaceInfo]] = {}
+    if resolve and isinstance(bindings, list):
+        resolved = asyncio.run(
+            _resolve_bindings_for_cli(
+                bindings=bindings,
+                raw_config=config.raw if isinstance(config.raw, dict) else {},
+            )
+        )
+        if output_json and isinstance(data, dict):
+            data = dict(data)
+            data["bindings"] = [
+                (
+                    _binding_with_resolved_surface(binding, resolved)
+                    if isinstance(binding, dict)
+                    else binding
+                )
+                for binding in bindings
+            ]
+
     if output_json:
         echo_json(data)
         return
 
-    bindings = data.get("bindings", []) if isinstance(data, dict) else []
     if not isinstance(bindings, list) or not bindings:
         typer.echo("No bindings found")
         return
@@ -97,6 +129,7 @@ def pma_binding_list(
                     str(binding.get("binding_id") or "")[:12],
                     f"surface={binding.get('surface_kind') or ''}",
                     f"key={binding.get('surface_key') or ''}",
+                    _resolved_binding_label(binding, resolved) if resolve else "",
                     f"thread={binding.get('thread_target_id') or ''}"[:20],
                     f"agent={binding.get('agent_id') or ''}",
                     format_resource_owner_label(binding),
@@ -104,6 +137,51 @@ def pma_binding_list(
             ).strip()
             + disabled
         )
+
+
+async def _resolve_bindings_for_cli(
+    *,
+    bindings: list[Any],
+    raw_config: Mapping[str, Any],
+) -> dict[tuple[str, str], Optional[SurfaceInfo]]:
+    mapping_bindings = [binding for binding in bindings if isinstance(binding, Mapping)]
+    resolvers = build_surface_resolvers(raw_config)
+    try:
+        return await resolve_surface_bindings(mapping_bindings, resolvers)
+    finally:
+        await close_surface_resolvers(resolvers)
+
+
+def _binding_surface_lookup_key(
+    binding: Mapping[str, Any],
+) -> Optional[tuple[str, str]]:
+    surface_kind = binding.get("surface_kind")
+    surface_key = binding.get("surface_key")
+    if not isinstance(surface_kind, str) or not surface_kind.strip():
+        return None
+    if not isinstance(surface_key, str) or not surface_key.strip():
+        return None
+    return (surface_kind.strip(), surface_key.strip())
+
+
+def _resolved_binding_label(
+    binding: Mapping[str, Any],
+    resolved: Mapping[tuple[str, str], Optional[SurfaceInfo]],
+) -> str:
+    lookup_key = _binding_surface_lookup_key(binding)
+    info = resolved.get(lookup_key) if lookup_key is not None else None
+    return f"name={surface_info_display(info)}"
+
+
+def _binding_with_resolved_surface(
+    binding: dict[str, Any],
+    resolved: Mapping[tuple[str, str], Optional[SurfaceInfo]],
+) -> dict[str, Any]:
+    enriched = dict(binding)
+    lookup_key = _binding_surface_lookup_key(binding)
+    info = resolved.get(lookup_key) if lookup_key is not None else None
+    enriched["surface_resolved"] = info.to_dict() if info is not None else None
+    return enriched
 
 
 def pma_binding_active(

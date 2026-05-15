@@ -16,12 +16,28 @@ def evict_lru_handle_locked(
     event_prefix: str,
     *,
     last_used_at_getter: Callable[[HandleT], float],
+    active_getter: Callable[[HandleT], bool] | None = None,
 ) -> HandleT | None:
     if not max_handles or max_handles <= 0:
         return None
     if len(handles) < max_handles:
         return None
-    lru_handle = min(handles.values(), key=last_used_at_getter)
+    candidates = [
+        handle
+        for handle in handles.values()
+        if active_getter is None or not active_getter(handle)
+    ]
+    if not candidates:
+        log_event(
+            logger,
+            logging.INFO,
+            f"{event_prefix}.handle.eviction.skipped",
+            reason="active",
+            max_handles=max_handles,
+            handle_count=len(handles),
+        )
+        return None
+    lru_handle = min(candidates, key=last_used_at_getter)
     log_event(
         logger,
         logging.INFO,
@@ -45,18 +61,25 @@ def pop_idle_handles_locked(
     *,
     last_used_at_getter: Callable[[HandleT], float],
     should_skip_prune: Callable[[HandleT], bool] | None = None,
+    active_getter: Callable[[HandleT], bool] | None = None,
 ) -> list[HandleT]:
     if not idle_ttl_seconds or idle_ttl_seconds <= 0:
         return []
     cutoff = time.monotonic() - idle_ttl_seconds
     stale: list[HandleT] = []
     for handle in list(handles.values()):
-        if should_skip_prune and should_skip_prune(handle):
+        if (should_skip_prune and should_skip_prune(handle)) or (
+            active_getter is not None and active_getter(handle)
+        ):
             log_event(
                 logger,
                 logging.INFO,
                 f"{event_prefix}.handle.prune.skipped",
-                reason="should_skip",
+                reason=(
+                    "active"
+                    if active_getter is not None and active_getter(handle)
+                    else "should_skip"
+                ),
                 workspace_id=handle.workspace_id,
                 workspace_root=str(handle.workspace_root),
             )

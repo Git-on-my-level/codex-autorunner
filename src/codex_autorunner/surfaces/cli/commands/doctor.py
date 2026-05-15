@@ -70,12 +70,18 @@ def _build_process_registry_payload(
         records.append(
             {
                 "kind": record.kind,
+                "handle_id": record.handle_id,
                 "workspace_id": record.workspace_id,
                 "record_key": record_key,
                 "pid": record.pid,
                 "pgid": record.pgid,
                 "owner_pid": record.owner_pid,
                 "base_url": record.base_url,
+                "server_scope": record.metadata.get("server_scope"),
+                "runtime_profile": record.metadata.get("runtime_profile"),
+                "initial_cwd": record.metadata.get("initial_cwd")
+                or record.metadata.get("cwd"),
+                "state_dir": record.metadata.get("state_dir"),
                 "path": str(
                     repo_root
                     / ".codex-autorunner"
@@ -505,9 +511,10 @@ def register_doctor_commands(
                 typer.echo(f"  {kind}: {registry_counts[kind]}")
             for record in registry_records:
                 typer.echo(
-                    "  {kind} {key} pid={pid} owner={owner_pid} url={base_url}".format(
+                    "  {kind} {key} scope={scope} pid={pid} owner={owner_pid} url={base_url}".format(
                         kind=record.get("kind"),
                         key=record.get("record_key"),
+                        scope=record.get("server_scope") or "unknown",
                         pid=record.get("pid"),
                         owner_pid=record.get("owner_pid"),
                         base_url=record.get("base_url") or "n/a",

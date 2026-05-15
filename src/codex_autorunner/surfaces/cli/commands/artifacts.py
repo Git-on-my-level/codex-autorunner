@@ -14,6 +14,12 @@ from ....core.artifact_delivery import (
     artifact_delivery_db_path,
     serialize_delivery,
 )
+from ....core.artifact_instructions import (
+    ARTIFACT_TARGET_CONVERSATION_ENV,
+    ARTIFACT_TARGET_SURFACE_ENV,
+    ARTIFACT_WORKSPACE_SCOPE_ENV,
+    current_artifact_target_failure_message,
+)
 from ....core.filebox import list_regular_files, outbox_dir, outbox_pending_dir
 from ....core.utils import RepoNotFoundError, find_repo_root
 
@@ -50,14 +56,12 @@ def _states(value: Optional[str]) -> tuple[DeliveryState, ...] | None:
 
 
 def _current_target() -> tuple[str, str, str | None]:
-    surface = os.environ.get("CAR_ARTIFACT_TARGET_SURFACE", "").strip()
-    conversation = os.environ.get("CAR_ARTIFACT_TARGET_CONVERSATION_KEY", "").strip()
-    workspace = os.environ.get("CAR_ARTIFACT_WORKSPACE_SCOPE", "").strip() or None
+    surface = os.environ.get(ARTIFACT_TARGET_SURFACE_ENV, "").strip()
+    conversation = os.environ.get(ARTIFACT_TARGET_CONVERSATION_ENV, "").strip()
+    workspace = os.environ.get(ARTIFACT_WORKSPACE_SCOPE_ENV, "").strip() or None
     if not surface or not conversation:
-        raise typer.BadParameter(
-            "--to current requires CAR_ARTIFACT_TARGET_SURFACE and "
-            "CAR_ARTIFACT_TARGET_CONVERSATION_KEY"
-        )
+        message = current_artifact_target_failure_message(os.environ)
+        raise typer.BadParameter(message or "current artifact target is unavailable")
     return surface, conversation, workspace
 
 

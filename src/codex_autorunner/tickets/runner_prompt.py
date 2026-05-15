@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Optional
 
@@ -34,6 +35,14 @@ _PREVIOUS_OUTPUT_HEADROOM_BYTES = 1200
 _truncate_text_by_bytes = _support.truncate_text_by_bytes
 _preserve_ticket_structure = _support.preserve_ticket_structure
 _shrink_prompt = _support.shrink_prompt
+
+
+@dataclass(frozen=True)
+class TicketFlowPromptVariants:
+    """Prompt variants for a fresh agent thread versus a reused ticket thread."""
+
+    new_session_prompt: str
+    existing_session_prompt: str
 
 
 def _build_car_hud() -> str:
@@ -95,6 +104,11 @@ def _build_prompt_model(
     return TicketFlowPromptModel(
         instructions=FULL_TICKET_FLOW_INSTRUCTIONS,
         include_optional_sections=True,
+        include_requested_context=True,
+        include_contextspace_docs=True,
+        include_human_replies=True,
+        include_previous_ticket_reference=True,
+        include_previous_agent_output=True,
         rel_ticket=rel_ticket,
         rel_dispatch_dir=safe_relpath(outbox_paths.dispatch_dir, workspace_root),
         rel_dispatch_path=safe_relpath(outbox_paths.dispatch_path, workspace_root),
@@ -159,3 +173,58 @@ def build_prompt(
     prompt = render_ticket_flow_prompt(model)
     validate_ticket_flow_prompt(prompt, max_bytes=prompt_max_bytes)
     return prompt
+
+
+def build_prompt_variants(
+    *,
+    ticket_path: Path,
+    workspace_root: Path,
+    ticket_doc: Any,
+    last_agent_output: Optional[str],
+    last_checkpoint_error: Optional[str] = None,
+    commit_required: bool = False,
+    commit_attempt: int = 0,
+    commit_max_attempts: int = 2,
+    outbox_paths: Any,
+    lint_errors: Optional[list[str]],
+    reply_context: Optional[str] = None,
+    requested_context: Optional[str] = None,
+    previous_ticket_content: Optional[str] = None,
+    prior_no_change_turns: int = 0,
+    prompt_max_bytes: int = 5 * 1024 * 1024,
+) -> TicketFlowPromptVariants:
+    """Build full and same-thread ticket-flow prompts from one prompt model."""
+    _ = ticket_doc
+    model = _build_prompt_model(
+        ticket_path=ticket_path,
+        workspace_root=workspace_root,
+        last_agent_output=last_agent_output,
+        last_checkpoint_error=last_checkpoint_error,
+        commit_required=commit_required,
+        commit_attempt=commit_attempt,
+        commit_max_attempts=commit_max_attempts,
+        outbox_paths=outbox_paths,
+        lint_errors=lint_errors,
+        reply_context=reply_context,
+        requested_context=requested_context,
+        previous_ticket_content=previous_ticket_content,
+        prior_no_change_turns=prior_no_change_turns,
+        prompt_max_bytes=prompt_max_bytes,
+    )
+    new_session_model = reduce_ticket_flow_prompt_to_budget(
+        model,
+        max_bytes=prompt_max_bytes,
+    )
+    new_session_prompt = render_ticket_flow_prompt(new_session_model)
+    validate_ticket_flow_prompt(new_session_prompt, max_bytes=prompt_max_bytes)
+
+    existing_session_model = reduce_ticket_flow_prompt_to_budget(
+        model.for_existing_session(),
+        max_bytes=prompt_max_bytes,
+    )
+    existing_session_prompt = render_ticket_flow_prompt(existing_session_model)
+    validate_ticket_flow_prompt(existing_session_prompt, max_bytes=prompt_max_bytes)
+    return TicketFlowPromptVariants(
+        new_session_prompt=new_session_prompt,
+        existing_session_prompt=existing_session_prompt,
+    )

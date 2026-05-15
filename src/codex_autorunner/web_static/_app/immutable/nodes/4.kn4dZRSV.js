@@ -1,0 +1,1 @@
+import{L as e,et as t,it as n,rt as r}from"../chunks/CO9mdSSY.js";import"../chunks/BFbU5qhn.js";import{t as i}from"../chunks/DcdFtrav.js";import{t as a}from"../chunks/CDYYNlbQ.js";function o(o,s){n(s,!0);let c=t(()=>i.params.workspaceId??`local`);a(o,{get workspaceId(){return e(c)}}),r()}export{o as component};

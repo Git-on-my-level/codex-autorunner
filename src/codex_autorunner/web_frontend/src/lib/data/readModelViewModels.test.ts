@@ -13,6 +13,20 @@ const now = '2026-05-11T12:00:00Z';
 const cursor = { value: 'c:1', sequence: 1, source: 'test', issuedAt: now };
 
 describe('read model view-model selectors', () => {
+  it('treats archived chat rows as archived for sidebar filtering', () => {
+    const row: ChatIndexRow = {
+      chatId: 'tf-archived',
+      surface: 'pma',
+      title: 'ticket-flow:codex',
+      status: 'archived',
+      unreadCount: 0,
+      lastActivityAt: now
+    };
+    expect(row.status).toBe('archived');
+    const summary = chatIndexRowToPmaChatSummary(row);
+    expect(summary.lifecycleStatus).toBe('archived');
+  });
+
   it('maps chat rows to existing PMA chat summaries', () => {
     const row: ChatIndexRow = {
       chatId: 'chat-1',

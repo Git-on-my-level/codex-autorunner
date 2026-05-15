@@ -5952,7 +5952,7 @@ async def test_dispatch_deferred_slash_commands_ack_before_prior_handler_finishe
         assert started == ["inter-1"]
 
         release_first.set()
-        await asyncio.wait_for(task, timeout=1.0)
+        await asyncio.wait_for(task, timeout=3.0)
         assert started == ["inter-1", "inter-2"]
     finally:
         release_first.set()

@@ -131,6 +131,22 @@ class _HermesTurnState:
     closed: bool = False
 
 
+@dataclass(frozen=True)
+class _HermesLifecycleSnapshot:
+    runtime_kind: str
+    server_scope: str
+    handle_id: str
+    workspace_root: str
+    pid: Optional[int]
+    pgid: Optional[int]
+    base_url: Optional[str]
+    active_prompts: int
+    started: bool
+    healthy: bool
+    last_used_at: float
+    state_dir: Optional[str]
+
+
 class HermesSupervisor:
     """Thin Hermes wrapper over the generic ACP subprocess supervisor."""
 
@@ -636,6 +652,32 @@ class HermesSupervisor:
         for state in retired_states:
             await self._retire_turn_state(state)
         await self._acp.close_all()
+
+    async def lifecycle_snapshot(self) -> tuple[Any, ...]:
+        acp_snapshots = await self._acp.lifecycle_snapshot()
+        async with self._lock:
+            active_by_workspace: dict[str, int] = {}
+            for workspace, _turn_id in self._turn_states:
+                active_by_workspace[workspace] = (
+                    active_by_workspace.get(workspace, 0) + 1
+                )
+        return tuple(
+            _HermesLifecycleSnapshot(
+                runtime_kind="hermes",
+                server_scope="workspace",
+                handle_id=snapshot.handle_id,
+                workspace_root=snapshot.workspace_root,
+                pid=snapshot.pid,
+                pgid=snapshot.pgid,
+                base_url=snapshot.base_url,
+                active_prompts=active_by_workspace.get(snapshot.workspace_root, 0),
+                started=snapshot.started,
+                healthy=snapshot.healthy,
+                last_used_at=snapshot.last_used_at,
+                state_dir=snapshot.state_dir,
+            )
+            for snapshot in acp_snapshots
+        )
 
     async def _resolve_turn_id(
         self,

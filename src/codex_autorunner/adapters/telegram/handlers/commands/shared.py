@@ -51,27 +51,6 @@ from .command_utils import (
     _format_opencode_exception,
 )
 
-FILES_HINT_TEMPLATE = (
-    "Artifact delivery target:\n"
-    "- Active scope: repo/worktree FileBox for this Telegram topic\n"
-    "- Target surface: telegram\n"
-    "- Target conversation: {conversation_key}\n"
-    "- Workspace scope: repo:{workspace_path}\n"
-    "- Canonical send-back command: `car artifacts send <file> --to current`.\n"
-    "- If current-target environment variables are unavailable, use: "
-    "`car artifacts send <file> --to explicit --surface telegram "
-    "--conversation {conversation_key} --workspace-scope repo:{workspace_path}`.\n"
-    "- Compatibility FileBox paths for this active target only:\n"
-    "  - Inbox: {inbox}\n"
-    "  - Legacy pending outbox: {outbox}\n"
-    "Topic key: {topic_key}\n"
-    "Topic dir: {topic_dir}\n"
-    "Files placed in a different hub/repo FileBox outbox are not implied to "
-    "belong to this conversation; run `car artifacts diagnose` to find them.\n"
-    "Check delivery with /files outbox.\n"
-    "Max file size: {max_bytes} bytes."
-)
-
 
 @dataclass
 class _RuntimeStub:

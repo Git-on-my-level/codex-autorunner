@@ -109,7 +109,11 @@ def should_inject_filebox_hint(
     """Gate filebox hints to raw user requests or turns with concrete file context."""
     if not prompt_text or not prompt_text.strip():
         return False
-    if "Outbox (pending):" in prompt_text or "Inbox:" in prompt_text:
+    if (
+        "Outbox (pending):" in prompt_text
+        or "Inbox:" in prompt_text
+        or "Artifact delivery (this turn):" in prompt_text
+    ):
         return False
     if not has_file_context and not has_user_filebox_hint_request(user_input_texts):
         return False
