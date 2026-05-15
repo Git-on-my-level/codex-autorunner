@@ -1,4 +1,4 @@
-import { pmaApi, type JsonRecord } from '$lib/api/client';
+import { webApi, type JsonRecord } from '$lib/api/client';
 import {
   confirmDialog,
   confirmDialogTyped
@@ -61,7 +61,7 @@ export async function confirmAndCleanupWorktree(target: CleanupWorktreeTarget): 
     if (!ok) return null;
   }
 
-  const result = await pmaApi.hub.cleanupWorktree({
+  const result = await webApi.hub.cleanupWorktree({
     worktreeRepoId: target.id,
     archive: true,
     force: requiresTypedConfirmation,
@@ -97,7 +97,7 @@ export async function confirmAndArchiveState(target: ArchiveStateTarget): Promis
   });
   if (!ok) return null;
 
-  const result = await pmaApi.hub.archiveState({
+  const result = await webApi.hub.archiveState({
     kind: target.kind,
     id: target.id,
     archiveNote: null
@@ -130,7 +130,7 @@ export async function submitCreateRepo(input: CreateRepoInput): Promise<ActionNo
   if (!repoId && !gitUrl) {
     return { tone: 'warning', message: 'Provide a repo name or a git URL.' };
   }
-  const result = await pmaApi.hub.createRepo({ repoId, gitUrl });
+  const result = await webApi.hub.createRepo({ repoId, gitUrl });
   if (!result.ok) return { tone: 'danger', message: result.error.message };
   await invalidateReadModelTags([readModelEntityTags.repoWorktreeIndex]);
   const label = stringValue(result.data.repo_id) ?? repoId ?? gitUrl ?? 'repo';
@@ -153,7 +153,7 @@ export async function submitCreateWorktree(input: CreateWorktreeInput): Promise<
   if (!branch) {
     return { tone: 'warning', message: 'Branch name is required.' };
   }
-  const result = await pmaApi.hub.createWorktree({
+  const result = await webApi.hub.createWorktree({
     baseRepoId: input.baseRepoId,
     branch
     // startPoint omitted on purpose — backend defaults to origin/<default-branch>
@@ -187,7 +187,7 @@ export type SetWorktreeSetupInput = {
 
 export async function submitSetWorktreeSetup(input: SetWorktreeSetupInput): Promise<ActionNotice> {
   const cleaned = input.commands.map((cmd) => cmd.trim()).filter((cmd) => cmd.length > 0);
-  const result = await pmaApi.hub.setWorktreeSetup(input.repoId, cleaned);
+  const result = await webApi.hub.setWorktreeSetup(input.repoId, cleaned);
   if (!result.ok) return { tone: 'danger', message: result.error.message };
   await invalidateReadModelTags([
     readModelEntityTags.repoWorktreeIndex,

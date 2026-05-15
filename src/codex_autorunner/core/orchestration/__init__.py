@@ -37,9 +37,9 @@ from .chat_operation_state import (
     ChatOperationState,
 )
 from .chat_surface_emitters import (
+    chat_surface_key,
     emit_binding_event,
     emit_chat_surface_event,
-    pma_surface_key,
 )
 from .chat_surface_events import (
     CHAT_SURFACE_EVENT_TYPES,
@@ -295,7 +295,7 @@ __all__ = [
     "plan_chat_operation_duplicate",
     "plan_chat_operation_recovery",
     "plan_managed_thread_delivery_recovery",
-    "pma_surface_key",
+    "chat_surface_key",
     "record_from_intent",
     "resolve_execution_history_maintenance_policy",
     "resolve_orchestration_sqlite_path",

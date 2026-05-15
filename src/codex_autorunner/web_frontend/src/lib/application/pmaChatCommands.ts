@@ -1,4 +1,4 @@
-import type { ApiResult, PmaApiClient } from '$lib/api/client';
+import type { ApiResult, WebApiClient } from '$lib/api/client';
 import type { PmaChatMessage, PmaChatSummary } from '$lib/viewModels/domain';
 import {
   buildManagedThreadCreatePayload,
@@ -54,7 +54,7 @@ export type ExistingPmaChatMessageOptions = {
 };
 
 type PmaCommandClient = {
-  pma: Pick<PmaApiClient['pma'], 'createChat' | 'startChatWithMessage' | 'sendMessage' | 'forkThread'>;
+  pma: Pick<WebApiClient['pma'], 'createChat' | 'startChatWithMessage' | 'sendMessage' | 'forkThread'>;
 };
 
 function requireThreadId(threadId: string): string {

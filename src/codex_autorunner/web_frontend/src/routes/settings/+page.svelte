@@ -2,7 +2,7 @@
   import { goto } from '$app/navigation';
   import { onMount } from 'svelte';
   import { page } from '$app/state';
-  import { pmaApi, type ApiError, type JsonRecord } from '$lib/api/client';
+  import { webApi, type ApiError, type JsonRecord } from '$lib/api/client';
   import MemoryRail from '$lib/components/MemoryRail.svelte';
   import { withRuntimeBasePath as href } from '$lib/runtime/basePath';
   import SettingsView from '$lib/components/SettingsView.svelte';
@@ -47,9 +47,9 @@
     error = null;
     saveError = null;
     const [session, agents, voice] = await Promise.all([
-      pmaApi.settings.getSession(),
-      pmaApi.pma.listAgents(),
-      pmaApi.voice.getConfig()
+      webApi.settings.getSession(),
+      webApi.pma.listAgents(),
+      webApi.voice.getConfig()
     ]);
 
     if (!session.ok && !agents.ok && !voice.ok) {
@@ -64,7 +64,7 @@
       agentRows.map(async (agent) => {
         if (!agentCanListModels(agent)) return;
         const id = agentId(agent);
-        const result = await pmaApi.pma.listAgentModels(id);
+        const result = await webApi.pma.listAgentModels(id);
         modelCatalogs[id] = result.ok ? result.data : null;
       })
     );
@@ -88,7 +88,7 @@
     if (!view || saving) return;
     saving = true;
     saveError = null;
-    const result = await pmaApi.settings.updateSession(buildSessionUpdatePayload(view.session));
+    const result = await webApi.settings.updateSession(buildSessionUpdatePayload(view.session));
     if (!result.ok) {
       saveError = result.error;
       saving = false;

@@ -2,14 +2,14 @@
   import SurfaceArtifactCard from '$lib/components/SurfaceArtifactCard.svelte';
   import { withRuntimeBasePath as href } from '$lib/runtime/basePath';
   import { renderMarkdownToHtml } from '$lib/viewModels/contextspace';
-  import { compactPmaTranscriptCards, formatCompactMessageDateTime, type PmaCard, type PmaToolCallCard } from '$lib/viewModels/pmaChat';
+  import { compactChatTranscriptCards, formatCompactMessageDateTime, type ChatTranscriptCard, type ChatToolCallCard } from '$lib/viewModels/pmaChat';
   import type { SurfaceArtifact } from '$lib/viewModels/domain';
 
   let {
     cards,
     assistantLabel = 'Assistant',
     streamingMessageId = null,
-  }: { cards: PmaCard[]; assistantLabel?: string; streamingMessageId?: string | null } = $props();
+  }: { cards: ChatTranscriptCard[]; assistantLabel?: string; streamingMessageId?: string | null } = $props();
 
   const userToggled = $state<Record<string, boolean>>({});
 
@@ -27,21 +27,21 @@
     return null;
   }
 
-  function isThinkingTrace(card: Extract<PmaCard, { kind: 'intermediate' }>): boolean {
+  function isThinkingTrace(card: Extract<ChatTranscriptCard, { kind: 'intermediate' }>): boolean {
     return card.title.trim().toLowerCase() === 'thinking';
   }
 
-  function isCommentaryTrace(card: Extract<PmaCard, { kind: 'intermediate' }>): boolean {
+  function isCommentaryTrace(card: Extract<ChatTranscriptCard, { kind: 'intermediate' }>): boolean {
     return card.title.trim().toLowerCase() === 'commentary';
   }
 
-  function traceKindLabel(card: Extract<PmaCard, { kind: 'intermediate' }>): string {
+  function traceKindLabel(card: Extract<ChatTranscriptCard, { kind: 'intermediate' }>): string {
     const title = card.title.trim();
     if (!title) return 'Update';
     return title.charAt(0).toUpperCase() + title.slice(1);
   }
 
-  function traceSummaryLabel(card: Extract<PmaCard, { kind: 'intermediate' }>): string {
+  function traceSummaryLabel(card: Extract<ChatTranscriptCard, { kind: 'intermediate' }>): string {
     const detail = card.detail?.split('·', 1)[0]?.trim();
     if (detail) return detail;
     const text = card.text.trim().replace(/\s+/g, ' ');
@@ -49,7 +49,7 @@
     return traceKindLabel(card);
   }
 
-  function thinkingTraceLabel(card: Extract<PmaCard, { kind: 'intermediate' }>): string {
+  function thinkingTraceLabel(card: Extract<ChatTranscriptCard, { kind: 'intermediate' }>): string {
     const detail = card.detail;
     if (detail) {
       const trimmed = detail.trim();
@@ -88,11 +88,11 @@
     return 'Reasoning trace';
   }
 
-  function isToolGroupRunning(tools: PmaToolCallCard[]): boolean {
+  function isToolGroupRunning(tools: ChatToolCallCard[]): boolean {
     return tools.length > 0 && tools[0].state === 'started';
   }
 
-  function toolGroupOpen(card: Extract<PmaCard, { kind: 'tool_group' }>): boolean {
+  function toolGroupOpen(card: Extract<ChatTranscriptCard, { kind: 'tool_group' }>): boolean {
     const userPref = userToggled[card.id];
     if (typeof userPref === 'boolean') return userPref;
     return isToolGroupRunning(card.tools);
@@ -103,14 +103,14 @@
     userToggled[cardId] = el.open;
   }
 
-  function toolHeadlineText(tool: PmaToolCallCard | undefined): string {
+  function toolHeadlineText(tool: ChatToolCallCard | undefined): string {
     if (!tool) return 'Tool call';
     const summary = tool.summary?.trim();
     if (summary) return summary;
     return tool.title;
   }
 
-  const displayCards = $derived(compactPmaTranscriptCards(cards));
+  const displayCards = $derived(compactChatTranscriptCards(cards));
 </script>
 
 {#each displayCards as card (card.id)}

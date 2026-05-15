@@ -27,7 +27,7 @@ def _sse_frame(event: str, payload: dict[str, Any], *, event_id: Optional[str]) 
     )
 
 
-def build_hub_chat_event_routes(context: HubAppContext) -> APIRouter:
+def build_chat_surface_event_routes(context: HubAppContext) -> APIRouter:
     router = APIRouter(prefix="/hub/chat", tags=["chat"])
 
     @router.get("/events")
@@ -216,4 +216,4 @@ def build_hub_chat_event_routes(context: HubAppContext) -> APIRouter:
     return router
 
 
-__all__ = ["build_hub_chat_event_routes"]
+__all__ = ["build_chat_surface_event_routes"]

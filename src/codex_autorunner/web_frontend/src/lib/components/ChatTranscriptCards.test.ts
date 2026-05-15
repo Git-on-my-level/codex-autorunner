@@ -1,7 +1,7 @@
 import { render } from 'svelte/server';
 import { describe, expect, it } from 'vitest';
 import ChatTranscriptCards from './ChatTranscriptCards.svelte';
-import type { PmaCard } from '$lib/viewModels/pmaChat';
+import type { ChatTranscriptCard } from '$lib/viewModels/pmaChat';
 
 const baseTrace = {
   turnId: 'turn-1',
@@ -13,7 +13,7 @@ const baseTrace = {
 
 describe('ChatTranscriptCards', () => {
   it('collapses thinking traces while keeping commentary visible', () => {
-    const cards: PmaCard[] = [
+    const cards: ChatTranscriptCard[] = [
       {
         ...baseTrace,
         kind: 'intermediate',
@@ -45,7 +45,7 @@ describe('ChatTranscriptCards', () => {
   });
 
   it('collapses non-commentary progress traces instead of rendering them as chat bubbles', () => {
-    const cards: PmaCard[] = [
+    const cards: ChatTranscriptCard[] = [
       {
         ...baseTrace,
         kind: 'intermediate',
@@ -75,7 +75,7 @@ describe('ChatTranscriptCards', () => {
   });
 
   it('renders richer progress labels when the model supplies them', () => {
-    const cards: PmaCard[] = [
+    const cards: ChatTranscriptCard[] = [
       {
         ...baseTrace,
         kind: 'intermediate',
@@ -92,7 +92,7 @@ describe('ChatTranscriptCards', () => {
   });
 
   it('collapses thinking traces inside worked summaries', () => {
-    const cards: PmaCard[] = [
+    const cards: ChatTranscriptCard[] = [
       {
         kind: 'turn_summary',
         id: 'summary-1',
@@ -133,7 +133,7 @@ describe('ChatTranscriptCards', () => {
   });
 
   it('renders compact timestamps on user and assistant message bubbles', () => {
-    const cards: PmaCard[] = [
+    const cards: ChatTranscriptCard[] = [
       {
         kind: 'message',
         id: 'u1',

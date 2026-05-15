@@ -13,18 +13,18 @@ import { surfaceRefFromThreadRaw } from './thread';
 import { isChatUnread } from './unread';
 
 /** Status chips (All / Waiting / …) on the chat list. */
-export type PmaChatStatusFilter = 'all' | 'active' | 'waiting' | 'unread' | 'archived';
+export type ChatStatusFilter = 'all' | 'active' | 'waiting' | 'unread' | 'archived';
 
 /** Full list filter: status chips, grouped ticket runs, or `surface:<slug>` messenger filters. */
-export type PmaChatFilter = PmaChatStatusFilter | 'ticket_runs' | `surface:${string}`;
+export type ChatFilter = ChatStatusFilter | 'ticket_runs' | `surface:${string}`;
 
 /** Token for the chats sidebar filter that lists only ticket-flow run groups (collapsed headers). */
-export const PMA_CHAT_TICKET_RUNS_FILTER = 'ticket_runs' as const satisfies PmaChatFilter;
+export const CHAT_TICKET_RUNS_FILTER = 'ticket_runs' as const satisfies ChatFilter;
 
 /** Synthetic list selection id for pinned PMA Memory in the chats sidebar. */
-export const PMA_MEMORY_LIST_ID = '__memory__';
+export const CHAT_MEMORY_LIST_ID = '__memory__';
 
-export const PMA_CHAT_FILTER_ORDER: PmaChatStatusFilter[] = ['all', 'waiting', 'active', 'unread', 'archived'];
+export const CHAT_FILTER_ORDER: ChatStatusFilter[] = ['all', 'waiting', 'active', 'unread', 'archived'];
 
 const INTERNAL_MESSENGER_SURFACE_KINDS = new Set([
   'managed_thread',
@@ -74,7 +74,7 @@ function messengerBadgeClass(slug: string): string {
 }
 
 /** Badge + filter slug for chats bound to an external messenger surface (Discord, Telegram, …). */
-export function pmaChatMessengerSurface(
+export function chatMessengerSurface(
   chat: PmaChatSummary | null
 ): { slug: string; label: string; badgeClass: string } | null {
   if (!chat) return null;
@@ -105,21 +105,21 @@ export function pmaChatMessengerSurface(
   return null;
 }
 
-export function pmaChatSurfaceFilterToken(slug: string): PmaChatFilter {
+export function chatSurfaceFilterToken(slug: string): ChatFilter {
   return `surface:${slug}`;
 }
 
-export function isPmaChatSurfaceFilter(filter: PmaChatFilter): filter is `surface:${string}` {
+export function isChatSurfaceFilter(filter: ChatFilter): filter is `surface:${string}` {
   return filter.startsWith('surface:');
 }
 
-export function pmaChatSurfaceFilterOptions(
+export function chatSurfaceFilterOptions(
   chats: PmaChatSummary[]
 ): { slug: string; label: string; count: number }[] {
   const counts = new Map<string, { label: string; count: number }>();
   for (const chat of chats) {
     if (isPmaChatArchived(chat)) continue;
-    const surf = pmaChatMessengerSurface(chat);
+    const surf = chatMessengerSurface(chat);
     if (!surf) continue;
     const prev = counts.get(surf.slug);
     if (prev) prev.count += 1;
@@ -179,7 +179,7 @@ export type ArtifactCardView = {
   detailLabel: string;
 };
 
-export type PmaCard =
+export type ChatTranscriptCard =
   | { kind: 'message'; id: string; message: PmaChatMessage; turnId: string | null; orderKey: string; timestamp: string | null }
   | {
       kind: 'intermediate';
@@ -194,14 +194,14 @@ export type PmaCard =
       orderKey: string;
       timestamp: string | null;
     }
-  | { kind: 'tool_group'; id: string; tools: PmaToolCallCard[]; turnId: string | null; orderKey: string; timestamp: string | null }
-  | { kind: 'turn_summary'; id: string; title: string; cards: PmaCard[]; turnId: string | null; orderKey: string; timestamp: string | null }
+  | { kind: 'tool_group'; id: string; tools: ChatToolCallCard[]; turnId: string | null; orderKey: string; timestamp: string | null }
+  | { kind: 'turn_summary'; id: string; title: string; cards: ChatTranscriptCard[]; turnId: string | null; orderKey: string; timestamp: string | null }
   | { kind: 'approval'; id: string; title: string; summary: string; detail: string | null; turnId: string | null; orderKey: string; timestamp: string | null }
   | { kind: 'lifecycle'; id: string; title: string; text: string; detail: string | null; turnId: string | null; orderKey: string; timestamp: string | null }
   | { kind: 'ticket'; id: string; title: string; summary: string | null; ticketId: string }
   | { kind: 'artifact'; id: string; artifact: SurfaceArtifact };
 
-export type PmaToolCallCard = {
+export type ChatToolCallCard = {
   id: string;
   title: string;
   summary: string | null;
@@ -211,13 +211,13 @@ export type PmaToolCallCard = {
   source?: SurfaceArtifact;
 };
 
-export type PmaTranscriptSnapshot = {
-  rows: PmaCard[];
+export type ChatTranscriptSnapshot = {
+  rows: ChatTranscriptCard[];
   status: PmaRunProgress | null;
   raw: Record<string, unknown>;
 };
 
-type PmaActivitySummaryCard = Extract<PmaCard, { kind: 'intermediate' | 'tool_group' | 'approval' }>;
+type ChatActivitySummaryCard = Extract<ChatTranscriptCard, { kind: 'intermediate' | 'tool_group' | 'approval' }>;
 
 type CanonicalProgressItem = {
   item_id?: string;
@@ -570,7 +570,7 @@ export function isPmaChatArchived(chat: PmaChatSummary): boolean {
 
 export function filterPmaChats(
   chats: PmaChatSummary[],
-  filter: PmaChatFilter,
+  filter: ChatFilter,
   query: string,
   lastSeen: Record<string, string> = {}
 ): PmaChatSummary[] {
@@ -580,11 +580,11 @@ export function filterPmaChats(
       const archived = isPmaChatArchived(chat);
       if (filter === 'archived') return archived;
       if (archived) return false;
-      if (isPmaChatSurfaceFilter(filter)) {
+      if (isChatSurfaceFilter(filter)) {
         const slug = filter.slice('surface:'.length);
-        return pmaChatMessengerSurface(chat)?.slug === slug;
+        return chatMessengerSurface(chat)?.slug === slug;
       }
-      if (filter === 'ticket_runs') return pmaChatRunGroupKey(chat) !== null;
+      if (filter === 'ticket_runs') return chatRunGroupKey(chat) !== null;
       if (filter === 'active') return activeStatuses.includes(chat.status);
       if (filter === 'waiting') return waitingStatuses.includes(chat.status);
       if (filter === 'unread') {
@@ -594,7 +594,7 @@ export function filterPmaChats(
     })
     .filter((chat) => {
       if (!needle) return true;
-      const surfaceLabel = pmaChatMessengerSurface(chat)?.label;
+      const surfaceLabel = chatMessengerSurface(chat)?.label;
       return [
         chat.title,
         chat.repoId,
@@ -647,7 +647,7 @@ export function sortChatsWaitingFirst(chats: PmaChatSummary[]): PmaChatSummary[]
 export function summarizeFilterCounts(
   chats: PmaChatSummary[],
   lastSeen: Record<string, string> = {}
-): Record<PmaChatStatusFilter, number> {
+): Record<ChatStatusFilter, number> {
   const activeChats = chats.filter((chat) => !isPmaChatArchived(chat));
   return {
     all: activeChats.length,
@@ -663,7 +663,7 @@ export function summarizeFilterCounts(
  * worktree (or repo, for repo-scoped flows) belong to the same operator-visible
  * run; they collapse into a single row on chat lists.
  */
-export type PmaChatRunGroup = {
+export type ChatRunGroup = {
   key: string;
   scopeKind: 'worktree' | 'repo';
   scopeId: string;
@@ -680,11 +680,11 @@ export type PmaChatRunGroup = {
   updatedAt: string | null;
 };
 
-export type PmaChatListEntry =
-  | { kind: 'group'; group: PmaChatRunGroup }
+export type ChatListEntry =
+  | { kind: 'group'; group: ChatRunGroup }
   | { kind: 'chat'; chat: PmaChatSummary };
 
-export function pmaChatRunGroupKey(chat: PmaChatSummary): string | null {
+export function chatRunGroupKey(chat: PmaChatSummary): string | null {
   if (!chat.isTicketFlow && !chat.ticketId) return null;
   const runSuffix = chat.runId ? `:run:${chat.runId}` : '';
   if (chat.worktreeId) return `worktree:${chat.worktreeId}${runSuffix}`;
@@ -697,7 +697,7 @@ export function countTicketRunGroups(chats: PmaChatSummary[]): number {
   const keys = new Set<string>();
   for (const chat of chats) {
     if (isPmaChatArchived(chat)) continue;
-    const key = pmaChatRunGroupKey(chat);
+    const key = chatRunGroupKey(chat);
     if (key) keys.add(key);
   }
   return keys.size;
@@ -707,7 +707,7 @@ function isUnread(chat: PmaChatSummary, lastSeen: Record<string, string>): boole
   return isChatUnread(chat, lastSeen);
 }
 
-function rollupGroupStatus(group: PmaChatRunGroup): WorkStatus {
+function rollupGroupStatus(group: ChatRunGroup): WorkStatus {
   if (group.waitingCount > 0) return 'waiting';
   if (group.activeCount > 0) return 'running';
   if (group.failedCount > 0) return 'failed';
@@ -720,7 +720,7 @@ function chatCountsDoneForRun(chat: PmaChatSummary): boolean {
   return chat.ticketDone === true || chat.status === 'done';
 }
 
-export function buildPmaChatListEntries(
+export function buildChatListEntries(
   chats: PmaChatSummary[],
   options: {
     lastSeen?: Record<string, string>;
@@ -728,16 +728,16 @@ export function buildPmaChatListEntries(
     worktreeLabel?: (worktreeId: string) => string | null;
     groupRuns?: boolean;
   } = {}
-): PmaChatListEntry[] {
+): ChatListEntry[] {
   const lastSeen = options.lastSeen ?? {};
   if (options.groupRuns === false) {
-    return sortChatsUnreadFirst(chats, lastSeen).map((chat) => ({ kind: 'chat', chat }) as PmaChatListEntry);
+    return sortChatsUnreadFirst(chats, lastSeen).map((chat) => ({ kind: 'chat', chat }) as ChatListEntry);
   }
-  const groups = new Map<string, PmaChatRunGroup>();
+  const groups = new Map<string, ChatRunGroup>();
   const standalone: PmaChatSummary[] = [];
 
   for (const chat of chats) {
-    const key = pmaChatRunGroupKey(chat);
+    const key = chatRunGroupKey(chat);
     if (!key) {
       standalone.push(chat);
       continue;
@@ -787,7 +787,7 @@ export function buildPmaChatListEntries(
     group.status = rollupGroupStatus(group);
   }
 
-  type Sortable = { entry: PmaChatListEntry; unreadRank: number; statusRank: number; sort: string; id: string };
+  type Sortable = { entry: ChatListEntry; unreadRank: number; statusRank: number; sort: string; id: string };
   const sortables: Sortable[] = [];
   for (const group of groups.values()) {
     sortables.push({
@@ -818,13 +818,13 @@ export function buildPmaChatListEntries(
 }
 
 /** Filter entries against a single PMA chat filter while preserving group structure. */
-export function filterPmaChatEntries(
-  entries: PmaChatListEntry[],
-  filter: PmaChatFilter,
+export function filterChatEntries(
+  entries: ChatListEntry[],
+  filter: ChatFilter,
   search: string,
   lastSeen: Record<string, string> = {}
-): PmaChatListEntry[] {
-  const out: PmaChatListEntry[] = [];
+): ChatListEntry[] {
+  const out: ChatListEntry[] = [];
   for (const entry of entries) {
     if (entry.kind === 'chat') {
       const filtered = filterPmaChats([entry.chat], filter, search, lastSeen);
@@ -838,7 +838,7 @@ export function filterPmaChatEntries(
       continue;
     }
     // Rebuild a slimmer group containing only matched chats so counts stay honest.
-    const trimmed: PmaChatRunGroup = {
+    const trimmed: ChatRunGroup = {
       ...entry.group,
       chats: matchedChats,
       totalCount: matchedChats.length,
@@ -879,17 +879,17 @@ export function chooseActiveChatId(
   return null;
 }
 
-export function buildPmaCards(
+export function buildChatTranscriptCards(
   timeline: PmaTimelineItem[],
   chat: PmaChatSummary | null,
   artifacts: SurfaceArtifact[]
-): PmaCard[] {
+): ChatTranscriptCard[] {
   const normalizedTimeline = suppressDuplicateTimelineDeliveries(timeline);
   const messageAttachmentKeys = collectMessageAttachmentKeys(normalizedTimeline);
   const timelineCards = normalizedTimeline
     .flatMap(timelineItemToCard)
     .filter((card) => !isMessageAttachmentArtifactCard(card, messageAttachmentKeys));
-  const cards: PmaCard[] = [...timelineCards];
+  const cards: ChatTranscriptCard[] = [...timelineCards];
 
   if (chat?.ticketId) {
     cards.push({
@@ -927,7 +927,7 @@ function canonicalTimelineIdentityKey(item: PmaTimelineItem): string {
   return item.identity.timelineItemId;
 }
 
-function isMessageAttachmentArtifactCard(card: PmaCard, messageAttachmentKeys: Set<string>): boolean {
+function isMessageAttachmentArtifactCard(card: ChatTranscriptCard, messageAttachmentKeys: Set<string>): boolean {
   if (card.kind !== 'artifact') return false;
   return artifactKeysFor(card.artifact).some((key) => messageAttachmentKeys.has(key));
 }
@@ -965,12 +965,12 @@ function artifactKeysFor(artifact: SurfaceArtifact): string[] {
   return [...keys];
 }
 
-export function mapPmaTranscriptSnapshot(
+export function mapChatTranscriptSnapshot(
   raw: Record<string, unknown>,
   mapProgress: (raw: Record<string, unknown>) => PmaRunProgress
-): PmaTranscriptSnapshot {
+): ChatTranscriptSnapshot {
   return {
-    rows: asRecordArray(raw.rows).map(mapPmaTranscriptRow).filter((row): row is PmaCard => row !== null),
+    rows: asRecordArray(raw.rows).map(mapChatTranscriptRow).filter((row): row is ChatTranscriptCard => row !== null),
     status: raw.status && typeof raw.status === 'object' && !Array.isArray(raw.status)
       ? mapProgress(raw.status as Record<string, unknown>)
       : null,
@@ -978,16 +978,16 @@ export function mapPmaTranscriptSnapshot(
   };
 }
 
-export function mapPmaTranscriptRows(rawRows: unknown): PmaCard[] {
-  return asRecordArray(rawRows).map(mapPmaTranscriptRow).filter((row): row is PmaCard => row !== null);
+export function mapChatTranscriptRows(rawRows: unknown): ChatTranscriptCard[] {
+  return asRecordArray(rawRows).map(mapChatTranscriptRow).filter((row): row is ChatTranscriptCard => row !== null);
 }
 
-export function compactPmaTranscriptCards(cards: PmaCard[]): PmaCard[] {
+export function compactChatTranscriptCards(cards: ChatTranscriptCard[]): ChatTranscriptCard[] {
   return summarizeTurnActivity(mergeIntermediateDeltas(foldAdjacentToolGroups(cards)));
 }
 
-function foldAdjacentToolGroups(cards: PmaCard[]): PmaCard[] {
-  const out: PmaCard[] = [];
+function foldAdjacentToolGroups(cards: ChatTranscriptCard[]): ChatTranscriptCard[] {
+  const out: ChatTranscriptCard[] = [];
   for (const card of cards) {
     const prev = out[out.length - 1];
     if (
@@ -1009,8 +1009,8 @@ function foldAdjacentToolGroups(cards: PmaCard[]): PmaCard[] {
   return out;
 }
 
-function mergeIntermediateDeltas(cards: PmaCard[]): PmaCard[] {
-  const out: PmaCard[] = [];
+function mergeIntermediateDeltas(cards: ChatTranscriptCard[]): ChatTranscriptCard[] {
+  const out: ChatTranscriptCard[] = [];
   for (const card of cards) {
     const prev = out[out.length - 1];
     if (
@@ -1035,9 +1035,9 @@ function mergeIntermediateDeltas(cards: PmaCard[]): PmaCard[] {
   return out;
 }
 
-function summarizeTurnActivity(cards: PmaCard[]): PmaCard[] {
-  const out: PmaCard[] = [];
-  let pending: PmaActivitySummaryCard[] = [];
+function summarizeTurnActivity(cards: ChatTranscriptCard[]): ChatTranscriptCard[] {
+  const out: ChatTranscriptCard[] = [];
+  let pending: ChatActivitySummaryCard[] = [];
 
   const flush = () => {
     if (!pending.length) return;
@@ -1060,7 +1060,7 @@ function summarizeTurnActivity(cards: PmaCard[]): PmaCard[] {
   return out;
 }
 
-function compactActivityRun(cards: PmaActivitySummaryCard[]): PmaCard[] {
+function compactActivityRun(cards: ChatActivitySummaryCard[]): ChatTranscriptCard[] {
   if (cards.length === 1 && !activityCardNeedsSummary(cards[0])) return cards;
   const turnId = activitySummaryTurnId(cards[0]);
   return [{
@@ -1074,7 +1074,7 @@ function compactActivityRun(cards: PmaActivitySummaryCard[]): PmaCard[] {
   }];
 }
 
-function activitySummaryTitle(cards: PmaActivitySummaryCard[]): string {
+function activitySummaryTitle(cards: ChatActivitySummaryCard[]): string {
   let toolCalls = 0;
   let thinkingUpdates = 0;
   let progressUpdates = 0;
@@ -1098,25 +1098,25 @@ function activitySummaryTitle(cards: PmaActivitySummaryCard[]): string {
   return parts.length ? parts.join(', ') : 'Activity details';
 }
 
-function activityCardNeedsSummary(card: PmaActivitySummaryCard): boolean {
+function activityCardNeedsSummary(card: ChatActivitySummaryCard): boolean {
   if (card.kind === 'tool_group') return card.tools.length > 1;
   if (card.kind === 'intermediate') return uniqueStrings([...card.eventIds, ...card.progressSourceIds]).length > 1;
   return false;
 }
 
-function isSummaryActivityCard(card: PmaCard): card is PmaActivitySummaryCard {
+function isSummaryActivityCard(card: ChatTranscriptCard): card is ChatActivitySummaryCard {
   if (card.kind === 'tool_group' || card.kind === 'approval') return true;
   if (card.kind !== 'intermediate') return false;
   return !isCommentaryTraceCard(card);
 }
 
-function activitySummaryTurnId(card: PmaActivitySummaryCard): string | null {
+function activitySummaryTurnId(card: ChatActivitySummaryCard): string | null {
   return card.turnId;
 }
 
 function shouldAppendIntermediateDelta(
-  left: Extract<PmaCard, { kind: 'intermediate' }>,
-  right: Extract<PmaCard, { kind: 'intermediate' }>
+  left: Extract<ChatTranscriptCard, { kind: 'intermediate' }>,
+  right: Extract<ChatTranscriptCard, { kind: 'intermediate' }>
 ): boolean {
   if (left.turnId !== right.turnId) return false;
   if (isCommentaryTraceCard(left) || isCommentaryTraceCard(right)) return false;
@@ -1130,7 +1130,7 @@ function shouldAppendIntermediateDelta(
   return isTokenLikeIntermediate(left) && isTokenLikeIntermediate(right);
 }
 
-function isTokenLikeIntermediate(card: Extract<PmaCard, { kind: 'intermediate' }>): boolean {
+function isTokenLikeIntermediate(card: Extract<ChatTranscriptCard, { kind: 'intermediate' }>): boolean {
   const text = card.text.trim();
   const title = card.title.trim();
   if (!text || text.length > 32 || /\n/.test(text)) return false;
@@ -1140,8 +1140,8 @@ function isTokenLikeIntermediate(card: Extract<PmaCard, { kind: 'intermediate' }
 }
 
 function mergedIntermediateTitle(
-  left: Extract<PmaCard, { kind: 'intermediate' }>,
-  right: Extract<PmaCard, { kind: 'intermediate' }>
+  left: Extract<ChatTranscriptCard, { kind: 'intermediate' }>,
+  right: Extract<ChatTranscriptCard, { kind: 'intermediate' }>
 ): string {
   if (isThinkingTraceTitle(left.title) || isThinkingTraceTitle(right.title)) return 'Thinking';
   if (isTokenLikeProgressIntermediate(left) && isTokenLikeProgressIntermediate(right)) return 'Progress';
@@ -1165,14 +1165,14 @@ function isProgressTraceTitle(title: string): boolean {
   return traceLabelText(title).toLowerCase() === 'progress';
 }
 
-function isTokenLikeProgressIntermediate(card: Extract<PmaCard, { kind: 'intermediate' }>): boolean {
+function isTokenLikeProgressIntermediate(card: Extract<ChatTranscriptCard, { kind: 'intermediate' }>): boolean {
   if (!isTokenLikeIntermediate(card)) return false;
   const text = card.text.trim();
   const title = card.title.trim();
   return /(?:\d|%)/.test(text) || /(?:\d|%)/.test(title);
 }
 
-function mapPmaTranscriptRow(raw: Record<string, unknown>): PmaCard | null {
+function mapChatTranscriptRow(raw: Record<string, unknown>): ChatTranscriptCard | null {
   const kind = stringValue(raw.kind);
   const id = stringValue(raw.id);
   if (!kind || !id) return null;
@@ -1259,7 +1259,7 @@ function mapPmaTranscriptRow(raw: Record<string, unknown>): PmaCard | null {
   return null;
 }
 
-function mapTranscriptToolCard(raw: Record<string, unknown>): PmaToolCallCard {
+function mapTranscriptToolCard(raw: Record<string, unknown>): ChatToolCallCard {
   const state = stringValue(raw.state);
   return {
     id: stringValue(raw.id) || 'tool',
@@ -1283,7 +1283,7 @@ function mapTranscriptArtifact(raw: Record<string, unknown>): SurfaceArtifact {
   };
 }
 
-export function mergePmaActivityEvents(
+export function mergeChatActivityEvents(
   existing: SurfaceArtifact[],
   incoming: SurfaceArtifact[],
   limit = 160
@@ -1305,12 +1305,12 @@ export function mergePmaActivityEvents(
   return ordered.slice(-limit);
 }
 
-export function buildPmaActivityCards(
+export function buildChatActivityCards(
   events: SurfaceArtifact[],
   options: { fallbackTurnId?: string | null } = {}
-): PmaCard[] {
-  const cards: PmaCard[] = [];
-  let toolGroup: PmaToolCallCard[] = [];
+): ChatTranscriptCard[] {
+  const cards: ChatTranscriptCard[] = [];
+  let toolGroup: ChatToolCallCard[] = [];
   const fallbackTurnId = options.fallbackTurnId ?? null;
 
   const flushToolGroup = () => {
@@ -1372,10 +1372,10 @@ export function buildPmaActivityCards(
 }
 
 function findMergeableIntermediate(
-  cards: PmaCard[],
+  cards: ChatTranscriptCard[],
   event: SurfaceArtifact,
   fallbackTurnId: string | null
-): Extract<PmaCard, { kind: 'intermediate' }> | null {
+): Extract<ChatTranscriptCard, { kind: 'intermediate' }> | null {
   if (isCommentaryTraceEvent(event)) {
     return null;
   }
@@ -1615,7 +1615,7 @@ function intermediateTitle(event: SurfaceArtifact): string {
 }
 
 function shouldMergeIntermediate(
-  card: Extract<PmaCard, { kind: 'intermediate' }>,
+  card: Extract<ChatTranscriptCard, { kind: 'intermediate' }>,
   event: SurfaceArtifact,
   fallbackTurnId: string | null = null
 ): boolean {
@@ -1658,7 +1658,7 @@ function toolDisplayTitle(event: SurfaceArtifact): string {
   return stringValue(item?.tool_name) || stringValue(item?.title) || event.summary || event.title || 'Tool call';
 }
 
-function toolState(event: SurfaceArtifact): PmaToolCallCard['state'] {
+function toolState(event: SurfaceArtifact): ChatToolCallCard['state'] {
   const rawState = stringValue(canonicalProgressItem(event)?.state).toLowerCase();
   if (rawState === 'started' || rawState === 'completed' || rawState === 'failed') return rawState;
   return 'unknown';
@@ -1729,7 +1729,7 @@ function isHiddenLifecycleActivity(event: SurfaceArtifact): boolean {
   return title === 'chat execution journal' || title === 'compaction summary';
 }
 
-function timelineItemToCard(item: PmaTimelineItem): PmaCard[] {
+function timelineItemToCard(item: PmaTimelineItem): ChatTranscriptCard[] {
   if (item.kind === 'user_message' || item.kind === 'assistant_message') {
     const text = stringValue(item.payload.text);
     if (!text.trim()) return [];
@@ -1815,11 +1815,11 @@ function timelineItemToCard(item: PmaTimelineItem): PmaCard[] {
   return [];
 }
 
-function toolCardFromTimeline(item: PmaTimelineItem): PmaToolCallCard {
+function toolCardFromTimeline(item: PmaTimelineItem): ChatToolCallCard {
   const result = asRecord(item.payload.result);
   const call = asRecord(item.payload.call);
   const rawState = stringValue(result.status ?? item.raw.status ?? item.status).toLowerCase();
-  const state: PmaToolCallCard['state'] =
+  const state: ChatToolCallCard['state'] =
     rawState.includes('fail') || rawState === 'error'
       ? 'failed'
       : result && Object.keys(result).length > 0
@@ -1887,13 +1887,13 @@ function mapTimelineArtifact(raw: Record<string, unknown>): SurfaceArtifact {
   };
 }
 
-function isCommentaryTraceCard(card: PmaCard): boolean {
+function isCommentaryTraceCard(card: ChatTranscriptCard): boolean {
   if (card.kind !== 'intermediate') return false;
   const title = card.title.trim().toLowerCase();
   return title === 'commentary';
 }
 
-function isTerminalTraceCard(card: PmaCard): boolean {
+function isTerminalTraceCard(card: ChatTranscriptCard): boolean {
   if (card.kind !== 'intermediate') return false;
   const title = card.title.trim().toLowerCase();
   return title === 'run failed' || title === 'turn failed' || title === 'interrupted';

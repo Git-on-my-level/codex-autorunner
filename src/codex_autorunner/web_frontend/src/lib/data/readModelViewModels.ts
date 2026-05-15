@@ -21,7 +21,7 @@ import {
 } from '$lib/viewModels/domain';
 import { normalizeManagedThreadChatKind } from '$lib/viewModels/managedThreadChatKind';
 import type { PmaQueuedTurn } from '$lib/api/client';
-import type { PmaCard } from '$lib/viewModels/pmaChat';
+import type { ChatTranscriptCard } from '$lib/viewModels/pmaChat';
 import type { ReadModelEntityState } from './readModelStore';
 
 type JsonRecord = Record<string, unknown>;
@@ -144,9 +144,9 @@ export function selectPmaChats(state: ReadModelEntityState): PmaChatSummary[] {
   return state.chatOrder.map((id) => state.chats[id]).filter(Boolean).map(chatIndexRowToPmaChatSummary);
 }
 
-export function selectPmaTranscript(state: ReadModelEntityState, chatId: string | null): PmaCard[] {
+export function selectChatTranscript(state: ReadModelEntityState, chatId: string | null): ChatTranscriptCard[] {
   if (!chatId) return [];
-  const transcript = state.pmaTranscripts[chatId];
+  const transcript = state.chatTranscripts[chatId];
   return transcript ? transcript.order.map((id) => transcript.cardsById[id]).filter(Boolean) : [];
 }
 

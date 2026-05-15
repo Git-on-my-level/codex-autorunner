@@ -4,7 +4,7 @@
   import AutoDismissNotice from '$lib/components/AutoDismissNotice.svelte';
   import RepoWorktreeViews from '$lib/components/RepoWorktreeViews.svelte';
   import { confirmAndArchiveState, confirmAndCleanupWorktree, type ActionNotice } from '$lib/actions/repoWorktreeActions';
-  import { pmaApi, type ApiError, type JsonRecord, type PartialPageIssue } from '$lib/api/client';
+  import { webApi, type ApiError, type JsonRecord, type PartialPageIssue } from '$lib/api/client';
   import { ensureRepoDetailLoaded, invalidateReadModelTags, readModelEntityStore, readModelEntityTags } from '$lib/data';
   import {
     mapContextspaceDocument,
@@ -105,7 +105,7 @@
     if (syncRepoBusy) return;
     syncRepoBusy = true;
     try {
-      const result = await pmaApi.hub.syncRepoMain(repoId);
+      const result = await webApi.hub.syncRepoMain(repoId);
       if (!result.ok) {
         notice = { tone: 'danger', message: result.error.message };
         return;
