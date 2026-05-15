@@ -30,3 +30,14 @@ def test_safe_refresh_local_mac_hub_script_runs_past_parse_stage(
     assert result.returncode == 1
     assert "LaunchAgent plist not found" in output
     assert "syntax error near unexpected token" not in output
+
+
+def test_safe_refresh_local_mac_hub_script_keeps_build_logs_out_of_wheel_path() -> None:
+    script = Path("scripts/safe-refresh-local-mac-hub.sh").read_text(encoding="utf-8")
+
+    assert "_build_web_static_assets >&2" in script
+    assert 'wheel_path="$(_build_package_wheel ' in script
+    assert "\"${wheel_path}\" == *$'\\n'*" in script
+    assert '"${wheel_path}" != *.whl' in script
+    assert '! -f "${wheel_path}"' in script
+    assert "Invalid staged wheel path for pip install" in script
