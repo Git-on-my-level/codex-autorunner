@@ -30,7 +30,14 @@ DEFAULT_CHAT_TIMELINE_LIMIT = 50
 MAX_CHAT_TIMELINE_LIMIT = 200
 MAX_CHAT_TIMELINE_PAGE_SOURCE_LIMIT = 1000
 
-_TERMINAL_SUCCESS_STATUSES = {"completed", "succeeded", "success", "delivered"}
+_TERMINAL_SUCCESS_STATUSES = {
+    "completed",
+    "complete",
+    "ok",
+    "succeeded",
+    "success",
+    "delivered",
+}
 _TERMINAL_FAILED_STATUSES = {"failed", "error", "cancelled", "canceled", "timeout"}
 _RUNNING_STATUSES = {"running", "in_progress", "started", "claimed", "delivering"}
 _QUEUED_STATUSES = {"queued", "pending"}
