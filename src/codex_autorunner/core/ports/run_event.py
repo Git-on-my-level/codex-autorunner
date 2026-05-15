@@ -8,7 +8,7 @@ from ..time_utils import now_iso
 # Canonical backend RunEvent contract:
 # - A turn emits Started first.
 # - A turn emits OutputDelta/ToolCall/ApprovalRequested/TokenUsage/RunNotice as progress.
-# - A turn ends with exactly one terminal event: Completed or Failed.
+# - A turn ends with exactly one terminal event: Completed, Failed, or Interrupted.
 # - Backend deltas should use the canonical delta_type set below.
 RUN_EVENT_DELTA_TYPE_USER_MESSAGE = "user_message"
 RUN_EVENT_DELTA_TYPE_ASSISTANT_STREAM = "assistant_stream"
@@ -98,6 +98,12 @@ class Failed:
     error_message: str
 
 
+@dataclass(frozen=True)
+class Interrupted:
+    timestamp: str
+    reason: str = "Runtime thread interrupted"
+
+
 RunEvent = Union[
     Started,
     OutputDelta,
@@ -108,11 +114,12 @@ RunEvent = Union[
     RunNotice,
     Completed,
     Failed,
+    Interrupted,
 ]
 
 
 def is_terminal_run_event(event: RunEvent) -> bool:
-    return isinstance(event, (Completed, Failed))
+    return isinstance(event, (Completed, Failed, Interrupted))
 
 
 __all__ = [
@@ -127,6 +134,7 @@ __all__ = [
     "ApprovalRequested",
     "Completed",
     "Failed",
+    "Interrupted",
     "OutputDelta",
     "RunEvent",
     "RunNotice",

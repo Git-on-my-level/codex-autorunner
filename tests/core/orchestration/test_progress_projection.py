@@ -10,6 +10,7 @@ from codex_autorunner.core.ports.run_event import (
     RUN_EVENT_STREAM_MODE_SNAPSHOT,
     ApprovalRequested,
     Failed,
+    Interrupted,
     OutputDelta,
     RunNotice,
     TokenUsage,
@@ -121,9 +122,17 @@ def test_progress_projection_marks_tool_failures() -> None:
 
 
 def test_progress_projection_marks_turn_failure_and_interruption() -> None:
-    failed, interrupted = _project(
+    failed, interrupted, stopped, direct_interrupted = _project(
         Failed(timestamp="2026-05-06T10:00:01Z", error_message="boom"),
         Failed(timestamp="2026-05-06T10:00:02Z", error_message="cancelled by user"),
+        Failed(
+            timestamp="2026-05-06T10:00:03Z",
+            error_message="Stopped by user request.",
+        ),
+        Interrupted(
+            timestamp="2026-05-06T10:00:04Z",
+            reason="surface-specific interrupt",
+        ),
     )
 
     assert failed.kind == "turn_failed"
@@ -131,6 +140,12 @@ def test_progress_projection_marks_turn_failure_and_interruption() -> None:
     assert failed.title == "Run failed"
     assert interrupted.kind == "turn_interrupted"
     assert interrupted.state == "interrupted"
+    assert stopped.kind == "turn_interrupted"
+    assert stopped.title == "Interrupted"
+    assert direct_interrupted.kind == "turn_interrupted"
+    assert direct_interrupted.state == "interrupted"
+    assert direct_interrupted.title == "Interrupted"
+    assert direct_interrupted.summary == "Turn interrupted"
 
 
 def test_progress_projection_suppresses_token_usage() -> None:

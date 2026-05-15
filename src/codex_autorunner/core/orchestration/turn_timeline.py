@@ -13,6 +13,7 @@ from ..ports.run_event import (
     ApprovalRequested,
     Completed,
     Failed,
+    Interrupted,
     OutputDelta,
     RunEvent,
     RunNotice,
@@ -86,6 +87,8 @@ def _event_type_and_status(event: RunEvent) -> tuple[str, str]:
         return "turn_completed", "ok"
     if isinstance(event, Failed):
         return "turn_failed", "error"
+    if isinstance(event, Interrupted):
+        return "turn_interrupted", "interrupted"
     return "unknown", "recorded"
 
 
@@ -458,6 +461,12 @@ class _CheckpointAccumulator:
             self._note_terminal_signal("turn_failed", "error", timestamp)
             return
 
+        if isinstance(event, Interrupted):
+            self.status = "interrupted"
+            self.failure_cause = event.reason
+            self._note_terminal_signal("turn_interrupted", "interrupted", timestamp)
+            return
+
     def _note_terminal_signal(
         self, source: str, status: CheckpointSignalStatus, timestamp: str
     ) -> None:
@@ -591,6 +600,16 @@ def _log_hot_projection_truncation(
                 hot_event_payload.get("error_message_chars") or len(event.error_message)
             ),
             truncated_chars=len(str(hot_event_payload.get("error_message") or "")),
+            contract=contract,
+        )
+    if hot_event_payload.get("reason_truncated") and isinstance(event, Interrupted):
+        log_truncation(
+            execution_id=execution_id,
+            event_family=event_family,
+            original_chars=int(
+                hot_event_payload.get("reason_chars") or len(event.reason)
+            ),
+            truncated_chars=len(str(hot_event_payload.get("reason") or "")),
             contract=contract,
         )
     if hot_event_payload.get("tool_input_truncated") and isinstance(event, ToolCall):

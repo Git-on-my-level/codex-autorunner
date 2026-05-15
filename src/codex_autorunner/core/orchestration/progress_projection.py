@@ -9,6 +9,7 @@ from ..ports.run_event import (
     ApprovalRequested,
     Completed,
     Failed,
+    Interrupted,
     OutputDelta,
     RunEvent,
     RunNotice,
@@ -108,7 +109,10 @@ def _notice_title(kind: Any, message: Any) -> str:
 
 def _failed_message_is_interruption(value: str) -> bool:
     lowered = value.lower()
-    return "interrupt" in lowered or "cancel" in lowered or "abort" in lowered
+    return any(
+        marker in lowered
+        for marker in ("interrupt", "cancel", "abort", "stopped by user")
+    )
 
 
 def _with_merged_assistant_update(
@@ -329,6 +333,17 @@ def reduce_progress_event(
             event_ids=(event_id,),
             timestamp=timestamp,
             hidden=True,
+        )
+
+    if isinstance(event, Interrupted):
+        return ProgressProjectionItem(
+            item_id=f"progress:turn_interrupted:{event_key}",
+            kind="turn_interrupted",
+            state="interrupted",
+            title="Interrupted",
+            summary=_summary("Turn interrupted", "Turn interrupted"),
+            event_ids=(event_id,),
+            timestamp=timestamp,
         )
 
     if isinstance(event, Failed):

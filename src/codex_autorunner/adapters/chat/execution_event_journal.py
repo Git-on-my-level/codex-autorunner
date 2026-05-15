@@ -8,6 +8,7 @@ from ...core.ports.run_event import (
     ApprovalRequested,
     Completed,
     Failed,
+    Interrupted,
     OutputDelta,
     RunEvent,
     RunNotice,
@@ -306,6 +307,18 @@ def journal_events_from_run_events(
                 message=event.error_message,
                 data={"error_message": event.error_message},
             )
+        elif isinstance(event, Interrupted):
+            mapped = _standard_journal_event(
+                timestamp=event.timestamp,
+                domain="execution",
+                name="interrupted",
+                event_index=event_index,
+                event_type=event_type,
+                source_event_type="interrupted",
+                status="interrupted",
+                message=event.reason,
+                data={"reason": event.reason},
+            )
         if mapped is None:
             continue
         journal.append(mapped)
@@ -376,6 +389,11 @@ def _run_event_from_timeline_entry(entry: Mapping[str, Any]) -> Optional[RunEven
         return Failed(
             timestamp=str(payload.get("timestamp") or ""),
             error_message=str(payload.get("error_message") or ""),
+        )
+    if event_type == "turn_interrupted":
+        return Interrupted(
+            timestamp=str(payload.get("timestamp") or ""),
+            reason=str(payload.get("reason") or "Turn interrupted"),
         )
     return None
 

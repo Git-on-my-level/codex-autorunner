@@ -41,6 +41,7 @@ from ...core.orchestration.turn_timeline import (
 from ...core.ports.run_event import (
     Completed,
     Failed,
+    Interrupted,
     OutputDelta,
     RunEvent,
     TokenUsage,
@@ -124,9 +125,11 @@ def _final_run_event(
     status: str,
     assistant_text: str,
     error: Optional[str],
-) -> Completed | Failed:
+) -> Completed | Failed | Interrupted:
     if status == "ok":
         return Completed(timestamp=now_iso(), final_message=assistant_text)
+    if status == "interrupted":
+        return Interrupted(timestamp=now_iso(), reason=error or "Turn interrupted")
     return Failed(
         timestamp=now_iso(),
         error_message=error or _DEFAULT_EXECUTION_ERROR,

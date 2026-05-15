@@ -16,6 +16,7 @@ from ..ports.run_event import (
     ApprovalRequested,
     Completed,
     Failed,
+    Interrupted,
     OutputDelta,
     RunEvent,
     RunNotice,
@@ -55,6 +56,7 @@ DIRECT_RUN_EVENT_TYPES = (
     TokenUsage,
     Completed,
     Failed,
+    Interrupted,
     Started,
 )
 
@@ -294,6 +296,11 @@ def note_run_event_state(
         error_message = str(run_event.error_message or "").strip()
         if error_message:
             event_state.last_error_message = error_message
+        return
+    if isinstance(run_event, Interrupted):
+        reason = str(run_event.reason or "").strip()
+        if reason:
+            event_state.last_error_message = reason
 
 
 async def normalize_runtime_progress_event(
@@ -572,7 +579,7 @@ def normalize_runtime_thread_message_payload(
 def terminal_run_event_from_outcome(
     outcome: RuntimeThreadOutcome,
     state: RuntimeThreadRunEventState,
-) -> Completed | Failed:
+) -> Completed | Failed | Interrupted:
     if outcome.status == "ok":
         if outcome.assistant_output is not None:
             final_message = outcome.assistant_output.text
@@ -583,6 +590,11 @@ def terminal_run_event_from_outcome(
         return Completed(
             timestamp=now_iso(),
             final_message=final_message,
+        )
+    if outcome.status == "interrupted":
+        return Interrupted(
+            timestamp=now_iso(),
+            reason="Runtime thread interrupted",
         )
     _error_detail = str(outcome.error or "").strip()
     return Failed(

@@ -7,6 +7,7 @@ from ..ports.run_event import (
     ApprovalRequested,
     Completed,
     Failed,
+    Interrupted,
     OutputDelta,
     RunEvent,
     RunNotice,
@@ -45,6 +46,7 @@ _TIMELINE_HOT_FAMILY_BY_EVENT_TYPE: dict[str, ExecutionHistoryEventFamily] = {
     "run_notice": "run_notice",
     "turn_completed": "terminal",
     "turn_failed": "terminal",
+    "turn_interrupted": "terminal",
 }
 
 
@@ -334,7 +336,7 @@ def classify_run_event_family(event: RunEvent) -> ExecutionHistoryEventFamily:
         return "output_delta"
     if isinstance(event, TokenUsage):
         return "token_usage"
-    if isinstance(event, (Completed, Failed)):
+    if isinstance(event, (Completed, Failed, Interrupted)):
         return "terminal"
     if isinstance(event, (Started, ApprovalRequested, RunNotice)):
         return "run_notice"
@@ -382,6 +384,12 @@ def truncate_hot_event_payload(
             if len(text) > _HOT_TEXT_PREVIEW_CHARS:
                 bounded["error_message_truncated"] = True
                 bounded["error_message_chars"] = len(text)
+        if "reason" in raw:
+            text = str(raw["reason"] or "")
+            bounded["reason"] = text[:_HOT_TEXT_PREVIEW_CHARS]
+            if len(text) > _HOT_TEXT_PREVIEW_CHARS:
+                bounded["reason_truncated"] = True
+                bounded["reason_chars"] = len(text)
         return bounded
     if contract == "delta_only":
         bounded = {}

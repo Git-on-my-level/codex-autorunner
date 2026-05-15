@@ -12,6 +12,7 @@ from codex_autorunner.core.ports.run_event import (
     ApprovalRequested,
     Completed,
     Failed,
+    Interrupted,
     OutputDelta,
     RunNotice,
     Started,
@@ -185,10 +186,25 @@ def test_failed_routing_is_terminal_family() -> None:
     assert decision.capture_cold_trace is True
 
 
+def test_interrupted_routing_is_terminal_family() -> None:
+    decision = route_run_event(
+        Interrupted(
+            timestamp="2026-04-12T00:00:05Z",
+            reason="user stopped the run",
+        )
+    )
+
+    assert decision.event_family == "terminal"
+    assert decision.hot_payload_contract == "terminal_summary"
+    assert decision.persist_hot_projection is True
+    assert decision.capture_cold_trace is True
+
+
 def test_timeline_hot_family_for_event_type_maps_turn_events() -> None:
     assert timeline_hot_family_for_event_type("turn_started") == "run_notice"
     assert timeline_hot_family_for_event_type("tool_call") == "tool_call"
     assert timeline_hot_family_for_event_type("turn_completed") == "terminal"
+    assert timeline_hot_family_for_event_type("turn_interrupted") == "terminal"
     assert timeline_hot_family_for_event_type("unknown") is None
 
 
@@ -288,6 +304,19 @@ def test_truncate_hot_event_failed_terminal_summary() -> None:
     assert len(bounded["error_message"]) <= 240
     assert bounded["error_message_truncated"] is True
     assert bounded["error_message_chars"] == 500
+
+
+def test_truncate_hot_event_interrupted_terminal_summary() -> None:
+    long_reason = "i" * 500
+    event = Interrupted(
+        timestamp="2026-04-12T00:00:05Z",
+        reason=long_reason,
+    )
+    bounded = truncate_hot_event_payload(event, "terminal_summary")
+
+    assert len(bounded["reason"]) <= 240
+    assert bounded["reason_truncated"] is True
+    assert bounded["reason_chars"] == 500
 
 
 def test_truncate_hot_event_delta_only_includes_char_count() -> None:

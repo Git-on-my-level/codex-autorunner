@@ -56,7 +56,7 @@ _TERMINAL_EXECUTION_STATUSES = frozenset(
         "error",
     }
 )
-_TERMINAL_EVENT_TYPES = frozenset({"turn_completed", "turn_failed"})
+_TERMINAL_EVENT_TYPES = frozenset({"turn_completed", "turn_failed", "turn_interrupted"})
 _CHECKPOINT_PREVIEW_CHARS = 240
 _DEFAULT_AUDIT_LIMIT = 50
 
@@ -1103,12 +1103,18 @@ def _extract_token_usage(
 
 def _extract_failure_cause(timeline_rows: Sequence[dict[str, Any]]) -> Optional[str]:
     for row in reversed(timeline_rows):
-        if str(row.get("event_type") or "").strip() != "turn_failed":
+        event_type = str(row.get("event_type") or "").strip()
+        if event_type not in {"turn_failed", "turn_interrupted"}:
             continue
         event = row.get("payload", {}).get("event")
         if not isinstance(event, dict):
             continue
-        message = str(event.get("error_message") or event.get("message") or "").strip()
+        message = str(
+            event.get("error_message")
+            or event.get("reason")
+            or event.get("message")
+            or ""
+        ).strip()
         if message:
             return message
     return None
@@ -1122,9 +1128,13 @@ def _extract_terminal_signals(
         event_type = str(row.get("event_type") or "").strip()
         if event_type not in _TERMINAL_EVENT_TYPES:
             continue
-        signal_status: CheckpointSignalStatus = (
-            "ok" if event_type == "turn_completed" else "error"
-        )
+        signal_status: CheckpointSignalStatus
+        if event_type == "turn_completed":
+            signal_status = "ok"
+        elif event_type == "turn_interrupted":
+            signal_status = "interrupted"
+        else:
+            signal_status = "error"
         signals.append(
             ExecutionCheckpointSignal(
                 source="legacy_hot_projection",

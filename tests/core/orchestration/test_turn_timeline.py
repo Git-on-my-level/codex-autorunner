@@ -20,6 +20,7 @@ from codex_autorunner.core.orchestration.turn_timeline import (
 )
 from codex_autorunner.core.ports.run_event import (
     Completed,
+    Interrupted,
     RunNotice,
     ToolCall,
     ToolResult,
@@ -361,6 +362,37 @@ def test_persist_turn_timeline_appends_from_start_index(tmp_path: Path) -> None:
         "tool_result",
         "turn_completed",
     ]
+
+
+def test_persist_turn_timeline_records_interrupted_terminal_event(
+    tmp_path: Path,
+) -> None:
+    count = persist_turn_timeline(
+        tmp_path,
+        execution_id="turn-interrupted",
+        target_kind="thread_target",
+        target_id="thread-1",
+        events=[
+            Interrupted(
+                timestamp="2026-03-19T00:00:03Z",
+                reason="user stopped the run",
+            )
+        ],
+    )
+
+    assert count == 1
+    timeline = list_turn_timeline(tmp_path, execution_id="turn-interrupted")
+    assert timeline[0]["event_type"] == "turn_interrupted"
+    assert timeline[0]["status"] == "interrupted"
+    assert timeline[0]["event"]["reason"] == "user stopped the run"
+    assert timeline[0]["event_family"] == "terminal"
+
+    checkpoint = ColdTraceStore(tmp_path).load_checkpoint("turn-interrupted")
+    assert checkpoint is not None
+    assert checkpoint.status == "interrupted"
+    assert checkpoint.failure_cause == "user stopped the run"
+    assert checkpoint.terminal_signals[0].source == "turn_interrupted"
+    assert checkpoint.terminal_signals[0].status == "interrupted"
 
 
 def test_persist_turn_timeline_continues_hot_persistence_when_cold_trace_append_fails(

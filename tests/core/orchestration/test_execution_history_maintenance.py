@@ -210,6 +210,28 @@ def _seed_execution(
                     )
                 )
                 next_index += 1
+            terminal_event_type = "turn_completed"
+            terminal_event_status = "ok"
+            terminal_event_payload = {
+                "timestamp": finished_at,
+                "final_message": "done",
+                "error_message": "",
+            }
+            if status == "failed":
+                terminal_event_type = "turn_failed"
+                terminal_event_status = "error"
+                terminal_event_payload = {
+                    "timestamp": finished_at,
+                    "final_message": "",
+                    "error_message": "boom",
+                }
+            elif status == "interrupted":
+                terminal_event_type = "turn_interrupted"
+                terminal_event_status = "interrupted"
+                terminal_event_payload = {
+                    "timestamp": finished_at,
+                    "reason": "user stopped the run",
+                }
             rows.extend(
                 [
                     (
@@ -228,17 +250,13 @@ def _seed_execution(
                     ),
                     (
                         f"turn-timeline:{execution_id}:{next_index + 1:04d}",
-                        "turn_completed" if status != "failed" else "turn_failed",
+                        terminal_event_type,
                         finished_at,
-                        "ok" if status != "failed" else "error",
+                        terminal_event_status,
                         {
                             "event_index": next_index + 1,
                             "event_family": "terminal",
-                            "event": {
-                                "timestamp": finished_at,
-                                "final_message": "done",
-                                "error_message": "boom" if status == "failed" else "",
-                            },
+                            "event": terminal_event_payload,
                         },
                     ),
                 ]
@@ -310,6 +328,24 @@ def test_backfill_legacy_execution_history_creates_manifest_and_checkpoint(
     assert len(checkpoint.terminal_signals) == 1
     assert len(events) == 10
     assert events[2]["event_family"] == "tool_call"
+
+
+def test_backfill_legacy_execution_history_preserves_interrupted_terminal_signal(
+    tmp_path: Path,
+) -> None:
+    hub_root = tmp_path / "hub"
+    hub_root.mkdir()
+    _seed_execution(hub_root, execution_id="exec-interrupted", status="interrupted")
+
+    summary = backfill_legacy_execution_history(hub_root)
+
+    assert summary.candidate_executions == 1
+    checkpoint = ColdTraceStore(hub_root).load_checkpoint("exec-interrupted")
+    assert checkpoint is not None
+    assert checkpoint.status == "interrupted"
+    assert checkpoint.failure_cause == "user stopped the run"
+    assert len(checkpoint.terminal_signals) == 1
+    assert checkpoint.terminal_signals[0].status == "interrupted"
 
 
 def test_compact_completed_execution_history_reduces_hot_rows_and_keeps_cold_trace(
