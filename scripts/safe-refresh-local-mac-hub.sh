@@ -1972,6 +1972,16 @@ _rollback() {
         "Update failed; orchestration DB snapshot restore failed. Keeping candidate venv active to avoid schema rollback mismatch." \
         "db_restore_failed" \
         "db_restore_failed"
+      # Symlink still points at next_venv; restart what we stopped above.
+      if [[ "${should_reload_hub}" == "true" ]]; then
+        _start_service || true
+      fi
+      if [[ "${should_reload_telegram}" == "true" ]]; then
+        _reload_telegram || true
+      fi
+      if [[ "${should_reload_discord}" == "true" ]]; then
+        _reload_discord || true
+      fi
       return 1
     fi
   fi
