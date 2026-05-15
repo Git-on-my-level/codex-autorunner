@@ -1473,7 +1473,7 @@ def _chat_index_sort_key(row: Mapping[str, Any]) -> tuple[int, float, str]:
 
 def _chat_index_sort_key_parts(row: Mapping[str, Any]) -> dict[str, Any]:
     key = _chat_index_sort_key(row)
-    last_activity_desc = key[1]
+    last_activity_desc: Any = key[1]
     if last_activity_desc == float("inf"):
         last_activity_desc = None
     return {

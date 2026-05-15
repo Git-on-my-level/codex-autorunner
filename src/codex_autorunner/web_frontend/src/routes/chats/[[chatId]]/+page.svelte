@@ -571,7 +571,7 @@
     return key === 'all' ? 'All' : key.charAt(0).toUpperCase() + key.slice(1);
   }
 
-  function readModelChatIndexFilter(value: PmaChatFilter): 'all' | 'waiting' | 'active' | 'unread' | 'archived' | 'ticket_runs' | 'external' {
+  function readModelChatIndexFilter(value: ChatFilter): 'all' | 'waiting' | 'active' | 'unread' | 'archived' | 'ticket_runs' | 'external' {
     if (value === 'ticket_runs') return 'ticket_runs';
     if (value.startsWith('surface:')) return 'external';
     if (value === 'all' || value === 'waiting' || value === 'active' || value === 'unread' || value === 'archived') return value;
