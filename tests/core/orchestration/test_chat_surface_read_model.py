@@ -9,6 +9,9 @@ from codex_autorunner.core.orchestration import (
     OrchestrationBindingStore,
     SQLiteChatSurfaceEventJournal,
 )
+from codex_autorunner.core.orchestration.chat_surface_read_model import (
+    _chat_index_sort_key_parts,
+)
 from codex_autorunner.core.orchestration.sqlite import open_orchestration_sqlite
 from codex_autorunner.core.pma_notification_store import PmaNotificationStore
 
@@ -207,6 +210,14 @@ def test_chat_index_omits_stale_bound_surfaces_without_managed_thread(
 
     index = service.chat_index_snapshot(view="all", limit=20)
     assert [row["managed_thread_id"] for row in index["rows"]] == ["live-thread"]
+
+
+def test_chat_index_sort_key_parts_serializes_missing_activity_as_null() -> None:
+    parts = _chat_index_sort_key_parts(
+        {"managed_thread_id": "thread-1", "unread_count": 0}
+    )
+
+    assert parts["last_activity_desc"] is None
 
 
 def test_chat_index_canonicalizes_legacy_worktree_repo_id_from_hub_topology(

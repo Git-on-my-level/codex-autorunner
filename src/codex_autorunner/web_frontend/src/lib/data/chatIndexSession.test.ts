@@ -142,6 +142,31 @@ describe('chat index session', () => {
     expect(second).toEqual(first);
     expect(store.snapshot().chatOrder).toEqual(['chat-active']);
   });
+
+  it('queues a follow-up snapshot when refresh parameters change during an in-flight request', async () => {
+    const store = new ReadModelEntityStore();
+    const firstResponse = deferred<ApiResult<ChatIndexSnapshot>>();
+    const client = {
+      chatIndex: vi.fn((request = {}) => {
+        if (request.filter === 'archived') {
+          return Promise.resolve(ok(chatIndexSnapshot('archived', [indexRow('chat-archived', 'Archived chat', 'archived')])));
+        }
+        return firstResponse.promise;
+      })
+    } as unknown as ReadModelSnapshotClient;
+    const session = createChatIndexSession({ client, store, streamFactory: mockStreamFactory() });
+
+    const refresh = session.refresh({ filter: 'all', limit: 200 });
+    const queuedRefresh = session.refresh({ filter: 'archived', limit: 200 });
+    firstResponse.resolve(ok(chatIndexSnapshot('all', [indexRow('chat-active', 'Active chat', 'running')])));
+    await queuedRefresh;
+    await refresh;
+
+    expect(client.chatIndex).toHaveBeenCalledTimes(2);
+    expect(client.chatIndex).toHaveBeenNthCalledWith(1, { filter: 'all', limit: 200 });
+    expect(client.chatIndex).toHaveBeenNthCalledWith(2, { filter: 'archived', limit: 200 });
+    expect(store.snapshot().chatOrder).toEqual(['chat-archived']);
+  });
 });
 
 function mockClient(): ReadModelSnapshotClient {
@@ -166,4 +191,12 @@ function mockStreamFactory(): ReturnType<typeof vi.fn> & ChatIndexStreamFactory 
     cursor: vi.fn(() => null),
     resetCursor: vi.fn()
   } as unknown as ReadModelStreamManager<ChatIndexPatchEvent>)) as ReturnType<typeof vi.fn> & ChatIndexStreamFactory;
+}
+
+function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((res) => {
+    resolve = res;
+  });
+  return { promise, resolve };
 }

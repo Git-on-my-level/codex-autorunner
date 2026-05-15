@@ -217,6 +217,9 @@ export class ReadModelEntityStore implements Readable<ReadModelEntityState> {
     next.chatIndexCursor = snapshot.cursor;
     next.repairRequired = false;
     rememberCursor(next, 'chat.index', snapshot.cursor);
+    for (const detail of Object.values(next.chatDetails)) {
+      if (detail.thread) seedDetailBackedChatRow(next, detail.thread);
+    }
     for (const row of rows) bump(next, 'chat', row.chatId);
     for (const group of snapshot.groups) bump(next, 'chatGroup', group.groupId);
     this.commit(next);
@@ -279,6 +282,7 @@ export class ReadModelEntityStore implements Readable<ReadModelEntityState> {
 
   applyChatDetailSnapshot(snapshot: ChatDetailSnapshot): void {
     const next = cloneState(this.state);
+    seedDetailBackedChatRow(next, snapshot.thread);
     next.chatDetails[snapshot.thread.chatId] = {
       thread: snapshot.thread,
       queue: snapshot.queue,
@@ -306,6 +310,7 @@ export class ReadModelEntityStore implements Readable<ReadModelEntityState> {
       next.artifacts[artifact.artifactId] = artifact;
       bump(next, 'artifact', artifact.artifactId);
     }
+    bump(next, 'chat', snapshot.thread.chatId);
     bump(next, 'timeline', snapshot.thread.chatId);
     rememberCursor(next, `chat.detail:${snapshot.thread.chatId}`, snapshot.cursor);
     this.commit(next);
@@ -808,6 +813,35 @@ function uniqueChatIndexRows(rows: ChatIndexRow[]): ChatIndexRow[] {
     byChatId.set(row.chatId, row);
   }
   return order.map((chatId) => byChatId.get(chatId)).filter((row): row is ChatIndexRow => Boolean(row));
+}
+
+function seedDetailBackedChatRow(state: ReadModelEntityState, thread: ChatThreadProjection): void {
+  if (state.chats[thread.chatId]) return;
+  state.chats[thread.chatId] = {
+    chatId: thread.chatId,
+    surface: chatIndexSurface(thread.surface),
+    title: thread.title,
+    status: thread.archived ? 'archived' : thread.status,
+    unreadCount: 0,
+    lastActivityAt: null,
+    repoId: thread.repoId ?? null,
+    worktreeId: thread.worktreeId ?? null,
+    ticketId: thread.ticketId ?? null,
+    runId: thread.runId ?? null,
+    agent: thread.agent ?? null,
+    agentProfile: thread.agentProfile ?? null,
+    chatKind: thread.chatKind ?? null,
+    model: thread.model ?? null,
+    groupId: null
+  };
+  state.chatOrder.push(thread.chatId);
+}
+
+function chatIndexSurface(surface: string): ChatIndexRow['surface'] {
+  if (['pma', 'file_chat', 'telegram', 'discord', 'app_server', 'other'].includes(surface)) {
+    return surface as ChatIndexRow['surface'];
+  }
+  return 'other';
 }
 
 function chatTranscriptCardEntityId(card: ChatTranscriptCard): string {

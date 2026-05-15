@@ -426,6 +426,22 @@ def test_hub_read_models_chats_patch_stream_repairs_future_cursor(hub_env) -> No
     assert repairs[0]["envelope"]["eventType"] == "projection.cursor_gap"
 
 
+def test_hub_read_models_chats_patch_stream_repairs_future_cursor_with_empty_journal(
+    hub_env,
+) -> None:
+    client = TestClient(create_hub_app(hub_env.hub_root))
+    response = client.get(
+        "/hub/read-models/chats/patches",
+        params={"cursor": "999", "once": "true"},
+    )
+
+    assert response.status_code == 200
+    repairs = _event_payloads(response.text, "projection.cursor_gap")
+    assert len(repairs) == 1
+    assert repairs[0]["envelope"]["operation"] == "invalidate"
+    assert repairs[0]["patch"]["rows"] == []
+
+
 def test_hub_read_models_chat_detail_contract_snapshot(hub_env) -> None:
     store = ManagedThreadStore(hub_env.hub_root, durable=True)
     thread = store.create_thread(

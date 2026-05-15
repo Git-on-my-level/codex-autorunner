@@ -141,6 +141,7 @@ def build_hub_chat_read_model_router(context: HubAppContext) -> APIRouter:
                     window_limit=window_limit,
                 )
                 events = batch["events"]
+                batch_cursor = _int_fallback(batch.get("cursor"), last_cursor)
                 for event_payload in events:
                     envelope = event_payload.get("envelope") or {}
                     cursor_payload = envelope.get("cursor") or {}
@@ -155,6 +156,9 @@ def build_hub_chat_read_model_router(context: HubAppContext) -> APIRouter:
                         event_id=str(sequence),
                     )
                 if events:
+                    last_cursor = batch_cursor
+                    if once:
+                        return
                     continue
                 if once:
                     return

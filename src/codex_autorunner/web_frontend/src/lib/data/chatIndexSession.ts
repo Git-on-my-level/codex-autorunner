@@ -42,6 +42,8 @@ export function createChatIndexSession(deps: ChatIndexSessionDeps = {}): ChatInd
   let started = false;
   let stream: ReadModelStreamManager<ChatIndexPatchEvent> | null = null;
   let currentRequest: ChatIndexRequest = { filter: 'all', limit: 200 };
+  let inFlightRequest: ChatIndexRequest | null = null;
+  let refreshAgain = false;
 
   function start(): void {
     if (started) return;
@@ -60,9 +62,12 @@ export function createChatIndexSession(deps: ChatIndexSessionDeps = {}): ChatInd
 
   async function refresh(request: ChatIndexRequest = currentRequest): Promise<void> {
     currentRequest = { ...currentRequest, ...request };
-    if (refreshPromise) return refreshPromise;
+    if (refreshPromise) {
+      if (!sameChatIndexRequest(inFlightRequest, currentRequest)) refreshAgain = true;
+      return refreshPromise;
+    }
     state.set({ status: 'loading', error: null });
-    refreshPromise = refreshChatList()
+    refreshPromise = refreshChatListUntilSettled()
       .then(() => {
         state.set({ status: started ? 'connected' : 'idle', error: null });
         if (started) openStream();
@@ -71,15 +76,21 @@ export function createChatIndexSession(deps: ChatIndexSessionDeps = {}): ChatInd
         state.set({ status: 'interrupted', error });
       })
       .finally(() => {
+        inFlightRequest = null;
+        refreshAgain = false;
         refreshPromise = null;
       });
     return refreshPromise;
   }
 
-  async function refreshChatList(): Promise<void> {
-    const result = await client.chatIndex(currentRequest);
-    if (!result.ok) throw result.error;
-    store.applyChatIndexSnapshot(result.data);
+  async function refreshChatListUntilSettled(): Promise<void> {
+    do {
+      refreshAgain = false;
+      inFlightRequest = { ...currentRequest };
+      const result = await client.chatIndex(inFlightRequest);
+      if (!result.ok) throw result.error;
+      store.applyChatIndexSnapshot(result.data);
+    } while (refreshAgain || !sameChatIndexRequest(inFlightRequest, currentRequest));
   }
 
   function openStream(): void {
@@ -126,4 +137,14 @@ function parseChatIndexPatchEvent(event: SseEvent<unknown>): ChatIndexPatchEvent
     return null;
   }
   return mapReadModelContract<ChatIndexPatchEvent>(event.data);
+}
+
+function sameChatIndexRequest(left: ChatIndexRequest | null, right: ChatIndexRequest | null): boolean {
+  if (!left || !right) return left === right;
+  return (
+    (left.filter ?? 'all') === (right.filter ?? 'all') &&
+    (left.limit ?? 200) === (right.limit ?? 200) &&
+    (left.query ?? '') === (right.query ?? '') &&
+    (left.surfaceKind ?? '') === (right.surfaceKind ?? '')
+  );
 }
