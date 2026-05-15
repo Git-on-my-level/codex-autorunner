@@ -346,7 +346,7 @@ class ChatSurfaceReadService:
         latest_cursor = self.latest_cursor()
         event_limit = _bounded_limit(limit, MAX_CHAT_SURFACE_EVENT_LIMIT)
         if after_cursor > latest_cursor:
-            gap_cursor = latest_cursor or after_cursor
+            gap_cursor = latest_cursor
             return {
                 "contract_version": "chat_index_patch_stream.v1",
                 "cursor": gap_cursor,
@@ -1473,9 +1473,12 @@ def _chat_index_sort_key(row: Mapping[str, Any]) -> tuple[int, float, str]:
 
 def _chat_index_sort_key_parts(row: Mapping[str, Any]) -> dict[str, Any]:
     key = _chat_index_sort_key(row)
+    last_activity_desc = key[1]
+    if last_activity_desc == float("inf"):
+        last_activity_desc = None
     return {
         "unread_priority": -key[0],
-        "last_activity_desc": key[1],
+        "last_activity_desc": last_activity_desc,
         "row_id": key[2],
     }
 
