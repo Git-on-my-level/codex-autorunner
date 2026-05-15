@@ -3302,14 +3302,14 @@ class DiscordBotService(DiscordInteractionResponseMixin):
     async def _opencode_supervisor_for_workspace(
         self, workspace_root: Path
     ) -> Optional[OpenCodeSupervisor]:
+        repo_config = load_repo_config(
+            workspace_root,
+            hub_path=self._hub_config_path,
+        )
+        opencode_config = getattr(repo_config, "opencode", None)
+        server_scope = getattr(opencode_config, "server_scope", "global")
+        key = "global" if server_scope == "global" else str(workspace_root)
         async with self._opencode_lock:
-            repo_config = load_repo_config(
-                workspace_root,
-                hub_path=self._hub_config_path,
-            )
-            opencode_config = getattr(repo_config, "opencode", None)
-            server_scope = getattr(opencode_config, "server_scope", "global")
-            key = "global" if server_scope == "global" else str(workspace_root)
             existing = self._opencode_supervisors.get(key)
             if existing is not None:
                 existing.last_requested_at = time.monotonic()
