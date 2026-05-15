@@ -532,7 +532,7 @@ describe('read model entity store', () => {
     expect(view.rows[0].status).toBe('running');
   });
 
-  it('keeps filtered chat index windows separate from cached chat entities', () => {
+  it('replaces the active chat index window when filters change', () => {
     const store = new ReadModelEntityStore();
     store.applyChatIndexSnapshot({
       cursor: cursor(1),
@@ -554,18 +554,15 @@ describe('read model entity store', () => {
       window: { limit: 200, totalIsExact: true, totalEstimate: 1 }
     }, { filter: 'archived', limit: 200 });
 
-    expect(Object.keys(store.snapshot().chats).sort()).toEqual(['chat-active', 'chat-archived', 'chat-waiting']);
-    expect(selectChatIndexWindowView(store.snapshot(), { filter: 'all', limit: 200 }).rows.map((row) => row.chatId)).toEqual([
-      'chat-active',
-      'chat-waiting'
-    ]);
+    expect(Object.keys(store.snapshot().chats).sort()).toEqual(['chat-archived']);
+    expect(selectChatIndexWindowView(store.snapshot(), { filter: 'all', limit: 200 }).rows.map((row) => row.chatId)).toEqual([]);
     expect(selectChatIndexWindowView(store.snapshot(), { filter: 'archived', limit: 200 }).rows.map((row) => row.chatId)).toEqual([
       'chat-archived'
     ]);
-    expect(store.snapshot().chatCounters).toEqual({ total: 2, waiting: 1, running: 1, unread: 0, archived: 1 });
+    expect(store.snapshot().chatCounters).toEqual({ total: 1, waiting: 0, running: 0, unread: 0, archived: 1 });
   });
 
-  it('returns cached chat index windows immediately by canonical request', () => {
+  it('keeps only the current chat index snapshot window hot', () => {
     const store = new ReadModelEntityStore();
     store.applyChatIndexSnapshot({
       cursor: cursor(1),
@@ -586,12 +583,13 @@ describe('read model entity store', () => {
       window: { limit: 200, totalIsExact: true, totalEstimate: 1 }
     }, { filter: 'archived', limit: 200 });
 
-    expect(selectChatIndexWindowView(store.snapshot(), { filter: 'all', limit: 200 }).rows.map((row) => row.chatId)).toEqual(['chat-active']);
+    expect(selectChatIndexWindowView(store.snapshot(), { filter: 'all', limit: 200 }).rows.map((row) => row.chatId)).toEqual([]);
     expect(selectChatIndexWindowView(store.snapshot(), { filter: 'archived', limit: 200 }).rows.map((row) => row.chatId)).toEqual(['chat-archived']);
     expect(selectChatIndexWindowView(store.snapshot(), { filter: 'waiting', limit: 200 }).rows).toEqual([]);
+    expect(Object.keys(store.snapshot().chats)).toEqual(['chat-archived']);
   });
 
-  it('applies entity chat-index patches once and marks affected cached windows stale', () => {
+  it('applies entity chat-index patches once and marks the active cached window stale', () => {
     const store = new ReadModelEntityStore();
     store.applyChatIndexSnapshot({
       cursor: cursor(1),
@@ -623,14 +621,38 @@ describe('read model entity store', () => {
     })).toBe('applied');
 
     const activeWindow = selectChatIndexWindowView(store.snapshot(), { filter: 'active', limit: 200 });
-    expect(selectChatIndexWindowView(store.snapshot(), { filter: 'all', limit: 200 }).rows.map((row) => row.chatId)).toEqual([
-      'chat-active',
-      'chat-waiting'
-    ]);
+    expect(selectChatIndexWindowView(store.snapshot(), { filter: 'all', limit: 200 }).rows.map((row) => row.chatId)).toEqual([]);
     expect(activeWindow.rows.map((row) => row.chatId)).toEqual([]);
     expect(activeWindow.window?.status).toBe('interrupted');
     expect(activeWindow.window?.refreshing).toBe(true);
     expect(store.snapshot().cursors['chat.index'].sequence).toBe(2);
+  });
+
+  it('does not retain off-window archived row patches in the chat index cache', () => {
+    const store = new ReadModelEntityStore();
+    store.applyChatIndexSnapshot({
+      cursor: cursor(10),
+      rows: [chat('chat-visible')],
+      groups: [],
+      counters: { total: 1, waiting: 0, running: 0, unread: 0, archived: 3000 },
+      filter: 'all',
+      query: null,
+      window: { limit: 1, totalIsExact: true, totalEstimate: 1 }
+    }, { filter: 'all', limit: 1 });
+
+    expect(store.applyChatIndexPatchEvent({
+      ...chatPatch(11, chat('chat-archived-history', 'archived')),
+      patch: {
+        rows: [chat('chat-archived-history', 'archived')],
+        groups: [],
+        removedRowIds: [],
+        removedGroupIds: [],
+        counters: { total: 1, waiting: 0, running: 0, unread: 0, archived: 3001 }
+      }
+    })).toBe('applied');
+
+    expect(Object.keys(store.snapshot().chats)).toEqual(['chat-visible']);
+    expect(store.snapshot().chatCounters.archived).toBe(3001);
   });
 
   it('marks the default chat window interrupted when archive patches under-fill it', () => {

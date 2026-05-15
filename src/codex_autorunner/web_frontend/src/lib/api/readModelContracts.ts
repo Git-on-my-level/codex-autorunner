@@ -114,7 +114,7 @@ export type ChatIndexPatch = {
 };
 
 export type ChatIndexPatchEvent = {
-  envelope: ReadModelEventEnvelope<'chat.index.patch', 'chat'>;
+  envelope: ReadModelEventEnvelope<'chat.index.patch' | 'projection.cursor_gap', 'chat'>;
   patch: ChatIndexPatch;
 };
 

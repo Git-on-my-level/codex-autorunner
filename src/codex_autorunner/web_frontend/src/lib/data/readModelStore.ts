@@ -248,11 +248,14 @@ export class ReadModelEntityStore implements Readable<ReadModelEntityState> {
       limit: request.limit ?? snapshot.window?.limit
     });
     const windowKey = canonicalChatIndexWindowKey(windowRequest);
+    next.chatWindows = {};
+    next.chats = {};
+    next.chatGroups = {};
     for (const row of rows) next.chats[row.chatId] = row;
     for (const group of snapshot.groups) next.chatGroups[group.groupId] = group;
     next.chatOrder = rows.map((row) => row.chatId);
     next.chatGroupOrder = snapshot.groups.map((group) => group.groupId);
-    if (isDefaultChatIndexWindow(windowRequest)) next.chatCounters = snapshot.counters;
+    next.chatCounters = snapshot.counters;
     next.chatIndexCursor = snapshot.cursor;
     next.chatWindows[windowKey] = {
       key: windowKey,
@@ -275,6 +278,7 @@ export class ReadModelEntityStore implements Readable<ReadModelEntityState> {
     }
     for (const row of rows) bump(next, 'chat', row.chatId);
     for (const group of snapshot.groups) bump(next, 'chatGroup', group.groupId);
+    pruneChatIndexCache(next);
     this.commit(next);
   }
 
@@ -318,8 +322,17 @@ export class ReadModelEntityStore implements Readable<ReadModelEntityState> {
       return 'repair_required';
     }
     if (!isNewer(this.state.cursors['chat.index'], event.envelope.cursor)) return 'ignored';
+    if (Object.keys(this.state.chatWindows).length === 0) {
+      this.markRepairRequired(event.envelope.cursor);
+      return 'repair_required';
+    }
     const next = cloneState(this.state);
+    const incomingRows = new Map(event.patch.rows.map((row) => [row.chatId, row]));
+    const orderedRowIds = new Set(event.patch.order ?? []);
     for (const row of event.patch.rows) {
+      const known = Boolean(next.chats[row.chatId]);
+      const orderedIntoCachedWindow = orderedRowIds.has(row.chatId) && Object.values(next.chatWindows).some((window) => chatIndexRowMatchesWindow(row, window.request));
+      if (!known && !orderedIntoCachedWindow) continue;
       next.chats[row.chatId] = row;
       if (!next.chatOrder.includes(row.chatId)) next.chatOrder.push(row.chatId);
       bump(next, 'chat', row.chatId);
@@ -339,13 +352,12 @@ export class ReadModelEntityStore implements Readable<ReadModelEntityState> {
       next.chatGroupOrder = next.chatGroupOrder.filter((groupId) => groupId !== id);
       bump(next, 'chatGroup', id);
     }
-    if (event.patch.order) {
-      next.chatOrder = event.patch.order.filter((id) => Boolean(next.chats[id]));
-    }
+    if (event.patch.order) next.chatOrder = event.patch.order.filter((id) => Boolean(next.chats[id] ?? incomingRows.get(id)));
     if (event.patch.counters) next.chatCounters = event.patch.counters;
     reconcileChatIndexWindowsAfterEntityPatch(next, event);
     next.chatIndexCursor = event.envelope.cursor;
     rememberCursor(next, 'chat.index', event.envelope.cursor);
+    pruneChatIndexCache(next);
     this.commit(next);
     return 'applied';
   }
@@ -898,6 +910,7 @@ function cloneChatIndexWindow(window: ChatIndexWindow): ChatIndexWindow {
 }
 
 function reconcileChatIndexWindowsAfterEntityPatch(next: ReadModelEntityState, event: ChatIndexPatchEvent): void {
+  const incomingRows = new Map(event.patch.rows.map((row) => [row.chatId, row]));
   for (const [key, window] of Object.entries(next.chatWindows)) {
     const defaultWindow = isDefaultChatIndexWindow(window.request);
     const existingIds = new Set(window.rowIds);
@@ -907,10 +920,14 @@ function reconcileChatIndexWindowsAfterEntityPatch(next: ReadModelEntityState, e
     });
     window.groupIds = window.groupIds.filter((groupId) => Boolean(next.chatGroups[groupId]));
     if (defaultWindow) {
-      if (event.patch.order) window.rowIds = event.patch.order.filter((rowId) => Boolean(next.chats[rowId]));
+      if (event.patch.order) {
+        window.rowIds = event.patch.order
+          .filter((rowId) => Boolean(next.chats[rowId] ?? incomingRows.get(rowId)))
+          .slice(0, window.request.limit);
+      }
       if (event.patch.counters) window.counters = event.patch.counters;
       window.cursor = event.envelope.cursor;
-      const affected = event.patch.removedRowIds.some((rowId) => existingIds.has(rowId)) || event.patch.rows.some((row) => existingIds.has(row.chatId) || chatIndexRowMatchesWindow(row, window.request));
+      const affected = event.patch.removedRowIds.some((rowId) => existingIds.has(rowId)) || event.patch.rows.some((row) => existingIds.has(row.chatId) || (event.patch.order ? event.patch.order.includes(row.chatId) : chatIndexRowMatchesWindow(row, window.request)));
       const needsBackfill = affected && !event.patch.order && (window.window?.totalEstimate ?? window.rowIds.length) > window.rowIds.length;
       window.status = needsBackfill ? 'interrupted' : 'ready';
       window.refreshing = needsBackfill;
@@ -926,6 +943,47 @@ function reconcileChatIndexWindowsAfterEntityPatch(next: ReadModelEntityState, e
       window.error = null;
     }
   }
+}
+
+function pruneChatIndexCache(state: ReadModelEntityState): void {
+  const retainedChatIds = retainedChatIndexRowIds(state);
+  for (const chatId of Object.keys(state.chats)) {
+    if (retainedChatIds.has(chatId)) continue;
+    delete state.chats[chatId];
+    delete state.versions.chat[chatId];
+  }
+  state.chatOrder = state.chatOrder.filter((chatId) => retainedChatIds.has(chatId) && Boolean(state.chats[chatId]));
+
+  const retainedGroupIds = new Set<string>();
+  for (const window of Object.values(state.chatWindows)) {
+    for (const groupId of window.groupIds) retainedGroupIds.add(groupId);
+  }
+  for (const groupId of Object.keys(state.chatGroups)) {
+    if (retainedGroupIds.has(groupId)) continue;
+    delete state.chatGroups[groupId];
+    delete state.versions.chatGroup[groupId];
+  }
+  state.chatGroupOrder = state.chatGroupOrder.filter((groupId) => retainedGroupIds.has(groupId) && Boolean(state.chatGroups[groupId]));
+}
+
+function retainedChatIndexRowIds(state: ReadModelEntityState): Set<string> {
+  const retained = new Set<string>();
+  for (const window of Object.values(state.chatWindows)) {
+    for (const chatId of window.rowIds) retained.add(chatId);
+  }
+  for (const [chatId, detail] of Object.entries(state.chatDetails)) {
+    if (detail.thread) retained.add(chatId);
+  }
+  for (const chatId of Object.keys(state.chatTranscripts)) retained.add(chatId);
+  for (const chatId of Object.keys(state.pmaProgress)) retained.add(chatId);
+  for (const chatId of Object.keys(state.pmaQueues)) retained.add(chatId);
+  for (const chatId of Object.keys(state.pmaArtifacts)) {
+    if (chatId !== '__global__') retained.add(chatId);
+  }
+  for (const mutation of Object.values(state.optimistic)) {
+    if (mutation.entityKind === 'chat' && mutation.entityId !== '*') retained.add(mutation.entityId);
+  }
+  return retained;
 }
 
 function chatIndexRowMatchesWindow(row: ChatIndexRow, request: ChatIndexWindow['request']): boolean {
@@ -1104,7 +1162,7 @@ function isNewer(previous: ProjectionCursor | undefined | null, next: Projection
 }
 
 function isRepairEvent(eventType: string, operation: string): boolean {
-  return eventType === 'projection.cursor_gap' || operation === 'reset';
+  return eventType === 'projection.cursor_gap' || operation === 'reset' || operation === 'invalidate';
 }
 
 function countersFromRows(rows: ChatIndexRow[]): ChatIndexCounters {

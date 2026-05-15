@@ -170,8 +170,8 @@ describe('chat index session', () => {
     expect(client.chatIndex).toHaveBeenNthCalledWith(1, { filter: 'all', limit: 200 });
     expect(client.chatIndex).toHaveBeenNthCalledWith(2, { filter: 'archived', limit: 200 });
     expect(store.snapshot().chatOrder).toEqual(['chat-archived']);
-    expect(Object.keys(store.snapshot().chats).sort()).toEqual(['chat-active', 'chat-archived']);
-    expect(selectChatIndexWindowView(store.snapshot(), { filter: 'all', limit: 200 }).rows.map((row) => row.chatId)).toEqual(['chat-active']);
+    expect(Object.keys(store.snapshot().chats).sort()).toEqual(['chat-archived']);
+    expect(selectChatIndexWindowView(store.snapshot(), { filter: 'all', limit: 200 }).rows.map((row) => row.chatId)).toEqual([]);
     expect(selectChatIndexWindowView(store.snapshot(), { filter: 'archived', limit: 200 }).rows.map((row) => row.chatId)).toEqual(['chat-archived']);
   });
 
@@ -269,6 +269,45 @@ describe('chat index session', () => {
       'chat-backfill'
     ]);
   });
+
+  it('repairs invalidated windows with one snapshot refresh', async () => {
+    const store = new ReadModelEntityStore();
+    let streamOptions: ReadModelStreamOptions<ChatIndexPatchEvent> | null = null;
+    const streamFactory = vi.fn((options: ReadModelStreamOptions<ChatIndexPatchEvent>) => {
+      streamOptions = options;
+      return {
+        open: vi.fn(),
+        close: vi.fn(),
+        cursor: vi.fn(() => null),
+        resetCursor: vi.fn()
+      } as unknown as ReadModelStreamManager<ChatIndexPatchEvent>;
+    }) as ReturnType<typeof vi.fn> & ChatIndexStreamFactory;
+    const client = mockClient();
+    const session = createChatIndexSession({ client, store, streamFactory });
+
+    session.start();
+    await session.refresh({ filter: 'all', limit: 200 });
+    const options = streamOptions as unknown as ReadModelStreamOptions<ChatIndexPatchEvent>;
+    options.onEvent?.({
+      ...chatPatchEvent(2, indexRow('chat-archived-history', 'Archived history', 'archived')),
+      envelope: {
+        ...chatPatchEvent(2, indexRow('chat-archived-history', 'Archived history', 'archived')).envelope,
+        eventType: 'projection.cursor_gap',
+        operation: 'invalidate'
+      },
+      patch: {
+        rows: [],
+        groups: [],
+        removedRowIds: [],
+        removedGroupIds: [],
+        counters: { total: 1, waiting: 0, running: 1, unread: 0, archived: 4000 }
+      }
+    }, null);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(client.chatIndex).toHaveBeenCalledTimes(2);
+    expect(Object.keys(store.snapshot().chats)).toEqual(['chat-active']);
+  });
 });
 
 function mockClient(): ReadModelSnapshotClient {
@@ -293,6 +332,33 @@ function mockStreamFactory(): ReturnType<typeof vi.fn> & ChatIndexStreamFactory 
     cursor: vi.fn(() => null),
     resetCursor: vi.fn()
   } as unknown as ReadModelStreamManager<ChatIndexPatchEvent>)) as ReturnType<typeof vi.fn> & ChatIndexStreamFactory;
+}
+
+function chatPatchEvent(sequence: number, row: ChatIndexRow): ChatIndexPatchEvent {
+  return {
+    envelope: {
+      contractVersion: READ_MODEL_CONTRACT_VERSION,
+      eventType: 'chat.index.patch',
+      cursor: projCursor(sequence, 'test.chat.index'),
+      entityKind: 'chat',
+      entityId: row.chatId,
+      operation: 'patch',
+      generatedAt: issuedAt
+    },
+    patch: {
+      rows: [row],
+      groups: [],
+      removedRowIds: [],
+      removedGroupIds: [],
+      counters: {
+        total: 1,
+        waiting: row.status === 'waiting' ? 1 : 0,
+        running: row.status === 'running' ? 1 : 0,
+        unread: 0,
+        archived: row.status === 'archived' ? 1 : 0
+      }
+    }
+  };
 }
 
 function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
