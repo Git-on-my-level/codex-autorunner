@@ -17,6 +17,17 @@ jobs:
         with:
           python-version: "3.11"
 
+      - name: Set up Node
+        uses: actions/setup-node@v5
+        with:
+          node-version: "22"
+
+      - name: Install frontend dependencies
+        run: |
+          corepack enable
+          corepack prepare pnpm@9.15.4 --activate
+          pnpm install --frozen-lockfile
+
       - name: Verify tag matches version
         run: |
           python - <<'PY'
@@ -33,6 +44,9 @@ jobs:
             )
           print(f"Release version {project_version} matches tag {tag}.")
           PY
+
+      - name: Build Web Hub static assets
+        run: pnpm run build
 
       - name: Build sdist and wheel
         run: |

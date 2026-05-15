@@ -1,13 +1,13 @@
 # Web Hub Frontend - Agent Guide
 
-This SvelteKit app is the default CAR hub UI. It builds into
-`../web_static/`, which is what `make serve-hub`, release smoke tests, and deployed
-hubs serve by default.
+This SvelteKit app is the default CAR hub UI. It builds into the ignored
+`../web_static/` package-artifact directory. Normal PRs should commit source,
+tests, and docs only; release/package builds produce and verify the static bundle.
 
 ## Keep Straight
 
 - App source: `src/codex_autorunner/web_frontend/src/`
-- Built output: `src/codex_autorunner/web_static/`
+- Built output: `src/codex_autorunner/web_static/` (ignored package artifact)
 - **Hub deep links**: SvelteKit client routing does not run until `index.html`
   loads. If you add routes under `src/routes/` that users can refresh or open in
   a new tab, the FastAPI hub must serve that same HTML for those paths (see
@@ -33,4 +33,5 @@ hubs serve by default.
 
 - Run `pnpm web:lint` after Svelte or TypeScript changes.
 - Run `pnpm web:test` for Web frontend unit tests.
-- Run `pnpm run build` or `make build` to regenerate committed `web_static/`.
+- Run `pnpm run build` or `make build` to validate and locally regenerate ignored
+  `web_static/`.

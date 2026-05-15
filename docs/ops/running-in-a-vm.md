@@ -12,7 +12,7 @@ Notes for running codex-autorunner inside containerized or cloud-provisioned VMs
 | Lane-aware checks | `./scripts/check.sh` (auto-detect) or `./scripts/check.sh --lane <lane>` | Lanes: `core`, `web-ui`, `web-core-contract`, `chat-apps`, `aggregate` (full) |
 | Full validation | `./scripts/check.sh --full` or `make check-full` | Runs all lanes plus extended checks |
 | Linting | `black --check src tests`, `ruff check src tests`, `make typecheck-strict` | Individual linters for targeted runs |
-| Web Hub build | `pnpm run build` or `make build` | Builds the default Svelte UI in `src/codex_autorunner/web_frontend/` → `src/codex_autorunner/web_static/`; always rebuild after Web UI changes |
+| Web Hub build | `pnpm run build` or `make build` | Builds the default Svelte UI in `src/codex_autorunner/web_frontend/` → ignored `src/codex_autorunner/web_static/`; always rebuild before packaging or static-mode smoke tests |
 
 ## Startup caveats
 
