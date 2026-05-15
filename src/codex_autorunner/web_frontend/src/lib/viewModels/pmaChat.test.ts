@@ -1600,6 +1600,37 @@ describe('PMA chat view helpers', () => {
     });
   });
 
+  it('preserves explicit non-thinking labels when merging token-like updates', () => {
+    const cards = compactChatTranscriptCards([
+      {
+        ...baseArtifactCardTrace('status-queued', 'queued', ['311']),
+        title: 'Status',
+        turnId: 'status-turn',
+        orderKey: '001'
+      },
+      {
+        ...baseArtifactCardTrace('status-running', 'running', ['312']),
+        title: 'Status',
+        turnId: 'status-turn',
+        orderKey: '002'
+      }
+    ]);
+
+    expect(cards).toHaveLength(1);
+    expect(cards[0]).toMatchObject({
+      kind: 'turn_summary',
+      title: '2 progress updates'
+    });
+    const summary = cards[0];
+    if (summary.kind !== 'turn_summary') throw new Error('expected turn summary');
+    expect(summary.cards[0]).toMatchObject({
+      kind: 'intermediate',
+      title: 'Status',
+      text: 'queued running',
+      eventIds: ['311', '312']
+    });
+  });
+
   it('keeps compact transcript ids stable as streaming activity grows', () => {
     const first = compactChatTranscriptCards([
       baseArtifactCardTrace('thinking-1', 'Need', ['401']),

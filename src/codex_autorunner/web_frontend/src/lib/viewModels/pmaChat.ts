@@ -1143,8 +1143,11 @@ function mergedIntermediateTitle(
   left: Extract<ChatTranscriptCard, { kind: 'intermediate' }>,
   right: Extract<ChatTranscriptCard, { kind: 'intermediate' }>
 ): string {
+  const leftLabel = traceLabelText(left.title);
+  const rightLabel = traceLabelText(right.title);
   if (isThinkingTraceTitle(left.title) || isThinkingTraceTitle(right.title)) return 'Thinking';
   if (isTokenLikeProgressIntermediate(left) && isTokenLikeProgressIntermediate(right)) return 'Progress';
+  if (leftLabel && leftLabel.toLowerCase() === rightLabel.toLowerCase()) return left.title || right.title;
   if (isTokenLikeIntermediate(left) && isTokenLikeIntermediate(right)) return 'Thinking';
   return left.title || right.title || 'Update';
 }
