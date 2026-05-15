@@ -6,8 +6,10 @@ import type {
   ChatDetailSnapshot,
   ChatIndexCounters,
   ChatIndexGroup,
+  ChatIndexSnapshot,
   ChatIndexPatchEvent,
   ChatIndexRow,
+  PageWindow,
   ChatQueueSummary,
   ChatThreadProjection,
   ChatTimelineItem,
@@ -74,6 +76,33 @@ export type RepoWorktreeRuntimeEntity = RuntimeProjection & {
 
 export type EntityVersions = Record<EntityKind, Record<string, number>>;
 
+export type ChatIndexWindowRequest = {
+  filter?: ChatIndexSnapshot['filter'];
+  query?: string | null;
+  surfaceKind?: string | null;
+  limit?: number;
+};
+
+export type ChatIndexWindowStatus = 'idle' | 'loading' | 'ready' | 'interrupted';
+
+export type ChatIndexWindow = {
+  key: string;
+  request: Required<Pick<ChatIndexWindowRequest, 'filter'>> & {
+    query: string | null;
+    surfaceKind: string | null;
+    limit: number;
+  };
+  rowIds: string[];
+  groupIds: string[];
+  counters: ChatIndexCounters;
+  cursor: ProjectionCursor | null;
+  window: PageWindow | null;
+  status: ChatIndexWindowStatus;
+  refreshing: boolean;
+  lastLoadedAt: string | null;
+  error: string | null;
+};
+
 export type ReadModelEntityState = {
   cursors: Record<string, ProjectionCursor>;
   chatIndexCursor: ProjectionCursor | null;
@@ -82,6 +111,7 @@ export type ReadModelEntityState = {
   chatGroups: Record<string, ChatIndexGroup>;
   chatGroupOrder: string[];
   chatCounters: ChatIndexCounters;
+  chatWindows: Record<string, ChatIndexWindow>;
   chatDetails: Record<string, ChatDetailProjection>;
   timelines: Record<string, TimelineProjection>;
   chatTranscripts: Record<string, { cardsById: Record<string, ChatTranscriptCard>; order: string[] }>;
@@ -144,6 +174,7 @@ export function createInitialReadModelState(): ReadModelEntityState {
     chatGroups: {},
     chatGroupOrder: [],
     chatCounters: emptyChatCounters,
+    chatWindows: {},
     chatDetails: {},
     timelines: {},
     chatTranscripts: {},
@@ -204,19 +235,41 @@ export class ReadModelEntityStore implements Readable<ReadModelEntityState> {
     rows: ChatIndexRow[];
     groups: ChatIndexGroup[];
     counters: ChatIndexCounters;
-  }): void {
+    filter?: ChatIndexSnapshot['filter'];
+    query?: string | null;
+    window?: PageWindow;
+  }, request: ChatIndexWindowRequest = {}): void {
     const rows = uniqueChatIndexRows(snapshot.rows);
     const next = cloneState(this.state);
-    for (const id of Object.keys(next.chats)) bump(next, 'chat', id);
-    for (const id of Object.keys(next.chatGroups)) bump(next, 'chatGroup', id);
-    next.chats = keyed(rows, (row) => row.chatId);
+    const windowRequest = normalizeChatIndexWindowRequest({
+      filter: request.filter ?? snapshot.filter,
+      query: request.query ?? snapshot.query,
+      surfaceKind: request.surfaceKind,
+      limit: request.limit ?? snapshot.window?.limit
+    });
+    const windowKey = canonicalChatIndexWindowKey(windowRequest);
+    for (const row of rows) next.chats[row.chatId] = row;
+    for (const group of snapshot.groups) next.chatGroups[group.groupId] = group;
     next.chatOrder = rows.map((row) => row.chatId);
-    next.chatGroups = keyed(snapshot.groups, (group) => group.groupId);
     next.chatGroupOrder = snapshot.groups.map((group) => group.groupId);
-    next.chatCounters = snapshot.counters;
+    if (isDefaultChatIndexWindow(windowRequest)) next.chatCounters = snapshot.counters;
     next.chatIndexCursor = snapshot.cursor;
+    next.chatWindows[windowKey] = {
+      key: windowKey,
+      request: windowRequest,
+      rowIds: rows.map((row) => row.chatId),
+      groupIds: snapshot.groups.map((group) => group.groupId),
+      counters: snapshot.counters,
+      cursor: snapshot.cursor,
+      window: snapshot.window ?? null,
+      status: 'ready',
+      refreshing: false,
+      lastLoadedAt: new Date().toISOString(),
+      error: null
+    };
     next.repairRequired = false;
     rememberCursor(next, 'chat.index', snapshot.cursor);
+    rememberCursor(next, `chat.index.window:${windowKey}`, snapshot.cursor);
     for (const detail of Object.values(next.chatDetails)) {
       if (detail.thread) seedDetailBackedChatRow(next, detail.thread);
     }
@@ -239,43 +292,74 @@ export class ReadModelEntityStore implements Readable<ReadModelEntityState> {
       if (!next.chatOrder.includes(row.chatId)) next.chatOrder.push(row.chatId);
       bump(next, 'chat', row.chatId);
     }
-    next.chatCounters = countersFromRows(next.chatOrder.map((id) => next.chats[id]).filter(Boolean));
+    const orderedRows = next.chatOrder.map((id) => next.chats[id]).filter(Boolean);
+    next.chatCounters = countersFromRows(orderedRows);
+    const windowRequest = normalizeChatIndexWindowRequest({ filter: 'all', limit: 200 });
+    const windowKey = canonicalChatIndexWindowKey(windowRequest);
+    next.chatWindows[windowKey] = {
+      key: windowKey,
+      request: windowRequest,
+      rowIds: orderedRows.map((row) => row.chatId),
+      groupIds: [],
+      counters: next.chatCounters,
+      cursor: next.chatIndexCursor,
+      window: null,
+      status: 'ready',
+      refreshing: false,
+      lastLoadedAt: new Date().toISOString(),
+      error: null
+    };
     this.commit(next);
   }
 
-  applyChatIndexPatchEvent(event: ChatIndexPatchEvent): 'applied' | 'ignored' | 'repair_required' {
+  applyChatIndexPatchEvent(event: ChatIndexPatchEvent, request: ChatIndexWindowRequest = {}): 'applied' | 'ignored' | 'repair_required' {
     if (isRepairEvent(event.envelope.eventType, event.envelope.operation)) {
       this.markRepairRequired(event.envelope.cursor);
       return 'repair_required';
     }
-    if (!isNewer(this.state.cursors['chat.index'], event.envelope.cursor)) return 'ignored';
+    const windowRequest = normalizeChatIndexWindowRequest(request);
+    const windowKey = canonicalChatIndexWindowKey(windowRequest);
+    const cursorKey = `chat.index.window:${windowKey}`;
+    if (!isNewer(this.state.cursors[cursorKey] ?? this.state.cursors['chat.index'], event.envelope.cursor)) return 'ignored';
     const next = cloneState(this.state);
+    const existingWindow = cloneChatIndexWindow(next.chatWindows[windowKey] ?? emptyChatIndexWindow(windowRequest));
     for (const row of event.patch.rows) {
       next.chats[row.chatId] = row;
       if (!next.chatOrder.includes(row.chatId)) next.chatOrder.push(row.chatId);
+      if (!existingWindow.rowIds.includes(row.chatId)) existingWindow.rowIds.push(row.chatId);
       bump(next, 'chat', row.chatId);
     }
     for (const id of event.patch.removedRowIds) {
-      delete next.chats[id];
       next.chatOrder = next.chatOrder.filter((rowId) => rowId !== id);
+      existingWindow.rowIds = existingWindow.rowIds.filter((rowId) => rowId !== id);
       bump(next, 'chat', id);
     }
     for (const group of event.patch.groups) {
       next.chatGroups[group.groupId] = group;
       if (!next.chatGroupOrder.includes(group.groupId)) next.chatGroupOrder.push(group.groupId);
+      if (!existingWindow.groupIds.includes(group.groupId)) existingWindow.groupIds.push(group.groupId);
       bump(next, 'chatGroup', group.groupId);
     }
     for (const id of event.patch.removedGroupIds) {
-      delete next.chatGroups[id];
       next.chatGroupOrder = next.chatGroupOrder.filter((groupId) => groupId !== id);
+      existingWindow.groupIds = existingWindow.groupIds.filter((groupId) => groupId !== id);
       bump(next, 'chatGroup', id);
     }
     if (event.patch.order) {
       next.chatOrder = event.patch.order.filter((id) => Boolean(next.chats[id]));
+      existingWindow.rowIds = event.patch.order.filter((id) => Boolean(next.chats[id]));
     }
-    if (event.patch.counters) next.chatCounters = event.patch.counters;
+    if (event.patch.counters && isDefaultChatIndexWindow(windowRequest)) next.chatCounters = event.patch.counters;
+    if (event.patch.counters) existingWindow.counters = event.patch.counters;
+    existingWindow.cursor = event.envelope.cursor;
+    existingWindow.status = 'ready';
+    existingWindow.refreshing = false;
+    existingWindow.lastLoadedAt = new Date().toISOString();
+    existingWindow.error = null;
+    next.chatWindows[windowKey] = existingWindow;
     next.chatIndexCursor = event.envelope.cursor;
     rememberCursor(next, 'chat.index', event.envelope.cursor);
+    rememberCursor(next, cursorKey, event.envelope.cursor);
     this.commit(next);
     return 'applied';
   }
@@ -710,6 +794,22 @@ export function selectChatIndexView(state: ReadModelEntityState): ChatIndexView 
   };
 }
 
+export function selectChatIndexWindowView(
+  state: ReadModelEntityState,
+  request: ChatIndexWindowRequest = {}
+): ChatIndexView & { window: ChatIndexWindow | null } {
+  const key = canonicalChatIndexWindowKey(request);
+  const window = state.chatWindows[key] ?? null;
+  if (!window) return { rows: [], groups: [], counters: emptyChatCounters, cursor: null, window: null };
+  return {
+    rows: window.rowIds.map((id) => state.chats[id]).filter(Boolean),
+    groups: window.groupIds.map((id) => state.chatGroups[id]).filter(Boolean),
+    counters: window.counters,
+    cursor: window.cursor,
+    window
+  };
+}
+
 export function selectChatDetailView(state: ReadModelEntityState, chatId: string | null): ChatDetailView {
   if (!chatId) return { thread: null, timeline: [], queue: null, artifacts: [] };
   const detail = state.chatDetails[chatId] ?? { thread: null, queue: null, artifactIds: [] };
@@ -735,6 +835,7 @@ function cloneState(state: ReadModelEntityState): ReadModelEntityState {
     chatGroups: { ...state.chatGroups },
     chatGroupOrder: [...state.chatGroupOrder],
     chatCounters: { ...state.chatCounters },
+    chatWindows: Object.fromEntries(Object.entries(state.chatWindows).map(([key, window]) => [key, cloneChatIndexWindow(window)])),
     chatDetails: { ...state.chatDetails },
     timelines: { ...state.timelines },
     chatTranscripts: { ...state.chatTranscripts },
@@ -799,6 +900,67 @@ function cloneChatTranscript(transcript: { cardsById: Record<string, ChatTranscr
   };
 }
 
+function cloneChatIndexWindow(window: ChatIndexWindow): ChatIndexWindow {
+  return {
+    ...window,
+    request: { ...window.request },
+    rowIds: [...window.rowIds],
+    groupIds: [...window.groupIds],
+    counters: { ...window.counters },
+    window: window.window ? { ...window.window } : null
+  };
+}
+
+function emptyChatIndexWindow(request: Required<Pick<ChatIndexWindowRequest, 'filter'>> & {
+  query: string | null;
+  surfaceKind: string | null;
+  limit: number;
+}): ChatIndexWindow {
+  const key = canonicalChatIndexWindowKey(request);
+  return {
+    key,
+    request,
+    rowIds: [],
+    groupIds: [],
+    counters: emptyChatCounters,
+    cursor: null,
+    window: null,
+    status: 'idle',
+    refreshing: false,
+    lastLoadedAt: null,
+    error: null
+  };
+}
+
+export function canonicalChatIndexWindowKey(request: ChatIndexWindowRequest = {}): string {
+  const normalized = normalizeChatIndexWindowRequest(request);
+  return JSON.stringify({
+    filter: normalized.filter,
+    query: normalized.query,
+    surfaceKind: normalized.surfaceKind,
+    limit: normalized.limit
+  });
+}
+
+function normalizeChatIndexWindowRequest(request: ChatIndexWindowRequest = {}): Required<Pick<ChatIndexWindowRequest, 'filter'>> & {
+  query: string | null;
+  surfaceKind: string | null;
+  limit: number;
+} {
+  const query = request.query?.trim() || null;
+  const surfaceKind = request.surfaceKind?.trim() || null;
+  return {
+    filter: request.filter ?? 'all',
+    query,
+    surfaceKind,
+    limit: request.limit ?? 200
+  };
+}
+
+function isDefaultChatIndexWindow(request: ReturnType<typeof normalizeChatIndexWindowRequest>): boolean {
+  return request.filter === 'all' && request.query === null && request.surfaceKind === null;
+}
+
 function keyed<T>(items: T[], key: (item: T) => string): Record<string, T> {
   const record: Record<string, T> = {};
   for (const item of items) record[key(item)] = item;
@@ -816,7 +978,10 @@ function uniqueChatIndexRows(rows: ChatIndexRow[]): ChatIndexRow[] {
 }
 
 function seedDetailBackedChatRow(state: ReadModelEntityState, thread: ChatThreadProjection): void {
-  if (state.chats[thread.chatId]) return;
+  if (state.chats[thread.chatId]) {
+    if (!state.chatOrder.includes(thread.chatId)) state.chatOrder.push(thread.chatId);
+    return;
+  }
   state.chats[thread.chatId] = {
     chatId: thread.chatId,
     surface: chatIndexSurface(thread.surface),

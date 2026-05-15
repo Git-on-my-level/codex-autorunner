@@ -89,7 +89,7 @@ export function createChatIndexSession(deps: ChatIndexSessionDeps = {}): ChatInd
       inFlightRequest = { ...currentRequest };
       const result = await client.chatIndex(inFlightRequest);
       if (!result.ok) throw result.error;
-      store.applyChatIndexSnapshot(result.data);
+      store.applyChatIndexSnapshot(result.data, inFlightRequest);
     } while (refreshAgain || !sameChatIndexRequest(inFlightRequest, currentRequest));
   }
 
@@ -107,7 +107,7 @@ export function createChatIndexSession(deps: ChatIndexSessionDeps = {}): ChatInd
       eventTypes: ['chat.index.patch', 'projection.cursor_gap'],
       parse: parseChatIndexPatchEvent,
       onEvent: (event) => {
-        const result = store.applyChatIndexPatchEvent(event);
+        const result = store.applyChatIndexPatchEvent(event, currentRequest);
         if (result === 'repair_required') {
           stream?.resetCursor();
           void refresh();

@@ -18,6 +18,8 @@
     readModelEntityStore,
     readModelEntityTags,
     type ReadModelLoaderResult,
+    type ChatIndexWindowRequest,
+    canonicalChatIndexWindowKey,
     selectRepoSummaries,
     selectPmaArtifacts,
     selectPmaChats,
@@ -135,13 +137,6 @@
   // New chats are local drafts until the first send commits agent/scope/model
   // and message in one backend call.
   let localDraftChat = $state<PmaChatSummary | null>(null);
-  const persistedChats = $derived<PmaChatSummary[]>(selectPmaChats(readModelState));
-  const chats = $derived<PmaChatSummary[]>(localDraftChat ? [localDraftChat, ...persistedChats] : persistedChats);
-  const transcriptCards = $derived<ChatTranscriptCard[]>(selectChatTranscript(readModelState, activeChatId));
-  const progress = $derived<PmaRunProgress | null>(selectPmaProgress(readModelState, activeChatId));
-  const artifacts = $derived<SurfaceArtifact[]>(selectPmaArtifacts(readModelState, activeChatId));
-  const queuedTurns = $derived<PmaQueuedTurn[]>(selectPmaQueue(readModelState, activeChatId));
-  const lastSeenMap = $derived<ChatLastSeenMap>(selectReadMarkers(readModelState) as ChatLastSeenMap);
   let agents = $state<JsonRecord[]>([]);
   let models = $state<JsonRecord[]>([]);
   let scopeOptions = $state<PmaChatScopeOption[]>(buildPmaChatScopeOptions([], []));
@@ -159,6 +154,14 @@
   let filter = $state<ChatFilter>('all');
   let detailMode = $state<'list' | 'detail'>('list');
   let search = $state('');
+  const currentChatIndexRequest = $derived<ChatIndexWindowRequest>(chatIndexRequestForCurrentFilters());
+  const persistedChats = $derived<PmaChatSummary[]>(selectPmaChats(readModelState, currentChatIndexRequest));
+  const chats = $derived<PmaChatSummary[]>(localDraftChat ? [localDraftChat, ...persistedChats] : persistedChats);
+  const transcriptCards = $derived<ChatTranscriptCard[]>(selectChatTranscript(readModelState, activeChatId));
+  const progress = $derived<PmaRunProgress | null>(selectPmaProgress(readModelState, activeChatId));
+  const artifacts = $derived<SurfaceArtifact[]>(selectPmaArtifacts(readModelState, activeChatId));
+  const queuedTurns = $derived<PmaQueuedTurn[]>(selectPmaQueue(readModelState, activeChatId));
+  const lastSeenMap = $derived<ChatLastSeenMap>(selectReadMarkers(readModelState) as ChatLastSeenMap);
   let draft = $state('');
   let loadingChats = $state(true);
   let loadingActive = $state(false);
@@ -313,14 +316,15 @@
     })
   );
   const filteredEntries = $derived(sortEntriesForPins(filterChatEntries(chatListEntries, filter, search, lastSeenMap), pinnedChatIds));
-  const filterCounts = $derived(summarizeFilterCounts(chats, lastSeenMap));
+  const filterCounts = $derived(chatStatusFilterCounts());
   const surfaceFilterChips = $derived(chatSurfaceFilterOptions(chats));
   const ticketRunGroupCount = $derived(countTicketRunGroups(chats));
   const activeChatCount = $derived(chats.filter((chat) => !isPmaChatArchived(chat)).length);
   const hasUsableChatIndex = $derived(Boolean(readModelState.chatIndexCursor || readModelState.chatOrder.length > 0));
+  const hasSelectedChatWindow = $derived(Boolean(readModelState.chatWindows[canonicalChatIndexWindowKey(currentChatIndexRequest)]));
   const initialChatIndexError = $derived(chatIndexLoadError());
   const visibleChatError = $derived(chatError ?? (!hasUsableChatIndex ? initialChatIndexError : null));
-  const showChatListSkeleton = $derived(loadingChats && !hasUsableChatIndex && !visibleChatError);
+  const showChatListSkeleton = $derived(loadingChats && !hasSelectedChatWindow && !visibleChatError);
 
   function isGroupExpanded(group: ChatRunGroup): boolean {
     if (group.key in expandedRunGroups) return expandedRunGroups[group.key];
@@ -578,6 +582,32 @@
     return 'all';
   }
 
+  function chatIndexRequestForCurrentFilters(): ChatIndexWindowRequest {
+    return {
+      filter: readModelChatIndexFilter(filter),
+      query: search.trim() || null,
+      surfaceKind: filter.startsWith('surface:') ? filter.slice('surface:'.length) : null,
+      limit: 200
+    };
+  }
+
+  function chatStatusFilterCounts(): Record<ChatStatusFilter, number> {
+    const counters = readModelState.chatCounters;
+    const localDraftBump = localDraftChat && !isPmaChatArchived(localDraftChat) ? 1 : 0;
+    const knownPersistedChats = selectPmaChats(readModelState, { filter: 'all', limit: 200 });
+    const knownChats = localDraftChat ? [localDraftChat, ...knownPersistedChats] : knownPersistedChats;
+    // Backend counters are authoritative for status chips. Unread remains client-adjusted
+    // until backend read markers fully match local last-seen semantics.
+    const clientUnread = summarizeFilterCounts(knownChats, lastSeenMap).unread;
+    return {
+      all: counters.total + localDraftBump,
+      active: counters.running,
+      waiting: counters.waiting,
+      unread: clientUnread,
+      archived: counters.archived
+    };
+  }
+
   function composerRecipientLabel(chat: PmaChatSummary | null): string {
     if (!chat) return 'Chat';
     if (chat.repoId) {
@@ -599,7 +629,7 @@
     unsubscribeReadModels = readModelEntityStore.subscribe((state) => {
       const replacementChatId = replacementForActiveChat(readModelState, state);
       readModelState = state;
-      if (state.chatIndexCursor || state.chatOrder.length > 0) {
+      if (state.chatWindows[canonicalChatIndexWindowKey(currentChatIndexRequest)] || state.chatIndexCursor || state.chatOrder.length > 0) {
         loadingChats = false;
         chatError = null;
         activateRequestedChatFromCurrentRows();
@@ -607,7 +637,7 @@
       if (replacementChatId) void selectChat(replacementChatId);
     });
     unsubscribeChatIndexSession = chatIndexSession.state.subscribe((session) => {
-      if (session.status === 'loading' && !readModelEntityStore.snapshot().chatIndexCursor) {
+      if (session.status === 'loading' && !readModelEntityStore.snapshot().chatWindows[canonicalChatIndexWindowKey(currentChatIndexRequest)]) {
         loadingChats = true;
       }
       if (session.error) {
@@ -656,18 +686,12 @@
   });
 
   $effect(() => {
-    const requestedFilter = readModelChatIndexFilter(filter);
-    const requestedSurfaceKind = filter.startsWith('surface:') ? filter.slice('surface:'.length) : null;
-    const requestedQuery = search.trim() || null;
+    const request = currentChatIndexRequest;
+    loadingChats = !readModelState.chatWindows[canonicalChatIndexWindowKey(request)] && !hasChatIndexProjection(readModelState);
     if (chatIndexFilterRefreshTimer) window.clearTimeout(chatIndexFilterRefreshTimer);
     chatIndexFilterRefreshTimer = window.setTimeout(() => {
       chatIndexFilterRefreshTimer = null;
-      void chatIndexSession.refresh({
-        filter: requestedFilter,
-        query: requestedQuery,
-        surfaceKind: requestedSurfaceKind,
-        limit: 200
-      });
+      void chatIndexSession.refresh(request);
     }, 180);
   });
 
@@ -718,7 +742,7 @@
 
   function activateRequestedChatFromCurrentRows(): void {
     if (isLocalDraftChatId(activeChatId)) return;
-    const loadedChats = selectPmaChats(readModelEntityStore.snapshot());
+    const loadedChats = selectPmaChats(readModelEntityStore.snapshot(), currentChatIndexRequest);
     const requestedChat = page.params.chatId ?? page.url.searchParams.get('chat');
     const selectedChatId = chooseActiveChatId(loadedChats, activeChatId, requestedChat);
     if (!selectedChatId || activeChatId === selectedChatId) return;
@@ -735,10 +759,10 @@
     nextState: typeof readModelState
   ): string | null {
     if (!activeChatId) return null;
-    const previousActive = selectPmaChats(previousState).find((chat) => chat.id === activeChatId) ?? null;
+    const previousActive = selectPmaChats(previousState, currentChatIndexRequest).find((chat) => chat.id === activeChatId) ?? null;
     const previousBinding = pmaChatBindingKey(previousActive);
     if (!previousBinding) return null;
-    const nextChats = selectPmaChats(nextState);
+    const nextChats = selectPmaChats(nextState, currentChatIndexRequest);
     const nextActive = nextChats.find((chat) => chat.id === activeChatId) ?? null;
     if (nextActive && !isPmaChatArchived(nextActive)) return null;
     const replacement = nextChats.find(

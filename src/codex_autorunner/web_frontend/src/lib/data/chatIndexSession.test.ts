@@ -7,7 +7,7 @@ import {
   type ChatIndexSnapshot,
   type ProjectionCursor
 } from '$lib/api/readModelContracts';
-import { ReadModelEntityStore } from './readModelStore';
+import { ReadModelEntityStore, selectChatIndexWindowView } from './readModelStore';
 import { selectPmaChats } from './readModelViewModels';
 import { createChatIndexSession } from './chatIndexSession';
 import type { ReadModelSnapshotClient } from './readModelClients';
@@ -166,6 +166,9 @@ describe('chat index session', () => {
     expect(client.chatIndex).toHaveBeenNthCalledWith(1, { filter: 'all', limit: 200 });
     expect(client.chatIndex).toHaveBeenNthCalledWith(2, { filter: 'archived', limit: 200 });
     expect(store.snapshot().chatOrder).toEqual(['chat-archived']);
+    expect(Object.keys(store.snapshot().chats).sort()).toEqual(['chat-active', 'chat-archived']);
+    expect(selectChatIndexWindowView(store.snapshot(), { filter: 'all', limit: 200 }).rows.map((row) => row.chatId)).toEqual(['chat-active']);
+    expect(selectChatIndexWindowView(store.snapshot(), { filter: 'archived', limit: 200 }).rows.map((row) => row.chatId)).toEqual(['chat-archived']);
   });
 });
 
