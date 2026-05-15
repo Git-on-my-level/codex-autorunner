@@ -7,6 +7,7 @@ from ..ports.run_event import (
     ApprovalRequested,
     Completed,
     Failed,
+    Interrupted,
     OutputDelta,
     RunEvent,
     RunNotice,
@@ -37,6 +38,8 @@ def serialize_run_event(event: RunEvent) -> dict[str, Any]:
         event_type = "completed"
     elif isinstance(event, Failed):
         event_type = "failed"
+    elif isinstance(event, Interrupted):
+        event_type = "interrupted"
     else:
         raise ValueError(f"Unsupported run event payload: {type(event).__name__}")
     return {
@@ -72,6 +75,8 @@ def deserialize_run_event(data: Mapping[str, Any]) -> RunEvent:
         return Completed(**event_payload)
     if event_type == "failed":
         return Failed(**event_payload)
+    if event_type == "interrupted":
+        return Interrupted(**event_payload)
     raise ValueError(f"Unsupported run event type: {event_type}")
 
 

@@ -395,7 +395,11 @@ def _terminal_timestamp_from_timeline(
 ) -> Optional[str]:
     timestamp: Optional[str] = None
     for entry in entries:
-        if str(entry.get("event_type") or "") not in {"turn_completed", "turn_failed"}:
+        if str(entry.get("event_type") or "") not in {
+            "turn_completed",
+            "turn_failed",
+            "turn_interrupted",
+        }:
             continue
         timestamp = _event_timestamp(entry) or timestamp
     return timestamp
@@ -404,7 +408,11 @@ def _terminal_timestamp_from_timeline(
 def _terminal_event_ids_from_timeline(entries: Iterable[dict[str, Any]]) -> list[int]:
     event_ids: list[int] = []
     for fallback, entry in enumerate(entries, start=1):
-        if str(entry.get("event_type") or "") not in {"turn_completed", "turn_failed"}:
+        if str(entry.get("event_type") or "") not in {
+            "turn_completed",
+            "turn_failed",
+            "turn_interrupted",
+        }:
             continue
         event_ids.append(_event_index(entry, fallback))
     return event_ids
