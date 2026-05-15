@@ -1078,6 +1078,26 @@ async def test_run_turn_passes_model_reasoning_and_reuses_thread_target(
 
 
 @pytest.mark.asyncio
+async def test_run_turn_does_not_mark_empty_assistant_output_successful(
+    tmp_path: Path,
+):
+    harness = _FakeHarness([_HarnessScript(assistant_text="")])
+    pool = _make_pool(tmp_path, harness, approval_mode="review")
+
+    result = await pool.run_turn(
+        AgentTurnRequest(
+            agent_id="opencode",
+            prompt="main",
+            workspace_root=tmp_path,
+        )
+    )
+
+    assert result.text == ""
+    assert result.error == "Agent completed without assistant output"
+    assert result.raw["final_status"] == "failed"
+
+
+@pytest.mark.asyncio
 async def test_run_turn_delegates_prompt_variant_selection_to_orchestration(
     tmp_path: Path,
 ):

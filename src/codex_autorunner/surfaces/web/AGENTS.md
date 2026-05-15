@@ -14,7 +14,7 @@ This surface owns FastAPI routes, web-specific services, and static asset servin
 - Web Hub UI: `../../web_frontend/` → ignored package artifact
   `../../web_static/`. Do not require generated static assets in normal PRs;
   release/package builds produce and verify them.
-- PMA managed-thread chat routes expose backend-owned timeline, progress, queue, and delivery state from `adapters/chat/` and `core/orchestration/`. Do not add web-local transcript composition or delivery state machines.
+- PMA managed-thread chat routes expose the backend-owned transcript projection plus progress, queue, and delivery state from `adapters/chat/` and `core/orchestration/`. The Web Chat primary rendering contract is `/hub/pma/threads/{id}/transcript` and `/transcript/events`; `/tail` and `/timeline` are diagnostics/projection inputs. Do not add web-local transcript composition or delivery state machines.
 - Web UI screen routes should expose screen-shaped read models with cursors and
   repair policies. Keep contracts in `read_model_contracts.py`, route assembly
   under `routes/`, and projection/rebuild logic in `core/` near the canonical

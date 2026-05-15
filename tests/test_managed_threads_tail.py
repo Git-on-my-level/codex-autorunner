@@ -28,10 +28,13 @@ from tests.pma_support import _enable_pma
 pytestmark = pytest.mark.slow
 
 
-def test_runtime_tail_fallback_uses_stable_turn_time_instead_of_read_time() -> None:
-    fallback = "2026-04-06T10:00:00+00:00"
-    since_after_fallback = int(
-        (datetime.fromisoformat(fallback) + timedelta(minutes=5)).timestamp() * 1000
+def test_runtime_tail_default_timestamp_uses_stable_turn_time_instead_of_read_time() -> (
+    None
+):
+    default_received_at = "2026-04-06T10:00:00+00:00"
+    since_after_default = int(
+        (datetime.fromisoformat(default_received_at) + timedelta(minutes=5)).timestamp()
+        * 1000
     )
 
     events = asyncio.run(
@@ -40,13 +43,13 @@ def test_runtime_tail_fallback_uses_stable_turn_time_instead_of_read_time() -> N
             tail_stream.RuntimeThreadRunEventState(),
             level="info",
             event_id_start=0,
-            since_ms=since_after_fallback,
-            fallback_received_at=fallback,
+            since_ms=since_after_default,
+            default_received_at=default_received_at,
         )
     )
 
     assert events
-    assert {event["received_at"] for event in events} == {fallback}
+    assert {event["received_at"] for event in events} == {default_received_at}
 
 
 def _seed_managed_thread_with_events(hub_env, app) -> tuple[str, str]:

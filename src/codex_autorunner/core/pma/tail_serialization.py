@@ -968,12 +968,12 @@ async def _serialize_runtime_raw_tail_events(
     event_id_start: int,
     since_ms: Optional[int] = None,
     projection_state: ProgressProjectionState | None = None,
-    fallback_received_at: Optional[str] = None,
+    default_received_at: Optional[str] = None,
 ) -> list[dict[str, Any]]:
     received_at_ms = 0
-    fallback_dt = parse_iso_datetime(fallback_received_at)
-    if fallback_dt is not None:
-        received_at = fallback_dt.isoformat()
+    default_dt = parse_iso_datetime(default_received_at)
+    if default_dt is not None:
+        received_at = default_dt.isoformat()
     else:
         received_at = datetime.now(timezone.utc).isoformat()
     since_ms_from_buffered_timestamp = False

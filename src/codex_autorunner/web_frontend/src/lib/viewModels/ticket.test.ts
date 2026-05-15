@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest';
 import { mockArtifact, mockChatSummary, mockRunProgress, mockTicketDetail, mockTicketSummary } from './mockData';
-import { pmaTimelineContractFields } from './domain';
 import {
   buildTicketDetailViewModel,
   buildTicketRepairChatCreatePayload,
@@ -293,41 +292,6 @@ Users can inspect tickets.
     expect(detail.actions.map((action) => action.label)).toContain('Open chat');
     expect(detail.actions.map((action) => action.label)).toContain('Continue run');
     expect(detail.actions.find((action) => action.label === 'Raw logs/debug')?.secondary).toBe(true);
-  });
-
-  it('builds ticket detail transcript cards from linked chat timeline and live progress', () => {
-    const detail = buildTicketDetailViewModel(
-      mockTicketDetail,
-      {
-        tickets: [mockTicketSummary],
-        runs: [mockRunProgress],
-        chats: [mockChatSummary],
-        artifacts: [],
-        timeline: [
-          {
-            id: 'timeline-assistant-1',
-            kind: 'assistant_message',
-            orderKey: '00000001|message|timeline-assistant-1',
-            timestamp: '2026-05-04T00:02:00Z',
-            chatId: 'chat-1',
-            turnId: 'turn-1',
-            status: 'running',
-            payload: { text: 'I am implementing the ticket now.' },
-            ...pmaTimelineContractFields('timeline-assistant-1'),
-            raw: {}
-          }
-        ]
-      }
-    );
-
-    expect(detail.chatTranscriptCards).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          kind: 'message',
-          message: expect.objectContaining({ text: 'I am implementing the ticket now.' })
-        })
-      ])
-    );
   });
 
   it('matches ticket runs from nested ticket engine state', () => {

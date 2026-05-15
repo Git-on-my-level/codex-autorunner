@@ -11,7 +11,6 @@ import {
   buildPmaActivityCards,
   buildPmaLiveActivity,
   buildPmaStatusBar,
-  buildPmaTranscriptCards,
   chooseActiveChatId,
   composeMessageWithAttachments,
   countTicketRunGroups,
@@ -22,12 +21,11 @@ import {
   formatCompactMessageDateTime,
   isPrimaryProgressArtifact,
   mergePmaActivityEvents,
-  mergePmaTimelineAndActivityCards,
+  mapPmaTranscriptSnapshot,
   mapChatSurfaceSnapshotToPmaChats,
   mapChatSurfaceEventToPmaChatSummary,
   modelReasoningOptions,
   modelSelectorState,
-  optimisticUserTimelineItemFromSend,
   pmaChatKind,
   pmaChatKindLabel,
   pmaChatHeaderScopeLine,
@@ -37,7 +35,6 @@ import {
   pmaChatSurfaceFilterOptions,
   pmaChatSurfaceFilterToken,
   progressPercent,
-  reconcilePmaTimeline,
   reconcileChatSurfaceEvent,
   reconcileChatSurfaceSnapshot,
   removePendingAttachment,
@@ -893,6 +890,52 @@ describe('PMA chat view helpers', () => {
     ]);
   });
 
+  it('maps backend-owned PMA transcript snapshots into renderable cards and status', () => {
+    const snapshot = mapPmaTranscriptSnapshot(
+      {
+        rows: [
+          {
+            kind: 'message',
+            id: 'turn:1:user',
+            turn_id: '1',
+            order_key: '001',
+            timestamp: '2026-05-04T00:00:01Z',
+            message: {
+              id: 'turn:1:user',
+              chat_id: 'chat-1',
+              role: 'user',
+              text: 'hello transcript',
+              created_at: '2026-05-04T00:00:01Z',
+              artifacts: []
+            }
+          },
+          {
+            kind: 'intermediate',
+            id: 'turn:1:intermediate:1',
+            title: 'Thinking',
+            text: 'checking repo',
+            order_key: '002'
+          }
+        ],
+        status: {
+          managed_thread_id: 'chat-1',
+          managed_turn_id: 'run-1',
+          turn_status: 'running',
+          phase: 'testing',
+          events: []
+        }
+      },
+      (raw) => ({ ...baseProgress, id: String(raw.managed_turn_id), phase: String(raw.phase) })
+    );
+
+    expect(snapshot.rows.map((row) => row.kind)).toEqual(['message', 'intermediate']);
+    expect(snapshot.rows[0]).toMatchObject({
+      kind: 'message',
+      message: { role: 'user', text: 'hello transcript' }
+    });
+    expect(snapshot.status).toMatchObject({ id: 'run-1', phase: 'testing' });
+  });
+
   it('summarizes live progress separately from transcript cards', () => {
     const live = buildPmaLiveActivity({
       ...baseProgress,
@@ -1136,333 +1179,6 @@ describe('PMA chat view helpers', () => {
     });
   });
 
-  it('collapses prior completed turn activity into one worked summary before the assistant reply', () => {
-    // The just-completed turn (most recent) stays fully expanded so its
-    // streamed layout doesn't shift; only earlier completed turns collapse.
-    const cards = buildPmaTranscriptCards(
-      [
-        timelineItem('turn:one:user', 'user_message', { text: 'Create tickets' }, '001'),
-        timelineItem('turn:one:intermediate:think-1', 'intermediate', { intermediate_kind: 'thinking', text: 'Inspecting repo state.' }, '002'),
-        timelineItem('turn:one:tool:1:rg', 'tool_group', { tool_name: 'rg tickets', call: { summary: 'rg tickets' }, result: { status: 'completed' } }, '003'),
-        timelineItem('turn:one:assistant', 'assistant_message', { text: 'Done.' }, '004'),
-        timelineItem('turn:two:user', 'user_message', { text: 'Anything else?' }, '005'),
-        timelineItem('turn:two:assistant', 'assistant_message', { text: 'No.' }, '006')
-      ],
-      null,
-      [],
-      { ...baseProgress, id: 'two', terminal: true, status: 'done', elapsedSeconds: 14, events: [] }
-    );
-
-    expect(cards.map((card) => card.kind)).toEqual([
-      'message',
-      'turn_summary',
-      'message',
-      'message',
-      'message'
-    ]);
-    expect(cards[1]).toMatchObject({
-      kind: 'turn_summary',
-      cards: [{ kind: 'intermediate' }, { kind: 'tool_group' }]
-    });
-  });
-
-  it('accumulates persisted OpenCode thinking deltas into one completed-turn summary row', () => {
-    const cards = buildPmaTranscriptCards(
-      [
-        timelineItem('turn:one:user', 'user_message', { text: 'Run a smoke test' }, '001'),
-        {
-          ...timelineItem('turn:one:intermediate:think-1', 'intermediate', {
-            intermediate_kind: 'thinking',
-            text: 'Got it'
-          }, '002'),
-          ...pmaTimelineContractFields('turn:one:intermediate:think-1', { sourceEventIds: ['turn:one:intermediate:think-1'] })
-        },
-        {
-          ...timelineItem('turn:one:intermediate:think-2', 'intermediate', {
-            intermediate_kind: 'thinking',
-            text: ' - I will create a test file'
-          }, '003'),
-          ...pmaTimelineContractFields('turn:one:intermediate:think-2', { sourceEventIds: ['turn:one:intermediate:think-2'] })
-        },
-        {
-          ...timelineItem('turn:one:intermediate:think-3', 'intermediate', {
-            intermediate_kind: 'thinking',
-            text: ', edit it, search within it, and then delete it.'
-          }, '004'),
-          ...pmaTimelineContractFields('turn:one:intermediate:think-3', { sourceEventIds: ['turn:one:intermediate:think-3'] })
-        },
-        timelineItem('turn:one:assistant', 'assistant_message', { text: 'Done.' }, '005'),
-        timelineItem('turn:two:user', 'user_message', { text: 'Anything else?' }, '006'),
-        timelineItem('turn:two:assistant', 'assistant_message', { text: 'No.' }, '007')
-      ],
-      null,
-      [],
-      { ...baseProgress, id: 'two', terminal: true, status: 'done', elapsedSeconds: 17, events: [] }
-    );
-
-    expect(cards.map((card) => card.kind)).toEqual([
-      'message',
-      'turn_summary',
-      'message',
-      'message',
-      'message'
-    ]);
-    expect(cards[1]).toMatchObject({
-      kind: 'turn_summary',
-      cards: [
-        {
-          kind: 'intermediate',
-          title: 'thinking',
-          text: 'Got it - I will create a test file, edit it, search within it, and then delete it.',
-          detail: '3 thinking updates · source events turn:one:intermediate:think-1, turn:one:intermediate:think-2, turn:one:intermediate:think-3'
-        }
-      ]
-    });
-    expect(JSON.stringify(cards[1])).not.toContain('"message":"Got it"');
-  });
-
-  it('does not re-add terminal live progress outside the worked summary after final output lands', () => {
-    const cards = buildPmaTranscriptCards(
-      [
-        timelineItem('turn:one:user', 'user_message', { text: 'Run tools' }, '001'),
-        timelineItem('turn:one:intermediate:think-1', 'intermediate', { intermediate_kind: 'thinking', text: 'Reading files' }, '002'),
-        timelineItem('turn:one:tool:1:rg', 'tool_group', { tool_name: 'rg', result: { status: 'completed' } }, '003'),
-        timelineItem('turn:one:assistant', 'assistant_message', { text: 'Done.' }, '004'),
-        timelineItem('turn:two:user', 'user_message', { text: 'Anything else?' }, '005'),
-        timelineItem('turn:two:assistant', 'assistant_message', { text: 'No.' }, '006')
-      ],
-      null,
-      [],
-      {
-        ...baseProgress,
-        id: 'two',
-        terminal: true,
-        status: 'done',
-        elapsedSeconds: 17,
-        events: [
-          {
-            ...baseArtifact,
-            id: 'live-thinking-1',
-            kind: 'progress',
-            createdAt: '2026-05-04T00:00:11Z',
-            summary: 'Reading files',
-            raw: {
-              execution_id: 'runtime-one',
-              progress_item: { kind: 'assistant_update', state: 'running', title: 'Thinking', summary: 'Reading files' }
-            }
-          },
-          {
-            ...baseArtifact,
-            id: 'live-tool-1',
-            kind: 'progress',
-            createdAt: '2026-05-04T00:00:12Z',
-            summary: 'rg',
-            raw: {
-              execution_id: 'runtime-one',
-              progress_item: { kind: 'tool', state: 'completed', title: 'rg' }
-            }
-          }
-        ]
-      }
-    );
-
-    expect(cards.map((card) => card.kind)).toEqual([
-      'message',
-      'turn_summary',
-      'message',
-      'message',
-      'message'
-    ]);
-    expect(cards[1]).toMatchObject({
-      kind: 'turn_summary',
-      cards: [{ kind: 'intermediate' }, { kind: 'tool_group' }]
-    });
-  });
-
-  it('streams running raw activity inline rather than collapsing it into a summary', () => {
-    const cards = buildPmaTranscriptCards(
-      [
-        timelineItem('turn:one:user', 'user_message', { text: 'Create tickets' }, '001'),
-        timelineItem('turn:one:intermediate:think-1', 'intermediate', { intermediate_kind: 'thinking', text: 'Inspecting repo state.' }, '002')
-      ],
-      null,
-      [],
-      { ...baseProgress, id: 'one', terminal: false, status: 'running', events: [] }
-    );
-
-    expect(cards.map((card) => card.kind)).toEqual(['message', 'intermediate']);
-    expect(cards[1]).toMatchObject({
-      kind: 'intermediate',
-      text: 'Inspecting repo state.'
-    });
-  });
-
-  it('keeps the most recent completed turn fully expanded so streamed cards stay visible', () => {
-    // After a turn finishes, the cards the user watched stream in must
-    // remain visible in the same shape — otherwise the live "Thinking" or
-    // tool cards appear to vanish and get replaced by a collapsed "Worked
-    // for Ns" summary, which is jarring. Only earlier turns collapse.
-    const cards = buildPmaTranscriptCards(
-      [
-        timelineItem('turn:one:user', 'user_message', { text: 'first turn' }, '00000001'),
-        timelineItem('turn:one:intermediate:think-1', 'intermediate', { intermediate_kind: 'thinking', text: 'Doing turn one.' }, '00000002'),
-        timelineItem('turn:one:assistant', 'assistant_message', { text: 'Done one.' }, '00000003'),
-        timelineItem('turn:two:user', 'user_message', { text: 'second turn' }, '00000004'),
-        timelineItem('turn:two:intermediate:think-1', 'intermediate', { intermediate_kind: 'thinking', text: 'Doing turn two.' }, '00000005'),
-        timelineItem('turn:two:tool:rg', 'tool_group', { tool_name: 'rg', result: { status: 'completed' } }, '00000006'),
-        timelineItem('turn:two:assistant', 'assistant_message', { text: 'Done two.' }, '00000007')
-      ],
-      null,
-      [],
-      { ...baseProgress, id: 'two', terminal: true, status: 'done', events: [] }
-    );
-
-    // turn:one collapses; turn:two (most recent) stays expanded so its
-    // thinking + tool cards remain visible alongside the assistant reply.
-    expect(cards.map((card) => card.kind)).toEqual([
-      'message',
-      'turn_summary',
-      'message',
-      'message',
-      'intermediate',
-      'tool_group',
-      'message'
-    ]);
-  });
-
-  it('keeps an in-flight turn expanded even when progress flickers to a non-running status mid-stream', () => {
-    // Repro for the streaming glitch where progress.status briefly leaves
-    // 'running' (e.g. 'waiting' between tool calls) and commentary leaks
-    // above/below a prematurely collapsed "Worked for Ns" group.
-    const cards = buildPmaTranscriptCards(
-      [
-        timelineItem('turn:one:user', 'user_message', { text: 'what does pma stand for?' }, '00000001'),
-        timelineItem('turn:one:intermediate:commentary-1', 'intermediate', { intermediate_kind: 'notice', title: 'Commentary', text: 'Checking docs.' }, '00000002'),
-        timelineItem('turn:one:tool:rg', 'tool_group', { tool_name: 'rg', call: { summary: 'rg PMA' } }, '00000003'),
-        timelineItem('turn:one:intermediate:commentary-2', 'intermediate', { intermediate_kind: 'notice', title: 'Commentary', text: 'Found the guide.' }, '00000004')
-      ],
-      null,
-      [],
-      { ...baseProgress, id: 'one', terminal: false, status: 'waiting', events: [] }
-    );
-
-    // No assistant_message has landed yet, so the turn must remain fully
-    // expanded — no turn_summary, no swallowed commentary.
-    expect(cards.map((card) => card.kind)).toEqual([
-      'message',
-      'intermediate',
-      'tool_group',
-      'intermediate'
-    ]);
-  });
-
-  it('inherits the active turn for raw tail progress and folds merged deltas under the work summary', () => {
-    const cards = buildPmaTranscriptCards(
-      [
-        timelineItem('turn:one:user', 'user_message', { text: 'Summarize this thread' }, '00000001')
-      ],
-      null,
-      [],
-      {
-        ...baseProgress,
-        id: 'one',
-        terminal: false,
-        status: 'running',
-        elapsedSeconds: 21,
-        events: [
-          {
-            ...baseArtifact,
-            id: 'raw-progress-1',
-            kind: 'progress',
-            createdAt: '2026-05-04T00:00:11Z',
-            summary: 'The',
-            raw: {
-              progress_item: { kind: 'notice', title: 'Progress', summary: 'The', event_ids: [11] }
-            }
-          },
-          {
-            ...baseArtifact,
-            id: 'raw-progress-2',
-            kind: 'progress',
-            createdAt: '2026-05-04T00:00:11.500Z',
-            summary: 'user',
-            raw: {
-              progress_item: { kind: 'notice', title: 'Progress', summary: 'user', event_ids: [12] }
-            }
-          },
-          {
-            ...baseArtifact,
-            id: 'commentary-1',
-            kind: 'progress',
-            createdAt: '2026-05-04T00:00:12Z',
-            summary: 'I am checking the latest context.',
-            raw: {
-              progress_item: { kind: 'notice', title: 'Commentary', summary: 'I am checking the latest context.', event_ids: [13] }
-            }
-          },
-          {
-            ...baseArtifact,
-            id: 'raw-progress-3',
-            kind: 'progress',
-            createdAt: '2026-05-04T00:00:13Z',
-            summary: 'wants',
-            raw: {
-              progress_item: { kind: 'notice', title: 'Progress', summary: 'wants', event_ids: [14] }
-            }
-          }
-        ]
-      }
-    );
-
-    expect(cards.map((card) => card.kind)).toEqual(['message', 'intermediate', 'intermediate']);
-    expect(cards[1]).toMatchObject({
-      kind: 'intermediate',
-      title: 'Progress',
-      text: 'The user wants'
-    });
-    expect(cards[2]).toMatchObject({
-      kind: 'intermediate',
-      title: 'Commentary',
-      text: 'I am checking the latest context.'
-    });
-  });
-
-  it('folds canonical progress deltas into one accumulated trace under the work summary', () => {
-    const cards = buildPmaTranscriptCards(
-      [
-        timelineItem('turn:one:user', 'user_message', { text: 'Give me a sitrep' }, '00000001'),
-        timelineItem(
-          'turn:one:intermediate:11',
-          'intermediate',
-          { intermediate_kind: 'Progress', text: 'The', source_event_ids: [11] },
-          '00000011'
-        ),
-        timelineItem(
-          'turn:one:intermediate:12',
-          'intermediate',
-          { intermediate_kind: 'Progress', text: 'user', source_event_ids: [12] },
-          '00000012'
-        ),
-        timelineItem(
-          'turn:one:intermediate:13',
-          'intermediate',
-          { intermediate_kind: 'Progress', text: 'wants', source_event_ids: [13] },
-          '00000013'
-        )
-      ],
-      null,
-      [],
-      { ...baseProgress, id: 'one', elapsedSeconds: 69, events: [] }
-    );
-
-    expect(cards.map((card) => card.kind)).toEqual(['message', 'intermediate']);
-    expect(cards[1]).toMatchObject({
-      kind: 'intermediate',
-      title: 'Progress',
-      text: 'The user wants'
-    });
-  });
-
   it('treats Hermes tool_call progress items as tool cards', () => {
     const cards = buildPmaActivityCards([
       {
@@ -1488,273 +1204,6 @@ describe('PMA chat view helpers', () => {
         tools: [{ title: 'shell', summary: 'git status', state: 'completed' }]
       }
     ]);
-  });
-
-  it('folds failed and interrupted turn notices under a summary instead of chat bubbles', () => {
-    const cards = buildPmaTranscriptCards(
-      [
-        timelineItem('turn:failed:user', 'user_message', { text: 'Run the check' }, '00000001'),
-        timelineItem(
-          'turn:failed:intermediate:1',
-          'intermediate',
-          { intermediate_kind: 'turn_failed', text: 'Turn failed.' },
-          '00000002'
-        ),
-        timelineItem(
-          'turn:failed:intermediate:2',
-          'intermediate',
-          { intermediate_kind: 'thinking', text: 'Collected failure context.' },
-          '00000003'
-        ),
-        timelineItem('turn:next:user', 'user_message', { text: 'Try again' }, '00000004'),
-        timelineItem('turn:next:assistant', 'assistant_message', { text: 'OK.' }, '00000005')
-      ],
-      null,
-      [],
-      { ...baseProgress, id: 'next', terminal: true, status: 'done', events: [] }
-    );
-
-    expect(cards.map((card) => card.kind)).toEqual([
-      'message',
-      'turn_summary',
-      'message',
-      'message'
-    ]);
-    expect(cards[1]).toMatchObject({
-      kind: 'turn_summary',
-      cards: [
-        { kind: 'intermediate', title: 'turn failed', text: 'Turn failed.' },
-        { kind: 'intermediate', title: 'thinking', text: 'Collected failure context.' }
-      ]
-    });
-  });
-
-  it('dedupes live activity against canonical source event ids and preserves chronological order', () => {
-    const canonical = buildPmaCards(
-      [
-        timelineItem('turn:one:user', 'user_message', { text: 'Run tools' }, '00000001'),
-        timelineItem(
-          'turn:one:tool:7:rg',
-          'tool_group',
-          {
-            tool_name: 'rg',
-            progress_items: [{ event_ids: [999] }],
-            call: { summary: 'rg TODO' },
-            result: { status: 'completed' }
-          },
-          '00000007'
-        ),
-        {
-          ...timelineItem('turn:one:assistant', 'assistant_message', { text: 'Done.' }, '00000009'),
-          timestamp: '2026-05-04T00:00:13Z'
-        }
-      ].map((item) =>
-        item.id === 'turn:one:tool:7:rg'
-          ? { ...item, ...pmaTimelineContractFields(item.id, { progressEventIds: [7] }) }
-          : item
-      ),
-      null,
-      []
-    );
-    const live = buildPmaActivityCards([
-      {
-        ...baseArtifact,
-        id: '7',
-        kind: 'progress',
-        createdAt: '2026-05-04T00:00:11Z',
-        raw: {
-          managed_turn_id: 'one',
-          progress_item: { kind: 'tool', state: 'completed', title: 'rg', event_ids: [7] }
-        }
-      },
-      {
-        ...baseArtifact,
-        id: '8',
-        kind: 'progress',
-        createdAt: '2026-05-04T00:00:12Z',
-        summary: 'Still thinking',
-        raw: {
-          managed_turn_id: 'one',
-          progress_item: { kind: 'assistant_update', state: 'running', title: 'Thinking', summary: 'Still thinking', event_ids: [8] }
-        }
-      }
-    ]);
-
-    expect(mergePmaTimelineAndActivityCards(canonical, live).map((card) => card.id)).toEqual([
-      'turn:one:user',
-      'turn:one:tool:7:rg',
-      'intermediate-8',
-      'turn:one:assistant'
-    ]);
-  });
-
-  it('keeps live streaming after the user prompt when trace sequence is below the user row sequence', () => {
-    const canonical = buildPmaCards(
-      [
-        timelineItem('turn:1:user', 'user_message', { text: 'first question' }, '00000010'),
-        timelineItem('turn:1:assistant', 'assistant_message', { text: 'first answer' }, '00000011'),
-        timelineItem('turn:2:user', 'user_message', { text: 'second question' }, '00000020'),
-        timelineItem(
-          'turn:2:intermediate:0001',
-          'intermediate',
-          {
-            intermediate_kind: 'thinking',
-            text: 'early trace line',
-            source_event_ids: [1],
-            progress_item: { kind: 'assistant_update', title: 'Thinking', summary: 'early', event_ids: [1] }
-          },
-          '00000003'
-        )
-      ],
-      null,
-      []
-    );
-    const live = buildPmaActivityCards(
-      [
-        {
-          ...baseArtifact,
-          id: 'live-stream-2',
-          kind: 'progress',
-          createdAt: '2026-05-13T12:00:02Z',
-          raw: {
-            managed_turn_id: '2',
-            progress_item: {
-              kind: 'assistant_update',
-              title: 'Thinking',
-              summary: 'second answer line',
-              event_ids: [2]
-            }
-          }
-        }
-      ],
-      { fallbackTurnId: '2' }
-    );
-
-    const merged = mergePmaTimelineAndActivityCards(canonical, live);
-    const ids = merged.map((card) => card.id);
-    const user2 = ids.indexOf('turn:2:user');
-    const liveIdx = ids.indexOf('intermediate-live-stream-2');
-    expect(user2).toBeGreaterThanOrEqual(0);
-    expect(liveIdx).toBeGreaterThanOrEqual(0);
-    expect(user2).toBeLessThan(liveIdx);
-  });
-
-  it('dedupes live commentary against canonical source event ids', () => {
-    const canonical = buildPmaCards(
-      [
-        timelineItem('turn:one:user', 'user_message', { text: 'Investigate duplicate chat cards' }, '00000001'),
-        {
-          ...timelineItem(
-            'turn:one:intermediate:13',
-            'intermediate',
-            {
-              intermediate_kind: 'progress',
-              text: 'I am checking the latest context.',
-              source_event_ids: [999],
-              progress_item: {
-                kind: 'notice',
-                title: 'Commentary',
-                summary: 'I am checking the latest context.',
-                event_ids: [999]
-              }
-            },
-            '00000013'
-          ),
-          ...pmaTimelineContractFields('turn:one:intermediate:13', { sourceEventIds: [13] })
-        }
-      ],
-      null,
-      []
-    );
-    const live = buildPmaActivityCards([
-      {
-        ...baseArtifact,
-        id: 'progress-commentary-13',
-        kind: 'progress',
-        createdAt: '2026-05-08T12:00:13Z',
-        summary: 'I am checking the latest context.',
-        raw: {
-          managed_turn_id: 'one',
-          progress_item: {
-            kind: 'notice',
-            title: 'Commentary',
-            summary: 'I am checking the latest context.',
-            event_ids: [13]
-          }
-        }
-      }
-    ]);
-
-    expect(mergePmaTimelineAndActivityCards(canonical, live).map((card) => card.id)).toEqual([
-      'turn:one:user',
-      'turn:one:intermediate:13'
-    ]);
-  });
-
-  it('keeps a merged live progress card when only some progress source ids are already canonical', () => {
-    const canonical = buildPmaCards(
-      [
-        timelineItem('turn:one:user', 'user_message', { text: 'Investigate' }, '00000001'),
-        timelineItem(
-          'turn:one:intermediate:13',
-          'intermediate',
-          {
-            intermediate_kind: 'progress',
-            text: 'Catchup line one.',
-            source_event_ids: [13],
-            progress_item: {
-              kind: 'notice',
-              title: 'Progress',
-              summary: 'Catchup line one.',
-              event_ids: [13]
-            }
-          },
-          '00000013'
-        )
-      ],
-      null,
-      []
-    );
-    const live = buildPmaActivityCards([
-      {
-        ...baseArtifact,
-        id: 'live-13',
-        kind: 'progress',
-        createdAt: '2026-05-08T12:00:01Z',
-        raw: {
-          managed_turn_id: 'one',
-          progress_item: {
-            kind: 'notice',
-            title: 'Progress',
-            summary: 'Catchup line one.',
-            event_ids: [13]
-          }
-        }
-      },
-      {
-        ...baseArtifact,
-        id: 'live-14',
-        kind: 'progress',
-        createdAt: '2026-05-08T12:00:02Z',
-        raw: {
-          managed_turn_id: 'one',
-          progress_item: {
-            kind: 'notice',
-            title: 'Progress',
-            summary: ' Only-live line two.',
-            event_ids: [14]
-          }
-        }
-      }
-    ]);
-
-    const merged = mergePmaTimelineAndActivityCards(canonical, live);
-    expect(merged.map((card) => card.id)).toEqual(['turn:one:user', 'turn:one:intermediate:13', 'intermediate-live-13']);
-    expect(merged[2]).toMatchObject({
-      kind: 'intermediate',
-      progressSourceIds: ['13', '14'],
-      text: 'Catchup line one. Only-live line two.'
-    });
   });
 
   it('does not merge live progress notices across tool activity', () => {
@@ -1814,104 +1263,60 @@ describe('PMA chat view helpers', () => {
     ]);
   });
 
-  it('anchors live progress after the user row when SSE timestamps precede the persisted prompt', () => {
-    const canonical = buildPmaCards(
+  it('does not merge live progress notices across tool activity', () => {
+    const cards = buildPmaActivityCards(
       [
         {
-          ...timelineItem('turn:one:user', 'user_message', { text: 'Do work' }, '00000042'),
-          timestamp: '2026-05-08T12:00:05Z',
-          orderKey: '00000042|2026-05-08T12:00:05Z|turn:one:user'
+          ...baseArtifact,
+          id: 'prog-1',
+          kind: 'progress',
+          createdAt: '2026-05-08T12:00:01Z',
+          raw: {
+            progress_item: {
+              kind: 'notice',
+              title: 'Progress',
+              summary: 'Starting',
+              event_ids: [1]
+            }
+          }
+        },
+        {
+          ...baseArtifact,
+          id: 'tool-2',
+          kind: 'progress',
+          createdAt: '2026-05-08T12:00:02Z',
+          raw: {
+            progress_item: {
+              kind: 'tool',
+              state: 'completed',
+              title: 'rg',
+              summary: 'rg TODO',
+              event_ids: [2]
+            }
+          }
+        },
+        {
+          ...baseArtifact,
+          id: 'prog-3',
+          kind: 'progress',
+          createdAt: '2026-05-08T12:00:03Z',
+          raw: {
+            progress_item: {
+              kind: 'notice',
+              title: 'Progress',
+              summary: 'Continuing',
+              event_ids: [3]
+            }
+          }
         }
       ],
-      null,
-      []
+      { fallbackTurnId: 'one' }
     );
-    const live = buildPmaActivityCards([
-      {
-        ...baseArtifact,
-        id: 'prog-1',
-        kind: 'progress',
-        createdAt: '2026-05-08T12:00:01Z',
-        raw: {
-          managed_turn_id: 'one',
-          progress_item: {
-            kind: 'notice',
-            title: 'Progress',
-            summary: 'Starting',
-            event_ids: [1]
-          }
-        }
-      },
-      {
-        ...baseArtifact,
-        id: 'prog-2',
-        kind: 'progress',
-        createdAt: '2026-05-08T12:00:02Z',
-        raw: {
-          managed_turn_id: 'one',
-          progress_item: {
-            kind: 'notice',
-            title: 'Progress',
-            summary: 'Continuing',
-            event_ids: [2]
-          }
-        }
-      }
-    ]);
 
-    const merged = mergePmaTimelineAndActivityCards(canonical, live);
-    expect(merged.map((card) => card.id)).toEqual([
-      'turn:one:user',
-      'intermediate-prog-1'
-    ]);
-    expect(merged[1]).toMatchObject({ kind: 'intermediate', text: 'Starting Continuing' });
-  });
-
-  it('anchors live progress after optimistic user bubbles', () => {
-    const optimistic = optimisticUserTimelineItemFromSend(
-      {
-        item_id: 'turn:one:user',
-        managed_turn_id: 'one',
-        delivered_message: 'Hi',
-        managed_thread_id: 'chat-1',
-        client_turn_id: 'client-1',
-        identity: {
-          timeline_item_id: 'turn:one:user',
-          progress_item_ids: [],
-          correlation_id: 'client-1'
-        },
-        provenance: {
-          source_event_ids: [],
-          progress_event_ids: [],
-          cursor_event_id: null
-        }
-      },
-      'Hi',
-      'chat-1'
-    );
-    expect(optimistic).not.toBeNull();
-    const canonical = buildPmaCards([optimistic!], null, []);
-    const live = buildPmaActivityCards([
-      {
-        ...baseArtifact,
-        id: 'prog-opt',
-        kind: 'progress',
-        createdAt: '2026-05-08T11:59:00Z',
-        raw: {
-          managed_turn_id: 'one',
-          progress_item: {
-            kind: 'notice',
-            title: 'Progress',
-            summary: 'Early SSE',
-            event_ids: [1]
-          }
-        }
-      }
-    ]);
-
-    expect(mergePmaTimelineAndActivityCards(canonical, live).map((card) => card.id)).toEqual([
-      'turn:one:user',
-      'intermediate-prog-opt'
+    expect(cards).toMatchObject([
+      { kind: 'intermediate', title: 'Progress', text: 'Starting', turnId: 'one' },
+      { kind: 'tool_group', tools: [{ title: 'rg' }], turnId: 'one' },
+      { kind: 'intermediate', title: 'Progress', text: 'Continuing', turnId: 'one' }
     ]);
   });
 
@@ -2003,49 +1408,6 @@ describe('PMA chat view helpers', () => {
     ).toEqual([]);
   });
 
-  it('keeps rendered card counts stable for high-volume hidden assistant streams', () => {
-    const noisyTimeline = Array.from({ length: 1_000 }, (_, index) =>
-      timelineItem(`turn:one:intermediate:stream:${index}`, 'intermediate', {
-        intermediate_kind: 'assistant_stream',
-        event_type: 'output_delta',
-        text: `chunk ${index}`
-      })
-    );
-
-    const baseInput = [
-      timelineItem('turn:one:intermediate:thinking', 'intermediate', {
-        intermediate_kind: 'thinking',
-        text: 'Reading files'
-      })
-    ];
-    const smallCards = buildPmaTranscriptCards(
-      [
-        timelineItem('turn:one:intermediate:stream:baseline', 'intermediate', {
-          intermediate_kind: 'assistant_stream',
-          event_type: 'output_delta',
-          text: 'baseline chunk'
-        }),
-        ...baseInput
-      ],
-      baseChat,
-      [],
-      null
-    );
-    const cards = buildPmaTranscriptCards(
-      [
-        ...noisyTimeline,
-        ...baseInput
-      ],
-      baseChat,
-      [],
-      null
-    );
-
-    expect(cards).toHaveLength(smallCards.length);
-    expect(cards.some((card) => card.kind === 'intermediate' && card.text === 'Reading files')).toBe(true);
-    expect(cards.some((card) => card.kind === 'intermediate' && card.text?.startsWith('chunk '))).toBe(false);
-  });
-
   it('renders compaction lifecycle timeline items as visible dividers', () => {
     const cards = buildPmaCards(
       [
@@ -2066,169 +1428,6 @@ describe('PMA chat view helpers', () => {
       title: 'Chat compacted',
       text: expect.stringContaining('Keep the current goal and constraints.')
     });
-  });
-
-  it('reconciles optimistic sends with backend timeline IDs in order', () => {
-    const optimistic = optimisticUserTimelineItemFromSend(
-      {
-        item_id: 'turn:turn-2:user',
-        managed_thread_id: 'chat-1',
-        managed_turn_id: 'turn-2',
-        delivered_message: 'queued second',
-        client_turn_id: 'client-turn-2',
-        execution_state: 'queued',
-        identity: {
-          timeline_item_id: 'turn:turn-2:user',
-          progress_item_ids: [],
-          correlation_id: 'client-turn-2'
-        },
-        provenance: {
-          source_event_ids: [],
-          progress_event_ids: [],
-          cursor_event_id: null
-        }
-      },
-      'fallback',
-      'chat-1'
-    );
-    expect(optimistic).not.toBeNull();
-
-    const merged = reconcilePmaTimeline(
-      [
-        timelineItem('turn:turn-1:user', 'user_message', { text: 'first' }, '001'),
-        optimistic!
-      ],
-      [
-        timelineItem('turn:turn-2:user', 'user_message', { text: 'queued second' }, '002')
-      ]
-    );
-
-    expect(merged.map((item) => item.id)).toEqual(['turn:turn-1:user', 'turn:turn-2:user']);
-  });
-
-  it('does not remove optimistic user placeholders by matching raw text only', () => {
-    const merged = reconcilePmaTimeline(
-      [
-        {
-          ...timelineItem('optimistic:user:123', 'user_message', { text: 'queued second' }, 'optimistic'),
-          ...pmaTimelineContractFields('optimistic:user:123', { correlationId: 'client-a' })
-        },
-        timelineItem('turn:turn-1:user', 'user_message', { text: 'first' }, '001')
-      ],
-      [
-        {
-          ...timelineItem('turn:turn-2:user', 'user_message', { text: 'queued second' }, '002'),
-          ...pmaTimelineContractFields('turn:turn-2:user', { correlationId: 'client-b' })
-        }
-      ]
-    );
-
-    expect(merged.map((item) => item.id)).toEqual(['turn:turn-1:user', 'turn:turn-2:user', 'optimistic:user:123']);
-  });
-
-  it('keeps timeline reconciliation bounded while preserving the first user message', () => {
-    const existing = [
-      timelineItem('turn:first:user', 'user_message', { text: 'first prompt' }, '001'),
-      ...Array.from({ length: 8 }, (_, index) =>
-        timelineItem(`event:${index}`, 'intermediate', { text: `step ${index}` }, `00${index + 2}`)
-      )
-    ];
-    const merged = reconcilePmaTimeline(
-      existing,
-      [timelineItem('turn:last:assistant', 'assistant_message', { text: 'done' }, '999')],
-      5
-    );
-
-    expect(merged).toHaveLength(5);
-    expect(merged[0].id).toBe('turn:first:user');
-    expect(merged.map((item) => item.id)).toContain('turn:last:assistant');
-  });
-
-  it('dedupes duplicate assistant frames by canonical timeline identity only', () => {
-    const cards = buildPmaTranscriptCards(
-      [
-        timelineItem('turn:one:user', 'user_message', { text: 'Do work' }, '001'),
-        {
-          ...timelineItem('cursor:a', 'assistant_message', { text: 'Done.' }, '002'),
-          ...pmaTimelineContractFields('turn:one:assistant')
-        },
-        {
-          ...timelineItem('cursor:b', 'assistant_message', { text: 'Done.' }, '003'),
-          ...pmaTimelineContractFields('turn:one:assistant')
-        },
-        timelineItem('turn:two:assistant', 'assistant_message', { text: 'Done.' }, '004'),
-        timelineItem('turn:three:assistant', 'assistant_message', { text: 'Done.' }, '005')
-      ],
-      baseChat,
-      [],
-      null
-    );
-
-    const assistantMessages = cards.filter(
-      (card) => card.kind === 'message' && card.message.role === 'assistant'
-    );
-    expect(assistantMessages.map((card) => card.id)).toEqual(['cursor:a', 'turn:two:assistant', 'turn:three:assistant']);
-  });
-
-  it('does not duplicate commentary when a Discord-started thread is opened on the web with live progress', () => {
-    const discordChat: PmaChatSummary = {
-      ...baseChat,
-      id: 'discord-thread-1',
-      title: 'discord:123456',
-      raw: { surface_kind: 'discord', surface_key: '123456' }
-    };
-    const canonical = buildPmaCards(
-      [
-        timelineItem('turn:one:user', 'user_message', { text: 'Fix the deploy script' }, '00000001'),
-        {
-          ...timelineItem('turn:one:intermediate:1', 'intermediate', {
-            intermediate_kind: 'thinking',
-            text: 'Checking deploy config',
-            source_event_ids: [11]
-          }, '00000002'),
-          ...pmaTimelineContractFields('turn:one:intermediate:1', { sourceEventIds: [11] })
-        },
-        {
-          ...timelineItem('turn:one:tool:1:rg', 'tool_group', {
-            tool_name: 'rg',
-            progress_items: [{ event_ids: [12] }],
-            call: { summary: 'rg deploy' },
-            result: { status: 'completed', summary: 'Found 3 matches' }
-          }, '00000003'),
-          ...pmaTimelineContractFields('turn:one:tool:1:rg', { sourceEventIds: ['turn:one:tool:1:rg'], progressEventIds: [12] })
-        },
-        timelineItem('turn:one:assistant', 'assistant_message', { text: 'Deploy script fixed.' }, '00000004')
-      ],
-      discordChat,
-      []
-    );
-    const live = buildPmaActivityCards([
-      {
-        ...baseArtifact,
-        id: '12',
-        kind: 'progress',
-        createdAt: '2026-05-13T00:01:00Z',
-        raw: {
-          managed_turn_id: 'one',
-          progress_item: { kind: 'tool', state: 'completed', title: 'rg', event_ids: [12] }
-        }
-      }
-    ]);
-
-    const merged = mergePmaTimelineAndActivityCards(canonical, live);
-
-    const toolCards = merged.filter((card) => card.kind === 'tool_group');
-    expect(toolCards).toHaveLength(1);
-    expect(toolCards[0].id).toBe('turn:one:tool:1:rg');
-
-    const intermediateCards = merged.filter((card) => card.kind === 'intermediate');
-    expect(intermediateCards).toHaveLength(1);
-    expect(intermediateCards[0].id).toBe('turn:one:intermediate:1');
-
-    const assistantCards = merged.filter(
-      (card) => card.kind === 'message' && card.message.role === 'assistant'
-    );
-    expect(assistantCards).toHaveLength(1);
   });
 
   it('preserves grouped tool provenance across all contributing events', () => {
@@ -2268,81 +1467,6 @@ describe('PMA chat view helpers', () => {
     expect(toolCard.tools[0].eventIds).toContain('evt-51');
     expect(toolCard.tools[0].eventIds).toContain('evt-52');
     expect(toolCard.tools[0].eventIds).toContain('evt-53');
-  });
-
-  it('normalizes optimistic send status through the canonical optional work-status mapper', () => {
-    expect(
-      optimisticUserTimelineItemFromSend(
-        {
-          item_id: 'turn:turn-active:user',
-          managed_thread_id: 'chat-1',
-          managed_turn_id: 'turn-active',
-          client_turn_id: 'client-active',
-          delivered_message: 'active work',
-          execution_state: 'active',
-          identity: {
-            timeline_item_id: 'turn:turn-active:user',
-            progress_item_ids: [],
-            correlation_id: 'client-active'
-          },
-          provenance: {
-            source_event_ids: [],
-            progress_event_ids: [],
-            cursor_event_id: null
-          }
-        },
-        'fallback',
-        'chat-1'
-      )?.status
-    ).toBe('running');
-    expect(
-      optimisticUserTimelineItemFromSend(
-        {
-          item_id: 'turn:turn-unknown:user',
-          managed_thread_id: 'chat-1',
-          managed_turn_id: 'turn-unknown',
-          client_turn_id: 'client-unknown',
-          delivered_message: 'unknown work',
-          execution_state: 'unknown-status',
-          identity: {
-            timeline_item_id: 'turn:turn-unknown:user',
-            progress_item_ids: [],
-            correlation_id: 'client-unknown'
-          },
-          provenance: {
-            source_event_ids: [],
-            progress_event_ids: [],
-            cursor_event_id: null
-          }
-        },
-        'fallback',
-        'chat-1'
-      )?.status
-    ).toBe('idle');
-    expect(
-      optimisticUserTimelineItemFromSend(
-        {
-          item_id: 'turn:turn-empty:user',
-          managed_thread_id: 'chat-1',
-          managed_turn_id: 'turn-empty',
-          client_turn_id: 'client-empty',
-          delivered_message: 'empty work',
-          execution_state: '',
-          identity: {
-            timeline_item_id: 'turn:turn-empty:user',
-            progress_item_ids: [],
-            correlation_id: 'client-empty'
-          },
-          provenance: {
-            source_event_ids: [],
-            progress_event_ids: [],
-            cursor_event_id: null
-          }
-        },
-        'fallback',
-        'chat-1'
-      )?.status
-    ).toBeNull();
   });
 
   it('merges streamed activity events without dropping older transcript activity', () => {

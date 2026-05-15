@@ -24,7 +24,7 @@
     selectPmaChats,
     selectPmaProgress,
     selectPmaQueue,
-    selectPmaTimeline,
+    selectPmaTranscript,
     selectWorktreeSummaries,
     selectReadMarkers
   } from '$lib/data';
@@ -36,7 +36,7 @@
     planStartAndSendChat
   } from '$lib/application/pmaChatCommands';
   import { withRuntimeBasePath as href } from '$lib/runtime/basePath';
-  import { openPmaTailEventSource, shouldUsePmaTailStream, type StreamSubscription } from '$lib/api/streaming';
+  import { openPmaTranscriptEventSource, shouldUsePmaTranscriptStream, type StreamSubscription } from '$lib/api/streaming';
   import {
     repoContextspaceRoute,
     repoRoute,
@@ -45,16 +45,10 @@
     worktreeRoute,
     worktreeTicketRoute
   } from '$lib/viewModels/routes';
-  import {
-    mapPmaRunProgress,
-    mapPmaTimelineItem,
-    mapSurfaceArtifact,
-    pmaTimelineContractFields
-  } from '$lib/viewModels/domain';
+  import { mapPmaRunProgress } from '$lib/viewModels/domain';
   import type {
     PmaChatSummary,
     PmaRunProgress,
-    PmaTimelineItem,
     SurfaceArtifact
   } from '$lib/viewModels/domain';
   import {
@@ -62,7 +56,6 @@
     buildPmaChatScopeOptions,
     buildPmaLiveActivity,
     buildManagedThreadMessagePayload,
-    buildPmaTranscriptCards,
     buildPmaStatusBar,
     chooseActiveChatId,
     composeMessageWithAttachments,
@@ -83,8 +76,7 @@
     pmaChatSurfaceFilterOptions,
     pmaChatSurfaceFilterToken,
     progressPercent,
-    optimisticUserTimelineItemFromSend,
-    reconcilePmaTimeline,
+    mapPmaTranscriptRows,
     removePendingAttachment,
     statusLabel,
     summarizeFilterCounts,
@@ -134,7 +126,7 @@
   const COMPACT_SUMMARY_PROMPT =
     'Summarize the conversation so far into a concise context block I can paste into a new thread. Include goals, constraints, decisions, and current state.';
   const PINNED_CHATS_STORAGE_KEY = 'car.webHub.pinnedChats.v1';
-  const PMA_TRANSCRIPT_TIMELINE_LIMIT = 50;
+  const PMA_TRANSCRIPT_LIMIT = 200;
 
   let readModelState = $state(readModelEntityStore.snapshot());
   let unsubscribeReadModels: (() => void) | null = null;
@@ -145,7 +137,7 @@
   let localDraftChat = $state<PmaChatSummary | null>(null);
   const persistedChats = $derived<PmaChatSummary[]>(selectPmaChats(readModelState));
   const chats = $derived<PmaChatSummary[]>(localDraftChat ? [localDraftChat, ...persistedChats] : persistedChats);
-  const timeline = $derived<PmaTimelineItem[]>(selectPmaTimeline(readModelState, activeChatId));
+  const transcriptCards = $derived<PmaCard[]>(selectPmaTranscript(readModelState, activeChatId));
   const progress = $derived<PmaRunProgress | null>(selectPmaProgress(readModelState, activeChatId));
   const artifacts = $derived<SurfaceArtifact[]>(selectPmaArtifacts(readModelState, activeChatId));
   const queuedTurns = $derived<PmaQueuedTurn[]>(selectPmaQueue(readModelState, activeChatId));
@@ -444,7 +436,7 @@
   }
   const displayedProgress = $derived(progressWithLiveElapsed(progress, clockNowMs));
   const liveActivity = $derived(buildPmaLiveActivity(displayedProgress));
-  const activeCards = $derived<PmaCard[]>(buildPmaTranscriptCards(timeline, activeChat, artifacts, displayedProgress));
+  const activeCards = $derived<PmaCard[]>(transcriptCards);
   const lastAssistantMessageCard = $derived.by<PmaCard | null>(() => {
     for (let i = activeCards.length - 1; i >= 0; i -= 1) {
       const card = activeCards[i];
@@ -644,6 +636,10 @@
       }
       return;
     }
+    // `goto('/chats')` after starting a draft is async; until the URL drops the
+    // prior `[chatId]`, this effect would otherwise reconcile back to that chat
+    // and clear the draft on the first click.
+    if (isLocalDraftChatId(activeChatId)) return;
     void activateDetailFromUrl(requestedDetail);
   });
 
@@ -1043,28 +1039,18 @@
       activeError = null;
     }
     let missingThreadError: ApiError | null = null;
-    const timelineTask = pmaApi.pma.getTimeline(chatId, { limit: PMA_TRANSCRIPT_TIMELINE_LIMIT }).then((messageResult) => {
+    const transcriptTask = pmaApi.pma.getTranscript(chatId, { limit: PMA_TRANSCRIPT_LIMIT }).then((messageResult) => {
       if (activeChatId !== chatId || refreshSeq !== activeRefreshSeq) return;
       if (messageResult.ok) {
-        readModelEntityStore.replacePmaTimeline(chatId, reconcilePmaTimeline(currentTimeline(chatId), messageResult.data));
+        replacePmaTranscriptPreservingPendingOptimistic(chatId, messageResult.data.rows);
+        if (messageResult.data.status) updateProgress(messageResult.data.status);
       } else if (isMissingManagedThreadError(messageResult.error)) {
         missingThreadError = messageResult.error;
-        readModelEntityStore.replacePmaTimeline(chatId, []);
+        readModelEntityStore.replacePmaTranscript(chatId, []);
       } else if (!options.quiet) {
         activeError = messageResult.error;
       }
     });
-    const progressTask = Promise.all([pmaApi.pma.getTail(chatId), pmaApi.pma.getStatus(chatId)]).then(
-      ([tailResult, statusResult]) => {
-        if (activeChatId !== chatId || refreshSeq !== activeRefreshSeq) return;
-        if (tailResult.ok) updateProgress(tailResult.data);
-        else if (statusResult.ok) updateProgress(statusResult.data);
-        else if (isMissingManagedThreadError(tailResult.error) || isMissingManagedThreadError(statusResult.error)) {
-          missingThreadError = isMissingManagedThreadError(tailResult.error) ? tailResult.error : statusResult.error;
-          readModelEntityStore.setPmaProgress(chatId, null);
-        } else if (!options.quiet && !activeError) activeError = tailResult.error;
-      }
-    );
     const queueTask = pmaApi.pma.getQueue(chatId).then((queueResult) => {
       if (activeChatId !== chatId || refreshSeq !== activeRefreshSeq) return;
       if (queueResult.ok) {
@@ -1075,7 +1061,7 @@
       }
     });
 
-    await Promise.all([timelineTask, progressTask, queueTask]);
+    await Promise.all([transcriptTask, queueTask]);
     if (activeChatId !== chatId || refreshSeq !== activeRefreshSeq) return;
     if (missingThreadError) {
       activeError = missingThreadError;
@@ -1083,7 +1069,7 @@
       closeStream();
       return;
     }
-    ensureTailStreamAfterSnapshot(chatId);
+    ensureTranscriptStreamAfterSnapshot(chatId);
     if (!options.quiet || loadingActive) loadingActive = false;
   }
 
@@ -1091,7 +1077,7 @@
     closeStream();
     const seedProgress = currentProgress(chatId);
     const seedChat = chats.find((chat) => chat.id === chatId) ?? null;
-    if (!shouldUsePmaTailStream(seedChat, seedProgress, currentQueueDepth(chatId))) {
+    if (!shouldUsePmaTranscriptStream(seedChat, seedProgress, currentQueueDepth(chatId))) {
       streamState = 'idle';
       streamError = null;
       return;
@@ -1099,7 +1085,7 @@
     streamState = 'connecting';
     streamError = null;
     refreshedTerminalTurnId = null;
-    streamSubscription = openPmaTailEventSource(chatId, {
+    streamSubscription = openPmaTranscriptEventSource(chatId, {
       sinceEventId: seedProgress?.lastEventId,
       sinceManagedTurnId: seedProgress?.id,
       onStatus: (status) => {
@@ -1114,27 +1100,24 @@
       onEvent: (event) => {
         if (activeChatId !== chatId) return;
         streamState = 'connected';
-        if (event.kind === 'timeline') {
-          const item = mapPmaTimelineItem(event.payload);
-          readModelEntityStore.replacePmaTimeline(chatId, reconcilePmaTimeline(currentTimeline(chatId), [item]));
-          if (item.kind === 'user_message') dropOptimisticPlaceholders();
+        if (event.kind === 'transcript_snapshot') {
+          const rows = mapPmaTranscriptRows(event.payload.rows);
+          replacePmaTranscriptPreservingPendingOptimistic(chatId, rows);
+          const status = event.payload.status;
+          if (status && typeof status === 'object' && !Array.isArray(status)) updateProgress(mapPmaRunProgress(status as JsonRecord));
           return;
         }
-        if (event.kind === 'tail') {
-          // Backend emits each new progress item as its own `tail` SSE frame
-          // mid-stream. The `progress` frame that follows each poll cycle
-          // does NOT carry the events list — only metadata (status/phase/
-          // elapsed). Without merging tail frames here the chat would stay
-          // empty until a full refresh fires on terminal, which is what
-          // made live commentary/tool-call updates appear only at the end.
-          appendLiveProgressEvent(chatId, event.payload);
+        if (event.kind === 'transcript_append') {
+          const rows = mapPmaTranscriptRows(event.payload.rows);
+          readModelEntityStore.upsertPmaTranscriptCards(chatId, rows);
           return;
         }
-        if (event.kind === 'progress' || event.kind === 'state') {
-          const nextProgress = mapPmaRunProgress(event.payload);
+        if (event.kind === 'transcript_patch') {
+          const status = event.payload.status;
+          if (!status || typeof status !== 'object' || Array.isArray(status)) return;
+          const nextProgress = mapPmaRunProgress(status as JsonRecord);
           updateProgress(nextProgress);
           if (
-            event.kind === 'progress' &&
             nextProgress.terminal &&
             nextProgress.id &&
             refreshedTerminalTurnId !== nextProgress.id
@@ -1142,25 +1125,10 @@
             refreshedTerminalTurnId = nextProgress.id;
             scheduleActiveRefresh(chatId, 700);
           }
-          // Only honor streamShouldClose from `progress` events. The `state`
-          // frame is the initial snapshot; a closed-from-state would tear the
-          // subscription down before any new turn can stream.
-          if (event.kind === 'progress' && nextProgress.streamShouldClose) {
+          if (nextProgress.streamShouldClose) {
             closeStream();
             return;
           }
-        }
-        if (event.kind === 'message') {
-          const payload = event.payload && typeof event.payload === 'object' && !Array.isArray(event.payload)
-            ? (event.payload as JsonRecord)
-            : null;
-          if (payload && payload.contract_version === 'managed_thread_timeline.v2') {
-            const item = mapPmaTimelineItem(payload);
-            readModelEntityStore.replacePmaTimeline(chatId, reconcilePmaTimeline(currentTimeline(chatId), [item]));
-            if (item.kind === 'user_message') dropOptimisticPlaceholders();
-          }
-          scheduleActiveRefresh(chatId, 250);
-          return;
         }
       },
       onError: () => {
@@ -1176,11 +1144,11 @@
     });
   }
 
-  function ensureTailStreamAfterSnapshot(chatId: string): void {
+  function ensureTranscriptStreamAfterSnapshot(chatId: string): void {
     if (activeChatId !== chatId || streamSubscription) return;
     const seedProgress = currentProgress(chatId);
     const seedChat = chats.find((chat) => chat.id === chatId) ?? null;
-    if (shouldUsePmaTailStream(seedChat, seedProgress, currentQueueDepth(chatId))) connectStream(chatId);
+    if (shouldUsePmaTranscriptStream(seedChat, seedProgress, currentQueueDepth(chatId))) connectStream(chatId);
   }
 
   function scheduleActiveRefresh(chatId: string, delayMs = 600): void {
@@ -1242,22 +1210,6 @@
     }
   }
 
-  function appendLiveProgressEvent(chatId: string, payload: Record<string, unknown>): void {
-    if (!payload || typeof payload !== 'object') return;
-    const artifact = mapSurfaceArtifact(payload);
-    if (!artifact.id) return;
-    const previous = currentProgress(chatId);
-    if (!previous) return;
-    if (previous.events.some((ev) => ev.id === artifact.id)) return;
-    const nowMs = Date.now();
-    readModelEntityStore.setPmaProgress(chatId, {
-      ...previous,
-      elapsedSeconds: progressElapsedWithLiveWall(previous, nowMs),
-      lastEventAt: artifact.createdAt ?? previous.lastEventAt,
-      events: [...previous.events, artifact]
-    });
-  }
-
   function progressWithLiveElapsed(value: PmaRunProgress | null, nowMs: number): PmaRunProgress | null {
     if (!value) return value;
     const elapsedSeconds = progressElapsedWithLiveWall(value, nowMs);
@@ -1267,12 +1219,50 @@
   function hasCachedDetail(chatId: string): boolean {
     const state = readModelEntityStore.snapshot();
     return Boolean(
-      state.pmaTimelines[chatId]?.order.length ||
+      state.pmaTranscripts[chatId]?.order.length ||
       state.pmaProgress[chatId] ||
       state.pmaQueues[chatId]?.length ||
       state.timelines[chatId]?.order.length ||
       state.chatDetails[chatId]?.thread
     );
+  }
+
+  function replacePmaTranscriptPreservingPendingOptimistic(chatId: string, rows: PmaCard[]): void {
+    const transcript = readModelEntityStore.snapshot().pmaTranscripts[chatId];
+    if (!transcript) {
+      readModelEntityStore.replacePmaTranscript(chatId, rows);
+      return;
+    }
+    const retainedOptimistic = transcript.order
+      .filter((id) => id.startsWith('optimistic:'))
+      .map((id) => transcript.cardsById[id])
+      .filter((card): card is PmaCard => Boolean(card))
+      .filter((card) => !transcriptRowsConfirmOptimistic(rows, card));
+    readModelEntityStore.replacePmaTranscript(chatId, [...rows, ...retainedOptimistic]);
+  }
+
+  function transcriptRowsConfirmOptimistic(rows: PmaCard[], optimistic: PmaCard): boolean {
+    if (optimistic.kind !== 'message' || optimistic.message.role !== 'user') return true;
+    const optimisticCorrelationId = transcriptCardCorrelationId(optimistic);
+    if (!optimisticCorrelationId) return false;
+    return rows.some((row) => {
+      if (row.id.startsWith('optimistic:')) return false;
+      if (row.kind !== 'message' || row.message.role !== 'user') return false;
+      return transcriptCardCorrelationId(row) === optimisticCorrelationId;
+    });
+  }
+
+  function transcriptCardCorrelationId(card: PmaCard): string | null {
+    if (card.kind !== 'message') return null;
+    const raw = card.message.raw;
+    const direct = raw.correlation_id ?? raw.client_turn_id;
+    if (typeof direct === 'string' && direct.trim()) return direct.trim();
+    const identity = raw.identity;
+    if (identity && typeof identity === 'object' && !Array.isArray(identity)) {
+      const value = (identity as Record<string, unknown>).correlation_id;
+      if (typeof value === 'string' && value.trim()) return value.trim();
+    }
+    return null;
   }
 
   function activeDetailLoadResult(chatId: string): ReadModelLoaderResult | null {
@@ -1296,10 +1286,6 @@
 
   function hasChatIndexProjection(state: typeof readModelState): boolean {
     return Boolean(state.chatIndexCursor || state.chatOrder.length > 0);
-  }
-
-  function currentTimeline(chatId: string): PmaTimelineItem[] {
-    return selectPmaTimeline(readModelEntityStore.snapshot(), chatId);
   }
 
   function currentProgress(chatId: string): PmaRunProgress | null {
@@ -1334,10 +1320,6 @@
         }
       }
     ]);
-  }
-
-  function dropOptimisticPlaceholders(): void {
-    if (activeChatId) readModelEntityStore.removeOptimisticPmaTimelineItems(activeChatId);
   }
 
   function retryStream(): void {
@@ -1545,27 +1527,35 @@
     const optimisticChatId = activeChatId;
     const optimisticId = `optimistic:user:${Date.now()}:${Math.random().toString(36).slice(2, 8)}`;
     const optimisticTimestamp = new Date().toISOString();
-    const optimisticPlaceholder: PmaTimelineItem = {
+    const optimisticPlaceholder: PmaCard = {
+      kind: 'message',
       id: optimisticId,
-      kind: 'user_message',
+      turnId: null,
       orderKey: `optimistic|${optimisticTimestamp}|${optimisticId}`,
       timestamp: optimisticTimestamp,
-      chatId: optimisticChatId,
-      turnId: '',
-      status: null,
-      payload: {
+      message: {
+        id: optimisticId,
+        chatId: optimisticChatId,
+        role: 'user',
         text: draftSnapshot,
-        text_preview: draftSnapshot.slice(0, 240),
-        attachments: attachmentsSnapshot.map((att) => ({
+        createdAt: optimisticTimestamp,
+        status: null,
+        artifacts: attachmentsSnapshot.map((att) => ({
           id: att.id,
           kind: att.kind,
           title: att.title,
+          summary: null,
           url: att.url,
-          size_label: att.sizeLabel
-        }))
-      },
-      ...pmaTimelineContractFields(optimisticId, { correlationId: optimisticId }),
-      raw: { optimistic: true }
+          createdAt: optimisticTimestamp,
+          raw: { size_label: att.sizeLabel, uploadedName: att.uploadedName }
+        })),
+        raw: {
+          optimistic: true,
+          client_turn_id: optimisticId,
+          correlation_id: optimisticId,
+          identity: { correlation_id: optimisticId }
+        }
+      }
     };
     readModelEntityStore.optimisticSend(
       optimisticChatId,
@@ -1580,18 +1570,40 @@
       },
       optimisticId
     );
-    readModelEntityStore.replacePmaTimeline(
-      optimisticChatId,
-      reconcilePmaTimeline(currentTimeline(optimisticChatId), [optimisticPlaceholder])
-    );
+    readModelEntityStore.upsertPmaTranscriptCards(optimisticChatId, [optimisticPlaceholder]);
     draft = '';
     pendingAttachments = [];
     const composerVersionAtClear = composerEditVersion;
     sending = true;
     composeError = null;
 
-    const removeOptimistic = () => {
-      readModelEntityStore.removeOptimisticPmaTimelineItems(optimisticChatId);
+    const moveOptimisticToCommittedChat = (committedChatId: string) => {
+      if (committedChatId === optimisticChatId) return;
+      readModelEntityStore.upsertPmaTranscriptCards(committedChatId, [
+        {
+          ...optimisticPlaceholder,
+          message: {
+            ...optimisticPlaceholder.message,
+            chatId: committedChatId
+          }
+        }
+      ]);
+      readModelEntityStore.removeOptimisticPmaTranscriptCards(optimisticChatId);
+    };
+    const transcriptHasBackendUserRow = (chatId: string) => {
+      const transcript = readModelEntityStore.snapshot().pmaTranscripts[chatId];
+      if (!transcript) return false;
+      return transcript.order.some((id) => {
+        if (id.startsWith('optimistic:')) return false;
+        const card = transcript.cardsById[id];
+        if (!card || card.kind !== 'message' || card.message.role !== 'user') return false;
+        return transcriptCardCorrelationId(card) === optimisticId;
+      });
+    };
+    const removeOptimistic = (chatId = optimisticChatId, options: { requireBackendRow?: boolean } = {}) => {
+      if (options.requireBackendRow && !transcriptHasBackendUserRow(chatId)) return false;
+      readModelEntityStore.removeOptimisticPmaTranscriptCards(chatId);
+      return true;
     };
     const restoreDraft = () => {
       removeOptimistic();
@@ -1671,34 +1683,14 @@
         localDraftChat = null;
         activeChatId = committedChatId;
         detailMode = 'detail';
+        moveOptimisticToCommittedChat(committedChatId);
         // Must complete before `sending` clears: the URL effect treats no `chatId`
         // segment as "list mode" unless we're still sending or on a local draft id.
         await syncDetailUrl(committedChatId);
       }
       await invalidateChatMutation(committedChatId);
-      const optimisticFromBackend = optimisticUserTimelineItemFromSend(
-        result.data.raw,
-        draftSnapshot,
-        committedChatId
-      );
-      if (optimisticFromBackend) {
-        readModelEntityStore.replacePmaTimeline(
-          committedChatId,
-          reconcilePmaTimeline(currentTimeline(committedChatId), [optimisticFromBackend])
-        );
-        readModelEntityStore.reconcileOptimisticTimelineItem(committedChatId, optimisticId, {
-          itemId: optimisticFromBackend.id,
-          kind: 'user_message',
-          role: 'user',
-          createdAt: optimisticFromBackend.timestamp ?? optimisticTimestamp,
-          text: draftSnapshot,
-          artifactIds: [],
-          clientMessageId: optimisticId,
-          backendMessageId: optimisticFromBackend.turnId || undefined
-        });
-      }
       await refreshActive(committedChatId, { quiet: true });
-      removeOptimistic();
+      removeOptimistic(committedChatId, { requireBackendRow: true });
       if (activeChat?.agentId === 'hermes' && profileForSend.trim()) {
         const stamped = profileForSend.trim();
         const chat = chats.find((row) => row.id === committedChatId);
@@ -1766,17 +1758,6 @@
     );
     if (result.ok) {
       await invalidateChatMutation(chatId);
-      const optimisticFromBackend = optimisticUserTimelineItemFromSend(
-        result.data.raw,
-        turn.prompt,
-        chatId
-      );
-      if (optimisticFromBackend) {
-        readModelEntityStore.replacePmaTimeline(
-          chatId,
-          reconcilePmaTimeline(currentTimeline(chatId), [optimisticFromBackend])
-        );
-      }
       await refreshActive(chatId, { quiet: true });
     } else {
       composeError = result.error;

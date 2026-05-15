@@ -97,6 +97,30 @@ async def test_refresh_does_not_duplicate_items(tmp_path: Path) -> None:
 
 
 @pytest.mark.anyio
+async def test_replay_pending_does_not_duplicate_live_enqueued_items(
+    tmp_path: Path,
+) -> None:
+    lane_id = "pma:default"
+    queue = PmaQueue(tmp_path)
+
+    item, _ = await queue.enqueue(
+        lane_id,
+        "live-key-1",
+        {"message": "hello"},
+    )
+
+    replayed = await queue.replay_pending(lane_id)
+    assert replayed == 0
+
+    first = await queue.dequeue(lane_id)
+    assert first is not None
+    assert first.item_id == item.item_id
+
+    second = await queue.dequeue(lane_id)
+    assert second is None
+
+
+@pytest.mark.anyio
 async def test_replay_pending_recovers_running_item_after_restart(
     tmp_path: Path,
 ) -> None:

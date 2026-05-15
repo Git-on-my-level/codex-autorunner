@@ -7,11 +7,10 @@ export type SseEvent<T = unknown> = {
   retry: number | null;
 };
 
-export type PmaTailStreamEvent =
-  | { kind: 'state'; payload: Record<string, unknown>; lastEventId: string | null }
-  | { kind: 'tail'; payload: Record<string, unknown>; lastEventId: string | null }
-  | { kind: 'timeline'; payload: Record<string, unknown>; lastEventId: string | null }
-  | { kind: 'progress'; payload: Record<string, unknown>; lastEventId: string | null }
+export type PmaTranscriptStreamEvent =
+  | { kind: 'transcript_snapshot'; payload: Record<string, unknown>; lastEventId: string | null }
+  | { kind: 'transcript_append'; payload: Record<string, unknown>; lastEventId: string | null }
+  | { kind: 'transcript_patch'; payload: Record<string, unknown>; lastEventId: string | null }
   | { kind: 'message'; payload: unknown; lastEventId: string | null };
 
 export type PmaChatStreamEvent =
@@ -32,8 +31,8 @@ export type FlowRunStreamEvent = {
   payload: Record<string, unknown>;
 };
 
-export type JsonStreamOptions = {
-  onEvent: (event: PmaTailStreamEvent) => void;
+export type TranscriptStreamOptions = {
+  onEvent: (event: PmaTranscriptStreamEvent) => void;
   onError?: (error: Event) => void;
   onStatus?: (status: 'connecting' | 'connected' | 'interrupted' | 'closed') => void;
   sinceEventId?: string | number | null;
@@ -41,7 +40,7 @@ export type JsonStreamOptions = {
   withCredentials?: boolean;
 };
 
-export type PmaTailStreamUseState = {
+export type PmaTranscriptStreamUseState = {
   status?: string | null;
   queueDepth?: number | null;
 };
@@ -92,12 +91,11 @@ export function parseJsonSseFrame(frame: string): SseEvent<unknown> | null {
   }
 }
 
-export function normalizePmaTailStreamEvent(event: SseEvent<unknown>): PmaTailStreamEvent {
+export function normalizePmaTranscriptStreamEvent(event: SseEvent<unknown>): PmaTranscriptStreamEvent {
   const payload = asRecord(event.data);
-  if (event.event === 'state') return { kind: 'state', payload, lastEventId: event.id };
-  if (event.event === 'tail') return { kind: 'tail', payload, lastEventId: event.id };
-  if (event.event === 'timeline') return { kind: 'timeline', payload, lastEventId: event.id };
-  if (event.event === 'progress') return { kind: 'progress', payload, lastEventId: event.id };
+  if (event.event === 'transcript.snapshot') return { kind: 'transcript_snapshot', payload, lastEventId: event.id };
+  if (event.event === 'transcript.append') return { kind: 'transcript_append', payload, lastEventId: event.id };
+  if (event.event === 'transcript.patch') return { kind: 'transcript_patch', payload, lastEventId: event.id };
   return { kind: 'message', payload: event.data, lastEventId: event.id };
 }
 
@@ -118,9 +116,9 @@ export function normalizeChatSurfaceStreamEvent(event: SseEvent<unknown>): ChatS
   return { kind: 'message', payload: event.data, lastEventId: event.id };
 }
 
-export function openPmaTailEventSource(
+export function openPmaTranscriptEventSource(
   managedThreadId: string,
-  options: JsonStreamOptions,
+  options: TranscriptStreamOptions,
   basePath = runtimeBasePath()
 ): StreamSubscription {
   const encoded = encodeURIComponent(managedThreadId);
@@ -132,7 +130,7 @@ export function openPmaTailEventSource(
   let lastManagedTurnId: string | null = optionalString(options.sinceManagedTurnId);
   const handle = (message: MessageEvent) => {
     attempt = 0;
-    const event = normalizePmaTailStreamEvent({
+    const event = normalizePmaTranscriptStreamEvent({
       id: message.lastEventId || null,
       event: message.type || 'message',
       data: parseJson(message.data),
@@ -156,13 +154,12 @@ export function openPmaTailEventSource(
       if (lastManagedTurnId) params.set('since_managed_turn_id', lastManagedTurnId);
     }
     const cursorQuery = params.size > 0 ? `?${params.toString()}` : '';
-    source = new EventSource(withRuntimeBasePath(`/hub/pma/threads/${encoded}/tail/events${cursorQuery}`, basePath), {
+    source = new EventSource(withRuntimeBasePath(`/hub/pma/threads/${encoded}/transcript/events${cursorQuery}`, basePath), {
       withCredentials: options.withCredentials
     });
-    source.addEventListener('state', handle);
-    source.addEventListener('tail', handle);
-    source.addEventListener('timeline', handle);
-    source.addEventListener('progress', handle);
+    source.addEventListener('transcript.snapshot', handle);
+    source.addEventListener('transcript.append', handle);
+    source.addEventListener('transcript.patch', handle);
     source.addEventListener('message', handle);
     source.addEventListener('error', (event) => {
       if (closed) return;
@@ -189,13 +186,13 @@ export function openPmaTailEventSource(
   };
 }
 
-export function shouldUsePmaTailStream(
-  chat: PmaTailStreamUseState | null | undefined,
-  progress: PmaTailStreamUseState | null | undefined,
+export function shouldUsePmaTranscriptStream(
+  chat: PmaTranscriptStreamUseState | null | undefined,
+  progress: PmaTranscriptStreamUseState | null | undefined,
   queuedTurns = 0
 ): boolean {
   if (queuedTurns > 0 || (progress?.queueDepth ?? 0) > 0) return true;
-  return isActivePmaTailStatus(progress?.status) || isActivePmaTailStatus(chat?.status);
+  return isActivePmaTranscriptStatus(progress?.status) || isActivePmaTranscriptStatus(chat?.status);
 }
 
 export function openPmaChatEventSource(
@@ -356,13 +353,23 @@ function optionalString(value: unknown): string | null {
   return null;
 }
 
-function isActivePmaTailStatus(status: unknown): boolean {
+function isActivePmaTranscriptStatus(status: unknown): boolean {
   return status === 'running' || status === 'waiting' || status === 'blocked';
 }
 
 function managedTurnIdFromPayload(payload: unknown): string | null {
   const data = asRecord(payload);
-  return optionalString(data.managed_turn_id ?? data.managedTurnId);
+  const direct = optionalString(data.managed_turn_id ?? data.managedTurnId);
+  if (direct) return direct;
+  const status = asRecord(data.status);
+  const statusTurn = optionalString(status.managed_turn_id ?? status.managedTurnId);
+  if (statusTurn) return statusTurn;
+  const rows = Array.isArray(data.rows) ? data.rows : [];
+  for (const row of rows) {
+    const rowTurn = optionalString(asRecord(row).turn_id ?? asRecord(row).turnId);
+    if (rowTurn) return rowTurn;
+  }
+  return null;
 }
 
 function readCursor(key: string): string | null {

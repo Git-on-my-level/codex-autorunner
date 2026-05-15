@@ -74,7 +74,6 @@ describe('/chats route load', () => {
     expect(result.activeDetail?.status).toBe('fetched');
     expect(client.chatDetail).toHaveBeenCalledWith('chat-2', 50);
     expect(selectChatDetailView(store.snapshot(), 'chat-2').thread?.title).toBe('Chat detail');
-    expect(store.snapshot().pmaTimelines['chat-2']?.order).toEqual(['item-1']);
   });
 
   it('returns an error handle when active chat detail fetch fails', async () => {

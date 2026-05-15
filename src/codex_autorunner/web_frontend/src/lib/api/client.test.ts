@@ -342,7 +342,7 @@ describe('API client error handling', () => {
     expect(result.ok).toBe(true);
   });
 
-  it('maps PMA canonical timeline payloads with stable item IDs', async () => {
+  it('maps PMA canonical diagnostic timeline payloads with stable item IDs', async () => {
     const fetcher = vi.fn(async () =>
       Response.json({
         contract_version: 'managed_thread_timeline.v2',
@@ -372,7 +372,7 @@ describe('API client error handling', () => {
     ) as unknown as typeof fetch;
     const client = new PmaApiClient(fetcher);
 
-    const result = await client.pma.getTimeline('thread-1');
+    const result = await client.pma.diagnostics.getTimeline('thread-1');
 
     expect(fetcher).toHaveBeenCalledWith('/hub/pma/threads/thread-1/timeline?limit=50', expect.any(Object));
     expect(result.ok).toBe(true);
@@ -386,7 +386,7 @@ describe('API client error handling', () => {
     }
   });
 
-  it('maps v2 timeline items with canonical identity and provenance', async () => {
+  it('maps v2 diagnostic timeline items with canonical identity and provenance', async () => {
     const fetcher = vi.fn(async () =>
       Response.json({
         contract_version: 'managed_thread_timeline.v2',
@@ -462,7 +462,7 @@ describe('API client error handling', () => {
     ) as unknown as typeof fetch;
     const client = new PmaApiClient(fetcher);
 
-    const result = await client.pma.getTimeline('thread-1');
+    const result = await client.pma.diagnostics.getTimeline('thread-1');
 
     expect(result.ok).toBe(true);
     if (result.ok) {
@@ -485,7 +485,7 @@ describe('API client error handling', () => {
     }
   });
 
-  it('requests PMA timelines with an explicit bounded limit', async () => {
+  it('requests PMA diagnostic timelines with an explicit bounded limit', async () => {
     const fetcher = vi.fn(async () =>
       Response.json({
         contract_version: 'managed_thread_timeline.v2',
@@ -494,9 +494,73 @@ describe('API client error handling', () => {
     ) as unknown as typeof fetch;
     const client = new PmaApiClient(fetcher);
 
-    await client.pma.getTimeline('thread-1', { limit: 25 });
+    await client.pma.diagnostics.getTimeline('thread-1', { limit: 25 });
 
     expect(fetcher).toHaveBeenCalledWith('/hub/pma/threads/thread-1/timeline?limit=25', expect.any(Object));
+  });
+
+  it('requests PMA transcript projections with backend-owned rows', async () => {
+    const fetcher = vi.fn(async () =>
+      Response.json({
+        contract_version: 'managed_thread_transcript.v1',
+        rows: [
+          {
+            kind: 'message',
+            id: 'turn:turn-1:user',
+            turn_id: 'turn-1',
+            order_key: '001',
+            timestamp: '2026-05-15T01:00:00Z',
+            message: {
+              id: 'turn:turn-1:user',
+              chat_id: 'thread-1',
+              role: 'user',
+              text: 'hello transcript',
+              created_at: '2026-05-15T01:00:00Z',
+              status: null,
+              artifacts: [],
+              raw: {}
+            }
+          }
+        ],
+        status: null
+      })
+    ) as unknown as typeof fetch;
+    const client = new PmaApiClient(fetcher);
+
+    const result = await client.pma.getTranscript('thread-1', { limit: 25 });
+
+    expect(fetcher).toHaveBeenCalledWith('/hub/pma/threads/thread-1/transcript?limit=25', expect.any(Object));
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.data.rows[0]).toMatchObject({
+        kind: 'message',
+        id: 'turn:turn-1:user',
+        message: { role: 'user', text: 'hello transcript' }
+      });
+    }
+  });
+
+  it('requests PMA tail projections through diagnostics-only client methods', async () => {
+    const fetcher = vi.fn(async () =>
+      Response.json({
+        managed_turn_id: 'turn-1',
+        managed_thread_id: 'thread-1',
+        status: 'running'
+      })
+    ) as unknown as typeof fetch;
+    const client = new PmaApiClient(fetcher);
+
+    const result = await client.pma.diagnostics.getTail('thread-1');
+
+    expect(fetcher).toHaveBeenCalledWith('/hub/pma/threads/thread-1/tail', expect.any(Object));
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.data).toMatchObject({
+        id: 'turn-1',
+        chatId: 'thread-1',
+        status: 'running'
+      });
+    }
   });
 
   it('uploads PMA inbox files with multipart form data', async () => {

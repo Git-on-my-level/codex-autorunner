@@ -766,12 +766,19 @@ async def execute_opencode(
 
     if output_result.error:
         raise HTTPException(status_code=502, detail=output_result.error)
-    timeline_events.append(
-        Completed(timestamp=now_iso(), final_message=output_result.text)
+    assistant_text = (
+        str(output_result.text or "").strip()
+        or timeline_state.best_assistant_text().strip()
     )
+    if not assistant_text:
+        raise HTTPException(
+            status_code=502,
+            detail="OpenCode completed without assistant output",
+        )
+    timeline_events.append(Completed(timestamp=now_iso(), final_message=assistant_text))
     return {
         "status": "ok",
-        "message": output_result.text,
+        "message": assistant_text,
         "thread_id": session_id,
         "backend_thread_id": session_id,
         "turn_id": build_turn_id(session_id),

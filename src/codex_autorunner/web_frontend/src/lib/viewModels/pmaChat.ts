@@ -26,8 +26,6 @@ export const PMA_MEMORY_LIST_ID = '__memory__';
 
 export const PMA_CHAT_FILTER_ORDER: PmaChatStatusFilter[] = ['all', 'waiting', 'active', 'unread', 'archived'];
 
-const PMA_TIMELINE_RECONCILE_LIMIT = 2_000;
-
 const INTERNAL_MESSENGER_SURFACE_KINDS = new Set([
   'managed_thread',
   'web',
@@ -211,6 +209,12 @@ export type PmaToolCallCard = {
   state: 'started' | 'completed' | 'failed' | 'unknown';
   eventIds: string[];
   source?: SurfaceArtifact;
+};
+
+export type PmaTranscriptSnapshot = {
+  rows: PmaCard[];
+  status: PmaRunProgress | null;
+  raw: Record<string, unknown>;
 };
 
 type CanonicalProgressItem = {
@@ -959,102 +963,131 @@ function artifactKeysFor(artifact: SurfaceArtifact): string[] {
   return [...keys];
 }
 
-export function buildPmaTranscriptCards(
-  timeline: PmaTimelineItem[],
-  chat: PmaChatSummary | null,
-  artifacts: SurfaceArtifact[],
-  progress: PmaRunProgress | null
-): PmaCard[] {
-  const normalizedTimeline = suppressDuplicateTimelineDeliveries(timeline);
-  const timelineCards = coalesceSequentialIntermediateTraceCards(
-    buildPmaCards(normalizedTimeline, chat, artifacts)
-  );
-  const activityCards = shouldSupplementWithLiveActivity(timelineCards, progress)
-    ? buildPmaActivityCards(progress?.events ?? [], { fallbackTurnId: progress?.id ?? null })
-    : [];
-  return summarizeCompletedTurnActivity(
-    mergePmaTimelineAndActivityCards(
-      timelineCards,
-      activityCards
-    ),
-    progress
-  );
-}
-
-export function reconcilePmaTimeline(
-  existing: PmaTimelineItem[],
-  incoming: PmaTimelineItem[],
-  limit = PMA_TIMELINE_RECONCILE_LIMIT
-): PmaTimelineItem[] {
-  if (!incoming.length) return existing;
-  const canonicalUserMessages = incoming.filter((item) => item.kind === 'user_message' && !item.id.startsWith('optimistic:'));
-  const byId = new Map(
-    existing
-      .filter((item) => !isSupersededOptimisticUserMessage(item, canonicalUserMessages))
-      .map((item) => [canonicalTimelineIdentityKey(item), item])
-  );
-  for (const item of incoming) {
-    const key = canonicalTimelineIdentityKey(item);
-    byId.set(key, { ...byId.get(key), ...item, payload: { ...byId.get(key)?.payload, ...item.payload } });
-  }
-  return trimPmaTimeline([...byId.values()].sort(compareTimelineItems), limit);
-}
-
-function trimPmaTimeline(items: PmaTimelineItem[], limit: number): PmaTimelineItem[] {
-  if (!Number.isFinite(limit) || limit <= 0 || items.length <= limit) return items;
-  const trimmed = items.slice(-limit);
-  const firstUserMessage = items.find((item) => item.kind === 'user_message');
-  if (!firstUserMessage || trimmed.some((item) => item.id === firstUserMessage.id)) return trimmed;
-  return [firstUserMessage, ...trimmed.slice(1)].sort(compareTimelineItems);
-}
-
-function isSupersededOptimisticUserMessage(item: PmaTimelineItem, canonicalUserMessages: PmaTimelineItem[]): boolean {
-  if (!item.id.startsWith('optimistic:') || item.kind !== 'user_message') return false;
-  const optimisticCorrelationId = item.identity.correlationId;
-  const optimisticTimelineItemId = item.identity.timelineItemId;
-  return canonicalUserMessages.some((canonical) => {
-    if (canonical.chatId !== item.chatId) return false;
-    return Boolean(
-      (optimisticCorrelationId && canonical.identity.correlationId === optimisticCorrelationId) ||
-        (optimisticTimelineItemId && canonical.identity.timelineItemId === optimisticTimelineItemId)
-    );
-  });
-}
-
-export function optimisticUserTimelineItemFromSend(
+export function mapPmaTranscriptSnapshot(
   raw: Record<string, unknown>,
-  fallbackText: string,
-  fallbackChatId: string
-): PmaTimelineItem | null {
-  const identity = asRecord(raw.identity);
-  const provenance = asRecord(raw.provenance);
-  const timelineItemId = stringValue(identity.timeline_item_id);
-  const correlationId = stringValue(identity.correlation_id);
-  const turnId = stringValue(raw.managed_turn_id);
-  const text = stringValue(raw.delivered_message) || stringValue(raw.prompt) || fallbackText;
-  if (!timelineItemId || !text.trim() || !correlationId) return null;
-  const chatId = stringValue(raw.managed_thread_id) || fallbackChatId;
-  const timestamp = new Date().toISOString();
+  mapProgress: (raw: Record<string, unknown>) => PmaRunProgress
+): PmaTranscriptSnapshot {
   return {
-    id: timelineItemId,
-    kind: 'user_message',
-    orderKey: `optimistic|${timestamp}|${timelineItemId}`,
-    timestamp,
-    chatId,
-    turnId: turnId || null,
-    status: normalizeOptionalWorkStatus(raw.execution_state ?? raw.status),
-    payload: {
-      text,
-      text_preview: text.slice(0, 240),
-      attachments: Array.isArray(raw.attachments) ? raw.attachments : []
-    },
-    ...pmaTimelineContractFields(timelineItemId, {
-      sourceEventIds: unknownArray(provenance.source_event_ids),
-      progressEventIds: unknownArray(provenance.progress_event_ids),
-      cursorEventId: stringValue(provenance.cursor_event_id) || null,
-      correlationId
-    }),
-    raw: { optimistic: true, ...raw }
+    rows: asRecordArray(raw.rows).map(mapPmaTranscriptRow).filter((row): row is PmaCard => row !== null),
+    status: raw.status && typeof raw.status === 'object' && !Array.isArray(raw.status)
+      ? mapProgress(raw.status as Record<string, unknown>)
+      : null,
+    raw
+  };
+}
+
+export function mapPmaTranscriptRows(rawRows: unknown): PmaCard[] {
+  return asRecordArray(rawRows).map(mapPmaTranscriptRow).filter((row): row is PmaCard => row !== null);
+}
+
+function mapPmaTranscriptRow(raw: Record<string, unknown>): PmaCard | null {
+  const kind = stringValue(raw.kind);
+  const id = stringValue(raw.id);
+  if (!kind || !id) return null;
+  if (kind === 'message') {
+    const message = asRecord(raw.message);
+    const role = stringValue(message.role) === 'user' ? 'user' : 'assistant';
+    const clientTurnId = nullableString(raw.client_turn_id ?? message.client_turn_id);
+    const correlationId = nullableString(raw.correlation_id ?? message.correlation_id);
+    const identity = asRecord(raw.identity ?? message.identity);
+    return {
+      kind: 'message',
+      id,
+      turnId: nullableString(raw.turn_id),
+      orderKey: stringValue(raw.order_key),
+      timestamp: nullableString(raw.timestamp),
+      message: {
+        id: stringValue(message.id) || id,
+        chatId: stringValue(message.chat_id),
+        role,
+        text: stringValue(message.text),
+        createdAt: nullableString(message.created_at),
+        status: normalizeOptionalWorkStatus(message.status),
+        artifacts: asRecordArray(message.artifacts).map(mapTranscriptArtifact),
+        raw: {
+          ...asRecord(message.raw),
+          client_turn_id: clientTurnId,
+          correlation_id: correlationId,
+          identity
+        }
+      }
+    };
+  }
+  if (kind === 'intermediate') {
+    return {
+      kind: 'intermediate',
+      id,
+      title: stringValue(raw.title) || 'Update',
+      text: stringValue(raw.text),
+      eventIds: asStringArray(raw.event_ids),
+      progressSourceIds: asStringArray(raw.progress_source_ids),
+      detail: nullableString(raw.detail),
+      turnId: nullableString(raw.turn_id),
+      orderKey: stringValue(raw.order_key),
+      timestamp: nullableString(raw.timestamp)
+    };
+  }
+  if (kind === 'tool_group') {
+    return {
+      kind: 'tool_group',
+      id,
+      tools: asRecordArray(raw.tools).map(mapTranscriptToolCard),
+      turnId: nullableString(raw.turn_id),
+      orderKey: stringValue(raw.order_key),
+      timestamp: nullableString(raw.timestamp)
+    };
+  }
+  if (kind === 'approval') {
+    return {
+      kind: 'approval',
+      id,
+      title: stringValue(raw.title) || 'Approval requested',
+      summary: stringValue(raw.summary),
+      detail: nullableString(raw.detail),
+      turnId: nullableString(raw.turn_id),
+      orderKey: stringValue(raw.order_key),
+      timestamp: nullableString(raw.timestamp)
+    };
+  }
+  if (kind === 'lifecycle') {
+    return {
+      kind: 'lifecycle',
+      id,
+      title: stringValue(raw.title) || 'Update',
+      text: stringValue(raw.text),
+      detail: nullableString(raw.detail),
+      turnId: nullableString(raw.turn_id),
+      orderKey: stringValue(raw.order_key),
+      timestamp: nullableString(raw.timestamp)
+    };
+  }
+  if (kind === 'artifact') {
+    return { kind: 'artifact', id, artifact: mapTranscriptArtifact(asRecord(raw.artifact)) };
+  }
+  return null;
+}
+
+function mapTranscriptToolCard(raw: Record<string, unknown>): PmaToolCallCard {
+  const state = stringValue(raw.state);
+  return {
+    id: stringValue(raw.id) || 'tool',
+    title: stringValue(raw.title) || 'Tool call',
+    summary: nullableString(raw.summary),
+    detail: nullableString(raw.detail),
+    state: state === 'completed' || state === 'failed' || state === 'unknown' ? state : 'started',
+    eventIds: asStringArray(raw.event_ids)
+  };
+}
+
+function mapTranscriptArtifact(raw: Record<string, unknown>): SurfaceArtifact {
+  return {
+    id: stringValue(raw.id) || stringValue(raw.artifact_id) || stringValue(raw.title) || 'artifact',
+    kind: stringValue(raw.kind) as SurfaceArtifact['kind'],
+    title: stringValue(raw.title) || stringValue(raw.name) || 'Artifact',
+    summary: nullableString(raw.summary),
+    url: nullableString(raw.url),
+    createdAt: nullableString(raw.created_at),
+    raw
   };
 }
 
@@ -1171,163 +1204,6 @@ function findMergeableIntermediate(
     continue;
   }
   return null;
-}
-
-/** Leading digits of PMA timeline `order_key` (`{sequence:08d}|…`), or an 8-digit test shorthand. */
-function parseLeadingTimelineSequence(orderKey: string): number | null {
-  const trimmed = orderKey.trim();
-  const prefixed = /^(\d{8})\|/.exec(trimmed);
-  if (prefixed) {
-    const value = Number.parseInt(prefixed[1], 10);
-    return Number.isFinite(value) ? value : null;
-  }
-  if (/^\d{8}$/.test(trimmed)) {
-    const value = Number.parseInt(trimmed, 10);
-    return Number.isFinite(value) ? value : null;
-  }
-  return null;
-}
-
-function turnUserTimelineSequence(cards: PmaCard[]): Map<string, number> {
-  const map = new Map<string, number>();
-  for (const card of cards) {
-    if (card.kind !== 'message' || card.message.role !== 'user') continue;
-    const turnId = card.turnId;
-    if (!turnId) continue;
-    const seq = parseLeadingTimelineSequence(card.orderKey);
-    if (seq !== null) map.set(turnId, seq);
-  }
-  return map;
-}
-
-function buildOptimisticUserOrderKeyByTurn(cards: PmaCard[]): Map<string, string> {
-  const map = new Map<string, string>();
-  for (const card of cards) {
-    if (card.kind !== 'message' || card.message.role !== 'user') continue;
-    const turnId = card.turnId;
-    if (!turnId || !card.orderKey.startsWith('optimistic|')) continue;
-    map.set(turnId, card.orderKey);
-  }
-  return map;
-}
-
-/** Highest backend sequence for durable rows that are not the turn's final assistant reply. */
-function maxTimelineTraceSequenceByTurn(cards: PmaCard[]): Map<string, number> {
-  const map = new Map<string, number>();
-  for (const card of cards) {
-    if (!('turnId' in card) || !card.turnId) continue;
-    if (card.kind === 'turn_summary') continue;
-    if (card.kind === 'message' && card.message.role === 'assistant') continue;
-    if (!('orderKey' in card) || !card.orderKey) continue;
-    const seq = parseLeadingTimelineSequence(card.orderKey);
-    if (seq === null) continue;
-    const prior = map.get(card.turnId);
-    map.set(card.turnId, prior === undefined ? seq : Math.max(prior, seq));
-  }
-  return map;
-}
-
-function transcriptMergeSortKey(
-  card: PmaCard,
-  isLiveExtra: boolean,
-  ctx: {
-    turnUserSeq: Map<string, number>;
-    maxTraceSeqByTurn: Map<string, number>;
-    optimisticUserOrderKeyByTurn: Map<string, string>;
-    timelineOrdinal: number;
-    liveOrdinal: number;
-  }
-): string {
-  const orderKey = 'orderKey' in card ? card.orderKey : '';
-
-  if (!isLiveExtra) {
-    if (orderKey) return orderKey;
-    return `99999999|meta|${String(ctx.timelineOrdinal).padStart(8, '0')}|${card.id}`;
-  }
-
-  const turnId = 'turnId' in card ? card.turnId : null;
-  const liveInner = parseLeadingTimelineSequence(orderKey) ?? ctx.liveOrdinal;
-
-  if (turnId) {
-    const optimisticUserKey = ctx.optimisticUserOrderKeyByTurn.get(turnId);
-    if (optimisticUserKey) {
-      return `${optimisticUserKey}|live|${String(liveInner).padStart(8, '0')}|${String(ctx.liveOrdinal).padStart(8, '0')}|${card.id}`;
-    }
-    const traceMax = ctx.maxTraceSeqByTurn.get(turnId);
-    const userSeq = ctx.turnUserSeq.get(turnId);
-    const anchor =
-      traceMax !== undefined && userSeq !== undefined
-        ? Math.max(traceMax, userSeq)
-        : traceMax !== undefined
-          ? traceMax
-          : userSeq !== undefined
-            ? userSeq
-            : 0;
-    const anchorStr = String(anchor).padStart(8, '0');
-    return `${anchorStr}|live|${String(liveInner).padStart(8, '0')}|${String(ctx.liveOrdinal).padStart(8, '0')}|${card.id}`;
-  }
-
-  const ts = cardTimestamp(card);
-  if (ts) {
-    return `${ts}|live|${String(liveInner).padStart(8, '0')}|${String(ctx.liveOrdinal).padStart(8, '0')}|${card.id}`;
-  }
-  return `99999998|live|${String(liveInner).padStart(8, '0')}|${String(ctx.liveOrdinal).padStart(8, '0')}|${card.id}`;
-}
-
-/** True when live activity should not be layered on top of the persisted timeline. */
-function liveActivitySuppressedByCanonicalTimeline(card: PmaCard, timelineEventIds: Set<string>): boolean {
-  if (card.kind === 'intermediate') {
-    const sources = card.progressSourceIds;
-    if (sources.length > 0) {
-      return sources.every((id) => timelineEventIds.has(id));
-    }
-  }
-  return cardEventIds(card).some((id) => timelineEventIds.has(id));
-}
-
-export function mergePmaTimelineAndActivityCards(
-  timelineCards: PmaCard[],
-  activityCards: PmaCard[]
-): PmaCard[] {
-  if (!activityCards.length) return timelineCards;
-  const timelineIds = new Set(timelineCards.map((card) => card.id));
-  const timelineEventIds = new Set<string>();
-  for (const card of timelineCards) {
-    for (const id of cardEventIds(card)) timelineEventIds.add(id);
-  }
-  const extra = activityCards.filter((card) => {
-    if (timelineIds.has(card.id)) return false;
-    return !liveActivitySuppressedByCanonicalTimeline(card, timelineEventIds);
-  });
-  if (!extra.length) return timelineCards;
-
-  const turnUserSeq = turnUserTimelineSequence(timelineCards);
-  const maxTraceSeqByTurn = maxTimelineTraceSequenceByTurn(timelineCards);
-  const optimisticUserOrderKeyByTurn = buildOptimisticUserOrderKeyByTurn(timelineCards);
-  const timelineOrdinal = new Map<PmaCard, number>(
-    timelineCards.map((card, index) => [card, index])
-  );
-  const extraOrdinal = new Map<PmaCard, number>(extra.map((card, index) => [card, index]));
-  const extraSet = new Set(extra);
-
-  const merged = [...timelineCards, ...extra];
-  return merged.sort((left, right) => {
-    const leftKey = transcriptMergeSortKey(left, extraSet.has(left), {
-      turnUserSeq,
-      maxTraceSeqByTurn,
-      optimisticUserOrderKeyByTurn,
-      timelineOrdinal: timelineOrdinal.get(left) ?? 0,
-      liveOrdinal: extraOrdinal.get(left) ?? 0
-    });
-    const rightKey = transcriptMergeSortKey(right, extraSet.has(right), {
-      turnUserSeq,
-      maxTraceSeqByTurn,
-      optimisticUserOrderKeyByTurn,
-      timelineOrdinal: timelineOrdinal.get(right) ?? 0,
-      liveOrdinal: extraOrdinal.get(right) ?? 0
-    });
-    return leftKey.localeCompare(rightKey);
-  });
 }
 
 export function filterArtifactsForActiveChat(
@@ -1569,66 +1445,6 @@ function mergeIntermediateText(current: string, incoming: string): string {
   if (/\s$/.test(current) || /^\s/.test(incoming)) return `${current}${incoming}`;
   if (/^[,.;:!?)]/.test(incoming) || /[(]$/.test(current)) return `${current}${incoming}`;
   return `${current} ${incoming}`;
-}
-
-function shouldSupplementWithLiveActivity(cards: PmaCard[], progress: PmaRunProgress | null): boolean {
-  if (!progress || !progress.events.length) return false;
-  if (!progress.terminal) return true;
-  const latestMessage = cards.filter((card) => card.kind === 'message').at(-1);
-  if (latestMessage?.kind === 'message' && latestMessage.message.role === 'assistant') return false;
-  return !cards.some(
-    (card) =>
-      card.kind === 'message' &&
-      card.message.role === 'assistant' &&
-      card.turnId === progress.id
-  );
-}
-
-function coalesceSequentialIntermediateTraceCards(cards: PmaCard[]): PmaCard[] {
-  const output: PmaCard[] = [];
-  for (const card of cards) {
-    if (!isMergeableTraceCard(card) || !card.turnId) {
-      output.push(card);
-      continue;
-    }
-    const existing = output[output.length - 1];
-    if (
-      existing &&
-      existing.kind === 'intermediate' &&
-      existing.turnId === card.turnId &&
-      !isCommentaryTraceCard(existing) &&
-      !isTerminalTraceCard(existing)
-    ) {
-      existing.text = mergeIntermediateText(existing.text, card.text);
-      existing.eventIds.push(...card.eventIds.filter((id) => !existing.eventIds.includes(id)));
-      existing.progressSourceIds.push(
-        ...card.progressSourceIds.filter((id) => !existing.progressSourceIds.includes(id))
-      );
-      existing.detail = traceDetailSummary(existing.title, existing.eventIds);
-      // Advance the merged card's anchor to the latest absorbed delta so the
-      // coalesced row keeps its position relative to neighboring tool calls
-      // and commentary as more chunks arrive.
-      if (card.orderKey && card.orderKey > existing.orderKey) {
-        existing.orderKey = card.orderKey;
-      }
-      if (card.timestamp && (!existing.timestamp || card.timestamp > existing.timestamp)) {
-        existing.timestamp = card.timestamp;
-      }
-      continue;
-    }
-
-    output.push(card);
-  }
-
-  return output;
-}
-
-function isMergeableTraceCard(card: PmaCard): card is Extract<PmaCard, { kind: 'intermediate' }> {
-  return card.kind === 'intermediate' && !isCommentaryTraceCard(card) && !isTerminalTraceCard(card);
-}
-
-function isThinkingTraceCard(card: PmaCard): card is Extract<PmaCard, { kind: 'intermediate' }> {
-  return card.kind === 'intermediate' && card.title.trim().toLowerCase() === 'thinking';
 }
 
 function thinkingTimelineDetail(item: PmaTimelineItem): string | null {
@@ -1879,109 +1695,6 @@ function mapTimelineArtifact(raw: Record<string, unknown>): SurfaceArtifact {
   };
 }
 
-function summarizeCompletedTurnActivity(cards: PmaCard[], progress: PmaRunProgress | null): PmaCard[] {
-  // Only collapse trace cards into a "Worked for Xs" summary once a turn has
-  // truly finished. While a turn is still in flight, the user wants to see
-  // commentary, thinking, and tool calls stream inline as they arrive —
-  // collapsing them mid-flight is what made the chat look frozen until
-  // completion.
-  //
-  // "In flight" means either:
-  //   • progress matches this turn and is not yet terminal (status may flicker
-  //     between running/waiting/idle between tool calls — we treat all of
-  //     those as still streaming), OR
-  //   • no persisted assistant message has landed for the turn yet.
-  //
-  // The persisted-assistant gate matters because progress always tracks the
-  // latest run, so a prior turn whose progress object has rotated out can
-  // still be missing its final reply and should not be collapsed yet.
-  const activeProgressTurnId = progress && !progress.terminal ? progress.id : null;
-  const turnsWithTerminalSignal = new Set<string>();
-  const turnOrder: string[] = [];
-  const seenTurnOrder = new Set<string>();
-  for (const card of cards) {
-    const turnId = cardTurnId(card);
-    if (!turnId) continue;
-    if (!seenTurnOrder.has(turnId)) {
-      seenTurnOrder.add(turnId);
-      turnOrder.push(turnId);
-    }
-    if (card.kind === 'message' && card.message.role === 'assistant') {
-      turnsWithTerminalSignal.add(turnId);
-    } else if (card.kind === 'intermediate' && isTerminalTraceCard(card)) {
-      turnsWithTerminalSignal.add(turnId);
-    }
-  }
-  // Keep the most recent turn fully expanded so the layout the user watched
-  // stream stays put once the turn completes — what was visible mid-stream
-  // remains visible after completion, with the final reply appended.
-  // Older completed turns still collapse so a long transcript doesn't get
-  // noisy.
-  const mostRecentTurnId = turnOrder.length ? turnOrder[turnOrder.length - 1] : null;
-  const isTurnInFlight = (turnId: string): boolean => {
-    if (turnId === activeProgressTurnId) return true;
-    if (!turnsWithTerminalSignal.has(turnId)) return true;
-    if (turnId === mostRecentTurnId) return true;
-    return false;
-  };
-
-  const byTurn = new Map<string, PmaCard[]>();
-  for (const card of cards) {
-    const turnId = cardTurnId(card);
-    if (!turnId) continue;
-    if (isTurnInFlight(turnId)) continue;
-    const group = byTurn.get(turnId) ?? [];
-    group.push(card);
-    byTurn.set(turnId, group);
-  }
-  const summaryByTurn = new Map<string, PmaCard>();
-  for (const [turnId, group] of byTurn) {
-    const trace = group.filter(isCollapsibleTraceCard);
-    if (!trace.length) continue;
-    const firstTrace = trace[0];
-    summaryByTurn.set(turnId, {
-      kind: 'turn_summary',
-      id: `turn:${turnId}:summary`,
-      title: `Worked for ${turnElapsedLabel(turnId, group, progress)}`,
-      cards: trace,
-      turnId,
-      orderKey: firstTrace.orderKey,
-      timestamp: firstTrace.timestamp
-    });
-  }
-  const output: PmaCard[] = [];
-  const inserted = new Set<string>();
-  for (const card of cards) {
-    const turnId = cardTurnId(card);
-    if (turnId && summaryByTurn.has(turnId) && isCollapsibleTraceCard(card)) {
-      if (!inserted.has(turnId)) {
-        output.push(summaryByTurn.get(turnId)!);
-        inserted.add(turnId);
-      }
-      continue;
-    }
-    output.push(card);
-  }
-  return output;
-}
-
-function turnElapsedLabel(turnId: string, cards: PmaCard[], progress: PmaRunProgress | null): string {
-  if (progress?.id === turnId && progress.elapsedSeconds !== null) return formatDuration(progress.elapsedSeconds);
-  const times = cards
-    .map((card) => Date.parse(cardTimestamp(card) ?? ''))
-    .filter((value) => Number.isFinite(value));
-  if (times.length >= 2) return formatDuration(Math.max(0, Math.round((Math.max(...times) - Math.min(...times)) / 1000)));
-  return 'a moment';
-}
-
-function isTraceCard(card: PmaCard): card is Extract<PmaCard, { kind: 'intermediate' | 'tool_group' | 'approval' }> {
-  return card.kind === 'intermediate' || card.kind === 'tool_group' || card.kind === 'approval';
-}
-
-function isCollapsibleTraceCard(card: PmaCard): card is Extract<PmaCard, { kind: 'intermediate' | 'tool_group' | 'approval' }> {
-  return isTraceCard(card) && !isCommentaryTraceCard(card);
-}
-
 function isCommentaryTraceCard(card: PmaCard): boolean {
   if (card.kind !== 'intermediate') return false;
   const title = card.title.trim().toLowerCase();
@@ -2002,21 +1715,6 @@ function isCommentaryTraceEvent(event: SurfaceArtifact): boolean {
 function isTerminalTraceEvent(event: SurfaceArtifact): boolean {
   const title = intermediateTitle(event).trim().toLowerCase();
   return title === 'run failed' || title === 'turn failed' || title === 'interrupted';
-}
-
-function cardTurnId(card: PmaCard): string | null {
-  return 'turnId' in card ? card.turnId : null;
-}
-
-function cardTimestamp(card: PmaCard): string | null {
-  return 'timestamp' in card ? card.timestamp : null;
-}
-
-function cardEventIds(card: PmaCard): string[] {
-  if (card.kind === 'intermediate') return card.eventIds;
-  if (card.kind === 'tool_group') return card.tools.flatMap((tool) => [tool.id, ...tool.eventIds]);
-  if (card.kind === 'approval') return [card.id];
-  return [];
 }
 
 function timelineSourceEventIds(item: PmaTimelineItem): string[] {
@@ -2055,14 +1753,6 @@ function activityOrderKey(event: SurfaceArtifact | undefined): string {
   return stringValue(event.raw.order_key) || `${event.createdAt ?? ''}|${event.id}|${stringValue(item?.item_id)}`;
 }
 
-function compareTimelineItems(left: PmaTimelineItem, right: PmaTimelineItem): number {
-  return timelineSortKey(left).localeCompare(timelineSortKey(right));
-}
-
-function timelineSortKey(item: PmaTimelineItem): string {
-  return item.orderKey || `${item.timestamp ?? ''}|${item.id}`;
-}
-
 function asRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
 }
@@ -2071,6 +1761,15 @@ function asRecordArray(value: unknown): Record<string, unknown>[] {
   return Array.isArray(value)
     ? value.filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === 'object' && !Array.isArray(item))
     : [];
+}
+
+function asStringArray(value: unknown): string[] {
+  return Array.isArray(value) ? value.map((item) => String(item)).filter(Boolean) : [];
+}
+
+function nullableString(value: unknown): string | null {
+  const text = stringValue(value);
+  return text || null;
 }
 
 export function formatRelativeTime(value: string | null, now = new Date()): string {

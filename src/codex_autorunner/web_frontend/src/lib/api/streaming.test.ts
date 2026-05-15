@@ -2,14 +2,14 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   normalizeChatSurfaceStreamEvent,
   normalizePmaChatStreamEvent,
-  normalizePmaTailStreamEvent,
+  normalizePmaTranscriptStreamEvent,
   openFlowRunEventSource,
   openChatSurfaceEventSource,
   openPmaChatEventSource,
-  openPmaTailEventSource,
+  openPmaTranscriptEventSource,
   parseJsonSseFrame,
   parseSseFrame,
-  shouldUsePmaTailStream
+  shouldUsePmaTranscriptStream
 } from './streaming';
 
 class FakeEventSource extends EventTarget {
@@ -61,26 +61,26 @@ describe('SSE helpers', () => {
     });
   });
 
-  it('parses JSON data and normalizes PMA tail events', () => {
-    const parsed = parseJsonSseFrame('id: 9\nevent: progress\ndata: {"phase":"testing"}\n\n');
+  it('parses JSON data and normalizes PMA transcript events', () => {
+    const parsed = parseJsonSseFrame('id: 9\nevent: transcript.patch\ndata: {"status":{"phase":"testing"}}\n\n');
     expect(parsed).not.toBeNull();
-    const normalized = normalizePmaTailStreamEvent(parsed!);
+    const normalized = normalizePmaTranscriptStreamEvent(parsed!);
 
     expect(normalized).toEqual({
-      kind: 'progress',
+      kind: 'transcript_patch',
       lastEventId: '9',
-      payload: { phase: 'testing' }
+      payload: { status: { phase: 'testing' } }
     });
   });
 
-  it('normalizes PMA timeline stream events', () => {
-    const parsed = parseJsonSseFrame('id: 7\nevent: timeline\ndata: {"item_id":"turn:1:intermediate:0001","kind":"intermediate"}\n\n');
+  it('normalizes PMA transcript append stream events', () => {
+    const parsed = parseJsonSseFrame('id: 7\nevent: transcript.append\ndata: {"rows":[{"id":"turn:1:intermediate:0001","kind":"intermediate"}]}\n\n');
     expect(parsed).not.toBeNull();
 
-    expect(normalizePmaTailStreamEvent(parsed!)).toEqual({
-      kind: 'timeline',
+    expect(normalizePmaTranscriptStreamEvent(parsed!)).toEqual({
+      kind: 'transcript_append',
       lastEventId: '7',
-      payload: { item_id: 'turn:1:intermediate:0001', kind: 'intermediate' }
+      payload: { rows: [{ id: 'turn:1:intermediate:0001', kind: 'intermediate' }] }
     });
   });
 
@@ -111,7 +111,7 @@ describe('SSE helpers', () => {
     });
   });
 
-  it('opens PMA tail EventSource under the configured hub base path', () => {
+  it('opens PMA transcript EventSource under the configured hub base path', () => {
     const close = vi.fn();
     const addEventListener = vi.fn();
     const eventSource = vi.fn(function EventSourceMock() {
@@ -119,45 +119,47 @@ describe('SSE helpers', () => {
     });
     vi.stubGlobal('EventSource', eventSource);
 
-    const subscription = openPmaTailEventSource('thread/1', { onEvent: vi.fn() }, '/car');
+    const subscription = openPmaTranscriptEventSource('thread/1', { onEvent: vi.fn() }, '/car');
 
-    expect(eventSource).toHaveBeenCalledWith('/car/hub/pma/threads/thread%2F1/tail/events', {
+    expect(eventSource).toHaveBeenCalledWith('/car/hub/pma/threads/thread%2F1/transcript/events', {
       withCredentials: undefined
     });
-    expect(addEventListener).toHaveBeenCalledWith('timeline', expect.any(Function));
+    expect(addEventListener).toHaveBeenCalledWith('transcript.snapshot', expect.any(Function));
+    expect(addEventListener).toHaveBeenCalledWith('transcript.append', expect.any(Function));
+    expect(addEventListener).toHaveBeenCalledWith('transcript.patch', expect.any(Function));
     subscription.close();
     expect(close).toHaveBeenCalledOnce();
   });
 
-  it('resumes PMA tail streams by in-memory event id after interruption', () => {
+  it('resumes PMA transcript streams by in-memory event id after interruption', () => {
     vi.useFakeTimers();
     vi.stubGlobal('EventSource', FakeEventSource);
     const events: unknown[] = [];
 
-    const subscription = openPmaTailEventSource('thread/1', { onEvent: (event) => events.push(event) }, '/car');
-    expect(FakeEventSource.instances[0].url).toBe('/car/hub/pma/threads/thread%2F1/tail/events');
+    const subscription = openPmaTranscriptEventSource('thread/1', { onEvent: (event) => events.push(event) }, '/car');
+    expect(FakeEventSource.instances[0].url).toBe('/car/hub/pma/threads/thread%2F1/transcript/events');
 
-    FakeEventSource.instances[0].emit('timeline', { item_id: 'item-1', managed_turn_id: 'turn-1' }, '8');
+    FakeEventSource.instances[0].emit('transcript.append', { rows: [{ id: 'item-1', turn_id: 'turn-1' }] }, '8');
     FakeEventSource.instances[0].fail();
     vi.advanceTimersByTime(500);
 
     expect(FakeEventSource.instances[1].url).toBe(
-      '/car/hub/pma/threads/thread%2F1/tail/events?since_event_id=8&since_managed_turn_id=turn-1'
+      '/car/hub/pma/threads/thread%2F1/transcript/events?since_event_id=8&since_managed_turn_id=turn-1'
     );
     expect(events).toEqual([
       {
-        kind: 'timeline',
+        kind: 'transcript_append',
         lastEventId: '8',
-        payload: { item_id: 'item-1', managed_turn_id: 'turn-1' }
+        payload: { rows: [{ id: 'item-1', turn_id: 'turn-1' }] }
       }
     ]);
     subscription.close();
   });
 
-  it('opens PMA tail streams from a provided progress cursor', () => {
+  it('opens PMA transcript streams from a provided progress cursor', () => {
     vi.stubGlobal('EventSource', FakeEventSource);
 
-    const subscription = openPmaTailEventSource(
+    const subscription = openPmaTranscriptEventSource(
       'thread/1',
       {
         onEvent: vi.fn(),
@@ -168,32 +170,32 @@ describe('SSE helpers', () => {
     );
 
     expect(FakeEventSource.instances[0].url).toBe(
-      '/car/hub/pma/threads/thread%2F1/tail/events?since_event_id=42&since_managed_turn_id=turn-1'
+      '/car/hub/pma/threads/thread%2F1/transcript/events?since_event_id=42&since_managed_turn_id=turn-1'
     );
     subscription.close();
   });
 
-  it('does not open PMA tail streams for terminal snapshots with no queued follow-up', () => {
-    expect(shouldUsePmaTailStream({ status: 'completed' }, { status: 'completed', queueDepth: 0 }, 0)).toBe(false);
+  it('does not open PMA transcript streams for terminal snapshots with no queued follow-up', () => {
+    expect(shouldUsePmaTranscriptStream({ status: 'completed' }, { status: 'completed', queueDepth: 0 }, 0)).toBe(false);
   });
 
-  it('keeps PMA tail streams useful for live and queued turns', () => {
-    expect(shouldUsePmaTailStream({ status: 'completed' }, { status: 'running', queueDepth: 0 }, 0)).toBe(true);
-    expect(shouldUsePmaTailStream({ status: 'completed' }, { status: 'completed', queueDepth: 0 }, 1)).toBe(true);
-    expect(shouldUsePmaTailStream({ status: 'waiting' }, null, 0)).toBe(true);
+  it('keeps PMA transcript streams useful for live and queued turns', () => {
+    expect(shouldUsePmaTranscriptStream({ status: 'completed' }, { status: 'running', queueDepth: 0 }, 0)).toBe(true);
+    expect(shouldUsePmaTranscriptStream({ status: 'completed' }, { status: 'completed', queueDepth: 0 }, 1)).toBe(true);
+    expect(shouldUsePmaTranscriptStream({ status: 'waiting' }, null, 0)).toBe(true);
   });
 
-  it('resets PMA tail stream cursors when the managed turn changes', () => {
+  it('resets PMA transcript stream cursors when the managed turn changes', () => {
     vi.useFakeTimers();
     vi.stubGlobal('EventSource', FakeEventSource);
 
-    const subscription = openPmaTailEventSource('thread/1', { onEvent: vi.fn() }, '/car');
-    FakeEventSource.instances[0].emit('timeline', { item_id: 'old-item', managed_turn_id: 'turn-1' }, '8');
-    FakeEventSource.instances[0].emit('progress', { managed_turn_id: 'turn-2', phase: 'booting' });
+    const subscription = openPmaTranscriptEventSource('thread/1', { onEvent: vi.fn() }, '/car');
+    FakeEventSource.instances[0].emit('transcript.append', { rows: [{ id: 'old-item', turn_id: 'turn-1' }] }, '8');
+    FakeEventSource.instances[0].emit('transcript.patch', { status: { managed_turn_id: 'turn-2', phase: 'booting' } });
     FakeEventSource.instances[0].fail();
     vi.advanceTimersByTime(500);
 
-    expect(FakeEventSource.instances[1].url).toBe('/car/hub/pma/threads/thread%2F1/tail/events');
+    expect(FakeEventSource.instances[1].url).toBe('/car/hub/pma/threads/thread%2F1/transcript/events');
     subscription.close();
   });
 

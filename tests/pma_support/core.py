@@ -7,6 +7,7 @@ from typing import Any, Optional
 import anyio
 import httpx
 import pytest
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
 from codex_autorunner.adapters.app_server.client import (
@@ -638,6 +639,13 @@ async def test_execute_opencode_records_completion_only_messages_in_timeline(
         ready_event = kwargs.get("ready_event")
         if ready_event is not None:
             ready_event.set()
+        part_handler = kwargs.get("part_handler")
+        if part_handler is not None:
+            await part_handler(
+                "text",
+                {"type": "text", "text": "completed only reply"},
+                "completed only reply",
+            )
         return OpenCodeTurnOutput(text="completed only reply")
 
     monkeypatch.setattr(
@@ -661,6 +669,53 @@ async def test_execute_opencode_records_completion_only_messages_in_timeline(
         "Completed",
     ]
     assert result["timeline_events"][0].content == "completed only reply"
+
+
+@pytest.mark.anyio
+async def test_execute_opencode_rejects_empty_successful_output(
+    hub_env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    class _Client:
+        async def create_session(
+            self, directory: Optional[str] = None
+        ) -> dict[str, str]:
+            _ = directory
+            return {"sessionId": "session-empty"}
+
+        async def prompt_async(self, *_args: Any, **_kwargs: Any) -> dict[str, Any]:
+            return {"id": "accepted"}
+
+    class _Supervisor:
+        async def get_client(self, _hub_root: Path) -> _Client:
+            return _Client()
+
+        async def mark_turn_started(self, _hub_root: Path) -> None:
+            return None
+
+        async def mark_turn_finished(self, _hub_root: Path) -> None:
+            return None
+
+    async def _fake_collect(*_args: Any, **kwargs: Any) -> OpenCodeTurnOutput:
+        ready_event = kwargs.get("ready_event")
+        if ready_event is not None:
+            ready_event.set()
+        return OpenCodeTurnOutput(text="")
+
+    monkeypatch.setattr(
+        "codex_autorunner.agents.opencode.runtime.collect_opencode_output",
+        _fake_collect,
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        await chat_runtime._execute_opencode(
+            _Supervisor(),
+            hub_env.hub_root,
+            "hello",
+            asyncio.Event(),
+        )
+
+    assert exc_info.value.status_code == 502
+    assert exc_info.value.detail == "OpenCode completed without assistant output"
 
 
 def test_pma_chat_persists_transcript_and_history_entry(hub_env) -> None:
@@ -751,22 +806,24 @@ def test_pma_history_detail_includes_turn_timeline(hub_env) -> None:
         ],
     )
 
-    client = TestClient(app)
-    resp = client.post("/hub/pma/chat", json={"message": "persist transcript"})
-    assert resp.status_code == 200
+    with TestClient(app) as client:
+        resp = client.post("/hub/pma/chat", json={"message": "persist transcript"})
+        assert resp.status_code == 200
 
-    history_entry = client.get("/hub/pma/history/turn-timeline")
-    assert history_entry.status_code == 200
-    payload = history_entry.json()
+        history_entry = client.get("/hub/pma/history/turn-timeline")
+        assert history_entry.status_code == 200
+        payload = history_entry.json()
     assert [item["event_type"] for item in payload["timeline"]] == [
+        "run_notice",
         "run_notice",
         "tool_call",
         "tool_result",
         "turn_completed",
+        "run_notice",
     ]
-    assert payload["timeline"][0]["event"]["message"] == "inspect state"
-    assert payload["timeline"][1]["event"]["tool_input"] == {"cmd": "pwd"}
-    assert payload["timeline"][2]["event"]["result"] == {"stdout": "/tmp"}
+    assert payload["timeline"][1]["event"]["message"] == "inspect state"
+    assert payload["timeline"][2]["event"]["tool_input"] == {"cmd": "pwd"}
+    assert payload["timeline"][3]["event"]["result"] == {"stdout": "/tmp"}
     checkpoint = ColdTraceStore(hub_env.hub_root).load_checkpoint("turn-timeline")
     assert checkpoint is not None
     assert checkpoint.trace_manifest_id
@@ -2592,20 +2649,20 @@ def test_pma_active_status_surfaces_last_result_on_completion(hub_env) -> None:
     )
     app.state.app_server_events = object()
 
-    client = TestClient(app)
-    chat_resp = client.post(
-        "/hub/pma/chat",
-        json={
-            "message": "hello",
-            "stream": False,
-            "client_turn_id": "cturn-result-1",
-        },
-    )
-    assert chat_resp.status_code == 200
+    with TestClient(app) as client:
+        chat_resp = client.post(
+            "/hub/pma/chat",
+            json={
+                "message": "hello",
+                "stream": False,
+                "client_turn_id": "cturn-result-1",
+            },
+        )
+        assert chat_resp.status_code == 200
 
-    active_resp = client.get("/hub/pma/active")
-    assert active_resp.status_code == 200
-    active_payload = active_resp.json()
+        active_resp = client.get("/hub/pma/active")
+        assert active_resp.status_code == 200
+        active_payload = active_resp.json()
     assert active_payload["active"] is False
     last = active_payload.get("last_result", {})
     assert last.get("status") == "ok"

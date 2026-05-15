@@ -25,13 +25,11 @@ import type {
   WorktreeTopology
 } from '$lib/api/readModelContracts';
 import {
-  pmaTimelineContractFields,
   type PmaRunProgress,
-  type PmaTimelineItem,
-  type PmaTimelineItemKind,
   type SurfaceArtifact,
   type TicketSummary
 } from '$lib/viewModels/domain';
+import type { PmaCard } from '$lib/viewModels/pmaChat';
 
 export type EntityKind =
   | 'chat'
@@ -86,7 +84,7 @@ export type ReadModelEntityState = {
   chatCounters: ChatIndexCounters;
   chatDetails: Record<string, ChatDetailProjection>;
   timelines: Record<string, TimelineProjection>;
-  pmaTimelines: Record<string, { itemsById: Record<string, PmaTimelineItem>; order: string[] }>;
+  pmaTranscripts: Record<string, { cardsById: Record<string, PmaCard>; order: string[] }>;
   pmaProgress: Record<string, PmaRunProgress>;
   pmaQueues: Record<string, PmaQueuedTurn[]>;
   pmaArtifacts: Record<string, SurfaceArtifact[]>;
@@ -135,7 +133,6 @@ export const emptyChatCounters: ChatIndexCounters = {
   archived: 0
 };
 
-export const PMA_TIMELINE_RETAIN_LIMIT = 200;
 export const PMA_LIVE_PROGRESS_EVENT_LIMIT = 80;
 
 export function createInitialReadModelState(): ReadModelEntityState {
@@ -149,7 +146,7 @@ export function createInitialReadModelState(): ReadModelEntityState {
     chatCounters: emptyChatCounters,
     chatDetails: {},
     timelines: {},
-    pmaTimelines: {},
+    pmaTranscripts: {},
     pmaProgress: {},
     pmaQueues: {},
     pmaArtifacts: {},
@@ -301,10 +298,6 @@ export class ReadModelEntityStore implements Readable<ReadModelEntityState> {
       order: snapshot.timeline.map((item) => item.itemId),
       windowLimit: snapshot.timelineWindow.limit
     };
-    next.pmaTimelines[snapshot.thread.chatId] = {
-      itemsById: keyed(snapshot.timeline.map((item) => chatTimelineItemToPmaItem(snapshot.thread.chatId, item)), (item) => item.id),
-      order: snapshot.timeline.map((item) => item.itemId)
-    };
     next.pmaQueues[snapshot.thread.chatId] = snapshot.queue.queuedTurnIds.map((id, index) => ({
       managedTurnId: id,
       position: index + 1,
@@ -372,40 +365,39 @@ export class ReadModelEntityStore implements Readable<ReadModelEntityState> {
     return 'applied';
   }
 
-  replacePmaTimeline(chatId: string, items: PmaTimelineItem[]): void {
-    const retainedItems = retainPmaTimelineWindow(items);
+  replacePmaTranscript(chatId: string, cards: PmaCard[]): void {
+    const orderedCards = orderPmaTranscriptCards(cards);
     const next = cloneState(this.state);
-    next.pmaTimelines[chatId] = {
-      itemsById: keyed(retainedItems, pmaTimelineEntityId),
-      order: retainedItems.map(pmaTimelineEntityId)
+    next.pmaTranscripts[chatId] = {
+      cardsById: keyed(orderedCards, pmaCardEntityId),
+      order: orderedCards.map(pmaCardEntityId)
     };
     bump(next, 'timeline', chatId);
     this.commit(next);
   }
 
-  upsertPmaTimelineItems(chatId: string, items: PmaTimelineItem[]): void {
-    if (!items.length) return;
+  upsertPmaTranscriptCards(chatId: string, cards: PmaCard[]): void {
+    if (!cards.length) return;
     const next = cloneState(this.state);
-    const timeline = next.pmaTimelines[chatId] ?? { itemsById: {}, order: [] };
-    for (const item of items) {
-      if (isDebugOnlyPmaTimelineItem(item)) continue;
-      const entityId = pmaTimelineEntityId(item);
-      timeline.itemsById[entityId] = item;
-      if (!timeline.order.includes(entityId)) timeline.order.push(entityId);
+    const transcript = next.pmaTranscripts[chatId] ?? { cardsById: {}, order: [] };
+    for (const card of cards) {
+      const id = pmaCardEntityId(card);
+      transcript.cardsById[id] = card;
+      if (!transcript.order.includes(id)) transcript.order.push(id);
     }
-    retainPmaTimelineProjectionWindow(timeline);
-    next.pmaTimelines[chatId] = timeline;
+    transcript.order = orderPmaTranscriptCards(transcript.order.map((id) => transcript.cardsById[id]).filter(Boolean)).map(pmaCardEntityId);
+    next.pmaTranscripts[chatId] = transcript;
     bump(next, 'timeline', chatId);
     this.commit(next);
   }
 
-  removeOptimisticPmaTimelineItems(chatId: string): void {
-    const timeline = this.state.pmaTimelines[chatId];
-    if (!timeline || !timeline.order.some((id) => id.startsWith('optimistic:'))) return;
+  removeOptimisticPmaTranscriptCards(chatId: string): void {
+    const transcript = this.state.pmaTranscripts[chatId];
+    if (!transcript || !transcript.order.some((id) => id.startsWith('optimistic:'))) return;
     const next = cloneState(this.state);
-    const target = next.pmaTimelines[chatId];
+    const target = next.pmaTranscripts[chatId];
     for (const id of target.order) {
-      if (id.startsWith('optimistic:')) delete target.itemsById[id];
+      if (id.startsWith('optimistic:')) delete target.cardsById[id];
     }
     target.order = target.order.filter((id) => !id.startsWith('optimistic:'));
     bump(next, 'timeline', chatId);
@@ -755,7 +747,7 @@ function cloneState(state: ReadModelEntityState): ReadModelEntityState {
     chatCounters: { ...state.chatCounters },
     chatDetails: cloneRecord(state.chatDetails),
     timelines: cloneRecord(state.timelines),
-    pmaTimelines: cloneRecord(state.pmaTimelines),
+    pmaTranscripts: cloneRecord(state.pmaTranscripts),
     pmaProgress: { ...state.pmaProgress },
     pmaQueues: cloneRecord(state.pmaQueues),
     pmaArtifacts: cloneRecord(state.pmaArtifacts),
@@ -813,62 +805,46 @@ function uniqueChatIndexRows(rows: ChatIndexRow[]): ChatIndexRow[] {
   return order.map((chatId) => byChatId.get(chatId)).filter((row): row is ChatIndexRow => Boolean(row));
 }
 
-function chatTimelineItemToPmaItem(chatId: string, item: ChatTimelineItem): PmaTimelineItem {
-  return {
-    id: item.itemId,
-    kind: pmaKindForChatTimelineItem(item.kind),
-    orderKey: item.itemId,
-    timestamp: item.createdAt,
-    chatId,
-    turnId: item.backendMessageId ?? null,
-    status: null,
-    ...pmaTimelineContractFields(item.itemId),
-    payload: {
-      text: item.text ?? '',
-      text_preview: item.text ?? '',
-      role: item.role ?? null,
-      artifact_ids: item.artifactIds
-    },
-    raw: item as unknown as PmaTimelineItem['raw']
-  };
+function pmaCardEntityId(card: PmaCard): string {
+  return card.id;
 }
 
-function pmaKindForChatTimelineItem(kind: ChatTimelineItem['kind']): PmaTimelineItemKind {
-  if (kind === 'user_message' || kind === 'assistant_message' || kind === 'artifact') return kind;
-  if (kind === 'progress') return 'status';
-  if (kind === 'system') return 'lifecycle';
-  return 'intermediate';
+function orderPmaTranscriptCards(cards: PmaCard[]): PmaCard[] {
+  return [...cards].sort(comparePmaTranscriptCards);
 }
 
-function pmaTimelineEntityId(item: PmaTimelineItem): string {
-  return item.identity.timelineItemId;
+function comparePmaTranscriptCards(left: PmaCard, right: PmaCard): number {
+  const byKey = pmaTranscriptCardSortKey(left).localeCompare(pmaTranscriptCardSortKey(right));
+  if (byKey !== 0) return byKey;
+  return pmaCardEntityId(left).localeCompare(pmaCardEntityId(right));
 }
 
-function retainPmaTimelineWindow(items: PmaTimelineItem[]): PmaTimelineItem[] {
-  return items.filter((item) => !isDebugOnlyPmaTimelineItem(item)).slice(-PMA_TIMELINE_RETAIN_LIMIT);
-}
-
-function retainPmaTimelineProjectionWindow(timeline: { itemsById: Record<string, PmaTimelineItem>; order: string[] }): void {
-  if (timeline.order.length <= PMA_TIMELINE_RETAIN_LIMIT) return;
-  const retain = new Set(timeline.order.slice(-PMA_TIMELINE_RETAIN_LIMIT));
-  for (const id of timeline.order) {
-    if (!retain.has(id)) delete timeline.itemsById[id];
+function pmaTranscriptCardSortKey(card: PmaCard): string {
+  const orderKey = transcriptCardOrderKey(card);
+  if (orderKey && !orderKey.startsWith('optimistic|')) {
+    const roleRank = card.kind === 'message' && card.message.role === 'user' ? '0' : '2';
+    return `${orderKey}|${roleRank}`;
   }
-  timeline.order = timeline.order.filter((id) => retain.has(id));
+  const timestamp = transcriptCardTimestamp(card) ?? '';
+  const roleRank = card.kind === 'message' && card.message.role === 'user' ? '0' : '1';
+  if (orderKey.startsWith('optimistic|')) return `00000000|optimistic|${timestamp}|${roleRank}|${orderKey}`;
+  return `1|${timestamp}|${roleRank}|${orderKey || card.id}`;
+}
+
+function transcriptCardOrderKey(card: PmaCard): string {
+  if ('orderKey' in card && typeof card.orderKey === 'string') return card.orderKey.trim();
+  return '';
+}
+
+function transcriptCardTimestamp(card: PmaCard): string | null {
+  if ('timestamp' in card && card.timestamp) return card.timestamp;
+  if (card.kind === 'message') return card.message.createdAt;
+  return null;
 }
 
 function withBoundedPmaProgressEvents(progress: PmaRunProgress): PmaRunProgress {
   const events = progress.events.filter((event) => !isDebugOnlyProgressArtifact(event)).slice(-PMA_LIVE_PROGRESS_EVENT_LIMIT);
   return events.length === progress.events.length ? progress : { ...progress, events };
-}
-
-function isDebugOnlyPmaTimelineItem(item: PmaTimelineItem): boolean {
-  if (item.raw.hidden === true || item.payload.hidden === true) return true;
-  const intermediateKind = stringValue(item.payload.intermediate_kind).toLowerCase();
-  const eventType = stringValue(item.payload.event_type).toLowerCase();
-  if (eventType === 'output_delta' && ['assistant_stream', 'assistant_message', 'log_line'].includes(intermediateKind)) return true;
-  const event = asRecord(item.payload.event);
-  return ['chat_execution_journal', 'compaction_summary'].includes(stringValue(event.kind).toLowerCase());
 }
 
 function isDebugOnlyProgressArtifact(event: SurfaceArtifact): boolean {

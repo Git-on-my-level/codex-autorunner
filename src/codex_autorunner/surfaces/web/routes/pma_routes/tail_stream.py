@@ -14,6 +14,10 @@ from .....core.managed_thread_store import ManagedThreadStore
 from .....core.orchestration.managed_thread_timeline import (
     timeline_item_from_tail_event,
 )
+from .....core.orchestration.managed_thread_transcript import (
+    build_managed_thread_transcript,
+    transcript_row_from_tail_event,
+)
 from .....core.orchestration.progress_projection import ProgressProjectionState
 from .....core.orchestration.runtime_thread_events import (
     RuntimeThreadRunEventState,
@@ -43,6 +47,7 @@ from .managed_threads import (
 
 _PERSISTED_TAIL_POLL_SECONDS = 1.0
 _PERSISTED_TAIL_HEARTBEAT_SECONDS = 15.0
+_TRANSCRIPT_STREAM_LIMIT = 200
 
 
 def parse_tail_duration_seconds(value: Optional[str]) -> Optional[int]:
@@ -262,7 +267,7 @@ async def _build_managed_thread_tail_snapshot(
     since_ms: Optional[int],
     resume_after: Optional[int],
     resume_after_managed_turn_id: Optional[str] = None,
-    include_runtime_fallback: bool = True,
+    include_runtime_overlay: bool = True,
 ) -> dict[str, Any]:
     context = get_pma_request_context(request)
     thread, turn, persisted_timeline_entries, turn_record = await asyncio.to_thread(
@@ -374,7 +379,7 @@ async def _build_managed_thread_tail_snapshot(
         persisted_max_event_id = max(int(e.get("event_id") or 0) for e in tail_events)
 
     runtime_overlay_eligible = bool(
-        include_runtime_fallback
+        include_runtime_overlay
         and has_backend_binding
         and harness is not None
         and (not tail_events or (turn_running and stream_available))
@@ -413,7 +418,7 @@ async def _build_managed_thread_tail_snapshot(
                     event_id_start=event_id_start,
                     since_ms=since_ms,
                     projection_state=projection_state,
-                    fallback_received_at=finished_at,
+                    default_received_at=finished_at,
                 )
                 if isinstance(state.token_usage, dict) and state.token_usage:
                     token_usage = dict(state.token_usage)
@@ -592,6 +597,15 @@ def _tail_snapshot_without_replay(snapshot: dict[str, Any]) -> dict[str, Any]:
     cheap_snapshot["events"] = []
     cheap_snapshot["last_event_id"] = high_watermark
     cheap_snapshot["last_event_at"] = None
+    live_activity = cheap_snapshot.get("live_activity")
+    if isinstance(live_activity, dict):
+        live_activity = dict(live_activity)
+        live_activity["summary"] = None
+        live_activity["current_tool"] = None
+        live_activity["events"] = []
+        live_activity["visible_event_count"] = 0
+        live_activity["coalesced_event_count"] = 0
+        cheap_snapshot["live_activity"] = live_activity
     diagnostics = cheap_snapshot.get("active_turn_diagnostics")
     if isinstance(diagnostics, dict):
         diagnostics = dict(diagnostics)
@@ -659,6 +673,73 @@ def _sse_stream_should_terminate(
     if thread_status == "archived" or lifecycle_status == "archived":
         return True, "thread_archived"
     return False, None
+
+
+def _successful_terminal_turn_id(snapshot: dict[str, Any]) -> str | None:
+    if snapshot.get("terminal") is not True:
+        return None
+    if str(snapshot.get("turn_status") or "").strip().lower() not in {
+        "ok",
+        "done",
+        "completed",
+        "complete",
+    }:
+        return None
+    return normalize_optional_text(snapshot.get("managed_turn_id"))
+
+
+def _transcript_has_assistant_row(snapshot: dict[str, Any], turn_id: str) -> bool:
+    rows = snapshot.get("rows")
+    if not isinstance(rows, list):
+        return False
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        if row.get("kind") != "message" or row.get("turn_id") != turn_id:
+            continue
+        message = row.get("message")
+        if not isinstance(message, dict):
+            continue
+        if (
+            message.get("role") == "assistant"
+            and str(message.get("text") or "").strip()
+        ):
+            return True
+    return False
+
+
+async def _build_managed_thread_transcript_snapshot(
+    *,
+    request: Request,
+    service: Any,
+    managed_thread_id: str,
+    harness: Any | None = None,
+    limit: int = _TRANSCRIPT_STREAM_LIMIT,
+    level: str = "info",
+    include_runtime_overlay: bool = True,
+) -> dict[str, Any]:
+    context = get_pma_request_context(request)
+    progress_snapshot = await _build_managed_thread_tail_snapshot(
+        request=request,
+        service=service,
+        managed_thread_id=managed_thread_id,
+        harness=harness,
+        limit=min(limit, _TRANSCRIPT_STREAM_LIMIT),
+        level=level,
+        since_ms=None,
+        resume_after=None,
+        resume_after_managed_turn_id=None,
+        include_runtime_overlay=include_runtime_overlay,
+    )
+    _apply_sse_lifetime_to_snapshot(progress_snapshot)
+    return await asyncio.to_thread(
+        build_managed_thread_transcript,
+        context.hub_root,
+        thread_store=context.thread_store(),
+        managed_thread_id=managed_thread_id,
+        limit=min(limit, _TRANSCRIPT_STREAM_LIMIT),
+        progress_snapshot=progress_snapshot,
+    )
 
 
 def build_managed_thread_tail_routes(
@@ -733,6 +814,203 @@ def build_managed_thread_tail_routes(
             resume_after_managed_turn_id=since_managed_turn_id,
         )
 
+    @router.get("/threads/{managed_thread_id}/transcript")
+    async def get_managed_thread_transcript(
+        managed_thread_id: str,
+        request: Request,
+        limit: int = _TRANSCRIPT_STREAM_LIMIT,
+        level: str = "info",
+    ) -> dict[str, Any]:
+        if limit <= 0:
+            raise HTTPException(status_code=400, detail="limit must be greater than 0")
+        service = await _build_managed_thread_orchestration_service_async(request)
+        thread_target = await asyncio.to_thread(
+            service.get_thread_target,
+            managed_thread_id,
+        )
+        harness = (
+            _managed_thread_harness_for_thread(service, thread_target)
+            if thread_target is not None
+            else None
+        )
+        return await _build_managed_thread_transcript_snapshot(
+            request=request,
+            service=service,
+            managed_thread_id=managed_thread_id,
+            harness=harness,
+            limit=min(limit, _TRANSCRIPT_STREAM_LIMIT),
+            level=normalize_tail_level(level),
+        )
+
+    @router.get("/threads/{managed_thread_id}/transcript/events")
+    async def stream_managed_thread_transcript(
+        managed_thread_id: str,
+        request: Request,
+        limit: int = _TRANSCRIPT_STREAM_LIMIT,
+        since_event_id: Optional[int] = None,
+        since_managed_turn_id: Optional[str] = None,
+        level: str = "info",
+        once: bool = False,
+        replay: bool = False,
+    ):
+        if limit <= 0:
+            raise HTTPException(status_code=400, detail="limit must be greater than 0")
+        normalized_level = normalize_tail_level(level)
+        service = await _build_managed_thread_orchestration_service_async(request)
+        thread_target = await asyncio.to_thread(
+            service.get_thread_target,
+            managed_thread_id,
+        )
+        harness = (
+            _managed_thread_harness_for_thread(service, thread_target)
+            if thread_target is not None
+            else None
+        )
+        resume_after = resolve_resume_after(request, since_event_id)
+        replay_initial_events = _sse_initial_replay_requested(
+            request=request,
+            replay=replay,
+            since=None,
+            since_event_id=since_event_id,
+            since_managed_turn_id=since_managed_turn_id,
+        )
+        initial = await _build_managed_thread_transcript_snapshot(
+            request=request,
+            service=service,
+            managed_thread_id=managed_thread_id,
+            harness=harness,
+            limit=min(limit, _TRANSCRIPT_STREAM_LIMIT),
+            level=normalized_level,
+        )
+
+        async def _stream() -> Any:
+            raw_initial_progress = initial.get("status")
+            initial_progress: dict[str, Any] = (
+                raw_initial_progress if isinstance(raw_initial_progress, dict) else {}
+            )
+            last_event_id = int(
+                initial_progress.get("last_event_id") or resume_after or 0
+            )
+            last_managed_turn_id = normalize_optional_text(
+                initial_progress.get("managed_turn_id") or since_managed_turn_id
+            )
+            snapshot_id_line = f"id: {last_event_id}\n" if last_event_id > 0 else ""
+            yield (
+                "event: transcript.snapshot\n"
+                f"{snapshot_id_line}"
+                "data: "
+                f"{json.dumps(initial, ensure_ascii=True)}\n\n"
+            )
+            if replay_initial_events:
+                for row in initial.get("rows", []):
+                    if isinstance(row, dict):
+                        replay_id_line = (
+                            f"id: {last_event_id}\n" if last_event_id > 0 else ""
+                        )
+                        yield (
+                            "event: transcript.append\n"
+                            f"{replay_id_line}"
+                            "data: "
+                            f"{json.dumps({'rows': [row]}, ensure_ascii=True)}\n\n"
+                        )
+            if once:
+                return
+            sse_close, _ = _sse_stream_should_terminate(initial_progress)
+            if sse_close:
+                return
+
+            last_heartbeat_at = asyncio.get_running_loop().time()
+            terminal_transcript_snapshots_sent: set[str] = set()
+            while True:
+                await asyncio.sleep(_PERSISTED_TAIL_POLL_SECONDS)
+                refreshed = await _build_managed_thread_tail_snapshot(
+                    request=request,
+                    service=service,
+                    managed_thread_id=managed_thread_id,
+                    harness=harness,
+                    limit=min(limit, _TRANSCRIPT_STREAM_LIMIT),
+                    level=normalized_level,
+                    since_ms=None,
+                    resume_after=last_event_id,
+                    resume_after_managed_turn_id=last_managed_turn_id,
+                    include_runtime_overlay=True,
+                )
+                _apply_sse_lifetime_to_snapshot(refreshed)
+                rows: list[dict[str, Any]] = []
+                for event in refreshed.get("events", []):
+                    if not isinstance(event, dict):
+                        continue
+                    rows.extend(
+                        transcript_row_from_tail_event(
+                            managed_thread_id=managed_thread_id,
+                            managed_turn_id=str(refreshed.get("managed_turn_id") or ""),
+                            tail_event=event,
+                        )
+                    )
+                if rows:
+                    append_event_id = int(
+                        refreshed.get("last_event_id") or last_event_id
+                    )
+                    append_id_line = (
+                        f"id: {append_event_id}\n" if append_event_id > 0 else ""
+                    )
+                    yield (
+                        "event: transcript.append\n"
+                        f"{append_id_line}"
+                        f"data: {json.dumps({'rows': rows}, ensure_ascii=True)}\n\n"
+                    )
+                last_event_id = int(refreshed.get("last_event_id") or last_event_id)
+                last_managed_turn_id = normalize_optional_text(
+                    refreshed.get("managed_turn_id")
+                )
+                terminal_turn_id = _successful_terminal_turn_id(refreshed)
+                if (
+                    terminal_turn_id
+                    and terminal_turn_id not in terminal_transcript_snapshots_sent
+                ):
+                    terminal_snapshot = await _build_managed_thread_transcript_snapshot(
+                        request=request,
+                        service=service,
+                        managed_thread_id=managed_thread_id,
+                        harness=harness,
+                        limit=min(limit, _TRANSCRIPT_STREAM_LIMIT),
+                        level=normalized_level,
+                    )
+                    if _transcript_has_assistant_row(
+                        terminal_snapshot,
+                        terminal_turn_id,
+                    ):
+                        terminal_id_line = (
+                            f"id: {last_event_id}\n" if last_event_id > 0 else ""
+                        )
+                        yield (
+                            "event: transcript.snapshot\n"
+                            f"{terminal_id_line}"
+                            "data: "
+                            f"{json.dumps(terminal_snapshot, ensure_ascii=True)}\n\n"
+                        )
+                        terminal_transcript_snapshots_sent.add(terminal_turn_id)
+                patch_id_line = f"id: {last_event_id}\n" if last_event_id > 0 else ""
+                yield (
+                    "event: transcript.patch\n"
+                    f"{patch_id_line}"
+                    "data: "
+                    f"{json.dumps({'status': _progress_stream_payload(refreshed)}, ensure_ascii=True)}\n\n"
+                )
+                sse_close, _ = _sse_stream_should_terminate(refreshed)
+                if sse_close:
+                    return
+                now = asyncio.get_running_loop().time()
+                if now - last_heartbeat_at >= _PERSISTED_TAIL_HEARTBEAT_SECONDS:
+                    yield ": keep-alive\n\n"
+                    last_heartbeat_at = now
+
+        return StreamingResponse(
+            _stream(),
+            media_type="text/event-stream",
+            headers=SSE_HEADERS,
+        )
+
     @router.get("/threads/{managed_thread_id}/tail/events")
     async def stream_managed_thread_tail(
         managed_thread_id: str,
@@ -777,7 +1055,7 @@ def build_managed_thread_tail_routes(
             resume_after_managed_turn_id=since_managed_turn_id,
             # Live UI needs harness-buffered deltas (OpenCode) while the durable
             # turn journal may lag; JSON GET /tail already uses the default True.
-            include_runtime_fallback=True,
+            include_runtime_overlay=True,
         )
 
         async def _stream() -> Any:
@@ -825,7 +1103,7 @@ def build_managed_thread_tail_routes(
                     since_ms=since_ms,
                     resume_after=last_event_id,
                     resume_after_managed_turn_id=last_managed_turn_id,
-                    include_runtime_fallback=True,
+                    include_runtime_overlay=True,
                 )
                 _apply_sse_lifetime_to_snapshot(refreshed)
                 for frame in _tail_event_sse_frames(

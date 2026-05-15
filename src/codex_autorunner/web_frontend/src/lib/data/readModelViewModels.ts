@@ -13,7 +13,6 @@ import {
   pmaChatArchivedFromRawSignals,
   type PmaChatSummary,
   type PmaRunProgress,
-  type PmaTimelineItem,
   type RepoSummary,
   type SurfaceArtifact,
   type TicketSummary,
@@ -22,6 +21,7 @@ import {
 } from '$lib/viewModels/domain';
 import { normalizeManagedThreadChatKind } from '$lib/viewModels/managedThreadChatKind';
 import type { PmaQueuedTurn } from '$lib/api/client';
+import type { PmaCard } from '$lib/viewModels/pmaChat';
 import type { ReadModelEntityState } from './readModelStore';
 
 type JsonRecord = Record<string, unknown>;
@@ -144,10 +144,10 @@ export function selectPmaChats(state: ReadModelEntityState): PmaChatSummary[] {
   return state.chatOrder.map((id) => state.chats[id]).filter(Boolean).map(chatIndexRowToPmaChatSummary);
 }
 
-export function selectPmaTimeline(state: ReadModelEntityState, chatId: string | null): PmaTimelineItem[] {
+export function selectPmaTranscript(state: ReadModelEntityState, chatId: string | null): PmaCard[] {
   if (!chatId) return [];
-  const timeline = state.pmaTimelines[chatId];
-  return timeline ? timeline.order.map((id) => timeline.itemsById[id]).filter(Boolean) : [];
+  const transcript = state.pmaTranscripts[chatId];
+  return transcript ? transcript.order.map((id) => transcript.cardsById[id]).filter(Boolean) : [];
 }
 
 export function selectPmaProgress(state: ReadModelEntityState, chatId: string | null): PmaRunProgress | null {

@@ -1,8 +1,7 @@
 <script lang="ts">
   import { onDestroy } from 'svelte';
-  import { openPmaTailEventSource, type StreamSubscription } from '$lib/api/streaming';
+  import { openPmaTranscriptEventSource, type StreamSubscription } from '$lib/api/streaming';
   import { withRuntimeBasePath as href } from '$lib/runtime/basePath';
-  import type { PmaTimelineItem } from '$lib/viewModels/domain';
 
   let {
     chatId,
@@ -40,24 +39,17 @@
   onDestroy(() => teardown());
 
   function connect(id: string): void {
-    subscription = openPmaTailEventSource(id, {
+    subscription = openPmaTranscriptEventSource(id, {
       onEvent: (event) => {
         if (activeChatId !== id) return;
         streamState = 'connected';
-        if (event.kind === 'timeline') {
-          const item = event.payload as unknown as PmaTimelineItem & { kind?: string; payload?: { text?: string } };
-          const kind = String(item.kind ?? '');
-          const text = String((item as { payload?: { text?: unknown } }).payload?.text ?? '').trim();
-          if (!text) return;
-          if (kind === 'assistant_message') {
-            latestText = text;
-            latestRole = 'assistant';
-          } else if (kind === 'user_message') {
-            latestText = text;
-            latestRole = 'user';
-          } else if (kind === 'intermediate' || kind === 'status') {
-            latestText = text;
-            latestRole = 'intermediate';
+        if (event.kind === 'transcript_snapshot' || event.kind === 'transcript_append') {
+          for (const row of transcriptRows(event.payload).reverse()) {
+            const next = rowPreview(row);
+            if (!next) continue;
+            latestText = next.text;
+            latestRole = next.role;
+            return;
           }
         }
       },
@@ -75,6 +67,30 @@
     latestText = '';
     latestRole = null;
     streamState = 'idle';
+  }
+
+  function transcriptRows(payload: Record<string, unknown>): Record<string, unknown>[] {
+    const rows = payload.rows;
+    return Array.isArray(rows)
+      ? rows.filter((row): row is Record<string, unknown> => Boolean(row) && typeof row === 'object' && !Array.isArray(row))
+      : [];
+  }
+
+  function rowPreview(row: Record<string, unknown>): { text: string; role: 'user' | 'assistant' | 'intermediate' } | null {
+    const kind = String(row.kind ?? '');
+    if (kind === 'message') {
+      const message = row.message;
+      if (!message || typeof message !== 'object' || Array.isArray(message)) return null;
+      const text = String((message as Record<string, unknown>).text ?? '').trim();
+      if (!text) return null;
+      const role = String((message as Record<string, unknown>).role ?? '') === 'user' ? 'user' : 'assistant';
+      return { text, role };
+    }
+    if (kind === 'intermediate' || kind === 'tool_group' || kind === 'approval' || kind === 'lifecycle') {
+      const text = String(row.text ?? row.summary ?? row.title ?? '').trim();
+      return text ? { text, role: 'intermediate' } : null;
+    }
+    return null;
   }
 
   const dotClass = $derived(`stream-dot signal-${statusSignal} stream-${streamState}`);

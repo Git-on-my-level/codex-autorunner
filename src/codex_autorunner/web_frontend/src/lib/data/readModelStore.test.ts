@@ -9,10 +9,10 @@ import {
   type PageWindow,
   type ProjectionCursor
 } from '$lib/api/readModelContracts';
-import { pmaTimelineContractFields, type PmaRunProgress, type PmaTimelineItem, type SurfaceArtifact } from '$lib/viewModels/domain';
+import { type PmaRunProgress, type SurfaceArtifact } from '$lib/viewModels/domain';
+import type { PmaCard } from '$lib/viewModels/pmaChat';
 import {
   PMA_LIVE_PROGRESS_EVENT_LIMIT,
-  PMA_TIMELINE_RETAIN_LIMIT,
   ReadModelEntityStore,
   selectChatDetailView,
   selectChatIndexView,
@@ -213,6 +213,142 @@ describe('read model entity store', () => {
     expect(store.snapshot().optimistic['client-1'].status).toBe('reconciled');
   });
 
+  it('replaces and upserts backend-owned PMA transcript cards independently of timeline state', () => {
+    const store = new ReadModelEntityStore();
+    const first: PmaCard = {
+      kind: 'message',
+      id: 'turn:1:user',
+      turnId: '1',
+      orderKey: '001',
+      timestamp: now,
+      message: {
+        id: 'turn:1:user',
+        chatId: 'chat-1',
+        role: 'user',
+        text: 'hello',
+        createdAt: now,
+        status: null,
+        artifacts: [],
+        raw: {}
+      }
+    };
+    const second: PmaCard = {
+      ...first,
+      id: 'turn:1:assistant',
+      orderKey: '002',
+      message: {
+        ...first.message,
+        id: 'turn:1:assistant',
+        role: 'assistant',
+        text: 'hi'
+      }
+    };
+
+    store.replacePmaTranscript('chat-1', [first]);
+    store.upsertPmaTranscriptCards('chat-1', [second]);
+
+    expect(store.snapshot().pmaTranscripts['chat-1'].order).toEqual(['turn:1:user', 'turn:1:assistant']);
+    expect(store.snapshot().pmaTranscripts['chat-1'].cardsById['turn:1:assistant']).toMatchObject({
+      kind: 'message',
+      message: { role: 'assistant', text: 'hi' }
+    });
+  });
+
+  it('orders backend-owned PMA transcript cards by backend order key across turns', () => {
+    const store = new ReadModelEntityStore();
+    const userOne: PmaCard = {
+      kind: 'message',
+      id: 'turn:1:user',
+      turnId: '1',
+      orderKey: '00000001|user',
+      timestamp: now,
+      message: {
+        id: 'turn:1:user',
+        chatId: 'chat-1',
+        role: 'user',
+        text: 'first',
+        createdAt: now,
+        status: null,
+        artifacts: [],
+        raw: {}
+      }
+    };
+    const assistantOne: PmaCard = {
+      ...userOne,
+      id: 'turn:1:assistant',
+      orderKey: '00000002|assistant',
+      message: { ...userOne.message, id: 'turn:1:assistant', role: 'assistant', text: 'first reply' }
+    };
+    const userTwo: PmaCard = {
+      ...userOne,
+      id: 'turn:2:user',
+      turnId: '2',
+      orderKey: '00000003|user',
+      message: { ...userOne.message, id: 'turn:2:user', text: 'second' }
+    };
+
+    store.replacePmaTranscript('chat-1', [userTwo, assistantOne, userOne]);
+
+    expect(store.snapshot().pmaTranscripts['chat-1'].order).toEqual([
+      'turn:1:user',
+      'turn:1:assistant',
+      'turn:2:user'
+    ]);
+  });
+
+  it('keeps an optimistic user transcript row before live progress that arrives first', () => {
+    const store = new ReadModelEntityStore();
+    const optimistic: PmaCard = {
+      kind: 'message',
+      id: 'optimistic:user:1',
+      turnId: null,
+      orderKey: 'optimistic|2026-05-11T12:00:00.000Z|optimistic:user:1',
+      timestamp: '2026-05-11T12:00:00.000Z',
+      message: {
+        id: 'optimistic:user:1',
+        chatId: 'chat-1',
+        role: 'user',
+        text: 'What tools do you have access to?',
+        createdAt: '2026-05-11T12:00:00.000Z',
+        status: null,
+        artifacts: [],
+        raw: { optimistic: true }
+      }
+    };
+    const progress: PmaCard = {
+      kind: 'intermediate',
+      id: 'turn:1:intermediate:0001',
+      title: 'Chat Execution Journal',
+      text: 'Execution started.',
+      eventIds: ['1'],
+      progressSourceIds: ['1'],
+      detail: null,
+      turnId: '1',
+      orderKey: '00000001|2026-05-11T12:00:01.000Z|turn:1:intermediate:0001',
+      timestamp: '2026-05-11T12:00:01.000Z'
+    };
+    const canonicalUser: PmaCard = {
+      ...optimistic,
+      id: 'turn:1:user',
+      turnId: '1',
+      orderKey: '00000000|2026-05-11T12:00:00.000Z|turn:1:user',
+      message: {
+        ...optimistic.message,
+        id: 'turn:1:user',
+        raw: {}
+      }
+    };
+
+    store.upsertPmaTranscriptCards('chat-1', [progress]);
+    store.upsertPmaTranscriptCards('chat-1', [optimistic]);
+
+    expect(store.snapshot().pmaTranscripts['chat-1'].order).toEqual(['optimistic:user:1', 'turn:1:intermediate:0001']);
+
+    store.replacePmaTranscript('chat-1', [progress, canonicalUser]);
+
+    expect(store.snapshot().pmaTranscripts['chat-1'].order).toEqual(['turn:1:user', 'turn:1:intermediate:0001']);
+  });
+
   it('keeps detail-backed chats when a bounded index snapshot arrives later', () => {
     const store = new ReadModelEntityStore();
     store.applyChatDetailSnapshot(detailSnapshot('deep-linked-chat'));
@@ -354,25 +490,6 @@ describe('read model entity store', () => {
     expect(selectChatDetailView(store.snapshot(), 'chat-1').timeline.filter((item) => item.itemId === 'item-2')).toHaveLength(1);
   });
 
-  it('retains only a bounded visible PMA timeline window', () => {
-    const store = new ReadModelEntityStore();
-    const noisyItems = Array.from({ length: 1_000 }, (_, index) => pmaTimelineItem(`stream-${index}`, {
-      intermediate_kind: 'assistant_stream',
-      event_type: 'output_delta',
-      text: `chunk ${index}`
-    }));
-    const visibleItems = Array.from({ length: PMA_TIMELINE_RETAIN_LIMIT + 10 }, (_, index) =>
-      pmaTimelineItem(`visible-${index}`, { text: `visible ${index}` })
-    );
-
-    store.replacePmaTimeline('chat-1', [...noisyItems, ...visibleItems]);
-
-    const timeline = store.snapshot().pmaTimelines['chat-1'];
-    expect(timeline.order).toHaveLength(PMA_TIMELINE_RETAIN_LIMIT);
-    expect(timeline.order.every((id) => id.startsWith('visible-'))).toBe(true);
-    expect(timeline.order[0]).toBe('visible-10');
-  });
-
   it('caps retained PMA live progress events and drops hidden/debug-only progress', () => {
     const store = new ReadModelEntityStore();
     const events = [
@@ -388,21 +505,6 @@ describe('read model entity store', () => {
     expect(retained[0].id).toBe('visible-5');
   });
 });
-
-function pmaTimelineItem(id: string, payload: Record<string, unknown>): PmaTimelineItem {
-  return {
-    id,
-    kind: 'intermediate',
-    orderKey: id,
-    timestamp: now,
-    chatId: 'chat-1',
-    turnId: 'turn-1',
-    status: 'running',
-    ...pmaTimelineContractFields(id),
-    payload,
-    raw: { item_id: id, payload }
-  };
-}
 
 function progressArtifact(id: string, progressItem: Record<string, unknown>): SurfaceArtifact {
   return {

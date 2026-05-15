@@ -58,6 +58,7 @@ from .wiring import build_app_server_supervisor_factory
 
 _logger = logging.getLogger(__name__)
 _DEFAULT_EXECUTION_ERROR = "Delegated turn failed"
+_EMPTY_ASSISTANT_OUTPUT_ERROR = "Agent completed without assistant output"
 _DEFAULT_INTERRUPTED_REASON = "Runtime thread interrupted"
 _TICKET_FLOW_REQUIRED_CAPABILITIES = ("durable_threads", "message_turns")
 
@@ -596,9 +597,14 @@ class DefaultAgentPool:
                 "done",
                 "success",
             }:
-                status = "ok"
-                error = None
-                result_status = "completed"
+                if assistant_text.strip():
+                    status = "ok"
+                    error = None
+                    result_status = "completed"
+                else:
+                    status = "error"
+                    error = _EMPTY_ASSISTANT_OUTPUT_ERROR
+                    result_status = "failed"
             elif normalized_status in {
                 "interrupted",
                 "cancelled",

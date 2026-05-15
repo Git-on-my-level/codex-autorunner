@@ -15,7 +15,7 @@ tests, and docs only; release/package builds produce and verify the static bundl
   comment block in `../surfaces/web/app.py`). Prefer documenting a new deep path in
   `tests/surfaces/web/test_web_static_routes.py`.
 - Design system: `DESIGN.md`
-- PMA chat renders the backend canonical timeline (`/hub/pma/threads/{id}/timeline`). Frontend helpers may map canonical items to cards and reconcile temporary optimistic items by stable backend IDs, but must not compose `/turns` into a parallel transcript or own final-delivery state.
+- PMA chat renders the backend-owned transcript projection (`/hub/pma/threads/{id}/transcript` and `/transcript/events`). Frontend helpers may map transcript rows to cards and keep temporary optimistic user rows until the backend confirms them, but must not compose `/turns`, `/tail`, or `/timeline` into a parallel transcript or own final-delivery state. `/timeline` and `/tail` are diagnostics/projection inputs, not the primary chat rendering contract.
 - Screen data should come from Web Hub read models, not broad page-local
   choreography. For chats, repo/worktree, ticket, run, and artifact surfaces,
   prefer `src/lib/data/readModelClients.ts`, `readModelStream.ts`,

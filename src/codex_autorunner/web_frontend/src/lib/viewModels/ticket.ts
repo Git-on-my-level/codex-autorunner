@@ -1,13 +1,11 @@
 import type { PmaChatSummary, PmaRunProgress, PmaTimelineItem, SurfaceArtifact, TicketDetail, TicketSummary, WorkStatus } from './domain';
 import {
   buildManagedThreadCreatePayload,
-  buildPmaTranscriptCards,
   formatRelativeTime,
   pmaChatKind,
   pmaChatKindLabel,
   progressPercent,
   statusLabel,
-  type PmaCard,
   type PmaChatKind,
   type ManagedThreadCreatePayload,
   type PmaChatScopeOption
@@ -220,7 +218,6 @@ export type TicketDetailViewModel = {
   timeline: TicketTimelineItem[];
   progressPercent: number;
   artifacts: TicketArtifactRow[];
-  chatTranscriptCards: PmaCard[];
   linkedChatId: string | null;
   /**
    * Every chat spawned for this ticket — typically one per agent
@@ -440,7 +437,6 @@ export function buildTicketDetailViewModel(
   const debugHref = run ? `/api/flows/${encodeURIComponent(run.id)}/dispatch_history` : null;
   const chatHref = chat ? `/chats?chat=${encodeURIComponent(chat.id)}` : detail.chatKey ? `/chats?chat=${encodeURIComponent(detail.chatKey)}` : null;
   const linkedChatId = chat?.id ?? null;
-  const chatTranscriptCards = buildPmaTranscriptCards(source.timeline ?? [], chat, [...detail.artifacts, ...source.artifacts], run);
   const sourceTickets = source.tickets.map((ticket) => ticketToListRow(ticket, source)).sort(byTicketNumberThenTitle);
   const routeId = routeIdForTicket(detail);
   const selectedIndex = sourceTickets.findIndex((row) => row.routeId === routeId || row.id === detail.id);
@@ -482,7 +478,6 @@ export function buildTicketDetailViewModel(
     timeline: buildTimeline(detail, run, runArtifacts, chatHref),
     progressPercent: progress,
     artifacts: uniqueArtifacts(runArtifacts).slice(0, 8).map(artifactToRow),
-    chatTranscriptCards,
     linkedChatId,
     linkedChats: allLinkedChats.map(linkedChatToVm),
     chatHref,

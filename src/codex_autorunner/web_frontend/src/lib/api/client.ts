@@ -29,6 +29,7 @@ import {
   type TicketSummary,
   type WorktreeSummary
 } from '$lib/viewModels/domain';
+import { mapPmaTranscriptSnapshot, type PmaTranscriptSnapshot } from '$lib/viewModels/pmaChat';
 import { runtimeBasePath, withRuntimeBasePath } from '$lib/runtime/basePath';
 
 export type ApiErrorKind = 'http' | 'network' | 'parse' | 'aborted';
@@ -317,14 +318,25 @@ export class PmaApiClient {
         }),
         (payload) => mapPmaChatSummary(asRecord(payload.thread ?? payload))
       ),
-    getTimeline: async (chatId: string, request: PmaTimelineRequest = {}): Promise<ApiResult<PmaTimelineItem[]>> => {
-      const params = new URLSearchParams({ limit: String(request.limit ?? 50) });
-      return mapResult(await this.getJson<JsonRecord>(`/hub/pma/threads/${encodeURIComponent(chatId)}/timeline?${params.toString()}`), (payload) =>
-        asArray(payload.items).map(mapPmaTimelineItem)
+    // Chat rendering uses transcript projections; timeline and tail are diagnostics-only.
+    getTranscript: async (chatId: string, request: PmaTimelineRequest = {}): Promise<ApiResult<PmaTranscriptSnapshot>> => {
+      const params = new URLSearchParams({ limit: String(request.limit ?? 200) });
+      return mapResult(await this.getJson<JsonRecord>(`/hub/pma/threads/${encodeURIComponent(chatId)}/transcript?${params.toString()}`), (payload) =>
+        mapPmaTranscriptSnapshot(payload, mapPmaRunProgress)
       );
     },
-    getTail: async (chatId: string): Promise<ApiResult<PmaRunProgress>> =>
-      mapResult(await this.getJson<JsonRecord>(`/hub/pma/threads/${encodeURIComponent(chatId)}/tail`), mapPmaRunProgress),
+    diagnostics: {
+      // Legacy diagnostics/tests only. Screen routes use chat index/detail projections.
+      getTimeline: async (chatId: string, request: PmaTimelineRequest = {}): Promise<ApiResult<PmaTimelineItem[]>> => {
+        const params = new URLSearchParams({ limit: String(request.limit ?? 50) });
+        return mapResult(
+          await this.getJson<JsonRecord>(`/hub/pma/threads/${encodeURIComponent(chatId)}/timeline?${params.toString()}`),
+          (payload) => asArray(payload.items).map(mapPmaTimelineItem)
+        );
+      },
+      getTail: async (chatId: string): Promise<ApiResult<PmaRunProgress>> =>
+        mapResult(await this.getJson<JsonRecord>(`/hub/pma/threads/${encodeURIComponent(chatId)}/tail`), mapPmaRunProgress)
+    },
     getStatus: async (chatId: string): Promise<ApiResult<PmaRunProgress>> =>
       mapResult(await this.getJson<JsonRecord>(`/hub/pma/threads/${encodeURIComponent(chatId)}/status`), mapPmaRunProgress),
     getQueue: async (chatId: string): Promise<ApiResult<PmaThreadQueue>> =>

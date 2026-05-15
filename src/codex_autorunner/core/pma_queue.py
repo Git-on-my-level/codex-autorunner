@@ -311,34 +311,36 @@ class PmaQueue:
         return cancelled
 
     async def replay_pending(self, lane_id: str) -> int:
-        self._record_loop()
-        if lane_id in self._replayed_lanes:
-            return 0
-        self._replayed_lanes.add(lane_id)
+        async with self._ensure_lock():
+            self._record_loop()
+            if lane_id in self._replayed_lanes:
+                return 0
+            self._replayed_lanes.add(lane_id)
 
-        items = await self.list_items(lane_id)
-        known = self._ensure_lane_known_ids(lane_id)
-        for item in items:
-            known.add(item.item_id)
-        replayable: list[PmaQueueItem] = []
-        for item in items:
-            if item.state == QueueItemState.PENDING:
+            items = await self.list_items(lane_id)
+            known = self._ensure_lane_known_ids(lane_id)
+            replayable: list[PmaQueueItem] = []
+            for item in items:
+                if item.item_id in known:
+                    continue
+                known.add(item.item_id)
+                if item.state == QueueItemState.PENDING:
+                    replayable.append(item)
+                    continue
+                if item.state != QueueItemState.RUNNING:
+                    continue
+                item.state = QueueItemState.PENDING
+                item.started_at = None
+                await self._update_in_file(item)
                 replayable.append(item)
-                continue
-            if item.state != QueueItemState.RUNNING:
-                continue
-            item.state = QueueItemState.PENDING
-            item.started_at = None
-            await self._update_in_file(item)
-            replayable.append(item)
-        if not replayable:
-            return 0
+            if not replayable:
+                return 0
 
-        queue = self._ensure_lane_queue(lane_id)
-        for item in replayable:
-            await queue.put(item)
-        self._ensure_lane_event(lane_id).set()
-        return len(replayable)
+            queue = self._ensure_lane_queue(lane_id)
+            for item in replayable:
+                await queue.put(item)
+            self._ensure_lane_event(lane_id).set()
+            return len(replayable)
 
     async def wait_for_lane_item(
         self,
@@ -633,7 +635,6 @@ class PmaQueue:
         return None
 
     def _notify_in_memory_enqueue(self, item: PmaQueueItem) -> None:
-        self._ensure_lane_known_ids(item.lane_id).add(item.item_id)
         queue = self._lane_queues.get(item.lane_id)
         event = self._lane_events.get(item.lane_id)
         loop = self._loop
@@ -641,6 +642,7 @@ class PmaQueue:
             return
 
         def _enqueue() -> None:
+            self._ensure_lane_known_ids(item.lane_id).add(item.item_id)
             queue.put_nowait(item)
             event.set()
 
