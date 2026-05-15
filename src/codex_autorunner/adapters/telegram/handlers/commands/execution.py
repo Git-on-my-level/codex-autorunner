@@ -95,6 +95,10 @@ from .....agents.registry import (
     resolve_agent_runtime,
     wrap_requested_agent_context,
 )
+from .....core.artifact_instructions import (
+    ArtifactDeliveryContext,
+    render_agent_artifact_instructions,
+)
 from .....core.config import load_hub_config
 from .....core.config_contract import ConfigError
 from .....core.context_awareness import (
@@ -172,7 +176,7 @@ if TYPE_CHECKING:
 
 from .command_utils import _format_opencode_exception
 from .opencode_stream_parts import OpenCodeStreamPartHandler
-from .shared import FILES_HINT_TEMPLATE, TelegramCommandSupportMixin
+from .shared import TelegramCommandSupportMixin
 from .turn_lifecycle import (
     clear_turn_runtime_state,
     compose_interrupt_aware_response,
@@ -1743,19 +1747,25 @@ class ExecutionCommands(TelegramCommandSupportMixin):
         user_input_text: Optional[str] = None,
     ) -> tuple[str, bool]:
         inbox_dir = self._files_inbox_dir(record.workspace_path, topic_key)
-        outbox_dir = self._files_outbox_pending_dir(record.workspace_path, topic_key)
         topic_dir = self._files_topic_dir(record.workspace_path, topic_key)
         return maybe_inject_filebox_hint(
             prompt_text,
             hint_text=wrap_injected_context(
-                FILES_HINT_TEMPLATE.format(
-                    inbox=str(inbox_dir),
-                    outbox=str(outbox_dir),
-                    conversation_key=_artifact_conversation_key_from_topic(topic_key),
-                    workspace_path=record.workspace_path,
-                    topic_key=topic_key,
-                    topic_dir=str(topic_dir),
-                    max_bytes=self._config.media.max_file_bytes,
+                render_agent_artifact_instructions(
+                    ArtifactDeliveryContext(
+                        surface="telegram",
+                        conversation_key=_artifact_conversation_key_from_topic(
+                            topic_key
+                        ),
+                        workspace_scope=f"repo:{record.workspace_path}",
+                        scope_label="repo/worktree artifact target for this Telegram topic",
+                        user_upload_inbox=inbox_dir,
+                        extra_agent_lines=(
+                            f"Topic key: {topic_key}",
+                            f"Topic dir: {topic_dir}",
+                            f"Max file size: {self._config.media.max_file_bytes} bytes.",
+                        ),
+                    )
                 )
             ),
             has_file_context=has_file_context,

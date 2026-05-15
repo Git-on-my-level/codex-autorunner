@@ -10,6 +10,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Optional, Sequence
 
+from .....core.artifact_instructions import (
+    ArtifactDeliveryContext,
+    render_agent_artifact_instructions,
+)
 from .....core.filebox import (
     inbox_dir as filebox_inbox_dir,
 )
@@ -32,24 +36,7 @@ from .command_utils import (
     _format_telegram_download_error,
 )
 from .filebox import FileBoxCommandsMixin
-from .shared import FILES_HINT_TEMPLATE, TelegramCommandSupportMixin
-
-PMA_FILES_HINT_TEMPLATE = (
-    "Artifact delivery target:\n"
-    "- Active scope: hub PMA FileBox for this Telegram PMA chat\n"
-    "- Target surface: telegram\n"
-    "- Target conversation: {conversation_key}\n"
-    "- Canonical send-back command: `car artifacts send <file> --to current`.\n"
-    "- If current-target environment variables are unavailable, use: "
-    "`car artifacts send <file> --to explicit --surface telegram --conversation {conversation_key}`.\n"
-    "- Compatibility FileBox paths for this active PMA target only:\n"
-    "  - Inbox: {inbox}\n"
-    "  - Legacy outbox: {outbox}\n"
-    "Files placed in a different hub/repo FileBox outbox are not implied to "
-    "belong to this conversation; run `car artifacts diagnose` to find them.\n"
-    "Check delivery with /files outbox.\n"
-    "Max file size: {max_bytes} bytes."
-)
+from .shared import TelegramCommandSupportMixin
 
 
 @dataclass
@@ -1181,30 +1168,38 @@ class FilesCommands(FileBoxCommandsMixin, TelegramCommandSupportMixin):
     ) -> str:
         if pma_enabled:
             pma_inbox = self._pma_inbox_dir()
-            pma_outbox = self._pma_outbox_dir()
-            if pma_inbox is not None and pma_outbox is not None:
+            if pma_inbox is not None:
                 return wrap_injected_context(
-                    PMA_FILES_HINT_TEMPLATE.format(
-                        inbox=str(pma_inbox),
-                        outbox=str(pma_outbox),
-                        conversation_key=_artifact_conversation_key_from_topic(
-                            topic_key
+                    render_agent_artifact_instructions(
+                        ArtifactDeliveryContext(
+                            surface="telegram",
+                            conversation_key=_artifact_conversation_key_from_topic(
+                                topic_key
+                            ),
+                            scope_label="hub PMA artifact target for this Telegram PMA chat",
+                            user_upload_inbox=pma_inbox,
+                            extra_agent_lines=(
+                                f"Max file size: {self._config.media.max_file_bytes} bytes.",
+                            ),
                         ),
-                        max_bytes=self._config.media.max_file_bytes,
                     )
                 )
         inbox_dir = self._files_inbox_dir(workspace_path, topic_key)
-        outbox_dir = self._files_outbox_pending_dir(workspace_path, topic_key)
         topic_dir = self._files_topic_dir(workspace_path, topic_key)
         return wrap_injected_context(
-            FILES_HINT_TEMPLATE.format(
-                inbox=str(inbox_dir),
-                outbox=str(outbox_dir),
-                conversation_key=_artifact_conversation_key_from_topic(topic_key),
-                workspace_path=workspace_path,
-                topic_key=topic_key,
-                topic_dir=str(topic_dir),
-                max_bytes=self._config.media.max_file_bytes,
+            render_agent_artifact_instructions(
+                ArtifactDeliveryContext(
+                    surface="telegram",
+                    conversation_key=_artifact_conversation_key_from_topic(topic_key),
+                    workspace_scope=f"repo:{workspace_path}",
+                    scope_label="repo/worktree artifact target for this Telegram topic",
+                    user_upload_inbox=inbox_dir,
+                    extra_agent_lines=(
+                        f"Topic key: {topic_key}",
+                        f"Topic dir: {topic_dir}",
+                        f"Max file size: {self._config.media.max_file_bytes} bytes.",
+                    ),
+                )
             )
         )
 

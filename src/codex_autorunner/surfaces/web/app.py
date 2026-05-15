@@ -66,6 +66,7 @@ from .routes.contextspace import build_contextspace_routes
 from .routes.feedback_reports import build_feedback_report_routes
 from .routes.filebox import build_hub_filebox_routes
 from .routes.flows import build_flow_routes
+from .routes.hub_chat_read_models import build_hub_chat_read_model_router
 from .routes.hub_control_plane import build_hub_control_plane_routes
 from .routes.hub_messages import build_hub_messages_routes
 from .routes.hub_repos import HubMountManager, build_hub_repo_routes
@@ -257,6 +258,7 @@ def create_hub_app(
     app.include_router(build_hub_control_plane_routes())
     app.include_router(build_hub_state_routes(context))
     app.include_router(build_hub_chat_event_routes(context))
+    app.include_router(build_hub_chat_read_model_router(context))
 
     app.state.hub_started = False
     app.state.hub_deferred_startup_complete = False

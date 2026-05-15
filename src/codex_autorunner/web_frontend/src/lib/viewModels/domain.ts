@@ -32,6 +32,23 @@ export type PmaChatSummary = {
   raw: JsonRecord;
 };
 
+/** True when a projection field explicitly marks the managed thread as archived (case-insensitive). */
+export function pmaLifecycleTokenIsArchived(value: unknown): boolean {
+  return String(value ?? '').trim().toLowerCase() === 'archived';
+}
+
+/**
+ * Archived chat detection from durable raw fields (index rows, surface snapshots, detail loads).
+ * Intentionally ignores generic `status` strings so live execution status cannot mask archival.
+ */
+export function pmaChatArchivedFromRawSignals(raw: JsonRecord | null | undefined): boolean {
+  if (!raw || typeof raw !== 'object') return false;
+  for (const key of ['lifecycle_status', 'lifecycleStatus', 'lifecycle', 'runtime_status'] as const) {
+    if (pmaLifecycleTokenIsArchived(raw[key])) return true;
+  }
+  return false;
+}
+
 /** Normalized user/PMA message shape, including surfaced cards as child artifacts. */
 export type PmaChatMessage = {
   id: string;
@@ -267,10 +284,23 @@ export function mapPmaChatSummary(raw: JsonRecord): PmaChatSummary {
     nullableString(raw.worktree_repo_id ?? raw.worktree_id) ?? (resourceKind === 'worktree' ? resourceId : null);
   const ticketId = ticketIdFromRaw(raw);
   const isTicketFlow = detectTicketFlowChat(raw, ticketId);
+  const lifecycleField = nullableString(raw.lifecycle_status ?? raw.lifecycleStatus);
+  const lifecycleRoot = nullableString(raw.lifecycle);
+  let lifecycleStatus: string | null =
+    pmaLifecycleTokenIsArchived(lifecycleField) || pmaLifecycleTokenIsArchived(lifecycleRoot)
+      ? 'archived'
+      : lifecycleField;
+  if (
+    lifecycleStatus !== 'archived' &&
+    pmaLifecycleTokenIsArchived(raw.runtime_status ?? raw.execution_status ?? raw.normalized_status)
+  ) {
+    lifecycleStatus = 'archived';
+  }
+
   return {
     id,
     title: readableThreadTitle(raw, id, ticketId),
-    lifecycleStatus: nullableString(raw.lifecycle_status ?? raw.lifecycleStatus),
+    lifecycleStatus,
     status,
     agentId: nullableString(raw.agent_id ?? raw.agent),
     chatKind: normalizeManagedThreadChatKind(raw.chat_kind ?? raw.chatKind ?? raw.thread_kind),

@@ -1,9 +1,82 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { ApiResult, JsonRecord, PmaApiClient } from '$lib/api/client';
+import {
+  READ_MODEL_CONTRACT_VERSION,
+  type ChatIndexRow,
+  type ChatIndexSnapshot,
+  type ProjectionCursor
+} from '$lib/api/readModelContracts';
 import type { ChatSurfaceStreamOptions, StreamSubscription } from '$lib/api/streaming';
 import { ReadModelEntityStore } from './readModelStore';
 import { selectPmaChats } from './readModelViewModels';
 import { createChatIndexSession } from './chatIndexSession';
+
+const issuedAt = '2026-05-12T00:00:00.000Z';
+
+function projCursor(sequence: number, source: string): ProjectionCursor {
+  return { value: `${source}:${sequence}`, sequence, source, issuedAt };
+}
+
+function chatIndexSnapshot(
+  filter: ChatIndexSnapshot['filter'],
+  rows: ChatIndexRow[]
+): ChatIndexSnapshot {
+  const counters = {
+    total: rows.length,
+    waiting: rows.filter((r) => r.status === 'waiting').length,
+    running: rows.filter((r) => r.status === 'running').length,
+    unread: rows.filter((r) => r.unreadCount > 0).length,
+    archived: rows.filter((r) => r.status === 'archived').length
+  };
+  return {
+    contractVersion: READ_MODEL_CONTRACT_VERSION,
+    kind: 'chat.index.snapshot',
+    cursor: projCursor(1, 'test.chat.index'),
+    window: {
+      limit: 200,
+      nextCursor: null,
+      previousCursor: null,
+      totalEstimate: rows.length,
+      totalIsExact: true
+    },
+    filter,
+    query: null,
+    rows,
+    groups: [],
+    counters,
+    repair: {
+      snapshotRoute: '/hub/read-models/chats',
+      cursorQueryParam: 'after',
+      gapEventType: 'projection.cursor_gap',
+      behavior: 'repair_snapshot_required'
+    }
+  };
+}
+
+function indexRow(
+  id: string,
+  title: string,
+  status: ChatIndexRow['status'],
+  lastActivityAt: string = issuedAt
+): ChatIndexRow {
+  return {
+    chatId: id,
+    surface: 'pma',
+    title,
+    status,
+    unreadCount: 0,
+    lastActivityAt,
+    repoId: null,
+    worktreeId: null,
+    ticketId: null,
+    runId: null,
+    agent: null,
+    agentProfile: null,
+    chatKind: null,
+    model: null,
+    groupId: null
+  };
+}
 
 describe('chat index session', () => {
   it('keeps one chat index stream while chat pages mount and unmount inside a layout session', async () => {
@@ -141,7 +214,7 @@ describe('chat index session', () => {
     expect(rows[0]).toMatchObject({
       id: 'chat-active',
       title: 'Agent Nexus / #codex',
-      updatedAt: '2026-05-12T00:00:00Z'
+      updatedAt: '2026-05-12T00:00:00.000Z'
     });
   });
 });
@@ -149,27 +222,25 @@ describe('chat index session', () => {
 function mockApi(): PmaApiClient {
   return {
     getJson: vi.fn(async (path: string): Promise<ApiResult<JsonRecord>> => {
-      if (path.includes('view=archived')) {
-        return ok({ rows: [chatRow('chat-archived', 'Archived chat', 'archived')] });
+      if (path.includes('filter=archived')) {
+        return ok(
+          chatIndexSnapshot('archived', [
+            indexRow('chat-archived', 'Archived chat', 'archived')
+          ]) as unknown as JsonRecord
+        );
       }
-      return ok({ rows: [chatRow('chat-active', 'Active chat', 'running')] });
+      if (path.includes('filter=all')) {
+        return ok(
+          chatIndexSnapshot('all', [indexRow('chat-active', 'Active chat', 'running')]) as unknown as JsonRecord
+        );
+      }
+      return ok({ rows: [] });
     })
   } as unknown as PmaApiClient;
 }
 
 function ok<T>(data: T): ApiResult<T> {
   return { ok: true, data };
-}
-
-function chatRow(id: string, title: string, status: string): JsonRecord {
-  return {
-    managed_thread_id: id,
-    title,
-    lifecycle_status: status,
-    runtime_status: status,
-    updated_at: '2026-05-12T00:00:00Z',
-    surface: 'pma'
-  };
 }
 
 function chatSurface(id: string, title: string): JsonRecord {

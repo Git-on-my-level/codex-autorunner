@@ -23,7 +23,7 @@ from tests.pma_context_support import (
     test_build_hub_snapshot_prefers_status_change_time_for_thread_freshness,
     test_build_hub_snapshot_repo_entries_include_canonical_state_v1,
     test_build_hub_snapshot_surfaces_unreadable_latest_dispatch,
-    test_format_pma_prompt_includes_filebox_paths,
+    test_format_pma_prompt_includes_artifact_delivery_contract,
     test_render_hub_snapshot_caps_pma_file_action_summaries,
     test_render_hub_snapshot_distinguishes_run_dispatch_vs_pma_files,
     test_render_hub_snapshot_empty_both,

@@ -221,7 +221,7 @@ WEB_UI_SCENARIOS: tuple[WebUiScenario, ...] = (
         seed_fixture=SeedFixtureKind.CHAT_LIST_DETAIL,
         visible_landmarks=("Chats", "Search chats, repos, tickets"),
         read_model_routes=(
-            "/hub/chat/index?view=active&limit=25",
+            "/hub/read-models/chats?filter=active&limit=25",
             "/hub/chat/patches",
         ),
         api_routes=("/hub/pma/threads",),
@@ -235,7 +235,7 @@ WEB_UI_SCENARIOS: tuple[WebUiScenario, ...] = (
         seed_fixture=SeedFixtureKind.PMA_NEW_CHAT,
         visible_landmarks=("Chats", "Search chats, repos, tickets"),
         read_model_routes=(
-            "/hub/chat/index?view=active&limit=25",
+            "/hub/read-models/chats?filter=active&limit=25",
             "/hub/chat/patches",
         ),
         api_routes=("/hub/pma/threads",),
@@ -250,7 +250,7 @@ WEB_UI_SCENARIOS: tuple[WebUiScenario, ...] = (
         seed_fixture=SeedFixtureKind.PMA_QUEUED,
         visible_landmarks=("Chats", "Queued follow-up"),
         read_model_routes=(
-            "/hub/chat/index?view=active&limit=25",
+            "/hub/read-models/chats?filter=active&limit=25",
             "/hub/read-models/chats/chat-smoke-1/timeline",
         ),
         frontend_mappers=("pmaChat.ts", "readModelClients.ts"),
@@ -264,7 +264,7 @@ WEB_UI_SCENARIOS: tuple[WebUiScenario, ...] = (
         seed_fixture=SeedFixtureKind.PMA_RUNNING,
         visible_landmarks=("Chats", "Reading files", "rg"),
         read_model_routes=(
-            "/hub/chat/index?view=active&limit=25",
+            "/hub/read-models/chats?filter=active&limit=25",
             "/hub/read-models/chats/chat-smoke-1/timeline",
         ),
         frontend_mappers=("pmaChat.ts", "readModelClients.ts"),
@@ -278,7 +278,7 @@ WEB_UI_SCENARIOS: tuple[WebUiScenario, ...] = (
         seed_fixture=SeedFixtureKind.PMA_FINAL,
         visible_landmarks=("Chats", "Final answer delivered."),
         read_model_routes=(
-            "/hub/chat/index?view=active&limit=25",
+            "/hub/read-models/chats?filter=active&limit=25",
             "/hub/read-models/chats/chat-smoke-1/timeline",
         ),
         frontend_mappers=("pmaChat.ts", "readModelClients.ts"),
@@ -291,7 +291,7 @@ WEB_UI_SCENARIOS: tuple[WebUiScenario, ...] = (
         seed_fixture=SeedFixtureKind.PMA_ERROR,
         visible_landmarks=("Chats", "Turn failed"),
         read_model_routes=(
-            "/hub/chat/index?view=active&limit=25",
+            "/hub/read-models/chats?filter=active&limit=25",
             "/hub/read-models/chats/chat-smoke-1/timeline",
         ),
         frontend_mappers=("pmaChat.ts", "readModelClients.ts"),
@@ -304,7 +304,7 @@ WEB_UI_SCENARIOS: tuple[WebUiScenario, ...] = (
         seed_fixture=SeedFixtureKind.PMA_APPROVAL,
         visible_landmarks=("Chats", "Run pnpm install?"),
         read_model_routes=(
-            "/hub/chat/index?view=active&limit=25",
+            "/hub/read-models/chats?filter=active&limit=25",
             "/hub/read-models/chats/chat-smoke-1/timeline",
         ),
         frontend_mappers=("pmaChat.ts", "readModelClients.ts"),
@@ -317,7 +317,7 @@ WEB_UI_SCENARIOS: tuple[WebUiScenario, ...] = (
         seed_fixture=SeedFixtureKind.PMA_INTERRUPT,
         visible_landmarks=("Chats", "Change direction now"),
         read_model_routes=(
-            "/hub/chat/index?view=active&limit=25",
+            "/hub/read-models/chats?filter=active&limit=25",
             "/hub/read-models/chats/chat-smoke-1/timeline",
         ),
         frontend_mappers=("pmaChat.ts", "readModelClients.ts"),
@@ -331,7 +331,7 @@ WEB_UI_SCENARIOS: tuple[WebUiScenario, ...] = (
         seed_fixture=SeedFixtureKind.PMA_ATTACHMENT,
         visible_landmarks=("Chats", "Review this file", "report.md"),
         read_model_routes=(
-            "/hub/chat/index?view=active&limit=25",
+            "/hub/read-models/chats?filter=active&limit=25",
             "/hub/read-models/chats/chat-smoke-1/timeline",
         ),
         frontend_mappers=("pmaChat.ts", "readModelClients.ts"),
@@ -344,7 +344,7 @@ WEB_UI_SCENARIOS: tuple[WebUiScenario, ...] = (
         seed_fixture=SeedFixtureKind.PMA_DUPLICATE_REPAIR,
         visible_landmarks=("Chats", "Summary complete.", "Snapshot repair"),
         read_model_routes=(
-            "/hub/chat/index?view=active&limit=25",
+            "/hub/read-models/chats?filter=active&limit=25",
             "/hub/read-models/chats/chat-smoke-1/timeline",
         ),
         frontend_mappers=("pmaChat.ts", "readModelClients.ts"),
@@ -357,7 +357,7 @@ WEB_UI_SCENARIOS: tuple[WebUiScenario, ...] = (
         seed_fixture=SeedFixtureKind.PMA_DISCORD_WEB_HANDOFF,
         visible_landmarks=("Chats", "Deploy script fixed.", "rg"),
         read_model_routes=(
-            "/hub/chat/index?view=active&limit=25",
+            "/hub/read-models/chats?filter=active&limit=25",
             "/hub/read-models/chats/chat-smoke-1/timeline",
         ),
         frontend_mappers=("pmaChat.ts", "readModelClients.ts"),
@@ -372,7 +372,7 @@ WEB_UI_SCENARIOS: tuple[WebUiScenario, ...] = (
         seed_fixture=SeedFixtureKind.PMA_GROUPED_TOOLS,
         visible_landmarks=("Chats", "Refactoring complete.", "multi-tool-group"),
         read_model_routes=(
-            "/hub/chat/index?view=active&limit=25",
+            "/hub/read-models/chats?filter=active&limit=25",
             "/hub/read-models/chats/chat-smoke-1/timeline",
         ),
         frontend_mappers=("pmaChat.ts", "readModelClients.ts"),

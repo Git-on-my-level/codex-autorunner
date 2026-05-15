@@ -49,9 +49,11 @@ BASE="$(car hub endpoint)"
 curl -s "$BASE/hub/read-models/repo-worktree/topology?kind=all&limit=50" | jq .
 curl -s "$BASE/hub/read-models/repo-worktree/runtime?kind=all&limit=50" | jq .
 curl -s "$BASE/hub/read-models/tickets/<ticket_id>?owner_kind=repo&owner_id=<repo_id>" | jq .
-curl -s "$BASE/hub/chat/index?view=all&limit=50" | jq .
-curl -s "$BASE/hub/chat/threads/<thread_id>/detail?timeline_limit=50" | jq .
+curl -s "$BASE/hub/read-models/chats?filter=all&limit=50" | jq .
+curl -s "$BASE/hub/read-models/chats/<thread_id>?timeline_limit=50" | jq .
 ```
+
+Older aliases (`GET /hub/chat/index`, `/hub/chat/threads/{threadId}/detail`) still expose the orchestration-backed shapes; callers that want **`web-read-models.v1`** JSON should prefer `/hub/read-models/chats*` (camelCase payloads from ``dump_read_model_contract``).
 
 For streams, verify the response is `text/event-stream`, cursors increase
 within one source, and reconnect with the last cursor replays no duplicate

@@ -150,6 +150,12 @@ Initial route shapes should be:
 - `GET /hub/read-models/tickets/{ticketId}`
   - Query: `dispatchLimit`, `dispatchAfter`.
   - Response: `TicketDetailSnapshot`.
+- `GET /hub/read-models/chats`
+  - Query: `filter`, `search`, `surfaceKind`, `groupBy`, `parentGroupId`, `cursor`, `offset`, `limit`.
+  - Response: `ChatIndexSnapshot`.
+- `GET /hub/read-models/chats/{chatId}`
+  - Query: `timelineLimit`.
+  - Response: `ChatDetailSnapshot`.
 - `GET /hub/read-models/events`
   - Query: `after`, `families`, `entityKind`, `entityId`.
   - SSE events: `ReadModelPatchEvent` payloads.
@@ -157,11 +163,12 @@ Initial route shapes should be:
 Snapshot routes may add screen-specific query parameters, but they must keep one
 primary snapshot per screen and must return a repair cursor.
 
-Current compatibility route names may differ while the surface converges on the
-generic `/hub/read-models/*` namespace. For example, chat index/detail currently
-also expose `/hub/chat/index`, `/hub/chat/threads/{threadId}/detail`, and
-`/hub/chat/patches`. Treat the contract shape and cursor semantics as the stable
-surface; route aliases are migration details.
+Chat index/detail screen snapshots are authoritative on **`/hub/read-models/chats*`**
+(`ChatIndexSnapshot` / `ChatDetailSnapshot`). Older **`/hub/chat/index`** and
+**/hub/chat/threads/{threadId}/detail** routes remain orchestration-era aliases;
+new Web Hub code should consume the contract routes and `mapReadModelContract`.
+Live PMA streaming still flows through **`/hub/chat/events`** and **`/hub/chat/patches`**
+until a read-model SSE family ships.
 
 ## Pagination Semantics
 

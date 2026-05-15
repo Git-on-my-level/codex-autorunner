@@ -1,13 +1,17 @@
 import { writable, type Readable } from 'svelte/store';
 import { pmaApi, type ApiError, type JsonRecord, type PmaApiClient } from '$lib/api/client';
 import {
+  mapReadModelContract,
+  type ChatIndexRow,
+  type ChatIndexSnapshot
+} from '$lib/api/readModelContracts';
+import {
   openChatSurfaceEventSource,
   type ChatSurfaceStreamEvent,
   type ChatSurfaceStreamOptions,
   type StreamSubscription
 } from '$lib/api/streaming';
 import {
-  legacyChatIndexRecordToChatIndexRow,
   pmaChatCounters,
   pmaChatSummaryToChatIndexRow,
   selectPmaChats,
@@ -40,6 +44,17 @@ type ChatIndexSessionDeps = {
   store?: ReadModelEntityStore;
   openStream?: (options: ChatSurfaceStreamOptions) => StreamSubscription;
 };
+
+/** Same merge semantics as merging two sequential index windows (last occurrence wins order). */
+function mergeUniqueChatIndexRows(primary: ChatIndexRow[], secondary: ChatIndexRow[]): ChatIndexRow[] {
+  const order: string[] = [];
+  const byChatId = new Map<string, ChatIndexRow>();
+  for (const row of [...primary, ...secondary]) {
+    if (!byChatId.has(row.chatId)) order.push(row.chatId);
+    byChatId.set(row.chatId, row);
+  }
+  return order.map((id) => byChatId.get(id)).filter((row): row is ChatIndexRow => Boolean(row));
+}
 
 export function createChatIndexSession(deps: ChatIndexSessionDeps = {}): ChatIndexSession {
   const api = deps.api ?? pmaApi;
@@ -91,15 +106,16 @@ export function createChatIndexSession(deps: ChatIndexSessionDeps = {}): ChatInd
   }
 
   async function refreshChatList(): Promise<void> {
-    const [activeChatResult, archivedChatResult] = await Promise.all([
-      api.getJson<JsonRecord>('/hub/chat/index?view=all&limit=200'),
-      api.getJson<JsonRecord>('/hub/chat/index?view=archived&limit=200')
+    const [activeSnapshot, archivedRes] = await Promise.all([
+      api.getJson<JsonRecord>('/hub/read-models/chats?filter=all&limit=200'),
+      api.getJson<JsonRecord>('/hub/read-models/chats?filter=archived&limit=200')
     ]);
-    if (!activeChatResult.ok) throw activeChatResult.error;
-    const rows = [
-      ...asRecords(activeChatResult.data.rows).map(legacyChatIndexRecordToChatIndexRow),
-      ...(archivedChatResult.ok ? asRecords(archivedChatResult.data.rows).map(legacyChatIndexRecordToChatIndexRow) : [])
-    ];
+    if (!activeSnapshot.ok) throw activeSnapshot.error;
+    const active = mapReadModelContract<ChatIndexSnapshot>(activeSnapshot.data);
+    const archivedRows = archivedRes.ok
+      ? mapReadModelContract<ChatIndexSnapshot>(archivedRes.data).rows
+      : [];
+    const rows = mergeUniqueChatIndexRows(active.rows, archivedRows);
     store.replaceChatIndexRows(rows, syntheticProjectionCursor('pma.thread-list.session'));
   }
 
@@ -205,8 +221,4 @@ function streamCursorFromUnknown(value: unknown): number {
   if (!/^\d+$/.test(raw)) return 0;
   const parsed = Number(raw);
   return Number.isSafeInteger(parsed) && parsed >= 0 ? parsed : 0;
-}
-
-function asRecords(value: unknown): JsonRecord[] {
-  return Array.isArray(value) ? value.filter((item): item is JsonRecord => Boolean(item) && typeof item === 'object' && !Array.isArray(item)) : [];
 }

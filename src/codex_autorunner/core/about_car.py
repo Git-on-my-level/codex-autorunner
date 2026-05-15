@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Mapping, Optional
 
+from .artifact_instructions import render_human_artifact_overview
 from .config import (
     REPO_OVERRIDE_FILENAME,
     ROOT_CONFIG_FILENAME,
@@ -114,14 +115,7 @@ def build_about_car_markdown(
         "- Tabs: **Contextspace** = edit `active_context.md`, `spec.md`, `decisions.md`.\n"
         "- Tabs: **Terminal** = launches the configured `codex` binary in a PTY.\n"
         "- Tabs: **Archive** = browse worktree snapshots.\n\n"
-        "## Artifact Delivery and FileBox Compatibility\n"
-        "- Canonical send-back: `car artifacts send <file> --to current` when a turn provides a current artifact target.\n"
-        "- Delivery records live in the artifact journal and can be inspected with `car artifacts list`, `inspect`, `retry`, `cancel`, and `diagnose`.\n"
-        "- Repo FileBox root: `.codex-autorunner/filebox/`.\n"
-        "- User uploads: `.codex-autorunner/filebox/inbox/`.\n"
-        "- Legacy outbox ingress: `.codex-autorunner/filebox/outbox/` and `outbox/pending/`, scoped only to the active hub/repo conversation target.\n"
-        "- Browser render outputs from `car render` are written to legacy outbox by default and can be imported with `car artifacts import-legacy`.\n"
-        "- Note: ticket_flow uses per-run dispatch directories; do not confuse dispatch with FileBox.\n\n"
+        f"{render_human_artifact_overview(include_upload_inbox=True)}\n\n"
         "## Critical rules\n"
         "- Do **not** create new copies of contextspace docs elsewhere in the repo.\n"
         "- Treat `.codex-autorunner/` as intentional project structure even though it is hidden/gitignored.\n\n"

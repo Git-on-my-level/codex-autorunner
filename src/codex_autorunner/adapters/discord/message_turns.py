@@ -46,13 +46,16 @@ from ...adapters.chat.models import ChatMessageEvent
 from ...adapters.chat.runtime_thread_errors import (
     sanitize_runtime_thread_error,
 )
+from ...core.artifact_instructions import (
+    ArtifactDeliveryContext,
+    render_agent_artifact_instructions,
+)
 from ...core.context_awareness import (
-    format_artifact_delivery_hint,
     maybe_inject_car_awareness,
     maybe_inject_filebox_hint,
     maybe_inject_prompt_writing_hint,
 )
-from ...core.filebox import inbox_dir, outbox_dir, outbox_pending_dir
+from ...core.filebox import inbox_dir
 from ...core.injected_context import wrap_injected_context
 from ...core.logging_utils import log_event
 from ...core.orchestration import (
@@ -313,15 +316,14 @@ def _maybe_inject_discord_filebox_hint(
     channel_id: str,
 ) -> tuple[str, bool]:
     hint_text = wrap_injected_context(
-        format_artifact_delivery_hint(
-            root=workspace_root,
-            target_surface="discord",
-            target_conversation_key=f"channel:{channel_id}",
-            workspace_scope=f"repo:{workspace_root}",
-            scope_label="repo/worktree FileBox for this Discord channel",
-            inbox_path=inbox_dir(workspace_root),
-            legacy_outbox_path=outbox_dir(workspace_root),
-            legacy_pending_path=outbox_pending_dir(workspace_root),
+        render_agent_artifact_instructions(
+            ArtifactDeliveryContext(
+                surface="discord",
+                conversation_key=f"channel:{channel_id}",
+                workspace_scope=f"repo:{workspace_root}",
+                scope_label="repo/worktree artifact target for this Discord channel",
+                user_upload_inbox=inbox_dir(workspace_root),
+            )
         )
     )
     return maybe_inject_filebox_hint(
