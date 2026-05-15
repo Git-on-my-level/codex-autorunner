@@ -119,7 +119,7 @@ async def _assistant_text_from_turn_events(
     state = RuntimeThreadRunEventState()
     for raw_event in raw_events:
         await normalize_runtime_progress_event(dict(raw_event), state)
-    return state.assistant_stream_text.strip() or state.assistant_message_text.strip()
+    return state.assistant_stream_text.strip()
 
 
 class HermesSupervisorError(RuntimeError):
