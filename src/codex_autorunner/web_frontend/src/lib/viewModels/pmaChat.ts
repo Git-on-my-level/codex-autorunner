@@ -1142,6 +1142,7 @@ function mergedIntermediateTitle(
   right: Extract<PmaCard, { kind: 'intermediate' }>
 ): string {
   if (isThinkingTraceTitle(left.title) || isThinkingTraceTitle(right.title)) return 'Thinking';
+  if (isTokenLikeProgressIntermediate(left) && isTokenLikeProgressIntermediate(right)) return 'Progress';
   if (isTokenLikeIntermediate(left) && isTokenLikeIntermediate(right)) return 'Thinking';
   return left.title || right.title || 'Update';
 }
@@ -1156,6 +1157,13 @@ function uniqueStrings(values: string[]): string[] {
 
 function isThinkingTraceTitle(title: string): boolean {
   return traceLabelText(title).toLowerCase() === 'thinking';
+}
+
+function isTokenLikeProgressIntermediate(card: Extract<PmaCard, { kind: 'intermediate' }>): boolean {
+  if (!isTokenLikeIntermediate(card)) return false;
+  const text = card.text.trim();
+  const title = card.title.trim();
+  return /(?:\d|%)/.test(text) || /(?:\d|%)/.test(title);
 }
 
 function mapPmaTranscriptRow(raw: Record<string, unknown>): PmaCard | null {

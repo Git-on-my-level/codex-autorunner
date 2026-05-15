@@ -1571,6 +1571,35 @@ describe('PMA chat view helpers', () => {
     });
   });
 
+  it('keeps numeric token-like progress updates out of thinking summaries', () => {
+    const cards = compactPmaTranscriptCards([
+      {
+        ...baseArtifactCardTrace('progress-10', '10%', ['301']),
+        turnId: 'progress-turn',
+        orderKey: '001'
+      },
+      {
+        ...baseArtifactCardTrace('progress-20', '20%', ['302']),
+        turnId: 'progress-turn',
+        orderKey: '002'
+      }
+    ]);
+
+    expect(cards).toHaveLength(1);
+    expect(cards[0]).toMatchObject({
+      kind: 'turn_summary',
+      title: '2 progress updates'
+    });
+    const summary = cards[0];
+    if (summary.kind !== 'turn_summary') throw new Error('expected turn summary');
+    expect(summary.cards[0]).toMatchObject({
+      kind: 'intermediate',
+      title: 'Progress',
+      text: '10% 20%',
+      eventIds: ['301', '302']
+    });
+  });
+
   it('merges streamed activity events without dropping older transcript activity', () => {
     const merged = mergePmaActivityEvents(
       [
