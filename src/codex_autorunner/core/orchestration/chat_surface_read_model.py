@@ -51,6 +51,7 @@ class ChatSurfaceProjection:
     resource_id: Optional[str] = None
     workspace_root: Optional[str] = None
     scope_urn: Optional[str] = None
+    worktree_id: Optional[str] = None
     managed_thread_id: Optional[str] = None
     external_conversation_ids: dict[tuple[str, str], dict[str, Optional[str]]] = field(
         default_factory=dict
@@ -77,6 +78,7 @@ class ChatSurfaceProjection:
         resource_id: Optional[str] = None,
         workspace_root: Optional[str] = None,
         scope_urn: Optional[str] = None,
+        worktree_id: Optional[str] = None,
         managed_thread_id: Optional[str] = None,
         external_conversation_id: Optional[str] = None,
         external_provider: Optional[str] = None,
@@ -103,6 +105,7 @@ class ChatSurfaceProjection:
         self.resource_id = _prefer(self.resource_id, resource_id)
         self.workspace_root = _prefer(self.workspace_root, workspace_root)
         self.scope_urn = _prefer(self.scope_urn, scope_urn)
+        self.worktree_id = _prefer(self.worktree_id, worktree_id)
         self.managed_thread_id = _prefer(self.managed_thread_id, managed_thread_id)
         if external_conversation_id is not None:
             provider = external_provider or self.surface_kind
@@ -143,6 +146,7 @@ class ChatSurfaceProjection:
                 "resource_id": self.resource_id,
                 "workspace_root": self.workspace_root,
                 "scope_urn": self.scope_urn,
+                "worktree_id": self.worktree_id,
             },
             "managed_thread_id": self.managed_thread_id,
             "external_conversation_ids": sorted(
@@ -550,7 +554,7 @@ class ChatSurfaceReadService:
             chat_id = _normalize_text(entry.get("chat_id"))
             if surface_kind is None or chat_id is None:
                 continue
-            owner_fields = _canonical_owner_fields(
+            owner_fields = canonical_owner_fields(
                 self._scope_index,
                 repo_id=entry.get("repo_id"),
                 resource_kind=entry.get("resource_kind"),
@@ -573,6 +577,7 @@ class ChatSurfaceReadService:
                 resource_id=owner_fields.get("resource_id"),
                 workspace_root=owner_fields.get("workspace_root"),
                 scope_urn=owner_fields.get("scope_urn"),
+                worktree_id=owner_fields.get("worktree_id"),
                 display_name=_normalize_text(entry.get("display")),
                 updated_at=_normalize_text(entry.get("seen_at")),
                 fact="channel_directory",
@@ -659,7 +664,7 @@ class ChatSurfaceReadService:
         for row in thread_rows:
             thread_id = str(row["thread_target_id"])
             thread_owner[thread_id] = row
-            owner_fields = _canonical_owner_fields(
+            owner_fields = canonical_owner_fields(
                 self._scope_index,
                 repo_id=row["repo_id"],
                 resource_kind=_row_get(row, "resource_kind"),
@@ -694,6 +699,7 @@ class ChatSurfaceReadService:
                 resource_id=owner_fields.get("resource_id"),
                 workspace_root=owner_fields.get("workspace_root"),
                 scope_urn=owner_fields.get("scope_urn"),
+                worktree_id=owner_fields.get("worktree_id"),
                 managed_thread_id=thread_id,
                 display_name=_normalize_text(row["display_name"]) or thread_id,
                 created_at=_normalize_text(row["created_at"]),
@@ -747,7 +753,7 @@ class ChatSurfaceReadService:
             if surface_kind is None or surface_key is None:
                 continue
             owner = thread_owner.get(binding_thread_id or "")
-            owner_fields = _canonical_owner_fields(
+            owner_fields = canonical_owner_fields(
                 self._scope_index,
                 repo_id=_normalize_text(row["repo_id"])
                 or _normalize_text(_row_get(owner, "repo_id")),
@@ -788,6 +794,7 @@ class ChatSurfaceReadService:
                 resource_id=owner_fields.get("resource_id"),
                 workspace_root=owner_fields.get("workspace_root"),
                 scope_urn=owner_fields.get("scope_urn"),
+                worktree_id=owner_fields.get("worktree_id"),
                 managed_thread_id=binding_thread_id,
                 display_name=_binding_display(row),
                 created_at=_normalize_text(row["created_at"]),
@@ -1088,7 +1095,7 @@ def _display_title(display: Mapping[str, Any], fallback: str) -> str:
     )
 
 
-def _canonical_owner_fields(
+def canonical_owner_fields(
     scope_index: WorkspaceScopeIndex,
     *,
     repo_id: Any = None,

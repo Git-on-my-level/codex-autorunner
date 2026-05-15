@@ -26,6 +26,7 @@ from .....core.domain.workspace_scope import (
 )
 from .....core.logging_utils import safe_log
 from .....core.managed_thread_store import ManagedThreadStore
+from .....core.orchestration.chat_surface_read_model import canonical_owner_fields
 from .....core.orchestration.sqlite import resolve_orchestration_sqlite_path
 from .....core.text_utils import _coerce_int as _standalone_coerce_int
 from .....core.usage import get_repo_session_usage_ledger
@@ -114,62 +115,16 @@ def resolve_scope_owner_fields(
     resource_id: Any = None,
     scope_urn: Any = None,
 ) -> dict[str, Optional[str]]:
-    normalized_resource_kind = (
-        resource_kind.strip()
-        if isinstance(resource_kind, str) and resource_kind.strip()
-        else None
-    )
-    normalized_resource_id = (
-        resource_id.strip()
-        if isinstance(resource_id, str) and resource_id.strip()
-        else None
-    )
     if not isinstance(scope_index, WorkspaceScopeIndex):
         repo_id = resolve_repo_id(raw_repo_id, workspace_path, scope_index)
-        return {
-            "repo_id": repo_id,
-            "worktree_id": None,
-            "resource_kind": normalized_resource_kind,
-            "resource_id": normalized_resource_id,
-            "workspace_root": canonical_workspace_path(workspace_path),
-            "scope_urn": None,
-        }
-    if normalized_resource_kind not in {None, "repo", "worktree", "filesystem"}:
-        resolution = scope_index.resolve(
-            raw_repo_id=raw_repo_id,
-            workspace_path=workspace_path,
-            scope_urn=scope_urn,
+        normalized_resource_kind = (
+            resource_kind.strip()
+            if isinstance(resource_kind, str) and resource_kind.strip()
+            else None
         )
-        fields = (
-            resolution.owner_fields()
-            if resolution is not None
-            else {
-                "repo_id": (
-                    raw_repo_id.strip()
-                    if isinstance(raw_repo_id, str) and raw_repo_id.strip()
-                    else None
-                ),
-                "worktree_id": None,
-                "resource_kind": None,
-                "resource_id": None,
-                "workspace_root": canonical_workspace_path(workspace_path),
-                "scope_urn": None,
-            }
-        )
-        fields["resource_kind"] = normalized_resource_kind
-        fields["resource_id"] = normalized_resource_id
-        return fields
-    resolution = scope_index.resolve(
-        raw_repo_id=raw_repo_id,
-        workspace_path=workspace_path,
-        resource_kind=resource_kind,
-        resource_id=resource_id,
-        scope_urn=scope_urn,
-    )
-    if resolution is None:
-        repo_id = (
-            raw_repo_id.strip()
-            if isinstance(raw_repo_id, str) and raw_repo_id.strip()
+        normalized_resource_id = (
+            resource_id.strip()
+            if isinstance(resource_id, str) and resource_id.strip()
             else None
         )
         return {
@@ -180,7 +135,14 @@ def resolve_scope_owner_fields(
             "workspace_root": canonical_workspace_path(workspace_path),
             "scope_urn": None,
         }
-    return resolution.owner_fields()
+    return canonical_owner_fields(
+        scope_index,
+        repo_id=raw_repo_id,
+        resource_kind=resource_kind,
+        resource_id=resource_id,
+        workspace_root=workspace_path,
+        scope_urn=scope_urn,
+    )
 
 
 def open_sqlite_read_only(path: Path) -> sqlite3.Connection:
