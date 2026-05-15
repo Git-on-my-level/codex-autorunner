@@ -820,6 +820,7 @@ def _system_update_worker(
         _write_update_status(
             "running",
             "Update started.",
+            phase="worker_start",
             repo_url=repo_url,
             update_dir=str(update_dir),
             repo_ref=repo_ref,
@@ -962,6 +963,8 @@ def _system_update_worker(
                 _write_update_status(
                     "error",
                     "Update failed; check hub logs for details.",
+                    phase="refresh_script_failed",
+                    error_type="refresh_script_failed",
                     exit_code=returncode,
                 )
             return
@@ -969,13 +972,18 @@ def _system_update_worker(
         existing = _read_update_status()
         if not existing or existing.get("status") not in ("rollback", "error"):
             _write_update_status(
-                "ok", "Update completed successfully.", update_target=update_target
+                "ok",
+                "Update completed successfully.",
+                phase="completed",
+                update_target=update_target,
             )
     except Exception:  # intentional: top-level error handler
         logger.exception("System update failed")
         _write_update_status(
             "error",
             "Update crashed; see hub logs for details.",
+            phase="worker_crashed",
+            error_type="worker_crashed",
         )
     finally:
         if lock_acquired:
@@ -1010,6 +1018,7 @@ def _spawn_update_process(
     _write_update_status(
         "running",
         "Update spawned.",
+        phase="spawned",
         repo_url=repo_url,
         update_dir=str(update_dir),
         repo_ref=repo_ref,
