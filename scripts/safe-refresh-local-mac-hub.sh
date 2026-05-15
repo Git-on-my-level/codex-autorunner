@@ -85,14 +85,18 @@ HEALTH_CHECK_DISCORD="${HEALTH_CHECK_DISCORD:-auto}"
 WAIT_HUB_HEALTH_BEFORE_CHAT_RELOAD="${WAIT_HUB_HEALTH_BEFORE_CHAT_RELOAD:-true}"
 LAUNCHD_STOP_WAIT_SECONDS="${LAUNCHD_STOP_WAIT_SECONDS:-10}"
 KEEP_OLD_VENVS="${KEEP_OLD_VENVS:-3}"
+UPDATE_SNAPSHOT_ROOT="${UPDATE_SNAPSHOT_ROOT:-}"
 NVM_BIN="${NVM_BIN:-$HOME/.nvm/versions/node/v22.12.0/bin}"
 LOCAL_BIN="${LOCAL_BIN:-$HOME/.local/bin}"
 PY39_BIN="${PY39_BIN:-$HOME/Library/Python/$(python3 -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')/bin}"
 OPENCODE_BIN="${OPENCODE_BIN:-$HOME/.opencode/bin}"
 
 current_target=""
+db_snapshot_dir=""
+update_run_id=""
 swap_completed=false
 rollback_completed=false
+rollback_restore_failed=false
 cutover_committed=false
 post_cutover_warnings=()
 hub_health_verified_after_reload=false
@@ -101,17 +105,50 @@ TELEGRAM_HEALTH_WAIT_TIMED_OUT=false
 DISCORD_HEALTH_WAIT_TIMED_OUT=false
 
 write_status() {
-  local status message
+  local status message phase error_type exit_code
   status="$1"
   message="$2"
+  phase="${3:-}"
+  error_type="${4:-}"
+  exit_code="${5:-}"
   if [[ -z "${UPDATE_STATUS_PATH}" || ! -x "${HELPER_PYTHON}" ]]; then
     return 0
   fi
-  "${HELPER_PYTHON}" - <<PY
-import json, pathlib, time
-path = pathlib.Path("${UPDATE_STATUS_PATH}")
+  UPDATE_STATUS_PATH_VALUE="${UPDATE_STATUS_PATH}" \
+  UPDATE_STATUS_VALUE="${status}" \
+  UPDATE_STATUS_MESSAGE="${message}" \
+  UPDATE_STATUS_PHASE="${phase}" \
+  UPDATE_STATUS_ERROR_TYPE="${error_type}" \
+  UPDATE_STATUS_EXIT_CODE="${exit_code}" \
+  UPDATE_RUN_ID_VALUE="${update_run_id}" \
+  "${HELPER_PYTHON}" - <<'PY'
+import json
+import os
+import pathlib
+import time
+
+path = pathlib.Path(os.environ["UPDATE_STATUS_PATH_VALUE"])
 path.parent.mkdir(parents=True, exist_ok=True)
-payload = {"status": "${status}", "message": "${message}", "at": time.time()}
+payload = {
+    "status": os.environ["UPDATE_STATUS_VALUE"],
+    "message": os.environ["UPDATE_STATUS_MESSAGE"],
+    "at": time.time(),
+}
+phase = os.environ.get("UPDATE_STATUS_PHASE") or ""
+if phase:
+    payload["phase"] = phase
+error_type = os.environ.get("UPDATE_STATUS_ERROR_TYPE") or ""
+if error_type:
+    payload["error_type"] = error_type
+exit_code = os.environ.get("UPDATE_STATUS_EXIT_CODE") or ""
+if exit_code:
+    try:
+        payload["exit_code"] = int(exit_code)
+    except ValueError:
+        payload["exit_code"] = exit_code
+run_id = os.environ.get("UPDATE_RUN_ID_VALUE") or ""
+if run_id:
+    payload["update_run_id"] = run_id
 try:
     existing = json.loads(path.read_text(encoding="utf-8"))
 except Exception:
@@ -134,7 +171,7 @@ PY
 fail() {
   local message="$1"
   echo "${message}" >&2
-  write_status "error" "${message}"
+  write_status "error" "${message}" "${2:-failed}" "${3:-script_error}"
   exit 1
 }
 
@@ -678,20 +715,38 @@ if [[ -z "${current_target}" ]]; then
 fi
 
 ts="$(date +%Y%m%d-%H%M%S)"
+update_run_id="${ts}-$$"
 next_venv="${PIPX_ROOT}/venvs/codex-autorunner.next-${ts}"
 wheel_dir="${next_venv}.wheelhouse"
+if [[ -z "${UPDATE_SNAPSHOT_ROOT}" ]]; then
+  if [[ -n "${UPDATE_STATUS_PATH}" ]]; then
+    UPDATE_SNAPSHOT_ROOT="$(dirname "${UPDATE_STATUS_PATH}")/update_snapshots"
+  else
+    UPDATE_SNAPSHOT_ROOT="${PIPX_ROOT}/venvs/codex-autorunner.update-snapshots"
+  fi
+fi
 
 echo "Creating staged venv at ${next_venv} (python: ${PIPX_PYTHON})..."
+write_status "running" "Creating staged venv at ${next_venv}." "venv_create_start"
 "${PIPX_PYTHON}" -m venv "${next_venv}"
 "${next_venv}/bin/python" -m pip -q install --upgrade pip
+write_status "running" "Created staged venv at ${next_venv}." "venv_create_done"
 
 echo "Preparing staged wheel for ${PACKAGE_INSTALL_SPEC}..."
+write_status "running" "Building staged wheel." "wheel_build_start"
 wheel_path="$(_build_package_wheel "${next_venv}/bin/python" "${wheel_dir}")"
+write_status "running" "Built staged wheel." "wheel_build_done"
+write_status "running" "Installing staged wheel into candidate venv." "pip_install_start"
 _install_package_from_wheel "${next_venv}/bin/python" "${wheel_path}"
+write_status "running" "Installed staged wheel into candidate venv." "pip_install_done"
 _ensure_playwright_chromium "${next_venv}/bin/python"
 rm -rf "${wheel_dir}"
 
 echo "Smoke-checking staged venv imports..."
+write_status "running" "Validating staged venv." "candidate_validation_start"
+if [[ ! -x "${next_venv}/bin/codex-autorunner" ]]; then
+  fail "Staged venv is missing codex-autorunner console script." "candidate_validation_failed" "candidate_invalid"
+fi
 "${next_venv}/bin/python" - <<'PY'
 import importlib.util
 
@@ -743,6 +798,7 @@ if spec is None or spec.origin is None:
 py_compile.compile(spec.origin, doraise=True)
 print("telegram service ok")
 PY
+write_status "running" "Validated staged venv." "candidate_validation_done"
 
 domain="gui/$(id -u)/${LABEL}"
 
@@ -1893,10 +1949,34 @@ _rollback() {
   fi
   rollback_completed=true
   echo "${message}" >&2
-  ln -sfn "${current_target}" "${CURRENT_VENV_LINK}"
+  write_status "running" "${message}" "rollback_start"
   hub_health_verified_after_reload=false
   if [[ "${should_reload_hub}" == "true" ]]; then
     _stop_service || true
+  fi
+  if [[ "${should_reload_telegram}" == "true" && -f "${TELEGRAM_PLIST_PATH}" ]]; then
+    launchctl unload -w "${TELEGRAM_PLIST_PATH}" >/dev/null 2>&1 || true
+  fi
+  if [[ "${should_reload_discord}" == "true" && -f "${DISCORD_PLIST_PATH}" ]]; then
+    launchctl unload -w "${DISCORD_PLIST_PATH}" >/dev/null 2>&1 || true
+  fi
+  if [[ -n "${db_snapshot_dir}" ]]; then
+    echo "Restoring orchestration DB snapshot from ${db_snapshot_dir}..." >&2
+    if "${next_venv}/bin/python" -m codex_autorunner.core.update_transaction \
+      restore-db \
+      --snapshot-dir "${db_snapshot_dir}" >/dev/null; then
+      write_status "running" "Restored orchestration DB snapshot." "db_restore_done"
+    else
+      rollback_restore_failed=true
+      write_status "error" \
+        "Update failed; orchestration DB snapshot restore failed. Keeping candidate venv active to avoid schema rollback mismatch." \
+        "db_restore_failed" \
+        "db_restore_failed"
+      return 1
+    fi
+  fi
+  ln -sfn "${current_target}" "${CURRENT_VENV_LINK}"
+  if [[ "${should_reload_hub}" == "true" ]]; then
     _start_service || true
   fi
   if [[ "${should_reload_telegram}" == "true" ]]; then
@@ -1916,11 +1996,37 @@ _on_exit() {
   if [[ "${swap_completed}" != "true" || "${rollback_completed}" == "true" || "${cutover_committed}" == "true" ]]; then
     return 0
   fi
-  _rollback "Update failed; rolling back to ${current_target}..."
-  write_status "rollback" "Update failed; rollback attempted."
+  if ! _rollback "Update failed; rolling back to ${current_target}..."; then
+    return 0
+  fi
+  write_status "rollback" "Update failed; rollback attempted." "rollback_attempted"
 }
 
 trap '_on_exit $?' EXIT
+
+if [[ -z "${HUB_ROOT}" ]]; then
+  fail "Unable to determine HUB_ROOT from ${PLIST_PATH}."
+fi
+
+echo "Snapshotting orchestration DB before cutover..."
+write_status "running" "Snapshotting orchestration DB before cutover." "db_snapshot_start"
+snapshot_payload="$(
+  "${next_venv}/bin/python" -m codex_autorunner.core.update_transaction \
+    snapshot-db \
+    --hub-root "${HUB_ROOT}" \
+    --snapshot-root "${UPDATE_SNAPSHOT_ROOT}" \
+    --run-id "${update_run_id}"
+)"
+db_snapshot_dir="$(
+  SNAPSHOT_PAYLOAD="${snapshot_payload}" "${HELPER_PYTHON}" - <<'PY'
+import json
+import os
+
+payload = json.loads(os.environ["SNAPSHOT_PAYLOAD"])
+print(payload.get("snapshot_dir", ""))
+PY
+)"
+write_status "running" "Snapshot orchestration DB before cutover." "db_snapshot_done"
 
 echo "Switching ${PREV_VENV_LINK} -> ${current_target}"
 ln -sfn "${current_target}" "${PREV_VENV_LINK}"
@@ -1929,19 +2035,19 @@ echo "Switching ${CURRENT_VENV_LINK} -> ${next_venv}"
 ln -sfn "${next_venv}" "${CURRENT_VENV_LINK}"
 swap_completed=true
 
-if [[ -z "${HUB_ROOT}" ]]; then
-  fail "Unable to determine HUB_ROOT from ${PLIST_PATH}."
-fi
-
 echo "Refreshing hub-managed repo artifacts under ${HUB_ROOT}..."
+write_status "running" "Refreshing hub-managed repo artifacts." "managed_repo_refresh_start"
 HUB_ROOT="${HUB_ROOT}" HELPER_PYTHON="${CURRENT_VENV_LINK}/bin/python" \
   bash "${PACKAGE_SRC}/scripts/update-hub-managed-repos.sh"
+write_status "running" "Refreshed hub-managed repo artifacts." "managed_repo_refresh_done"
 
 if [[ "${should_reload_hub}" == "true" ]]; then
   echo "Restarting launchd service ${LABEL}..."
+  write_status "running" "Restarting hub service." "service_restart_start"
   _ensure_plist_uses_current_venv
   _stop_service
   _start_service
+  write_status "running" "Restarted hub service." "service_restart_done"
 fi
 
 hub_warm_ok=true
@@ -2000,7 +2106,10 @@ if [[ "${health_ok}" == "true" ]]; then
   fi
   ensure_login_shell_path "${LOCAL_BIN}"
 else
-  _rollback "Health check failed; rolling back to ${current_target}..."
+  if ! _rollback "Health check failed; rolling back to ${current_target}..."; then
+    echo "Rollback aborted because orchestration DB restore failed." >&2
+    exit 2
+  fi
   rollback_hub_ok=true
   rollback_telegram_ok=true
   rollback_discord_ok=true
