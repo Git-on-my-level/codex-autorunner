@@ -311,6 +311,14 @@ def _dedupe_key_for_facet(facet: RecoveryFacet) -> str:
 
 
 def _severity_for_facet(facet: RecoveryFacet) -> RecoveryIntentSeverity:
+    if facet.name == RecoveryFacetName.COMMIT_BARRIER:
+        return (
+            RecoveryIntentSeverity.WARNING
+            if facet.status == RecoveryFacetStatus.EXHAUSTED
+            else RecoveryIntentSeverity.INFO
+        )
+    if facet.name == RecoveryFacetName.DISPATCH_PAUSE:
+        return RecoveryIntentSeverity.INFO
     if (
         facet.name
         in {
@@ -391,14 +399,26 @@ def format_recovery_notification_intent(
     facet = facet_payload if isinstance(facet_payload, Mapping) else {}
     facet_name = _normalize_optional_text(facet.get("name")) or record.event_type
     facet_status = _normalize_optional_text(facet.get("status")) or "active"
+    raw_severity = record.severity
+    severity = (
+        raw_severity.value
+        if isinstance(raw_severity, RecoveryIntentSeverity)
+        else _normalize_optional_text(raw_severity)
+    ) or RecoveryIntentSeverity.INFO.value
+    is_escalation = severity != RecoveryIntentSeverity.INFO.value
 
     lines = [
-        f"Ticket flow recovery update (run {record.run_id}): "
+        f"Ticket flow {'recovery' if is_escalation else 'status'} update (run {record.run_id}): "
         f"{primary_state or record.event_type}.",
-        f"Blocker: {facet_name} ({facet_status}).",
-        f"Severity: {record.severity}.",
+        (
+            f"Blocker: {facet_name} ({facet_status})."
+            if is_escalation
+            else f"State: {facet_name} ({facet_status})."
+        ),
     ]
-    if record.reason:
+    if is_escalation:
+        lines.append(f"Severity: {severity}.")
+    if record.reason and is_escalation:
         lines.append(f"Reason: {record.reason}.")
 
     raw_data = facet.get("data")
@@ -421,7 +441,7 @@ def format_recovery_notification_intent(
             )
         else:
             lines.append(
-                "Commit barrier pending; preserving completed ticket work before advancing."
+                "Next step: commit the completed ticket work before advancing."
             )
     if facet_name == RecoveryFacetName.STALE_ALIVE.value:
         stale_reason = _normalize_optional_text(data.get("reason"))

@@ -428,6 +428,52 @@ describe('view model mappers', () => {
     expect(vm.openTickets).toBe(2);
   });
 
+  it('maps pending commit-barrier repo state as waiting instead of blocked', () => {
+    const vm = mapRepoSummary({
+      id: 'base',
+      name: 'Base repo',
+      ticket_flow_display: {
+        status: 'running',
+        is_active: true,
+        done_count: 1,
+        total_count: 3
+      },
+      run_state: {
+        state: 'commit_barrier_pending',
+        recovery_state: 'commit_barrier_pending',
+        attention_required: true,
+        commit_barrier_pending: true
+      }
+    });
+
+    expect(vm.status).toBe('waiting');
+    expect(vm.activeRuns).toBe(0);
+    expect(vm.openTickets).toBe(2);
+  });
+
+  it('keeps exhausted commit-barrier repo state blocked', () => {
+    const vm = mapRepoSummary({
+      id: 'base',
+      name: 'Base repo',
+      ticket_flow_display: {
+        status: 'running',
+        is_active: true,
+        done_count: 1,
+        total_count: 3
+      },
+      run_state: {
+        state: 'commit_barrier_exhausted',
+        recovery_state: 'commit_barrier_exhausted',
+        attention_required: true,
+        commit_barrier_pending: true
+      }
+    });
+
+    expect(vm.status).toBe('blocked');
+    expect(vm.activeRuns).toBe(0);
+    expect(vm.openTickets).toBe(2);
+  });
+
   it('maps worktree summaries from enriched hub repo payloads', () => {
     const vm = mapWorktreeSummary({
       id: 'base--feature',

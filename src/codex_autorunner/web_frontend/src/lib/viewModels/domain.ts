@@ -654,7 +654,8 @@ function normalizeRepoRuntimeStatus(ticketFlow: JsonRecord, runState: JsonRecord
     const state = String(runState.state ?? runState.recovery_state ?? '').trim().toLowerCase();
     if (state === 'restart_exhausted') return 'failed';
     if (state === 'stale_alive') return 'blocked';
-    if (state === 'commit_barrier_pending' || state === 'commit_barrier_exhausted') return 'blocked';
+    if (state === 'commit_barrier_pending') return 'waiting';
+    if (state === 'commit_barrier_exhausted') return 'blocked';
     return normalizeResourceWorkStatus(state || 'blocked');
   }
   return normalizeResourceWorkStatus(

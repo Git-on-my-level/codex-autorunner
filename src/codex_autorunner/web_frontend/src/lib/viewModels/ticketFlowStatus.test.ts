@@ -166,4 +166,46 @@ describe('ticket flow status routes', () => {
     expect(vm.signal).toBe('blocked');
     expect(vm.reasonLabel).toContain('semantic progress is stale');
   });
+
+  it('renders pending commit barrier as a waiting commit step', () => {
+    const vm = buildTicketFlowStatusViewModel(
+      [],
+      [
+        {
+          id: 'run-commit-barrier',
+          chatId: null,
+          status: 'waiting',
+          workStatus: null,
+          operatorStatus: null,
+          terminal: false,
+          streamShouldClose: false,
+          streamCloseReason: null,
+          phase: null,
+          guidance: null,
+          queueDepth: 0,
+          elapsedSeconds: null,
+          startedAt: null,
+          idleSeconds: null,
+          lastEventId: null,
+          lastEventAt: '2026-05-04T00:03:00Z',
+          progressPercent: null,
+          events: [],
+          raw: {
+            id: 'run-commit-barrier',
+            status: 'running',
+            repo_id: 'codex-autorunner',
+            run_state: {
+              recovery_state: 'commit_barrier_pending',
+              commit_barrier_pending: true
+            }
+          }
+        }
+      ],
+      { kind: 'repo', id: 'codex-autorunner' }
+    );
+
+    expect(vm.statusLabel).toBe('Ready to commit');
+    expect(vm.signal).toBe('waiting');
+    expect(vm.reasonLabel).toBe('Commit the completed ticket work before advancing');
+  });
 });

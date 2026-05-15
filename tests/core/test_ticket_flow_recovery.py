@@ -12,6 +12,7 @@ from codex_autorunner.core.ticket_flow_recovery import (
     RecoveryNotificationIntent,
     build_recovery_notification_intents,
     build_recovery_projection,
+    format_recovery_notification_intent,
 )
 
 
@@ -81,6 +82,7 @@ def test_recovery_projection_exposes_facets_from_flow_record(
     assert run_state["notification_intents"][0]["event_type"] == (
         "ticket_flow.commit_barrier.active"
     )
+    assert run_state["notification_intents"][0]["severity"] == "info"
 
 
 def test_commit_barrier_intent_id_ignores_volatile_restart_snapshot_fields() -> None:
@@ -138,7 +140,9 @@ def test_commit_barrier_intent_id_ignores_volatile_restart_snapshot_fields() -> 
     assert len(exhausted_intents) == 1
     assert first_intents[0].intent_id == second_intents[0].intent_id
     assert first_intents[0].event_type == "ticket_flow.commit_barrier.active"
+    assert first_intents[0].severity == RecoveryIntentSeverity.INFO
     assert exhausted_intents[0].event_type == "ticket_flow.commit_barrier.exhausted"
+    assert exhausted_intents[0].severity == RecoveryIntentSeverity.WARNING
     assert exhausted_intents[0].intent_id != first_intents[0].intent_id
 
 
@@ -206,6 +210,8 @@ def test_notification_intent_id_stable_when_restart_attempts_change(
     second_intent = second_state["notification_intents"][0]
     assert first_intent["event_type"] == "ticket_flow.commit_barrier.active"
     assert second_intent["event_type"] == "ticket_flow.commit_barrier.active"
+    assert first_intent["severity"] == "info"
+    assert second_intent["severity"] == "info"
     assert first_intent["intent_id"] == second_intent["intent_id"]
 
 
@@ -263,6 +269,36 @@ def test_exhausted_commit_barrier_projects_escalation_intent(
     assert run_state["notification_intents"][0]["event_type"] == (
         "ticket_flow.commit_barrier.exhausted"
     )
+    assert run_state["notification_intents"][0]["severity"] == "warning"
+
+
+def test_active_commit_barrier_notification_reads_as_status_update() -> None:
+    intent = RecoveryNotificationIntent(
+        intent_id="ticket_flow_recovery:test-intent",
+        run_id="run-1",
+        event_type="ticket_flow.commit_barrier.active",
+        severity=RecoveryIntentSeverity.INFO,
+        reason="done-current-ticket-has-uncommitted-worktree-changes",
+        recommended_actions=("car ticket-flow status --repo /tmp/repo",),
+        cooldown_seconds=3600,
+        payload={
+            "primary_state": "commit_barrier_pending",
+            "facet": {
+                "name": "commit_barrier",
+                "status": "active",
+                "data": {"current_ticket": ".codex-autorunner/tickets/TICKET-001.md"},
+            },
+        },
+    )
+
+    message = format_recovery_notification_intent(intent)
+
+    assert "Ticket flow status update" in message
+    assert "State: commit_barrier (active)." in message
+    assert "Next step: commit the completed ticket work before advancing." in message
+    assert "Severity:" not in message
+    assert "Blocker:" not in message
+    assert "Reason:" not in message
 
 
 def test_notification_intent_ledger_upserts_observation_without_duplicate(

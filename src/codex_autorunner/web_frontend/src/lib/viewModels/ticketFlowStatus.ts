@@ -260,7 +260,7 @@ function recoveryReasonFromRun(run: PmaRunProgress | null): string | null {
       stringFromRaw(run.raw, 'run_state.recovery_projection.facets.commit_barrier.reason') ??
       (state === 'commit_barrier_exhausted'
         ? 'Commit barrier retry budget exhausted; resolve the worktree before resuming'
-        : 'Committing or preserving completed ticket work before advancing')
+        : 'Commit the completed ticket work before advancing')
     );
   }
   if (state === 'restart_exhausted') {
@@ -286,7 +286,7 @@ function recoveryReasonFromRun(run: PmaRunProgress | null): string | null {
 }
 
 function recoveryStatusLabel(state: string | null): string | null {
-  if (state === 'commit_barrier_pending') return 'Preserving work';
+  if (state === 'commit_barrier_pending') return 'Ready to commit';
   if (state === 'commit_barrier_exhausted') return 'Commit blocked';
   if (state === 'restart_exhausted') return 'Recovery exhausted';
   if (state === 'stale_alive') return 'Needs attention';
