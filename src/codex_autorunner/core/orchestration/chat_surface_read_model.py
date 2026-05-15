@@ -1664,63 +1664,6 @@ def _chat_row_search_text(row: Mapping[str, Any]) -> str:
     return " ".join(str(value).lower() for value in values if value)
 
 
-def _filter_chat_index_rows(
-    rows: list[dict[str, Any]],
-    *,
-    view: str,
-    query: Optional[str],
-    surface_kind: Optional[str],
-    parent_group_id: Optional[str],
-) -> list[dict[str, Any]]:
-    normalized_view = (view or "all").strip().lower()
-    normalized_query = _normalize_text(query)
-    normalized_query = normalized_query.lower() if normalized_query else None
-    normalized_surface = _normalize_kind(surface_kind)
-    filtered: list[dict[str, Any]] = []
-    for row in rows:
-        if parent_group_id is not None and row.get("group_id") != parent_group_id:
-            continue
-        if normalized_view != "external" and row.get("managed_thread_id") is None:
-            continue
-        if normalized_surface is not None and normalized_surface not in set(
-            row.get("surface_kinds") or []
-        ):
-            continue
-        if normalized_view == "waiting" and int(row.get("queue_depth") or 0) <= 0:
-            continue
-        if (
-            normalized_view == "active"
-            and _chat_index_effective_status(row) != "running"
-        ):
-            continue
-        if normalized_view == "unread" and not row.get("unread"):
-            continue
-        if normalized_view == "archived" and row.get("lifecycle_status") != "archived":
-            continue
-        if normalized_view == "external" and set(row.get("surface_kinds") or []) <= {
-            "pma"
-        }:
-            continue
-        if normalized_view == "ticket_run" and row.get("group_id") is None:
-            continue
-        if normalized_view not in {
-            "all",
-            "waiting",
-            "active",
-            "unread",
-            "archived",
-            "external",
-            "ticket_run",
-        }:
-            continue
-        if normalized_view != "archived" and row.get("lifecycle_status") == "archived":
-            continue
-        if normalized_query is not None and normalized_query not in row["search_text"]:
-            continue
-        filtered.append(row)
-    return filtered
-
-
 def _chat_index_sort_key(row: Mapping[str, Any]) -> tuple[int, float, str]:
     priority = 1 if row.get("unread") else 0
     raw = str(
@@ -1759,18 +1702,6 @@ def _chat_index_effective_status(row: Mapping[str, Any]) -> str:
     if runtime == "running" or lifecycle == "running":
         return "running"
     return "idle"
-
-
-def _chat_index_counters(rows: list[dict[str, Any]]) -> dict[str, int]:
-    return {
-        "total": len(rows),
-        "waiting": sum(1 for row in rows if int(row.get("queue_depth") or 0) > 0),
-        "running": sum(
-            1 for row in rows if _chat_index_effective_status(row) == "running"
-        ),
-        "unread": sum(int(row.get("unread_count") or 0) for row in rows),
-        "archived": sum(1 for row in rows if row.get("lifecycle_status") == "archived"),
-    }
 
 
 def _chat_index_projection_params(
