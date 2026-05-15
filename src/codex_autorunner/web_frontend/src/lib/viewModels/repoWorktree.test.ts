@@ -367,7 +367,7 @@ describe('repo/worktree view models', () => {
     expect(vm.childWorktrees[0]).toMatchObject({
       href: '/repos/repo-1/worktrees/worktree-1',
       currentTicketId: null,
-      openTickets: 0,
+      openTickets: 1,
       activeRuns: 1
     });
   });
