@@ -998,7 +998,6 @@ function foldAdjacentToolGroups(cards: PmaCard[]): PmaCard[] {
     ) {
       out[out.length - 1] = {
         ...prev,
-        id: `${prev.id}..${card.id}`,
         tools: [...prev.tools, ...card.tools],
         orderKey: prev.orderKey || card.orderKey,
         timestamp: prev.timestamp ?? card.timestamp
@@ -1021,7 +1020,6 @@ function mergeIntermediateDeltas(cards: PmaCard[]): PmaCard[] {
     ) {
       out[out.length - 1] = {
         ...prev,
-        id: `${prev.id}..${card.id}`,
         title: mergedIntermediateTitle(prev, card),
         text: mergeIntermediateText(prev.text, card.text),
         eventIds: uniqueStrings([...prev.eventIds, ...card.eventIds]),
@@ -1067,7 +1065,7 @@ function compactActivityRun(cards: PmaActivitySummaryCard[]): PmaCard[] {
   const turnId = activitySummaryTurnId(cards[0]);
   return [{
     kind: 'turn_summary',
-    id: `turn:${turnId ?? cards[0].id}:activity:${cards[0].id}:${cards.at(-1)?.id ?? cards[0].id}`,
+    id: `turn:${turnId ?? cards[0].id}:activity:${cards[0].id}`,
     title: activitySummaryTitle(cards),
     cards,
     turnId,
