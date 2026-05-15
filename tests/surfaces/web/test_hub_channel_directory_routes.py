@@ -393,6 +393,11 @@ def test_hub_channel_directory_route_includes_binding_rows_without_directory_ent
     supervisor = create_test_hub_supervisor(hub_root)
     repo = supervisor.create_repo("work")
     init_git_repo(repo.path)
+    worktree = supervisor.create_worktree(
+        base_repo_id="work",
+        branch="feature/channel-scope",
+        start_point="HEAD",
+    )
 
     write_discord_binding_rows(
         hub_root / ".codex-autorunner" / "discord_state.sqlite3",
@@ -400,7 +405,7 @@ def test_hub_channel_directory_route_includes_binding_rows_without_directory_ent
             {
                 "channel_id": "chan-bound",
                 "guild_id": "guild-1",
-                "workspace_path": str(repo.path),
+                "workspace_path": str(worktree.path),
                 "repo_id": None,
                 "pma_enabled": 0,
                 "agent": "codex",
@@ -416,7 +421,7 @@ def test_hub_channel_directory_route_includes_binding_rows_without_directory_ent
                 "chat_id": -1001,
                 "thread_id": 77,
                 "scope": None,
-                "workspace_path": str(repo.path),
+                "workspace_path": str(worktree.path),
                 "repo_id": None,
                 "active_thread_id": "telegram-thread",
                 "payload_json": {"agent": "codex"},
@@ -433,12 +438,18 @@ def test_hub_channel_directory_route_includes_binding_rows_without_directory_ent
     assert "discord:chan-bound" in by_key
     assert by_key["discord:chan-bound"]["display"] == "guild:guild-1 / #chan-bound"
     assert by_key["discord:chan-bound"]["repo_id"] == "work"
-    assert by_key["discord:chan-bound"]["workspace_path"] == str(repo.path)
+    assert by_key["discord:chan-bound"]["worktree_id"] == worktree.id
+    assert by_key["discord:chan-bound"]["resource_kind"] == "worktree"
+    assert by_key["discord:chan-bound"]["resource_id"] == worktree.id
+    assert by_key["discord:chan-bound"]["workspace_path"] == str(worktree.path)
 
     assert "telegram:-1001:77" in by_key
     assert by_key["telegram:-1001:77"]["display"] == "telegram:-1001:77"
     assert by_key["telegram:-1001:77"]["active_thread_id"] == "telegram-thread"
     assert by_key["telegram:-1001:77"]["repo_id"] == "work"
+    assert by_key["telegram:-1001:77"]["worktree_id"] == worktree.id
+    assert by_key["telegram:-1001:77"]["resource_kind"] == "worktree"
+    assert by_key["telegram:-1001:77"]["resource_id"] == worktree.id
 
 
 def test_hub_channel_directory_route_deduplicates_legacy_discord_guild_keys(
@@ -643,7 +654,9 @@ def test_hub_channel_directory_route_includes_managed_threads(
     created = store.create_thread(
         "codex",
         worktree.path,
-        repo_id=worktree.id,
+        repo_id=base.id,
+        resource_kind="worktree",
+        resource_id=worktree.id,
         name="ticket-flow:codex",
         metadata={
             "thread_kind": "ticket_flow",
@@ -661,7 +674,10 @@ def test_hub_channel_directory_route_includes_managed_threads(
     pma_key = f"managed_thread:{managed_thread_id}"
     assert pma_key in rows
     pma_row = rows[pma_key]
-    assert pma_row["repo_id"] == worktree.id
+    assert pma_row["repo_id"] == base.id
+    assert pma_row["worktree_id"] == worktree.id
+    assert pma_row["resource_kind"] == "worktree"
+    assert pma_row["resource_id"] == worktree.id
     assert pma_row["workspace_path"] == str(worktree.path)
     assert pma_row["source"] == "managed_thread"
     assert pma_row["provenance"]["source"] == "managed_thread"

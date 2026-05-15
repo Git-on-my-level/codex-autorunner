@@ -20,8 +20,13 @@ from urllib.parse import unquote
 from .....adapters.chat.agents import (
     resolve_chat_agent_and_profile,
 )
+from .....core.domain.workspace_scope import (
+    WorkspaceScopeIndex,
+    workspace_scope_index_from_snapshots,
+)
 from .....core.logging_utils import safe_log
 from .....core.managed_thread_store import ManagedThreadStore
+from .....core.orchestration.chat_surface_read_model import canonical_owner_fields
 from .....core.orchestration.sqlite import resolve_orchestration_sqlite_path
 from .....core.text_utils import _coerce_int as _standalone_coerce_int
 from .....core.usage import get_repo_session_usage_ledger
@@ -66,19 +71,8 @@ def canonical_workspace_path(value: Any) -> Optional[str]:
     return None
 
 
-def repo_id_by_workspace_path(snapshots: Iterable[Any]) -> dict[str, str]:
-    mapping: dict[str, str] = {}
-    for snapshot in snapshots:
-        repo_id = getattr(snapshot, "id", None)
-        path = getattr(snapshot, "path", None)
-        if not isinstance(repo_id, str) or not isinstance(path, Path):
-            continue
-        mapping[str(path)] = repo_id
-        try:
-            mapping[str(path.resolve())] = repo_id
-        except OSError:
-            pass
-    return mapping
+def workspace_scope_index(snapshots: Iterable[Any]) -> WorkspaceScopeIndex:
+    return workspace_scope_index_from_snapshots(snapshots)
 
 
 def resolve_repo_id(
@@ -95,6 +89,45 @@ def resolve_repo_id(
         if candidate in repo_id_by_workspace:
             return repo_id_by_workspace[candidate]
     return None
+
+
+def resolve_scope_owner_fields(
+    *,
+    raw_repo_id: Any,
+    workspace_path: Any,
+    scope_index: WorkspaceScopeIndex | dict[str, str],
+    resource_kind: Any = None,
+    resource_id: Any = None,
+    scope_urn: Any = None,
+) -> dict[str, Optional[str]]:
+    if not isinstance(scope_index, WorkspaceScopeIndex):
+        repo_id = resolve_repo_id(raw_repo_id, workspace_path, scope_index)
+        normalized_resource_kind = (
+            resource_kind.strip()
+            if isinstance(resource_kind, str) and resource_kind.strip()
+            else None
+        )
+        normalized_resource_id = (
+            resource_id.strip()
+            if isinstance(resource_id, str) and resource_id.strip()
+            else None
+        )
+        return {
+            "repo_id": repo_id,
+            "worktree_id": None,
+            "resource_kind": normalized_resource_kind,
+            "resource_id": normalized_resource_id,
+            "workspace_root": canonical_workspace_path(workspace_path),
+            "scope_urn": None,
+        }
+    return canonical_owner_fields(
+        scope_index,
+        repo_id=raw_repo_id,
+        resource_kind=resource_kind,
+        resource_id=resource_id,
+        workspace_root=workspace_path,
+        scope_urn=scope_urn,
+    )
 
 
 def open_sqlite_read_only(path: Path) -> sqlite3.Connection:
@@ -245,7 +278,7 @@ def telegram_require_topics_enabled(context: HubAppContext) -> bool:
 
 def read_discord_bindings(
     db_path: Path,
-    repo_id_by_workspace: dict[str, str],
+    scope_index: WorkspaceScopeIndex,
     *,
     context: HubAppContext,
 ) -> dict[str, dict[str, Any]]:
@@ -287,10 +320,14 @@ def read_discord_bindings(
                 row["workspace_path"] if "workspace_path" in columns else None
             )
             wp = canonical_workspace_path(workspace_path_raw)
-            repo_id = resolve_repo_id(
-                row["repo_id"] if "repo_id" in columns else None,
-                workspace_path_raw,
-                repo_id_by_workspace,
+            owner_fields = resolve_scope_owner_fields(
+                raw_repo_id=row["repo_id"] if "repo_id" in columns else None,
+                workspace_path=workspace_path_raw,
+                scope_index=scope_index,
+                resource_kind=(
+                    row["resource_kind"] if "resource_kind" in columns else None
+                ),
+                resource_id=row["resource_id"] if "resource_id" in columns else None,
             )
             agent, agent_profile = resolve_agent_state(
                 row["agent"] if "agent" in columns else None,
@@ -308,21 +345,11 @@ def read_discord_bindings(
                     else None
                 ),
                 "workspace_path": wp,
-                "repo_id": repo_id,
-                "resource_kind": (
-                    str(row["resource_kind"]).strip()
-                    if "resource_kind" in columns
-                    and isinstance(row["resource_kind"], str)
-                    and str(row["resource_kind"]).strip()
-                    else None
-                ),
-                "resource_id": (
-                    str(row["resource_id"]).strip()
-                    if "resource_id" in columns
-                    and isinstance(row["resource_id"], str)
-                    and str(row["resource_id"]).strip()
-                    else None
-                ),
+                "repo_id": owner_fields["repo_id"],
+                "worktree_id": owner_fields["worktree_id"],
+                "resource_kind": owner_fields["resource_kind"],
+                "resource_id": owner_fields["resource_id"],
+                "scope_urn": owner_fields["scope_urn"],
                 "pma_enabled": (
                     bool(row["pma_enabled"]) if "pma_enabled" in columns else False
                 ),
@@ -391,7 +418,7 @@ def read_telegram_scope_map(
 
 def read_telegram_bindings(
     db_path: Path,
-    repo_id_by_workspace: dict[str, str],
+    scope_index: WorkspaceScopeIndex,
     *,
     context: HubAppContext,
 ) -> dict[str, dict[str, Any]]:
@@ -467,11 +494,6 @@ def read_telegram_bindings(
                 else payload.get("workspace_path")
             )
             wp = canonical_workspace_path(workspace_path_raw)
-            repo_id = resolve_repo_id(
-                row["repo_id"] if "repo_id" in columns else payload.get("repo_id"),
-                workspace_path_raw,
-                repo_id_by_workspace,
-            )
             active_thread_id = (
                 row["active_thread_id"]
                 if "active_thread_id" in columns
@@ -491,6 +513,16 @@ def read_telegram_bindings(
             resource_id = payload.get("resource_id") or payload.get("resourceId")
             if not isinstance(resource_id, str) or not resource_id.strip():
                 resource_id = None
+            owner_fields = resolve_scope_owner_fields(
+                raw_repo_id=(
+                    row["repo_id"] if "repo_id" in columns else payload.get("repo_id")
+                ),
+                workspace_path=workspace_path_raw,
+                scope_index=scope_index,
+                resource_kind=resource_kind,
+                resource_id=resource_id,
+                scope_urn=payload.get("scope_urn") or payload.get("scopeUrn"),
+            )
             agent, agent_profile = resolve_agent_state(
                 payload.get("agent"),
                 payload.get("agent_profile") or payload.get("agentProfile"),
@@ -513,9 +545,11 @@ def read_telegram_bindings(
                     ),
                     "surface_key": row["topic_key"],
                     "workspace_path": wp,
-                    "repo_id": repo_id,
-                    "resource_kind": resource_kind,
-                    "resource_id": resource_id,
+                    "repo_id": owner_fields["repo_id"],
+                    "worktree_id": owner_fields["worktree_id"],
+                    "resource_kind": owner_fields["resource_kind"],
+                    "resource_id": owner_fields["resource_id"],
+                    "scope_urn": owner_fields["scope_urn"],
                     "pma_enabled": pma_enabled,
                     "agent": agent,
                     "agent_profile": agent_profile,
@@ -652,7 +686,7 @@ def read_orchestration_bindings(
 
 def read_active_managed_threads(
     hub_root: Path,
-    repo_id_by_workspace: dict[str, str],
+    scope_index: WorkspaceScopeIndex,
     *,
     context: HubAppContext,
 ) -> list[dict[str, Any]]:
@@ -667,10 +701,13 @@ def read_active_managed_threads(
                 continue
             workspace_raw = row.get("workspace_root")
             wp = canonical_workspace_path(workspace_raw)
-            repo_id = resolve_repo_id(
-                row.get("repo_id"),
-                workspace_raw,
-                repo_id_by_workspace,
+            owner_fields = resolve_scope_owner_fields(
+                raw_repo_id=row.get("repo_id"),
+                workspace_path=workspace_raw,
+                scope_index=scope_index,
+                resource_kind=row.get("resource_kind"),
+                resource_id=row.get("resource_id"),
+                scope_urn=row.get("scope_urn"),
             )
             metadata_raw = row.get("metadata")
             metadata: dict[str, Any] = (
@@ -705,7 +742,11 @@ def read_active_managed_threads(
                     "managed_thread_id": managed_thread_id.strip(),
                     "agent": agent,
                     "agent_profile": agent_profile,
-                    "repo_id": repo_id,
+                    "repo_id": owner_fields["repo_id"],
+                    "worktree_id": owner_fields["worktree_id"],
+                    "resource_kind": owner_fields["resource_kind"],
+                    "resource_id": owner_fields["resource_id"],
+                    "scope_urn": owner_fields["scope_urn"],
                     "workspace_path": wp,
                     "name": name,
                     "updated_at": updated_at,
