@@ -559,7 +559,7 @@ describe('read model entity store', () => {
     expect(selectChatIndexWindowView(store.snapshot(), { filter: 'archived', limit: 200 }).rows.map((row) => row.chatId)).toEqual([
       'chat-archived'
     ]);
-    expect(store.snapshot().chatCounters).toEqual({ total: 1, waiting: 0, running: 0, unread: 0, archived: 1 });
+    expect(store.snapshot().chatCounters).toEqual({ total: 2, waiting: 1, running: 1, unread: 0, archived: 1 });
   });
 
   it('keeps only the current chat index snapshot window hot', () => {

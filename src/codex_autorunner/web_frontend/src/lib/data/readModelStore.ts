@@ -255,7 +255,7 @@ export class ReadModelEntityStore implements Readable<ReadModelEntityState> {
     for (const group of snapshot.groups) next.chatGroups[group.groupId] = group;
     next.chatOrder = rows.map((row) => row.chatId);
     next.chatGroupOrder = snapshot.groups.map((group) => group.groupId);
-    next.chatCounters = snapshot.counters;
+    if (isDefaultChatIndexWindow(windowRequest)) next.chatCounters = snapshot.counters;
     next.chatIndexCursor = snapshot.cursor;
     next.chatWindows[windowKey] = {
       key: windowKey,
