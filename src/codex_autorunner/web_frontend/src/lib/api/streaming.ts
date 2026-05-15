@@ -7,7 +7,7 @@ export type SseEvent<T = unknown> = {
   retry: number | null;
 };
 
-export type PmaTranscriptStreamEvent =
+export type ChatTranscriptStreamEvent =
   | { kind: 'transcript_snapshot'; payload: Record<string, unknown>; lastEventId: string | null }
   | { kind: 'transcript_append'; payload: Record<string, unknown>; lastEventId: string | null }
   | { kind: 'transcript_patch'; payload: Record<string, unknown>; lastEventId: string | null }
@@ -32,7 +32,7 @@ export type FlowRunStreamEvent = {
 };
 
 export type TranscriptStreamOptions = {
-  onEvent: (event: PmaTranscriptStreamEvent) => void;
+  onEvent: (event: ChatTranscriptStreamEvent) => void;
   onError?: (error: Event) => void;
   onStatus?: (status: 'connecting' | 'connected' | 'interrupted' | 'closed') => void;
   sinceEventId?: string | number | null;
@@ -40,7 +40,7 @@ export type TranscriptStreamOptions = {
   withCredentials?: boolean;
 };
 
-export type PmaTranscriptStreamUseState = {
+export type ChatTranscriptStreamUseState = {
   status?: string | null;
   queueDepth?: number | null;
 };
@@ -91,7 +91,7 @@ export function parseJsonSseFrame(frame: string): SseEvent<unknown> | null {
   }
 }
 
-export function normalizePmaTranscriptStreamEvent(event: SseEvent<unknown>): PmaTranscriptStreamEvent {
+export function normalizeChatTranscriptStreamEvent(event: SseEvent<unknown>): ChatTranscriptStreamEvent {
   const payload = asRecord(event.data);
   if (event.event === 'transcript.snapshot') return { kind: 'transcript_snapshot', payload, lastEventId: event.id };
   if (event.event === 'transcript.append') return { kind: 'transcript_append', payload, lastEventId: event.id };
@@ -116,7 +116,7 @@ export function normalizeChatSurfaceStreamEvent(event: SseEvent<unknown>): ChatS
   return { kind: 'message', payload: event.data, lastEventId: event.id };
 }
 
-export function openPmaTranscriptEventSource(
+export function openChatTranscriptEventSource(
   managedThreadId: string,
   options: TranscriptStreamOptions,
   basePath = runtimeBasePath()
@@ -130,7 +130,7 @@ export function openPmaTranscriptEventSource(
   let lastManagedTurnId: string | null = optionalString(options.sinceManagedTurnId);
   const handle = (message: MessageEvent) => {
     attempt = 0;
-    const event = normalizePmaTranscriptStreamEvent({
+    const event = normalizeChatTranscriptStreamEvent({
       id: message.lastEventId || null,
       event: message.type || 'message',
       data: parseJson(message.data),
@@ -186,13 +186,13 @@ export function openPmaTranscriptEventSource(
   };
 }
 
-export function shouldUsePmaTranscriptStream(
-  chat: PmaTranscriptStreamUseState | null | undefined,
-  progress: PmaTranscriptStreamUseState | null | undefined,
+export function shouldUseChatTranscriptStream(
+  chat: ChatTranscriptStreamUseState | null | undefined,
+  progress: ChatTranscriptStreamUseState | null | undefined,
   queuedTurns = 0
 ): boolean {
   if (queuedTurns > 0 || (progress?.queueDepth ?? 0) > 0) return true;
-  return isActivePmaTranscriptStatus(progress?.status) || isActivePmaTranscriptStatus(chat?.status);
+  return isActiveChatTranscriptStatus(progress?.status) || isActiveChatTranscriptStatus(chat?.status);
 }
 
 export function openPmaChatEventSource(
@@ -353,7 +353,7 @@ function optionalString(value: unknown): string | null {
   return null;
 }
 
-function isActivePmaTranscriptStatus(status: unknown): boolean {
+function isActiveChatTranscriptStatus(status: unknown): boolean {
   return status === 'running' || status === 'waiting' || status === 'blocked';
 }
 

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { PmaApiClient, dataOr, normalizeApiError, partialPageIssue } from './client';
+import { WebApiClient, dataOr, normalizeApiError, partialPageIssue } from './client';
 
 describe('API client error handling', () => {
   it('normalizes HTTP JSON errors into displayable errors', async () => {
@@ -10,7 +10,7 @@ describe('API client error handling', () => {
         headers: { 'content-type': 'application/json' }
       })
     ) as unknown as typeof fetch;
-    const client = new PmaApiClient(fetcher);
+    const client = new WebApiClient(fetcher);
 
     const result = await client.getJson('/hub/repos/missing');
 
@@ -33,7 +33,7 @@ describe('API client error handling', () => {
         headers: { 'content-type': 'text/html' }
       })
     ) as unknown as typeof fetch;
-    const client = new PmaApiClient(fetcher);
+    const client = new WebApiClient(fetcher);
 
     const result = await client.getJson('/hub/pma/threads');
 
@@ -45,7 +45,7 @@ describe('API client error handling', () => {
 
   it('truncates long text error responses before display', async () => {
     const fetcher = vi.fn(async () => new Response('x'.repeat(260), { status: 500 })) as unknown as typeof fetch;
-    const client = new PmaApiClient(fetcher);
+    const client = new WebApiClient(fetcher);
 
     const result = await client.getJson('/hub/pma/threads');
 
@@ -73,7 +73,7 @@ describe('API client error handling', () => {
         threads: [{ thread_target_id: 'thread-1', display_name: 'PMA room', status: 'running' }]
       })
     ) as unknown as typeof fetch;
-    const client = new PmaApiClient(fetcher);
+    const client = new WebApiClient(fetcher);
 
     const result = await client.pma.listChats();
 
@@ -102,7 +102,7 @@ describe('API client error handling', () => {
         ]
       })
     ) as unknown as typeof fetch;
-    const client = new PmaApiClient(fetcher);
+    const client = new WebApiClient(fetcher);
 
     const result = await client.pma.listChats();
 
@@ -123,7 +123,7 @@ describe('API client error handling', () => {
       }
       return Response.json({ status: 'ok' });
     }) as unknown as typeof fetch;
-    const client = new PmaApiClient(fetcher);
+    const client = new WebApiClient(fetcher);
 
     await client.pma.interruptThread('thread-1');
     await client.pma.resumeThread('thread-1');
@@ -145,7 +145,7 @@ describe('API client error handling', () => {
       if (url === '/hub/state') return Response.json({ title: 'Dispatch Desk' });
       return Response.json({ status: 'ok' });
     }) as unknown as typeof fetch;
-    const client = new PmaApiClient(fetcher);
+    const client = new WebApiClient(fetcher);
 
     const state = await client.hub.getState();
     await client.hub.updateState({ title: 'Dispatch Desk' });
@@ -162,7 +162,7 @@ describe('API client error handling', () => {
         threads: []
       })
     ) as unknown as typeof fetch;
-    const client = new PmaApiClient(fetcher, '/car');
+    const client = new WebApiClient(fetcher, '/car');
 
     const result = await client.pma.listChats();
 
@@ -196,7 +196,7 @@ describe('API client error handling', () => {
       }
       return new Response('unexpected request', { status: 500 });
     }) as unknown as typeof fetch;
-    const client = new PmaApiClient(fetcher);
+    const client = new WebApiClient(fetcher);
 
     const result = await client.ticketFlow.listTickets({ worktree: 'wt-1' });
 
@@ -224,7 +224,7 @@ describe('API client error handling', () => {
       }
       return new Response('unexpected request', { status: 500 });
     }) as unknown as typeof fetch;
-    const client = new PmaApiClient(fetcher);
+    const client = new WebApiClient(fetcher);
 
     await client.ticketFlow.listTickets({ repo: 'repo with spaces/and%symbols' });
     await client.ticketFlow.listTickets({ worktree: 'wt with spaces/and%symbols' });
@@ -267,7 +267,7 @@ describe('API client error handling', () => {
       }
       return new Response('unexpected request', { status: 500 });
     }) as unknown as typeof fetch;
-    const client = new PmaApiClient(fetcher);
+    const client = new WebApiClient(fetcher);
 
     const result = await client.ticketFlow.listTickets();
 
@@ -291,7 +291,7 @@ describe('API client error handling', () => {
       }
       return new Response('unexpected request', { status: 500 });
     }) as unknown as typeof fetch;
-    const client = new PmaApiClient(fetcher);
+    const client = new WebApiClient(fetcher);
 
     const repoRuns = await client.ticketFlow.listRuns({ repo: 'repo-1' });
     const worktreeRuns = await client.ticketFlow.listRuns({ worktree: 'wt-1' });
@@ -313,7 +313,7 @@ describe('API client error handling', () => {
       }
       return new Response('unexpected request', { status: 500 });
     }) as unknown as typeof fetch;
-    const client = new PmaApiClient(fetcher);
+    const client = new WebApiClient(fetcher);
 
     const created = await client.ticketFlow.createTicket({ title: 'Created', body: '## Goal\nShip it.' }, { repo: 'repo-1' });
     const reordered = await client.ticketFlow.reorderTicket(3, 1, false, { repo: 'repo-1' });
@@ -334,7 +334,7 @@ describe('API client error handling', () => {
 
   it('does not double-prefix already based request paths', async () => {
     const fetcher = vi.fn(async () => Response.json({ ok: true })) as unknown as typeof fetch;
-    const client = new PmaApiClient(fetcher, '/car');
+    const client = new WebApiClient(fetcher, '/car');
 
     const result = await client.getJson('/car/hub/messages');
 
@@ -370,7 +370,7 @@ describe('API client error handling', () => {
         ]
       })
     ) as unknown as typeof fetch;
-    const client = new PmaApiClient(fetcher);
+    const client = new WebApiClient(fetcher);
 
     const result = await client.pma.diagnostics.getTimeline('thread-1');
 
@@ -460,7 +460,7 @@ describe('API client error handling', () => {
         ]
       })
     ) as unknown as typeof fetch;
-    const client = new PmaApiClient(fetcher);
+    const client = new WebApiClient(fetcher);
 
     const result = await client.pma.diagnostics.getTimeline('thread-1');
 
@@ -492,7 +492,7 @@ describe('API client error handling', () => {
         items: []
       })
     ) as unknown as typeof fetch;
-    const client = new PmaApiClient(fetcher);
+    const client = new WebApiClient(fetcher);
 
     await client.pma.diagnostics.getTimeline('thread-1', { limit: 25 });
 
@@ -525,7 +525,7 @@ describe('API client error handling', () => {
         status: null
       })
     ) as unknown as typeof fetch;
-    const client = new PmaApiClient(fetcher);
+    const client = new WebApiClient(fetcher);
 
     const result = await client.pma.getTranscript('thread-1', { limit: 25 });
 
@@ -548,7 +548,7 @@ describe('API client error handling', () => {
         status: 'running'
       })
     ) as unknown as typeof fetch;
-    const client = new PmaApiClient(fetcher);
+    const client = new WebApiClient(fetcher);
 
     const result = await client.pma.diagnostics.getTail('thread-1');
 
@@ -565,7 +565,7 @@ describe('API client error handling', () => {
 
   it('uploads PMA inbox files with multipart form data', async () => {
     const fetcher = vi.fn(async () => Response.json({ status: 'ok', saved: ['screen.png'] })) as unknown as typeof fetch;
-    const client = new PmaApiClient(fetcher);
+    const client = new WebApiClient(fetcher);
 
     const result = await client.pma.uploadInboxFile(new File(['png'], 'screen.png', { type: 'image/png' }));
 
@@ -587,7 +587,7 @@ describe('API client error handling', () => {
         decisions: '- Decision'
       })
     ) as unknown as typeof fetch;
-    const client = new PmaApiClient(fetcher);
+    const client = new WebApiClient(fetcher);
 
     const result = await client.contextspace.listDocuments('repo-1');
 
@@ -620,7 +620,7 @@ describe('API client error handling', () => {
       }
       return Response.json({ name: 'active_context.md', content: 'Current PMA work' });
     }) as unknown as typeof fetch;
-    const client = new PmaApiClient(fetcher);
+    const client = new WebApiClient(fetcher);
 
     const result = await client.pma.listDocsWithContent();
 
@@ -640,7 +640,7 @@ describe('API client error handling', () => {
 
   it('updates PMA docs through the hub docs endpoint', async () => {
     const fetcher = vi.fn(async () => Response.json({ name: 'AGENTS.md', status: 'ok' })) as unknown as typeof fetch;
-    const client = new PmaApiClient(fetcher);
+    const client = new WebApiClient(fetcher);
 
     const result = await client.pma.updateDoc('AGENTS.md', '# Updated guidance');
 
@@ -685,7 +685,7 @@ describe('API client error handling', () => {
         decisions: '- Decision'
       })
     ) as unknown as typeof fetch;
-    const client = new PmaApiClient(fetcher);
+    const client = new WebApiClient(fetcher);
 
     const result = await client.contextspace.updateDocument('repo-1', 'active_context', '# Updated');
 

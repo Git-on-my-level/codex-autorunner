@@ -29,7 +29,7 @@ import {
   type TicketSummary,
   type WorktreeSummary
 } from '$lib/viewModels/domain';
-import { mapPmaTranscriptSnapshot, type PmaTranscriptSnapshot } from '$lib/viewModels/pmaChat';
+import { mapChatTranscriptSnapshot, type ChatTranscriptSnapshot } from '$lib/viewModels/pmaChat';
 import { runtimeBasePath, withRuntimeBasePath } from '$lib/runtime/basePath';
 
 export type ApiErrorKind = 'http' | 'network' | 'parse' | 'aborted';
@@ -209,7 +209,7 @@ function readableErrorText(text: string, status: number): string {
   return text.length > 220 ? `${text.slice(0, 217)}...` : text;
 }
 
-export class PmaApiClient {
+export class WebApiClient {
   constructor(
     private readonly fetcher: typeof fetch = fetch,
     private readonly basePath = runtimeBasePath()
@@ -319,10 +319,10 @@ export class PmaApiClient {
         (payload) => mapPmaChatSummary(asRecord(payload.thread ?? payload))
       ),
     // Chat rendering uses transcript projections; timeline and tail are diagnostics-only.
-    getTranscript: async (chatId: string, request: PmaTimelineRequest = {}): Promise<ApiResult<PmaTranscriptSnapshot>> => {
+    getTranscript: async (chatId: string, request: PmaTimelineRequest = {}): Promise<ApiResult<ChatTranscriptSnapshot>> => {
       const params = new URLSearchParams({ limit: String(request.limit ?? 200) });
       return mapResult(await this.getJson<JsonRecord>(`/hub/pma/threads/${encodeURIComponent(chatId)}/transcript?${params.toString()}`), (payload) =>
-        mapPmaTranscriptSnapshot(payload, mapPmaRunProgress)
+        mapChatTranscriptSnapshot(payload, mapPmaRunProgress)
       );
     },
     diagnostics: {
@@ -924,4 +924,4 @@ function isStandardPmaDoc(name: string): boolean {
   );
 }
 
-export const pmaApi = new PmaApiClient();
+export const webApi = new WebApiClient();

@@ -61,7 +61,7 @@ from .middleware import (
     SecurityHeadersMiddleware,
 )
 from .routes.auth import build_auth_routes
-from .routes.chat_events import build_hub_chat_event_routes
+from .routes.chat_events import build_chat_surface_event_routes
 from .routes.contextspace import build_contextspace_routes
 from .routes.feedback_reports import build_feedback_report_routes
 from .routes.filebox import build_hub_filebox_routes
@@ -257,7 +257,7 @@ def create_hub_app(
     app.include_router(build_hub_filebox_routes())
     app.include_router(build_hub_control_plane_routes())
     app.include_router(build_hub_state_routes(context))
-    app.include_router(build_hub_chat_event_routes(context))
+    app.include_router(build_chat_surface_event_routes(context))
     app.include_router(build_hub_chat_read_model_router(context))
 
     app.state.hub_started = False

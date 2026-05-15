@@ -10,7 +10,7 @@ import {
   type ProjectionCursor
 } from '$lib/api/readModelContracts';
 import { type PmaRunProgress, type SurfaceArtifact } from '$lib/viewModels/domain';
-import type { PmaCard } from '$lib/viewModels/pmaChat';
+import type { ChatTranscriptCard } from '$lib/viewModels/pmaChat';
 import {
   PMA_LIVE_PROGRESS_EVENT_LIMIT,
   ReadModelEntityStore,
@@ -215,7 +215,7 @@ describe('read model entity store', () => {
 
   it('replaces and upserts backend-owned PMA transcript cards independently of timeline state', () => {
     const store = new ReadModelEntityStore();
-    const first: PmaCard = {
+    const first: ChatTranscriptCard = {
       kind: 'message',
       id: 'turn:1:user',
       turnId: '1',
@@ -232,7 +232,7 @@ describe('read model entity store', () => {
         raw: {}
       }
     };
-    const second: PmaCard = {
+    const second: ChatTranscriptCard = {
       ...first,
       id: 'turn:1:assistant',
       orderKey: '002',
@@ -244,11 +244,11 @@ describe('read model entity store', () => {
       }
     };
 
-    store.replacePmaTranscript('chat-1', [first]);
-    store.upsertPmaTranscriptCards('chat-1', [second]);
+    store.replaceChatTranscript('chat-1', [first]);
+    store.upsertChatTranscriptCards('chat-1', [second]);
 
-    expect(store.snapshot().pmaTranscripts['chat-1'].order).toEqual(['turn:1:user', 'turn:1:assistant']);
-    expect(store.snapshot().pmaTranscripts['chat-1'].cardsById['turn:1:assistant']).toMatchObject({
+    expect(store.snapshot().chatTranscripts['chat-1'].order).toEqual(['turn:1:user', 'turn:1:assistant']);
+    expect(store.snapshot().chatTranscripts['chat-1'].cardsById['turn:1:assistant']).toMatchObject({
       kind: 'message',
       message: { role: 'assistant', text: 'hi' }
     });
@@ -256,7 +256,7 @@ describe('read model entity store', () => {
 
   it('orders backend-owned PMA transcript cards by backend order key across turns', () => {
     const store = new ReadModelEntityStore();
-    const userOne: PmaCard = {
+    const userOne: ChatTranscriptCard = {
       kind: 'message',
       id: 'turn:1:user',
       turnId: '1',
@@ -273,13 +273,13 @@ describe('read model entity store', () => {
         raw: {}
       }
     };
-    const assistantOne: PmaCard = {
+    const assistantOne: ChatTranscriptCard = {
       ...userOne,
       id: 'turn:1:assistant',
       orderKey: '00000002|assistant',
       message: { ...userOne.message, id: 'turn:1:assistant', role: 'assistant', text: 'first reply' }
     };
-    const userTwo: PmaCard = {
+    const userTwo: ChatTranscriptCard = {
       ...userOne,
       id: 'turn:2:user',
       turnId: '2',
@@ -287,9 +287,9 @@ describe('read model entity store', () => {
       message: { ...userOne.message, id: 'turn:2:user', text: 'second' }
     };
 
-    store.replacePmaTranscript('chat-1', [userTwo, assistantOne, userOne]);
+    store.replaceChatTranscript('chat-1', [userTwo, assistantOne, userOne]);
 
-    expect(store.snapshot().pmaTranscripts['chat-1'].order).toEqual([
+    expect(store.snapshot().chatTranscripts['chat-1'].order).toEqual([
       'turn:1:user',
       'turn:1:assistant',
       'turn:2:user'
@@ -298,7 +298,7 @@ describe('read model entity store', () => {
 
   it('keeps an optimistic user transcript row before live progress that arrives first', () => {
     const store = new ReadModelEntityStore();
-    const optimistic: PmaCard = {
+    const optimistic: ChatTranscriptCard = {
       kind: 'message',
       id: 'optimistic:user:1',
       turnId: null,
@@ -315,7 +315,7 @@ describe('read model entity store', () => {
         raw: { optimistic: true }
       }
     };
-    const progress: PmaCard = {
+    const progress: ChatTranscriptCard = {
       kind: 'intermediate',
       id: 'turn:1:intermediate:0001',
       title: 'Chat Execution Journal',
@@ -327,7 +327,7 @@ describe('read model entity store', () => {
       orderKey: '00000001|2026-05-11T12:00:01.000Z|turn:1:intermediate:0001',
       timestamp: '2026-05-11T12:00:01.000Z'
     };
-    const canonicalUser: PmaCard = {
+    const canonicalUser: ChatTranscriptCard = {
       ...optimistic,
       id: 'turn:1:user',
       turnId: '1',
@@ -339,19 +339,19 @@ describe('read model entity store', () => {
       }
     };
 
-    store.upsertPmaTranscriptCards('chat-1', [progress]);
-    store.upsertPmaTranscriptCards('chat-1', [optimistic]);
+    store.upsertChatTranscriptCards('chat-1', [progress]);
+    store.upsertChatTranscriptCards('chat-1', [optimistic]);
 
-    expect(store.snapshot().pmaTranscripts['chat-1'].order).toEqual(['optimistic:user:1', 'turn:1:intermediate:0001']);
+    expect(store.snapshot().chatTranscripts['chat-1'].order).toEqual(['optimistic:user:1', 'turn:1:intermediate:0001']);
 
-    store.replacePmaTranscript('chat-1', [progress, canonicalUser]);
+    store.replaceChatTranscript('chat-1', [progress, canonicalUser]);
 
-    expect(store.snapshot().pmaTranscripts['chat-1'].order).toEqual(['turn:1:user', 'turn:1:intermediate:0001']);
+    expect(store.snapshot().chatTranscripts['chat-1'].order).toEqual(['turn:1:user', 'turn:1:intermediate:0001']);
   });
 
   it('keeps live progress below the same-turn user when event sequence ties', () => {
     const store = new ReadModelEntityStore();
-    const user: PmaCard = {
+    const user: ChatTranscriptCard = {
       kind: 'message',
       id: 'turn:1:user',
       turnId: '1',
@@ -368,7 +368,7 @@ describe('read model entity store', () => {
         raw: {}
       }
     };
-    const progress: PmaCard = {
+    const progress: ChatTranscriptCard = {
       kind: 'intermediate',
       id: 'turn:1:intermediate:0001',
       title: 'Chat Execution Journal',
@@ -381,14 +381,14 @@ describe('read model entity store', () => {
       timestamp: '2026-05-11T12:00:00.000Z'
     };
 
-    store.replacePmaTranscript('chat-1', [progress, user]);
+    store.replaceChatTranscript('chat-1', [progress, user]);
 
-    expect(store.snapshot().pmaTranscripts['chat-1'].order).toEqual(['turn:1:user', 'turn:1:intermediate:0001']);
+    expect(store.snapshot().chatTranscripts['chat-1'].order).toEqual(['turn:1:user', 'turn:1:intermediate:0001']);
   });
 
   it('orders later live progress after an earlier assistant despite low live event sequence', () => {
     const store = new ReadModelEntityStore();
-    const firstUser: PmaCard = {
+    const firstUser: ChatTranscriptCard = {
       kind: 'message',
       id: 'turn:1:user',
       turnId: '1',
@@ -405,7 +405,7 @@ describe('read model entity store', () => {
         raw: {}
       }
     };
-    const firstAssistant: PmaCard = {
+    const firstAssistant: ChatTranscriptCard = {
       ...firstUser,
       id: 'turn:1:assistant',
       orderKey: '00000003|2026-05-11T12:00:08.000Z|turn:1:assistant',
@@ -418,7 +418,7 @@ describe('read model entity store', () => {
         createdAt: '2026-05-11T12:00:08.000Z'
       }
     };
-    const secondProgress: PmaCard = {
+    const secondProgress: ChatTranscriptCard = {
       kind: 'intermediate',
       id: 'turn:2:intermediate:0001',
       title: 'Chat Execution Journal',
@@ -431,9 +431,9 @@ describe('read model entity store', () => {
       timestamp: '2026-05-11T12:00:27.000Z'
     };
 
-    store.replacePmaTranscript('chat-1', [secondProgress, firstAssistant, firstUser]);
+    store.replaceChatTranscript('chat-1', [secondProgress, firstAssistant, firstUser]);
 
-    expect(store.snapshot().pmaTranscripts['chat-1'].order).toEqual([
+    expect(store.snapshot().chatTranscripts['chat-1'].order).toEqual([
       'turn:1:user',
       'turn:1:assistant',
       'turn:2:intermediate:0001'

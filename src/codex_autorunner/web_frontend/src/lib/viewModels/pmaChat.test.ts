@@ -7,21 +7,22 @@ import {
   buildManagedThreadMessagePayload,
   agentCapabilityAllowed,
   buildPmaChatScopeOptions,
-  buildPmaCards,
-  buildPmaActivityCards,
+  buildChatTranscriptCards,
+  buildChatActivityCards,
   buildPmaLiveActivity,
   buildPmaStatusBar,
   chooseActiveChatId,
+  compactChatTranscriptCards,
   composeMessageWithAttachments,
   countTicketRunGroups,
   filterPmaChats,
-  filterPmaChatEntries,
+  filterChatEntries,
   filterArtifactsForActiveChat,
   formatRelativeTime,
   formatCompactMessageDateTime,
   isPrimaryProgressArtifact,
-  mergePmaActivityEvents,
-  mapPmaTranscriptSnapshot,
+  mergeChatActivityEvents,
+  mapChatTranscriptSnapshot,
   mapChatSurfaceSnapshotToPmaChats,
   mapChatSurfaceEventToPmaChatSummary,
   modelReasoningOptions,
@@ -29,11 +30,11 @@ import {
   pmaChatKind,
   pmaChatKindLabel,
   pmaChatHeaderScopeLine,
-  pmaChatMessengerSurface,
+  chatMessengerSurface,
   pmaChatScopeLabelFromChat,
   pmaChatScopeTagView,
-  pmaChatSurfaceFilterOptions,
-  pmaChatSurfaceFilterToken,
+  chatSurfaceFilterOptions,
+  chatSurfaceFilterToken,
   progressPercent,
   reconcileChatSurfaceEvent,
   reconcileChatSurfaceSnapshot,
@@ -41,7 +42,7 @@ import {
   sortChatsUnreadFirst,
   sortChatsWaitingFirst,
   summarizeFilterCounts,
-  buildPmaChatListEntries
+  buildChatListEntries
 } from './pmaChat';
 import { resolvePmaChatSelectorsForActiveChat } from './modelPickers';
 
@@ -120,6 +121,21 @@ const baseProgress: PmaRunProgress = {
   raw: {}
 };
 
+function baseArtifactCardTrace(id: string, text: string, eventIds: string[]) {
+  return {
+    kind: 'intermediate' as const,
+    id,
+    title: text,
+    text,
+    eventIds,
+    progressSourceIds: [],
+    detail: null,
+    turnId: 'one',
+    orderKey: id,
+    timestamp: '2026-05-04T00:00:01Z'
+  };
+}
+
 describe('PMA chat view helpers', () => {
   it('collapses ticket-flow chats sharing a worktree into one run group, even without ticket ids', () => {
     const chats: PmaChatSummary[] = [
@@ -127,7 +143,7 @@ describe('PMA chat view helpers', () => {
       { ...baseChat, id: 'tf-2', ticketId: null, isTicketFlow: true, worktreeId: 'wt-A', repoId: 'repo-1' },
       { ...baseChat, id: 'tf-3', ticketId: null, isTicketFlow: true, worktreeId: 'wt-A', repoId: 'repo-1' }
     ];
-    const entries = buildPmaChatListEntries(chats, { groupRuns: true });
+    const entries = buildChatListEntries(chats, { groupRuns: true });
     expect(entries).toHaveLength(1);
     expect(entries[0].kind).toBe('group');
     if (entries[0].kind === 'group') {
@@ -141,7 +157,7 @@ describe('PMA chat view helpers', () => {
       { ...baseChat, id: 'tf-2', status: 'idle', ticketId: 'TICKET-002', ticketDone: true },
       { ...baseChat, id: 'tf-3', status: 'running', ticketId: 'TICKET-003', ticketDone: false }
     ];
-    const entries = buildPmaChatListEntries(chats, { groupRuns: true });
+    const entries = buildChatListEntries(chats, { groupRuns: true });
     expect(entries).toHaveLength(1);
     expect(entries[0].kind).toBe('group');
     if (entries[0].kind === 'group') {
@@ -167,8 +183,8 @@ describe('PMA chat view helpers', () => {
     const chats = [standalone, runA, runB, runOther];
     expect(countTicketRunGroups(chats)).toBe(2);
     expect(filterPmaChats(chats, 'ticket_runs', '', {}).map((c) => c.id).sort()).toEqual(['r-a', 'r-b', 'r-c']);
-    const entries = buildPmaChatListEntries(chats, { groupRuns: true });
-    const filtered = filterPmaChatEntries(entries, 'ticket_runs', '', {});
+    const entries = buildChatListEntries(chats, { groupRuns: true });
+    const filtered = filterChatEntries(entries, 'ticket_runs', '', {});
     expect(filtered).toHaveLength(2);
     expect(filtered.every((e) => e.kind === 'group')).toBe(true);
   });
@@ -180,7 +196,7 @@ describe('PMA chat view helpers', () => {
       { ...baseChat, id: 'run-b-ticket-1', runId: 'run-b', isTicketFlow: true, worktreeId: 'wt-1', repoId: 'repo-1' }
     ];
 
-    const entries = buildPmaChatListEntries(chats, { groupRuns: true });
+    const entries = buildChatListEntries(chats, { groupRuns: true });
 
     expect(entries).toHaveLength(2);
     expect(entries.map((entry) => entry.kind === 'group' ? entry.group.key : '').sort()).toEqual([
@@ -196,7 +212,7 @@ describe('PMA chat view helpers', () => {
       { ...baseChat, id: 'run-2-a', runId: 'run-2', ticketId: 'TICKET-003', worktreeId: 'wt-1' }
     ];
 
-    const entries = buildPmaChatListEntries(chats, { groupRuns: true });
+    const entries = buildChatListEntries(chats, { groupRuns: true });
 
     expect(entries).toHaveLength(2);
     expect(entries.filter((entry) => entry.kind === 'group').map((entry) => entry.group.key).sort()).toEqual([
@@ -206,7 +222,7 @@ describe('PMA chat view helpers', () => {
   });
 
   it('merges overlapping live assistant progress without duplicating snapshots', () => {
-    const cards = buildPmaActivityCards([
+    const cards = buildChatActivityCards([
       {
         ...baseArtifact,
         id: 'progress-1',
@@ -297,9 +313,9 @@ describe('PMA chat view helpers', () => {
       raw: { lifecycle: 'archived' }
     };
     const chats: PmaChatSummary[] = [active, archivedViaRaw];
-    const entries = buildPmaChatListEntries(chats, { groupRuns: true });
+    const entries = buildChatListEntries(chats, { groupRuns: true });
     expect(entries).toHaveLength(1);
-    const filtered = filterPmaChatEntries(entries, 'all', '', {});
+    const filtered = filterChatEntries(entries, 'all', '', {});
     expect(filtered).toHaveLength(1);
     if (filtered[0].kind !== 'group') throw new Error('expected group row');
     expect(filtered[0].group.chats.map((c) => c.id)).toEqual(['tf-active']);
@@ -308,7 +324,7 @@ describe('PMA chat view helpers', () => {
 
   it('detects messenger surface from API fields and title prefix', () => {
     expect(
-      pmaChatMessengerSurface({
+      chatMessengerSurface({
         ...baseChat,
         title: 'discord:123',
         raw: {}
@@ -316,7 +332,7 @@ describe('PMA chat view helpers', () => {
     ).toEqual({ slug: 'discord', label: 'Discord', badgeClass: 'surface-discord' });
 
     expect(
-      pmaChatMessengerSurface({
+      chatMessengerSurface({
         ...baseChat,
         title: 'General',
         raw: { surface_kind: 'discord', surface_key: 'ch-1' }
@@ -324,7 +340,7 @@ describe('PMA chat view helpers', () => {
     ).toEqual({ slug: 'discord', label: 'Discord', badgeClass: 'surface-discord' });
 
     expect(
-      pmaChatMessengerSurface({
+      chatMessengerSurface({
         ...baseChat,
         title: 'side thread',
         raw: { managed_thread_id: 't1', surface_urn: 'managed_thread:t1' }
@@ -706,21 +722,21 @@ describe('PMA chat view helpers', () => {
     const discordChat = { ...baseChat, id: 'd1', title: 'discord:999', raw: {} };
     const hubChat = { ...baseChat, id: 'h1', title: 'Chat · repo', raw: {} };
     const list = [discordChat, hubChat];
-    expect(filterPmaChats(list, pmaChatSurfaceFilterToken('discord'), '')).toEqual([discordChat]);
-    expect(pmaChatSurfaceFilterOptions(list)).toEqual([{ slug: 'discord', label: 'Discord', count: 1 }]);
+    expect(filterPmaChats(list, chatSurfaceFilterToken('discord'), '')).toEqual([discordChat]);
+    expect(chatSurfaceFilterOptions(list)).toEqual([{ slug: 'discord', label: 'Discord', count: 1 }]);
   });
 
   it('gives notification chats their own surface filter instead of generic other when identifiable', () => {
     const notificationChat = { ...baseChat, id: 'n1', title: 'Notification run_finished', raw: { surface_kind: 'other' } };
     const list = [notificationChat, { ...baseChat, id: 'h1', title: 'Chat', raw: {} }];
 
-    expect(pmaChatMessengerSurface(notificationChat)).toEqual({
+    expect(chatMessengerSurface(notificationChat)).toEqual({
       slug: 'notifications',
       label: 'Notifications',
       badgeClass: 'surface-notifications'
     });
-    expect(pmaChatSurfaceFilterOptions(list)).toEqual([{ slug: 'notifications', label: 'Notifications', count: 1 }]);
-    expect(filterPmaChats(list, pmaChatSurfaceFilterToken('notifications'), '')).toEqual([notificationChat]);
+    expect(chatSurfaceFilterOptions(list)).toEqual([{ slug: 'notifications', label: 'Notifications', count: 1 }]);
+    expect(filterPmaChats(list, chatSurfaceFilterToken('notifications'), '')).toEqual([notificationChat]);
   });
 
   it('sorts waiting chats ahead of others then by recent updates', () => {
@@ -750,7 +766,7 @@ describe('PMA chat view helpers', () => {
       'read-new',
       'read-old'
     ]);
-    expect(buildPmaChatListEntries(chats, { groupRuns: false, lastSeen }).map((entry) => entry.kind === 'chat' ? entry.chat.id : '')).toEqual([
+    expect(buildChatListEntries(chats, { groupRuns: false, lastSeen }).map((entry) => entry.kind === 'chat' ? entry.chat.id : '')).toEqual([
       'unread-new',
       'unread-old',
       'read-new',
@@ -778,7 +794,7 @@ describe('PMA chat view helpers', () => {
       'backend-read'
     ]);
 
-    const entries = buildPmaChatListEntries(chats, { groupRuns: true, lastSeen });
+    const entries = buildChatListEntries(chats, { groupRuns: true, lastSeen });
     expect(entries).toHaveLength(1);
     expect(entries[0].kind).toBe('group');
     if (entries[0].kind === 'group') {
@@ -853,7 +869,7 @@ describe('PMA chat view helpers', () => {
   });
 
   it('builds active chat cards for durable transcript content and scoped artifacts', () => {
-    const cards = buildPmaCards(
+    const cards = buildChatTranscriptCards(
       [
         timelineItem('turn:one:assistant', 'assistant_message', {
           text: 'Created a PMA ticket and started the run.',
@@ -891,7 +907,7 @@ describe('PMA chat view helpers', () => {
   });
 
   it('maps backend-owned PMA transcript snapshots into renderable cards and status', () => {
-    const snapshot = mapPmaTranscriptSnapshot(
+    const snapshot = mapChatTranscriptSnapshot(
       {
         rows: [
           {
@@ -970,7 +986,7 @@ describe('PMA chat view helpers', () => {
   });
 
   it('prefers specific progress labels over generic progress/update fallbacks', () => {
-    const activityCards = buildPmaActivityCards([
+    const activityCards = buildChatActivityCards([
       {
         ...baseArtifact,
         id: 'progress-1',
@@ -998,7 +1014,7 @@ describe('PMA chat view helpers', () => {
       text: 'Starting pytest'
     });
 
-    const transcriptCards = buildPmaCards(
+    const transcriptCards = buildChatTranscriptCards(
       [
         timelineItem(
           'turn:one:intermediate:21',
@@ -1038,7 +1054,7 @@ describe('PMA chat view helpers', () => {
   });
 
   it('falls back to phase metadata when the progress text is generic', () => {
-    const activityCards = buildPmaActivityCards([
+    const activityCards = buildChatActivityCards([
       {
         ...baseArtifact,
         id: 'progress-2',
@@ -1109,7 +1125,7 @@ describe('PMA chat view helpers', () => {
   });
 
   it('skips empty message cards and suppresses debug-only lifecycle events from the transcript', () => {
-    const cards = buildPmaCards(
+    const cards = buildChatTranscriptCards(
       [
         timelineItem('turn:empty:user', 'user_message', { text: '' }),
         timelineItem('turn:empty:status:running', 'status', { status: 'running' })
@@ -1123,7 +1139,7 @@ describe('PMA chat view helpers', () => {
   });
 
   it('keeps low-level PMA events out of primary transcript cards while preserving final responses', () => {
-    const cards = buildPmaCards(
+    const cards = buildChatTranscriptCards(
       [
         timelineItem('turn:final:assistant', 'assistant_message', {
           text: 'Done. The PMA smoke fixtures are now covered.'
@@ -1142,7 +1158,7 @@ describe('PMA chat view helpers', () => {
   });
 
   it('persists intermediate output and groups tool calls between user and final assistant messages', () => {
-    const cards = buildPmaCards(
+    const cards = buildChatTranscriptCards(
       [
         timelineItem('turn:one:user', 'user_message', { text: 'Create tickets' }, '001'),
         {
@@ -1180,7 +1196,7 @@ describe('PMA chat view helpers', () => {
   });
 
   it('treats Hermes tool_call progress items as tool cards', () => {
-    const cards = buildPmaActivityCards([
+    const cards = buildChatActivityCards([
       {
         ...baseArtifact,
         id: 'hermes-tool-1',
@@ -1207,7 +1223,7 @@ describe('PMA chat view helpers', () => {
   });
 
   it('does not merge live progress notices across tool activity', () => {
-    const cards = buildPmaActivityCards(
+    const cards = buildChatActivityCards(
       [
         {
           ...baseArtifact,
@@ -1264,7 +1280,7 @@ describe('PMA chat view helpers', () => {
   });
 
   it('does not merge live progress notices across tool activity', () => {
-    const cards = buildPmaActivityCards(
+    const cards = buildChatActivityCards(
       [
         {
           ...baseArtifact,
@@ -1322,7 +1338,7 @@ describe('PMA chat view helpers', () => {
 
   it('drops decode-failure lifecycle noise from canonical and live activity cards', () => {
     expect(
-      buildPmaCards(
+      buildChatTranscriptCards(
         [
           timelineItem('turn:one:intermediate:1', 'intermediate', {
             intermediate_kind: 'decode_failure',
@@ -1334,7 +1350,7 @@ describe('PMA chat view helpers', () => {
       )
     ).toEqual([]);
     expect(
-      buildPmaActivityCards([
+      buildChatActivityCards([
         {
           ...baseArtifact,
           id: 'decode-1',
@@ -1348,7 +1364,7 @@ describe('PMA chat view helpers', () => {
   });
 
   it('drops persisted assistant answer deltas, log lines, and internal journal notices from visible trace cards', () => {
-    const cards = buildPmaCards(
+    const cards = buildChatTranscriptCards(
       [
         timelineItem('turn:one:intermediate:journal', 'intermediate', {
           intermediate_kind: 'chat_execution_journal',
@@ -1387,7 +1403,7 @@ describe('PMA chat view helpers', () => {
     expect(cards).toHaveLength(1);
     expect(cards[0]).toMatchObject({ kind: 'intermediate', text: 'Reading files' });
     expect(
-      buildPmaActivityCards([
+      buildChatActivityCards([
         {
           ...baseArtifact,
           id: 'journal-1',
@@ -1409,7 +1425,7 @@ describe('PMA chat view helpers', () => {
   });
 
   it('renders compaction lifecycle timeline items as visible dividers', () => {
-    const cards = buildPmaCards(
+    const cards = buildChatTranscriptCards(
       [
         timelineItem('action:1:compact', 'lifecycle', {
           lifecycle_kind: 'chat_compacted',
@@ -1431,7 +1447,7 @@ describe('PMA chat view helpers', () => {
   });
 
   it('preserves grouped tool provenance across all contributing events', () => {
-    const cards = buildPmaCards(
+    const cards = buildChatTranscriptCards(
       [
         timelineItem('turn:one:user', 'user_message', { text: 'Refactor' }, '001'),
         {
@@ -1469,8 +1485,145 @@ describe('PMA chat view helpers', () => {
     expect(toolCard.tools[0].eventIds).toContain('evt-53');
   });
 
+  it('compacts dense transcript activity into expandable turn summaries', () => {
+    const cards = compactChatTranscriptCards([
+      {
+        kind: 'message',
+        id: 'turn:one:user',
+        turnId: 'one',
+        orderKey: '001',
+        timestamp: '2026-05-04T00:00:00Z',
+        message: {
+          id: 'turn:one:user',
+          chatId: 'chat-1',
+          role: 'user',
+          text: 'Investigate',
+          createdAt: '2026-05-04T00:00:00Z',
+          status: null,
+          artifacts: [],
+          raw: {}
+        }
+      },
+      {
+        ...baseArtifactCardTrace('need', 'Need', ['197']),
+        orderKey: '002'
+      },
+      {
+        ...baseArtifactCardTrace('to', 'to', ['198']),
+        orderKey: '003'
+      },
+      {
+        kind: 'tool_group',
+        id: 'tool-1',
+        turnId: 'one',
+        orderKey: '004',
+        timestamp: '2026-05-04T00:00:03Z',
+        tools: [
+          {
+            id: 'tool-1',
+            title: 'rg',
+            summary: 'Search files',
+            detail: null,
+            state: 'completed',
+            eventIds: ['199']
+          }
+        ]
+      },
+      {
+        kind: 'tool_group',
+        id: 'tool-2',
+        turnId: 'one',
+        orderKey: '005',
+        timestamp: '2026-05-04T00:00:04Z',
+        tools: [
+          {
+            id: 'tool-2',
+            title: 'pytest',
+            summary: 'Run tests',
+            detail: null,
+            state: 'completed',
+            eventIds: ['200']
+          }
+        ]
+      }
+    ]);
+
+    expect(cards).toHaveLength(2);
+    expect(cards[1]).toMatchObject({
+      kind: 'turn_summary',
+      title: '2 tool calls, 2 thinking updates'
+    });
+    const summary = cards[1];
+    if (summary.kind !== 'turn_summary') throw new Error('expected turn summary');
+    expect(summary.cards).toHaveLength(2);
+    expect(summary.cards[0]).toMatchObject({
+      kind: 'intermediate',
+      title: 'Thinking',
+      text: 'Need to',
+      eventIds: ['197', '198']
+    });
+    expect(summary.cards[1]).toMatchObject({
+      kind: 'tool_group',
+      tools: [
+        { title: 'rg', eventIds: ['199'] },
+        { title: 'pytest', eventIds: ['200'] }
+      ]
+    });
+  });
+
+  it('keeps numeric token-like progress updates out of thinking summaries', () => {
+    const cards = compactChatTranscriptCards([
+      {
+        ...baseArtifactCardTrace('progress-10', '10%', ['301']),
+        turnId: 'progress-turn',
+        orderKey: '001'
+      },
+      {
+        ...baseArtifactCardTrace('progress-20', '20%', ['302']),
+        turnId: 'progress-turn',
+        orderKey: '002'
+      }
+    ]);
+
+    expect(cards).toHaveLength(1);
+    expect(cards[0]).toMatchObject({
+      kind: 'turn_summary',
+      title: '2 progress updates'
+    });
+    const summary = cards[0];
+    if (summary.kind !== 'turn_summary') throw new Error('expected turn summary');
+    expect(summary.cards[0]).toMatchObject({
+      kind: 'intermediate',
+      title: 'Progress',
+      text: '10% 20%',
+      eventIds: ['301', '302']
+    });
+  });
+
+  it('keeps compact transcript ids stable as streaming activity grows', () => {
+    const first = compactChatTranscriptCards([
+      baseArtifactCardTrace('thinking-1', 'Need', ['401']),
+      baseArtifactCardTrace('thinking-2', 'to', ['402'])
+    ]);
+    const second = compactChatTranscriptCards([
+      baseArtifactCardTrace('thinking-1', 'Need', ['401']),
+      baseArtifactCardTrace('thinking-2', 'to', ['402']),
+      baseArtifactCardTrace('thinking-3', 'check', ['403'])
+    ]);
+
+    expect(first[0]).toMatchObject({ kind: 'turn_summary', id: 'turn:one:activity:thinking-1' });
+    expect(second[0]).toMatchObject({ kind: 'turn_summary', id: 'turn:one:activity:thinking-1' });
+    const firstSummary = first[0];
+    const secondSummary = second[0];
+    if (firstSummary.kind !== 'turn_summary' || secondSummary.kind !== 'turn_summary') {
+      throw new Error('expected turn summaries');
+    }
+    expect(firstSummary.cards[0]).toMatchObject({ id: 'thinking-1', text: 'Need to' });
+    expect(secondSummary.cards[0]).toMatchObject({ id: 'thinking-1', text: 'Need to check' });
+  });
+
   it('merges streamed activity events without dropping older transcript activity', () => {
-    const merged = mergePmaActivityEvents(
+    const merged = mergeChatActivityEvents(
       [
         {
           ...baseArtifact,

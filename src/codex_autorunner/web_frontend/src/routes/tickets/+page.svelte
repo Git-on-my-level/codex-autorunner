@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import TicketViews from '$lib/components/TicketViews.svelte';
-  import { pmaApi, type ApiError } from '$lib/api/client';
+  import { webApi, type ApiError } from '$lib/api/client';
   import { readModelEntityStore } from '$lib/data';
   import { buildTicketListViewModel, type TicketFilter, type TicketListViewModel } from '$lib/viewModels/ticket';
   import { mapTicketSummary } from '$lib/viewModels/domain';
@@ -33,7 +33,7 @@
       }
     }
 
-    const result = await pmaApi.ticketFlow.listTickets();
+    const result = await webApi.ticketFlow.listTickets();
     if (!result.ok) {
       error = result.error;
       list = null;

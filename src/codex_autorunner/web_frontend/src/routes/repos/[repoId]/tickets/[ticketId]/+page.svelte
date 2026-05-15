@@ -3,7 +3,7 @@
   import { page } from '$app/state';
   import { onDestroy, onMount } from 'svelte';
   import TicketViews from '$lib/components/TicketViews.svelte';
-  import { pmaApi, type ApiError, type JsonRecord, type PartialPageIssue } from '$lib/api/client';
+  import { webApi, type ApiError, type JsonRecord, type PartialPageIssue } from '$lib/api/client';
   import { openFlowRunEventSource, type StreamSubscription } from '$lib/api/streaming';
   import {
     invalidateReadModelTags,
@@ -70,7 +70,7 @@
   });
 
   async function loadPickerSupport(): Promise<void> {
-    const result = await pmaApi.pma.listAgents();
+    const result = await webApi.pma.listAgents();
     if (!result.ok) return;
     agents = result.data.agents;
     const entries = await Promise.all(
@@ -78,7 +78,7 @@
         .filter((agent) => agentCanListModels(agent))
         .map(async (agent) => {
           const id = agentId(agent);
-          const models = await pmaApi.pma.listAgentModels(id);
+          const models = await webApi.pma.listAgentModels(id);
           return [id, models.ok ? models.data : null] as const;
         })
     );
@@ -131,7 +131,7 @@
         }
       }
     }
-    const snapshot = await pmaApi.readModels.ticketDetail(routeTicketId, { kind: 'repo', id: ownerId });
+    const snapshot = await webApi.readModels.ticketDetail(routeTicketId, { kind: 'repo', id: ownerId });
     if (!isCurrentRequest()) return;
     if (!snapshot.ok) {
       error = snapshot.error;
@@ -231,7 +231,7 @@
       command === 'resume' && currentRunId
         ? `/repos/${encodeURIComponent(repoId)}/api/flows/${encodeURIComponent(currentRunId)}/resume`
         : `/repos/${encodeURIComponent(repoId)}/api/flows/ticket_flow/bootstrap`;
-    const result = await pmaApi.requestJson(path, { method: 'POST', body: command === 'bootstrap' ? { once: false } : undefined });
+    const result = await webApi.requestJson(path, { method: 'POST', body: command === 'bootstrap' ? { once: false } : undefined });
     actionStatus = result.ok ? 'Ticket flow command accepted.' : result.error.message;
     await loadTicketDetail(false);
   }
@@ -244,7 +244,7 @@
       return false;
     }
     saveStatus = 'Saving ticket...';
-    const result = await pmaApi.ticketFlow.updateTicket(ticketNumber, buildTicketUpdateContent(detail, payload), { repo: repoId });
+    const result = await webApi.ticketFlow.updateTicket(ticketNumber, buildTicketUpdateContent(detail, payload), { repo: repoId });
     saveStatus = result.ok ? 'Ticket saved.' : result.error.message;
     if (result.ok) {
       await invalidateReadModelTags([
@@ -259,12 +259,12 @@
 
   async function repairWithPma(ticket: TicketDetailViewModel): Promise<void> {
     actionStatus = 'Creating PMA repair chat...';
-    const createResult = await pmaApi.pma.createChat(buildTicketRepairChatCreatePayload(ticket));
+    const createResult = await webApi.pma.createChat(buildTicketRepairChatCreatePayload(ticket));
     if (!createResult.ok) {
       actionStatus = createResult.error.message;
       return;
     }
-    const sendResult = await pmaApi.pma.sendMessage(createResult.data.id, buildManagedThreadMessagePayload(buildTicketRepairPrompt(ticket), '', false));
+    const sendResult = await webApi.pma.sendMessage(createResult.data.id, buildManagedThreadMessagePayload(buildTicketRepairPrompt(ticket), '', false));
     if (!sendResult.ok) {
       actionStatus = sendResult.error.message;
       return;

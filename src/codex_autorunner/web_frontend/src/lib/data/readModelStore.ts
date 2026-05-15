@@ -29,7 +29,7 @@ import {
   type SurfaceArtifact,
   type TicketSummary
 } from '$lib/viewModels/domain';
-import type { PmaCard } from '$lib/viewModels/pmaChat';
+import type { ChatTranscriptCard } from '$lib/viewModels/pmaChat';
 
 export type EntityKind =
   | 'chat'
@@ -84,7 +84,7 @@ export type ReadModelEntityState = {
   chatCounters: ChatIndexCounters;
   chatDetails: Record<string, ChatDetailProjection>;
   timelines: Record<string, TimelineProjection>;
-  pmaTranscripts: Record<string, { cardsById: Record<string, PmaCard>; order: string[] }>;
+  chatTranscripts: Record<string, { cardsById: Record<string, ChatTranscriptCard>; order: string[] }>;
   pmaProgress: Record<string, PmaRunProgress>;
   pmaQueues: Record<string, PmaQueuedTurn[]>;
   pmaArtifacts: Record<string, SurfaceArtifact[]>;
@@ -146,7 +146,7 @@ export function createInitialReadModelState(): ReadModelEntityState {
     chatCounters: emptyChatCounters,
     chatDetails: {},
     timelines: {},
-    pmaTranscripts: {},
+    chatTranscripts: {},
     pmaProgress: {},
     pmaQueues: {},
     pmaArtifacts: {},
@@ -365,37 +365,37 @@ export class ReadModelEntityStore implements Readable<ReadModelEntityState> {
     return 'applied';
   }
 
-  replacePmaTranscript(chatId: string, cards: PmaCard[]): void {
-    const orderedCards = orderPmaTranscriptCards(cards);
+  replaceChatTranscript(chatId: string, cards: ChatTranscriptCard[]): void {
+    const orderedCards = orderChatTranscriptCards(cards);
     const next = cloneState(this.state);
-    next.pmaTranscripts[chatId] = {
-      cardsById: keyed(orderedCards, pmaCardEntityId),
-      order: orderedCards.map(pmaCardEntityId)
+    next.chatTranscripts[chatId] = {
+      cardsById: keyed(orderedCards, chatTranscriptCardEntityId),
+      order: orderedCards.map(chatTranscriptCardEntityId)
     };
     bump(next, 'timeline', chatId);
     this.commit(next);
   }
 
-  upsertPmaTranscriptCards(chatId: string, cards: PmaCard[]): void {
+  upsertChatTranscriptCards(chatId: string, cards: ChatTranscriptCard[]): void {
     if (!cards.length) return;
     const next = cloneState(this.state);
-    const transcript = next.pmaTranscripts[chatId] ?? { cardsById: {}, order: [] };
+    const transcript = next.chatTranscripts[chatId] ?? { cardsById: {}, order: [] };
     for (const card of cards) {
-      const id = pmaCardEntityId(card);
+      const id = chatTranscriptCardEntityId(card);
       transcript.cardsById[id] = card;
       if (!transcript.order.includes(id)) transcript.order.push(id);
     }
-    transcript.order = orderPmaTranscriptCards(transcript.order.map((id) => transcript.cardsById[id]).filter(Boolean)).map(pmaCardEntityId);
-    next.pmaTranscripts[chatId] = transcript;
+    transcript.order = orderChatTranscriptCards(transcript.order.map((id) => transcript.cardsById[id]).filter(Boolean)).map(chatTranscriptCardEntityId);
+    next.chatTranscripts[chatId] = transcript;
     bump(next, 'timeline', chatId);
     this.commit(next);
   }
 
-  removeOptimisticPmaTranscriptCards(chatId: string): void {
-    const transcript = this.state.pmaTranscripts[chatId];
+  removeOptimisticChatTranscriptCards(chatId: string): void {
+    const transcript = this.state.chatTranscripts[chatId];
     if (!transcript || !transcript.order.some((id) => id.startsWith('optimistic:'))) return;
     const next = cloneState(this.state);
-    const target = next.pmaTranscripts[chatId];
+    const target = next.chatTranscripts[chatId];
     for (const id of target.order) {
       if (id.startsWith('optimistic:')) delete target.cardsById[id];
     }
@@ -747,7 +747,7 @@ function cloneState(state: ReadModelEntityState): ReadModelEntityState {
     chatCounters: { ...state.chatCounters },
     chatDetails: cloneRecord(state.chatDetails),
     timelines: cloneRecord(state.timelines),
-    pmaTranscripts: cloneRecord(state.pmaTranscripts),
+    chatTranscripts: cloneRecord(state.chatTranscripts),
     pmaProgress: { ...state.pmaProgress },
     pmaQueues: cloneRecord(state.pmaQueues),
     pmaArtifacts: cloneRecord(state.pmaArtifacts),
@@ -805,15 +805,15 @@ function uniqueChatIndexRows(rows: ChatIndexRow[]): ChatIndexRow[] {
   return order.map((chatId) => byChatId.get(chatId)).filter((row): row is ChatIndexRow => Boolean(row));
 }
 
-function pmaCardEntityId(card: PmaCard): string {
+function chatTranscriptCardEntityId(card: ChatTranscriptCard): string {
   return card.id;
 }
 
-function orderPmaTranscriptCards(cards: PmaCard[]): PmaCard[] {
-  return [...cards].sort(comparePmaTranscriptCards);
+function orderChatTranscriptCards(cards: ChatTranscriptCard[]): ChatTranscriptCard[] {
+  return [...cards].sort(compareChatTranscriptCards);
 }
 
-function comparePmaTranscriptCards(left: PmaCard, right: PmaCard): number {
+function compareChatTranscriptCards(left: ChatTranscriptCard, right: ChatTranscriptCard): number {
   const leftTimestamp = transcriptCardTimestamp(left) ?? '';
   const rightTimestamp = transcriptCardTimestamp(right) ?? '';
   if (leftTimestamp && rightTimestamp && leftTimestamp !== rightTimestamp) return leftTimestamp.localeCompare(rightTimestamp);
@@ -826,24 +826,24 @@ function comparePmaTranscriptCards(left: PmaCard, right: PmaCard): number {
   if (byKey !== 0) return byKey;
   const byRole = transcriptCardRoleRank(left).localeCompare(transcriptCardRoleRank(right));
   if (byRole !== 0) return byRole;
-  return pmaCardEntityId(left).localeCompare(pmaCardEntityId(right));
+  return chatTranscriptCardEntityId(left).localeCompare(chatTranscriptCardEntityId(right));
 }
 
-function transcriptCardOrderKey(card: PmaCard): string {
+function transcriptCardOrderKey(card: ChatTranscriptCard): string {
   if ('orderKey' in card && typeof card.orderKey === 'string') return card.orderKey.trim();
   return '';
 }
 
-function transcriptCardRoleRank(card: PmaCard): string {
+function transcriptCardRoleRank(card: ChatTranscriptCard): string {
   if (card.kind === 'message') return card.message.role === 'user' ? '0' : '2';
   return '1';
 }
 
-function transcriptCardTurnId(card: PmaCard): string | null {
+function transcriptCardTurnId(card: ChatTranscriptCard): string | null {
   return 'turnId' in card ? card.turnId : null;
 }
 
-function transcriptCardTimestamp(card: PmaCard): string | null {
+function transcriptCardTimestamp(card: ChatTranscriptCard): string | null {
   if ('timestamp' in card && card.timestamp) return card.timestamp;
   if (card.kind === 'message') return card.message.createdAt;
   return null;

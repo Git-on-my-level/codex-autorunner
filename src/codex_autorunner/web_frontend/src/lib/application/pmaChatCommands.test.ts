@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { PmaApiClient } from '$lib/api/client';
+import { WebApiClient } from '$lib/api/client';
 import { localPmaChatScopeOption } from '$lib/viewModels/pmaChat';
 import {
   executePmaChatCommandPlan,
@@ -104,7 +104,7 @@ describe('PMA chat command execution', () => {
       }
       return Response.json({ thread: { thread_target_id: 'unexpected' } });
     }) as unknown as typeof fetch;
-    const client = new PmaApiClient(fetcher);
+    const client = new WebApiClient(fetcher);
 
     const result = await executePmaChatCommandPlan(client, planSendExistingChat('thread-1', 'Continue'));
 
@@ -121,7 +121,7 @@ describe('PMA chat command execution', () => {
     const fetcher = vi.fn(async () =>
       Response.json({ thread: { thread_target_id: 'thread-new', display_name: 'New chat' } })
     ) as unknown as typeof fetch;
-    const client = new PmaApiClient(fetcher);
+    const client = new WebApiClient(fetcher);
 
     await executePmaChatCommandPlan(client, planStartChat(localPmaChatScopeOption(), 'codex'));
     await executePmaChatCommandPlan(client, planForkChat('thread-1', { name: 'Forked chat' }));
@@ -140,7 +140,7 @@ describe('PMA chat command execution', () => {
     const fetcher = vi.fn(async () =>
       Response.json({ managed_thread_id: 'thread-new', managed_turn_id: 'turn-1', delivered_message: 'Hello' })
     ) as unknown as typeof fetch;
-    const client = new PmaApiClient(fetcher);
+    const client = new WebApiClient(fetcher);
 
     const result = await executePmaChatCommandPlan(
       client,

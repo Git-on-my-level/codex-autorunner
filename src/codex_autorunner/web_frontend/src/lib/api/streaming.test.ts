@@ -2,14 +2,14 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   normalizeChatSurfaceStreamEvent,
   normalizePmaChatStreamEvent,
-  normalizePmaTranscriptStreamEvent,
+  normalizeChatTranscriptStreamEvent,
   openFlowRunEventSource,
   openChatSurfaceEventSource,
   openPmaChatEventSource,
-  openPmaTranscriptEventSource,
+  openChatTranscriptEventSource,
   parseJsonSseFrame,
   parseSseFrame,
-  shouldUsePmaTranscriptStream
+  shouldUseChatTranscriptStream
 } from './streaming';
 
 class FakeEventSource extends EventTarget {
@@ -64,7 +64,7 @@ describe('SSE helpers', () => {
   it('parses JSON data and normalizes PMA transcript events', () => {
     const parsed = parseJsonSseFrame('id: 9\nevent: transcript.patch\ndata: {"status":{"phase":"testing"}}\n\n');
     expect(parsed).not.toBeNull();
-    const normalized = normalizePmaTranscriptStreamEvent(parsed!);
+    const normalized = normalizeChatTranscriptStreamEvent(parsed!);
 
     expect(normalized).toEqual({
       kind: 'transcript_patch',
@@ -77,7 +77,7 @@ describe('SSE helpers', () => {
     const parsed = parseJsonSseFrame('id: 7\nevent: transcript.append\ndata: {"rows":[{"id":"turn:1:intermediate:0001","kind":"intermediate"}]}\n\n');
     expect(parsed).not.toBeNull();
 
-    expect(normalizePmaTranscriptStreamEvent(parsed!)).toEqual({
+    expect(normalizeChatTranscriptStreamEvent(parsed!)).toEqual({
       kind: 'transcript_append',
       lastEventId: '7',
       payload: { rows: [{ id: 'turn:1:intermediate:0001', kind: 'intermediate' }] }
@@ -119,7 +119,7 @@ describe('SSE helpers', () => {
     });
     vi.stubGlobal('EventSource', eventSource);
 
-    const subscription = openPmaTranscriptEventSource('thread/1', { onEvent: vi.fn() }, '/car');
+    const subscription = openChatTranscriptEventSource('thread/1', { onEvent: vi.fn() }, '/car');
 
     expect(eventSource).toHaveBeenCalledWith('/car/hub/pma/threads/thread%2F1/transcript/events', {
       withCredentials: undefined
@@ -136,7 +136,7 @@ describe('SSE helpers', () => {
     vi.stubGlobal('EventSource', FakeEventSource);
     const events: unknown[] = [];
 
-    const subscription = openPmaTranscriptEventSource('thread/1', { onEvent: (event) => events.push(event) }, '/car');
+    const subscription = openChatTranscriptEventSource('thread/1', { onEvent: (event) => events.push(event) }, '/car');
     expect(FakeEventSource.instances[0].url).toBe('/car/hub/pma/threads/thread%2F1/transcript/events');
 
     FakeEventSource.instances[0].emit('transcript.append', { rows: [{ id: 'item-1', turn_id: 'turn-1' }] }, '8');
@@ -159,7 +159,7 @@ describe('SSE helpers', () => {
   it('opens PMA transcript streams from a provided progress cursor', () => {
     vi.stubGlobal('EventSource', FakeEventSource);
 
-    const subscription = openPmaTranscriptEventSource(
+    const subscription = openChatTranscriptEventSource(
       'thread/1',
       {
         onEvent: vi.fn(),
@@ -176,20 +176,20 @@ describe('SSE helpers', () => {
   });
 
   it('does not open PMA transcript streams for terminal snapshots with no queued follow-up', () => {
-    expect(shouldUsePmaTranscriptStream({ status: 'completed' }, { status: 'completed', queueDepth: 0 }, 0)).toBe(false);
+    expect(shouldUseChatTranscriptStream({ status: 'completed' }, { status: 'completed', queueDepth: 0 }, 0)).toBe(false);
   });
 
   it('keeps PMA transcript streams useful for live and queued turns', () => {
-    expect(shouldUsePmaTranscriptStream({ status: 'completed' }, { status: 'running', queueDepth: 0 }, 0)).toBe(true);
-    expect(shouldUsePmaTranscriptStream({ status: 'completed' }, { status: 'completed', queueDepth: 0 }, 1)).toBe(true);
-    expect(shouldUsePmaTranscriptStream({ status: 'waiting' }, null, 0)).toBe(true);
+    expect(shouldUseChatTranscriptStream({ status: 'completed' }, { status: 'running', queueDepth: 0 }, 0)).toBe(true);
+    expect(shouldUseChatTranscriptStream({ status: 'completed' }, { status: 'completed', queueDepth: 0 }, 1)).toBe(true);
+    expect(shouldUseChatTranscriptStream({ status: 'waiting' }, null, 0)).toBe(true);
   });
 
   it('resets PMA transcript stream cursors when the managed turn changes', () => {
     vi.useFakeTimers();
     vi.stubGlobal('EventSource', FakeEventSource);
 
-    const subscription = openPmaTranscriptEventSource('thread/1', { onEvent: vi.fn() }, '/car');
+    const subscription = openChatTranscriptEventSource('thread/1', { onEvent: vi.fn() }, '/car');
     FakeEventSource.instances[0].emit('transcript.append', { rows: [{ id: 'old-item', turn_id: 'turn-1' }] }, '8');
     FakeEventSource.instances[0].emit('transcript.patch', { status: { managed_turn_id: 'turn-2', phase: 'booting' } });
     FakeEventSource.instances[0].fail();

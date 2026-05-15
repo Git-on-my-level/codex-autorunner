@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import ContextspaceView from '$lib/components/ContextspaceView.svelte';
-  import { pmaApi, type ApiError } from '$lib/api/client';
+  import { webApi, type ApiError } from '$lib/api/client';
   import { buildContextspaceViewModel, type ContextspaceViewModel } from '$lib/viewModels/contextspace';
   import { mapRepoSummary, mapWorktreeSummary, type RepoSummary, type WorktreeSummary } from '$lib/viewModels/domain';
   import type { ScopeRef } from '$lib/viewModels/scope';
@@ -31,7 +31,7 @@
   }
 
   async function loadInventory(): Promise<void> {
-    const topology = await pmaApi.readModels.repoWorktreeTopology('all', 200);
+    const topology = await webApi.readModels.repoWorktreeTopology('all', 200);
     repoList = topology.ok
       ? topology.data.repos.map((repo) =>
           mapRepoSummary({
@@ -62,7 +62,7 @@
     error = null;
     await loadInventory();
     const id = await resolveWorkspaceId();
-    const docs = await pmaApi.contextspace.listDocuments(id);
+    const docs = await webApi.contextspace.listDocuments(id);
     if (!docs.ok) {
       error = docs.error;
       vm = null;
@@ -75,7 +75,7 @@
 
   async function saveDoc(docId: string, content: string): Promise<boolean> {
     if (!vm) return false;
-    const result = await pmaApi.contextspace.updateDocument(vm.workspaceId, docId, content);
+    const result = await webApi.contextspace.updateDocument(vm.workspaceId, docId, content);
     if (!result.ok) {
       error = result.error;
       return false;

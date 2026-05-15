@@ -15,7 +15,7 @@ import {
   type TicketSummary,
   type WorktreeSummary
 } from './domain';
-import { buildPmaChatListEntries } from './pmaChat';
+import { buildChatListEntries } from './pmaChat';
 import {
   buildRepoWorktreeDetailViewModel,
   buildRepoWorktreeIndexViewModel,
@@ -274,7 +274,7 @@ describe('fixture-backed Web UI scenario harness', () => {
 
   it('normalizes unknown statuses and missing optional fields for chat lists', () => {
     const source = mapped(chatListDetail());
-    const entries = buildPmaChatListEntries(source.chats);
+    const entries = buildChatListEntries(source.chats);
 
     expect(source.chats.find((chat) => chat.id === 'chat-unknown-status')?.status).toBe('idle');
     expect(entries.length).toBeGreaterThan(0);
