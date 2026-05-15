@@ -87,6 +87,44 @@ def _seed_thread_rows(hub_root: Path, count: int) -> None:
                     )
 
 
+def _seed_archived_surface_events(hub_root: Path, count: int, *, prefix: str) -> None:
+    with open_orchestration_sqlite(hub_root, durable=True, migrate=True) as conn:
+        with conn:
+            conn.executemany(
+                """
+                INSERT INTO orch_chat_surface_events (
+                    idempotency_key,
+                    event_type,
+                    surface_kind,
+                    surface_key,
+                    managed_thread_id,
+                    repo_id,
+                    lifecycle_status,
+                    status,
+                    occurred_at,
+                    created_at,
+                    payload_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    (
+                        f"{prefix}-{index}",
+                        "surface.archived",
+                        "pma",
+                        f"old-thread-{index}",
+                        f"old-thread-{index}",
+                        "repo",
+                        "archived",
+                        "archived",
+                        "2026-05-11T00:00:00Z",
+                        "2026-05-11T00:00:00Z",
+                        "{}",
+                    )
+                    for index in range(count)
+                ),
+            )
+
+
 def _event_payloads(text: str, event_name: str) -> list[dict]:
     payloads: list[dict] = []
     current_event: str | None = None
@@ -605,18 +643,7 @@ def test_hub_read_models_chats_patch_stream_does_not_replay_historical_events(
     hub_env,
 ) -> None:
     _seed_thread_rows(hub_env.hub_root, 1)
-    journal = SQLiteChatSurfaceEventJournal(hub_env.hub_root, durable=True)
-    for index in range(1200):
-        journal.append_event(
-            idempotency_key=f"historical-archive-{index}",
-            event_type="surface.archived",
-            surface_kind="pma",
-            surface_key=f"old-thread-{index}",
-            managed_thread_id=f"old-thread-{index}",
-            repo_id="repo",
-            lifecycle_status="archived",
-            status="archived",
-        )
+    _seed_archived_surface_events(hub_env.hub_root, 1200, prefix="historical-archive")
 
     client = TestClient(create_hub_app(hub_env.hub_root))
     response = client.get(

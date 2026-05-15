@@ -48,6 +48,7 @@ _LANE_PREFIXES: dict[ScopedValidationLane, tuple[str, ...]] = {
         "tests/routes",
         "tests/contracts",
         "tests/surfaces/web",
+        "tests/web_ui_lab",
     ),
     "chat-apps": (
         "src/codex_autorunner/adapters/chat",

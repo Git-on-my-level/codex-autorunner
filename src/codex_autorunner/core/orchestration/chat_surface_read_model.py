@@ -2086,57 +2086,6 @@ def _chat_patch_from_event(event: ChatSurfaceEvent) -> dict[str, Any]:
     }
 
 
-def _chat_index_patch_event_from_surface_event(
-    event: ChatSurfaceEvent,
-    *,
-    snapshot: Mapping[str, Any],
-) -> dict[str, Any]:
-    rows_raw = snapshot.get("rows") or []
-    rows = [row for row in rows_raw if isinstance(row, Mapping)]
-    chat_id = _chat_id_for_event(event)
-    matching_rows = [
-        dict(row)
-        for row in rows
-        if _normalize_text(row.get("managed_thread_id")) == event.managed_thread_id
-        or _normalize_text(row.get("chat_id")) == chat_id
-        or _normalize_text(row.get("row_id"))
-        == f"surface:{event.surface_kind}:{event.surface_key}"
-    ]
-    removed = [] if matching_rows else [chat_id]
-    return {
-        "envelope": {
-            "event_type": "chat.index.patch",
-            "cursor": event.cursor,
-            "entity_kind": "chat",
-            "entity_id": chat_id,
-            "operation": "patch" if matching_rows else "delete",
-            "generated_at": event.created_at,
-        },
-        "patch": {
-            "rows": matching_rows,
-            "groups": [
-                dict(group)
-                for group in snapshot.get("groups") or []
-                if isinstance(group, Mapping)
-            ],
-            "removed_row_ids": removed,
-            "removed_group_ids": [],
-            "order": [
-                str(
-                    row.get("managed_thread_id")
-                    or row.get("chat_id")
-                    or row.get("row_id")
-                )
-                for row in rows
-                if row.get("managed_thread_id")
-                or row.get("chat_id")
-                or row.get("row_id")
-            ],
-            "counters": _chat_index_patch_counters(snapshot, rows),
-        },
-    }
-
-
 def _chat_index_cursor_gap_event(
     *,
     cursor: int,
@@ -2201,12 +2150,6 @@ def _chat_index_projection_invalidated_event(
             "snapshot_route": "/hub/read-models/chats",
         },
     }
-
-
-def _chat_id_for_event(event: ChatSurfaceEvent) -> str:
-    if event.managed_thread_id:
-        return event.managed_thread_id
-    return f"surface:{event.surface_kind}:{event.surface_key}"
 
 
 def _chat_index_patch_counters(
