@@ -2,7 +2,7 @@
   import SurfaceArtifactCard from '$lib/components/SurfaceArtifactCard.svelte';
   import { withRuntimeBasePath as href } from '$lib/runtime/basePath';
   import { renderMarkdownToHtml } from '$lib/viewModels/contextspace';
-  import { formatCompactMessageDateTime, type PmaCard, type PmaToolCallCard } from '$lib/viewModels/pmaChat';
+  import { compactPmaTranscriptCards, formatCompactMessageDateTime, type PmaCard, type PmaToolCallCard } from '$lib/viewModels/pmaChat';
   import type { SurfaceArtifact } from '$lib/viewModels/domain';
 
   let {
@@ -110,26 +110,7 @@
     return tool.title;
   }
 
-  function foldConsecutiveToolGroups(input: PmaCard[]): PmaCard[] {
-    const out: PmaCard[] = [];
-    for (const card of input) {
-      const prev = out[out.length - 1];
-      if (
-        card.kind === 'tool_group' &&
-        prev &&
-        prev.kind === 'tool_group' &&
-        prev.turnId === card.turnId &&
-        prev.turnId !== null
-      ) {
-        out[out.length - 1] = { ...prev, tools: [...prev.tools, ...card.tools] };
-        continue;
-      }
-      out.push(card);
-    }
-    return out;
-  }
-
-  const displayCards = $derived(foldConsecutiveToolGroups(cards));
+  const displayCards = $derived(compactPmaTranscriptCards(cards));
 </script>
 
 {#each displayCards as card (card.id)}

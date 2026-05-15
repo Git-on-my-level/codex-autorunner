@@ -12,6 +12,7 @@ import {
   buildPmaLiveActivity,
   buildPmaStatusBar,
   chooseActiveChatId,
+  compactPmaTranscriptCards,
   composeMessageWithAttachments,
   countTicketRunGroups,
   filterPmaChats,
@@ -119,6 +120,21 @@ const baseProgress: PmaRunProgress = {
   ],
   raw: {}
 };
+
+function baseArtifactCardTrace(id: string, text: string, eventIds: string[]) {
+  return {
+    kind: 'intermediate' as const,
+    id,
+    title: text,
+    text,
+    eventIds,
+    progressSourceIds: [],
+    detail: null,
+    turnId: 'one',
+    orderKey: id,
+    timestamp: '2026-05-04T00:00:01Z'
+  };
+}
 
 describe('PMA chat view helpers', () => {
   it('collapses ticket-flow chats sharing a worktree into one run group, even without ticket ids', () => {
@@ -1467,6 +1483,92 @@ describe('PMA chat view helpers', () => {
     expect(toolCard.tools[0].eventIds).toContain('evt-51');
     expect(toolCard.tools[0].eventIds).toContain('evt-52');
     expect(toolCard.tools[0].eventIds).toContain('evt-53');
+  });
+
+  it('compacts dense transcript activity into expandable turn summaries', () => {
+    const cards = compactPmaTranscriptCards([
+      {
+        kind: 'message',
+        id: 'turn:one:user',
+        turnId: 'one',
+        orderKey: '001',
+        timestamp: '2026-05-04T00:00:00Z',
+        message: {
+          id: 'turn:one:user',
+          chatId: 'chat-1',
+          role: 'user',
+          text: 'Investigate',
+          createdAt: '2026-05-04T00:00:00Z',
+          status: null,
+          artifacts: [],
+          raw: {}
+        }
+      },
+      {
+        ...baseArtifactCardTrace('need', 'Need', ['197']),
+        orderKey: '002'
+      },
+      {
+        ...baseArtifactCardTrace('to', 'to', ['198']),
+        orderKey: '003'
+      },
+      {
+        kind: 'tool_group',
+        id: 'tool-1',
+        turnId: 'one',
+        orderKey: '004',
+        timestamp: '2026-05-04T00:00:03Z',
+        tools: [
+          {
+            id: 'tool-1',
+            title: 'rg',
+            summary: 'Search files',
+            detail: null,
+            state: 'completed',
+            eventIds: ['199']
+          }
+        ]
+      },
+      {
+        kind: 'tool_group',
+        id: 'tool-2',
+        turnId: 'one',
+        orderKey: '005',
+        timestamp: '2026-05-04T00:00:04Z',
+        tools: [
+          {
+            id: 'tool-2',
+            title: 'pytest',
+            summary: 'Run tests',
+            detail: null,
+            state: 'completed',
+            eventIds: ['200']
+          }
+        ]
+      }
+    ]);
+
+    expect(cards).toHaveLength(2);
+    expect(cards[1]).toMatchObject({
+      kind: 'turn_summary',
+      title: '2 tool calls, 2 thinking updates'
+    });
+    const summary = cards[1];
+    if (summary.kind !== 'turn_summary') throw new Error('expected turn summary');
+    expect(summary.cards).toHaveLength(2);
+    expect(summary.cards[0]).toMatchObject({
+      kind: 'intermediate',
+      title: 'Thinking',
+      text: 'Need to',
+      eventIds: ['197', '198']
+    });
+    expect(summary.cards[1]).toMatchObject({
+      kind: 'tool_group',
+      tools: [
+        { title: 'rg', eventIds: ['199'] },
+        { title: 'pytest', eventIds: ['200'] }
+      ]
+    });
   });
 
   it('merges streamed activity events without dropping older transcript activity', () => {

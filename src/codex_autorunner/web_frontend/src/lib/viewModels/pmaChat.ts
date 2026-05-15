@@ -217,6 +217,8 @@ export type PmaTranscriptSnapshot = {
   raw: Record<string, unknown>;
 };
 
+type PmaActivitySummaryCard = Extract<PmaCard, { kind: 'intermediate' | 'tool_group' | 'approval' }>;
+
 type CanonicalProgressItem = {
   item_id?: string;
   kind?: string;
@@ -978,6 +980,182 @@ export function mapPmaTranscriptSnapshot(
 
 export function mapPmaTranscriptRows(rawRows: unknown): PmaCard[] {
   return asRecordArray(rawRows).map(mapPmaTranscriptRow).filter((row): row is PmaCard => row !== null);
+}
+
+export function compactPmaTranscriptCards(cards: PmaCard[]): PmaCard[] {
+  return summarizeTurnActivity(mergeIntermediateDeltas(foldAdjacentToolGroups(cards)));
+}
+
+function foldAdjacentToolGroups(cards: PmaCard[]): PmaCard[] {
+  const out: PmaCard[] = [];
+  for (const card of cards) {
+    const prev = out[out.length - 1];
+    if (
+      card.kind === 'tool_group' &&
+      prev?.kind === 'tool_group' &&
+      prev.turnId === card.turnId &&
+      prev.turnId !== null
+    ) {
+      out[out.length - 1] = {
+        ...prev,
+        id: `${prev.id}..${card.id}`,
+        tools: [...prev.tools, ...card.tools],
+        orderKey: prev.orderKey || card.orderKey,
+        timestamp: prev.timestamp ?? card.timestamp
+      };
+      continue;
+    }
+    out.push(card);
+  }
+  return out;
+}
+
+function mergeIntermediateDeltas(cards: PmaCard[]): PmaCard[] {
+  const out: PmaCard[] = [];
+  for (const card of cards) {
+    const prev = out[out.length - 1];
+    if (
+      card.kind === 'intermediate' &&
+      prev?.kind === 'intermediate' &&
+      shouldAppendIntermediateDelta(prev, card)
+    ) {
+      out[out.length - 1] = {
+        ...prev,
+        id: `${prev.id}..${card.id}`,
+        title: mergedIntermediateTitle(prev, card),
+        text: mergeIntermediateText(prev.text, card.text),
+        eventIds: uniqueStrings([...prev.eventIds, ...card.eventIds]),
+        progressSourceIds: uniqueStrings([...prev.progressSourceIds, ...card.progressSourceIds]),
+        detail: mergedTraceDetail(mergedIntermediateTitle(prev, card), [...prev.eventIds, ...card.eventIds]),
+        orderKey: prev.orderKey || card.orderKey,
+        timestamp: prev.timestamp ?? card.timestamp
+      };
+      continue;
+    }
+    out.push(card);
+  }
+  return out;
+}
+
+function summarizeTurnActivity(cards: PmaCard[]): PmaCard[] {
+  const out: PmaCard[] = [];
+  let pending: PmaActivitySummaryCard[] = [];
+
+  const flush = () => {
+    if (!pending.length) return;
+    out.push(...compactActivityRun(pending));
+    pending = [];
+  };
+
+  for (const card of cards) {
+    if (isSummaryActivityCard(card)) {
+      const currentTurn = activitySummaryTurnId(card);
+      const pendingTurn = pending.length ? activitySummaryTurnId(pending[0]) : currentTurn;
+      if (pending.length && currentTurn !== pendingTurn) flush();
+      pending.push(card);
+      continue;
+    }
+    flush();
+    out.push(card);
+  }
+  flush();
+  return out;
+}
+
+function compactActivityRun(cards: PmaActivitySummaryCard[]): PmaCard[] {
+  if (cards.length === 1 && !activityCardNeedsSummary(cards[0])) return cards;
+  const turnId = activitySummaryTurnId(cards[0]);
+  return [{
+    kind: 'turn_summary',
+    id: `turn:${turnId ?? cards[0].id}:activity:${cards[0].id}:${cards.at(-1)?.id ?? cards[0].id}`,
+    title: activitySummaryTitle(cards),
+    cards,
+    turnId,
+    orderKey: cards[0].orderKey,
+    timestamp: cards[0].timestamp
+  }];
+}
+
+function activitySummaryTitle(cards: PmaActivitySummaryCard[]): string {
+  let toolCalls = 0;
+  let thinkingUpdates = 0;
+  let progressUpdates = 0;
+  let approvals = 0;
+  for (const card of cards) {
+    if (card.kind === 'tool_group') {
+      toolCalls += card.tools.length;
+    } else if (card.kind === 'approval') {
+      approvals += 1;
+    } else if (card.kind === 'intermediate') {
+      const count = Math.max(1, uniqueStrings([...card.eventIds, ...card.progressSourceIds]).length);
+      if (isThinkingTraceTitle(card.title)) thinkingUpdates += count;
+      else progressUpdates += count;
+    }
+  }
+  const parts: string[] = [];
+  if (toolCalls) parts.push(`${toolCalls} tool ${toolCalls === 1 ? 'call' : 'calls'}`);
+  if (thinkingUpdates) parts.push(`${thinkingUpdates} thinking ${thinkingUpdates === 1 ? 'update' : 'updates'}`);
+  if (progressUpdates) parts.push(`${progressUpdates} progress ${progressUpdates === 1 ? 'update' : 'updates'}`);
+  if (approvals) parts.push(`${approvals} approval ${approvals === 1 ? 'request' : 'requests'}`);
+  return parts.length ? parts.join(', ') : 'Activity details';
+}
+
+function activityCardNeedsSummary(card: PmaActivitySummaryCard): boolean {
+  if (card.kind === 'tool_group') return card.tools.length > 1;
+  if (card.kind === 'intermediate') return uniqueStrings([...card.eventIds, ...card.progressSourceIds]).length > 1;
+  return false;
+}
+
+function isSummaryActivityCard(card: PmaCard): card is PmaActivitySummaryCard {
+  if (card.kind === 'tool_group' || card.kind === 'approval') return true;
+  if (card.kind !== 'intermediate') return false;
+  return !isCommentaryTraceCard(card);
+}
+
+function activitySummaryTurnId(card: PmaActivitySummaryCard): string | null {
+  return card.turnId;
+}
+
+function shouldAppendIntermediateDelta(
+  left: Extract<PmaCard, { kind: 'intermediate' }>,
+  right: Extract<PmaCard, { kind: 'intermediate' }>
+): boolean {
+  if (left.turnId !== right.turnId) return false;
+  if (isCommentaryTraceCard(left) || isCommentaryTraceCard(right)) return false;
+  if (isTerminalTraceCard(left) || isTerminalTraceCard(right)) return false;
+  if (isThinkingTraceTitle(left.title) && isThinkingTraceTitle(right.title)) return true;
+  if (traceLabelText(left.title).toLowerCase() === traceLabelText(right.title).toLowerCase()) return true;
+  return isTokenLikeIntermediate(left) && isTokenLikeIntermediate(right);
+}
+
+function isTokenLikeIntermediate(card: Extract<PmaCard, { kind: 'intermediate' }>): boolean {
+  const text = card.text.trim();
+  const title = card.title.trim();
+  if (!text || text.length > 32 || /\n/.test(text)) return false;
+  if (/[.!?]$/.test(text)) return false;
+  if (title && title.length <= 32 && text.toLowerCase() === title.toLowerCase()) return true;
+  return text.split(/\s+/).length <= 3 && !isSpecificTraceSummary(text);
+}
+
+function mergedIntermediateTitle(
+  left: Extract<PmaCard, { kind: 'intermediate' }>,
+  right: Extract<PmaCard, { kind: 'intermediate' }>
+): string {
+  if (isThinkingTraceTitle(left.title) || isThinkingTraceTitle(right.title)) return 'Thinking';
+  if (isTokenLikeIntermediate(left) && isTokenLikeIntermediate(right)) return 'Thinking';
+  return left.title || right.title || 'Update';
+}
+
+function mergedTraceDetail(title: string, eventIds: string[]): string | null {
+  return traceDetailSummary(title, uniqueStrings(eventIds));
+}
+
+function uniqueStrings(values: string[]): string[] {
+  return Array.from(new Set(values.filter(Boolean)));
+}
+
+function isThinkingTraceTitle(title: string): boolean {
+  return traceLabelText(title).toLowerCase() === 'thinking';
 }
 
 function mapPmaTranscriptRow(raw: Record<string, unknown>): PmaCard | null {
