@@ -71,21 +71,6 @@ def canonical_workspace_path(value: Any) -> Optional[str]:
     return None
 
 
-def repo_id_by_workspace_path(snapshots: Iterable[Any]) -> dict[str, str]:
-    mapping: dict[str, str] = {}
-    for snapshot in snapshots:
-        repo_id = getattr(snapshot, "id", None)
-        path = getattr(snapshot, "path", None)
-        if not isinstance(repo_id, str) or not isinstance(path, Path):
-            continue
-        mapping[str(path)] = repo_id
-        try:
-            mapping[str(path.resolve())] = repo_id
-        except OSError:
-            pass
-    return mapping
-
-
 def workspace_scope_index(snapshots: Iterable[Any]) -> WorkspaceScopeIndex:
     return workspace_scope_index_from_snapshots(snapshots)
 
