@@ -3,6 +3,7 @@ import type { ChatIndexRow, RepoWorktreeRuntimeSnapshot, RepoWorktreeTopologySna
 import { ReadModelEntityStore } from './readModelStore';
 import {
   chatIndexRowToPmaChatSummary,
+  legacyChatIndexRecordToChatIndexRow,
   pmaChatSummaryToChatIndexRow,
   selectPmaChats,
   selectRepoSummaries,
@@ -88,6 +89,26 @@ describe('read model view-model selectors', () => {
     });
 
     expect(summary.isTicketFlow).toBe(true);
+    expect(summary.repoId).toBe('repo-1');
+    expect(summary.worktreeId).toBe('repo-1--ticket-flow');
+  });
+
+  it('derives worktree ids from legacy resource owner fields', () => {
+    const summary = chatIndexRowToPmaChatSummary(
+      legacyChatIndexRecordToChatIndexRow({
+        row_id: 'row-1',
+        surface: 'discord',
+        title: 'Discord channel',
+        lifecycle: 'bound',
+        runtime_status: 'idle',
+        repo_id: 'repo-1',
+        resource_kind: 'worktree',
+        resource_id: 'repo-1--discord-1'
+      })
+    );
+
+    expect(summary.repoId).toBe('repo-1');
+    expect(summary.worktreeId).toBe('repo-1--discord-1');
   });
 
   it('selects chat and repo/worktree summaries from normalized state', () => {

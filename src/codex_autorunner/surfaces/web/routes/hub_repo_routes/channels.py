@@ -438,9 +438,9 @@ class HubChannelService:
                 "Hub channel enrichment failed listing repo snapshots",
                 exc=exc,
             )
-        from .channel_source_readers import repo_id_by_workspace_path
+        from .channel_source_readers import workspace_scope_index
 
-        repo_id_by_workspace = repo_id_by_workspace_path(snapshots)
+        scope_index = workspace_scope_index(snapshots)
         discord_state_path = state_db_path(
             self._context, "discord_bot", DISCORD_STATE_FILE_DEFAULT
         )
@@ -451,13 +451,13 @@ class HubChannelService:
         discord_bindings_task = asyncio.to_thread(
             read_discord_bindings,
             discord_state_path,
-            repo_id_by_workspace,
+            scope_index,
             context=self._context,
         )
         telegram_bindings_task = asyncio.to_thread(
             read_telegram_bindings,
             telegram_state_path,
-            repo_id_by_workspace,
+            scope_index,
             context=self._context,
         )
         discord_thread_bindings_task = asyncio.to_thread(
@@ -475,7 +475,7 @@ class HubChannelService:
         managed_threads_task = asyncio.to_thread(
             read_active_managed_threads,
             self._context.config.root,
-            repo_id_by_workspace,
+            scope_index,
             context=self._context,
         )
         (
@@ -531,12 +531,18 @@ class HubChannelService:
                     repo_id = binding.get("repo_id")
                     if isinstance(repo_id, str) and repo_id:
                         row["repo_id"] = repo_id
+                    worktree_id = binding.get("worktree_id")
+                    if isinstance(worktree_id, str) and worktree_id:
+                        row["worktree_id"] = worktree_id
                     resource_kind = binding.get("resource_kind")
                     if isinstance(resource_kind, str) and resource_kind:
                         row["resource_kind"] = resource_kind
                     resource_id = binding.get("resource_id")
                     if isinstance(resource_id, str) and resource_id:
                         row["resource_id"] = resource_id
+                    scope_urn = binding.get("scope_urn")
+                    if isinstance(scope_urn, str) and scope_urn:
+                        row["scope_urn"] = scope_urn
                     workspace_path = binding.get("workspace_path")
                     if isinstance(workspace_path, str) and workspace_path:
                         row["workspace_path"] = workspace_path
@@ -702,6 +708,7 @@ class HubChannelService:
                 continue
             seen_keys.add(key)
             repo_id = thread.get("repo_id")
+            worktree_id = thread.get("worktree_id")
             workspace_path = thread.get("workspace_path")
             agent = normalize_agent(thread.get("agent"), context=self._context)
             has_running_turn = bool(thread.get("has_running_turn"))
@@ -756,6 +763,17 @@ class HubChannelService:
             }
             if isinstance(repo_id, str) and repo_id:
                 thread_row["repo_id"] = repo_id
+            if isinstance(worktree_id, str) and worktree_id:
+                thread_row["worktree_id"] = worktree_id
+            resource_kind = thread.get("resource_kind")
+            if isinstance(resource_kind, str) and resource_kind:
+                thread_row["resource_kind"] = resource_kind
+            resource_id = thread.get("resource_id")
+            if isinstance(resource_id, str) and resource_id:
+                thread_row["resource_id"] = resource_id
+            scope_urn = thread.get("scope_urn")
+            if isinstance(scope_urn, str) and scope_urn:
+                thread_row["scope_urn"] = scope_urn
             if isinstance(workspace_path, str) and workspace_path:
                 thread_row["workspace_path"] = workspace_path
                 run_data = self._load_workspace_run_data(
