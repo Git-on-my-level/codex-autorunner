@@ -322,14 +322,14 @@ describe('PMA chat view helpers', () => {
     expect(filtered[0].group.totalCount).toBe(1);
   });
 
-  it('detects messenger surface from API fields and title prefix', () => {
+  it('detects messenger surface from API fields, not protocol-id titles', () => {
     expect(
       chatMessengerSurface({
         ...baseChat,
         title: 'discord:123',
         raw: {}
       })
-    ).toEqual({ slug: 'discord', label: 'Discord', badgeClass: 'surface-discord' });
+    ).toBeNull();
 
     expect(
       chatMessengerSurface({
@@ -719,7 +719,7 @@ describe('PMA chat view helpers', () => {
   });
 
   it('filters chats by messenger surface slug', () => {
-    const discordChat = { ...baseChat, id: 'd1', title: 'discord:999', raw: {} };
+    const discordChat = { ...baseChat, id: 'd1', title: 'Engineering', raw: { surface_kind: 'discord' } };
     const hubChat = { ...baseChat, id: 'h1', title: 'Chat · repo', raw: {} };
     const list = [discordChat, hubChat];
     expect(filterPmaChats(list, chatSurfaceFilterToken('discord'), '')).toEqual([discordChat]);

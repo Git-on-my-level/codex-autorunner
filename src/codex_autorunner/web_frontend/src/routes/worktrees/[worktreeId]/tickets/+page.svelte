@@ -7,7 +7,6 @@
   import { dataOr, partialPageIssue, webApi, type ApiError, type PartialPageIssue } from '$lib/api/client';
   import {
     invalidateReadModelTags,
-    pmaChatSummaryToChatIndexRow,
     readModelEntityStore,
     readModelEntityTags,
     scopedOwnerKey,
@@ -26,7 +25,7 @@
   import { legacyWorktreeRedirectPath } from '$lib/viewModels/routes';
   import type { SurfaceActionManifest, TicketFilter, TicketListViewModel } from '$lib/viewModels/ticket';
   import { rememberTickets } from '$lib/viewModels/ticketCache';
-  import { mapPmaChatSummary, mapPmaRunProgress, mapTicketSummary } from '$lib/viewModels/domain';
+  import { mapPmaRunProgress, mapTicketSummary } from '$lib/viewModels/domain';
 
   const worktreeId = $derived(page.params.worktreeId ?? 'unknown-worktree');
   const routeRepoId = $derived(page.params.repoId ?? null);
@@ -83,11 +82,9 @@
     const owner = scopedTicketQueueOwner(queueConfig);
     const tickets = detail.data.scopedTickets.map(mapTicketSummary);
     const runs = detail.data.scopedRuns.map(mapPmaRunProgress);
-    const chats = detail.data.scopedChats.map(mapPmaChatSummary);
     rememberTickets(owner, tickets);
     readModelEntityStore.replaceScopedTicketSummaries(ownerKey, tickets);
     readModelEntityStore.replaceScopedRuns(ownerKey, runs);
-    readModelEntityStore.upsertChatIndexRows(chats.map(pmaChatSummaryToChatIndexRow));
     selectedFilter = 'all';
     loading = false;
     const manifest = await loadScopedActionManifest(webApi, queueConfig);

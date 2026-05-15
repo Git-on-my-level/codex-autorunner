@@ -23,7 +23,8 @@ export async function loadChatRoute(options: {
   const chatId = options.chatId?.trim() || null;
   const chatIndexPromise = ensureChatIndexLoaded({}, {
     ...options.loaderOptions,
-    depends: options.depends
+    depends: options.depends,
+    refresh: true
   });
   if (!chatId) return { chatId: null, chatIndex: await chatIndexPromise, activeDetail: null };
 

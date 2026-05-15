@@ -6,6 +6,8 @@ Older ``GET /hub/chat/index`` hub-shaped snapshots remain for non-SPA tooling.
 
 from __future__ import annotations
 
+import asyncio
+import json
 from datetime import datetime
 from typing import (
     TYPE_CHECKING,
@@ -18,7 +20,8 @@ from typing import (
     cast,
 )
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi.responses import StreamingResponse
 
 from codex_autorunner.core.managed_thread_kinds import (
     ManagedThreadChatKind,
@@ -31,6 +34,8 @@ from ..read_model_contracts import (
     ChatDetailSnapshot,
     ChatIndexCounters,
     ChatIndexGroup,
+    ChatIndexPatch,
+    ChatIndexPatchEvent,
     ChatIndexRow,
     ChatIndexSnapshot,
     ChatQueueSummary,
@@ -40,10 +45,12 @@ from ..read_model_contracts import (
     ChatTimelineProvenance,
     PageWindow,
     ProjectionCursor,
+    ReadModelEventEnvelope,
     RepairPolicy,
     dump_read_model_contract,
     read_model_now,
 )
+from .shared import SSE_HEADERS
 
 if TYPE_CHECKING:
     from ..app_state import HubAppContext
@@ -57,6 +64,17 @@ SurfaceLiteral = Literal[
 ]
 
 SNAPSHOT_CHAT_INDEX_ROUTE = "/hub/read-models/chats"
+CHAT_INDEX_PATCH_ROUTE = "/hub/read-models/chats/patches"
+_POLL_INTERVAL_SECONDS = 1.5
+
+
+def _sse_frame(event: str, payload: dict[str, Any], *, event_id: Optional[str]) -> str:
+    event_id_line = f"id: {event_id}\n" if event_id else ""
+    return (
+        f"event: {event}\n"
+        f"{event_id_line}"
+        f"data: {json.dumps(payload, ensure_ascii=True)}\n\n"
+    )
 
 
 def build_hub_chat_read_model_router(context: HubAppContext) -> APIRouter:
@@ -86,6 +104,70 @@ def build_hub_chat_read_model_router(context: HubAppContext) -> APIRouter:
                 offset=bounded_offset,
                 limit=limit,
             )
+        )
+
+    @router.get(CHAT_INDEX_PATCH_ROUTE)
+    async def stream_chat_index_patches(
+        request: Request,
+        filter_param: Annotated[ChatIndexContractFilter, Query(alias="filter")] = "all",
+        search: Annotated[Optional[str], Query()] = None,
+        surface_kind: Annotated[Optional[str], Query()] = None,
+        group_by: Annotated[Optional[str], Query()] = None,
+        parent_group_id: Annotated[Optional[str], Query()] = None,
+        cursor: Annotated[Optional[str], Query()] = None,
+        event_limit: Annotated[int, Query(ge=1, le=1000)] = 100,
+        window_limit: Annotated[int, Query(ge=1, le=200)] = 200,
+        once: bool = False,
+    ):
+        header_cursor = request.headers.get("last-event-id")
+        raw_cursor = cursor if cursor is not None else header_cursor
+        try:
+            parsed_cursor = _parse_chat_index_cursor(raw_cursor)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+        async def _stream() -> Any:
+            last_cursor = parsed_cursor
+            while True:
+                batch = await asyncio.to_thread(
+                    service.chat_index_patch_contracts,
+                    last_cursor,
+                    filter_param=filter_param,
+                    query=search,
+                    surface_kind=surface_kind,
+                    group_by=group_by,
+                    parent_group_id=parent_group_id,
+                    event_limit=event_limit,
+                    window_limit=window_limit,
+                )
+                events = batch["events"]
+                batch_cursor = _int_fallback(batch.get("cursor"), last_cursor)
+                for event_payload in events:
+                    envelope = event_payload.get("envelope") or {}
+                    cursor_payload = envelope.get("cursor") or {}
+                    sequence = _int_fallback(
+                        cursor_payload.get("sequence"), last_cursor
+                    )
+                    last_cursor = sequence
+                    event_type = str(envelope.get("eventType") or "chat.index.patch")
+                    yield _sse_frame(
+                        event_type,
+                        event_payload,
+                        event_id=str(sequence),
+                    )
+                if events:
+                    last_cursor = batch_cursor
+                    if once:
+                        return
+                    continue
+                if once:
+                    return
+                await asyncio.sleep(_POLL_INTERVAL_SECONDS)
+
+        return StreamingResponse(
+            _stream(),
+            media_type="text/event-stream",
+            headers=SSE_HEADERS,
         )
 
     @router.get("/hub/read-models/chats/{chat_id}")
@@ -195,6 +277,103 @@ class ChatReadModelService:
             groups=groups_contract,
             counters=counters,
             repair=RepairPolicy(snapshot_route=SNAPSHOT_CHAT_INDEX_ROUTE),
+        )
+
+    def chat_index_patch_contracts(
+        self,
+        cursor: Optional[int],
+        *,
+        filter_param: ChatIndexContractFilter,
+        query: Optional[str],
+        surface_kind: Optional[str],
+        group_by: Optional[str],
+        parent_group_id: Optional[str],
+        event_limit: int,
+        window_limit: int,
+    ) -> dict[str, Any]:
+        hub_view = _contract_filter_to_hub_view(filter_param)
+        batch = self._surface.chat_index_patch_batch(
+            cursor,
+            view=hub_view,
+            query=query,
+            surface_kind=surface_kind,
+            group_by=group_by,
+            parent_group_id=parent_group_id,
+            limit=event_limit,
+            window_limit=window_limit,
+        )
+        events = [
+            dump_read_model_contract(self._chat_index_patch_event_from_hub(raw))
+            for raw in batch.get("events") or []
+            if isinstance(raw, dict)
+        ]
+        return {"cursor": batch.get("cursor"), "events": events}
+
+    def _chat_index_patch_event_from_hub(
+        self, raw: Mapping[str, Any]
+    ) -> ChatIndexPatchEvent:
+        envelope_raw = raw.get("envelope") or {}
+        envelope_map = envelope_raw if isinstance(envelope_raw, Mapping) else {}
+        sequence = _int_fallback(envelope_map.get("cursor"), 0)
+        event_type = str(envelope_map.get("event_type") or "chat.index.patch")
+        operation = str(envelope_map.get("operation") or "patch")
+        if operation not in {
+            "upsert",
+            "patch",
+            "delete",
+            "reorder",
+            "invalidate",
+            "reset",
+        }:
+            operation = "patch"
+        generated_at = (
+            parse_iso_optional(str(envelope_map.get("generated_at") or ""))
+            or read_model_now()
+        )
+        patch_raw = raw.get("patch") or {}
+        patch_map = patch_raw if isinstance(patch_raw, Mapping) else {}
+        rows = [
+            hub_chat_row_to_chat_index_row(cast(Mapping[str, Any], row))
+            for row in patch_map.get("rows") or []
+            if isinstance(row, Mapping)
+        ]
+        groups = [
+            hub_group_dict_to_contract(cast(Mapping[str, Any], group))
+            for group in patch_map.get("groups") or []
+            if isinstance(group, Mapping)
+        ]
+        counters = _chat_index_counters_from_raw(patch_map.get("counters"), rows)
+        return ChatIndexPatchEvent(
+            envelope=ReadModelEventEnvelope(
+                event_type=event_type,
+                cursor=projection_cursor_chat_index(sequence),
+                entity_kind=str(envelope_map.get("entity_kind") or "chat"),
+                entity_id=str(envelope_map.get("entity_id") or "chat.index"),
+                operation=cast(
+                    Literal[
+                        "upsert",
+                        "patch",
+                        "delete",
+                        "reorder",
+                        "invalidate",
+                        "reset",
+                    ],
+                    operation,
+                ),
+                generated_at=generated_at,
+            ),
+            patch=ChatIndexPatch(
+                rows=rows,
+                groups=groups,
+                removed_row_ids=_str_list(patch_map.get("removed_row_ids")),
+                removed_group_ids=_str_list(patch_map.get("removed_group_ids")),
+                order=(
+                    _str_list(patch_map.get("order"))
+                    if patch_map.get("order") is not None
+                    else None
+                ),
+                counters=counters,
+            ),
         )
 
     def chat_detail_contract(
@@ -309,6 +488,21 @@ def _resolve_offset(cursor: Optional[str], offset_default: int) -> int:
     return offset_default
 
 
+def _parse_chat_index_cursor(raw: Any) -> int:
+    value = _str_or_none(raw)
+    if value is None:
+        return 0
+    if value.startswith("chat.index:"):
+        value = value.split(":", 1)[1]
+    try:
+        parsed = int(value)
+    except ValueError as exc:
+        raise ValueError("cursor must be a non-negative integer") from exc
+    if parsed < 0:
+        raise ValueError("cursor must be a non-negative integer")
+    return parsed
+
+
 def _str_or_none(value: Any) -> Optional[str]:
     if isinstance(value, str) and value.strip():
         return value
@@ -324,6 +518,21 @@ def _int_fallback(value: Any, fallback: int) -> int:
         except ValueError:
             return fallback
     return fallback
+
+
+def _chat_index_counters_from_raw(
+    raw: Any, rows: list[ChatIndexRow]
+) -> Optional[ChatIndexCounters]:
+    if not isinstance(raw, Mapping):
+        return None
+    total = _int_fallback(raw.get("total"), len(rows))
+    return ChatIndexCounters(
+        total=max(0, total),
+        waiting=max(0, _int_fallback(raw.get("waiting"), 0)),
+        running=max(0, _int_fallback(raw.get("running"), 0)),
+        unread=max(0, _int_fallback(raw.get("unread"), 0)),
+        archived=max(0, _int_fallback(raw.get("archived"), 0)),
+    )
 
 
 def parse_iso_optional(raw: str) -> Optional[datetime]:
@@ -433,14 +642,56 @@ def hub_chat_row_to_chat_index_row(raw: Mapping[str, Any]) -> ChatIndexRow:
     )
 
     normalized_status = _chat_surface_status_from_row(raw)
+    surface_bindings = [
+        dict(cast(Mapping[str, Any], surface))
+        for surface in raw.get("surface_bindings") or raw.get("surfaces") or []
+        if isinstance(surface, Mapping)
+    ]
+    primary_surface = raw.get("primary_surface") or raw.get("surface")
+    primary_surface_out = (
+        dict(cast(Mapping[str, Any], primary_surface))
+        if isinstance(primary_surface, Mapping)
+        else None
+    )
+    binding_display_names = _str_list(raw.get("binding_display_names"))
+    binding_display_name = _str_or_none(raw.get("binding_display_name")) or (
+        binding_display_names[0] if binding_display_names else None
+    )
 
     return ChatIndexRow(
         chat_id=chat_id,
         surface=surface_from_hub_row(raw),
         title=str(raw.get("title") or chat_id),
+        display_title=_str_or_none(raw.get("display_title"))
+        or _str_or_none(raw.get("chat_display_name")),
+        technical_title=_str_or_none(raw.get("technical_title")),
+        primary_surface=primary_surface_out,
+        surface_bindings=surface_bindings,
+        binding_display_name=binding_display_name,
+        binding_display_names=binding_display_names,
+        lifecycle=_str_or_none(raw.get("lifecycle")),
+        runtime_status=_str_or_none(
+            raw.get("runtime_status") or raw.get("target_runtime_status")
+        ),
+        archive_state=(
+            "archived"
+            if _normalize_kind_text(_str_or_none(raw.get("archive_state")))
+            == "archived"
+            or _normalize_kind_text(_str_or_none(raw.get("lifecycle_status")))
+            == "archived"
+            else "active"
+        ),
         status=normalized_status,
         unread_count=unread_count,
         last_activity_at=last_activity,
+        sort_key=(
+            dict(cast(Mapping[str, Any], raw.get("sort_key")))
+            if isinstance(raw.get("sort_key"), Mapping)
+            else None
+        ),
+        resource_kind=_str_or_none(raw.get("resource_kind")),
+        resource_id=_str_or_none(raw.get("resource_id")),
+        workspace_root=_str_or_none(raw.get("workspace_root")),
         repo_id=repo_id_out,
         worktree_id=worktree_id_out,
         ticket_id=ticket_id,

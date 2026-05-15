@@ -190,14 +190,7 @@ class ChatSurfaceReadService:
     ) -> dict[str, Any]:
         started_at = time.perf_counter()
         row_limit = _bounded_limit(limit, MAX_CHAT_SURFACE_SNAPSHOT_LIMIT)
-        projections: dict[tuple[str, str], ChatSurfaceProjection] = {}
-        self._project_channel_directory(projections)
-        self._project_orchestration_tables(projections)
-        self._project_events(projections)
-        surfaces = sorted(
-            (projection.to_dict() for projection in projections.values()),
-            key=lambda item: (item["surface_kind"], item["surface_key"]),
-        )[:row_limit]
+        surfaces = self._projected_surfaces(limit=row_limit)
         cursor = self._journal.latest_cursor()
         payload = {
             "contract_version": CHAT_SURFACE_READ_CONTRACT_VERSION,
@@ -267,7 +260,7 @@ class ChatSurfaceReadService:
         """
 
         started_at = time.perf_counter()
-        surfaces = self.snapshot(limit=MAX_CHAT_SURFACE_SNAPSHOT_LIMIT)["surfaces"]
+        surfaces = self._projected_surfaces(limit=None)
         rows = _chat_index_rows_from_surfaces(surfaces)
         rows = _filter_chat_index_rows(
             rows,
@@ -334,6 +327,98 @@ class ChatSurfaceReadService:
         )
         return payload
 
+    def chat_index_patch_batch(
+        self,
+        cursor: Optional[int],
+        *,
+        view: str = "all",
+        query: Optional[str] = None,
+        surface_kind: Optional[str] = None,
+        group_by: Optional[str] = None,
+        parent_group_id: Optional[str] = None,
+        limit: int = DEFAULT_CHAT_SURFACE_EVENT_LIMIT,
+        window_limit: int = DEFAULT_CHAT_INDEX_LIMIT,
+    ) -> dict[str, Any]:
+        """Return typed chat-index patches backed by the chat-surface journal."""
+
+        started_at = time.perf_counter()
+        after_cursor = max(0, int(cursor or 0))
+        latest_cursor = self.latest_cursor()
+        event_limit = _bounded_limit(limit, MAX_CHAT_SURFACE_EVENT_LIMIT)
+        if after_cursor > latest_cursor:
+            gap_cursor = latest_cursor
+            return {
+                "contract_version": "chat_index_patch_stream.v1",
+                "cursor": gap_cursor,
+                "events": [
+                    _chat_index_cursor_gap_event(
+                        cursor=gap_cursor,
+                        requested_cursor=after_cursor,
+                        latest_cursor=latest_cursor,
+                    )
+                ],
+                "limits": {
+                    "requested": int(limit),
+                    "returned": 1,
+                    "max": MAX_CHAT_SURFACE_EVENT_LIMIT,
+                },
+            }
+
+        events = self._journal.read_events_since(after_cursor, limit=event_limit)
+        if events and events[0].cursor > after_cursor + 1:
+            gap_cursor = events[0].cursor
+            payload_events = [
+                _chat_index_cursor_gap_event(
+                    cursor=gap_cursor,
+                    requested_cursor=after_cursor,
+                    latest_cursor=latest_cursor,
+                )
+            ]
+            next_cursor = gap_cursor
+        else:
+            snapshot = self.chat_index_snapshot(
+                view=view,
+                query=query,
+                surface_kind=surface_kind,
+                group_by=group_by,
+                parent_group_id=parent_group_id,
+                offset=0,
+                limit=window_limit,
+            )
+            payload_events = [
+                _chat_index_patch_event_from_surface_event(
+                    event,
+                    snapshot=snapshot,
+                )
+                for event in events
+            ]
+            next_cursor = events[-1].cursor if events else after_cursor
+
+        payload = {
+            "contract_version": "chat_index_patch_stream.v1",
+            "cursor": next_cursor,
+            "events": payload_events,
+            "limits": {
+                "requested": int(limit),
+                "returned": len(payload_events),
+                "max": MAX_CHAT_SURFACE_EVENT_LIMIT,
+            },
+        }
+        _log_read_model_metric(
+            "stream_read_latency",
+            started_at,
+            snapshot="chat_index",
+            returned=len(payload_events),
+            cursor=next_cursor,
+            cursor_gap_count=sum(
+                1
+                for event in payload_events
+                if event.get("envelope", {}).get("event_type")
+                == "projection.cursor_gap"
+            ),
+        )
+        return payload
+
     def chat_detail_snapshot(
         self,
         managed_thread_id: str,
@@ -358,7 +443,7 @@ class ChatSurfaceReadService:
         surface_rows = [
             row
             for row in _chat_index_rows_from_surfaces(
-                self.snapshot(limit=MAX_CHAT_SURFACE_SNAPSHOT_LIMIT)["surfaces"]
+                self._projected_surfaces(limit=None)
             )
             if row.get("managed_thread_id") == normalized_thread_id
         ]
@@ -544,12 +629,23 @@ class ChatSurfaceReadService:
     def latest_cursor(self) -> int:
         return self._journal.latest_cursor()
 
+    def _projected_surfaces(self, *, limit: Optional[int]) -> list[dict[str, Any]]:
+        projections: dict[tuple[str, str], ChatSurfaceProjection] = {}
+        self._project_channel_directory(projections)
+        self._project_orchestration_tables(projections)
+        self._project_events(projections)
+        surfaces = sorted(
+            (projection.to_dict() for projection in projections.values()),
+            key=lambda item: (item["surface_kind"], item["surface_key"]),
+        )
+        if limit is None:
+            return surfaces
+        return surfaces[:limit]
+
     def _project_channel_directory(
         self, projections: dict[tuple[str, str], ChatSurfaceProjection]
     ) -> None:
-        for entry in _read_channel_directory_entries(self._hub_root)[
-            :MAX_CHAT_SURFACE_SNAPSHOT_LIMIT
-        ]:
+        for entry in _read_channel_directory_entries(self._hub_root):
             surface_kind = _normalize_kind(entry.get("platform"))
             chat_id = _normalize_text(entry.get("chat_id"))
             if surface_kind is None or chat_id is None:
@@ -595,9 +691,7 @@ class ChatSurfaceReadService:
                 SELECT *
                   FROM orch_thread_targets
                  ORDER BY updated_at DESC, created_at DESC, thread_target_id ASC
-                 LIMIT ?
                 """,
-                (MAX_CHAT_SURFACE_SNAPSHOT_LIMIT,),
             ).fetchall()
             execution_rows = conn.execute(
                 """
@@ -636,9 +730,7 @@ class ChatSurfaceReadService:
                   FROM orch_bindings
                  WHERE disabled_at IS NULL
                  ORDER BY surface_kind ASC, surface_key ASC, updated_at ASC, binding_id ASC
-                 LIMIT ?
                 """,
-                (MAX_CHAT_SURFACE_SNAPSHOT_LIMIT,),
             ).fetchall()
             notification_rows = (
                 conn.execute(
@@ -646,9 +738,7 @@ class ChatSurfaceReadService:
                     SELECT *
                       FROM orch_notification_conversations
                      ORDER BY updated_at ASC, created_at ASC, notification_id ASC
-                     LIMIT ?
                     """,
-                    (MAX_CHAT_SURFACE_SNAPSHOT_LIMIT,),
                 ).fetchall()
                 if _table_exists(conn, "orch_notification_conversations")
                 else []
@@ -971,16 +1061,25 @@ def _chat_index_rows_from_surfaces(
             "lifecycle": surface.get("lifecycle"),
             "display_name": display_map.get("display_name"),
             "title": display_map.get("title"),
+            "binding_display_name": _surface_binding_display_name(surface),
         }
         if managed_thread_id is None:
+            title = _display_title(display_map, surface_key)
             external_rows.append(
                 {
                     "row_type": "chat",
                     "row_id": f"surface:{surface_kind}:{surface_key}",
+                    "chat_id": f"surface:{surface_kind}:{surface_key}",
                     "managed_thread_id": None,
                     "surface": base_surface,
                     "surfaces": [base_surface],
-                    "title": _display_title(display_map, surface_key),
+                    "title": title,
+                    "display_title": title,
+                    "technical_title": f"{surface_kind}:{surface_key}",
+                    "primary_surface": base_surface,
+                    "surface_bindings": [base_surface],
+                    "binding_display_name": base_surface["binding_display_name"],
+                    "binding_display_names": _binding_display_names([base_surface]),
                     "repo_id": resource_owner.get("repo_id"),
                     "worktree_id": _worktree_id_from_owner(resource_owner),
                     "resource_kind": resource_owner.get("resource_kind"),
@@ -995,8 +1094,10 @@ def _chat_index_rows_from_surfaces(
                     "created_at": surface.get("created_at"),
                     "last_message_preview": metadata_map.get("last_message_preview"),
                     "unread": bool(metadata_map.get("unread")),
+                    "unread_count": int(metadata_map.get("unread_count") or 0),
                     "active_turn_id": metadata_map.get("active_turn_id"),
                     "queue_depth": int(metadata_map.get("queue_depth") or 0),
+                    "archive_state": _archive_state(surface.get("lifecycle_status")),
                     "search_text": "",
                 }
             )
@@ -1008,9 +1109,11 @@ def _chat_index_rows_from_surfaces(
             row = {
                 "row_type": "chat",
                 "row_id": f"thread:{managed_thread_id}",
+                "chat_id": managed_thread_id,
                 "managed_thread_id": managed_thread_id,
                 "surfaces": [],
                 "title": managed_thread_id,
+                "technical_title": managed_thread_id,
                 "repo_id": resource_owner.get("repo_id"),
                 "worktree_id": _worktree_id_from_owner(resource_owner),
                 "resource_kind": resource_owner.get("resource_kind"),
@@ -1032,6 +1135,7 @@ def _chat_index_rows_from_surfaces(
                 "active_turn_id": metadata_map.get("active_turn_id"),
                 "queue_depth": int(metadata_map.get("queue_depth") or 0),
                 "unread": bool(metadata_map.get("unread")),
+                "unread_count": int(metadata_map.get("unread_count") or 0),
                 "cleanup_protected": bool(metadata_map.get("cleanup_protected")),
             }
             by_thread[managed_thread_id] = row
@@ -1088,6 +1192,28 @@ def _chat_index_rows_from_surfaces(
             row["chat_display_name"] = friendly_title
             if _is_fallback_chat_title(row.get("title"), row):
                 row["title"] = friendly_title
+        row["display_title"] = _normalize_text(row.get("chat_display_name")) or str(
+            row.get("title") or row.get("chat_id") or row.get("row_id") or ""
+        )
+        row["technical_title"] = _normalize_text(row.get("technical_title")) or str(
+            row.get("managed_thread_id") or row.get("row_id") or ""
+        )
+        primary_surface = row.get("surface")
+        if not isinstance(primary_surface, Mapping):
+            primary_surface = _primary_surface(row)
+        row["primary_surface"] = dict(primary_surface) if primary_surface else None
+        row["surface_bindings"] = [
+            dict(surface)
+            for surface in row.get("surfaces", [])
+            if isinstance(surface, Mapping)
+        ]
+        binding_display_names = _binding_display_names(row["surface_bindings"])
+        row["binding_display_names"] = binding_display_names
+        row["binding_display_name"] = (
+            binding_display_names[0] if binding_display_names else None
+        )
+        row["archive_state"] = _archive_state(row.get("lifecycle_status"))
+        row["sort_key"] = _chat_index_sort_key_parts(row)
         row["group_id"] = _chat_ticket_group_id(row)
         row["surface_kinds"] = sorted(
             {
@@ -1106,6 +1232,44 @@ def _display_title(display: Mapping[str, Any], fallback: str) -> str:
         or _normalize_text(display.get("display_name"))
         or fallback
     )
+
+
+def _surface_binding_display_name(surface: Mapping[str, Any]) -> Optional[str]:
+    display = surface.get("display")
+    display_map = display if isinstance(display, Mapping) else {}
+    return _normalize_text(display_map.get("display_name") or display_map.get("title"))
+
+
+def _binding_display_names(surfaces: Iterable[Mapping[str, Any]]) -> list[str]:
+    names: list[str] = []
+    for surface in surfaces:
+        name = _normalize_text(
+            surface.get("binding_display_name")
+            or surface.get("display_name")
+            or surface.get("title")
+        )
+        if name is None or _is_surface_id_title(name, surface):
+            continue
+        if name not in names:
+            names.append(name)
+    return names
+
+
+def _primary_surface(row: Mapping[str, Any]) -> Optional[Mapping[str, Any]]:
+    surfaces = row.get("surfaces")
+    if not isinstance(surfaces, list):
+        return None
+    for surface in surfaces:
+        if isinstance(surface, Mapping) and surface.get("surface_kind") == "pma":
+            return surface
+    for surface in surfaces:
+        if isinstance(surface, Mapping):
+            return surface
+    return None
+
+
+def _archive_state(lifecycle_status: Any) -> str:
+    return "archived" if _normalize_kind(lifecycle_status) == "archived" else "active"
 
 
 def canonical_owner_fields(
@@ -1305,6 +1469,18 @@ def _chat_index_sort_key(row: Mapping[str, Any]) -> tuple[int, float, str]:
         updated_key,
         str(row.get("row_id") or ""),
     )
+
+
+def _chat_index_sort_key_parts(row: Mapping[str, Any]) -> dict[str, Any]:
+    key = _chat_index_sort_key(row)
+    last_activity_desc: Any = key[1]
+    if last_activity_desc == float("inf"):
+        last_activity_desc = None
+    return {
+        "unread_priority": -key[0],
+        "last_activity_desc": last_activity_desc,
+        "row_id": key[2],
+    }
 
 
 def _chat_ticket_group_id(row: Mapping[str, Any]) -> Optional[str]:
@@ -1522,6 +1698,107 @@ def _chat_patch_from_event(event: ChatSurfaceEvent) -> dict[str, Any]:
         "lifecycle": _event_lifecycle(event),
         "occurred_at": event.occurred_at,
         "details": details,
+    }
+
+
+def _chat_index_patch_event_from_surface_event(
+    event: ChatSurfaceEvent,
+    *,
+    snapshot: Mapping[str, Any],
+) -> dict[str, Any]:
+    rows_raw = snapshot.get("rows") or []
+    rows = [row for row in rows_raw if isinstance(row, Mapping)]
+    chat_id = _chat_id_for_event(event)
+    matching_rows = [
+        dict(row)
+        for row in rows
+        if _normalize_text(row.get("managed_thread_id")) == event.managed_thread_id
+        or _normalize_text(row.get("chat_id")) == chat_id
+        or _normalize_text(row.get("row_id"))
+        == f"surface:{event.surface_kind}:{event.surface_key}"
+    ]
+    removed = [] if matching_rows else [chat_id]
+    return {
+        "envelope": {
+            "event_type": "chat.index.patch",
+            "cursor": event.cursor,
+            "entity_kind": "chat",
+            "entity_id": chat_id,
+            "operation": "patch" if matching_rows else "delete",
+            "generated_at": event.created_at,
+        },
+        "patch": {
+            "rows": matching_rows,
+            "groups": [
+                dict(group)
+                for group in snapshot.get("groups") or []
+                if isinstance(group, Mapping)
+            ],
+            "removed_row_ids": removed,
+            "removed_group_ids": [],
+            "order": [
+                str(
+                    row.get("managed_thread_id")
+                    or row.get("chat_id")
+                    or row.get("row_id")
+                )
+                for row in rows
+                if row.get("managed_thread_id")
+                or row.get("chat_id")
+                or row.get("row_id")
+            ],
+            "counters": _chat_index_patch_counters(snapshot, rows),
+        },
+    }
+
+
+def _chat_index_cursor_gap_event(
+    *,
+    cursor: int,
+    requested_cursor: int,
+    latest_cursor: int,
+) -> dict[str, Any]:
+    now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    return {
+        "envelope": {
+            "event_type": "projection.cursor_gap",
+            "cursor": cursor,
+            "entity_kind": "chat",
+            "entity_id": "chat.index",
+            "operation": "invalidate",
+            "generated_at": now,
+        },
+        "patch": {
+            "rows": [],
+            "groups": [],
+            "removed_row_ids": [],
+            "removed_group_ids": [],
+            "order": None,
+            "counters": None,
+        },
+        "repair": {
+            "requested_cursor": requested_cursor,
+            "latest_cursor": latest_cursor,
+            "snapshot_route": "/hub/read-models/chats",
+        },
+    }
+
+
+def _chat_id_for_event(event: ChatSurfaceEvent) -> str:
+    if event.managed_thread_id:
+        return event.managed_thread_id
+    return f"surface:{event.surface_kind}:{event.surface_key}"
+
+
+def _chat_index_patch_counters(
+    snapshot: Mapping[str, Any], rows: list[Mapping[str, Any]]
+) -> dict[str, int]:
+    return {
+        "total": int((snapshot.get("window") or {}).get("total_count") or 0),
+        "waiting": sum(1 for row in rows if int(row.get("queue_depth") or 0) > 0),
+        "running": sum(1 for row in rows if row.get("lifecycle") == "running"),
+        "unread": sum(int(row.get("unread_count") or 0) for row in rows),
+        "archived": sum(1 for row in rows if row.get("lifecycle_status") == "archived"),
     }
 
 

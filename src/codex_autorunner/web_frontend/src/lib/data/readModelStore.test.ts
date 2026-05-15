@@ -175,8 +175,9 @@ describe('read model entity store', () => {
   it('applies chat detail timeline patches and reconciles optimistic sends', () => {
     const store = new ReadModelEntityStore();
     store.applyChatDetailSnapshot(detailSnapshot());
-    expect(selectChatIndexView(store.snapshot()).rows[0].agentProfile).toBe('m4-pma');
-    expect(selectChatIndexView(store.snapshot()).rows[0].chatKind).toBe('coding_agent');
+    expect(selectChatIndexView(store.snapshot()).rows.map((row) => row.chatId)).toEqual(['chat-1']);
+    expect(selectChatDetailView(store.snapshot(), 'chat-1').thread?.agentProfile).toBe('m4-pma');
+    expect(selectChatDetailView(store.snapshot(), 'chat-1').thread?.chatKind).toBe('coding_agent');
     store.optimisticSend(
       'chat-1',
       {
@@ -493,7 +494,7 @@ describe('read model entity store', () => {
     ]);
   });
 
-  it('keeps detail-backed chats when a bounded index snapshot arrives later', () => {
+  it('keeps detail-loaded chats addressable when a bounded index snapshot arrives later', () => {
     const store = new ReadModelEntityStore();
     store.applyChatDetailSnapshot(detailSnapshot('deep-linked-chat'));
 
@@ -506,6 +507,7 @@ describe('read model entity store', () => {
 
     const view = selectChatIndexView(store.snapshot());
     expect(view.rows.map((row) => row.chatId)).toEqual(['chat-1', 'deep-linked-chat']);
+    expect(view.rows[1].title).toBe('Chat detail');
     expect(selectChatDetailView(store.snapshot(), 'deep-linked-chat').thread?.title).toBe('Chat detail');
   });
 

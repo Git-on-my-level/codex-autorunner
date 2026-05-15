@@ -75,9 +75,9 @@ describe('read model snapshot client', () => {
       readModels: {}
     } as never);
 
-    const result = await client.chatIndex({ filter: 'active', limit: 25 });
+    const result = await client.chatIndex({ filter: 'active', query: 'build', surfaceKind: 'discord', limit: 25 });
 
-    expect(calls).toEqual(['/hub/read-models/chats?filter=active&limit=25']);
+    expect(calls).toEqual(['/hub/read-models/chats?filter=active&limit=25&search=build&surface_kind=discord']);
     expect(result.ok && result.data.rows[0]).toMatchObject({
       chatId: 'chat-1',
       agent: 'hermes',
