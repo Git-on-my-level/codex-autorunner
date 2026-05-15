@@ -11,7 +11,9 @@ This surface owns FastAPI routes, web-specific services, and static asset servin
 
 - Route handlers live under `routes/`; prefer extending the closest route package before growing `app.py`.
 - Shared web-specific logic belongs in `services/`, `static_assets.py`, `static_refresh.py`, or nearby helpers.
-- Web Hub UI: `../../web_frontend/` → `../../web_static/`.
+- Web Hub UI: `../../web_frontend/` → ignored package artifact
+  `../../web_static/`. Do not require generated static assets in normal PRs;
+  release/package builds produce and verify them.
 - PMA managed-thread chat routes expose backend-owned timeline, progress, queue, and delivery state from `adapters/chat/` and `core/orchestration/`. Do not add web-local transcript composition or delivery state machines.
 - Web UI screen routes should expose screen-shaped read models with cursors and
   repair policies. Keep contracts in `read_model_contracts.py`, route assembly

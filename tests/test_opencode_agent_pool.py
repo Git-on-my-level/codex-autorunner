@@ -987,6 +987,50 @@ async def test_run_turn_persists_full_timeline_from_raw_events_after_partial_liv
 
 
 @pytest.mark.asyncio
+async def test_run_turn_persists_interrupted_timeline_without_failure_reason(
+    tmp_path: Path,
+):
+    harness = _FakeHarness(
+        [
+            _HarnessScript(
+                assistant_text="",
+                status="interrupted",
+            )
+        ]
+    )
+    pool = _make_pool(tmp_path, harness, approval_mode="yolo")
+
+    result = await pool.run_turn(
+        AgentTurnRequest(
+            agent_id="codex",
+            prompt="stop",
+            workspace_root=tmp_path,
+        )
+    )
+
+    execution_id = str(result.raw["execution_id"])
+    timeline = await _await_until(
+        lambda: (
+            entries
+            if len(
+                entries := list_turn_timeline(
+                    tmp_path,
+                    execution_id=execution_id,
+                )
+            )
+            >= 1
+            else None
+        ),
+        timeout_s=2.0,
+    )
+
+    assert result.raw["final_status"] == "interrupted"
+    assert timeline[-1]["event_type"] == "turn_interrupted"
+    assert timeline[-1]["event"]["reason"] == "Runtime thread interrupted"
+    assert timeline[-1]["event"]["reason"] != "Delegated turn failed"
+
+
+@pytest.mark.asyncio
 async def test_run_turn_passes_model_reasoning_and_reuses_thread_target(
     tmp_path: Path,
 ):

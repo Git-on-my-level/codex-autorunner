@@ -24,6 +24,7 @@ from codex_autorunner.core.ports.run_event import (
     ApprovalRequested,
     Completed,
     Failed,
+    Interrupted,
     OutputDelta,
     RunNotice,
     ToolCall,
@@ -332,6 +333,18 @@ def test_failed_and_interrupted_timelines_include_terminal_status(
 
     interrupted = store.create_turn(thread_id, prompt="will stop")
     interrupted_id = str(interrupted["managed_turn_id"])
+    persist_turn_timeline(
+        hub_root,
+        execution_id=interrupted_id,
+        target_kind="thread_target",
+        target_id=thread_id,
+        events=[
+            Interrupted(
+                timestamp="2026-05-06T10:00:02Z",
+                reason="user stopped the run",
+            )
+        ],
+    )
     assert store.mark_turn_interrupted(interrupted_id)
 
     payload = build_managed_thread_timeline(
@@ -347,6 +360,12 @@ def test_failed_and_interrupted_timelines_include_terminal_status(
     assert (
         statuses[f"turn:{interrupted_id}:status:interrupted"]["status"] == "interrupted"
     )
+    assert statuses[f"turn:{interrupted_id}:status:interrupted"]["timestamp"] == (
+        "2026-05-06T10:00:02Z"
+    )
+    assert statuses[f"turn:{interrupted_id}:status:interrupted"]["provenance"][
+        "source_event_ids"
+    ] == [1]
 
 
 def test_live_tail_event_projects_to_canonical_timeline_item() -> None:

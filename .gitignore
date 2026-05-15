@@ -1,5 +1,6 @@
 node_modules/
 build/
+src/codex_autorunner/web_static/
 .env
 # Cursor Pad workspace manifest (local / cloud-specific paths)
 Padfile

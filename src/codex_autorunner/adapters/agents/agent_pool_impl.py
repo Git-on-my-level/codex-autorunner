@@ -41,6 +41,7 @@ from ...core.orchestration.turn_timeline import (
 from ...core.ports.run_event import (
     Completed,
     Failed,
+    Interrupted,
     OutputDelta,
     RunEvent,
     TokenUsage,
@@ -57,6 +58,7 @@ from .wiring import build_app_server_supervisor_factory
 
 _logger = logging.getLogger(__name__)
 _DEFAULT_EXECUTION_ERROR = "Delegated turn failed"
+_DEFAULT_INTERRUPTED_REASON = "Runtime thread interrupted"
 _TICKET_FLOW_REQUIRED_CAPABILITIES = ("durable_threads", "message_turns")
 
 
@@ -124,9 +126,14 @@ def _final_run_event(
     status: str,
     assistant_text: str,
     error: Optional[str],
-) -> Completed | Failed:
+) -> Completed | Failed | Interrupted:
     if status == "ok":
         return Completed(timestamp=now_iso(), final_message=assistant_text)
+    if status == "interrupted":
+        reason = str(error or "").strip()
+        if not reason or reason == _DEFAULT_EXECUTION_ERROR:
+            reason = _DEFAULT_INTERRUPTED_REASON
+        return Interrupted(timestamp=now_iso(), reason=reason)
     return Failed(
         timestamp=now_iso(),
         error_message=error or _DEFAULT_EXECUTION_ERROR,
@@ -599,7 +606,7 @@ class DefaultAgentPool:
                 "aborted",
             }:
                 status = "interrupted"
-                error = _DEFAULT_EXECUTION_ERROR
+                error = None
                 result_status = "interrupted"
             else:
                 status = "error"
@@ -678,7 +685,11 @@ class DefaultAgentPool:
             or backend_turn_id
             or execution_id
         )
-        final_error = None if status == "ok" else (error or _DEFAULT_EXECUTION_ERROR)
+        final_error = (
+            None
+            if status in {"ok", "interrupted"}
+            else (error or _DEFAULT_EXECUTION_ERROR)
+        )
         final_text = (
             assistant_text
             if assistant_text

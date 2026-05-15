@@ -45,6 +45,7 @@ from codex_autorunner.core.ports.run_event import (
     ApprovalRequested,
     Completed,
     Failed,
+    Interrupted,
     OutputDelta,
     RunNotice,
     TokenUsage,
@@ -932,6 +933,51 @@ async def test_terminal_run_event_from_outcome_redacts_unknown_errors() -> None:
 
     assert isinstance(event, Failed)
     assert event.error_message == "Runtime thread failed"
+
+
+async def test_terminal_run_event_from_outcome_canonicalizes_surface_interrupts() -> (
+    None
+):
+    state = RuntimeThreadRunEventState()
+
+    for surface_error in (
+        "Discord PMA turn interrupted",
+        "Telegram PMA turn interrupted",
+        "PMA chat interrupted",
+    ):
+        event = terminal_run_event_from_outcome(
+            RuntimeThreadOutcome(
+                status="interrupted",
+                assistant_text="",
+                error=surface_error,
+                backend_thread_id="thread-1",
+                backend_turn_id="turn-1",
+            ),
+            state,
+        )
+
+        assert isinstance(event, Interrupted)
+        assert event.reason == "Runtime thread interrupted"
+
+
+async def test_terminal_run_event_from_outcome_canonicalizes_stale_interrupt_error() -> (
+    None
+):
+    state = RuntimeThreadRunEventState()
+
+    event = terminal_run_event_from_outcome(
+        RuntimeThreadOutcome(
+            status="error",
+            assistant_text="",
+            error="Runtime thread interrupted",
+            backend_thread_id="thread-1",
+            backend_turn_id="turn-1",
+        ),
+        state,
+    )
+
+    assert isinstance(event, Interrupted)
+    assert event.reason == "Runtime thread interrupted"
 
 
 async def test_normalize_runtime_thread_raw_event_deduplicates_identical_stream_chunks() -> (

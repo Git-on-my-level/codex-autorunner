@@ -26,6 +26,7 @@ from ..ports.run_event import (
     ApprovalRequested,
     Completed,
     Failed,
+    Interrupted,
     OutputDelta,
     RunNotice,
     TokenUsage,
@@ -375,6 +376,11 @@ def _run_event_from_timeline_entry(entry: dict[str, Any]) -> Any | None:
         return Failed(
             timestamp=timestamp,
             error_message=str(event.get("error_message") or "Turn failed"),
+        )
+    if event_type == "turn_interrupted":
+        return Interrupted(
+            timestamp=timestamp,
+            reason=str(event.get("reason") or "Turn interrupted"),
         )
     return None
 

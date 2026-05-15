@@ -11,7 +11,7 @@ Validation is split into lanes so that small, scoped changes don't trigger the f
 | Lane | Scope | What it runs |
 |------|-------|-------------|
 | `core` | Backend/logic | Python lint, typecheck, core pytest, dead-code check |
-| `web-ui` | Frontend/UI | Core checks + Web frontend lint, `pnpm run build`, Web frontend tests, `web_static` drift check |
+| `web-ui` | Frontend/UI | Core checks + Web frontend lint, `pnpm run build`, Web frontend tests, SPA shell coverage |
 | `web-core-contract` | Web/API contract changes | Same local checks as `web-ui`; selected for scoped core + Web surface diffs so chat-surface lab work stays out of the first feedback loop |
 | `chat-apps` | Chat integrations | Core checks + deterministic chat-surface lab suite (`make test-chat-surface-lab`) |
 | `aggregate` | Full validation | All lane checks combined |
@@ -43,15 +43,10 @@ make test-chat-surface-lab
 ./scripts/check.sh --full
 ```
 
-When staged Web frontend source changes require committed generated assets,
-`scripts/check.sh` runs `scripts/check_web_static_preflight.py` before the
-expensive Web lane. If `src/codex_autorunner/web_static/` is missing from the
-staged diff, refresh it with:
-
-```bash
-pnpm run build
-git add src/codex_autorunner/web_static/
-```
+Web frontend source is the reviewable artifact. `src/codex_autorunner/web_static/`
+is ignored generated output for local package/release builds, so normal PRs
+should not stage it. The Web lane still runs `pnpm run build` to prove the
+bundle can be produced from source.
 
 The Web lane also compares `svelte-check` warnings against
 `scripts/svelte_warning_baseline.json`. Known warnings are reported as baseline

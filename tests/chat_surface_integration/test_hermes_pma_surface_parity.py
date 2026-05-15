@@ -176,7 +176,7 @@ CASES = (
             "telegram": "Telegram PMA turn interrupted",
         },
         expected_progress_state={
-            "discord": "failed",
+            "discord": "retired",
             "telegram": "retired",
         },
         expect_progress_retired=True,

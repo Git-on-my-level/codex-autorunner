@@ -10,6 +10,7 @@ from ...core.ports.run_event import (
     ApprovalRequested,
     Completed,
     Failed,
+    Interrupted,
     OutputDelta,
     RunNotice,
     ToolCall,
@@ -209,6 +210,20 @@ def apply_run_event_to_progress_tracker(
             tracker.set_label("cancelled")
         else:
             tracker.set_label("failed")
+        return ProgressTrackerEventOutcome(
+            changed=True,
+            force=True,
+            remove_components=True,
+            terminal=True,
+        )
+
+    if isinstance(run_event, Interrupted):
+        if tracker.label == "done" and runtime_state.final_message:
+            return ProgressTrackerEventOutcome(changed=False)
+        runtime_state.error_message = run_event.reason or "Turn interrupted"
+        tracker.note_error(runtime_state.error_message)
+        tracker.clear_transient_action()
+        tracker.set_label("cancelled")
         return ProgressTrackerEventOutcome(
             changed=True,
             force=True,
