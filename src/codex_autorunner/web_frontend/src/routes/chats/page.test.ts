@@ -36,6 +36,40 @@ describe('/chats page', () => {
     expect(body).not.toContain('Loading chats');
   });
 
+  it('renders active rebound rows from chat-index even when raw lifecycle fields are stale archived', () => {
+    readModelEntityStore.upsertChatIndexRows([
+      {
+        chatId: 'discord-rebound-active',
+        surface: 'discord',
+        title: 'Discord Rebound Active',
+        lifecycle: 'archived',
+        runtimeStatus: 'running',
+        archiveState: 'active',
+        status: 'running',
+        unreadCount: 0,
+        lastActivityAt: '2026-05-11T12:00:00Z',
+        primarySurface: { surface_kind: 'pma', lifecycle: 'running' },
+        surfaceBindings: [{ surface_kind: 'discord', surface_key: 'channel-1', lifecycle: 'archived' }]
+      },
+      {
+        chatId: 'discord-old-archived',
+        surface: 'discord',
+        title: 'Discord Old Archived',
+        lifecycle: 'archived',
+        archiveState: 'archived',
+        status: 'archived',
+        unreadCount: 0,
+        lastActivityAt: '2026-05-10T12:00:00Z'
+      }
+    ]);
+
+    const { body } = render(Page);
+
+    expect(body).toContain('Discord Rebound Active');
+    expect(body).toContain('Discord');
+    expect(body).not.toContain('Discord Old Archived');
+  });
+
   it('uses backend unread counters when the first chat window is smaller than the full result set', () => {
     readModelEntityStore.applyChatIndexSnapshot({
       cursor: projectionCursor(),

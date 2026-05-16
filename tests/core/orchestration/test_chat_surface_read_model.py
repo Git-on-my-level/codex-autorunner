@@ -126,6 +126,32 @@ def _seed_execution(
         )
 
 
+def _mark_projected_thread_archived(hub_root: Path, thread_id: str) -> None:
+    with open_orchestration_sqlite(hub_root, durable=False, migrate=True) as conn:
+        row = conn.execute(
+            """
+            SELECT row_json
+              FROM orch_chat_index_projection
+             WHERE managed_thread_id = ?
+            """,
+            (thread_id,),
+        ).fetchone()
+        assert row is not None
+        row_json = json.loads(row["row_json"])
+        row_json["lifecycle_status"] = "archived"
+        row_json["archive_state"] = "archived"
+        conn.execute(
+            """
+            UPDATE orch_chat_index_projection
+               SET lifecycle_status = 'archived',
+                   effective_status = 'archived',
+                   row_json = ?
+             WHERE managed_thread_id = ?
+            """,
+            (json.dumps(row_json, sort_keys=True, separators=(",", ":")), thread_id),
+        )
+
+
 def test_chat_surface_read_model_projects_contract_fixture_surface_inventory(
     tmp_path: Path,
 ) -> None:
@@ -239,6 +265,118 @@ def test_chat_index_omits_stale_bound_surfaces_without_managed_thread(
 
     index = service.chat_index_snapshot(view="all", limit=20)
     assert [row["managed_thread_id"] for row in index["rows"]] == ["live-thread"]
+
+
+def test_chat_index_uses_managed_lifecycle_after_discord_surface_rebind(
+    tmp_path: Path,
+) -> None:
+    hub_root = tmp_path / "hub"
+    _seed_thread(
+        hub_root,
+        thread_id="thread-a",
+        lifecycle_status="archived",
+        runtime_status="completed",
+    )
+    _seed_thread(
+        hub_root,
+        thread_id="thread-b",
+        lifecycle_status="active",
+        runtime_status="running",
+    )
+    bindings = OrchestrationBindingStore(hub_root, durable=False)
+    first = bindings.upsert_binding(
+        surface_kind="discord",
+        surface_key="guild:channel",
+        thread_target_id="thread-a",
+        repo_id="repo-1",
+        resource_kind="repo",
+        resource_id="repo-1",
+        metadata={"display_name": "Discord channel"},
+    )
+    bindings.disable_binding(binding_id=first.binding_id)
+    bindings.upsert_binding(
+        surface_kind="discord",
+        surface_key="guild:channel",
+        thread_target_id="thread-b",
+        repo_id="repo-1",
+        resource_kind="repo",
+        resource_id="repo-1",
+        metadata={"display_name": "Discord channel"},
+    )
+
+    service = ChatSurfaceReadService(hub_root, durable=False)
+
+    discord = service.chat_index_snapshot(
+        view="all",
+        surface_kind="discord",
+        limit=20,
+    )
+    assert [row["managed_thread_id"] for row in discord["rows"]] == ["thread-b"]
+    assert discord["rows"][0]["archive_state"] == "active"
+    assert discord["rows"][0]["lifecycle"] == "running"
+    assert discord["counters"]["total"] == 1
+    assert discord["counters"]["archived"] == 0
+
+    archived = service.chat_index_snapshot(view="archived", limit=20)
+    assert [row["managed_thread_id"] for row in archived["rows"]] == ["thread-a"]
+    assert archived["counters"]["total"] == 1
+
+
+def test_chat_index_uses_managed_lifecycle_after_telegram_surface_rebind(
+    tmp_path: Path,
+) -> None:
+    hub_root = tmp_path / "hub"
+    _seed_thread(
+        hub_root,
+        thread_id="telegram-thread-a",
+        lifecycle_status="archived",
+        runtime_status="completed",
+    )
+    _seed_thread(
+        hub_root,
+        thread_id="telegram-thread-b",
+        lifecycle_status="active",
+        runtime_status="running",
+    )
+    bindings = OrchestrationBindingStore(hub_root, durable=False)
+    first = bindings.upsert_binding(
+        surface_kind="telegram",
+        surface_key="-1001:77",
+        thread_target_id="telegram-thread-a",
+        repo_id="repo-1",
+        resource_kind="repo",
+        resource_id="repo-1",
+        metadata={"display_name": "Telegram topic"},
+    )
+    bindings.disable_binding(binding_id=first.binding_id)
+    bindings.upsert_binding(
+        surface_kind="telegram",
+        surface_key="-1001:77",
+        thread_target_id="telegram-thread-b",
+        repo_id="repo-1",
+        resource_kind="repo",
+        resource_id="repo-1",
+        metadata={"display_name": "Telegram topic"},
+    )
+
+    service = ChatSurfaceReadService(hub_root, durable=False)
+
+    telegram = service.chat_index_snapshot(
+        view="all",
+        surface_kind="telegram",
+        limit=20,
+    )
+    assert [row["managed_thread_id"] for row in telegram["rows"]] == [
+        "telegram-thread-b"
+    ]
+    assert telegram["rows"][0]["archive_state"] == "active"
+    assert telegram["counters"]["total"] == 1
+    assert telegram["counters"]["archived"] == 0
+
+    archived = service.chat_index_snapshot(view="archived", limit=20)
+    assert [row["managed_thread_id"] for row in archived["rows"]] == [
+        "telegram-thread-a"
+    ]
 
 
 def test_chat_index_sort_key_parts_serializes_missing_activity_as_null() -> None:
@@ -620,6 +758,116 @@ def test_chat_index_snapshot_reads_rebuilt_sql_projection_without_reprojecting(
 
     archived = service.chat_index_snapshot(view="archived", limit=20)
     assert [row["managed_thread_id"] for row in archived["rows"]] == ["thread-archived"]
+
+
+def test_chat_index_rebuild_repairs_stale_archived_bound_surface_projection(
+    tmp_path: Path,
+) -> None:
+    hub_root = tmp_path / "hub"
+    bindings = OrchestrationBindingStore(hub_root, durable=False)
+    journal = SQLiteChatSurfaceEventJournal(hub_root, durable=False)
+
+    for surface_kind, surface_key, active_thread_id in (
+        ("discord", "guild:channel", "discord-thread-new"),
+        ("telegram", "-1001:77", "telegram-thread-new"),
+    ):
+        archived_thread_id = f"{surface_kind}-thread-old"
+        _seed_thread(
+            hub_root,
+            thread_id=archived_thread_id,
+            lifecycle_status="archived",
+            runtime_status="completed",
+        )
+        _seed_thread(
+            hub_root,
+            thread_id=active_thread_id,
+            lifecycle_status="active",
+            runtime_status="running",
+        )
+        first = bindings.upsert_binding(
+            surface_kind=surface_kind,
+            surface_key=surface_key,
+            thread_target_id=archived_thread_id,
+            repo_id="repo-1",
+            resource_kind="repo",
+            resource_id="repo-1",
+            metadata={"display_name": f"{surface_kind} chat"},
+        )
+        bindings.disable_binding(binding_id=first.binding_id)
+        bindings.upsert_binding(
+            surface_kind=surface_kind,
+            surface_key=surface_key,
+            thread_target_id=active_thread_id,
+            repo_id="repo-1",
+            resource_kind="repo",
+            resource_id="repo-1",
+            metadata={"display_name": f"{surface_kind} chat"},
+        )
+        journal.append_event(
+            idempotency_key=f"stale-archive-{surface_kind}",
+            event_type="surface.archived",
+            surface_kind=surface_kind,
+            surface_key=surface_key,
+            managed_thread_id=archived_thread_id,
+            lifecycle_status="archived",
+            status="archived",
+            source_kind="test",
+            occurred_at="2026-05-11T00:00:01Z",
+        )
+
+    service = ChatSurfaceReadService(hub_root, durable=False)
+    service.rebuild_chat_index_projection()
+    _mark_projected_thread_archived(hub_root, "discord-thread-new")
+    _mark_projected_thread_archived(hub_root, "telegram-thread-new")
+
+    assert service.chat_index_projection_status()["needs_rebuild"] is False
+    assert (
+        service.chat_index_snapshot(view="all", surface_kind="discord", limit=20)[
+            "rows"
+        ]
+        == []
+    )
+    assert (
+        service.chat_index_snapshot(view="all", surface_kind="telegram", limit=20)[
+            "rows"
+        ]
+        == []
+    )
+
+    dry_run = service.repair_stale_bound_surface_archive_state(dry_run=True)
+    first_repair = service.repair_stale_bound_surface_archive_state()
+    second_repair = service.repair_stale_bound_surface_archive_state()
+
+    assert dry_run["matched"] == 2
+    assert first_repair["matched"] == 2
+    assert first_repair["repaired"] == 2
+    assert first_repair["projection"]["row_count"] == 4
+    assert second_repair["matched"] == 0
+    assert second_repair["repaired"] == 0
+    discord = service.chat_index_snapshot(
+        view="all",
+        surface_kind="discord",
+        limit=20,
+    )
+    telegram = service.chat_index_snapshot(
+        view="all",
+        surface_kind="telegram",
+        limit=20,
+    )
+    archived = service.chat_index_snapshot(view="archived", limit=20)
+
+    assert [row["managed_thread_id"] for row in discord["rows"]] == [
+        "discord-thread-new"
+    ]
+    assert discord["rows"][0]["archive_state"] == "active"
+    assert [row["managed_thread_id"] for row in telegram["rows"]] == [
+        "telegram-thread-new"
+    ]
+    assert telegram["rows"][0]["archive_state"] == "active"
+    assert {row["managed_thread_id"] for row in archived["rows"]} == {
+        "discord-thread-old",
+        "telegram-thread-old",
+    }
 
 
 def test_chat_index_and_detail_prefer_bound_chat_display_for_fallback_titles(

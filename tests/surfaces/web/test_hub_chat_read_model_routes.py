@@ -87,6 +87,64 @@ def _seed_thread_rows(hub_root: Path, count: int) -> None:
                     )
 
 
+def _insert_thread_row(
+    hub_root: Path,
+    *,
+    thread_id: str,
+    display_name: str,
+    lifecycle_status: str = "active",
+    runtime_status: str = "idle",
+    updated_at: str = "2026-05-11T00:00:00Z",
+) -> None:
+    with open_orchestration_sqlite(hub_root, durable=True, migrate=True) as conn:
+        with conn:
+            conn.execute(
+                """
+                INSERT INTO orch_thread_targets (
+                    thread_target_id,
+                    agent_id,
+                    repo_id,
+                    resource_kind,
+                    resource_id,
+                    display_name,
+                    lifecycle_status,
+                    runtime_status,
+                    metadata_json,
+                    created_at,
+                    updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    thread_id,
+                    "codex",
+                    "repo",
+                    "repo",
+                    "repo",
+                    display_name,
+                    lifecycle_status,
+                    runtime_status,
+                    "{}",
+                    "2026-05-11T00:00:00Z",
+                    updated_at,
+                ),
+            )
+
+
+def _archive_thread_row(hub_root: Path, *, thread_id: str, updated_at: str) -> None:
+    with open_orchestration_sqlite(hub_root, durable=True, migrate=True) as conn:
+        with conn:
+            conn.execute(
+                """
+                UPDATE orch_thread_targets
+                   SET lifecycle_status = 'archived',
+                       runtime_status = 'completed',
+                       updated_at = ?
+                 WHERE thread_target_id = ?
+                """,
+                (updated_at, thread_id),
+            )
+
+
 def _seed_archived_surface_events(hub_root: Path, count: int, *, prefix: str) -> None:
     with open_orchestration_sqlite(hub_root, durable=True, migrate=True) as conn:
         with conn:
@@ -569,8 +627,8 @@ def test_hub_read_models_chats_all_excludes_effectively_archived_rows(
                         "repo",
                         "repo",
                         "Stale archived runtime",
-                        "active",
                         "archived",
+                        "completed",
                         "{}",
                         "2026-05-11T00:00:00Z",
                         "2026-05-11T00:01:00Z",
@@ -599,6 +657,246 @@ def test_hub_read_models_chats_all_excludes_effectively_archived_rows(
     assert [row.chat_id for row in archived_snapshot.rows] == [
         "thread-stale-archived-runtime"
     ]
+
+
+def test_hub_read_models_chats_discord_rebind_uses_managed_archive_state(
+    hub_env,
+) -> None:
+    with open_orchestration_sqlite(
+        hub_env.hub_root, durable=True, migrate=True
+    ) as conn:
+        with conn:
+            conn.executemany(
+                """
+                INSERT INTO orch_thread_targets (
+                    thread_target_id,
+                    agent_id,
+                    repo_id,
+                    resource_kind,
+                    resource_id,
+                    display_name,
+                    lifecycle_status,
+                    runtime_status,
+                    metadata_json,
+                    created_at,
+                    updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    (
+                        "thread-discord-old",
+                        "codex",
+                        "repo",
+                        "repo",
+                        "repo",
+                        "Old Discord generation",
+                        "archived",
+                        "completed",
+                        "{}",
+                        "2026-05-11T00:00:00Z",
+                        "2026-05-11T00:01:00Z",
+                    ),
+                    (
+                        "thread-discord-new",
+                        "codex",
+                        "repo",
+                        "repo",
+                        "repo",
+                        "New Discord generation",
+                        "active",
+                        "running",
+                        "{}",
+                        "2026-05-11T00:02:00Z",
+                        "2026-05-11T00:03:00Z",
+                    ),
+                ),
+            )
+    bindings = OrchestrationBindingStore(hub_env.hub_root, durable=True)
+    first = bindings.upsert_binding(
+        surface_kind="discord",
+        surface_key="guild:channel",
+        thread_target_id="thread-discord-old",
+        repo_id="repo",
+        resource_kind="repo",
+        resource_id="repo",
+        metadata={"display_name": "Discord channel"},
+    )
+    bindings.disable_binding(binding_id=first.binding_id)
+    bindings.upsert_binding(
+        surface_kind="discord",
+        surface_key="guild:channel",
+        thread_target_id="thread-discord-new",
+        repo_id="repo",
+        resource_kind="repo",
+        resource_id="repo",
+        metadata={"display_name": "Discord channel"},
+    )
+
+    client = TestClient(create_hub_app(hub_env.hub_root))
+    response = client.get(
+        "/hub/read-models/chats",
+        params={"filter": "all", "surface_kind": "discord", "limit": 20},
+    )
+
+    assert response.status_code == 200
+    snapshot = load_read_model_contract(ChatIndexSnapshot, response.json())
+    assert [row.chat_id for row in snapshot.rows] == ["thread-discord-new"]
+    assert snapshot.rows[0].archive_state == "active"
+    assert snapshot.rows[0].status == "running"
+    assert snapshot.counters.total == 1
+    assert snapshot.counters.archived == 0
+
+    archived_response = client.get(
+        "/hub/read-models/chats", params={"filter": "archived", "limit": 20}
+    )
+    assert archived_response.status_code == 200
+    archived_snapshot = load_read_model_contract(
+        ChatIndexSnapshot, archived_response.json()
+    )
+    assert [row.chat_id for row in archived_snapshot.rows] == ["thread-discord-old"]
+
+
+@pytest.mark.parametrize(
+    ("surface_kind", "surface_key", "display_name"),
+    [
+        ("discord", "guild:channel", "Discord channel"),
+        ("telegram", "-1001:77", "Telegram topic"),
+    ],
+)
+def test_hub_read_models_chats_bound_newt_rebind_moves_active_generation(
+    hub_env,
+    surface_kind: str,
+    surface_key: str,
+    display_name: str,
+) -> None:
+    old_thread_id = f"thread-{surface_kind}-old-generation"
+    new_thread_id = f"thread-{surface_kind}-new-generation"
+    _insert_thread_row(
+        hub_env.hub_root,
+        thread_id=old_thread_id,
+        display_name=f"Old {display_name}",
+        updated_at="2026-05-11T00:01:00Z",
+    )
+    bindings = OrchestrationBindingStore(hub_env.hub_root, durable=True)
+    bindings.upsert_binding(
+        surface_kind=surface_kind,
+        surface_key=surface_key,
+        thread_target_id=old_thread_id,
+        agent_id="codex",
+        repo_id="repo",
+        resource_kind="repo",
+        resource_id="repo",
+        metadata={"display_name": display_name},
+    )
+
+    client = TestClient(create_hub_app(hub_env.hub_root))
+    initial = client.get(
+        "/hub/read-models/chats",
+        params={"filter": "all", "surface_kind": surface_kind, "limit": 20},
+    )
+    assert initial.status_code == 200
+    initial_snapshot = load_read_model_contract(ChatIndexSnapshot, initial.json())
+    assert [row.chat_id for row in initial_snapshot.rows] == [old_thread_id]
+
+    _archive_thread_row(
+        hub_env.hub_root,
+        thread_id=old_thread_id,
+        updated_at="2026-05-11T00:02:00Z",
+    )
+    SQLiteChatSurfaceEventJournal(hub_env.hub_root, durable=True).append_event(
+        idempotency_key=f"archive-old-{surface_kind}-generation",
+        event_type="surface.archived",
+        surface_kind=surface_kind,
+        surface_key=surface_key,
+        managed_thread_id=old_thread_id,
+        repo_id="repo",
+        lifecycle_status="archived",
+        status="archived",
+        occurred_at="2026-05-11T00:02:00Z",
+    )
+    archived_before_newt = client.get(
+        "/hub/read-models/chats",
+        params={"filter": "archived", "limit": 20},
+    )
+    assert archived_before_newt.status_code == 200
+    archived_before_snapshot = load_read_model_contract(
+        ChatIndexSnapshot, archived_before_newt.json()
+    )
+    patch_cursor = archived_before_snapshot.cursor.sequence
+    assert [row.chat_id for row in archived_before_snapshot.rows] == [old_thread_id]
+
+    _insert_thread_row(
+        hub_env.hub_root,
+        thread_id=new_thread_id,
+        display_name=f"New {display_name}",
+        lifecycle_status="active",
+        runtime_status="running",
+        updated_at="2026-05-11T00:03:00Z",
+    )
+    bindings.upsert_binding(
+        surface_kind=surface_kind,
+        surface_key=surface_key,
+        thread_target_id=new_thread_id,
+        agent_id="codex",
+        repo_id="repo",
+        resource_kind="repo",
+        resource_id="repo",
+        metadata={"display_name": display_name},
+    )
+
+    patch_response = client.get(
+        "/hub/read-models/chats/patches",
+        params={
+            "cursor": str(patch_cursor),
+            "filter": "all",
+            "surface_kind": surface_kind,
+            "once": "true",
+        },
+    )
+    assert patch_response.status_code == 200
+    repairs = _event_payloads(patch_response.text, "projection.cursor_gap")
+    assert len(repairs) == 1
+    assert repairs[0]["envelope"]["operation"] == "invalidate"
+    assert repairs[0]["patch"]["counters"]["total"] == 1
+    assert repairs[0]["patch"]["counters"]["archived"] == 0
+
+    all_response = client.get(
+        "/hub/read-models/chats", params={"filter": "all", "limit": 20}
+    )
+    surface_response = client.get(
+        "/hub/read-models/chats",
+        params={"filter": "all", "surface_kind": surface_kind, "limit": 20},
+    )
+    archived_response = client.get(
+        "/hub/read-models/chats", params={"filter": "archived", "limit": 20}
+    )
+    old_detail = client.get(f"/hub/read-models/chats/{old_thread_id}")
+
+    assert all_response.status_code == 200
+    assert surface_response.status_code == 200
+    assert archived_response.status_code == 200
+    assert old_detail.status_code == 200
+
+    all_snapshot = load_read_model_contract(ChatIndexSnapshot, all_response.json())
+    surface_snapshot = load_read_model_contract(
+        ChatIndexSnapshot, surface_response.json()
+    )
+    archived_snapshot = load_read_model_contract(
+        ChatIndexSnapshot, archived_response.json()
+    )
+    old_detail_snapshot = load_read_model_contract(
+        ChatDetailSnapshot, old_detail.json()
+    )
+
+    assert new_thread_id in [row.chat_id for row in all_snapshot.rows]
+    assert [row.chat_id for row in surface_snapshot.rows] == [new_thread_id]
+    assert surface_snapshot.rows[0].surface == surface_kind
+    assert surface_snapshot.rows[0].archive_state == "active"
+    assert surface_snapshot.rows[0].status == "running"
+    assert [row.chat_id for row in archived_snapshot.rows] == [old_thread_id]
+    assert archived_snapshot.rows[0].archive_state == "archived"
+    assert old_detail_snapshot.thread.chat_id == old_thread_id
+    assert old_detail_snapshot.thread.archived is True
 
 
 def test_hub_read_models_chats_contract_active_filter_matches_index_window(

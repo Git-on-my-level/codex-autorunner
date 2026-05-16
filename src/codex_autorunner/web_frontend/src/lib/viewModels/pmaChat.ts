@@ -8,7 +8,7 @@ import type {
   WorktreeSummary,
   WorkStatus
 } from './domain';
-import { normalizeOptionalWorkStatus, pmaChatArchivedFromRawSignals, pmaLifecycleTokenIsArchived, pmaTimelineContractFields } from './domain';
+import { normalizeOptionalWorkStatus, pmaChatArchivedFromRawSignals, pmaLifecycleTokenIsActive, pmaLifecycleTokenIsArchived, pmaTimelineContractFields } from './domain';
 import { surfaceRefFromThreadRaw } from './thread';
 import { isChatUnread } from './unread';
 
@@ -565,7 +565,9 @@ const activeStatuses: WorkStatus[] = ['running'];
 const waitingStatuses: WorkStatus[] = ['waiting', 'blocked'];
 
 export function isPmaChatArchived(chat: PmaChatSummary): boolean {
-  return pmaLifecycleTokenIsArchived(chat.lifecycleStatus) || pmaChatArchivedFromRawSignals(chat.raw);
+  if (pmaLifecycleTokenIsArchived(chat.lifecycleStatus)) return true;
+  if (pmaLifecycleTokenIsActive(chat.lifecycleStatus)) return false;
+  return pmaChatArchivedFromRawSignals(chat.raw);
 }
 
 export function filterPmaChats(

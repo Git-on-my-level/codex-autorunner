@@ -9,6 +9,7 @@ import {
   selectRepoSummaries,
   selectWorktreeSummaries
 } from './readModelViewModels';
+import { chatSurfaceFilterToken, filterPmaChats } from '$lib/viewModels/pmaChat';
 
 const now = '2026-05-11T12:00:00Z';
 const cursor = { value: 'c:1', sequence: 1, source: 'test', issuedAt: now };
@@ -59,6 +60,41 @@ describe('read model view-model selectors', () => {
     expect(pmaChatSummaryToChatIndexRow(summary).agentProfile).toBe('m4-pma');
     expect(pmaChatSummaryToChatIndexRow(summary).chatId).toBe('chat-1');
     expect(pmaChatSummaryToChatIndexRow(summary).unreadCount).toBe(2);
+  });
+
+  it('keeps active rebound chat-index rows visible despite stale raw surface archive fields', () => {
+    const row: ChatIndexRow = {
+      chatId: 'discord-rebound-active',
+      surface: 'discord',
+      title: 'Discord Ops',
+      lifecycle: 'archived',
+      runtimeStatus: 'running',
+      archiveState: 'active',
+      status: 'running',
+      unreadCount: 0,
+      lastActivityAt: now,
+      primarySurface: {
+        surface_kind: 'pma',
+        lifecycle: 'running'
+      },
+      surfaceBindings: [
+        {
+          surface_kind: 'discord',
+          surface_key: 'channel-1',
+          lifecycle: 'archived'
+        }
+      ]
+    };
+
+    const summary = chatIndexRowToPmaChatSummary(row);
+
+    expect(summary.lifecycleStatus).toBe('active');
+    expect(pmaChatSummaryToChatIndexRow(summary).status).toBe('running');
+    expect(filterPmaChats([summary], 'all', '').map((chat) => chat.id)).toEqual(['discord-rebound-active']);
+    expect(filterPmaChats([summary], chatSurfaceFilterToken('discord'), '').map((chat) => chat.id)).toEqual([
+      'discord-rebound-active'
+    ]);
+    expect(filterPmaChats([summary], 'archived', '').map((chat) => chat.id)).toEqual([]);
   });
 
   it('preserves unread counts through PMA chat row conversion', () => {

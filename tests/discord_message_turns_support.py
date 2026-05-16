@@ -67,6 +67,9 @@ from codex_autorunner.core.managed_thread_identity import (
     pma_base_key,
 )
 from codex_autorunner.core.managed_thread_store import ManagedThreadStore
+from codex_autorunner.core.orchestration.chat_surface_events import (
+    SQLiteChatSurfaceEventJournal,
+)
 from codex_autorunner.core.ports.run_event import (
     RUN_EVENT_DELTA_TYPE_ASSISTANT_STREAM,
     RUN_EVENT_DELTA_TYPE_LOG_LINE,
@@ -7913,5 +7916,88 @@ async def test_reset_discord_thread_binding_preserves_logical_hermes_profile(
         assert binding is not None
         assert binding.thread_target_id == replacement_thread_id
         assert binding.agent_id == "hermes"
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_reset_discord_thread_binding_replaces_archived_generation(
+    tmp_path: Path,
+) -> None:
+    service, _rest, store, workspace = await _build_discord_service(
+        tmp_path,
+        [],
+        config_kwargs=dict(max_message_length=120),
+    )
+
+    try:
+        orchestration_service = service._discord_thread_service()
+        current_thread = orchestration_service.create_thread_target(
+            "codex",
+            workspace.resolve(),
+            repo_id="repo-1",
+            display_name="discord:channel-1",
+        )
+        service._attach_discord_thread_binding(
+            channel_id="channel-1",
+            thread_target_id=current_thread.thread_target_id,
+            agent="codex",
+            repo_id="repo-1",
+            workspace_root=workspace.resolve(),
+            pma_enabled=False,
+        )
+        orchestration_service.archive_thread_target(current_thread.thread_target_id)
+
+        had_previous, replacement_thread_id = (
+            await service._reset_discord_thread_binding(
+                channel_id="channel-1",
+                workspace_root=workspace.resolve(),
+                agent="codex",
+                repo_id="repo-1",
+                resource_kind=None,
+                resource_id=None,
+                pma_enabled=False,
+            )
+        )
+
+        assert had_previous is True
+        assert replacement_thread_id != current_thread.thread_target_id
+
+        replacement_thread = orchestration_service.get_thread_target(
+            replacement_thread_id
+        )
+        assert replacement_thread is not None
+        assert replacement_thread.lifecycle_status == "active"
+
+        old_thread = orchestration_service.get_thread_target(
+            current_thread.thread_target_id
+        )
+        assert old_thread is not None
+        assert old_thread.lifecycle_status == "archived"
+
+        binding = orchestration_service.get_binding(
+            surface_kind="discord",
+            surface_key="channel-1",
+        )
+        assert binding is not None
+        assert binding.thread_target_id == replacement_thread_id
+
+        events = SQLiteChatSurfaceEventJournal(tmp_path, durable=False).read_history(
+            limit=20
+        )
+        rebound_events = [
+            event
+            for event in events
+            if event.event_type == "surface.rebound"
+            and event.surface_kind == "discord"
+            and event.surface_key == "channel-1"
+        ]
+        assert rebound_events
+        assert rebound_events[-1].managed_thread_id == replacement_thread_id
+        assert rebound_events[-1].lifecycle_status == "active"
+        assert (
+            rebound_events[-1].payload["previous_thread_target_id"]
+            == current_thread.thread_target_id
+        )
     finally:
         await store.close()

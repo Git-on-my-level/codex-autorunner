@@ -26,6 +26,7 @@ from ....adapters.discord.rest import DiscordRestClient
 from ....adapters.telegram.client import TelegramBotClient
 from ....adapters.telegram.state_types import parse_topic_key
 from ....core.config import ConfigError, load_hub_config
+from ....core.orchestration import ChatSurfaceReadService
 from ....core.orchestration.sqlite import resolve_orchestration_sqlite_path
 from ..hub_path_option import hub_root_path_option
 
@@ -642,8 +643,13 @@ def register_chat_commands(
         add_completion=False,
         help="Inspect and remediate live per-conversation chat dispatch queues.",
     )
+    index_app = typer.Typer(
+        add_completion=False,
+        help="Inspect and repair the chat index read-model projection.",
+    )
     app.add_typer(channels_app, name="channels")
     app.add_typer(queue_app, name="queue")
+    app.add_typer(index_app, name="index")
 
     @app.command("resolve")
     def chat_resolve(
@@ -719,6 +725,82 @@ def register_chat_commands(
 
         for result in results:
             typer.echo(_format_resolve_text_line(result))
+
+    @index_app.command("rebuild")
+    def chat_index_rebuild(
+        dry_run: bool = typer.Option(
+            False,
+            "--dry-run",
+            help="Report projection state without rebuilding.",
+        ),
+        output_json: bool = typer.Option(False, "--json", help="Emit JSON output"),
+        path: Optional[Path] = hub_root_path_option(),
+    ) -> None:
+        """Rebuild the chat index projection from canonical orchestration state."""
+        hub_root = resolve_hub_path(path)
+        service = ChatSurfaceReadService(hub_root, durable=True)
+        status = service.chat_index_projection_status()
+        if dry_run:
+            payload = {"dry_run": True, "projection": status}
+            if output_json:
+                typer.echo(json.dumps(payload, indent=2))
+                return
+            typer.echo(
+                "Chat index projection dry run: "
+                f"rows={status['row_count']} "
+                f"revision={status['projection_revision']} "
+                f"needs_rebuild={'yes' if status['needs_rebuild'] else 'no'}"
+            )
+            return
+
+        result = service.rebuild_chat_index_projection()
+        payload = {"dry_run": False, "projection": result}
+        if output_json:
+            typer.echo(json.dumps(payload, indent=2))
+            return
+        typer.echo(
+            "Rebuilt chat index projection: "
+            f"rows={result['row_count']} "
+            f"revision={result['projection_revision']} "
+            f"source_changed={'yes' if result['source_changed'] else 'no'}"
+        )
+
+    @index_app.command("repair-stale-bound-archives")
+    def chat_index_repair_stale_bound_archives(
+        dry_run: bool = typer.Option(
+            False,
+            "--dry-run",
+            help="Report matching active bindings without writing repair events.",
+        ),
+        output_json: bool = typer.Option(False, "--json", help="Emit JSON output"),
+        path: Optional[Path] = hub_root_path_option(),
+    ) -> None:
+        """Repair active Discord/Telegram chats shadowed by stale archive facts."""
+        hub_root = resolve_hub_path(path)
+        service = ChatSurfaceReadService(hub_root, durable=True)
+        result = service.repair_stale_bound_surface_archive_state(dry_run=dry_run)
+        if output_json:
+            typer.echo(json.dumps(result, indent=2))
+            return
+        if dry_run:
+            typer.echo(
+                "Stale bound archive repair dry run: " f"matched={result['matched']}"
+            )
+            for candidate in result["candidates"]:
+                typer.echo(
+                    "  "
+                    f"{candidate['surface_kind']}:{candidate['surface_key']} "
+                    f"-> {candidate['managed_thread_id']}"
+                )
+            return
+        projection = result.get("projection") or {}
+        typer.echo(
+            "Repaired stale bound archive state: "
+            f"matched={result['matched']} "
+            f"repaired={result['repaired']} "
+            f"already_recorded={result['already_recorded']} "
+            f"projection_revision={projection.get('projection_revision', 0)}"
+        )
 
     @channels_app.command("list")
     def chat_channels_list(

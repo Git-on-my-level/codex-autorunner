@@ -137,6 +137,8 @@ async def replace_surface_thread(
     display_name: str,
     binding_metadata: Optional[dict[str, Any]] = None,
     thread_metadata: Optional[dict[str, Any]] = None,
+    backend_thread_id: Optional[str] = None,
+    backend_runtime_instance_id: Optional[str] = None,
     binding: Optional[Any] = None,
     thread: Optional[Any] = None,
 ) -> ManagedThreadReplacementResult:
@@ -156,6 +158,15 @@ async def replace_surface_thread(
         if previous_thread_id:
             stop_outcome = await orchestration_service.stop_thread(previous_thread_id)
             orchestration_service.archive_thread_target(previous_thread_id)
+    replacement_metadata = dict(thread_metadata or {})
+    normalized_runtime_instance_id = _normalized_optional_text(
+        backend_runtime_instance_id
+    )
+    if normalized_runtime_instance_id is not None:
+        replacement_metadata.setdefault(
+            "backend_runtime_instance_id",
+            normalized_runtime_instance_id,
+        )
     replacement = orchestration_service.create_thread_target(
         agent_id,
         workspace_root,
@@ -163,7 +174,8 @@ async def replace_surface_thread(
         resource_kind=resource_kind,
         resource_id=resource_id,
         display_name=display_name,
-        metadata=dict(thread_metadata or {}) or None,
+        backend_thread_id=_normalized_optional_text(backend_thread_id),
+        metadata=replacement_metadata or None,
     )
     bound_thread = bind_surface_thread(
         orchestration_service,
@@ -176,6 +188,8 @@ async def replace_surface_thread(
         resource_id=resource_id,
         mode=mode,
         metadata=binding_metadata,
+        backend_thread_id=backend_thread_id,
+        backend_runtime_instance_id=backend_runtime_instance_id,
         thread=replacement,
     )
     return ManagedThreadReplacementResult(

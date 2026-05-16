@@ -50,6 +50,9 @@ from codex_autorunner.core.managed_thread_store import (
     prepare_managed_thread_store,
 )
 from codex_autorunner.core.orchestration import SQLiteManagedThreadDeliveryEngine
+from codex_autorunner.core.orchestration.chat_surface_events import (
+    SQLiteChatSurfaceEventJournal,
+)
 from codex_autorunner.core.orchestration.managed_thread_delivery import (
     ManagedThreadDeliveryState,
 )
@@ -1679,6 +1682,103 @@ async def test_resolve_telegram_managed_thread_reuses_archived_thread(
     assert resolved is not None
     assert resolved.thread_target_id == current_thread.thread_target_id
     assert resolved.lifecycle_status == "active"
+
+
+@pytest.mark.anyio
+async def test_sync_telegram_thread_binding_replaces_archived_generation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    record = TelegramTopicRecord(
+        pma_enabled=False,
+        workspace_path=str(workspace),
+        repo_id="repo-1",
+        agent="codex",
+    )
+    handler = _ManagedThreadPMAHandler(record, tmp_path)
+
+    _patch_telegram_harness(
+        monkeypatch,
+        _BaseFakeHarness(),
+        execution_commands_module,
+    )
+
+    orchestration_service = (
+        execution_commands_module._build_telegram_thread_orchestration_service(handler)
+    )
+    current_thread = orchestration_service.create_thread_target(
+        "codex",
+        workspace.resolve(),
+        repo_id="repo-1",
+        display_name="telegram:test-topic",
+        backend_thread_id="old-backend-thread",
+    )
+    orchestration_service.upsert_binding(
+        surface_kind="telegram",
+        surface_key="telegram:-1001:101",
+        thread_target_id=current_thread.thread_target_id,
+        agent_id="codex",
+        repo_id="repo-1",
+        mode="repo",
+    )
+    orchestration_service.archive_thread_target(current_thread.thread_target_id)
+
+    (
+        _service,
+        replacement_thread,
+    ) = await execution_commands_module._sync_telegram_thread_binding(
+        handler,
+        surface_key="telegram:-1001:101",
+        workspace_root=workspace.resolve(),
+        agent="codex",
+        repo_id="repo-1",
+        resource_kind=None,
+        resource_id=None,
+        backend_thread_id="new-backend-thread",
+        mode="repo",
+        pma_enabled=False,
+        replace_existing=True,
+    )
+
+    assert replacement_thread.thread_target_id != current_thread.thread_target_id
+    assert replacement_thread.lifecycle_status == "active"
+    assert replacement_thread.backend_thread_id == "new-backend-thread"
+
+    binding = orchestration_service.get_binding(
+        surface_kind="telegram",
+        surface_key="telegram:-1001:101",
+    )
+    assert binding is not None
+    assert binding.thread_target_id == replacement_thread.thread_target_id
+
+    old_thread = orchestration_service.get_thread_target(
+        current_thread.thread_target_id
+    )
+    assert old_thread is not None
+    assert old_thread.lifecycle_status == "archived"
+
+    events = SQLiteChatSurfaceEventJournal(tmp_path, durable=False).read_history(
+        limit=20
+    )
+    rebound_events = [
+        event
+        for event in events
+        if event.event_type == "surface.rebound"
+        and event.surface_kind == "telegram"
+        and event.surface_key == "telegram:-1001:101"
+    ]
+    assert rebound_events
+    assert rebound_events[-1].managed_thread_id == replacement_thread.thread_target_id
+    assert rebound_events[-1].lifecycle_status == "active"
+    assert (
+        rebound_events[-1].payload["previous_thread_target_id"]
+        == current_thread.thread_target_id
+    )
+    assert (
+        rebound_events[-1].idempotency_key
+        != f"thread:{current_thread.thread_target_id}:telegram:telegram:-1001:101:archived"
+    )
 
 
 @pytest.mark.anyio
