@@ -596,14 +596,14 @@
     const localDraftBump = localDraftChat && !isPmaChatArchived(localDraftChat) ? 1 : 0;
     const knownPersistedChats = selectPmaChats(readModelState, { filter: 'all', limit: 50 });
     const knownChats = localDraftChat ? [localDraftChat, ...knownPersistedChats] : knownPersistedChats;
-    // Backend counters are authoritative for status chips. Unread remains client-adjusted
-    // until backend read markers fully match local last-seen semantics.
+    // Backend counters cover the full windowed result set; local read markers can only
+    // raise the unread count for rows the client has already seen.
     const clientUnread = summarizeFilterCounts(knownChats, lastSeenMap).unread;
     return {
       all: counters.total + localDraftBump,
       active: counters.running,
       waiting: counters.waiting,
-      unread: clientUnread,
+      unread: Math.max(counters.unread, clientUnread),
       archived: counters.archived
     };
   }

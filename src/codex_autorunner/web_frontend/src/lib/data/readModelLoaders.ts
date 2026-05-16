@@ -105,8 +105,8 @@ export async function ensureRepoWorktreeIndexLoaded(
 
   const client = options.client ?? readModelSnapshotClient;
   const [topology, runtime] = await Promise.all([
-    client.repoWorktreeTopology('all', options.limit ?? 50),
-    client.repoWorktreeRuntime('all', options.limit ?? 50)
+    client.repoWorktreeTopology('all', options.limit ?? 200),
+    client.repoWorktreeRuntime('all', options.limit ?? 200)
   ]);
   if (!topology.ok) return { status: 'error', tags, error: topology.error };
   if (!runtime.ok) return { status: 'error', tags, error: runtime.error };
