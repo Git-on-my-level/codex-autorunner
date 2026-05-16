@@ -262,6 +262,12 @@ export type ManagedThreadCreatePayload = {
   scope_urn: string;
 };
 
+export type PmaChatScopeSource =
+  | 'default_hub'
+  | 'route_explicit'
+  | 'picker_explicit'
+  | 'inherited_continuation';
+
 export type PmaChatScopeOption =
   | {
       id: 'local';
@@ -602,7 +608,10 @@ export type ManagedThreadMessagePayload = {
 };
 
 export type ManagedThreadStartMessagePayload = ManagedThreadCreatePayload &
-  ManagedThreadMessagePayload;
+  ManagedThreadMessagePayload & {
+    origin: 'web';
+    scope_source: PmaChatScopeSource;
+  };
 
 const activeStatuses: WorkStatus[] = ['running'];
 const waitingStatuses: WorkStatus[] = ['waiting', 'blocked'];
@@ -2422,10 +2431,13 @@ export function buildManagedThreadStartMessagePayload(
   message: string,
   attachments: Array<PendingAttachment | DocumentFileIntentPayload> = [],
   reasoning = '',
-  clientTurnId = ''
+  clientTurnId = '',
+  scopeSource: PmaChatScopeSource = 'default_hub'
 ): ManagedThreadStartMessagePayload {
   return {
     ...buildManagedThreadCreatePayload(agent, scope, name, model, profile, chatKind),
+    origin: 'web',
+    scope_source: scopeSource,
     ...buildManagedThreadMessagePayload(
       message,
       model,

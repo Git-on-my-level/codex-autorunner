@@ -70,9 +70,41 @@ describe('PMA chat command plans', () => {
         message: 'Hello',
         reasoning: 'high',
         client_turn_id: 'client-1',
+        origin: 'web',
         scope_urn: 'hub',
+        scope_source: 'default_hub',
         wait_for_confirmation: false
       }
+    });
+  });
+
+  it('marks route and picker genesis scope sources on draft first sends', () => {
+    const repoScope = {
+      id: 'repo:repo-1',
+      kind: 'repo' as const,
+      label: 'Repo One',
+      detail: '/hub/repo-1',
+      resourceKind: 'repo' as const,
+      resourceId: 'repo-1',
+      scopeUrn: 'repo:repo-1'
+    };
+    expect(
+      planStartAndSendChat(repoScope, 'codex', '', '', 'Route chat', {
+        scopeSource: 'route_explicit'
+      }).body
+    ).toMatchObject({
+      origin: 'web',
+      scope_urn: 'repo:repo-1',
+      scope_source: 'route_explicit'
+    });
+    expect(
+      planStartAndSendChat(repoScope, 'codex', '', '', 'Picker chat', {
+        scopeSource: 'picker_explicit'
+      }).body
+    ).toMatchObject({
+      origin: 'web',
+      scope_urn: 'repo:repo-1',
+      scope_source: 'picker_explicit'
     });
   });
 
