@@ -132,3 +132,78 @@ def test_seed_codex_home_resyncs_config_when_auth_already_seeded(
     assert (target_home / "config.toml").read_text(
         encoding="utf-8"
     ) == "multi_agent = true\n"
+
+
+def test_seed_codex_home_replaces_stale_managed_auth_file(
+    tmp_path: Path, monkeypatch
+) -> None:
+    source_home = tmp_path / "source-codex-home"
+    source_home.mkdir()
+    source_auth = source_home / "auth.json"
+    source_auth.write_text('{"token":"fresh"}\n', encoding="utf-8")
+    monkeypatch.setenv("CODEX_HOME", str(source_home))
+
+    target_home = tmp_path / "target-codex-home"
+    target_home.mkdir()
+    target_auth = target_home / "auth.json"
+    target_auth.write_text('{"token":"stale"}\n', encoding="utf-8")
+
+    seed_codex_home(target_home, event_prefix="test")
+
+    assert target_auth.is_symlink()
+    assert target_auth.resolve() == source_auth.resolve()
+    assert target_auth.read_text(encoding="utf-8") == '{"token":"fresh"}\n'
+
+
+def test_seed_codex_home_replaces_stale_managed_auth_symlink(
+    tmp_path: Path, monkeypatch
+) -> None:
+    old_home = tmp_path / "old-codex-home"
+    old_home.mkdir()
+    old_auth = old_home / "auth.json"
+    old_auth.write_text('{"token":"stale"}\n', encoding="utf-8")
+    source_home = tmp_path / "source-codex-home"
+    source_home.mkdir()
+    source_auth = source_home / "auth.json"
+    source_auth.write_text('{"token":"fresh"}\n', encoding="utf-8")
+    monkeypatch.setenv("CODEX_HOME", str(source_home))
+
+    target_home = tmp_path / "target-codex-home"
+    target_home.mkdir()
+    target_auth = target_home / "auth.json"
+    target_auth.symlink_to(old_auth)
+
+    seed_codex_home(target_home, event_prefix="test")
+
+    assert target_auth.is_symlink()
+    assert target_auth.resolve() == source_auth.resolve()
+    assert target_auth.read_text(encoding="utf-8") == '{"token":"fresh"}\n'
+
+
+def test_seed_codex_home_preserves_existing_auth_when_relink_fails(
+    tmp_path: Path, monkeypatch
+) -> None:
+    source_home = tmp_path / "source-codex-home"
+    source_home.mkdir()
+    source_auth = source_home / "auth.json"
+    source_auth.write_text('{"token":"fresh"}\n', encoding="utf-8")
+    monkeypatch.setenv("CODEX_HOME", str(source_home))
+
+    target_home = tmp_path / "target-codex-home"
+    target_home.mkdir()
+    target_auth = target_home / "auth.json"
+    target_auth.write_text('{"token":"still-usable"}\n', encoding="utf-8")
+
+    original_symlink_to = Path.symlink_to
+
+    def fail_temp_auth_symlink(self: Path, target: Path, *args, **kwargs) -> None:
+        if self.name.startswith(".auth.json.tmp."):
+            raise OSError("symlink unavailable")
+        return original_symlink_to(self, target, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "symlink_to", fail_temp_auth_symlink)
+
+    seed_codex_home(target_home, event_prefix="test")
+
+    assert not target_auth.is_symlink()
+    assert target_auth.read_text(encoding="utf-8") == '{"token":"still-usable"}\n'
