@@ -16,6 +16,7 @@ from typing import Any, Callable, Optional, cast
 
 import typer
 
+from ....core.config import find_nearest_hub_config_path
 from ....core.flows import FlowController, FlowStore
 from ....core.flows.flow_housekeeping import (
     FlowRetentionConfig,
@@ -48,6 +49,9 @@ from ....core.force_attestation import (
 from ....core.managed_processes import reap_managed_processes
 from ....core.orchestration import build_ticket_flow_orchestration_service
 from ....core.orchestration.models import FlowRunTarget
+from ....core.orchestration.ticket_flow_visibility_repair import (
+    repair_ticket_flow_chat_visibility,
+)
 from ....core.runtime import RuntimeContext
 from ....core.state_roots import resolve_repo_flows_db_path, resolve_repo_state_root
 from ....core.ticket_flow_operator import (
@@ -99,6 +103,15 @@ def _build_force_attestation(
         "user_request": force_attestation,
         "target_scope": target_scope,
     }
+
+
+def _resolve_ticket_flow_repair_hub_root(repo_root: Path, hub: Optional[Path]) -> Path:
+    if hub is not None:
+        return hub.expanduser().resolve()
+    hub_config_path = find_nearest_hub_config_path(repo_root)
+    if hub_config_path is not None:
+        return hub_config_path.parent.parent.resolve()
+    return repo_root.resolve()
 
 
 def register_flow_commands(
@@ -981,6 +994,49 @@ def register_flow_commands(
             typer.echo(json.dumps(payload, indent=2))
             return
         _print_ticket_flow_status(payload)
+
+    @ticket_flow_app.command("repair-visibility")
+    def ticket_flow_repair_visibility(
+        repo: Optional[Path] = typer.Option(None, "--repo", help="Repo path"),
+        hub: Optional[Path] = hub_root_path_option(),
+        run_id: Optional[str] = typer.Option(None, "--run-id", help="Flow run ID"),
+        repo_id: Optional[str] = typer.Option(
+            None,
+            "--repo-id",
+            help="Hub repo id to stamp on repaired managed-thread rows.",
+        ),
+        dry_run: bool = typer.Option(
+            True,
+            "--dry-run/--apply",
+            help="Preview repairs by default; pass --apply to mutate hub records.",
+        ),
+        output_json: bool = typer.Option(True, "--json/--no-json", help="Emit JSON"),
+    ):
+        """Repair missing Web Hub chat visibility for legacy ticket_flow runs."""
+        engine = require_repo_config(repo, hub)
+        normalized_run_id = _normalize_flow_run_id(run_id)
+        report = repair_ticket_flow_chat_visibility(
+            repo_root=engine.repo_root,
+            hub_root=_resolve_ticket_flow_repair_hub_root(engine.repo_root, hub),
+            repo_id=repo_id,
+            run_id=normalized_run_id,
+            dry_run=dry_run,
+            durable=engine.config.durable_writes,
+        )
+        payload = report.to_dict()
+        if output_json:
+            typer.echo(json.dumps(payload, indent=2, sort_keys=True))
+            return
+        typer.echo(
+            f"scanned={payload['scanned_runs']} repaired={payload['repaired']} "
+            f"already_linked={payload['already_linked']} dry_run={payload['dry_run']}"
+        )
+        for diagnostic in payload["diagnostics"]:
+            typer.echo(
+                "diagnostic: "
+                f"run={diagnostic['run_id']} status={diagnostic['status']} "
+                f"reason={diagnostic['reason']}"
+            )
 
     @ticket_flow_app.command("stop")
     def ticket_flow_stop(
