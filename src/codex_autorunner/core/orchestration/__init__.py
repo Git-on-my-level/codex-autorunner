@@ -143,6 +143,19 @@ from .sqlite import (
     resolve_orchestration_sqlite_path,
 )
 from .threads import SurfaceThreadMessageRequest
+from .ticket_flow_chat_ledger_contract import (
+    TICKET_FLOW_CHAT_LEDGER_CONTRACT_VERSION,
+    TICKET_FLOW_FLOW_TYPE,
+    TICKET_FLOW_LEDGER_LIFECYCLE,
+    TICKET_FLOW_LEDGER_RECORDS,
+    TICKET_FLOW_THREAD_KIND,
+    TicketFlowLedgerRecord,
+    TicketFlowThreadLink,
+    ticket_flow_chat_ledger_contract,
+    ticket_flow_thread_link_key,
+    ticket_flow_thread_metadata,
+    validate_ticket_flow_thread_metadata,
+)
 
 if TYPE_CHECKING:
     from . import runtime_threads as runtime_threads_module
@@ -253,10 +266,17 @@ __all__ = [
     "SQLiteManagedThreadSideEffectEngine",
     "SQLiteManagedThreadSideEffectLedger",
     "SurfaceThreadMessageRequest",
+    "TICKET_FLOW_CHAT_LEDGER_CONTRACT_VERSION",
+    "TICKET_FLOW_FLOW_TYPE",
+    "TICKET_FLOW_LEDGER_LIFECYCLE",
+    "TICKET_FLOW_LEDGER_RECORDS",
+    "TICKET_FLOW_THREAD_KIND",
     "ThreadExecutionStore",
     "Thread",
     "ThreadStopOutcome",
     "ThreadTarget",
+    "TicketFlowLedgerRecord",
+    "TicketFlowThreadLink",
     "WorkspaceRuntimeAcquisition",
     "apply_orchestration_migrations",
     "audit_execution_history",
@@ -300,5 +320,9 @@ __all__ = [
     "resolve_execution_history_maintenance_policy",
     "resolve_orchestration_sqlite_path",
     "serialize_chat_surface_event",
+    "ticket_flow_chat_ledger_contract",
+    "ticket_flow_thread_link_key",
+    "ticket_flow_thread_metadata",
+    "validate_ticket_flow_thread_metadata",
     "vacuum_execution_history",
 ]

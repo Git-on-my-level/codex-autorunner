@@ -10,6 +10,7 @@ from codex_autorunner.core.managed_thread_store import ManagedThreadStore
 from codex_autorunner.core.orchestration import (
     OrchestrationBindingStore,
     SQLiteChatSurfaceEventJournal,
+    ticket_flow_thread_metadata,
 )
 from codex_autorunner.core.orchestration.sqlite import open_orchestration_sqlite
 from codex_autorunner.server import create_hub_app
@@ -294,12 +295,11 @@ def test_chat_index_contract_uses_terminal_thread_status_and_ticket_flow_metadat
                     "active",
                     "completed",
                     json.dumps(
-                        {
-                            "flow_type": "ticket_flow",
-                            "thread_kind": "ticket_flow",
-                            "ticket_id": "TICKET-015",
-                            "run_id": "run-015",
-                        }
+                        ticket_flow_thread_metadata(
+                            flow_run_id="run-015",
+                            ticket_id="TICKET-015",
+                            workspace_root=str(hub_env.repo_root),
+                        )
                     ),
                     "2026-05-15T11:57:27Z",
                     "2026-05-15T12:08:56Z",
