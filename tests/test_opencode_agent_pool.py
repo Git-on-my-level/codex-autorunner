@@ -1271,7 +1271,7 @@ async def test_run_turn_supports_runtime_backed_hermes_agent(tmp_path: Path):
 
     threads = pool._thread_store.list_threads(agent="hermes", limit=1)
     assert len(threads) == 1
-    assert threads[0]["name"] == "ticket-flow:hermes"
+    assert threads[0]["name"] == "Ticket Flow (hermes)"
     assert harness.calls[0]["conversation_id"] == "session-1"
 
 
@@ -1356,7 +1356,7 @@ async def test_run_turn_uses_profile_aware_runtime_resolution_for_hermes_queue_d
                 for candidate in pool._thread_store.list_threads(
                     agent="hermes", limit=1
                 )
-                if candidate.get("name") == "ticket-flow:hermes@m4-pma"
+                if candidate.get("name") == "Ticket Flow tkt-123 (hermes@m4-pma)"
                 and isinstance(candidate.get("metadata"), dict)
                 and candidate["metadata"].get("agent_profile") == "m4-pma"
             ),
@@ -1365,11 +1365,13 @@ async def test_run_turn_uses_profile_aware_runtime_resolution_for_hermes_queue_d
         timeout_s=2.0,
     )
     thread_id = str(thread["managed_thread_id"])
-    assert thread["name"] == "ticket-flow:hermes@m4-pma"
+    assert thread["name"] == "Ticket Flow tkt-123 (hermes@m4-pma)"
     assert thread["metadata"]["agent_profile"] == "m4-pma"
     assert thread["metadata"]["run_id"] == "run-123"
+    assert thread["metadata"]["flow_run_id"] == "run-123"
     assert thread["metadata"]["ticket_id"] == "tkt-123"
     assert thread["metadata"]["ticket_path"] == options["ticket_path"]
+    assert thread["metadata"]["ticket_flow_link_key"] == "ticket_flow:run-123:tkt-123"
 
     second_task = asyncio.create_task(
         pool.run_turn(
@@ -1400,6 +1402,91 @@ async def test_run_turn_uses_profile_aware_runtime_resolution_for_hermes_queue_d
     assert factory.calls == [("hermes-m4-pma", None), ("hermes-m4-pma", None)]
     assert alias_harness.calls[0]["conversation_id"] == "session-1"
     assert alias_harness.calls[1]["conversation_id"] == "session-1"
+
+
+@pytest.mark.asyncio
+async def test_run_turn_reuses_ticket_flow_thread_link_without_runner_state(
+    tmp_path: Path,
+):
+    harness = _FakeHarness(
+        [
+            _HarnessScript(assistant_text="done-1"),
+            _HarnessScript(assistant_text="done-2"),
+        ]
+    )
+    pool = _make_pool(tmp_path, harness, approval_mode="review")
+    options = {
+        "ticket_flow_run_id": "run-reuse",
+        "ticket_id": "tkt-reuse",
+        "ticket_path": ".codex-autorunner/tickets/TICKET-123.md",
+    }
+
+    first = await pool.run_turn(
+        AgentTurnRequest(
+            agent_id="codex",
+            prompt="first",
+            workspace_root=tmp_path,
+            options=options,
+        )
+    )
+    second = await pool.run_turn(
+        AgentTurnRequest(
+            agent_id="codex",
+            prompt="second",
+            workspace_root=tmp_path,
+            options=options,
+        )
+    )
+
+    assert first.conversation_id == second.conversation_id
+    threads = [
+        thread
+        for thread in pool._thread_store.list_threads(agent="codex", limit=10)
+        if isinstance(thread.get("metadata"), dict)
+        and thread["metadata"].get("ticket_flow_link_key")
+        == "ticket_flow:run-reuse:tkt-reuse"
+    ]
+    assert len(threads) == 1
+    assert harness.calls[0]["conversation_id"] == "session-1"
+    assert harness.calls[1]["conversation_id"] == "session-1"
+
+
+@pytest.mark.asyncio
+async def test_failed_run_turn_still_persists_ticket_flow_link(tmp_path: Path):
+    harness = _FakeHarness(
+        [
+            _HarnessScript(
+                assistant_text="",
+                status="error",
+                errors=["runtime failed"],
+            )
+        ]
+    )
+    pool = _make_pool(tmp_path, harness, approval_mode="review")
+
+    result = await pool.run_turn(
+        AgentTurnRequest(
+            agent_id="codex",
+            prompt="first",
+            workspace_root=tmp_path,
+            options={
+                "ticket_flow_run_id": "run-failed",
+                "ticket_id": "tkt-failed",
+                "ticket_path": ".codex-autorunner/tickets/TICKET-999.md",
+            },
+        )
+    )
+
+    assert result.error
+    thread = pool._thread_store.get_thread(result.conversation_id)
+    assert thread is not None
+    metadata = thread["metadata"]
+    assert metadata["thread_kind"] == "ticket_flow"
+    assert metadata["flow_type"] == "ticket_flow"
+    assert metadata["run_id"] == "run-failed"
+    assert metadata["flow_run_id"] == "run-failed"
+    assert metadata["ticket_id"] == "tkt-failed"
+    assert metadata["ticket_flow_link_key"] == "ticket_flow:run-failed:tkt-failed"
 
 
 @pytest.mark.asyncio
