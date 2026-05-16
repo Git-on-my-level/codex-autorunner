@@ -828,11 +828,11 @@ class ChatSurfaceReadService:
                 include_archived_rows=True,
             )
             counters_sql = f"""
-                SELECT COALESCE(SUM(CASE WHEN (lifecycle_status IS NULL OR lifecycle_status != 'archived') THEN 1 ELSE 0 END), 0) AS total,
-                       COALESCE(SUM(CASE WHEN (lifecycle_status IS NULL OR lifecycle_status != 'archived') AND queue_depth > 0 THEN 1 ELSE 0 END), 0) AS waiting,
-                       COALESCE(SUM(CASE WHEN (lifecycle_status IS NULL OR lifecycle_status != 'archived') AND effective_status = 'running' THEN 1 ELSE 0 END), 0) AS running,
-                       COALESCE(SUM(CASE WHEN (lifecycle_status IS NULL OR lifecycle_status != 'archived') THEN unread_count ELSE 0 END), 0) AS unread,
-                       COALESCE(SUM(CASE WHEN lifecycle_status = 'archived' THEN 1 ELSE 0 END), 0) AS archived
+                SELECT COALESCE(SUM(CASE WHEN {_CHAT_INDEX_NON_ARCHIVED_SQL} THEN 1 ELSE 0 END), 0) AS total,
+                       COALESCE(SUM(CASE WHEN {_CHAT_INDEX_NON_ARCHIVED_SQL} AND queue_depth > 0 THEN 1 ELSE 0 END), 0) AS waiting,
+                       COALESCE(SUM(CASE WHEN {_CHAT_INDEX_NON_ARCHIVED_SQL} AND effective_status = 'running' THEN 1 ELSE 0 END), 0) AS running,
+                       COALESCE(SUM(CASE WHEN {_CHAT_INDEX_NON_ARCHIVED_SQL} THEN unread_count ELSE 0 END), 0) AS unread,
+                       COALESCE(SUM(CASE WHEN NOT ({_CHAT_INDEX_NON_ARCHIVED_SQL}) THEN 1 ELSE 0 END), 0) AS archived
                   FROM orch_chat_index_projection
                  WHERE {where_counters_sql}
                 """
@@ -843,7 +843,7 @@ class ChatSurfaceReadService:
                        COALESCE(SUM(CASE WHEN queue_depth > 0 THEN 1 ELSE 0 END), 0) AS waiting,
                        COALESCE(SUM(CASE WHEN effective_status = 'running' THEN 1 ELSE 0 END), 0) AS running,
                        COALESCE(SUM(unread_count), 0) AS unread,
-                       COALESCE(SUM(CASE WHEN lifecycle_status = 'archived' THEN 1 ELSE 0 END), 0) AS archived
+                       COALESCE(SUM(CASE WHEN NOT ({_CHAT_INDEX_NON_ARCHIVED_SQL}) THEN 1 ELSE 0 END), 0) AS archived
                   FROM orch_chat_index_projection
                  WHERE {where_counters_sql}
                 """
@@ -1801,6 +1801,12 @@ def _chat_index_row_from_projection(row: Mapping[str, Any]) -> dict[str, Any]:
     return parsed if isinstance(parsed, dict) else {}
 
 
+_CHAT_INDEX_NON_ARCHIVED_SQL = (
+    "(lifecycle_status IS NULL OR lifecycle_status != 'archived') "
+    "AND effective_status != 'archived'"
+)
+
+
 def _chat_index_projection_where(
     *,
     view: str,
@@ -1830,7 +1836,7 @@ def _chat_index_projection_where(
     elif normalized_view == "unread":
         clauses.append("unread != 0")
     elif normalized_view == "archived":
-        clauses.append("lifecycle_status = 'archived'")
+        clauses.append(f"NOT ({_CHAT_INDEX_NON_ARCHIVED_SQL})")
     elif normalized_view == "external":
         clauses.append("surface_kind_list != ''")
         clauses.append("surface_kind_list != '|pma|'")
@@ -1841,7 +1847,7 @@ def _chat_index_projection_where(
     if normalized_view != "archived" and not (
         include_archived_rows and normalized_view == "all"
     ):
-        clauses.append("(lifecycle_status IS NULL OR lifecycle_status != 'archived')")
+        clauses.append(_CHAT_INDEX_NON_ARCHIVED_SQL)
     if normalized_query is not None:
         clauses.append("search_text LIKE ?")
         params.append(f"%{normalized_query}%")

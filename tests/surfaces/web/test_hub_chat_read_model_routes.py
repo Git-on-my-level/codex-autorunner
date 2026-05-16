@@ -525,6 +525,82 @@ def test_hub_read_models_chats_counters_cover_full_filtered_set(hub_env) -> None
     assert snapshot.rows[0].status != "running"
 
 
+def test_hub_read_models_chats_all_excludes_effectively_archived_rows(
+    hub_env,
+) -> None:
+    with open_orchestration_sqlite(
+        hub_env.hub_root, durable=True, migrate=True
+    ) as conn:
+        with conn:
+            conn.executemany(
+                """
+                INSERT INTO orch_thread_targets (
+                    thread_target_id,
+                    agent_id,
+                    repo_id,
+                    resource_kind,
+                    resource_id,
+                    display_name,
+                    lifecycle_status,
+                    runtime_status,
+                    metadata_json,
+                    created_at,
+                    updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    (
+                        "thread-active",
+                        "codex",
+                        "repo",
+                        "repo",
+                        "repo",
+                        "Active thread",
+                        "active",
+                        "idle",
+                        "{}",
+                        "2026-05-11T00:00:00Z",
+                        "2026-05-11T00:02:00Z",
+                    ),
+                    (
+                        "thread-stale-archived-runtime",
+                        "codex",
+                        "repo",
+                        "repo",
+                        "repo",
+                        "Stale archived runtime",
+                        "active",
+                        "archived",
+                        "{}",
+                        "2026-05-11T00:00:00Z",
+                        "2026-05-11T00:01:00Z",
+                    ),
+                ),
+            )
+
+    client = TestClient(create_hub_app(hub_env.hub_root))
+    response = client.get(
+        "/hub/read-models/chats", params={"filter": "all", "limit": 20}
+    )
+
+    assert response.status_code == 200
+    snapshot = load_read_model_contract(ChatIndexSnapshot, response.json())
+    assert [row.chat_id for row in snapshot.rows] == ["thread-active"]
+    assert snapshot.counters.total == 1
+    assert snapshot.counters.archived == 1
+
+    archived_response = client.get(
+        "/hub/read-models/chats", params={"filter": "archived", "limit": 20}
+    )
+    assert archived_response.status_code == 200
+    archived_snapshot = load_read_model_contract(
+        ChatIndexSnapshot, archived_response.json()
+    )
+    assert [row.chat_id for row in archived_snapshot.rows] == [
+        "thread-stale-archived-runtime"
+    ]
+
+
 def test_hub_read_models_chats_contract_active_filter_matches_index_window(
     hub_env,
 ) -> None:
