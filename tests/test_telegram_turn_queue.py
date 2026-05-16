@@ -698,6 +698,49 @@ async def test_normal_turn_append_to_progress_does_not_emit_separate_metrics() -
 
 
 @pytest.mark.anyio
+async def test_normal_turn_durable_delivery_handled_suppresses_legacy_progress_summary_send() -> (
+    None
+):
+    wait = asyncio.Event()
+    wait.set()
+    client = _ClientStub(turn_wait_events=[wait])
+    record = _record("thread-1")
+    records = {"10:11": record}
+    handler = _HandlerStub(
+        client=client,
+        max_parallel_turns=1,
+        records=records,
+    )
+
+    async def _fake_run_turn_and_collect_result(
+        _message: TelegramMessage,
+        _runtime: _RuntimeStub,
+        **_kwargs: object,
+    ) -> SimpleNamespace:
+        return SimpleNamespace(
+            record=record,
+            thread_id="thread-1",
+            turn_id="turn-1",
+            response="",
+            placeholder_id=456,
+            elapsed_seconds=None,
+            token_usage=None,
+            transcript_message_id=None,
+            transcript_text=None,
+            intermediate_response="done · agent codex · gpt-4.1-mini · 12s · step 3",
+            durable_delivery_handled=True,
+        )
+
+    handler._run_turn_and_collect_result = _fake_run_turn_and_collect_result  # type: ignore[assignment]
+
+    message = _message(message_id=1, thread_id=11)
+    await handler._handle_normal_message(message, _RuntimeStub(), record=record)
+
+    assert handler._deliver_calls == []
+    assert handler._delete_calls == [(10, 456)]
+
+
+@pytest.mark.anyio
 async def test_normal_turn_appends_metrics_footer_to_response_by_default() -> None:
     wait = asyncio.Event()
     wait.set()
