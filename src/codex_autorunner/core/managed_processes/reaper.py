@@ -25,6 +25,7 @@ REAPER_GRACE_SECONDS: Final = 0.2
 REAPER_KILL_SECONDS: Final = 0.2
 
 DEFAULT_MAX_RECORD_AGE_SECONDS = 6 * 60 * 60
+CODEX_APP_SERVER_WORKSPACE_MAX_AGE_SECONDS = 5 * 60
 _OWNER_PROCESS_CMD_HINTS: Final = ("codex_autorunner", "codex-autorunner", "car ")
 
 
@@ -56,6 +57,14 @@ def _is_older_than(record: ProcessRecord, max_age_seconds: int) -> bool:
         return True
     threshold = datetime.now(timezone.utc) - timedelta(seconds=max_age_seconds)
     return started < threshold
+
+
+def _is_stale_workspace_codex_app_server(record: ProcessRecord) -> bool:
+    if record.kind != "codex_app_server":
+        return False
+    if record.metadata.get("server_scope") != "workspace":
+        return False
+    return _is_older_than(record, CODEX_APP_SERVER_WORKSPACE_MAX_AGE_SECONDS)
 
 
 @dataclass
@@ -151,7 +160,10 @@ def reap_managed_processes(
                 owner_running = False
                 owner_mismatch = True
         record_old = _is_older_than(record, max_record_age_seconds)
-        should_reap = force or (not owner_running) or record_old
+        stale_workspace_codex = _is_stale_workspace_codex_app_server(record)
+        should_reap = (
+            force or (not owner_running) or record_old or stale_workspace_codex
+        )
 
         if not should_reap:
             summary.skipped += 1

@@ -303,6 +303,86 @@ def test_reaper_reaps_old_records_even_if_owner_running(
     assert kill_calls == [(5111, signal.SIGTERM), (5111, signal.SIGKILL)]
 
 
+def test_reaper_reaps_stale_workspace_codex_app_server_even_if_owner_running(
+    monkeypatch, tmp_path: Path
+) -> None:
+    rec = _record(
+        kind="codex_app_server",
+        workspace_id="ws-codex",
+        pid=5211,
+        pgid=5211,
+        owner_pid=1234,
+        started_at=(datetime.now(timezone.utc) - timedelta(seconds=6 * 60))
+        .isoformat()
+        .replace("+00:00", "Z"),
+    )
+    rec.metadata = {"server_scope": "workspace"}
+    registry.write_process_record(tmp_path, rec)
+    monkeypatch.setattr(reaper_module, "REAPER_GRACE_SECONDS", 0.0)
+    monkeypatch.setattr(reaper_module, "REAPER_KILL_SECONDS", 0.0)
+    monkeypatch.setattr(
+        "codex_autorunner.core.managed_processes.reaper._pid_is_running",
+        lambda pid: pid == 1234,
+    )
+    monkeypatch.setattr(
+        "codex_autorunner.core.managed_processes.reaper._pgid_is_running",
+        lambda _pgid: False,
+    )
+    killpg_calls: list[tuple[int, int]] = []
+    kill_calls: list[tuple[int, int]] = []
+    monkeypatch.setattr(
+        "codex_autorunner.core.process_termination.os.killpg",
+        lambda pgid, sig: killpg_calls.append((pgid, sig)),
+    )
+    monkeypatch.setattr(
+        "codex_autorunner.core.process_termination.os.kill",
+        lambda pid, sig: kill_calls.append((pid, sig)),
+    )
+
+    summary = reap_managed_processes(tmp_path, max_record_age_seconds=24 * 60 * 60)
+
+    assert summary.removed == 1
+    assert summary.skipped == 0
+    assert killpg_calls == [(5211, signal.SIGTERM), (5211, signal.SIGKILL)]
+    assert kill_calls == [(5211, signal.SIGTERM), (5211, signal.SIGKILL)]
+    assert (
+        registry.read_process_record(tmp_path, "codex_app_server", "ws-codex") is None
+    )
+
+
+def test_reaper_preserves_old_global_codex_app_server_when_owner_running(
+    monkeypatch, tmp_path: Path
+) -> None:
+    rec = _record(
+        kind="codex_app_server",
+        workspace_id="global",
+        pid=5311,
+        pgid=5311,
+        owner_pid=1234,
+        started_at=(datetime.now(timezone.utc) - timedelta(seconds=6 * 60))
+        .isoformat()
+        .replace("+00:00", "Z"),
+    )
+    rec.metadata = {"server_scope": "global"}
+    registry.write_process_record(tmp_path, rec)
+    monkeypatch.setattr(
+        "codex_autorunner.core.managed_processes.reaper._pid_is_running",
+        lambda pid: pid == 1234,
+    )
+    monkeypatch.setattr(
+        "codex_autorunner.core.managed_processes.reaper._pgid_is_running",
+        lambda _pgid: False,
+    )
+
+    summary = reap_managed_processes(tmp_path, max_record_age_seconds=24 * 60 * 60)
+
+    assert summary.removed == 0
+    assert summary.skipped == 1
+    assert (
+        registry.read_process_record(tmp_path, "codex_app_server", "global") is not None
+    )
+
+
 def test_reaper_treats_zombie_owner_pid_as_not_running(
     monkeypatch, tmp_path: Path
 ) -> None:

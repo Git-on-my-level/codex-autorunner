@@ -101,6 +101,8 @@ class FixtureServer:
             self._send_error(req_id, "not initialized")
             return
         if method == "initialize":
+            if self._scenario == "initialize_hang":
+                time.sleep(60)
             self._initialized = True
             self.send(
                 {

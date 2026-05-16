@@ -878,8 +878,8 @@ class DiscordBotService(DiscordInteractionResponseMixin):
                 self.app_server_events.handle_notification,
             ),
             logger=self._logger,
-            server_scope=getattr(root_app_server_config, "server_scope", "global"),
-            max_handles=getattr(root_app_server_config, "max_handles", 1),
+            server_scope="global",
+            max_handles=1,
             idle_ttl_seconds=getattr(root_app_server_config, "idle_ttl_seconds", 3600),
             startup_timeout_seconds=getattr(
                 root_app_server_config, "startup_timeout_seconds", 30
@@ -3279,40 +3279,25 @@ class DiscordBotService(DiscordInteractionResponseMixin):
     async def _app_server_supervisor_for_workspace(
         self, workspace_root: Path
     ) -> WorkspaceAppServerSupervisor:
-        repo_config = load_repo_config(
-            workspace_root,
-            hub_path=self._hub_config_path,
-        )
-        app_cfg = getattr(repo_config, "app_server", None)
-        scope = getattr(app_cfg, "server_scope", "global") if app_cfg else "global"
-        if scope != "workspace":
-            return self._app_server_supervisor
-        key = str(canonicalize_path(workspace_root))
+        workspace_supervisors: list[WorkspaceAppServerSupervisor] = []
         async with self._app_server_lock:
-            existing = self._app_server_workspace_supervisors.get(key)
-            if existing is not None:
-                return existing
-            command = list(getattr(app_cfg, "command", None) or ["codex", "app-server"])
-            supervisor = WorkspaceAppServerSupervisor(
-                command,
-                state_root=self._app_server_state_root,
-                env_builder=self._build_workspace_env,
-                notification_handler=cast(
-                    Callable[[Mapping[str, object]], Awaitable[None]],
-                    self.app_server_events.handle_notification,
-                ),
-                logger=self._logger,
-                server_scope="workspace",
-                max_handles=getattr(app_cfg, "max_handles", 1),
-                idle_ttl_seconds=getattr(app_cfg, "idle_ttl_seconds", 3600),
-                startup_timeout_seconds=getattr(app_cfg, "startup_timeout_seconds", 30),
-                terminate_grace_seconds=getattr(app_cfg, "terminate_grace_seconds", 2),
-                terminate_kill_seconds=getattr(app_cfg, "terminate_kill_seconds", 3),
-                registry_root=getattr(self, "_hub_root", None) or self._config.root,
-            )
-            self._app_server_workspace_supervisors[key] = supervisor
-            self._runtime_services.register_owned_supervisor(supervisor)
-            return supervisor
+            if self._app_server_workspace_supervisors:
+                workspace_supervisors = list(
+                    self._app_server_workspace_supervisors.values()
+                )
+                self._app_server_workspace_supervisors.clear()
+        for supervisor in workspace_supervisors:
+            try:
+                await supervisor.close_all()
+            except Exception as exc:
+                log_event(
+                    self._logger,
+                    logging.WARNING,
+                    "discord.app_server.workspace_supervisor_close_failed",
+                    workspace_root=str(workspace_root),
+                    exc=exc,
+                )
+        return self._app_server_supervisor
 
     async def _client_for_workspace(
         self, workspace_path: Optional[str]
