@@ -20,6 +20,7 @@ import {
   filterArtifactsForActiveChat,
   formatRelativeTime,
   formatCompactMessageDateTime,
+  isLocalChatPlaceholder,
   isPmaChatArchived,
   isPrimaryProgressArtifact,
   mergeChatActivityEvents,
@@ -796,6 +797,40 @@ describe('PMA chat view helpers', () => {
       'unread-old',
       'read-new',
       'read-old'
+    ]);
+  });
+
+  it('keeps local draft placeholders ahead of unread and recent persisted chats', () => {
+    const chats: PmaChatSummary[] = [
+      { ...baseChat, id: 'unread-new', status: 'idle', ticketId: null, isTicketFlow: false, updatedAt: '2026-05-04T03:00:00Z' },
+      { ...baseChat, id: 'read-new', status: 'idle', ticketId: null, isTicketFlow: false, updatedAt: '2026-05-04T04:00:00Z' },
+      {
+        ...baseChat,
+        id: 'draft:pma:1',
+        title: 'New chat',
+        lifecycleStatus: 'draft',
+        status: 'idle',
+        agentId: null,
+        model: null,
+        ticketId: null,
+        isTicketFlow: false,
+        updatedAt: '2026-05-04T02:00:00Z',
+        raw: { draft: true }
+      }
+    ];
+    const lastSeen = {
+      'read-new': '2026-05-04T04:00:00Z'
+    };
+
+    expect(sortChatsUnreadFirst(chats, lastSeen).map((chat) => chat.id)).toEqual([
+      'draft:pma:1',
+      'unread-new',
+      'read-new'
+    ]);
+    expect(buildChatListEntries(chats, { groupRuns: true, lastSeen }).map((entry) => entry.kind === 'chat' ? entry.chat.id : '')).toEqual([
+      'draft:pma:1',
+      'unread-new',
+      'read-new'
     ]);
   });
 
@@ -2047,6 +2082,29 @@ describe('PMA chat view helpers', () => {
     expect(mergeLocalChatPlaceholders([{ ...baseChat, id: 'managed-thread-1' }], [placeholder]).map((chat) => chat.id)).toEqual([
       'managed-thread-1'
     ]);
+  });
+
+  it('recognizes committed placeholders without requiring agent or model metadata', () => {
+    const draftChat: PmaChatSummary = {
+      ...baseChat,
+      id: 'draft:pma:blank',
+      title: 'New chat',
+      lifecycleStatus: 'draft',
+      status: 'idle',
+      agentId: null,
+      agentProfile: null,
+      model: null,
+      ticketId: null,
+      isTicketFlow: false,
+      raw: { draft: true }
+    };
+
+    const placeholder = committedDraftChatPlaceholder(draftChat, 'managed-thread-blank');
+
+    expect(isLocalChatPlaceholder(placeholder)).toBe(true);
+    expect(placeholder.agentId).toBeNull();
+    expect(placeholder.agentProfile).toBeNull();
+    expect(placeholder.model).toBeNull();
   });
 
   it('summarizes model selector loading, empty, error, and loaded states', () => {

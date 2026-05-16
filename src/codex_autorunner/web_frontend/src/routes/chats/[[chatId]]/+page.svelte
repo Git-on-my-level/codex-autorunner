@@ -65,6 +65,7 @@
     filterChatEntries,
     formatBytes,
     formatRelativeTime,
+    isLocalChatPlaceholder,
     isPmaChatArchived,
     localPmaChatScopeOption,
     mergeLocalChatPlaceholders,
@@ -395,7 +396,13 @@
   function sortEntriesForPins(entries: ChatListEntry[], pinned: Record<string, true>): ChatListEntry[] {
     const decorated = entries.map((entry) => {
       if (entry.kind === 'chat') {
-        return { entry, pinned: pinned[entry.chat.id] === true, sort: entry.chat.updatedAt ?? '', id: entry.chat.id };
+        return {
+          entry,
+          pinned: pinned[entry.chat.id] === true,
+          placeholder: isLocalChatPlaceholder(entry.chat),
+          sort: entry.chat.updatedAt ?? '',
+          id: entry.chat.id
+        };
       }
       const chats = [...entry.group.chats].sort((left, right) => {
         const pinnedDiff = Number(pinned[right.id] === true) - Number(pinned[left.id] === true);
@@ -405,11 +412,14 @@
       return {
         entry: { kind: 'group' as const, group: { ...entry.group, chats } },
         pinned: chats.some((chat) => pinned[chat.id] === true),
+        placeholder: false,
         sort: entry.group.updatedAt ?? '',
         id: entry.group.key
       };
     });
     decorated.sort((left, right) => {
+      const placeholderDiff = Number(right.placeholder) - Number(left.placeholder);
+      if (placeholderDiff !== 0) return placeholderDiff;
       const pinnedDiff = Number(right.pinned) - Number(left.pinned);
       if (pinnedDiff !== 0) return pinnedDiff;
       const timeDiff = right.sort.localeCompare(left.sort);
@@ -1432,10 +1442,10 @@
       title: newChatDisplayName(),
       lifecycleStatus: 'draft',
       status: 'idle',
-      agentId: selectedAgent || null,
+      agentId: null,
       chatKind,
-      agentProfile: selectedProfile.trim() || null,
-      model: selectedModel.trim() || null,
+      agentProfile: null,
+      model: null,
       repoId: scope.kind === 'repo' ? scope.resourceId : null,
       worktreeId: scope.kind === 'worktree' ? scope.resourceId : null,
       ticketId: null,
