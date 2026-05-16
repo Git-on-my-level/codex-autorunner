@@ -270,7 +270,7 @@ def _collect_service_pids(
                     sid,
                 )
                 result = subprocess.run(
-                    ["ps", "-o", "pid=", "-o", "ppid="],
+                    ["ps", "-A", "-o", "pid=", "-o", "ppid="],
                     capture_output=True,
                     text=True,
                     check=False,

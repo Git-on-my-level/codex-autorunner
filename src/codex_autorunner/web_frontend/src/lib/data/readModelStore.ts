@@ -298,7 +298,7 @@ export class ReadModelEntityStore implements Readable<ReadModelEntityState> {
     }
     const orderedRows = next.chatOrder.map((id) => next.chats[id]).filter(Boolean);
     next.chatCounters = countersFromRows(orderedRows);
-    const windowRequest = normalizeChatIndexWindowRequest({ filter: 'all', limit: 200 });
+    const windowRequest = normalizeChatIndexWindowRequest({ filter: 'all', limit: 50 });
     const windowKey = canonicalChatIndexWindowKey(windowRequest);
     next.chatWindows[windowKey] = {
       key: windowKey,
@@ -1030,7 +1030,7 @@ function normalizeChatIndexWindowRequest(request: ChatIndexWindowRequest = {}): 
     filter: request.filter ?? 'all',
     query,
     surfaceKind,
-    limit: request.limit ?? 200
+    limit: request.limit ?? 50
   };
 }
 

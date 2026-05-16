@@ -13,7 +13,7 @@ export type ChatRouteLoadData = {
 };
 
 const CHAT_DETAIL_TIMELINE_LIMIT = 50;
-const CHAT_INDEX_WINDOW_LIMIT = 200;
+const CHAT_INDEX_WINDOW_LIMIT = 50;
 
 /** Testable helper; must not live in `+page.ts` (SvelteKit allows only reserved route exports there). */
 export async function loadChatRoute(options: {

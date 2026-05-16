@@ -46,6 +46,8 @@ from ...adapters.chat.models import ChatMessageEvent
 from ...adapters.chat.runtime_thread_errors import (
     sanitize_runtime_thread_error,
 )
+from ...core.apps.install import installed_apps_root
+from ...core.artifact_delivery import ArtifactDeliveryService
 from ...core.artifact_instructions import (
     ArtifactDeliveryContext,
     render_agent_artifact_instructions,
@@ -101,6 +103,7 @@ from ..chat.managed_turn_runner import (
     run_managed_surface_turn,
 )
 from ..chat.progress_primitives import TurnProgressTracker
+from ..chat.ticket_flow_artifacts import collect_terminal_wrapup_artifacts
 from ..chat.turn_metrics import (
     compose_turn_response_with_footer,
 )
@@ -169,6 +172,7 @@ DISCORD_MANAGED_THREAD_SUBMISSION_TIMEOUT_SECONDS = 45.0
 DISCORD_PMA_PROGRESS_MAX_ACTIONS = 12
 DISCORD_PMA_PROGRESS_MIN_EDIT_INTERVAL_SECONDS = 1.0
 DISCORD_PMA_PROGRESS_HEARTBEAT_INTERVAL_SECONDS = 2.0
+_MAX_CHAT_WRAPUP_ARTIFACT_BYTES = 8 * 1024 * 1024
 
 
 _sanitize_runtime_thread_result_error = sanitize_runtime_thread_error
@@ -229,6 +233,56 @@ def _record_pending_discord_direct_delivery(
             delivered=delivered,
             delivery_state=updated.state.value,
         )
+
+
+def _enqueue_chat_wrapup_artifacts(
+    *,
+    workspace_root: Path,
+    channel_id: str,
+) -> int:
+    artifacts = collect_terminal_wrapup_artifacts(
+        workspace_root,
+        max_file_size_bytes=_MAX_CHAT_WRAPUP_ARTIFACT_BYTES,
+    )
+    if not artifacts:
+        return 0
+
+    service = ArtifactDeliveryService(workspace_root)
+    enqueued = 0
+    for artifact in artifacts:
+        if not artifact.absolute_path.is_file():
+            continue
+        service.enqueue_file(
+            artifact.absolute_path,
+            target_surface="discord",
+            target_conversation_key=f"channel:{channel_id}",
+            workspace_scope=f"repo:{workspace_root}",
+            origin_root=workspace_root,
+            metadata={
+                "app_id": artifact.app_id,
+                "app_version": artifact.app_version,
+                "tool_id": artifact.tool_id,
+                "hook_point": artifact.hook_point,
+                "label": artifact.label,
+                "kind": artifact.kind,
+                "relative_path": artifact.relative_path,
+            },
+        )
+        enqueued += 1
+    return enqueued
+
+
+def _workspace_has_installed_apps(workspace_root: Path) -> bool:
+    apps_root = installed_apps_root(workspace_root)
+    if not apps_root.exists():
+        return False
+    try:
+        for child in apps_root.iterdir():
+            if child.is_dir() and (child / "app.lock.json").exists():
+                return True
+    except OSError:
+        return True
+    return False
 
 
 @dataclass(frozen=True)
@@ -1447,12 +1501,34 @@ async def _deliver_discord_turn_result(
         terminal_message_id=current_message_id,
         terminal_created_at=current_lease_created_at,
     )
+    enqueued_wrapup_artifacts = 0
     try:
         if dispatch.pending_compact_seed is not None:
             await dispatch.service._store.clear_pending_compact_seed(
                 channel_id=dispatch.channel_id
             )
-        if send_final_message:
+        if _workspace_has_installed_apps(workspace_root):
+            try:
+                enqueued_wrapup_artifacts = await asyncio.to_thread(
+                    _enqueue_chat_wrapup_artifacts,
+                    workspace_root=workspace_root,
+                    channel_id=dispatch.channel_id,
+                )
+            except Exception as exc:
+                log_event(
+                    dispatch.service._logger,
+                    logging.WARNING,
+                    "discord.turn.wrapup_artifacts_enqueue_failed",
+                    channel_id=dispatch.channel_id,
+                    session_key=dispatch.session_key,
+                    preview_message_id=preview_message_id,
+                    execution_id=execution_id,
+                    background_task_owner="discord.turn.delivery",
+                    workspace_root=str(workspace_root),
+                    agent=dispatch.agent,
+                    exc=exc,
+                )
+        if send_final_message or enqueued_wrapup_artifacts:
             await dispatch.service._flush_outbox_files(
                 workspace_root=workspace_root,
                 channel_id=dispatch.channel_id,
@@ -1492,7 +1568,8 @@ async def _deliver_discord_turn_result(
         visible_failure_notice=visible_failure_notice,
         send_final_message=send_final_message,
         response_chars=len(response_text or ""),
-        flushed_outbox_files=send_final_message,
+        flushed_outbox_files=send_final_message or bool(enqueued_wrapup_artifacts),
+        enqueued_wrapup_artifacts=enqueued_wrapup_artifacts,
         agent=dispatch.agent,
     )
     _dispatch_snapshot = getattr(dispatch, "chat_ux_snapshot", None)
