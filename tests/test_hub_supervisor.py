@@ -3493,6 +3493,67 @@ def test_drain_pma_automation_wakeups_processes_pending(
         supervisor.shutdown()
 
 
+def test_drain_pma_automation_wakeups_retries_transient_queue_enqueue_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    hub_root = tmp_path / "hub"
+    supervisor = _make_basic_supervisor(hub_root)
+    started_lanes = []
+    attempts = 0
+    sleeps: list[float] = []
+    original_ensure = hub_module.PmaQueue.ensure_active_item_sync
+
+    def flaky_ensure(self, lane_id, idempotency_key, payload):
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise RuntimeError("stale terminal bridge connection")
+        return original_ensure(self, lane_id, idempotency_key, payload)
+
+    monkeypatch.setattr(hub_module.PmaQueue, "ensure_active_item_sync", flaky_ensure)
+    monkeypatch.setattr(hub_module.time, "sleep", sleeps.append)
+    supervisor.set_pma_lane_worker_starter(
+        lambda lane_id: started_lanes.append(lane_id)
+    )
+    try:
+        store = supervisor.ensure_pma_automation_store()
+        subscription = store.create_subscription(
+            {
+                "event_types": ["managed_thread_completed"],
+                "repo_id": "demo",
+                "idempotency_key": "sub-retry-queue-enqueue",
+            }
+        )
+        subscription_id = subscription["subscription"]["subscription_id"]
+        created, deduped = store.enqueue_wakeup(
+            source="lifecycle_subscription",
+            repo_id="demo",
+            run_id="r1",
+            thread_id="thread-1",
+            lane_id="pma:default",
+            from_state="running",
+            to_state="completed",
+            reason="managed_turn_completed",
+            timestamp="2026-01-01T00:00:00Z",
+            idempotency_key="managed-turn:exec-1:completed",
+            subscription_id=subscription_id,
+            event_type="managed_thread_completed",
+        )
+        assert deduped is False
+
+        drained = supervisor.drain_pma_automation_wakeups()
+
+        assert drained == 1
+        assert attempts == 2
+        assert sleeps == [0.25]
+        assert started_lanes == ["pma:default"]
+        assert store.list_pending_wakeups() == []
+        worker_started = store.list_wakeups(state_filter="worker_started")
+        assert [entry["wakeup_id"] for entry in worker_started] == [created.wakeup_id]
+    finally:
+        supervisor.shutdown()
+
+
 def test_ensure_pma_safety_checker_creates_checker(tmp_path: Path) -> None:
     hub_root = tmp_path / "hub"
     supervisor = _make_basic_supervisor(hub_root)
