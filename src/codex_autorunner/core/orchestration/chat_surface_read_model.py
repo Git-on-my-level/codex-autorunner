@@ -647,7 +647,196 @@ class ChatSurfaceReadService:
         except (TypeError, ValueError):
             return 0
 
-    def rebuild_chat_index_projection(self) -> None:
+    def chat_index_projection_status(self) -> dict[str, Any]:
+        """Return current SQL projection state without rebuilding it."""
+
+        source_signature = self._chat_index_source_signature()
+        with open_orchestration_sqlite(
+            self._hub_root, durable=self._durable, migrate=True
+        ) as conn:
+            if not _table_exists(
+                conn, "orch_chat_index_projection"
+            ) or not _table_exists(conn, "orch_chat_index_projection_meta"):
+                return {
+                    "source_signature": source_signature,
+                    "stored_source_signature": None,
+                    "projection_revision": 0,
+                    "row_count": 0,
+                    "needs_rebuild": True,
+                }
+            meta = {
+                str(row["key"]): str(row["value"])
+                for row in conn.execute(
+                    """
+                    SELECT key, value
+                      FROM orch_chat_index_projection_meta
+                     WHERE key IN ('source_signature', 'projection_revision')
+                    """
+                ).fetchall()
+            }
+            row = conn.execute(
+                "SELECT COUNT(*) AS row_count FROM orch_chat_index_projection"
+            ).fetchone()
+        stored_signature = meta.get("source_signature")
+        return {
+            "source_signature": source_signature,
+            "stored_source_signature": stored_signature,
+            "projection_revision": max(
+                0, _safe_int(meta.get("projection_revision"), 0)
+            ),
+            "row_count": int(row["row_count"] or 0) if row is not None else 0,
+            "needs_rebuild": stored_signature != source_signature,
+        }
+
+    def repair_stale_bound_surface_archive_state(
+        self, *, dry_run: bool = False
+    ) -> dict[str, Any]:
+        """Emit current-generation facts for active bindings shadowed by archives."""
+
+        surfaces = self._projected_surfaces(limit=None)
+        projected_by_surface = {
+            (
+                _normalize_kind(surface.get("surface_kind")),
+                _normalize_text(surface.get("surface_key")),
+            ): surface
+            for surface in surfaces
+        }
+        with open_orchestration_sqlite(
+            self._hub_root, durable=self._durable, migrate=True
+        ) as conn:
+            binding_rows = conn.execute(
+                """
+                SELECT b.binding_id,
+                       b.surface_kind,
+                       b.surface_key,
+                       b.target_id,
+                       b.repo_id AS binding_repo_id,
+                       b.resource_kind AS binding_resource_kind,
+                       b.resource_id AS binding_resource_id,
+                       b.metadata_json AS binding_metadata_json,
+                       b.updated_at AS binding_updated_at,
+                       t.repo_id AS thread_repo_id,
+                       t.resource_kind AS thread_resource_kind,
+                       t.resource_id AS thread_resource_id,
+                       t.workspace_root AS thread_workspace_root,
+                       t.lifecycle_status AS thread_lifecycle_status
+                  FROM orch_bindings b
+                  JOIN orch_thread_targets t
+                    ON t.thread_target_id = b.target_id
+                 WHERE b.disabled_at IS NULL
+                   AND lower(b.surface_kind) IN ('discord', 'telegram')
+                   AND COALESCE(t.lifecycle_status, 'active') != 'archived'
+                 ORDER BY b.surface_kind ASC, b.surface_key ASC, b.binding_id ASC
+                """
+            ).fetchall()
+
+        candidates: list[dict[str, Any]] = []
+        for row in binding_rows:
+            surface_kind = _normalize_kind(row["surface_kind"])
+            surface_key = _normalize_text(row["surface_key"])
+            managed_thread_id = _normalize_text(row["target_id"])
+            if (
+                surface_kind not in {"discord", "telegram"}
+                or surface_key is None
+                or managed_thread_id is None
+            ):
+                continue
+            surface = projected_by_surface.get((surface_kind, surface_key))
+            if surface is None:
+                continue
+            lifecycle_status = _normalize_kind(surface.get("lifecycle_status"))
+            lifecycle = _normalize_kind(surface.get("lifecycle"))
+            if lifecycle_status != "archived" and lifecycle != "archived":
+                continue
+            metadata = _json_object(row["binding_metadata_json"])
+            candidates.append(
+                {
+                    "surface_kind": surface_kind,
+                    "surface_key": surface_key,
+                    "managed_thread_id": managed_thread_id,
+                    "binding_id": _normalize_text(row["binding_id"]),
+                    "repo_id": _normalize_text(row["binding_repo_id"])
+                    or _normalize_text(row["thread_repo_id"]),
+                    "resource_kind": _normalize_text(row["binding_resource_kind"])
+                    or _normalize_text(row["thread_resource_kind"]),
+                    "resource_id": _normalize_text(row["binding_resource_id"])
+                    or _normalize_text(row["thread_resource_id"]),
+                    "workspace_root": _normalize_text(row["thread_workspace_root"]),
+                    "display_name": _normalize_text(metadata.get("display_name")),
+                    "stale_lifecycle": lifecycle,
+                    "stale_lifecycle_status": lifecycle_status,
+                }
+            )
+
+        result: dict[str, Any] = {
+            "dry_run": dry_run,
+            "matched": len(candidates),
+            "repaired": 0,
+            "already_recorded": 0,
+            "candidates": candidates,
+            "projection": None,
+        }
+        if dry_run:
+            return result
+
+        repaired = 0
+        already_recorded = 0
+        for candidate in candidates:
+            append = self._journal.append_event(
+                idempotency_key=(
+                    "repair.stale_bound_surface_archive_state:"
+                    f"{candidate['surface_kind']}:"
+                    f"{candidate['surface_key']}:"
+                    f"{candidate['managed_thread_id']}"
+                ),
+                event_type="surface.rebound",
+                surface_kind=str(candidate["surface_kind"]),
+                surface_key=str(candidate["surface_key"]),
+                managed_thread_id=str(candidate["managed_thread_id"]),
+                repo_id=_normalize_text(candidate.get("repo_id")),
+                resource_kind=_normalize_text(candidate.get("resource_kind")),
+                resource_id=_normalize_text(candidate.get("resource_id")),
+                workspace_root=_normalize_text(candidate.get("workspace_root")),
+                lifecycle_status="active",
+                status="bound",
+                source_kind="chat_index_repair",
+                source_id="stale_bound_surface_archive_state",
+                payload={
+                    "repair": "stale_bound_surface_archive_state",
+                    "binding_id": candidate.get("binding_id"),
+                    "display": {
+                        "display_name": candidate.get("display_name"),
+                    },
+                },
+            )
+            if append.inserted:
+                repaired += 1
+            else:
+                already_recorded += 1
+
+        projection = self.rebuild_chat_index_projection()
+        result.update(
+            {
+                "repaired": repaired,
+                "already_recorded": already_recorded,
+                "projection": projection,
+            }
+        )
+        if candidates:
+            logger.info(
+                "repaired stale bound surface archive state",
+                extra={
+                    "event": "chat_index_repair",
+                    "repair": "stale_bound_surface_archive_state",
+                    "matched": len(candidates),
+                    "repaired": repaired,
+                    "already_recorded": already_recorded,
+                },
+            )
+        return result
+
+    def rebuild_chat_index_projection(self) -> dict[str, Any]:
+        before = self.chat_index_projection_status()
         source_signature = self._chat_index_source_signature()
         surfaces = self._projected_surfaces(limit=None)
         rows = sorted(
@@ -738,6 +927,16 @@ class ChatSurfaceReadService:
                     """,
                     (str(projection_revision), rebuilt_at),
                 )
+        return {
+            "rebuilt": True,
+            "row_count": len(rows),
+            "projection_revision": projection_revision,
+            "previous_projection_revision": before.get("projection_revision", 0),
+            "source_signature": source_signature,
+            "previous_source_signature": before.get("stored_source_signature"),
+            "source_changed": before.get("stored_source_signature") != source_signature,
+            "rebuilt_at": rebuilt_at,
+        }
 
     def _ensure_chat_index_projection_current(self) -> None:
         source_signature = self._chat_index_source_signature()
@@ -2297,6 +2496,8 @@ def _choose_lifecycle(current: str, candidate: Optional[str]) -> str:
 def _choose_ordered_lifecycle(current: str, candidate: Optional[str]) -> str:
     if candidate is None:
         return current
+    if current == "archived" and candidate == "bound":
+        return candidate
     if current == "archived" or candidate == "archived":
         return "archived"
     if current in _DYNAMIC_LIFECYCLES and candidate in _DYNAMIC_LIFECYCLES:
