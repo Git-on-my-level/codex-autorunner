@@ -260,7 +260,7 @@ def _merge_transcript_rows(
     durable_rows: list[dict[str, Any]], live_rows: list[dict[str, Any]]
 ) -> list[dict[str, Any]]:
     if not live_rows:
-        return durable_rows
+        return _sort_transcript_rows(durable_rows)
     merged_by_id: dict[str, dict[str, Any]] = {}
     merged: list[dict[str, Any]] = []
     for row in durable_rows:
@@ -282,7 +282,7 @@ def _merge_transcript_rows(
         if row_id:
             merged_by_id[row_id] = row
         merged.append(row)
-    return sorted(merged, key=_row_sort_key)
+    return _sort_transcript_rows(merged)
 
 
 def _retain_transcript_window(
@@ -303,11 +303,64 @@ def _retain_transcript_window(
         anchor_id = anchor.get("id")
         if anchor_id and not any(row.get("id") == anchor_id for row in retained):
             retained = [anchor, *retained[1:]]
-    return sorted(retained, key=_row_sort_key)
+    return _sort_transcript_rows(retained)
 
 
-def _row_sort_key(row: Mapping[str, Any]) -> str:
+def _sort_transcript_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    turn_anchors: dict[str, str] = {}
+    turn_fallbacks: dict[str, str] = {}
+    for row in rows:
+        turn_id = _optional_text(row.get("turn_id"))
+        if turn_id is None:
+            continue
+        generic_key = _generic_row_sort_key(row)
+        existing_fallback = turn_fallbacks.get(turn_id)
+        if existing_fallback is None or generic_key < existing_fallback:
+            turn_fallbacks[turn_id] = generic_key
+        if _message_role(row) == "user":
+            existing_anchor = turn_anchors.get(turn_id)
+            if existing_anchor is None or generic_key < existing_anchor:
+                turn_anchors[turn_id] = generic_key
+
+    for turn_id, fallback_key in turn_fallbacks.items():
+        turn_anchors.setdefault(turn_id, fallback_key)
+
+    return sorted(rows, key=lambda row: _row_sort_key(row, turn_anchors))
+
+
+def _row_sort_key(
+    row: Mapping[str, Any], turn_anchors: Mapping[str, str]
+) -> tuple[str, int, str, str]:
+    generic_key = _generic_row_sort_key(row)
+    turn_id = _optional_text(row.get("turn_id"))
+    if turn_id is None:
+        return (generic_key, _row_phase(row), generic_key, str(row.get("id") or ""))
+    return (
+        str(turn_anchors.get(turn_id) or generic_key),
+        _row_phase(row),
+        generic_key,
+        str(row.get("id") or ""),
+    )
+
+
+def _generic_row_sort_key(row: Mapping[str, Any]) -> str:
     return str(row.get("order_key") or row.get("timestamp") or row.get("id") or "")
+
+
+def _row_phase(row: Mapping[str, Any]) -> int:
+    role = _message_role(row)
+    if role == "user":
+        return 0
+    if role == "assistant":
+        return 2
+    return 1
+
+
+def _message_role(row: Mapping[str, Any]) -> Optional[str]:
+    if row.get("kind") != "message":
+        return None
+    role = _mapping(row.get("message")).get("role")
+    return str(role) if role is not None else None
 
 
 def _source_event_ids(item: Mapping[str, Any]) -> list[str]:
