@@ -1596,12 +1596,11 @@
     if (!options.preserveSelectedScope) {
       selectedScopeId = 'local';
       selectedScopeSource = 'default_hub';
-      if (newChatKind === 'agent') newChatKind = 'pma';
+      newChatKind = 'pma';
     }
     localDraftChat = newDraftChatSummary();
     activeChatId = localDraftChat.id;
     detailMode = 'detail';
-    newChatKind = 'pma';
     closeStream();
     void goto(href('/chats'), { replaceState: true });
     creating = false;
