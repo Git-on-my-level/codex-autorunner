@@ -698,10 +698,6 @@ async def test_normal_turn_append_to_progress_does_not_emit_separate_metrics() -
 
 
 @pytest.mark.anyio
-@pytest.mark.xfail(
-    reason="Durable Telegram final delivery still falls through to legacy progress-summary delivery.",
-    strict=True,
-)
 async def test_normal_turn_durable_delivery_handled_suppresses_legacy_progress_summary_send() -> (
     None
 ):
@@ -741,6 +737,7 @@ async def test_normal_turn_durable_delivery_handled_suppresses_legacy_progress_s
     await handler._handle_normal_message(message, _RuntimeStub(), record=record)
 
     assert handler._deliver_calls == []
+    assert handler._delete_calls == [(10, 456)]
 
 
 @pytest.mark.anyio
