@@ -1516,6 +1516,8 @@ class PmaAutomationStore:
             metadata=metadata,
             origin_thread_id=origin_thread_id,
             origin_lane_id=origin_lane_id,
+            origin_surface_kind=origin_surface_kind,
+            origin_surface_key=origin_surface_key,
         )
         if not normalized_event_types:
             logger.warning(
