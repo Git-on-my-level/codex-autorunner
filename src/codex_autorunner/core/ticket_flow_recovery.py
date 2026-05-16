@@ -363,6 +363,12 @@ def recovery_notification_transport_key(*, transport: str, channel_id: Any) -> s
     return f"{normalized_transport}:{normalized_channel}"
 
 
+def recovery_notification_fingerprint(record: FlowNotificationIntentRecord) -> str:
+    """Return the stable chat-surface dedupe key for a recovery notification."""
+
+    return str(record.intent_id or "").strip()
+
+
 def recovery_notification_intent_should_deliver(
     record: FlowNotificationIntentRecord,
     *,
@@ -488,6 +494,7 @@ __all__ = [
     "build_recovery_notification_intents",
     "build_recovery_projection",
     "format_recovery_notification_intent",
+    "recovery_notification_fingerprint",
     "recovery_notification_intent_is_alert",
     "recovery_notification_intent_should_deliver",
     "recovery_notification_transport_key",

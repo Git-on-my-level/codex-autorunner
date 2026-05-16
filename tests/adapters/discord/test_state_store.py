@@ -209,6 +209,32 @@ async def test_pending_compact_seed_round_trip(tmp_path: Path) -> None:
 
 
 @pytest.mark.anyio
+async def test_recovery_notification_cursor_round_trip(tmp_path: Path) -> None:
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    try:
+        await store.initialize()
+        await store.upsert_binding(
+            channel_id="123",
+            guild_id="456",
+            workspace_path=str(tmp_path / "workspace"),
+            repo_id="repo-1",
+        )
+
+        await store.mark_recovery_notification_seen(
+            channel_id="123",
+            fingerprint="ticket_flow_recovery:abc",
+            notified_at="2026-05-14T12:00:00+00:00",
+        )
+
+        binding = await store.get_binding(channel_id="123")
+        assert binding is not None
+        assert binding["last_recovery_fingerprint"] == "ticket_flow_recovery:abc"
+        assert binding["last_recovery_notified_at"] == "2026-05-14T12:00:00+00:00"
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
 async def test_outbox_enqueue_list_get_and_deliver(tmp_path: Path) -> None:
     store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
     try:
