@@ -36,6 +36,10 @@
     planSendExistingChat,
     planStartAndSendChat
   } from '$lib/application/pmaChatCommands';
+  import {
+    mergeTranscriptSnapshotWithPendingOptimistic,
+    transcriptCardCorrelationId
+  } from '$lib/application/pmaChatArchitecture';
   import { withRuntimeBasePath as href } from '$lib/runtime/basePath';
   import { openChatTranscriptEventSource, shouldUseChatTranscriptStream, type StreamSubscription } from '$lib/api/streaming';
   import {
@@ -1321,41 +1325,11 @@
   }
 
   function replaceChatTranscriptPreservingPendingOptimistic(chatId: string, rows: ChatTranscriptCard[]): void {
-    const transcript = readModelEntityStore.snapshot().chatTranscripts[chatId];
-    if (!transcript) {
-      readModelEntityStore.replaceChatTranscript(chatId, rows);
-      return;
-    }
-    const retainedOptimistic = transcript.order
-      .filter((id) => id.startsWith('optimistic:'))
-      .map((id) => transcript.cardsById[id])
-      .filter((card): card is ChatTranscriptCard => Boolean(card))
-      .filter((card) => !transcriptRowsConfirmOptimistic(rows, card));
-    readModelEntityStore.replaceChatTranscript(chatId, [...rows, ...retainedOptimistic]);
-  }
-
-  function transcriptRowsConfirmOptimistic(rows: ChatTranscriptCard[], optimistic: ChatTranscriptCard): boolean {
-    if (optimistic.kind !== 'message' || optimistic.message.role !== 'user') return true;
-    const optimisticCorrelationId = transcriptCardCorrelationId(optimistic);
-    if (!optimisticCorrelationId) return false;
-    return rows.some((row) => {
-      if (row.id.startsWith('optimistic:')) return false;
-      if (row.kind !== 'message' || row.message.role !== 'user') return false;
-      return transcriptCardCorrelationId(row) === optimisticCorrelationId;
-    });
-  }
-
-  function transcriptCardCorrelationId(card: ChatTranscriptCard): string | null {
-    if (card.kind !== 'message') return null;
-    const raw = card.message.raw;
-    const direct = raw.correlation_id ?? raw.client_turn_id;
-    if (typeof direct === 'string' && direct.trim()) return direct.trim();
-    const identity = raw.identity;
-    if (identity && typeof identity === 'object' && !Array.isArray(identity)) {
-      const value = (identity as Record<string, unknown>).correlation_id;
-      if (typeof value === 'string' && value.trim()) return value.trim();
-    }
-    return null;
+    const existing = readModelEntityStore.snapshot().chatTranscripts[chatId];
+    readModelEntityStore.replaceChatTranscript(
+      chatId,
+      mergeTranscriptSnapshotWithPendingOptimistic(existing, rows)
+    );
   }
 
   function activeDetailLoadResult(chatId: string): ReadModelLoaderResult | null {
