@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import json
 import logging
 import os
 import re
@@ -46,7 +47,8 @@ from codex_autorunner.adapters.discord.service import (
 )
 from codex_autorunner.adapters.discord.state import DiscordStateStore
 from codex_autorunner.agents.registry import AgentDescriptor
-from codex_autorunner.bootstrap import seed_hub_files
+from codex_autorunner.bootstrap import seed_hub_files, seed_repo_files
+from codex_autorunner.core.apps import compute_bundle_sha
 from codex_autorunner.core.context_awareness import (
     CAR_AWARENESS_BLOCK,
     PROMPT_WRITING_HINT,
@@ -75,6 +77,7 @@ from codex_autorunner.core.ports.run_event import (
     TokenUsage,
 )
 from codex_autorunner.core.sse import format_sse
+from codex_autorunner.core.state_roots import resolve_repo_state_root
 from codex_autorunner.core.utils import canonicalize_path
 from tests.support.discord_turn_fakes import (
     _BaseDiscordFakeHarness,
@@ -98,6 +101,54 @@ from tests.support.discord_turn_fakes import (
 )
 
 pytestmark = pytest.mark.slow
+
+
+def _write_installed_wrapup_app(workspace: Path) -> None:
+    seed_hub_files(workspace, force=True)
+    seed_repo_files(workspace, git_required=False)
+    state_root = resolve_repo_state_root(workspace)
+    app_root = state_root / "apps" / "local.wrapup"
+    bundle_root = app_root / "bundle"
+    bundle_root.mkdir(parents=True, exist_ok=True)
+    manifest_text = """schema_version: 1
+id: local.wrapup
+name: Wrapup App
+version: 1.0.0
+hooks:
+  before_chat_wrapup:
+    - artifacts:
+        - "artifacts/summary.md"
+        - "artifacts/summary.png"
+"""
+    (bundle_root / "car-app.yaml").write_text(manifest_text, encoding="utf-8")
+    bundle_sha = compute_bundle_sha(bundle_root)
+    (app_root / "artifacts").mkdir(parents=True, exist_ok=True)
+    (app_root / "artifacts" / "summary.md").write_text(
+        "# summary\n",
+        encoding="utf-8",
+    )
+    (app_root / "artifacts" / "summary.png").write_bytes(b"png-bytes")
+    (app_root / "state").mkdir(parents=True, exist_ok=True)
+    (app_root / "logs").mkdir(parents=True, exist_ok=True)
+    (app_root / "app.lock.json").write_text(
+        json.dumps(
+            {
+                "id": "local.wrapup",
+                "version": "1.0.0",
+                "source_repo_id": "local",
+                "source_url": "https://example.invalid/apps.git",
+                "source_path": "apps/wrapup",
+                "source_ref": "main",
+                "commit_sha": "deadbeef",
+                "manifest_sha": "manifest-sha",
+                "bundle_sha": bundle_sha,
+                "trusted": True,
+                "installed_at": "2026-04-28T00:00:00Z",
+            },
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
 
 
 def _discord_test_queue_worker_hooks(
@@ -1942,6 +1993,161 @@ async def test_message_create_flushes_root_outbox_files_after_turn(
         assert sent_files
         assert sent_files[0].read_text(encoding="utf-8") == "root artifact payload\n"
         assert not root_file.exists()
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_message_create_flushes_root_outbox_when_wrapup_artifacts_fail(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    root_outbox = outbox_dir(workspace.resolve())
+    root_outbox.mkdir(parents=True, exist_ok=True)
+    root_file = root_outbox / "root-result.txt"
+    root_file.write_text("root artifact payload\n", encoding="utf-8")
+
+    def _fail_collect_wrapup_artifacts(*_args: Any, **_kwargs: Any) -> None:
+        raise RuntimeError("bad app artifact config")
+
+    monkeypatch.setattr(
+        discord_message_turns_module,
+        "collect_terminal_wrapup_artifacts",
+        _fail_collect_wrapup_artifacts,
+    )
+
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    await store.upsert_binding(
+        channel_id="channel-1",
+        guild_id="guild-1",
+        workspace_path=str(workspace),
+        repo_id=None,
+    )
+    rest = _FakeRest()
+    gateway = _FakeGateway([("MESSAGE_CREATE", _message_create("ship it"))])
+    service = DiscordBotService(
+        _config(tmp_path),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=gateway,
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+
+    async def _fake_run_turn(
+        self,
+        *,
+        workspace_root: Path,
+        prompt_text: str,
+        agent: str,
+        model_override: Optional[str],
+        reasoning_effort: Optional[str],
+        session_key: str,
+        orchestrator_channel_key: str,
+        source_message_id: Optional[str] = None,
+        managed_thread_surface_key: Optional[str] = None,
+        chat_ux_snapshot: Any = None,
+    ) -> str:
+        _ = (
+            self,
+            workspace_root,
+            prompt_text,
+            agent,
+            model_override,
+            reasoning_effort,
+            session_key,
+            orchestrator_channel_key,
+            source_message_id,
+            managed_thread_surface_key,
+            chat_ux_snapshot,
+        )
+        return "Done from fake turn"
+
+    service._run_agent_turn_for_message = _fake_run_turn.__get__(
+        service, DiscordBotService
+    )
+
+    try:
+        await service.run_forever()
+        assert rest.attachment_messages
+        assert any(
+            item["filename"] == "root-result.txt" for item in rest.attachment_messages
+        )
+        assert not root_file.exists()
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_message_create_sends_chat_wrapup_app_artifacts_after_turn(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    _write_installed_wrapup_app(workspace)
+
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    await store.upsert_binding(
+        channel_id="channel-1",
+        guild_id="guild-1",
+        workspace_path=str(workspace),
+        repo_id=None,
+    )
+    rest = _FakeRest()
+    gateway = _FakeGateway([("MESSAGE_CREATE", _message_create("ship it"))])
+    service = DiscordBotService(
+        _config(tmp_path),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=gateway,
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+
+    async def _fake_run_turn(
+        self,
+        *,
+        workspace_root: Path,
+        prompt_text: str,
+        agent: str,
+        model_override: Optional[str],
+        reasoning_effort: Optional[str],
+        session_key: str,
+        orchestrator_channel_key: str,
+        source_message_id: Optional[str] = None,
+        managed_thread_surface_key: Optional[str] = None,
+        chat_ux_snapshot: Any = None,
+    ) -> DiscordMessageTurnResult:
+        _ = (
+            self,
+            workspace_root,
+            prompt_text,
+            agent,
+            model_override,
+            reasoning_effort,
+            session_key,
+            orchestrator_channel_key,
+            source_message_id,
+            managed_thread_surface_key,
+            chat_ux_snapshot,
+        )
+        return DiscordMessageTurnResult(
+            final_message="Done from fake turn",
+            send_final_message=False,
+        )
+
+    service._run_agent_turn_for_message = _fake_run_turn.__get__(
+        service, DiscordBotService
+    )
+
+    try:
+        await service.run_forever()
+        filenames = {item["filename"] for item in rest.attachment_messages}
+        assert {"summary.md", "summary.png"} <= filenames
     finally:
         await store.close()
 
