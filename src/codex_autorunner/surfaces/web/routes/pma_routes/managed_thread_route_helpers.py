@@ -375,10 +375,16 @@ def _worktree_parent_repo_id(
     if worktree_id is None:
         return None
     for snapshot in repos or ():
-        if normalize_optional_text(getattr(snapshot, "id", None)) != worktree_id:
+        if normalize_optional_text(_repo_snapshot_value(snapshot, "id")) != worktree_id:
             continue
-        return normalize_optional_text(getattr(snapshot, "worktree_of", None))
+        return normalize_optional_text(_repo_snapshot_value(snapshot, "worktree_of"))
     return None
+
+
+def _repo_snapshot_value(snapshot: Any, attr: str) -> Any:
+    if isinstance(snapshot, dict):
+        return snapshot.get(attr)
+    return getattr(snapshot, attr, None)
 
 
 def managed_thread_metadata_for_provisioned_workspace(
@@ -948,6 +954,11 @@ def resolve_managed_thread_create_resolution(
         repos,
         resource_id if resource_kind == "worktree" else None,
     )
+    if resource_kind == "worktree" and worktree_parent_repo_id is None:
+        raise HTTPException(
+            status_code=400,
+            detail="Worktree scope requires worktree_of metadata",
+        )
     followup_policy = resolve_managed_thread_followup_policy(
         payload,
         # Terminal follow-up defaults now apply when the thread is used, not at

@@ -266,6 +266,45 @@ def test_create_managed_thread_legacy_worktree_payload_gets_worktree_genesis_urn
     assert genesis["scope"]["resource_id"] == worktree_id
 
 
+def test_create_managed_thread_legacy_worktree_payload_rejects_missing_parent(
+    hub_env,
+) -> None:
+    from codex_autorunner.bootstrap import seed_repo_files
+    from codex_autorunner.core.config import load_hub_config
+    from codex_autorunner.manifest import load_manifest, save_manifest
+
+    worktree_id = "repo--orphan-feature"
+    worktree_root = hub_env.hub_root / "worktrees" / worktree_id
+    worktree_root.mkdir(parents=True)
+    (worktree_root / ".git").mkdir()
+    seed_repo_files(worktree_root, git_required=False)
+    hub_config = load_hub_config(hub_env.hub_root)
+    manifest = load_manifest(hub_config.manifest_path, hub_env.hub_root)
+    manifest.ensure_repo(
+        hub_env.hub_root,
+        worktree_root,
+        repo_id=worktree_id,
+        kind="worktree",
+        worktree_of=None,
+        branch="orphan-feature",
+    )
+    save_manifest(hub_config.manifest_path, manifest, hub_env.hub_root)
+    app = create_hub_app(hub_env.hub_root)
+
+    with TestClient(app) as client:
+        resp = client.post(
+            "/hub/pma/threads",
+            json={
+                "agent": "codex",
+                "resource_kind": "worktree",
+                "resource_id": worktree_id,
+            },
+        )
+
+    assert resp.status_code == 400
+    assert "worktree_of metadata" in resp.json()["detail"]
+
+
 def test_create_managed_thread_rejects_conflicting_repo_fields(hub_env) -> None:
     app = create_hub_app(hub_env.hub_root)
 
