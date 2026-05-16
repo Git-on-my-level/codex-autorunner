@@ -351,7 +351,7 @@ def test_chat_index_contract_uses_terminal_thread_status_and_ticket_flow_metadat
     assert row.status == "idle"
     assert row.ticket_id == "TICKET-015"
     assert row.run_id == "run-015"
-    assert row.group_id == "ticket:TICKET-015"
+    assert row.group_id == "run:run-015"
 
     active_response = client.get(
         "/hub/read-models/chats", params={"filter": "active", "limit": 20}

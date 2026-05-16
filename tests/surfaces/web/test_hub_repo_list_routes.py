@@ -9,6 +9,7 @@ from tests.surfaces.web._hub_test_support import (
 )
 
 from codex_autorunner.core.flows import FlowRunStatus
+from codex_autorunner.core.orchestration.sqlite import open_orchestration_sqlite
 from codex_autorunner.core.state import RunnerState, save_state
 from codex_autorunner.server import create_hub_app
 
@@ -73,6 +74,22 @@ def test_hub_repo_list_includes_ticket_flow_summary_and_run_state(
     assert run_state["recommended_action"]
     assert_repo_canonical_state_v1(repo_entry)
     assert repo_entry["canonical_state_v1"]["represented_run_id"] == "run-paused"
+    assert repo_entry["flow_run_projection"][0]["run_id"] == "run-paused"
+
+    with open_orchestration_sqlite(hub_root, durable=True, migrate=True) as conn:
+        row = conn.execute(
+            """
+            SELECT repo_id, flow_type, status, summary_json
+              FROM orch_flow_run_projections
+             WHERE flow_run_id = ?
+            """,
+            ("run-paused",),
+        ).fetchone()
+    assert row is not None
+    assert row["repo_id"] == "base"
+    assert row["flow_type"] == "ticket_flow"
+    assert row["status"] == "paused"
+    assert '"archive_ready":false' in row["summary_json"]
 
 
 def test_hub_scan_reuses_repo_summary_enrichment(tmp_path: Path) -> None:

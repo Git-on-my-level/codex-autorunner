@@ -257,6 +257,7 @@ class HubRepoProjectionService:
         from .archive import has_car_state
         from .flows.models import flow_run_duration_seconds
         from .flows.store import FlowStore
+        from .orchestration.flow_run_projection import project_ticket_flow_run_records
         from .pma_context import get_latest_ticket_flow_run_state_with_record
         from .ticket_flow_projection import build_canonical_state_v1
         from .ticket_flow_summary import build_ticket_flow_summary
@@ -270,6 +271,7 @@ class HubRepoProjectionService:
             "ticket_flow": None,
             "ticket_flow_display": None,
             "run_state": None,
+            "flow_run_projection": [],
             "current_run_artifacts": [],
             "canonical_state_v1": None,
             "git_status": self._compute_git_status(snapshot),
@@ -320,6 +322,20 @@ class HubRepoProjectionService:
                 store=store,
             )
             payload["run_state"] = run_state
+            if store is not None:
+                try:
+                    records = store.list_flow_runs(flow_type="ticket_flow")
+                    payload["flow_run_projection"] = project_ticket_flow_run_records(
+                        self._context.config.root,
+                        snapshot.path,
+                        snapshot.id,
+                        records,
+                        ticket_flow_summary=(
+                            ticket_flow if isinstance(ticket_flow, dict) else None
+                        ),
+                    )[:5]
+                except Exception:
+                    payload["flow_run_projection"] = []
             if run_record is not None:
                 if str(snapshot.last_run_id) != str(run_record.id):
                     payload["last_exit_code"] = None
