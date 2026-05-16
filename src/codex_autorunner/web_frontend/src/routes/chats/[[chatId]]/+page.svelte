@@ -59,6 +59,7 @@
     buildManagedThreadMessagePayload,
     buildPmaStatusBar,
     chooseActiveChatId,
+    committedDraftChatPlaceholder,
     composeMessageWithAttachments,
     countTicketRunGroups,
     filterChatEntries,
@@ -66,6 +67,7 @@
     formatRelativeTime,
     isPmaChatArchived,
     localPmaChatScopeOption,
+    mergeLocalChatPlaceholders,
     CHAT_FILTER_ORDER,
     CHAT_TICKET_RUNS_FILTER,
     pmaChatKind,
@@ -78,6 +80,7 @@
     chatSurfaceFilterToken,
     progressPercent,
     mapChatTranscriptRows,
+    visibleLocalChatPlaceholders as selectVisibleLocalChatPlaceholders,
     removePendingAttachment,
     statusLabel,
     summarizeFilterCounts,
@@ -137,6 +140,7 @@
   // New chats are local drafts until the first send commits agent/scope/model
   // and message in one backend call.
   let localDraftChat = $state<PmaChatSummary | null>(null);
+  let committedDraftChat = $state<PmaChatSummary | null>(null);
   let agents = $state<JsonRecord[]>([]);
   let models = $state<JsonRecord[]>([]);
   let scopeOptions = $state<PmaChatScopeOption[]>(buildPmaChatScopeOptions([], []));
@@ -156,7 +160,11 @@
   let search = $state('');
   const currentChatIndexRequest = $derived<ChatIndexWindowRequest>(chatIndexRequestForCurrentFilters());
   const persistedChats = $derived<PmaChatSummary[]>(selectPmaChats(readModelState, currentChatIndexRequest));
-  const chats = $derived<PmaChatSummary[]>(localDraftChat ? [localDraftChat, ...persistedChats] : persistedChats);
+  const localChatPlaceholders = $derived<PmaChatSummary[]>([localDraftChat, committedDraftChat].filter((chat): chat is PmaChatSummary => Boolean(chat)));
+  const visibleLocalChatPlaceholders = $derived<PmaChatSummary[]>(
+    selectVisibleLocalChatPlaceholders(persistedChats, localChatPlaceholders)
+  );
+  const chats = $derived<PmaChatSummary[]>(mergeLocalChatPlaceholders(persistedChats, localChatPlaceholders));
   const transcriptCards = $derived<ChatTranscriptCard[]>(selectChatTranscript(readModelState, activeChatId));
   const progress = $derived<PmaRunProgress | null>(selectPmaProgress(readModelState, activeChatId));
   const artifacts = $derived<SurfaceArtifact[]>(selectPmaArtifacts(readModelState, activeChatId));
@@ -191,6 +199,7 @@
   let composerFocused = $state(false);
   let composerEditVersion = 0;
   let pendingPointerChatId: string | null = null;
+  let pendingCommittedDetailUrlChatId = $state<string | null>(null);
   let removeDocumentChatPointerCapture: (() => void) | null = null;
 
   const COMPOSER_DEFAULT_MAX_PX = 360;
@@ -319,7 +328,8 @@
   const filterCounts = $derived(chatStatusFilterCounts());
   const surfaceFilterChips = $derived(chatSurfaceFilterOptions(chats));
   const ticketRunGroupCount = $derived(countTicketRunGroups(chats));
-  const activeChatCount = $derived(readModelState.chatCounters.total + (localDraftChat && !isPmaChatArchived(localDraftChat) ? 1 : 0));
+  const localChatPlaceholderCount = $derived(visibleLocalChatPlaceholders.filter((chat) => !isPmaChatArchived(chat)).length);
+  const activeChatCount = $derived(readModelState.chatCounters.total + localChatPlaceholderCount);
   const hasUsableChatIndex = $derived(Boolean(readModelState.chatIndexCursor || readModelState.chatOrder.length > 0));
   const hasSelectedChatWindow = $derived(Boolean(readModelState.chatWindows[canonicalChatIndexWindowKey(currentChatIndexRequest)]));
   const initialChatIndexError = $derived(chatIndexLoadError());
@@ -593,16 +603,18 @@
 
   function chatStatusFilterCounts(): Record<ChatStatusFilter, number> {
     const counters = readModelState.chatCounters;
-    const localDraftBump = localDraftChat && !isPmaChatArchived(localDraftChat) ? 1 : 0;
     const knownPersistedChats = selectPmaChats(readModelState, { filter: 'all', limit: 50 });
-    const knownChats = localDraftChat ? [localDraftChat, ...knownPersistedChats] : knownPersistedChats;
+    const localKnownPlaceholders = selectVisibleLocalChatPlaceholders(knownPersistedChats, localChatPlaceholders);
+    const knownChats = localKnownPlaceholders.length > 0 ? [...localKnownPlaceholders, ...knownPersistedChats] : knownPersistedChats;
+    const localRunningCount = localKnownPlaceholders.filter((chat) => chat.status === 'running').length;
+    const localWaitingCount = localKnownPlaceholders.filter((chat) => chat.status === 'waiting' || chat.status === 'blocked').length;
     // Backend counters cover the full windowed result set; local read markers can only
     // raise the unread count for rows the client has already seen.
     const clientUnread = summarizeFilterCounts(knownChats, lastSeenMap).unread;
     return {
-      all: counters.total + localDraftBump,
-      active: counters.running,
-      waiting: counters.waiting,
+      all: counters.total + localChatPlaceholderCount,
+      active: counters.running + localRunningCount,
+      waiting: counters.waiting + localWaitingCount,
       unread: Math.max(counters.unread, clientUnread),
       archived: counters.archived
     };
@@ -666,7 +678,7 @@
     const requestedDetail = requestedDetailFromUrl();
     if (!requestedDetail) {
       if (isLocalDraftChatId(activeChatId)) return;
-      if (sending || creating) return;
+      if (pendingCommittedDetailUrlChatId && activeChatId === pendingCommittedDetailUrlChatId) return;
       if (activeChatId !== null) {
         closeStream();
         activeChatId = null;
@@ -679,6 +691,13 @@
     // and clear the draft on the first click.
     if (isLocalDraftChatId(activeChatId)) return;
     void activateDetailFromUrl(requestedDetail);
+  });
+
+  $effect(() => {
+    if (!committedDraftChat) return;
+    if (persistedChats.some((chat) => chat.id === committedDraftChat?.id)) {
+      committedDraftChat = null;
+    }
   });
 
   $effect(() => {
@@ -905,6 +924,8 @@
   async function selectChat(chatId: string): Promise<void> {
     const cached = hasCachedDetail(chatId);
     if (!isLocalDraftChatId(chatId)) localDraftChat = null;
+    if (committedDraftChat?.id !== chatId) committedDraftChat = null;
+    pendingCommittedDetailUrlChatId = null;
     activeChatId = chatId;
     detailMode = 'detail';
     loadingActive = !cached;
@@ -954,6 +975,8 @@
     if (detailId === activeChatId) return;
     if (!chats.some((chat) => chat.id === detailId)) {
       closeStream();
+      if (committedDraftChat?.id !== detailId) committedDraftChat = null;
+      pendingCommittedDetailUrlChatId = null;
       activeChatId = detailId;
       detailMode = 'detail';
       loadingActive = true;
@@ -974,6 +997,8 @@
     const loaderResult = activeDetailLoadResult(chatId);
     const loaderOwnsInitialDetail = Boolean(loaderResult && loaderResult.status !== 'cold');
     if (!isLocalDraftChatId(chatId)) localDraftChat = null;
+    if (committedDraftChat?.id !== chatId) committedDraftChat = null;
+    pendingCommittedDetailUrlChatId = null;
     activeChatId = chatId;
     detailMode = 'detail';
     loadingActive = !(cached || loaderOwnsInitialDetail);
@@ -1700,13 +1725,31 @@
         return;
       }
       if (targetIsDraft) {
+        const draftChatForPlaceholder =
+          localDraftChat?.id === targetChatId
+            ? localDraftChat
+            : activeChat && activeChat.id === targetChatId
+              ? activeChat
+              : null;
+        if (draftChatForPlaceholder) {
+          committedDraftChat = committedDraftChatPlaceholder(
+            draftChatForPlaceholder,
+            committedChatId,
+            optimisticTimestamp
+          );
+        }
         localDraftChat = null;
         activeChatId = committedChatId;
         detailMode = 'detail';
+        pendingCommittedDetailUrlChatId = committedChatId;
         moveOptimisticToCommittedChat(committedChatId);
-        // Must complete before `sending` clears: the URL effect treats no `chatId`
-        // segment as "list mode" unless we're still sending or on a local draft id.
-        await syncDetailUrl(committedChatId);
+        try {
+          await syncDetailUrl(committedChatId);
+        } finally {
+          if (pendingCommittedDetailUrlChatId === committedChatId) {
+            pendingCommittedDetailUrlChatId = null;
+          }
+        }
       }
       await invalidateChatMutation(committedChatId);
       await refreshActive(committedChatId, { quiet: true });
