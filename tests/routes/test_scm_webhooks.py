@@ -712,6 +712,85 @@ def test_scm_webhook_inline_drain_delegates_to_scm_automation_service(
     ]
 
 
+def test_scm_webhook_inline_drain_ensures_worker_for_scm_enqueue(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    hub_root = tmp_path / "hub"
+    hub_root.mkdir(parents=True, exist_ok=True)
+    cfg = _enable_github_webhooks(_hub_config(), drain_inline=True)
+    calls: list[tuple[str, object]] = []
+
+    class _ServiceStub:
+        def __init__(self, hub_root: Path, *, reaction_config=None, **kwargs) -> None:
+            _ = (reaction_config, kwargs)
+            calls.append(("init", hub_root))
+
+        def ingest_event(self, event) -> None:
+            calls.append(("ingest_event", event.event_id))
+
+        def process_now(self, limit: int = 10) -> list[object]:
+            calls.append(("process_now", limit))
+            return [
+                SimpleNamespace(
+                    operation_id="op-enqueue-1",
+                    operation_kind="enqueue_managed_turn",
+                    state="succeeded",
+                    response={
+                        "thread_target_id": "thread-1",
+                        "managed_turn_id": "turn-1",
+                        "status": "queued",
+                    },
+                )
+            ]
+
+    def _ensure_worker(app, managed_thread_id: str) -> None:
+        calls.append(("ensure_worker", managed_thread_id))
+        assert app.state.config.root == hub_root
+
+    monkeypatch.setattr(scm_webhooks_module, "ScmAutomationService", _ServiceStub)
+    monkeypatch.setattr(
+        scm_webhooks_module,
+        "ensure_managed_thread_queue_worker",
+        _ensure_worker,
+    )
+
+    payload = {
+        "action": "opened",
+        "repository": {"full_name": "acme/widgets", "id": 99},
+        "sender": {"login": "octocat", "id": 7, "type": "User"},
+        "pull_request": {
+            "number": 42,
+            "title": "Wake bound thread",
+            "state": "open",
+            "merged": False,
+            "draft": False,
+            "html_url": "https://github.com/acme/widgets/pull/42",
+            "created_at": "2026-03-24T10:00:00+00:00",
+            "updated_at": "2026-03-24T10:01:02+00:00",
+            "base": {"ref": "main"},
+            "head": {"ref": "feature/scm-automation"},
+            "user": {"login": "octocat"},
+        },
+    }
+    body = json.dumps(payload).encode("utf-8")
+    app = _build_route_app(hub_root, cfg=cfg)
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/hub/scm/webhooks/github",
+            content=body,
+            headers=_headers(body, event="pull_request"),
+        )
+
+    assert response.status_code == 200
+    assert calls == [
+        ("init", hub_root),
+        ("ingest_event", "github:delivery-1"),
+        ("process_now", 10),
+        ("ensure_worker", "thread-1"),
+    ]
+
+
 def test_scm_webhook_preserves_explicit_correlation_id_header(tmp_path: Path) -> None:
     hub_root = tmp_path / "hub"
     hub_root.mkdir(parents=True, exist_ok=True)

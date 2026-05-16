@@ -29,10 +29,12 @@ from ....core.scm_webhook_config import (
     resolve_github_webhook_config,
     resolve_payload_limits,
 )
+from .pma_routes.managed_thread_runtime import ensure_managed_thread_queue_worker
 
 ScmDrainCallback = Callable[[Request, ScmEvent], object]
 _DEFAULT_INSPECT_LIMIT = 50
 _MAX_INSPECT_LIMIT = 200
+logger = logging.getLogger(__name__)
 
 
 def _to_webhook_config(resolved) -> GitHubWebhookConfig:
@@ -135,9 +137,40 @@ def _default_drain_callback_factory(
 
     def callback(_request: Request, event: ScmEvent) -> None:
         service.ingest_event(event)
-        service.process_now()
+        processed = service.process_now()
+        _ensure_managed_thread_queue_workers_for_scm_operations(_request, processed)
 
     return callback
+
+
+def _ensure_managed_thread_queue_workers_for_scm_operations(
+    request: Request,
+    processed_operations: object,
+) -> None:
+    if not isinstance(processed_operations, (list, tuple)):
+        return
+    ensured_thread_ids: set[str] = set()
+    for operation in processed_operations:
+        if getattr(operation, "operation_kind", None) != "enqueue_managed_turn":
+            continue
+        if getattr(operation, "state", None) not in {"succeeded", "effect_applied"}:
+            continue
+        response = getattr(operation, "response", None)
+        if not isinstance(response, dict):
+            continue
+        thread_target_id = str(response.get("thread_target_id") or "").strip()
+        if not thread_target_id or thread_target_id in ensured_thread_ids:
+            continue
+        ensured_thread_ids.add(thread_target_id)
+        try:
+            ensure_managed_thread_queue_worker(request.app, thread_target_id)
+        except Exception:
+            logger.exception(
+                "Failed to ensure managed-thread queue worker after SCM enqueue "
+                "(thread_target_id=%s, operation_id=%s)",
+                thread_target_id,
+                getattr(operation, "operation_id", None),
+            )
 
 
 def build_scm_webhook_routes(
