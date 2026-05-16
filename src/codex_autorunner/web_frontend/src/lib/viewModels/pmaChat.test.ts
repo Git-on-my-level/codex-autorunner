@@ -1571,6 +1571,33 @@ describe('PMA chat view helpers', () => {
     });
   });
 
+  it('keeps compacted live activity bounded for large streamed PMA turns', () => {
+    const cards = compactChatTranscriptCards(
+      Array.from({ length: 1000 }, (_, index) => ({
+        ...baseArtifactCardTrace(
+          `thinking-${index.toString().padStart(4, '0')}`,
+          `token-${index}`,
+          [`evt-${index}`]
+        ),
+        title: 'Thinking',
+        orderKey: index.toString().padStart(6, '0')
+      }))
+    );
+
+    expect(cards).toHaveLength(1);
+    expect(cards[0]).toMatchObject({
+      kind: 'turn_summary',
+      title: '200 thinking updates'
+    });
+    const summary = cards[0];
+    if (summary.kind !== 'turn_summary') throw new Error('expected turn summary');
+    const trace = summary.cards[0];
+    if (trace.kind !== 'intermediate') throw new Error('expected intermediate trace');
+    expect(trace.eventIds).toHaveLength(200);
+    expect(trace.text.length).toBeLessThanOrEqual(4000);
+    expect(trace.text).toContain('[additional live updates omitted]');
+  });
+
   it('keeps numeric token-like progress updates out of thinking summaries', () => {
     const cards = compactChatTranscriptCards([
       {

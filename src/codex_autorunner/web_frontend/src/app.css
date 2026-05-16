@@ -2406,6 +2406,12 @@ textarea:hover {
   margin: 0;
 }
 
+.trace-omitted {
+  margin: var(--space-1) 0 var(--space-2) calc(8px + var(--space-2));
+  color: var(--color-ink-muted);
+  font-size: var(--font-size-0);
+}
+
 .nested-trace.approval-card {
   border-left: 0;
   background: transparent;

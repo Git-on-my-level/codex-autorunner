@@ -35,6 +35,8 @@ const INTERNAL_MESSENGER_SURFACE_KINDS = new Set([
 ]);
 
 const TOOL_PROGRESS_KINDS = new Set(['tool', 'tool_call', 'tool_result', 'function_call']);
+const MAX_COMPACT_ACTIVITY_SOURCE_IDS = 200;
+const MAX_MERGED_INTERMEDIATE_TEXT_CHARS = 4000;
 
 function rawString(value: unknown): string | null {
   return typeof value === 'string' && value.trim() ? value : null;
@@ -1019,10 +1021,13 @@ function mergeIntermediateDeltas(cards: ChatTranscriptCard[]): ChatTranscriptCar
       out[out.length - 1] = {
         ...prev,
         title: mergedIntermediateTitle(prev, card),
-        text: mergeIntermediateText(prev.text, card.text),
-        eventIds: uniqueStrings([...prev.eventIds, ...card.eventIds]),
-        progressSourceIds: uniqueStrings([...prev.progressSourceIds, ...card.progressSourceIds]),
-        detail: mergedTraceDetail(mergedIntermediateTitle(prev, card), [...prev.eventIds, ...card.eventIds]),
+        text: mergeIntermediateText(prev.text, card.text, MAX_MERGED_INTERMEDIATE_TEXT_CHARS),
+        eventIds: appendCappedUniqueStrings(prev.eventIds, card.eventIds, MAX_COMPACT_ACTIVITY_SOURCE_IDS),
+        progressSourceIds: appendCappedUniqueStrings(prev.progressSourceIds, card.progressSourceIds, MAX_COMPACT_ACTIVITY_SOURCE_IDS),
+        detail: mergedTraceDetail(
+          mergedIntermediateTitle(prev, card),
+          appendCappedUniqueStrings(prev.eventIds, card.eventIds, MAX_COMPACT_ACTIVITY_SOURCE_IDS)
+        ),
         orderKey: prev.orderKey || card.orderKey,
         timestamp: prev.timestamp ?? card.timestamp
       };
@@ -1156,6 +1161,25 @@ function mergedTraceDetail(title: string, eventIds: string[]): string | null {
 
 function uniqueStrings(values: string[]): string[] {
   return Array.from(new Set(values.filter(Boolean)));
+}
+
+function appendCappedUniqueStrings(existing: string[], incoming: string[], max: number): string[] {
+  if (max <= 0) return [];
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const value of existing) {
+    if (!value || seen.has(value)) continue;
+    seen.add(value);
+    out.push(value);
+    if (out.length >= max) return out;
+  }
+  for (const value of incoming) {
+    if (!value || seen.has(value)) continue;
+    seen.add(value);
+    out.push(value);
+    if (out.length >= max) return out;
+  }
+  return out;
 }
 
 function isThinkingTraceTitle(title: string): boolean {
@@ -1623,21 +1647,29 @@ function shouldMergeIntermediate(
   return card.turnId === activityTurnId(event, fallbackTurnId) && !isCommentaryTraceCard(card);
 }
 
-function mergeIntermediateText(current: string, incoming: string): string {
-  if (!current) return incoming;
+function mergeIntermediateText(current: string, incoming: string, maxChars = Number.POSITIVE_INFINITY): string {
+  if (!current) return clampMergedIntermediateText(incoming, maxChars);
+  if (current.includes('[additional live updates omitted]')) return current;
   if (!incoming) return current;
   if (incoming === current) return current;
-  if (incoming.startsWith(current)) return incoming;
+  if (incoming.startsWith(current)) return clampMergedIntermediateText(incoming, maxChars);
   if (current.endsWith(incoming)) return current;
   const maxOverlap = Math.min(current.length, Math.max(incoming.length - 1, 0));
   for (let overlap = maxOverlap; overlap > 0; overlap -= 1) {
     if (current.slice(-overlap) === incoming.slice(0, overlap)) {
-      return `${current}${incoming.slice(overlap)}`;
+      return clampMergedIntermediateText(`${current}${incoming.slice(overlap)}`, maxChars);
     }
   }
-  if (/\s$/.test(current) || /^\s/.test(incoming)) return `${current}${incoming}`;
-  if (/^[,.;:!?)]/.test(incoming) || /[(]$/.test(current)) return `${current}${incoming}`;
-  return `${current} ${incoming}`;
+  if (/\s$/.test(current) || /^\s/.test(incoming)) return clampMergedIntermediateText(`${current}${incoming}`, maxChars);
+  if (/^[,.;:!?)]/.test(incoming) || /[(]$/.test(current)) return clampMergedIntermediateText(`${current}${incoming}`, maxChars);
+  return clampMergedIntermediateText(`${current} ${incoming}`, maxChars);
+}
+
+function clampMergedIntermediateText(text: string, maxChars: number): string {
+  if (!Number.isFinite(maxChars) || maxChars <= 0 || text.length <= maxChars) return text;
+  const marker = '\n\n[additional live updates omitted]';
+  const bodyLimit = Math.max(0, maxChars - marker.length);
+  return `${text.slice(0, bodyLimit).trimEnd()}${marker}`;
 }
 
 function thinkingTimelineDetail(item: PmaTimelineItem): string | null {
