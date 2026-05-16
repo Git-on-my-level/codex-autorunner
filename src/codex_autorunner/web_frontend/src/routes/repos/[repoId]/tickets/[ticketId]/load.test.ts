@@ -23,7 +23,7 @@ describe('/repos/[repoId]/tickets/[ticketId] route load', () => {
       repoId: 'repo-1',
       ticketId: 't-1',
       depends,
-      loaderOptions: { store, client }
+      loaderOptions: { store, client, blocking: true }
     });
 
     expect(result.repoId).toBe('repo-1');
@@ -53,7 +53,27 @@ describe('/repos/[repoId]/tickets/[ticketId] route load', () => {
     expect(client.ticketDetail).not.toHaveBeenCalled();
   });
 
-  it('returns error when ticket detail fetch fails', async () => {
+  it('returns cold without blocking when ticket detail is missing', async () => {
+    const store = new ReadModelEntityStore();
+    const client = mockClient({
+      ticketDetail: vi.fn().mockResolvedValue(ok(ticketDetailSnapshot('t-1', 'repo-1')))
+    });
+    const { loadRepoTicketDetailRoute } = await importPageLoad(true);
+
+    const result = await loadRepoTicketDetailRoute({
+      repoId: 'repo-1',
+      ticketId: 't-1',
+      loaderOptions: { store, client }
+    });
+
+    expect(result.result).toEqual({
+      status: 'cold',
+      tags: ['entity:ticket:t-1', 'entity:repo:repo-1']
+    });
+    expect(client.ticketDetail).not.toHaveBeenCalled();
+  });
+
+  it('returns error when blocking ticket detail fetch fails', async () => {
     const store = new ReadModelEntityStore();
     const error = apiError('Not found');
     const client = mockClient({
@@ -64,7 +84,7 @@ describe('/repos/[repoId]/tickets/[ticketId] route load', () => {
     const result = await loadRepoTicketDetailRoute({
       repoId: 'repo-1',
       ticketId: 't-1',
-      loaderOptions: { store, client }
+      loaderOptions: { store, client, blocking: true }
     });
 
     expect(result.result).toEqual({

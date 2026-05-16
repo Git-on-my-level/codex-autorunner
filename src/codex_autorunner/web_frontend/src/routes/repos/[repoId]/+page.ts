@@ -25,7 +25,8 @@ export async function loadRepoDetailRoute(options: {
     repoId,
     result: await ensureRepoDetailLoaded(repoId, {
       ...options.loaderOptions,
-      depends: options.depends
+      depends: options.depends,
+      blocking: options.loaderOptions?.blocking ?? false
     })
   };
 }

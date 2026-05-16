@@ -62,8 +62,10 @@
     const snapshot = readModelEntityStore.snapshot().repoDetails[repoId];
     if (snapshot) {
       detail = buildDetailFromSnapshot(snapshot as unknown as Record<string, unknown>);
+      loading = false;
+      return;
     }
-    loading = false;
+    void loadRepoDetail(true);
   });
 
   async function loadRepoDetail(showLoading = true): Promise<void> {

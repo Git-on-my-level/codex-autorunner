@@ -37,6 +37,20 @@ describe('read model loaders', () => {
     expect(selectChatDetailView(store.snapshot(), 'chat-1').thread?.title).toBe('Chat detail');
   });
 
+  it('can return a cold placeholder on a cache miss without blocking route navigation', async () => {
+    const store = new ReadModelEntityStore();
+    const client = mockClient({
+      chatDetail: vi.fn().mockResolvedValue(ok(chatDetailSnapshot('chat-1')))
+    });
+    const { ensureChatDetailLoaded } = await importLoaders(true);
+
+    const result = await ensureChatDetailLoaded('chat-1', { store, client, blocking: false });
+
+    expect(result).toEqual({ status: 'cold', tags: ['entity:chat:chat-1'] });
+    expect(client.chatDetail).not.toHaveBeenCalled();
+    expect(selectChatDetailView(store.snapshot(), 'chat-1').thread).toBeNull();
+  });
+
   it('returns an error result without mutating the store when fetch fails', async () => {
     const store = new ReadModelEntityStore();
     const error = apiError('Snapshot unavailable');
@@ -79,6 +93,21 @@ describe('read model loaders', () => {
     expect(client.repoWorktreeRuntime).toHaveBeenCalledWith('all', 200);
     expect(store.snapshot().repos['repo-1']?.label).toBe('Repo One');
     expect(store.snapshot().runtime['repo:repo-1']?.activeRunStatus).toBe('running');
+  });
+
+  it('can defer repo-worktree index snapshots for non-blocking page loads', async () => {
+    const store = new ReadModelEntityStore();
+    const client = mockClient({
+      repoWorktreeTopology: vi.fn().mockResolvedValue(ok(repoWorktreeTopologySnapshot())),
+      repoWorktreeRuntime: vi.fn().mockResolvedValue(ok(repoWorktreeRuntimeSnapshot()))
+    });
+    const { ensureRepoWorktreeIndexLoaded } = await importLoaders(true);
+
+    const result = await ensureRepoWorktreeIndexLoaded({ store, client, blocking: false });
+
+    expect(result).toEqual({ status: 'cold', tags: ['entity:repo-worktree:index'] });
+    expect(client.repoWorktreeTopology).not.toHaveBeenCalled();
+    expect(client.repoWorktreeRuntime).not.toHaveBeenCalled();
   });
 
   it('allows repo-worktree index callers to request a smaller profile window explicitly', async () => {

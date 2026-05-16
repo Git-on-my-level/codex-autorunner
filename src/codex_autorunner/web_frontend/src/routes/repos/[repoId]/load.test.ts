@@ -25,7 +25,7 @@ describe('/repos/[repoId] route load', () => {
     expect(client.repoDetail).not.toHaveBeenCalled();
   });
 
-  it('fetches and hydrates a missing repo detail', async () => {
+  it('returns cold on a missing repo detail so navigation can commit immediately', async () => {
     const store = new ReadModelEntityStore();
     const client = mockClient({
       repoDetail: vi.fn().mockResolvedValue(ok(repoDetailSnapshot('repo-2')))
@@ -33,6 +33,20 @@ describe('/repos/[repoId] route load', () => {
     const { loadRepoDetailRoute } = await importPageLoad(true);
 
     const result = await loadRepoDetailRoute({ repoId: 'repo-2', loaderOptions: { store, client } });
+
+    expect(result.result).toEqual({ status: 'cold', tags: ['entity:repo:repo-2'] });
+    expect(client.repoDetail).not.toHaveBeenCalled();
+    expect(store.snapshot().repoDetails['repo-2']).toBeUndefined();
+  });
+
+  it('can fetch and hydrate a missing repo detail when explicitly blocking', async () => {
+    const store = new ReadModelEntityStore();
+    const client = mockClient({
+      repoDetail: vi.fn().mockResolvedValue(ok(repoDetailSnapshot('repo-2')))
+    });
+    const { loadRepoDetailRoute } = await importPageLoad(true);
+
+    const result = await loadRepoDetailRoute({ repoId: 'repo-2', loaderOptions: { store, client, blocking: true } });
 
     expect(result.result.status).toBe('fetched');
     expect(client.repoDetail).toHaveBeenCalledWith('repo-2');
@@ -50,7 +64,7 @@ describe('/repos/[repoId] route load', () => {
     expect(depends).toHaveBeenCalledWith('entity:repo:repo-1');
   });
 
-  it('returns an error handle when repo detail fetch fails', async () => {
+  it('returns an error handle when blocking repo detail fetch fails', async () => {
     const store = new ReadModelEntityStore();
     const error = apiError('Snapshot unavailable');
     const client = mockClient({
@@ -58,7 +72,7 @@ describe('/repos/[repoId] route load', () => {
     });
     const { loadRepoDetailRoute } = await importPageLoad(true);
 
-    const result = await loadRepoDetailRoute({ repoId: 'repo-1', loaderOptions: { store, client } });
+    const result = await loadRepoDetailRoute({ repoId: 'repo-1', loaderOptions: { store, client, blocking: true } });
 
     expect(result.result).toEqual({ status: 'error', tags: ['entity:repo:repo-1'], error });
     expect(store.snapshot().repoDetails['repo-1']).toBeUndefined();

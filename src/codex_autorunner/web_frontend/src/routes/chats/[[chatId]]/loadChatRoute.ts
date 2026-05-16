@@ -27,7 +27,8 @@ export async function loadChatRoute(options: {
     {
       ...options.loaderOptions,
       depends: options.depends,
-      refresh: true
+      refresh: true,
+      blocking: options.loaderOptions?.blocking ?? false
     }
   );
   if (!chatId) return { chatId: null, chatIndex: await chatIndexPromise, activeDetail: null };
@@ -35,7 +36,8 @@ export async function loadChatRoute(options: {
   const activeDetailPromise = ensureChatDetailLoaded(chatId, {
     ...options.loaderOptions,
     depends: options.depends,
-    timelineLimit: CHAT_DETAIL_TIMELINE_LIMIT
+    timelineLimit: CHAT_DETAIL_TIMELINE_LIMIT,
+    blocking: options.loaderOptions?.blocking ?? false
   });
   const [chatIndex, activeDetail] = await Promise.all([chatIndexPromise, activeDetailPromise]);
 

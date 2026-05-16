@@ -29,7 +29,8 @@ export async function loadWorktreeTicketDetailRoute(options: {
     ticketId,
     result: await ensureTicketDetailLoaded(ticketId, { kind: 'worktree', id: worktreeId }, {
       ...options.loaderOptions,
-      depends: options.depends
+      depends: options.depends,
+      blocking: options.loaderOptions?.blocking ?? false
     })
   };
 }

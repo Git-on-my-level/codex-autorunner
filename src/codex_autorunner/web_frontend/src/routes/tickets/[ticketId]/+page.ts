@@ -30,7 +30,8 @@ export async function loadTicketDetailRoute(options: {
   const ticketId = options.ticketId ?? '';
   const indexResult = await ensureTicketIndexLoaded({
     ...options.loaderOptions,
-    depends: options.depends
+    depends: options.depends,
+    blocking: options.loaderOptions?.blocking ?? false
   });
 
   const store = options.loaderOptions?.store;
@@ -48,7 +49,8 @@ export async function loadTicketDetailRoute(options: {
     if (matched?.workspaceId && (matched.workspaceKind === 'repo' || matched.workspaceKind === 'worktree')) {
       detailResult = await ensureTicketDetailLoaded(ticketId, { kind: matched.workspaceKind, id: matched.workspaceId }, {
         ...options.loaderOptions,
-        depends: undefined
+        depends: undefined,
+        blocking: options.loaderOptions?.blocking ?? false
       });
     }
   }

@@ -67,8 +67,10 @@
         return;
       }
       detail = buildDetailFromSnapshot(snapshot as unknown as Record<string, unknown>);
+      loading = false;
+      return;
     }
-    loading = false;
+    void loadWorktreeDetail(true);
   });
 
   async function loadWorktreeDetail(showLoading = true): Promise<void> {

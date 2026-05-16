@@ -23,7 +23,7 @@ describe('/worktrees/[worktreeId] route load', () => {
     expect(client.worktreeDetail).not.toHaveBeenCalled();
   });
 
-  it('fetches and hydrates a missing worktree detail', async () => {
+  it('returns cold on a missing worktree detail so navigation can commit immediately', async () => {
     const store = new ReadModelEntityStore();
     const client = mockClient({
       worktreeDetail: vi.fn().mockResolvedValue(ok(worktreeDetailSnapshot('wt-2')))
@@ -31,6 +31,20 @@ describe('/worktrees/[worktreeId] route load', () => {
     const { loadWorktreeDetailRoute } = await importPageLoad(true);
 
     const result = await loadWorktreeDetailRoute({ worktreeId: 'wt-2', loaderOptions: { store, client } });
+
+    expect(result.result).toEqual({ status: 'cold', tags: ['entity:worktree:wt-2'] });
+    expect(client.worktreeDetail).not.toHaveBeenCalled();
+    expect(store.snapshot().worktreeDetails['wt-2']).toBeUndefined();
+  });
+
+  it('can fetch and hydrate a missing worktree detail when explicitly blocking', async () => {
+    const store = new ReadModelEntityStore();
+    const client = mockClient({
+      worktreeDetail: vi.fn().mockResolvedValue(ok(worktreeDetailSnapshot('wt-2')))
+    });
+    const { loadWorktreeDetailRoute } = await importPageLoad(true);
+
+    const result = await loadWorktreeDetailRoute({ worktreeId: 'wt-2', loaderOptions: { store, client, blocking: true } });
 
     expect(result.result.status).toBe('fetched');
     expect(client.worktreeDetail).toHaveBeenCalledWith('wt-2');
@@ -48,7 +62,7 @@ describe('/worktrees/[worktreeId] route load', () => {
     expect(depends).toHaveBeenCalledWith('entity:worktree:wt-1');
   });
 
-  it('returns an error handle when worktree detail fetch fails', async () => {
+  it('returns an error handle when blocking worktree detail fetch fails', async () => {
     const store = new ReadModelEntityStore();
     const error = apiError('Snapshot unavailable');
     const client = mockClient({
@@ -56,7 +70,7 @@ describe('/worktrees/[worktreeId] route load', () => {
     });
     const { loadWorktreeDetailRoute } = await importPageLoad(true);
 
-    const result = await loadWorktreeDetailRoute({ worktreeId: 'wt-1', loaderOptions: { store, client } });
+    const result = await loadWorktreeDetailRoute({ worktreeId: 'wt-1', loaderOptions: { store, client, blocking: true } });
 
     expect(result.result).toEqual({ status: 'error', tags: ['entity:worktree:wt-1'], error });
     expect(store.snapshot().worktreeDetails['wt-1']).toBeUndefined();

@@ -23,7 +23,7 @@ describe('/worktrees/[worktreeId]/tickets/[ticketId] route load', () => {
       worktreeId: 'wt-1',
       ticketId: 't-1',
       depends,
-      loaderOptions: { store, client }
+      loaderOptions: { store, client, blocking: true }
     });
 
     expect(result.worktreeId).toBe('wt-1');
@@ -48,6 +48,26 @@ describe('/worktrees/[worktreeId]/tickets/[ticketId] route load', () => {
 
     expect(result.result).toEqual({
       status: 'cache-hit',
+      tags: ['entity:ticket:t-1', 'entity:worktree:wt-1']
+    });
+    expect(client.ticketDetail).not.toHaveBeenCalled();
+  });
+
+  it('returns cold without blocking when ticket detail is missing', async () => {
+    const store = new ReadModelEntityStore();
+    const client = mockClient({
+      ticketDetail: vi.fn().mockResolvedValue(ok(ticketDetailSnapshot('t-1', 'wt-1')))
+    });
+    const { loadWorktreeTicketDetailRoute } = await importPageLoad(true);
+
+    const result = await loadWorktreeTicketDetailRoute({
+      worktreeId: 'wt-1',
+      ticketId: 't-1',
+      loaderOptions: { store, client }
+    });
+
+    expect(result.result).toEqual({
+      status: 'cold',
       tags: ['entity:ticket:t-1', 'entity:worktree:wt-1']
     });
     expect(client.ticketDetail).not.toHaveBeenCalled();

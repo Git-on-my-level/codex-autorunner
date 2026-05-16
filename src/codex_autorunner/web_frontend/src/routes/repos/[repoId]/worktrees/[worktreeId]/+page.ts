@@ -25,7 +25,8 @@ export async function loadWorktreeDetailRoute(options: {
     worktreeId,
     result: await ensureWorktreeDetailLoaded(worktreeId, {
       ...options.loaderOptions,
-      depends: options.depends
+      depends: options.depends,
+      blocking: options.loaderOptions?.blocking ?? false
     })
   };
 }
