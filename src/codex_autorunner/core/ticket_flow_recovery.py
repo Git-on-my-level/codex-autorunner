@@ -369,6 +369,8 @@ def recovery_notification_intent_should_deliver(
     transport_key: str,
     now: Optional[str] = None,
 ) -> bool:
+    if not recovery_notification_intent_is_alert(record):
+        return False
     if record.resolved:
         return False
     attempts = record.delivery_attempts
@@ -390,6 +392,19 @@ def recovery_notification_intent_should_deliver(
     return (current - last_attempted).total_seconds() >= record.cooldown_seconds
 
 
+def recovery_notification_intent_is_alert(
+    record: FlowNotificationIntentRecord,
+) -> bool:
+    """Return whether a recovery intent should interrupt a chat surface."""
+    return _severity_value(record.severity) != RecoveryIntentSeverity.INFO.value
+
+
+def _severity_value(value: Any) -> str:
+    if isinstance(value, RecoveryIntentSeverity):
+        return value.value
+    return _normalize_optional_text(value) or RecoveryIntentSeverity.INFO.value
+
+
 def format_recovery_notification_intent(
     record: FlowNotificationIntentRecord,
 ) -> str:
@@ -399,12 +414,7 @@ def format_recovery_notification_intent(
     facet = facet_payload if isinstance(facet_payload, Mapping) else {}
     facet_name = _normalize_optional_text(facet.get("name")) or record.event_type
     facet_status = _normalize_optional_text(facet.get("status")) or "active"
-    raw_severity = record.severity
-    severity = (
-        raw_severity.value
-        if isinstance(raw_severity, RecoveryIntentSeverity)
-        else _normalize_optional_text(raw_severity)
-    ) or RecoveryIntentSeverity.INFO.value
+    severity = _severity_value(record.severity)
     is_escalation = severity != RecoveryIntentSeverity.INFO.value
 
     lines = [
@@ -478,6 +488,7 @@ __all__ = [
     "build_recovery_notification_intents",
     "build_recovery_projection",
     "format_recovery_notification_intent",
+    "recovery_notification_intent_is_alert",
     "recovery_notification_intent_should_deliver",
     "recovery_notification_transport_key",
 ]
