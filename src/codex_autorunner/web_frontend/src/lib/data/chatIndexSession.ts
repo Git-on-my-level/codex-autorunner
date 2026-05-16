@@ -182,7 +182,7 @@ function sameChatIndexRequest(left: ChatIndexRequest | null, right: ChatIndexReq
   if (!left || !right) return left === right;
   return (
     (left.filter ?? 'all') === (right.filter ?? 'all') &&
-    (left.limit ?? 200) === (right.limit ?? 200) &&
+    (left.limit ?? 50) === (right.limit ?? 50) &&
     (left.query ?? '') === (right.query ?? '') &&
     (left.surfaceKind ?? '') === (right.surfaceKind ?? '')
   );
