@@ -4,6 +4,9 @@ import json
 from pathlib import Path
 
 from codex_autorunner.adapters.chat.channel_directory import ChannelDirectoryStore
+from codex_autorunner.core.domain.workspace_scope import (
+    workspace_scope_index_from_snapshots,
+)
 from codex_autorunner.core.orchestration import (
     ChatSurfaceReadService,
     OrchestrationBindingStore,
@@ -11,6 +14,7 @@ from codex_autorunner.core.orchestration import (
 )
 from codex_autorunner.core.orchestration.chat_surface_read_model import (
     _chat_index_sort_key_parts,
+    canonical_owner_fields,
 )
 from codex_autorunner.core.orchestration.sqlite import open_orchestration_sqlite
 from codex_autorunner.core.pma_notification_store import PmaNotificationStore
@@ -21,6 +25,31 @@ _FIXTURE_PATH = (
     / "chat_surface"
     / "lifecycle_contract.json"
 )
+
+
+def test_canonical_owner_fields_preserves_unindexed_review_resource_repo_id(
+    tmp_path: Path,
+) -> None:
+    checkout = tmp_path / "review-checkout"
+    checkout.mkdir()
+    index = workspace_scope_index_from_snapshots([])
+
+    fields = canonical_owner_fields(
+        index,
+        repo_id="repo-from-review-diff",
+        resource_kind="file",
+        resource_id="src/example.py",
+        workspace_root=str(checkout),
+    )
+
+    assert fields == {
+        "repo_id": "repo-from-review-diff",
+        "worktree_id": None,
+        "resource_kind": "file",
+        "resource_id": "src/example.py",
+        "workspace_root": str(checkout.resolve()),
+        "scope_urn": "repo:repo-from-review-diff",
+    }
 
 
 def _seed_thread(
