@@ -101,6 +101,10 @@ function detailSnapshot(chatId = 'chat-1'): ChatDetailSnapshot {
         itemId: 'item-1',
         kind: 'user_message',
         role: 'user',
+        managedTurnId: 'turn-1',
+        orderKey: '00000010|turn-1|user',
+        section: 'user_message',
+        sectionOrder: 10,
         createdAt: now,
         text: 'hello',
         artifactIds: [],
@@ -179,6 +183,12 @@ describe('read model entity store', () => {
     expect(selectChatIndexView(store.snapshot()).rows.map((row) => row.chatId)).toEqual(['chat-1']);
     expect(selectChatDetailView(store.snapshot(), 'chat-1').thread?.agentProfile).toBe('m4-pma');
     expect(selectChatDetailView(store.snapshot(), 'chat-1').thread?.chatKind).toBe('coding_agent');
+    expect(selectChatDetailView(store.snapshot(), 'chat-1').timeline[0]).toMatchObject({
+      managedTurnId: 'turn-1',
+      orderKey: '00000010|turn-1|user',
+      section: 'user_message',
+      sectionOrder: 10
+    });
     store.optimisticSend(
       'chat-1',
       {
@@ -780,6 +790,10 @@ describe('read model entity store', () => {
             itemId: 'item-2',
             kind: 'assistant_message',
             role: 'assistant',
+            managedTurnId: 'turn-1',
+            orderKey: '00000030|turn-1|assistant',
+            section: 'assistant_message',
+            sectionOrder: 30,
             createdAt: now,
             text: 'done',
             artifactIds: []

@@ -31,6 +31,8 @@ from codex_autorunner.core.orchestration import ChatSurfaceReadService
 
 from ..read_model_contracts import (
     ChatArtifactSummary,
+    ChatDetailPatch,
+    ChatDetailPatchEvent,
     ChatDetailSnapshot,
     ChatIndexCounters,
     ChatIndexGroup,
@@ -189,6 +191,59 @@ def build_hub_chat_read_model_router(context: HubAppContext) -> APIRouter:
             ) from exc
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @router.get("/hub/read-models/chats/{chat_id}/patches")
+    async def stream_chat_detail_patches(
+        request: Request,
+        chat_id: str,
+        cursor: Annotated[Optional[str], Query()] = None,
+        event_limit: Annotated[int, Query(ge=1, le=1000)] = 100,
+        once: bool = False,
+    ):
+        header_cursor = request.headers.get("last-event-id")
+        raw_cursor = cursor if cursor is not None else header_cursor
+        try:
+            parsed_cursor = _parse_chat_detail_cursor(raw_cursor)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+        async def _stream() -> Any:
+            last_cursor = parsed_cursor
+            while True:
+                batch = await asyncio.to_thread(
+                    service.chat_detail_patch_contracts,
+                    chat_id,
+                    last_cursor,
+                    event_limit=event_limit,
+                )
+                events = batch["events"]
+                batch_cursor = _int_fallback(batch.get("cursor"), last_cursor)
+                for event_payload in events:
+                    envelope = event_payload.get("envelope") or {}
+                    cursor_payload = envelope.get("cursor") or {}
+                    sequence = _int_fallback(
+                        cursor_payload.get("sequence"), last_cursor
+                    )
+                    last_cursor = sequence
+                    yield _sse_frame(
+                        str(envelope.get("eventType") or "chat.detail.patch"),
+                        event_payload,
+                        event_id=str(sequence),
+                    )
+                if events:
+                    last_cursor = batch_cursor
+                    if once:
+                        return
+                    continue
+                if once:
+                    return
+                await asyncio.sleep(_POLL_INTERVAL_SECONDS)
+
+        return StreamingResponse(
+            _stream(),
+            media_type="text/event-stream",
+            headers=SSE_HEADERS,
+        )
 
     return router
 
@@ -472,6 +527,45 @@ class ChatReadModelService:
             ),
         )
 
+    def chat_detail_patch_contracts(
+        self,
+        chat_id: str,
+        cursor: Optional[int],
+        *,
+        event_limit: int,
+    ) -> dict[str, Any]:
+        batch = self._surface.chat_patches_since(cursor, limit=event_limit)
+        events = [
+            dump_read_model_contract(
+                self._chat_detail_patch_event_from_hub(chat_id, raw)
+            )
+            for raw in batch.get("patches") or []
+            if isinstance(raw, Mapping)
+            and str(raw.get("managed_thread_id") or "") == chat_id
+        ]
+        return {"cursor": batch.get("cursor"), "events": events}
+
+    def _chat_detail_patch_event_from_hub(
+        self,
+        chat_id: str,
+        raw: Mapping[str, Any],
+    ) -> ChatDetailPatchEvent:
+        sequence = _int_fallback(raw.get("cursor"), 0)
+        occurred = (
+            parse_iso_optional(str(raw.get("occurred_at") or "")) or read_model_now()
+        )
+        return ChatDetailPatchEvent(
+            envelope=ReadModelEventEnvelope(
+                event_type="chat.detail.patch",
+                cursor=projection_cursor_chat_detail(sequence),
+                entity_kind="chat",
+                entity_id=chat_id,
+                operation="reset",
+                generated_at=occurred,
+            ),
+            patch=ChatDetailPatch(),
+        )
+
 
 def _contract_filter_to_hub_view(contract_filter: str) -> str:
     return "ticket_run" if contract_filter == "ticket_runs" else contract_filter
@@ -495,6 +589,21 @@ def _parse_chat_index_cursor(raw: Any) -> int:
     if value is None:
         return 0
     if value.startswith("chat.index:"):
+        value = value.split(":", 1)[1]
+    try:
+        parsed = int(value)
+    except ValueError as exc:
+        raise ValueError("cursor must be a non-negative integer") from exc
+    if parsed < 0:
+        raise ValueError("cursor must be a non-negative integer")
+    return parsed
+
+
+def _parse_chat_detail_cursor(raw: Any) -> int:
+    value = _str_or_none(raw)
+    if value is None:
+        return 0
+    if value.startswith("chat.detail:"):
         value = value.split(":", 1)[1]
     try:
         parsed = int(value)
@@ -904,6 +1013,39 @@ def _timeline_role(
     return None
 
 
+def _timeline_section(
+    kind: _ChatTimelineKind,
+    raw_kind: Any,
+) -> Literal[
+    "user_message",
+    "activity",
+    "assistant_message",
+    "terminal_metadata",
+    "thread_metadata",
+]:
+    text = str(raw_kind or "").strip().lower()
+    if kind == "user_message":
+        return "user_message"
+    if kind == "assistant_message":
+        return "assistant_message"
+    if text in {"status", "delivery", "terminal_metadata"}:
+        return "terminal_metadata"
+    if text in {"lifecycle", "compaction", "thread_metadata"}:
+        return "thread_metadata"
+    return "activity"
+
+
+def _timeline_section_order(section: str) -> int:
+    order = {
+        "user_message": 10,
+        "activity": 20,
+        "assistant_message": 30,
+        "terminal_metadata": 40,
+        "thread_metadata": 50,
+    }
+    return order.get(section, 90)
+
+
 def _str_list(values: Any) -> list[str]:
     if not isinstance(values, list):
         return []
@@ -952,13 +1094,28 @@ def hub_timeline_item_dict_to_contract(raw: dict[str, Any]) -> ChatTimelineItem:
         cursor_event_id=_str_or_none(prov_raw.get("cursor_event_id")),
     )
 
-    text_val = raw.get("text") or raw.get("summary") or raw.get("payload_text")
+    payload_raw = raw.get("payload")
+    payload = payload_raw if isinstance(payload_raw, Mapping) else {}
+    kind = _timeline_kind(raw.get("kind"))
+    section = _timeline_section(kind, raw.get("kind"))
+    text_val = (
+        raw.get("text")
+        or raw.get("summary")
+        or raw.get("payload_text")
+        or payload.get("text")
+        or payload.get("text_preview")
+        or payload.get("summary")
+    )
     text_out = _str_or_none(text_val) if text_val is not None else None
 
     return ChatTimelineItem(
         item_id=item_id,
-        kind=_timeline_kind(raw.get("kind")),
+        kind=kind,
         role=_timeline_role(raw.get("role")),
+        managed_turn_id=_str_or_none(raw.get("managed_turn_id")),
+        order_key=str(raw.get("order_key") or item_id),
+        section=section,
+        section_order=_timeline_section_order(section),
         created_at=created_dt,
         text=text_out,
         artifact_ids=[],

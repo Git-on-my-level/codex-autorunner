@@ -1151,3 +1151,49 @@ def test_hub_read_models_chat_detail_contract_snapshot(hub_env) -> None:
     assert snapshot.queue.active_turn_id == running["managed_turn_id"]
     assert snapshot.queue.depth == 1
     assert snapshot.timeline[0].kind == "user_message"
+    assert snapshot.timeline[0].managed_turn_id == running["managed_turn_id"]
+    assert snapshot.timeline[0].section == "user_message"
+    assert snapshot.timeline[0].section_order == 10
+    assert snapshot.timeline[0].order_key
+    assert snapshot.timeline[0].text == "hello detail"
+    assert body["timeline"][0]["managedTurnId"] == running["managed_turn_id"]
+    assert body["timeline"][0]["section"] == "user_message"
+    assert body["timeline"][0]["sectionOrder"] == 10
+
+
+def test_hub_read_models_chat_detail_patch_stream_is_repairable(hub_env) -> None:
+    store = ManagedThreadStore(hub_env.hub_root, durable=True)
+    thread = store.create_thread(
+        "hermes",
+        hub_env.repo_root,
+        repo_id="repo",
+        resource_kind="repo",
+        resource_id="repo",
+        name="Detail patch thread",
+    )
+    thread_id = str(thread["managed_thread_id"])
+    SQLiteChatSurfaceEventJournal(hub_env.hub_root, durable=True).append_event(
+        idempotency_key="detail-patch-contract-1",
+        event_type="execution.progress",
+        surface_kind="pma",
+        surface_key=thread_id,
+        managed_thread_id=thread_id,
+        repo_id="repo",
+        status="running",
+        payload={"patch_type": "timeline_append"},
+    )
+
+    client = TestClient(create_hub_app(hub_env.hub_root))
+    response = client.get(
+        f"/hub/read-models/chats/{thread_id}/patches",
+        params={"once": "true"},
+    )
+
+    assert response.status_code == 200
+    body = response.text
+    assert "event: chat.detail.patch" in body
+    assert '"contractVersion": "web-read-models.v1"' in body
+    assert '"eventType": "chat.detail.patch"' in body
+    assert '"entityId": "' + thread_id + '"' in body
+    assert '"operation": "reset"' in body
+    assert '"appendedTimeline": []' in body

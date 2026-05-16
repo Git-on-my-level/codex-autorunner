@@ -159,6 +159,10 @@ def test_chat_detail_snapshot_and_patch_round_trip_without_legacy_thread_payload
         item_id="timeline-1",
         kind="assistant_message",
         role="assistant",
+        managed_turn_id="turn-1",
+        order_key="00000030|turn-1|assistant",
+        section="assistant_message",
+        section_order=30,
         created_at=NOW,
         text="Working on it.",
         backend_message_id="turn-1",
@@ -186,6 +190,10 @@ def test_chat_detail_snapshot_and_patch_round_trip_without_legacy_thread_payload
     assert payload["timelineWindow"]["limit"] == 50
     assert payload["thread"]["chatKind"] == "coding_agent"
     assert payload["timeline"][0]["backendMessageId"] == "turn-1"
+    assert payload["timeline"][0]["managedTurnId"] == "turn-1"
+    assert payload["timeline"][0]["orderKey"] == "00000030|turn-1|assistant"
+    assert payload["timeline"][0]["section"] == "assistant_message"
+    assert payload["timeline"][0]["sectionOrder"] == 30
     assert payload["timeline"][0]["identity"]["timelineItemId"] == "timeline-1"
     assert payload["timeline"][0]["identity"]["progressItemIds"] == ["progress-1"]
     assert payload["timeline"][0]["identity"]["correlationId"] == "client-corr-1"
@@ -217,6 +225,10 @@ def test_chat_timeline_item_canonical_identity_and_provenance_fields_round_trip(
         item_id="tl-canonical",
         kind="tool_event",
         role="tool",
+        managed_turn_id="turn-1",
+        order_key="00000020|turn-1|tool",
+        section="activity",
+        section_order=20,
         created_at=NOW,
         text="Ran npm test",
         identity=ChatTimelineIdentity(
@@ -232,6 +244,10 @@ def test_chat_timeline_item_canonical_identity_and_provenance_fields_round_trip(
     )
     payload = dump_read_model_contract(item)
     assert payload["identity"]["timelineItemId"] == "tl-canonical"
+    assert payload["managedTurnId"] == "turn-1"
+    assert payload["orderKey"] == "00000020|turn-1|tool"
+    assert payload["section"] == "activity"
+    assert payload["sectionOrder"] == 20
     assert payload["identity"]["progressItemIds"] == ["prog-1", "prog-2"]
     assert payload["provenance"]["sourceEventIds"] == ["src-1"]
     assert payload["provenance"]["cursorEventId"] == "sse-cursor-99"

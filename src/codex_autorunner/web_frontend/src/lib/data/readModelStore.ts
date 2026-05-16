@@ -373,7 +373,7 @@ export class ReadModelEntityStore implements Readable<ReadModelEntityState> {
     next.timelines[snapshot.thread.chatId] = {
       chatId: snapshot.thread.chatId,
       itemsById: keyed(snapshot.timeline, (item) => item.itemId),
-      order: snapshot.timeline.map((item) => item.itemId),
+      order: orderChatTimelineItems(snapshot.timeline).map((item) => item.itemId),
       windowLimit: snapshot.timelineWindow.limit
     };
     next.pmaQueues[snapshot.thread.chatId] = snapshot.queue.queuedTurnIds.map((id, index) => ({
@@ -423,6 +423,7 @@ export class ReadModelEntityStore implements Readable<ReadModelEntityState> {
       delete existingTimeline.itemsById[id];
       existingTimeline.order = existingTimeline.order.filter((itemId) => itemId !== id);
     }
+    existingTimeline.order = orderChatTimelineItems(existingTimeline.order.map((id) => existingTimeline.itemsById[id]).filter(Boolean)).map((item) => item.itemId);
     next.timelines[chatId] = existingTimeline;
     const detail = cloneChatDetailProjection(next.chatDetails[chatId] ?? { thread: null, queue: null, artifactIds: [] });
     if (event.patch.thread) {
@@ -893,6 +894,18 @@ function cloneTimelineProjection(timeline: TimelineProjection): TimelineProjecti
     order: [...timeline.order],
     windowLimit: timeline.windowLimit
   };
+}
+
+function orderChatTimelineItems(items: ChatTimelineItem[]): ChatTimelineItem[] {
+  return [...items].sort((a, b) => {
+    const aOrder = a.orderKey || a.itemId;
+    const bOrder = b.orderKey || b.itemId;
+    if (aOrder !== bOrder) return aOrder < bOrder ? -1 : 1;
+    const aSection = a.sectionOrder ?? 90;
+    const bSection = b.sectionOrder ?? 90;
+    if (aSection !== bSection) return aSection - bSection;
+    return a.itemId.localeCompare(b.itemId);
+  });
 }
 
 function cloneChatTranscript(transcript: { cardsById: Record<string, ChatTranscriptCard>; order: string[] }): { cardsById: Record<string, ChatTranscriptCard>; order: string[] } {

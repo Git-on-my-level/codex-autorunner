@@ -209,6 +209,16 @@ class ChatTimelineItem(ReadModelContract):
         "system",
     ]
     role: Optional[Literal["user", "assistant", "tool", "system"]] = None
+    managed_turn_id: Optional[str] = None
+    order_key: str
+    section: Literal[
+        "user_message",
+        "activity",
+        "assistant_message",
+        "terminal_metadata",
+        "thread_metadata",
+    ]
+    section_order: int = Field(ge=0)
     created_at: datetime
     text: Optional[str] = None
     artifact_ids: list[str] = Field(default_factory=list)
