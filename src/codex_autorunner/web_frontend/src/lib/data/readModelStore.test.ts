@@ -592,7 +592,7 @@ describe('read model entity store', () => {
     expect(view.rows[0].status).toBe('running');
   });
 
-  it('replaces the active chat index window when filters change', () => {
+  it('preserves bounded chat index windows when filters change', () => {
     const store = new ReadModelEntityStore();
     store.applyChatIndexSnapshot({
       cursor: cursor(1),
@@ -614,15 +614,18 @@ describe('read model entity store', () => {
       window: { limit: 200, totalIsExact: true, totalEstimate: 1 }
     }, { filter: 'archived', limit: 200 });
 
-    expect(Object.keys(store.snapshot().chats).sort()).toEqual(['chat-archived']);
-    expect(selectChatIndexWindowView(store.snapshot(), { filter: 'all', limit: 200 }).rows.map((row) => row.chatId)).toEqual([]);
+    expect(Object.keys(store.snapshot().chats).sort()).toEqual(['chat-active', 'chat-archived', 'chat-waiting']);
+    expect(selectChatIndexWindowView(store.snapshot(), { filter: 'all', limit: 200 }).rows.map((row) => row.chatId)).toEqual([
+      'chat-active',
+      'chat-waiting'
+    ]);
     expect(selectChatIndexWindowView(store.snapshot(), { filter: 'archived', limit: 200 }).rows.map((row) => row.chatId)).toEqual([
       'chat-archived'
     ]);
     expect(store.snapshot().chatCounters).toEqual({ total: 2, waiting: 1, running: 1, unread: 0, archived: 1 });
   });
 
-  it('keeps only the current chat index snapshot window hot', () => {
+  it('keeps previously loaded filter windows addressable after a default refresh', () => {
     const store = new ReadModelEntityStore();
     store.applyChatIndexSnapshot({
       cursor: cursor(1),
@@ -643,10 +646,21 @@ describe('read model entity store', () => {
       window: { limit: 200, totalIsExact: true, totalEstimate: 1 }
     }, { filter: 'archived', limit: 200 });
 
-    expect(selectChatIndexWindowView(store.snapshot(), { filter: 'all', limit: 200 }).rows.map((row) => row.chatId)).toEqual([]);
+    store.applyChatIndexSnapshot({
+      cursor: cursor(3),
+      rows: [chat('chat-visible')],
+      groups: [],
+      counters: { total: 1, waiting: 0, running: 0, unread: 0, archived: 1 },
+      filter: 'all',
+      query: null,
+      window: { limit: 50, totalIsExact: true, totalEstimate: 1 }
+    }, { filter: 'all', limit: 50 });
+
+    expect(selectChatIndexWindowView(store.snapshot(), { filter: 'all', limit: 200 }).rows.map((row) => row.chatId)).toEqual(['chat-active']);
     expect(selectChatIndexWindowView(store.snapshot(), { filter: 'archived', limit: 200 }).rows.map((row) => row.chatId)).toEqual(['chat-archived']);
     expect(selectChatIndexWindowView(store.snapshot(), { filter: 'waiting', limit: 200 }).rows).toEqual([]);
-    expect(Object.keys(store.snapshot().chats)).toEqual(['chat-archived']);
+    expect(selectChatIndexWindowView(store.snapshot(), { filter: 'all', limit: 50 }).rows.map((row) => row.chatId)).toEqual(['chat-visible']);
+    expect(Object.keys(store.snapshot().chats).sort()).toEqual(['chat-active', 'chat-archived', 'chat-visible']);
   });
 
   it('applies entity chat-index patches once and marks the active cached window stale', () => {
@@ -681,7 +695,10 @@ describe('read model entity store', () => {
     })).toBe('applied');
 
     const activeWindow = selectChatIndexWindowView(store.snapshot(), { filter: 'active', limit: 200 });
-    expect(selectChatIndexWindowView(store.snapshot(), { filter: 'all', limit: 200 }).rows.map((row) => row.chatId)).toEqual([]);
+    expect(selectChatIndexWindowView(store.snapshot(), { filter: 'all', limit: 200 }).rows.map((row) => row.chatId)).toEqual([
+      'chat-active',
+      'chat-waiting'
+    ]);
     expect(activeWindow.rows.map((row) => row.chatId)).toEqual([]);
     expect(activeWindow.window?.status).toBe('interrupted');
     expect(activeWindow.window?.refreshing).toBe(true);

@@ -169,9 +169,9 @@ describe('chat index session', () => {
     expect(client.chatIndex).toHaveBeenCalledTimes(2);
     expect(client.chatIndex).toHaveBeenNthCalledWith(1, { filter: 'all', limit: 200 });
     expect(client.chatIndex).toHaveBeenNthCalledWith(2, { filter: 'archived', limit: 200 });
-    expect(store.snapshot().chatOrder).toEqual(['chat-archived']);
-    expect(Object.keys(store.snapshot().chats).sort()).toEqual(['chat-archived']);
-    expect(selectChatIndexWindowView(store.snapshot(), { filter: 'all', limit: 200 }).rows.map((row) => row.chatId)).toEqual([]);
+    expect(store.snapshot().chatOrder).toEqual(['chat-active', 'chat-archived']);
+    expect(Object.keys(store.snapshot().chats).sort()).toEqual(['chat-active', 'chat-archived']);
+    expect(selectChatIndexWindowView(store.snapshot(), { filter: 'all', limit: 200 }).rows.map((row) => row.chatId)).toEqual(['chat-active']);
     expect(selectChatIndexWindowView(store.snapshot(), { filter: 'archived', limit: 200 }).rows.map((row) => row.chatId)).toEqual(['chat-archived']);
   });
 
