@@ -188,7 +188,7 @@ def repair_ticket_flow_chat_visibility(
                         run_id=record.id,
                         status="unrecoverable",
                         reason=(
-                            "missing completed ticket-turn evidence in flow events "
+                            "missing repairable ticket-turn evidence in flow events "
                             "or ticket thread state"
                         ),
                     )
@@ -297,7 +297,7 @@ def diagnose_ticket_flow_projection_gaps(
                         status=record.status.value,
                         reason=(
                             "repo-local flows.db has a terminal ticket-flow run, "
-                            "but no completed ticket-turn evidence that can be "
+                            "but no repairable ticket-turn evidence that can be "
                             "projected into a Web Hub managed-thread row"
                         ),
                     )
@@ -368,7 +368,15 @@ def _collect_ticket_turn_evidence(
                 turn_id = None
         elif event.event_type == FlowEventType.AGENT_STREAM_DELTA:
             turn_id = _text(event.data.get("turn_id")) or turn_id
-        elif event.event_type == FlowEventType.STEP_COMPLETED and selected_ticket:
+        elif (
+            event.event_type
+            in {
+                FlowEventType.STEP_COMPLETED,
+                FlowEventType.STEP_FAILED,
+                FlowEventType.AGENT_FAILED,
+            }
+            and selected_ticket
+        ):
             path_evidence = _evidence_from_ticket_path(
                 record,
                 repo_root=repo_root,
@@ -377,6 +385,7 @@ def _collect_ticket_turn_evidence(
                 profile=_text(engine.get("profile")),
                 turn_id=turn_id,
                 source="flow_events",
+                require_done=event.event_type == FlowEventType.STEP_COMPLETED,
             )
             selected_ticket = None
             turn_id = None
@@ -447,6 +456,7 @@ def _evidence_from_ticket_path(
     profile: Optional[str],
     turn_id: Optional[str],
     source: str,
+    require_done: bool = True,
 ) -> Optional[_TicketTurnEvidence]:
     path = (repo_root / ticket_path).resolve()
     try:
@@ -454,7 +464,11 @@ def _evidence_from_ticket_path(
         frontmatter, _body = parse_markdown_frontmatter(raw)
     except (OSError, ValueError):
         return None
-    if not isinstance(frontmatter, dict) or frontmatter.get("done") is not True:
+    if not isinstance(frontmatter, dict):
+        return None
+    if require_done and frontmatter.get("done") is not True:
+        return None
+    if not require_done and frontmatter.get("done") is not True and turn_id is None:
         return None
     ticket_id = _text(frontmatter.get("ticket_id"))
     if ticket_id is None:

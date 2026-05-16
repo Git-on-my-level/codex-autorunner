@@ -43,6 +43,8 @@ def _seed_completed_run(
     run_id: str,
     ticket_path: str,
     state: dict | None = None,
+    status: FlowRunStatus = FlowRunStatus.COMPLETED,
+    terminal_event: FlowEventType = FlowEventType.STEP_COMPLETED,
 ) -> None:
     db_path = resolve_repo_flows_db_path(repo_root)
     db_path.parent.mkdir(parents=True, exist_ok=True)
@@ -63,15 +65,15 @@ def _seed_completed_run(
             data={"delta": "done", "turn_id": "turn-1"},
         )
         store.create_event(
-            event_id=f"{run_id}-completed",
+            event_id=f"{run_id}-terminal",
             run_id=run_id,
-            event_type=FlowEventType.STEP_COMPLETED,
+            event_type=terminal_event,
             step_id="ticket_turn",
             data={"step_id": "ticket_turn", "next_steps": []},
         )
         store.update_flow_run_status(
             run_id,
-            FlowRunStatus.COMPLETED,
+            status,
             state=state or {"ticket_engine": {"last_agent_id": "codex"}},
             started_at="2026-05-15T12:00:00Z",
             finished_at="2026-05-15T12:05:00Z",
@@ -190,7 +192,41 @@ def test_repair_ticket_flow_visibility_reports_incomplete_evidence(hub_env) -> N
 
     assert report.repaired == 0
     assert report.diagnostics[0].status == "unrecoverable"
-    assert "missing completed ticket-turn evidence" in report.diagnostics[0].reason
+    assert "missing repairable ticket-turn evidence" in report.diagnostics[0].reason
+
+
+def test_repair_ticket_flow_visibility_recovers_failed_turn_with_open_ticket(
+    hub_env,
+) -> None:
+    run_id = "failed-run-with-open-ticket"
+    ticket_path = _write_ticket(
+        hub_env.repo_root,
+        "TICKET-002A.md",
+        ticket_id="ticket-failed",
+        done=False,
+    )
+    _seed_completed_run(
+        hub_env.repo_root,
+        run_id=run_id,
+        ticket_path=ticket_path,
+        status=FlowRunStatus.FAILED,
+        terminal_event=FlowEventType.STEP_FAILED,
+    )
+
+    report = repair_ticket_flow_chat_visibility(
+        repo_root=hub_env.repo_root,
+        hub_root=hub_env.hub_root,
+        repo_id=hub_env.repo_id,
+        run_id=run_id,
+    )
+
+    assert report.repaired == 1
+    assert report.actions[0].ticket_id == "ticket-failed"
+    store = ManagedThreadStore(hub_env.hub_root, durable=True)
+    thread = store.get_thread(report.actions[0].managed_thread_id or "")
+    assert thread is not None
+    assert thread["metadata"]["ticket_id"] == "ticket-failed"
+    assert thread["metadata"]["repair_provenance"]["source"] == "flow_events"
 
 
 def test_repair_ticket_flow_visibility_skips_already_linked_run(hub_env) -> None:
