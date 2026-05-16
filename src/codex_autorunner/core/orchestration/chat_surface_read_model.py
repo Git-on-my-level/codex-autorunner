@@ -1760,11 +1760,16 @@ def _chat_index_rows_from_surfaces(
             )
     rows = list(by_thread.values()) + external_rows
     for row in rows:
-        friendly_title = _friendly_chat_title(row)
-        if friendly_title is not None:
-            row["chat_display_name"] = friendly_title
-            if _is_fallback_chat_title(row.get("title"), row):
-                row["title"] = friendly_title
+        if row.get("managed_thread_id") is None:
+            friendly_title = _friendly_chat_title(row)
+            if friendly_title is not None:
+                row["chat_display_name"] = friendly_title
+                if _is_fallback_chat_title(row.get("title"), row):
+                    row["title"] = friendly_title
+        else:
+            identity_title = _managed_thread_identity_title(row)
+            row["title"] = identity_title
+            row["chat_display_name"] = identity_title
         row["display_title"] = _normalize_text(row.get("chat_display_name")) or str(
             row.get("title") or row.get("chat_id") or row.get("row_id") or ""
         )
@@ -1811,6 +1816,19 @@ def _display_title(display: Mapping[str, Any], fallback: str) -> str:
         or _normalize_text(display.get("display_name"))
         or fallback
     )
+
+
+def _managed_thread_identity_title(row: Mapping[str, Any]) -> str:
+    """Return the primary PMA-owned title for a managed-thread chat row."""
+
+    managed_thread_id = _normalize_text(row.get("managed_thread_id"))
+    title = _normalize_text(row.get("title"))
+    if title is not None and not _is_fallback_chat_title(title, row):
+        return title
+    preview = _normalize_text(row.get("last_message_preview"))
+    if preview is not None:
+        return preview
+    return managed_thread_id or _normalize_text(row.get("chat_id")) or title or ""
 
 
 def _surface_binding_display_name(surface: Mapping[str, Any]) -> Optional[str]:
@@ -1950,7 +1968,10 @@ def _is_fallback_chat_title(value: Any, row: Mapping[str, Any]) -> bool:
     title = _normalize_text(value)
     if title is None:
         return True
-    if title == _normalize_text(row.get("managed_thread_id")):
+    managed_thread_id = _normalize_text(row.get("managed_thread_id"))
+    if title == managed_thread_id:
+        return True
+    if managed_thread_id is not None and title == f"Thread {managed_thread_id}":
         return True
     if _is_surface_id_title(title, row):
         return True
