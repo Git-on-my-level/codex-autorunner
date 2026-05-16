@@ -1036,6 +1036,30 @@ export function compactChatTranscriptCards(cards: ChatTranscriptCard[]): ChatTra
   return summarizeTurnActivity(mergeIntermediateDeltas(foldAdjacentToolGroups(cards)));
 }
 
+export type UserMessagePromptParts = {
+  userText: string;
+  systemContext: string | null;
+};
+
+const INJECTED_CONTEXT_PATTERN = /<injected context>\s*([\s\S]*?)\s*<\/injected context>/gi;
+
+export function splitInjectedPromptContext(text: string): UserMessagePromptParts {
+  const contexts: string[] = [];
+  const userText = text
+    .replace(INJECTED_CONTEXT_PATTERN, (_match, context: string) => {
+      const trimmed = String(context ?? '').trim();
+      if (trimmed) contexts.push(trimmed);
+      return '\n\n';
+    })
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+
+  return {
+    userText,
+    systemContext: contexts.length ? contexts.join('\n\n---\n\n') : null
+  };
+}
+
 function foldAdjacentToolGroups(cards: ChatTranscriptCard[]): ChatTranscriptCard[] {
   const out: ChatTranscriptCard[] = [];
   for (const card of cards) {
