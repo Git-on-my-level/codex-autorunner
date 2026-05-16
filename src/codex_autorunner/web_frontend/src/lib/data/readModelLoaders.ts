@@ -18,6 +18,7 @@ export type ReadModelDepends = (...dependencies: ReadModelDependency[]) => void;
 export type ReadModelLoaderOptions = {
   depends?: ReadModelDepends;
   refresh?: boolean;
+  blocking?: boolean;
   stale?: (state: ReadModelEntityState) => boolean;
   store?: ReadModelEntityStore;
   client?: ReadModelSnapshotClient;
@@ -62,7 +63,9 @@ export async function ensureChatIndexLoaded(
   if (!browser) return { status: 'cold', tags };
 
   const state = store.snapshot();
-  if (!shouldRefresh(state, Boolean(state.chatIndexCursor), options)) return { status: 'cache-hit', tags };
+  const cached = Boolean(state.chatIndexCursor);
+  if (!shouldRefresh(state, cached, options)) return { status: 'cache-hit', tags };
+  if (options.blocking === false) return cached ? { status: 'cache-hit', tags } : { status: 'cold', tags };
 
   const client = options.client ?? readModelSnapshotClient;
   const result = await client.chatIndex(request);
@@ -83,6 +86,7 @@ export async function ensureChatDetailLoaded(
   const state = store.snapshot();
   const cached = Boolean(state.chatDetails[chatId]?.thread && state.timelines[chatId]);
   if (!shouldRefresh(state, cached, options)) return { status: 'cache-hit', tags };
+  if (options.blocking === false) return cached ? { status: 'cache-hit', tags } : { status: 'cold', tags };
 
   const client = options.client ?? readModelSnapshotClient;
   const result = await client.chatDetail(chatId, options.timelineLimit);
@@ -102,6 +106,7 @@ export async function ensureRepoWorktreeIndexLoaded(
   const state = store.snapshot();
   const cached = Boolean(state.cursors['repo_worktree.topology'] && state.cursors['repo_worktree.runtime']);
   if (!shouldRefresh(state, cached, options)) return { status: 'cache-hit', tags };
+  if (options.blocking === false) return cached ? { status: 'cache-hit', tags } : { status: 'cold', tags };
 
   const client = options.client ?? readModelSnapshotClient;
   const [topology, runtime] = await Promise.all([
@@ -131,6 +136,7 @@ export async function ensureTicketDetailLoaded(
   const state = store.snapshot();
   const cached = Boolean(state.tickets[ticketId] && state.cursors[`ticket.detail:${ticketId}`]);
   if (!shouldRefresh(state, cached, options)) return { status: 'cache-hit', tags };
+  if (options.blocking === false) return cached ? { status: 'cache-hit', tags } : { status: 'cold', tags };
 
   const client = options.client ?? readModelSnapshotClient;
   const result = await client.ticketDetail(ticketId, owner);
@@ -151,6 +157,7 @@ export async function ensureRepoDetailLoaded(
   const state = store.snapshot();
   const cached = Boolean(state.repoDetails[repoId]);
   if (!shouldRefresh(state, cached, options)) return { status: 'cache-hit', tags };
+  if (options.blocking === false) return cached ? { status: 'cache-hit', tags } : { status: 'cold', tags };
 
   const client = options.client ?? readModelSnapshotClient;
   const result = await client.repoDetail(repoId);
@@ -171,6 +178,7 @@ export async function ensureWorktreeDetailLoaded(
   const state = store.snapshot();
   const cached = Boolean(state.worktreeDetails[worktreeId]);
   if (!shouldRefresh(state, cached, options)) return { status: 'cache-hit', tags };
+  if (options.blocking === false) return cached ? { status: 'cache-hit', tags } : { status: 'cold', tags };
 
   const client = options.client ?? readModelSnapshotClient;
   const result = await client.worktreeDetail(worktreeId);
@@ -195,6 +203,7 @@ export async function ensureTicketIndexLoaded(
   const state = store.snapshot();
   const cached = Boolean(state.ticketOrderByOwner[ownerKey]);
   if (!shouldRefresh(state, cached, options)) return { status: 'cache-hit', tags };
+  if (options.blocking === false) return cached ? { status: 'cache-hit', tags } : { status: 'cold', tags };
 
   const client = options.client ?? readModelSnapshotClient;
   const result = await client.ticketIndex(options.owner);

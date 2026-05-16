@@ -761,12 +761,15 @@ function mergeRunCards(
   parentRepoId: string | null = null
 ): RepoWorktreeRunCard[] {
   const cards = new Map<string, RepoWorktreeRunCard>();
+  const chatsById = new Map(chats.map((chat) => [chat.id, chat]));
+  const runChatIds = new Set<string>();
   for (const run of runs) {
-    const chat = run.chatId ? chats.find((candidate) => candidate.id === run.chatId) ?? null : null;
+    const chat = run.chatId ? chatsById.get(run.chatId) ?? null : null;
+    if (run.chatId) runChatIds.add(run.chatId);
     cards.set(`run:${run.id}`, runToCard(run, chat, scopeKind, scopeId, parentRepoId));
   }
   for (const chat of chats) {
-    if ([...cards.values()].some((card) => card.chatHref === `/chats?chat=${encodeURIComponent(chat.id)}`)) continue;
+    if (runChatIds.has(chat.id)) continue;
     cards.set(`chat:${chat.id}`, chatToCard(chat, scopeKind, scopeId, parentRepoId));
   }
   return [...cards.values()].sort(byRunRecent);

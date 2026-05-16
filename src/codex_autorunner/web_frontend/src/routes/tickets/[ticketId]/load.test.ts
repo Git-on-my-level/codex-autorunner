@@ -22,7 +22,7 @@ describe('/tickets/[ticketId] route load', () => {
     });
     const { loadTicketDetailRoute } = await importPageLoad(true);
 
-    const result = await loadTicketDetailRoute({ ticketId: 't-1', depends, loaderOptions: { store, client } });
+    const result = await loadTicketDetailRoute({ ticketId: 't-1', depends, loaderOptions: { store, client, blocking: true } });
 
     expect(result.ticketId).toBe('t-1');
     expect(result.indexResult.status).toBe('fetched');
@@ -44,7 +44,7 @@ describe('/tickets/[ticketId] route load', () => {
     });
     const { loadTicketDetailRoute } = await importPageLoad(true);
 
-    await loadTicketDetailRoute({ ticketId: 't-1', depends, loaderOptions: { store, client } });
+    await loadTicketDetailRoute({ ticketId: 't-1', depends, loaderOptions: { store, client, blocking: true } });
 
     expect(client.ticketDetail).toHaveBeenCalledWith('t-1', { kind: 'repo', id: 'repo-right' });
   });
@@ -58,6 +58,19 @@ describe('/tickets/[ticketId] route load', () => {
     const result = await loadTicketDetailRoute({ ticketId: 't-1', loaderOptions: { store, client } });
 
     expect(result.indexResult).toEqual({ status: 'cache-hit', tags: ['entity:ticket:index'] });
+  });
+
+  it('returns cold and defers detail lookup when the ticket index is missing', async () => {
+    const store = new ReadModelEntityStore();
+    const client = mockClient();
+    const { loadTicketDetailRoute } = await importPageLoad(true);
+
+    const result = await loadTicketDetailRoute({ ticketId: 't-1', loaderOptions: { store, client } });
+
+    expect(result.indexResult).toEqual({ status: 'cold', tags: ['entity:ticket:index'] });
+    expect(result.detailResult).toBeNull();
+    expect(client.ticketIndex).not.toHaveBeenCalled();
+    expect(client.ticketDetail).not.toHaveBeenCalled();
   });
 
   it('returns cold when not in the browser', async () => {

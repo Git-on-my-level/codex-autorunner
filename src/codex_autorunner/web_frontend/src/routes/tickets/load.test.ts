@@ -12,7 +12,7 @@ import type { ReadModelSnapshotClient } from '$lib/data/readModelClients';
 const now = '2026-05-11T12:00:00Z';
 
 describe('/tickets route load', () => {
-  it('fetches and returns ticket index result', async () => {
+  it('returns cold without blocking navigation when the ticket index is missing', async () => {
     const store = new ReadModelEntityStore();
     const depends = vi.fn();
     const summaries = [ticketSummary('t-1', 'Ticket A')];
@@ -22,6 +22,23 @@ describe('/tickets route load', () => {
     const { loadTicketIndexRoute } = await importPageLoad(true);
 
     const result = await loadTicketIndexRoute({ depends, loaderOptions: { store, client } });
+
+    expect(result.result).toEqual({ status: 'cold', tags: ['entity:ticket:index'] });
+    expect(depends).toHaveBeenCalledWith('entity:ticket:index');
+    expect(client.ticketIndex).not.toHaveBeenCalled();
+    expect(store.snapshot().ticketOrderByOwner['all']).toBeUndefined();
+  });
+
+  it('can fetch and return ticket index result when explicitly blocking', async () => {
+    const store = new ReadModelEntityStore();
+    const depends = vi.fn();
+    const summaries = [ticketSummary('t-1', 'Ticket A')];
+    const client = mockClient({
+      ticketIndex: vi.fn().mockResolvedValue(ok(summaries))
+    });
+    const { loadTicketIndexRoute } = await importPageLoad(true);
+
+    const result = await loadTicketIndexRoute({ depends, loaderOptions: { store, client, blocking: true } });
 
     expect(result.result.status).toBe('fetched');
     expect(depends).toHaveBeenCalledWith('entity:ticket:index');

@@ -21,7 +21,8 @@ export async function loadTicketIndexRoute(options: {
   return {
     result: await ensureTicketIndexLoaded({
       ...options.loaderOptions,
-      depends: options.depends
+      depends: options.depends,
+      blocking: options.loaderOptions?.blocking ?? false
     })
   };
 }

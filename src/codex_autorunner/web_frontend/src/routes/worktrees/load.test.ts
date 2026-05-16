@@ -30,7 +30,7 @@ describe('/worktrees index route load', () => {
     expect(client.repoWorktreeTopology).not.toHaveBeenCalled();
   });
 
-  it('fetches and hydrates when the store is empty', async () => {
+  it('returns cold when the store is empty so navigation can commit immediately', async () => {
     const store = new ReadModelEntityStore();
     const client = mockClient();
     vi.doMock('$lib/data/readModelStore', () => ({ readModelEntityStore: store }));
@@ -39,9 +39,9 @@ describe('/worktrees index route load', () => {
 
     const result = await load({ depends: vi.fn() } as any) as any;
 
-    expect(result.status).toBe('fetched');
-    expect(client.repoWorktreeTopology).toHaveBeenCalled();
-    expect(client.repoWorktreeRuntime).toHaveBeenCalled();
+    expect(result.status).toBe('cold');
+    expect(client.repoWorktreeTopology).not.toHaveBeenCalled();
+    expect(client.repoWorktreeRuntime).not.toHaveBeenCalled();
   });
 
   it('returns cold when not in the browser', async () => {

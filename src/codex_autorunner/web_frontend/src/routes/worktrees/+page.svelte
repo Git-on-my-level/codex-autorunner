@@ -28,8 +28,9 @@
     )
   );
   let refreshing = $state<boolean>(false);
+  let coldHydrating = $state<boolean>(true);
   let refreshError = $state<ApiError | null>(null);
-  const loading = $derived(data.status === 'cold' || refreshing);
+  const loading = $derived((data.status === 'cold' && coldHydrating) || refreshing);
   const error = $derived(refreshError ?? (data.status === 'error' ? data.error : null));
   let notice = $state<ActionNotice | null>(null);
 
@@ -37,6 +38,7 @@
     unsubscribeReadModels = readModelEntityStore.subscribe((state) => {
       readModelState = state;
     });
+    if (data.status === 'cold') void loadWorktrees();
   });
 
   onDestroy(() => {
@@ -46,11 +48,15 @@
   async function loadWorktrees(): Promise<void> {
     refreshing = true;
     refreshError = null;
-    const result = await ensureRepoWorktreeIndexLoaded({ refresh: true });
-    if (result.status === 'error') {
-      refreshError = result.error;
+    try {
+      const result = await ensureRepoWorktreeIndexLoaded({ refresh: true });
+      if (result.status === 'error') {
+        refreshError = result.error;
+      }
+    } finally {
+      coldHydrating = false;
+      refreshing = false;
     }
-    refreshing = false;
   }
 
   async function handleCleanupWorktree(target: Parameters<typeof confirmAndCleanupWorktree>[0]): Promise<void> {

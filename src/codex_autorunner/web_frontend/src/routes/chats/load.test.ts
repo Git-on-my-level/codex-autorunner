@@ -15,7 +15,7 @@ import type { ReadModelSnapshotClient } from '$lib/data/readModelClients';
 const now = '2026-05-11T12:00:00Z';
 
 describe('/chats route load', () => {
-  it('loads the chat index and returns list-mode data when no active chat id is present', async () => {
+  it('returns cold list-mode data without blocking navigation when no active chat id is present', async () => {
     const depends = vi.fn();
     const client = mockClient();
     const { loadChatRoute } = await importPageLoad(true);
@@ -24,12 +24,11 @@ describe('/chats route load', () => {
 
     expect(result).toEqual({
       chatId: null,
-      chatIndex: { status: 'fetched', tags: ['entity:chat:index'] },
+      chatIndex: { status: 'cold', tags: ['entity:chat:index'] },
       activeDetail: null
     });
     expect(depends).toHaveBeenCalledWith('entity:chat:index');
-    expect(client.chatIndex).toHaveBeenCalledTimes(1);
-    expect(client.chatIndex).toHaveBeenCalledWith({ limit: 50 });
+    expect(client.chatIndex).not.toHaveBeenCalled();
   });
 
   it('registers the chat index and active chat entity dependencies', async () => {
@@ -54,7 +53,7 @@ describe('/chats route load', () => {
 
     expect(result).toEqual({
       chatId: 'chat-1',
-      chatIndex: { status: 'fetched', tags: ['entity:chat:index'] },
+      chatIndex: { status: 'cold', tags: ['entity:chat:index'] },
       activeDetail: { status: 'cache-hit', tags: ['entity:chat:chat-1'] }
     });
     expect(result.activeDetail?.status).not.toBe('cold');
@@ -73,10 +72,10 @@ describe('/chats route load', () => {
     });
     const { loadChatRoute } = await importPageLoad(true);
 
-    await loadChatRoute({ loaderOptions: { store, client } });
+    await loadChatRoute({ loaderOptions: { store, client, blocking: true } });
     const firstOrder = [...store.snapshot().chatOrder];
     const firstTitles = firstOrder.map((id) => store.snapshot().chats[id]?.title);
-    await loadChatRoute({ loaderOptions: { store, client } });
+    await loadChatRoute({ loaderOptions: { store, client, blocking: true } });
 
     expect(client.chatIndex).toHaveBeenCalledTimes(2);
     expect(store.snapshot().chatOrder).toEqual(firstOrder);
@@ -91,7 +90,7 @@ describe('/chats route load', () => {
     });
     const { loadChatRoute } = await importPageLoad(true);
 
-    const result = await loadChatRoute({ chatId: 'chat-2', loaderOptions: { store, client } });
+    const result = await loadChatRoute({ chatId: 'chat-2', loaderOptions: { store, client, blocking: true } });
 
     expect(result.chatIndex.status).toBe('fetched');
     expect(result.activeDetail?.status).toBe('fetched');
@@ -107,7 +106,7 @@ describe('/chats route load', () => {
     });
     const { loadChatRoute } = await importPageLoad(true);
 
-    const result = await loadChatRoute({ chatId: 'chat-1', loaderOptions: { store, client } });
+    const result = await loadChatRoute({ chatId: 'chat-1', loaderOptions: { store, client, blocking: true } });
 
     expect(result).toEqual({
       chatId: 'chat-1',

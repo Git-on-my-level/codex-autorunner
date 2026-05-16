@@ -29,7 +29,8 @@ export async function loadRepoTicketDetailRoute(options: {
     ticketId,
     result: await ensureTicketDetailLoaded(ticketId, { kind: 'repo', id: repoId }, {
       ...options.loaderOptions,
-      depends: options.depends
+      depends: options.depends,
+      blocking: options.loaderOptions?.blocking ?? false
     })
   };
 }
