@@ -267,7 +267,15 @@ async def execute_queue_item(
         )
 
     started = await runtime.begin_turn(
-        client_turn_id, store=store, lane_id=getattr(item, "lane_id", None)
+        client_turn_id,
+        store=store,
+        lane_id=getattr(item, "lane_id", None),
+        origin_surface_kind=None if automation_trigger else "web",
+        origin_surface_key=(
+            None
+            if automation_trigger
+            else _normalize_optional_text(getattr(item, "lane_id", None))
+        ),
     )
     if not started:
         detail = "Another PMA turn is already active; queue item was not started"

@@ -27,6 +27,7 @@ from .pma_domain.models import (
     PmaDeliveryTarget,
 )
 from .pma_domain.publish_policy import evaluate_publish_suppression
+from .pma_origin import extract_pma_origin_metadata
 from .text_utils import _normalize_optional_text, _normalize_pma_delivery_target
 
 logger = logging.getLogger(__name__)
@@ -172,6 +173,27 @@ def _attempts_from_dispatch_decision(
     return attempts
 
 
+def _context_origin_surface_kind(
+    context_payload: Optional[Mapping[str, Any]],
+) -> Optional[str]:
+    if not isinstance(context_payload, Mapping):
+        return None
+
+    def _from_metadata(metadata: Any) -> Optional[str]:
+        origin = extract_pma_origin_metadata(
+            metadata if isinstance(metadata, Mapping) else None
+        )
+        return _normalize_optional_text(origin.surface_kind) if origin else None
+
+    direct = _from_metadata(context_payload.get("metadata"))
+    if direct is not None:
+        return direct
+    wake_up = context_payload.get("wake_up")
+    if isinstance(wake_up, Mapping):
+        return _from_metadata(wake_up.get("metadata"))
+    return None
+
+
 async def deliver_pma_notification(
     *,
     hub_root: Path,
@@ -211,6 +233,10 @@ async def deliver_pma_notification(
             dispatch_decision=dispatch_decision,
             normalized_repo_id=normalized_repo_id,
         )
+        if _context_origin_surface_kind(context_payload) == "web":
+            persisted_attempts = [
+                attempt for attempt in persisted_attempts if attempt.route == "explicit"
+            ]
         suppression_target = _suppression_target_for_dispatch_decision_path(
             delivery_target=delivery_target,
             context_payload=context_payload,

@@ -14,9 +14,20 @@ class PmaOriginContext:
     lane_id: Optional[str] = None
     agent: Optional[str] = None
     profile: Optional[str] = None
+    surface_kind: Optional[str] = None
+    surface_key: Optional[str] = None
 
     def is_empty(self) -> bool:
-        return not any((self.thread_id, self.lane_id, self.agent, self.profile))
+        return not any(
+            (
+                self.thread_id,
+                self.lane_id,
+                self.agent,
+                self.profile,
+                self.surface_kind,
+                self.surface_key,
+            )
+        )
 
     def to_metadata(self) -> dict[str, str]:
         metadata: dict[str, str] = {}
@@ -28,6 +39,10 @@ class PmaOriginContext:
             metadata["agent"] = self.agent
         if self.profile:
             metadata["profile"] = self.profile
+        if self.surface_kind:
+            metadata["surface_kind"] = self.surface_kind
+        if self.surface_key:
+            metadata["surface_key"] = self.surface_key
         return metadata
 
 
@@ -39,6 +54,8 @@ def normalize_pma_origin_context(value: Any) -> Optional[PmaOriginContext]:
         lane_id=_normalize_optional_text(value.get("lane_id")),
         agent=_normalize_optional_text(value.get("agent")),
         profile=_normalize_optional_text(value.get("profile")),
+        surface_kind=_normalize_optional_text(value.get("surface_kind")),
+        surface_key=_normalize_optional_text(value.get("surface_key")),
     )
     return None if origin.is_empty() else origin
 
@@ -60,6 +77,8 @@ def merge_pma_origin_metadata(
     origin: Optional[PmaOriginContext] = None,
     origin_thread_id: Optional[str] = None,
     origin_lane_id: Optional[str] = None,
+    origin_surface_kind: Optional[str] = None,
+    origin_surface_key: Optional[str] = None,
 ) -> dict[str, Any]:
     resolved = dict(metadata or {})
     existing_origin = extract_pma_origin_metadata(resolved)
@@ -81,6 +100,16 @@ def merge_pma_origin_metadata(
         profile=(
             (origin.profile if origin else None)
             or (existing_origin.profile if existing_origin else None)
+        ),
+        surface_kind=(
+            _normalize_optional_text(origin_surface_kind)
+            or (origin.surface_kind if origin else None)
+            or (existing_origin.surface_kind if existing_origin else None)
+        ),
+        surface_key=(
+            _normalize_optional_text(origin_surface_key)
+            or (origin.surface_key if origin else None)
+            or (existing_origin.surface_key if existing_origin else None)
         ),
     )
     if merged_origin.is_empty():
