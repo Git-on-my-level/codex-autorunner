@@ -1521,6 +1521,12 @@ def _chat_index_rows_from_surfaces(
         row["binding_display_name"] = (
             binding_display_names[0] if binding_display_names else None
         )
+        if (
+            row.get("managed_thread_id") is not None
+            and _normalize_kind(row.get("lifecycle_status")) != "archived"
+            and _normalize_kind(row.get("lifecycle")) == "archived"
+        ):
+            row["lifecycle"] = _managed_thread_row_lifecycle(row)
         row["archive_state"] = _archive_state(row.get("lifecycle_status"))
         row["sort_key"] = _chat_index_sort_key_parts(row)
         row["group_id"] = _chat_ticket_group_id(row)
@@ -1579,6 +1585,17 @@ def _primary_surface(row: Mapping[str, Any]) -> Optional[Mapping[str, Any]]:
 
 def _archive_state(lifecycle_status: Any) -> str:
     return "archived" if _normalize_kind(lifecycle_status) == "archived" else "active"
+
+
+def _managed_thread_row_lifecycle(row: Mapping[str, Any]) -> str:
+    if int(row.get("queue_depth") or 0) > 0:
+        return "queued"
+    runtime = _status_to_lifecycle(
+        row.get("runtime_status") or row.get("target_runtime_status")
+    )
+    if runtime in {"idle", "running", "failed"}:
+        return runtime
+    return "bound"
 
 
 def canonical_owner_fields(
@@ -1731,10 +1748,10 @@ def _chat_index_effective_status(row: Mapping[str, Any]) -> str:
     runtime = _status_to_lifecycle(
         row.get("runtime_status") or row.get("target_runtime_status")
     )
-    if (
-        lifecycle_status == "archived"
-        or lifecycle == "archived"
-        or runtime == "archived"
+    if lifecycle_status == "archived":
+        return "archived"
+    if row.get("managed_thread_id") is None and (
+        lifecycle == "archived" or runtime == "archived"
     ):
         return "archived"
     if int(row.get("queue_depth") or 0) > 0:

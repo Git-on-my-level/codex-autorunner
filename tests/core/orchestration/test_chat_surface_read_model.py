@@ -241,6 +241,118 @@ def test_chat_index_omits_stale_bound_surfaces_without_managed_thread(
     assert [row["managed_thread_id"] for row in index["rows"]] == ["live-thread"]
 
 
+def test_chat_index_uses_managed_lifecycle_after_discord_surface_rebind(
+    tmp_path: Path,
+) -> None:
+    hub_root = tmp_path / "hub"
+    _seed_thread(
+        hub_root,
+        thread_id="thread-a",
+        lifecycle_status="archived",
+        runtime_status="completed",
+    )
+    _seed_thread(
+        hub_root,
+        thread_id="thread-b",
+        lifecycle_status="active",
+        runtime_status="running",
+    )
+    bindings = OrchestrationBindingStore(hub_root, durable=False)
+    first = bindings.upsert_binding(
+        surface_kind="discord",
+        surface_key="guild:channel",
+        thread_target_id="thread-a",
+        repo_id="repo-1",
+        resource_kind="repo",
+        resource_id="repo-1",
+        metadata={"display_name": "Discord channel"},
+    )
+    bindings.disable_binding(binding_id=first.binding_id)
+    bindings.upsert_binding(
+        surface_kind="discord",
+        surface_key="guild:channel",
+        thread_target_id="thread-b",
+        repo_id="repo-1",
+        resource_kind="repo",
+        resource_id="repo-1",
+        metadata={"display_name": "Discord channel"},
+    )
+
+    service = ChatSurfaceReadService(hub_root, durable=False)
+
+    discord = service.chat_index_snapshot(
+        view="all",
+        surface_kind="discord",
+        limit=20,
+    )
+    assert [row["managed_thread_id"] for row in discord["rows"]] == ["thread-b"]
+    assert discord["rows"][0]["archive_state"] == "active"
+    assert discord["rows"][0]["lifecycle"] == "running"
+    assert discord["counters"]["total"] == 1
+    assert discord["counters"]["archived"] == 0
+
+    archived = service.chat_index_snapshot(view="archived", limit=20)
+    assert [row["managed_thread_id"] for row in archived["rows"]] == ["thread-a"]
+    assert archived["counters"]["total"] == 1
+
+
+def test_chat_index_uses_managed_lifecycle_after_telegram_surface_rebind(
+    tmp_path: Path,
+) -> None:
+    hub_root = tmp_path / "hub"
+    _seed_thread(
+        hub_root,
+        thread_id="telegram-thread-a",
+        lifecycle_status="archived",
+        runtime_status="completed",
+    )
+    _seed_thread(
+        hub_root,
+        thread_id="telegram-thread-b",
+        lifecycle_status="active",
+        runtime_status="running",
+    )
+    bindings = OrchestrationBindingStore(hub_root, durable=False)
+    first = bindings.upsert_binding(
+        surface_kind="telegram",
+        surface_key="-1001:77",
+        thread_target_id="telegram-thread-a",
+        repo_id="repo-1",
+        resource_kind="repo",
+        resource_id="repo-1",
+        metadata={"display_name": "Telegram topic"},
+    )
+    bindings.disable_binding(binding_id=first.binding_id)
+    bindings.upsert_binding(
+        surface_kind="telegram",
+        surface_key="-1001:77",
+        thread_target_id="telegram-thread-b",
+        repo_id="repo-1",
+        resource_kind="repo",
+        resource_id="repo-1",
+        metadata={"display_name": "Telegram topic"},
+    )
+
+    service = ChatSurfaceReadService(hub_root, durable=False)
+
+    telegram = service.chat_index_snapshot(
+        view="all",
+        surface_kind="telegram",
+        limit=20,
+    )
+    assert [row["managed_thread_id"] for row in telegram["rows"]] == [
+        "telegram-thread-b"
+    ]
+    assert telegram["rows"][0]["archive_state"] == "active"
+    assert telegram["counters"]["total"] == 1
+    assert telegram["counters"]["archived"] == 0
+
+    archived = service.chat_index_snapshot(view="archived", limit=20)
+    assert [row["managed_thread_id"] for row in archived["rows"]] == [
+        "telegram-thread-a"
+    ]
+
+
 def test_chat_index_sort_key_parts_serializes_missing_activity_as_null() -> None:
     parts = _chat_index_sort_key_parts(
         {"managed_thread_id": "thread-1", "unread_count": 0}

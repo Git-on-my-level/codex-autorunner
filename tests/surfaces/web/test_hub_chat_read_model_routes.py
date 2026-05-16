@@ -569,8 +569,8 @@ def test_hub_read_models_chats_all_excludes_effectively_archived_rows(
                         "repo",
                         "repo",
                         "Stale archived runtime",
-                        "active",
                         "archived",
+                        "completed",
                         "{}",
                         "2026-05-11T00:00:00Z",
                         "2026-05-11T00:01:00Z",
@@ -599,6 +599,103 @@ def test_hub_read_models_chats_all_excludes_effectively_archived_rows(
     assert [row.chat_id for row in archived_snapshot.rows] == [
         "thread-stale-archived-runtime"
     ]
+
+
+def test_hub_read_models_chats_discord_rebind_uses_managed_archive_state(
+    hub_env,
+) -> None:
+    with open_orchestration_sqlite(
+        hub_env.hub_root, durable=True, migrate=True
+    ) as conn:
+        with conn:
+            conn.executemany(
+                """
+                INSERT INTO orch_thread_targets (
+                    thread_target_id,
+                    agent_id,
+                    repo_id,
+                    resource_kind,
+                    resource_id,
+                    display_name,
+                    lifecycle_status,
+                    runtime_status,
+                    metadata_json,
+                    created_at,
+                    updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    (
+                        "thread-discord-old",
+                        "codex",
+                        "repo",
+                        "repo",
+                        "repo",
+                        "Old Discord generation",
+                        "archived",
+                        "completed",
+                        "{}",
+                        "2026-05-11T00:00:00Z",
+                        "2026-05-11T00:01:00Z",
+                    ),
+                    (
+                        "thread-discord-new",
+                        "codex",
+                        "repo",
+                        "repo",
+                        "repo",
+                        "New Discord generation",
+                        "active",
+                        "running",
+                        "{}",
+                        "2026-05-11T00:02:00Z",
+                        "2026-05-11T00:03:00Z",
+                    ),
+                ),
+            )
+    bindings = OrchestrationBindingStore(hub_env.hub_root, durable=True)
+    first = bindings.upsert_binding(
+        surface_kind="discord",
+        surface_key="guild:channel",
+        thread_target_id="thread-discord-old",
+        repo_id="repo",
+        resource_kind="repo",
+        resource_id="repo",
+        metadata={"display_name": "Discord channel"},
+    )
+    bindings.disable_binding(binding_id=first.binding_id)
+    bindings.upsert_binding(
+        surface_kind="discord",
+        surface_key="guild:channel",
+        thread_target_id="thread-discord-new",
+        repo_id="repo",
+        resource_kind="repo",
+        resource_id="repo",
+        metadata={"display_name": "Discord channel"},
+    )
+
+    client = TestClient(create_hub_app(hub_env.hub_root))
+    response = client.get(
+        "/hub/read-models/chats",
+        params={"filter": "all", "surface_kind": "discord", "limit": 20},
+    )
+
+    assert response.status_code == 200
+    snapshot = load_read_model_contract(ChatIndexSnapshot, response.json())
+    assert [row.chat_id for row in snapshot.rows] == ["thread-discord-new"]
+    assert snapshot.rows[0].archive_state == "active"
+    assert snapshot.rows[0].status == "running"
+    assert snapshot.counters.total == 1
+    assert snapshot.counters.archived == 0
+
+    archived_response = client.get(
+        "/hub/read-models/chats", params={"filter": "archived", "limit": 20}
+    )
+    assert archived_response.status_code == 200
+    archived_snapshot = load_read_model_contract(
+        ChatIndexSnapshot, archived_response.json()
+    )
+    assert [row.chat_id for row in archived_snapshot.rows] == ["thread-discord-old"]
 
 
 def test_hub_read_models_chats_contract_active_filter_matches_index_window(

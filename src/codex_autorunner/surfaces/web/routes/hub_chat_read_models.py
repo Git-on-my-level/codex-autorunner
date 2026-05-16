@@ -584,10 +584,11 @@ def _chat_surface_status_from_row(row: Mapping[str, Any]) -> ChatSurfaceStatus:
     lifecycle_status = str(row.get("lifecycle_status") or "").strip().lower()
     runtime = str(row.get("runtime_status") or row.get("target_runtime_status") or "")
     runtime_l = runtime.strip().lower()
-    if (
-        lifecycle_status == "archived"
-        or lifecycle == "archived"
-        or runtime_l == "archived"
+    archive_state = str(row.get("archive_state") or "").strip().lower()
+    if lifecycle_status == "archived" or archive_state == "archived":
+        return "archived"
+    if row.get("managed_thread_id") is None and (
+        lifecycle == "archived" or runtime_l == "archived"
     ):
         return "archived"
     queue_depth = _int_fallback(row.get("queue_depth"), 0)
