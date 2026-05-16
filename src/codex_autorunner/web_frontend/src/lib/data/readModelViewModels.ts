@@ -9,6 +9,7 @@ import {
   mapRepoSummary,
   mapWorktreeSummary,
   normalizeWorkStatus,
+  pmaLifecycleTokenIsActive,
   pmaLifecycleTokenIsArchived,
   pmaChatArchivedFromRawSignals,
   type PmaChatSummary,
@@ -287,8 +288,8 @@ function legacyChatIndexStatus(
 }
 
 function chatIndexStatus(chat: PmaChatSummary): ChatIndexRow['status'] {
-  if (pmaLifecycleTokenIsArchived(chat.lifecycleStatus) || pmaChatArchivedFromRawSignals(chat.raw))
-    return 'archived';
+  if (pmaLifecycleTokenIsArchived(chat.lifecycleStatus)) return 'archived';
+  if (!pmaLifecycleTokenIsActive(chat.lifecycleStatus) && pmaChatArchivedFromRawSignals(chat.raw)) return 'archived';
   if (chat.status === 'waiting') return 'waiting';
   if (chat.status === 'running') return 'running';
   if (chat.status === 'failed' || chat.status === 'blocked' || chat.status === 'invalid') return 'failed';

@@ -20,6 +20,7 @@ import {
   filterArtifactsForActiveChat,
   formatRelativeTime,
   formatCompactMessageDateTime,
+  isPmaChatArchived,
   isPrimaryProgressArtifact,
   mergeChatActivityEvents,
   mapChatTranscriptSnapshot,
@@ -292,6 +293,28 @@ describe('PMA chat view helpers', () => {
     expect(filterPmaChats(chats, 'archived', 'support').map((chat) => chat.id)).toEqual(['chat-2']);
     expect(filterPmaChats(chats, 'unread', '').map((chat) => chat.id).sort()).toEqual(['chat-1', 'chat-3']);
     expect(summarizeFilterCounts(chats)).toEqual({ all: 2, active: 1, waiting: 1, unread: 2, archived: 1 });
+  });
+
+  it('trusts active lifecycle status over stale raw archive fields for list membership', () => {
+    const rebound: PmaChatSummary = {
+      ...baseChat,
+      id: 'discord-rebound-active',
+      lifecycleStatus: 'active',
+      raw: {
+        archive_state: 'active',
+        lifecycle_status: 'active',
+        lifecycle: 'archived',
+        runtime_status: 'archived',
+        surface_kind: 'discord',
+        surface_bindings: [{ surface_kind: 'discord', surface_key: 'channel-1', lifecycle: 'archived' }],
+        primary_surface: { surface_kind: 'pma', lifecycle: 'running' }
+      }
+    };
+
+    expect(isPmaChatArchived(rebound)).toBe(false);
+    expect(filterPmaChats([rebound], 'all', '')).toEqual([rebound]);
+    expect(filterPmaChats([rebound], chatSurfaceFilterToken('discord'), '')).toEqual([rebound]);
+    expect(filterPmaChats([rebound], 'archived', '')).toEqual([]);
   });
 
   it('drops archived ticket-flow chats from grouped run rows when not on the archived filter', () => {

@@ -37,13 +37,21 @@ export function pmaLifecycleTokenIsArchived(value: unknown): boolean {
   return String(value ?? '').trim().toLowerCase() === 'archived';
 }
 
+export function pmaLifecycleTokenIsActive(value: unknown): boolean {
+  return String(value ?? '').trim().toLowerCase() === 'active';
+}
+
 /**
  * Archived chat detection from durable raw fields (index rows, surface snapshots, detail loads).
  * Intentionally ignores generic `status` strings so live execution status cannot mask archival.
  */
 export function pmaChatArchivedFromRawSignals(raw: JsonRecord | null | undefined): boolean {
   if (!raw || typeof raw !== 'object') return false;
-  for (const key of ['lifecycle_status', 'lifecycleStatus', 'lifecycle', 'runtime_status'] as const) {
+  for (const key of ['archive_state', 'archiveState', 'lifecycle_status', 'lifecycleStatus'] as const) {
+    if (pmaLifecycleTokenIsArchived(raw[key])) return true;
+    if (pmaLifecycleTokenIsActive(raw[key])) return false;
+  }
+  for (const key of ['lifecycle', 'runtime_status'] as const) {
     if (pmaLifecycleTokenIsArchived(raw[key])) return true;
   }
   return false;
@@ -284,14 +292,23 @@ export function mapPmaChatSummary(raw: JsonRecord): PmaChatSummary {
     nullableString(raw.worktree_repo_id ?? raw.worktree_id) ?? (resourceKind === 'worktree' ? resourceId : null);
   const ticketId = ticketIdFromRaw(raw);
   const isTicketFlow = detectTicketFlowChat(raw, ticketId);
+  const archiveState = nullableString(raw.archive_state ?? raw.archiveState);
   const lifecycleField = nullableString(raw.lifecycle_status ?? raw.lifecycleStatus);
   const lifecycleRoot = nullableString(raw.lifecycle);
-  let lifecycleStatus: string | null =
-    pmaLifecycleTokenIsArchived(lifecycleField) || pmaLifecycleTokenIsArchived(lifecycleRoot)
-      ? 'archived'
-      : lifecycleField;
+  let lifecycleStatus: string | null = pmaLifecycleTokenIsArchived(archiveState)
+    ? 'archived'
+    : pmaLifecycleTokenIsActive(archiveState)
+      ? 'active'
+      : pmaLifecycleTokenIsArchived(lifecycleField)
+        ? 'archived'
+        : pmaLifecycleTokenIsActive(lifecycleField)
+          ? 'active'
+          : pmaLifecycleTokenIsArchived(lifecycleRoot)
+            ? 'archived'
+            : lifecycleField;
   if (
     lifecycleStatus !== 'archived' &&
+    lifecycleStatus !== 'active' &&
     pmaLifecycleTokenIsArchived(raw.runtime_status ?? raw.execution_status ?? raw.normalized_status)
   ) {
     lifecycleStatus = 'archived';
