@@ -86,6 +86,7 @@
     visibleLocalChatPlaceholders as selectVisibleLocalChatPlaceholders,
     removePendingAttachment,
     statusLabel,
+    summarizeVisibleLocalPlaceholderStatusCounts,
     type DocumentFileIntentPayload,
     type PendingAttachment,
     type ChatTranscriptCard,
@@ -172,6 +173,9 @@
   );
   const chats = $derived<PmaChatSummary[]>(
     mergeLocalChatPlaceholders(persistedChats, committedChatPlaceholders)
+  );
+  const persistedFacetChats = $derived<PmaChatSummary[]>(
+    mergeChatFacetSourceChats(facetPersistedChats, persistedChats)
   );
   const facetChats = $derived<PmaChatSummary[]>(
     mergeChatFacetSourceChats(facetPersistedChats, persistedChats, committedChatPlaceholders)
@@ -626,13 +630,11 @@
   function chatStatusFilterCounts(): Record<ChatStatusFilter, number> {
     const counters = readModelState.chatCounters;
     const knownChats = facetChats;
-    const localKnownPlaceholders = selectVisibleLocalChatPlaceholders(knownChats, committedChatPlaceholders);
-    const localRunningCount = localKnownPlaceholders.filter((chat) => chat.status === 'running').length;
-    const localWaitingCount = localKnownPlaceholders.filter((chat) => chat.status === 'waiting' || chat.status === 'blocked').length;
+    const localStatusCounts = summarizeVisibleLocalPlaceholderStatusCounts(persistedFacetChats, committedChatPlaceholders);
     return {
       all: counters.total + localChatPlaceholderCount,
-      active: counters.running + localRunningCount,
-      waiting: counters.waiting + localWaitingCount,
+      active: counters.running + localStatusCounts.active,
+      waiting: counters.waiting + localStatusCounts.waiting,
       unread: adjustedUnreadFilterCount(counters.unread, knownChats, lastSeenMap),
       archived: counters.archived
     };

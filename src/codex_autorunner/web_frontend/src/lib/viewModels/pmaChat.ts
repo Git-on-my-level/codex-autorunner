@@ -731,6 +731,17 @@ export function adjustedUnreadFilterCount(
   return Math.max(0, serverUnread - knownServerUnread + knownEffectiveUnread);
 }
 
+export function summarizeVisibleLocalPlaceholderStatusCounts(
+  persistedChats: PmaChatSummary[],
+  placeholders: Array<PmaChatSummary | null | undefined>
+): Pick<Record<ChatStatusFilter, number>, 'active' | 'waiting'> {
+  const visible = visibleLocalChatPlaceholders(persistedChats, placeholders);
+  return {
+    active: visible.filter((chat) => activeStatuses.includes(chat.status)).length,
+    waiting: visible.filter((chat) => waitingStatuses.includes(chat.status)).length
+  };
+}
+
 /**
  * A "run group" key for ticket-flow chats. Ticket-flow chats sharing the same
  * worktree (or repo, for repo-scoped flows) belong to the same operator-visible

@@ -49,6 +49,7 @@ import {
   sortChatsWaitingFirst,
   splitInjectedPromptContext,
   summarizeFilterCounts,
+  summarizeVisibleLocalPlaceholderStatusCounts,
   buildChatListEntries
 } from './pmaChat';
 import { resolvePmaChatSelectorsForActiveChat } from './modelPickers';
@@ -359,6 +360,43 @@ describe('PMA chat view helpers', () => {
       'slack',
       'telegram'
     ]);
+  });
+
+  it('counts local placeholder statuses against persisted facet rows before placeholders are merged', () => {
+    const persisted = {
+      ...baseChat,
+      id: 'persisted-chat',
+      ticketId: null,
+      isTicketFlow: false
+    };
+    const waitingPlaceholder = {
+      ...baseChat,
+      id: 'committed-waiting',
+      ticketId: null,
+      isTicketFlow: false,
+      status: 'waiting' as const,
+      raw: { draft_committed_placeholder: true }
+    };
+    const runningPlaceholder = {
+      ...baseChat,
+      id: 'committed-running',
+      ticketId: null,
+      isTicketFlow: false,
+      status: 'running' as const,
+      raw: { draft_committed_placeholder: true }
+    };
+    const mergedFacetRows = mergeChatFacetSourceChats(
+      [persisted],
+      [],
+      [waitingPlaceholder, runningPlaceholder]
+    );
+
+    expect(
+      summarizeVisibleLocalPlaceholderStatusCounts([persisted], [waitingPlaceholder, runningPlaceholder])
+    ).toEqual({ active: 1, waiting: 1 });
+    expect(
+      summarizeVisibleLocalPlaceholderStatusCounts(mergedFacetRows, [waitingPlaceholder, runningPlaceholder])
+    ).toEqual({ active: 0, waiting: 0 });
   });
 
   it('trusts active lifecycle status over stale raw archive fields for list membership', () => {
