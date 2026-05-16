@@ -11,6 +11,9 @@
     streamingMessageId = null,
   }: { cards: ChatTranscriptCard[]; assistantLabel?: string; streamingMessageId?: string | null } = $props();
 
+  const MAX_RENDERED_TOOL_GROUP_ITEMS = 80;
+  const MAX_RENDERED_TURN_SUMMARY_CARDS = 80;
+
   const userToggled = $state<Record<string, boolean>>({});
 
   function attachmentKindLabel(kind: SurfaceArtifact['kind']): string {
@@ -110,6 +113,22 @@
     return tool.title;
   }
 
+  function visibleToolGroupItems(card: Extract<ChatTranscriptCard, { kind: 'tool_group' }>): ChatToolCallCard[] {
+    return card.tools.slice(0, MAX_RENDERED_TOOL_GROUP_ITEMS);
+  }
+
+  function omittedToolGroupItemCount(card: Extract<ChatTranscriptCard, { kind: 'tool_group' }>): number {
+    return Math.max(0, card.tools.length - MAX_RENDERED_TOOL_GROUP_ITEMS);
+  }
+
+  function visibleTurnSummaryCards(card: Extract<ChatTranscriptCard, { kind: 'turn_summary' }>): ChatTranscriptCard[] {
+    return card.cards.slice(0, MAX_RENDERED_TURN_SUMMARY_CARDS);
+  }
+
+  function omittedTurnSummaryCardCount(card: Extract<ChatTranscriptCard, { kind: 'turn_summary' }>): number {
+    return Math.max(0, card.cards.length - MAX_RENDERED_TURN_SUMMARY_CARDS);
+  }
+
   const displayCards = $derived(compactChatTranscriptCards(cards));
 </script>
 
@@ -193,7 +212,7 @@
         </strong>
       </summary>
       <ol>
-        {#each card.tools as tool (tool.id)}
+        {#each visibleToolGroupItems(card) as tool (tool.id)}
           <li class={tool.state}>
             <span>{tool.state}</span>
             <strong>{tool.title}</strong>
@@ -206,6 +225,9 @@
           </li>
         {/each}
       </ol>
+      {#if omittedToolGroupItemCount(card) > 0}
+        <p class="trace-omitted">{omittedToolGroupItemCount(card)} additional tool calls omitted</p>
+      {/if}
     </details>
   {:else if card.kind === 'turn_summary'}
     <details class="tool-call-bar turn-summary-card">
@@ -213,7 +235,7 @@
         <strong>{card.title}</strong>
       </summary>
       <div class="turn-summary-trace">
-        {#each card.cards as traceCard (traceCard.id)}
+        {#each visibleTurnSummaryCards(card) as traceCard (traceCard.id)}
           {#if traceCard.kind === 'intermediate'}
             {#if isThinkingTrace(traceCard)}
               <details class="tool-call-bar thinking-trace nested-trace">
@@ -253,7 +275,7 @@
                 </strong>
               </summary>
               <ol>
-                {#each traceCard.tools as tool (tool.id)}
+                {#each visibleToolGroupItems(traceCard) as tool (tool.id)}
                   <li class={tool.state}>
                     <span>{tool.state}</span>
                     <strong>{tool.title}</strong>
@@ -266,6 +288,9 @@
                   </li>
                 {/each}
               </ol>
+              {#if omittedToolGroupItemCount(traceCard) > 0}
+                <p class="trace-omitted">{omittedToolGroupItemCount(traceCard)} additional tool calls omitted</p>
+              {/if}
             </details>
           {:else if traceCard.kind === 'approval'}
             <details class="approval-card nested-trace">
@@ -280,6 +305,9 @@
             </details>
           {/if}
         {/each}
+        {#if omittedTurnSummaryCardCount(card) > 0}
+          <p class="trace-omitted">{omittedTurnSummaryCardCount(card)} additional activity updates omitted</p>
+        {/if}
       </div>
     </details>
   {:else if card.kind === 'approval'}

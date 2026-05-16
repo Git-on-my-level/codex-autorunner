@@ -4,7 +4,7 @@ import asyncio
 import json
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Iterator, Optional
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
@@ -48,6 +48,29 @@ from .managed_threads import (
 _PERSISTED_TAIL_POLL_SECONDS = 1.0
 _PERSISTED_TAIL_HEARTBEAT_SECONDS = 15.0
 _TRANSCRIPT_STREAM_LIMIT = 200
+_TRANSCRIPT_APPEND_ROW_LIMIT = 80
+
+
+def _transcript_append_frames(
+    rows: list[dict[str, Any]],
+    append_event_id: int,
+    *,
+    chunk_limit: int = _TRANSCRIPT_APPEND_ROW_LIMIT,
+) -> Iterator[str]:
+    if not rows:
+        return
+    effective_limit = max(1, chunk_limit)
+    for offset in range(0, len(rows), effective_limit):
+        chunk = rows[offset : offset + effective_limit]
+        is_final_chunk = offset + effective_limit >= len(rows)
+        append_id_line = (
+            f"id: {append_event_id}\n" if is_final_chunk and append_event_id > 0 else ""
+        )
+        yield (
+            "event: transcript.append\n"
+            f"{append_id_line}"
+            f"data: {json.dumps({'rows': chunk}, ensure_ascii=True)}\n\n"
+        )
 
 
 def parse_tail_duration_seconds(value: Optional[str]) -> Optional[int]:
@@ -951,14 +974,8 @@ def build_managed_thread_tail_routes(
                     append_event_id = int(
                         refreshed.get("last_event_id") or last_event_id
                     )
-                    append_id_line = (
-                        f"id: {append_event_id}\n" if append_event_id > 0 else ""
-                    )
-                    yield (
-                        "event: transcript.append\n"
-                        f"{append_id_line}"
-                        f"data: {json.dumps({'rows': rows}, ensure_ascii=True)}\n\n"
-                    )
+                    for frame in _transcript_append_frames(rows, append_event_id):
+                        yield frame
                 last_event_id = int(refreshed.get("last_event_id") or last_event_id)
                 last_managed_turn_id = normalize_optional_text(
                     refreshed.get("managed_turn_id")

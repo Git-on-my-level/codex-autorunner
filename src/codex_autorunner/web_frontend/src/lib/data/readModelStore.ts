@@ -458,10 +458,14 @@ export class ReadModelEntityStore implements Readable<ReadModelEntityState> {
     if (!cards.length) return;
     const next = cloneState(this.state);
     const transcript = cloneChatTranscript(next.chatTranscripts[chatId] ?? { cardsById: {}, order: [] });
+    const knownIds = new Set(transcript.order);
     for (const card of cards) {
       const id = chatTranscriptCardEntityId(card);
       transcript.cardsById[id] = card;
-      if (!transcript.order.includes(id)) transcript.order.push(id);
+      if (!knownIds.has(id)) {
+        knownIds.add(id);
+        transcript.order.push(id);
+      }
     }
     transcript.order = orderChatTranscriptCards(transcript.order.map((id) => transcript.cardsById[id]).filter(Boolean)).map(chatTranscriptCardEntityId);
     next.chatTranscripts[chatId] = transcript;

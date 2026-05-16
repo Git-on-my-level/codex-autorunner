@@ -132,6 +132,33 @@ describe('ChatTranscriptCards', () => {
     expect(body).toContain('Nested visible update.');
   });
 
+  it('bounds nested activity rendered inside turn summaries', () => {
+    const cards: ChatTranscriptCard[] = [
+      {
+        kind: 'turn_summary',
+        id: 'summary-1',
+        title: '120 thinking updates',
+        turnId: 'turn-1',
+        orderKey: '00000002|summary',
+        timestamp: '2026-05-10T00:00:12.000Z',
+        cards: Array.from({ length: 120 }, (_, index) => ({
+          ...baseTrace,
+          kind: 'intermediate' as const,
+          id: `thinking-${index}`,
+          title: 'thinking',
+          text: `Nested private trace ${index}`,
+          detail: `${index + 1} thinking updates`
+        }))
+      }
+    ];
+
+    const { body } = render(ChatTranscriptCards, { props: { cards } });
+
+    expect(body).toContain('Nested private trace 79');
+    expect(body).not.toContain('Nested private trace 80');
+    expect(body).toContain('40 additional activity updates omitted');
+  });
+
   it('renders compact timestamps on user and assistant message bubbles', () => {
     const cards: ChatTranscriptCard[] = [
       {

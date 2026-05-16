@@ -22,6 +22,7 @@ from codex_autorunner.core.ports.run_event import Completed, OutputDelta, RunNot
 from codex_autorunner.server import create_hub_app
 from codex_autorunner.surfaces.web.routes.pma_routes.tail_stream import (
     _successful_terminal_turn_id,
+    _transcript_append_frames,
     _transcript_has_assistant_row,
 )
 
@@ -71,6 +72,31 @@ def test_transcript_stream_terminal_snapshot_gate_requires_assistant_row() -> No
         },
         "turn-1",
     )
+
+
+def test_transcript_append_frames_chunk_without_advancing_cursor_early() -> None:
+    rows = [
+        {
+            "kind": "intermediate",
+            "id": f"row-{index}",
+            "order_key": f"{index:04d}",
+        }
+        for index in range(85)
+    ]
+
+    frames = list(_transcript_append_frames(rows, append_event_id=123, chunk_limit=80))
+
+    assert len(frames) == 2
+    assert "\nid: 123\n" not in frames[0]
+    assert "\nid: 123\n" in frames[1]
+    first_payload = json.loads(frames[0].split("data: ", 1)[1])
+    second_payload = json.loads(frames[1].split("data: ", 1)[1])
+    assert [row["id"] for row in first_payload["rows"]] == [
+        f"row-{index}" for index in range(80)
+    ]
+    assert [row["id"] for row in second_payload["rows"]] == [
+        f"row-{index}" for index in range(80, 85)
+    ]
 
 
 def test_managed_thread_transcript_live_rows_replace_stale_durable_rows() -> None:
