@@ -771,22 +771,6 @@ async def _sync_telegram_thread_binding(
         surface_key=surface_key,
         mode=mode,
     )
-    if replace_existing and current_thread is not None:
-        stop_outcome = await orchestration_service.stop_thread(
-            current_thread.thread_target_id
-        )
-        if stop_outcome.recovered_lost_backend:
-            log_event(
-                handlers._logger,
-                logging.INFO,
-                "telegram.thread.recovered_lost_backend",
-                surface_key=surface_key,
-                managed_thread_id=current_thread.thread_target_id,
-                mode=mode,
-            )
-        orchestration_service.archive_thread_target(current_thread.thread_target_id)
-        binding = None
-        current_thread = None
     requested_backend_thread_id = None if pma_enabled else backend_thread_id
     runtime_binding = await resolve_chat_thread_runtime_binding(
         orchestration_service,
@@ -805,6 +789,40 @@ async def _sync_telegram_thread_binding(
             workspace_root=workspace_root,
             mode=mode,
         )
+    if replace_existing:
+        replacement = await replace_surface_thread(
+            orchestration_service,
+            surface_kind="telegram",
+            surface_key=surface_key,
+            workspace_root=workspace_root,
+            agent_id=agent,
+            repo_id=repo_id.strip() if isinstance(repo_id, str) else None,
+            resource_kind=resource_kind,
+            resource_id=resource_id,
+            mode=mode,
+            display_name=f"telegram:{surface_key}",
+            binding_metadata={
+                "topic_key": surface_key,
+                "pma_enabled": pma_enabled,
+                "surface_key": surface_key,
+            },
+            backend_thread_id=runtime_binding.backend_thread_id,
+            backend_runtime_instance_id=runtime_binding.backend_runtime_instance_id,
+            binding=binding,
+            thread=current_thread,
+        )
+        stop_outcome = replacement.stop_outcome
+        if stop_outcome is not None and stop_outcome.recovered_lost_backend:
+            previous_thread_id = replacement.previous_thread_id
+            log_event(
+                handlers._logger,
+                logging.INFO,
+                "telegram.thread.recovered_lost_backend",
+                surface_key=surface_key,
+                managed_thread_id=previous_thread_id,
+                mode=mode,
+            )
+        return orchestration_service, replacement.replacement_thread
     return _shared_resolve_managed_thread_target(
         orchestration_service,
         request=ManagedThreadTargetRequest(
