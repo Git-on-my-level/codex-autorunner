@@ -29,7 +29,7 @@ describe('/chats route load', () => {
     });
     expect(depends).toHaveBeenCalledWith('entity:chat:index');
     expect(client.chatIndex).toHaveBeenCalledTimes(1);
-    expect(client.chatIndex).toHaveBeenCalledWith({ limit: 200 });
+    expect(client.chatIndex).toHaveBeenCalledWith({ limit: 50 });
   });
 
   it('registers the chat index and active chat entity dependencies', async () => {

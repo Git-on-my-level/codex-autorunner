@@ -41,7 +41,7 @@ export function createChatIndexSession(deps: ChatIndexSessionDeps = {}): ChatInd
   let refreshPromise: Promise<void> | null = null;
   let started = false;
   let stream: ReadModelStreamManager<ChatIndexPatchEvent> | null = null;
-  let currentRequest: ChatIndexRequest = { filter: 'all', limit: 200 };
+  let currentRequest: ChatIndexRequest = { filter: 'all', limit: 50 };
   let inFlightRequest: ChatIndexRequest | null = null;
   let refreshAgain = false;
 

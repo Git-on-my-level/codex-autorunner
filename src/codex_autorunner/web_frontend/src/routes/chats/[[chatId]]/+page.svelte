@@ -587,14 +587,14 @@
       filter: readModelChatIndexFilter(filter),
       query: search.trim() || null,
       surfaceKind: filter.startsWith('surface:') ? filter.slice('surface:'.length) : null,
-      limit: 200
+      limit: 50
     };
   }
 
   function chatStatusFilterCounts(): Record<ChatStatusFilter, number> {
     const counters = readModelState.chatCounters;
     const localDraftBump = localDraftChat && !isPmaChatArchived(localDraftChat) ? 1 : 0;
-    const knownPersistedChats = selectPmaChats(readModelState, { filter: 'all', limit: 200 });
+    const knownPersistedChats = selectPmaChats(readModelState, { filter: 'all', limit: 50 });
     const knownChats = localDraftChat ? [localDraftChat, ...knownPersistedChats] : knownPersistedChats;
     // Backend counters are authoritative for status chips. Unread remains client-adjusted
     // until backend read markers fully match local last-seen semantics.
@@ -654,8 +654,8 @@
     void loadInitialSupportingData(
       webApi.pma.listFiles(),
       webApi.pma.listAgents(),
-      webApi.readModels.repoWorktreeTopology('all', 200),
-      webApi.readModels.repoWorktreeRuntime('all', 200)
+      webApi.readModels.repoWorktreeTopology('all', 50),
+      webApi.readModels.repoWorktreeRuntime('all', 50)
     );
     activeClockInterval = window.setInterval(() => {
       if (progress?.status === 'running') clockNowMs = Date.now();
