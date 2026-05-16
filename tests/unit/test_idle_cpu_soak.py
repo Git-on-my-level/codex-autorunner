@@ -262,6 +262,39 @@ class TestIdleCpuSoakProcessManagement:
         )
         assert sorted(pids) == [1001]
 
+    def test_collect_service_pids_fallback_scans_all_processes(self, monkeypatch):
+        """macOS lacks ps sid output; fallback must still find child services."""
+
+        class FakeProc:
+            pid = 1000
+
+        calls: list[list[str]] = []
+
+        def fake_run(cmd, **kwargs):
+            calls.append(cmd)
+            if cmd == ["ps", "-A", "-o", "pid=", "-o", "sid="]:
+                return subprocess.CompletedProcess(
+                    cmd, 1, "", "ps: sid: keyword not found"
+                )
+            if cmd == ["ps", "-A", "-o", "pid=", "-o", "ppid="]:
+                return subprocess.CompletedProcess(
+                    cmd,
+                    0,
+                    "1000 999\n1001 1000\n1002 1001\n2000 1\n",
+                    "",
+                )
+            return subprocess.CompletedProcess(cmd, 1, "", "")
+
+        monkeypatch.setattr(soak_module.subprocess, "run", fake_run)
+        monkeypatch.setattr(soak_module.os, "getsid", lambda _pid: 1000)
+
+        pids = soak_module._collect_service_pids(  # noqa: SLF001
+            [FakeProc()], logging.getLogger("test")
+        )
+
+        assert ["ps", "-A", "-o", "pid=", "-o", "ppid="] in calls
+        assert sorted(pids) == [1001, 1002]
+
     def test_write_and_delete_service_record(self, monkeypatch, tmp_path: Path):
         class FakeProc:
             pid = 5151

@@ -725,6 +725,7 @@ def create_hub_app(
                         )
 
             async def _process_monitor_loop() -> None:
+                await asyncio.sleep(DEFAULT_PROCESS_MONITOR_CADENCE_SECONDS)
                 while True:
                     try:
                         await asyncio.to_thread(
