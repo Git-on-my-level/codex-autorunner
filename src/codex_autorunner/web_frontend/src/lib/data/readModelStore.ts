@@ -896,16 +896,67 @@ function cloneTimelineProjection(timeline: TimelineProjection): TimelineProjecti
   };
 }
 
+function genericTimelineSortKey(item: ChatTimelineItem): string {
+  return item.orderKey || item.itemId;
+}
+
+function timelineTurnId(item: ChatTimelineItem): string | null {
+  const id = item.managedTurnId;
+  if (id == null) return null;
+  const trimmed = String(id).trim();
+  return trimmed ? trimmed : null;
+}
+
+function timelineItemPhase(item: ChatTimelineItem): number {
+  if (item.kind === 'user_message' || item.role === 'user') return 0;
+  if (item.kind === 'assistant_message' || item.role === 'assistant') return 2;
+  return 1;
+}
+
+function buildTimelineTurnAnchors(items: ChatTimelineItem[]): Map<string, string> {
+  const turnFallbacks: Record<string, string> = {};
+  const turnAnchors: Record<string, string> = {};
+  for (const item of items) {
+    const turnId = timelineTurnId(item);
+    if (!turnId) continue;
+    const g = genericTimelineSortKey(item);
+    const prevFb = turnFallbacks[turnId];
+    if (prevFb === undefined || g < prevFb) turnFallbacks[turnId] = g;
+    if (timelineItemPhase(item) === 0) {
+      const prevAnchor = turnAnchors[turnId];
+      if (prevAnchor === undefined || g < prevAnchor) turnAnchors[turnId] = g;
+    }
+  }
+  for (const turnId of Object.keys(turnFallbacks)) {
+    if (turnAnchors[turnId] === undefined) turnAnchors[turnId] = turnFallbacks[turnId]!;
+  }
+  return new Map(Object.entries(turnAnchors));
+}
+
+type TimelineSortTuple = readonly [string, number, string, string];
+
+function timelineRowSortKey(item: ChatTimelineItem, anchors: Map<string, string>): TimelineSortTuple {
+  const genericKey = genericTimelineSortKey(item);
+  const turnId = timelineTurnId(item);
+  const phase = timelineItemPhase(item);
+  if (!turnId) return [genericKey, phase, genericKey, item.itemId];
+  const anchor = anchors.get(turnId) ?? genericKey;
+  return [anchor, phase, genericKey, item.itemId];
+}
+
+function compareTimelineSortTuples(a: TimelineSortTuple, b: TimelineSortTuple): number {
+  if (a[0] !== b[0]) return a[0] < b[0] ? -1 : 1;
+  if (a[1] !== b[1]) return a[1] - b[1];
+  if (a[2] !== b[2]) return a[2] < b[2] ? -1 : 1;
+  if (a[3] !== b[3]) return a[3] < b[3] ? -1 : 1;
+  return 0;
+}
+
 function orderChatTimelineItems(items: ChatTimelineItem[]): ChatTimelineItem[] {
-  return [...items].sort((a, b) => {
-    const aOrder = a.orderKey || a.itemId;
-    const bOrder = b.orderKey || b.itemId;
-    if (aOrder !== bOrder) return aOrder < bOrder ? -1 : 1;
-    const aSection = a.sectionOrder ?? 90;
-    const bSection = b.sectionOrder ?? 90;
-    if (aSection !== bSection) return aSection - bSection;
-    return a.itemId.localeCompare(b.itemId);
-  });
+  const anchors = buildTimelineTurnAnchors(items);
+  return [...items].sort((a, b) =>
+    compareTimelineSortTuples(timelineRowSortKey(a, anchors), timelineRowSortKey(b, anchors))
+  );
 }
 
 function cloneChatTranscript(transcript: { cardsById: Record<string, ChatTranscriptCard>; order: string[] }): { cardsById: Record<string, ChatTranscriptCard>; order: string[] } {
