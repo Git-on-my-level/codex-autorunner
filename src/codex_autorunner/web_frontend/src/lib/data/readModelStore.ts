@@ -373,7 +373,7 @@ export class ReadModelEntityStore implements Readable<ReadModelEntityState> {
     next.timelines[snapshot.thread.chatId] = {
       chatId: snapshot.thread.chatId,
       itemsById: keyed(snapshot.timeline, (item) => item.itemId),
-      order: snapshot.timeline.map((item) => item.itemId),
+      order: orderChatTimelineItems(snapshot.timeline).map((item) => item.itemId),
       windowLimit: snapshot.timelineWindow.limit
     };
     next.pmaQueues[snapshot.thread.chatId] = snapshot.queue.queuedTurnIds.map((id, index) => ({
@@ -423,6 +423,7 @@ export class ReadModelEntityStore implements Readable<ReadModelEntityState> {
       delete existingTimeline.itemsById[id];
       existingTimeline.order = existingTimeline.order.filter((itemId) => itemId !== id);
     }
+    existingTimeline.order = orderChatTimelineItems(existingTimeline.order.map((id) => existingTimeline.itemsById[id]).filter(Boolean)).map((item) => item.itemId);
     next.timelines[chatId] = existingTimeline;
     const detail = cloneChatDetailProjection(next.chatDetails[chatId] ?? { thread: null, queue: null, artifactIds: [] });
     if (event.patch.thread) {
@@ -893,6 +894,76 @@ function cloneTimelineProjection(timeline: TimelineProjection): TimelineProjecti
     order: [...timeline.order],
     windowLimit: timeline.windowLimit
   };
+}
+
+function genericTimelineSortKey(item: ChatTimelineItem): string {
+  return item.orderKey || item.createdAt || item.itemId;
+}
+
+function timelineTurnId(item: ChatTimelineItem): string | null {
+  const id = item.managedTurnId;
+  if (id == null) return null;
+  const trimmed = String(id).trim();
+  return trimmed ? trimmed : null;
+}
+
+function timelineItemPhase(item: ChatTimelineItem): number {
+  if (typeof item.sectionOrder === 'number') return item.sectionOrder;
+  if (item.section === 'user_message' || item.kind === 'user_message' || item.role === 'user') return 10;
+  if (item.section === 'assistant_message' || item.kind === 'assistant_message' || item.role === 'assistant') return 30;
+  if (item.section === 'terminal_metadata') return 40;
+  if (item.section === 'thread_metadata') return 50;
+  return 20;
+}
+
+function timelineItemIsUserAnchor(item: ChatTimelineItem): boolean {
+  return item.section === 'user_message' || item.kind === 'user_message' || item.role === 'user';
+}
+
+function buildTimelineTurnAnchors(items: ChatTimelineItem[]): Map<string, string> {
+  const turnFallbacks: Record<string, string> = {};
+  const turnAnchors: Record<string, string> = {};
+  for (const item of items) {
+    const turnId = timelineTurnId(item);
+    if (!turnId) continue;
+    const g = genericTimelineSortKey(item);
+    const prevFb = turnFallbacks[turnId];
+    if (prevFb === undefined || g < prevFb) turnFallbacks[turnId] = g;
+    if (timelineItemIsUserAnchor(item)) {
+      const prevAnchor = turnAnchors[turnId];
+      if (prevAnchor === undefined || g < prevAnchor) turnAnchors[turnId] = g;
+    }
+  }
+  for (const turnId of Object.keys(turnFallbacks)) {
+    if (turnAnchors[turnId] === undefined) turnAnchors[turnId] = turnFallbacks[turnId]!;
+  }
+  return new Map(Object.entries(turnAnchors));
+}
+
+type TimelineSortTuple = readonly [string, number, string, string];
+
+function timelineRowSortKey(item: ChatTimelineItem, anchors: Map<string, string>): TimelineSortTuple {
+  const genericKey = genericTimelineSortKey(item);
+  const turnId = timelineTurnId(item);
+  const phase = timelineItemPhase(item);
+  if (!turnId) return [genericKey, phase, genericKey, item.itemId];
+  const anchor = anchors.get(turnId) ?? genericKey;
+  return [anchor, phase, genericKey, item.itemId];
+}
+
+function compareTimelineSortTuples(a: TimelineSortTuple, b: TimelineSortTuple): number {
+  if (a[0] !== b[0]) return a[0] < b[0] ? -1 : 1;
+  if (a[1] !== b[1]) return a[1] - b[1];
+  if (a[2] !== b[2]) return a[2] < b[2] ? -1 : 1;
+  if (a[3] !== b[3]) return a[3] < b[3] ? -1 : 1;
+  return 0;
+}
+
+function orderChatTimelineItems(items: ChatTimelineItem[]): ChatTimelineItem[] {
+  const anchors = buildTimelineTurnAnchors(items);
+  return [...items].sort((a, b) =>
+    compareTimelineSortTuples(timelineRowSortKey(a, anchors), timelineRowSortKey(b, anchors))
+  );
 }
 
 function cloneChatTranscript(transcript: { cardsById: Record<string, ChatTranscriptCard>; order: string[] }): { cardsById: Record<string, ChatTranscriptCard>; order: string[] } {

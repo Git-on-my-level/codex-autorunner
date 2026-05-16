@@ -226,6 +226,18 @@ Chat detail:
 - Patch: `ChatDetailPatchEvent`.
 - Carries thread metadata, visible timeline window, queue summary, artifacts,
   and optimistic reconciliation ids (`clientMessageId`, `backendMessageId`).
+- Timeline items carry backend-authored turn and ordering fields:
+  `managedTurnId`, `orderKey`, `section`, and `sectionOrder`. The frontend may
+  sort visible items by `orderKey` for idempotent patch replay, but it must not
+  infer turn structure from timestamps, `/tail`, or `/timeline`.
+- Compatibility bridge: the snapshot route is authoritative at
+  `/hub/read-models/chats/{chatId}` and the typed detail stream lives at
+  `/hub/read-models/chats/{chatId}/patches`. While that stream is backed by the
+  older chat-surface journal, it emits repairable `ChatDetailPatchEvent` reset
+  events instead of exposing legacy patch payloads for the frontend to
+  reinterpret. `/hub/pma/threads/{id}/transcript` remains supported for legacy
+  diagnostics and PMA-specific tests; new Web Hub data code should prefer the
+  read-model snapshot/patch routes and normalized store.
 
 Repo/worktree:
 

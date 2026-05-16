@@ -134,6 +134,10 @@ export type ChatTimelineItem = {
   itemId: string;
   kind: 'user_message' | 'assistant_message' | 'tool_event' | 'progress' | 'artifact' | 'system';
   role?: 'user' | 'assistant' | 'tool' | 'system' | null;
+  managedTurnId?: string | null;
+  orderKey?: string | null;
+  section?: 'user_message' | 'activity' | 'assistant_message' | 'terminal_metadata' | 'thread_metadata' | null;
+  sectionOrder?: number | null;
   createdAt: string;
   text?: string | null;
   artifactIds: string[];

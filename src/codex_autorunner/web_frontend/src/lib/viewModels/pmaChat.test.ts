@@ -36,6 +36,8 @@ import {
   pmaChatScopeTagView,
   chatSurfaceFilterOptions,
   chatSurfaceFilterToken,
+  committedDraftChatPlaceholder,
+  mergeLocalChatPlaceholders,
   progressPercent,
   reconcileChatSurfaceEvent,
   reconcileChatSurfaceSnapshot,
@@ -1995,6 +1997,55 @@ describe('PMA chat view helpers', () => {
         title: 'https://example.test',
         url: 'https://example.test'
       }
+    ]);
+  });
+
+  it('builds a committed draft placeholder that keeps detail mounted while the chat index is stale', () => {
+    const draftChat: PmaChatSummary = {
+      ...baseChat,
+      id: 'draft:pma:1',
+      title: 'New chat',
+      lifecycleStatus: 'draft',
+      status: 'idle',
+      ticketId: null,
+      isTicketFlow: false,
+      updatedAt: '2026-05-11T12:00:00Z',
+      raw: {
+        draft: true,
+        scope_urn: 'hub',
+        chat_kind: 'pma'
+      }
+    };
+
+    const placeholder = committedDraftChatPlaceholder(
+      draftChat,
+      'managed-thread-1',
+      '2026-05-11T12:00:01Z'
+    );
+
+    expect(placeholder).toMatchObject({
+      id: 'managed-thread-1',
+      title: 'New chat',
+      lifecycleStatus: 'active',
+      status: 'running',
+      updatedAt: '2026-05-11T12:00:01Z',
+      agentId: draftChat.agentId,
+      repoId: draftChat.repoId,
+      worktreeId: draftChat.worktreeId,
+      raw: {
+        draft: false,
+        draft_committed_placeholder: true,
+        previous_draft_id: 'draft:pma:1',
+        managed_thread_id: 'managed-thread-1'
+      }
+    });
+    expect(mergeLocalChatPlaceholders([], [placeholder]).map((chat) => chat.id)).toEqual(['managed-thread-1']);
+    expect(mergeLocalChatPlaceholders([baseChat], [placeholder]).map((chat) => chat.id)).toEqual([
+      'managed-thread-1',
+      'chat-1'
+    ]);
+    expect(mergeLocalChatPlaceholders([{ ...baseChat, id: 'managed-thread-1' }], [placeholder]).map((chat) => chat.id)).toEqual([
+      'managed-thread-1'
     ]);
   });
 

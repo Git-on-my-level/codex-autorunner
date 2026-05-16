@@ -101,6 +101,10 @@ function detailSnapshot(chatId = 'chat-1'): ChatDetailSnapshot {
         itemId: 'item-1',
         kind: 'user_message',
         role: 'user',
+        managedTurnId: 'turn-1',
+        orderKey: '00000010|turn-1|user',
+        section: 'user_message',
+        sectionOrder: 10,
         createdAt: now,
         text: 'hello',
         artifactIds: [],
@@ -179,6 +183,12 @@ describe('read model entity store', () => {
     expect(selectChatIndexView(store.snapshot()).rows.map((row) => row.chatId)).toEqual(['chat-1']);
     expect(selectChatDetailView(store.snapshot(), 'chat-1').thread?.agentProfile).toBe('m4-pma');
     expect(selectChatDetailView(store.snapshot(), 'chat-1').thread?.chatKind).toBe('coding_agent');
+    expect(selectChatDetailView(store.snapshot(), 'chat-1').timeline[0]).toMatchObject({
+      managedTurnId: 'turn-1',
+      orderKey: '00000010|turn-1|user',
+      section: 'user_message',
+      sectionOrder: 10
+    });
     store.optimisticSend(
       'chat-1',
       {
@@ -213,6 +223,56 @@ describe('read model entity store', () => {
     expect(timelineIds).not.toContain('optimistic:client-1');
     expect(timelineIds).toContain('item-2');
     expect(store.snapshot().optimistic['client-1'].status).toBe('reconciled');
+  });
+
+  it('keeps same-turn activity after the user row when backend order keys arrive out of phase order', () => {
+    const store = new ReadModelEntityStore();
+    const snapshot = detailSnapshot();
+    snapshot.timeline = [
+      {
+        itemId: 'turn-1-progress',
+        kind: 'progress',
+        managedTurnId: 'turn-1',
+        orderKey: '00000005|turn-1|progress',
+        section: 'activity',
+        sectionOrder: 20,
+        createdAt: now,
+        text: 'Starting',
+        artifactIds: []
+      },
+      {
+        itemId: 'turn-1-user',
+        kind: 'user_message',
+        role: 'user',
+        managedTurnId: 'turn-1',
+        orderKey: '00000010|turn-1|user',
+        section: 'user_message',
+        sectionOrder: 10,
+        createdAt: now,
+        text: 'hello',
+        artifactIds: []
+      },
+      {
+        itemId: 'turn-1-assistant',
+        kind: 'assistant_message',
+        role: 'assistant',
+        managedTurnId: 'turn-1',
+        orderKey: '00000015|turn-1|assistant',
+        section: 'assistant_message',
+        sectionOrder: 30,
+        createdAt: now,
+        text: 'hi',
+        artifactIds: []
+      }
+    ];
+
+    store.applyChatDetailSnapshot(snapshot);
+
+    expect(selectChatDetailView(store.snapshot(), 'chat-1').timeline.map((item) => item.itemId)).toEqual([
+      'turn-1-user',
+      'turn-1-progress',
+      'turn-1-assistant'
+    ]);
   });
 
   it('replaces and upserts backend-owned PMA transcript cards independently of timeline state', () => {
@@ -780,6 +840,10 @@ describe('read model entity store', () => {
             itemId: 'item-2',
             kind: 'assistant_message',
             role: 'assistant',
+            managedTurnId: 'turn-1',
+            orderKey: '00000030|turn-1|assistant',
+            section: 'assistant_message',
+            sectionOrder: 30,
             createdAt: now,
             text: 'done',
             artifactIds: []
@@ -795,6 +859,48 @@ describe('read model entity store', () => {
     expect(store.applyChatDetailPatchEvent(event)).toBe('applied');
     expect(store.applyChatDetailPatchEvent(event)).toBe('ignored');
     expect(selectChatDetailView(store.snapshot(), 'chat-1').timeline.filter((item) => item.itemId === 'item-2')).toHaveLength(1);
+  });
+
+  it('keeps same-turn patched activity after the user row when its order key is earlier', () => {
+    const store = new ReadModelEntityStore();
+    store.applyChatDetailSnapshot(detailSnapshot());
+    const event: ChatDetailPatchEvent = {
+      envelope: {
+        contractVersion: READ_MODEL_CONTRACT_VERSION,
+        eventType: 'chat.detail.patch',
+        cursor: cursor(2),
+        entityKind: 'chat',
+        entityId: 'chat-1',
+        operation: 'upsert',
+        generatedAt: now
+      },
+      patch: {
+        appendedTimeline: [
+          {
+            itemId: 'turn-1-progress',
+            kind: 'progress',
+            managedTurnId: 'turn-1',
+            orderKey: '00000005|turn-1|progress',
+            section: 'activity',
+            sectionOrder: 20,
+            createdAt: now,
+            text: 'Starting',
+            artifactIds: []
+          }
+        ],
+        patchedTimeline: [],
+        removedTimelineIds: [],
+        queue: null,
+        artifacts: []
+      }
+    };
+
+    expect(store.applyChatDetailPatchEvent(event)).toBe('applied');
+
+    expect(selectChatDetailView(store.snapshot(), 'chat-1').timeline.map((item) => item.itemId)).toEqual([
+      'item-1',
+      'turn-1-progress'
+    ]);
   });
 
   it('caps retained PMA live progress events and drops hidden/debug-only progress', () => {

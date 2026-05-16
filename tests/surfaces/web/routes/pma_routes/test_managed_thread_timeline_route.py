@@ -11,6 +11,7 @@ from codex_autorunner.core.orchestration import SQLiteChatSurfaceEventJournal
 from codex_autorunner.core.orchestration.cold_trace_store import ColdTraceWriter
 from codex_autorunner.core.orchestration.managed_thread_transcript import (
     _merge_transcript_rows,
+    build_managed_thread_transcript,
 )
 from codex_autorunner.core.orchestration.sqlite import open_orchestration_sqlite
 from codex_autorunner.core.orchestration.turn_timeline import (
@@ -120,6 +121,81 @@ def test_managed_thread_transcript_live_rows_replace_stale_durable_rows() -> Non
     merged = _merge_transcript_rows(durable_rows, live_rows)
 
     assert merged == [live_rows[0]]
+
+
+def test_managed_thread_transcript_live_rows_stay_after_turn_user_row() -> None:
+    durable_rows = [
+        {
+            "kind": "message",
+            "id": "turn:turn-1:user",
+            "turn_id": "turn-1",
+            "order_key": "00000005|2026-05-12T10:00:00Z|turn:turn-1:user",
+            "message": {"role": "user", "text": "hello"},
+        }
+    ]
+    live_rows = [
+        {
+            "kind": "intermediate",
+            "id": "turn:turn-1:intermediate:0001",
+            "turn_id": "turn-1",
+            "order_key": "00000001|2026-05-12T09:59:59Z|progress",
+            "text": "thinking",
+        }
+    ]
+
+    merged = _merge_transcript_rows(durable_rows, live_rows)
+
+    assert [row["id"] for row in merged] == [
+        "turn:turn-1:user",
+        "turn:turn-1:intermediate:0001",
+    ]
+
+
+def test_managed_thread_transcript_running_first_turn_orders_live_progress_after_user(
+    hub_env,
+) -> None:
+    store = ManagedThreadStore(hub_env.hub_root)
+    created = store.create_thread(
+        "codex",
+        hub_env.repo_root.resolve(),
+        repo_id=hub_env.repo_id,
+    )
+    managed_thread_id = str(created["managed_thread_id"])
+    turn = store.create_turn(managed_thread_id, prompt="first prompt")
+    turn_id = str(turn["managed_turn_id"])
+
+    transcript = build_managed_thread_transcript(
+        hub_env.hub_root,
+        thread_store=store,
+        managed_thread_id=managed_thread_id,
+        progress_snapshot={
+            "managed_turn_id": turn_id,
+            "last_event_id": 1,
+            "events": [
+                {
+                    "event_id": 1,
+                    "event_type": "progress",
+                    "received_at": "2026-05-12T09:59:59Z",
+                    "summary": "Planning next step",
+                    "progress_kind": "assistant_update",
+                    "progress_state": "running",
+                    "progress_item": {
+                        "item_id": "progress:assistant_update:1",
+                        "kind": "assistant_update",
+                        "summary": "Planning next step",
+                        "event_ids": [1],
+                    },
+                }
+            ],
+        },
+    )
+
+    rows = transcript["rows"]
+    assert [row["kind"] for row in rows] == ["message", "intermediate"]
+    assert rows[0]["id"] == f"turn:{turn_id}:user"
+    assert rows[0]["message"]["role"] == "user"
+    assert rows[1]["id"] == f"turn:{turn_id}:intermediate:0001"
+    assert rows[1]["turn_id"] == turn_id
 
 
 def test_managed_thread_timeline_endpoint_returns_canonical_items(hub_env) -> None:

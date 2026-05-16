@@ -546,6 +546,45 @@ export function reconcileChatSurfaceSnapshot(
   return { chats: nextChats, replacementChatId: replacement?.id ?? null };
 }
 
+export function committedDraftChatPlaceholder(
+  draftChat: PmaChatSummary,
+  committedChatId: string,
+  updatedAt = new Date().toISOString()
+): PmaChatSummary {
+  return {
+    ...draftChat,
+    id: committedChatId,
+    lifecycleStatus: 'active',
+    status: 'running',
+    updatedAt,
+    raw: {
+      ...draftChat.raw,
+      draft: false,
+      draft_committed_placeholder: true,
+      previous_draft_id: draftChat.id,
+      id: committedChatId,
+      managed_thread_id: committedChatId
+    }
+  };
+}
+
+export function mergeLocalChatPlaceholders(
+  persistedChats: PmaChatSummary[],
+  placeholders: Array<PmaChatSummary | null | undefined>
+): PmaChatSummary[] {
+  const visiblePlaceholders = visibleLocalChatPlaceholders(persistedChats, placeholders);
+  return visiblePlaceholders.length > 0 ? [...visiblePlaceholders, ...persistedChats] : persistedChats;
+}
+
+export function visibleLocalChatPlaceholders(
+  persistedChats: PmaChatSummary[],
+  placeholders: Array<PmaChatSummary | null | undefined>
+): PmaChatSummary[] {
+  return placeholders
+    .filter((chat): chat is PmaChatSummary => Boolean(chat))
+    .filter((chat) => !persistedChats.some((row) => row.id === chat.id));
+}
+
 export type ManagedThreadMessagePayload = {
   message: string;
   attachments?: DocumentFileIntentPayload[];
