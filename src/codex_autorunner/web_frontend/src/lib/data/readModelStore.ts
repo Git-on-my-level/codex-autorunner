@@ -248,13 +248,8 @@ export class ReadModelEntityStore implements Readable<ReadModelEntityState> {
       limit: request.limit ?? snapshot.window?.limit
     });
     const windowKey = canonicalChatIndexWindowKey(windowRequest);
-    next.chatWindows = {};
-    next.chats = {};
-    next.chatGroups = {};
     for (const row of rows) next.chats[row.chatId] = row;
     for (const group of snapshot.groups) next.chatGroups[group.groupId] = group;
-    next.chatOrder = rows.map((row) => row.chatId);
-    next.chatGroupOrder = snapshot.groups.map((group) => group.groupId);
     if (isDefaultChatIndexWindow(windowRequest)) next.chatCounters = snapshot.counters;
     next.chatIndexCursor = snapshot.cursor;
     next.chatWindows[windowKey] = {
@@ -276,6 +271,7 @@ export class ReadModelEntityStore implements Readable<ReadModelEntityState> {
     for (const detail of Object.values(next.chatDetails)) {
       if (detail.thread) seedDetailBackedChatRow(next, detail.thread);
     }
+    rebuildChatIndexEntityOrder(next);
     for (const row of rows) bump(next, 'chat', row.chatId);
     for (const group of snapshot.groups) bump(next, 'chatGroup', group.groupId);
     pruneChatIndexCache(next);
@@ -982,6 +978,30 @@ function cloneChatIndexWindow(window: ChatIndexWindow): ChatIndexWindow {
     counters: { ...window.counters },
     window: window.window ? { ...window.window } : null
   };
+}
+
+function rebuildChatIndexEntityOrder(state: ReadModelEntityState): void {
+  const chatIds: string[] = [];
+  const groupIds: string[] = [];
+  const pushUnique = (target: string[], id: string): void => {
+    if (!target.includes(id)) target.push(id);
+  };
+  for (const window of Object.values(state.chatWindows)) {
+    for (const chatId of window.rowIds) {
+      if (state.chats[chatId]) pushUnique(chatIds, chatId);
+    }
+    for (const groupId of window.groupIds) {
+      if (state.chatGroups[groupId]) pushUnique(groupIds, groupId);
+    }
+  }
+  for (const chatId of state.chatOrder) {
+    if (state.chats[chatId]) pushUnique(chatIds, chatId);
+  }
+  for (const groupId of state.chatGroupOrder) {
+    if (state.chatGroups[groupId]) pushUnique(groupIds, groupId);
+  }
+  state.chatOrder = chatIds;
+  state.chatGroupOrder = groupIds;
 }
 
 function reconcileChatIndexWindowsAfterEntityPatch(next: ReadModelEntityState, event: ChatIndexPatchEvent): void {
