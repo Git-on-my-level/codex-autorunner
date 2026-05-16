@@ -17,6 +17,7 @@ from tests.discord_message_turns_support import (
     test_message_create_flush_outbox_skips_symlink_outside_pending,
     test_message_create_flushes_pending_outbox_files_after_turn,
     test_message_create_flushes_root_outbox_files_after_turn,
+    test_message_create_flushes_root_outbox_when_wrapup_artifacts_fail,
     test_message_create_injects_car_context_for_car_trigger,
     test_message_create_mixed_audio_and_file_attachment_keeps_outbox_hint,
     test_message_create_non_pma_injects_filebox_hint_for_inbox_keyword,
@@ -24,6 +25,7 @@ from tests.discord_message_turns_support import (
     test_message_create_non_pma_injects_prompt_context_hints,
     test_message_create_non_pma_prompt_hint_ignores_reply_context_prompt_text,
     test_message_create_non_pma_uses_raw_message_for_github_link_source,
+    test_message_create_sends_chat_wrapup_app_artifacts_after_turn,
     test_message_create_video_attachment_does_not_transcribe,
     test_message_event_submits_through_surface_orchestration_ingress,
 )

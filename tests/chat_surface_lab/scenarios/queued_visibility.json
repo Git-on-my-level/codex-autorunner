@@ -285,7 +285,8 @@
       "field": "chat_ux_delta_queue_visible_ms",
       "surfaces": [
         "discord"
-      ]
+      ],
+      "max_ms": 4000.0
     },
     {
       "budget_id": "queue_visible",
