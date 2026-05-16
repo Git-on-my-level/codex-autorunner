@@ -251,6 +251,7 @@ def _scope_urn_for_create_resolution(
     scope_ref: Optional[ScopeRef],
     resource_kind: Optional[str],
     resource_id: Optional[str],
+    worktree_parent_repo_id: Optional[str],
     workspace_root: Path,
     hub_root: Path,
 ) -> str:
@@ -258,6 +259,16 @@ def _scope_urn_for_create_resolution(
         return scope_ref.to_urn()
     if resource_kind == "repo" and resource_id is not None:
         return ScopeRef(kind="repo", id=resource_id).to_urn()
+    if (
+        resource_kind == "worktree"
+        and resource_id is not None
+        and worktree_parent_repo_id is not None
+    ):
+        return ScopeRef(
+            kind="worktree",
+            id=resource_id,
+            parent_repo_id=worktree_parent_repo_id,
+        ).to_urn()
     try:
         if workspace_root.resolve() == hub_root.resolve():
             return ScopeRef(kind="hub").to_urn()
@@ -273,6 +284,7 @@ def _create_genesis_metadata(
     resource_kind: Optional[str],
     resource_id: Optional[str],
     repo_id: Optional[str],
+    worktree_parent_repo_id: Optional[str],
     workspace_root: Path,
     hub_root: Path,
 ) -> dict[str, Any]:
@@ -311,6 +323,7 @@ def _create_genesis_metadata(
         scope_ref=scope_ref,
         resource_kind=resource_kind,
         resource_id=resource_id,
+        worktree_parent_repo_id=worktree_parent_repo_id,
         workspace_root=workspace_root,
         hub_root=hub_root,
     )
@@ -353,6 +366,19 @@ def _create_genesis_metadata(
     if payload.client_intent is not None:
         metadata["client_intent"] = payload.client_intent
     return metadata
+
+
+def _worktree_parent_repo_id(
+    repos: Any,
+    worktree_id: Optional[str],
+) -> Optional[str]:
+    if worktree_id is None:
+        return None
+    for snapshot in repos or ():
+        if normalize_optional_text(getattr(snapshot, "id", None)) != worktree_id:
+            continue
+        return normalize_optional_text(getattr(snapshot, "worktree_of", None))
+    return None
 
 
 def managed_thread_metadata_for_provisioned_workspace(
@@ -918,6 +944,10 @@ def resolve_managed_thread_create_resolution(
     resource_kind = pma_context.resource_kind
     resource_id = pma_context.resource_id
     resolved_repo_id = pma_context.repo_id
+    worktree_parent_repo_id = _worktree_parent_repo_id(
+        repos,
+        resource_id if resource_kind == "worktree" else None,
+    )
     followup_policy = resolve_managed_thread_followup_policy(
         payload,
         # Terminal follow-up defaults now apply when the thread is used, not at
@@ -961,6 +991,7 @@ def resolve_managed_thread_create_resolution(
             resource_kind=resource_kind,
             resource_id=resource_id,
             repo_id=resolved_repo_id,
+            worktree_parent_repo_id=worktree_parent_repo_id,
             workspace_root=resolved_workspace,
             hub_root=hub_root,
         ),

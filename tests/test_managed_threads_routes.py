@@ -216,6 +216,56 @@ def test_create_managed_thread_legacy_payload_gets_genesis_stamp(hub_env) -> Non
     assert genesis["scope"]["urn"] == f"repo:{hub_env.repo_id}"
 
 
+def test_create_managed_thread_legacy_worktree_payload_gets_worktree_genesis_urn(
+    hub_env,
+) -> None:
+    from codex_autorunner.bootstrap import seed_repo_files
+    from codex_autorunner.core.config import load_hub_config
+    from codex_autorunner.manifest import load_manifest, save_manifest
+
+    worktree_id = "repo--legacy-feature"
+    worktree_root = hub_env.hub_root / "worktrees" / worktree_id
+    worktree_root.mkdir(parents=True)
+    (worktree_root / ".git").mkdir()
+    seed_repo_files(worktree_root, git_required=False)
+    hub_config = load_hub_config(hub_env.hub_root)
+    manifest = load_manifest(hub_config.manifest_path, hub_env.hub_root)
+    manifest.ensure_repo(
+        hub_env.hub_root,
+        worktree_root,
+        repo_id=worktree_id,
+        kind="worktree",
+        worktree_of=hub_env.repo_id,
+        branch="legacy-feature",
+    )
+    save_manifest(hub_config.manifest_path, manifest, hub_env.hub_root)
+    app = create_hub_app(hub_env.hub_root)
+
+    with TestClient(app) as client:
+        resp = client.post(
+            "/hub/pma/threads",
+            json={
+                "agent": "codex",
+                "resource_kind": "worktree",
+                "resource_id": worktree_id,
+            },
+        )
+
+    assert resp.status_code == 200
+    thread = resp.json()["thread"]
+    stored = ManagedThreadStore(hub_env.hub_root).get_thread(
+        thread["managed_thread_id"]
+    )
+    assert stored is not None
+    genesis = stored["metadata"]["genesis"]
+    assert genesis["origin"] == "legacy"
+    assert genesis["scope_source"] == "legacy_scope_fields"
+    assert genesis["scope"]["kind"] == "worktree"
+    assert genesis["scope"]["urn"] == f"worktree:{hub_env.repo_id}/{worktree_id}"
+    assert genesis["scope"]["resource_kind"] == "worktree"
+    assert genesis["scope"]["resource_id"] == worktree_id
+
+
 def test_create_managed_thread_rejects_conflicting_repo_fields(hub_env) -> None:
     app = create_hub_app(hub_env.hub_root)
 
