@@ -152,6 +152,88 @@ def test_create_managed_thread_with_repo_scope_urn(hub_env) -> None:
     assert thread["workspace_root"] == str(hub_env.repo_root.resolve())
 
 
+def test_create_managed_thread_persists_explicit_genesis_metadata(hub_env) -> None:
+    app = create_hub_app(hub_env.hub_root)
+
+    with TestClient(app) as client:
+        resp = client.post(
+            "/hub/pma/threads",
+            json={
+                "agent": "codex",
+                "scope_urn": f"repo:{hub_env.repo_id}",
+                "genesis": {
+                    "origin": "web",
+                    "scope_source": "picker_explicit",
+                    "parent_thread_id": "parent-thread-1",
+                    "fork_mode": "copy_context",
+                    "client_intent": {"draft_id": "draft-1"},
+                },
+                "name": "Genesis thread",
+            },
+        )
+
+    assert resp.status_code == 200
+    thread = resp.json()["thread"]
+    store = ManagedThreadStore(hub_env.hub_root)
+    stored = store.get_thread(thread["managed_thread_id"])
+    assert stored is not None
+    genesis = stored["metadata"]["genesis"]
+    assert genesis["origin"] == "web"
+    assert genesis["scope_source"] == "picker_explicit"
+    assert genesis["legacy"] is False
+    assert genesis["parent_thread_id"] == "parent-thread-1"
+    assert genesis["fork_mode"] == "copy_context"
+    assert genesis["client_intent"] == {"draft_id": "draft-1"}
+    assert genesis["scope"]["urn"] == f"repo:{hub_env.repo_id}"
+    assert genesis["scope"]["kind"] == "repo"
+    assert genesis["scope"]["resource_kind"] == "repo"
+    assert genesis["scope"]["resource_id"] == hub_env.repo_id
+    assert genesis["scope"]["actual_workspace_root"] == thread["workspace_root"]
+    assert genesis["client_scope_request"] == {
+        "scope_urn": f"repo:{hub_env.repo_id}",
+    }
+
+
+def test_create_managed_thread_legacy_payload_gets_genesis_stamp(hub_env) -> None:
+    app = create_hub_app(hub_env.hub_root)
+
+    with TestClient(app) as client:
+        resp = client.post(
+            "/hub/pma/threads",
+            json={"agent": "codex", **_repo_owner(hub_env)},
+        )
+
+    assert resp.status_code == 200
+    thread = resp.json()["thread"]
+    stored = ManagedThreadStore(hub_env.hub_root).get_thread(
+        thread["managed_thread_id"]
+    )
+    assert stored is not None
+    genesis = stored["metadata"]["genesis"]
+    assert genesis["origin"] == "legacy"
+    assert genesis["scope_source"] == "legacy_scope_fields"
+    assert genesis["legacy"] is True
+    assert genesis["scope"]["urn"] == f"repo:{hub_env.repo_id}"
+
+
+def test_create_managed_thread_rejects_conflicting_repo_fields(hub_env) -> None:
+    app = create_hub_app(hub_env.hub_root)
+
+    with TestClient(app) as client:
+        resp = client.post(
+            "/hub/pma/threads",
+            json={
+                "agent": "codex",
+                "repo_id": hub_env.repo_id,
+                "resource_kind": "repo",
+                "resource_id": "other-repo",
+            },
+        )
+
+    assert resp.status_code == 400
+    assert "repo_id conflicts" in resp.json()["detail"]
+
+
 def test_create_managed_thread_with_worktree_scope_urn(hub_env) -> None:
     from codex_autorunner.bootstrap import seed_repo_files
     from codex_autorunner.core.config import load_hub_config

@@ -199,6 +199,45 @@ def test_start_thread_message_commits_agent_selection_without_empty_thread(
     assert turns[0]["model"] == "zai/glm"
 
 
+def test_start_thread_message_persists_genesis_metadata(hub_env) -> None:
+    _enable_pma(
+        hub_env.hub_root,
+        model="model-default",
+        reactive_enabled=False,
+        managed_thread_terminal_followup_default=False,
+    )
+    app = create_hub_app(hub_env.hub_root)
+    fake_supervisor = FakeSupervisor(FakeClient(sequential=True))
+
+    with TestClient(app) as client:
+        app.state.app_server_supervisor = fake_supervisor
+        app.state.app_server_events = object()
+        start_resp = client.post(
+            "/hub/pma/thread-starts",
+            json={
+                "message": "start with explicit genesis",
+                "agent": "codex",
+                "defer_execution": True,
+                "wait_for_confirmation": False,
+                "origin": "web",
+                "scope_source": "route_explicit",
+                "client_intent": {"route": "/repos/repo-1/chat"},
+                **_repo_owner(hub_env),
+            },
+        )
+
+    assert start_resp.status_code == 200
+    managed_thread_id = start_resp.json()["managed_thread_id"]
+    thread = ManagedThreadStore(hub_env.hub_root).get_thread(managed_thread_id)
+    assert thread is not None
+    genesis = thread["metadata"]["genesis"]
+    assert genesis["origin"] == "web"
+    assert genesis["scope_source"] == "route_explicit"
+    assert genesis["legacy"] is False
+    assert genesis["client_intent"] == {"route": "/repos/repo-1/chat"}
+    assert genesis["scope"]["urn"] == f"repo:{hub_env.repo_id}"
+
+
 def test_existing_thread_message_rejects_agent_field(hub_env) -> None:
     _enable_pma(
         hub_env.hub_root,
