@@ -14,8 +14,12 @@ from .....agents.registry import (
     resolve_agent_runtime,
     wrap_requested_agent_context,
 )
-from .....core.orchestration import build_harness_backed_orchestration_service
+from .....core.orchestration import (
+    ChatSurfaceReadService,
+    build_harness_backed_orchestration_service,
+)
 from .....core.orchestration.catalog import RuntimeAgentDescriptor
+from .....core.orchestration.chat_surface_emitters import emit_chat_surface_event
 from .....core.orchestration.managed_thread_timeline import (
     MAX_MANAGED_THREAD_TIMELINE_LIMIT,
     build_managed_thread_timeline,
@@ -23,6 +27,7 @@ from .....core.orchestration.managed_thread_timeline import (
 from .....core.orchestration.turn_timeline import list_turn_timeline
 from .....core.pma_automation_store import PmaAutomationThreadNotFoundError
 from .....core.text_utils import _truncate_text
+from .....core.time_utils import now_iso
 from ...schemas import (
     ManagedThreadBulkArchiveRequest,
     ManagedThreadCompactRequest,
@@ -65,6 +70,60 @@ from .managed_thread_route_helpers import (
 )
 
 _logger = logging.getLogger(__name__)
+
+
+def _archiveable_notification_surfaces(
+    row: dict[str, Any],
+) -> list[dict[str, str]]:
+    seen: set[tuple[str, str]] = set()
+    surfaces: list[dict[str, str]] = []
+    raw_surfaces = list(row.get("surface_bindings") or row.get("surfaces") or [])
+    primary = row.get("primary_surface") or row.get("surface")
+    if isinstance(primary, dict):
+        raw_surfaces.append(primary)
+    for raw in raw_surfaces:
+        if not isinstance(raw, dict):
+            continue
+        surface_kind = normalize_optional_text(raw.get("surface_kind"))
+        surface_key = normalize_optional_text(raw.get("surface_key"))
+        if surface_kind != "notification" or surface_key is None:
+            continue
+        key = (surface_kind, surface_key)
+        if key in seen:
+            continue
+        seen.add(key)
+        surfaces.append({"surface_kind": surface_kind, "surface_key": surface_key})
+    return surfaces
+
+
+def _emit_notification_surface_archived(
+    *,
+    hub_root: Path,
+    surface_key: str,
+    row: dict[str, Any],
+) -> bool:
+    occurred_at = now_iso()
+    result = emit_chat_surface_event(
+        hub_root,
+        idempotency_key=f"notification_surface_archive:{surface_key}",
+        event_type="surface.archived",
+        surface_kind="notification",
+        surface_key=surface_key,
+        managed_thread_id=normalize_optional_text(row.get("managed_thread_id")),
+        repo_id=normalize_optional_text(row.get("repo_id")),
+        resource_kind=normalize_optional_text(row.get("resource_kind")),
+        resource_id=normalize_optional_text(row.get("resource_id")),
+        workspace_root=normalize_optional_text(row.get("workspace_root")),
+        lifecycle_status="archived",
+        status="archived",
+        source_kind="hub.pma.archive_active",
+        source_id=normalize_optional_text(row.get("row_id"))
+        or normalize_optional_text(row.get("chat_id"))
+        or surface_key,
+        payload={"row_id": row.get("row_id"), "chat_id": row.get("chat_id")},
+        occurred_at=occurred_at,
+    )
+    return bool(result.inserted)
 
 
 def _subscription_request_has_explicit_routing(payload: dict[str, Any]) -> bool:
@@ -860,32 +919,65 @@ def build_managed_thread_crud_routes(
         service = build_managed_thread_orchestration_service(request)
         context = get_pma_request_context(request)
         store = context.thread_store()
-        active_thread_ids = [
-            str(thread["managed_thread_id"])
-            for thread in store.list_threads(status="active", limit=None)
-        ]
+        archive_targets = ChatSurfaceReadService(
+            context.hub_root, durable=True
+        ).chat_index_archive_targets()
         archived_threads: list[Any] = []
         errors: list[dict[str, str]] = []
+        archived_row_ids: set[str] = set()
+        archived_thread_ids: set[str] = set()
+        archived_surfaces: list[dict[str, str]] = []
 
-        for managed_thread_id in active_thread_ids:
-            thread = service.get_thread_target(managed_thread_id)
-            if thread is None:
-                errors.append(
-                    {
-                        "thread_id": managed_thread_id,
-                        "detail": "Managed thread not found",
-                    }
-                )
-                continue
-
-            old_status = normalize_optional_text(thread.lifecycle_status)
-            updated = service.archive_thread_target(managed_thread_id)
-            store.append_action(
-                "managed_thread_archive",
-                managed_thread_id=managed_thread_id,
-                payload_json=json.dumps({"old_status": old_status}, ensure_ascii=True),
+        for row in archive_targets:
+            row_id = (
+                normalize_optional_text(row.get("row_id"))
+                or normalize_optional_text(row.get("chat_id"))
+                or "unknown-chat-row"
             )
-            archived_threads.append(updated)
+            row_archived = False
+            managed_thread_id = normalize_optional_text(row.get("managed_thread_id"))
+            if managed_thread_id is not None:
+                if managed_thread_id in archived_thread_ids:
+                    row_archived = True
+                else:
+                    thread = service.get_thread_target(managed_thread_id)
+                    if thread is None:
+                        if not _archiveable_notification_surfaces(row):
+                            errors.append(
+                                {
+                                    "thread_id": managed_thread_id,
+                                    "detail": "Managed thread not found",
+                                }
+                            )
+                    elif normalize_optional_text(thread.lifecycle_status) == "archived":
+                        archived_thread_ids.add(managed_thread_id)
+                        row_archived = True
+                    else:
+                        old_status = normalize_optional_text(thread.lifecycle_status)
+                        updated = service.archive_thread_target(managed_thread_id)
+                        store.append_action(
+                            "managed_thread_archive",
+                            managed_thread_id=managed_thread_id,
+                            payload_json=json.dumps(
+                                {"old_status": old_status}, ensure_ascii=True
+                            ),
+                        )
+                        archived_threads.append(updated)
+                        archived_thread_ids.add(managed_thread_id)
+                        row_archived = True
+
+            for surface in _archiveable_notification_surfaces(row):
+                surface_key = surface["surface_key"]
+                _emit_notification_surface_archived(
+                    hub_root=context.hub_root,
+                    surface_key=surface_key,
+                    row=row,
+                )
+                archived_surfaces.append(surface)
+                row_archived = True
+
+            if row_archived:
+                archived_row_ids.add(row_id)
 
         binding_metadata = _load_chat_binding_metadata_by_thread(context.hub_root)
         return {
@@ -896,8 +988,9 @@ def build_managed_thread_crud_routes(
                 )
                 for thread in archived_threads
             ],
-            "archived_count": len(archived_threads),
-            "requested_count": len(active_thread_ids),
+            "archived_surfaces": archived_surfaces,
+            "archived_count": len(archived_row_ids),
+            "requested_count": len(archive_targets),
             "errors": errors,
             "error_count": len(errors),
         }
