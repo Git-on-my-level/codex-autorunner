@@ -75,8 +75,25 @@ describe('read model loaders', () => {
     const result = await ensureRepoWorktreeIndexLoaded({ store, client });
 
     expect(result.status).toBe('fetched');
+    expect(client.repoWorktreeTopology).toHaveBeenCalledWith('all', 200);
+    expect(client.repoWorktreeRuntime).toHaveBeenCalledWith('all', 200);
     expect(store.snapshot().repos['repo-1']?.label).toBe('Repo One');
     expect(store.snapshot().runtime['repo:repo-1']?.activeRunStatus).toBe('running');
+  });
+
+  it('allows repo-worktree index callers to request a smaller profile window explicitly', async () => {
+    const store = new ReadModelEntityStore();
+    const client = mockClient({
+      repoWorktreeTopology: vi.fn().mockResolvedValue(ok(repoWorktreeTopologySnapshot())),
+      repoWorktreeRuntime: vi.fn().mockResolvedValue(ok(repoWorktreeRuntimeSnapshot()))
+    });
+    const { ensureRepoWorktreeIndexLoaded } = await importLoaders(true);
+
+    const result = await ensureRepoWorktreeIndexLoaded({ store, client, limit: 50 });
+
+    expect(result.status).toBe('fetched');
+    expect(client.repoWorktreeTopology).toHaveBeenCalledWith('all', 50);
+    expect(client.repoWorktreeRuntime).toHaveBeenCalledWith('all', 50);
   });
 
   it('uses ticket and owner entity tags for scoped ticket details', async () => {

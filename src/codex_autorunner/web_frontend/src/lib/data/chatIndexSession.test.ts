@@ -99,7 +99,7 @@ describe('chat index session', () => {
     session.start();
 
     expect(client.chatIndex).toHaveBeenCalledTimes(1);
-    expect(client.chatIndex).toHaveBeenNthCalledWith(1, { filter: 'all', limit: 200 });
+    expect(client.chatIndex).toHaveBeenNthCalledWith(1, { filter: 'all', limit: 50 });
     expect(streamFactory).toHaveBeenCalledWith(expect.objectContaining({
       key: 'chat.index.entity',
       path: '/hub/read-models/chats/patches',
@@ -182,7 +182,7 @@ describe('chat index session', () => {
     const session = createChatIndexSession({ client, store, streamFactory });
 
     session.start();
-    await session.refresh({ filter: 'all', limit: 200 });
+    await session.refresh({ filter: 'all', limit: 50 });
     await session.refresh({ filter: 'archived', limit: 200 });
 
     expect(streamFactory).toHaveBeenCalledTimes(1);
@@ -286,7 +286,7 @@ describe('chat index session', () => {
     const session = createChatIndexSession({ client, store, streamFactory });
 
     session.start();
-    await session.refresh({ filter: 'all', limit: 200 });
+    await session.refresh({ filter: 'all', limit: 50 });
     const options = streamOptions as unknown as ReadModelStreamOptions<ChatIndexPatchEvent>;
     options.onEvent?.({
       ...chatPatchEvent(2, indexRow('chat-archived-history', 'Archived history', 'archived')),

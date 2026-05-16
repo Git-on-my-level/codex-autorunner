@@ -41,7 +41,7 @@ export function createChatIndexSession(deps: ChatIndexSessionDeps = {}): ChatInd
   let refreshPromise: Promise<void> | null = null;
   let started = false;
   let stream: ReadModelStreamManager<ChatIndexPatchEvent> | null = null;
-  let currentRequest: ChatIndexRequest = { filter: 'all', limit: 200 };
+  let currentRequest: ChatIndexRequest = { filter: 'all', limit: 50 };
   let inFlightRequest: ChatIndexRequest | null = null;
   let refreshAgain = false;
 
@@ -182,7 +182,7 @@ function sameChatIndexRequest(left: ChatIndexRequest | null, right: ChatIndexReq
   if (!left || !right) return left === right;
   return (
     (left.filter ?? 'all') === (right.filter ?? 'all') &&
-    (left.limit ?? 200) === (right.limit ?? 200) &&
+    (left.limit ?? 50) === (right.limit ?? 50) &&
     (left.query ?? '') === (right.query ?? '') &&
     (left.surfaceKind ?? '') === (right.surfaceKind ?? '')
   );

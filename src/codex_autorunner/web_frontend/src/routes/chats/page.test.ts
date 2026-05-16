@@ -1,6 +1,9 @@
 import { render } from 'svelte/server';
 import { afterEach, describe, expect, it } from 'vitest';
-import type { ChatIndexRow } from '$lib/api/readModelContracts';
+import {
+  type ChatIndexRow,
+  type ProjectionCursor
+} from '$lib/api/readModelContracts';
 import { readModelEntityStore } from '$lib/data/readModelStore';
 import Page from './[[chatId]]/+page.svelte';
 
@@ -32,6 +35,29 @@ describe('/chats page', () => {
     expect(body).toContain('Chat One');
     expect(body).not.toContain('Loading chats');
   });
+
+  it('uses backend unread counters when the first chat window is smaller than the full result set', () => {
+    readModelEntityStore.applyChatIndexSnapshot({
+      cursor: projectionCursor(),
+      window: {
+        limit: 50,
+        nextCursor: 'next-page',
+        previousCursor: null,
+        totalEstimate: 200,
+        totalIsExact: false
+      },
+      filter: 'all',
+      query: null,
+      rows: [chatIndexRow()],
+      groups: [],
+      counters: { total: 200, waiting: 0, running: 1, unread: 7, archived: 0 }
+    });
+
+    const { body } = render(Page);
+
+    expect(body).toContain('Unread');
+    expect(body).toContain('7');
+  });
 });
 
 function chatIndexRow(): ChatIndexRow {
@@ -50,5 +76,14 @@ function chatIndexRow(): ChatIndexRow {
     chatKind: 'pma',
     model: 'gpt-5.5',
     groupId: null
+  };
+}
+
+function projectionCursor(): ProjectionCursor {
+  return {
+    value: 'test:1',
+    sequence: 1,
+    source: 'test',
+    issuedAt: '2026-05-11T12:00:00Z'
   };
 }
