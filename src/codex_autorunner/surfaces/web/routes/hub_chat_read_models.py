@@ -79,6 +79,10 @@ def _sse_frame(event: str, payload: dict[str, Any], *, event_id: Optional[str]) 
     )
 
 
+def _advance_chat_detail_stream_cursor(last_cursor: int, batch_cursor: int) -> int:
+    return max(last_cursor, batch_cursor)
+
+
 def build_hub_chat_read_model_router(context: HubAppContext) -> APIRouter:
     router = APIRouter()
 
@@ -157,8 +161,8 @@ def build_hub_chat_read_model_router(context: HubAppContext) -> APIRouter:
                         event_payload,
                         event_id=str(sequence),
                     )
+                last_cursor = max(last_cursor, batch_cursor)
                 if events:
-                    last_cursor = batch_cursor
                     if once:
                         return
                     continue
@@ -230,8 +234,10 @@ def build_hub_chat_read_model_router(context: HubAppContext) -> APIRouter:
                         event_payload,
                         event_id=str(sequence),
                     )
+                last_cursor = _advance_chat_detail_stream_cursor(
+                    last_cursor, batch_cursor
+                )
                 if events:
-                    last_cursor = batch_cursor
                     if once:
                         return
                     continue

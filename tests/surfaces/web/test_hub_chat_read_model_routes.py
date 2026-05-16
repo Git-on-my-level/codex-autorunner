@@ -18,6 +18,7 @@ from codex_autorunner.surfaces.web.read_model_contracts import (
     ChatIndexSnapshot,
     load_read_model_contract,
 )
+from codex_autorunner.surfaces.web.routes import hub_chat_read_models
 from codex_autorunner.surfaces.web.routes.hub_chat_read_models import (
     hub_group_dict_to_contract,
 )
@@ -1197,3 +1198,68 @@ def test_hub_read_models_chat_detail_patch_stream_is_repairable(hub_env) -> None
     assert '"entityId": "' + thread_id + '"' in body
     assert '"operation": "reset"' in body
     assert '"appendedTimeline": []' in body
+
+
+def test_hub_read_models_chat_detail_patch_cursor_skips_unrelated_batches(
+    hub_env,
+) -> None:
+    store = ManagedThreadStore(hub_env.hub_root, durable=True)
+    target = store.create_thread(
+        "hermes",
+        hub_env.repo_root,
+        repo_id="repo",
+        resource_kind="repo",
+        resource_id="repo",
+        name="Target detail patch thread",
+    )
+    other = store.create_thread(
+        "hermes",
+        hub_env.repo_root,
+        repo_id="repo",
+        resource_kind="repo",
+        resource_id="repo",
+        name="Other detail patch thread",
+    )
+    target_id = str(target["managed_thread_id"])
+    other_id = str(other["managed_thread_id"])
+    service = hub_chat_read_models.ChatReadModelService(hub_env.hub_root)
+    baseline = service.chat_detail_patch_contracts(target_id, None, event_limit=100)
+    baseline_cursor = int(baseline["cursor"] or 0)
+    journal = SQLiteChatSurfaceEventJournal(hub_env.hub_root, durable=True)
+    journal.append_event(
+        idempotency_key="detail-patch-other-first",
+        event_type="execution.progress",
+        surface_kind="pma",
+        surface_key=other_id,
+        managed_thread_id=other_id,
+        repo_id="repo",
+        status="running",
+        payload={"patch_type": "timeline_append"},
+    )
+    journal.append_event(
+        idempotency_key="detail-patch-target-second",
+        event_type="execution.progress",
+        surface_kind="pma",
+        surface_key=target_id,
+        managed_thread_id=target_id,
+        repo_id="repo",
+        status="running",
+        payload={"patch_type": "timeline_append"},
+    )
+
+    first_batch = service.chat_detail_patch_contracts(
+        target_id, baseline_cursor, event_limit=1
+    )
+    assert first_batch["events"] == []
+    first_cursor = int(first_batch["cursor"])
+    assert first_cursor > 0
+
+    next_cursor = hub_chat_read_models._advance_chat_detail_stream_cursor(
+        0, first_cursor
+    )
+    second_batch = service.chat_detail_patch_contracts(
+        target_id, next_cursor, event_limit=1
+    )
+
+    assert len(second_batch["events"]) == 1
+    assert second_batch["events"][0]["envelope"]["entityId"] == target_id

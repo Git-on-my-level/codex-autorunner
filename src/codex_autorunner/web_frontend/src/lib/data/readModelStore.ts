@@ -897,7 +897,7 @@ function cloneTimelineProjection(timeline: TimelineProjection): TimelineProjecti
 }
 
 function genericTimelineSortKey(item: ChatTimelineItem): string {
-  return item.orderKey || item.itemId;
+  return item.orderKey || item.createdAt || item.itemId;
 }
 
 function timelineTurnId(item: ChatTimelineItem): string | null {
@@ -908,9 +908,16 @@ function timelineTurnId(item: ChatTimelineItem): string | null {
 }
 
 function timelineItemPhase(item: ChatTimelineItem): number {
-  if (item.kind === 'user_message' || item.role === 'user') return 0;
-  if (item.kind === 'assistant_message' || item.role === 'assistant') return 2;
-  return 1;
+  if (typeof item.sectionOrder === 'number') return item.sectionOrder;
+  if (item.section === 'user_message' || item.kind === 'user_message' || item.role === 'user') return 10;
+  if (item.section === 'assistant_message' || item.kind === 'assistant_message' || item.role === 'assistant') return 30;
+  if (item.section === 'terminal_metadata') return 40;
+  if (item.section === 'thread_metadata') return 50;
+  return 20;
+}
+
+function timelineItemIsUserAnchor(item: ChatTimelineItem): boolean {
+  return item.section === 'user_message' || item.kind === 'user_message' || item.role === 'user';
 }
 
 function buildTimelineTurnAnchors(items: ChatTimelineItem[]): Map<string, string> {
@@ -922,7 +929,7 @@ function buildTimelineTurnAnchors(items: ChatTimelineItem[]): Map<string, string
     const g = genericTimelineSortKey(item);
     const prevFb = turnFallbacks[turnId];
     if (prevFb === undefined || g < prevFb) turnFallbacks[turnId] = g;
-    if (timelineItemPhase(item) === 0) {
+    if (timelineItemIsUserAnchor(item)) {
       const prevAnchor = turnAnchors[turnId];
       if (prevAnchor === undefined || g < prevAnchor) turnAnchors[turnId] = g;
     }
