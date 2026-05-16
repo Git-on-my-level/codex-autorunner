@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
 
 from codex_autorunner.core import ticket_flow_operator as operator_module
 from codex_autorunner.core.flows.models import FlowRunStatus
@@ -13,6 +14,7 @@ from codex_autorunner.core.ticket_flow_recovery import (
     build_recovery_notification_intents,
     build_recovery_projection,
     format_recovery_notification_intent,
+    recovery_notification_intent_should_deliver,
 )
 
 
@@ -299,6 +301,58 @@ def test_active_commit_barrier_notification_reads_as_status_update() -> None:
     assert "Severity:" not in message
     assert "Blocker:" not in message
     assert "Reason:" not in message
+
+
+def test_info_recovery_intents_are_not_chat_alerts() -> None:
+    record = SimpleNamespace(
+        intent_id="ticket_flow_recovery:test-intent",
+        run_id="run-1",
+        event_type="ticket_flow.commit_barrier.active",
+        severity=RecoveryIntentSeverity.INFO,
+        reason="done-current-ticket-has-uncommitted-worktree-changes",
+        recommended_actions=("car ticket-flow status --repo /tmp/repo",),
+        cooldown_seconds=3600,
+        resolved=False,
+        payload={
+            "primary_state": "commit_barrier_pending",
+            "facet": {"name": "commit_barrier", "status": "active", "data": {}},
+        },
+        delivery_attempts={},
+    )
+
+    assert (
+        recovery_notification_intent_should_deliver(
+            record,
+            transport_key="discord:channel-1",
+        )
+        is False
+    )
+
+
+def test_warning_recovery_intents_remain_chat_alerts() -> None:
+    record = SimpleNamespace(
+        intent_id="ticket_flow_recovery:test-intent",
+        run_id="run-1",
+        event_type="ticket_flow.commit_barrier.exhausted",
+        severity=RecoveryIntentSeverity.WARNING,
+        reason="commit-barrier-retry-budget-exhausted",
+        recommended_actions=("car ticket-flow status --repo /tmp/repo",),
+        cooldown_seconds=3600,
+        resolved=False,
+        payload={
+            "primary_state": "commit_barrier_exhausted",
+            "facet": {"name": "commit_barrier", "status": "exhausted", "data": {}},
+        },
+        delivery_attempts={},
+    )
+
+    assert (
+        recovery_notification_intent_should_deliver(
+            record,
+            transport_key="telegram:123:456",
+        )
+        is True
+    )
 
 
 def test_notification_intent_ledger_upserts_observation_without_duplicate(

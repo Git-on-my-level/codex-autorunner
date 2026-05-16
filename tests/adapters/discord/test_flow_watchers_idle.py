@@ -291,6 +291,61 @@ async def test_recovery_scan_marks_core_ledger_after_enqueue(monkeypatch) -> Non
     assert enqueued[0].record_id == "recovery:channel-1:intent-2"
 
 
+@pytest.mark.anyio
+async def test_recovery_scan_skips_info_status_updates(monkeypatch) -> None:
+    binding = {
+        "channel_id": "channel-1",
+        "guild_id": "guild-1",
+        "workspace_path": "/tmp/workspace",
+    }
+
+    service = MagicMock()
+    service._logger = logging.getLogger("test")
+    service._store = MagicMock()
+    service._store.list_bindings = AsyncMock(return_value=[binding])
+    service._store.enqueue_outbox = AsyncMock()
+    service._hub_raw_config_cache = {}
+    service._flow_run_mirror.return_value.mirror_outbound = MagicMock()
+
+    monkeypatch.setattr(
+        "codex_autorunner.adapters.discord.flow_watchers._preferred_bound_sources_by_workspace",
+        lambda _service: {},
+    )
+    monkeypatch.setattr(
+        "codex_autorunner.adapters.discord.flow_watchers._preferred_bound_source_for_workspace",
+        lambda _service, _workspace_root: None,
+    )
+    monkeypatch.setattr(
+        "codex_autorunner.adapters.discord.flow_watchers.list_active_ticket_flow_notification_intents",
+        lambda _workspace_root: [
+            SimpleNamespace(
+                intent_id="intent-info",
+                run_id="run-1",
+                event_type="ticket_flow.commit_barrier.active",
+                severity="info",
+                reason="done-current-ticket-has-uncommitted-worktree-changes",
+                recommended_actions=("car ticket-flow status --repo /tmp/workspace",),
+                cooldown_seconds=3600,
+                resolved=False,
+                payload={
+                    "primary_state": "commit_barrier_pending",
+                    "facet": {
+                        "name": "commit_barrier",
+                        "status": "active",
+                        "data": {},
+                    },
+                },
+                delivery_attempts={},
+            )
+        ],
+    )
+
+    notified = await _scan_and_enqueue_recovery_notifications(service)
+
+    assert notified == 0
+    service._store.enqueue_outbox.assert_not_awaited()
+
+
 def test_discord_recovery_watchers_do_not_reintroduce_snapshot_fingerprints() -> None:
     from codex_autorunner.adapters.discord import flow_watchers
 

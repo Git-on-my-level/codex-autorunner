@@ -726,6 +726,72 @@ async def test_recovery_intent_sends_once_per_telegram_topic(
 
 
 @pytest.mark.anyio
+async def test_recovery_intent_skips_info_status_updates(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace = tmp_path / "tg-recovery-info"
+    _init_repo(workspace)
+    record = _DummyRecord(workspace)
+    calls: list[tuple[int, str, Optional[int]]] = []
+
+    async def send_message_with_outbox(
+        chat_id: int,
+        text: str,
+        *,
+        thread_id: Optional[int],
+        reply_to: Optional[int],
+    ) -> bool:
+        _ = reply_to
+        calls.append((chat_id, text, thread_id))
+        return True
+
+    async def send_document(*args, **kwargs) -> bool:
+        return True
+
+    bridge = TelegramTicketFlowBridge(
+        logger=logging.getLogger("test"),
+        store=_DummyStore({"123:456": record}),
+        pause_targets={},
+        send_message_with_outbox=send_message_with_outbox,
+        send_document=send_document,
+        pause_config=PauseDispatchNotifications(
+            enabled=True,
+            send_attachments=False,
+            max_file_size_bytes=1024,
+            chunk_long_messages=True,
+        ),
+        default_notification_chat_id=None,
+    )
+    intent = SimpleNamespace(
+        intent_id="intent-telegram-info",
+        run_id="run-1",
+        event_type="ticket_flow.commit_barrier.active",
+        severity="info",
+        reason="done-current-ticket-has-uncommitted-worktree-changes",
+        recommended_actions=("car ticket-flow status --repo /tmp/repo",),
+        cooldown_seconds=3600,
+        resolved=False,
+        payload={
+            "primary_state": "commit_barrier_pending",
+            "facet": {
+                "name": "commit_barrier",
+                "status": "active",
+                "data": {},
+            },
+        },
+        delivery_attempts={},
+    )
+    monkeypatch.setattr(
+        "codex_autorunner.adapters.telegram.ticket_flow_bridge.list_active_ticket_flow_notification_intents",
+        lambda _path: [intent],
+    )
+
+    await bridge._notify_recovery_for_workspace(workspace, [("123:456", record)])
+
+    assert calls == []
+
+
+@pytest.mark.anyio
 async def test_recovery_scan_runs_when_pause_notifications_disabled(
     tmp_path: Path,
 ) -> None:
