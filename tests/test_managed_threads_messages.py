@@ -12,15 +12,23 @@ from fastapi.testclient import TestClient
 
 from codex_autorunner.adapters.discord.state import DiscordStateStore
 from codex_autorunner.adapters.telegram.state import TelegramStateStore
-from codex_autorunner.core.config import CONFIG_FILENAME, DEFAULT_HUB_CONFIG
+from codex_autorunner.bootstrap import seed_repo_files
+from codex_autorunner.core.config import (
+    CONFIG_FILENAME,
+    DEFAULT_HUB_CONFIG,
+    load_hub_config,
+)
 from codex_autorunner.core.managed_thread_store import (
     ManagedThreadNotActiveError,
     ManagedThreadStore,
 )
+from codex_autorunner.core.orchestration import OrchestrationBindingStore
 from codex_autorunner.core.orchestration.runtime_bindings import (
     clear_runtime_thread_binding,
 )
+from codex_autorunner.core.pma_notification_store import PmaNotificationStore
 from codex_autorunner.core.pma_transcripts import PmaTranscriptStore
+from codex_autorunner.manifest import load_manifest, save_manifest
 from codex_autorunner.server import create_hub_app
 from tests.conftest import write_test_config
 from tests.pma_support import (
@@ -37,6 +45,25 @@ from tests.pma_support.managed_threads import (
 )
 
 pytestmark = pytest.mark.slow
+
+
+def _seed_manifest_worktree(hub_env, worktree_id: str) -> Path:
+    worktree_root = hub_env.hub_root / "worktrees" / worktree_id
+    worktree_root.mkdir(parents=True)
+    (worktree_root / ".git").mkdir(exist_ok=True)
+    seed_repo_files(worktree_root, git_required=False)
+    hub_config = load_hub_config(hub_env.hub_root)
+    manifest = load_manifest(hub_config.manifest_path, hub_env.hub_root)
+    manifest.ensure_repo(
+        hub_env.hub_root,
+        worktree_root,
+        repo_id=worktree_id,
+        kind="worktree",
+        worktree_of=hub_env.repo_id,
+        branch="feature",
+    )
+    save_manifest(hub_config.manifest_path, manifest, hub_env.hub_root)
+    return worktree_root
 
 
 def test_send_message_persists_turns_and_reuses_backend_thread(hub_env) -> None:
@@ -133,13 +160,13 @@ def test_send_message_persists_turns_and_reuses_backend_thread(hub_env) -> None:
     assert first_turn["status"] == "ok"
     assert first_turn["assistant_text"] == "assistant-output-1"
     assert first_turn["backend_turn_id"] == "backend-turn-1"
-    assert first_turn["transcript_turn_id"] == first_payload["managed_turn_id"]
+    assert first_turn["transcript_turn_id"] is None
 
     second_turn = by_id[second_payload["managed_turn_id"]]
     assert second_turn["status"] == "ok"
     assert second_turn["assistant_text"] == "assistant-output-2"
     assert second_turn["backend_turn_id"] == "backend-turn-2"
-    assert second_turn["transcript_turn_id"] == second_payload["managed_turn_id"]
+    assert second_turn["transcript_turn_id"] is None
 
     transcripts = PmaTranscriptStore(hub_env.hub_root)
     transcript = transcripts.read_transcript(first_payload["managed_turn_id"])
@@ -236,6 +263,157 @@ def test_start_thread_message_persists_genesis_metadata(hub_env) -> None:
     assert genesis["legacy"] is False
     assert genesis["client_intent"] == {"route": "/repos/repo-1/chat"}
     assert genesis["scope"]["urn"] == f"repo:{hub_env.repo_id}"
+
+
+def test_global_first_send_uses_hub_genesis_after_worktree_discord_chat_and_keeps_pma_title(
+    hub_env,
+) -> None:
+    _enable_pma(
+        hub_env.hub_root,
+        model="model-default",
+        reactive_enabled=False,
+        managed_thread_terminal_followup_default=False,
+    )
+    worktree_id = f"{hub_env.repo_id}--feature"
+    worktree_root = _seed_manifest_worktree(hub_env, worktree_id)
+    app = create_hub_app(hub_env.hub_root)
+    fake_supervisor = FakeSupervisor(FakeClient(sequential=True))
+
+    with TestClient(app) as client:
+        app.state.app_server_supervisor = fake_supervisor
+        app.state.app_server_events = object()
+        selected_resp = client.post(
+            "/hub/pma/threads",
+            json={
+                "agent": "codex",
+                "name": "Previously selected Discord worktree chat",
+                "scope_urn": f"worktree:{hub_env.repo_id}/{worktree_id}",
+                "origin": "web",
+                "scope_source": "route_explicit",
+            },
+        )
+        assert selected_resp.status_code == 200
+        selected_thread = selected_resp.json()["thread"]
+        assert selected_thread["workspace_root"] == str(worktree_root.resolve())
+        OrchestrationBindingStore(hub_env.hub_root, durable=True).upsert_binding(
+            surface_kind="discord",
+            surface_key="guild:ambient-worktree",
+            thread_target_id=selected_thread["managed_thread_id"],
+            resource_kind="worktree",
+            resource_id=worktree_id,
+            metadata={"display_name": "Agent Nexus / #worktree"},
+        )
+
+        start_resp = client.post(
+            "/hub/pma/thread-starts",
+            json={
+                "message": "Investigate notification routing",
+                "agent": "codex",
+                "name": "New PMA chat",
+                "scope_urn": "hub",
+                "origin": "web",
+                "scope_source": "default_hub",
+                "client_intent": {
+                    "route": "/chats",
+                    "draft_id": "draft-global-after-discord",
+                },
+                "defer_execution": True,
+                "wait_for_confirmation": False,
+            },
+        )
+        assert start_resp.status_code == 200
+        managed_thread_id = start_resp.json()["managed_thread_id"]
+
+        notifications = PmaNotificationStore(hub_env.hub_root)
+        notifications.record_notification(
+            correlation_id="corr-5dd3",
+            source_kind="pma",
+            delivery_mode="direct",
+            surface_kind="discord",
+            surface_key="guild:alerts",
+            delivery_record_id="delivery-5dd3",
+            managed_thread_id=managed_thread_id,
+            notification_id="5dd3d434ee364219af850bf41221c27c",
+        )
+        index_resp = client.get("/hub/chat/index", params={"limit": 20})
+
+    assert str(hub_env.hub_root.resolve()) in fake_supervisor.client.thread_start_roots
+    assert str(worktree_root.resolve()) not in fake_supervisor.client.thread_start_roots
+
+    thread = ManagedThreadStore(hub_env.hub_root).get_thread(managed_thread_id)
+    assert thread is not None
+    assert thread["repo_id"] is None
+    assert thread["resource_kind"] is None
+    assert thread["resource_id"] is None
+    assert thread["workspace_root"] == str(hub_env.hub_root.resolve())
+    assert thread["last_message_preview"] == "Investigate notification routing"
+    genesis = thread["metadata"]["genesis"]
+    assert genesis["origin"] == "web"
+    assert genesis["scope_source"] == "default_hub"
+    assert genesis["scope"]["urn"] == "hub"
+    assert genesis["client_intent"]["draft_id"] == "draft-global-after-discord"
+
+    assert index_resp.status_code == 200
+    row = next(
+        item
+        for item in index_resp.json()["rows"]
+        if item["managed_thread_id"] == managed_thread_id
+    )
+    assert row["title"] == "Investigate notification routing"
+    assert row["display_title"] == "Investigate notification routing"
+    assert (
+        "Notification 5dd3d434ee364219af850bf41221c27c" in row["binding_display_names"]
+    )
+    assert {surface["surface_kind"] for surface in row["surface_bindings"]} >= {
+        "pma",
+        "notification",
+    }
+
+
+def test_route_explicit_first_send_creates_worktree_scoped_genesis(hub_env) -> None:
+    _enable_pma(
+        hub_env.hub_root,
+        model="model-default",
+        reactive_enabled=False,
+        managed_thread_terminal_followup_default=False,
+    )
+    worktree_id = f"{hub_env.repo_id}--route-explicit"
+    worktree_root = _seed_manifest_worktree(hub_env, worktree_id)
+    app = create_hub_app(hub_env.hub_root)
+    fake_supervisor = FakeSupervisor(FakeClient(sequential=True))
+
+    with TestClient(app) as client:
+        app.state.app_server_supervisor = fake_supervisor
+        app.state.app_server_events = object()
+        start_resp = client.post(
+            "/hub/pma/thread-starts",
+            json={
+                "message": "Route explicit worktree chat",
+                "agent": "codex",
+                "scope_urn": f"worktree:{hub_env.repo_id}/{worktree_id}",
+                "origin": "web",
+                "scope_source": "route_explicit",
+                "client_intent": {
+                    "route": f"/chats?new=worktree:{worktree_id}&kind=pma"
+                },
+                "defer_execution": True,
+                "wait_for_confirmation": False,
+            },
+        )
+
+    assert start_resp.status_code == 200
+    managed_thread_id = start_resp.json()["managed_thread_id"]
+    assert str(worktree_root.resolve()) in fake_supervisor.client.thread_start_roots
+
+    thread = ManagedThreadStore(hub_env.hub_root).get_thread(managed_thread_id)
+    assert thread is not None
+    assert thread["resource_kind"] == "worktree"
+    assert thread["resource_id"] == worktree_id
+    assert thread["workspace_root"] == str(worktree_root.resolve())
+    genesis = thread["metadata"]["genesis"]
+    assert genesis["origin"] == "web"
+    assert genesis["scope_source"] == "route_explicit"
+    assert genesis["scope"]["urn"] == f"worktree:{hub_env.repo_id}/{worktree_id}"
 
 
 def test_existing_thread_message_rejects_agent_field(hub_env) -> None:

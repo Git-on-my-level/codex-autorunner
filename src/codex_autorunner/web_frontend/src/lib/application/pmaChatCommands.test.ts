@@ -108,6 +108,42 @@ describe('PMA chat command plans', () => {
     });
   });
 
+  it('keeps global draft first sends hub-scoped unless the route or picker is explicit', () => {
+    const ambientWorktreeScope = {
+      id: 'worktree:repo-1/repo-1--discord-1',
+      kind: 'worktree' as const,
+      label: 'Discord worktree',
+      detail: '/worktrees/repo-1--discord-1',
+      workspaceRoot: '/hub/worktrees/repo-1--discord-1',
+      resourceId: 'repo-1--discord-1',
+      parentRepoId: 'repo-1',
+      scopeUrn: 'worktree:repo-1/repo-1--discord-1'
+    };
+
+    expect(
+      planStartAndSendChat(
+        localPmaChatScopeOption(),
+        'codex',
+        '',
+        '',
+        'Global chat after selection'
+      ).body
+    ).toMatchObject({
+      origin: 'web',
+      scope_urn: 'hub',
+      scope_source: 'default_hub'
+    });
+    expect(
+      planStartAndSendChat(ambientWorktreeScope, 'codex', '', '', 'Explicit route chat', {
+        scopeSource: 'route_explicit'
+      }).body
+    ).toMatchObject({
+      origin: 'web',
+      scope_urn: 'worktree:repo-1/repo-1--discord-1',
+      scope_source: 'route_explicit'
+    });
+  });
+
   it('plans queue and interrupt policies explicitly for existing threads', () => {
     expect(planQueueExistingChat('thread-1', 'Queue this')).toMatchObject({
       kind: 'SendMessage',

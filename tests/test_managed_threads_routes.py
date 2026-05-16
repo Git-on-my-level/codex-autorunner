@@ -968,7 +968,7 @@ def test_create_managed_thread_rejects_missing_or_both_inputs(hub_env) -> None:
     assert missing.json()["thread"]["resource_kind"] is None
     assert missing.json()["thread"]["workspace_root"] == str(hub_env.hub_root.resolve())
     assert both.status_code == 400
-    assert "Exactly one of resource owner or workspace_root is required" in (
+    assert "workspace_root cannot be combined with legacy owner fields" in (
         both.json().get("detail") or ""
     )
 
@@ -2323,6 +2323,24 @@ def test_managed_thread_crud_routes_use_orchestration_service(
                     "context_profile": "car_ambient",
                     "approval_mode": "yolo",
                     "chat_kind": "pma",
+                    "genesis": {
+                        "origin": "legacy",
+                        "scope_source": "legacy_scope_fields",
+                        "legacy": True,
+                        "scope": {
+                            "urn": f"repo:{hub_env.repo_id}",
+                            "kind": "repo",
+                            "repo_id": hub_env.repo_id,
+                            "resource_kind": "repo",
+                            "resource_id": hub_env.repo_id,
+                            "workspace_root": str(hub_env.repo_root.resolve()),
+                            "actual_workspace_root": str(hub_env.repo_root.resolve()),
+                        },
+                        "client_scope_request": {
+                            "resource_kind": "repo",
+                            "resource_id": hub_env.repo_id,
+                        },
+                    },
                 },
             },
         ),

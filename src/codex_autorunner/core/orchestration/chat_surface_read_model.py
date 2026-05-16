@@ -1767,6 +1767,9 @@ def _chat_index_rows_from_surfaces(
                 if _is_fallback_chat_title(row.get("title"), row):
                     row["title"] = friendly_title
         else:
+            # Chat identity is owned by the managed thread. Delivery surfaces,
+            # notification reply contexts, and channel bindings stay visible as
+            # bindings, but they must not replace the PMA-owned display title.
             identity_title = _managed_thread_identity_title(row)
             row["title"] = identity_title
             row["chat_display_name"] = identity_title
