@@ -1623,7 +1623,7 @@ describe('PMA chat view helpers', () => {
     expect(cards).toHaveLength(2);
     expect(cards[1]).toMatchObject({
       kind: 'turn_summary',
-      title: '2 tool calls, 2 thinking updates'
+      title: '1 reasoning step · 2 tool calls'
     });
     const summary = cards[1];
     if (summary.kind !== 'turn_summary') throw new Error('expected turn summary');
@@ -1659,7 +1659,7 @@ describe('PMA chat view helpers', () => {
     expect(cards).toHaveLength(1);
     expect(cards[0]).toMatchObject({
       kind: 'turn_summary',
-      title: '200 thinking updates'
+      title: '1 reasoning step'
     });
     const summary = cards[0];
     if (summary.kind !== 'turn_summary') throw new Error('expected turn summary');
@@ -1687,7 +1687,7 @@ describe('PMA chat view helpers', () => {
     expect(cards).toHaveLength(1);
     expect(cards[0]).toMatchObject({
       kind: 'turn_summary',
-      title: '2 progress updates'
+      title: '1 reasoning step'
     });
     const summary = cards[0];
     if (summary.kind !== 'turn_summary') throw new Error('expected turn summary');
@@ -1718,7 +1718,7 @@ describe('PMA chat view helpers', () => {
     expect(cards).toHaveLength(1);
     expect(cards[0]).toMatchObject({
       kind: 'turn_summary',
-      title: '2 progress updates'
+      title: '1 reasoning step'
     });
     const summary = cards[0];
     if (summary.kind !== 'turn_summary') throw new Error('expected turn summary');
@@ -1750,6 +1750,24 @@ describe('PMA chat view helpers', () => {
     }
     expect(firstSummary.cards[0]).toMatchObject({ id: 'thinking-1', text: 'Need to' });
     expect(secondSummary.cards[0]).toMatchObject({ id: 'thinking-1', text: 'Need to check' });
+  });
+
+  it('collapses streamed progress fragments including punctuation tokens', () => {
+    const cards = compactChatTranscriptCards([
+      { ...baseArtifactCardTrace('frag-1', '1', ['501']), turnId: 'frag-turn', orderKey: '001' },
+      { ...baseArtifactCardTrace('frag-2', '.', ['502']), turnId: 'frag-turn', orderKey: '002' },
+      { ...baseArtifactCardTrace('frag-3', '2', ['503']), turnId: 'frag-turn', orderKey: '003' }
+    ]);
+
+    expect(cards).toHaveLength(1);
+    const summary = cards[0];
+    if (summary.kind !== 'turn_summary') throw new Error('expected turn summary');
+    expect(summary.cards).toHaveLength(1);
+    expect(summary.cards[0]).toMatchObject({
+      kind: 'intermediate',
+      text: '1. 2',
+      eventIds: ['501', '502', '503']
+    });
   });
 
   it('merges streamed activity events without dropping older transcript activity', () => {

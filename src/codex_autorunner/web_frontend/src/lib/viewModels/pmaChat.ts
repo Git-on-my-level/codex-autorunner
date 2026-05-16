@@ -1151,10 +1151,18 @@ function compactActivityRun(cards: ChatActivitySummaryCard[]): ChatTranscriptCar
   }];
 }
 
+function formatActivityCount(value: number): string {
+  if (value < 1000) return String(value);
+  const thousands = value / 1000;
+  return `${thousands >= 10 ? String(Math.round(thousands)) : thousands.toFixed(1).replace(/\.0$/, '')}k`;
+}
+
 function activitySummaryTitle(cards: ChatActivitySummaryCard[]): string {
+  // Count merged cards — one per reasoning step / tool call — rather than raw
+  // source-event ids, so a turn reads as "5 reasoning steps" instead of an
+  // alarming "31689 thinking updates".
   let toolCalls = 0;
-  let thinkingUpdates = 0;
-  let progressUpdates = 0;
+  let reasoningSteps = 0;
   let approvals = 0;
   for (const card of cards) {
     if (card.kind === 'tool_group') {
@@ -1162,17 +1170,20 @@ function activitySummaryTitle(cards: ChatActivitySummaryCard[]): string {
     } else if (card.kind === 'approval') {
       approvals += 1;
     } else if (card.kind === 'intermediate') {
-      const count = Math.max(1, uniqueStrings([...card.eventIds, ...card.progressSourceIds]).length);
-      if (isThinkingTraceTitle(card.title)) thinkingUpdates += count;
-      else progressUpdates += count;
+      reasoningSteps += 1;
     }
   }
   const parts: string[] = [];
-  if (toolCalls) parts.push(`${toolCalls} tool ${toolCalls === 1 ? 'call' : 'calls'}`);
-  if (thinkingUpdates) parts.push(`${thinkingUpdates} thinking ${thinkingUpdates === 1 ? 'update' : 'updates'}`);
-  if (progressUpdates) parts.push(`${progressUpdates} progress ${progressUpdates === 1 ? 'update' : 'updates'}`);
-  if (approvals) parts.push(`${approvals} approval ${approvals === 1 ? 'request' : 'requests'}`);
-  return parts.length ? parts.join(', ') : 'Activity details';
+  if (reasoningSteps) {
+    parts.push(`${formatActivityCount(reasoningSteps)} reasoning ${reasoningSteps === 1 ? 'step' : 'steps'}`);
+  }
+  if (toolCalls) {
+    parts.push(`${formatActivityCount(toolCalls)} tool ${toolCalls === 1 ? 'call' : 'calls'}`);
+  }
+  if (approvals) {
+    parts.push(`${formatActivityCount(approvals)} approval ${approvals === 1 ? 'request' : 'requests'}`);
+  }
+  return parts.length ? parts.join(' · ') : 'Activity details';
 }
 
 function activityCardNeedsSummary(card: ChatActivitySummaryCard): boolean {
@@ -1204,6 +1215,9 @@ function shouldAppendIntermediateDelta(
   if (isProgressTraceTitle(left.title) && isTokenLikeProgressIntermediate(right)) return true;
   if (isProgressTraceTitle(right.title) && isTokenLikeProgressIntermediate(left)) return true;
   if (traceLabelText(left.title).toLowerCase() === traceLabelText(right.title).toLowerCase()) return true;
+  // Streamed progress notices arrive titled generically (`Progress`,
+  // `Update`, `Notice`) — fold consecutive ones into a single card.
+  if (isGenericTraceLabel(left.title) && isGenericTraceLabel(right.title)) return true;
   return isTokenLikeIntermediate(left) && isTokenLikeIntermediate(right);
 }
 
@@ -1211,7 +1225,9 @@ function isTokenLikeIntermediate(card: Extract<ChatTranscriptCard, { kind: 'inte
   const text = card.text.trim();
   const title = card.title.trim();
   if (!text || text.length > 32 || /\n/.test(text)) return false;
-  if (/[.!?]$/.test(text)) return false;
+  // A streamed fragment (a numbered-list token, a stray `.`) is still
+  // mergeable even when it ends in punctuation; only reject genuine sentences.
+  if (/[.!?]$/.test(text) && (text.length > 8 || /\s/.test(text))) return false;
   if (title && title.length <= 32 && text.toLowerCase() === title.toLowerCase()) return true;
   return text.split(/\s+/).length <= 3 && !isSpecificTraceSummary(text);
 }
@@ -1223,8 +1239,12 @@ function mergedIntermediateTitle(
   const leftLabel = traceLabelText(left.title);
   const rightLabel = traceLabelText(right.title);
   if (isThinkingTraceTitle(left.title) || isThinkingTraceTitle(right.title)) return 'Thinking';
+  if (isProgressTraceTitle(left.title) || isProgressTraceTitle(right.title)) return 'Progress';
   if (isTokenLikeProgressIntermediate(left) && isTokenLikeProgressIntermediate(right)) return 'Progress';
   if (leftLabel && leftLabel.toLowerCase() === rightLabel.toLowerCase()) return left.title || right.title;
+  // Consecutive generically-titled progress notices collapse to one stream;
+  // never surface a single fragment (`1`, `.`) as the card title.
+  if (isGenericTraceLabel(left.title) || isGenericTraceLabel(right.title)) return 'Progress';
   if (isTokenLikeIntermediate(left) && isTokenLikeIntermediate(right)) return 'Thinking';
   return left.title || right.title || 'Update';
 }

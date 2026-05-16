@@ -232,4 +232,33 @@ describe('ChatTranscriptCards', () => {
     expect(body.indexOf('class="injected-prompt-card"')).toBeLessThan(body.indexOf('class="message user"'));
     expect(body).not.toContain('&lt;injected context&gt;');
   });
+
+  it('never renders raw JSON detail as a trace headline', () => {
+    const jsonDetail = '{ "event_id": 1, "event_type": "progress", "lines": ["1"] }';
+    const cards: ChatTranscriptCard[] = [
+      {
+        ...baseTrace,
+        kind: 'intermediate',
+        id: 'progress-json',
+        title: 'progress',
+        text: 'Working on it',
+        detail: jsonDetail
+      },
+      {
+        ...baseTrace,
+        kind: 'intermediate',
+        id: 'thinking-json',
+        title: 'thinking',
+        text: 'Reasoning through the request',
+        detail: jsonDetail
+      }
+    ];
+
+    const { body } = render(ChatTranscriptCards, { props: { cards } });
+
+    expect(body).not.toContain('event_id');
+    expect(body).not.toContain('event_type');
+    expect(body).toContain('Working on it');
+    expect(body).toContain('Reasoning through the request');
+  });
 });

@@ -158,6 +158,10 @@ def _timeline_item_to_transcript_rows(item: Mapping[str, Any]) -> list[dict[str,
         text = _optional_text(payload.get("text")) or ""
         if not text.strip() or _is_hidden_intermediate(payload):
             return []
+        # `detail` is never rendered as a raw view for intermediate cards — the
+        # web component only mines it for a headline label. Emitting raw event
+        # JSON here leaked `{ "event_id": ... }` into the card headline, so the
+        # row carries no detail and the UI derives a clean label from `text`.
         return [
             {
                 "kind": "intermediate",
@@ -166,12 +170,7 @@ def _timeline_item_to_transcript_rows(item: Mapping[str, Any]) -> list[dict[str,
                 "text": text,
                 "event_ids": _source_event_ids(item),
                 "progress_source_ids": [],
-                "detail": _json_detail(
-                    payload.get("live_tail_event")
-                    or payload.get("event")
-                    or payload.get("result")
-                    or payload.get("call")
-                ),
+                "detail": None,
                 "turn_id": managed_turn_id,
                 "order_key": order_key,
                 "timestamp": timestamp,

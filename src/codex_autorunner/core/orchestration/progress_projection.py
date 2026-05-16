@@ -93,6 +93,19 @@ def _summary(value: Any, fallback: str) -> str:
     return _truncate_text(redact_text(text), 220)
 
 
+def _is_specific_notice_message(message: str) -> bool:
+    """A notice message is title-worthy only when it reads as a phrase.
+
+    Streamed progress arrives as tiny fragments (`1`, `.`, `2`) that must not
+    become card titles; a real notice (`entered review mode`) should.
+    """
+
+    text = message.strip()
+    if not text:
+        return False
+    return " " in text or len(text) > 24
+
+
 def _notice_title(kind: Any, message: Any) -> str:
     kind_text = str(kind or "").strip()
     if kind_text == "thinking":
@@ -102,6 +115,7 @@ def _notice_title(kind: Any, message: Any) -> str:
         kind_text in {"progress", "notice"}
         and message_text
         and message_text.lower() not in {"progress", "update", "notice"}
+        and _is_specific_notice_message(message_text)
     ):
         return message_text
     return kind_text.replace("_", " ").title() or "Update"
@@ -115,11 +129,18 @@ def _failed_message_is_interruption(value: str) -> bool:
     )
 
 
-def _with_merged_assistant_update(
+def _with_merged_streamed_item(
     previous: ProgressProjectionItem,
     current: ProgressProjectionItem,
 ) -> ProgressProjectionItem:
-    summary = _merge_assistant_update_summary(previous, current)
+    """Fold a streamed continuation (`assistant_update` or `progress` notice).
+
+    Consecutive items sharing a `merge_key` collapse into one card so a turn's
+    reasoning/progress stream renders as a few readable entries instead of
+    thousands of per-token fragments.
+    """
+
+    summary = _merge_streamed_item_summary(previous, current)
     return ProgressProjectionItem(
         item_id=previous.item_id,
         kind=previous.kind,
@@ -137,7 +158,7 @@ def _with_merged_assistant_update(
     )
 
 
-def _merge_assistant_update_summary(
+def _merge_streamed_item_summary(
     previous: ProgressProjectionItem,
     current: ProgressProjectionItem,
 ) -> str:
@@ -166,7 +187,7 @@ def project_progress_events(
             and item.merge_key is not None
             and items[-1].merge_key == item.merge_key
         ):
-            merged = _with_merged_assistant_update(items[-1], item)
+            merged = _with_merged_streamed_item(items[-1], item)
             items[-1] = merged
             state.last_item = merged
             continue
@@ -273,8 +294,31 @@ def reduce_progress_event(
                 timestamp=timestamp,
                 hidden=True,
             )
-        kind = "assistant_update" if event.kind == "thinking" else "notice"
+        is_thinking = event.kind == "thinking"
+        # Streamed progress/thought chunks arrive as many tiny RunNotices.
+        # Give them a merge_key so consecutive fragments fold into one card,
+        # the same way assistant_update deltas already do. `thinking` notices
+        # carry cumulative snapshots (codex `summaryTextDelta`, opencode
+        # `reasoning`), so they merge with snapshot overlap-dedup; `progress`
+        # notices are append-only deltas and merge by concatenation.
+        is_progress = event.kind in {"progress", "notice"}
+        kind = "assistant_update" if is_thinking else "notice"
         title = _notice_title(event.kind, event.message)
+        if is_thinking:
+            merge_key: Optional[str] = "assistant_update"
+            group_id: Optional[str] = f"assistant:{event_key}"
+            group_kind: Optional[str] = "assistant_updates"
+            merge_strategy = RUN_EVENT_STREAM_MODE_SNAPSHOT
+        elif is_progress:
+            merge_key = "progress_notice"
+            group_id = f"progress:{event_key}"
+            group_kind = "progress_updates"
+            merge_strategy = "delta"
+        else:
+            merge_key = None
+            group_id = None
+            group_kind = None
+            merge_strategy = "delta"
         return ProgressProjectionItem(
             item_id=f"progress:{kind}:{event_key}",
             kind=kind,
@@ -283,9 +327,10 @@ def reduce_progress_event(
             summary=_summary(event.message, title),
             event_ids=(event_id,),
             timestamp=timestamp,
-            group_id=f"assistant:{event_key}" if kind == "assistant_update" else None,
-            group_kind="assistant_updates" if kind == "assistant_update" else None,
-            merge_key="assistant_update" if kind == "assistant_update" else None,
+            group_id=group_id,
+            group_kind=group_kind,
+            merge_key=merge_key,
+            merge_strategy=merge_strategy,
         )
 
     if isinstance(event, ToolCall):

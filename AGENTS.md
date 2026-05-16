@@ -5,6 +5,7 @@ This repo dogfoods codex-autorunner. Start here, then prefer the nearest nested 
 ## Start Here
 
 - Read `docs/car_constitution/61_AGENT_CHEATSHEET.md` first.
+- Read `.commandcode/taste/taste.md` for project-specific agent taste and preferences.
 - If the task mentions tickets, contextspace, dispatch, or `.codex-autorunner/`, also read `.codex-autorunner/ABOUT_CAR.md`.
 - If you need runtime setup details, read `.codex-autorunner/DESTINATION_QUICKSTART.md`.
 

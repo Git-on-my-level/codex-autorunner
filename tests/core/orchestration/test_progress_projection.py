@@ -192,6 +192,53 @@ def test_progress_projection_keeps_approvals_and_notices_interleaved() -> None:
     assert [item.event_ids for item in items] == [(1,), (2,), (3,)]
 
 
+def test_progress_projection_merges_streamed_progress_fragments() -> None:
+    items = _project(
+        RunNotice(timestamp="2026-05-06T10:00:01Z", kind="progress", message="1"),
+        RunNotice(timestamp="2026-05-06T10:00:02Z", kind="progress", message="."),
+        RunNotice(timestamp="2026-05-06T10:00:03Z", kind="progress", message="2"),
+    )
+
+    assert len(items) == 1
+    assert items[0].kind == "notice"
+    assert items[0].title == "Progress"
+    assert items[0].summary == "1.2"
+    assert items[0].event_ids == (1, 2, 3)
+
+
+def test_progress_projection_keeps_specific_progress_notice_titles() -> None:
+    items = _project(
+        RunNotice(
+            timestamp="2026-05-06T10:00:01Z",
+            kind="progress",
+            message="entered review mode",
+        )
+    )
+
+    assert items[0].kind == "notice"
+    assert items[0].title == "entered review mode"
+
+
+def test_progress_projection_dedupes_cumulative_thinking_snapshots() -> None:
+    items = _project(
+        RunNotice(timestamp="2026-05-06T10:00:01Z", kind="thinking", message="Read"),
+        RunNotice(
+            timestamp="2026-05-06T10:00:02Z", kind="thinking", message="Read files"
+        ),
+        RunNotice(
+            timestamp="2026-05-06T10:00:03Z",
+            kind="thinking",
+            message="Read files now",
+        ),
+    )
+
+    assert len(items) == 1
+    assert items[0].kind == "assistant_update"
+    assert items[0].summary == "Read files now"
+    assert items[0].merge_strategy == RUN_EVENT_STREAM_MODE_SNAPSHOT
+    assert items[0].event_ids == (1, 2, 3)
+
+
 def test_high_volume_stream_deltas_reduce_to_bounded_visible_projection() -> None:
     events = [
         ProgressProjectionInput(

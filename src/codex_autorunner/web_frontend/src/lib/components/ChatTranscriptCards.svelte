@@ -50,9 +50,14 @@
     return title.charAt(0).toUpperCase() + title.slice(1);
   }
 
+  function looksLikeJson(value: string): boolean {
+    const trimmed = value.trim();
+    return trimmed.startsWith('{') || trimmed.startsWith('[');
+  }
+
   function traceSummaryLabel(card: Extract<ChatTranscriptCard, { kind: 'intermediate' }>): string {
     const detail = card.detail?.split('·', 1)[0]?.trim();
-    if (detail) return detail;
+    if (detail && !looksLikeJson(detail)) return detail;
     const text = card.text.trim().replace(/\s+/g, ' ');
     if (text) return text.length > 80 ? `${text.slice(0, 80).trimEnd()}…` : text;
     return traceKindLabel(card);
@@ -88,7 +93,7 @@
       }
     }
     const count = card.detail?.split('·', 1)[0]?.trim();
-    if (count) return count;
+    if (count && !looksLikeJson(count)) return count;
     const text = card.text?.trim();
     if (text) {
       const oneLine = text.replace(/\s+/g, ' ');
