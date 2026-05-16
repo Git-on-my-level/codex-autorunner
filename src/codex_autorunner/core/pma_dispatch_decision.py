@@ -146,6 +146,33 @@ def _lane_delivery_target_from_context(
     )
 
 
+def _origin_surface_from_context(
+    context_payload: Optional[Mapping[str, Any]],
+) -> Optional[tuple[str, str]]:
+    if not isinstance(context_payload, Mapping):
+        return None
+
+    def _from_metadata(metadata: Any) -> Optional[tuple[str, str]]:
+        origin = extract_pma_origin_metadata(
+            metadata if isinstance(metadata, Mapping) else None
+        )
+        if origin is None:
+            return None
+        surface_kind = _normalize_optional_text(origin.surface_kind)
+        surface_key = _normalize_optional_text(origin.surface_key)
+        if surface_kind is None:
+            return None
+        return surface_kind, surface_key or ""
+
+    direct = _from_metadata(context_payload.get("metadata"))
+    if direct is not None:
+        return direct
+    wake_up = context_payload.get("wake_up")
+    if isinstance(wake_up, Mapping):
+        return _from_metadata(wake_up.get("metadata"))
+    return None
+
+
 def build_pma_dispatch_decision(
     *,
     message: str,
@@ -168,6 +195,10 @@ def build_pma_dispatch_decision(
     normalized_source_kind = _normalize_optional_text(source_kind) or "automation"
     normalized_repo_id = _normalize_optional_text(repo_id)
     lane_surface_binding = _surface_binding_from_lane_id(lane_id)
+    origin_surface = _origin_surface_from_context(context_payload)
+    external_fallback_allowed = not (
+        origin_surface is not None and origin_surface[0] == "web"
+    )
 
     if normalized_delivery == "none":
         return PmaDispatchDecision(requested_delivery="none")
@@ -221,7 +252,11 @@ def build_pma_dispatch_decision(
                 )
             )
 
-    if normalized_delivery in {"auto", "primary_pma"} and normalized_repo_id:
+    if (
+        external_fallback_allowed
+        and normalized_delivery in {"auto", "primary_pma"}
+        and normalized_repo_id
+    ):
         attempts.extend(
             PmaDispatchAttempt(
                 route="primary_pma",
@@ -238,7 +273,11 @@ def build_pma_dispatch_decision(
             for surface_kind in ("discord", "telegram")
         )
 
-    if normalized_delivery in {"auto", "bound"} and workspace_root is not None:
+    if (
+        external_fallback_allowed
+        and normalized_delivery in {"auto", "bound"}
+        and workspace_root is not None
+    ):
         attempts.extend(
             PmaDispatchAttempt(
                 route="bound",

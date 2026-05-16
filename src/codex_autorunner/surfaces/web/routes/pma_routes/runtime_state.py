@@ -157,6 +157,8 @@ class PmaRuntimeState:
         *,
         store: Optional[PmaStateStore] = None,
         lane_id: Optional[str] = None,
+        origin_surface_kind: Optional[str] = None,
+        origin_surface_key: Optional[str] = None,
     ) -> bool:
         async with await self.get_pma_lock():
             if self.pma_active:
@@ -169,6 +171,8 @@ class PmaRuntimeState:
                 "thread_id": None,
                 "turn_id": None,
                 "lane_id": lane_id or "",
+                "surface_kind": origin_surface_kind or "",
+                "surface_key": origin_surface_key or "",
                 "started_at": datetime.now(timezone.utc).isoformat(),
             }
         if store is not None:

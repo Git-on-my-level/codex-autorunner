@@ -81,6 +81,10 @@ def build_managed_thread_terminal_notify_payload(
         payload["origin_thread_id"] = origin.thread_id
     if origin and origin.lane_id:
         payload["origin_lane_id"] = origin.lane_id
+    if origin and origin.surface_kind:
+        payload["origin_surface_kind"] = origin.surface_kind
+    if origin and origin.surface_key:
+        payload["origin_surface_key"] = origin.surface_key
     return payload
 
 
@@ -202,6 +206,10 @@ def apply_origin_followup_context(
         resolved_payload.setdefault("origin_thread_id", origin.thread_id)
     if origin.lane_id:
         resolved_payload.setdefault("origin_lane_id", origin.lane_id)
+    if origin.surface_kind:
+        resolved_payload.setdefault("origin_surface_kind", origin.surface_kind)
+    if origin.surface_key:
+        resolved_payload.setdefault("origin_surface_key", origin.surface_key)
     resolved_payload["metadata"] = merge_pma_origin_metadata(
         (
             resolved_payload.get("metadata")

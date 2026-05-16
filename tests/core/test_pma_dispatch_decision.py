@@ -366,3 +366,70 @@ def test_build_pma_dispatch_decision_keeps_surface_keys_empty_without_lane_id(
         None,
         None,
     ]
+
+
+def test_build_pma_dispatch_decision_confines_web_origin_without_explicit_target(
+    tmp_path: Path,
+) -> None:
+    decision = build_pma_dispatch_decision(
+        message="Web-origin follow-up",
+        requested_delivery="auto",
+        source_kind="managed_thread_completed",
+        repo_id="repo-a",
+        workspace_root=tmp_path / "repo-a",
+        managed_thread_id="watched-thread",
+        delivery_target=None,
+        context_payload={
+            "wake_up": {
+                "metadata": {
+                    "pma_origin": {
+                        "thread_id": "pma-thread",
+                        "lane_id": "pma:default",
+                        "surface_kind": "web",
+                        "surface_key": "pma:default",
+                    }
+                }
+            }
+        },
+        binding_metadata_by_thread={},
+        preferred_bound_surface_kinds=("discord", "telegram"),
+    )
+
+    assert decision.suppress_publish is False
+    assert decision.attempts == ()
+
+
+def test_build_pma_dispatch_decision_allows_explicit_target_from_web_origin(
+    tmp_path: Path,
+) -> None:
+    decision = build_pma_dispatch_decision(
+        message="Web-origin explicit follow-up",
+        requested_delivery="auto",
+        source_kind="managed_thread_completed",
+        repo_id="repo-a",
+        workspace_root=tmp_path / "repo-a",
+        managed_thread_id="watched-thread",
+        delivery_target=None,
+        context_payload={
+            "wake_up": {
+                "lane_id": "discord:12345",
+                "metadata": {
+                    "pma_origin": {
+                        "thread_id": "pma-thread",
+                        "lane_id": "pma:default",
+                        "surface_kind": "web",
+                        "surface_key": "pma:default",
+                    }
+                },
+            }
+        },
+        binding_metadata_by_thread={},
+        preferred_bound_surface_kinds=("discord", "telegram"),
+    )
+
+    assert [
+        (attempt.route, attempt.surface_kind, attempt.surface_key)
+        for attempt in decision.attempts
+    ] == [
+        ("explicit", "discord", "12345"),
+    ]

@@ -450,6 +450,81 @@ async def test_deliver_pma_notification_suppresses_duplicate_when_lane_explicit_
 
 
 @pytest.mark.anyio
+async def test_deliver_pma_notification_confines_persisted_web_origin_dispatch(
+    tmp_path: Path,
+) -> None:
+    hub_root = _hub(tmp_path)
+    workspace = (hub_root / "worktrees" / "repo-web-origin").resolve()
+    workspace.mkdir(parents=True, exist_ok=True)
+    _write_manifest(hub_root, "repo-web-origin", workspace)
+
+    discord_store = DiscordStateStore(
+        hub_root / ".codex-autorunner" / "discord_state.sqlite3"
+    )
+    try:
+        await discord_store.upsert_binding(
+            channel_id="repo-web-origin-discord",
+            guild_id="guild-1",
+            workspace_path=str(workspace),
+            repo_id="repo-web-origin",
+        )
+        await discord_store.update_pma_state(
+            channel_id="repo-web-origin-discord",
+            pma_enabled=True,
+            pma_prev_workspace_path=str(workspace),
+            pma_prev_repo_id="repo-web-origin",
+        )
+
+        dispatch_decision = {
+            "suppress_publish": False,
+            "attempts": [
+                {
+                    "route": "primary_pma",
+                    "delivery_mode": "primary_pma",
+                    "surface_kind": "discord",
+                    "repo_id": "repo-web-origin",
+                },
+                {
+                    "route": "bound",
+                    "delivery_mode": "bound",
+                    "surface_kind": "discord",
+                    "repo_id": "repo-web-origin",
+                    "workspace_root": str(workspace),
+                },
+            ],
+        }
+
+        outcome = await deliver_pma_notification(
+            hub_root=hub_root,
+            repo_id="repo-web-origin",
+            workspace_root=workspace,
+            message="Web-origin completion",
+            correlation_id="corr-web-origin",
+            delivery="auto",
+            source_kind="managed_thread_completed",
+            managed_thread_id="managed-thread-web-origin",
+            context_payload={
+                "wake_up": {
+                    "metadata": {
+                        "pma_origin": {
+                            "thread_id": "pma-thread",
+                            "lane_id": "pma:default",
+                            "surface_kind": "web",
+                            "surface_key": "pma:default",
+                        }
+                    }
+                }
+            },
+            dispatch_decision=dispatch_decision,
+        )
+
+        assert outcome == {"route": "auto", "targets": 0, "published": 0}
+        assert await discord_store.list_outbox() == []
+    finally:
+        await discord_store.close()
+
+
+@pytest.mark.anyio
 async def test_deliver_pma_notification_does_not_suppress_duplicate_notice_without_thread_id(
     tmp_path: Path,
 ) -> None:

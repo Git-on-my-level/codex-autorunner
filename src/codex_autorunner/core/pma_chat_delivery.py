@@ -21,7 +21,10 @@ from .chat_bindings import (
     preferred_non_pma_chat_notification_source_for_workspace,
 )
 from .config import load_hub_config
-from .pma_dispatch_decision import _lane_delivery_target_from_context
+from .pma_dispatch_decision import (
+    _lane_delivery_target_from_context,
+    _origin_surface_from_context,
+)
 from .pma_domain.models import (
     PmaDeliveryAttempt,
     PmaDeliveryTarget,
@@ -211,6 +214,11 @@ async def deliver_pma_notification(
             dispatch_decision=dispatch_decision,
             normalized_repo_id=normalized_repo_id,
         )
+        origin_surface = _origin_surface_from_context(context_payload)
+        if origin_surface is not None and origin_surface[0] == "web":
+            persisted_attempts = [
+                attempt for attempt in persisted_attempts if attempt.route == "explicit"
+            ]
         suppression_target = _suppression_target_for_dispatch_decision_path(
             delivery_target=delivery_target,
             context_payload=context_payload,

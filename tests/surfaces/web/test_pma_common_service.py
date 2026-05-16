@@ -332,6 +332,8 @@ async def test_managed_thread_automation_client_forwards_origin_thread_context(
             "lane_id": "discord",
             "agent": "hermes",
             "profile": "m4-pma",
+            "surface_kind": "web",
+            "surface_key": "pma:default",
         }
     )
     client = ManagedThreadAutomationClient(request, lambda: runtime_state)
@@ -369,11 +371,15 @@ async def test_managed_thread_automation_client_forwards_origin_thread_context(
     }
     assert captured["origin_thread_id"] == "pma-thread-1"
     assert captured["origin_lane_id"] == "discord"
+    assert captured["origin_surface_kind"] == "web"
+    assert captured["origin_surface_key"] == "pma:default"
     assert captured["metadata"]["pma_origin"] == {
         "thread_id": "pma-thread-1",
         "lane_id": "discord",
         "agent": "hermes",
         "profile": "m4-pma",
+        "surface_kind": "web",
+        "surface_key": "pma:default",
     }
 
 

@@ -1443,11 +1443,15 @@ class PmaAutomationStore:
         metadata: Optional[dict[str, Any]],
         origin_thread_id: Optional[str] = None,
         origin_lane_id: Optional[str] = None,
+        origin_surface_kind: Optional[str] = None,
+        origin_surface_key: Optional[str] = None,
     ) -> dict[str, Any]:
         resolved_metadata = merge_pma_origin_metadata(
             metadata,
             origin_thread_id=origin_thread_id,
             origin_lane_id=origin_lane_id,
+            origin_surface_kind=origin_surface_kind,
+            origin_surface_key=origin_surface_key,
         )
         delivery_target = _normalize_delivery_target(
             resolved_metadata.get("delivery_target")
@@ -1494,6 +1498,8 @@ class PmaAutomationStore:
         metadata: Optional[dict[str, Any]] = None,
         origin_thread_id: Optional[str] = None,
         origin_lane_id: Optional[str] = None,
+        origin_surface_kind: Optional[str] = None,
+        origin_surface_key: Optional[str] = None,
     ) -> tuple[PmaLifecycleSubscription, bool]:
         key = _normalize_text(idempotency_key)
         normalized_event_types = self._normalize_subscription_event_types(event_types)
@@ -1510,6 +1516,8 @@ class PmaAutomationStore:
             metadata=metadata,
             origin_thread_id=origin_thread_id,
             origin_lane_id=origin_lane_id,
+            origin_surface_kind=origin_surface_kind,
+            origin_surface_key=origin_surface_key,
         )
         if not normalized_event_types:
             logger.warning(
@@ -1560,6 +1568,10 @@ class PmaAutomationStore:
         normalized_idempotency_key = _normalize_text(data.get("idempotency_key"))
         normalized_origin_thread_id = _normalize_text(data.get("origin_thread_id"))
         normalized_origin_lane_id = _normalize_text(data.get("origin_lane_id"))
+        normalized_origin_surface_kind = _normalize_text(
+            data.get("origin_surface_kind")
+        )
+        normalized_origin_surface_key = _normalize_text(data.get("origin_surface_key"))
         confirm_duplicate = _normalize_bool(data.get("confirm"), fallback=False)
         is_auto_subscription = self._is_auto_subscription_key(
             normalized_idempotency_key
@@ -1618,6 +1630,8 @@ class PmaAutomationStore:
             ),
             origin_thread_id=normalized_origin_thread_id,
             origin_lane_id=normalized_origin_lane_id,
+            origin_surface_kind=normalized_origin_surface_kind,
+            origin_surface_key=normalized_origin_surface_key,
         )
         result = {"subscription": created.to_dict(), "deduped": deduped}
         scope_warning = _repo_scoped_subscription_warning(
