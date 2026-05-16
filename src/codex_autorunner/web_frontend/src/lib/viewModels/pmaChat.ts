@@ -568,6 +568,10 @@ export function committedDraftChatPlaceholder(
   };
 }
 
+export function isLocalChatPlaceholder(chat: PmaChatSummary): boolean {
+  return chat.lifecycleStatus === 'draft' || chat.raw.draft === true || chat.raw.draft_committed_placeholder === true;
+}
+
 export function mergeLocalChatPlaceholders(
   persistedChats: PmaChatSummary[],
   placeholders: Array<PmaChatSummary | null | undefined>
@@ -660,6 +664,8 @@ export function sortChatsUnreadFirst(
   const statusRank = (status: WorkStatus) =>
     status === 'waiting' || status === 'blocked' ? 0 : status === 'running' ? 1 : 2;
   return [...chats].sort((left, right) => {
+    const placeholderDiff = Number(isLocalChatPlaceholder(right)) - Number(isLocalChatPlaceholder(left));
+    if (placeholderDiff !== 0) return placeholderDiff;
     const unreadDiff = Number(isUnread(right, lastSeen)) - Number(isUnread(left, lastSeen));
     if (unreadDiff !== 0) return unreadDiff;
     const leftTime = Date.parse(left.updatedAt ?? '') || 0;
@@ -828,11 +834,12 @@ export function buildChatListEntries(
     group.status = rollupGroupStatus(group);
   }
 
-  type Sortable = { entry: ChatListEntry; unreadRank: number; statusRank: number; sort: string; id: string };
+  type Sortable = { entry: ChatListEntry; placeholderRank: number; unreadRank: number; statusRank: number; sort: string; id: string };
   const sortables: Sortable[] = [];
   for (const group of groups.values()) {
     sortables.push({
       entry: { kind: 'group', group },
+      placeholderRank: 1,
       unreadRank: group.unreadCount > 0 ? 0 : 1,
       statusRank: group.waitingCount > 0 ? 0 : group.activeCount > 0 ? 1 : 2,
       sort: group.updatedAt ?? '',
@@ -842,6 +849,7 @@ export function buildChatListEntries(
   for (const chat of standalone) {
     sortables.push({
       entry: { kind: 'chat', chat },
+      placeholderRank: isLocalChatPlaceholder(chat) ? 0 : 1,
       unreadRank: isUnread(chat, lastSeen) ? 0 : 1,
       statusRank: chat.status === 'waiting' || chat.status === 'blocked' ? 0 : chat.status === 'running' ? 1 : 2,
       sort: chat.updatedAt ?? '',
@@ -849,6 +857,7 @@ export function buildChatListEntries(
     });
   }
   sortables.sort((a, b) => {
+    if (a.placeholderRank !== b.placeholderRank) return a.placeholderRank - b.placeholderRank;
     if (a.unreadRank !== b.unreadRank) return a.unreadRank - b.unreadRank;
     const timeDiff = (b.sort || '').localeCompare(a.sort || '');
     if (timeDiff !== 0) return timeDiff;

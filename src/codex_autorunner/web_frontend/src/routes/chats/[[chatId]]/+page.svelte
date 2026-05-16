@@ -65,6 +65,7 @@
     filterChatEntries,
     formatBytes,
     formatRelativeTime,
+    isLocalChatPlaceholder,
     isPmaChatArchived,
     localPmaChatScopeOption,
     mergeLocalChatPlaceholders,
@@ -137,8 +138,9 @@
   let unsubscribeChatIndexSession: (() => void) | null = null;
   let chatIndexFilterRefreshTimer: number | null = null;
   let activeChatId = $state<string | null>(null);
-  // New chats are local drafts until the first send commits agent/scope/model
-  // and message in one backend call.
+  // Unsent new chats are page-local only: `localDraftChat` drives the composer until
+  // the first send creates the managed thread. They are intentionally omitted from
+  // the sidebar index (`chats`) so leaving the flow does not surface a draft row.
   let localDraftChat = $state<PmaChatSummary | null>(null);
   let committedDraftChat = $state<PmaChatSummary | null>(null);
   let agents = $state<JsonRecord[]>([]);
@@ -160,11 +162,21 @@
   let search = $state('');
   const currentChatIndexRequest = $derived<ChatIndexWindowRequest>(chatIndexRequestForCurrentFilters());
   const persistedChats = $derived<PmaChatSummary[]>(selectPmaChats(readModelState, currentChatIndexRequest));
-  const localChatPlaceholders = $derived<PmaChatSummary[]>([localDraftChat, committedDraftChat].filter((chat): chat is PmaChatSummary => Boolean(chat)));
-  const visibleLocalChatPlaceholders = $derived<PmaChatSummary[]>(
-    selectVisibleLocalChatPlaceholders(persistedChats, localChatPlaceholders)
+  const committedChatPlaceholders = $derived<PmaChatSummary[]>(
+    [committedDraftChat].filter((chat): chat is PmaChatSummary => Boolean(chat))
   );
-  const chats = $derived<PmaChatSummary[]>(mergeLocalChatPlaceholders(persistedChats, localChatPlaceholders));
+  const visibleLocalChatPlaceholders = $derived<PmaChatSummary[]>(
+    selectVisibleLocalChatPlaceholders(persistedChats, committedChatPlaceholders)
+  );
+  const chats = $derived<PmaChatSummary[]>(
+    mergeLocalChatPlaceholders(persistedChats, committedChatPlaceholders)
+  );
+
+  function chatSummaryForId(chatId: string | null): PmaChatSummary | null {
+    if (!chatId) return null;
+    if (localDraftChat?.id === chatId) return localDraftChat;
+    return chats.find((c) => c.id === chatId) ?? null;
+  }
   const transcriptCards = $derived<ChatTranscriptCard[]>(selectChatTranscript(readModelState, activeChatId));
   const progress = $derived<PmaRunProgress | null>(selectPmaProgress(readModelState, activeChatId));
   const artifacts = $derived<SurfaceArtifact[]>(selectPmaArtifacts(readModelState, activeChatId));
@@ -309,11 +321,7 @@
   let followBottom = true;
   let messageStackResizeObserver: ResizeObserver | null = null;
 
-  const activeChat = $derived(
-    activeChatId
-      ? chats.find((chat) => chat.id === activeChatId) ?? null
-      : null
-  );
+  const activeChat = $derived(activeChatId ? chatSummaryForId(activeChatId) : null);
   let expandedRunGroups = $state<Record<string, boolean>>({});
   let pinnedChatIds = $state<Record<string, true>>({});
   const chatListEntries = $derived(
@@ -395,7 +403,13 @@
   function sortEntriesForPins(entries: ChatListEntry[], pinned: Record<string, true>): ChatListEntry[] {
     const decorated = entries.map((entry) => {
       if (entry.kind === 'chat') {
-        return { entry, pinned: pinned[entry.chat.id] === true, sort: entry.chat.updatedAt ?? '', id: entry.chat.id };
+        return {
+          entry,
+          pinned: pinned[entry.chat.id] === true,
+          placeholder: isLocalChatPlaceholder(entry.chat),
+          sort: entry.chat.updatedAt ?? '',
+          id: entry.chat.id
+        };
       }
       const chats = [...entry.group.chats].sort((left, right) => {
         const pinnedDiff = Number(pinned[right.id] === true) - Number(pinned[left.id] === true);
@@ -405,11 +419,14 @@
       return {
         entry: { kind: 'group' as const, group: { ...entry.group, chats } },
         pinned: chats.some((chat) => pinned[chat.id] === true),
+        placeholder: false,
         sort: entry.group.updatedAt ?? '',
         id: entry.group.key
       };
     });
     decorated.sort((left, right) => {
+      const placeholderDiff = Number(right.placeholder) - Number(left.placeholder);
+      if (placeholderDiff !== 0) return placeholderDiff;
       const pinnedDiff = Number(right.pinned) - Number(left.pinned);
       if (pinnedDiff !== 0) return pinnedDiff;
       const timeDiff = right.sort.localeCompare(left.sort);
@@ -604,7 +621,7 @@
   function chatStatusFilterCounts(): Record<ChatStatusFilter, number> {
     const counters = readModelState.chatCounters;
     const knownPersistedChats = selectPmaChats(readModelState, { filter: 'all', limit: 50 });
-    const localKnownPlaceholders = selectVisibleLocalChatPlaceholders(knownPersistedChats, localChatPlaceholders);
+    const localKnownPlaceholders = selectVisibleLocalChatPlaceholders(knownPersistedChats, committedChatPlaceholders);
     const knownChats = localKnownPlaceholders.length > 0 ? [...localKnownPlaceholders, ...knownPersistedChats] : knownPersistedChats;
     const localRunningCount = localKnownPlaceholders.filter((chat) => chat.status === 'running').length;
     const localWaitingCount = localKnownPlaceholders.filter((chat) => chat.status === 'waiting' || chat.status === 'blocked').length;
@@ -973,6 +990,10 @@
 
   async function activateDetailFromUrl(detailId: string): Promise<void> {
     if (detailId === activeChatId) return;
+    if (localDraftChat && detailId === localDraftChat.id) {
+      await selectChatWithoutUrl(detailId);
+      return;
+    }
     if (!chats.some((chat) => chat.id === detailId)) {
       closeStream();
       if (committedDraftChat?.id !== detailId) committedDraftChat = null;
@@ -1010,7 +1031,7 @@
 
   function markActiveChatRead(): void {
     if (!activeChatId) return;
-    const chat = chats.find((c) => c.id === activeChatId);
+    const chat = chatSummaryForId(activeChatId);
     const stamp = chat?.updatedAt ?? new Date().toISOString();
     const next = markChatRead(lastSeenMap, activeChatId, stamp);
     if (next === lastSeenMap) return;
@@ -1039,8 +1060,9 @@
 
   async function archiveChat(chatId: string, options: { confirmed?: boolean } = {}): Promise<void> {
     if (archiving) return;
+    if (isLocalDraftChatId(chatId)) return;
     if (!options.confirmed) {
-      const chat = chats.find((item) => item.id === chatId);
+      const chat = chatSummaryForId(chatId);
       const ok = await confirmDialog({
         title: 'Archive chat',
         message: `Archive "${chat?.title ?? chatId}"?`,
@@ -1375,7 +1397,7 @@
   }
 
   function syncSelectorsToActiveChat(): void {
-    const chat = chats.find((item) => item.id === activeChatId);
+    const chat = chatSummaryForId(activeChatId);
     const scopeId = scopeIdForChat(chat);
     if (scopeId) selectedScopeId = scopeId;
     const resolved = resolvePmaChatSelectorsForActiveChat(
@@ -2585,7 +2607,7 @@
       </div>
       {#if activeChat && (showStreamHealthAside || !isPmaChatArchived(activeChat))}
         <div class="chat-header-tools">
-          {#if !isPmaChatArchived(activeChat)}
+          {#if !isPmaChatArchived(activeChat) && !isLocalDraftChatId(activeChat.id)}
             <button
               class="chat-header-action"
               type="button"
