@@ -418,6 +418,39 @@ class ChatSurfaceReadService:
         )
         return payload
 
+    def chat_index_archive_targets(self) -> list[dict[str, Any]]:
+        """Return every non-archived chat-index row the bulk archive command owns.
+
+        This is intentionally projection-backed so bulk archive and the `/chats`
+        counters cannot drift apart.  Managed-thread rows are archiveable through
+        the thread lifecycle store; notification-only rows are archiveable through
+        a chat-surface lifecycle event.
+        """
+
+        self._ensure_chat_index_projection_current()
+        where_sql = (
+            f"{_CHAT_INDEX_NON_ARCHIVED_SQL} "
+            "AND (managed_thread_id IS NOT NULL "
+            "OR surface_kind_list LIKE '%|notification|%')"
+        )
+        with open_orchestration_sqlite(
+            self._hub_root, durable=self._durable, migrate=True
+        ) as conn:
+            rows = [
+                _chat_index_row_from_projection(row)
+                for row in conn.execute(
+                    f"""
+                    SELECT row_json
+                      FROM orch_chat_index_projection
+                     WHERE {where_sql}
+                     ORDER BY sort_unread_priority DESC,
+                              sort_last_activity_desc ASC,
+                              row_id ASC
+                    """
+                ).fetchall()
+            ]
+        return [row for row in rows if row]
+
     def chat_detail_snapshot(
         self,
         managed_thread_id: str,

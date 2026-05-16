@@ -14,9 +14,11 @@ from codex_autorunner.core.config import CONFIG_FILENAME, DEFAULT_HUB_CONFIG
 from codex_autorunner.core.managed_thread_store import ManagedThreadStore
 from codex_autorunner.core.orchestration import (
     ActiveWorkSummary,
+    ChatSurfaceReadService,
     OrchestrationBindingStore,
     ThreadTarget,
 )
+from codex_autorunner.core.pma_notification_store import PmaNotificationStore
 from codex_autorunner.server import create_hub_app
 from codex_autorunner.surfaces.web.routes.pma_routes import (
     managed_thread_route_helpers,
@@ -1827,6 +1829,49 @@ def test_archive_active_managed_threads_route_archives_beyond_list_window(
         for managed_thread_id in active_ids
     )
     assert refreshed.get_thread(archived)["lifecycle_status"] == "archived"
+
+
+def test_archive_active_managed_threads_route_archives_notification_chat_rows(
+    hub_env,
+) -> None:
+    notification_store = PmaNotificationStore(hub_env.hub_root)
+    for index in range(3):
+        notification_store.record_notification(
+            correlation_id=f"corr-{index}",
+            source_kind="pma.review",
+            delivery_mode="bound",
+            surface_kind="discord",
+            surface_key=f"channel-{index}",
+            delivery_record_id=f"delivery-{index}",
+            repo_id=hub_env.repo_id,
+            workspace_root=str(hub_env.repo_root),
+            notification_id=f"notif-{index}",
+        )
+
+    read_service = ChatSurfaceReadService(hub_env.hub_root, durable=True)
+    assert len(read_service.chat_index_archive_targets()) == 3
+
+    app = create_hub_app(hub_env.hub_root)
+    with TestClient(app) as client:
+        archive_resp = client.post("/hub/pma/threads/archive-active")
+
+    assert archive_resp.status_code == 200
+    payload = archive_resp.json()
+    assert payload["requested_count"] == 3
+    assert payload["archived_count"] == 3
+    assert payload["error_count"] == 0
+    assert payload["threads"] == []
+    assert [surface["surface_key"] for surface in payload["archived_surfaces"]] == [
+        "notification:notif-0",
+        "notification:notif-1",
+        "notification:notif-2",
+    ]
+    assert (
+        ChatSurfaceReadService(
+            hub_env.hub_root, durable=True
+        ).chat_index_archive_targets()
+        == []
+    )
 
 
 def test_managed_thread_queue_routes_list_cancel_and_clear(hub_env) -> None:
