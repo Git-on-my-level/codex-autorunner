@@ -465,7 +465,7 @@ async def test_service_exposes_app_server_event_buffer_context(
 
 
 @pytest.mark.anyio
-async def test_workspace_supervisor_uses_resolved_repo_app_server_command(
+async def test_workspace_app_server_config_uses_hub_singleton_command(
     tmp_path: Path, monkeypatch
 ) -> None:
     captured: list[dict[str, object]] = []
@@ -501,7 +501,7 @@ async def test_workspace_supervisor_uses_resolved_repo_app_server_command(
     try:
         await service._app_server_supervisor_for_workspace(workspace)
         assert captured
-        assert captured[0]["command"] == ["/custom/codex", "app-server", "--x"]
+        assert captured[0]["command"] == ["codex", "app-server"]
     finally:
         await store.close()
 
@@ -525,7 +525,7 @@ async def test_app_server_supervisor_is_shared_across_workspaces(
         lambda *args, **kwargs: SimpleNamespace(
             app_server=SimpleNamespace(
                 command=["/custom/codex", "app-server"],
-                server_scope="global",
+                server_scope="workspace",
                 max_handles=1,
                 idle_ttl_seconds=3600,
                 startup_timeout_seconds=30,
@@ -559,7 +559,7 @@ async def test_app_server_supervisor_is_shared_across_workspaces(
 
         assert supervisor_a is supervisor_b
         assert supervisor_a is service._runtime_services.app_server_supervisor
-        assert captured == [["/custom/codex", "app-server"]]
+        assert captured == [["codex", "app-server"]]
     finally:
         await service._runtime_services.close()
         await store.close()

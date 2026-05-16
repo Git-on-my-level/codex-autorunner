@@ -5,14 +5,26 @@ import logging
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Dict, Optional, Sequence
+from typing import Any, Callable, Dict, Optional, Sequence
 
 from ...core.logging_utils import log_event
+from ...core.managed_processes import reap_managed_processes
+from ...core.managed_processes.registry import list_process_records
 from ...core.supervisor_utils import evict_lru_handle_locked, pop_idle_handles_locked
 from ...workspace import canonical_workspace_root, workspace_id_for_path
 from .client import ApprovalHandler, CodexAppServerClient, NotificationHandler
 
 EnvBuilder = Callable[[Path, str, Path], Dict[str, str]]
+
+
+def _reap_and_list_codex_app_server_records(
+    registry_root: Path,
+) -> tuple[list[Any], Optional[Exception]]:
+    try:
+        reap_managed_processes(registry_root)
+        return list_process_records(registry_root, kind="codex_app_server"), None
+    except Exception as exc:
+        return [], exc
 
 
 @dataclass
@@ -91,6 +103,7 @@ class WorkspaceAppServerSupervisor:
         terminate_kill_seconds: Optional[float] = None,
         registry_root: Optional[Path] = None,
         runtime_profile: Optional[str] = None,
+        max_processes: Optional[int] = 6,
     ) -> None:
         self._command = [str(arg) for arg in command]
         self._state_root = state_root
@@ -129,6 +142,9 @@ class WorkspaceAppServerSupervisor:
         self._terminate_kill_seconds = terminate_kill_seconds
         self._registry_root = registry_root
         self._runtime_profile = runtime_profile
+        self._max_processes = (
+            max_processes if max_processes is not None and max_processes > 0 else None
+        )
         self._handles: dict[str, AppServerHandle] = {}
         self._lock = asyncio.Lock()
 
@@ -247,6 +263,35 @@ class WorkspaceAppServerSupervisor:
             if evicted is not None:
                 evicted_id = evicted.workspace_id
                 handles_to_close.append(evicted)
+
+        for handle in handles_to_close:
+            try:
+                reason = (
+                    "max_handles" if handle.workspace_id == evicted_id else "idle_ttl"
+                )
+                log_event(
+                    self._logger,
+                    logging.INFO,
+                    "app_server.handle.closing",
+                    reason=reason,
+                    workspace_id=handle.workspace_id,
+                    workspace_root=str(handle.workspace_root),
+                    idle_ttl_seconds=self._idle_ttl_seconds,
+                    max_handles=self._max_handles,
+                    last_used_at=handle.last_used_at,
+                )
+                await handle.client.close()
+            except Exception as exc:  # intentional: best-effort cleanup during eviction
+                self._logger.debug("Failed to close handle: %s", exc)
+                continue
+
+        await self._enforce_process_budget(workspace_root)
+
+        async with self._lock:
+            existing = self._handles.get(workspace_id)
+            if existing is not None:
+                existing.last_used_at = time.monotonic()
+                return existing
             state_dir = self._state_root / workspace_id
             env = self._env_builder(workspace_root, workspace_id, state_dir)
             client = CodexAppServerClient(
@@ -288,26 +333,6 @@ class WorkspaceAppServerSupervisor:
                 last_used_at=time.monotonic(),
             )
             self._handles[workspace_id] = handle
-        for handle in handles_to_close:
-            try:
-                reason = (
-                    "max_handles" if handle.workspace_id == evicted_id else "idle_ttl"
-                )
-                log_event(
-                    self._logger,
-                    logging.INFO,
-                    "app_server.handle.closing",
-                    reason=reason,
-                    workspace_id=handle.workspace_id,
-                    workspace_root=str(handle.workspace_root),
-                    idle_ttl_seconds=self._idle_ttl_seconds,
-                    max_handles=self._max_handles,
-                    last_used_at=handle.last_used_at,
-                )
-                await handle.client.close()
-            except Exception as exc:  # intentional: best-effort cleanup during eviction
-                self._logger.debug("Failed to close handle: %s", exc)
-                continue
         return handle
 
     async def _ensure_started(self, handle: AppServerHandle) -> None:
@@ -367,6 +392,43 @@ class WorkspaceAppServerSupervisor:
             healthy=handle.started and self._client_pid(handle.client) is not None,
             last_used_at=handle.last_used_at,
             state_dir=str(self._state_root / handle.workspace_id),
+        )
+
+    async def _enforce_process_budget(self, workspace_root: Path) -> None:
+        if self._max_processes is None:
+            return
+        registry_root = self._registry_root or workspace_root
+        records, exc = await asyncio.to_thread(
+            _reap_and_list_codex_app_server_records, registry_root
+        )
+        if exc is not None:
+            log_event(
+                self._logger,
+                logging.WARNING,
+                "app_server.process_budget_check_failed",
+                max_processes=self._max_processes,
+                registry_root=str(registry_root),
+                exc=exc,
+            )
+            return
+        running_records = [
+            record
+            for record in records
+            if record.pid is not None or record.pgid is not None
+        ]
+        if len(running_records) < self._max_processes:
+            return
+        log_event(
+            self._logger,
+            logging.ERROR,
+            "app_server.process_budget_exceeded",
+            max_processes=self._max_processes,
+            process_records=len(running_records),
+            registry_root=str(registry_root),
+        )
+        raise RuntimeError(
+            "Codex app-server process budget exceeded "
+            f"({len(running_records)}/{self._max_processes}); waiting for reaper"
         )
 
     def _client_pid(self, client: CodexAppServerClient) -> Optional[int]:

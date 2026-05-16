@@ -313,3 +313,155 @@ async def test_lifecycle_snapshot_reports_global_handle_fields(
     assert snapshot.handles[0].handle_id == "global"
     assert snapshot.handles[0].pid == 43210
     assert snapshot.handles[0].state_dir == str(tmp_path / "state" / "global")
+
+
+@pytest.mark.anyio
+async def test_process_budget_rejects_new_app_server_spawn(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    class FakeClient:
+        instances: list["FakeClient"] = []
+
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            FakeClient.instances.append(self)
+
+        async def start(self) -> None:
+            return
+
+        async def close(self) -> None:
+            return
+
+    monkeypatch.setattr(
+        "codex_autorunner.adapters.app_server.supervisor.CodexAppServerClient",
+        FakeClient,
+    )
+    monkeypatch.setattr(
+        "codex_autorunner.adapters.app_server.supervisor.reap_managed_processes",
+        lambda _root: None,
+    )
+    monkeypatch.setattr(
+        "codex_autorunner.adapters.app_server.supervisor.list_process_records",
+        lambda _root, kind=None: [
+            type("Record", (), {"pid": 1001, "pgid": 1001})(),
+            type("Record", (), {"pid": 1002, "pgid": 1002})(),
+        ],
+    )
+
+    supervisor = WorkspaceAppServerSupervisor(
+        [sys.executable, "-c", "print('noop')"],
+        state_root=tmp_path / "state",
+        env_builder=lambda _root, _id, _state: {},
+        registry_root=tmp_path,
+        max_processes=2,
+    )
+    workspace = tmp_path / "repo"
+    workspace.mkdir()
+
+    with pytest.raises(RuntimeError, match="process budget exceeded"):
+        await supervisor.get_client(workspace)
+
+    assert FakeClient.instances == []
+
+
+@pytest.mark.anyio
+async def test_process_budget_allows_spawn_after_reaper_reduces_records(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    class FakeClient:
+        instances: list["FakeClient"] = []
+
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            FakeClient.instances.append(self)
+
+        async def start(self) -> None:
+            return
+
+        async def close(self) -> None:
+            return
+
+    monkeypatch.setattr(
+        "codex_autorunner.adapters.app_server.supervisor.CodexAppServerClient",
+        FakeClient,
+    )
+    reaped: list[Path] = []
+    monkeypatch.setattr(
+        "codex_autorunner.adapters.app_server.supervisor.reap_managed_processes",
+        lambda root: reaped.append(root),
+    )
+    monkeypatch.setattr(
+        "codex_autorunner.adapters.app_server.supervisor.list_process_records",
+        lambda _root, kind=None: [
+            type("Record", (), {"pid": 1001, "pgid": 1001})(),
+        ],
+    )
+
+    supervisor = WorkspaceAppServerSupervisor(
+        [sys.executable, "-c", "print('noop')"],
+        state_root=tmp_path / "state",
+        env_builder=lambda _root, _id, _state: {},
+        registry_root=tmp_path,
+        max_processes=2,
+    )
+    workspace = tmp_path / "repo"
+    workspace.mkdir()
+
+    await supervisor.get_client(workspace)
+
+    assert reaped == [tmp_path]
+    assert len(FakeClient.instances) == 1
+
+
+@pytest.mark.anyio
+async def test_process_budget_rejection_closes_evicted_handles_first(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Evicted LRU handles must close before budget enforcement can raise."""
+
+    closed_handle_ids: list[str] = []
+
+    class FakeClient:
+        instances: list["FakeClient"] = []
+
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            self.kwargs = kwargs
+            FakeClient.instances.append(self)
+
+        async def start(self) -> None:
+            return
+
+        async def close(self) -> None:
+            closed_handle_ids.append(str(self.kwargs["handle_id"]))
+
+    monkeypatch.setattr(
+        "codex_autorunner.adapters.app_server.supervisor.CodexAppServerClient",
+        FakeClient,
+    )
+
+    supervisor = WorkspaceAppServerSupervisor(
+        [sys.executable, "-c", "print('noop')"],
+        state_root=tmp_path / "state",
+        env_builder=lambda _root, _id, _state: {},
+        server_scope="workspace",
+        max_handles=1,
+        registry_root=tmp_path,
+        max_processes=2,
+    )
+    one = tmp_path / "one"
+    two = tmp_path / "two"
+    one.mkdir()
+    two.mkdir()
+
+    await supervisor.get_client(one)
+    assert len(FakeClient.instances) == 1
+    first_handle_id = str(FakeClient.instances[0].kwargs["handle_id"])
+
+    async def reject_budget(_workspace_root: Path) -> None:
+        raise RuntimeError("process budget exceeded (test)")
+
+    monkeypatch.setattr(supervisor, "_enforce_process_budget", reject_budget)
+
+    with pytest.raises(RuntimeError, match="process budget exceeded"):
+        await supervisor.get_client(two)
+
+    assert closed_handle_ids == [first_handle_id]
+    assert len(FakeClient.instances) == 1

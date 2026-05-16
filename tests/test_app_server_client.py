@@ -95,6 +95,32 @@ async def test_request_response_out_of_order(tmp_path: Path) -> None:
 
 
 @pytest.mark.anyio
+async def test_startup_timeout_terminates_hung_initialize_and_allows_fresh_start(
+    tmp_path: Path,
+) -> None:
+    client = CodexAppServerClient(
+        fixture_command("initialize_hang"),
+        cwd=tmp_path,
+        startup_timeout_seconds=0.2,
+    )
+
+    try:
+        with pytest.raises(CodexAppServerDisconnected, match="startup timed out"):
+            await client.start()
+
+        assert client._process is None
+        assert client._initialized is False
+
+        client._command = fixture_command("basic")
+        await client.start()
+
+        assert client._process is not None
+        assert client._initialized is True
+    finally:
+        await client.close()
+
+
+@pytest.mark.anyio
 async def test_turn_completion_and_agent_message(tmp_path: Path) -> None:
     client = CodexAppServerClient(fixture_command("basic"), cwd=tmp_path)
     try:
