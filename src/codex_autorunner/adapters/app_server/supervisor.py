@@ -258,12 +258,40 @@ class WorkspaceAppServerSupervisor:
             if existing is not None:
                 existing.last_used_at = time.monotonic()
                 return existing
-            await self._enforce_process_budget_locked(workspace_root)
             handles_to_close.extend(self._pop_idle_handles_locked())
             evicted = self._evict_lru_handle_locked()
             if evicted is not None:
                 evicted_id = evicted.workspace_id
                 handles_to_close.append(evicted)
+
+        for handle in handles_to_close:
+            try:
+                reason = (
+                    "max_handles" if handle.workspace_id == evicted_id else "idle_ttl"
+                )
+                log_event(
+                    self._logger,
+                    logging.INFO,
+                    "app_server.handle.closing",
+                    reason=reason,
+                    workspace_id=handle.workspace_id,
+                    workspace_root=str(handle.workspace_root),
+                    idle_ttl_seconds=self._idle_ttl_seconds,
+                    max_handles=self._max_handles,
+                    last_used_at=handle.last_used_at,
+                )
+                await handle.client.close()
+            except Exception as exc:  # intentional: best-effort cleanup during eviction
+                self._logger.debug("Failed to close handle: %s", exc)
+                continue
+
+        await self._enforce_process_budget(workspace_root)
+
+        async with self._lock:
+            existing = self._handles.get(workspace_id)
+            if existing is not None:
+                existing.last_used_at = time.monotonic()
+                return existing
             state_dir = self._state_root / workspace_id
             env = self._env_builder(workspace_root, workspace_id, state_dir)
             client = CodexAppServerClient(
@@ -305,26 +333,6 @@ class WorkspaceAppServerSupervisor:
                 last_used_at=time.monotonic(),
             )
             self._handles[workspace_id] = handle
-        for handle in handles_to_close:
-            try:
-                reason = (
-                    "max_handles" if handle.workspace_id == evicted_id else "idle_ttl"
-                )
-                log_event(
-                    self._logger,
-                    logging.INFO,
-                    "app_server.handle.closing",
-                    reason=reason,
-                    workspace_id=handle.workspace_id,
-                    workspace_root=str(handle.workspace_root),
-                    idle_ttl_seconds=self._idle_ttl_seconds,
-                    max_handles=self._max_handles,
-                    last_used_at=handle.last_used_at,
-                )
-                await handle.client.close()
-            except Exception as exc:  # intentional: best-effort cleanup during eviction
-                self._logger.debug("Failed to close handle: %s", exc)
-                continue
         return handle
 
     async def _ensure_started(self, handle: AppServerHandle) -> None:
@@ -386,7 +394,7 @@ class WorkspaceAppServerSupervisor:
             state_dir=str(self._state_root / handle.workspace_id),
         )
 
-    async def _enforce_process_budget_locked(self, workspace_root: Path) -> None:
+    async def _enforce_process_budget(self, workspace_root: Path) -> None:
         if self._max_processes is None:
             return
         registry_root = self._registry_root or workspace_root
