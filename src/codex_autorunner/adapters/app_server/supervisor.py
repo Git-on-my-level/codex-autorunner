@@ -5,7 +5,7 @@ import logging
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Dict, Optional, Sequence
+from typing import Any, Callable, Dict, Optional, Sequence
 
 from ...core.logging_utils import log_event
 from ...core.managed_processes import reap_managed_processes
@@ -15,6 +15,16 @@ from ...workspace import canonical_workspace_root, workspace_id_for_path
 from .client import ApprovalHandler, CodexAppServerClient, NotificationHandler
 
 EnvBuilder = Callable[[Path, str, Path], Dict[str, str]]
+
+
+def _reap_and_list_codex_app_server_records(
+    registry_root: Path,
+) -> tuple[list[Any], Optional[Exception]]:
+    try:
+        reap_managed_processes(registry_root)
+        return list_process_records(registry_root, kind="codex_app_server"), None
+    except Exception as exc:
+        return [], exc
 
 
 @dataclass
@@ -248,12 +258,12 @@ class WorkspaceAppServerSupervisor:
             if existing is not None:
                 existing.last_used_at = time.monotonic()
                 return existing
+            await self._enforce_process_budget_locked(workspace_root)
             handles_to_close.extend(self._pop_idle_handles_locked())
             evicted = self._evict_lru_handle_locked()
             if evicted is not None:
                 evicted_id = evicted.workspace_id
                 handles_to_close.append(evicted)
-            self._enforce_process_budget_locked(workspace_root)
             state_dir = self._state_root / workspace_id
             env = self._env_builder(workspace_root, workspace_id, state_dir)
             client = CodexAppServerClient(
@@ -376,14 +386,14 @@ class WorkspaceAppServerSupervisor:
             state_dir=str(self._state_root / handle.workspace_id),
         )
 
-    def _enforce_process_budget_locked(self, workspace_root: Path) -> None:
+    async def _enforce_process_budget_locked(self, workspace_root: Path) -> None:
         if self._max_processes is None:
             return
         registry_root = self._registry_root or workspace_root
-        try:
-            reap_managed_processes(registry_root)
-            records = list_process_records(registry_root, kind="codex_app_server")
-        except Exception as exc:
+        records, exc = await asyncio.to_thread(
+            _reap_and_list_codex_app_server_records, registry_root
+        )
+        if exc is not None:
             log_event(
                 self._logger,
                 logging.WARNING,
