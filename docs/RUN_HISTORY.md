@@ -4,13 +4,20 @@ This document defines the canonical run-history model in Codex Autorunner.
 
 ## Source Of Truth
 
-Use `FlowStore` at `.codex-autorunner/flows.db` as the single source of truth for run history.
+Use `FlowStore` at `.codex-autorunner/flows.db` as the single source of truth
+for flow-engine run history. This store proves what the ticket-flow engine ran;
+it does not by itself make a turn visible in Web Hub Chats.
 
 - Runs: `flow_runs`
 - Timeline/events: `flow_events`
 - Artifacts: `flow_artifacts`
 
 Legacy numeric run directories are compatibility-only and must not be used for new run history features.
+
+Web Hub chat visibility is sourced from hub orchestration records:
+`orch_thread_targets`, `orch_thread_executions`, bindings, delivery ledgers,
+and chat-surface events. A ticket-flow turn is visible only when orchestration
+contains a repairable `flow_run_id + ticket_id -> managed_thread_id` link.
 
 ### Archived Run Artifacts Are Not Live History
 

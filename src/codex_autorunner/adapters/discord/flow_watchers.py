@@ -82,6 +82,16 @@ def _load_latest_terminal_ticket_flow_run(
                     latest_run = run
     if latest_run is None:
         return None
+    log_event(
+        service._logger,
+        logging.DEBUG,
+        "discord.terminal_watch.legacy_flows_db_status_fallback",
+        run_id=latest_run.id,
+        status=latest_run.status.value,
+        workspace_root=str(workspace_root),
+        fallback="flows.db",
+        canonical_owner="orchestration",
+    )
     return (latest_run.id, latest_run.status.value, latest_run.error_message)
 
 

@@ -984,6 +984,37 @@ class ChatSurfaceReadService:
                     "count": int(row["count"] or 0),
                     "max_updated": row["max_updated"],
                 }
+            if _table_exists(conn, "orch_thread_targets"):
+                row = conn.execute(
+                    """
+                    SELECT COUNT(*) AS count,
+                           MAX(COALESCE(updated_at, created_at)) AS max_updated
+                      FROM orch_thread_targets
+                     WHERE json_extract(metadata_json, '$.flow_type') = 'ticket_flow'
+                       AND json_extract(metadata_json, '$.ticket_flow_link_key') IS NOT NULL
+                    """
+                ).fetchone()
+                facts["ticket_flow_thread_links"] = {
+                    "count": int(row["count"] or 0),
+                    "max_updated": row["max_updated"],
+                }
+            else:
+                facts["ticket_flow_thread_links"] = None
+            if _table_exists(conn, "orch_flow_run_projections"):
+                row = conn.execute(
+                    """
+                    SELECT COUNT(*) AS count,
+                           MAX(updated_at) AS max_updated
+                      FROM orch_flow_run_projections
+                     WHERE flow_type = 'ticket_flow'
+                    """
+                ).fetchone()
+                facts["ticket_flow_flow_projections"] = {
+                    "count": int(row["count"] or 0),
+                    "max_updated": row["max_updated"],
+                }
+            else:
+                facts["ticket_flow_flow_projections"] = None
         directory_path = (
             self._hub_root / ".codex-autorunner" / "chat" / "channel_directory.json"
         )

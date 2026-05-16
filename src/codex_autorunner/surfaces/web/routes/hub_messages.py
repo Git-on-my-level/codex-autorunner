@@ -107,6 +107,7 @@ def _build_hub_messages_payload(
         action_queue=(
             snapshot.action_queue if "action_queue" in requested_sections else None
         ),
+        unreadable_diagnostics=snapshot.unreadable_diagnostics,
     )
     return payload.model_dump(exclude_none=True)
 

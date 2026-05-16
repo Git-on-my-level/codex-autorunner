@@ -1036,6 +1036,16 @@ class TelegramTicketFlowBridge:
             store.close()
         if latest_run is None:
             return None
+        log_event(
+            self._logger,
+            logging.DEBUG,
+            "telegram.ticket_flow.terminal_legacy_flows_db_status_fallback",
+            run_id=latest_run.id,
+            status=latest_run.status.value,
+            workspace_root=str(workspace_root),
+            fallback="flows.db",
+            canonical_owner="orchestration",
+        )
         terminal_at = latest_run.finished_at or latest_run.created_at
         return (
             latest_run.id,

@@ -79,6 +79,30 @@ class TicketFlowVisibilityRepairReport:
 
 
 @dataclass(frozen=True)
+class TicketFlowProjectionGap:
+    repo_root: str
+    hub_root: str
+    run_id: str
+    status: str
+    reason: str
+    ticket_id: Optional[str] = None
+    ticket_path: Optional[str] = None
+    expected_link_key: Optional[str] = None
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "repo_root": self.repo_root,
+            "hub_root": self.hub_root,
+            "run_id": self.run_id,
+            "status": self.status,
+            "reason": self.reason,
+            "ticket_id": self.ticket_id,
+            "ticket_path": self.ticket_path,
+            "expected_link_key": self.expected_link_key,
+        }
+
+
+@dataclass(frozen=True)
 class _TicketTurnEvidence:
     run_id: str
     ticket_path: str
@@ -226,6 +250,86 @@ def repair_ticket_flow_chat_visibility(
         actions=tuple(actions),
         diagnostics=tuple(diagnostics),
     )
+
+
+def diagnose_ticket_flow_projection_gaps(
+    *,
+    repo_root: Path,
+    hub_root: Path,
+    repo_id: Optional[str] = None,
+    run_id: Optional[str] = None,
+    durable: bool = True,
+) -> tuple[TicketFlowProjectionGap, ...]:
+    """Return terminal ticket-flow turns in flows.db that lack hub chat links."""
+
+    normalized_repo_root = repo_root.resolve()
+    normalized_hub_root = hub_root.resolve()
+    db_path = resolve_repo_flows_db_path(normalized_repo_root)
+    if not db_path.exists():
+        return ()
+
+    gaps: list[TicketFlowProjectionGap] = []
+    with FlowStore(db_path, durable=durable) as flow_store:
+        if run_id:
+            record = flow_store.get_flow_run(run_id)
+            records = [record] if record is not None else []
+        else:
+            records = flow_store.list_flow_runs(flow_type="ticket_flow")
+        thread_store = ManagedThreadStore(normalized_hub_root, durable=durable)
+        for record in records:
+            if record is None or record.flow_type != "ticket_flow":
+                continue
+            if not _is_repairable_terminal(record):
+                continue
+            evidence_items = list(
+                _collect_ticket_turn_evidence(
+                    record,
+                    flow_store=flow_store,
+                    repo_root=normalized_repo_root,
+                )
+            )
+            if not evidence_items:
+                gaps.append(
+                    TicketFlowProjectionGap(
+                        repo_root=str(normalized_repo_root),
+                        hub_root=str(normalized_hub_root),
+                        run_id=record.id,
+                        status=record.status.value,
+                        reason=(
+                            "repo-local flows.db has a terminal ticket-flow run, "
+                            "but no completed ticket-turn evidence that can be "
+                            "projected into a Web Hub managed-thread row"
+                        ),
+                    )
+                )
+                continue
+            for evidence in evidence_items:
+                existing = _find_existing_ticket_flow_thread(
+                    thread_store,
+                    evidence=evidence,
+                    repo_root=normalized_repo_root,
+                    repo_id=repo_id,
+                )
+                if existing is not None:
+                    continue
+                gaps.append(
+                    TicketFlowProjectionGap(
+                        repo_root=str(normalized_repo_root),
+                        hub_root=str(normalized_hub_root),
+                        run_id=evidence.run_id,
+                        status=record.status.value,
+                        reason=(
+                            "repo-local flows.db has an executed ticket-flow turn "
+                            "without a canonical orchestration managed-thread link"
+                        ),
+                        ticket_id=evidence.ticket_id,
+                        ticket_path=evidence.ticket_path,
+                        expected_link_key=ticket_flow_thread_link_key(
+                            evidence.run_id, evidence.ticket_id
+                        ),
+                    )
+                )
+    return tuple(gaps)
 
 
 def _is_repairable_terminal(record: FlowRunRecord) -> bool:
@@ -480,3 +584,13 @@ def _text(value: Any) -> Optional[str]:
         return None
     text = str(value).strip()
     return text or None
+
+
+__all__ = [
+    "TicketFlowProjectionGap",
+    "TicketFlowVisibilityRepairAction",
+    "TicketFlowVisibilityRepairDiagnostic",
+    "TicketFlowVisibilityRepairReport",
+    "diagnose_ticket_flow_projection_gaps",
+    "repair_ticket_flow_chat_visibility",
+]

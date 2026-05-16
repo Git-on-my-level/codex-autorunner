@@ -7,6 +7,7 @@ from codex_autorunner.core.flows.store import FlowStore
 from codex_autorunner.core.managed_thread_store import ManagedThreadStore
 from codex_autorunner.core.orchestration import ticket_flow_thread_metadata
 from codex_autorunner.core.orchestration.ticket_flow_visibility_repair import (
+    diagnose_ticket_flow_projection_gaps,
     repair_ticket_flow_chat_visibility,
 )
 from codex_autorunner.core.state_roots import resolve_repo_flows_db_path
@@ -128,6 +129,47 @@ def test_repair_ticket_flow_visibility_recovers_completed_run(hub_env) -> None:
     assert again.repaired == 0
     assert again.already_linked == 1
     assert again.actions[0].managed_thread_id == thread["managed_thread_id"]
+
+
+def test_diagnostics_flag_completed_turn_without_canonical_link(hub_env) -> None:
+    run_id = "55b8aa99-ea89-4628-a7f7-9f4166534b6f"
+    ticket_path = _write_ticket(
+        hub_env.repo_root,
+        "TICKET-001A.md",
+        ticket_id="ticket-gap",
+        done=True,
+    )
+    _seed_completed_run(hub_env.repo_root, run_id=run_id, ticket_path=ticket_path)
+
+    gaps = diagnose_ticket_flow_projection_gaps(
+        repo_root=hub_env.repo_root,
+        hub_root=hub_env.hub_root,
+        repo_id=hub_env.repo_id,
+        run_id=run_id,
+    )
+
+    assert len(gaps) == 1
+    assert gaps[0].run_id == run_id
+    assert gaps[0].ticket_id == "ticket-gap"
+    assert gaps[0].expected_link_key == f"ticket_flow:{run_id}:ticket-gap"
+    assert "without a canonical orchestration managed-thread link" in gaps[0].reason
+
+    repair_ticket_flow_chat_visibility(
+        repo_root=hub_env.repo_root,
+        hub_root=hub_env.hub_root,
+        repo_id=hub_env.repo_id,
+        run_id=run_id,
+    )
+
+    assert (
+        diagnose_ticket_flow_projection_gaps(
+            repo_root=hub_env.repo_root,
+            hub_root=hub_env.hub_root,
+            repo_id=hub_env.repo_id,
+            run_id=run_id,
+        )
+        == ()
+    )
 
 
 def test_repair_ticket_flow_visibility_reports_incomplete_evidence(hub_env) -> None:

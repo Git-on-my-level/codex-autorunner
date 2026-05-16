@@ -71,3 +71,19 @@ From artifacts alone, a debugger must be able to answer:
 - A stream or snapshot regression must identify the failing family: chat index,
   chat detail, repo/worktree topology, repo/worktree runtime, ticket detail, or
   a newer documented family.
+
+## Ticket-flow visibility diagnostics
+- Treat `.codex-autorunner/flows.db` as flow-engine execution state: it proves
+  run sequencing, status, and terminal history.
+- Treat hub orchestration records as Web Hub chat visibility state:
+  `orch_thread_targets`, `orch_thread_executions`, bindings, delivery ledgers,
+  and chat-surface events must rebuild the Chats view.
+- A completed ticket-flow turn without a repairable
+  `flow_run_id + ticket_id -> managed_thread_id` orchestration link is a
+  projection gap. Hub Messages surfaces these gaps under
+  `ticket_flow_visibility` diagnostics; repair/backfill should use the
+  ticket-flow visibility repair path.
+- Discord and Telegram terminal status watchers still have a temporary
+  `flows.db` fallback while flow notifications finish migrating to canonical
+  projections. These reads emit `legacy_flows_db_status_fallback` diagnostic log
+  events and must not be expanded into new chat visibility sources.
