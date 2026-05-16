@@ -44,6 +44,7 @@ import {
   removePendingAttachment,
   sortChatsUnreadFirst,
   sortChatsWaitingFirst,
+  splitInjectedPromptContext,
   summarizeFilterCounts,
   buildChatListEntries
 } from './pmaChat';
@@ -140,6 +141,17 @@ function baseArtifactCardTrace(id: string, text: string, eventIds: string[]) {
 }
 
 describe('PMA chat view helpers', () => {
+  it('splits injected prompt context out of user-visible message text', () => {
+    expect(
+      splitInjectedPromptContext(
+        '<injected context>\nSystem setup\n</injected context>\n\nFix this\n\n<injected context>\nArtifact delivery\n</injected context>'
+      )
+    ).toEqual({
+      userText: 'Fix this',
+      systemContext: 'System setup\n\n---\n\nArtifact delivery'
+    });
+  });
+
   it('collapses ticket-flow chats sharing a worktree into one run group, even without ticket ids', () => {
     const chats: PmaChatSummary[] = [
       { ...baseChat, id: 'tf-1', ticketId: null, isTicketFlow: true, worktreeId: 'wt-A', repoId: 'repo-1' },

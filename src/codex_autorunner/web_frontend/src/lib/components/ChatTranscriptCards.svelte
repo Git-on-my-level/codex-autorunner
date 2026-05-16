@@ -2,7 +2,13 @@
   import SurfaceArtifactCard from '$lib/components/SurfaceArtifactCard.svelte';
   import { withRuntimeBasePath as href } from '$lib/runtime/basePath';
   import { renderMarkdownToHtml } from '$lib/viewModels/contextspace';
-  import { compactChatTranscriptCards, formatCompactMessageDateTime, type ChatTranscriptCard, type ChatToolCallCard } from '$lib/viewModels/pmaChat';
+  import {
+    compactChatTranscriptCards,
+    formatCompactMessageDateTime,
+    splitInjectedPromptContext,
+    type ChatTranscriptCard,
+    type ChatToolCallCard
+  } from '$lib/viewModels/pmaChat';
   import type { SurfaceArtifact } from '$lib/viewModels/domain';
 
   let {
@@ -135,13 +141,25 @@
 {#each displayCards as card (card.id)}
   {#if card.kind === 'message'}
     {@const isStreaming = card.message.role === 'assistant' && card.id === streamingMessageId}
+    {@const promptParts = card.message.role === 'user' ? splitInjectedPromptContext(card.message.text) : null}
+    {@const visibleMessageText = promptParts?.userText ?? card.message.text}
+    {#if promptParts?.systemContext}
+      <details class="injected-prompt-card">
+        <summary>
+          <span>CAR system prompt</span>
+        </summary>
+        <div class="injected-prompt-body markdown-body">
+          {@html renderMarkdownToHtml(promptParts.systemContext, { openLinksInNewTab: true })}
+        </div>
+      </details>
+    {/if}
     <article class={`message ${card.message.role === 'user' ? 'user' : 'assistant'}`}>
       <span>{card.message.role === 'user' ? 'You' : assistantLabel}</span>
       {#if isStreaming}
-        <div class="message-markdown streaming">{card.message.text}</div>
+        <div class="message-markdown streaming">{visibleMessageText}</div>
       {:else}
         <div class="message-markdown markdown-body">
-          {@html renderMarkdownToHtml(card.message.text, { openLinksInNewTab: true })}
+          {@html renderMarkdownToHtml(visibleMessageText, { openLinksInNewTab: true })}
         </div>
       {/if}
       {#if card.message.role === 'user' && card.message.artifacts.length > 0}

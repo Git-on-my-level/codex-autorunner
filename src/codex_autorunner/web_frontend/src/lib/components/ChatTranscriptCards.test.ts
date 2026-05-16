@@ -201,4 +201,35 @@ describe('ChatTranscriptCards', () => {
     expect(body).toContain('datetime="2026-05-10T12:00:00.000Z"');
     expect(body).toContain('datetime="2026-05-10T12:05:00.000Z"');
   });
+
+  it('renders injected prompt context as a separate collapsed card above the user message', () => {
+    const cards: ChatTranscriptCard[] = [
+      {
+        kind: 'message',
+        id: 'u1',
+        turnId: 't1',
+        orderKey: '00000001|u1',
+        timestamp: '2026-05-10T12:00:00.000Z',
+        message: {
+          id: 'u1',
+          chatId: 'c1',
+          role: 'user',
+          text: '<injected context>\nCAR setup details\n</injected context>\n\nPlease fix the archive button.',
+          createdAt: '2026-05-10T12:00:00.000Z',
+          status: null,
+          artifacts: [],
+          raw: {}
+        }
+      }
+    ];
+
+    const { body } = render(ChatTranscriptCards, { props: { cards } });
+
+    expect(body).toContain('class="injected-prompt-card"');
+    expect(body).toContain('<span>CAR system prompt</span>');
+    expect(body).toContain('CAR setup details');
+    expect(body).toContain('Please fix the archive button.');
+    expect(body.indexOf('class="injected-prompt-card"')).toBeLessThan(body.indexOf('class="message user"'));
+    expect(body).not.toContain('&lt;injected context&gt;');
+  });
 });
