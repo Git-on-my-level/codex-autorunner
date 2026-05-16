@@ -42,7 +42,9 @@ Mapping the conceptual layers to the codebase:
     - `contextspace/`: Optional context (`active_context.md`, `decisions.md`, `spec.md`).
     - `config.yml`: Generated config.
     - `state.sqlite3`, logs, lock.
-    - `flows.db`: Flow engine internals (source of truth).
+    - `flows.db`: Flow engine execution state for sequencing, pause/resume,
+      and terminal run history. Web Hub chat visibility is not sourced from
+      this database; it is rebuilt from hub orchestration records.
     - `discord_state.sqlite3`, `telegram_state.sqlite3`: Transport delivery/outbox state.
 - **Global Root** (cross-repo caches):
   - `~/.codex-autorunner/`: update cache, update status/lock, shared app-server workspaces.
@@ -55,10 +57,13 @@ Mapping the conceptual layers to the codebase:
 4. **Update State**: Handle stop rules (exit code, stop_after_runs, limits).
 
 ## Ticket Flow Lifecycle Ownership
-- **Filesystem is source of truth**: `.codex-autorunner/tickets/`,
-  `.codex-autorunner/contextspace/`, `.codex-autorunner/flows.db`, and
-  `.codex-autorunner/flows/<run_id>/` artifacts are authoritative over in-memory
-  surface state.
+- **Filesystem/orchestration stores are source of truth**:
+  `.codex-autorunner/tickets/`, `.codex-autorunner/contextspace/`,
+  `.codex-autorunner/flows.db`, and `.codex-autorunner/flows/<run_id>/`
+  artifacts are authoritative for ticket-flow engine state over in-memory
+  surface state. Hub `orchestration.sqlite3` thread targets, executions,
+  bindings, deliveries, and chat-surface events are authoritative for Web Hub
+  chat visibility.
 - **Reducer/supervisor own lifecycle transitions**:
   `core/flows/supervisor.py` classifies recovery observations, emits typed
   recovery effects, and hands lifecycle triggers to

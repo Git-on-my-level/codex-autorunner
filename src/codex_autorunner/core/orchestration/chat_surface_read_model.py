@@ -970,6 +970,7 @@ class ChatSurfaceReadService:
                 "orch_managed_thread_deliveries": "MAX(COALESCE(updated_at, delivered_at, created_at))",
                 "orch_notification_conversations": "MAX(COALESCE(updated_at, created_at))",
                 "orch_chat_surface_events": "MAX(COALESCE(created_at, occurred_at, event_id))",
+                "orch_flow_run_projections": "MAX(updated_at)",
             }
             facts: dict[str, Any] = {}
             for table, updated_expr in table_updated_exprs.items():
@@ -983,6 +984,37 @@ class ChatSurfaceReadService:
                     "count": int(row["count"] or 0),
                     "max_updated": row["max_updated"],
                 }
+            if _table_exists(conn, "orch_thread_targets"):
+                row = conn.execute(
+                    """
+                    SELECT COUNT(*) AS count,
+                           MAX(COALESCE(updated_at, created_at)) AS max_updated
+                      FROM orch_thread_targets
+                     WHERE json_extract(metadata_json, '$.flow_type') = 'ticket_flow'
+                       AND json_extract(metadata_json, '$.ticket_flow_link_key') IS NOT NULL
+                    """
+                ).fetchone()
+                facts["ticket_flow_thread_links"] = {
+                    "count": int(row["count"] or 0),
+                    "max_updated": row["max_updated"],
+                }
+            else:
+                facts["ticket_flow_thread_links"] = None
+            if _table_exists(conn, "orch_flow_run_projections"):
+                row = conn.execute(
+                    """
+                    SELECT COUNT(*) AS count,
+                           MAX(updated_at) AS max_updated
+                      FROM orch_flow_run_projections
+                     WHERE flow_type = 'ticket_flow'
+                    """
+                ).fetchone()
+                facts["ticket_flow_flow_projections"] = {
+                    "count": int(row["count"] or 0),
+                    "max_updated": row["max_updated"],
+                }
+            else:
+                facts["ticket_flow_flow_projections"] = None
         directory_path = (
             self._hub_root / ".codex-autorunner" / "chat" / "channel_directory.json"
         )
@@ -2083,10 +2115,12 @@ def _chat_index_sort_key_parts(row: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def _chat_ticket_group_id(row: Mapping[str, Any]) -> Optional[str]:
+    run_id = _normalize_text(row.get("run_id"))
+    if _normalize_kind(row.get("flow_type")) == "ticket_flow" and run_id is not None:
+        return f"run:{run_id}"
     ticket_id = _normalize_text(row.get("ticket_id") or row.get("current_ticket_id"))
     if ticket_id is not None:
         return f"ticket:{ticket_id}"
-    run_id = _normalize_text(row.get("run_id"))
     if run_id is not None:
         return f"run:{run_id}"
     kind = _normalize_kind(row.get("resource_kind"))

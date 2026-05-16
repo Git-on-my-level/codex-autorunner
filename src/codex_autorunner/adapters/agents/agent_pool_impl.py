@@ -34,6 +34,11 @@ from ...core.orchestration.runtime_threads import (
     RuntimeThreadExecution,
     begin_next_queued_runtime_thread_execution,
 )
+from ...core.orchestration.ticket_flow_chat_ledger_contract import (
+    ticket_flow_thread_link_key,
+    ticket_flow_thread_metadata,
+    validate_ticket_flow_thread_metadata,
+)
 from ...core.orchestration.turn_timeline import (
     append_turn_events_to_cold_trace,
     persist_turn_timeline,
@@ -339,6 +344,147 @@ class DefaultAgentPool:
                     f"(missing capability: {capability})"
                 )
         return resolved_agent_id
+
+    def _ticket_flow_display_name(
+        self,
+        *,
+        agent_id: str,
+        agent_profile: Optional[str],
+        ticket_id: Optional[str],
+        ticket_path: Optional[str],
+    ) -> str:
+        ticket_label = ticket_id or (
+            Path(ticket_path).name if isinstance(ticket_path, str) else None
+        )
+        agent_label = (
+            agent_id if agent_profile is None else f"{agent_id}@{agent_profile}"
+        )
+        if ticket_label:
+            return f"Ticket Flow {ticket_label} ({agent_label})"
+        return f"Ticket Flow ({agent_label})"
+
+    def _ticket_flow_thread_metadata(
+        self,
+        *,
+        agent_profile: Optional[str],
+        workspace_root: Path,
+        ticket_flow_run_id: Optional[str],
+        ticket_id: Optional[str],
+        ticket_path: Optional[str],
+    ) -> dict[str, Any]:
+        extra: dict[str, Any] = {}
+        if agent_profile is not None:
+            extra["agent_profile"] = agent_profile
+        if ticket_flow_run_id is None or ticket_id is None:
+            # Keep legacy/direct callers functional, but ticket-flow runner calls
+            # must pass both fields so the canonical link can be repaired.
+            extra.update(
+                {
+                    "thread_kind": "ticket_flow",
+                    "flow_type": "ticket_flow",
+                    "run_id": ticket_flow_run_id,
+                    "flow_run_id": ticket_flow_run_id,
+                    "ticket_id": ticket_id,
+                    "ticket_path": ticket_path,
+                    "workspace_root": str(workspace_root),
+                }
+            )
+            return extra
+        metadata = ticket_flow_thread_metadata(
+            flow_run_id=ticket_flow_run_id,
+            ticket_id=ticket_id,
+            workspace_root=str(workspace_root),
+            repo_id=self._repo_id,
+            ticket_path=ticket_path,
+            extra=extra,
+        )
+        validate_ticket_flow_thread_metadata(metadata)
+        return metadata
+
+    def _find_ticket_flow_thread_target_id(
+        self,
+        *,
+        agent_id: str,
+        workspace_root: Path,
+        ticket_flow_run_id: Optional[str],
+        ticket_id: Optional[str],
+    ) -> Optional[str]:
+        if ticket_flow_run_id is None or ticket_id is None:
+            return None
+        link_key = ticket_flow_thread_link_key(ticket_flow_run_id, ticket_id)
+        try:
+            candidates = list(
+                self._thread_store.list_threads(
+                    agent=agent_id,
+                    repo_id=self._repo_id,
+                    limit=1000,
+                )
+            )
+            if self._repo_id is not None:
+                candidates.extend(
+                    self._thread_store.list_threads(
+                        agent=agent_id,
+                        limit=1000,
+                    )
+                )
+        except (sqlite3.Error, OSError, ValueError, TypeError):
+            _logger.debug(
+                "Failed to scan ticket-flow thread links for run=%s ticket=%s",
+                ticket_flow_run_id,
+                ticket_id,
+                exc_info=True,
+            )
+            return None
+        seen_thread_ids: set[str] = set()
+        workspace_text = str(workspace_root)
+        for candidate in candidates:
+            candidate_thread_id = _normalize_optional_text(
+                candidate.get("managed_thread_id") or candidate.get("thread_target_id")
+            )
+            if candidate_thread_id is None or candidate_thread_id in seen_thread_ids:
+                continue
+            seen_thread_ids.add(candidate_thread_id)
+            metadata = candidate.get("metadata")
+            if not isinstance(metadata, dict):
+                continue
+            candidate_workspace = _normalize_optional_text(
+                candidate.get("workspace_root") or metadata.get("workspace_root")
+            )
+            if candidate_workspace != workspace_text:
+                continue
+            if (
+                _normalize_optional_text(metadata.get("ticket_flow_link_key"))
+                == link_key
+            ):
+                return candidate_thread_id
+            if (
+                _normalize_optional_text(metadata.get("flow_run_id"))
+                == ticket_flow_run_id
+                and _normalize_optional_text(metadata.get("ticket_id")) == ticket_id
+            ):
+                return candidate_thread_id
+        return None
+
+    def _refresh_ticket_flow_thread_target(
+        self,
+        thread_target_id: str,
+        *,
+        display_name: str,
+        metadata: dict[str, Any],
+    ) -> None:
+        try:
+            self._thread_store.update_thread_metadata(thread_target_id, metadata)
+            self._thread_store.update_thread_title(
+                thread_target_id,
+                display_name,
+                metadata=metadata,
+                only_if_generic=False,
+            )
+        except (sqlite3.Error, OSError, ValueError, TypeError):
+            _logger.exception(
+                "Failed to refresh ticket-flow thread metadata (thread=%s)",
+                thread_target_id,
+            )
 
     async def close_all(self) -> None:
         worker_lock = self._ensure_worker_lock()
@@ -879,28 +1025,57 @@ class DefaultAgentPool:
         ticket_flow_run_id = _normalize_optional_text(options.get("ticket_flow_run_id"))
         ticket_id = _normalize_optional_text(options.get("ticket_id"))
         ticket_path = _normalize_optional_text(options.get("ticket_path"))
-        display_name = f"ticket-flow:{agent_id}"
-        if agent_profile:
-            display_name = f"{display_name}@{agent_profile}"
-        thread = service.resolve_thread_target(
-            thread_target_id=_normalize_optional_text(req.conversation_id),
+        workspace_root = req.workspace_root.resolve()
+        display_name = self._ticket_flow_display_name(
             agent_id=agent_id,
-            workspace_root=req.workspace_root.resolve(),
+            agent_profile=agent_profile,
+            ticket_id=ticket_id,
+            ticket_path=ticket_path,
+        )
+        metadata = self._ticket_flow_thread_metadata(
+            agent_profile=agent_profile,
+            workspace_root=workspace_root,
+            ticket_flow_run_id=ticket_flow_run_id,
+            ticket_id=ticket_id,
+            ticket_path=ticket_path,
+        )
+        requested_thread_id = _normalize_optional_text(req.conversation_id)
+        thread_target_id = (
+            requested_thread_id
+            or self._find_ticket_flow_thread_target_id(
+                agent_id=agent_id,
+                workspace_root=workspace_root,
+                ticket_flow_run_id=ticket_flow_run_id,
+                ticket_id=ticket_id,
+            )
+        )
+        thread = service.resolve_thread_target(
+            thread_target_id=thread_target_id,
+            agent_id=agent_id,
+            workspace_root=workspace_root,
             repo_id=self._repo_id,
             display_name=display_name,
             backend_thread_id=None,
-            metadata={
-                "agent_profile": agent_profile,
-                "thread_kind": "ticket_flow",
-                "flow_type": "ticket_flow",
-                "run_id": ticket_flow_run_id,
-                "ticket_id": ticket_id,
-                "ticket_path": ticket_path,
-            },
+            metadata=metadata,
         )
+        self._refresh_ticket_flow_thread_target(
+            thread.thread_target_id,
+            display_name=display_name,
+            metadata=metadata,
+        )
+        refreshed_thread = service.get_thread_target(thread.thread_target_id)
+        if refreshed_thread is not None:
+            thread = refreshed_thread
         request_metadata = {
             "execution_error_message": _DEFAULT_EXECUTION_ERROR,
             "runtime_prompt": prompt,
+            "thread_kind": "ticket_flow",
+            "flow_type": "ticket_flow",
+            "run_id": ticket_flow_run_id,
+            "flow_run_id": ticket_flow_run_id,
+            "ticket_id": ticket_id,
+            "ticket_path": ticket_path,
+            "ticket_flow_link_key": metadata.get("ticket_flow_link_key"),
         }
         if existing_session_prompt is not None:
             request_metadata["existing_session_runtime_prompt"] = (

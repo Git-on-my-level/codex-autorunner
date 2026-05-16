@@ -41,6 +41,9 @@ from .hub_projection_store import (
 from .logging_utils import safe_log
 from .managed_thread_store import default_managed_threads_db_path
 from .orchestration.sqlite import resolve_orchestration_sqlite_path
+from .orchestration.ticket_flow_visibility_repair import (
+    diagnose_ticket_flow_projection_gaps,
+)
 from .pma_context import (
     PMA_MAX_TEXT,
     _gather_inbox,
@@ -628,6 +631,51 @@ def _collect_inbox_messages(
     if limit and limit > 0:
         return messages[: int(limit)]
     return messages
+
+
+def _collect_ticket_flow_projection_diagnostics(
+    *,
+    hub_root: Path,
+    repo_context: _HubRepoMessageContext,
+) -> list[dict[str, str]]:
+    diagnostics: list[dict[str, str]] = []
+    for snap in repo_context.snapshots:
+        repo_id = str(getattr(snap, "id", "") or "").strip()
+        repo_root = getattr(snap, "path", None)
+        if not repo_id or not isinstance(repo_root, Path):
+            continue
+        try:
+            gaps = diagnose_ticket_flow_projection_gaps(
+                repo_root=repo_root,
+                hub_root=hub_root,
+                repo_id=repo_id,
+            )
+        except Exception as exc:
+            diagnostics.append(
+                {
+                    "section": "ticket_flow_visibility",
+                    "reason": str(exc) or type(exc).__name__,
+                    "source": f"ticket_flow_projection_gaps:{repo_id}",
+                }
+            )
+            continue
+        for gap in gaps:
+            payload = gap.to_dict()
+            diagnostics.append(
+                {
+                    "section": "ticket_flow_visibility",
+                    "reason": str(payload["reason"]),
+                    "source": "flows.db->orchestration_link",
+                    "repo_id": repo_id,
+                    "repo_root": str(payload["repo_root"]),
+                    "run_id": str(payload["run_id"]),
+                    "status": str(payload["status"]),
+                    "ticket_id": str(payload["ticket_id"] or ""),
+                    "ticket_path": str(payload["ticket_path"] or ""),
+                    "expected_link_key": str(payload["expected_link_key"] or ""),
+                }
+            )
+    return diagnostics
 
 
 def _serialize_hub_snapshot(
@@ -1269,6 +1317,13 @@ class HubReadModelService:
             filtered_action_queue=filtered_action_queue,
             unreadable_diagnostics=unreadable_diagnostics,
         )
+        if isinstance(hub_root, Path):
+            unreadable_diagnostics.extend(
+                _collect_ticket_flow_projection_diagnostics(
+                    hub_root=hub_root,
+                    repo_context=repo_context,
+                )
+            )
         snapshot = _serialize_hub_snapshot(
             generated_at=settings.generated_at,
             requested=requested,

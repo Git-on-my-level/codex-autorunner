@@ -15,7 +15,7 @@ from codex_autorunner.core.config import (
     REPO_OVERRIDE_FILENAME,
     ROOT_CONFIG_FILENAME,
 )
-from codex_autorunner.core.flows.models import FlowRunStatus
+from codex_autorunner.core.flows.models import FlowEventType, FlowRunStatus
 from codex_autorunner.core.flows.store import FlowStore
 from codex_autorunner.core.hub import HubSupervisor
 from codex_autorunner.core.hub_inbox_resolution import (
@@ -207,6 +207,26 @@ def _write_ticket(repo_root: Path, ticket_name: str) -> None:
         ("---\n" f"title: {ticket_name}\n" "done: false\n" "---\n\n" "Body\n"),
         encoding="utf-8",
     )
+
+
+def _write_done_ticket_with_id(
+    repo_root: Path, ticket_name: str, ticket_id: str
+) -> str:
+    rel = f".codex-autorunner/tickets/{ticket_name}"
+    path = repo_root / rel
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        (
+            "---\n"
+            f"title: {ticket_name}\n"
+            "done: true\n"
+            f"ticket_id: {ticket_id}\n"
+            "---\n\n"
+            "Body\n"
+        ),
+        encoding="utf-8",
+    )
+    return rel
 
 
 def _write_dead_worker_artifacts(repo_root: Path, run_id: str) -> None:
@@ -1452,6 +1472,64 @@ def test_hub_messages_surfaces_mismatched_ticket_engine_state(
         assert item["run_id"] == run_id
         run_state = item.get("run_state") or {}
         assert run_state.get("state") in ("paused", "blocked")
+
+
+def test_hub_messages_diagnose_terminal_ticket_flow_without_chat_link(
+    hub_env, monkeypatch
+) -> None:
+    run_id = "cccc0000-cccc-cccc-cccc-cccccccc0000"
+    ticket_path = _write_done_ticket_with_id(
+        hub_env.repo_root,
+        "TICKET-101.md",
+        "ticket-chat-gap",
+    )
+    db_path = hub_env.repo_root / ".codex-autorunner" / "flows.db"
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    with FlowStore(db_path) as store:
+        store.initialize()
+        store.create_flow_run(
+            run_id,
+            "ticket_flow",
+            input_data={
+                "workspace_root": str(hub_env.repo_root),
+                "runs_dir": ".codex-autorunner/runs",
+            },
+            state={"ticket_engine": {"last_agent_id": "codex"}},
+            metadata={},
+        )
+        store.create_event(
+            event_id=f"{run_id}-selected",
+            run_id=run_id,
+            event_type=FlowEventType.STEP_PROGRESS,
+            step_id="ticket_turn",
+            data={"message": "Selected ticket", "current_ticket": ticket_path},
+        )
+        store.create_event(
+            event_id=f"{run_id}-completed",
+            run_id=run_id,
+            event_type=FlowEventType.STEP_COMPLETED,
+            step_id="ticket_turn",
+            data={"step_id": "ticket_turn"},
+        )
+        store.update_flow_run_status(
+            run_id,
+            FlowRunStatus.COMPLETED,
+            state={"ticket_engine": {"last_agent_id": "codex"}},
+        )
+
+    app = _build_hub_messages_app(hub_env.hub_root, monkeypatch)
+    with TestClient(app) as client:
+        res = client.get("/hub/messages")
+
+    assert res.status_code == 200
+    diagnostics = res.json()["unreadable_diagnostics"]
+    gap = next(
+        item for item in diagnostics if item.get("section") == "ticket_flow_visibility"
+    )
+    assert gap["run_id"] == run_id
+    assert gap["ticket_id"] == "ticket-chat-gap"
+    assert gap["expected_link_key"] == f"ticket_flow:{run_id}:ticket-chat-gap"
+    assert "without a canonical orchestration managed-thread link" in gap["reason"]
 
 
 def test_hub_messages_distinguishes_no_dispatch_from_unreadable_dispatch(

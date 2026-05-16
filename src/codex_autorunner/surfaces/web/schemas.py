@@ -546,6 +546,7 @@ class HubMessagesResponse(ResponseModel):
     pma_files_detail: Optional[Dict[str, List[Dict[str, Any]]]] = None
     automation: Optional[Dict[str, Any]] = None
     action_queue: Optional[List[Dict[str, Any]]] = None
+    unreadable_diagnostics: Optional[List[Dict[str, str]]] = None
 
 
 class SessionStopRequest(Payload):

@@ -4,12 +4,15 @@ import asyncio
 import json
 import sqlite3
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Literal, Optional, cast
+from typing import TYPE_CHECKING, Any, Literal, Mapping, Optional, cast
 
 from fastapi import APIRouter, HTTPException
 
 from .....contextspace.paths import read_contextspace_docs
 from .....core.freshness import iso_now
+from .....core.orchestration.flow_run_projection import (
+    project_ticket_flow_run_records,
+)
 from .....core.orchestration.sqlite import open_orchestration_sqlite
 from .....core.state_roots import resolve_repo_flows_db_path, resolve_repo_state_root
 from .....tickets.files import list_ticket_paths
@@ -138,12 +141,14 @@ def _runtime_projection(item: dict[str, Any]) -> RuntimeProjection:
     )
 
 
-def _run_payload(record: Any) -> dict[str, Any]:
+def _run_payload(
+    record: Any, projected: Optional[Mapping[str, Any]] = None
+) -> dict[str, Any]:
     status = getattr(getattr(record, "status", None), "value", None) or getattr(
         record, "status", None
     )
     state = getattr(record, "state", None)
-    return {
+    payload = {
         "id": str(getattr(record, "id", "")),
         "run_id": str(getattr(record, "id", "")),
         "flow_type": getattr(record, "flow_type", None),
@@ -155,6 +160,14 @@ def _run_payload(record: Any) -> dict[str, Any]:
         "error_message": getattr(record, "error_message", None),
         "state": state if isinstance(state, dict) else {},
     }
+    if projected:
+        payload["projection"] = dict(projected)
+        payload["current_ticket"] = projected.get("current_ticket")
+        payload["archive_ready"] = projected.get("archive_ready")
+        progress = projected.get("progress")
+        if isinstance(progress, Mapping):
+            payload["progress"] = dict(progress)
+    return payload
 
 
 def _ticket_projection_status(raw: object) -> str:
@@ -374,7 +387,34 @@ class RepoWorktreeReadModelService:
             recover_stuck=True,
             logger=self._context.logger,
         )
-        return [_run_payload(record) for record in records[:limit]]
+        repo_id = str(getattr(self._snapshot_by_path(workspace_root), "id", "") or "")
+        if repo_id:
+            projected = project_ticket_flow_run_records(
+                self._context.config.root,
+                workspace_root,
+                repo_id,
+                records,
+            )
+            projected_by_id = {
+                str(row.get("run_id") or row.get("flow_run_id")): row
+                for row in projected
+            }
+        else:
+            projected_by_id = {}
+        return [
+            _run_payload(record, projected_by_id.get(str(getattr(record, "id", ""))))
+            for record in records[:limit]
+        ]
+
+    def _snapshot_by_path(self, workspace_root: Path) -> Any:
+        resolved = workspace_root.resolve()
+        for snapshot in self._context.supervisor.list_repos(use_cache=True):
+            try:
+                if snapshot.path.resolve() == resolved:
+                    return snapshot
+            except OSError:
+                continue
+        return None
 
     def _scoped_chats(
         self, *, owner_kind: str, owner_id: str, limit: int

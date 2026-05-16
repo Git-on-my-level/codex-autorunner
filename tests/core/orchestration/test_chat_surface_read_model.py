@@ -656,7 +656,7 @@ def test_chat_index_carries_ticket_flow_metadata_for_grouping(
     )
     assert row["ticket_id"] == "TICKET-015"
     assert row["run_id"] == "run-015"
-    assert row["group_id"] == "ticket:TICKET-015"
+    assert row["group_id"] == "run:run-015"
 
     grouped = ChatSurfaceReadService(hub_root, durable=False).chat_index_snapshot(
         view="ticket_run",
@@ -665,7 +665,7 @@ def test_chat_index_carries_ticket_flow_metadata_for_grouping(
     )
 
     assert grouped["rows"][0]["row_type"] == "group"
-    assert grouped["rows"][0]["group_id"] == "ticket:TICKET-015"
+    assert grouped["rows"][0]["group_id"] == "run:run-015"
 
     active = ChatSurfaceReadService(hub_root, durable=False).chat_index_snapshot(
         view="active",
