@@ -78,40 +78,6 @@ def project_ticket_flow_run_records(
     return [dict(row["public"]) for row in rows]
 
 
-def list_projected_flow_runs(
-    hub_root: Path,
-    *,
-    repo_id: Optional[str] = None,
-    flow_type: Optional[str] = None,
-    limit: int = 100,
-    durable: bool = True,
-) -> list[dict[str, Any]]:
-    bounded = max(1, min(int(limit or 100), 500))
-    clauses = ["1 = 1"]
-    params: list[Any] = []
-    if repo_id:
-        clauses.append("repo_id = ?")
-        params.append(str(repo_id))
-    if flow_type:
-        clauses.append("flow_type = ?")
-        params.append(str(flow_type))
-    params.append(bounded)
-    with open_orchestration_sqlite(hub_root, durable=durable, migrate=True) as conn:
-        rows = conn.execute(
-            f"""
-            SELECT *
-              FROM orch_flow_run_projections
-             WHERE {' AND '.join(clauses)}
-             ORDER BY COALESCE(started_at, updated_at) DESC,
-                      updated_at DESC,
-                      flow_run_id ASC
-             LIMIT ?
-            """,
-            params,
-        ).fetchall()
-    return [_public_projection(row) for row in rows]
-
-
 def _projection_row(
     *,
     repo_root: Path,
@@ -198,21 +164,6 @@ def _summary_payload(
         "projection_source": "repo_flow_store",
         "projection_owner": "orchestration",
         "repo_id": repo_id,
-    }
-
-
-def _public_projection(row: Mapping[str, Any]) -> dict[str, Any]:
-    summary = _json_object(row.get("summary_json"))
-    return {
-        "run_id": str(row.get("flow_run_id") or ""),
-        "flow_run_id": str(row.get("flow_run_id") or ""),
-        "repo_id": row.get("repo_id"),
-        "flow_type": row.get("flow_type"),
-        "status": row.get("status"),
-        "started_at": row.get("started_at"),
-        "finished_at": row.get("finished_at"),
-        "updated_at": row.get("updated_at"),
-        **summary,
     }
 
 
