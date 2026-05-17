@@ -7,37 +7,21 @@
   import { openFlowRunEventSource, type StreamSubscription } from '$lib/api/streaming';
   import {
     invalidateReadModelTags,
+    loadScopedTicketDetailSession,
     readModelEntityStore,
     readModelEntityTags,
-    scopedOwnerKey,
-    selectPmaRuns,
-    selectTicketSummaries
+    renderScopedTicketCachedDetail,
+    ticketFlowEventShouldReload
   } from '$lib/data';
   import { stripRuntimeBasePath, withRuntimeBasePath as href } from '$lib/runtime/basePath';
   import {
     buildTicketWorkerActivity,
     buildTicketUpdateContent,
-    buildTicketDetailViewModel,
     buildTicketRepairChatCreatePayload,
     buildTicketRepairPrompt,
-    resolveTicketRouteId,
-    ticketDetailFromSummary,
     type TicketDetailViewModel,
     type TicketEditPayload
   } from '$lib/viewModels/ticket';
-  import { legacyWorktreeRedirectPath } from '$lib/viewModels/routes';
-  import {
-    mapPmaChatSummary,
-    mapPmaRunProgress,
-    mapTicketDetail,
-    mapTicketSummary,
-    type PmaChatSummary,
-    type PmaRunProgress,
-    type SurfaceArtifact,
-    type TicketDetail,
-    type TicketSummary
-  } from '$lib/viewModels/domain';
-  import { cachedTickets, rememberTickets } from '$lib/viewModels/ticketCache';
   import { agentCanListModels, agentId } from '$lib/viewModels/modelPickers';
   import { buildManagedThreadMessagePayload } from '$lib/viewModels/pmaChat';
 
@@ -110,95 +94,38 @@
     if (showLoading) loading = true;
     error = null;
     sectionIssues = [];
-    const cachedList = cachedTickets({ worktree: ownerId });
-    if (showLoading && cachedList) renderCachedTicket(cachedList, ownerId, routeTicketId);
-    if (showLoading && !detail) {
-      const storeState = readModelEntityStore.snapshot();
-      const ownerKey = scopedOwnerKey({ kind: 'worktree', id: ownerId });
-      const summaryIds = storeState.ticketOrderByOwner[ownerKey];
-      if (summaryIds?.length) {
-        const ticketList = summaryIds.map(id => storeState.ticketSummaries[id]).filter(Boolean);
-        const selected = resolveTicketRouteId(ticketList, routeTicketId);
-        if (selected) {
-          detail = buildTicketDetailViewModel(ticketDetailFromSummary(selected), {
-            tickets: ticketList,
-            runs: [],
-            chats: [],
-            artifacts: []
-          });
-          loading = false;
-        }
+    if (showLoading) {
+      const cached = renderScopedTicketCachedDetail({ kind: 'worktree', id: ownerId, parentRepoId: null }, routeTicketId, {
+        readModelState
+      });
+      if (cached) {
+        detail = cached.detail;
+        loading = false;
       }
     }
-    const snapshot = await webApi.readModels.ticketDetail(routeTicketId, { kind: 'worktree', id: ownerId });
+    const session = await loadScopedTicketDetailSession(
+      webApi,
+      { kind: 'worktree', id: ownerId, parentRepoId: null },
+      routeTicketId,
+      { currentPath: stripRuntimeBasePath(page.url.pathname) }
+    );
     if (!isCurrentRequest()) return;
-    if (!snapshot.ok) {
-      error = snapshot.error;
+    if (!session.ok) {
+      error = session.error;
       loading = false;
       return;
     }
-    const ticketRecord = snapshot.data.ticketDetail as JsonRecord;
-    const parentRepoId = typeof ticketRecord.base_repo_id === 'string' ? ticketRecord.base_repo_id : null;
-    const redirectTo = legacyWorktreeRedirectPath(stripRuntimeBasePath(page.url.pathname), ownerId, parentRepoId);
-    if (redirectTo) {
-      await goto(href(redirectTo), { replaceState: true });
+    if (session.redirectTo) {
+      loading = false;
+      await goto(href(session.redirectTo), { replaceState: true });
       return;
     }
-    const loadedTicketList = snapshot.data.ticketQueue.map(mapTicketSummary);
-    const loadedRuns = snapshot.data.runQueue.map(mapPmaRunProgress);
-    const loadedChats = snapshot.data.chatQueue.map(mapPmaChatSummary);
-    const ownerKey = scopedOwnerKey({ kind: 'worktree', id: ownerId, parentRepoId });
-    rememberTickets({ worktree: ownerId }, loadedTicketList);
-    readModelEntityStore.replaceScopedTicketSummaries(ownerKey, loadedTicketList);
-    readModelEntityStore.replaceScopedRuns(ownerKey, loadedRuns);
-    const ticketList = selectTicketSummaries(readModelState, ownerKey);
-    const ticketDetail = mapTicketDetail(ticketRecord);
-    detail = buildTicketDetailViewModel(ticketDetail, { tickets: ticketList, runs: [], chats: [], artifacts: [] });
-    sectionIssues = [];
+    currentRunId = session.currentRunId;
+    detail = session.detail;
+    sectionIssues = session.sectionIssues;
+    dispatchHistory = session.dispatches;
     loading = false;
-    const runs = selectPmaRuns(readModelState, ownerKey);
-    if (!isCurrentRequest()) return;
-    renderTicketDetail(ticketDetail, ticketList, runs, loadedChats, snapshot.data.dispatches ?? [], [], ownerId, isCurrentRequest);
-  }
-
-  function renderCachedTicket(ticketList: TicketSummary[], ownerId: string, routeTicketId: string): void {
-    if (ownerId !== worktreeId || routeTicketId !== ticketId) return;
-    const selected = resolveTicketRouteId(ticketList, routeTicketId);
-    if (!selected) return;
-    readModelEntityStore.replaceScopedTicketSummaries(scopedOwnerKey({ kind: 'worktree', id: ownerId }), ticketList);
-    detail = buildTicketDetailViewModel(ticketDetailFromSummary(selected), {
-      tickets: ticketList,
-      runs: [],
-      chats: [],
-      artifacts: []
-    });
-    loading = false;
-  }
-
-  function renderTicketDetail(
-    ticketDetail: TicketDetail,
-    ticketList: TicketSummary[],
-    runs: PmaRunProgress[],
-    chats: PmaChatSummary[],
-    dispatches: JsonRecord[],
-    baseIssues: PartialPageIssue[],
-    ownerId: string,
-    isCurrentRequest = () => true
-  ): void {
-    if (!isCurrentRequest()) return;
-    const baseSource = { tickets: ticketList, runs, chats, artifacts: [] as SurfaceArtifact[] };
-    const baseDetail = buildTicketDetailViewModel(ticketDetail, baseSource);
-    currentRunId = baseDetail.flowRunId;
-    detail = baseDetail;
-    sectionIssues = baseIssues;
-    loading = false;
-    dispatchHistory = dispatches;
     if (currentRunId) connectFlowStream(currentRunId, ownerId);
-    detail = buildTicketDetailViewModel(ticketDetail, {
-      ...baseSource,
-      artifacts: []
-    });
-    loading = false;
   }
 
   function connectFlowStream(runId: string, ownerId: string): void {
@@ -207,7 +134,7 @@
       onEvent: (event) => {
         const payload = { ...event.payload, seq: event.payload.seq ?? event.id };
         flowEvents = [...flowEvents, payload].slice(-120);
-        if (isTerminalFlowEvent(payload)) {
+        if (ticketFlowEventShouldReload(payload)) {
           void loadTicketDetail(false, ownerId, ticketId);
           closeFlowStream();
         }
@@ -221,12 +148,6 @@
   function closeFlowStream(): void {
     streamSubscription?.close();
     streamSubscription = null;
-  }
-
-  function isTerminalFlowEvent(payload: JsonRecord): boolean {
-    const status = String(payload.status ?? payload.flow_status ?? payload.state ?? '').toLowerCase();
-    const eventType = String(payload.event_type ?? payload.type ?? '').toLowerCase();
-    return ['completed', 'complete', 'done', 'failed', 'cancelled', 'canceled'].includes(status) || eventType.includes('terminal');
   }
 
   async function runCommand(command: 'resume' | 'bootstrap'): Promise<void> {

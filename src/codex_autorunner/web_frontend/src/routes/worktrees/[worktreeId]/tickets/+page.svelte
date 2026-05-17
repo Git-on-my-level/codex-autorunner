@@ -4,28 +4,23 @@
   import { onDestroy, onMount } from 'svelte';
   import TicketViews from '$lib/components/TicketViews.svelte';
   import { confirmDialog } from '$lib/components/confirmDialog';
-  import { dataOr, partialPageIssue, webApi, type ApiError, type PartialPageIssue } from '$lib/api/client';
+  import { webApi, type ApiError, type PartialPageIssue } from '$lib/api/client';
   import {
     invalidateReadModelTags,
+    loadScopedTicketListSession,
     readModelEntityStore,
     readModelEntityTags,
-    scopedOwnerKey,
     selectTicketListView
   } from '$lib/data';
   import { stripRuntimeBasePath, withRuntimeBasePath as href } from '$lib/runtime/basePath';
   import {
-    loadScopedActionManifest,
     reorderScopedTicket,
     runScopedTicketQueueCommand,
     scopedTicketActionStatus,
-    scopedTicketQueueOwner,
     scopedTicketQueueScope,
     type ScopedTicketQueueConfig
   } from '$lib/viewModels/scopedTicketQueue';
-  import { legacyWorktreeRedirectPath } from '$lib/viewModels/routes';
   import type { SurfaceActionManifest, TicketFilter, TicketListViewModel } from '$lib/viewModels/ticket';
-  import { rememberTickets } from '$lib/viewModels/ticketCache';
-  import { mapPmaRunProgress, mapTicketSummary } from '$lib/viewModels/domain';
 
   const worktreeId = $derived(page.params.worktreeId ?? 'unknown-worktree');
   const routeRepoId = $derived(page.params.repoId ?? null);
@@ -43,7 +38,6 @@
   let unsubscribeReadModels: (() => void) | null = null;
   let actionManifest = $state<SurfaceActionManifest | null>(null);
   const ownerScope = $derived(scopedTicketQueueScope(queueConfig));
-  const ownerKey = $derived(scopedOwnerKey(ownerScope));
   const list = $derived<TicketListViewModel | null>(selectTicketListView(readModelState, ownerScope, actionManifest));
   let selectedFilter = $state<TicketFilter>('all');
   let loading = $state(true);
@@ -66,32 +60,22 @@
     if (showLoading) loading = true;
     error = null;
     sectionIssues = [];
-    const detail = await webApi.readModels.worktreeDetail(worktreeId);
-    if (!detail.ok) {
-      error = detail.error;
+    const session = await loadScopedTicketListSession(webApi, queueConfig, {
+      currentPath: stripRuntimeBasePath(page.url.pathname)
+    });
+    if (!session.ok) {
+      error = session.error;
       loading = false;
       return;
     }
-    const parentRepoId = typeof detail.data.parentLinks.repo_id === 'string' ? detail.data.parentLinks.repo_id : null;
-    hubParentRepoId = parentRepoId;
-    const redirectTo = legacyWorktreeRedirectPath(stripRuntimeBasePath(page.url.pathname), worktreeId, parentRepoId);
-    if (redirectTo) {
-      await goto(href(redirectTo), { replaceState: true });
+    hubParentRepoId = session.parentRepoId;
+    if (session.redirectTo) {
+      loading = false;
+      await goto(href(session.redirectTo), { replaceState: true });
       return;
     }
-    const owner = scopedTicketQueueOwner(queueConfig);
-    const tickets = detail.data.ticketQueue.map(mapTicketSummary);
-    const runs = detail.data.runQueue.map(mapPmaRunProgress);
-    rememberTickets(owner, tickets);
-    readModelEntityStore.replaceScopedTicketSummaries(ownerKey, tickets);
-    readModelEntityStore.replaceScopedRuns(ownerKey, runs);
-    selectedFilter = 'all';
-    loading = false;
-    const manifest = await loadScopedActionManifest(webApi, queueConfig);
-    actionManifest = dataOr(manifest, null);
-    sectionIssues = [
-      !manifest.ok ? partialPageIssue('action_manifest', 'Action manifest unavailable', manifest.error) : null
-    ].filter((issue): issue is PartialPageIssue => Boolean(issue));
+    actionManifest = session.actionManifest;
+    sectionIssues = session.sectionIssues;
     selectedFilter = 'all';
     loading = false;
   }
