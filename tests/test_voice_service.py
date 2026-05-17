@@ -139,3 +139,49 @@ def test_voice_service_passes_env_to_provider_resolver():
     result = service.transcribe(b"audio bytes", client="web")
     assert result["text"] == "ok"
     assert captured["env"].get("OPENAI_API_KEY") == "workspace-key"
+
+
+def test_voice_service_logs_error_at_startup_when_local_provider_missing(caplog):
+    """VoiceService should log a clear ERROR at __init__ time when a local
+    voice provider is configured but its Python package is not installed."""
+    import logging
+    import sys
+
+    from codex_autorunner.voice.provider_catalog import (
+        check_local_voice_provider_available,
+    )
+
+    # Block mlx_whisper to simulate a missing install.
+    class _Blocker:
+        def find_module(self, name, path=None):
+            if name == "mlx_whisper":
+                return self
+            return None
+
+        def load_module(self, name):
+            raise ImportError("blocked by test")
+
+    sys.meta_path.insert(0, _Blocker())
+    # Remove any cached import so the blocker actually fires.
+    sys.modules.pop("mlx_whisper", None)
+
+    try:
+        # Verify the check function detects the missing package.
+        err = check_local_voice_provider_available("mlx_whisper")
+        assert err is not None
+        assert "voice-mlx" in err
+
+        # Verify VoiceService logs the error during __init__.
+        with caplog.at_level(logging.ERROR, logger="codex_autorunner.voice.service"):
+            cfg = VoiceConfig.from_raw(
+                {"enabled": True, "provider": "mlx_whisper"},
+            )
+            VoiceService(cfg)
+
+        assert any(
+            "Voice provider dependency check failed" in rec.message
+            for rec in caplog.records
+        )
+    finally:
+        # Clean up meta-path blocker so we don't break subsequent tests.
+        sys.meta_path.pop(0)
