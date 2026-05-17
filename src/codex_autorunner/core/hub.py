@@ -51,12 +51,6 @@ logger = logging.getLogger("codex_autorunner.hub")
 _LIST_REPOS_CACHE_TTL_SECONDS = 30.0
 
 
-def _runtime_preflight_blocks_enable(details: Optional[Mapping[str, object]]) -> bool:
-    if not details:
-        return False
-    return str(details.get("status") or "").lower() in {"incompatible", "error"}
-
-
 @dataclass(frozen=True)
 class PmaLaneWorkerStartResult:
     accepted: bool

@@ -239,7 +239,7 @@ async def test_flow_callback_recover_latest_active(
 
 
 @pytest.mark.anyio
-async def test_flow_callback_retire_updates_message_while_archiving(
+async def test_flow_callback_retire_updates_message_while_retiring(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     store = _init_store(tmp_path)
@@ -263,7 +263,7 @@ async def test_flow_callback_retire_updates_message_while_archiving(
     assert handler.answers == ["Working..."]
     assert handler.edits == [
         (
-            f"Archiving run `{run_id}`. This can take a few seconds.",
+            f"Retiring run `{run_id}`. This can take a few seconds.",
             {"inline_keyboard": []},
         )
     ]

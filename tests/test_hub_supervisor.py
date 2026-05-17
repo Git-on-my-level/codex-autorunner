@@ -4001,17 +4001,6 @@ def test_normalize_pinned_parent_repo_ids_filters() -> None:
     assert hub_module.normalize_pinned_parent_repo_ids([1, 2]) == []
 
 
-def test_runtime_preflight_blocks_enable() -> None:
-    assert hub_module._runtime_preflight_blocks_enable(None) is False
-    assert hub_module._runtime_preflight_blocks_enable({}) is False
-    assert hub_module._runtime_preflight_blocks_enable({"status": "ready"}) is False
-    assert hub_module._runtime_preflight_blocks_enable({"status": "deferred"}) is False
-    assert (
-        hub_module._runtime_preflight_blocks_enable({"status": "incompatible"}) is True
-    )
-    assert hub_module._runtime_preflight_blocks_enable({"status": "error"}) is True
-
-
 def test_git_failure_detail() -> None:
     from codex_autorunner.core.git_utils import git_failure_detail
 
