@@ -371,7 +371,9 @@ def test_recovery_notification_binding_dedupe_suppresses_same_fingerprint() -> N
     )
 
 
-def test_recovery_notification_binding_dedupe_does_not_block_different_fingerprint() -> None:
+def test_recovery_notification_binding_dedupe_does_not_block_different_fingerprint() -> (
+    None
+):
     """A recent notify for intent A must not delay an alert for intent B (Codex #1788)."""
     now = datetime(2026, 5, 14, 12, 0, tzinfo=timezone.utc)
     binding = {
