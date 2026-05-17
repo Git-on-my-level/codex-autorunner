@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from dataclasses import dataclass
 from typing import Any, Callable, Optional
 
@@ -102,6 +103,8 @@ class ExecutionResultCoordinator:
     mark_turn_interrupted: Callable[[str], Any]
     notify_transition: Callable[[dict[str, Any]], dict[str, Any]]
     logger: logging.Logger = logger
+    retry_delays: tuple[float, ...] = (0.25, 0.75)
+    sleep: Callable[[float], None] = time.sleep
 
     def record_execution_result(
         self,
@@ -176,17 +179,30 @@ class ExecutionResultCoordinator:
             transition,
             thread=self.get_thread_target(thread_target_id),
         )
-        try:
-            result = self.notify_transition(payload)
-        except (OSError, RuntimeError, TypeError, ValueError):
-            self.logger.exception(
-                "Failed to notify PMA automation for terminal managed-thread "
-                "transition (thread_target_id=%s, execution_id=%s, to_state=%s)",
-                thread_target_id,
-                execution_id,
-                transition.to_state,
-            )
-            return
+        attempts = len(self.retry_delays) + 1
+        result: dict[str, Any] = {}
+        for attempt in range(1, attempts + 1):
+            try:
+                result = self.notify_transition(payload)
+                break
+            except (OSError, RuntimeError, TypeError, ValueError) as exc:
+                self.logger.warning(
+                    "Failed to notify PMA automation for terminal managed-thread "
+                    "transition; retrying if budget remains "
+                    "(thread_target_id=%s, execution_id=%s, event_type=%s, "
+                    "subscription_id=%s, attempt=%s, attempts=%s, error=%s)",
+                    thread_target_id,
+                    execution_id,
+                    payload["event_type"],
+                    payload.get("subscription_id"),
+                    attempt,
+                    attempts,
+                    exc,
+                    exc_info=True,
+                )
+                if attempt >= attempts:
+                    return
+                self.sleep(self.retry_delays[attempt - 1])
 
         try:
             created = int(result.get("created") or 0)

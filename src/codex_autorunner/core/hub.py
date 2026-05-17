@@ -986,25 +986,63 @@ class HubSupervisor:
                 and str(wakeup.get("idempotency_key")).strip()
                 else f"automation:{wakeup_id}"
             )
+            lane_id = (
+                str(wakeup.get("lane_id")).strip()
+                if isinstance(wakeup.get("lane_id"), str)
+                and str(wakeup.get("lane_id")).strip()
+                else "pma:default"
+            )
+            item = None
+            created_queue_item = False
             try:
-                lane_id = (
-                    str(wakeup.get("lane_id")).strip()
-                    if isinstance(wakeup.get("lane_id"), str)
-                    and str(wakeup.get("lane_id")).strip()
-                    else "pma:default"
-                )
-                item, created_queue_item = queue.ensure_active_item_sync(
-                    lane_id, idempotency_key, payload
-                )
+                delivery_attempts = 3
+                for attempt in range(1, delivery_attempts + 1):
+                    try:
+                        item, created_queue_item = queue.ensure_active_item_sync(
+                            lane_id, idempotency_key, payload
+                        )
+                        break
+                    except (
+                        sqlite3.Error,
+                        OSError,
+                        ValueError,
+                        TypeError,
+                        RuntimeError,
+                    ) as exc:
+                        logger.warning(
+                            "Failed to enqueue PMA automation wake-up for delivery; "
+                            "retrying if budget remains (wakeup_id=%s, "
+                            "subscription_id=%s, thread_id=%s, lane_id=%s, "
+                            "attempt=%s, attempts=%s, error=%s)",
+                            wakeup_id,
+                            wakeup.get("subscription_id"),
+                            wakeup.get("thread_id"),
+                            lane_id,
+                            attempt,
+                            delivery_attempts,
+                            exc,
+                            exc_info=True,
+                        )
+                        if attempt >= delivery_attempts:
+                            raise
+                        time.sleep(0.25 * (2 ** (attempt - 1)))
+                if item is None:
+                    raise RuntimeError("pma_wakeup_delivery_retry_exhausted")
                 dupe_reason = (
                     None if created_queue_item else f"duplicate of {item.item_id}"
                 )
                 mark_wakeup_queued(wakeup_id)
                 worker_start_result = self._request_pma_lane_worker_start(lane_id)
             except (sqlite3.Error, OSError, ValueError, TypeError, RuntimeError):
-                logger.exception(
-                    "Failed to drain PMA automation wake-up %s into PMA queue",
+                logger.warning(
+                    "Failed to drain PMA automation wake-up into PMA queue; "
+                    "leaving pending for housekeeping retry "
+                    "(wakeup_id=%s, subscription_id=%s, thread_id=%s, lane_id=%s)",
                     wakeup_id,
+                    wakeup.get("subscription_id"),
+                    wakeup.get("thread_id"),
+                    lane_id,
+                    exc_info=True,
                 )
                 continue
             if dupe_reason:

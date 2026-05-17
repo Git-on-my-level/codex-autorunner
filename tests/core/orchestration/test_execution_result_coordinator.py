@@ -66,6 +66,45 @@ def test_record_execution_result_persists_and_notifies_terminal_transition() -> 
     assert transition_payloads[0]["agent"] == "codex"
 
 
+def test_terminal_transition_retry_recovers_transient_notify_failure() -> None:
+    execution = ExecutionRecord(
+        execution_id="exec-1",
+        target_id="thread-1",
+        target_kind="thread",
+        status="ok",
+    )
+    attempts = 0
+    sleeps: list[float] = []
+    transition_payloads: list[dict[str, object]] = []
+
+    def notify_transition(payload: dict[str, object]) -> dict[str, object]:
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise RuntimeError("temporary hub control-plane failure")
+        transition_payloads.append(payload)
+        return {"created": 1}
+
+    ExecutionResultCoordinator(
+        get_execution=lambda _thread_id, _execution_id: execution,
+        get_thread_target=lambda _thread_id: None,
+        mark_turn_finished=lambda _execution_id, **_kwargs: True,
+        mark_turn_interrupted=lambda _execution_id: True,
+        notify_transition=notify_transition,
+        retry_delays=(0.1, 0.2),
+        sleep=sleeps.append,
+    ).notify_terminal_transition(
+        thread_target_id="thread-1",
+        execution_id="exec-1",
+        status="ok",
+    )
+
+    assert attempts == 2
+    assert sleeps == [0.1]
+    assert len(transition_payloads) == 1
+    assert transition_payloads[0]["event_type"] == "managed_thread_completed"
+
+
 def test_record_execution_interrupted_is_idempotent_without_duplicate_notify() -> None:
     execution = ExecutionRecord(
         execution_id="exec-1",
