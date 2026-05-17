@@ -2,6 +2,8 @@
 Centralized Git utilities for consistent git operations across the codebase.
 """
 
+import hashlib
+import os
 import subprocess
 from contextlib import contextmanager
 from pathlib import Path
@@ -61,6 +63,123 @@ def run_git(
         raise GitError(f"git {args[0]} failed: {detail}", returncode=proc.returncode)
 
     return proc
+
+
+def _run_git_bytes(
+    args: List[str],
+    cwd: Path,
+    *,
+    timeout_seconds: int = 30,
+    check: bool = False,
+) -> subprocess.CompletedProcess[bytes]:
+    try:
+        proc = subprocess.run(
+            ["git"] + args,
+            cwd=str(cwd),
+            capture_output=True,
+            timeout=timeout_seconds,
+            env=subprocess_env(),
+        )
+    except FileNotFoundError as exc:
+        raise GitError("git binary not found", returncode=127) from exc
+    except subprocess.TimeoutExpired as exc:
+        raise GitError(
+            f"git command timed out: git {' '.join(args)}", returncode=124
+        ) from exc
+
+    if check and proc.returncode != 0:
+        stderr = (proc.stderr or b"").decode("utf-8", errors="replace").strip()
+        stdout = (proc.stdout or b"").decode("utf-8", errors="replace").strip()
+        detail = stderr or stdout or f"exit {proc.returncode}"
+        raise GitError(f"git {args[0]} failed: {detail}", returncode=proc.returncode)
+
+    return proc
+
+
+def _run_git_stdout(args: List[str], *, workspace_root: Path) -> str:
+    proc = run_git(args, cwd=workspace_root, check=True)
+    return proc.stdout or ""
+
+
+def _untracked_file_fingerprint(path: Path) -> str:
+    try:
+        stat = path.lstat()
+        if path.is_symlink():
+            payload = f"symlink:{path.readlink()}".encode(
+                "utf-8", errors="surrogateescape"
+            )
+        elif path.is_file():
+            payload = path.read_bytes()
+        else:
+            payload = b""
+        content_hash = hashlib.sha256(payload).hexdigest()
+        return f"{stat.st_mode}:{stat.st_size}:{content_hash}"
+    except OSError as exc:
+        return f"unreadable:{type(exc).__name__}"
+
+
+def _is_control_plane_path(rel_path: str) -> bool:
+    return rel_path == ".codex-autorunner" or rel_path.startswith(".codex-autorunner/")
+
+
+def git_content_sensitive_repo_fingerprint(workspace_root: Path) -> Optional[str]:
+    """Return HEAD, status, and content hashes for dirty repository state."""
+    try:
+        head = _run_git_stdout(
+            ["rev-parse", "HEAD"], workspace_root=workspace_root
+        ).strip()
+        if not head:
+            return None
+
+        status = _run_git_stdout(
+            ["status", "--porcelain"], workspace_root=workspace_root
+        ).strip()
+        staged_diff = _run_git_stdout(
+            ["diff", "--cached", "--full-index", "--binary"],
+            workspace_root=workspace_root,
+        )
+        worktree_diff = _run_git_stdout(
+            ["diff", "--full-index", "--binary"],
+            workspace_root=workspace_root,
+        )
+        untracked_proc = _run_git_bytes(
+            ["ls-files", "--others", "--exclude-standard", "-z"],
+            cwd=workspace_root,
+            check=True,
+        )
+    except (GitError, UnicodeDecodeError):
+        return None
+
+    digest = hashlib.sha256()
+    for label, value in (
+        ("head", head),
+        ("status", status),
+        ("staged", staged_diff),
+        ("worktree", worktree_diff),
+    ):
+        digest.update(label.encode("utf-8"))
+        digest.update(b"\0")
+        digest.update(value.encode("utf-8", errors="surrogateescape"))
+        digest.update(b"\0")
+
+    untracked_paths = sorted(
+        path for path in (untracked_proc.stdout or b"").split(b"\0") if path
+    )
+    for rel_path_bytes in untracked_paths:
+        rel_path = os.fsdecode(rel_path_bytes)
+        if _is_control_plane_path(rel_path):
+            continue
+        digest.update(b"untracked\0")
+        digest.update(rel_path_bytes)
+        digest.update(b"\0")
+        digest.update(
+            _untracked_file_fingerprint(workspace_root / rel_path).encode(
+                "utf-8", errors="surrogateescape"
+            )
+        )
+        digest.update(b"\0")
+
+    return f"{head}\n{status}\ncontent:{digest.hexdigest()}"
 
 
 def git_linked_worktree_git_dir(repo_root: Path) -> Optional[Path]:
