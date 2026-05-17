@@ -11,6 +11,7 @@ from codex_autorunner.core.automation.models import (
     EXECUTOR_PMA_TURN,
     TARGET_POLICY_HUB,
     TRIGGER_KIND_EVENT,
+    TRIGGER_KIND_MANUAL,
 )
 
 
@@ -124,6 +125,38 @@ def test_rule_engine_records_event_but_does_not_enqueue_disabled_rule(tmp_path) 
     assert result.jobs_created == 0
     assert store.get_event("event-1") is not None
     assert store.list_jobs() == []
+
+
+def test_rule_engine_selected_manual_rule_uses_templating_and_policy(tmp_path) -> None:
+    store = AutomationStore(tmp_path)
+    rule = AutomationRule.create(
+        rule_id="manual-rule",
+        name="Manual wakeup",
+        trigger_kind=TRIGGER_KIND_MANUAL,
+        target_policy=TARGET_POLICY_HUB,
+        target={"repo_id": "{{ event.target.repo_id }}"},
+        executor_kind=EXECUTOR_PMA_TURN,
+        executor={"message": "Wake {{ event.payload.prompt }}"},
+        policy={"dedupe_key": "{{ metadata.manual_dedupe_key }}"},
+    )
+    store.upsert_rule(rule)
+    event = store.record_event(
+        AutomationEvent.create(
+            event_id="manual-event",
+            event_type="manual.run",
+            target={"repo_id": "repo-1"},
+            payload={"prompt": "now"},
+            metadata={"manual_dedupe_key": "manual-key"},
+        )
+    )
+
+    result = AutomationRuleEngine(store).enqueue_job_for_rule(rule, event)
+
+    assert result.jobs_created == 1
+    job = store.list_jobs()[0]
+    assert job.dedupe_key == "manual-key"
+    assert job.target["repo_id"] == "repo-1"
+    assert job.executor["message"] == "Wake now"
 
 
 def test_rule_engine_rejects_non_matching_event_type_and_filter(tmp_path) -> None:

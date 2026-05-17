@@ -184,6 +184,32 @@ def test_route_event_flow_completed_records_unified_event_and_job(
     assert job.policy["reactive_debounce_key"].endswith(":repo-1:run-1")
 
 
+def test_route_event_records_unified_event_when_pma_disabled(
+    tmp_path: Path,
+) -> None:
+    config = _make_hub_config(tmp_path, pma_enabled=False)
+    automation_store = AutomationStore(tmp_path)
+    ensure_builtin_pma_reactive_rule(automation_store, pma_config=config.pma)
+    router, store = _make_router(
+        tmp_path,
+        hub_config=config,
+        automation_rule_engine=AutomationRuleEngine(automation_store),
+    )
+    event = LifecycleEvent(
+        event_type=LifecycleEventType.FLOW_FAILED,
+        repo_id="repo-1",
+        run_id="run-1",
+    )
+
+    router.route_event(event)
+
+    assert event.event_id in store.marked_processed_ids
+    saved_event = automation_store.get_event(f"lifecycle:{event.event_id}")
+    assert saved_event is not None
+    assert saved_event.event_type == "lifecycle.flow_failed"
+    assert automation_store.list_jobs() == []
+
+
 def test_route_event_flow_failed_marks_pma_disabled(tmp_path: Path) -> None:
     router, store = _make_router(tmp_path, pma_enabled=False)
     event = LifecycleEvent(

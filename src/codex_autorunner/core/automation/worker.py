@@ -11,6 +11,7 @@ from .models import (
     JOB_DEAD_LETTERED,
     JOB_FAILED,
     JOB_PAUSED,
+    JOB_RUNNING,
     JOB_SKIPPED,
     JOB_SUCCEEDED,
     AutomationJob,
@@ -52,6 +53,7 @@ class AutomationExecutorRegistry:
 @dataclass(frozen=True)
 class WorkerProcessResult:
     claimed: int = 0
+    running: int = 0
     succeeded: int = 0
     failed: int = 0
     retried: int = 0
@@ -83,7 +85,8 @@ class AutomationJobWorker:
         self._store.release_stale_claims(
             stale_before=_add_seconds(stamp, -self._claim_lease_seconds), now=stamp
         )
-        claimed = succeeded = failed = retried = dead = cancelled = skipped = 0
+        claimed = running_count = succeeded = failed = retried = dead = cancelled = 0
+        skipped = 0
         paused = escalated = 0
         for _ in range(max(0, int(limit))):
             job = self._store.claim_next_job(lock_key=self._worker_id, now=stamp)
@@ -132,6 +135,14 @@ class AutomationJobWorker:
                         now=stamp,
                     )
                     paused += 1
+                elif status == JOB_RUNNING:
+                    self._store.update_running_job(
+                        running.job_id,
+                        result_summary=result.summary,
+                        execution_refs=result.execution_refs,
+                        now=stamp,
+                    )
+                    running_count += 1
                 elif status == JOB_FAILED:
                     did_escalate = self._handle_failure(
                         running, result.summary or "executor_failed", stamp
@@ -185,6 +196,7 @@ class AutomationJobWorker:
                 )
         return WorkerProcessResult(
             claimed=claimed,
+            running=running_count,
             succeeded=succeeded,
             failed=failed,
             retried=retried,

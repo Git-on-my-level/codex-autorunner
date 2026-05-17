@@ -603,8 +603,12 @@ def test_shared_state_service_automation_rule_crud_and_manual_run(
                     "executor": {
                         "lane_id": "pma:default",
                         "api_token": "secret-value",
+                        "message": "Manual {{ event.payload.prompt }}",
                     },
-                    "policy": {"approval_mode": "pause_and_request_user"},
+                    "policy": {
+                        "approval_mode": "pause_and_request_user",
+                        "dedupe_key": "{{ metadata.manual_dedupe_key }}",
+                    },
                 },
                 "schedule": {
                     "schedule_id": "schedule-1",
@@ -657,7 +661,10 @@ def test_shared_state_service_automation_rule_crud_and_manual_run(
         "schedule-1"
     ]
     assert run.job is not None
+    assert run.job["dedupe_key"] == "manual-run-1"
+    assert run.job["executor"]["message"] == "Manual check now"
     assert run.job["payload"]["request"]["secret"] == "[redacted]"
+    assert run.job["payload"]["event"]["event_type"] == "manual.run"
     assert [job["job_id"] for job in jobs.jobs] == [run.job["job_id"]]
     assert len(events.events) == 1
     assert events.events[0]["raw_payload"]["secret"] == "[redacted]"

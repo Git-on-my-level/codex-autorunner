@@ -9,15 +9,22 @@ import pytest
 
 from codex_autorunner.core.automation import (
     EXECUTOR_TICKET_FLOW,
+    AutomationEvent,
+    AutomationExecutorRegistry,
     AutomationJob,
+    AutomationJobWorker,
+    AutomationRule,
+    AutomationStore,
 )
 from codex_autorunner.core.automation.models import (
+    JOB_RUNNING,
     TARGET_POLICY_AUTO_WORKTREE,
     TARGET_POLICY_EXISTING_REPO,
     TARGET_POLICY_EXISTING_WORKTREE,
     TARGET_POLICY_HUB,
     TARGET_POLICY_NEW_AUTOMATION_WORKTREE,
     TARGET_POLICY_PR_WORKTREE,
+    TRIGGER_KIND_EVENT,
 )
 from codex_autorunner.core.automation.ticket_flow_executor import (
     TicketFlowAutomationExecutor,
@@ -181,6 +188,8 @@ def test_ticket_flow_executor_creates_isolated_worktree_for_base_targets(
 
     result = executor.execute(job)
 
+    assert result.status == JOB_RUNNING
+    assert result.data["execution_phase"] == "running"
     assert result.execution_refs["ticket_flow_repo_id"].startswith("base--automation-")
     worktree = Path(result.data["worktree"]["path"])
     assert (worktree / ".codex-autorunner" / "tickets" / "TICKET-001.md").exists()
@@ -331,3 +340,64 @@ def test_ticket_flow_executor_supports_repo_relative_pack_path(hub: Path) -> Non
         "ticket_flow_worktree_id": result.data["worktree"]["repo_id"],
         "ticket_flow_run_id": "run-1",
     }
+
+
+def test_ticket_flow_worker_keeps_job_running_after_child_run_start(
+    hub: Path,
+) -> None:
+    store = AutomationStore(hub)
+    store.upsert_rule(
+        AutomationRule.create(
+            rule_id="rule-1",
+            name="Ticket flow",
+            trigger_kind=TRIGGER_KIND_EVENT,
+            trigger={"event_types": ["manual.run"]},
+            target_policy=TARGET_POLICY_EXISTING_REPO,
+            executor_kind=EXECUTOR_TICKET_FLOW,
+        )
+    )
+    store.record_event(
+        AutomationEvent.create(event_id="event-1", event_type="manual.run")
+    )
+    store.enqueue_job(
+        AutomationJob.create(
+            job_id="job-1",
+            rule_id="rule-1",
+            event_id="event-1",
+            target={"policy": TARGET_POLICY_EXISTING_REPO, "repo_id": "base"},
+            executor={
+                "kind": EXECUTOR_TICKET_FLOW,
+                "ticket_pack": {
+                    "source": "inline",
+                    "tickets": [{"path": "TICKET-001.md", "content": _ticket()}],
+                },
+            },
+            available_at="2026-01-01T00:00:00Z",
+        )
+    )
+    fake_wm = _FakeWorktreeManager(hub)
+    registry = AutomationExecutorRegistry()
+    registry.register(EXECUTOR_TICKET_FLOW, _executor(hub, fake_wm))
+
+    result = AutomationJobWorker(store, registry).process_once(
+        now="2026-01-01T00:00:00Z"
+    )
+
+    saved = store.get_job("job-1")
+    attempt = store.list_attempts("job-1")[0]
+    assert result.running == 1
+    assert result.succeeded == 0
+    assert saved.state == JOB_RUNNING
+    assert saved.lock_key is None
+    assert saved.claimed_at is None
+    assert saved.finished_at is None
+    assert saved.ticket_flow_run_id == "run-1"
+    assert saved.ticket_flow_repo_id == saved.ticket_flow_worktree_id
+    assert attempt.status == JOB_RUNNING
+    assert attempt.executor_result["execution_phase"] == "running"
+
+    released = store.release_stale_claims(
+        stale_before="2026-01-01T00:05:00Z", now="2026-01-01T00:10:00Z"
+    )
+    assert released == 0
+    assert store.get_job("job-1").state == JOB_RUNNING

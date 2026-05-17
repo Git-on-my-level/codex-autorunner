@@ -48,11 +48,8 @@ class LifecycleEventRouter:
         decision = "skip"
         processed = False
         if event.event_type == LifecycleEventType.DISPATCH_CREATED:
-            if not self._hub_config.pma.enabled:
-                decision = "pma_disabled"
-                processed = True
-            else:
-                interceptor = self._ensure_dispatch_interceptor()
+            interceptor = self._ensure_dispatch_interceptor()
+            if interceptor is not None:
                 repo_snapshot = None
                 try:
                     snapshots = self._list_repos_fn()
@@ -67,30 +64,58 @@ class LifecycleEventRouter:
                     repo_snapshot = None
 
                 if repo_snapshot is None or not repo_snapshot.exists_on_disk:
-                    decision = "repo_missing"
+                    evaluation = self._record_automation_event(event)
+                    decision = self._automation_decision(
+                        evaluation, fallback="dispatch_enqueued"
+                    )
+                    if not (
+                        evaluation is not None
+                        and (
+                            evaluation.jobs_created
+                            or evaluation.jobs_deduped
+                            or evaluation.jobs_skipped
+                            or evaluation.matched_rules
+                        )
+                    ):
+                        decision = "repo_missing"
                     processed = True
                 elif interceptor is not None:
                     result = self._run_coroutine_fn(
                         interceptor.process_dispatch_event(event, repo_snapshot.path)
                     )
                     if result and result.action == "auto_resolved":
+                        self._record_automation_event(
+                            event,
+                            payload_overrides={"pma_dispatch_action": result.action},
+                        )
                         decision = "dispatch_auto_resolved"
                         processed = True
                     elif result and result.action == "ignore":
+                        self._record_automation_event(
+                            event,
+                            payload_overrides={"pma_dispatch_action": result.action},
+                        )
                         decision = "dispatch_ignored"
                         processed = True
                     else:
-                        evaluation = self._record_automation_event(event)
+                        evaluation = self._record_automation_event(
+                            event,
+                            payload_overrides={
+                                "pma_dispatch_action": (
+                                    result.action if result is not None else "escalate"
+                                )
+                            },
+                        )
                         decision = self._automation_decision(
                             evaluation, fallback="dispatch_escalated"
                         )
                         processed = True
-                else:
-                    evaluation = self._record_automation_event(event)
-                    decision = self._automation_decision(
-                        evaluation, fallback="dispatch_enqueued"
-                    )
-                    processed = True
+            else:
+                evaluation = self._record_automation_event(event)
+                decision = self._automation_decision(
+                    evaluation, fallback="dispatch_enqueued"
+                )
+                processed = True
         elif event.event_type in (
             LifecycleEventType.FLOW_STARTED,
             LifecycleEventType.FLOW_RESUMED,
@@ -99,15 +124,9 @@ class LifecycleEventRouter:
             LifecycleEventType.FLOW_FAILED,
             LifecycleEventType.FLOW_STOPPED,
         ):
-            if not self._hub_config.pma.enabled:
-                decision = "pma_disabled"
-                processed = True
-            else:
-                evaluation = self._record_automation_event(event)
-                decision = self._automation_decision(
-                    evaluation, fallback="flow_enqueued"
-                )
-                processed = True
+            evaluation = self._record_automation_event(event)
+            decision = self._automation_decision(evaluation, fallback="flow_enqueued")
+            processed = True
 
         if processed:
             self._lifecycle_store.mark_processed(event_id)
@@ -125,7 +144,10 @@ class LifecycleEventRouter:
         )
 
     def _record_automation_event(
-        self, event: LifecycleEvent
+        self,
+        event: LifecycleEvent,
+        *,
+        payload_overrides: Optional[dict[str, Any]] = None,
     ) -> Optional[RuleEvaluationResult]:
         if self._automation_rule_engine is None:
             return None
@@ -147,6 +169,7 @@ class LifecycleEventRouter:
             payload={
                 **dict(data),
                 **{k: v for k, v in transition.items() if v is not None},
+                **dict(payload_overrides or {}),
                 "event_type": legacy_event_type,
                 "origin": event.origin,
             },

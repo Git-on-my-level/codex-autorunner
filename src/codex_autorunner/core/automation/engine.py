@@ -9,6 +9,7 @@ from ..text_utils import _json_dumps
 from ..time_utils import now_iso
 from .models import (
     TRIGGER_KIND_EVENT,
+    TRIGGER_KIND_SCHEDULE,
     AutomationEvent,
     AutomationJob,
     AutomationRule,
@@ -79,21 +80,14 @@ class AutomationRuleEngine:
         created = 0
         deduped = 0
         skipped = 0
-        for rule in self._store.list_rules(
-            enabled=True, trigger_kind=TRIGGER_KIND_EVENT
-        ):
+        for rule in self._store.list_rules(enabled=True):
             if not self.matches_event(rule, event):
                 continue
             matched += 1
-            job = self._job_for_rule(rule, event)
-            if self._blocked_by_policy(rule, event, job):
-                skipped += 1
-                continue
-            _, was_deduped = self._store.enqueue_job(job)
-            if was_deduped:
-                deduped += 1
-            else:
-                created += 1
+            rule_result = self.enqueue_job_for_rule(rule, event)
+            created += rule_result.jobs_created
+            deduped += rule_result.jobs_deduped
+            skipped += rule_result.jobs_skipped
         return RuleEvaluationResult(
             event=event,
             matched_rules=matched,
@@ -102,7 +96,42 @@ class AutomationRuleEngine:
             jobs_skipped=skipped,
         )
 
+    def enqueue_job_for_rule(
+        self, rule: AutomationRule, event: AutomationEvent
+    ) -> RuleEvaluationResult:
+        job = self._job_for_rule(rule, event)
+        if self._blocked_by_policy(rule, event, job):
+            return RuleEvaluationResult(
+                event=event,
+                matched_rules=1,
+                jobs_created=0,
+                jobs_deduped=0,
+                jobs_skipped=1,
+            )
+        _, was_deduped = self._store.enqueue_job(job)
+        return RuleEvaluationResult(
+            event=event,
+            matched_rules=1,
+            jobs_created=0 if was_deduped else 1,
+            jobs_deduped=1 if was_deduped else 0,
+            jobs_skipped=0,
+        )
+
+    def job_for_rule(
+        self, rule: AutomationRule, event: AutomationEvent
+    ) -> AutomationJob:
+        return self._job_for_rule(rule, event)
+
     def matches_event(self, rule: AutomationRule, event: AutomationEvent) -> bool:
+        if rule.trigger_kind == TRIGGER_KIND_SCHEDULE:
+            if event.event_type != "schedule.fire":
+                return False
+            schedule_rule_id = _dig(
+                self._match_context(event, rule), "schedule.rule_id"
+            )
+            if schedule_rule_id is not None and schedule_rule_id != rule.rule_id:
+                return False
+            return self._filters_match(rule.filters, self._match_context(event, rule))
         if rule.trigger_kind != TRIGGER_KIND_EVENT:
             return False
         event_types = rule.trigger.get("event_types")
@@ -126,15 +155,25 @@ class AutomationRuleEngine:
                 "event": event.to_dict(),
                 "metadata": rule.metadata,
                 "rule": {"rule_id": rule.rule_id, "name": rule.name},
+                **(
+                    {
+                        "manual_run": True,
+                        "request": event.payload,
+                    }
+                    if event.event_type == "manual.run"
+                    else {}
+                ),
             },
             context,
         )
-        dedupe_key = self._render_policy_key(
-            policy.get("dedupe_key"), context
-        ) or default_dedupe_key(
-            rule_id=rule.rule_id,
-            event_id=event.event_id,
-            target=target if isinstance(target, dict) else {},
+        dedupe_key = (
+            self._render_policy_key(policy.get("dedupe_key"), context)
+            or self._render_policy_key(event.metadata.get("manual_dedupe_key"), context)
+            or default_dedupe_key(
+                rule_id=rule.rule_id,
+                event_id=event.event_id,
+                target=target if isinstance(target, dict) else {},
+            )
         )
         batch_key = self._render_policy_key(policy.get("batch_key"), context)
         available_at = event.observed_at or now_iso()

@@ -7,8 +7,8 @@ from typing import Any, Optional
 
 from ..automation import (
     AutomationEvent,
-    AutomationJob,
     AutomationRule,
+    AutomationRuleEngine,
     AutomationSchedule,
     AutomationStore,
 )
@@ -887,24 +887,31 @@ class HubSharedStateService:
                 target=target,
                 payload=request.payload,
                 raw_payload=request.payload,
-                metadata={"rule_id": rule.rule_id, **request.metadata},
-            )
-        )
-        job, _deduped = self._automation_store.enqueue_job(
-            AutomationJob.create(
-                rule_id=rule.rule_id,
-                event_id=event.event_id,
-                dedupe_key=request.dedupe_key,
-                target=target,
-                executor={"kind": rule.executor_kind, **rule.executor},
-                policy=rule.policy,
-                payload={
-                    "event": event.to_dict(),
-                    "manual_run": True,
-                    "request": request.payload,
+                metadata={
+                    "rule_id": rule.rule_id,
+                    **(
+                        {"manual_dedupe_key": request.dedupe_key}
+                        if request.dedupe_key
+                        else {}
+                    ),
+                    **request.metadata,
                 },
             )
         )
+        engine = AutomationRuleEngine(self._automation_store)
+        expected_job = engine.job_for_rule(rule, event)
+        result = engine.enqueue_job_for_rule(rule, event)
+        job = self._automation_store.get_job_by_dedupe_key(expected_job.dedupe_key)
+        if job is None:
+            raise HubControlPlaneError(
+                "hub_rejected",
+                f"Automation rule policy skipped manual run: {request.rule_id}",
+                details={
+                    "rule_id": request.rule_id,
+                    "event_id": event.event_id,
+                    "jobs_skipped": result.jobs_skipped,
+                },
+            )
         return AutomationJobResponse(job=redact_automation_mapping(job.to_dict()))
 
     def list_automation_jobs(

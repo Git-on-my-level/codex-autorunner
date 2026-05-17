@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import uuid
 from pathlib import Path
 from typing import Any, Optional
 
@@ -207,15 +208,7 @@ class AutomationStore:
                         event_id, event_type, source, observed_at, repo_id,
                         target_json, payload_json, raw_payload_json, metadata_json
                     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    ON CONFLICT(event_id) DO UPDATE SET
-                        event_type = excluded.event_type,
-                        source = excluded.source,
-                        observed_at = excluded.observed_at,
-                        repo_id = excluded.repo_id,
-                        target_json = excluded.target_json,
-                        payload_json = excluded.payload_json,
-                        raw_payload_json = excluded.raw_payload_json,
-                        metadata_json = excluded.metadata_json
+                    ON CONFLICT(event_id) DO NOTHING
                     """,
                     (
                         event.event_id,
@@ -311,6 +304,14 @@ class AutomationStore:
             ).fetchone()
         return self._row_to_job(row) if row is not None else None
 
+    def get_job_by_dedupe_key(self, dedupe_key: str) -> Optional[AutomationJob]:
+        with open_orchestration_sqlite(self._hub_root, durable=self._durable) as conn:
+            row = conn.execute(
+                "SELECT * FROM orch_automation_jobs WHERE dedupe_key = ?",
+                (dedupe_key,),
+            ).fetchone()
+        return self._row_to_job(row) if row is not None else None
+
     def list_jobs(
         self,
         *,
@@ -347,38 +348,54 @@ class AutomationStore:
         self, *, lock_key: Optional[str] = None, now: Optional[str] = None
     ) -> Optional[AutomationJob]:
         stamp = normalize_timestamp(now)
+        claimed: sqlite3.Row | None = None
         with open_orchestration_sqlite(self._hub_root, durable=self._durable) as conn:
-            with conn:
-                row = conn.execute(
+            try:
+                conn.execute("BEGIN IMMEDIATE")
+                rows = conn.execute(
                     """
                     SELECT *
                       FROM orch_automation_jobs
                      WHERE state = ? AND available_at <= ?
                      ORDER BY available_at ASC, updated_at ASC, job_id ASC
-                     LIMIT 1
+                     LIMIT 100
                     """,
                     (JOB_PENDING, stamp),
-                ).fetchone()
-                if row is None:
-                    return None
-                validate_job_transition(str(row["state"]), JOB_CLAIMED)
-                cursor = conn.execute(
-                    """
-                    UPDATE orch_automation_jobs
-                       SET state = ?,
-                           lock_key = COALESCE(?, lock_key),
-                           claimed_at = ?,
-                           updated_at = ?
-                     WHERE job_id = ? AND state = ?
-                    """,
-                    (JOB_CLAIMED, lock_key, stamp, stamp, row["job_id"], JOB_PENDING),
-                )
-                if int(cursor.rowcount or 0) != 1:
-                    return None
-                claimed = conn.execute(
-                    "SELECT * FROM orch_automation_jobs WHERE job_id = ?",
-                    (row["job_id"],),
-                ).fetchone()
+                ).fetchall()
+                for row in rows:
+                    candidate = self._row_to_job(row)
+                    if self._job_concurrency_saturated(conn, candidate):
+                        continue
+                    validate_job_transition(str(row["state"]), JOB_CLAIMED)
+                    cursor = conn.execute(
+                        """
+                        UPDATE orch_automation_jobs
+                           SET state = ?,
+                               lock_key = COALESCE(?, lock_key),
+                               claimed_at = ?,
+                               updated_at = ?
+                         WHERE job_id = ? AND state = ?
+                        """,
+                        (
+                            JOB_CLAIMED,
+                            lock_key,
+                            stamp,
+                            stamp,
+                            row["job_id"],
+                            JOB_PENDING,
+                        ),
+                    )
+                    if int(cursor.rowcount or 0) != 1:
+                        continue
+                    claimed = conn.execute(
+                        "SELECT * FROM orch_automation_jobs WHERE job_id = ?",
+                        (row["job_id"],),
+                    ).fetchone()
+                    break
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                raise
         return self._row_to_job(claimed) if claimed is not None else None
 
     def start_job(self, job_id: str, *, now: Optional[str] = None) -> AutomationJob:
@@ -406,6 +423,38 @@ class AutomationStore:
             execution_refs=execution_refs,
             finished=True,
         )
+
+    def update_running_job(
+        self,
+        job_id: str,
+        *,
+        result_summary: Optional[str] = None,
+        execution_refs: Optional[dict[str, Any]] = None,
+        now: Optional[str] = None,
+    ) -> AutomationJob:
+        self._transition_job(
+            job_id,
+            JOB_RUNNING,
+            now=now,
+            result_summary=result_summary,
+            execution_refs=execution_refs,
+        )
+        with open_orchestration_sqlite(self._hub_root, durable=self._durable) as conn:
+            with conn:
+                conn.execute(
+                    """
+                    UPDATE orch_automation_jobs
+                       SET lock_key = NULL,
+                           claimed_at = NULL,
+                           updated_at = ?
+                     WHERE job_id = ?
+                    """,
+                    (normalize_timestamp(now), job_id),
+                )
+        saved = self.get_job(job_id)
+        if saved is None:
+            raise RuntimeError("failed to update automation job")
+        return saved
 
     def fail_job(
         self,
@@ -681,12 +730,38 @@ class AutomationStore:
                        SET state = ?,
                            lock_key = NULL,
                            claimed_at = NULL,
+                           started_at = CASE WHEN state = ? THEN NULL ELSE started_at END,
+                           available_at = CASE WHEN available_at > ? THEN ? ELSE available_at END,
+                           next_attempt_at = CASE WHEN next_attempt_at > ? THEN ? ELSE next_attempt_at END,
                            updated_at = ?
-                     WHERE state = ?
-                       AND claimed_at IS NOT NULL
-                       AND claimed_at <= ?
+                     WHERE state IN (?, ?)
+                       AND (
+                           (claimed_at IS NOT NULL AND claimed_at <= ?)
+                           OR (
+                               state = ?
+                               AND started_at IS NOT NULL
+                               AND started_at <= ?
+                               AND managed_thread_execution_id IS NULL
+                               AND pma_queue_item_id IS NULL
+                               AND ticket_flow_run_id IS NULL
+                               AND publish_operation_id IS NULL
+                           )
+                       )
                     """,
-                    (JOB_PENDING, stamp, JOB_CLAIMED, threshold),
+                    (
+                        JOB_PENDING,
+                        JOB_RUNNING,
+                        stamp,
+                        stamp,
+                        stamp,
+                        stamp,
+                        stamp,
+                        JOB_CLAIMED,
+                        JOB_RUNNING,
+                        threshold,
+                        JOB_RUNNING,
+                        threshold,
+                    ),
                 )
                 return int(cursor.rowcount or 0)
 
@@ -710,6 +785,15 @@ class AutomationStore:
                 tuple(params),
             ).fetchone()
         return int(row["c"] if row is not None else 0)
+
+    def count_active_jobs(
+        self,
+        *,
+        rule_id: Optional[str] = None,
+        target: Optional[dict[str, Any]] = None,
+    ) -> int:
+        with open_orchestration_sqlite(self._hub_root, durable=self._durable) as conn:
+            return self._count_active_jobs(conn, rule_id=rule_id, target=target)
 
     def has_recent_job_for_rule(self, rule_id: str, *, since: str) -> bool:
         return self.count_jobs_for_rule_since(rule_id, since=since) > 0
@@ -1048,12 +1132,50 @@ class AutomationStore:
             ) VALUES (?, ?, ?, ?)
             """,
             (
-                f"{rule.rule_id}:{rule.updated_at}",
+                f"{rule.rule_id}:{uuid.uuid4()}",
                 rule.rule_id,
                 _json_dumps(rule.to_dict()),
                 now_iso(),
             ),
         )
+
+    def _job_concurrency_saturated(
+        self, conn: sqlite3.Connection, job: AutomationJob
+    ) -> bool:
+        per_rule = int(job.policy.get("max_concurrent_per_rule") or 1)
+        per_target = int(job.policy.get("max_concurrent_per_target") or 1)
+        if (
+            per_rule > 0
+            and self._count_active_jobs(conn, rule_id=job.rule_id) >= per_rule
+        ):
+            return True
+        if (
+            per_target > 0
+            and self._count_active_jobs(conn, target=job.target) >= per_target
+        ):
+            return True
+        return False
+
+    def _count_active_jobs(
+        self,
+        conn: sqlite3.Connection,
+        *,
+        rule_id: Optional[str] = None,
+        target: Optional[dict[str, Any]] = None,
+    ) -> int:
+        clauses = ["state IN (?, ?)"]
+        params: list[Any] = [JOB_CLAIMED, JOB_RUNNING]
+        if rule_id is not None:
+            clauses.append("rule_id = ?")
+            params.append(rule_id)
+        if target is not None:
+            clauses.append("target_json = ?")
+            params.append(_json_dumps(target))
+        row = conn.execute(
+            f"SELECT COUNT(*) AS c FROM orch_automation_jobs WHERE {' AND '.join(clauses)}",
+            tuple(params),
+        ).fetchone()
+        return int(row["c"] if row is not None else 0)
 
     def _row_to_rule(self, row: sqlite3.Row) -> AutomationRule:
         return AutomationRule.create(

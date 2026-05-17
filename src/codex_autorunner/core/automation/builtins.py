@@ -58,10 +58,14 @@ def ensure_builtin_pma_reactive_rule(
     filters: dict[str, Any] = {}
     if origin_blocklist:
         filters["event.payload.origin"] = {"not_in": origin_blocklist}
+    filters["event.payload.pma_dispatch_action"] = {
+        "not_in": ["auto_resolved", "ignore"]
+    }
     rule = AutomationRule.create(
         rule_id=BUILTIN_PMA_REACTIVE_RULE_ID,
         name="Built-in PMA lifecycle reaction",
-        enabled=bool(getattr(pma_config, "reactive_enabled", True)),
+        enabled=bool(getattr(pma_config, "enabled", True))
+        and bool(getattr(pma_config, "reactive_enabled", True)),
         system_owned=True,
         trigger_kind=TRIGGER_KIND_EVENT,
         trigger={"kind": "lifecycle_event", "event_types": event_types},

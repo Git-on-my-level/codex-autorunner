@@ -16,6 +16,7 @@ from codex_autorunner.core.automation.models import (
     SCHEDULE_WEEKLY,
     TARGET_POLICY_HUB,
     TRIGGER_KIND_EVENT,
+    TRIGGER_KIND_SCHEDULE,
 )
 
 
@@ -54,6 +55,42 @@ def test_due_one_shot_schedule_fires_once_and_enqueues_job(tmp_path) -> None:
     assert second.schedules_fired == 0
     assert store.get_schedule("schedule-1").state == "completed"
     assert len(store.list_events(event_type="schedule.fire")) == 1
+
+
+def test_due_schedule_rule_uses_schedule_fire_event_path(tmp_path) -> None:
+    store = AutomationStore(tmp_path)
+    store.upsert_rule(
+        AutomationRule.create(
+            rule_id="daily-rule",
+            name="Daily PMA turn",
+            trigger_kind=TRIGGER_KIND_SCHEDULE,
+            trigger={"schedule_kind": SCHEDULE_DAILY},
+            target_policy=TARGET_POLICY_HUB,
+            target={"repo_id": "{{ schedule.payload.repo_id }}"},
+            executor_kind=EXECUTOR_PMA_TURN,
+            executor={"message": "Fire {{ schedule.rule_id }}"},
+            policy={"dedupe_key": "{{ event.event_id }}"},
+        )
+    )
+    store.upsert_schedule(
+        AutomationSchedule.create(
+            schedule_id="schedule-1",
+            rule_id="daily-rule",
+            schedule_kind=SCHEDULE_DAILY,
+            next_fire_at="2026-01-01T00:00:00Z",
+            schedule={"payload": {"repo_id": "repo-1"}},
+        )
+    )
+
+    result = AutomationScheduler(store, AutomationRuleEngine(store)).process_due(
+        now="2026-01-01T00:00:00Z"
+    )
+
+    assert result.jobs_created == 1
+    job = store.list_jobs()[0]
+    assert job.event_id.startswith("schedule.fire:schedule-1:")
+    assert job.target["repo_id"] == "repo-1"
+    assert job.executor["message"] == "Fire daily-rule"
 
 
 def test_interval_daily_and_weekly_next_fire_calculation() -> None:

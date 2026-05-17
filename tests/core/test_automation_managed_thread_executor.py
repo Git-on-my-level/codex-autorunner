@@ -17,7 +17,7 @@ from codex_autorunner.core.automation.models import (
     JOB_DEAD_LETTERED,
     JOB_PAUSED,
     JOB_PENDING,
-    JOB_SUCCEEDED,
+    JOB_RUNNING,
     TARGET_POLICY_HUB,
     TRIGGER_KIND_EVENT,
 )
@@ -89,8 +89,9 @@ def test_managed_thread_turn_creates_turn_and_refs(tmp_path: Path) -> None:
     )
 
     saved = store.get_job("job-1")
-    assert result.succeeded == 1
-    assert saved.state == JOB_SUCCEEDED
+    assert result.running == 1
+    assert result.succeeded == 0
+    assert saved.state == JOB_RUNNING
     assert saved.managed_thread_target_id == thread_id
     turn = threads.get_turn(thread_id, str(saved.managed_thread_execution_id))
     assert turn["prompt"] == "Say hi to Ada"

@@ -13,6 +13,7 @@ from codex_autorunner.core.automation import (
 from codex_autorunner.core.automation.models import (
     EXECUTOR_MANAGED_THREAD_TURN,
     EXECUTOR_PMA_TURN,
+    JOB_CLAIMED,
     JOB_FAILED,
     JOB_PENDING,
     JOB_RUNNING,
@@ -92,6 +93,62 @@ def test_rule_crud_event_recording_and_json_roundtrip(tmp_path) -> None:
         store.list_events(event_type=event.event_type)[0].raw_payload["action"]
         == "submitted"
     )
+
+
+def test_record_event_preserves_first_seen_payload_for_duplicate_id(tmp_path) -> None:
+    store = AutomationStore(tmp_path)
+
+    first = store.record_event(_event())
+    duplicate = store.record_event(
+        AutomationEvent.create(
+            event_id="event-1",
+            event_type="manual.run",
+            source="manual",
+            repo_id="repo-other",
+            target={"repo_id": "repo-other"},
+            payload={"changed": True},
+            raw_payload={"changed": True},
+            metadata={"attempt": 2},
+        )
+    )
+
+    assert duplicate == first
+    saved = store.get_event("event-1")
+    assert saved == first
+    assert saved.payload == {"pr": {"number": 42}}
+    assert saved.raw_payload == {"action": "submitted"}
+    assert saved.metadata == {}
+
+
+def test_rule_version_ids_do_not_collide_for_same_updated_at(tmp_path) -> None:
+    store = AutomationStore(tmp_path)
+    rule = _rule()
+    rule.updated_at = "2026-01-01T00:00:00Z"
+    store.upsert_rule(rule)
+
+    first_update = _rule()
+    first_update.name = "First update"
+    first_update.updated_at = "2026-01-01T00:00:00Z"
+    store.upsert_rule(first_update)
+
+    second_update = _rule()
+    second_update.name = "Second update"
+    second_update.updated_at = "2026-01-01T00:00:00Z"
+    store.upsert_rule(second_update)
+
+    with open_orchestration_sqlite(tmp_path) as conn:
+        rows = conn.execute(
+            """
+            SELECT version_id
+              FROM orch_automation_rule_versions
+             WHERE rule_id = ?
+             ORDER BY created_at ASC
+            """,
+            ("rule-1",),
+        ).fetchall()
+
+    assert len(rows) == 2
+    assert len({row["version_id"] for row in rows}) == 2
 
 
 def test_job_enqueue_dedupe_claim_complete_fail_and_attempts(tmp_path) -> None:
@@ -183,6 +240,96 @@ def test_failed_job_can_be_requeued_explicitly(tmp_path) -> None:
 
     requeued = store.retry_job("job-fail", available_at="2026-01-01T00:00:03Z")
     assert requeued.state == JOB_PENDING
+
+
+def test_claim_next_job_counts_claimed_jobs_against_concurrency(tmp_path) -> None:
+    store = AutomationStore(tmp_path)
+    store.upsert_rule(_rule())
+    store.record_event(_event())
+    policy = {"max_concurrent_per_rule": 1, "max_concurrent_per_target": 1}
+    store.enqueue_job(
+        AutomationJob.create(
+            job_id="job-1",
+            rule_id="rule-1",
+            event_id="event-1",
+            dedupe_key="dedupe-1",
+            available_at="2026-01-01T00:00:00Z",
+            target={"repo_id": "repo-1"},
+            executor={"kind": EXECUTOR_MANAGED_THREAD_TURN},
+            policy=policy,
+        )
+    )
+    store.enqueue_job(
+        AutomationJob.create(
+            job_id="job-2",
+            rule_id="rule-1",
+            event_id="event-1",
+            dedupe_key="dedupe-2",
+            available_at="2026-01-01T00:00:00Z",
+            target={"repo_id": "repo-1"},
+            executor={"kind": EXECUTOR_MANAGED_THREAD_TURN},
+            policy=policy,
+        )
+    )
+
+    first = store.claim_next_job(lock_key="worker-1", now="2026-01-01T00:00:00Z")
+    second = store.claim_next_job(lock_key="worker-2", now="2026-01-01T00:00:00Z")
+
+    assert first is not None
+    assert first.job_id == "job-1"
+    assert second is None
+    assert store.get_job("job-1").state == JOB_CLAIMED
+    assert store.get_job("job-2").state == JOB_PENDING
+    assert store.count_active_jobs(rule_id="rule-1") == 1
+
+
+def test_release_stale_claims_recovers_claimed_and_running_jobs(tmp_path) -> None:
+    store = AutomationStore(tmp_path)
+    store.upsert_rule(_rule())
+    store.record_event(_event())
+    store.enqueue_job(
+        AutomationJob.create(
+            job_id="claimed-job",
+            rule_id="rule-1",
+            event_id="event-1",
+            dedupe_key="dedupe-claimed",
+            available_at="2026-01-01T00:00:00Z",
+            target={"repo_id": "repo-1", "job": "claimed"},
+            executor={"kind": EXECUTOR_MANAGED_THREAD_TURN},
+            policy={"max_concurrent_per_rule": 2, "max_concurrent_per_target": 1},
+        )
+    )
+    store.enqueue_job(
+        AutomationJob.create(
+            job_id="running-job",
+            rule_id="rule-1",
+            event_id="event-1",
+            dedupe_key="dedupe-running",
+            available_at="2026-01-01T00:00:00Z",
+            target={"repo_id": "repo-1", "job": "running"},
+            executor={"kind": EXECUTOR_MANAGED_THREAD_TURN},
+            policy={"max_concurrent_per_rule": 2, "max_concurrent_per_target": 1},
+        )
+    )
+    store.claim_next_job(lock_key="old", now="2026-01-01T00:00:00Z")
+    store.claim_next_job(lock_key="old", now="2026-01-01T00:00:00Z")
+    store.start_job("running-job", now="2026-01-01T00:00:01Z")
+
+    released = store.release_stale_claims(
+        stale_before="2026-01-01T00:05:00Z", now="2026-01-01T00:10:00Z"
+    )
+
+    assert released == 2
+    claimed = store.get_job("claimed-job")
+    running = store.get_job("running-job")
+    assert claimed.state == JOB_PENDING
+    assert claimed.lock_key is None
+    assert claimed.claimed_at is None
+    assert running.state == JOB_PENDING
+    assert running.lock_key is None
+    assert running.claimed_at is None
+    assert running.started_at is None
+    assert running.attempt_count == 1
 
 
 def test_schedule_crud(tmp_path) -> None:

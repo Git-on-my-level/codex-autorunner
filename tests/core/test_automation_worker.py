@@ -15,10 +15,12 @@ from codex_autorunner.core.automation.models import (
     JOB_DEAD_LETTERED,
     JOB_FAILED,
     JOB_PENDING,
+    JOB_RUNNING,
     JOB_SUCCEEDED,
     TARGET_POLICY_HUB,
     TRIGGER_KIND_EVENT,
 )
+from codex_autorunner.core.orchestration.sqlite import open_orchestration_sqlite
 
 
 class _SuccessExecutor:
@@ -26,6 +28,16 @@ class _SuccessExecutor:
         return AutomationExecutorResult(
             summary=f"ok:{job.job_id}",
             data={"ok": True},
+            execution_refs={"pma_lane_id": "pma:default"},
+        )
+
+
+class _RunningExecutor:
+    def execute(self, job):
+        return AutomationExecutorResult(
+            status=JOB_RUNNING,
+            summary=f"started:{job.job_id}",
+            data={"execution_phase": "running"},
             execution_refs={"pma_lane_id": "pma:default"},
         )
 
@@ -89,6 +101,29 @@ def test_worker_claims_records_attempt_and_completes_job(tmp_path) -> None:
     assert store.list_attempts("job-1")[0].status == JOB_SUCCEEDED
 
 
+def test_worker_persists_running_executor_result_without_success(tmp_path) -> None:
+    store = _store_with_rule_and_event(tmp_path)
+    store.enqueue_job(_job("job-1"))
+    registry = AutomationExecutorRegistry()
+    registry.register(EXECUTOR_PMA_TURN, _RunningExecutor())
+
+    result = AutomationJobWorker(store, registry).process_once(
+        now="2026-01-01T00:00:00Z"
+    )
+
+    saved = store.get_job("job-1")
+    attempt = store.list_attempts("job-1")[0]
+    assert result.running == 1
+    assert result.succeeded == 0
+    assert saved.state == JOB_RUNNING
+    assert saved.pma_lane_id == "pma:default"
+    assert saved.lock_key is None
+    assert saved.claimed_at is None
+    assert saved.finished_at is None
+    assert attempt.status == JOB_RUNNING
+    assert attempt.executor_result["execution_phase"] == "running"
+
+
 def test_worker_retries_then_succeeds_and_records_attempts(tmp_path) -> None:
     store = _store_with_rule_and_event(tmp_path)
     store.enqueue_job(
@@ -140,13 +175,30 @@ def test_worker_dead_letters_after_max_attempts(tmp_path) -> None:
 
 def test_worker_recovers_stale_claim_and_respects_running_concurrency(tmp_path) -> None:
     store = _store_with_rule_and_event(tmp_path)
-    stale, _ = store.enqueue_job(_job("stale-job"))
-    store.claim_next_job(lock_key="old", now="2026-01-01T00:00:00Z")
-    assert store.get_job(stale.job_id).state == JOB_CLAIMED
-
     running, _ = store.enqueue_job(_job("running-job", dedupe_key="running"))
-    store.claim_next_job(lock_key="other", now="2026-01-01T00:05:00Z")
-    store.start_job(running.job_id, now="2026-01-01T00:05:00Z")
+    store.claim_next_job(lock_key="other", now="2026-01-01T00:09:30Z")
+    store.start_job(running.job_id, now="2026-01-01T00:09:30Z")
+    stale, _ = store.enqueue_job(_job("stale-job"))
+    with open_orchestration_sqlite(tmp_path) as conn:
+        with conn:
+            conn.execute(
+                """
+                UPDATE orch_automation_jobs
+                   SET state = ?,
+                       lock_key = ?,
+                       claimed_at = ?,
+                       updated_at = ?
+                 WHERE job_id = ?
+                """,
+                (
+                    JOB_CLAIMED,
+                    "old",
+                    "2026-01-01T00:00:00Z",
+                    "2026-01-01T00:00:00Z",
+                    stale.job_id,
+                ),
+            )
+    assert store.get_job(stale.job_id).state == JOB_CLAIMED
 
     registry = AutomationExecutorRegistry()
     registry.register(EXECUTOR_PMA_TURN, _SuccessExecutor())
@@ -154,5 +206,6 @@ def test_worker_recovers_stale_claim_and_respects_running_concurrency(tmp_path) 
         now="2026-01-01T00:10:00Z"
     )
 
-    assert result.skipped == 1
+    assert result.claimed == 0
+    assert result.skipped == 0
     assert store.get_job("stale-job").state == JOB_PENDING

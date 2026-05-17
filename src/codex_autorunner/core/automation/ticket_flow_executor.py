@@ -14,7 +14,7 @@ from ..hub_topology import HubTopologyRepository
 from ..hub_worktree_manager import WorktreeManager
 from ..utils import is_within
 from .models import (
-    JOB_SUCCEEDED,
+    JOB_RUNNING,
     TARGET_POLICY_AUTO_WORKTREE,
     TARGET_POLICY_EXISTING_REPO,
     TARGET_POLICY_EXISTING_WORKTREE,
@@ -79,9 +79,10 @@ class TicketFlowAutomationExecutor:
         )
         run_id = str(getattr(record, "id", "") or "")
         return AutomationExecutorResult(
-            status=JOB_SUCCEEDED,
+            status=JOB_RUNNING,
             summary="started ticket-flow automation run",
             data={
+                "execution_phase": "running",
                 "worktree": {
                     "base_repo_id": resolved.base_repo_id,
                     "repo_id": resolved.repo_id,

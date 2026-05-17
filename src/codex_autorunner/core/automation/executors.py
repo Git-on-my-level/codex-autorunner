@@ -21,6 +21,7 @@ from .models import (
     JOB_DEAD_LETTERED,
     JOB_FAILED,
     JOB_PAUSED,
+    JOB_RUNNING,
     JOB_SUCCEEDED,
     AutomationJob,
 )
@@ -245,9 +246,12 @@ def _managed_turn_result(
 ) -> AutomationExecutorResult:
     turn_id = _require_text(turn.get("managed_turn_id"), "managed_turn_id")
     return AutomationExecutorResult(
-        status=JOB_SUCCEEDED,
+        status=JOB_RUNNING,
         summary=f"managed thread turn {turn.get('status') or 'created'}",
         data={
+            "execution_phase": (
+                "waiting" if turn.get("status") == "queued" else "running"
+            ),
             "thread_target_id": thread_id,
             "managed_turn_id": turn_id,
             "client_turn_id": client_turn_id,
