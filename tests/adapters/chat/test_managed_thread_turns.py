@@ -30,6 +30,7 @@ from codex_autorunner.core.orchestration.runtime_threads import (
     RuntimeThreadExecution,
     RuntimeThreadOutcome,
 )
+from codex_autorunner.core.orchestration.service import ManagedThreadExecutionStore
 from codex_autorunner.core.orchestration.turn_output_reducer import (
     build_assistant_transcript_prefix,
     trim_cumulative_assistant_text,
@@ -225,6 +226,45 @@ def test_prior_completed_assistant_text_prefix_reconstructs_trimmed_history() ->
         service,
         managed_thread_id="thread-1",
         managed_turn_id="turn-current",
+    )
+
+    assert prefix == "first answersecond answer"
+    assert (
+        trim_cumulative_assistant_text(
+            "first answersecond answerthird answer",
+            prefix,
+        )[0]
+        == "third answer"
+    )
+
+
+def test_prior_completed_assistant_text_prefix_reads_execution_store_wrapper(
+    tmp_path: Path,
+) -> None:
+    store = ManagedThreadExecutionStore(ManagedThreadStore(tmp_path / "hub"))
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    thread = store.create_thread_target("hermes", workspace)
+    first = store.create_execution(thread.thread_target_id, prompt="first")
+    store.record_execution_result(
+        thread.thread_target_id,
+        first.execution_id,
+        status="ok",
+        assistant_text="first answer",
+    )
+    second = store.create_execution(thread.thread_target_id, prompt="second")
+    store.record_execution_result(
+        thread.thread_target_id,
+        second.execution_id,
+        status="ok",
+        assistant_text="first answersecond answer",
+    )
+    current = store.create_execution(thread.thread_target_id, prompt="third")
+
+    prefix = managed_thread_turns_module._prior_completed_assistant_text_prefix(
+        SimpleNamespace(thread_store=store),
+        managed_thread_id=thread.thread_target_id,
+        managed_turn_id=current.execution_id,
     )
 
     assert prefix == "first answersecond answer"
