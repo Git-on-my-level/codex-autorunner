@@ -244,6 +244,19 @@ async def notify_hub_automation_transition(
     if isinstance(extra, dict):
         payload.update(extra)
 
+    store = await get_automation_store(request, runtime_state, required=False)
+    notify_transition = getattr(store, "notify_transition", None)
+    if callable(notify_transition):
+        try:
+            await await_if_needed(notify_transition(dict(payload)))
+        except (
+            RuntimeError,
+            OSError,
+            TypeError,
+            ValueError,
+        ):  # notification must not disrupt caller
+            logger.exception("Failed to notify PMA automation transition store")
+
     supervisor = get_pma_request_context(request).hub_supervisor
     if supervisor is None:
         return
@@ -279,6 +292,14 @@ async def notify_hub_automation_transition(
             logger.exception("Failed immediate PMA automation processing")
     except (RuntimeError, OSError, ValueError):
         logger.exception("Failed immediate PMA automation processing")
+
+    drain_wakeups = getattr(supervisor, "drain_pma_automation_wakeups", None)
+    if not callable(drain_wakeups):
+        return
+    try:
+        await await_if_needed(drain_wakeups())
+    except (RuntimeError, OSError, TypeError, ValueError):
+        logger.exception("Failed immediate PMA wakeup drain")
 
 
 def _lifecycle_event_from_transition_payload(payload: dict[str, Any]) -> LifecycleEvent:

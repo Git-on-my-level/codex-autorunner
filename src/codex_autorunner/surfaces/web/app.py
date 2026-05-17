@@ -74,16 +74,16 @@ from .routes.hub_state import build_hub_state_routes
 from .routes.interactions import build_interaction_routes
 from .routes.pma import build_pma_routes
 from .routes.pma_routes import PmaRuntimeState
-from .routes.pma_routes.managed_thread_runtime import (
-    recover_orphaned_managed_thread_executions,
-    restart_managed_thread_queue_workers,
-)
 from .routes.scm_webhooks import build_scm_webhook_routes
 from .routes.settings import build_settings_routes
 from .routes.system import build_system_routes
 from .routes.voice import build_voice_routes
 from .services.browser_auth import SESSION_COOKIE_NAME, BrowserAuthStore
 from .services.pma import create_pma_application_container
+from .services.pma.managed_thread_runtime import (
+    recover_orphaned_managed_thread_executions,
+    restart_managed_thread_queue_workers,
+)
 from .static_assets import (
     render_web_index_html,
     resolve_web_static_dir,

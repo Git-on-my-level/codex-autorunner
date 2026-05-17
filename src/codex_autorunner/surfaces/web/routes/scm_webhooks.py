@@ -29,7 +29,7 @@ from ....core.scm_webhook_config import (
     resolve_github_webhook_config,
     resolve_payload_limits,
 )
-from .pma_routes.managed_thread_runtime import ensure_managed_thread_queue_worker
+from ..services.pma.managed_thread_runtime import ensure_managed_thread_queue_worker
 
 ScmDrainCallback = Callable[[Request, ScmEvent], object]
 _DEFAULT_INSPECT_LIMIT = 50
