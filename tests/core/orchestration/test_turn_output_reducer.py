@@ -36,6 +36,67 @@ def test_reduce_turn_output_trims_cumulative_transcript_prefix() -> None:
     assert envelope.provenance["candidate_source"] == "outcome"
 
 
+def test_reduce_turn_output_trims_mutated_cumulative_transcript_prefix() -> None:
+    state = RuntimeThreadRunEventState()
+    previous = "\n".join(
+        [
+            "Earlier diagnosis.",
+            "",
+            "```text",
+            "/Users/example/.local/pipx/venvs/codex-autorunner.next-20260518-024620/bin/python",
+            "```",
+            "",
+            *[
+                f"Step {index}: verify the installed package and restart state."
+                for index in range(80)
+            ],
+            "The package needs to be installed in that venv.",
+        ]
+    )
+    current = (
+        previous.replace("```text\n", "``\n", 1).replace(
+            "that venv.\nEarlier diagnosis.",
+            "that venv.Earlier diagnosis.",
+            1,
+        )
+        + "\n\nCurrent turn answer only."
+    )
+
+    envelope = reduce_turn_output(
+        managed_thread_id="thread-1",
+        managed_turn_id="turn-2",
+        backend_thread_id="session-1",
+        backend_turn_id="turn-2",
+        outcome=_outcome(current),
+        event_state=state,
+        prior_assistant_texts=[previous],
+    )
+
+    assert envelope.text == "Current turn answer only."
+    assert envelope.ownership == "trimmed_from_cumulative"
+    assert envelope.source == "reducer"
+
+
+def test_reduce_turn_output_keeps_new_answer_when_near_prefix_tail_repeats() -> None:
+    state = RuntimeThreadRunEventState()
+    previous = "prefix block with ABCD near tail\n" + ("filler line\n" * 60) + "ABCD"
+    current = previous[:-4] + "WXYZ" + "ABCD extra answer"
+
+    envelope = reduce_turn_output(
+        managed_thread_id="thread-1",
+        managed_turn_id="turn-2",
+        backend_thread_id="session-1",
+        backend_turn_id="turn-2",
+        outcome=_outcome(current),
+        event_state=state,
+        prior_assistant_texts=[previous],
+    )
+
+    assert envelope.text == "ABCD extra answer"
+    assert envelope.ownership == "trimmed_from_cumulative"
+    assert envelope.source == "reducer"
+
+
 def test_reduce_turn_output_rejects_exact_prior_output_as_stale() -> None:
     state = RuntimeThreadRunEventState()
 
