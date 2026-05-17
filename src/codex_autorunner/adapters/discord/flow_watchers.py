@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 import inspect
 import logging
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
 
@@ -47,7 +46,6 @@ PAUSE_SCAN_INTERVAL_SECONDS = 5.0
 TERMINAL_SCAN_INTERVAL_SECONDS = 5.0
 _IDLE_BACKOFF_MAX_SECONDS = 30.0
 _IDLE_BACKOFF_STEP_SECONDS = 5.0
-RECOVERY_NOTIFICATION_COOLDOWN_SECONDS = 15 * 60
 
 
 def _truncate_error(error_message: Optional[str], limit: int = 200) -> str:
@@ -157,33 +155,14 @@ def _format_ticket_flow_dispatch_notification(
     return "\n\n".join(("\n".join(header_lines), body))
 
 
-def _parse_iso_datetime(raw: Any) -> Optional[datetime]:
-    if not isinstance(raw, str) or not raw.strip():
-        return None
-    try:
-        parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
-    except ValueError:
-        return None
-    if parsed.tzinfo is None:
-        return parsed.replace(tzinfo=timezone.utc)
-    return parsed.astimezone(timezone.utc)
-
-
 def _recovery_notification_is_suppressed_by_binding(
     binding: Any,
     *,
     fingerprint: str,
-    now: datetime,
-    cooldown_seconds: int = RECOVERY_NOTIFICATION_COOLDOWN_SECONDS,
 ) -> bool:
     if not fingerprint:
         return False
-    if binding.get("last_recovery_fingerprint") == fingerprint:
-        return True
-    last_notified_at = _parse_iso_datetime(binding.get("last_recovery_notified_at"))
-    if last_notified_at is None:
-        return False
-    return (now - last_notified_at).total_seconds() < cooldown_seconds
+    return binding.get("last_recovery_fingerprint") == fingerprint
 
 
 def _preferred_bound_source_for_workspace(
@@ -408,7 +387,6 @@ async def _scan_and_enqueue_recovery_notifications(service: Any) -> int:
             if _recovery_notification_is_suppressed_by_binding(
                 binding,
                 fingerprint=fingerprint,
-                now=datetime.now(timezone.utc),
             ):
                 continue
             message = format_recovery_notification_intent(intent)

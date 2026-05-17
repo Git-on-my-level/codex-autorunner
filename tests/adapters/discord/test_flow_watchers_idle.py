@@ -14,7 +14,6 @@ from codex_autorunner.adapters.discord.flow_watchers import (
     _IDLE_BACKOFF_MAX_SECONDS,
     _IDLE_BACKOFF_STEP_SECONDS,
     PAUSE_SCAN_INTERVAL_SECONDS,
-    RECOVERY_NOTIFICATION_COOLDOWN_SECONDS,
     TERMINAL_SCAN_INTERVAL_SECONDS,
     _next_idle_interval,
     _recovery_notification_is_suppressed_by_binding,
@@ -363,45 +362,26 @@ def test_recovery_notification_binding_dedupe_suppresses_same_fingerprint() -> N
     now = datetime(2026, 5, 14, 12, 0, tzinfo=timezone.utc)
     binding = {
         "last_recovery_fingerprint": "ticket_flow_recovery:abc",
-        "last_recovery_notified_at": (
-            now - timedelta(seconds=RECOVERY_NOTIFICATION_COOLDOWN_SECONDS + 1)
-        ).isoformat(),
+        "last_recovery_notified_at": (now - timedelta(minutes=5)).isoformat(),
     }
 
     assert _recovery_notification_is_suppressed_by_binding(
         binding,
         fingerprint="ticket_flow_recovery:abc",
-        now=now,
     )
 
 
-def test_recovery_notification_binding_dedupe_rate_limits_new_fingerprint() -> None:
+def test_recovery_notification_binding_dedupe_does_not_block_different_fingerprint() -> None:
+    """A recent notify for intent A must not delay an alert for intent B (Codex #1788)."""
     now = datetime(2026, 5, 14, 12, 0, tzinfo=timezone.utc)
     binding = {
         "last_recovery_fingerprint": "ticket_flow_recovery:abc",
         "last_recovery_notified_at": (now - timedelta(minutes=5)).isoformat(),
     }
 
-    assert _recovery_notification_is_suppressed_by_binding(
-        binding,
-        fingerprint="ticket_flow_recovery:def",
-        now=now,
-    )
-
-
-def test_recovery_notification_binding_dedupe_allows_after_cooldown() -> None:
-    now = datetime(2026, 5, 14, 12, 0, tzinfo=timezone.utc)
-    binding = {
-        "last_recovery_fingerprint": "ticket_flow_recovery:abc",
-        "last_recovery_notified_at": (
-            now - timedelta(seconds=RECOVERY_NOTIFICATION_COOLDOWN_SECONDS + 1)
-        ).isoformat(),
-    }
-
     assert not _recovery_notification_is_suppressed_by_binding(
         binding,
         fingerprint="ticket_flow_recovery:def",
-        now=now,
     )
 
 
