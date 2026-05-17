@@ -1,22 +1,26 @@
 import pytest
 
-from codex_autorunner.core.config_layering import (
-    CONFIG_FILENAME,
+from codex_autorunner.core.config_defaults import (
     DEFAULT_HUB_CONFIG,
     DEFAULT_REPO_CONFIG,
-    GENERATED_CONFIG_HEADER,
     REPO_SHARED_KEYS,
+)
+from codex_autorunner.core.config_generated import GENERATED_CONFIG_HEADER
+from codex_autorunner.core.config_sources import (
+    CONFIG_FILENAME,
     ROOT_CONFIG_FILENAME,
     ROOT_OVERRIDE_FILENAME,
-    _clone_config_value,
-    _load_yaml_dict,
-    _mapping_has_nested_key,
-    _merge_defaults,
     derive_repo_config_data,
     find_nearest_hub_config_path,
     load_root_defaults,
     repo_shared_overrides_from_hub,
     resolve_hub_config_data,
+)
+from codex_autorunner.core.config_yaml import (
+    _clone_config_value,
+    _load_yaml_dict,
+    _mapping_has_nested_key,
+    _merge_defaults,
 )
 
 

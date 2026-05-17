@@ -130,7 +130,7 @@ def default_housekeeping_rule_named(
     include_repo_review_runs: bool = False,
     include_hub_update_rules: bool = False,
 ) -> Optional[HousekeepingRule]:
-    from .core.config_layering import _default_housekeeping_section
+    from .core.config_defaults import _default_housekeeping_section
 
     default_config = parse_housekeeping_config(
         _default_housekeeping_section(

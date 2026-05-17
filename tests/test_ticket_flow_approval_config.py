@@ -255,7 +255,7 @@ class TestPmaNumericCompatibilityRepair:
         assert cfg.max_upload_bytes == 10_000_000
 
     def test_max_text_chars_non_int_falls_back(self, tmp_path: Path) -> None:
-        from codex_autorunner.core.config_layering import PMA_DEFAULT_MAX_TEXT_CHARS
+        from codex_autorunner.core.config_defaults import PMA_DEFAULT_MAX_TEXT_CHARS
         from codex_autorunner.core.config_parsers import _parse_pma_config
 
         cfg = _parse_pma_config({"max_text_chars": "bad"}, tmp_path, {})

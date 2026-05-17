@@ -1,0 +1,789 @@
+import json
+from typing import Any, Dict
+
+from .config_contract import CONFIG_VERSION
+from .constants import DEFAULT_UPDATE_REPO_REF, DEFAULT_UPDATE_REPO_URL
+from .report_retention import (
+    DEFAULT_REPORT_MAX_HISTORY_FILES,
+    DEFAULT_REPORT_MAX_TOTAL_BYTES,
+)
+
+TWELVE_HOUR_SECONDS = 12 * 60 * 60
+PMA_DEFAULT_MAX_TEXT_CHARS = 10_000
+PMA_DEFAULT_TURN_IDLE_TIMEOUT_SECONDS = 1800
+
+
+def _default_agents_section() -> Dict[str, Any]:
+    """Build the default agents section."""
+    return {
+        "codex": {
+            "binary": "codex",
+        },
+        "opencode": {
+            "binary": "opencode",
+            "subagent_models": {
+                "subagent": "zai-coding-plan/glm-4.7-flashx",
+            },
+        },
+        "hermes": {
+            "binary": "hermes",
+        },
+    }
+
+
+def _default_app_server_section() -> Dict[str, Any]:
+    """Build the default app_server section."""
+    return {
+        "server_scope": "global",
+        "command": ["codex", "app-server"],
+        "state_root": "~/.codex-autorunner/workspaces",
+        "auto_restart": True,
+        "max_handles": 1,
+        "idle_ttl_seconds": 3600,
+        "startup_timeout_seconds": 30,
+        "terminate_grace_seconds": 2,
+        "terminate_kill_seconds": 3,
+        "turn_timeout_seconds": 7200,
+        "turn_stall_timeout_seconds": 60,
+        "turn_stall_poll_interval_seconds": 2,
+        "turn_stall_recovery_min_interval_seconds": 10,
+        "turn_stall_max_recovery_attempts": 8,
+        "request_timeout": None,
+        "client": {
+            "max_message_bytes": 50 * 1024 * 1024,
+            "oversize_preview_bytes": 4096,
+            "max_oversize_drain_bytes": 100 * 1024 * 1024,
+            "restart_backoff_initial_seconds": 0.5,
+            "restart_backoff_max_seconds": 30.0,
+            "restart_backoff_jitter_ratio": 0.1,
+        },
+        "output": {
+            "policy": "final_only",
+        },
+        "prompts": {
+            "doc_chat": {
+                "max_chars": 12000,
+                "message_max_chars": 2000,
+                "target_excerpt_max_chars": 4000,
+                "recent_summary_max_chars": 2000,
+            },
+            "spec_ingest": {
+                "max_chars": 12000,
+                "message_max_chars": 2000,
+                "spec_excerpt_max_chars": 5000,
+            },
+            "autorunner": {
+                "max_chars": 16000,
+                "message_max_chars": 2000,
+                "todo_excerpt_max_chars": 4000,
+                "prev_run_max_chars": 3000,
+            },
+        },
+    }
+
+
+def _default_telegram_bot_section(
+    shell_enabled: bool = True, include_agent_timeouts: bool = False
+) -> Dict[str, Any]:
+    """Build the default telegram_bot section.
+
+    Args:
+        shell_enabled: Whether shell integration is enabled (True for repo, False for hub).
+        include_agent_timeouts: Whether to include agent_timeouts (True for repo, False for hub).
+    """
+    config = {
+        "enabled": False,
+        "mode": "polling",
+        "bot_token_env": "CAR_TELEGRAM_BOT_TOKEN",
+        "chat_id_env": "CAR_TELEGRAM_CHAT_ID",
+        "parse_mode": "HTML",
+        "debug": {
+            "prefix_context": False,
+        },
+        "allowed_chat_ids": [],
+        "allowed_user_ids": [],
+        "require_topics": False,
+        "defaults": {
+            "approval_mode": "yolo",
+            "approval_policy": "on-request",
+            "sandbox_policy": "workspaceWrite",
+            "yolo_approval_policy": "never",
+            "yolo_sandbox_policy": "dangerFullAccess",
+        },
+        "concurrency": {
+            "max_parallel_turns": 5,
+            "per_topic_queue": True,
+        },
+        "media": {
+            "enabled": True,
+            "images": True,
+            "voice": True,
+            "files": True,
+            "max_image_bytes": 10_000_000,
+            "max_voice_bytes": 10_000_000,
+            "max_file_bytes": 100_000_000,
+            "image_prompt": (
+                "The user sent an image with no caption. Use it to continue the "
+                "conversation; if no clear task, describe the image and ask what "
+                "they want."
+            ),
+        },
+        "shell": {
+            "enabled": shell_enabled,
+            "timeout_ms": 120000,
+            "max_output_chars": 3800,
+        },
+        "cache": {
+            "cleanup_interval_seconds": 300,
+            "coalesce_buffer_ttl_seconds": 60,
+            "media_batch_buffer_ttl_seconds": 60,
+            "model_pending_ttl_seconds": 1800,
+            "pending_approval_ttl_seconds": 600,
+            "pending_question_ttl_seconds": 600,
+            "reasoning_buffer_ttl_seconds": 900,
+            "selection_state_ttl_seconds": 1800,
+            "turn_preview_ttl_seconds": 900,
+            "progress_stream_ttl_seconds": 900,
+            "oversize_warning_ttl_seconds": 3600,
+            "update_id_persist_interval_seconds": 60,
+        },
+        "command_registration": {
+            "enabled": True,
+            "scopes": [
+                {"type": "default", "language_code": ""},
+                {"type": "all_group_chats", "language_code": ""},
+            ],
+        },
+        "opencode_command": None,
+        "state_file": ".codex-autorunner/telegram_state.sqlite3",
+        "app_server_command": ["codex", "app-server"],
+        "app_server": {
+            "max_handles": 20,
+            "idle_ttl_seconds": 3600,
+            "turn_timeout_seconds": 7200,
+        },
+        "polling": {
+            "timeout_seconds": 30,
+            "allowed_updates": ["message", "edited_message", "callback_query"],
+        },
+    }
+
+    if include_agent_timeouts:
+        config["agent_timeouts"] = {
+            "codex": 7200,
+            "opencode": 7200,
+        }
+
+    return config
+
+
+def _default_discord_bot_section() -> Dict[str, Any]:
+    """Build the default discord_bot section."""
+    return {
+        "enabled": False,
+        "bot_token_env": "CAR_DISCORD_BOT_TOKEN",
+        "app_id_env": "CAR_DISCORD_APP_ID",
+        "allowed_guild_ids": [],
+        "allowed_channel_ids": [],
+        "allowed_user_ids": [],
+        "command_registration": {
+            "enabled": True,
+            "scope": "guild",
+            "guild_ids": [],
+        },
+        "state_file": ".codex-autorunner/discord_state.sqlite3",
+        "intents": 33281,
+        "max_message_length": 2000,
+        "shell": {
+            "enabled": False,
+            "timeout_ms": 120000,
+            "max_output_chars": 3800,
+        },
+        "media": {
+            "enabled": True,
+            "voice": True,
+            "max_voice_bytes": 10_000_000,
+        },
+        "dispatch": {
+            "handler_timeout_seconds": None,
+            "handler_stalled_warning_seconds": 60.0,
+        },
+    }
+
+
+def _default_terminal_section() -> Dict[str, Any]:
+    """Build the default terminal section."""
+    return {
+        "idle_timeout_seconds": TWELVE_HOUR_SECONDS,
+    }
+
+
+def _default_opencode_section() -> Dict[str, Any]:
+    """Build the default opencode section."""
+    return {
+        "server_scope": "global",
+        "session_stall_timeout_seconds": 300,
+        "max_text_chars": 20000,
+        "max_handles": 1,
+        "idle_ttl_seconds": 900,
+    }
+
+
+def _default_usage_section() -> Dict[str, Any]:
+    """Build the default usage section."""
+    return {
+        "cache_scope": "global",
+        "global_cache_root": None,
+        "repo_cache_path": ".codex-autorunner/usage/usage_series_cache.json",
+    }
+
+
+def _default_server_section() -> Dict[str, Any]:
+    """Build the default server section."""
+    return {
+        "host": "127.0.0.1",
+        "port": 4173,
+        "base_path": "",
+        "access_log": False,
+        "auth_token_env": "",
+        "allowed_hosts": [],
+        "allowed_origins": [],
+    }
+
+
+def _default_static_assets_section() -> Dict[str, Any]:
+    """Build the default static_assets section."""
+    return {
+        "cache_root": ".codex-autorunner/static-cache",
+        "max_cache_entries": 5,
+        "max_cache_age_days": 30,
+    }
+
+
+def _default_update_section() -> Dict[str, Any]:
+    """Build the default update section."""
+    return {
+        "skip_checks": False,
+        "backend": "auto",
+        "linux_service_names": _default_update_linux_service_names(),
+    }
+
+
+def _default_update_linux_service_names() -> Dict[str, str]:
+    return {
+        "hub": "car-hub",
+        "telegram": "car-telegram",
+        "discord": "car-discord",
+    }
+
+
+def _default_github_automation_section() -> Dict[str, Any]:
+    """Build the additive GitHub automation section."""
+    return {
+        "enabled": False,
+        "policy": {
+            "enqueue_managed_turn": "allow",
+            "notify_chat": "allow",
+            "react_pr_review_comment": "allow",
+            "post_pr_comment": "deny",
+            "add_labels": "deny",
+            "merge_pr": "deny",
+        },
+        "reactions": {
+            "enabled": True,
+            "ci_failed": True,
+            "ci_failed_batch_window_seconds": 60,
+            "ci_failed_batch_max_window_seconds": 180,
+            "changes_requested": True,
+            "review_comment": True,
+            "approved_and_green": True,
+            "merged": True,
+            "duplicate_escalation_threshold": 3,
+            "delivery_failure_escalation_threshold": 3,
+            "github_login_whitelist": [],
+            "github_login_blacklist": [],
+        },
+        "polling": {
+            "enabled": False,
+            "discovery_interval_seconds": 360,
+            "discovery_workspace_limit": 1,
+            "discovery_include_manifest_repos": False,
+            "discovery_terminal_thread_lookback_minutes": 1440,
+            "watch_window_minutes": 30,
+            "interval_seconds": 90,
+            "no_activity_tier": "cold",
+            "post_open_boost_minutes": 30,
+            "post_open_boost_interval_seconds": 30,
+        },
+        "webhook_ingress": {
+            "enabled": False,
+            "max_payload_bytes": 262_144,
+            "store_raw_payload": False,
+            "max_raw_payload_bytes": 65_536,
+        },
+    }
+
+
+def _default_templates_section() -> Dict[str, Any]:
+    """Build the default templates section."""
+    return {
+        "enabled": True,
+        "repos": [
+            {
+                "id": "blessed",
+                "url": "https://github.com/Git-on-my-level/car-ticket-templates",
+                "trusted": True,
+                "default_ref": "main",
+            }
+        ],
+    }
+
+
+def _default_apps_section() -> Dict[str, Any]:
+    """Build the default apps section."""
+    return {
+        "enabled": True,
+        "repos": [
+            {
+                "id": "blessed",
+                "url": "https://github.com/Git-on-my-level/blessed-car-apps",
+                "trusted": True,
+                "default_ref": "main",
+            }
+        ],
+    }
+
+
+def _default_housekeeping_rules_basic() -> list:
+    """Build the basic housekeeping rules (shared by repo and hub)."""
+    return [
+        {
+            "name": "run_logs",
+            "kind": "directory",
+            "path": ".codex-autorunner/runs",
+            "glob": "run-*.log",
+            "recursive": False,
+            "max_files": 200,
+            "max_total_bytes": 500_000_000,
+            "max_age_days": 30,
+        },
+        {
+            "name": "terminal_image_uploads",
+            "kind": "directory",
+            "path": ".codex-autorunner/uploads/terminal-images",
+            "glob": "*",
+            "recursive": False,
+            "max_files": 500,
+            "max_total_bytes": 200_000_000,
+            "max_age_days": 14,
+        },
+        {
+            "name": "telegram_images",
+            "kind": "directory",
+            "path": ".codex-autorunner/uploads/telegram-images",
+            "glob": "*",
+            "recursive": False,
+            "max_files": 500,
+            "max_total_bytes": 200_000_000,
+            "max_age_days": 14,
+        },
+        {
+            "name": "telegram_voice",
+            "kind": "directory",
+            "path": ".codex-autorunner/uploads/telegram-voice",
+            "glob": "*",
+            "recursive": False,
+            "max_files": 500,
+            "max_total_bytes": 500_000_000,
+            "max_age_days": 14,
+        },
+        {
+            "name": "telegram_files",
+            "kind": "directory",
+            "path": ".codex-autorunner/uploads/telegram-files",
+            "glob": "*",
+            "recursive": True,
+            "max_files": 500,
+            "max_total_bytes": 500_000_000,
+            "max_age_days": 14,
+        },
+        {
+            "name": "github_context",
+            "kind": "directory",
+            "path": ".codex-autorunner/github_context",
+            "glob": "*",
+            "recursive": False,
+            "max_files": 200,
+            "max_total_bytes": 100_000_000,
+            "max_age_days": 30,
+        },
+    ]
+
+
+def _default_housekeeping_section(
+    include_repo_review_runs: bool = False, include_hub_update_rules: bool = False
+) -> Dict[str, Any]:
+    """Build the default housekeeping section.
+
+    Args:
+        include_repo_review_runs: Whether to include review_runs rule (repo mode only).
+        include_hub_update_rules: Whether to include hub-specific update rules (hub mode only).
+    """
+    rules = _default_housekeeping_rules_basic()
+
+    if include_repo_review_runs:
+        rules.append(
+            {
+                "name": "review_runs",
+                "kind": "directory",
+                "path": ".codex-autorunner/review/runs",
+                "glob": "*",
+                "recursive": True,
+                "max_files": 100,
+                "max_total_bytes": 500_000_000,
+                "max_age_days": 30,
+            }
+        )
+
+    if include_hub_update_rules:
+        rules.extend(
+            [
+                {
+                    "name": "update_cache",
+                    "kind": "directory",
+                    "path": "~/.codex-autorunner/update_cache",
+                    "glob": "*",
+                    "recursive": True,
+                    "max_files": 2000,
+                    "max_total_bytes": 1_000_000_000,
+                    "max_age_days": 30,
+                },
+                {
+                    "name": "update_log",
+                    "kind": "file",
+                    "path": "~/.codex-autorunner/update-standalone.log",
+                    "max_bytes": 5_000_000,
+                },
+            ]
+        )
+
+    return {
+        "enabled": True,
+        "interval_seconds": 3600,
+        "min_file_age_seconds": 600,
+        "dry_run": False,
+        "rules": rules,
+    }
+
+
+DEFAULT_REPO_CONFIG: Dict[str, Any] = {
+    "version": CONFIG_VERSION,
+    "mode": "repo",
+    "docs": {
+        "active_context": ".codex-autorunner/contextspace/active_context.md",
+        "decisions": ".codex-autorunner/contextspace/decisions.md",
+        "spec": ".codex-autorunner/contextspace/spec.md",
+    },
+    "review": {
+        "enabled": True,
+        "agent": "opencode",
+        "model": "zai-coding-plan/glm-5.1",
+        "subagent_agent": "subagent",
+        "subagent_model": "zai-coding-plan/glm-4.7-flashx",
+        "reasoning": None,
+        "max_wallclock_seconds": None,
+    },
+    "codex": {
+        "binary": "codex",
+        "args": ["--yolo", "exec", "--sandbox", "danger-full-access"],
+        "terminal_args": ["--yolo"],
+        "model": None,
+        "reasoning": None,
+        "models": {
+            "small": "gpt-5.1-codex-mini",
+            "large": None,
+        },
+    },
+    "agents": _default_agents_section(),
+    "prompt": {
+        "prev_run_max_chars": 6000,
+        "template": ".codex-autorunner/prompt.txt",
+    },
+    "ui": {
+        "editor": "vi",
+    },
+    "security": {
+        "redact_run_logs": True,
+    },
+    "runner": {
+        "sleep_seconds": 5,
+        "stop_after_runs": None,
+        "max_wallclock_seconds": None,
+        "no_progress_threshold": 3,
+        "review": {
+            "enabled": False,
+            "trigger": {
+                "on_todos_complete": True,
+                "on_no_progress_stop": True,
+                "on_max_runs_stop": True,
+                "on_stop_requested": False,
+                "on_error_exit": False,
+            },
+            "agent": None,
+            "model": None,
+            "reasoning": None,
+            "max_wallclock_seconds": None,
+            "context": {
+                "primary_docs": ["spec", "decisions"],
+                "include_docs": ["active_context"],
+                "include_last_run_artifacts": True,
+                "max_doc_chars": 20000,
+            },
+            "artifacts": {
+                "write_to_review_runs_dir": True,
+            },
+        },
+    },
+    "autorunner": {
+        "reuse_session": False,
+    },
+    "ticket_flow": {
+        "approval_mode": "yolo",
+        "default_approval_decision": "accept",
+        "include_previous_ticket_context": False,
+        "restart_recoverable_failures": True,
+        "restart_max_attempts": 2,
+        "restart_backoff_seconds": 0.0,
+        "stale_alive_threshold_seconds": 1800,
+    },
+    "git": {
+        "auto_commit": False,
+        "commit_message_template": "[codex] run #{run_id}",
+    },
+    "github": {
+        "enabled": True,
+        "pr_draft_default": False,
+        "sync_commit_mode": "auto",
+        "sync_agent_timeout_seconds": 1800,
+        "automation": _default_github_automation_section(),
+    },
+    "update": _default_update_section(),
+    "app_server": _default_app_server_section(),
+    "opencode": _default_opencode_section(),
+    "usage": _default_usage_section(),
+    "server": _default_server_section(),
+    "notifications": {
+        "enabled": "auto",
+        "events": ["run_finished", "run_error", "tui_idle"],
+        "tui_idle_seconds": 60,
+        "timeout_seconds": 5.0,
+        "discord": {
+            "webhook_url_env": "CAR_DISCORD_WEBHOOK_URL",
+        },
+        "telegram": {
+            "bot_token_env": "CAR_TELEGRAM_BOT_TOKEN",
+            "chat_id_env": "CAR_TELEGRAM_CHAT_ID",
+        },
+    },
+    "telegram_bot": _default_telegram_bot_section(
+        shell_enabled=True, include_agent_timeouts=True
+    ),
+    "discord_bot": _default_discord_bot_section(),
+    "terminal": _default_terminal_section(),
+    "voice": {
+        "enabled": True,
+        "provider": "local_whisper",
+        "latency_mode": "balanced",
+        "chunk_ms": 600,
+        "sample_rate": 16_000,
+        "warn_on_remote_api": True,
+        "push_to_talk": {
+            "max_ms": 15_000,
+            "silence_auto_stop_ms": 1_200,
+            "min_hold_ms": 150,
+        },
+        "providers": {
+            "openai_whisper": {
+                "remote_api": True,
+                "api_key_env": "OPENAI_API_KEY",
+                "model": "whisper-1",
+                "base_url": None,
+                "temperature": 0,
+                "language": None,
+                "redact_request": True,
+            },
+            "local_whisper": {
+                "remote_api": False,
+                "model": "small",
+                "device": "auto",
+                "compute_type": "default",
+                "cpu_threads": 0,
+                "num_workers": 1,
+                "download_root": None,
+                "local_files_only": False,
+                "beam_size": 1,
+                "vad_filter": True,
+                "language": None,
+            },
+            "mlx_whisper": {
+                "remote_api": False,
+                "model": "small",
+                "language": None,
+                "beam_size": None,
+                "temperature": 0.0,
+                "condition_on_previous_text": False,
+                "word_timestamps": False,
+                "initial_prompt": None,
+            },
+        },
+    },
+    "log": {
+        "path": ".codex-autorunner/codex-autorunner.log",
+        "max_bytes": 10_000_000,
+        "backup_count": 3,
+    },
+    "server_log": {
+        "path": ".codex-autorunner/codex-server.log",
+        "max_bytes": 10_000_000,
+        "backup_count": 3,
+    },
+    "static_assets": {
+        "cache_root": ".codex-autorunner/static-cache",
+        "max_cache_entries": 5,
+        "max_cache_age_days": 30,
+    },
+    "housekeeping": _default_housekeeping_section(include_repo_review_runs=True),
+    "flow_retention": {
+        "retention_days": 7,
+        "sweep_interval_seconds": 86400,
+    },
+    "storage": {
+        "durable_writes": False,
+    },
+    "apps": _default_apps_section(),
+}
+
+REPO_DEFAULT_KEYS = {
+    "docs",
+    "codex",
+    "prompt",
+    "ui",
+    "runner",
+    "autorunner",
+    "ticket_flow",
+    "git",
+    "github",
+    "update",
+    "notifications",
+    "voice",
+    "log",
+    "server_log",
+    "review",
+    "opencode",
+    "usage",
+    "flow_retention",
+    "apps",
+}
+DEFAULT_REPO_DEFAULTS = {
+    key: json.loads(json.dumps(DEFAULT_REPO_CONFIG[key])) for key in REPO_DEFAULT_KEYS
+}
+REPO_SHARED_KEYS = {
+    "agents",
+    "server",
+    "app_server",
+    "opencode",
+    "pma",
+    "telegram_bot",
+    "discord_bot",
+    "terminal",
+    "static_assets",
+    "housekeeping",
+    "update",
+    "usage",
+    "templates",
+    "apps",
+}
+
+DEFAULT_HUB_CONFIG: Dict[str, Any] = {
+    "version": CONFIG_VERSION,
+    "mode": "hub",
+    "repo_defaults": DEFAULT_REPO_DEFAULTS,
+    "pma": {
+        "enabled": True,
+        "default_agent": "codex",
+        "profile": None,
+        "model": None,
+        "reasoning": None,
+        "turn_idle_timeout_seconds": PMA_DEFAULT_TURN_IDLE_TIMEOUT_SECONDS,
+        "max_upload_bytes": 10_000_000,
+        "max_repos": 25,
+        "max_messages": 10,
+        "max_text_chars": PMA_DEFAULT_MAX_TEXT_CHARS,
+        "docs_max_chars": 12_000,
+        "active_context_max_lines": 200,
+        "context_log_tail_lines": 120,
+        "freshness_stale_threshold_seconds": 1800,
+        "reactive_enabled": True,
+        "reactive_event_types": [
+            "flow_paused",
+            "flow_failed",
+            "flow_completed",
+            "dispatch_created",
+        ],
+        "reactive_debounce_seconds": 300,
+        "reactive_origin_blocklist": ["pma"],
+        "filebox_inbox_max_age_days": 7,
+        "filebox_outbox_max_age_days": 7,
+        "report_max_history_files": DEFAULT_REPORT_MAX_HISTORY_FILES,
+        "report_max_total_bytes": DEFAULT_REPORT_MAX_TOTAL_BYTES,
+        "app_server_workspace_max_age_days": 7,
+        "inbox_auto_dismiss_grace_seconds": 3600,
+        "cleanup_require_archive": True,
+        "cleanup_auto_delete_orphans": False,
+        "worktree_archive_profile": "portable",
+        "worktree_archive_max_snapshots_per_repo": 10,
+        "worktree_archive_max_age_days": 30,
+        "worktree_archive_max_total_bytes": 1_000_000_000,
+        "run_archive_max_entries": 200,
+        "run_archive_max_age_days": 30,
+        "run_archive_max_total_bytes": 1_000_000_000,
+        "orchestration_compaction_max_hot_rows": 16,
+        "orchestration_hot_history_retention_days": 30,
+        "orchestration_cold_trace_retention_days": 90,
+    },
+    "templates": _default_templates_section(),
+    "apps": _default_apps_section(),
+    "agents": _default_agents_section(),
+    "terminal": _default_terminal_section(),
+    "telegram_bot": _default_telegram_bot_section(
+        shell_enabled=False, include_agent_timeouts=False
+    ),
+    "discord_bot": _default_discord_bot_section(),
+    "hub": {
+        "repos_root": ".",
+        "worktrees_root": "worktrees",
+        "manifest": ".codex-autorunner/manifest.yml",
+        "discover_depth": 1,
+        "auto_init_missing": True,
+        "include_root_repo": False,
+        "repo_server_inherit": True,
+        "update_repo_url": DEFAULT_UPDATE_REPO_URL,
+        "update_repo_ref": DEFAULT_UPDATE_REPO_REF,
+        "log": {
+            "path": ".codex-autorunner/codex-autorunner-hub.log",
+            "max_bytes": 10_000_000,
+            "backup_count": 3,
+        },
+    },
+    "update": _default_update_section(),
+    "app_server": _default_app_server_section(),
+    "opencode": _default_opencode_section(),
+    "usage": _default_usage_section(),
+    "server": _default_server_section(),
+    "server_log": None,
+    "static_assets": _default_static_assets_section(),
+    "housekeeping": _default_housekeeping_section(include_hub_update_rules=True),
+    "storage": {
+        "durable_writes": False,
+    },
+}

@@ -19,7 +19,7 @@ from ....core.config import (
     load_hub_config,
     load_repo_config,
 )
-from ....core.config_layering import update_override_templates
+from ....core.config_sources import update_override_templates
 from ....core.git_utils import GitError
 from ....core.templates import (
     FetchedTemplate,

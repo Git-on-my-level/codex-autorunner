@@ -15,7 +15,7 @@ from .config import (
     load_repo_config,
 )
 from .config_env import resolve_env_for_root
-from .config_layering import load_root_defaults
+from .config_sources import load_root_defaults
 from .generated_hub_config import normalize_generated_hub_config
 from .text_utils import _mapping
 

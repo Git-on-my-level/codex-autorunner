@@ -19,18 +19,17 @@ from .config_contract import (
     CONFIG_VERSION,
     ConfigError,
 )
+from .config_defaults import DEFAULT_HUB_CONFIG, DEFAULT_REPO_CONFIG
 from .config_env import collect_env_overrides
-from .config_layering import (
+from .config_generated import GENERATED_CONFIG_HEADER
+from .config_parsers import parse_flow_retention_config
+from .config_sources import (
     CONFIG_FILENAME,
-    DEFAULT_HUB_CONFIG,
-    DEFAULT_REPO_CONFIG,
-    GENERATED_CONFIG_HEADER,
     REPO_OVERRIDE_FILENAME,
     ROOT_CONFIG_FILENAME,
     ROOT_OVERRIDE_FILENAME,
     find_nearest_hub_config_path,
 )
-from .config_parsers import parse_flow_retention_config
 from .config_types import (
     AppRepoConfig,
     AppsConfig,
