@@ -119,6 +119,19 @@ def _ingest_created_enqueue(result: Any) -> bool:
     return False
 
 
+def _ingest_and_process_scm_automation_jobs(automation_service: Any, event: Any) -> Any:
+    processor = getattr(automation_service, "process_scm_automation_jobs", None)
+    if not callable(processor):
+        return automation_service.ingest_event(event)
+    result = automation_service.ingest_event(event, execute_automation_jobs=False)
+    processed = processor(automation_jobs=getattr(result, "automation_jobs", ()))
+    if hasattr(result, "automation_jobs"):
+        result.automation_jobs = getattr(processed, "automation_jobs", ())
+    if hasattr(result, "publish_operations"):
+        result.publish_operations = getattr(processed, "publish_operations", ())
+    return result
+
+
 def _check_targets_current_head(
     payload: Mapping[str, Any],
     *,
@@ -213,7 +226,7 @@ def emit_new_conditions(
             correlation_id=f"scm-poll:{watch.watch_id}",
             payload=dict(payload),
         )
-        automation_service.ingest_event(event)
+        _ingest_and_process_scm_automation_jobs(automation_service, event)
         emitted += 1
 
     for key, payload in current_checks.items():
@@ -236,7 +249,7 @@ def emit_new_conditions(
             correlation_id=f"scm-poll:{watch.watch_id}",
             payload=dict(payload),
         )
-        automation_service.ingest_event(event)
+        _ingest_and_process_scm_automation_jobs(automation_service, event)
         emitted += 1
 
     for key, payload in current_issue_comments.items():
@@ -256,7 +269,7 @@ def emit_new_conditions(
             correlation_id=f"scm-poll:{watch.watch_id}",
             payload=dict(payload),
         )
-        automation_service.ingest_event(event)
+        _ingest_and_process_scm_automation_jobs(automation_service, event)
         emitted += 1
 
     for key, payload in current_review_thread_comments.items():
@@ -291,7 +304,9 @@ def emit_new_conditions(
             correlation_id=f"scm-poll:{watch.watch_id}",
             payload=dict(payload_mapping),
         )
-        ingest_result = automation_service.ingest_event(event)
+        ingest_result = _ingest_and_process_scm_automation_jobs(
+            automation_service, event
+        )
         if _ingest_created_enqueue(ingest_result):
             _mark_review_comment_processed(
                 snapshot,

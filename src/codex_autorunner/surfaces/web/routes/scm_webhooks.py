@@ -136,7 +136,8 @@ def _default_drain_callback_factory(
     )
 
     def callback(_request: Request, event: ScmEvent) -> None:
-        service.ingest_event(event)
+        ingested = service.ingest_event(event, execute_automation_jobs=False)
+        service.process_scm_automation_jobs(automation_jobs=ingested.automation_jobs)
         processed = service.process_now()
         _ensure_managed_thread_queue_workers_for_scm_operations(_request, processed)
 

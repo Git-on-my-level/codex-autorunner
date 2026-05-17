@@ -661,8 +661,15 @@ def test_scm_webhook_inline_drain_delegates_to_scm_automation_service(
                 )
             )
 
-        def ingest_event(self, event) -> None:
-            calls.append(("ingest_event", event.event_id))
+        def ingest_event(self, event, *, execute_automation_jobs: bool = True):
+            calls.append(("ingest_event", event.event_id, execute_automation_jobs))
+            return SimpleNamespace(automation_jobs=("job-1",))
+
+        def process_scm_automation_jobs(self, *, automation_jobs=()):
+            calls.append(("process_scm_automation_jobs", tuple(automation_jobs)))
+            return SimpleNamespace(
+                automation_jobs=automation_jobs, publish_operations=()
+            )
 
         def process_now(self, limit: int = 10) -> list[object]:
             calls.append(("process_now", limit))
@@ -707,7 +714,8 @@ def test_scm_webhook_inline_drain_delegates_to_scm_automation_service(
     assert calls[1][1]["webhook_ingress"]["store_raw_payload"] is False
     assert calls[1][1]["webhook_ingress"]["secret"] == "topsecret"
     assert calls[2:] == [
-        ("ingest_event", "github:delivery-1"),
+        ("ingest_event", "github:delivery-1", False),
+        ("process_scm_automation_jobs", ("job-1",)),
         ("process_now", 10),
     ]
 
@@ -725,8 +733,15 @@ def test_scm_webhook_inline_drain_ensures_worker_for_scm_enqueue(
             _ = (reaction_config, kwargs)
             calls.append(("init", hub_root))
 
-        def ingest_event(self, event) -> None:
-            calls.append(("ingest_event", event.event_id))
+        def ingest_event(self, event, *, execute_automation_jobs: bool = True):
+            calls.append(("ingest_event", event.event_id, execute_automation_jobs))
+            return SimpleNamespace(automation_jobs=("job-1",))
+
+        def process_scm_automation_jobs(self, *, automation_jobs=()):
+            calls.append(("process_scm_automation_jobs", tuple(automation_jobs)))
+            return SimpleNamespace(
+                automation_jobs=automation_jobs, publish_operations=()
+            )
 
         def process_now(self, limit: int = 10) -> list[object]:
             calls.append(("process_now", limit))
@@ -785,7 +800,8 @@ def test_scm_webhook_inline_drain_ensures_worker_for_scm_enqueue(
     assert response.status_code == 200
     assert calls == [
         ("init", hub_root),
-        ("ingest_event", "github:delivery-1"),
+        ("ingest_event", "github:delivery-1", False),
+        ("process_scm_automation_jobs", ("job-1",)),
         ("process_now", 10),
         ("ensure_worker", "thread-1"),
     ]
