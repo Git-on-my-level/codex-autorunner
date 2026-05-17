@@ -493,43 +493,7 @@ def _setup_worktree_manifest(hub_root: Path) -> None:
     save_manifest(manifest_path, manifest, hub_root)
 
 
-def test_cleanup_worktree_rejects_when_archive_required_but_not_requested(
-    tmp_path: Path,
-) -> None:
-    from codex_autorunner.core.config import (
-        CONFIG_FILENAME,
-        DEFAULT_HUB_CONFIG,
-        load_hub_config,
-    )
-    from codex_autorunner.core.hub_topology import HubTopologyRepository
-    from codex_autorunner.core.hub_worktree_manager import WorktreeManager
-    from tests.conftest import write_test_config
-
-    hub_root = tmp_path / "hub"
-    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
-    write_test_config(hub_root / CONFIG_FILENAME, cfg)
-
-    ctx = MagicMock()
-    hub_config = load_hub_config(hub_root)
-    manager = WorktreeManager(
-        hub_config=hub_config,
-        topology_repository=HubTopologyRepository(
-            hub_root=hub_config.root,
-            manifest_path=hub_config.manifest_path,
-        ),
-        ctx=ctx,
-    )
-    with pytest.raises(ValueError, match="cleanup requires archiving"):
-        manager._validate_cleanup_worktree(
-            worktree_repo_id="wt-1",
-            archive=False,
-            force=False,
-            force_archive=False,
-            force_attestation=None,
-        )
-
-
-def test_cleanup_worktree_blocks_on_chat_binding_check_failure_without_force(
+def test_retire_worktree_blocks_on_chat_binding_check_failure_without_force(
     tmp_path: Path,
 ) -> None:
     from codex_autorunner.core.config import (
@@ -565,16 +529,14 @@ def test_cleanup_worktree_blocks_on_chat_binding_check_failure_without_force(
     manager._has_active_chat_binding = _binding_check_raises
 
     with pytest.raises(ValueError, match="Unable to verify active chat bindings"):
-        manager._validate_cleanup_worktree(
+        manager._validate_retire_worktree(
             worktree_repo_id="base--feature-test",
-            archive=False,
             force=False,
-            force_archive=False,
             force_attestation=None,
         )
 
 
-def test_cleanup_worktree_allows_force_to_proceed_past_chat_binding_check_failure(
+def test_retire_worktree_allows_force_to_proceed_past_chat_binding_check_failure(
     tmp_path: Path,
 ) -> None:
     from codex_autorunner.core.config import (
@@ -609,32 +571,30 @@ def test_cleanup_worktree_allows_force_to_proceed_past_chat_binding_check_failur
 
     manager._has_active_chat_binding = _binding_check_raises
 
-    result = manager._validate_cleanup_worktree(
+    result = manager._validate_retire_worktree(
         worktree_repo_id="base--feature-test",
-        archive=False,
         force=True,
-        force_archive=False,
         force_attestation={
             "phrase": (
                 "the user has explicitly asked me to perform a dangerous action "
                 "and I'm confident I'm not misunderstanding them"
             ),
-            "user_request": "cleanup base--feature-test",
-            "target_scope": "hub.cleanup_worktree:base--feature-test",
+            "user_request": "retire base--feature-test",
+            "target_scope": "hub.retire_worktree:base--feature-test",
         },
     )
     assert result is not None
 
 
 # ---------------------------------------------------------------------------
-# 5. WorktreeCleanupReport characterization
+# 5. WorktreeRetireReport characterization
 # ---------------------------------------------------------------------------
 
 
 def test_cleanup_report_completed_steps_filters_by_ok_status() -> None:
-    from codex_autorunner.core.hub_worktree_lifecycle import WorktreeCleanupReport
+    from codex_autorunner.core.hub_worktree_lifecycle import WorktreeRetireReport
 
-    report = WorktreeCleanupReport()
+    report = WorktreeRetireReport()
     report.add_step("stop_runner", "ok")
     report.add_step("telemetry", "error", "timeout")
     report.add_step("archive", "ok")
@@ -642,9 +602,9 @@ def test_cleanup_report_completed_steps_filters_by_ok_status() -> None:
 
 
 def test_cleanup_report_failed_step_returns_first_error() -> None:
-    from codex_autorunner.core.hub_worktree_lifecycle import WorktreeCleanupReport
+    from codex_autorunner.core.hub_worktree_lifecycle import WorktreeRetireReport
 
-    report = WorktreeCleanupReport()
+    report = WorktreeRetireReport()
     report.add_step("stop_runner", "ok")
     report.add_step("telemetry", "error", "timeout")
     report.add_step("archive", "error", "disk full")
@@ -652,9 +612,9 @@ def test_cleanup_report_failed_step_returns_first_error() -> None:
 
 
 def test_cleanup_report_failed_step_returns_none_when_all_ok() -> None:
-    from codex_autorunner.core.hub_worktree_lifecycle import WorktreeCleanupReport
+    from codex_autorunner.core.hub_worktree_lifecycle import WorktreeRetireReport
 
-    report = WorktreeCleanupReport()
+    report = WorktreeRetireReport()
     report.add_step("stop_runner", "ok")
     report.add_step("archive", "ok")
     assert report.failed_step is None

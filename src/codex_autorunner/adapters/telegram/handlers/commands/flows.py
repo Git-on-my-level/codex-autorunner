@@ -30,13 +30,13 @@ from .....core.flows.ux_helpers import (
     format_ticket_flow_status_lines,
     issue_md_has_content,
     issue_md_path,
-    resolve_ticket_flow_archive_mode,
+    resolve_ticket_flow_retire_mode,
     seed_issue_from_github,
     seed_issue_from_text,
     select_default_ticket_flow_run,
     select_ticket_flow_run,
     summarize_flow_freshness,
-    ticket_flow_archive_requires_force,
+    ticket_flow_retire_requires_force,
     ticket_progress,
 )
 from .....core.flows.worker_process import FlowWorkerHealth, check_worker_health
@@ -155,35 +155,33 @@ class FlowCommands(TelegramCommandSupportMixin):
         return cache
 
     @staticmethod
-    def _flow_archive_prompt_text(record: object) -> str:
+    def _flow_retire_prompt_text(record: object) -> str:
         run_id = getattr(record, "id", "unknown")
         status = getattr(getattr(record, "status", None), "value", "unknown")
         return (
             f"Run {_code(run_id)} is {status}. Archiving it will reset the live "
             "tickets/contextspace state and move the current run artifacts into the "
-            "archive. Archive it anyway?"
+            "retire. Retire it anyway?"
         )
 
     @staticmethod
-    def _flow_archive_in_progress_text(run_id: object) -> str:
+    def _flow_retire_in_progress_text(run_id: object) -> str:
         return f"Archiving run {_code(run_id)}. This can take a few seconds."
 
-    def _build_flow_archive_confirmation_keyboard(
+    def _build_flow_retire_confirmation_keyboard(
         self,
         run_id: str,
         *,
         repo_id: Optional[str] = None,
         prompt_variant: bool,
     ) -> dict[str, Any]:
-        confirm_action = (
-            "archive_confirm_prompt" if prompt_variant else "archive_confirm"
-        )
-        cancel_action = "archive_cancel_prompt" if prompt_variant else "archive_cancel"
+        confirm_action = "retire_confirm_prompt" if prompt_variant else "retire_confirm"
+        cancel_action = "retire_cancel_prompt" if prompt_variant else "retire_cancel"
         return build_inline_keyboard(
             [
                 [
                     InlineButton(
-                        "Archive now",
+                        "Retire now",
                         encode_flow_callback(confirm_action, run_id, repo_id=repo_id),
                     ),
                     InlineButton(
@@ -573,8 +571,8 @@ class FlowCommands(TelegramCommandSupportMixin):
             if action == "recover":
                 await self._handle_flow_recover(message, repo_root, rest_argv)
                 return
-            if action == "archive":
-                await self._handle_flow_archive(message, repo_root, rest_argv)
+            if action == "retire":
+                await self._handle_flow_retire(message, repo_root, rest_argv)
                 return
             if action == "reply":
                 await self._handle_reply(message, remainder)
@@ -770,14 +768,14 @@ class FlowCommands(TelegramCommandSupportMixin):
                 else:
                     notice = "Recovered." if updated else "No changes needed."
         elif action in {
-            "archive",
-            "archive_confirm",
-            "archive_cancel",
-            "archive_confirm_prompt",
-            "archive_cancel_prompt",
+            "retire",
+            "retire_confirm",
+            "retire_cancel",
+            "retire_confirm_prompt",
+            "retire_cancel_prompt",
         }:
-            if action == "archive_cancel":
-                await _answer_once("Archive cancelled")
+            if action == "retire_cancel":
+                await _answer_once("Retire cancelled")
                 await self._render_flow_status_callback(
                     callback,
                     repo_root,
@@ -785,11 +783,11 @@ class FlowCommands(TelegramCommandSupportMixin):
                     repo_id=effective_repo_id,
                 )
                 return
-            if action == "archive_cancel_prompt":
-                await _answer_once("Archive cancelled")
+            if action == "retire_cancel_prompt":
+                await _answer_once("Retire cancelled")
                 await self._edit_callback_message(
                     callback,
-                    "Archive cancelled.",
+                    "Retire cancelled.",
                     reply_markup={"inline_keyboard": []},
                 )
                 return
@@ -802,18 +800,18 @@ class FlowCommands(TelegramCommandSupportMixin):
                 store.close()
 
             if error is None:
-                archive_mode = resolve_ticket_flow_archive_mode(record)
-                if archive_mode == "blocked":
+                retire_mode = resolve_ticket_flow_retire_mode(record)
+                if retire_mode == "blocked":
                     error = (
                         f"Run {record.id} is {record.status.value}. "
                         "Stop or pause it before archiving."
                     )
-                elif action == "archive" and archive_mode == "confirm":
-                    await _answer_once("Confirm archive?")
+                elif action == "retire" and retire_mode == "confirm":
+                    await _answer_once("Confirm retire?")
                     await self._edit_callback_message(
                         callback,
-                        self._flow_archive_prompt_text(record),
-                        reply_markup=self._build_flow_archive_confirmation_keyboard(
+                        self._flow_retire_prompt_text(record),
+                        reply_markup=self._build_flow_retire_confirmation_keyboard(
                             record.id,
                             repo_id=effective_repo_id,
                             prompt_variant=False,
@@ -825,17 +823,17 @@ class FlowCommands(TelegramCommandSupportMixin):
                         await _answer_once("Working...")
                         await self._edit_callback_message(
                             callback,
-                            self._flow_archive_in_progress_text(record.id),
+                            self._flow_retire_in_progress_text(record.id),
                             reply_markup={"inline_keyboard": []},
                         )
                         summary = await self._run_blocking_flow_call(
-                            flow_service.archive_flow_run,
+                            flow_service.retire_flow_run,
                             record.id,
-                            force=ticket_flow_archive_requires_force(record),
+                            force=ticket_flow_retire_requires_force(record),
                             delete_run=True,
                         )
                         notice = (
-                            f"Archived {summary['archived_tickets']} tickets and "
+                            f"Retired {summary['archived_tickets']} tickets and "
                             f"{'moved' if summary['archived_runs'] else 'skipped'} run artifacts."
                         )
                     except ValueError as exc:
@@ -1035,7 +1033,7 @@ class FlowCommands(TelegramCommandSupportMixin):
             FlowActionPolicySnapshot(
                 status=status,
                 worker_health_status=health.status,
-                archive_mode=resolve_ticket_flow_archive_mode(record),
+                retire_mode=resolve_ticket_flow_retire_mode(record),
                 has_run=True,
             )
         )
@@ -1974,7 +1972,7 @@ You are the first ticket in a new ticket_flow run.
             )
         await self._handle_flow_bootstrap(message, repo_root, argv=["--force-new"])
 
-    async def _handle_flow_archive(
+    async def _handle_flow_retire(
         self, message: TelegramMessage, repo_root: Path, argv: list[str]
     ) -> None:
         force = self._has_flag(argv, "--force")
@@ -1994,8 +1992,8 @@ You are the first ticket in a new ticket_flow run.
         finally:
             store.close()
 
-        archive_mode = resolve_ticket_flow_archive_mode(record)
-        if archive_mode == "blocked":
+        retire_mode = resolve_ticket_flow_retire_mode(record)
+        if retire_mode == "blocked":
             await self._send_message(
                 message.chat_id,
                 f"Run {_code(record.id)} is {record.status.value}. Stop or pause it before archiving.",
@@ -2004,13 +2002,13 @@ You are the first ticket in a new ticket_flow run.
                 parse_mode="Markdown",
             )
             return
-        if archive_mode == "confirm" and not force:
+        if retire_mode == "confirm" and not force:
             await self._send_message(
                 message.chat_id,
-                self._flow_archive_prompt_text(record),
+                self._flow_retire_prompt_text(record),
                 thread_id=message.thread_id,
                 reply_to=message.message_id,
-                reply_markup=self._build_flow_archive_confirmation_keyboard(
+                reply_markup=self._build_flow_retire_confirmation_keyboard(
                     record.id,
                     prompt_variant=True,
                 ),
@@ -2019,15 +2017,15 @@ You are the first ticket in a new ticket_flow run.
             return
 
         summary = await self._run_blocking_flow_call(
-            self._ticket_flow_orchestration_service(repo_root).archive_flow_run,
+            self._ticket_flow_orchestration_service(repo_root).retire_flow_run,
             record.id,
-            force=ticket_flow_archive_requires_force(record),
+            force=ticket_flow_retire_requires_force(record),
             delete_run=True,
         )
 
         await self._send_message(
             message.chat_id,
-            f"Archived run {_code(record.id)} ({summary['archived_tickets']} tickets).",
+            f"Retired run {_code(record.id)} ({summary['archived_tickets']} tickets).",
             thread_id=message.thread_id,
             reply_to=message.message_id,
             parse_mode="Markdown",

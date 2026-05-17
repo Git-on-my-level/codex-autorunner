@@ -79,15 +79,15 @@ describe('RepoWorktreeViews', () => {
         state: 'ready',
         mode: 'index',
         index,
-        onCleanupWorktree: () => undefined,
+        onRetireWorktree: () => undefined,
         onArchiveState: () => undefined
       }
     });
 
     expect(body).toContain('Archive CAR state for codex-autorunner');
     expect(body).toContain('Archive CAR state for discord-5');
-    expect(body).toContain('Cleanup worktree discord-5');
-    expect(body).toContain('icon-action cleanup');
+    expect(body).toContain('Retire worktree discord-5');
+    expect(body).toContain('icon-action retire');
     expect(body).toContain('icon-action archive');
   });
 

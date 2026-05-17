@@ -264,10 +264,10 @@ def build_flow_status_buttons(
     *,
     include_refresh: bool = True,
     worker_health_status: Optional[str] = None,
-    archive_mode: Optional[str] = None,
+    retire_mode: Optional[str] = None,
 ) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
-    archive_mode = archive_mode or (
+    retire_mode = retire_mode or (
         "ready"
         if status in {"completed", "stopped", "failed", "superseded"}
         else "confirm" if status in {"paused", "stopping"} else "blocked"
@@ -276,7 +276,7 @@ def build_flow_status_buttons(
         FlowActionPolicySnapshot(
             status=status,
             worker_health_status=worker_health_status,
-            archive_mode=archive_mode,
+            retire_mode=retire_mode,
             has_run=bool(run_id),
         )
     )

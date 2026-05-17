@@ -51,6 +51,12 @@ logger = logging.getLogger("codex_autorunner.hub")
 _LIST_REPOS_CACHE_TTL_SECONDS = 30.0
 
 
+def _runtime_preflight_blocks_enable(details: Optional[Mapping[str, object]]) -> bool:
+    if not details:
+        return False
+    return str(details.get("status") or "").lower() in {"incompatible", "error"}
+
+
 @dataclass(frozen=True)
 class PmaLaneWorkerStartResult:
     accepted: bool
@@ -255,7 +261,7 @@ class HubSupervisor:
             on_invalidate_cache=self._invalidate_list_cache,
             on_snapshot_for_repo=self._snapshot_for_repo,
             on_stop_runner=self._stop_runner_and_wait_for_exit,
-            on_cleanup_worktree=self.cleanup_worktree,
+            on_retire_worktree=self.retire_worktree,
             on_list_repos=self.list_repos,
             runners=self._runner_orchestrator.runners,
         )
@@ -545,24 +551,22 @@ class HubSupervisor:
     def unbound_repo_thread_counts(self) -> dict[str, int]:
         return self._repo_manager.unbound_repo_thread_counts()
 
-    def cleanup_worktree(
+    def retire_worktree(
         self,
         *,
         worktree_repo_id: str,
         delete_branch: bool = False,
         delete_remote: bool = False,
-        archive: bool = True,
         force_archive: bool = False,
         archive_note: Optional[str] = None,
         force: bool = False,
         force_attestation: Optional[Mapping[str, object]] = None,
         archive_profile: Optional[str] = None,
     ) -> Dict[str, object]:
-        return self._worktree_manager.cleanup_worktree(
+        return self._worktree_manager.retire_worktree(
             worktree_repo_id=worktree_repo_id,
             delete_branch=delete_branch,
             delete_remote=delete_remote,
-            archive=archive,
             force_archive=force_archive,
             archive_note=archive_note,
             force=force,
@@ -570,17 +574,21 @@ class HubSupervisor:
             archive_profile=archive_profile,
         )
 
-    def archive_worktree(
+    def delete_worktree(
         self,
         *,
         worktree_repo_id: str,
-        archive_note: Optional[str] = None,
-        archive_profile: Optional[str] = None,
+        delete_branch: bool = False,
+        delete_remote: bool = False,
+        force: bool = False,
+        force_attestation: Optional[Mapping[str, object]] = None,
     ) -> Dict[str, object]:
-        return self._worktree_manager.archive_worktree(
+        return self._worktree_manager.delete_worktree(
             worktree_repo_id=worktree_repo_id,
-            archive_note=archive_note,
-            archive_profile=archive_profile,
+            delete_branch=delete_branch,
+            delete_remote=delete_remote,
+            force=force,
+            force_attestation=force_attestation,
         )
 
     def archive_repo_state(

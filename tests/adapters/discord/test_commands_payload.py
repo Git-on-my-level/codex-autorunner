@@ -137,7 +137,7 @@ def test_required_options_are_marked_required() -> None:
     assert flow_root_run_id["required"] is False
     assert flow_root_run_id["autocomplete"] is True
 
-    for flow_name in ("restart", "resume", "stop", "archive", "recover"):
+    for flow_name in ("restart", "resume", "stop", "retire", "recover"):
         flow_command = _find_option(flow_root["options"], flow_name)
         flow_run_id = _find_option(flow_command["options"], "run_id")
         assert flow_run_id["required"] is False

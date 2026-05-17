@@ -14,14 +14,14 @@ def _enabled(snapshot: FlowActionPolicySnapshot) -> list[str]:
 
 def test_policy_paused_run() -> None:
     actions = build_flow_action_policy(
-        FlowActionPolicySnapshot(status="paused", archive_mode="confirm", has_run=True)
+        FlowActionPolicySnapshot(status="paused", retire_mode="confirm", has_run=True)
     )
 
     assert _enabled(
-        FlowActionPolicySnapshot(status="paused", archive_mode="confirm", has_run=True)
-    ) == ["resume", "restart", "archive"]
-    archive = next(action for action in actions if action.action == "archive")
-    assert archive.requires_confirmation is True
+        FlowActionPolicySnapshot(status="paused", retire_mode="confirm", has_run=True)
+    ) == ["resume", "restart", "retire"]
+    retire = next(action for action in actions if action.action == "retire")
+    assert retire.requires_confirmation is True
 
 
 def test_policy_running_healthy() -> None:
@@ -29,7 +29,7 @@ def test_policy_running_healthy() -> None:
         FlowActionPolicySnapshot(
             status="running",
             worker_health_status="alive",
-            archive_mode="blocked",
+            retire_mode="blocked",
             has_run=True,
             has_open_tickets=True,
         )
@@ -41,7 +41,7 @@ def test_policy_running_unhealthy() -> None:
         FlowActionPolicySnapshot(
             status="running",
             worker_health_status="dead",
-            archive_mode="blocked",
+            retire_mode="blocked",
             has_run=True,
         )
     ) == ["stop", "recover", "refresh"]
@@ -51,33 +51,33 @@ def test_policy_terminal_completed() -> None:
     assert _enabled(
         FlowActionPolicySnapshot(
             status="completed",
-            archive_mode="ready",
+            retire_mode="ready",
             has_run=True,
             has_open_tickets=True,
         )
-    ) == ["start", "restart", "archive", "refresh"]
+    ) == ["start", "restart", "retire", "refresh"]
 
 
 def test_policy_terminal_failed() -> None:
     assert _enabled(
-        FlowActionPolicySnapshot(status="failed", archive_mode="ready", has_run=True)
-    ) == ["restart", "archive", "refresh"]
+        FlowActionPolicySnapshot(status="failed", retire_mode="ready", has_run=True)
+    ) == ["restart", "retire", "refresh"]
 
 
 def test_policy_stopped() -> None:
     assert _enabled(
-        FlowActionPolicySnapshot(status="stopped", archive_mode="ready", has_run=True)
-    ) == ["restart", "archive", "refresh"]
+        FlowActionPolicySnapshot(status="stopped", retire_mode="ready", has_run=True)
+    ) == ["restart", "retire", "refresh"]
 
 
-def test_policy_archived_blocked() -> None:
+def test_policy_retired_blocked() -> None:
     actions = build_flow_action_policy(
-        FlowActionPolicySnapshot(status="running", archive_mode="blocked", has_run=True)
+        FlowActionPolicySnapshot(status="running", retire_mode="blocked", has_run=True)
     )
-    archive = next(action for action in actions if action.action == "archive")
+    retire = next(action for action in actions if action.action == "retire")
 
-    assert archive.enabled is False
-    assert archive.disabled_reason == "Archive is blocked while the run is active"
+    assert retire.enabled is False
+    assert retire.disabled_reason == "Retire is blocked while the run is active"
 
 
 def test_policy_no_run() -> None:

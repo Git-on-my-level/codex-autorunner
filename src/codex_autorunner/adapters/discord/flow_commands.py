@@ -21,12 +21,12 @@ from ...core.flows.ux_helpers import (
     GitHubServiceProtocol,
     build_flow_status_snapshot,
     issue_md_path,
-    resolve_ticket_flow_archive_mode,
+    resolve_ticket_flow_retire_mode,
     seed_issue_from_github,
     seed_issue_from_text,
     select_default_ticket_flow_run,
     select_ticket_flow_run_record,
-    ticket_flow_archive_requires_force,
+    ticket_flow_retire_requires_force,
 )
 from ...core.logging_utils import log_event
 from ...core.utils import atomic_write
@@ -70,16 +70,16 @@ def _flow_run_matches_action(record: FlowRunRecord, action: str) -> bool:
     return True
 
 
-def flow_archive_prompt_text(record: FlowRunRecord) -> str:
+def flow_retire_prompt_text(record: FlowRunRecord) -> str:
     return (
         f"Run {record.id} is {record.status.value}. "
-        "Archiving it will reset the live tickets/contextspace state and move the "
-        "current run artifacts into the archive. Archive it anyway?"
+        "Retiring it will reset the live tickets/contextspace state and move the "
+        "current run artifacts into the retire. Retire it anyway?"
     )
 
 
-def flow_archive_in_progress_text(run_id: str) -> str:
-    return f"Archiving run {run_id}... This can take a few seconds."
+def flow_retire_in_progress_text(run_id: str) -> str:
+    return f"Retiring run {run_id}... This can take a few seconds."
 
 
 def flow_restart_in_progress_text(run_id: str) -> str:
@@ -288,16 +288,16 @@ def _format_archived_flow_status_text(
         lines.append(prefix.strip())
         lines.append("")
     else:
-        lines.append(f"Run {run_id} has already been archived.")
+        lines.append(f"Run {run_id} has already been retired.")
         lines.append("")
     lines.append(f"Run: {run_id}")
     lines.append("Status: archived")
     archived_at = archived_summary.get("archived_at")
     if isinstance(archived_at, str) and archived_at.strip():
-        lines.append(f"Archived at: {archived_at.strip()}")
+        lines.append(f"Retired at: {archived_at.strip()}")
     archive_path = archived_summary.get("archive_path")
     if isinstance(archive_path, str) and archive_path.strip():
-        lines.append(f"Archive path: {archive_path.strip()}")
+        lines.append(f"Retire path: {archive_path.strip()}")
     lines.append(
         f"Tickets archived: {'yes' if archived_summary.get('has_tickets') else 'no'}"
     )
@@ -393,29 +393,29 @@ def _archived_flow_status_summary_from_archive_result(
     }
 
 
-def _format_flow_archive_completion_text(summary: dict[str, Any]) -> str:
+def _format_flow_retire_completion_text(summary: dict[str, Any]) -> str:
     return (
-        f"Archived run {summary['run_id']} "
+        f"Retired run {summary['run_id']} "
         f"(tickets={summary['archived_tickets']}, "
         f"runs_archived={summary['archived_runs']}, "
         f"contextspace={summary['archived_contextspace']})."
     )
 
 
-def build_flow_archive_confirmation_components(
+def build_flow_retire_confirmation_components(
     run_id: str,
     *,
     prompt_variant: bool,
 ) -> list[dict[str, Any]]:
-    confirm_action = "archive_confirm_prompt" if prompt_variant else "archive_confirm"
-    cancel_action = "archive_cancel_prompt" if prompt_variant else "archive_cancel"
+    confirm_action = "retire_confirm_prompt" if prompt_variant else "retire_confirm"
+    cancel_action = "retire_cancel_prompt" if prompt_variant else "retire_cancel"
     from .components import DISCORD_BUTTON_STYLE_DANGER
 
     return [
         build_action_row(
             [
                 build_button(
-                    "Archive now",
+                    "Retire now",
                     f"flow:{run_id}:{confirm_action}",
                     style=DISCORD_BUTTON_STYLE_DANGER,
                 ),
@@ -1791,7 +1791,7 @@ async def handle_flow_stop(
     )
 
 
-async def handle_flow_archive(
+async def handle_flow_retire(
     service: Any,
     interaction_id: str,
     interaction_token: str,
@@ -1810,7 +1810,7 @@ async def handle_flow_archive(
             interaction_id,
             interaction_token,
             workspace_root=workspace_root,
-            action="archive",
+            action="retire",
             run_id_opt=run_id_opt,
         )
         if run_id_opt is None:
@@ -1859,30 +1859,30 @@ async def handle_flow_archive(
             interaction_id=interaction_id,
             interaction_token=interaction_token,
             deferred=deferred,
-            text="No ticket_flow run found to archive.",
+            text="No ticket_flow run found to retire.",
         )
         return
 
-    archive_mode = resolve_ticket_flow_archive_mode(target)
-    if archive_mode == "blocked":
+    retire_mode = resolve_ticket_flow_retire_mode(target)
+    if retire_mode == "blocked":
         await service.send_or_respond_ephemeral(
             interaction_id=interaction_id,
             interaction_token=interaction_token,
             deferred=deferred,
             text=(
                 f"Run {target.id} is {target.status.value}. "
-                "Stop or pause it before archiving."
+                "Stop or pause it before retiring."
             ),
         )
         return
 
-    if archive_mode == "confirm" and not confirmed:
+    if retire_mode == "confirm" and not confirmed:
         await service.send_or_respond_ephemeral_with_components(
             interaction_id=interaction_id,
             interaction_token=interaction_token,
             deferred=deferred,
-            text=flow_archive_prompt_text(target),
-            components=build_flow_archive_confirmation_components(
+            text=flow_retire_prompt_text(target),
+            components=build_flow_retire_confirmation_components(
                 target.id,
                 prompt_variant=True,
             ),
@@ -1893,10 +1893,10 @@ async def handle_flow_archive(
     run_mirror.mirror_inbound(
         run_id=target.id,
         platform="discord",
-        event_type="flow_archive_command",
+        event_type="flow_retire_command",
         kind="command",
         actor="user",
-        text="/flow archive",
+        text="/flow retire",
         chat_id=channel_id,
         thread_id=guild_id,
         message_id=interaction_id,
@@ -1904,9 +1904,9 @@ async def handle_flow_archive(
     flow_service = service._ticket_flow_orchestration_service(workspace_root)
     try:
         summary = await asyncio.to_thread(
-            flow_service.archive_flow_run,
+            flow_service.retire_flow_run,
             target.id,
-            force=ticket_flow_archive_requires_force(target),
+            force=ticket_flow_retire_requires_force(target),
             delete_run=True,
         )
     except KeyError:
@@ -1929,7 +1929,7 @@ async def handle_flow_archive(
         )
         return
 
-    outbound_text = _format_flow_archive_completion_text(summary)
+    outbound_text = _format_flow_retire_completion_text(summary)
     await service.send_or_respond_ephemeral(
         interaction_id=interaction_id,
         interaction_token=interaction_token,
@@ -2156,11 +2156,11 @@ async def handle_flow_button(
             component_response=True,
         )
     elif action in {
-        "archive",
-        "archive_confirm",
-        "archive_cancel",
-        "archive_confirm_prompt",
-        "archive_cancel_prompt",
+        "retire",
+        "retire_confirm",
+        "retire_cancel",
+        "retire_confirm_prompt",
+        "retire_cancel_prompt",
     }:
         flow_service = service._ticket_flow_orchestration_service(workspace_root)
         deferred = await ensure_component_response_deferred(
@@ -2168,7 +2168,7 @@ async def handle_flow_button(
             interaction_id,
             interaction_token,
         )
-        if action == "archive_cancel":
+        if action == "retire_cancel":
             await handle_flow_status(
                 service,
                 interaction_id,
@@ -2180,12 +2180,12 @@ async def handle_flow_button(
                 update_message=True,
             )
             return
-        if action == "archive_cancel_prompt":
+        if action == "retire_cancel_prompt":
             await update_runtime_component_message(
                 service,
                 interaction_id,
                 interaction_token,
-                "Archive cancelled.",
+                "Retire cancelled.",
                 components=[],
             )
             return
@@ -2230,9 +2230,9 @@ async def handle_flow_button(
             )
             return
 
-        archive_mode = resolve_ticket_flow_archive_mode(target)
-        blocked_text = f"Run {target.id} is {target.status.value}. Stop or pause it before archiving."
-        if archive_mode == "blocked":
+        retire_mode = resolve_ticket_flow_retire_mode(target)
+        blocked_text = f"Run {target.id} is {target.status.value}. Stop or pause it before retiring."
+        if retire_mode == "blocked":
             if action.endswith("_prompt"):
                 await update_runtime_component_message(
                     service,
@@ -2250,13 +2250,13 @@ async def handle_flow_button(
                 )
             return
 
-        if action == "archive" and archive_mode == "confirm":
+        if action == "retire" and retire_mode == "confirm":
             await update_runtime_component_message(
                 service,
                 interaction_id,
                 interaction_token,
-                flow_archive_prompt_text(target),
-                components=build_flow_archive_confirmation_components(
+                flow_retire_prompt_text(target),
+                components=build_flow_retire_confirmation_components(
                     target.id,
                     prompt_variant=False,
                 ),
@@ -2267,13 +2267,13 @@ async def handle_flow_button(
             service,
             interaction_id,
             interaction_token,
-            flow_archive_in_progress_text(target.id),
+            flow_retire_in_progress_text(target.id),
         )
         try:
             summary = await asyncio.to_thread(
-                flow_service.archive_flow_run,
+                flow_service.retire_flow_run,
                 run_id,
-                force=ticket_flow_archive_requires_force(target),
+                force=ticket_flow_retire_requires_force(target),
                 delete_run=True,
             )
         except KeyError:
@@ -2297,7 +2297,7 @@ async def handle_flow_button(
             )
             return
 
-        archive_prefix = _format_flow_archive_completion_text(summary)
+        archive_prefix = _format_flow_retire_completion_text(summary)
         try:
             await handle_flow_status(
                 service,
@@ -2320,7 +2320,7 @@ async def handle_flow_button(
             log_event(
                 service._logger,
                 logging.WARNING,
-                "discord.flow.archive.status_refresh_failed",
+                "discord.flow.retire.status_refresh_failed",
                 run_id=summary["run_id"],
                 workspace_root=str(workspace_root),
                 exc=exc,

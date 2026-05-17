@@ -3,7 +3,7 @@
   import { onMount } from 'svelte';
   import AutoDismissNotice from '$lib/components/AutoDismissNotice.svelte';
   import RepoWorktreeViews from '$lib/components/RepoWorktreeViews.svelte';
-  import { confirmAndArchiveState, confirmAndCleanupWorktree, type ActionNotice } from '$lib/actions/repoWorktreeActions';
+  import { confirmAndArchiveState, confirmAndRetireWorktree, type ActionNotice } from '$lib/actions/repoWorktreeActions';
   import { webApi, type ApiError, type JsonRecord, type PartialPageIssue } from '$lib/api/client';
   import { ensureRepoDetailLoaded, invalidateReadModelTags, readModelEntityStore, readModelEntityTags } from '$lib/data';
   import {
@@ -87,8 +87,8 @@
     return Array.isArray(topology.children) ? (topology.children as JsonRecord[]) : [];
   }
 
-  async function handleCleanupWorktree(target: Parameters<typeof confirmAndCleanupWorktree>[0]): Promise<void> {
-    const result = await confirmAndCleanupWorktree(target);
+  async function handleRetireWorktree(target: Parameters<typeof confirmAndRetireWorktree>[0]): Promise<void> {
+    const result = await confirmAndRetireWorktree(target);
     if (!result) return;
     notice = result;
     if (result.tone === 'success') await loadRepoDetail();
@@ -129,7 +129,7 @@
   {detail}
   {sectionIssues}
   onRetry={() => loadRepoDetail()}
-  onCleanupWorktree={handleCleanupWorktree}
+  onRetireWorktree={handleRetireWorktree}
   onArchiveState={handleArchiveState}
   onSyncRepo={handleSyncRepo}
   syncRepoBusy={syncRepoBusy}

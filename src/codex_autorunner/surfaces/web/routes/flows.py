@@ -51,7 +51,7 @@ from ....core.flows.ux_helpers import (
     build_flow_status_snapshot,
     ensure_worker,
     issue_md_path,
-    resolve_ticket_flow_archive_mode,
+    resolve_ticket_flow_retire_mode,
     seed_issue_from_github,
     seed_issue_from_text,
 )
@@ -713,7 +713,7 @@ def _build_flow_status_response(
             worker_health_status=(
                 worker_health.status if worker_health is not None else None
             ),
-            archive_mode=resolve_ticket_flow_archive_mode(record),
+            retire_mode=resolve_ticket_flow_retire_mode(record),
             has_run=True,
             has_open_tickets=has_open_tickets,
         )
@@ -1085,8 +1085,8 @@ def build_flow_routes() -> APIRouter:
                 worker_health_status=(
                     worker_health.status if worker_health is not None else None
                 ),
-                archive_mode=(
-                    resolve_ticket_flow_archive_mode(run) if run else "blocked"
+                retire_mode=(
+                    resolve_ticket_flow_retire_mode(run) if run else "blocked"
                 ),
                 has_run=run is not None,
                 has_open_tickets=_ticket_dir_has_open_tickets(
@@ -1719,17 +1719,17 @@ def build_flow_routes() -> APIRouter:
         finally:
             store.close()
 
-    @router.post("/{run_id}/archive")
-    async def archive_flow(
+    @router.post("/{run_id}/retire")
+    async def retire_flow(
         http_request: Request,
         run_id: str,
         delete_run: bool = True,
         force: bool = False,
     ):
-        """Archive a completed flow and reset live ticket/contextspace state.
+        """Retire a completed flow and reset live ticket/contextspace state.
 
         Args:
-            run_id: The flow run to archive.
+            run_id: The flow run to retire.
             delete_run: Whether to delete the run record after archiving.
             force: If True, allow archiving flows stuck in stopping/paused state
                    by force-stopping the worker first.
@@ -1753,7 +1753,7 @@ def build_flow_routes() -> APIRouter:
             else:
                 raise HTTPException(
                     status_code=400,
-                    detail="Can only archive completed/stopped/failed flows (use force=true for stuck flows)",
+                    detail="Can only retire completed/stopped/failed flows (use force=true for stuck flows)",
                 )
 
         try:
@@ -1767,7 +1767,7 @@ def build_flow_routes() -> APIRouter:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
         return {
-            "status": "archived",
+            "status": "retired",
             "run_id": run_id,
             "tickets_archived": summary["archived_tickets"],
             "archived_runs": summary["archived_runs"],

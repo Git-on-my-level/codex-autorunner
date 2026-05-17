@@ -57,15 +57,15 @@ class WorktreeHubContext(Protocol):
 
 
 @dataclass
-class CleanupStepRecord:
+class RetireStepRecord:
     step: str
     status: str
     detail: Optional[str] = None
 
 
 @dataclass
-class WorktreeCleanupReport:
-    steps: List[CleanupStepRecord] = field(default_factory=list)
+class WorktreeRetireReport:
+    steps: List[RetireStepRecord] = field(default_factory=list)
     docker_cleanup: Optional[Dict[str, object]] = None
     archived_thread_ids: List[str] = field(default_factory=list)
 
@@ -75,7 +75,7 @@ class WorktreeCleanupReport:
         status: str,
         detail: Optional[str] = None,
     ) -> None:
-        self.steps.append(CleanupStepRecord(step=step, status=status, detail=detail))
+        self.steps.append(RetireStepRecord(step=step, status=status, detail=detail))
 
     @property
     def completed_steps(self) -> List[str]:

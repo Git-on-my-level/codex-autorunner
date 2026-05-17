@@ -92,9 +92,8 @@ export type PmaBulkArchiveResult = {
   errors: JsonRecord[];
 };
 
-export type WorktreeCleanupRequest = {
+export type WorktreeRetireRequest = {
   worktreeRepoId: string;
-  archive?: boolean;
   force?: boolean;
   forceAttestation?: string | null;
   forceArchive?: boolean;
@@ -502,12 +501,11 @@ export class WebApiClient {
           force: request.force ?? false
         }
       }),
-    cleanupWorktree: async (request: WorktreeCleanupRequest): Promise<ApiResult<JsonRecord>> =>
-      this.requestJson<JsonRecord>('/hub/worktrees/cleanup', {
+    retireWorktree: async (request: WorktreeRetireRequest): Promise<ApiResult<JsonRecord>> =>
+      this.requestJson<JsonRecord>('/hub/worktrees/retire', {
         method: 'POST',
         body: {
           worktreeRepoId: request.worktreeRepoId,
-          archive: request.archive ?? true,
           force: request.force ?? false,
           forceAttestation: request.forceAttestation ?? null,
           forceArchive: request.forceArchive ?? false,

@@ -61,11 +61,11 @@ def test_cli_destructive_commands_include_safety_notes() -> None:
     runner = CliRunner()
     destructive_paths = [
         ("kill",),
-        ("hub", "worktree", "cleanup"),
-        ("hub", "worktree", "archive"),
+        ("hub", "worktree", "retire"),
+        ("hub", "worktree", "delete"),
         ("hub", "inbox", "clear"),
         ("hub", "runs", "cleanup"),
-        ("ticket-flow", "archive"),
+        ("ticket-flow", "retire"),
     ]
 
     for path in destructive_paths:

@@ -71,7 +71,7 @@ def _write_dispatch(
     return path
 
 
-def _reviewed_thread_cleanup_report(managed_thread_id: str) -> dict[str, object]:
+def _reviewed_thread_retire_report(managed_thread_id: str) -> dict[str, object]:
     return {
         "groups": {
             "safe": [],
@@ -83,7 +83,7 @@ def _reviewed_thread_cleanup_report(managed_thread_id: str) -> dict[str, object]
                     "category": "threads",
                     "label": managed_thread_id,
                     "action": "archive_managed_thread",
-                    "reason": "review-approved cleanup",
+                    "reason": "review-approved retire",
                     "target": {"managed_thread_id": managed_thread_id},
                     "evidence": {"freshness": {"is_stale": True}},
                 }
@@ -274,17 +274,17 @@ def test_apply_pma_hygiene_report_only_removes_safe_items(hub_env) -> None:
     assert automation_store.list_wakeups() == []
 
 
-def test_apply_pma_hygiene_report_can_include_reviewed_thread_cleanup(hub_env) -> None:
+def test_apply_pma_hygiene_report_can_include_reviewed_thread_retire(hub_env) -> None:
     hub_root = hub_env.hub_root
     thread_store = ManagedThreadStore(hub_root)
     thread = thread_store.create_thread(
         "codex",
         hub_env.repo_root,
         repo_id=hub_env.repo_id,
-        name="reviewed-cleanup-thread",
+        name="reviewed-retire-thread",
     )
     managed_thread_id = thread["managed_thread_id"]
-    report = _reviewed_thread_cleanup_report(managed_thread_id)
+    report = _reviewed_thread_retire_report(managed_thread_id)
 
     blocked = apply_pma_hygiene_report(hub_root, report)
     assert blocked["attempted"] == 0
@@ -311,7 +311,7 @@ def test_apply_pma_hygiene_report_revalidates_reviewed_thread_binding(hub_env) -
         name="reviewed-thread-now-bound",
     )
     managed_thread_id = thread["managed_thread_id"]
-    report = _reviewed_thread_cleanup_report(managed_thread_id)
+    report = _reviewed_thread_retire_report(managed_thread_id)
 
     OrchestrationBindingStore(hub_root).upsert_binding(
         surface_kind="github_pr",
@@ -347,7 +347,7 @@ def test_apply_pma_hygiene_report_revalidates_reviewed_thread_busy_state(
         name="reviewed-thread-now-busy",
     )
     managed_thread_id = thread["managed_thread_id"]
-    report = _reviewed_thread_cleanup_report(managed_thread_id)
+    report = _reviewed_thread_retire_report(managed_thread_id)
 
     thread_store.create_turn(managed_thread_id, prompt="still running")
 
@@ -377,7 +377,7 @@ def test_apply_pma_hygiene_report_revalidates_reviewed_thread_lifecycle(
         name="reviewed-thread-now-archived",
     )
     managed_thread_id = thread["managed_thread_id"]
-    report = _reviewed_thread_cleanup_report(managed_thread_id)
+    report = _reviewed_thread_retire_report(managed_thread_id)
 
     thread_store.archive_thread(managed_thread_id)
 
@@ -687,16 +687,16 @@ def test_apply_pma_hygiene_report_purge_worktree_fails_on_error_status_payload(
         }
     }
 
-    def _fake_cleanup(_repo_id: str, _archive: bool) -> dict[str, object]:
-        return {"status": "error", "message": "cleanup refused"}
+    def _fake_retire(_repo_id: str, _archive: bool) -> dict[str, object]:
+        return {"status": "error", "message": "retire refused"}
 
     apply_result = apply_pma_hygiene_report(
-        hub_root, report, cleanup_worktree=_fake_cleanup
+        hub_root, report, retire_worktree=_fake_retire
     )
     assert apply_result["applied"] == 0
     assert apply_result["failed"] == 1
     assert apply_result["results"][0]["status"] == "failed"
-    assert apply_result["results"][0]["error"] == "cleanup refused"
+    assert apply_result["results"][0]["error"] == "retire refused"
 
 
 def test_build_pma_hygiene_report_marks_dirty_stale_worktree_needs_confirmation(
@@ -768,9 +768,8 @@ def test_apply_pma_hygiene_report_purges_safe_worktree_candidate(
     apply_result = apply_pma_hygiene_report(
         hub_root,
         report,
-        cleanup_worktree=lambda repo_id, archive: supervisor.cleanup_worktree(
+        retire_worktree=lambda repo_id, archive: supervisor.retire_worktree(
             worktree_repo_id=repo_id,
-            archive=archive,
         ),
     )
 

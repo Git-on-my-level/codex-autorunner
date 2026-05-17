@@ -1582,7 +1582,7 @@ class FlowBackedOrchestrationService(OrchestrationFlowService):
             poll_interval_seconds=poll_interval_seconds,
         )
 
-    def archive_flow_run(
+    def retire_flow_run(
         self,
         run_id: str,
         *,
@@ -1592,7 +1592,7 @@ class FlowBackedOrchestrationService(OrchestrationFlowService):
         wrapper, existing = self._find_wrapper_for_run(run_id)
         if wrapper is None or existing is None:
             raise KeyError(f"Unknown flow run '{run_id}'")
-        return wrapper.archive_run(
+        return wrapper.retire_run(
             existing.run_id,
             force=force,
             delete_run=delete_run,

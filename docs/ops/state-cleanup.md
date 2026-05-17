@@ -9,7 +9,7 @@ CAR manages state across several retention families:
 
 | Family | Scope | Class | Description |
 |--------|-------|-------|-------------|
-| worktree_archives | repo | reviewable | Worktree cleanup snapshots |
+| worktree_archives | repo | reviewable | Worktree retire snapshots |
 | run_archives | repo | reviewable | Run archive entries |
 | logs | repo/global | ephemeral | Run logs and update log |
 | uploads | repo | ephemeral | Terminal and Telegram upload staging |
@@ -171,8 +171,8 @@ CAR provides targeted cleanup commands for specific families:
 | `car cleanup reports` | Prune report history |
 | `car cleanup processes` | Reap stale managed processes |
 | `car hub runs cleanup` | Hub-specific run cleanup |
-| `car hub worktree cleanup` | Hub-specific worktree cleanup |
-| `car hub worktree archive` | Archive worktree before cleanup |
+| `car hub worktree retire` | Hub-specific worktree retire |
+| `car hub worktree retire` | Retire worktree after preserving artifacts |
 
 These commands remain available for targeted operations. `car cleanup state`
 is the umbrella command for state-wide retention.

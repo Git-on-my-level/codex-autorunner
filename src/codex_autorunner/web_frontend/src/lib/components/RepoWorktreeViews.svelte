@@ -24,7 +24,7 @@
     errorMessage = null,
     sectionIssues = [],
     onRetry = undefined,
-    onCleanupWorktree = undefined,
+    onRetireWorktree = undefined,
     onArchiveState = undefined,
     onRepoPin = undefined,
     onSyncRepo = undefined,
@@ -40,7 +40,7 @@
     errorMessage?: string | null;
     sectionIssues?: PartialPageIssue[];
     onRetry?: (() => void) | undefined;
-    onCleanupWorktree?: ((worktree: { id: string; label: string; chatBound: boolean; cleanupBlockedByChatBinding: boolean }) => void | Promise<void>) | undefined;
+    onRetireWorktree?: ((worktree: { id: string; label: string; chatBound: boolean; cleanupBlockedByChatBinding: boolean }) => void | Promise<void>) | undefined;
     onArchiveState?: ((target: { kind: 'repo' | 'worktree'; id: string; label: string; hasCarState: boolean; unboundManagedThreadCount: number }) => void | Promise<void>) | undefined;
     onRepoPin?: ((target: { id: string; pinned: boolean }) => void | Promise<void>) | undefined;
     onSyncRepo?: (() => void | Promise<void>) | undefined;
@@ -145,13 +145,13 @@
     return target.hasCarState || target.unboundManagedThreadCount > 0;
   }
 
-  function handleCleanupClick(
+  function handleRetireClick(
     event: MouseEvent,
     worktree: { id: string; label: string; chatBound: boolean; cleanupBlockedByChatBinding: boolean }
   ): void {
     event.preventDefault();
     event.stopPropagation();
-    void onCleanupWorktree?.(worktree);
+    void onRetireWorktree?.(worktree);
   }
 
   function handleArchiveClick(
@@ -423,7 +423,7 @@
               {#if
                 (row.kind === 'repo' && onOpenRepoSettings) ||
                 (onArchiveState && canArchiveState(row)) ||
-                (row.kind === 'worktree' && onCleanupWorktree)}
+                (row.kind === 'worktree' && onRetireWorktree)}
                 <span class="repo-head-icon-actions">
                   {#if row.kind === 'repo' && onOpenRepoSettings}
                     <button
@@ -461,13 +461,13 @@
                       <span class="emoji-icon" aria-hidden="true">🧹</span>
                     </button>
                   {/if}
-                  {#if row.kind === 'worktree' && onCleanupWorktree}
+                  {#if row.kind === 'worktree' && onRetireWorktree}
                     <button
-                      class="icon-action cleanup"
+                      class="icon-action retire"
                       type="button"
-                      title="Cleanup worktree: archive a snapshot, then delete the checkout"
-                      aria-label={`Cleanup worktree ${row.label}`}
-                      onclick={(event) => handleCleanupClick(event, row)}
+                      title="Retire worktree: preserve artifacts, then remove the checkout"
+                      aria-label={`Retire worktree ${row.label}`}
+                      onclick={(event) => handleRetireClick(event, row)}
                     >
                       {@render trashIcon()}
                     </button>
@@ -605,7 +605,7 @@
                         >
                           + Agent
                         </a>
-                        {#if (onArchiveState && canArchiveState(worktree)) || onCleanupWorktree}
+                        {#if (onArchiveState && canArchiveState(worktree)) || onRetireWorktree}
                           <span class="worktree-row-icon-actions">
                             {#if onArchiveState && canArchiveState(worktree)}
                               <button
@@ -624,13 +624,13 @@
                                 <span class="emoji-icon" aria-hidden="true">🧹</span>
                               </button>
                             {/if}
-                            {#if onCleanupWorktree}
+                            {#if onRetireWorktree}
                               <button
-                                class="icon-action cleanup"
+                                class="icon-action retire"
                                 type="button"
-                                title="Cleanup worktree: archive a snapshot, then delete the checkout"
-                                aria-label={`Cleanup worktree ${worktree.label}`}
-                                onclick={(event) => handleCleanupClick(event, worktree)}
+                                title="Retire worktree: preserve artifacts, then remove the checkout"
+                                aria-label={`Retire worktree ${worktree.label}`}
+                                onclick={(event) => handleRetireClick(event, worktree)}
                               >
                                 {@render trashIcon()}
                               </button>
@@ -688,13 +688,13 @@
             <span>Archive</span>
           </button>
         {/if}
-        {#if detail.kind === 'worktree' && onCleanupWorktree}
+        {#if detail.kind === 'worktree' && onRetireWorktree}
           <button
             class="hero-action icon-hero-action danger"
             type="button"
-            title="Cleanup worktree: archive a snapshot, then delete the checkout"
-            aria-label={`Cleanup worktree ${detail.title}`}
-            onclick={(event) => handleCleanupClick(event, {
+            title="Retire worktree: preserve artifacts, then remove the checkout"
+            aria-label={`Retire worktree ${detail.title}`}
+            onclick={(event) => handleRetireClick(event, {
               id: detail.id,
               label: shortDetailTitle,
               chatBound: detail.chatBound,
@@ -702,7 +702,7 @@
             })}
           >
             {@render trashIcon()}
-            <span>Cleanup</span>
+            <span>Retire</span>
           </button>
         {/if}
       {/snippet}
@@ -1500,7 +1500,7 @@
     background: var(--color-surface-muted);
   }
 
-  .icon-action.cleanup:hover,
+  .icon-action.retire:hover,
   .icon-hero-action.danger:hover {
     color: var(--color-danger);
     border-color: color-mix(in srgb, var(--color-danger) 40%, var(--color-border));

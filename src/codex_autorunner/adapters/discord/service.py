@@ -268,9 +268,8 @@ from .effects import (
 )
 from .errors import DiscordAPIError, is_unknown_interaction_error
 from .flow_commands import (
-    build_flow_archive_confirmation_components,
-    flow_archive_prompt_text,
-    handle_flow_archive,
+    build_flow_retire_confirmation_components,
+    flow_retire_prompt_text,
     handle_flow_button,
     handle_flow_issue,
     handle_flow_plan,
@@ -278,6 +277,7 @@ from .flow_commands import (
     handle_flow_reply,
     handle_flow_restart,
     handle_flow_resume,
+    handle_flow_retire,
     handle_flow_runs,
     handle_flow_start,
     handle_flow_status,
@@ -3698,16 +3698,16 @@ class DiscordBotService(DiscordInteractionResponseMixin):
         )
 
     @staticmethod
-    def _flow_archive_prompt_text(record: FlowRunRecord) -> str:
-        return flow_archive_prompt_text(record)
+    def _flow_retire_prompt_text(record: FlowRunRecord) -> str:
+        return flow_retire_prompt_text(record)
 
     @staticmethod
-    def _build_flow_archive_confirmation_components(
+    def _build_flow_retire_confirmation_components(
         run_id: str,
         *,
         prompt_variant: bool,
     ) -> list[dict[str, Any]]:
-        return build_flow_archive_confirmation_components(
+        return build_flow_retire_confirmation_components(
             run_id,
             prompt_variant=prompt_variant,
         )
@@ -7229,7 +7229,7 @@ class DiscordBotService(DiscordInteractionResponseMixin):
             guild_id=guild_id,
         )
 
-    async def _handle_flow_archive(
+    async def _handle_flow_retire(
         self,
         interaction_id: str,
         interaction_token: str,
@@ -7240,7 +7240,7 @@ class DiscordBotService(DiscordInteractionResponseMixin):
         guild_id: Optional[str] = None,
     ) -> None:
         await self._run_effectful_handler(
-            handle_flow_archive,
+            handle_flow_retire,
             interaction_id,
             interaction_token,
             workspace_root=workspace_root,

@@ -219,10 +219,10 @@ async def test_flow_service_routes_operations_through_ticket_flow_wrapper():
             calls.append(("wait", run_id, timeout_seconds, poll_interval_seconds))
             return runs.get(run_id)
 
-        def archive_run(
+        def retire_run(
             self, run_id: str, *, force: bool = False, delete_run: bool = True
         ) -> dict[str, object]:
-            calls.append(("archive", run_id, force, delete_run))
+            calls.append(("retire", run_id, force, delete_run))
             return {
                 "run_id": run_id,
                 "archived_tickets": 1,
@@ -267,7 +267,7 @@ async def test_flow_service_routes_operations_through_ticket_flow_wrapper():
     service.ensure_flow_run_worker("run-1")
     reconciled, updated, locked = service.reconcile_flow_run("run-1")
     waited = await service.wait_for_flow_run_terminal("run-1")
-    archived = service.archive_flow_run("run-1", force=True, delete_run=False)
+    archived = service.retire_flow_run("run-1", force=True, delete_run=False)
 
     assert resumed.status == "running"
     assert stopped.status == "stopped"
@@ -303,7 +303,7 @@ async def test_flow_service_routes_operations_through_ticket_flow_wrapper():
         ("get", "run-1"),
         ("wait", "run-1", 10.0, 0.25),
         ("get", "run-1"),
-        ("archive", "run-1", True, False),
+        ("retire", "run-1", True, False),
         ("list",),
         ("get", "missing"),
     ]

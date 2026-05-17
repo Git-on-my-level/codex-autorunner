@@ -122,10 +122,9 @@ async def _cleanup_failed_provisioned_worktree(
         return
     try:
         await asyncio.to_thread(
-            supervisor.cleanup_worktree,
+            supervisor.retire_worktree,
             worktree_repo_id=normalized_repo_id,
             delete_branch=True,
-            archive=True,
         )
     except (
         Exception

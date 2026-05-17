@@ -1258,16 +1258,16 @@ _SLASH_ROUTES: tuple[SlashCommandRoute, ...] = (
         workspace_lock_policy="bound_workspace",
     ),
     SlashCommandRoute(
-        id="car.flow.archive",
-        canonical_path=("car", "flow", "archive"),
-        registered_path=("flow", "archive"),
+        id="car.flow.retire",
+        canonical_path=("car", "flow", "retire"),
+        registered_path=("flow", "retire"),
         description=next(
-            spec.description for spec in FLOW_ACTION_SPECS if spec.name == "archive"
+            spec.description for spec in FLOW_ACTION_SPECS if spec.name == "retire"
         ),
         handler=lambda *args, **kwargs: _dispatch_service_method(
             *args,
             **kwargs,
-            method_name="_handle_flow_archive",
+            method_name="_handle_flow_retire",
             include_options=True,
             include_channel_id=True,
             include_guild_id=True,

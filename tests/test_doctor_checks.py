@@ -719,7 +719,7 @@ def test_hub_worktree_doctor_checks_detects_orphans(tmp_path: Path):
     assert check.passed is False
     assert str(hub_config.worktrees_root) in check.message
     assert f"car hub scan --path {hub_root}" in check.fix
-    assert "car hub worktree cleanup" in check.fix
+    assert "car hub worktree retire" in check.fix
 
 
 def test_hub_destination_doctor_checks_reports_effective_destination(

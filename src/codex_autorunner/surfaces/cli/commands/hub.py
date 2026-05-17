@@ -1013,7 +1013,7 @@ def register_hub_commands(
         typer.echo(f"scanned: {config.root}")
         for snap in snapshots:
             hint = (
-                _with_hub_path(f"car hub worktree archive {snap.id}", config.root)
+                _with_hub_path(f"car hub worktree retire {snap.id}", config.root)
                 if snap.kind == "worktree"
                 else _with_hub_path(f"car hub destination show {snap.id}", config.root)
             )
