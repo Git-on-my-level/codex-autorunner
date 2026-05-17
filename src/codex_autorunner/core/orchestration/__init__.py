@@ -171,31 +171,55 @@ from .ticket_flow_chat_ledger_contract import (
 
 if TYPE_CHECKING:
     from . import runtime_threads as runtime_threads_module
-    from .service import (
-        HarnessBackedOrchestrationService,
-        ManagedThreadExecutionStore,
+    from .flow_service import FlowBackedOrchestrationService
+    from .service_factories import (
         build_harness_backed_orchestration_service,
-        build_surface_orchestration_ingress,
         build_ticket_flow_orchestration_service,
+    )
+    from .surface_ingress import (
+        SurfaceIngressResult,
+        SurfaceOrchestrationIngress,
+        build_surface_orchestration_ingress,
+        get_surface_orchestration_ingress,
+    )
+    from .thread_service import HarnessBackedOrchestrationService
+    from .thread_store_adapter import (
+        ManagedThreadExecutionStore,
     )
 
 _LAZY_EXPORTS = {
     "runtime_threads_module": (".runtime_threads", None),
+    "FlowBackedOrchestrationService": (
+        ".flow_service",
+        "FlowBackedOrchestrationService",
+    ),
     "HarnessBackedOrchestrationService": (
-        ".service",
+        ".thread_service",
         "HarnessBackedOrchestrationService",
     ),
-    "ManagedThreadExecutionStore": (".service", "ManagedThreadExecutionStore"),
+    "ManagedThreadExecutionStore": (
+        ".thread_store_adapter",
+        "ManagedThreadExecutionStore",
+    ),
     "build_harness_backed_orchestration_service": (
-        ".service",
+        ".service_factories",
         "build_harness_backed_orchestration_service",
     ),
     "build_surface_orchestration_ingress": (
-        ".service",
+        ".surface_ingress",
         "build_surface_orchestration_ingress",
     ),
+    "get_surface_orchestration_ingress": (
+        ".surface_ingress",
+        "get_surface_orchestration_ingress",
+    ),
+    "SurfaceIngressResult": (".surface_ingress", "SurfaceIngressResult"),
+    "SurfaceOrchestrationIngress": (
+        ".surface_ingress",
+        "SurfaceOrchestrationIngress",
+    ),
     "build_ticket_flow_orchestration_service": (
-        ".service",
+        ".service_factories",
         "build_ticket_flow_orchestration_service",
     ),
 }
@@ -250,6 +274,7 @@ __all__ = [
     "CHAT_SURFACE_READ_CONTRACT_VERSION",
     "ColdTraceStore",
     "ExecutionRecord",
+    "FlowBackedOrchestrationService",
     "FlowTarget",
     "FreshConversationRequiredError",
     "HarnessBackedOrchestrationService",
@@ -284,6 +309,8 @@ __all__ = [
     "SQLiteManagedThreadDeliveryLedger",
     "SQLiteManagedThreadSideEffectEngine",
     "SQLiteManagedThreadSideEffectLedger",
+    "SurfaceIngressResult",
+    "SurfaceOrchestrationIngress",
     "SurfaceThreadMessageRequest",
     "TICKET_FLOW_CHAT_LEDGER_CONTRACT_VERSION",
     "TICKET_FLOW_FLOW_TYPE",
@@ -322,6 +349,7 @@ __all__ = [
     "emit_chat_surface_event",
     "evaluate_chat_architecture_goal",
     "get_agent_definition",
+    "get_surface_orchestration_ingress",
     "initialize_orchestration_sqlite",
     "is_valid_managed_thread_delivery_transition",
     "list_agent_definitions",
