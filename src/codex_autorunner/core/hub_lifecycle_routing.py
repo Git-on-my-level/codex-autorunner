@@ -5,6 +5,7 @@ import logging
 import sqlite3
 from typing import Any, Callable, List, Optional
 
+from .automation import AutomationEvent, AutomationRuleEngine
 from .config import HubConfig
 from .hub_topology import RepoSnapshot
 from .lifecycle_events import LifecycleEvent, LifecycleEventStore, LifecycleEventType
@@ -33,6 +34,7 @@ class LifecycleEventRouter:
         ensure_pma_automation_store_fn: Callable[[], PmaAutomationStore],
         ensure_pma_safety_checker_fn: Callable[[], PmaSafetyChecker],
         run_coroutine_fn: Callable[[Any], Any],
+        automation_rule_engine: Optional[AutomationRuleEngine] = None,
         logger: Optional[logging.Logger] = None,
     ) -> None:
         self._hub_config = hub_config
@@ -41,6 +43,7 @@ class LifecycleEventRouter:
         self._ensure_pma_automation_store_fn = ensure_pma_automation_store_fn
         self._ensure_pma_safety_checker_fn = ensure_pma_safety_checker_fn
         self._run_coroutine_fn = run_coroutine_fn
+        self._automation_rule_engine = automation_rule_engine
         self._logger = logger or logging.getLogger("codex_autorunner.hub")
         self._dispatch_interceptor: Optional[PmaDispatchInterceptor] = None
 
@@ -54,6 +57,13 @@ class LifecycleEventRouter:
         decision = "skip"
         processed = False
         automation_wakeups = 0
+        try:
+            self._record_automation_event(event)
+        except (sqlite3.Error, OSError, ValueError, TypeError, RuntimeError):
+            self._logger.exception(
+                "Failed to record lifecycle automation event %s",
+                event.event_id,
+            )
         try:
             automation_wakeups = self._enqueue_automation_wakeups(event)
         except (sqlite3.Error, OSError, ValueError, TypeError, RuntimeError):
@@ -152,6 +162,39 @@ class LifecycleEventRouter:
             processed,
             automation_wakeups,
         )
+
+    def _record_automation_event(self, event: LifecycleEvent) -> None:
+        if self._automation_rule_engine is None:
+            return
+        event_type = _automation_lifecycle_event_type(event.event_type)
+        if event_type is None:
+            return
+        data = event.data if isinstance(event.data, dict) else {}
+        automation_event = AutomationEvent.create(
+            event_id=f"lifecycle:{event.event_id}",
+            event_type=event_type,
+            source="lifecycle",
+            observed_at=event.timestamp,
+            repo_id=event.repo_id,
+            target={"repo_id": event.repo_id, "run_id": event.run_id},
+            payload={
+                **dict(data),
+                "repo_id": event.repo_id,
+                "run_id": event.run_id,
+                "origin": event.origin,
+            },
+            raw_payload={
+                "event_id": event.event_id,
+                "event_type": event.event_type.value,
+                "repo_id": event.repo_id,
+                "run_id": event.run_id,
+                "timestamp": event.timestamp,
+                "data": dict(data),
+                "origin": event.origin,
+            },
+            metadata={"lifecycle_event_id": event.event_id},
+        )
+        self._automation_rule_engine.record_event_and_enqueue_jobs(automation_event)
 
     def check_reactive_gate(self, event: LifecycleEvent) -> tuple[bool, str]:
         pma = self._hub_config.pma
@@ -387,3 +430,18 @@ class LifecycleEventRouter:
                 on_intercept=self._on_dispatch_intercept,
             )
         return self._dispatch_interceptor
+
+
+def _automation_lifecycle_event_type(
+    event_type: LifecycleEventType,
+) -> Optional[str]:
+    mapping = {
+        LifecycleEventType.DISPATCH_CREATED: "lifecycle.dispatch_created",
+        LifecycleEventType.FLOW_STARTED: "lifecycle.flow_started",
+        LifecycleEventType.FLOW_RESUMED: "lifecycle.flow_resumed",
+        LifecycleEventType.FLOW_PAUSED: "lifecycle.flow_paused",
+        LifecycleEventType.FLOW_COMPLETED: "lifecycle.flow_completed",
+        LifecycleEventType.FLOW_FAILED: "lifecycle.flow_failed",
+        LifecycleEventType.FLOW_STOPPED: "lifecycle.flow_stopped",
+    }
+    return mapping.get(event_type)

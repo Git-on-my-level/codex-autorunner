@@ -310,7 +310,7 @@ class AutomationStore:
                 if row is None:
                     return None
                 validate_job_transition(str(row["state"]), JOB_CLAIMED)
-                conn.execute(
+                cursor = conn.execute(
                     """
                     UPDATE orch_automation_jobs
                        SET state = ?,
@@ -321,6 +321,8 @@ class AutomationStore:
                     """,
                     (JOB_CLAIMED, lock_key, stamp, stamp, row["job_id"], JOB_PENDING),
                 )
+                if int(cursor.rowcount or 0) != 1:
+                    return None
                 claimed = conn.execute(
                     "SELECT * FROM orch_automation_jobs WHERE job_id = ?",
                     (row["job_id"],),
@@ -370,9 +372,50 @@ class AutomationStore:
         )
 
     def retry_job(
-        self, job_id: str, *, available_at: Optional[str] = None
+        self,
+        job_id: str,
+        *,
+        available_at: Optional[str] = None,
+        retry_backoff_seconds: Optional[int] = None,
     ) -> AutomationJob:
-        return self._transition_job(job_id, JOB_PENDING, now=available_at)
+        stamp = normalize_timestamp(available_at)
+        with open_orchestration_sqlite(self._hub_root, durable=self._durable) as conn:
+            with conn:
+                row = conn.execute(
+                    "SELECT * FROM orch_automation_jobs WHERE job_id = ?",
+                    (job_id,),
+                ).fetchone()
+                if row is None:
+                    raise ValueError(f"Unknown automation job: {job_id}")
+                validate_job_transition(str(row["state"]), JOB_PENDING)
+                conn.execute(
+                    """
+                    UPDATE orch_automation_jobs
+                       SET state = ?,
+                           available_at = ?,
+                           next_attempt_at = ?,
+                           retry_backoff_seconds = COALESCE(?, retry_backoff_seconds),
+                           lock_key = NULL,
+                           claimed_at = NULL,
+                           updated_at = ?
+                     WHERE job_id = ?
+                    """,
+                    (
+                        JOB_PENDING,
+                        stamp,
+                        stamp,
+                        retry_backoff_seconds,
+                        stamp,
+                        job_id,
+                    ),
+                )
+                saved = conn.execute(
+                    "SELECT * FROM orch_automation_jobs WHERE job_id = ?",
+                    (job_id,),
+                ).fetchone()
+        if saved is None:
+            raise RuntimeError("failed to retry automation job")
+        return self._row_to_job(saved)
 
     def cancel_job(self, job_id: str, *, now: Optional[str] = None) -> AutomationJob:
         return self._transition_job(job_id, JOB_CANCELLED, now=now, finished=True)
@@ -510,6 +553,113 @@ class AutomationStore:
                 tuple(params),
             ).fetchall()
         return [self._row_to_schedule(row) for row in rows]
+
+    def list_due_schedules(
+        self, *, now: Optional[str] = None, limit: int = 100
+    ) -> list[AutomationSchedule]:
+        stamp = normalize_timestamp(now)
+        with open_orchestration_sqlite(self._hub_root, durable=self._durable) as conn:
+            rows = conn.execute(
+                """
+                SELECT *
+                  FROM orch_automation_schedules
+                 WHERE state = 'active'
+                   AND next_fire_at IS NOT NULL
+                   AND next_fire_at <= ?
+                 ORDER BY next_fire_at ASC, schedule_id ASC
+                 LIMIT ?
+                """,
+                (stamp, max(0, int(limit))),
+            ).fetchall()
+        return [self._row_to_schedule(row) for row in rows]
+
+    def update_schedule_fire(
+        self,
+        schedule_id: str,
+        *,
+        last_fire_at: str,
+        next_fire_at: Optional[str],
+        state: str = "active",
+        now: Optional[str] = None,
+    ) -> Optional[AutomationSchedule]:
+        stamp = normalize_timestamp(now)
+        normalized_last = normalize_timestamp(last_fire_at)
+        normalized_next = normalize_timestamp(next_fire_at) if next_fire_at else None
+        with open_orchestration_sqlite(self._hub_root, durable=self._durable) as conn:
+            with conn:
+                conn.execute(
+                    """
+                    UPDATE orch_automation_schedules
+                       SET last_fire_at = ?,
+                           next_fire_at = ?,
+                           state = ?,
+                           updated_at = ?
+                     WHERE schedule_id = ?
+                    """,
+                    (normalized_last, normalized_next, state, stamp, schedule_id),
+                )
+        return self.get_schedule(schedule_id)
+
+    def release_stale_claims(
+        self, *, stale_before: str, now: Optional[str] = None
+    ) -> int:
+        stamp = normalize_timestamp(now)
+        threshold = normalize_timestamp(stale_before)
+        with open_orchestration_sqlite(self._hub_root, durable=self._durable) as conn:
+            with conn:
+                cursor = conn.execute(
+                    """
+                    UPDATE orch_automation_jobs
+                       SET state = ?,
+                           lock_key = NULL,
+                           claimed_at = NULL,
+                           updated_at = ?
+                     WHERE state = ?
+                       AND claimed_at IS NOT NULL
+                       AND claimed_at <= ?
+                    """,
+                    (JOB_PENDING, stamp, JOB_CLAIMED, threshold),
+                )
+                return int(cursor.rowcount or 0)
+
+    def count_running_jobs(
+        self,
+        *,
+        rule_id: Optional[str] = None,
+        target: Optional[dict[str, Any]] = None,
+    ) -> int:
+        clauses = ["state = ?"]
+        params: list[Any] = [JOB_RUNNING]
+        if rule_id is not None:
+            clauses.append("rule_id = ?")
+            params.append(rule_id)
+        if target is not None:
+            clauses.append("target_json = ?")
+            params.append(_json_dumps(target))
+        with open_orchestration_sqlite(self._hub_root, durable=self._durable) as conn:
+            row = conn.execute(
+                f"SELECT COUNT(*) AS c FROM orch_automation_jobs WHERE {' AND '.join(clauses)}",
+                tuple(params),
+            ).fetchone()
+        return int(row["c"] if row is not None else 0)
+
+    def has_recent_job_for_rule(self, rule_id: str, *, since: str) -> bool:
+        return self.count_jobs_for_rule_since(rule_id, since=since) > 0
+
+    def count_jobs_for_rule_since(self, rule_id: str, *, since: str) -> int:
+        stamp = normalize_timestamp(since)
+        with open_orchestration_sqlite(self._hub_root, durable=self._durable) as conn:
+            row = conn.execute(
+                """
+                SELECT COUNT(*) AS c
+                  FROM orch_automation_jobs
+                 WHERE rule_id = ?
+                   AND created_at >= ?
+                   AND state IN (?, ?, ?)
+                """,
+                (rule_id, stamp, JOB_RUNNING, JOB_SUCCEEDED, JOB_PENDING),
+            ).fetchone()
+        return int(row["c"] if row is not None else 0)
 
     def backfill_legacy_pma_automation(self) -> dict[str, int]:
         with open_orchestration_sqlite(self._hub_root, durable=self._durable) as conn:

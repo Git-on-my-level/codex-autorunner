@@ -1,6 +1,8 @@
+from .engine import AutomationRuleEngine, RuleEvaluationResult, render_template
 from .models import (
     AUTOMATION_EVENT_TYPES,
     EXECUTOR_KINDS,
+    EXECUTOR_PMA_TURN,
     JOB_CLAIMED,
     JOB_DEAD_LETTERED,
     JOB_FAILED,
@@ -20,17 +22,36 @@ from .models import (
     validate_job_transition,
     validate_policy,
 )
+from .scheduler import (
+    AutomationScheduler,
+    SchedulerProcessResult,
+    calculate_next_fire_at,
+)
 from .store import AutomationStore
+from .worker import (
+    AutomationExecutor,
+    AutomationExecutorRegistry,
+    AutomationExecutorResult,
+    AutomationJobWorker,
+    WorkerProcessResult,
+)
 
 __all__ = [
     "AUTOMATION_EVENT_TYPES",
+    "AutomationExecutor",
+    "AutomationExecutorRegistry",
+    "AutomationExecutorResult",
     "AutomationEvent",
     "AutomationJob",
     "AutomationJobAttempt",
+    "AutomationJobWorker",
     "AutomationRule",
+    "AutomationRuleEngine",
+    "AutomationScheduler",
     "AutomationSchedule",
     "AutomationStore",
     "EXECUTOR_KINDS",
+    "EXECUTOR_PMA_TURN",
     "JOB_CLAIMED",
     "JOB_DEAD_LETTERED",
     "JOB_FAILED",
@@ -39,9 +60,14 @@ __all__ = [
     "JOB_STATE_TRANSITIONS",
     "JOB_STATES",
     "JOB_SUCCEEDED",
+    "RuleEvaluationResult",
     "SCHEDULE_KINDS",
+    "SchedulerProcessResult",
     "TARGET_POLICIES",
     "TRIGGER_KINDS",
+    "WorkerProcessResult",
+    "calculate_next_fire_at",
+    "render_template",
     "validate_job_transition",
     "validate_policy",
 ]

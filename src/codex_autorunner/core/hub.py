@@ -9,6 +9,12 @@ from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple
 
 from ..discovery import discover_and_init
 from ..manifest import Manifest
+from .automation import (
+    EXECUTOR_PMA_TURN,
+    AutomationExecutorRegistry,
+    AutomationExecutorResult,
+    AutomationJob,
+)
 from .config import (
     HubConfig,
     RepoConfig,
@@ -56,6 +62,56 @@ class PmaLaneWorkerStartResult:
     accepted: bool
     reason: str
     lane_id: str
+
+
+class _PmaTurnAutomationExecutor:
+    def __init__(
+        self,
+        *,
+        hub_root: Path,
+        start_lane_worker_fn: Callable[[str], PmaLaneWorkerStartResult],
+    ) -> None:
+        self._hub_root = hub_root
+        self._start_lane_worker_fn = start_lane_worker_fn
+
+    def execute(self, job: AutomationJob) -> AutomationExecutorResult:
+        lane_id = (
+            str(job.executor.get("lane_id") or job.executor.get("lane") or "").strip()
+            or DEFAULT_PMA_LANE_ID
+        )
+        message = str(
+            job.executor.get("message")
+            or job.executor.get("prompt")
+            or "Automation job received."
+        )
+        payload = {
+            "message": message,
+            "agent": job.executor.get("agent"),
+            "model": job.executor.get("model"),
+            "reasoning": job.executor.get("reasoning"),
+            "client_turn_id": job.job_id,
+            "stream": False,
+            "hub_root": str(self._hub_root),
+            "automation_job": job.to_dict(),
+        }
+        item, created = PmaQueue(self._hub_root).ensure_active_item_sync(
+            lane_id, f"automation-job:{job.job_id}", payload
+        )
+        start_result = self._start_lane_worker_fn(lane_id)
+        if not start_result.accepted:
+            return AutomationExecutorResult(
+                status="failed",
+                summary=f"pma_lane_worker_start_failed:{start_result.reason}",
+                execution_refs={
+                    "pma_lane_id": lane_id,
+                    "pma_queue_item_id": item.item_id,
+                },
+            )
+        return AutomationExecutorResult(
+            summary="queued PMA automation turn",
+            data={"created_queue_item": created},
+            execution_refs={"pma_lane_id": lane_id, "pma_queue_item_id": item.item_id},
+        )
 
 
 BackendFactoryBuilder = Callable[[Path, RepoConfig], BackendFactory]
@@ -235,6 +291,14 @@ class HubSupervisor:
         self._pma_lane_worker_starter: Optional[Callable[[str], None]] = None
         self._scm_poll_processor = scm_poll_processor
         self._invalidation_callbacks: List[Callable[[], None]] = []
+        automation_executor_registry = AutomationExecutorRegistry()
+        automation_executor_registry.register(
+            EXECUTOR_PMA_TURN,
+            _PmaTurnAutomationExecutor(
+                hub_root=hub_config.root,
+                start_lane_worker_fn=self._request_pma_lane_worker_start,
+            ),
+        )
         self._lifecycle_orchestrator = HubLifecycleOrchestrator(
             hub_config,
             list_repos_fn=lambda: self.list_repos(),
@@ -244,6 +308,7 @@ class HubSupervisor:
             process_scm_polls_fn=lambda: self.process_scm_automation_polls(),
             process_pma_timers_fn=lambda: self.process_pma_automation_timers(),
             drain_pma_wakeups_fn=lambda: self.drain_pma_automation_wakeups(),
+            automation_executor_registry=automation_executor_registry,
             logger=logger,
         )
         self._lifecycle_orchestrator._process_event_fn = (

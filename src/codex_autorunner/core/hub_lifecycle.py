@@ -7,6 +7,13 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Optional, Protocol
 
+from .automation import (
+    AutomationExecutorRegistry,
+    AutomationJobWorker,
+    AutomationRuleEngine,
+    AutomationScheduler,
+    AutomationStore,
+)
 from .config import HubConfig
 from .hub_lifecycle_routing import LifecycleEventRouter
 from .hub_topology import RepoSnapshot
@@ -337,10 +344,22 @@ class HubLifecycleOrchestrator:
         process_scm_polls_fn: Optional[Callable[[], dict[str, int]]] = None,
         process_pma_timers_fn: Optional[Callable[[], int]] = None,
         drain_pma_wakeups_fn: Optional[Callable[[], int]] = None,
+        automation_executor_registry: Optional[AutomationExecutorRegistry] = None,
         logger: Optional[logging.Logger] = None,
     ) -> None:
         self._hub_config = hub_config
         self._lifecycle_emitter = LifecycleEventEmitter(hub_config.root)
+        self._automation_store = AutomationStore(hub_config.root)
+        self._automation_rule_engine = AutomationRuleEngine(self._automation_store)
+        self._automation_scheduler = AutomationScheduler(
+            self._automation_store, self._automation_rule_engine
+        )
+        self._automation_executor_registry = (
+            automation_executor_registry or AutomationExecutorRegistry()
+        )
+        self._automation_job_worker = AutomationJobWorker(
+            self._automation_store, self._automation_executor_registry
+        )
         self._lifecycle_router = LifecycleEventRouter(
             hub_config=hub_config,
             lifecycle_store=self.lifecycle_store,
@@ -348,6 +367,7 @@ class HubLifecycleOrchestrator:
             ensure_pma_automation_store_fn=ensure_pma_automation_store_fn,
             ensure_pma_safety_checker_fn=ensure_pma_safety_checker_fn,
             run_coroutine_fn=run_coroutine_fn,
+            automation_rule_engine=self._automation_rule_engine,
             logger=logger,
         )
         self._lifecycle_worker = HubLifecycleWorker(
@@ -412,11 +432,21 @@ class HubLifecycleOrchestrator:
 
     def process_lifecycle_events(self) -> int:
         processed = self._lifecycle_event_processor.process_events(limit=100)
+        self.process_automation()
         try:
             self._drain_pma_wakeups()
         except Exception:
             self._logger.exception("Failed draining PMA automation wake-ups")
         return processed
+
+    def process_automation(self) -> int:
+        scheduler_result = self._automation_scheduler.process_due(limit=100)
+        worker_result = self._automation_job_worker.process_once(limit=25)
+        return (
+            scheduler_result.schedules_fired
+            + scheduler_result.jobs_created
+            + worker_result.claimed
+        )
 
     def trigger_pma_from_lifecycle_event(self, event: LifecycleEvent) -> None:
         self._process_lifecycle_event(event)
@@ -436,6 +466,9 @@ class HubLifecycleOrchestrator:
             productive = True
         timer_count = self._process_pma_timers()
         if timer_count > 0:
+            productive = True
+        automation_count = self.process_automation()
+        if automation_count > 0:
             productive = True
         wakeup_count = self._drain_pma_wakeups()
         if wakeup_count > 0:
