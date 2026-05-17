@@ -638,6 +638,7 @@ def register_root_commands(app: typer.Typer) -> None:
                 autorunner_approval_policy=state.autorunner_approval_policy,
                 autorunner_sandbox_mode=state.autorunner_sandbox_mode,
                 autorunner_workspace_write_network=state.autorunner_workspace_write_network,
+                ticket_flow_require_commit=state.ticket_flow_require_commit,
                 runner_pid=None,
                 sessions=state.sessions,
                 repo_to_session=state.repo_to_session,

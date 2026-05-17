@@ -53,6 +53,7 @@ from ....core.orchestration.ticket_flow_visibility_repair import (
     repair_ticket_flow_chat_visibility,
 )
 from ....core.runtime import RuntimeContext
+from ....core.state import load_state
 from ....core.state_roots import resolve_repo_flows_db_path, resolve_repo_state_root
 from ....core.ticket_flow_operator import (
     PreflightCheck,
@@ -631,9 +632,16 @@ def register_flow_commands(
                     )
                 if flow_type == "ticket_flow":
                     agent_pool = build_agent_pool(engine.config)
+                    state_path = getattr(engine, "state_path", None)
+                    require_commit_default = (
+                        load_state(state_path).ticket_flow_require_commit
+                        if state_path is not None
+                        else True
+                    )
                     return build_ticket_flow_definition(
                         agent_pool=agent_pool,
                         auto_commit_default=engine.config.git_auto_commit,
+                        require_commit_default=require_commit_default,
                         include_previous_ticket_context_default=(
                             engine.config.ticket_flow.include_previous_ticket_context
                         ),

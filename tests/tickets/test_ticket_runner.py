@@ -1721,6 +1721,53 @@ async def test_ticket_runner_requires_commit_before_advancing_done_ticket(
 
 
 @pytest.mark.asyncio
+async def test_ticket_runner_can_advance_done_ticket_without_commit_when_disabled(
+    tmp_path: Path,
+) -> None:
+    workspace_root = tmp_path
+    _init_git_repo(workspace_root)
+    ticket_dir = workspace_root / ".codex-autorunner" / "tickets"
+    ticket_dir.mkdir(parents=True, exist_ok=True)
+    ticket_path = ticket_dir / "TICKET-001.md"
+    _write_ticket(ticket_path, done=False)
+
+    def handler(req: AgentTurnRequest) -> AgentTurnResult:
+        _set_ticket_done(ticket_path, done=True)
+        (workspace_root / "work.txt").write_text("dirty\n", encoding="utf-8")
+        return AgentTurnResult(
+            agent_id=req.agent_id,
+            conversation_id="conv1",
+            turn_id="t1",
+            text="done but dirty",
+        )
+
+    runner = TicketRunner(
+        workspace_root=workspace_root,
+        run_id="run-1",
+        config=TicketRunConfig(
+            ticket_dir=Path(".codex-autorunner/tickets"),
+            auto_commit=False,
+            require_commit=False,
+        ),
+        agent_pool=FakeAgentPool(handler),
+    )
+
+    result = await runner.step({})
+    assert result.status == "continue"
+    assert result.state.get("commit") is None
+    assert result.state.get("current_ticket") is None
+    assert subprocess.run(
+        ["git", "status", "--porcelain"],
+        cwd=workspace_root,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout
+    completed = await runner.step(result.state)
+    assert completed.status == "completed"
+
+
+@pytest.mark.asyncio
 async def test_ticket_runner_recovers_missing_commit_pending_for_done_current_ticket_with_dirty_worktree(
     tmp_path: Path,
 ) -> None:

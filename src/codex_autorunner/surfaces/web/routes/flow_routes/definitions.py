@@ -49,6 +49,7 @@ def build_flow_definition(
     from ....adapters.agents.build_agent_pool import build_agent_pool
     from ....core.config import load_repo_config
     from ....core.runtime import RuntimeContext
+    from ....core.state import load_state
     from ....flows.ticket_flow import build_ticket_flow_definition
     from ....tickets import DEFAULT_MAX_TOTAL_TURNS
 
@@ -62,6 +63,9 @@ def build_flow_definition(
         definition = build_ticket_flow_definition(
             agent_pool=agent_pool,
             auto_commit_default=engine.config.git_auto_commit,
+            require_commit_default=load_state(
+                engine.state_path
+            ).ticket_flow_require_commit,
             include_previous_ticket_context_default=(
                 engine.config.ticket_flow.include_previous_ticket_context
             ),

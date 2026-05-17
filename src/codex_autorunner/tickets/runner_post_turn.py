@@ -450,6 +450,7 @@ class _ReconcileInputs:
     max_lint_retries: int
     max_commit_retries: int
     auto_commit: bool
+    require_commit: bool
     checkpoint_message_template: str
     emit_event: Optional[Any]
 
@@ -478,6 +479,7 @@ def reconcile_post_turn(
     max_lint_retries: int,
     max_commit_retries: int,
     auto_commit: bool,
+    require_commit: bool,
     checkpoint_message_template: str,
     emit_event: Optional[Any],
 ) -> TicketResult:
@@ -629,7 +631,7 @@ def reconcile_post_turn(
     agent_committed_this_turn = git_state_after["agent_committed_this_turn"]
 
     commit_required_now = bool(
-        updated_fm and updated_fm.done and clean_after_agent is False
+        require_commit and updated_fm and updated_fm.done and clean_after_agent is False
     )
     checkpoint_error = None
     if auto_commit and not commit_pending and not commit_required_now:
@@ -655,7 +657,7 @@ def reconcile_post_turn(
         )
 
     if updated_fm and updated_fm.done:
-        if clean_after_agent is False:
+        if require_commit and clean_after_agent is False:
             (
                 commit_state_update,
                 commit_status,

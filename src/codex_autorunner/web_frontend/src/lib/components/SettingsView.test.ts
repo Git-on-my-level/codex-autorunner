@@ -67,6 +67,8 @@ describe('settings page component', () => {
     expect(body).toContain('Approval policy');
     expect(body).toContain('Sandbox mode');
     expect(body).toContain('Workspace-write network');
+    expect(body).toContain('Ticket flow commits');
+    expect(body).toContain('Require a git commit before advancing after a completed ticket');
     expect(body).toContain('Voice transcription');
     expect(body).toContain('Enable with PMA');
     // The flat redesign drops the noisy default-state hub status block, the

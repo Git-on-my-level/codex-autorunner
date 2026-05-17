@@ -25,6 +25,7 @@ class RunnerState:
     autorunner_approval_policy: Optional[str] = None
     autorunner_sandbox_mode: Optional[str] = None
     autorunner_workspace_write_network: Optional[bool] = None
+    ticket_flow_require_commit: bool = True
     runner_stop_after_runs: Optional[int] = None
     runner_pid: Optional[int] = None
     sessions: dict[str, "SessionRecord"] = dataclasses.field(default_factory=dict)
@@ -43,6 +44,7 @@ class RunnerState:
             "autorunner_approval_policy": self.autorunner_approval_policy,
             "autorunner_sandbox_mode": self.autorunner_sandbox_mode,
             "autorunner_workspace_write_network": self.autorunner_workspace_write_network,
+            "ticket_flow_require_commit": self.ticket_flow_require_commit,
             "runner_pid": self.runner_pid,
             "sessions": {
                 session_id: record.to_dict()
@@ -157,6 +159,8 @@ def _encode_overrides(state: RunnerState) -> Optional[str]:
         overrides["autorunner_workspace_write_network"] = (
             state.autorunner_workspace_write_network
         )
+    if state.ticket_flow_require_commit is not True:
+        overrides["ticket_flow_require_commit"] = state.ticket_flow_require_commit
     if state.runner_stop_after_runs is not None:
         overrides["runner_stop_after_runs"] = state.runner_stop_after_runs
     if not overrides:
@@ -213,6 +217,9 @@ def _apply_overrides(state: RunnerState, raw: Optional[str]) -> None:
     workspace_write_network = data.get("autorunner_workspace_write_network")
     if isinstance(workspace_write_network, bool):
         state.autorunner_workspace_write_network = workspace_write_network
+    ticket_flow_require_commit = data.get("ticket_flow_require_commit")
+    if isinstance(ticket_flow_require_commit, bool):
+        state.ticket_flow_require_commit = ticket_flow_require_commit
     runner_stop_after_runs = data.get("runner_stop_after_runs")
     if isinstance(runner_stop_after_runs, int) and not isinstance(
         runner_stop_after_runs, bool

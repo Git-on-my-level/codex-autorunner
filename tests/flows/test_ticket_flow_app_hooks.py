@@ -221,6 +221,7 @@ def _reconcile_ticket_done(
         max_lint_retries=3,
         max_commit_retries=2,
         auto_commit=False,
+        require_commit=True,
         checkpoint_message_template="checkpoint {run_id}",
         emit_event=emit_event,
     )

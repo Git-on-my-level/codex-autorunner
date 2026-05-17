@@ -38,6 +38,7 @@ def test_session_settings_round_trip_persists_values(_settings_env) -> None:
             "autorunner_approval_policy": "",
             "autorunner_sandbox_mode": "",
             "autorunner_workspace_write_network": None,
+            "ticket_flow_require_commit": True,
             "runner_stop_after_runs": None,
         },
     )
@@ -50,6 +51,7 @@ def test_session_settings_round_trip_persists_values(_settings_env) -> None:
         "autorunner_approval_policy": None,
         "autorunner_sandbox_mode": None,
         "autorunner_workspace_write_network": None,
+        "ticket_flow_require_commit": True,
         "runner_stop_after_runs": None,
     }
 
@@ -61,6 +63,7 @@ def test_session_settings_round_trip_persists_values(_settings_env) -> None:
             "autorunner_approval_policy": "never",
             "autorunner_sandbox_mode": "workspaceWrite",
             "autorunner_workspace_write_network": True,
+            "ticket_flow_require_commit": False,
             "runner_stop_after_runs": 4,
         },
     )
@@ -72,6 +75,7 @@ def test_session_settings_round_trip_persists_values(_settings_env) -> None:
         "autorunner_approval_policy": "never",
         "autorunner_sandbox_mode": "workspaceWrite",
         "autorunner_workspace_write_network": True,
+        "ticket_flow_require_commit": False,
         "runner_stop_after_runs": 4,
     }
 
@@ -91,6 +95,7 @@ def test_session_settings_allow_clearing_values(_settings_env) -> None:
             "autorunner_approval_policy": "never",
             "autorunner_sandbox_mode": "workspaceWrite",
             "autorunner_workspace_write_network": False,
+            "ticket_flow_require_commit": False,
             "runner_stop_after_runs": 2,
         },
     )
@@ -104,6 +109,7 @@ def test_session_settings_allow_clearing_values(_settings_env) -> None:
             "autorunner_approval_policy": "",
             "autorunner_sandbox_mode": "",
             "autorunner_workspace_write_network": None,
+            "ticket_flow_require_commit": True,
             "runner_stop_after_runs": None,
         },
     )
@@ -115,6 +121,7 @@ def test_session_settings_allow_clearing_values(_settings_env) -> None:
         "autorunner_approval_policy": None,
         "autorunner_sandbox_mode": None,
         "autorunner_workspace_write_network": None,
+        "ticket_flow_require_commit": True,
         "runner_stop_after_runs": None,
     }
 
@@ -159,6 +166,12 @@ def test_session_settings_rejects_invalid_runtime_preferences(_settings_env) -> 
     )
     assert invalid_network.status_code == 422
 
+    invalid_ticket_flow_commit = client.post(
+        "/api/session/settings",
+        json={"ticket_flow_require_commit": "yes"},
+    )
+    assert invalid_ticket_flow_commit.status_code == 422
+
     invalid_runs = client.post(
         "/api/session/settings",
         json={"runner_stop_after_runs": 0},
@@ -178,6 +191,7 @@ def test_session_settings_apply_all_runtime_preferences_directly(_settings_env) 
             "autorunner_approval_policy": "unlessTrusted",
             "autorunner_sandbox_mode": "workspaceWrite",
             "autorunner_workspace_write_network": True,
+            "ticket_flow_require_commit": False,
             "runner_stop_after_runs": 5,
         },
     )
@@ -189,6 +203,7 @@ def test_session_settings_apply_all_runtime_preferences_directly(_settings_env) 
         "autorunner_approval_policy": "unlessTrusted",
         "autorunner_sandbox_mode": "workspaceWrite",
         "autorunner_workspace_write_network": True,
+        "ticket_flow_require_commit": False,
         "runner_stop_after_runs": 5,
     }
 

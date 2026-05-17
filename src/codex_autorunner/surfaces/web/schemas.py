@@ -400,6 +400,7 @@ class SessionSettingsRequest(Payload):
     autorunner_approval_policy: Optional[str] = None
     autorunner_sandbox_mode: Optional[str] = None
     autorunner_workspace_write_network: Optional[StrictBool] = None
+    ticket_flow_require_commit: Optional[StrictBool] = None
     runner_stop_after_runs: Optional[int] = None
 
 
@@ -714,6 +715,7 @@ class SessionSettingsResponse(ResponseModel):
     autorunner_approval_policy: Optional[str]
     autorunner_sandbox_mode: Optional[str]
     autorunner_workspace_write_network: Optional[bool]
+    ticket_flow_require_commit: bool
     runner_stop_after_runs: Optional[int]
 
 
