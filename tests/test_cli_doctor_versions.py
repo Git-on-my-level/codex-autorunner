@@ -9,7 +9,7 @@ import pytest
 from typer.testing import CliRunner
 
 from codex_autorunner.cli import app
-from codex_autorunner.core.runtime import DoctorCheck, DoctorReport
+from codex_autorunner.core.diagnostics.types import DoctorCheck, DoctorReport
 from codex_autorunner.surfaces.cli.commands.doctor import _find_hub_server_process
 
 runner = CliRunner()
@@ -100,16 +100,15 @@ def _stub_doctor_checks(monkeypatch):
             )
         ]
 
-    monkeypatch.setattr(doctor_cmd, "doctor", lambda _start: DoctorReport(checks=[]))
+    monkeypatch.setattr(
+        doctor_cmd,
+        "runtime_doctor_report",
+        lambda **_kwargs: DoctorReport(checks=[]),
+    )
     monkeypatch.setattr(doctor_cmd, "load_hub_config", lambda _start: _StubHubConfig())
     monkeypatch.setattr(doctor_cmd, "find_repo_root", _raise_repo_not_found)
     monkeypatch.setattr(doctor_cmd, "telegram_doctor_checks", lambda *_a, **_k: [])
     monkeypatch.setattr(doctor_cmd, "discord_doctor_checks", lambda *_a, **_k: [])
-    monkeypatch.setattr(doctor_cmd, "pma_doctor_checks", lambda *_a, **_k: [])
-    monkeypatch.setattr(doctor_cmd, "hub_worktree_doctor_checks", lambda *_a, **_k: [])
-    monkeypatch.setattr(
-        doctor_cmd, "hub_destination_doctor_checks", lambda *_a, **_k: []
-    )
     monkeypatch.setattr(doctor_cmd, "chat_doctor_checks", _chat_doctor_checks)
     return chat_calls
 

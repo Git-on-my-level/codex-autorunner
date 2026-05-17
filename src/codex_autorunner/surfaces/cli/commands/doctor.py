@@ -16,25 +16,19 @@ from ....adapters.chat.doctor import (
 from ....adapters.discord.doctor import discord_doctor_checks
 from ....adapters.telegram.doctor import telegram_doctor_checks
 from ....core.config import ConfigError, RepoConfig, derive_repo_config, load_hub_config
+from ....core.diagnostics.opencode import summarize_opencode_lifecycle
 from ....core.diagnostics.process_snapshot import (
     collect_processes,
     enrich_with_ownership,
 )
+from ....core.diagnostics.registry import runtime_doctor_report
+from ....core.diagnostics.types import DoctorReport
 from ....core.flows.worker_reaper import (
     inspect_flow_workers,
     reap_stale_flow_workers,
 )
 from ....core.git_utils import GitError, run_git
 from ....core.managed_processes import list_process_records
-from ....core.runtime import (
-    DoctorReport,
-    doctor,
-    hermes_doctor_checks,
-    hub_destination_doctor_checks,
-    hub_worktree_doctor_checks,
-    pma_doctor_checks,
-    summarize_opencode_lifecycle,
-)
 from ....core.utils import (
     RepoNotFoundError,
     find_repo_root,
@@ -306,8 +300,6 @@ def register_doctor_commands(
             return
         try:
             start_path = repo or Path.cwd()
-            report = doctor(start_path)
-
             hub_config = load_hub_config(start_path)
             repo_config: Optional[RepoConfig] = None
             repo_root: Optional[Path] = None
@@ -321,23 +313,21 @@ def register_doctor_commands(
                 repo_config or hub_config, repo_root=repo_root
             )
             discord_checks = discord_doctor_checks(hub_config)
-            pma_checks = pma_doctor_checks(hub_config, repo_root=repo_root)
-            hub_worktree_checks = hub_worktree_doctor_checks(hub_config)
-            hub_destination_checks = hub_destination_doctor_checks(hub_config)
             chat_checks = chat_doctor_checks(repo_root=repo_root) if dev else []
             chat_lab_checks = (
                 chat_surface_lab_doctor_checks(repo_root=repo_root) if dev else []
             )
             timing_checks = chat_ux_timing_diagnostic_checks() if dev else []
 
+            report = runtime_doctor_report(
+                start_path=start_path,
+                hub_config=hub_config,
+                repo_root=repo_root,
+            )
             report = DoctorReport(
                 checks=report.checks
                 + telegram_checks
                 + discord_checks
-                + pma_checks
-                + hub_worktree_checks
-                + hub_destination_checks
-                + hermes_doctor_checks(hub_config)
                 + chat_checks
                 + chat_lab_checks
                 + timing_checks
