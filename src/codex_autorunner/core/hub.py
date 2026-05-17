@@ -11,12 +11,14 @@ from ..discovery import discover_and_init
 from ..manifest import Manifest
 from .automation import (
     EXECUTOR_PMA_TURN,
+    EXECUTOR_TICKET_FLOW,
     AutomationExecutorRegistry,
     AutomationExecutorResult,
     AutomationJob,
     AutomationStore,
 )
 from .automation.models import JOB_SKIPPED, JOB_SUCCEEDED
+from .automation.ticket_flow_executor import TicketFlowAutomationExecutor
 from .config import (
     HubConfig,
     RepoConfig,
@@ -509,6 +511,12 @@ class HubSupervisor:
         self._pma_lane_worker_starter: Optional[Callable[[str], None]] = None
         self._scm_poll_processor = scm_poll_processor
         self._invalidation_callbacks: List[Callable[[], None]] = []
+        self._worktree_bridge = _HubWorktreeBridge(self)
+        self._worktree_manager = WorktreeManager(
+            hub_config,
+            topology_repository=self._topology_repository,
+            ctx=self._worktree_bridge,
+        )
         automation_executor_registry = AutomationExecutorRegistry()
         automation_executor_registry.register(
             EXECUTOR_PMA_TURN,
@@ -516,6 +524,15 @@ class HubSupervisor:
                 hub_root=hub_config.root,
                 start_lane_worker_fn=self._request_pma_lane_worker_start,
                 safety_checker_fn=lambda: self.ensure_pma_safety_checker(),
+            ),
+        )
+        automation_executor_registry.register(
+            EXECUTOR_TICKET_FLOW,
+            TicketFlowAutomationExecutor(
+                hub_root=hub_config.root,
+                topology_repository=self._topology_repository,
+                worktree_manager=self._worktree_manager,
+                run_coroutine_fn=self._run_coroutine,
             ),
         )
         self._lifecycle_orchestrator = HubLifecycleOrchestrator(
@@ -539,12 +556,6 @@ class HubSupervisor:
             on_retire_worktree=self.retire_worktree,
             on_list_repos=self.list_repos,
             runners=self._runner_orchestrator.runners,
-        )
-        self._worktree_bridge = _HubWorktreeBridge(self)
-        self._worktree_manager = WorktreeManager(
-            hub_config,
-            topology_repository=self._topology_repository,
-            ctx=self._worktree_bridge,
         )
         self._lifecycle_orchestrator.wire_outbox_lifecycle()
         self._startup_phase = HUB_STARTUP_RECONCILING

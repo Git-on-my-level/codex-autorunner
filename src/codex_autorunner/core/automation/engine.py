@@ -116,7 +116,7 @@ class AutomationRuleEngine:
         self, rule: AutomationRule, event: AutomationEvent
     ) -> AutomationJob:
         context = self._template_context(rule=rule, event=event, job={})
-        target = render_template(rule.target, context)
+        target = render_template({"policy": rule.target_policy, **rule.target}, context)
         executor = render_template(
             {"kind": rule.executor_kind, **rule.executor}, context
         )
