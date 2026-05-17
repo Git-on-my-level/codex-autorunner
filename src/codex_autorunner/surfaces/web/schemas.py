@@ -251,6 +251,25 @@ class AppServerThreadArchiveRequest(Payload):
     thread_id: str = Field(validation_alias=AliasChoices("thread_id", "threadId", "id"))
 
 
+class ManagedThreadGenesisRequest(Payload):
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+    origin: Optional[str] = None
+    scope_source: Optional[str] = Field(
+        default=None, validation_alias=AliasChoices("scope_source", "scopeSource")
+    )
+    parent_thread_id: Optional[str] = Field(
+        default=None,
+        validation_alias=AliasChoices("parent_thread_id", "parentThreadId"),
+    )
+    fork_mode: Optional[str] = Field(
+        default=None, validation_alias=AliasChoices("fork_mode", "forkMode")
+    )
+    client_intent: Optional[Any] = Field(
+        default=None, validation_alias=AliasChoices("client_intent", "clientIntent")
+    )
+
+
 class ManagedThreadCreateRequest(Payload):
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
@@ -274,6 +293,21 @@ class ManagedThreadCreateRequest(Payload):
         exclude=True,
     )
     workspace_root: Optional[str] = None
+    genesis: Optional[ManagedThreadGenesisRequest] = None
+    origin: Optional[str] = None
+    scope_source: Optional[str] = Field(
+        default=None, validation_alias=AliasChoices("scope_source", "scopeSource")
+    )
+    parent_thread_id: Optional[str] = Field(
+        default=None,
+        validation_alias=AliasChoices("parent_thread_id", "parentThreadId"),
+    )
+    fork_mode: Optional[str] = Field(
+        default=None, validation_alias=AliasChoices("fork_mode", "forkMode")
+    )
+    client_intent: Optional[Any] = Field(
+        default=None, validation_alias=AliasChoices("client_intent", "clientIntent")
+    )
     name: Optional[str] = None
     model: Optional[str] = None
     pr_mode: bool = Field(
@@ -328,6 +362,21 @@ class ManagedThreadCreateRequest(Payload):
         if not isinstance(value, dict):
             return value
         payload = dict(value)
+        genesis = value.get("genesis")
+        if isinstance(genesis, dict):
+            alias_pairs = (
+                ("origin", "origin"),
+                ("scope_source", "scopeSource"),
+                ("parent_thread_id", "parentThreadId"),
+                ("fork_mode", "forkMode"),
+                ("client_intent", "clientIntent"),
+            )
+            for field_name, alias in alias_pairs:
+                if field_name not in payload and alias not in payload:
+                    if field_name in genesis:
+                        payload[field_name] = genesis[field_name]
+                    elif alias in genesis:
+                        payload[field_name] = genesis[alias]
         payload["notify_on_explicit"] = any(
             key in value for key in ("notify_on", "notifyOn")
         )
@@ -425,6 +474,7 @@ __all__ = [
     "ManagedThreadCompactRequest",
     "ManagedThreadCreateRequest",
     "ManagedThreadForkRequest",
+    "ManagedThreadGenesisRequest",
     "ManagedThreadMessageRequest",
     "ManagedThreadResumeRequest",
     "PmaNewSessionRequest",

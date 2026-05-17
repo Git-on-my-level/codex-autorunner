@@ -9,7 +9,8 @@ import {
   type ManagedThreadMessagePayload,
   type ManagedThreadStartMessagePayload,
   type PendingAttachment,
-  type PmaChatScopeOption
+  type PmaChatScopeOption,
+  type PmaChatScopeSource
 } from '$lib/viewModels/pmaChat';
 import type { PmaChatKind } from '$lib/viewModels/pmaChat';
 
@@ -89,6 +90,7 @@ export function planStartAndSendChat(
     attachments?: Array<PendingAttachment | DocumentFileIntentPayload>;
     reasoning?: string;
     clientTurnId?: string;
+    scopeSource?: PmaChatScopeSource;
   } = {}
 ): StartAndSendPmaChatPlan {
   return {
@@ -103,7 +105,8 @@ export function planStartAndSendChat(
       message,
       options.attachments ?? [],
       options.reasoning ?? '',
-      options.clientTurnId ?? ''
+      options.clientTurnId ?? '',
+      options.scopeSource ?? 'default_hub'
     )
   };
 }

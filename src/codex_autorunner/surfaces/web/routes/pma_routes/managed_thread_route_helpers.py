@@ -223,6 +223,187 @@ def _scope_ref_from_payload(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+def _validate_legacy_scope_field_consistency(
+    payload: ManagedThreadCreateRequest,
+) -> None:
+    workspace_root = normalize_optional_text(payload.workspace_root)
+    repo_id = normalize_optional_text(payload.repo_id)
+    resource_kind = normalize_optional_text(payload.resource_kind)
+    resource_id = normalize_optional_text(payload.resource_id)
+    if workspace_root is not None and any((repo_id, resource_kind, resource_id)):
+        raise HTTPException(
+            status_code=400,
+            detail="workspace_root cannot be combined with legacy owner fields",
+        )
+    if repo_id is None:
+        return
+    if resource_kind is None and resource_id is None:
+        return
+    if resource_kind != "repo" or resource_id != repo_id:
+        raise HTTPException(
+            status_code=400,
+            detail="repo_id conflicts with resource_kind/resource_id",
+        )
+
+
+def _scope_urn_for_create_resolution(
+    *,
+    scope_ref: Optional[ScopeRef],
+    resource_kind: Optional[str],
+    resource_id: Optional[str],
+    worktree_parent_repo_id: Optional[str],
+    workspace_root: Path,
+    hub_root: Path,
+) -> str:
+    if scope_ref is not None:
+        return scope_ref.to_urn()
+    if resource_kind == "repo" and resource_id is not None:
+        return ScopeRef(kind="repo", id=resource_id).to_urn()
+    if (
+        resource_kind == "worktree"
+        and resource_id is not None
+        and worktree_parent_repo_id is not None
+    ):
+        return ScopeRef(
+            kind="worktree",
+            id=resource_id,
+            parent_repo_id=worktree_parent_repo_id,
+        ).to_urn()
+    try:
+        if workspace_root.resolve() == hub_root.resolve():
+            return ScopeRef(kind="hub").to_urn()
+    except OSError:
+        pass
+    return ScopeRef(kind="filesystem", path=str(workspace_root)).to_urn()
+
+
+def _create_genesis_metadata(
+    *,
+    payload: ManagedThreadCreateRequest,
+    scope_ref: Optional[ScopeRef],
+    resource_kind: Optional[str],
+    resource_id: Optional[str],
+    repo_id: Optional[str],
+    worktree_parent_repo_id: Optional[str],
+    workspace_root: Path,
+    hub_root: Path,
+) -> dict[str, Any]:
+    genesis_provided = any(
+        value is not None
+        for value in (
+            payload.genesis,
+            normalize_optional_text(payload.origin),
+            normalize_optional_text(payload.scope_source),
+            normalize_optional_text(payload.parent_thread_id),
+            normalize_optional_text(payload.fork_mode),
+            payload.client_intent,
+        )
+    )
+    if genesis_provided:
+        origin = normalize_optional_text(payload.origin) or "unknown"
+        scope_source = normalize_optional_text(payload.scope_source) or "unspecified"
+    else:
+        origin = "legacy"
+        if normalize_optional_text(payload.scope_urn) is not None:
+            scope_source = "legacy_scope_urn"
+        elif any(
+            normalize_optional_text(value) is not None
+            for value in (
+                payload.workspace_root,
+                payload.repo_id,
+                payload.resource_kind,
+                payload.resource_id,
+            )
+        ):
+            scope_source = "legacy_scope_fields"
+        else:
+            scope_source = "legacy_default_hub"
+
+    scope_urn = _scope_urn_for_create_resolution(
+        scope_ref=scope_ref,
+        resource_kind=resource_kind,
+        resource_id=resource_id,
+        worktree_parent_repo_id=worktree_parent_repo_id,
+        workspace_root=workspace_root,
+        hub_root=hub_root,
+    )
+    scope_kind = scope_ref.kind if scope_ref is not None else None
+    if scope_kind is None:
+        scope_kind = resource_kind or (
+            "hub" if scope_urn == ScopeRef(kind="hub").to_urn() else "filesystem"
+        )
+    client_intent_fields = {
+        "scope_urn": normalize_optional_text(payload.scope_urn),
+        "workspace_root": normalize_optional_text(payload.workspace_root),
+        "repo_id": normalize_optional_text(payload.repo_id),
+        "resource_kind": normalize_optional_text(payload.resource_kind),
+        "resource_id": normalize_optional_text(payload.resource_id),
+    }
+    metadata: dict[str, Any] = {
+        "origin": origin,
+        "scope_source": scope_source,
+        "legacy": not genesis_provided,
+        "scope": {
+            "urn": scope_urn,
+            "kind": scope_kind,
+            "repo_id": repo_id,
+            "resource_kind": resource_kind,
+            "resource_id": resource_id,
+            "workspace_root": str(workspace_root),
+        },
+        "client_scope_request": {
+            key: value
+            for key, value in client_intent_fields.items()
+            if value is not None
+        },
+    }
+    parent_thread_id = normalize_optional_text(payload.parent_thread_id)
+    if parent_thread_id is not None:
+        metadata["parent_thread_id"] = parent_thread_id
+    fork_mode = normalize_optional_text(payload.fork_mode)
+    if fork_mode is not None:
+        metadata["fork_mode"] = fork_mode
+    if payload.client_intent is not None:
+        metadata["client_intent"] = payload.client_intent
+    return metadata
+
+
+def _worktree_parent_repo_id(
+    repos: Any,
+    worktree_id: Optional[str],
+) -> Optional[str]:
+    if worktree_id is None:
+        return None
+    for snapshot in repos or ():
+        if normalize_optional_text(_repo_snapshot_value(snapshot, "id")) != worktree_id:
+            continue
+        return normalize_optional_text(_repo_snapshot_value(snapshot, "worktree_of"))
+    return None
+
+
+def _repo_snapshot_value(snapshot: Any, attr: str) -> Any:
+    if isinstance(snapshot, dict):
+        return snapshot.get(attr)
+    return getattr(snapshot, attr, None)
+
+
+def managed_thread_metadata_for_provisioned_workspace(
+    resolution: ManagedThreadCreateResolution,
+    provisioned_workspace: ManagedThreadWorkspaceProvision,
+) -> dict[str, Any]:
+    metadata = dict(resolution.metadata)
+    genesis = metadata.get("genesis")
+    if isinstance(genesis, dict):
+        genesis = dict(genesis)
+        scope = genesis.get("scope")
+        if isinstance(scope, dict):
+            scope = dict(scope)
+            scope["actual_workspace_root"] = str(provisioned_workspace.workspace_root)
+            genesis["scope"] = scope
+        metadata["genesis"] = genesis
+    return metadata
+
+
 def _build_operator_status_fields(
     *,
     normalized_status: Optional[str],
@@ -690,6 +871,7 @@ def resolve_managed_thread_create_resolution(
     context = get_pma_request_context(request)
     hub_root = context.hub_root
     scope_ref = _scope_ref_from_payload(payload)
+    _validate_legacy_scope_field_consistency(payload)
     scope_workspace_root: Optional[str] = None
     scope_resource_kind: Optional[str] = None
     scope_resource_id: Optional[str] = None
@@ -768,6 +950,15 @@ def resolve_managed_thread_create_resolution(
     resource_kind = pma_context.resource_kind
     resource_id = pma_context.resource_id
     resolved_repo_id = pma_context.repo_id
+    worktree_parent_repo_id = _worktree_parent_repo_id(
+        repos,
+        resource_id if resource_kind == "worktree" else None,
+    )
+    if resource_kind == "worktree" and worktree_parent_repo_id is None:
+        raise HTTPException(
+            status_code=400,
+            detail="Worktree scope requires worktree_of metadata",
+        )
     followup_policy = resolve_managed_thread_followup_policy(
         payload,
         # Terminal follow-up defaults now apply when the thread is used, not at
@@ -805,6 +996,16 @@ def resolve_managed_thread_create_resolution(
         "context_profile": context_profile,
         "approval_mode": approval_mode,
         "chat_kind": normalize_managed_thread_chat_kind(payload.chat_kind),
+        "genesis": _create_genesis_metadata(
+            payload=payload,
+            scope_ref=scope_ref,
+            resource_kind=resource_kind,
+            resource_id=resource_id,
+            repo_id=resolved_repo_id,
+            worktree_parent_repo_id=worktree_parent_repo_id,
+            workspace_root=resolved_workspace,
+            hub_root=hub_root,
+        ),
     }
     chat_kind = normalize_optional_text(payload.chat_kind)
     if chat_kind is not None:

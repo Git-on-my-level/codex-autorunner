@@ -60,6 +60,7 @@ from .managed_thread_route_helpers import (
     _resolve_running_or_latest_execution,
     _serialize_managed_thread,
     _serialize_thread_target,
+    managed_thread_metadata_for_provisioned_workspace,
     provision_managed_thread_workspace,
     resolve_managed_thread_create_resolution,
     resolve_managed_thread_list_query,
@@ -490,6 +491,10 @@ def build_managed_thread_crud_routes(
 
         service = build_managed_thread_orchestration_service(request)
         try:
+            metadata = managed_thread_metadata_for_provisioned_workspace(
+                resolved,
+                provisioned_workspace,
+            )
             try:
                 if resolved.scope is not None:
                     thread = service.create_thread_target(
@@ -497,7 +502,7 @@ def build_managed_thread_crud_routes(
                         provisioned_workspace.workspace_root,
                         scope=resolved.scope,
                         display_name=normalize_optional_text(payload.name),
-                        metadata=resolved.metadata,
+                        metadata=metadata,
                     )
                 else:
                     thread = service.create_thread_target(
@@ -507,7 +512,7 @@ def build_managed_thread_crud_routes(
                         resource_kind=resolved.resource_kind,
                         resource_id=resolved.resource_id,
                         display_name=normalize_optional_text(payload.name),
-                        metadata=resolved.metadata,
+                        metadata=metadata,
                     )
             except Exception:
                 await _cleanup_failed_provisioned_worktree(

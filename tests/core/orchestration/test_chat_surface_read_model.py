@@ -61,6 +61,8 @@ def _seed_thread(
     resource_id: str | None = None,
     lifecycle_status: str = "active",
     runtime_status: str = "idle",
+    display_name: str | None = None,
+    last_message_preview: str | None = None,
     metadata: dict[str, object] | None = None,
 ) -> None:
     with open_orchestration_sqlite(hub_root, durable=False, migrate=True) as conn:
@@ -75,10 +77,11 @@ def _seed_thread(
                 display_name,
                 lifecycle_status,
                 runtime_status,
+                last_message_preview,
                 metadata_json,
                 created_at,
                 updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 thread_id,
@@ -86,9 +89,10 @@ def _seed_thread(
                 repo_id,
                 resource_kind,
                 resource_id or repo_id,
-                f"Thread {thread_id}",
+                display_name or f"Thread {thread_id}",
                 lifecycle_status,
                 runtime_status,
+                last_message_preview,
                 json.dumps(metadata or {}),
                 "2026-05-11T00:00:00Z",
                 "2026-05-11T00:00:10Z",
@@ -721,7 +725,7 @@ def test_chat_index_sorts_by_conversation_activity_not_metadata_hydration(
     older = next(
         row for row in index["rows"] if row["managed_thread_id"] == "thread-older"
     )
-    assert older["title"] == "Agent Nexus / #codex"
+    assert older["title"] == "thread-older"
     assert older["last_activity_at"] == "2026-05-11T00:00:10Z"
 
 
@@ -870,7 +874,7 @@ def test_chat_index_rebuild_repairs_stale_archived_bound_surface_projection(
     }
 
 
-def test_chat_index_and_detail_prefer_bound_chat_display_for_fallback_titles(
+def test_chat_index_and_detail_keep_bound_chat_display_secondary(
     tmp_path: Path,
 ) -> None:
     hub_root = tmp_path / "hub"
@@ -961,16 +965,123 @@ def test_chat_index_and_detail_prefer_bound_chat_display_for_fallback_titles(
         for item in index["rows"]
         if item["managed_thread_id"] == "thread-discord-friendly"
     )
-    assert row["title"] == "Agent Nexus / #codex"
-    assert row["chat_display_name"] == "Agent Nexus / #codex"
+    assert row["title"] == "thread-discord-friendly"
+    assert row["display_title"] == "thread-discord-friendly"
+    assert row["chat_display_name"] == "thread-discord-friendly"
+    assert row["binding_display_name"] == "Agent Nexus / #codex"
 
     detail = service.chat_detail_snapshot("thread-discord-friendly")
-    assert detail["thread"]["title"] == "Agent Nexus / #codex"
-    assert detail["thread"]["chat_display_name"] == "Agent Nexus / #codex"
+    assert detail["thread"]["title"] == "thread-discord-friendly"
+    assert detail["thread"]["chat_display_name"] == "thread-discord-friendly"
 
     custom_detail = service.chat_detail_snapshot("thread-discord-custom")
     assert custom_detail["thread"]["title"] == "Customer escalation"
-    assert custom_detail["thread"]["chat_display_name"] == "Agent Nexus / #support"
+    assert custom_detail["thread"]["chat_display_name"] == "Customer escalation"
+
+
+def test_chat_index_keeps_pma_title_with_notification_reply_contexts(
+    tmp_path: Path,
+) -> None:
+    hub_root = tmp_path / "hub"
+    _seed_thread(
+        hub_root,
+        thread_id="thread-notified",
+        display_name="Deploy investigation",
+    )
+    notifications = PmaNotificationStore(hub_root)
+    notifications.record_notification(
+        correlation_id="corr-notification-source",
+        source_kind="pma",
+        delivery_mode="direct",
+        surface_kind="discord",
+        surface_key="guild:alerts",
+        delivery_record_id="delivery-notification-source",
+        repo_id="repo-1",
+        managed_thread_id="thread-notified",
+        notification_id="5dd3d434ee364219af850bf41221c27c",
+    )
+    notifications.record_notification(
+        correlation_id="corr-notification-continuation",
+        source_kind="pma",
+        delivery_mode="direct",
+        surface_kind="telegram",
+        surface_key="-100:42",
+        delivery_record_id="delivery-notification-continuation",
+        repo_id="repo-1",
+        managed_thread_id="source-thread",
+        continuation_thread_target_id="thread-notified",
+        notification_id="followup-notification",
+    )
+
+    row = ChatSurfaceReadService(hub_root, durable=False).chat_index_snapshot(limit=20)[
+        "rows"
+    ][0]
+
+    assert row["managed_thread_id"] == "thread-notified"
+    assert row["title"] == "Deploy investigation"
+    assert row["display_title"] == "Deploy investigation"
+    assert row["chat_display_name"] == "Deploy investigation"
+    assert (
+        "Notification 5dd3d434ee364219af850bf41221c27c" in row["binding_display_names"]
+    )
+    assert {surface["surface_kind"] for surface in row["surface_bindings"]} >= {
+        "pma",
+        "notification",
+    }
+
+
+def test_chat_index_keeps_external_notification_label_without_managed_thread(
+    tmp_path: Path,
+) -> None:
+    hub_root = tmp_path / "hub"
+    PmaNotificationStore(hub_root).record_notification(
+        correlation_id="corr-external-notification",
+        source_kind="pma",
+        delivery_mode="direct",
+        surface_kind="discord",
+        surface_key="guild:alerts",
+        delivery_record_id="delivery-external-notification",
+        repo_id="repo-1",
+        notification_id="external-notification",
+    )
+
+    row = ChatSurfaceReadService(hub_root, durable=False).chat_index_snapshot(
+        view="external",
+        limit=20,
+    )["rows"][0]
+
+    assert row["managed_thread_id"] is None
+    assert row["title"] == "Notification external-notification"
+    assert row["display_title"] == "Notification external-notification"
+    assert row["chat_display_name"] == "Notification external-notification"
+
+
+def test_chat_index_uses_message_preview_before_thread_id_fallback(
+    tmp_path: Path,
+) -> None:
+    hub_root = tmp_path / "hub"
+    _seed_thread(
+        hub_root,
+        thread_id="thread-preview-title",
+        last_message_preview="Investigate failed deploy",
+    )
+    OrchestrationBindingStore(hub_root, durable=False).upsert_binding(
+        surface_kind="discord",
+        surface_key="1495134681929355404",
+        thread_target_id="thread-preview-title",
+        repo_id="repo-1",
+        resource_kind="repo",
+        resource_id="repo-1",
+        metadata={"display_name": "Agent Nexus / #deploys"},
+    )
+
+    row = ChatSurfaceReadService(hub_root, durable=False).chat_index_snapshot(limit=20)[
+        "rows"
+    ][0]
+
+    assert row["title"] == "Investigate failed deploy"
+    assert row["display_title"] == "Investigate failed deploy"
+    assert row["binding_display_name"] == "Agent Nexus / #deploys"
 
 
 def test_chat_surface_read_model_allows_lifecycle_recovery_events(

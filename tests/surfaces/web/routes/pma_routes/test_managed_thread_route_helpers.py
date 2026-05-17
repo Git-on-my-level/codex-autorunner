@@ -18,6 +18,29 @@ from codex_autorunner.surfaces.web.routes.pma_routes.managed_thread_route_helper
     resolve_managed_thread_list_query,
     serialize_managed_thread_turn_summary,
 )
+from codex_autorunner.surfaces.web.schemas import ManagedThreadStartMessageRequest
+
+
+def test_start_schema_accepts_nested_genesis_aliases() -> None:
+    payload = ManagedThreadStartMessageRequest.model_validate(
+        {
+            "message": "hello",
+            "agent": "codex",
+            "genesis": {
+                "origin": "web",
+                "scopeSource": "default_hub",
+                "parentThreadId": "thread-parent",
+                "forkMode": "copy_context",
+                "clientIntent": {"draftId": "draft-1"},
+            },
+        }
+    )
+
+    assert payload.origin == "web"
+    assert payload.scope_source == "default_hub"
+    assert payload.parent_thread_id == "thread-parent"
+    assert payload.fork_mode == "copy_context"
+    assert payload.client_intent == {"draftId": "draft-1"}
 
 
 class TestNormalizeWorkspaceRootInput:

@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { render } from 'svelte/server';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
@@ -10,6 +12,22 @@ import Page from './[[chatId]]/+page.svelte';
 describe('/chats page', () => {
   afterEach(() => {
     readModelEntityStore.reset();
+  });
+
+  it('preserves route-selected agent drafts when creating a scoped local draft', () => {
+    const source = readFileSync(
+      fileURLToPath(new URL('./[[chatId]]/+page.svelte', import.meta.url)),
+      'utf8'
+    );
+    const createChatBody = source.match(
+      /async function createChat[\s\S]*?\n  async function sendMessage/
+    )?.[0];
+
+    expect(createChatBody).toContain('if (!options.preserveSelectedScope)');
+    expect(createChatBody).toMatch(
+      /if \(!options\.preserveSelectedScope\) \{[\s\S]*newChatKind = 'pma';[\s\S]*\}/
+    );
+    expect(createChatBody).not.toMatch(/detailMode = 'detail';\s*newChatKind = 'pma';/);
   });
 
   it('renders filters, chat list shell, and composer affordances without global memory controls', () => {

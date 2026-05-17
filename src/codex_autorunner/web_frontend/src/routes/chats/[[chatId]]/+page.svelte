@@ -98,7 +98,8 @@
     type ChatStatusFilter,
     type ChatListEntry,
     type ChatRunGroup,
-    type PmaChatScopeOption
+    type PmaChatScopeOption,
+    type PmaChatScopeSource
   } from '$lib/viewModels/pmaChat';
   import {
     isChatUnread,
@@ -162,6 +163,7 @@
   let selectedReasoning = $state('');
   let selectedProfile = $state('');
   let selectedScopeId = $state('local');
+  let selectedScopeSource = $state<PmaChatScopeSource>('default_hub');
   let newChatKind = $state<'pma' | 'agent'>('pma');
   let filter = $state<ChatFilter>('all');
   let detailMode = $state<'list' | 'detail'>('list');
@@ -835,7 +837,10 @@
       topologyResult.ok ? selectRepoSummaries(scopeState) : [],
       topologyResult.ok ? selectWorktreeSummaries(scopeState) : []
     );
-    if (!scopeOptions.some((scope) => scope.id === selectedScopeId)) selectedScopeId = 'local';
+    if (!scopeOptions.some((scope) => scope.id === selectedScopeId)) {
+      selectedScopeId = 'local';
+      selectedScopeSource = 'default_hub';
+    }
     if (!canStartCodingAgentChat) newChatKind = 'pma';
     if (agentResult.ok) {
       agents = agentResult.data.agents;
@@ -882,16 +887,19 @@
       const sid = `repo:${decoded.slice('repo:'.length)}`;
       if (scopeOptions.some((scope) => scope.id === sid)) {
         selectedScopeId = sid;
+        selectedScopeSource = 'route_explicit';
         appliedScope = true;
       }
     } else if (decoded.startsWith('worktree:')) {
       const sid = `worktree:${decoded.slice('worktree:'.length)}`;
       if (scopeOptions.some((scope) => scope.id === sid)) {
         selectedScopeId = sid;
+        selectedScopeSource = 'route_explicit';
         appliedScope = true;
       }
     } else if (decoded === 'local' || decoded === 'hub') {
       selectedScopeId = 'local';
+      selectedScopeSource = 'route_explicit';
       appliedScope = true;
     }
     const requestedKind = page.url.searchParams.get('kind');
@@ -901,7 +909,7 @@
     params.delete('kind');
     const query = params.toString();
     void goto(href(`/chats${query ? `?${query}` : ''}`), { replaceState: true }).then(() => {
-      if (appliedScope) void createChat();
+      if (appliedScope) void createChat({ preserveSelectedScope: true });
     });
   }
 
@@ -1416,6 +1424,11 @@
     if (modelExists(models, selectedModel)) persistLastModelForAgent(selectedAgent, selectedModel);
   }
 
+  function handleScopePickerChange(): void {
+    selectedScopeSource = selectedScopeId === 'local' ? 'default_hub' : 'picker_explicit';
+    if (newChatKind === 'agent' && selectedScopeId === 'local') newChatKind = 'pma';
+  }
+
   function newChatDisplayName(): string {
     return newChatKind === 'agent' && canStartCodingAgentChat
       ? 'New coding agent chat'
@@ -1443,7 +1456,9 @@
       updatedAt: now,
       raw: {
         draft: true,
+        origin: 'web',
         scope_urn: scope.scopeUrn,
+        scope_source: selectedScopeSource,
         chat_kind: chatKind
       }
     };
@@ -1552,13 +1567,17 @@
     };
   });
 
-  async function createChat(): Promise<void> {
+  async function createChat(options: { preserveSelectedScope?: boolean } = {}): Promise<void> {
     creating = true;
     composeError = null;
+    if (!options.preserveSelectedScope) {
+      selectedScopeId = 'local';
+      selectedScopeSource = 'default_hub';
+      newChatKind = 'pma';
+    }
     localDraftChat = newDraftChatSummary();
     activeChatId = localDraftChat.id;
     detailMode = 'detail';
-    newChatKind = 'pma';
     closeStream();
     void goto(href('/chats'), { replaceState: true });
     creating = false;
@@ -1683,7 +1702,8 @@
               chatKind: newChatKind === 'agent' && canStartCodingAgentChat ? 'coding_agent' : 'pma',
               attachments: attachmentsForMessage,
               reasoning: selectedReasoning,
-              clientTurnId: optimisticId
+              clientTurnId: optimisticId,
+              scopeSource: selectedScopeSource
             }
           )
         : busyPolicy === 'interrupt'
@@ -2217,7 +2237,7 @@
         <span class="sr-only">Search chats</span>
         <input bind:value={search} type="search" placeholder="Search chats, repos, tickets" />
       </label>
-      <button class="new-chat-button" type="button" onclick={createChat} disabled={creating}>
+      <button class="new-chat-button" type="button" onclick={() => createChat()} disabled={creating}>
         {createChatLabel}
       </button>
     </div>
@@ -2643,11 +2663,14 @@
             bind:profileValue={selectedProfile}
             bind:modelValue={selectedModel}
             bind:reasoningValue={selectedReasoning}
+            bind:scopeValue={selectedScopeId}
             {models}
+            {scopeOptions}
             loading={loadingModels}
             showAgent={showAgentSelector}
             onAgentChange={handleAgentChange}
             onPickerChange={handlePickerChange}
+            onScopeChange={handleScopePickerChange}
           />
         </div>
       {:else if activeCards.length === 0 && liveActivity}
