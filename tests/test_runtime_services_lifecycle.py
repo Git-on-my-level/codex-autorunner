@@ -9,9 +9,9 @@ import pytest
 from fastapi import FastAPI
 
 from codex_autorunner.core.runtime_services import RuntimeServices
-from codex_autorunner.surfaces.web import app as hub_app_module
 from codex_autorunner.surfaces.web import app_builders as app_builders_module
 from codex_autorunner.surfaces.web.app_builders import _app_lifespan
+from codex_autorunner.surfaces.web.services import hub_startup as hub_startup_module
 
 
 class _FakeAgentPool:
@@ -203,9 +203,9 @@ async def test_hub_prune_loop_uses_explicit_supervisor(
         if sleep_calls > 1:
             raise asyncio.CancelledError()
 
-    monkeypatch.setattr(hub_app_module.asyncio, "sleep", _fake_sleep)
+    monkeypatch.setattr(hub_startup_module.asyncio, "sleep", _fake_sleep)
 
-    await hub_app_module._run_prune_loop(
+    await hub_startup_module.run_prune_loop(
         interval_seconds=1.0,
         supervisor=supervisor,
         logger=logging.getLogger("test.hub.prune"),

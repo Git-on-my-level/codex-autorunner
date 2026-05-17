@@ -1,7 +1,4 @@
-"""Regression tests for hub startup / health ordering (GitHub #1266).
-
-Hub heavy startup is deferred via `_deferred_hub_startup`.
-"""
+"""Regression tests for hub startup / health ordering (GitHub #1266)."""
 
 from __future__ import annotations
 
@@ -10,6 +7,7 @@ import asyncio
 import sqlite3
 import sys
 import threading
+import time
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -27,16 +25,17 @@ from codex_autorunner.core.pma_queue import PmaQueue
 from codex_autorunner.server import create_hub_app
 from codex_autorunner.surfaces.web import app as web_app_module
 from codex_autorunner.surfaces.web import app_state as web_app_state_module
+from codex_autorunner.surfaces.web.services import hub_startup as hub_startup_module
 from tests.conftest import write_test_config
 from tests.pma_support import _enable_pma
 from tests.test_hub_app_context import _stub_opencode_supervisor
 
-_APP_PY = Path(web_app_module.__file__).resolve()
+_STARTUP_SERVICE_PY = Path(hub_startup_module.__file__).resolve()
 
 
-def _find_create_hub_lifespan(tree: ast.Module) -> ast.AsyncFunctionDef | None:
+def _find_hub_startup_service_lifespan(tree: ast.Module) -> ast.AsyncFunctionDef | None:
     for node in tree.body:
-        if not isinstance(node, ast.FunctionDef) or node.name != "create_hub_app":
+        if not isinstance(node, ast.ClassDef) or node.name != "HubStartupService":
             continue
         for item in node.body:
             if isinstance(item, ast.AsyncFunctionDef) and item.name == "lifespan":
@@ -130,8 +129,8 @@ def _hub_lifespan_yields_before_blocking_startup_work() -> bool:
     When heavy work moves into nested helpers or tasks only, outer-body blocking awaits may be
     empty; treat as early-yield semantics so the integration test runs.
     """
-    tree = ast.parse(_APP_PY.read_text(encoding="utf-8"))
-    lifespan = _find_create_hub_lifespan(tree)
+    tree = ast.parse(_STARTUP_SERVICE_PY.read_text(encoding="utf-8"))
+    lifespan = _find_hub_startup_service_lifespan(tree)
     if lifespan is None:
         return False
     yield_lines: list[int] = []
@@ -165,7 +164,7 @@ def test_hub_health_serves_before_deferred_startup_work_finishes(
         await asyncio.sleep(3600)
 
     monkeypatch.setattr(
-        web_app_module,
+        hub_startup_module,
         "recover_orphaned_managed_thread_executions",
         _hanging_recover,
     )
@@ -206,7 +205,7 @@ def test_hub_root_health_serves_before_deferred_startup_work_finishes(
         await asyncio.sleep(3600)
 
     monkeypatch.setattr(
-        web_app_module,
+        hub_startup_module,
         "recover_orphaned_managed_thread_executions",
         _hanging_recover,
     )
@@ -280,7 +279,7 @@ def test_health_reports_startup_phase_before_deferred_startup_finishes(
         await asyncio.sleep(3600)
 
     monkeypatch.setattr(
-        web_app_module,
+        hub_startup_module,
         "recover_orphaned_managed_thread_executions",
         _hanging_recover,
     )
@@ -312,9 +311,15 @@ def test_health_reports_deferred_startup_complete_after_lifespan(
     )
 
     with TestClient(app) as client:
-        response = client.get("/health")
-        assert response.status_code == 200
-        body = response.json()
+        body = None
+        for _ in range(100):
+            response = client.get("/health")
+            assert response.status_code == 200
+            body = response.json()
+            if body["hub_deferred_startup_complete"] is True:
+                break
+            time.sleep(0.01)
+        assert body is not None
         assert body["hub_startup_phase"] == HUB_STARTUP_STARTED
         assert body["hub_deferred_startup_complete"] is True
 
@@ -493,7 +498,7 @@ def test_hub_health_includes_last_orchestration_housekeeping(
         raise sqlite3.OperationalError("disabled for serializer test")
 
     monkeypatch.setattr(
-        web_app_module,
+        hub_startup_module,
         "run_execution_history_housekeeping_once",
         _skip_execution_history_housekeeping,
     )
@@ -547,27 +552,27 @@ def test_hub_housekeeping_loop_survives_sqlite_errors(
         return _Summary()
 
     monkeypatch.setattr(
-        web_app_module,
+        hub_startup_module,
         "prune_filebox_root",
         _fake_prune_filebox_root,
     )
     monkeypatch.setattr(
-        web_app_module,
+        hub_startup_module,
         "reap_managed_docker_containers",
         lambda *args, **kwargs: None,
     )
     monkeypatch.setattr(
-        web_app_module,
+        hub_startup_module,
         "run_housekeeping_once",
         lambda *args, **kwargs: None,
     )
     monkeypatch.setattr(
-        web_app_module,
+        hub_startup_module,
         "reap_managed_docker_containers",
         lambda *args, **kwargs: None,
     )
     monkeypatch.setattr(
-        web_app_module,
+        hub_startup_module,
         "run_execution_history_housekeeping_once",
         _fake_execution_history_housekeeping,
     )
