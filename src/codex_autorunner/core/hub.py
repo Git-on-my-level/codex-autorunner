@@ -9,6 +9,23 @@ from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple
 
 from ..discovery import discover_and_init
 from ..manifest import Manifest
+from .automation import (
+    EXECUTOR_GITHUB_COMMENT,
+    EXECUTOR_GITHUB_REACTION,
+    EXECUTOR_MANAGED_THREAD_TURN,
+    EXECUTOR_PMA_TURN,
+    EXECUTOR_PUBLISH_CHAT_NOTIFICATION,
+    EXECUTOR_PUBLISH_OPERATION,
+    EXECUTOR_TICKET_FLOW,
+    AutomationExecutorRegistry,
+    AutomationExecutorResult,
+    AutomationJob,
+    AutomationStore,
+    ManagedThreadTurnAutomationExecutor,
+    PublishOperationAutomationExecutor,
+)
+from .automation.models import JOB_SKIPPED, JOB_SUCCEEDED
+from .automation.ticket_flow_executor import TicketFlowAutomationExecutor
 from .config import (
     HubConfig,
     RepoConfig,
@@ -37,9 +54,15 @@ from .lifecycle_events import (
 )
 from .pma_automation_store import DEFAULT_PMA_LANE_ID, PmaAutomationStore
 from .pma_queue import PmaQueue
+from .pma_reactive import PmaReactiveStore
 from .pma_safety import PmaSafetyChecker, PmaSafetyConfig
 from .ports.backend_orchestrator import (
     BackendOrchestrator as BackendOrchestratorProtocol,
+)
+from .publish_executor import PublishExecutorRegistry
+from .publish_operation_executors import (
+    build_enqueue_managed_turn_executor,
+    build_notify_chat_executor,
 )
 from .runner_controller import ProcessRunnerController, SpawnRunnerFn
 from .runtime import RuntimeContext
@@ -56,6 +79,271 @@ class PmaLaneWorkerStartResult:
     accepted: bool
     reason: str
     lane_id: str
+
+
+class _PmaTurnAutomationExecutor:
+    def __init__(
+        self,
+        *,
+        hub_root: Path,
+        start_lane_worker_fn: Callable[[str], PmaLaneWorkerStartResult],
+        safety_checker_fn: Optional[Callable[[], PmaSafetyChecker]] = None,
+    ) -> None:
+        self._hub_root = hub_root
+        self._start_lane_worker_fn = start_lane_worker_fn
+        self._safety_checker_fn = safety_checker_fn
+
+    def execute(self, job: AutomationJob) -> AutomationExecutorResult:
+        if job.policy.get("requires_pma_safety"):
+            if self._safety_checker_fn is not None:
+                safety_check = self._safety_checker_fn().check_reactive_turn()
+                if not safety_check.allowed:
+                    return AutomationExecutorResult(
+                        status=JOB_SKIPPED,
+                        summary=safety_check.reason or "reactive_blocked",
+                    )
+            debounce_seconds = int(job.policy.get("reactive_debounce_seconds") or 0)
+            debounce_key = str(job.policy.get("reactive_debounce_key") or "").strip()
+            if debounce_seconds > 0 and debounce_key:
+                if not PmaReactiveStore(self._hub_root).check_and_update(
+                    debounce_key, debounce_seconds
+                ):
+                    return AutomationExecutorResult(
+                        status=JOB_SKIPPED,
+                        summary="reactive_debounced",
+                    )
+        lane_id = (
+            str(job.executor.get("lane_id") or job.executor.get("lane") or "").strip()
+            or DEFAULT_PMA_LANE_ID
+        )
+        message = str(
+            job.executor.get("message")
+            or job.executor.get("prompt")
+            or "Automation job received."
+        )
+        payload = {
+            "message": message,
+            "agent": job.executor.get("agent"),
+            "model": job.executor.get("model"),
+            "reasoning": job.executor.get("reasoning"),
+            "client_turn_id": job.job_id,
+            "stream": False,
+            "hub_root": str(self._hub_root),
+            "automation_job": job.to_dict(),
+        }
+        lifecycle_event = self._legacy_lifecycle_event_payload(job)
+        if lifecycle_event is not None:
+            payload["lifecycle_event"] = lifecycle_event
+        wake_up = self._legacy_timer_wakeup_payload(job)
+        if wake_up is not None:
+            payload["wake_up"] = wake_up
+            payload["message"] = self._timer_wakeup_message(wake_up)
+        wake_up = self._subscription_wakeup_payload(job)
+        if wake_up is not None:
+            payload["wake_up"] = wake_up
+            payload["message"] = self._subscription_wakeup_message(wake_up)
+        wake_up = self._legacy_wakeup_payload(job)
+        if wake_up is not None:
+            payload["wake_up"] = wake_up
+            payload["message"] = self._legacy_wakeup_message(wake_up)
+        item = None
+        created = False
+        delivery_attempts = 3
+        queue = PmaQueue(self._hub_root)
+        for attempt in range(1, delivery_attempts + 1):
+            try:
+                item, created = queue.ensure_active_item_sync(
+                    lane_id, f"automation-job:{job.job_id}", payload
+                )
+                break
+            except (
+                sqlite3.Error,
+                OSError,
+                ValueError,
+                TypeError,
+                RuntimeError,
+            ) as exc:
+                logger.warning(
+                    "Failed to enqueue PMA automation job; retrying if budget "
+                    "remains (job_id=%s, lane_id=%s, attempt=%s, attempts=%s, "
+                    "error=%s)",
+                    job.job_id,
+                    lane_id,
+                    attempt,
+                    delivery_attempts,
+                    exc,
+                    exc_info=True,
+                )
+                if attempt >= delivery_attempts:
+                    raise
+                time.sleep(0.25 * (2 ** (attempt - 1)))
+        if item is None:
+            raise RuntimeError("pma_automation_delivery_retry_exhausted")
+        start_result = self._start_lane_worker_fn(lane_id)
+        if not start_result.accepted:
+            return AutomationExecutorResult(
+                status="failed",
+                summary=f"pma_lane_worker_start_failed:{start_result.reason}",
+                execution_refs={
+                    "pma_lane_id": lane_id,
+                    "pma_queue_item_id": item.item_id,
+                },
+            )
+        return AutomationExecutorResult(
+            summary="queued PMA automation turn",
+            data={"created_queue_item": created},
+            execution_refs={"pma_lane_id": lane_id, "pma_queue_item_id": item.item_id},
+        )
+
+    def _legacy_lifecycle_event_payload(
+        self, job: AutomationJob
+    ) -> Optional[dict[str, Any]]:
+        event = job.payload.get("event")
+        if not isinstance(event, dict):
+            return None
+        raw = event.get("raw_payload")
+        if not isinstance(raw, dict):
+            return None
+        event_type = raw.get("event_type")
+        event_id = raw.get("event_id")
+        if not isinstance(event_type, str) or not event_type:
+            return None
+        raw_data = raw.get("data")
+        return {
+            "event_id": event_id,
+            "event_type": event_type,
+            "repo_id": raw.get("repo_id"),
+            "run_id": raw.get("run_id"),
+            "timestamp": raw.get("timestamp"),
+            "data": dict(raw_data) if isinstance(raw_data, dict) else {},
+            "origin": raw.get("origin"),
+        }
+
+    def _legacy_timer_wakeup_payload(
+        self, job: AutomationJob
+    ) -> Optional[dict[str, Any]]:
+        if job.executor.get("wake_up_kind") != "pma_timer":
+            return None
+        event = job.payload.get("event")
+        if not isinstance(event, dict):
+            return None
+        event_payload = event.get("payload")
+        if not isinstance(event_payload, dict):
+            return None
+        schedule = event_payload.get("schedule")
+        if not isinstance(schedule, dict):
+            return None
+        schedule_config = schedule.get("schedule")
+        if not isinstance(schedule_config, dict):
+            return None
+        timer_payload = schedule_config.get("payload")
+        if not isinstance(timer_payload, dict):
+            return None
+        wake_up = dict(timer_payload)
+        wake_up["source"] = "timer"
+        wake_up["timer_id"] = wake_up.get("timer_id") or schedule_config.get(
+            "legacy_timer_id"
+        )
+        wake_up["timestamp"] = wake_up.get("timestamp") or schedule.get("last_fire_at")
+        wake_up["lane_id"] = wake_up.get("lane_id") or "pma:default"
+        return wake_up
+
+    def _subscription_wakeup_payload(
+        self, job: AutomationJob
+    ) -> Optional[dict[str, Any]]:
+        if job.executor.get("wake_up_kind") != "pma_subscription":
+            return None
+        wake_up = {
+            key: job.executor.get(key)
+            for key in (
+                "source",
+                "event_type",
+                "subscription_id",
+                "repo_id",
+                "run_id",
+                "thread_id",
+                "lane_id",
+                "from_state",
+                "to_state",
+                "reason",
+                "timestamp",
+                "delivery_target",
+                "pma_origin",
+                "metadata",
+            )
+        }
+        wake_up["source"] = wake_up.get("source") or "transition"
+        wake_up["lane_id"] = wake_up.get("lane_id") or "pma:default"
+        return {
+            key: value
+            for key, value in wake_up.items()
+            if value is not None and value != ""
+        }
+
+    def _legacy_wakeup_payload(self, job: AutomationJob) -> Optional[dict[str, Any]]:
+        if job.executor.get("wake_up_kind") != "pma_legacy_wakeup":
+            return None
+        wake_up = job.payload.get("wake_up")
+        if not isinstance(wake_up, dict):
+            return None
+        out = dict(wake_up)
+        out["lane_id"] = out.get("lane_id") or "pma:default"
+        return out
+
+    def _timer_wakeup_message(self, wake_up: dict[str, Any]) -> str:
+        lines = ["Automation wake-up received."]
+        for key in (
+            "source",
+            "event_type",
+            "subscription_id",
+            "timer_id",
+            "repo_id",
+            "run_id",
+            "thread_id",
+            "lane_id",
+            "from_state",
+            "to_state",
+            "reason",
+            "timestamp",
+        ):
+            value = wake_up.get(key)
+            if value is not None:
+                lines.append(f"{key}: {value}")
+        lines.append(
+            "suggested_next_action: verify progress, then use "
+            "/hub/pma/timers/{timer_id}/touch or /hub/pma/timers/{timer_id}/cancel."
+        )
+        return "\n".join(lines)
+
+    def _subscription_wakeup_message(self, wake_up: dict[str, Any]) -> str:
+        lines = ["Automation wake-up received."]
+        for key in (
+            "source",
+            "event_type",
+            "subscription_id",
+            "repo_id",
+            "run_id",
+            "thread_id",
+            "lane_id",
+            "from_state",
+            "to_state",
+            "reason",
+            "timestamp",
+        ):
+            value = wake_up.get(key)
+            if value is not None:
+                lines.append(f"{key}: {value}")
+        lines.append(
+            "suggested_next_action: inspect the transition and adjust "
+            "/hub/pma/subscriptions or /hub/pma/timers as needed."
+        )
+        return "\n".join(lines)
+
+    def _legacy_wakeup_message(self, wake_up: dict[str, Any]) -> str:
+        source = wake_up.get("source")
+        if source == "timer":
+            return self._timer_wakeup_message(wake_up)
+        return self._subscription_wakeup_message(wake_up)
 
 
 BackendFactoryBuilder = Callable[[Path, RepoConfig], BackendFactory]
@@ -235,15 +523,61 @@ class HubSupervisor:
         self._pma_lane_worker_starter: Optional[Callable[[str], None]] = None
         self._scm_poll_processor = scm_poll_processor
         self._invalidation_callbacks: List[Callable[[], None]] = []
+        self._worktree_bridge = _HubWorktreeBridge(self)
+        self._worktree_manager = WorktreeManager(
+            hub_config,
+            topology_repository=self._topology_repository,
+            ctx=self._worktree_bridge,
+        )
+        automation_executor_registry = AutomationExecutorRegistry()
+        automation_executor_registry.register(
+            EXECUTOR_PMA_TURN,
+            _PmaTurnAutomationExecutor(
+                hub_root=hub_config.root,
+                start_lane_worker_fn=self._request_pma_lane_worker_start,
+                safety_checker_fn=lambda: self.ensure_pma_safety_checker(),
+            ),
+        )
+        automation_executor_registry.register(
+            EXECUTOR_TICKET_FLOW,
+            TicketFlowAutomationExecutor(
+                hub_root=hub_config.root,
+                topology_repository=self._topology_repository,
+                worktree_manager=self._worktree_manager,
+                run_coroutine_fn=self._run_coroutine,
+            ),
+        )
+        automation_executor_registry.register(
+            EXECUTOR_MANAGED_THREAD_TURN,
+            ManagedThreadTurnAutomationExecutor(hub_root=hub_config.root),
+        )
+        publish_registry = PublishExecutorRegistry(
+            {
+                "enqueue_managed_turn": build_enqueue_managed_turn_executor(
+                    hub_root=hub_config.root
+                ),
+                "notify_chat": build_notify_chat_executor(hub_root=hub_config.root),
+            },
+            mutation_policy_config=hub_config.raw,
+        )
+        publish_executor = PublishOperationAutomationExecutor(
+            hub_root=hub_config.root,
+            executor_registry=publish_registry,
+        )
+        for executor_kind in (
+            EXECUTOR_PUBLISH_OPERATION,
+            EXECUTOR_PUBLISH_CHAT_NOTIFICATION,
+            EXECUTOR_GITHUB_REACTION,
+            EXECUTOR_GITHUB_COMMENT,
+        ):
+            automation_executor_registry.register(executor_kind, publish_executor)
         self._lifecycle_orchestrator = HubLifecycleOrchestrator(
             hub_config,
             list_repos_fn=lambda: self.list_repos(),
-            ensure_pma_automation_store_fn=lambda: self.ensure_pma_automation_store(),
-            ensure_pma_safety_checker_fn=lambda: self.ensure_pma_safety_checker(),
             run_coroutine_fn=self._run_coroutine,
             process_scm_polls_fn=lambda: self.process_scm_automation_polls(),
             process_pma_timers_fn=lambda: self.process_pma_automation_timers(),
-            drain_pma_wakeups_fn=lambda: self.drain_pma_automation_wakeups(),
+            automation_executor_registry=automation_executor_registry,
             logger=logger,
         )
         self._lifecycle_orchestrator._process_event_fn = (
@@ -258,12 +592,6 @@ class HubSupervisor:
             on_retire_worktree=self.retire_worktree,
             on_list_repos=self.list_repos,
             runners=self._runner_orchestrator.runners,
-        )
-        self._worktree_bridge = _HubWorktreeBridge(self)
-        self._worktree_manager = WorktreeManager(
-            hub_config,
-            topology_repository=self._topology_repository,
-            ctx=self._worktree_bridge,
         )
         self._lifecycle_orchestrator.wire_outbox_lifecycle()
         self._startup_phase = HUB_STARTUP_RECONCILING
@@ -744,10 +1072,11 @@ class HubSupervisor:
         timer_wakeups = (
             self.process_pma_automation_timers(limit=limit) if include_timers else 0
         )
-        dispatched_wakeups = self.drain_pma_automation_wakeups(limit=limit)
+        automation_processed = self._lifecycle_orchestrator.process_automation()
         return {
             "timers_processed": timer_wakeups,
-            "wakeups_dispatched": dispatched_wakeups,
+            "automation_processed": automation_processed,
+            "wakeups_dispatched": 0,
         }
 
     def trigger_pma_from_lifecycle_event(self, event: LifecycleEvent) -> None:
@@ -832,20 +1161,11 @@ class HubSupervisor:
         if take <= 0:
             return 0
 
-        store = self.ensure_pma_automation_store()
-        dequeue_due_timers = getattr(store, "dequeue_due_timers", None)
-        if not callable(dequeue_due_timers):
-            return 0
-        due_timers = dequeue_due_timers(limit=take)
-        if not due_timers:
-            return 0
-
-        created = 0
-        for timer in due_timers:
-            _, deduped = store.notify_timer_fired(timer)
-            if not deduped:
-                created += 1
-        return created
+        scheduler = self._lifecycle_orchestrator._automation_scheduler
+        worker = self._lifecycle_orchestrator._automation_job_worker
+        scheduler.process_due(limit=take)
+        worker_result = worker.process_once(limit=take)
+        return worker_result.succeeded + worker_result.skipped
 
     def _build_pma_wakeup_message(self, wake_up: dict[str, Any]) -> str:
         lines = ["Automation wake-up received."]
@@ -898,6 +1218,7 @@ class HubSupervisor:
         if not self.hub_config.pma.enabled:
             return 0
 
+        automation_store = AutomationStore(self.hub_config.root)
         store = self.ensure_pma_automation_store()
         list_pending_wakeups = getattr(store, "list_pending_wakeups", None)
         mark_wakeup_queued = getattr(store, "mark_wakeup_queued", None)
@@ -912,155 +1233,20 @@ class HubSupervisor:
         if not wakeups:
             return 0
 
-        queue = PmaQueue(self.hub_config.root)
+        automation_store.backfill_legacy_pma_automation()
+        worker = self._lifecycle_orchestrator._automation_job_worker
+        worker.process_once(limit=len(wakeups))
         drained = 0
         for wakeup in wakeups:
             wakeup_id = str(wakeup.get("wakeup_id") or "").strip()
             if not wakeup_id:
                 continue
-            wake_payload = {
-                "wakeup_id": wakeup_id,
-                "repo_id": wakeup.get("repo_id"),
-                "run_id": wakeup.get("run_id"),
-                "thread_id": wakeup.get("thread_id"),
-                "lane_id": (
-                    str(wakeup.get("lane_id")).strip()
-                    if isinstance(wakeup.get("lane_id"), str)
-                    and str(wakeup.get("lane_id")).strip()
-                    else "pma:default"
-                ),
-                "from_state": wakeup.get("from_state"),
-                "to_state": wakeup.get("to_state"),
-                "reason": wakeup.get("reason"),
-                "timestamp": wakeup.get("timestamp"),
-                "source": wakeup.get("source"),
-                "event_type": wakeup.get("event_type"),
-                "subscription_id": wakeup.get("subscription_id"),
-                "timer_id": wakeup.get("timer_id"),
-            }
-            metadata = wakeup.get("metadata")
-            if isinstance(metadata, dict):
-                wake_payload["metadata"] = dict(metadata)
-                delivery_target = metadata.get("delivery_target")
-                if isinstance(delivery_target, dict):
-                    wake_payload["delivery_target"] = dict(delivery_target)
-            payload = {
-                "message": self._build_pma_wakeup_message(wake_payload),
-                "agent": None,
-                "model": None,
-                "reasoning": None,
-                "client_turn_id": wakeup_id,
-                "stream": False,
-                "hub_root": str(self.hub_config.root),
-                "wake_up": wake_payload,
-            }
-            event_id = wakeup.get("event_id")
-            event_type = wakeup.get("event_type")
-            if (
-                isinstance(event_id, str)
-                and event_id
-                and isinstance(event_type, str)
-                and event_type
-            ):
-                metadata = wakeup.get("metadata")
-                origin = (
-                    metadata.get("origin")
-                    if isinstance(metadata, dict)
-                    and isinstance(metadata.get("origin"), str)
-                    else "system"
-                )
-                payload["lifecycle_event"] = {
-                    "event_id": event_id,
-                    "event_type": event_type,
-                    "repo_id": wakeup.get("repo_id"),
-                    "run_id": wakeup.get("run_id"),
-                    "timestamp": wakeup.get("timestamp"),
-                    "data": (
-                        dict(wakeup.get("event_data"))
-                        if isinstance(wakeup.get("event_data"), dict)
-                        else {}
-                    ),
-                    "origin": origin,
-                }
-            idempotency_key = (
-                str(wakeup.get("idempotency_key")).strip()
-                if isinstance(wakeup.get("idempotency_key"), str)
-                and str(wakeup.get("idempotency_key")).strip()
-                else f"automation:{wakeup_id}"
-            )
-            lane_id = (
-                str(wakeup.get("lane_id")).strip()
-                if isinstance(wakeup.get("lane_id"), str)
-                and str(wakeup.get("lane_id")).strip()
-                else "pma:default"
-            )
-            item = None
-            created_queue_item = False
-            try:
-                delivery_attempts = 3
-                for attempt in range(1, delivery_attempts + 1):
-                    try:
-                        item, created_queue_item = queue.ensure_active_item_sync(
-                            lane_id, idempotency_key, payload
-                        )
-                        break
-                    except (
-                        sqlite3.Error,
-                        OSError,
-                        ValueError,
-                        TypeError,
-                        RuntimeError,
-                    ) as exc:
-                        logger.warning(
-                            "Failed to enqueue PMA automation wake-up for delivery; "
-                            "retrying if budget remains (wakeup_id=%s, "
-                            "subscription_id=%s, thread_id=%s, lane_id=%s, "
-                            "attempt=%s, attempts=%s, error=%s)",
-                            wakeup_id,
-                            wakeup.get("subscription_id"),
-                            wakeup.get("thread_id"),
-                            lane_id,
-                            attempt,
-                            delivery_attempts,
-                            exc,
-                            exc_info=True,
-                        )
-                        if attempt >= delivery_attempts:
-                            raise
-                        time.sleep(0.25 * (2 ** (attempt - 1)))
-                if item is None:
-                    raise RuntimeError("pma_wakeup_delivery_retry_exhausted")
-                dupe_reason = (
-                    None if created_queue_item else f"duplicate of {item.item_id}"
-                )
-                mark_wakeup_queued(wakeup_id)
-                worker_start_result = self._request_pma_lane_worker_start(lane_id)
-            except (sqlite3.Error, OSError, ValueError, TypeError, RuntimeError):
-                logger.warning(
-                    "Failed to drain PMA automation wake-up into PMA queue; "
-                    "leaving pending for housekeeping retry "
-                    "(wakeup_id=%s, subscription_id=%s, thread_id=%s, lane_id=%s)",
-                    wakeup_id,
-                    wakeup.get("subscription_id"),
-                    wakeup.get("thread_id"),
-                    lane_id,
-                    exc_info=True,
-                )
+            job = automation_store.get_job(f"legacy-pma-wakeup:{wakeup_id}")
+            if job is None:
                 continue
-            if dupe_reason:
-                logger.info(
-                    "Deduped PMA queue item for automation wake-up %s: %s",
-                    wakeup_id,
-                    dupe_reason,
-                )
-            if not worker_start_result.accepted:
-                logger.warning(
-                    "Leaving PMA automation wake-up %s pending because lane worker "
-                    "startup failed for lane_id=%s reason=%s",
-                    wakeup_id,
-                    worker_start_result.lane_id,
-                    worker_start_result.reason,
-                )
+            if job.state != JOB_SUCCEEDED:
+                if job.attempt_count > 0:
+                    mark_wakeup_queued(wakeup_id)
                 continue
             if mark_wakeup_dispatched(wakeup_id):
                 drained += 1

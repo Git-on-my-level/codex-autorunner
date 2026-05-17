@@ -71,6 +71,9 @@ class FlowRuntime:
             "transition_idempotency_key",
             f"lifecycle:{event_type.value}:{record.id}:{token}",
         )
+        for key, value in record.metadata.items():
+            if str(key).startswith("automation_"):
+                payload.setdefault(str(key), value)
         return payload
 
     def _emit_lifecycle(

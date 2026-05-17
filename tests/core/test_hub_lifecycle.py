@@ -4,7 +4,9 @@ import logging
 import threading
 from datetime import datetime, timedelta, timezone
 
+from codex_autorunner.core.config import load_hub_config
 from codex_autorunner.core.hub_lifecycle import (
+    HubLifecycleOrchestrator,
     HubLifecycleWorker,
     LifecycleEventProcessor,
     LifecycleRetryPolicy,
@@ -405,3 +407,45 @@ def test_hub_lifecycle_worker_wake_resets_idle_streak() -> None:
 
     assert call_count >= 2
     assert streak_after_wake == 0
+
+
+def test_hub_lifecycle_cycle_calls_automation_processors(tmp_path) -> None:
+    config_dir = tmp_path / ".codex-autorunner"
+    config_dir.mkdir(parents=True)
+    (config_dir / "config.yml").write_text(
+        "version: 2\nmode: hub\npma:\n  enabled: false\n",
+        encoding="utf-8",
+    )
+    orchestrator = HubLifecycleOrchestrator(
+        load_hub_config(tmp_path),
+        list_repos_fn=lambda: [],
+        run_coroutine_fn=lambda coro: None,
+        process_scm_polls_fn=lambda: {"polled": 0, "events_emitted": 0},
+    )
+
+    class _Scheduler:
+        calls = 0
+
+        def process_due(self, *, limit: int = 100):
+            self.calls += 1
+            return type(
+                "SchedulerResult",
+                (),
+                {"schedules_fired": 1, "jobs_created": 0},
+            )()
+
+    class _Worker:
+        calls = 0
+
+        def process_once(self, *, limit: int = 25):
+            self.calls += 1
+            return type("WorkerResult", (), {"claimed": 0})()
+
+    scheduler = _Scheduler()
+    worker = _Worker()
+    orchestrator._automation_scheduler = scheduler
+    orchestrator._automation_job_worker = worker
+
+    assert orchestrator._process_lifecycle_event_cycle() is True
+    assert scheduler.calls >= 1
+    assert worker.calls >= 1

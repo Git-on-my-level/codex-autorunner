@@ -3,6 +3,7 @@ from __future__ import annotations
 import copy
 import hashlib
 import html
+import json
 import logging
 import re
 import threading
@@ -10,8 +11,24 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Optional, Protocol
+from typing import Any, Optional, Protocol, cast
 
+from .automation import (
+    AutomationEvent,
+    AutomationExecutorResult,
+    AutomationJob,
+    AutomationJobAttempt,
+    AutomationRule,
+    AutomationRuleEngine,
+    AutomationStore,
+)
+from .automation.models import (
+    EXECUTOR_PUBLISH_OPERATION,
+    JOB_SKIPPED,
+    JOB_SUCCEEDED,
+    TARGET_POLICY_PR_WORKTREE,
+    TRIGGER_KIND_EVENT,
+)
 from .chat_bindings import active_chat_binding_metadata_by_thread
 from .config import load_hub_config
 from .pr_binding_resolver import resolve_binding_for_scm_event
@@ -45,7 +62,7 @@ from .scm_observability import (
     correlation_id_for_operation,
     with_correlation_id,
 )
-from .scm_reaction_router import route_scm_reactions
+from .scm_reaction_router import route_scm_action_specs
 from .scm_reaction_state import (
     ScmReactionStateStore,
     reaction_state_kind,
@@ -53,6 +70,8 @@ from .scm_reaction_state import (
 )
 from .scm_reaction_types import (
     ReactionIntent,
+    ReactionKind,
+    ReactionOperationKind,
     ScmReactionConfig,
     stable_reaction_operation_key,
 )
@@ -88,6 +107,20 @@ class ScmReactionRouter(Protocol):
         binding: Optional[PrBinding] = None,
         config: ScmReactionConfig | Mapping[str, Any] | None = None,
     ) -> list[ReactionIntent]: ...
+
+
+class ScmActionRouter(Protocol):
+    def __call__(
+        self,
+        event: ScmEvent,
+        *,
+        binding: Optional[PrBinding] = None,
+        config: ScmReactionConfig | Mapping[str, Any] | None = None,
+    ) -> list[dict[str, Any]]: ...
+
+
+class ScmAutomationRuleEvaluator(Protocol):
+    def record_event_and_enqueue_jobs(self, event: AutomationEvent) -> object: ...
 
 
 class PublishJournalWriter(Protocol):
@@ -129,6 +162,368 @@ class PublishExecutorFactory(Protocol):
         repo_root: Path,
         raw_config: Optional[dict[str, Any]] = None,
     ) -> Mapping[str, PublishActionExecutor]: ...
+
+
+class ScmCompatibilityPublishBridgeExecutor:
+    def __init__(
+        self,
+        publish_operations: tuple[PublishOperation, ...] = (),
+        *,
+        service: Optional["ScmAutomationService"] = None,
+        event_context: Optional[
+            Mapping[
+                str, tuple[ScmEvent, Optional[PrBinding], tuple[dict[str, Any], ...]]
+            ]
+        ] = None,
+    ) -> None:
+        self._publish_operations = publish_operations
+        self._service = service
+        self._event_context = dict(event_context or {})
+
+    @property
+    def publish_operations(self) -> tuple[PublishOperation, ...]:
+        return self._publish_operations
+
+    def publish_for_job(self, job: AutomationJob) -> tuple[PublishOperation, ...]:
+        if self._service is None:
+            raise RuntimeError(
+                "SCM publish bridge executor requires a service to publish jobs"
+            )
+        cached = self._event_context.get(job.event_id)
+        if cached is not None:
+            event, binding, actions = cached
+            return self.publish_for_event(event=event, binding=binding, actions=actions)
+        automation_event = self._service._automation_store.get_event(job.event_id)
+        if automation_event is None:
+            self._publish_operations = ()
+            return self._publish_operations
+        event = _scm_event_from_automation_event(automation_event)
+        actions = _actions_for_scm_job(job, automation_event)
+        thread_target_id = _normalize_text(
+            _mapping_or_empty(automation_event.payload.get("binding")).get(
+                "thread_target_id"
+            )
+        )
+        binding = self._service._binding_resolver(
+            event,
+            thread_target_id=thread_target_id,
+        )
+        return self.publish_for_event(event=event, binding=binding, actions=actions)
+
+    def publish_for_event(
+        self,
+        *,
+        event: ScmEvent,
+        binding: Optional[PrBinding],
+        actions: tuple[dict[str, Any], ...],
+    ) -> tuple[PublishOperation, ...]:
+        if self._service is None:
+            raise RuntimeError(
+                "SCM publish bridge executor requires a service to publish actions"
+            )
+        service = self._service
+        correlation_id = correlation_id_for_event(event)
+        publish_operations: list[PublishOperation] = []
+        seen_operation_keys: set[str] = set()
+        for action in actions:
+            legacy_intent = _legacy_intent_from_action(action)
+            action_binding_id = _normalize_text(action.get("binding_id"))
+            action_event_id = _normalize_text(action.get("event_id")) or event.event_id
+            action_reaction_kind = _require_action_text(action, "reaction_kind")
+            action_operation_kind = _require_action_text(action, "operation_kind")
+            service._audit_recorder.record(
+                action_type=SCM_AUDIT_ROUTED_INTENT,
+                correlation_id=correlation_id,
+                event=event,
+                binding=binding,
+                intent=legacy_intent,
+            )
+            binding_id: Optional[str] = None
+            fingerprint: Optional[str] = None
+            rsk: Optional[str] = None
+            tracking: dict[str, Any] = {}
+            if binding is not None and action_binding_id is not None:
+                binding_id = action_binding_id
+                fingerprint = (
+                    service._reaction_state_store.compute_reaction_fingerprint(
+                        event,
+                        binding=binding,
+                        intent=legacy_intent,
+                    )
+                )
+                rsk = reaction_state_kind(
+                    reaction_kind=action_reaction_kind,
+                    operation_kind=action_operation_kind,
+                )
+                tracking = _compact_mapping(
+                    {
+                        "binding_id": binding_id,
+                        "correlation_id": correlation_id,
+                        "event_id": action_event_id,
+                        "event_type": event.event_type,
+                        "fingerprint": fingerprint,
+                        "operation_kind": action_operation_kind,
+                        "pr_number": binding.pr_number,
+                        "provider": event.provider,
+                        "reaction_kind": action_reaction_kind,
+                        "reaction_state_kind": rsk,
+                        "repo_id": binding.repo_id or event.repo_id,
+                        "repo_slug": binding.repo_slug or event.repo_slug,
+                        "head_branch": binding.head_branch,
+                        "base_branch": binding.base_branch,
+                        "thread_target_id": binding.thread_target_id,
+                    }
+                )
+                service._reaction_state_store.resolve_other_active_reactions(
+                    binding_id=binding_id,
+                    reaction_kind=rsk,
+                    keep_fingerprint=fingerprint,
+                    event_id=action_event_id,
+                    metadata=tracking,
+                )
+                existing = service._reaction_state_store.get_reaction_state(
+                    binding_id=binding_id,
+                    reaction_kind=rsk,
+                    fingerprint=fingerprint,
+                )
+                if not service._reaction_state_store.should_emit_reaction(
+                    binding_id=binding_id,
+                    reaction_kind=rsk,
+                    fingerprint=fingerprint,
+                ):
+                    existing_attempt_count = int(
+                        getattr(existing, "attempt_count", 0) or 0
+                    )
+                    duplicate_threshold = (
+                        service._reaction_config.duplicate_escalation_threshold
+                    )
+                    if (
+                        existing is not None
+                        and getattr(existing, "escalated_at", None) is None
+                        and duplicate_threshold > 0
+                        and existing_attempt_count + 1 >= duplicate_threshold
+                    ):
+                        escalation_operation = create_escalation_operation(
+                            journal=service._journal,
+                            reaction_state_store=service._reaction_state_store,
+                            audit_recorder=service._audit_recorder,
+                            binding_id=binding_id,
+                            reaction_kind=rsk,
+                            fingerprint=fingerprint,
+                            tracking=tracking,
+                            message=format_duplicate_escalation_message(
+                                tracking,
+                                attempt_count=existing_attempt_count + 1,
+                            ),
+                            reason="duplicate",
+                            seen_operation_keys=seen_operation_keys,
+                            event_id=action_event_id,
+                        )
+                        if escalation_operation is not None:
+                            publish_operations.append(escalation_operation)
+                    elif (
+                        existing is not None
+                        and getattr(existing, "escalated_at", None) is None
+                    ):
+                        service._reaction_state_store.mark_reaction_suppressed(
+                            binding_id=binding_id,
+                            reaction_kind=rsk,
+                            fingerprint=fingerprint,
+                            event_id=action_event_id,
+                            metadata=tracking,
+                        )
+                    continue
+            operation_key = _require_action_text(action, "operation_key")
+            next_attempt_at: Optional[str] = None
+            if (
+                binding is not None
+                and action_reaction_kind == "review_comment"
+                and action_operation_kind == "enqueue_managed_turn"
+            ):
+                operation_key = service._review_comment_enqueue_batch_key(
+                    event=event,
+                    binding=binding,
+                )
+                next_attempt_at = service._review_comment_enqueue_next_attempt_at(
+                    event=event
+                )
+            if operation_key in seen_operation_keys:
+                continue
+            seen_operation_keys.add(operation_key)
+            payload = service._build_feedback_payload(
+                event=event,
+                intent=legacy_intent,
+                binding=binding,
+                payload=with_correlation_id(
+                    copy.deepcopy(_mapping_or_empty(action.get("payload"))),
+                    correlation_id=correlation_id,
+                ),
+                tracking=tracking,
+            )
+            operation: PublishOperation
+            deduped = False
+            if (
+                binding is not None
+                and action_reaction_kind == "ci_failed"
+                and action_operation_kind == "enqueue_managed_turn"
+            ):
+                head_sha = _ci_failed_head_sha_from_payload(payload)
+                if tracking and head_sha is not None:
+                    tracking["ci_head_sha"] = head_sha
+                    payload["scm_reaction"] = tracking
+            else:
+                head_sha = None
+            if tracking and "scm_reaction" not in payload:
+                payload["scm_reaction"] = tracking
+            if (
+                binding is not None
+                and action_reaction_kind == "ci_failed"
+                and action_operation_kind == "enqueue_managed_turn"
+            ):
+                if head_sha is not None:
+                    existing_ci_batch = service._find_pending_ci_failed_batch_operation(
+                        binding=binding,
+                        head_sha=head_sha,
+                    )
+                    if existing_ci_batch is not None:
+                        next_attempt_at = service._ci_failed_enqueue_next_attempt_at(
+                            event=event,
+                            bundle=merge_feedback_bundles(
+                                extract_feedback_bundle(existing_ci_batch.payload)
+                                or {},
+                                extract_feedback_bundle(payload) or {},
+                            ),
+                        )
+                        operation = service._merge_pending_feedback_operation(
+                            operation=existing_ci_batch,
+                            incoming_payload=payload,
+                            next_attempt_at=next_attempt_at,
+                            operation_key=operation_key,
+                            operation_kind=action_operation_kind,
+                        )
+                        deduped = True
+                    else:
+                        if (
+                            binding_id is not None
+                            and fingerprint is not None
+                            and rsk is not None
+                            and _ci_head_already_has_reaction(
+                                service._reaction_state_store,
+                                binding_id=binding_id,
+                                head_sha=head_sha,
+                                fingerprint=fingerprint,
+                            )
+                        ):
+                            service._reaction_state_store.mark_reaction_suppressed(
+                                binding_id=binding_id,
+                                reaction_kind=rsk,
+                                fingerprint=fingerprint,
+                                event_id=action_event_id,
+                                metadata={
+                                    **tracking,
+                                    "suppression_reason": "ci_head_already_queued",
+                                },
+                            )
+                            continue
+                        next_attempt_at = service._ci_failed_enqueue_next_attempt_at(
+                            event=event,
+                            bundle=extract_feedback_bundle(payload) or {},
+                        )
+                        operation, deduped = service._journal.create_operation(
+                            operation_key=operation_key,
+                            operation_kind=action_operation_kind,
+                            payload=payload,
+                            next_attempt_at=next_attempt_at,
+                        )
+                else:
+                    operation, deduped = service._journal.create_operation(
+                        operation_key=operation_key,
+                        operation_kind=action_operation_kind,
+                        payload=payload,
+                        next_attempt_at=next_attempt_at,
+                    )
+            else:
+                operation, deduped = service._journal.create_operation(
+                    operation_key=operation_key,
+                    operation_kind=action_operation_kind,
+                    payload=payload,
+                    next_attempt_at=next_attempt_at,
+                )
+                if (
+                    deduped
+                    and operation.state == "pending"
+                    and action_operation_kind == "enqueue_managed_turn"
+                    and extract_feedback_bundle(payload) is not None
+                ):
+                    operation = service._merge_pending_feedback_operation(
+                        operation=operation,
+                        incoming_payload=payload,
+                        next_attempt_at=next_attempt_at,
+                        operation_key=operation_key,
+                        operation_kind=action_operation_kind,
+                    )
+            if (
+                next_attempt_at is not None
+                and action_operation_kind == "enqueue_managed_turn"
+            ):
+                drain_at = operation.next_attempt_at
+                if drain_at is not None:
+                    service._schedule_deferred_publish_drain_at(drain_at)
+            service._audit_recorder.record(
+                action_type=SCM_AUDIT_PUBLISH_CREATED,
+                correlation_id=correlation_id,
+                event=event,
+                binding=binding,
+                intent=legacy_intent,
+                operation=operation,
+                payload={"deduped": deduped, "coalesced": deduped},
+            )
+            if fingerprint is not None and binding_id is not None and rsk is not None:
+                service._reaction_state_store.mark_reaction_emitted(
+                    binding_id=binding_id,
+                    reaction_kind=rsk,
+                    fingerprint=fingerprint,
+                    event_id=action_event_id,
+                    operation_key=operation_key,
+                    metadata=tracking,
+                )
+            publish_operations.append(operation)
+            if (
+                binding is not None
+                and action_reaction_kind == "review_comment"
+                and action_operation_kind == "enqueue_managed_turn"
+            ):
+                notice_operation = service._create_review_comment_notice_operation(
+                    tracking=tracking,
+                    enqueue_operation=operation,
+                    seen_operation_keys=seen_operation_keys,
+                    next_attempt_at=operation.next_attempt_at,
+                )
+                if notice_operation is not None:
+                    publish_operations.append(notice_operation)
+        created = tuple(publish_operations)
+        self._publish_operations = (*self._publish_operations, *created)
+        return created
+
+    def execute(self, job: AutomationJob) -> AutomationExecutorResult:
+        operation = _matching_publish_operation_for_job(job, self._publish_operations)
+        if self._service is not None and operation is None:
+            self.publish_for_job(job)
+            operation = _matching_publish_operation_for_job(
+                job, self._publish_operations
+            )
+        refs = (
+            {"publish_operation_id": operation.operation_id}
+            if operation is not None
+            else {}
+        )
+        status = JOB_SKIPPED if operation is None else JOB_SUCCEEDED
+        return AutomationExecutorResult(
+            status=status,
+            summary=_operation_result_summary(operation),
+            data=_operation_attempt_result(operation),
+            execution_refs=refs,
+        )
 
 
 class ScmReactionStateTracker(Protocol):
@@ -228,6 +623,21 @@ def _normalize_event_id(value: object) -> Optional[str]:
     return text or None
 
 
+def _normalize_int(value: object) -> Optional[int]:
+    if value is None:
+        return None
+    if isinstance(value, int):
+        return value
+    if not isinstance(value, str):
+        return None
+    if value == "":
+        return None
+    try:
+        return int(value)
+    except ValueError:
+        return None
+
+
 def _compact_mapping(payload: Mapping[str, Any]) -> dict[str, Any]:
     return {
         key: value
@@ -236,15 +646,16 @@ def _compact_mapping(payload: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
-def _intent_priority(intent: ReactionIntent) -> tuple[int, str]:
+def _action_priority(action: Mapping[str, Any]) -> tuple[int, str]:
     priorities = {
         "react_pr_review_comment": 0,
         "enqueue_managed_turn": 1,
         "notify_chat": 2,
     }
+    operation_kind = _normalize_text(action.get("operation_kind")) or ""
     return (
-        priorities.get(intent.operation_kind, 50),
-        intent.operation_key,
+        priorities.get(operation_kind, 50),
+        _normalize_text(action.get("operation_key")) or "",
     )
 
 
@@ -280,6 +691,356 @@ def _isoformat_z(value: datetime) -> str:
 def _auxiliary_correlation_id(*, correlation_id: str, operation_key: str) -> str:
     digest = hashlib.sha256(operation_key.encode("utf-8")).hexdigest()[:12]
     return f"{correlation_id}:aux:{digest}"
+
+
+def _automation_event_type_for_scm_event(event: ScmEvent) -> Optional[str]:
+    if event.provider != "github":
+        return None
+    payload = _normalize_mapping(event.payload)
+    action = (_normalize_text(payload.get("action")) or "").lower()
+    status = (_normalize_text(payload.get("status")) or "").lower()
+    if event.event_type == "pull_request" and action in {"opened", "closed"}:
+        return f"scm.github.pull_request.{action}"
+    if event.event_type == "pull_request_review" and action == "submitted":
+        return "scm.github.pull_request_review.submitted"
+    if event.event_type == "pull_request_review_comment" and action == "created":
+        return "scm.github.pull_request_review_comment.created"
+    if event.event_type == "issue_comment" and action == "created":
+        return "scm.github.pull_request_review_comment.created"
+    if event.event_type == "check_run" and status == "completed":
+        return "scm.github.check_run.completed"
+    if event.event_type == "workflow_run" and status == "completed":
+        return "scm.github.workflow_run.completed"
+    return None
+
+
+def _builtin_scm_rule_id(reaction_kind: ReactionKind) -> str:
+    return f"builtin:scm:github:{reaction_kind}"
+
+
+def _scm_config_hash(config: ScmReactionConfig) -> str:
+    payload = json.dumps(config.to_dict(), sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _builtin_scm_reaction_rule(
+    *,
+    reaction_kind: ReactionKind,
+    config: ScmReactionConfig,
+    existing: Optional[AutomationRule],
+) -> AutomationRule:
+    config_hash = _scm_config_hash(config)
+    existing_hash = (
+        _normalize_text(existing.metadata.get("scm_config_hash"))
+        if existing is not None
+        else None
+    )
+    enabled = (
+        existing.enabled
+        if existing is not None and existing_hash == config_hash
+        else config.is_enabled(reaction_kind)
+    )
+    return AutomationRule.create(
+        rule_id=_builtin_scm_rule_id(reaction_kind),
+        name=f"Built-in GitHub SCM reaction: {reaction_kind}",
+        enabled=enabled,
+        system_owned=True,
+        trigger_kind=TRIGGER_KIND_EVENT,
+        trigger={
+            "kind": "scm_event",
+            "event_types": [
+                "scm.github.pull_request.opened",
+                "scm.github.pull_request.closed",
+                "scm.github.pull_request_review.submitted",
+                "scm.github.pull_request_review_comment.created",
+                "scm.github.check_run.completed",
+                "scm.github.workflow_run.completed",
+            ],
+        },
+        filters={"event.payload.reaction_kind": reaction_kind},
+        target_policy=TARGET_POLICY_PR_WORKTREE,
+        target={
+            "provider": "{{ event.payload.provider }}",
+            "repo_id": "{{ event.repo_id }}",
+            "repo_slug": "{{ event.payload.repo.slug }}",
+            "pr_number": "{{ pr.number }}",
+            "binding_id": "{{ event.payload.binding.binding_id }}",
+            "thread_target_id": "{{ event.payload.binding.thread_target_id }}",
+        },
+        executor_kind=EXECUTOR_PUBLISH_OPERATION,
+        executor={
+            "operation_kind": "scm_action_specs",
+            "reaction_kind": reaction_kind,
+            "action_source": "event.payload.actions",
+        },
+        policy={
+            "dedupe_key": (
+                f"scm:{reaction_kind}:"
+                "{{ event.payload.source_event_id }}:"
+                "{{ event.payload.binding.binding_id }}"
+            ),
+            "batch_key": f"scm:{reaction_kind}:{{{{ event.repo_id }}}}:{{{{ pr.number }}}}",
+            "batch_window_seconds": _scm_batch_window_seconds(
+                reaction_kind,
+                config,
+            ),
+            "approval_mode": "pause_and_request_user",
+            "max_attempts": 3,
+            "max_concurrent_per_rule": 1,
+            "max_concurrent_per_target": 1,
+            "duplicate_escalation_threshold": config.duplicate_escalation_threshold,
+            "delivery_failure_escalation_threshold": (
+                config.delivery_failure_escalation_threshold
+            ),
+        },
+        metadata={
+            "builtin": True,
+            "purpose": "scm_github_reaction",
+            "reaction_kind": reaction_kind,
+            "source_config": "github.automation.reactions",
+            "scm_config_hash": config_hash,
+        },
+    )
+
+
+def _scm_batch_window_seconds(
+    reaction_kind: ReactionKind,
+    config: ScmReactionConfig,
+) -> int:
+    if reaction_kind == "ci_failed":
+        return config.ci_failed_batch_window_seconds
+    if reaction_kind == "review_comment":
+        return config.review_comment_batch_window_seconds
+    return 0
+
+
+def _matching_publish_operation_for_job(
+    job: AutomationJob,
+    publish_operations: tuple[PublishOperation, ...],
+) -> Optional[PublishOperation]:
+    if not publish_operations:
+        return None
+    reaction_kind = _job_reaction_kind(job)
+    if reaction_kind is None:
+        return publish_operations[0]
+    for operation in publish_operations:
+        if (
+            _operation_reaction_kind(operation) == reaction_kind
+            and _operation_feedback_bundle(operation) is not None
+        ):
+            return operation
+    for operation in publish_operations:
+        if (
+            _operation_reaction_kind(operation) == reaction_kind
+            and operation.operation_kind == "enqueue_managed_turn"
+        ):
+            return operation
+    for operation in publish_operations:
+        if _operation_reaction_kind(operation) == reaction_kind:
+            return operation
+    return publish_operations[0]
+
+
+def _actions_for_scm_job(
+    job: AutomationJob,
+    automation_event: AutomationEvent,
+) -> tuple[dict[str, Any], ...]:
+    payload = _mapping_or_empty(automation_event.payload)
+    actions = payload.get("actions")
+    if not isinstance(actions, list):
+        return ()
+    reaction_kind = _job_reaction_kind(job)
+    normalized: list[dict[str, Any]] = []
+    for action in actions:
+        if not isinstance(action, Mapping):
+            continue
+        if (
+            reaction_kind is not None
+            and _normalize_text(action.get("reaction_kind")) != reaction_kind
+        ):
+            continue
+        normalized.append(dict(action))
+    return tuple(sorted(normalized, key=_action_priority))
+
+
+def _scm_event_from_automation_event(event: AutomationEvent) -> ScmEvent:
+    payload = _mapping_or_empty(event.payload)
+    repo = _mapping_or_empty(payload.get("repo"))
+    pr = _mapping_or_empty(payload.get("pr"))
+    source_event_id = _normalize_text(payload.get("source_event_id"))
+    source_event_type = _normalize_text(payload.get("source_event_type"))
+    observed_at = event.observed_at
+    return ScmEvent(
+        event_id=source_event_id or event.event_id.removeprefix("scm:"),
+        provider=_normalize_text(payload.get("provider")) or "github",
+        event_type=source_event_type or event.event_type,
+        occurred_at=observed_at,
+        received_at=observed_at,
+        created_at=observed_at,
+        repo_slug=_normalize_text(repo.get("slug")),
+        repo_id=_normalize_text(repo.get("repo_id")) or event.repo_id,
+        pr_number=_normalize_int(pr.get("number")),
+        delivery_id=_normalize_text(payload.get("delivery_id")),
+        correlation_id=_normalize_text(payload.get("correlation_id"))
+        or _normalize_text(event.metadata.get("scm_correlation_id")),
+        payload=copy.deepcopy(_mapping_or_empty(payload.get("scm_payload"))),
+        raw_payload=copy.deepcopy(event.raw_payload),
+    )
+
+
+def _job_reaction_kind(job: AutomationJob) -> Optional[str]:
+    payload = job.payload if isinstance(job.payload, Mapping) else {}
+    event = payload.get("event")
+    event_payload = event.get("payload") if isinstance(event, Mapping) else None
+    if isinstance(event_payload, Mapping):
+        return _normalize_text(event_payload.get("reaction_kind"))
+    return _normalize_text(job.executor.get("reaction_kind"))
+
+
+def _is_scm_publish_bridge_job(job: AutomationJob) -> bool:
+    return (
+        _normalize_text(job.executor.get("kind")) == EXECUTOR_PUBLISH_OPERATION
+        and _normalize_text(job.executor.get("operation_kind")) == "scm_action_specs"
+    )
+
+
+def _operation_reaction_kind(operation: PublishOperation) -> Optional[str]:
+    payload = operation.payload if isinstance(operation.payload, Mapping) else {}
+    tracking = payload.get("scm_reaction")
+    if isinstance(tracking, Mapping):
+        return _normalize_text(tracking.get("reaction_kind"))
+    metadata = payload.get("metadata")
+    scm = metadata.get("scm") if isinstance(metadata, Mapping) else None
+    if isinstance(scm, Mapping):
+        return _normalize_text(scm.get("reaction_kind"))
+    return _normalize_text(payload.get("reaction_kind"))
+
+
+def _operation_feedback_bundle(operation: PublishOperation) -> Optional[dict[str, Any]]:
+    return extract_feedback_bundle(operation.payload)
+
+
+def _operation_is_escalation(operation: PublishOperation) -> bool:
+    return operation.operation_key.startswith("scm-reaction-escalation:")
+
+
+def _operation_escalation_reason(operation: PublishOperation) -> Optional[str]:
+    if not _operation_is_escalation(operation):
+        return None
+    parts = operation.operation_key.split(":", 2)
+    return parts[1] if len(parts) > 1 and parts[1] else "unknown"
+
+
+def _operation_attempt_result(operation: Optional[PublishOperation]) -> dict[str, Any]:
+    result: dict[str, Any] = {"bridge": "scm_reaction_publish"}
+    if operation is None:
+        result["outcome"] = "suppressed"
+        return result
+    result.update(
+        {
+            "outcome": (
+                "escalated" if _operation_is_escalation(operation) else "published"
+            ),
+            "publish_operation_id": operation.operation_id,
+            "publish_operation_key": operation.operation_key,
+            "publish_operation_kind": operation.operation_kind,
+            "publish_operation_state": operation.state,
+            "next_attempt_at": operation.next_attempt_at,
+            "publish_operation": operation.to_dict(),
+        }
+    )
+    escalation_reason = _operation_escalation_reason(operation)
+    if escalation_reason is not None:
+        result["escalation_reason"] = escalation_reason
+    bundle = _operation_feedback_bundle(operation)
+    if bundle is not None:
+        bundle_items = bundle.get("items")
+        result["batch"] = _compact_mapping(
+            {
+                "mode": bundle.get("batch_mode"),
+                "item_count": (
+                    len(bundle_items) if isinstance(bundle_items, list) else None
+                ),
+                "ci_head_sha": bundle.get("ci_head_sha"),
+                "opened_at": bundle.get("opened_at"),
+                "last_event_at": bundle.get("last_event_at"),
+                "next_attempt_at": operation.next_attempt_at,
+            }
+        )
+    elif operation.next_attempt_at is not None:
+        result["batch"] = {"next_attempt_at": operation.next_attempt_at}
+    return result
+
+
+def _operation_result_summary(operation: Optional[PublishOperation]) -> str:
+    if operation is None:
+        return "SCM reaction suppressed before publish"
+    if _operation_is_escalation(operation):
+        reason = _operation_escalation_reason(operation) or "unknown"
+        return f"SCM reaction escalated through publish operation ({reason})"
+    if operation.next_attempt_at is not None:
+        return "SCM reaction batched through publish operation"
+    return "SCM reaction bridged through publish operation"
+
+
+def _action_from_legacy_intent(intent: ReactionIntent) -> dict[str, Any]:
+    return _compact_mapping(
+        {
+            "reaction_kind": intent.reaction_kind,
+            "operation_kind": intent.operation_kind,
+            "operation_key": intent.operation_key,
+            "event_id": intent.event_id,
+            "binding_id": intent.binding_id,
+            "payload": copy.deepcopy(intent.payload),
+        }
+    )
+
+
+def _legacy_intent_from_action(action: Mapping[str, Any]) -> ReactionIntent:
+    return ReactionIntent(
+        reaction_kind=cast(ReactionKind, _require_action_text(action, "reaction_kind")),
+        operation_kind=cast(
+            ReactionOperationKind, _require_action_text(action, "operation_kind")
+        ),
+        operation_key=_require_action_text(action, "operation_key"),
+        payload=copy.deepcopy(_mapping_or_empty(action.get("payload"))),
+        event_id=_normalize_text(action.get("event_id")),
+        binding_id=_normalize_text(action.get("binding_id")),
+    )
+
+
+def _legacy_intents_from_actions(
+    actions: tuple[dict[str, Any], ...],
+) -> tuple[ReactionIntent, ...]:
+    return tuple(_legacy_intent_from_action(action) for action in actions)
+
+
+def _actions_from_legacy_router(
+    router: ScmReactionRouter,
+) -> ScmActionRouter:
+    def route(
+        event: ScmEvent,
+        *,
+        binding: Optional[PrBinding] = None,
+        config: ScmReactionConfig | Mapping[str, Any] | None = None,
+    ) -> list[dict[str, Any]]:
+        return [
+            _action_from_legacy_intent(intent)
+            for intent in router(event, binding=binding, config=config)
+        ]
+
+    return route
+
+
+def _require_action_text(action: Mapping[str, Any], key: str) -> str:
+    text = _normalize_text(action.get(key))
+    if text is None:
+        raise ValueError(f"SCM action is missing {key}")
+    return text
+
+
+def _mapping_or_empty(value: Any) -> dict[str, Any]:
+    return dict(value) if isinstance(value, Mapping) else {}
 
 
 def _event_payload(event: ScmEvent) -> Mapping[str, Any]:
@@ -484,6 +1245,14 @@ class ScmAutomationIngestResult:
     binding: Optional[PrBinding]
     reaction_intents: tuple[ReactionIntent, ...]
     publish_operations: tuple[PublishOperation, ...]
+    automation_event: Optional[AutomationEvent] = None
+    automation_jobs: tuple[AutomationJob, ...] = ()
+
+
+@dataclass(frozen=True)
+class ScmAutomationJobProcessResult:
+    automation_jobs: tuple[AutomationJob, ...] = ()
+    publish_operations: tuple[PublishOperation, ...] = ()
 
 
 class ScmAutomationService:
@@ -493,12 +1262,15 @@ class ScmAutomationService:
         *,
         event_store: Optional[ScmEventLookup] = None,
         binding_resolver: Optional[ScmBindingResolver] = None,
+        action_router: Optional[ScmActionRouter] = None,
         reaction_router: Optional[ScmReactionRouter] = None,
         reaction_config: ScmReactionConfig | Mapping[str, Any] | None = None,
         reaction_state_store: Optional[ScmReactionStateTracker] = None,
         journal: Optional[PublishJournalWriter] = None,
         publish_processor: Optional[PublishOperationDrainer] = None,
         publish_executor_factory: Optional[PublishExecutorFactory] = None,
+        automation_store: Optional[AutomationStore] = None,
+        automation_rule_engine: Optional[ScmAutomationRuleEvaluator] = None,
         schedule_deferred_publish_drain: bool = False,
     ) -> None:
         self._hub_root = Path(hub_root)
@@ -506,8 +1278,16 @@ class ScmAutomationService:
         self._binding_resolver = binding_resolver or _default_binding_resolver(
             self._hub_root
         )
-        self._reaction_router = reaction_router or route_scm_reactions
+        self._action_router = action_router or (
+            _actions_from_legacy_router(reaction_router)
+            if reaction_router is not None
+            else route_scm_action_specs
+        )
         self._reaction_config = ScmReactionConfig.from_mapping(reaction_config)
+        self._automation_store = automation_store or AutomationStore(self._hub_root)
+        self._automation_rule_engine = automation_rule_engine or AutomationRuleEngine(
+            self._automation_store
+        )
         self._audit_recorder = ScmAuditRecorder(self._hub_root)
         self._reaction_state_store = reaction_state_store or ScmReactionStateStore(
             self._hub_root
@@ -529,6 +1309,7 @@ class ScmAutomationService:
         self._schedule_deferred_publish_drain = schedule_deferred_publish_drain
         self._deferred_drain_timer: Optional[threading.Timer] = None
         self._deferred_drain_lock = threading.Lock()
+        self._seed_builtin_scm_rules()
 
     def _cancel_deferred_publish_drain(self) -> None:
         with self._deferred_drain_lock:
@@ -871,6 +1652,7 @@ class ScmAutomationService:
         event_or_id: ScmEvent | str,
         *,
         thread_target_id: Optional[str] = None,
+        execute_automation_jobs: bool = True,
     ) -> ScmAutomationIngestResult:
         event = self._resolve_event(event_or_id)
         correlation_id = correlation_id_for_event(event)
@@ -882,295 +1664,254 @@ class ScmAutomationService:
             binding=binding,
             payload={"binding_found": binding is not None},
         )
-        reaction_intents = tuple(
+        scm_actions = tuple(
             sorted(
-                self._reaction_router(
+                self._action_router(
                     event,
                     binding=binding,
                     config=self._reaction_config,
                 ),
-                key=_intent_priority,
+                key=_action_priority,
             )
         )
-
-        publish_operations: list[PublishOperation] = []
-        seen_operation_keys: set[str] = set()
-        for intent in reaction_intents:
-            self._audit_recorder.record(
-                action_type=SCM_AUDIT_ROUTED_INTENT,
-                correlation_id=correlation_id,
-                event=event,
-                binding=binding,
-                intent=intent,
-            )
-            binding_id: Optional[str] = None
-            fingerprint: Optional[str] = None
-            rsk: Optional[str] = None
-            tracking: dict[str, Any] = {}
-            if binding is not None and intent.binding_id is not None:
-                binding_id = intent.binding_id
-                fingerprint = self._reaction_state_store.compute_reaction_fingerprint(
-                    event,
-                    binding=binding,
-                    intent=intent,
-                )
-                rsk = reaction_state_kind(
-                    reaction_kind=intent.reaction_kind,
-                    operation_kind=intent.operation_kind,
-                )
-                tracking = _compact_mapping(
-                    {
-                        "binding_id": binding_id,
-                        "correlation_id": correlation_id,
-                        "event_id": intent.event_id or event.event_id,
-                        "event_type": event.event_type,
-                        "fingerprint": fingerprint,
-                        "operation_kind": intent.operation_kind,
-                        "pr_number": binding.pr_number,
-                        "provider": event.provider,
-                        "reaction_kind": intent.reaction_kind,
-                        "reaction_state_kind": rsk,
-                        "repo_id": binding.repo_id or event.repo_id,
-                        "repo_slug": binding.repo_slug or event.repo_slug,
-                        "head_branch": binding.head_branch,
-                        "base_branch": binding.base_branch,
-                        "thread_target_id": binding.thread_target_id,
-                    }
-                )
-                self._reaction_state_store.resolve_other_active_reactions(
-                    binding_id=binding_id,
-                    reaction_kind=rsk,
-                    keep_fingerprint=fingerprint,
-                    event_id=intent.event_id or event.event_id,
-                    metadata=tracking,
-                )
-                existing = self._reaction_state_store.get_reaction_state(
-                    binding_id=binding_id,
-                    reaction_kind=rsk,
-                    fingerprint=fingerprint,
-                )
-                if not self._reaction_state_store.should_emit_reaction(
-                    binding_id=binding_id,
-                    reaction_kind=rsk,
-                    fingerprint=fingerprint,
-                ):
-                    existing_attempt_count = int(
-                        getattr(existing, "attempt_count", 0) or 0
-                    )
-                    duplicate_threshold = (
-                        self._reaction_config.duplicate_escalation_threshold
-                    )
-                    if (
-                        existing is not None
-                        and getattr(existing, "escalated_at", None) is None
-                        and duplicate_threshold > 0
-                        and existing_attempt_count + 1 >= duplicate_threshold
-                    ):
-                        escalation_operation = create_escalation_operation(
-                            journal=self._journal,
-                            reaction_state_store=self._reaction_state_store,
-                            audit_recorder=self._audit_recorder,
-                            binding_id=binding_id,
-                            reaction_kind=rsk,
-                            fingerprint=fingerprint,
-                            tracking=tracking,
-                            message=format_duplicate_escalation_message(
-                                tracking,
-                                attempt_count=existing_attempt_count + 1,
-                            ),
-                            reason="duplicate",
-                            seen_operation_keys=seen_operation_keys,
-                            event_id=intent.event_id or event.event_id,
-                        )
-                        if escalation_operation is not None:
-                            publish_operations.append(escalation_operation)
-                    elif (
-                        existing is not None
-                        and getattr(existing, "escalated_at", None) is None
-                    ):
-                        self._reaction_state_store.mark_reaction_suppressed(
-                            binding_id=binding_id,
-                            reaction_kind=rsk,
-                            fingerprint=fingerprint,
-                            event_id=intent.event_id or event.event_id,
-                            metadata=tracking,
-                        )
-                    continue
-            operation_key = intent.operation_key
-            next_attempt_at: Optional[str] = None
-            if (
-                binding is not None
-                and intent.reaction_kind == "review_comment"
-                and intent.operation_kind == "enqueue_managed_turn"
-            ):
-                operation_key = self._review_comment_enqueue_batch_key(
-                    event=event,
-                    binding=binding,
-                )
-                next_attempt_at = self._review_comment_enqueue_next_attempt_at(
-                    event=event
-                )
-            if operation_key in seen_operation_keys:
-                continue
-            seen_operation_keys.add(operation_key)
-            payload = self._build_feedback_payload(
-                event=event,
-                intent=intent,
-                binding=binding,
-                payload=with_correlation_id(
-                    copy.deepcopy(intent.payload),
-                    correlation_id=correlation_id,
+        reaction_intents = _legacy_intents_from_actions(scm_actions)
+        automation_event = self._automation_event_for_scm_event(
+            event=event,
+            binding=binding,
+            actions=scm_actions,
+        )
+        automation_jobs = self._record_automation_event_and_jobs(automation_event)
+        publish_operations: tuple[PublishOperation, ...] = ()
+        if execute_automation_jobs:
+            processed = self.process_scm_automation_jobs(
+                automation_jobs=automation_jobs,
+                event_context=(
+                    {automation_event.event_id: (event, binding, scm_actions)}
+                    if automation_event is not None
+                    else None
                 ),
-                tracking=tracking,
             )
-            operation: PublishOperation
-            deduped = False
-            if (
-                binding is not None
-                and intent.reaction_kind == "ci_failed"
-                and intent.operation_kind == "enqueue_managed_turn"
-            ):
-                head_sha = _ci_failed_head_sha_from_payload(payload)
-                if tracking and head_sha is not None:
-                    tracking["ci_head_sha"] = head_sha
-                    payload["scm_reaction"] = tracking
-            else:
-                head_sha = None
-            if tracking and "scm_reaction" not in payload:
-                payload["scm_reaction"] = tracking
-            if (
-                binding is not None
-                and intent.reaction_kind == "ci_failed"
-                and intent.operation_kind == "enqueue_managed_turn"
-            ):
-                if head_sha is not None:
-                    existing_ci_batch = self._find_pending_ci_failed_batch_operation(
-                        binding=binding,
-                        head_sha=head_sha,
-                    )
-                    if existing_ci_batch is not None:
-                        next_attempt_at = self._ci_failed_enqueue_next_attempt_at(
-                            event=event,
-                            bundle=merge_feedback_bundles(
-                                extract_feedback_bundle(existing_ci_batch.payload)
-                                or {},
-                                extract_feedback_bundle(payload) or {},
-                            ),
-                        )
-                        operation = self._merge_pending_feedback_operation(
-                            operation=existing_ci_batch,
-                            incoming_payload=payload,
-                            next_attempt_at=next_attempt_at,
-                            operation_key=operation_key,
-                            operation_kind=intent.operation_kind,
-                        )
-                        deduped = True
-                    else:
-                        if (
-                            binding_id is not None
-                            and fingerprint is not None
-                            and rsk is not None
-                            and _ci_head_already_has_reaction(
-                                self._reaction_state_store,
-                                binding_id=binding_id,
-                                head_sha=head_sha,
-                                fingerprint=fingerprint,
-                            )
-                        ):
-                            self._reaction_state_store.mark_reaction_suppressed(
-                                binding_id=binding_id,
-                                reaction_kind=rsk,
-                                fingerprint=fingerprint,
-                                event_id=intent.event_id or event.event_id,
-                                metadata={
-                                    **tracking,
-                                    "suppression_reason": "ci_head_already_queued",
-                                },
-                            )
-                            continue
-                        next_attempt_at = self._ci_failed_enqueue_next_attempt_at(
-                            event=event,
-                            bundle=extract_feedback_bundle(payload) or {},
-                        )
-                        operation, deduped = self._journal.create_operation(
-                            operation_key=operation_key,
-                            operation_kind=intent.operation_kind,
-                            payload=payload,
-                            next_attempt_at=next_attempt_at,
-                        )
-                else:
-                    operation, deduped = self._journal.create_operation(
-                        operation_key=operation_key,
-                        operation_kind=intent.operation_kind,
-                        payload=payload,
-                        next_attempt_at=next_attempt_at,
-                    )
-            else:
-                operation, deduped = self._journal.create_operation(
-                    operation_key=operation_key,
-                    operation_kind=intent.operation_kind,
-                    payload=payload,
-                    next_attempt_at=next_attempt_at,
-                )
-                if (
-                    deduped
-                    and operation.state == "pending"
-                    and intent.operation_kind == "enqueue_managed_turn"
-                    and extract_feedback_bundle(payload) is not None
-                ):
-                    operation = self._merge_pending_feedback_operation(
-                        operation=operation,
-                        incoming_payload=payload,
-                        next_attempt_at=next_attempt_at,
-                        operation_key=operation_key,
-                        operation_kind=intent.operation_kind,
-                    )
-            if (
-                next_attempt_at is not None
-                and intent.operation_kind == "enqueue_managed_turn"
-            ):
-                drain_at = operation.next_attempt_at
-                if drain_at is not None:
-                    self._schedule_deferred_publish_drain_at(drain_at)
-            self._audit_recorder.record(
-                action_type=SCM_AUDIT_PUBLISH_CREATED,
-                correlation_id=correlation_id,
-                event=event,
-                binding=binding,
-                intent=intent,
-                operation=operation,
-                payload={"deduped": deduped, "coalesced": deduped},
-            )
-            if fingerprint is not None and binding_id is not None and rsk is not None:
-                self._reaction_state_store.mark_reaction_emitted(
-                    binding_id=binding_id,
-                    reaction_kind=rsk,
-                    fingerprint=fingerprint,
-                    event_id=intent.event_id or event.event_id,
-                    operation_key=operation_key,
-                    metadata=tracking,
-                )
-            publish_operations.append(operation)
-            if (
-                binding is not None
-                and intent.reaction_kind == "review_comment"
-                and intent.operation_kind == "enqueue_managed_turn"
-            ):
-                notice_operation = self._create_review_comment_notice_operation(
-                    tracking=tracking,
-                    enqueue_operation=operation,
-                    seen_operation_keys=seen_operation_keys,
-                    next_attempt_at=operation.next_attempt_at,
-                )
-                if notice_operation is not None:
-                    publish_operations.append(notice_operation)
-
+            automation_jobs = processed.automation_jobs
+            publish_operations = processed.publish_operations
         return ScmAutomationIngestResult(
             event=event,
             binding=binding,
             reaction_intents=reaction_intents,
-            publish_operations=tuple(publish_operations),
+            publish_operations=publish_operations,
+            automation_event=automation_event,
+            automation_jobs=automation_jobs,
         )
+
+    def _record_automation_event_and_jobs(
+        self,
+        automation_event: Optional[AutomationEvent],
+    ) -> tuple[AutomationJob, ...]:
+        if automation_event is None:
+            return ()
+        self._automation_rule_engine.record_event_and_enqueue_jobs(automation_event)
+        return tuple(
+            job
+            for job in self._automation_store.list_jobs(limit=1000)
+            if job.event_id == automation_event.event_id
+        )
+
+    def process_scm_automation_jobs(
+        self,
+        *,
+        automation_jobs: tuple[AutomationJob, ...] = (),
+        event_id: Optional[str] = None,
+        event_context: Optional[
+            Mapping[
+                str, tuple[ScmEvent, Optional[PrBinding], tuple[dict[str, Any], ...]]
+            ]
+        ] = None,
+        limit: int = 100,
+    ) -> "ScmAutomationJobProcessResult":
+        if not automation_jobs:
+            jobs = tuple(
+                job
+                for job in self._automation_store.list_jobs(
+                    state="pending",
+                    limit=max(0, int(limit)),
+                )
+                if (event_id is None or job.event_id == event_id)
+                and _is_scm_publish_bridge_job(job)
+            )
+        else:
+            jobs = tuple(
+                job
+                for job in (
+                    self._automation_store.get_job(item.job_id)
+                    for item in automation_jobs[: max(0, int(limit))]
+                )
+                if job is not None and _is_scm_publish_bridge_job(job)
+            )
+        bridge_executor = ScmCompatibilityPublishBridgeExecutor(
+            service=self,
+            event_context=event_context,
+        )
+        if event_context and not any(job.state == "pending" for job in jobs):
+            for event, binding, actions in event_context.values():
+                bridge_executor.publish_for_event(
+                    event=event,
+                    binding=binding,
+                    actions=actions,
+                )
+        processed_jobs = self._mark_automation_jobs_bridged(
+            automation_jobs=jobs,
+            publish_operations=(),
+            executor=bridge_executor,
+        )
+        return ScmAutomationJobProcessResult(
+            automation_jobs=processed_jobs,
+            publish_operations=bridge_executor.publish_operations,
+        )
+
+    def _mark_automation_jobs_bridged(
+        self,
+        *,
+        automation_jobs: tuple[AutomationJob, ...],
+        publish_operations: tuple[PublishOperation, ...],
+        executor: Optional[ScmCompatibilityPublishBridgeExecutor] = None,
+    ) -> tuple[AutomationJob, ...]:
+        if executor is None:
+            executor = ScmCompatibilityPublishBridgeExecutor(publish_operations)
+        updated_jobs: list[AutomationJob] = []
+        for job in automation_jobs:
+            if job.state != "pending":
+                updated_jobs.append(job)
+                continue
+            started = self._automation_store.start_job(job.job_id)
+            result = executor.execute(started)
+            if result.status == JOB_SKIPPED:
+                completed = self._automation_store.skip_job(
+                    started.job_id,
+                    result_summary=result.summary,
+                )
+            else:
+                completed = self._automation_store.complete_job(
+                    started.job_id,
+                    result_summary=result.summary,
+                    execution_refs=result.execution_refs,
+                )
+            self._automation_store.record_attempt(
+                AutomationJobAttempt.create(
+                    job_id=completed.job_id,
+                    attempt_number=completed.attempt_count,
+                    status=result.status,
+                    started_at=completed.started_at,
+                    finished_at=completed.finished_at,
+                    executor_result=result.data,
+                    execution_refs=result.execution_refs,
+                )
+            )
+            updated_jobs.append(completed)
+        return tuple(updated_jobs)
+
+    def _automation_event_for_scm_event(
+        self,
+        *,
+        event: ScmEvent,
+        binding: Optional[PrBinding],
+        actions: tuple[dict[str, Any], ...],
+    ) -> Optional[AutomationEvent]:
+        event_type = _automation_event_type_for_scm_event(event)
+        if event_type is None:
+            return None
+        reaction_kind = (
+            _normalize_text(actions[0].get("reaction_kind")) if actions else None
+        )
+        return AutomationEvent.create(
+            event_id=f"scm:{event.event_id}",
+            event_type=event_type,
+            observed_at=event.received_at or event.occurred_at,
+            source=f"scm.{event.provider}",
+            repo_id=event.repo_id or (binding.repo_id if binding is not None else None),
+            target=_compact_mapping(
+                {
+                    "provider": event.provider,
+                    "repo_slug": event.repo_slug
+                    or (binding.repo_slug if binding is not None else None),
+                    "repo_id": event.repo_id
+                    or (binding.repo_id if binding is not None else None),
+                    "pr_number": event.pr_number
+                    or (binding.pr_number if binding is not None else None),
+                    "binding_id": binding.binding_id if binding is not None else None,
+                    "thread_target_id": (
+                        binding.thread_target_id if binding is not None else None
+                    ),
+                }
+            ),
+            payload=_compact_mapping(
+                {
+                    "provider": event.provider,
+                    "source_event_id": event.event_id,
+                    "source_event_type": event.event_type,
+                    "delivery_id": event.delivery_id,
+                    "correlation_id": correlation_id_for_event(event),
+                    "repo": _compact_mapping(
+                        {
+                            "slug": event.repo_slug
+                            or (binding.repo_slug if binding is not None else None),
+                            "repo_id": event.repo_id
+                            or (binding.repo_id if binding is not None else None),
+                        }
+                    ),
+                    "pr": _compact_mapping(
+                        {
+                            "number": event.pr_number
+                            or (binding.pr_number if binding is not None else None),
+                            "state": binding.pr_state if binding is not None else None,
+                            "head_branch": (
+                                binding.head_branch if binding is not None else None
+                            ),
+                            "base_branch": (
+                                binding.base_branch if binding is not None else None
+                            ),
+                        }
+                    ),
+                    "binding": (
+                        _compact_mapping(
+                            {
+                                "binding_id": binding.binding_id,
+                                "thread_target_id": binding.thread_target_id,
+                            }
+                        )
+                        if binding is not None
+                        else None
+                    ),
+                    "reaction_kind": reaction_kind,
+                    "actions": actions,
+                    "operation_kinds": [action["operation_kind"] for action in actions],
+                    "scm_payload": copy.deepcopy(event.payload),
+                }
+            ),
+            raw_payload=copy.deepcopy(event.raw_payload or event.payload),
+            metadata=_compact_mapping(
+                {
+                    "scm_event_id": event.event_id,
+                    "scm_correlation_id": correlation_id_for_event(event),
+                }
+            ),
+        )
+
+    def _seed_builtin_scm_rules(self) -> None:
+        for reaction_kind in (
+            "ci_failed",
+            "changes_requested",
+            "review_comment",
+            "approved_and_green",
+            "merged",
+        ):
+            self._automation_store.upsert_rule(
+                _builtin_scm_reaction_rule(
+                    reaction_kind=reaction_kind,
+                    config=self._reaction_config,
+                    existing=self._automation_store.get_rule(
+                        _builtin_scm_rule_id(reaction_kind)
+                    ),
+                )
+            )
 
     def process_now(self, limit: int = 10) -> list[PublishOperation]:
         processed = self._publish_processor.process_now(limit=limit)
@@ -1291,6 +2032,7 @@ __all__ = [
     "PublishJournalWriter",
     "PublishOperationDrainer",
     "ScmAutomationIngestResult",
+    "ScmAutomationJobProcessResult",
     "ScmAutomationService",
     "ScmBindingResolver",
     "ScmEventLookup",

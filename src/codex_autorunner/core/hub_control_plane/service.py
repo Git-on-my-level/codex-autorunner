@@ -5,6 +5,13 @@ from importlib import metadata as importlib_metadata
 from pathlib import Path
 from typing import Any, Optional
 
+from ..automation import (
+    AutomationEvent,
+    AutomationRule,
+    AutomationRuleEngine,
+    AutomationSchedule,
+    AutomationStore,
+)
 from ..managed_thread_store import ManagedThreadStore
 from ..orchestration.bindings import OrchestrationBindingStore
 from ..orchestration.cold_trace_store import ColdTraceStore
@@ -19,8 +26,28 @@ from ..pma_notification_store import NotificationConversation, PmaNotificationSt
 from ..pma_transcripts import PmaTranscriptStore
 from .errors import HubControlPlaneError
 from .models import (
+    AutomationEventListRequest,
+    AutomationEventListResponse,
+    AutomationEventLookupRequest,
+    AutomationEventResponse,
+    AutomationJobActionRequest,
+    AutomationJobListRequest,
+    AutomationJobListResponse,
+    AutomationJobLookupRequest,
+    AutomationJobResponse,
     AutomationRequest,
     AutomationResult,
+    AutomationRuleEnabledRequest,
+    AutomationRuleListRequest,
+    AutomationRuleListResponse,
+    AutomationRuleLookupRequest,
+    AutomationRuleResponse,
+    AutomationRuleRunRequest,
+    AutomationRuleUpsertRequest,
+    AutomationScheduleListRequest,
+    AutomationScheduleListResponse,
+    AutomationScheduleLookupRequest,
+    AutomationScheduleResponse,
     ExecutionBackendIdUpdateRequest,
     ExecutionCancelAllRequest,
     ExecutionCancelAllResponse,
@@ -79,6 +106,7 @@ from .models import (
     WorkspaceSetupCommandRequest,
     WorkspaceSetupCommandResult,
     deserialize_run_event,
+    redact_automation_mapping,
     resolve_thread_target_list_status_fields,
 )
 
@@ -86,6 +114,7 @@ CONTROL_PLANE_API_VERSION = "1.0.0"
 CONTROL_PLANE_MINIMUM_CLIENT_API_VERSION = "1.0.0"
 CONTROL_PLANE_CAPABILITIES: tuple[str, ...] = (
     "automation_requests",
+    "automations",
     "compact_seed_updates",
     "compatibility_handshake",
     "notification_continuations",
@@ -209,6 +238,10 @@ class HubSharedStateService:
             bootstrap_on_init=False,
         )
         self._execution_store = ManagedThreadExecutionStore(self._thread_store)
+        self._automation_store = AutomationStore(
+            self._hub_root,
+            durable=self._durable_writes,
+        )
 
     @property
     def capabilities(self) -> tuple[str, ...]:
@@ -759,6 +792,229 @@ class HubSharedStateService:
             workspace_root=str(workspace_root),
             repo_id_hint=request.repo_id_hint,
             setup_command_count=max(0, int(count or 0)),
+        )
+
+    def upsert_automation_rule(
+        self, request: AutomationRuleUpsertRequest
+    ) -> AutomationRuleResponse:
+        rule = self._automation_store.upsert_rule(AutomationRule.create(**request.rule))
+        schedule_payload = request.schedule
+        schedule = None
+        if schedule_payload is not None:
+            schedule_payload = dict(schedule_payload)
+            schedule_payload.setdefault("rule_id", rule.rule_id)
+            schedule = self._automation_store.upsert_schedule(
+                AutomationSchedule.create(**schedule_payload)
+            )
+        return AutomationRuleResponse(
+            rule=redact_automation_mapping(rule.to_dict()),
+            schedule=(
+                redact_automation_mapping(schedule.to_dict())
+                if schedule is not None
+                else None
+            ),
+        )
+
+    def get_automation_rule(
+        self, request: AutomationRuleLookupRequest
+    ) -> AutomationRuleResponse:
+        rule = self._automation_store.get_rule(request.rule_id)
+        if rule is None:
+            raise HubControlPlaneError(
+                "hub_rejected",
+                f"Unknown automation rule: {request.rule_id}",
+                details={"rule_id": request.rule_id},
+            )
+        schedules = self._automation_store.list_schedules(rule_id=rule.rule_id)
+        schedule = schedules[0] if schedules else None
+        return AutomationRuleResponse(
+            rule=redact_automation_mapping(rule.to_dict()),
+            schedule=(
+                redact_automation_mapping(schedule.to_dict())
+                if schedule is not None
+                else None
+            ),
+        )
+
+    def list_automation_rules(
+        self, request: AutomationRuleListRequest
+    ) -> AutomationRuleListResponse:
+        rules = self._automation_store.list_rules(
+            enabled=request.enabled,
+            trigger_kind=request.trigger_kind,
+        )[: request.limit]
+        return AutomationRuleListResponse(
+            rules=tuple(redact_automation_mapping(rule.to_dict()) for rule in rules)
+        )
+
+    def set_automation_rule_enabled(
+        self, request: AutomationRuleEnabledRequest
+    ) -> AutomationRuleResponse:
+        rule = self._automation_store.set_rule_enabled(
+            request.rule_id,
+            request.enabled,
+        )
+        if rule is None:
+            raise HubControlPlaneError(
+                "hub_rejected",
+                f"Unknown automation rule: {request.rule_id}",
+                details={"rule_id": request.rule_id},
+            )
+        return AutomationRuleResponse(rule=redact_automation_mapping(rule.to_dict()))
+
+    def run_automation_rule(
+        self, request: AutomationRuleRunRequest
+    ) -> AutomationJobResponse:
+        rule = self._automation_store.get_rule(request.rule_id)
+        if rule is None:
+            raise HubControlPlaneError(
+                "hub_rejected",
+                f"Unknown automation rule: {request.rule_id}",
+                details={"rule_id": request.rule_id},
+            )
+        if not rule.enabled:
+            raise HubControlPlaneError(
+                "hub_rejected",
+                f"Automation rule is disabled: {request.rule_id}",
+                details={"rule_id": request.rule_id},
+            )
+        target = {**rule.target, **request.target}
+        event = self._automation_store.record_event(
+            AutomationEvent.create(
+                event_type="manual.run",
+                source="hub_control_plane",
+                repo_id=target.get("repo_id"),
+                target=target,
+                payload=request.payload,
+                raw_payload=request.payload,
+                metadata={
+                    "rule_id": rule.rule_id,
+                    **(
+                        {"manual_dedupe_key": request.dedupe_key}
+                        if request.dedupe_key
+                        else {}
+                    ),
+                    **request.metadata,
+                },
+            )
+        )
+        engine = AutomationRuleEngine(self._automation_store)
+        expected_job = engine.job_for_rule(rule, event)
+        result = engine.enqueue_job_for_rule(rule, event)
+        job = self._automation_store.get_job_by_dedupe_key(expected_job.dedupe_key)
+        if job is None:
+            raise HubControlPlaneError(
+                "hub_rejected",
+                f"Automation rule policy skipped manual run: {request.rule_id}",
+                details={
+                    "rule_id": request.rule_id,
+                    "event_id": event.event_id,
+                    "jobs_skipped": result.jobs_skipped,
+                },
+            )
+        return AutomationJobResponse(job=redact_automation_mapping(job.to_dict()))
+
+    def list_automation_jobs(
+        self, request: AutomationJobListRequest
+    ) -> AutomationJobListResponse:
+        jobs = self._automation_store.list_jobs(
+            state=request.state,
+            rule_id=request.rule_id,
+            limit=request.limit,
+        )
+        return AutomationJobListResponse(
+            jobs=tuple(redact_automation_mapping(job.to_dict()) for job in jobs)
+        )
+
+    def get_automation_job(
+        self, request: AutomationJobLookupRequest
+    ) -> AutomationJobResponse:
+        job = self._automation_store.get_job(request.job_id)
+        if job is None:
+            raise HubControlPlaneError(
+                "hub_rejected",
+                f"Unknown automation job: {request.job_id}",
+                details={"job_id": request.job_id},
+            )
+        attempts = self._automation_store.list_attempts(job.job_id)
+        return AutomationJobResponse(
+            job=redact_automation_mapping(job.to_dict()),
+            attempts=tuple(
+                redact_automation_mapping(attempt.to_dict()) for attempt in attempts
+            ),
+        )
+
+    def cancel_automation_job(
+        self, request: AutomationJobActionRequest
+    ) -> AutomationJobResponse:
+        job = self._automation_store.cancel_job(request.job_id)
+        return AutomationJobResponse(job=redact_automation_mapping(job.to_dict()))
+
+    def retry_automation_job(
+        self, request: AutomationJobActionRequest
+    ) -> AutomationJobResponse:
+        job = self._automation_store.retry_job(
+            request.job_id,
+            available_at=request.available_at,
+        )
+        return AutomationJobResponse(job=redact_automation_mapping(job.to_dict()))
+
+    def revive_dead_lettered_automation_job(
+        self, request: AutomationJobActionRequest
+    ) -> AutomationJobResponse:
+        job = self._automation_store.revive_dead_lettered_job(
+            request.job_id,
+            available_at=request.available_at,
+        )
+        return AutomationJobResponse(job=redact_automation_mapping(job.to_dict()))
+
+    def list_automation_events(
+        self, request: AutomationEventListRequest
+    ) -> AutomationEventListResponse:
+        events = self._automation_store.list_events(
+            event_type=request.event_type,
+            limit=request.limit,
+        )
+        return AutomationEventListResponse(
+            events=tuple(redact_automation_mapping(event.to_dict()) for event in events)
+        )
+
+    def get_automation_event(
+        self, request: AutomationEventLookupRequest
+    ) -> AutomationEventResponse:
+        event = self._automation_store.get_event(request.event_id)
+        if event is None:
+            raise HubControlPlaneError(
+                "hub_rejected",
+                f"Unknown automation event: {request.event_id}",
+                details={"event_id": request.event_id},
+            )
+        return AutomationEventResponse(event=redact_automation_mapping(event.to_dict()))
+
+    def list_automation_schedules(
+        self, request: AutomationScheduleListRequest
+    ) -> AutomationScheduleListResponse:
+        schedules = self._automation_store.list_schedules(rule_id=request.rule_id)[
+            : request.limit
+        ]
+        return AutomationScheduleListResponse(
+            schedules=tuple(
+                redact_automation_mapping(schedule.to_dict()) for schedule in schedules
+            )
+        )
+
+    def get_automation_schedule(
+        self, request: AutomationScheduleLookupRequest
+    ) -> AutomationScheduleResponse:
+        schedule = self._automation_store.get_schedule(request.schedule_id)
+        if schedule is None:
+            raise HubControlPlaneError(
+                "hub_rejected",
+                f"Unknown automation schedule: {request.schedule_id}",
+                details={"schedule_id": request.schedule_id},
+            )
+        return AutomationScheduleResponse(
+            schedule=redact_automation_mapping(schedule.to_dict())
         )
 
     def request_automation(self, request: AutomationRequest) -> AutomationResult:

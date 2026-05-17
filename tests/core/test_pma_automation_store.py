@@ -4,6 +4,7 @@ import logging
 
 import pytest
 
+from codex_autorunner.core.automation import AutomationStore
 from codex_autorunner.core.managed_thread_store import ManagedThreadStore
 from codex_autorunner.core.orchestration import OrchestrationBindingStore
 from codex_autorunner.core.pma_automation_store import (
@@ -89,6 +90,38 @@ def test_due_timers_fire_once(tmp_path) -> None:
 
     due_again = store.dequeue_due_timers(limit=10)
     assert due_again == []
+
+
+def test_timer_create_touch_and_cancel_mirror_unified_schedule(tmp_path) -> None:
+    store = PmaAutomationStore(tmp_path)
+    automation_store = AutomationStore(tmp_path)
+
+    created = store.create_timer(
+        {
+            "due_at": "2026-01-01T00:00:00Z",
+            "thread_id": "thread-123",
+            "reason": "timer_due",
+            "idempotency_key": "timer-key-1",
+        }
+    )["timer"]
+    timer_id = created["timer_id"]
+    schedule = automation_store.get_schedule(f"pma-timer:{timer_id}")
+    assert schedule is not None
+    assert schedule.next_fire_at == "2026-01-01T00:00:00Z"
+    assert schedule.schedule["payload"]["thread_id"] == "thread-123"
+    assert automation_store.get_rule(f"builtin:pma:timer:{timer_id}") is not None
+
+    touched = store.touch_timer(timer_id, {"due_at": "2026-01-02T00:00:00Z"})
+    assert touched["touched"] is True
+    assert (
+        automation_store.get_schedule(f"pma-timer:{timer_id}").next_fire_at
+        == "2026-01-02T00:00:00Z"
+    )
+
+    assert store.cancel_timer(timer_id, {"reason": "done"}) is True
+    cancelled = automation_store.get_schedule(f"pma-timer:{timer_id}")
+    assert cancelled.state == "cancelled"
+    assert cancelled.next_fire_at is None
 
 
 def test_watchdog_timer_refires_until_touched(tmp_path) -> None:

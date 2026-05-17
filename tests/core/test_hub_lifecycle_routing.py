@@ -2,11 +2,14 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
-from unittest.mock import MagicMock
 
+from codex_autorunner.core.automation import (
+    AutomationRuleEngine,
+    AutomationStore,
+    ensure_builtin_pma_reactive_rule,
+)
 from codex_autorunner.core.config import HubConfig
 from codex_autorunner.core.hub_lifecycle_routing import LifecycleEventRouter
 from codex_autorunner.core.hub_topology import LockStatus, RepoSnapshot, RepoStatus
@@ -14,7 +17,6 @@ from codex_autorunner.core.lifecycle_events import (
     LifecycleEvent,
     LifecycleEventType,
 )
-from codex_autorunner.core.pma_automation_store import PmaAutomationStore
 
 
 def _make_hub_config(tmp_path: Path, *, pma_enabled: bool = True) -> HubConfig:
@@ -66,33 +68,16 @@ class _StubStore:
         self.prune_calls += 1
 
 
-@dataclass
-class _StubSafetyResult:
-    allowed: bool = True
-    reason: str = ""
-
-
-class _StubSafetyChecker:
-    def __init__(self, *, allowed: bool = True, reason: str = "") -> None:
-        self._result = _StubSafetyResult(allowed=allowed, reason=reason)
-
-    def check_reactive_turn(self) -> _StubSafetyResult:
-        return self._result
-
-
 def _make_router(
     tmp_path: Path,
     *,
     hub_config: Optional[HubConfig] = None,
     list_repos_fn=None,
     pma_enabled: bool = True,
+    automation_rule_engine: Optional[AutomationRuleEngine] = None,
 ) -> tuple[LifecycleEventRouter, _StubStore]:
     config = hub_config or _make_hub_config(tmp_path, pma_enabled=pma_enabled)
     store = _StubStore()
-    automation_store_mock = MagicMock(spec=PmaAutomationStore)
-    automation_store_mock.match_lifecycle_subscriptions.return_value = []
-    automation_store_mock.enqueue_wakeup.return_value = (None, False)
-    safety_checker = _StubSafetyChecker()
 
     def _run_coro(coro):
         return (
@@ -105,9 +90,8 @@ def _make_router(
         hub_config=config,
         lifecycle_store=store,
         list_repos_fn=list_repos_fn or (lambda: []),
-        ensure_pma_automation_store_fn=lambda: automation_store_mock,
-        ensure_pma_safety_checker_fn=lambda: safety_checker,
         run_coroutine_fn=_run_coro,
+        automation_rule_engine=automation_rule_engine,
         logger=logging.getLogger("test.hub_lifecycle_routing"),
     )
     return router, store
@@ -169,6 +153,61 @@ def test_route_event_flow_completed_enqueues_pma(tmp_path: Path) -> None:
     )
     router.route_event(event)
     assert event.event_id in store.marked_processed_ids
+
+
+def test_route_event_flow_completed_records_unified_event_and_job(
+    tmp_path: Path,
+) -> None:
+    config = _make_hub_config(tmp_path)
+    automation_store = AutomationStore(tmp_path)
+    ensure_builtin_pma_reactive_rule(automation_store, pma_config=config.pma)
+    router, store = _make_router(
+        tmp_path,
+        hub_config=config,
+        automation_rule_engine=AutomationRuleEngine(automation_store),
+    )
+    event = LifecycleEvent(
+        event_type=LifecycleEventType.FLOW_COMPLETED,
+        repo_id="repo-1",
+        run_id="run-1",
+    )
+
+    router.route_event(event)
+
+    assert event.event_id in store.marked_processed_ids
+    saved_event = automation_store.get_event(f"lifecycle:{event.event_id}")
+    assert saved_event is not None
+    assert saved_event.event_type == "lifecycle.flow_completed"
+    job = automation_store.list_jobs()[0]
+    assert job.executor["kind"] == "pma_turn"
+    assert job.dedupe_key == f"lifecycle:{event.event_id}"
+    assert job.policy["reactive_debounce_key"].endswith(":repo-1:run-1")
+
+
+def test_route_event_records_unified_event_when_pma_disabled(
+    tmp_path: Path,
+) -> None:
+    config = _make_hub_config(tmp_path, pma_enabled=False)
+    automation_store = AutomationStore(tmp_path)
+    ensure_builtin_pma_reactive_rule(automation_store, pma_config=config.pma)
+    router, store = _make_router(
+        tmp_path,
+        hub_config=config,
+        automation_rule_engine=AutomationRuleEngine(automation_store),
+    )
+    event = LifecycleEvent(
+        event_type=LifecycleEventType.FLOW_FAILED,
+        repo_id="repo-1",
+        run_id="run-1",
+    )
+
+    router.route_event(event)
+
+    assert event.event_id in store.marked_processed_ids
+    saved_event = automation_store.get_event(f"lifecycle:{event.event_id}")
+    assert saved_event is not None
+    assert saved_event.event_type == "lifecycle.flow_failed"
+    assert automation_store.list_jobs() == []
 
 
 def test_route_event_flow_failed_marks_pma_disabled(tmp_path: Path) -> None:
@@ -250,75 +289,6 @@ def test_build_transition_payload_defaults_for_flow_started_and_resumed(
     assert started_payload["to_state"] == "running"
     assert resumed_payload["from_state"] == "paused"
     assert resumed_payload["to_state"] == "running"
-
-
-def test_check_reactive_gate_returns_allowed_by_default(tmp_path: Path) -> None:
-    router, _ = _make_router(tmp_path)
-    event = LifecycleEvent(
-        event_type=LifecycleEventType.FLOW_FAILED,
-        repo_id="repo-1",
-        run_id="run-1",
-    )
-    allowed, reason = router.check_reactive_gate(event)
-    assert allowed is True
-    assert reason == "reactive_allowed"
-
-
-def test_check_reactive_gate_respects_reactive_disabled(tmp_path: Path) -> None:
-    config = _make_hub_config(tmp_path)
-    config.pma.reactive_enabled = False
-    router, _ = _make_router(tmp_path, hub_config=config)
-    event = LifecycleEvent(
-        event_type=LifecycleEventType.FLOW_FAILED,
-        repo_id="repo-1",
-        run_id="run-1",
-    )
-    allowed, reason = router.check_reactive_gate(event)
-    assert allowed is False
-    assert reason == "reactive_disabled"
-
-
-def test_check_reactive_gate_respects_origin_blocklist(tmp_path: Path) -> None:
-    config = _make_hub_config(tmp_path)
-    config.pma.reactive_origin_blocklist = ["pma"]
-    router, _ = _make_router(tmp_path, hub_config=config)
-    event = LifecycleEvent(
-        event_type=LifecycleEventType.FLOW_FAILED,
-        repo_id="repo-1",
-        run_id="run-1",
-        origin="pma",
-    )
-    allowed, reason = router.check_reactive_gate(event)
-    assert allowed is False
-    assert reason == "reactive_origin_blocked"
-
-
-def test_check_reactive_gate_respects_event_type_allowlist(tmp_path: Path) -> None:
-    config = _make_hub_config(tmp_path)
-    config.pma.reactive_event_types = ["flow_failed"]
-    router, _ = _make_router(tmp_path, hub_config=config)
-    event = LifecycleEvent(
-        event_type=LifecycleEventType.FLOW_COMPLETED,
-        repo_id="repo-1",
-        run_id="run-1",
-    )
-    allowed, reason = router.check_reactive_gate(event)
-    assert allowed is False
-    assert reason == "reactive_filtered"
-
-
-def test_automation_wakeup_enqueue_failure_does_not_crash(tmp_path: Path) -> None:
-    router, store = _make_router(tmp_path)
-    router._ensure_pma_automation_store_fn = MagicMock(
-        side_effect=RuntimeError("store error")
-    )
-    event = LifecycleEvent(
-        event_type=LifecycleEventType.FLOW_FAILED,
-        repo_id="repo-1",
-        run_id="run-1",
-    )
-    router.route_event(event)
-    assert event.event_id in store.marked_processed_ids
 
 
 def test_list_repos_failure_does_not_crash_dispatch(tmp_path: Path) -> None:

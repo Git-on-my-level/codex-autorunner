@@ -5,8 +5,18 @@ import threading
 import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Any, Callable, Optional, Protocol
 
+from .automation import (
+    AutomationExecutorRegistry,
+    AutomationJobWorker,
+    AutomationRuleEngine,
+    AutomationScheduler,
+    AutomationStore,
+    ensure_builtin_pma_reactive_rule,
+)
+from .automation.child_reconciler import AutomationChildRunReconciler
 from .config import HubConfig
 from .hub_lifecycle_routing import LifecycleEventRouter
 from .hub_topology import RepoSnapshot
@@ -15,8 +25,6 @@ from .lifecycle_events import (
     LifecycleEventEmitter,
     LifecycleEventStore,
 )
-from .pma_automation_store import PmaAutomationStore
-from .pma_safety import PmaSafetyChecker
 from .text_utils import _parse_iso_timestamp
 
 LIFECYCLE_RETRY_METADATA_KEY = "lifecycle_retry"
@@ -331,23 +339,41 @@ class HubLifecycleOrchestrator:
         hub_config: HubConfig,
         *,
         list_repos_fn: Callable[[], list[RepoSnapshot]],
-        ensure_pma_automation_store_fn: Callable[[], PmaAutomationStore],
-        ensure_pma_safety_checker_fn: Callable[[], PmaSafetyChecker],
         run_coroutine_fn: Callable[[Any], Any],
         process_scm_polls_fn: Optional[Callable[[], dict[str, int]]] = None,
         process_pma_timers_fn: Optional[Callable[[], int]] = None,
-        drain_pma_wakeups_fn: Optional[Callable[[], int]] = None,
+        automation_executor_registry: Optional[AutomationExecutorRegistry] = None,
         logger: Optional[logging.Logger] = None,
     ) -> None:
         self._hub_config = hub_config
+        self._list_repos_fn = list_repos_fn
         self._lifecycle_emitter = LifecycleEventEmitter(hub_config.root)
+        self._automation_store = AutomationStore(hub_config.root)
+        self._automation_store.backfill_legacy_pma_automation()
+        ensure_builtin_pma_reactive_rule(
+            self._automation_store, pma_config=hub_config.pma
+        )
+        self._automation_rule_engine = AutomationRuleEngine(self._automation_store)
+        self._automation_scheduler = AutomationScheduler(
+            self._automation_store, self._automation_rule_engine
+        )
+        self._automation_child_reconciler = AutomationChildRunReconciler(
+            self._automation_store,
+            resolve_repo_path=self._resolve_repo_path_for_automation,
+            logger=logger,
+        )
+        self._automation_executor_registry = (
+            automation_executor_registry or AutomationExecutorRegistry()
+        )
+        self._automation_job_worker = AutomationJobWorker(
+            self._automation_store, self._automation_executor_registry
+        )
         self._lifecycle_router = LifecycleEventRouter(
             hub_config=hub_config,
             lifecycle_store=self.lifecycle_store,
             list_repos_fn=list_repos_fn,
-            ensure_pma_automation_store_fn=ensure_pma_automation_store_fn,
-            ensure_pma_safety_checker_fn=ensure_pma_safety_checker_fn,
             run_coroutine_fn=run_coroutine_fn,
+            automation_rule_engine=self._automation_rule_engine,
             logger=logger,
         )
         self._lifecycle_worker = HubLifecycleWorker(
@@ -359,7 +385,6 @@ class HubLifecycleOrchestrator:
         )
         self._process_scm_polls_fn = process_scm_polls_fn
         self._process_pma_timers_fn = process_pma_timers_fn
-        self._drain_pma_wakeups_fn = drain_pma_wakeups_fn
         self._process_event_fn: Callable[[LifecycleEvent], None] = (
             self._process_lifecycle_event
         )
@@ -412,11 +437,35 @@ class HubLifecycleOrchestrator:
 
     def process_lifecycle_events(self) -> int:
         processed = self._lifecycle_event_processor.process_events(limit=100)
-        try:
-            self._drain_pma_wakeups()
-        except Exception:
-            self._logger.exception("Failed draining PMA automation wake-ups")
+        self.process_automation()
         return processed
+
+    def process_automation(self) -> int:
+        reconcile_before = self._automation_child_reconciler.reconcile_running_jobs(
+            limit=100
+        )
+        scheduler_result = self._automation_scheduler.process_due(limit=100)
+        worker_result = self._automation_job_worker.process_once(limit=25)
+        reconcile_after = self._automation_child_reconciler.reconcile_running_jobs(
+            limit=100
+        )
+        return (
+            reconcile_before.changed
+            + scheduler_result.schedules_fired
+            + scheduler_result.jobs_created
+            + worker_result.claimed
+            + reconcile_after.changed
+        )
+
+    def _resolve_repo_path_for_automation(self, repo_id: str) -> Optional[Path]:
+        try:
+            snapshots = self._list_repos_fn()
+        except (RuntimeError, OSError, ValueError, TypeError):
+            return None
+        for snapshot in snapshots:
+            if snapshot.id == repo_id and snapshot.exists_on_disk:
+                return Path(snapshot.path)
+        return None
 
     def trigger_pma_from_lifecycle_event(self, event: LifecycleEvent) -> None:
         self._process_lifecycle_event(event)
@@ -437,8 +486,8 @@ class HubLifecycleOrchestrator:
         timer_count = self._process_pma_timers()
         if timer_count > 0:
             productive = True
-        wakeup_count = self._drain_pma_wakeups()
-        if wakeup_count > 0:
+        automation_count = self.process_automation()
+        if automation_count > 0:
             productive = True
         return productive
 
@@ -450,11 +499,6 @@ class HubLifecycleOrchestrator:
     def _process_pma_timers(self) -> int:
         if self._process_pma_timers_fn is not None:
             return self._process_pma_timers_fn()
-        return 0
-
-    def _drain_pma_wakeups(self) -> int:
-        if self._drain_pma_wakeups_fn is not None:
-            return self._drain_pma_wakeups_fn()
         return 0
 
     def _build_lifecycle_retry_policy(self) -> LifecycleRetryPolicy:

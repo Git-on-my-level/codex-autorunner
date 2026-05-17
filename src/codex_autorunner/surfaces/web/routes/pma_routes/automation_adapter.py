@@ -7,6 +7,7 @@ from typing import Any, Optional
 
 from fastapi import HTTPException, Request
 
+from .....core.lifecycle_events import LifecycleEvent, LifecycleEventType
 from .....core.time_utils import now_iso
 from ...services.pma import get_pma_request_context
 from ...services.pma.common import (
@@ -14,6 +15,22 @@ from ...services.pma.common import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+_LIFECYCLE_EVENT_BY_TO_STATE = {
+    "running": LifecycleEventType.FLOW_STARTED,
+    "started": LifecycleEventType.FLOW_STARTED,
+    "resumed": LifecycleEventType.FLOW_RESUMED,
+    "paused": LifecycleEventType.FLOW_PAUSED,
+    "blocked": LifecycleEventType.FLOW_PAUSED,
+    "completed": LifecycleEventType.FLOW_COMPLETED,
+    "succeeded": LifecycleEventType.FLOW_COMPLETED,
+    "failed": LifecycleEventType.FLOW_FAILED,
+    "error": LifecycleEventType.FLOW_FAILED,
+    "stopped": LifecycleEventType.FLOW_STOPPED,
+    "cancelled": LifecycleEventType.FLOW_STOPPED,
+    "canceled": LifecycleEventType.FLOW_STOPPED,
+}
 
 
 async def await_if_needed(value: Any) -> Any:
@@ -226,24 +243,14 @@ async def notify_hub_automation_transition(
         payload.update(extra)
 
     supervisor = get_pma_request_context(request).hub_supervisor
-    store = await get_automation_store(request, runtime_state, required=False)
-    if store is None:
+    if supervisor is None:
         return
-
-    method = first_callable(
-        store,
-        ("notify_transition",),
-    )
-    if method is None:
+    trigger = getattr(supervisor, "trigger_pma_from_lifecycle_event", None)
+    if not callable(trigger):
         return
     try:
-        await call_with_fallbacks(
-            method,
-            [
-                ((dict(payload),), {}),
-                ((), {"payload": dict(payload)}),
-                ((), dict(payload)),
-            ],
+        await await_if_needed(
+            trigger(_lifecycle_event_from_transition_payload(payload))
         )
     except (
         RuntimeError,
@@ -270,6 +277,25 @@ async def notify_hub_automation_transition(
             logger.exception("Failed immediate PMA automation processing")
     except (RuntimeError, OSError, ValueError):
         logger.exception("Failed immediate PMA automation processing")
+
+
+def _lifecycle_event_from_transition_payload(payload: dict[str, Any]) -> LifecycleEvent:
+    to_state = str(payload.get("to_state") or "").strip().lower()
+    event_type = _LIFECYCLE_EVENT_BY_TO_STATE.get(
+        to_state, LifecycleEventType.FLOW_FAILED
+    )
+    event_id = normalize_optional_text(
+        payload.get("transition_id")
+    ) or normalize_optional_text(payload.get("idempotency_key"))
+    return LifecycleEvent(
+        event_type=event_type,
+        repo_id=normalize_optional_text(payload.get("repo_id")) or "",
+        run_id=normalize_optional_text(payload.get("run_id")) or "",
+        data=dict(payload),
+        origin="web_pma_route",
+        timestamp=normalize_optional_text(payload.get("timestamp")) or now_iso(),
+        event_id=event_id or "",
+    )
 
 
 async def notify_managed_thread_terminal_transition(

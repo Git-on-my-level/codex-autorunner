@@ -324,7 +324,9 @@ You are an **abstraction layer, not an executor**. Coordinate tickets and flows 
 ## Automation primitives (event-driven continuity)
 
 - Use automation when a lane should continue without manual polling.
-- Subscriptions: run/thread transition triggers enqueue PMA wake-up turns.
+- PMA subscription and timer endpoints are compatibility adapters backed by
+  unified `AutomationRule`, `AutomationSchedule`, and `AutomationJob` rows.
+- Subscriptions: run/thread transition triggers enqueue PMA automation jobs.
   - `POST /hub/pma/subscriptions`
   - `GET /hub/pma/subscriptions`
   - `DELETE /hub/pma/subscriptions/{subscription_id}`
@@ -337,7 +339,8 @@ You are an **abstraction layer, not an executor**. Coordinate tickets and flows 
 - Typical event_types:
   - ticket flow: `flow_paused`, `flow_completed`, `flow_failed`, `flow_stopped`
   - managed thread: `managed_thread_completed`, `managed_thread_failed`
-- Durable state is stored at `.codex-autorunner/pma/automation_store.json`.
+- Canonical durable state is stored in hub `orchestration.sqlite3`; the
+  `.codex-autorunner/pma/automation_store.json` file is a compatibility mirror.
 - Practical recipes are in the hub-scoped PMA operations guide under “PMA automation wake-ups”.
 
 ## Destinations (execution runtime)
@@ -546,10 +549,13 @@ Do NOT copy `.codex-autorunner/` between worktrees:
 ## PMA automation wake-ups (subscriptions + timers)
 
 Use automation to keep multi-lane work moving without explicit polling.
+These PMA endpoints are compatibility adapters over the unified automation
+plane: built-in and user-created behavior is represented as rules, schedules,
+events, jobs, and attempts in hub orchestration state.
 
 What to configure:
 - Subscriptions:
-  - trigger on lifecycle transitions and enqueue PMA wake-up turns.
+  - trigger on lifecycle transitions and enqueue PMA automation jobs.
   - create/list/delete:
     - `POST /hub/pma/subscriptions`
     - `GET /hub/pma/subscriptions`
@@ -594,7 +600,8 @@ Example payloads:
 Notes:
 - Wake-up payloads include `repo_id`, `run_id`/`thread_id`, `from_state`, `to_state`, `reason`, `timestamp`, and `lane_id`.
 - Handlers should be idempotent; duplicate events can occur by design.
-- Durable storage path: `.codex-autorunner/pma/automation_store.json`.
+- Canonical durable storage: hub `orchestration.sqlite3` automation tables.
+- Compatibility mirror: `.codex-autorunner/pma/automation_store.json`.
 """
     )
 

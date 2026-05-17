@@ -261,9 +261,14 @@ All canonical PMA state lives in `orchestration.sqlite3` tables:
 | `orch_thread_executions` | `PmaThreadStore` | Managed turn execution records |
 | `orch_thread_actions` | `PmaThreadStore` | Thread-level action records |
 | `orch_queue_items` | `PmaQueue` / `PmaThreadStore` | Lane items and thread-execution queue items |
-| `orch_automation_subscriptions` | `PmaAutomationStore` | Automation subscription state |
-| `orch_automation_timers` | `PmaAutomationStore` | Automation timer state |
-| `orch_automation_wakeups` | `PmaAutomationStore` | Automation wakeup state |
+| `orch_automation_rules` | `AutomationStore` | Unified automation rule definitions, including built-ins |
+| `orch_automation_events` | `AutomationStore` | Normalized lifecycle, SCM, schedule, repo, and manual events |
+| `orch_automation_jobs` | `AutomationStore` | Durable automation job ledger and execution refs |
+| `orch_automation_job_attempts` | `AutomationStore` | Per-attempt execution results and errors |
+| `orch_automation_schedules` | `AutomationStore` | Derived schedule state for scheduled rules |
+| `orch_automation_subscriptions` | `PmaAutomationStore` adapter | PMA compatibility subscription rows mirrored into automation rules |
+| `orch_automation_timers` | `PmaAutomationStore` adapter | PMA compatibility timer rows mirrored into automation schedules |
+| `orch_automation_wakeups` | `PmaAutomationStore` adapter | Legacy wakeup rows backfilled into automation events/jobs before execution |
 | `orch_reactive_debounce_state` | `PmaReactiveStore` | Reactive debounce timestamps |
 
 Compatibility mirrors are rewritten after each canonical mutation for

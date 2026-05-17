@@ -436,7 +436,7 @@ def test_automation_timer_due_drains_to_pma_queue(tmp_path: Path) -> None:
         created = supervisor.process_pma_automation_timers()
         assert created == 1
         drained = supervisor.drain_pma_automation_wakeups()
-        assert drained == 1
+        assert drained == 0
 
         assert supervisor.process_pma_automation_timers() == 0
         supervisor.drain_pma_automation_wakeups()

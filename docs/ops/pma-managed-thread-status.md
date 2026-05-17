@@ -138,6 +138,10 @@ Thread-scoped subscriptions are supported on creation with `thread_id`. When
 `thread_id` is omitted, the subscription is repo- or run-scoped and may match
 any managed thread in that scope.
 
+These subscription commands are compatibility adapters. They create or update
+system-owned automation rules, and lifecycle transitions enqueue durable
+automation jobs before PMA lane work is started.
+
 ## Resource Ownership And Bindings
 
 Every PMA managed thread is a durable CAR thread target owned by a typed

@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+from .automation import AutomationStore
 from .hub import HubSupervisor
 
 _logger = logging.getLogger(__name__)
@@ -17,6 +18,9 @@ def empty_automation_snapshot() -> dict[str, Any]:
             "dispatched_recent_count": 0,
             "pending_sample": [],
         },
+        "rules": {"enabled_count": 0, "sample": []},
+        "schedules": {"active_count": 0, "sample": []},
+        "jobs": {"pending_count": 0, "recent_sample": []},
     }
 
 
@@ -181,4 +185,91 @@ def snapshot_pma_automation(
             for entry in pending_wakeups_sample[:max_items]
         ],
     }
+    _attach_unified_automation_snapshot(supervisor, out, max_items=max_items)
     return out
+
+
+def _attach_unified_automation_snapshot(
+    supervisor: HubSupervisor, out: dict[str, Any], *, max_items: int
+) -> None:
+    hub_root = getattr(getattr(supervisor, "hub_config", None), "root", None)
+    if hub_root is None:
+        return
+    try:
+        store = AutomationStore(hub_root)
+        rules = store.list_rules()
+        schedules = store.list_schedules()
+        pending_jobs = store.list_jobs(state="pending", limit=max_items)
+        recent_jobs = store.list_jobs(limit=max_items)
+    except (RuntimeError, OSError, ValueError, TypeError):
+        _logger.exception("Failed to read unified automation snapshot")
+        return
+
+    def _pick(entry: dict[str, Any], fields: tuple[str, ...]) -> dict[str, Any]:
+        picked: dict[str, Any] = {}
+        for field in fields:
+            value = entry.get(field)
+            if value is None:
+                continue
+            if isinstance(value, str) and not value.strip():
+                continue
+            picked[field] = value
+        return picked
+
+    out["rules"] = {
+        "enabled_count": sum(1 for rule in rules if rule.enabled),
+        "sample": [
+            _pick(
+                rule.to_dict(),
+                (
+                    "rule_id",
+                    "name",
+                    "enabled",
+                    "system_owned",
+                    "trigger_kind",
+                    "target_policy",
+                    "executor_kind",
+                    "metadata",
+                ),
+            )
+            for rule in rules[:max_items]
+        ],
+    }
+    out["schedules"] = {
+        "active_count": sum(1 for schedule in schedules if schedule.state == "active"),
+        "sample": [
+            _pick(
+                schedule.to_dict(),
+                (
+                    "schedule_id",
+                    "rule_id",
+                    "schedule_kind",
+                    "next_fire_at",
+                    "last_fire_at",
+                    "state",
+                    "schedule",
+                ),
+            )
+            for schedule in schedules[:max_items]
+        ],
+    }
+    out["jobs"] = {
+        "pending_count": len(pending_jobs),
+        "recent_sample": [
+            _pick(
+                job.to_dict(),
+                (
+                    "job_id",
+                    "rule_id",
+                    "event_id",
+                    "state",
+                    "available_at",
+                    "pma_lane_id",
+                    "pma_queue_item_id",
+                    "result_summary",
+                    "error_text",
+                ),
+            )
+            for job in recent_jobs[:max_items]
+        ],
+    }

@@ -9,6 +9,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional, cast
 
+from .automation import (
+    AutomationStore,
+    mirror_pma_subscription_rule,
+    mirror_pma_timer_schedule,
+)
 from .chat_bindings import (
     active_chat_binding_metadata_by_thread,
     preferred_non_pma_chat_notification_source_for_workspace,
@@ -1523,6 +1528,8 @@ class PmaAutomationStore:
             logger.warning(
                 "Creating PMA subscription with empty event_types; subscription will match all events"
             )
+        created: PmaLifecycleSubscription
+        deduped = False
         with file_lock(self._lock_path()):
             with open_orchestration_sqlite(
                 self._hub_root, durable=self._durable
@@ -1531,26 +1538,29 @@ class PmaAutomationStore:
                     if key is not None:
                         existing = self._find_active_subscription_by_key(conn, key)
                         if existing is not None:
-                            return existing, True
-                    created = PmaLifecycleSubscription.create(
-                        event_types=normalized_event_types,
-                        repo_id=repo_id,
-                        run_id=run_id,
-                        thread_id=normalized_thread_id,
-                        lane_id=resolved_lane_id,
-                        from_state=from_state,
-                        to_state=to_state,
-                        reason=reason,
-                        idempotency_key=key,
-                        max_matches=_resolve_subscription_max_matches(
-                            max_matches=max_matches,
-                            notify_once=notify_once,
+                            created = existing
+                            deduped = True
+                    if not deduped:
+                        created = PmaLifecycleSubscription.create(
+                            event_types=normalized_event_types,
+                            repo_id=repo_id,
+                            run_id=run_id,
+                            thread_id=normalized_thread_id,
+                            lane_id=resolved_lane_id,
+                            from_state=from_state,
+                            to_state=to_state,
+                            reason=reason,
+                            idempotency_key=key,
+                            max_matches=_resolve_subscription_max_matches(
+                                max_matches=max_matches,
+                                notify_once=notify_once,
+                                metadata=resolved_metadata,
+                            ),
                             metadata=resolved_metadata,
-                        ),
-                        metadata=resolved_metadata,
-                    )
-                    self._insert_subscription_row(conn, created)
-            return created, False
+                        )
+                        self._insert_subscription_row(conn, created)
+        self._mirror_subscription_rule(created)
+        return created, deduped
 
     def create_subscription(
         self, payload: Optional[dict[str, Any]] = None, **kwargs: Any
@@ -1669,7 +1679,29 @@ class PmaAutomationStore:
                         (stamp, stamp, target_id),
                     )
                     changed = cursor.rowcount > 0
+                    if changed:
+                        conn.execute(
+                            """
+                            UPDATE orch_automation_rules
+                               SET enabled = 0,
+                                   updated_at = ?
+                             WHERE rule_id = ?
+                            """,
+                            (stamp, f"builtin:pma:subscription:{target_id}"),
+                        )
             return changed
+
+    def _mirror_subscription_rule(self, subscription: PmaLifecycleSubscription) -> None:
+        try:
+            mirror_pma_subscription_rule(
+                AutomationStore(self._hub_root, durable=self._durable),
+                subscription=subscription,
+            )
+        except (sqlite3.Error, OSError, ValueError, TypeError, RuntimeError):
+            logger.exception(
+                "Failed to mirror PMA subscription into unified automation rule: %s",
+                getattr(subscription, "subscription_id", None),
+            )
 
     def purge_subscription(
         self, subscription_id: str, *, require_inactive: bool = True
@@ -1870,6 +1902,8 @@ class PmaAutomationStore:
         normalized_due_at = _normalize_due_timestamp(due_at, field_name="due_at")
         if normalized_due_at is None:
             raise ValueError("due_at is required")
+        created: PmaAutomationTimer
+        deduped = False
         with file_lock(self._lock_path()):
             with open_orchestration_sqlite(
                 self._hub_root, durable=self._durable
@@ -1886,24 +1920,27 @@ class PmaAutomationStore:
                     if key is not None:
                         existing = self._find_pending_timer_by_key(conn, key)
                         if existing is not None:
-                            return existing, True
-                    created = PmaAutomationTimer.create(
-                        due_at=normalized_due_at,
-                        timer_type=timer_type,
-                        idle_seconds=idle_seconds,
-                        subscription_id=normalized_subscription_id,
-                        repo_id=repo_id,
-                        run_id=run_id,
-                        thread_id=thread_id,
-                        lane_id=lane_id,
-                        from_state=from_state,
-                        to_state=to_state,
-                        reason=reason,
-                        idempotency_key=key,
-                        metadata=metadata,
-                    )
-                    self._insert_timer_row(conn, created)
-            return created, False
+                            created = existing
+                            deduped = True
+                    if not deduped:
+                        created = PmaAutomationTimer.create(
+                            due_at=normalized_due_at,
+                            timer_type=timer_type,
+                            idle_seconds=idle_seconds,
+                            subscription_id=normalized_subscription_id,
+                            repo_id=repo_id,
+                            run_id=run_id,
+                            thread_id=thread_id,
+                            lane_id=lane_id,
+                            from_state=from_state,
+                            to_state=to_state,
+                            reason=reason,
+                            idempotency_key=key,
+                            metadata=metadata,
+                        )
+                        self._insert_timer_row(conn, created)
+        self._mirror_timer_schedule(created)
+        return created, deduped
 
     def create_timer(
         self, payload: Optional[dict[str, Any]] = None, **kwargs: Any
@@ -1991,6 +2028,17 @@ class PmaAutomationStore:
                             (cancelled_at, target_id),
                         )
                     changed = cursor.rowcount > 0
+                    if changed:
+                        conn.execute(
+                            """
+                            UPDATE orch_automation_schedules
+                               SET state = 'cancelled',
+                                   next_fire_at = NULL,
+                                   updated_at = ?
+                             WHERE schedule_id = ?
+                            """,
+                            (cancelled_at, f"pma-timer:{target_id}"),
+                        )
             return changed
 
     def purge_timer(self, timer_id: str, *, require_inactive: bool = True) -> bool:
@@ -2102,8 +2150,21 @@ class PmaAutomationStore:
                     self._save_structured_unlocked(
                         state, subscriptions, timers, wakeups
                     )
+                    self._mirror_timer_schedule(entry)
                     return {"status": "ok", "timer": entry.to_dict(), "touched": True}
         return {"status": "ok", "timer_id": target_id, "touched": False}
+
+    def _mirror_timer_schedule(self, timer: PmaAutomationTimer) -> None:
+        try:
+            mirror_pma_timer_schedule(
+                AutomationStore(self._hub_root, durable=self._durable),
+                timer=timer,
+            )
+        except (sqlite3.Error, OSError, ValueError, TypeError, RuntimeError):
+            logger.exception(
+                "Failed to mirror PMA timer into unified automation schedule: %s",
+                getattr(timer, "timer_id", None),
+            )
 
     def dequeue_due_timers(
         self,

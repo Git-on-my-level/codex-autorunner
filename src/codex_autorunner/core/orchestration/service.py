@@ -6,11 +6,11 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Mapping, Optional
 
+from ..automation import AutomationEvent, AutomationRuleEngine, AutomationStore
 from ..car_context import CarContextProfile, normalize_car_context_profile
 from ..domain.refs import ScopeRef
 from ..logging_utils import log_event
 from ..managed_thread_store import ManagedThreadStore
-from ..pma_automation_store import PmaAutomationStore
 from ..text_utils import _truncate_text
 from .bindings import ActiveWorkSummary, OrchestrationBindingStore
 from .catalog import MappingAgentDefinitionCatalog, RuntimeAgentDescriptor
@@ -58,6 +58,67 @@ from .threads import SurfaceThreadMessageRequest, ThreadControlRequest
 
 MessagePreviewLimit = 120
 logger = logging.getLogger(__name__)
+
+
+def _notify_pma_lifecycle_automation_transition(
+    hub_root: Path, payload: dict[str, Any]
+) -> dict[str, Any]:
+    store = AutomationStore(hub_root)
+    store.backfill_legacy_pma_automation()
+    event_id_source = (
+        _optional_text(payload.get("transition_id"))
+        or _optional_text(payload.get("idempotency_key"))
+        or _optional_text(payload.get("managed_turn_id"))
+        or _optional_text(payload.get("thread_id"))
+        or "managed-thread-transition"
+    )
+    automation_event = AutomationEvent.create(
+        event_id=f"lifecycle:{event_id_source}",
+        event_type=_automation_event_type_from_transition(payload),
+        source="lifecycle",
+        repo_id=_optional_text(payload.get("repo_id")) or "",
+        target={
+            "repo_id": _optional_text(payload.get("repo_id")),
+            "run_id": _optional_text(payload.get("run_id")),
+            "thread_id": _optional_text(payload.get("thread_id")),
+        },
+        payload={
+            **dict(payload),
+            "origin": _optional_text(payload.get("origin")) or "orchestration",
+        },
+        raw_payload=dict(payload),
+        metadata={"lifecycle_event_id": event_id_source},
+        observed_at=_optional_text(payload.get("timestamp")),
+    )
+    result = AutomationRuleEngine(store).record_event_and_enqueue_jobs(automation_event)
+    return {
+        "status": "ok",
+        "matched": result.matched_rules,
+        "created": result.jobs_created,
+        "deduped": result.jobs_deduped,
+        "skipped": result.jobs_skipped,
+    }
+
+
+def _automation_event_type_from_transition(payload: Mapping[str, Any]) -> str:
+    to_state = str(payload.get("to_state") or "").strip().lower()
+    if to_state == "completed":
+        return "lifecycle.flow_completed"
+    if to_state in {"interrupted", "stopped"}:
+        return "lifecycle.flow_stopped"
+    if to_state in {"paused", "blocked"}:
+        return "lifecycle.flow_paused"
+    if to_state in {"running", "resumed"}:
+        return "lifecycle.flow_resumed"
+    return "lifecycle.flow_failed"
+
+
+def _optional_text(value: Any) -> Optional[str]:
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
+
 
 HarnessFactory = Callable[..., RuntimeThreadHarness]
 
@@ -175,9 +236,9 @@ class ManagedThreadExecutionStore(ThreadExecutionStore):
             get_thread_target=self.get_thread_target,
             mark_turn_finished=self._store.mark_turn_finished,
             mark_turn_interrupted=self._store.mark_turn_interrupted,
-            notify_transition=PmaAutomationStore(
-                self._store.hub_root
-            ).notify_transition,
+            notify_transition=lambda payload: _notify_pma_lifecycle_automation_transition(
+                self._store.hub_root, payload
+            ),
             logger=logger,
         )
 

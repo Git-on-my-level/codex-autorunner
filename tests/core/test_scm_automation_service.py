@@ -4,6 +4,9 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Optional
 
+import pytest
+
+from codex_autorunner.core.automation import AutomationStore
 from codex_autorunner.core.pr_bindings import PrBinding
 from codex_autorunner.core.publish_journal import PublishOperation
 from codex_autorunner.core.scm_automation_service import ScmAutomationService
@@ -61,6 +64,23 @@ def _event(
     )
 
 
+def _merged_event() -> ScmEvent:
+    return ScmEvent(
+        event_id="github:event-merged",
+        provider="github",
+        event_type="pull_request",
+        occurred_at="2026-03-26T00:00:00Z",
+        received_at="2026-03-26T00:00:01Z",
+        created_at="2026-03-26T00:00:02Z",
+        repo_slug="acme/widgets",
+        repo_id="repo-1",
+        pr_number=42,
+        delivery_id="delivery-1",
+        payload={"action": "closed", "state": "closed", "merged": True},
+        raw_payload=None,
+    )
+
+
 def _binding() -> PrBinding:
     return PrBinding(
         binding_id="binding-1",
@@ -76,6 +96,26 @@ def _binding() -> PrBinding:
         updated_at="2026-03-26T00:00:00Z",
         closed_at=None,
     )
+
+
+def _event_for_reaction_kind(reaction_kind: str) -> ScmEvent:
+    if reaction_kind == "ci_failed":
+        return _ci_failed_event(event_id="github:event-ci-failed")
+    if reaction_kind == "changes_requested":
+        return _event(event_id="github:event-changes-requested")
+    if reaction_kind == "review_comment":
+        return _event(
+            event_id="github:event-review-comment",
+            payload={"action": "submitted", "review_state": "commented"},
+        )
+    if reaction_kind == "approved_and_green":
+        return _event(
+            event_id="github:event-approved",
+            payload={"action": "submitted", "review_state": "approved"},
+        )
+    if reaction_kind == "merged":
+        return _merged_event()
+    raise AssertionError(f"unknown reaction kind: {reaction_kind}")
 
 
 def _intent(
@@ -547,6 +587,132 @@ def test_ingest_event_loads_persisted_event_routes_reactions_and_dedupes_publish
     assert sorted(journal.operations_by_key) == ["scm:key-1", "scm:key-2"]
 
 
+def test_ingest_event_records_normalized_automation_event_and_builtin_rule_job(
+    tmp_path: Path,
+) -> None:
+    event = _event()
+    binding = _binding()
+    service = ScmAutomationService(
+        tmp_path,
+        event_store=_EventStoreFake(event),
+        binding_resolver=_BindingResolverFake(binding),
+        reaction_state_store=_PermissiveReactionStateFake(),
+        journal=_JournalFake(),
+        publish_processor=_ProcessorFake(processed=[]),
+    )
+
+    result = service.ingest_event("github:event-1")
+
+    assert result.automation_event is not None
+    assert result.automation_event.event_id == "scm:github:event-1"
+    assert (
+        result.automation_event.event_type == "scm.github.pull_request_review.submitted"
+    )
+    assert result.automation_event.payload["reaction_kind"] == "changes_requested"
+    assert "reaction_intents" not in result.automation_event.payload
+    assert result.automation_event.payload["actions"][0]["reaction_kind"] == (
+        "changes_requested"
+    )
+    assert result.automation_event.metadata.get("compatibility_translator") is None
+    assert len(result.automation_jobs) == 1
+    job = result.automation_jobs[0]
+    assert job.rule_id == "builtin:scm:github:changes_requested"
+    assert job.event_id == "scm:github:event-1"
+    assert job.target["policy"] == "pr_worktree"
+    assert job.executor["kind"] == "publish_operation"
+    assert job.executor["reaction_kind"] == "changes_requested"
+    assert job.executor["action_source"] == "event.payload.actions"
+    assert "reaction_intents" not in job.executor
+    assert job.state == "succeeded"
+    assert job.publish_operation_id == result.publish_operations[0].operation_id
+
+    store = AutomationStore(tmp_path)
+    rules = {rule.rule_id: rule for rule in store.list_rules()}
+    assert {
+        "builtin:scm:github:ci_failed",
+        "builtin:scm:github:changes_requested",
+        "builtin:scm:github:review_comment",
+        "builtin:scm:github:approved_and_green",
+        "builtin:scm:github:merged",
+    }.issubset(rules)
+    assert store.get_event("scm:github:event-1") is not None
+    attempts = store.list_attempts(job.job_id)
+    assert len(attempts) == 1
+    assert attempts[0].execution_refs == {
+        "publish_operation_id": result.publish_operations[0].operation_id
+    }
+    assert attempts[0].executor_result["outcome"] == "published"
+
+
+def test_minimal_noise_profile_seeds_disabled_rules_and_skips_their_jobs(
+    tmp_path: Path,
+) -> None:
+    event = _event(
+        event_id="github:event-approved",
+        payload={"action": "submitted", "review_state": "approved"},
+    )
+    binding = _binding()
+    service = ScmAutomationService(
+        tmp_path,
+        event_store=_EventStoreFake(event),
+        binding_resolver=_BindingResolverFake(binding),
+        reaction_router=route_scm_reactions,
+        reaction_config={"profile": "minimal_noise"},
+        reaction_state_store=_PermissiveReactionStateFake(),
+        journal=_JournalFake(),
+        publish_processor=_ProcessorFake(processed=[]),
+    )
+
+    result = service.ingest_event("github:event-approved")
+
+    store = AutomationStore(tmp_path)
+    approved_rule = store.get_rule("builtin:scm:github:approved_and_green")
+    assert approved_rule is not None
+    assert approved_rule.enabled is False
+    assert result.reaction_intents == ()
+    assert result.automation_event is not None
+    assert result.automation_jobs == ()
+
+
+@pytest.mark.parametrize(
+    "reaction_kind",
+    [
+        "ci_failed",
+        "changes_requested",
+        "review_comment",
+        "approved_and_green",
+        "merged",
+    ],
+)
+def test_builtin_scm_rules_create_completed_automation_jobs_for_each_reaction_kind(
+    tmp_path: Path,
+    reaction_kind: str,
+) -> None:
+    event = _event_for_reaction_kind(reaction_kind)
+    service = ScmAutomationService(
+        tmp_path,
+        event_store=_EventStoreFake(event),
+        binding_resolver=_BindingResolverFake(_binding()),
+        reaction_state_store=_PermissiveReactionStateFake(),
+        journal=_JournalFake(),
+        publish_processor=_ProcessorFake(processed=[]),
+    )
+
+    result = service.ingest_event(event)
+
+    assert [intent.reaction_kind for intent in result.reaction_intents] == [
+        reaction_kind
+    ]
+    assert len(result.automation_jobs) == 1
+    job = result.automation_jobs[0]
+    assert job.rule_id == f"builtin:scm:github:{reaction_kind}"
+    assert job.state == "succeeded"
+    assert job.publish_operation_id is not None
+    attempts = AutomationStore(tmp_path).list_attempts(job.job_id)
+    assert len(attempts) == 1
+    assert attempts[0].status == "succeeded"
+
+
 def test_ci_failed_pending_merge_falls_back_to_create_when_update_races(
     tmp_path: Path,
 ) -> None:
@@ -615,6 +781,13 @@ def test_ingest_event_suppresses_repeated_semantic_reaction_conditions_using_dur
     assert first_operation_key.startswith("scm-reaction:github:changes_requested:")
     assert len(second.reaction_intents) == 1
     assert second.publish_operations == ()
+    assert len(second.automation_jobs) == 1
+    assert second.automation_jobs[0].state == "skipped"
+    assert second.automation_jobs[0].publish_operation_id is None
+    attempts = AutomationStore(tmp_path).list_attempts(second.automation_jobs[0].job_id)
+    assert len(attempts) == 1
+    assert attempts[0].status == "skipped"
+    assert attempts[0].executor_result["outcome"] == "suppressed"
     assert journal.create_calls == [(first_operation_key, "enqueue_managed_turn")]
 
     state_store = ScmReactionStateStore(tmp_path)
@@ -829,6 +1002,14 @@ def test_ingest_event_escalates_after_duplicate_threshold_without_requeueing_sam
     assert stored.attempt_count == 3
     assert stored.escalated_at is not None
     assert stored.last_operation_key == third.publish_operations[0].operation_key
+    third_attempt = AutomationStore(tmp_path).list_attempts(
+        third.automation_jobs[0].job_id
+    )[0]
+    assert third.automation_jobs[0].result_summary == (
+        "SCM reaction escalated through publish operation (duplicate)"
+    )
+    assert third_attempt.executor_result["outcome"] == "escalated"
+    assert third_attempt.executor_result["escalation_reason"] == "duplicate"
 
 
 def test_ingest_event_resolves_previous_fingerprint_and_allows_reemit_after_condition_changes(
@@ -1032,6 +1213,16 @@ def test_ingest_event_batches_review_comment_enqueue_for_15_seconds(
     assert journal.next_attempts_by_key[enqueue_op.operation_key] == (
         "2026-03-26T00:00:15Z"
     )
+    attempt = AutomationStore(tmp_path).list_attempts(result.automation_jobs[0].job_id)[
+        0
+    ]
+    assert result.automation_jobs[0].result_summary == (
+        "SCM reaction batched through publish operation"
+    )
+    assert attempt.executor_result["batch"]["mode"] == "general"
+    assert attempt.executor_result["batch"]["next_attempt_at"] == (
+        "2026-03-26T00:00:15Z"
+    )
 
 
 def test_ingest_event_dedupes_review_comment_enqueue_within_same_batch_window(
@@ -1168,6 +1359,14 @@ def test_ingest_event_batches_ci_failures_for_same_head_and_refreshes_timer(
     assert (
         second_result.publish_operations[0].payload["request"]["message_text"]
         == "CI failed for acme/widgets#42: chat-apps (failure). Inspect the failing check and push a fix."
+    )
+    second_attempt = AutomationStore(tmp_path).list_attempts(
+        second_result.automation_jobs[0].job_id
+    )[0]
+    assert second_attempt.executor_result["batch"]["mode"] == "ci_failed"
+    assert second_attempt.executor_result["batch"]["item_count"] == 2
+    assert second_attempt.executor_result["batch"]["next_attempt_at"] == (
+        "2026-03-26T00:01:40Z"
     )
 
 
