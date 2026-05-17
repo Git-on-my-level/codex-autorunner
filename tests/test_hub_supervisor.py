@@ -2753,6 +2753,35 @@ def test_archive_worktree_archives_bound_managed_threads(tmp_path: Path):
     assert untouched["lifecycle_status"] == "active"
 
 
+def test_retire_worktree_rejects_force_archive_without_force_attestation(
+    tmp_path: Path,
+) -> None:
+    hub_root = tmp_path / "hub"
+    _write_default_hub_config(hub_root)
+
+    supervisor = HubSupervisor(
+        load_hub_config(hub_root),
+        backend_factory_builder=build_agent_backend_factory,
+        app_server_supervisor_factory_builder=build_app_server_supervisor_factory,
+        backend_orchestrator_builder=build_backend_orchestrator,
+    )
+    base = supervisor.create_repo("base")
+    _init_git_repo(base.path)
+    worktree = supervisor.create_worktree(
+        base_repo_id="base",
+        branch="feature/force-archive-guard",
+        start_point="HEAD",
+    )
+
+    with pytest.raises(ValueError, match="--force requires --force-attestation"):
+        supervisor.retire_worktree(
+            worktree_repo_id=worktree.id,
+            force_archive=True,
+        )
+
+    assert worktree.path.exists()
+
+
 def test_cleanup_worktree_allows_mixed_chat_bound_with_force(tmp_path: Path):
     hub_root = tmp_path / "hub"
     _write_default_hub_config(hub_root)

@@ -964,12 +964,13 @@ print(
         *,
         worktree_repo_id: str,
         force: bool,
+        force_archive: bool = False,
         force_attestation: Optional[Mapping[str, object]],
     ) -> ResolvedWorktreeEntry:
         self._ctx.invalidate_cache()
         resolved = self._resolve_worktree_entry(worktree_repo_id)
         enforce_force_attestation(
-            force=force,
+            force=force or force_archive,
             force_attestation=force_attestation,
             logger=logger,
             action="hub.retire_worktree",
@@ -1164,6 +1165,7 @@ print(
         resolved = self._validate_retire_worktree(
             worktree_repo_id=worktree_repo_id,
             force=force,
+            force_archive=force_archive,
             force_attestation=force_attestation,
         )
         worktree_path = resolved.worktree_path

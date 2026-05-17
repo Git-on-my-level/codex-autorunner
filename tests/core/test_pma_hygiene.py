@@ -4,6 +4,7 @@ import json
 import os
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from typing import Any
 
 from typer.testing import CliRunner
 
@@ -20,6 +21,7 @@ from codex_autorunner.core.config import (
     load_hub_config,
 )
 from codex_autorunner.core.filebox import ensure_structure, inbox_dir
+from codex_autorunner.core.force_attestation import FORCE_ATTESTATION_REQUIRED_PHRASE
 from codex_autorunner.core.hub import HubSupervisor
 from codex_autorunner.core.managed_thread_store import ManagedThreadStore
 from codex_autorunner.core.orchestration.bindings import OrchestrationBindingStore
@@ -771,6 +773,77 @@ def test_apply_pma_hygiene_report_purges_safe_worktree_candidate(
         retire_worktree=lambda repo_id, archive: supervisor.retire_worktree(
             worktree_repo_id=repo_id,
         ),
+    )
+
+    assert apply_result["attempted"] == 1
+    assert apply_result["applied"] == 1
+    assert apply_result["failed"] == 0
+    assert not worktree.path.exists()
+    assert (
+        load_manifest(
+            load_hub_config(hub_root).manifest_path,
+            hub_root,
+        ).get(worktree.id)
+        is None
+    )
+    assert thread_store.get_thread(created["managed_thread_id"])[
+        "lifecycle_status"
+    ] == ("archived")
+
+
+def test_apply_pma_hygiene_report_purges_worktree_without_snapshot_when_archive_not_requested(
+    tmp_path: Path,
+) -> None:
+    hub_root = tmp_path / "hub"
+    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    cfg.setdefault("pma", {})["cleanup_require_archive"] = False
+    write_test_config(hub_root / CONFIG_FILENAME, cfg)
+    supervisor = HubSupervisor(
+        load_hub_config(hub_root),
+        backend_factory_builder=build_agent_backend_factory,
+        app_server_supervisor_factory_builder=build_app_server_supervisor_factory,
+        backend_orchestrator_builder=build_backend_orchestrator,
+    )
+    base = supervisor.create_repo("base")
+    _init_git_repo(base.path)
+    worktree = supervisor.create_worktree(
+        base_repo_id="base",
+        branch="feature/purge-no-snapshot",
+        start_point="HEAD",
+    )
+    thread_store = ManagedThreadStore(hub_root)
+    created = thread_store.create_thread(
+        "codex",
+        worktree.path,
+        repo_id=worktree.id,
+        name="stale-worktree-thread",
+    )
+
+    now = datetime.now(timezone.utc)
+    report = build_pma_hygiene_report(
+        hub_root,
+        categories=["threads"],
+        generated_at=_iso(now + timedelta(hours=2)),
+        stale_threshold_seconds=60,
+    )
+
+    def _hygiene_worktree(repo_id: str, archive: bool) -> dict[str, Any]:
+        if archive:
+            return supervisor.retire_worktree(worktree_repo_id=repo_id)
+        return supervisor.delete_worktree(
+            worktree_repo_id=repo_id,
+            force=True,
+            force_attestation={
+                "phrase": FORCE_ATTESTATION_REQUIRED_PHRASE,
+                "user_request": "Apply PMA hygiene automated purge without retire snapshot.",
+                "target_scope": f"hub.pma.hygiene.purge_worktree:{repo_id}",
+            },
+        )
+
+    apply_result = apply_pma_hygiene_report(
+        hub_root,
+        report,
+        retire_worktree=_hygiene_worktree,
     )
 
     assert apply_result["attempted"] == 1
