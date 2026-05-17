@@ -1655,7 +1655,7 @@ async def test_stop_thread_marks_interrupted_when_backend_binding_is_missing(
     assert service.get_running_execution(thread.thread_target_id) is None
 
 
-async def test_stop_thread_marks_interrupted_when_runtime_instance_is_stale_without_interrupt(
+async def test_stop_thread_attempts_interrupt_when_runtime_instance_is_stale(
     tmp_path: Path,
 ) -> None:
     harness = _FakeHarness(backend_runtime_instance_id_value="runtime-old")
@@ -1679,9 +1679,11 @@ async def test_stop_thread_marks_interrupted_when_runtime_instance_is_stale_with
 
     outcome = await service.stop_thread(thread.thread_target_id)
 
-    assert harness.interrupt_calls == []
+    assert harness.interrupt_calls == [
+        (workspace_root, "backend-conversation-1", "backend-turn-1")
+    ]
     assert outcome.interrupted_active is True
-    assert outcome.recovered_lost_backend is True
+    assert outcome.recovered_lost_backend is False
     assert outcome.execution is not None
     assert outcome.execution.execution_id == execution.execution_id
     assert outcome.execution.status == "interrupted"
@@ -1689,8 +1691,46 @@ async def test_stop_thread_marks_interrupted_when_runtime_instance_is_stale_with
     refreshed_thread = service.get_thread_target(thread.thread_target_id)
     assert refreshed_thread is not None
     binding = _thread_runtime_binding(service, thread.thread_target_id)
-    assert binding is None
+    assert binding is not None
+    assert binding.backend_thread_id == "backend-conversation-1"
     assert service.get_running_execution(thread.thread_target_id) is None
+
+
+async def test_stop_thread_recovers_lost_backend_when_stale_runtime_interrupt_fails(
+    tmp_path: Path,
+) -> None:
+    harness = _FakeHarness(backend_runtime_instance_id_value="runtime-old")
+    service = _build_service(tmp_path, harness)
+    workspace_root = tmp_path / "workspace"
+    workspace_root.mkdir()
+    thread = service.create_thread_target(
+        "codex",
+        workspace_root,
+        metadata={"backend_runtime_instance_id": "runtime-old"},
+    )
+    execution = await service.send_message(
+        MessageRequest(
+            target_id=thread.thread_target_id,
+            target_kind="thread",
+            message_text="Need an answer",
+        )
+    )
+
+    harness.backend_runtime_instance_id_value = "runtime-new"
+    harness.interrupt_error = RuntimeError("Unknown Hermes turn 'backend-turn-1'")
+
+    outcome = await service.stop_thread(thread.thread_target_id)
+
+    assert harness.interrupt_calls == [
+        (workspace_root, "backend-conversation-1", "backend-turn-1")
+    ]
+    assert outcome.interrupted_active is True
+    assert outcome.recovered_lost_backend is True
+    assert outcome.execution is not None
+    assert outcome.execution.execution_id == execution.execution_id
+    assert outcome.execution.status == "interrupted"
+    binding = _thread_runtime_binding(service, thread.thread_target_id)
+    assert binding is None
 
 
 async def test_stop_thread_marks_interrupted_when_runtime_binding_is_lost_after_restart(

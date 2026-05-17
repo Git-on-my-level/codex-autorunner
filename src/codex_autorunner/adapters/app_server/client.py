@@ -774,6 +774,7 @@ class CodexAppServerClient:
             "app_server.spawned",
             command=list(self._command),
             cwd=self._cwd,
+            pid=self._process.pid,
             runtime_instance_id=self._runtime_instance_id,
         )
         disconnected = self._ensure_disconnect_event()
@@ -1682,6 +1683,7 @@ class CodexAppServerClient:
             logging.WARNING,
             "app_server.disconnected",
             auto_restart=self._auto_restart,
+            runtime_instance_id=self._runtime_instance_id,
             returncode=returncode,
             pid=pid,
             pending_requests=len(self._pending),

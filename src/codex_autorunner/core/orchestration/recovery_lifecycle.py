@@ -498,19 +498,7 @@ class _ThreadRecoveryHelper:
                 backend_thread_id=backend_thread_id,
                 stored_runtime_instance_id=runtime_binding.backend_runtime_instance_id,
                 current_runtime_instance_id=runtime_instance_id,
-            )
-            interrupted = self.interrupt_lost_backend_execution(
-                thread_target_id=thread_target_id,
-                execution=execution,
-                backend_thread_id=backend_thread_id,
-                reason="stale_backend_runtime_instance",
-            )
-            return ThreadStopOutcome(
-                thread_target_id=thread_target_id,
-                cancelled_queued=cancelled_queued,
-                execution=interrupted,
-                interrupted_active=True,
-                recovered_lost_backend=True,
+                action="attempt_interrupt",
             )
 
         try:
