@@ -74,7 +74,7 @@ def flow_retire_prompt_text(record: FlowRunRecord) -> str:
     return (
         f"Run {record.id} is {record.status.value}. "
         "Retiring it will reset the live tickets/contextspace state and move the "
-        "current run artifacts into the retire. Retire it anyway?"
+        "current run artifacts into the archive. Retire it anyway?"
     )
 
 

@@ -159,14 +159,14 @@ class FlowCommands(TelegramCommandSupportMixin):
         run_id = getattr(record, "id", "unknown")
         status = getattr(getattr(record, "status", None), "value", "unknown")
         return (
-            f"Run {_code(run_id)} is {status}. Archiving it will reset the live "
+            f"Run {_code(run_id)} is {status}. Retiring it will reset the live "
             "tickets/contextspace state and move the current run artifacts into the "
-            "retire. Retire it anyway?"
+            "archive. Retire it anyway?"
         )
 
     @staticmethod
     def _flow_retire_in_progress_text(run_id: object) -> str:
-        return f"Archiving run {_code(run_id)}. This can take a few seconds."
+        return f"Retiring run {_code(run_id)}. This can take a few seconds."
 
     def _build_flow_retire_confirmation_keyboard(
         self,
