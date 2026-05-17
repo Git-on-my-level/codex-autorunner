@@ -3,6 +3,7 @@ import type { PmaChatSummary, PmaRunProgress, PmaTimelineItem, SurfaceArtifact }
 import { pmaTimelineContractFields } from './domain';
 import {
   artifactCardView,
+  adjustedUnreadFilterCount,
   buildManagedThreadCreatePayload,
   buildManagedThreadMessagePayload,
   agentCapabilityAllowed,
@@ -23,6 +24,7 @@ import {
   isLocalChatPlaceholder,
   isPmaChatArchived,
   isPrimaryProgressArtifact,
+  mergeChatFacetSourceChats,
   mergeChatActivityEvents,
   mapChatTranscriptSnapshot,
   mapChatSurfaceSnapshotToPmaChats,
@@ -47,6 +49,7 @@ import {
   sortChatsWaitingFirst,
   splitInjectedPromptContext,
   summarizeFilterCounts,
+  summarizeVisibleLocalPlaceholderStatusCounts,
   buildChatListEntries
 } from './pmaChat';
 import { resolvePmaChatSelectorsForActiveChat } from './modelPickers';
@@ -308,6 +311,92 @@ describe('PMA chat view helpers', () => {
     expect(filterPmaChats(chats, 'archived', 'support').map((chat) => chat.id)).toEqual(['chat-2']);
     expect(filterPmaChats(chats, 'unread', '').map((chat) => chat.id).sort()).toEqual(['chat-1', 'chat-3']);
     expect(summarizeFilterCounts(chats)).toEqual({ all: 2, active: 1, waiting: 1, unread: 2, archived: 1 });
+  });
+
+  it('keeps unread membership aligned with backend unread rows while allowing local read markers to suppress known rows', () => {
+    const chats: PmaChatSummary[] = [
+      { ...baseChat, id: 'server-unread-read-locally', unreadCount: 2, updatedAt: '2026-05-04T01:00:00Z' },
+      { ...baseChat, id: 'server-unread-visible', unreadCount: 1, updatedAt: '2026-05-04T02:00:00Z' },
+      { ...baseChat, id: 'locally-unread-only', unreadCount: 0, updatedAt: '2026-05-04T03:00:00Z' }
+    ];
+    const lastSeen = {
+      'server-unread-read-locally': '2026-05-04T01:00:00Z'
+    };
+
+    expect(filterPmaChats(chats, 'unread', '', lastSeen).map((chat) => chat.id)).toEqual([
+      'server-unread-visible'
+    ]);
+    expect(summarizeFilterCounts(chats, lastSeen).unread).toBe(1);
+    expect(adjustedUnreadFilterCount(3, chats, lastSeen)).toBe(2);
+  });
+
+  it('builds filter facets from the stable all-window plus the selected window', () => {
+    const discord = {
+      ...baseChat,
+      id: 'discord-chat',
+      ticketId: null,
+      isTicketFlow: false,
+      raw: { surface_kind: 'discord' }
+    };
+    const telegram = {
+      ...baseChat,
+      id: 'telegram-chat',
+      ticketId: null,
+      isTicketFlow: false,
+      raw: { surface_kind: 'telegram' }
+    };
+    const selectedSlack = {
+      ...baseChat,
+      id: 'slack-chat',
+      ticketId: null,
+      isTicketFlow: false,
+      raw: { surface_kind: 'slack' }
+    };
+
+    const facetChats = mergeChatFacetSourceChats([discord, telegram], [selectedSlack], []);
+
+    expect(chatSurfaceFilterOptions(facetChats).map((option) => option.slug)).toEqual([
+      'discord',
+      'slack',
+      'telegram'
+    ]);
+  });
+
+  it('counts local placeholder statuses against persisted facet rows before placeholders are merged', () => {
+    const persisted = {
+      ...baseChat,
+      id: 'persisted-chat',
+      ticketId: null,
+      isTicketFlow: false
+    };
+    const waitingPlaceholder = {
+      ...baseChat,
+      id: 'committed-waiting',
+      ticketId: null,
+      isTicketFlow: false,
+      status: 'waiting' as const,
+      raw: { draft_committed_placeholder: true }
+    };
+    const runningPlaceholder = {
+      ...baseChat,
+      id: 'committed-running',
+      ticketId: null,
+      isTicketFlow: false,
+      status: 'running' as const,
+      raw: { draft_committed_placeholder: true }
+    };
+    const mergedFacetRows = mergeChatFacetSourceChats(
+      [persisted],
+      [],
+      [waitingPlaceholder, runningPlaceholder]
+    );
+
+    expect(
+      summarizeVisibleLocalPlaceholderStatusCounts([persisted], [waitingPlaceholder, runningPlaceholder])
+    ).toEqual({ active: 1, waiting: 1 });
+    expect(
+      summarizeVisibleLocalPlaceholderStatusCounts(mergedFacetRows, [waitingPlaceholder, runningPlaceholder])
+    ).toEqual({ active: 0, waiting: 0 });
   });
 
   it('trusts active lifecycle status over stale raw archive fields for list membership', () => {
@@ -846,7 +935,7 @@ describe('PMA chat view helpers', () => {
     ]);
   });
 
-  it('ignores backend unread counts for filters, sort, and run-group unread totals', () => {
+  it('uses backend unread rows plus local read markers for filters, sort, and run-group unread totals', () => {
     const chats: PmaChatSummary[] = [
       { ...baseChat, id: 'backend-read', unreadCount: 0, updatedAt: '2026-05-04T05:00:00Z' },
       { ...baseChat, id: 'backend-unread-low', unreadCount: 1, updatedAt: '2026-05-04T01:00:00Z' },

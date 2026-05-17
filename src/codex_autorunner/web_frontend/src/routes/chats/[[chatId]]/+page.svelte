@@ -53,6 +53,7 @@
     SurfaceArtifact
   } from '$lib/viewModels/domain';
   import {
+    adjustedUnreadFilterCount,
     buildChatListEntries,
     buildPmaChatScopeOptions,
     buildPmaLiveActivity,
@@ -68,6 +69,7 @@
     isLocalChatPlaceholder,
     isPmaChatArchived,
     localPmaChatScopeOption,
+    mergeChatFacetSourceChats,
     mergeLocalChatPlaceholders,
     CHAT_FILTER_ORDER,
     CHAT_TICKET_RUNS_FILTER,
@@ -84,7 +86,7 @@
     visibleLocalChatPlaceholders as selectVisibleLocalChatPlaceholders,
     removePendingAttachment,
     statusLabel,
-    summarizeFilterCounts,
+    summarizeVisibleLocalPlaceholderStatusCounts,
     type DocumentFileIntentPayload,
     type PendingAttachment,
     type ChatTranscriptCard,
@@ -162,6 +164,7 @@
   let search = $state('');
   const currentChatIndexRequest = $derived<ChatIndexWindowRequest>(chatIndexRequestForCurrentFilters());
   const persistedChats = $derived<PmaChatSummary[]>(selectPmaChats(readModelState, currentChatIndexRequest));
+  const facetPersistedChats = $derived<PmaChatSummary[]>(selectPmaChats(readModelState, { filter: 'all', limit: 50 }));
   const committedChatPlaceholders = $derived<PmaChatSummary[]>(
     [committedDraftChat].filter((chat): chat is PmaChatSummary => Boolean(chat))
   );
@@ -170,6 +173,12 @@
   );
   const chats = $derived<PmaChatSummary[]>(
     mergeLocalChatPlaceholders(persistedChats, committedChatPlaceholders)
+  );
+  const persistedFacetChats = $derived<PmaChatSummary[]>(
+    mergeChatFacetSourceChats(facetPersistedChats, persistedChats)
+  );
+  const facetChats = $derived<PmaChatSummary[]>(
+    mergeChatFacetSourceChats(facetPersistedChats, persistedChats, committedChatPlaceholders)
   );
 
   function chatSummaryForId(chatId: string | null): PmaChatSummary | null {
@@ -334,8 +343,8 @@
   );
   const filteredEntries = $derived(sortEntriesForPins(filterChatEntries(chatListEntries, filter, search, lastSeenMap), pinnedChatIds));
   const filterCounts = $derived(chatStatusFilterCounts());
-  const surfaceFilterChips = $derived(chatSurfaceFilterOptions(chats));
-  const ticketRunGroupCount = $derived(countTicketRunGroups(chats));
+  const surfaceFilterChips = $derived(chatSurfaceFilterOptions(facetChats));
+  const ticketRunGroupCount = $derived(countTicketRunGroups(facetChats));
   const localChatPlaceholderCount = $derived(visibleLocalChatPlaceholders.filter((chat) => !isPmaChatArchived(chat)).length);
   const activeChatCount = $derived(readModelState.chatCounters.total + localChatPlaceholderCount);
   const hasUsableChatIndex = $derived(Boolean(readModelState.chatIndexCursor || readModelState.chatOrder.length > 0));
@@ -620,19 +629,13 @@
 
   function chatStatusFilterCounts(): Record<ChatStatusFilter, number> {
     const counters = readModelState.chatCounters;
-    const knownPersistedChats = selectPmaChats(readModelState, { filter: 'all', limit: 50 });
-    const localKnownPlaceholders = selectVisibleLocalChatPlaceholders(knownPersistedChats, committedChatPlaceholders);
-    const knownChats = localKnownPlaceholders.length > 0 ? [...localKnownPlaceholders, ...knownPersistedChats] : knownPersistedChats;
-    const localRunningCount = localKnownPlaceholders.filter((chat) => chat.status === 'running').length;
-    const localWaitingCount = localKnownPlaceholders.filter((chat) => chat.status === 'waiting' || chat.status === 'blocked').length;
-    // Backend counters cover the full windowed result set; local read markers can only
-    // raise the unread count for rows the client has already seen.
-    const clientUnread = summarizeFilterCounts(knownChats, lastSeenMap).unread;
+    const knownChats = facetChats;
+    const localStatusCounts = summarizeVisibleLocalPlaceholderStatusCounts(persistedFacetChats, committedChatPlaceholders);
     return {
       all: counters.total + localChatPlaceholderCount,
-      active: counters.running + localRunningCount,
-      waiting: counters.waiting + localWaitingCount,
-      unread: Math.max(counters.unread, clientUnread),
+      active: counters.running + localStatusCounts.active,
+      waiting: counters.waiting + localStatusCounts.waiting,
+      unread: adjustedUnreadFilterCount(counters.unread, knownChats, lastSeenMap),
       archived: counters.archived
     };
   }

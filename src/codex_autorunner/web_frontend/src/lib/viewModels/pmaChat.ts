@@ -589,6 +589,17 @@ export function visibleLocalChatPlaceholders(
     .filter((chat) => !persistedChats.some((row) => row.id === chat.id));
 }
 
+export function mergeChatFacetSourceChats(
+  baseChats: PmaChatSummary[],
+  currentChats: PmaChatSummary[],
+  placeholders: Array<PmaChatSummary | null | undefined> = []
+): PmaChatSummary[] {
+  const byId = new Map<string, PmaChatSummary>();
+  for (const chat of baseChats) byId.set(chat.id, chat);
+  for (const chat of currentChats) byId.set(chat.id, chat);
+  return mergeLocalChatPlaceholders([...byId.values()], placeholders);
+}
+
 export type ManagedThreadMessagePayload = {
   message: string;
   attachments?: DocumentFileIntentPayload[];
@@ -705,6 +716,32 @@ export function summarizeFilterCounts(
   };
 }
 
+export function adjustedUnreadFilterCount(
+  serverUnread: number,
+  knownChats: PmaChatSummary[],
+  lastSeen: Record<string, string> = {}
+): number {
+  let knownServerUnread = 0;
+  let knownEffectiveUnread = 0;
+  for (const chat of knownChats) {
+    if (isPmaChatArchived(chat) || typeof chat.unreadCount !== 'number' || chat.unreadCount <= 0) continue;
+    knownServerUnread += 1;
+    if (isUnread(chat, lastSeen)) knownEffectiveUnread += 1;
+  }
+  return Math.max(0, serverUnread - knownServerUnread + knownEffectiveUnread);
+}
+
+export function summarizeVisibleLocalPlaceholderStatusCounts(
+  persistedChats: PmaChatSummary[],
+  placeholders: Array<PmaChatSummary | null | undefined>
+): Pick<Record<ChatStatusFilter, number>, 'active' | 'waiting'> {
+  const visible = visibleLocalChatPlaceholders(persistedChats, placeholders);
+  return {
+    active: visible.filter((chat) => activeStatuses.includes(chat.status)).length,
+    waiting: visible.filter((chat) => waitingStatuses.includes(chat.status)).length
+  };
+}
+
 /**
  * A "run group" key for ticket-flow chats. Ticket-flow chats sharing the same
  * worktree (or repo, for repo-scoped flows) belong to the same operator-visible
@@ -751,7 +788,9 @@ export function countTicketRunGroups(chats: PmaChatSummary[]): number {
 }
 
 function isUnread(chat: PmaChatSummary, lastSeen: Record<string, string>): boolean {
-  return isChatUnread(chat, lastSeen);
+  if (typeof chat.unreadCount === 'number' && chat.unreadCount <= 0) return false;
+  if (!isChatUnread(chat, lastSeen)) return false;
+  return typeof chat.unreadCount === 'number' ? chat.unreadCount > 0 : true;
 }
 
 function rollupGroupStatus(group: ChatRunGroup): WorkStatus {
