@@ -351,6 +351,7 @@ from .pma_commands import (
     handle_pma_on,
     handle_pma_status,
 )
+from .queue_status_lifecycle import QueueStatusCleanupPolicy
 from .rendering import (
     format_discord_message,
 )
@@ -1992,6 +1993,8 @@ class DiscordBotService(DiscordInteractionResponseMixin):
         *,
         conversation_id: str,
         channel_id: Optional[str] = None,
+        cleanup_policy: QueueStatusCleanupPolicy = QueueStatusCleanupPolicy.DELETE_STALE,
+        component_source_message_id: Optional[str] = None,
     ) -> None:
         entry = self._queue_status_messages.pop(conversation_id, None)
         if not isinstance(entry, tuple):
@@ -1999,6 +2002,11 @@ class DiscordBotService(DiscordInteractionResponseMixin):
         stored_channel_id, message_id = entry
         resolved_channel_id = channel_id or stored_channel_id
         if not resolved_channel_id or not message_id:
+            return
+        if (
+            cleanup_policy == QueueStatusCleanupPolicy.PRESERVE_COMPONENT_SOURCE
+            and message_id == str(component_source_message_id or "").strip()
+        ):
             return
         await self._delete_channel_message_safe(
             resolved_channel_id,
@@ -2031,6 +2039,8 @@ class DiscordBotService(DiscordInteractionResponseMixin):
         conversation_id: str,
         channel_id: str,
         repost: bool = False,
+        cleanup_policy: QueueStatusCleanupPolicy = QueueStatusCleanupPolicy.DELETE_STALE,
+        component_source_message_id: Optional[str] = None,
     ) -> None:
         queue_status = await self._dispatcher.queue_status(conversation_id)
         pending_items_raw = []
@@ -2044,6 +2054,8 @@ class DiscordBotService(DiscordInteractionResponseMixin):
             await self._clear_queue_status_message(
                 conversation_id=conversation_id,
                 channel_id=channel_id,
+                cleanup_policy=cleanup_policy,
+                component_source_message_id=component_source_message_id,
             )
             return
         busy_label, allow_interrupt = await self._queued_notice_config_for_conversation(
