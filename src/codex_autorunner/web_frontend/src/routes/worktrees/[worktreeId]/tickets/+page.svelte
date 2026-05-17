@@ -80,8 +80,8 @@
       return;
     }
     const owner = scopedTicketQueueOwner(queueConfig);
-    const tickets = detail.data.scopedTickets.map(mapTicketSummary);
-    const runs = detail.data.scopedRuns.map(mapPmaRunProgress);
+    const tickets = detail.data.ticketQueue.map(mapTicketSummary);
+    const runs = detail.data.runQueue.map(mapPmaRunProgress);
     rememberTickets(owner, tickets);
     readModelEntityStore.replaceScopedTicketSummaries(ownerKey, tickets);
     readModelEntityStore.replaceScopedRuns(ownerKey, runs);

@@ -137,22 +137,22 @@
       loading = false;
       return;
     }
-    const legacyTicket = (snapshot.data.legacyTicket ?? {}) as JsonRecord;
-    const parentRepoId = typeof legacyTicket.base_repo_id === 'string' ? legacyTicket.base_repo_id : null;
+    const ticketRecord = snapshot.data.ticketDetail as JsonRecord;
+    const parentRepoId = typeof ticketRecord.base_repo_id === 'string' ? ticketRecord.base_repo_id : null;
     const redirectTo = legacyWorktreeRedirectPath(stripRuntimeBasePath(page.url.pathname), ownerId, parentRepoId);
     if (redirectTo) {
       await goto(href(redirectTo), { replaceState: true });
       return;
     }
-    const loadedTicketList = (snapshot.data.scopedTickets ?? []).map(mapTicketSummary);
-    const loadedRuns = (snapshot.data.scopedRuns ?? []).map(mapPmaRunProgress);
-    const loadedChats = (snapshot.data.scopedChats ?? []).map(mapPmaChatSummary);
+    const loadedTicketList = snapshot.data.ticketQueue.map(mapTicketSummary);
+    const loadedRuns = snapshot.data.runQueue.map(mapPmaRunProgress);
+    const loadedChats = snapshot.data.chatQueue.map(mapPmaChatSummary);
     const ownerKey = scopedOwnerKey({ kind: 'worktree', id: ownerId, parentRepoId });
     rememberTickets({ worktree: ownerId }, loadedTicketList);
     readModelEntityStore.replaceScopedTicketSummaries(ownerKey, loadedTicketList);
     readModelEntityStore.replaceScopedRuns(ownerKey, loadedRuns);
     const ticketList = selectTicketSummaries(readModelState, ownerKey);
-    const ticketDetail = mapTicketDetail(legacyTicket);
+    const ticketDetail = mapTicketDetail(ticketRecord);
     detail = buildTicketDetailViewModel(ticketDetail, { tickets: ticketList, runs: [], chats: [], artifacts: [] });
     sectionIssues = [];
     loading = false;

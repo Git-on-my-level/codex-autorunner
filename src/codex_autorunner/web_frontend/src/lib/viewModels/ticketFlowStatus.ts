@@ -27,22 +27,22 @@ export function buildTicketFlowStatusViewModel(
   owner: TicketFlowOwnerScope = null,
   now = new Date()
 ): TicketFlowStatusViewModel {
-  const scopedTickets = owner ? tickets.filter((ticket) => ticketMatchesOwner(ticket, owner)) : tickets;
-  const scopedRuns = owner ? runs.filter((run) => runMatchesOwner(run, owner)) : runs;
-  const activeRun = selectPrimaryRun(scopedRuns);
-  const recentRun = activeRun ?? mostRecentRun(scopedRuns);
+  const filteredTickets = owner ? tickets.filter((ticket) => ticketMatchesOwner(ticket, owner)) : tickets;
+  const filteredRuns = owner ? runs.filter((run) => runMatchesOwner(run, owner)) : runs;
+  const activeRun = selectPrimaryRun(filteredRuns);
+  const recentRun = activeRun ?? mostRecentRun(filteredRuns);
   const run = activeRun ?? recentRun;
-  const ticketLookup = run ? buildTicketAliasLookup(scopedTickets) : null;
-  const currentTicket = run ? findTicketForRun(scopedTickets, run, ticketLookup) : scopedTickets.find((ticket) => ticket.status !== 'done') ?? null;
-  const doneCount = scopedTickets.filter((ticket) => ticket.status === 'done').length;
-  const totalCount = scopedTickets.length;
+  const ticketLookup = run ? buildTicketAliasLookup(filteredTickets) : null;
+  const currentTicket = run ? findTicketForRun(filteredTickets, run, ticketLookup) : filteredTickets.find((ticket) => ticket.status !== 'done') ?? null;
+  const doneCount = filteredTickets.filter((ticket) => ticket.status === 'done').length;
+  const totalCount = filteredTickets.length;
   const status = activeRun?.status ?? currentTicket?.status ?? (doneCount > 0 && doneCount === totalCount ? 'done' : 'idle');
   const recoveryState = recoveryStateFromRun(run);
   const lastActivityAt =
     run?.lastEventAt ??
     currentTicket?.updatedAt ??
-    mostRecent(scopedTickets.map((ticket) => ticket.updatedAt)) ??
-    mostRecent(scopedRuns.flatMap((entry) => [entry.lastEventAt, dateFromRaw(entry.raw, ['finished_at', 'started_at', 'created_at'])]));
+    mostRecent(filteredTickets.map((ticket) => ticket.updatedAt)) ??
+    mostRecent(filteredRuns.flatMap((entry) => [entry.lastEventAt, dateFromRaw(entry.raw, ['finished_at', 'started_at', 'created_at'])]));
   const turns = numberFromRaw(run?.raw, [
     'turn_count',
     'turns',
@@ -67,7 +67,7 @@ export function buildTicketFlowStatusViewModel(
     elapsedLabel: formatElapsed(elapsed),
     progressLabel: `${doneCount}/${totalCount}`,
     lastActivityLabel: formatRelativeTime(lastActivityAt, now),
-    reasonLabel: recoveryReasonFromRun(run) ?? reasonFromRun(run) ?? reasonFromTickets(scopedTickets) ?? 'No reason reported',
+    reasonLabel: recoveryReasonFromRun(run) ?? reasonFromRun(run) ?? reasonFromTickets(filteredTickets) ?? 'No reason reported',
     signal: recoverySignal(recoveryState) ?? statusSignal(status)
   };
 }

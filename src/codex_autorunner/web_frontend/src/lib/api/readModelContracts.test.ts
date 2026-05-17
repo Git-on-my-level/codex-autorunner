@@ -214,6 +214,10 @@ describe('read model contracts', () => {
       artifacts: [],
       dispatchWindow: window(),
       dispatches: [{ seq: 1, mode: 'notify' }],
+      ticketDetail: {},
+      ticketQueue: [],
+      runQueue: [],
+      chatQueue: [],
       repair: repair('/hub/read-models/tickets/tkt_1')
     });
     const event = mapReadModelContract<TicketDetailPatchEvent>({

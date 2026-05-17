@@ -282,9 +282,9 @@ export type RepoWorktreeDetailSnapshot = {
   parentLinks: Record<string, unknown>;
   topology: Record<string, unknown>;
   runtime: Record<string, unknown>;
-  scopedTickets: Record<string, unknown>[];
-  scopedRuns: Record<string, unknown>[];
-  scopedChats: Record<string, unknown>[];
+  ticketQueue: Record<string, unknown>[];
+  runQueue: Record<string, unknown>[];
+  chatQueue: Record<string, unknown>[];
   contextspaceSummary: Record<string, unknown>[];
   currentArtifacts: Record<string, unknown>[];
   ticketWindow: PageWindow;
@@ -336,6 +336,10 @@ export type TicketDetailSnapshot = {
   dispatchWindow: PageWindow;
   dispatches: Record<string, unknown>[];
   repair: RepairPolicy;
+  ticketDetail: Record<string, unknown>;
+  ticketQueue: Record<string, unknown>[];
+  runQueue: Record<string, unknown>[];
+  chatQueue: Record<string, unknown>[];
 };
 
 export type TicketDetailPatch = {

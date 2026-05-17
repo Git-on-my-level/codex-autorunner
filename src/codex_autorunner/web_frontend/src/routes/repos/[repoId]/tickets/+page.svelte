@@ -66,8 +66,8 @@
       loading = false;
       return;
     }
-    const tickets = snapshot.data.scopedTickets.map(mapTicketSummary);
-    const runs = snapshot.data.scopedRuns.map(mapPmaRunProgress);
+    const tickets = snapshot.data.ticketQueue.map(mapTicketSummary);
+    const runs = snapshot.data.runQueue.map(mapPmaRunProgress);
     rememberTickets(owner, tickets);
     readModelEntityStore.replaceScopedTicketSummaries(ownerKey, tickets);
     readModelEntityStore.replaceScopedRuns(ownerKey, runs);

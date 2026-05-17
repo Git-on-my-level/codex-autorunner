@@ -377,15 +377,15 @@ export function buildRepoWorktreeDetailViewModel(
   const activeRunCards = runCards.filter((run) => ['running', 'waiting', 'blocked'].includes(run.status));
   const visibleRuns = activeRunCards.length ? activeRunCards : runCards.slice(0, 1);
   const currentTicketIds = new Set(visibleRuns.map((run) => run.ticketId).filter((ticketId): ticketId is string => Boolean(ticketId)));
-  const scopedTickets = ticketsForResource(source.tickets, kind, id, lookup);
-  const flowStatus = buildTicketFlowStatusViewModel(scopedTickets, primaryRuns, { kind, id });
+  const ownerTickets = ticketsForResource(source.tickets, kind, id, lookup);
+  const flowStatus = buildTicketFlowStatusViewModel(ownerTickets, primaryRuns, { kind, id });
   const activeCurrentTicketId = isActiveTicketFlowStatus(flowStatus.status) ? flowStatus.currentTicketId : null;
-  const currentTickets = ticketsForIds(scopedTickets, currentTicketIds, activeCurrentTicketId);
-  const nextTickets = scopedTickets
+  const currentTickets = ticketsForIds(ownerTickets, currentTicketIds, activeCurrentTicketId);
+  const nextTickets = ownerTickets
     .filter((ticket) => ticket.status !== 'done' && !currentTicketIds.has(ticket.id))
     .slice(0, 5)
     .map((ticket) => ticketToRow(ticket, activeCurrentTicketId));
-  const ticketOverview = buildTicketOverview(scopedTickets, currentTickets, nextTickets);
+  const ticketOverview = buildTicketOverview(ownerTickets, currentTickets, nextTickets);
   const resourceArtifacts = asRecordArray(resource.raw.current_run_artifacts).map(mapSurfaceArtifact);
   const runArtifacts = [...resourceArtifacts, ...source.artifacts, ...primaryRuns.flatMap((run) => run.events)].map(artifactToRow);
   const activity = [
@@ -1233,19 +1233,19 @@ function scopedSignals(
   lookup?: RepoWorktreeLookup | null
 ): { waiting: number; failed: number; active: number } {
   const key = resourceKey(kind, id);
-  const scopedChats = lookup?.chatsByResource.get(key) ?? source.chats.filter((chat) =>
+  const ownerChats = lookup?.chatsByResource.get(key) ?? source.chats.filter((chat) =>
     kind === 'repo'
       ? Boolean(chat.repoId === id && !chat.worktreeId)
       : chat.worktreeId === id
   );
   const indexedRuns = lookup?.runsByResource.get(key);
-  const scopedRuns = indexedRuns ?? source.runs.filter((run) =>
+  const ownerRuns = indexedRuns ?? source.runs.filter((run) =>
     kind === 'repo'
       ? runMatchesResource(run, 'repo', id) &&
         !childIds.some((wid) => runMatchesResource(run, 'worktree', wid))
       : runMatchesResource(run, 'worktree', id)
   );
-  const chatIds = new Set(scopedChats.map((chat) => chat.id));
+  const chatIds = new Set(ownerChats.map((chat) => chat.id));
   let waiting = 0;
   let failed = 0;
   let active = 0;
@@ -1254,8 +1254,8 @@ function scopedSignals(
     else if (status === 'failed') failed += 1;
     else if (status === 'running') active += 1;
   };
-  for (const chat of scopedChats) bumpStatus(chat.status);
-  for (const run of scopedRuns) {
+  for (const chat of ownerChats) bumpStatus(chat.status);
+  for (const run of ownerRuns) {
     if (run.chatId && chatIds.has(run.chatId)) continue;
     bumpStatus(run.status);
   }

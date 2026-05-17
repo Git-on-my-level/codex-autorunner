@@ -136,15 +136,15 @@
       loading = false;
       return;
     }
-    const loadedTicketList = (snapshot.data.scopedTickets ?? []).map(mapTicketSummary);
-    const loadedRuns = (snapshot.data.scopedRuns ?? []).map(mapPmaRunProgress);
-    const loadedChats = (snapshot.data.scopedChats ?? []).map(mapPmaChatSummary);
+    const loadedTicketList = snapshot.data.ticketQueue.map(mapTicketSummary);
+    const loadedRuns = snapshot.data.runQueue.map(mapPmaRunProgress);
+    const loadedChats = snapshot.data.chatQueue.map(mapPmaChatSummary);
     const ownerKey = scopedOwnerKey({ kind: 'repo', id: ownerId });
     rememberTickets({ repo: ownerId }, loadedTicketList);
     readModelEntityStore.replaceScopedTicketSummaries(ownerKey, loadedTicketList);
     readModelEntityStore.replaceScopedRuns(ownerKey, loadedRuns);
     const ticketList = selectTicketSummaries(readModelState, ownerKey);
-    const ticketDetail = mapTicketDetail((snapshot.data.legacyTicket ?? {}) as JsonRecord);
+    const ticketDetail = mapTicketDetail(snapshot.data.ticketDetail as JsonRecord);
     detail = buildTicketDetailViewModel(ticketDetail, { tickets: ticketList, runs: [], chats: [], artifacts: [] });
     sectionIssues = [];
     loading = false;

@@ -35,9 +35,9 @@
   function buildDetailFromSnapshot(snapshot: Record<string, unknown>): RepoWorktreeDetailViewModel {
     const payload = snapshot as {
       identity: Record<string, unknown>;
-      scopedRuns: Record<string, unknown>[];
-      scopedChats: Record<string, unknown>[];
-      scopedTickets: Record<string, unknown>[];
+      runQueue: Record<string, unknown>[];
+      chatQueue: Record<string, unknown>[];
+      ticketQueue: Record<string, unknown>[];
       contextspaceSummary: Record<string, unknown>[];
       currentArtifacts: Record<string, unknown>[];
     };
@@ -47,9 +47,9 @@
     const baseSource = {
       repos: [],
       worktrees: worktreeList,
-      runs: payload.scopedRuns.map(mapPmaRunProgress),
-      chats: payload.scopedChats.map(mapPmaChatSummary),
-      tickets: payload.scopedTickets.map(mapTicketSummary),
+      runs: payload.runQueue.map(mapPmaRunProgress),
+      chats: payload.chatQueue.map(mapPmaChatSummary),
+      tickets: payload.ticketQueue.map(mapTicketSummary),
       contextspaceDocs: payload.contextspaceSummary.map(mapContextspaceDocument),
       artifacts: payload.currentArtifacts.map(mapSurfaceArtifact)
     };
