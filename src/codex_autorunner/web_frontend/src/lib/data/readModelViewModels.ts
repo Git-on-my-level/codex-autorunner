@@ -27,6 +27,10 @@ import type { ChatTranscriptCard } from '$lib/viewModels/pmaChat';
 import { selectChatIndexWindowView, type ChatIndexWindowRequest, type ReadModelEntityState } from './readModelStore';
 
 type JsonRecord = Record<string, unknown>;
+type ChatTranscriptProjection = ReadModelEntityState['chatTranscripts'][string];
+
+const emptyChatTranscript: ChatTranscriptCard[] = [];
+const chatTranscriptSelectionCache = new WeakMap<ChatTranscriptProjection, ChatTranscriptCard[]>();
 
 export function syntheticProjectionCursor(source: string, sequence = Date.now()): ProjectionCursor {
   return {
@@ -163,9 +167,14 @@ export function selectPmaChats(state: ReadModelEntityState, request?: ChatIndexW
 }
 
 export function selectChatTranscript(state: ReadModelEntityState, chatId: string | null): ChatTranscriptCard[] {
-  if (!chatId) return [];
+  if (!chatId) return emptyChatTranscript;
   const transcript = state.chatTranscripts[chatId];
-  return transcript ? transcript.order.map((id) => transcript.cardsById[id]).filter(Boolean) : [];
+  if (!transcript) return emptyChatTranscript;
+  const cached = chatTranscriptSelectionCache.get(transcript);
+  if (cached) return cached;
+  const selected = transcript.order.map((id) => transcript.cardsById[id]).filter(Boolean);
+  chatTranscriptSelectionCache.set(transcript, selected);
+  return selected;
 }
 
 export function selectPmaProgress(state: ReadModelEntityState, chatId: string | null): PmaRunProgress | null {

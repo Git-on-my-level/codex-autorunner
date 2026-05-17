@@ -20,6 +20,11 @@ const PURIFY_CONFIG = {
   FORBID_ATTR: ['style', 'onerror', 'onload', 'onclick', 'onmouseover']
 };
 
+const MAX_RENDER_CACHE_ENTRIES = 250;
+const MAX_RENDER_CACHE_CHARS = 1_000_000;
+const renderCache = new Map<string, string>();
+let renderCacheChars = 0;
+
 export type RenderMarkdownOptions = {
   /** When true, every `<a>` gets `target="_blank"` and `rel="noopener noreferrer"`. */
   openLinksInNewTab?: boolean;
@@ -43,6 +48,13 @@ function forceMarkdownLinksOpenInNewTab(html: string): string {
 
 export function renderMarkdownToHtml(markdown: string, options?: RenderMarkdownOptions): string {
   if (!markdown) return '';
+  const cacheKey = `${options?.openLinksInNewTab ? '1' : '0'}:${markdown}`;
+  const cached = renderCache.get(cacheKey);
+  if (cached !== undefined) {
+    renderCache.delete(cacheKey);
+    renderCache.set(cacheKey, cached);
+    return cached;
+  }
   const rawHtml = marked.parse(markdown, { async: false }) as string;
   const purified = DOMPurify.sanitize(rawHtml, PURIFY_CONFIG);
   // Strip any href that survived sanitize but resolves to a dangerous scheme.
@@ -50,5 +62,18 @@ export function renderMarkdownToHtml(markdown: string, options?: RenderMarkdownO
   // `data:` and `vbscript:` to match the legacy renderer's contract.
   let out = purified.replace(/href="(data|vbscript):[^"]*"/gi, 'href="#"');
   if (options?.openLinksInNewTab) out = forceMarkdownLinksOpenInNewTab(out);
+  rememberRenderedMarkdown(cacheKey, out);
   return out;
+}
+
+function rememberRenderedMarkdown(cacheKey: string, html: string): void {
+  renderCache.set(cacheKey, html);
+  renderCacheChars += cacheKey.length + html.length;
+  while (renderCache.size > MAX_RENDER_CACHE_ENTRIES || renderCacheChars > MAX_RENDER_CACHE_CHARS) {
+    const oldestKey = renderCache.keys().next().value;
+    if (oldestKey === undefined) break;
+    const oldestValue = renderCache.get(oldestKey) ?? '';
+    renderCache.delete(oldestKey);
+    renderCacheChars -= oldestKey.length + oldestValue.length;
+  }
 }

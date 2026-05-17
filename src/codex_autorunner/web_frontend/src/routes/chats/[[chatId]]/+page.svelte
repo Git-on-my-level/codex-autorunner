@@ -324,8 +324,10 @@
     slashSelectedIndex = Math.min(slashSelectedIndex, Math.max(slashSuggestions.length - 1, 0));
   });
   let pendingRefreshTimer: number | null = null;
+  let pendingQueueRefreshTimer: number | null = null;
   let activeClockInterval: number | null = null;
   let activeRefreshSeq = 0;
+  let activeQueueRefreshSeq = 0;
   let clockNowMs = $state(Date.now());
   let lastScrolledChatId: string | null = null;
   let lastScrolledCardCount = 0;
@@ -763,6 +765,7 @@
     unsubscribeChatIndexSession?.();
     chatIndexSession.stop();
     if (pendingRefreshTimer) window.clearTimeout(pendingRefreshTimer);
+    if (pendingQueueRefreshTimer) window.clearTimeout(pendingQueueRefreshTimer);
     if (chatIndexFilterRefreshTimer) window.clearTimeout(chatIndexFilterRefreshTimer);
     if (activeClockInterval) window.clearInterval(activeClockInterval);
     closeStream();
@@ -1186,6 +1189,17 @@
     if (!options.quiet || loadingActive) loadingActive = false;
   }
 
+  async function refreshActiveQueue(chatId: string): Promise<void> {
+    const refreshSeq = ++activeQueueRefreshSeq;
+    const queueResult = await webApi.pma.getQueue(chatId);
+    if (activeChatId !== chatId || refreshSeq !== activeQueueRefreshSeq) return;
+    if (queueResult.ok) {
+      readModelEntityStore.setPmaQueue(chatId, queueResult.data.queuedTurns);
+    } else if (isMissingManagedThreadError(queueResult.error)) {
+      readModelEntityStore.setPmaQueue(chatId, []);
+    }
+  }
+
   function connectStream(chatId: string): void {
     closeStream();
     const seedProgress = currentProgress(chatId);
@@ -1217,7 +1231,18 @@
           const rows = mapChatTranscriptRows(event.payload.rows);
           replaceChatTranscriptPreservingPendingOptimistic(chatId, rows);
           const status = event.payload.status;
-          if (status && typeof status === 'object' && !Array.isArray(status)) updateProgress(mapPmaRunProgress(status as JsonRecord));
+          if (status && typeof status === 'object' && !Array.isArray(status)) {
+            const nextProgress = mapPmaRunProgress(status as JsonRecord);
+            updateProgress(nextProgress);
+            if (
+              nextProgress.terminal &&
+              nextProgress.id &&
+              transcriptHasAssistantMessageForTurn(rows, nextProgress.id)
+            ) {
+              refreshedTerminalTurnId = nextProgress.id;
+              scheduleActiveQueueRefresh(chatId, 700);
+            }
+          }
           return;
         }
         if (event.kind === 'transcript_append') {
@@ -1272,6 +1297,14 @@
     }, delayMs);
   }
 
+  function scheduleActiveQueueRefresh(chatId: string, delayMs = 600): void {
+    if (pendingQueueRefreshTimer) window.clearTimeout(pendingQueueRefreshTimer);
+    pendingQueueRefreshTimer = window.setTimeout(() => {
+      pendingQueueRefreshTimer = null;
+      if (activeChatId === chatId) void refreshActiveQueue(chatId);
+    }, delayMs);
+  }
+
   function closeStream(): void {
     streamSubscription?.close();
     streamSubscription = null;
@@ -1280,6 +1313,15 @@
 
   function isMissingManagedThreadError(error: ApiError): boolean {
     return error.status === 404 && error.message.toLowerCase().includes('managed thread not found');
+  }
+
+  function transcriptHasAssistantMessageForTurn(cards: ChatTranscriptCard[], turnId: string): boolean {
+    return cards.some((card) =>
+      card.kind === 'message' &&
+      card.turnId === turnId &&
+      card.message.role === 'assistant' &&
+      card.message.text.trim().length > 0
+    );
   }
 
   /** Elapsed seconds capped by wall clock while status is running (matches live UI). */

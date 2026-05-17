@@ -946,6 +946,8 @@ def build_managed_thread_tail_routes(
             terminal_transcript_snapshots_sent: set[str] = set()
             while True:
                 await asyncio.sleep(_PERSISTED_TAIL_POLL_SECONDS)
+                if await request.is_disconnected():
+                    return
                 refreshed = await _build_managed_thread_tail_snapshot(
                     request=request,
                     service=service,
@@ -1110,6 +1112,8 @@ def build_managed_thread_tail_routes(
             last_heartbeat_at = asyncio.get_running_loop().time()
             while True:
                 await asyncio.sleep(_PERSISTED_TAIL_POLL_SECONDS)
+                if await request.is_disconnected():
+                    return
                 refreshed = await _build_managed_thread_tail_snapshot(
                     request=request,
                     service=service,
