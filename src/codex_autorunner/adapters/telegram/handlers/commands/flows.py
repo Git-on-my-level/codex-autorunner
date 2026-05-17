@@ -804,7 +804,7 @@ class FlowCommands(TelegramCommandSupportMixin):
                 if retire_mode == "blocked":
                     error = (
                         f"Run {record.id} is {record.status.value}. "
-                        "Stop or pause it before archiving."
+                        "Stop or pause it before retiring."
                     )
                 elif action == "retire" and retire_mode == "confirm":
                     await _answer_once("Confirm retire?")
@@ -1996,7 +1996,7 @@ You are the first ticket in a new ticket_flow run.
         if retire_mode == "blocked":
             await self._send_message(
                 message.chat_id,
-                f"Run {_code(record.id)} is {record.status.value}. Stop or pause it before archiving.",
+                f"Run {_code(record.id)} is {record.status.value}. Stop or pause it before retiring.",
                 thread_id=message.thread_id,
                 reply_to=message.message_id,
                 parse_mode="Markdown",
