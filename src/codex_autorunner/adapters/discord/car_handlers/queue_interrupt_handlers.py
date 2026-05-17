@@ -18,6 +18,10 @@ from ..interaction_runtime import (
     defer_and_update_runtime_component_message,
     ensure_ephemeral_response_deferred,
 )
+from ..queue_status_lifecycle import (
+    DiscordQueueComponentAction,
+    QueueStatusCleanupPolicy,
+)
 
 _logger = logging.getLogger(__name__)
 
@@ -301,9 +305,15 @@ async def handle_queue_cancel_button(
         channel_id=channel_id,
         guild_id=guild_id,
     )
+    action = DiscordQueueComponentAction.build(
+        conversation_id=conversation_id,
+        channel_id=channel_id,
+        queued_user_message_id=source_message_id,
+        component_source_message_id=message_id,
+    )
     cancelled = await service._dispatcher.cancel_pending_message(
-        conversation_id,
-        source_message_id,
+        action.conversation_id,
+        action.queued_user_message_id,
     )
     if not cancelled:
         await service.respond_ephemeral(
@@ -320,8 +330,10 @@ async def handle_queue_cancel_button(
         components=[],
     )
     await service._refresh_queue_status_message(
-        conversation_id=conversation_id,
-        channel_id=channel_id,
+        conversation_id=action.conversation_id,
+        channel_id=action.channel_id,
+        cleanup_policy=QueueStatusCleanupPolicy.PRESERVE_COMPONENT_SOURCE,
+        component_source_message_id=action.component_source_message_id,
     )
     await service.respond_ephemeral(
         interaction_id,
@@ -354,9 +366,15 @@ async def handle_queue_interrupt_send_button(
         channel_id=channel_id,
         guild_id=guild_id,
     )
+    action = DiscordQueueComponentAction.build(
+        conversation_id=conversation_id,
+        channel_id=channel_id,
+        queued_user_message_id=source_message_id,
+        component_source_message_id=message_id,
+    )
     promoted = await service._dispatcher.promote_pending_message(
-        conversation_id,
-        source_message_id,
+        action.conversation_id,
+        action.queued_user_message_id,
     )
     if not promoted:
         await send_interrupt_component_response(
@@ -366,10 +384,6 @@ async def handle_queue_interrupt_send_button(
             "Queued request is no longer pending.",
         )
         return
-    await service._refresh_queue_status_message(
-        conversation_id=conversation_id,
-        channel_id=channel_id,
-    )
     binding = await service._store.get_binding(channel_id=channel_id)
     pma_enabled = bool(binding.get("pma_enabled", False)) if binding else False
     mode = "pma" if pma_enabled else "repo"
@@ -377,14 +391,27 @@ async def handle_queue_interrupt_send_button(
         service._get_discord_thread_binding(channel_id=channel_id, mode=mode)
     )
     if current_thread is None:
-        await service._wake_dispatcher_conversation(conversation_id)
-        await send_interrupt_component_response(
+        await defer_and_update_runtime_component_message(
             service,
             interaction_id,
             interaction_token,
             "Queued request moved to the front.",
+            components=[],
         )
+        await service._refresh_queue_status_message(
+            conversation_id=action.conversation_id,
+            channel_id=action.channel_id,
+            cleanup_policy=QueueStatusCleanupPolicy.PRESERVE_COMPONENT_SOURCE,
+            component_source_message_id=action.component_source_message_id,
+        )
+        await service._wake_dispatcher_conversation(action.conversation_id)
         return
+    await service._refresh_queue_status_message(
+        conversation_id=action.conversation_id,
+        channel_id=action.channel_id,
+        cleanup_policy=QueueStatusCleanupPolicy.PRESERVE_COMPONENT_SOURCE,
+        component_source_message_id=action.component_source_message_id,
+    )
     await defer_and_update_runtime_component_message(
         service,
         interaction_id,
@@ -398,12 +425,12 @@ async def handle_queue_interrupt_send_button(
         channel_id=channel_id,
         active_turn_text="Message received. Switching to it now...",
         allow_promoted_no_active_success=True,
-        progress_reuse_source_message_id=source_message_id,
+        progress_reuse_source_message_id=action.queued_user_message_id,
         progress_reuse_acknowledgement="Message received. Switching to it now...",
-        dispatcher_conversation_id=conversation_id,
+        dispatcher_conversation_id=action.conversation_id,
         source="component",
         source_custom_id=custom_id,
-        source_message_id=message_id,
+        source_message_id=action.component_source_message_id,
         source_user_id=user_id,
     )
 

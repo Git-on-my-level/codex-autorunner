@@ -3026,9 +3026,8 @@ async def test_component_interaction_queue_cancel_cancels_selected_pending_messa
             message_id="notice-1",
         )
 
-        assert rest.deleted_channel_messages == [
-            {"channel_id": "channel-1", "message_id": "notice-1"}
-        ]
+        assert rest.deleted_channel_messages == []
+        assert conversation_id not in service._queue_status_messages
         assert len(rest.interaction_responses) == 1
         assert rest.interaction_responses[0]["payload"]["type"] == 6
         assert len(rest.edited_original_interaction_responses) == 2
@@ -3106,6 +3105,7 @@ async def test_component_interaction_queue_interrupt_send_promotes_and_interrupt
             channel_id="channel-1",
             guild_id="guild-1",
         )
+        service._queue_status_messages[conversation_id] = ("channel-1", "notice-1")
 
         async def _promote_pending_message(
             _conversation_id: str, message_id: str
@@ -3161,6 +3161,8 @@ async def test_component_interaction_queue_interrupt_send_promotes_and_interrupt
         assert (
             rest.edited_original_interaction_responses[0]["payload"]["components"] == []
         )
+        assert rest.deleted_channel_messages == []
+        assert conversation_id not in service._queue_status_messages
     finally:
         await store.close()
 
@@ -3177,6 +3179,7 @@ async def test_component_interaction_queue_interrupt_send_wakes_dispatcher_witho
             channel_id="channel-1",
             guild_id="guild-1",
         )
+        service._queue_status_messages[conversation_id] = ("channel-1", "notice-1")
 
         async def _promote_pending_message(
             _conversation_id: str, message_id: str
@@ -3210,12 +3213,18 @@ async def test_component_interaction_queue_interrupt_send_wakes_dispatcher_witho
 
         assert wake_calls == [conversation_id]
         assert len(rest.interaction_responses) == 1
-        assert rest.interaction_responses[0]["payload"]["type"] == 5
-        assert len(rest.followup_messages) == 1
+        assert rest.interaction_responses[0]["payload"]["type"] == 6
+        assert rest.followup_messages == []
+        assert rest.deleted_channel_messages == []
+        assert len(rest.edited_original_interaction_responses) == 1
         assert (
-            rest.followup_messages[0]["payload"]["content"]
+            rest.edited_original_interaction_responses[0]["payload"]["content"]
             == "Queued request moved to the front."
         )
+        assert (
+            rest.edited_original_interaction_responses[0]["payload"]["components"] == []
+        )
+        assert conversation_id not in service._queue_status_messages
     finally:
         await store.close()
 
