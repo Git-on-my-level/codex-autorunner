@@ -56,7 +56,7 @@ from ...core.state import now_iso
 from ...core.state_roots import resolve_discord_state_path
 from ..chat.agents import normalize_hermes_profile
 
-DISCORD_STATE_SCHEMA_VERSION = 14
+DISCORD_STATE_SCHEMA_VERSION = 15
 DISCORD_INTERACTION_LEDGER_RETENTION_DAYS = 14
 _UNSET = object()
 _logger = logging.getLogger(__name__)
@@ -214,9 +214,8 @@ class ChannelBinding:
     last_pause_run_id: Optional[str]
     last_pause_dispatch_seq: Optional[str]
     last_terminal_run_id: Optional[str]
-    # Legacy read-only migration data. Recovery notification policy is owned by
-    # the core flow notification ledger, not by channel binding cursors.
     last_recovery_fingerprint: Optional[str]
+    last_recovery_notified_at: Optional[str]
     pending_compact_seed: Optional[str]
     pending_compact_session_key: Optional[str]
     updated_at: str
@@ -468,6 +467,20 @@ class DiscordStateStore:
             self._mark_terminal_run_seen_sync,
             channel_id,
             run_id,
+        )
+
+    async def mark_recovery_notification_seen(
+        self,
+        *,
+        channel_id: str,
+        fingerprint: str,
+        notified_at: Optional[str] = None,
+    ) -> None:
+        await self._run(
+            self._mark_recovery_notification_seen_sync,
+            channel_id,
+            fingerprint,
+            notified_at,
         )
 
     async def update_pma_state(
@@ -935,6 +948,11 @@ class DiscordStateStore:
                         name="flow_recovery_cursor",
                         apply=self._migration_v14,
                     ),
+                    SqliteMigrationStep(
+                        version=15,
+                        name="flow_recovery_notified_at",
+                        apply=self._migration_v15,
+                    ),
                 ),
             )
             conn.execute(
@@ -1083,6 +1101,13 @@ class DiscordStateStore:
             (("last_recovery_fingerprint", "last_recovery_fingerprint TEXT"),),
         )
 
+    def _migration_v15(self, conn: sqlite3.Connection) -> None:
+        ensure_columns(
+            conn,
+            "channel_bindings",
+            (("last_recovery_notified_at", "last_recovery_notified_at TEXT"),),
+        )
+
     def _upsert_binding_sync(
         self,
         channel_id: str,
@@ -1155,6 +1180,11 @@ class DiscordStateStore:
         last_recovery_fingerprint_raw = (
             row["last_recovery_fingerprint"]
             if "last_recovery_fingerprint" in row.keys()
+            else None
+        )
+        last_recovery_notified_at_raw = (
+            row["last_recovery_notified_at"]
+            if "last_recovery_notified_at" in row.keys()
             else None
         )
         pending_compact_seed_raw = (
@@ -1276,6 +1306,11 @@ class DiscordStateStore:
                 if isinstance(last_recovery_fingerprint_raw, str)
                 else None
             ),
+            last_recovery_notified_at=(
+                last_recovery_notified_at_raw
+                if isinstance(last_recovery_notified_at_raw, str)
+                else None
+            ),
             pending_compact_seed=(
                 pending_compact_seed_raw
                 if isinstance(pending_compact_seed_raw, str)
@@ -1367,6 +1402,26 @@ class DiscordStateStore:
                 WHERE channel_id = ?
                 """,
                 (run_id, now_iso(), channel_id),
+            )
+
+    def _mark_recovery_notification_seen_sync(
+        self,
+        channel_id: str,
+        fingerprint: str,
+        notified_at: Optional[str],
+    ) -> None:
+        conn = self._connection_sync()
+        timestamp = notified_at or now_iso()
+        with conn:
+            conn.execute(
+                """
+                UPDATE channel_bindings
+                SET last_recovery_fingerprint = ?,
+                    last_recovery_notified_at = ?,
+                    updated_at = ?
+                WHERE channel_id = ?
+                """,
+                (fingerprint, timestamp, timestamp, channel_id),
             )
 
     def _update_pma_state_sync(

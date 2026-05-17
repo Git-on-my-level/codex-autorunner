@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import inspect
 import logging
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
@@ -15,6 +16,7 @@ from codex_autorunner.adapters.discord.flow_watchers import (
     PAUSE_SCAN_INTERVAL_SECONDS,
     TERMINAL_SCAN_INTERVAL_SECONDS,
     _next_idle_interval,
+    _recovery_notification_is_suppressed_by_binding,
     _scan_and_enqueue_recovery_notifications,
 )
 
@@ -346,7 +348,7 @@ async def test_recovery_scan_skips_info_status_updates(monkeypatch) -> None:
     service._store.enqueue_outbox.assert_not_awaited()
 
 
-def test_discord_recovery_watchers_do_not_reintroduce_snapshot_fingerprints() -> None:
+def test_discord_recovery_watchers_do_not_use_volatile_snapshot_fields() -> None:
     from codex_autorunner.adapters.discord import flow_watchers
 
     assert not hasattr(flow_watchers, "_recovery_fingerprint")
@@ -354,8 +356,35 @@ def test_discord_recovery_watchers_do_not_reintroduce_snapshot_fingerprints() ->
     source = inspect.getsource(flow_watchers)
     assert "restart_attempts" not in source
     assert "last_recovery_action" not in source
-    assert "last_recovery_fingerprint" not in source
-    assert "mark_recovery_seen" not in source
+
+
+def test_recovery_notification_binding_dedupe_suppresses_same_fingerprint() -> None:
+    now = datetime(2026, 5, 14, 12, 0, tzinfo=timezone.utc)
+    binding = {
+        "last_recovery_fingerprint": "ticket_flow_recovery:abc",
+        "last_recovery_notified_at": (now - timedelta(minutes=5)).isoformat(),
+    }
+
+    assert _recovery_notification_is_suppressed_by_binding(
+        binding,
+        fingerprint="ticket_flow_recovery:abc",
+    )
+
+
+def test_recovery_notification_binding_dedupe_does_not_block_different_fingerprint() -> (
+    None
+):
+    """A recent notify for intent A must not delay an alert for intent B (Codex #1788)."""
+    now = datetime(2026, 5, 14, 12, 0, tzinfo=timezone.utc)
+    binding = {
+        "last_recovery_fingerprint": "ticket_flow_recovery:abc",
+        "last_recovery_notified_at": (now - timedelta(minutes=5)).isoformat(),
+    }
+
+    assert not _recovery_notification_is_suppressed_by_binding(
+        binding,
+        fingerprint="ticket_flow_recovery:def",
+    )
 
 
 @pytest.mark.anyio

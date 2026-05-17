@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import logging
 from pathlib import Path
 from typing import Any, Optional
@@ -24,6 +25,7 @@ from ...core.recovery_notification_intents import (
 )
 from ...core.ticket_flow_recovery import (
     format_recovery_notification_intent,
+    recovery_notification_fingerprint,
     recovery_notification_intent_should_deliver,
     recovery_notification_transport_key,
 )
@@ -151,6 +153,17 @@ def _format_ticket_flow_dispatch_notification(
     if isinstance(source, str) and source.strip():
         header_lines.append(f"Source: {source.strip()}")
     return "\n\n".join(("\n".join(header_lines), body))
+
+
+def _recovery_notification_is_suppressed_by_binding(
+    binding: Any,
+    *,
+    fingerprint: str,
+) -> bool:
+    if not fingerprint:
+        return False
+    last_fp = binding.get("last_recovery_fingerprint")
+    return isinstance(last_fp, str) and last_fp == fingerprint
 
 
 def _preferred_bound_source_for_workspace(
@@ -371,6 +384,12 @@ async def _scan_and_enqueue_recovery_notifications(service: Any) -> int:
                 intent, transport_key=transport_key
             ):
                 continue
+            fingerprint = recovery_notification_fingerprint(intent)
+            if _recovery_notification_is_suppressed_by_binding(
+                binding,
+                fingerprint=fingerprint,
+            ):
+                continue
             message = format_recovery_notification_intent(intent)
             record_id = f"recovery:{channel_id}:{intent.intent_id}"
             try:
@@ -407,6 +426,16 @@ async def _scan_and_enqueue_recovery_notifications(service: Any) -> int:
                     transport_key=transport_key,
                     record_id=record_id,
                 )
+                mark_seen = getattr(
+                    service._store, "mark_recovery_notification_seen", None
+                )
+                if callable(mark_seen):
+                    result = mark_seen(
+                        channel_id=channel_id,
+                        fingerprint=fingerprint,
+                    )
+                    if inspect.isawaitable(result):
+                        await result
             except (OSError, RuntimeError, ValueError, KeyError, TypeError) as exc:
                 log_event(
                     service._logger,
