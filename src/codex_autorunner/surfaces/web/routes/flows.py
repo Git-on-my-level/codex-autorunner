@@ -65,6 +65,7 @@ from ....core.flows.worker_process import (
 )
 from ....core.orchestration import build_ticket_flow_orchestration_service
 from ....core.runtime import RuntimeContext
+from ....core.state import load_state
 from ....core.ticket_flow_operator import (
     resolve_run_reuse_policy,
     select_active_or_paused_run,
@@ -264,6 +265,9 @@ def _build_flow_definition(
         definition = build_ticket_flow_definition(
             agent_pool=agent_pool,
             auto_commit_default=engine.config.git_auto_commit,
+            require_commit_default=load_state(
+                engine.state_path
+            ).ticket_flow_require_commit,
             include_previous_ticket_context_default=(
                 engine.config.ticket_flow.include_previous_ticket_context
             ),
@@ -499,6 +503,21 @@ def _reap_dead_worker(run_id: str, state: FlowRoutesState) -> None:
 class FlowStartRequest(BaseModel):
     input_data: Dict = Field(default_factory=dict)
     metadata: Optional[Dict] = None
+
+
+def _with_ticket_flow_session_settings(
+    http_request: Request, flow_type: str, request: FlowStartRequest
+) -> FlowStartRequest:
+    if flow_type != "ticket_flow":
+        return request
+    engine = getattr(http_request.app.state, "engine", None)
+    state_path = getattr(engine, "state_path", None)
+    if state_path is None:
+        return request
+    session_state = load_state(state_path)
+    input_data = dict(request.input_data or {})
+    input_data.setdefault("require_commit", session_state.ticket_flow_require_commit)
+    return FlowStartRequest(input_data=input_data, metadata=request.metadata)
 
 
 class BootstrapCheckResponse(BaseModel):
@@ -1034,6 +1053,7 @@ def build_flow_routes() -> APIRouter:
     @router.post("/{flow_type}/start", response_model=FlowStatusResponse)
     async def start_flow(request: Request, flow_type: str, req: FlowStartRequest):
         state = _ensure_state_in_app(request)
+        req = _with_ticket_flow_session_settings(request, flow_type, req)
         meta = req.metadata if isinstance(req.metadata, dict) else {}
         force_new = bool(meta.get("force_new"))
         return await _start_flow(flow_type, req, state, force_new=force_new)
@@ -1204,6 +1224,9 @@ def build_flow_routes() -> APIRouter:
         payload = FlowStartRequest(
             input_data=flow_request.input_data,
             metadata=meta | {"seeded_ticket": seeded},
+        )
+        payload = _with_ticket_flow_session_settings(
+            http_request, "ticket_flow", payload
         )
         validate_tickets = not tickets_exist or force_new
         return await _start_flow(
@@ -1663,7 +1686,11 @@ def build_flow_routes() -> APIRouter:
 
         return await _start_flow(
             "ticket_flow",
-            FlowStartRequest(metadata={"force_new": True}),
+            _with_ticket_flow_session_settings(
+                http_request,
+                "ticket_flow",
+                FlowStartRequest(metadata={"force_new": True}),
+            ),
             state,
             force_new=True,
         )

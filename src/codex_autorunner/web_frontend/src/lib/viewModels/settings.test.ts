@@ -16,7 +16,8 @@ describe('settings view model', () => {
         autorunner_effort_override: 'medium',
         autorunner_approval_policy: 'never',
         autorunner_sandbox_mode: 'dangerFullAccess',
-        autorunner_workspace_write_network: true
+        autorunner_workspace_write_network: true,
+        ticket_flow_require_commit: false
       },
       agents: [
         { id: 'hermes', name: 'Hermes', capabilities: ['durable_threads', 'model_listing'], capability_projection: projection('hermes', true) },
@@ -34,6 +35,7 @@ describe('settings view model', () => {
 
     expect(view.hub.map((item) => item.label)).toContain('Runtime settings API');
     expect(view.session.modelOverrides).toEqual({ hermes: 'hermes-model' });
+    expect(view.session.ticketFlowRequireCommit).toBe(false);
     expect(view.hub).toContainEqual({ label: 'Settings changes', value: 'Direct save', tone: 'ok' });
     expect(view.agents).toMatchObject([
       { id: 'hermes', modelStatus: 'available', modelCount: 1, modelOptions: [{ id: 'gpt-5.4', label: 'GPT-5.4 (gpt-5.4)' }] },
@@ -58,7 +60,8 @@ describe('settings view model', () => {
         stopAfterRuns: '3',
         approvalPolicy: 'never',
         sandboxMode: 'dangerFullAccess',
-        workspaceWriteNetwork: null
+        workspaceWriteNetwork: null,
+        ticketFlowRequireCommit: false
       })
     ).toEqual({
       autorunner_model_overrides: { codex: 'gpt-5.4', opencode: 'zai/default' },
@@ -66,6 +69,7 @@ describe('settings view model', () => {
       autorunner_approval_policy: 'never',
       autorunner_sandbox_mode: 'dangerFullAccess',
       autorunner_workspace_write_network: null,
+      ticket_flow_require_commit: false,
       runner_stop_after_runs: 3
     });
   });

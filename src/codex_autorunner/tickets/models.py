@@ -89,6 +89,7 @@ class TicketRunConfig:
     max_commit_retries: int = 2
     max_network_retries: int = 5
     auto_commit: bool = True
+    require_commit: bool = True
     prompt_max_bytes: int = 5 * 1024 * 1024  # 5 MB default budget
     checkpoint_message_template: str = (
         "CAR checkpoint: run={run_id} turn={turn} agent={agent}"

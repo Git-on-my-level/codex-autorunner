@@ -19,6 +19,7 @@ def build_ticket_flow_definition(
     *,
     agent_pool: AgentPool,
     auto_commit_default: bool = False,
+    require_commit_default: bool = True,
     include_previous_ticket_context_default: bool = False,
     max_total_turns_default: int = DEFAULT_MAX_TOTAL_TURNS,
 ) -> FlowDefinition:
@@ -57,6 +58,9 @@ def build_ticket_flow_definition(
         max_total_turns = int(
             input_data.get("max_total_turns") or max_total_turns_default
         )
+        require_commit = input_data.get("require_commit")
+        if not isinstance(require_commit, bool):
+            require_commit = require_commit_default
 
         repo_id = _resolve_ticket_flow_repo_id(workspace_root)
         runner = TicketRunner(
@@ -66,6 +70,7 @@ def build_ticket_flow_definition(
                 ticket_dir=ticket_dir,
                 max_total_turns=max_total_turns,
                 auto_commit=auto_commit_default,
+                require_commit=require_commit,
                 include_previous_ticket_context=include_previous_ticket_context_default,
             ),
             agent_pool=agent_pool,

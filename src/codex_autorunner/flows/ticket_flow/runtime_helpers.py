@@ -27,6 +27,7 @@ from ...core.flows.workspace_root import (
 )
 from ...core.orchestration.models import FlowRunTarget
 from ...core.runtime import RuntimeContext
+from ...core.state import load_state
 from ...core.state_roots import resolve_repo_flows_db_path, resolve_repo_state_root
 from ...core.ticket_flow_operator import (
     PreflightCheckResult as TicketFlowInboxPreflight,
@@ -70,6 +71,7 @@ def build_ticket_flow_runtime_resources(
     definition = build_ticket_flow_definition(
         agent_pool=agent_pool,
         auto_commit_default=config.git_auto_commit,
+        require_commit_default=load_state(engine.state_path).ticket_flow_require_commit,
         include_previous_ticket_context_default=(
             config.ticket_flow.include_previous_ticket_context
         ),

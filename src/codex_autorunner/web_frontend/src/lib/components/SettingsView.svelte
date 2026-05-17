@@ -117,7 +117,8 @@
       view.session.stopAfterRuns !== baseline.stopAfterRuns ||
       view.session.approvalPolicy !== baseline.approvalPolicy ||
       view.session.sandboxMode !== baseline.sandboxMode ||
-      view.session.workspaceWriteNetwork !== baseline.workspaceWriteNetwork
+      view.session.workspaceWriteNetwork !== baseline.workspaceWriteNetwork ||
+      view.session.ticketFlowRequireCommit !== baseline.ticketFlowRequireCommit
     );
   });
 
@@ -288,6 +289,17 @@
           ariaLabel="Workspace-write network"
           onchange={patchNetwork}
         />
+        <label class="checkbox-field">
+          <input
+            type="checkbox"
+            checked={view.session.ticketFlowRequireCommit}
+            onchange={(event) => patchSession('ticketFlowRequireCommit', event.currentTarget.checked)}
+          />
+          <span>
+            <strong>Ticket flow commits</strong>
+            <small>Require a git commit before advancing after a completed ticket</small>
+          </span>
+        </label>
       </div>
       <AutoDismissNotice message={saveError} tone="danger" />
     </section>
@@ -520,5 +532,34 @@
     color: var(--color-ink);
     font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
     font-size: var(--font-size-0);
+  }
+
+  .checkbox-field {
+    grid-template-columns: auto 1fr;
+    align-items: start;
+    gap: var(--space-2);
+  }
+
+  .checkbox-field input {
+    width: 18px;
+    height: 18px;
+    margin-top: 2px;
+    accent-color: var(--color-accent);
+  }
+
+  .checkbox-field span {
+    gap: 2px;
+  }
+
+  .checkbox-field strong {
+    color: var(--color-ink);
+    font-size: var(--font-size-0);
+    font-weight: 600;
+  }
+
+  .checkbox-field small {
+    color: var(--color-ink-muted);
+    font-size: var(--font-size-0);
+    line-height: 1.35;
   }
 </style>

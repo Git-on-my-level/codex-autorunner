@@ -145,6 +145,7 @@ async def test_ticket_flow_uses_definition_defaults_for_runner_config(
     flow_def = build_ticket_flow_definition(
         agent_pool=mock_agent_pool,
         auto_commit_default=True,
+        require_commit_default=False,
         include_previous_ticket_context_default=True,
     )
     repo_dir = tmp_path / "repo"
@@ -179,4 +180,5 @@ async def test_ticket_flow_uses_definition_defaults_for_runner_config(
 
             config = mock_runner_class.call_args.kwargs["config"]
             assert config.auto_commit is True
+            assert config.require_commit is False
             assert config.include_previous_ticket_context is True

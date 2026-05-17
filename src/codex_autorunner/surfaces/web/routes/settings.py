@@ -47,6 +47,7 @@ def _session_settings_response(state: RunnerState) -> dict[str, Any]:
         "autorunner_approval_policy": state.autorunner_approval_policy,
         "autorunner_sandbox_mode": state.autorunner_sandbox_mode,
         "autorunner_workspace_write_network": state.autorunner_workspace_write_network,
+        "ticket_flow_require_commit": state.ticket_flow_require_commit,
         "runner_stop_after_runs": state.runner_stop_after_runs,
     }
 
@@ -113,6 +114,18 @@ def _normalize_session_settings_update(
             status_code=400,
             detail="autorunner_workspace_write_network must be a boolean",
         )
+    ticket_flow_require_commit = (
+        updates.get("ticket_flow_require_commit")
+        if "ticket_flow_require_commit" in updates
+        else state.ticket_flow_require_commit
+    )
+    if "ticket_flow_require_commit" in updates and not isinstance(
+        ticket_flow_require_commit, bool
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail="ticket_flow_require_commit must be a boolean",
+        )
     runner_stop_after_runs = (
         updates.get("runner_stop_after_runs")
         if "runner_stop_after_runs" in updates
@@ -137,6 +150,7 @@ def _normalize_session_settings_update(
         "autorunner_approval_policy": approval_policy,
         "autorunner_sandbox_mode": sandbox_mode,
         "autorunner_workspace_write_network": workspace_write_network,
+        "ticket_flow_require_commit": ticket_flow_require_commit,
         "runner_stop_after_runs": runner_stop_after_runs,
     }
 
@@ -153,6 +167,8 @@ def _thread_reset_required(normalized: dict[str, Any], state: RunnerState) -> bo
             normalized["autorunner_sandbox_mode"] != state.autorunner_sandbox_mode,
             normalized["autorunner_workspace_write_network"]
             != state.autorunner_workspace_write_network,
+            normalized["ticket_flow_require_commit"]
+            != state.ticket_flow_require_commit,
             normalized["runner_stop_after_runs"] != state.runner_stop_after_runs,
         )
     )
@@ -188,6 +204,7 @@ def _apply_session_settings_update(
             autorunner_workspace_write_network=normalized[
                 "autorunner_workspace_write_network"
             ],
+            ticket_flow_require_commit=normalized["ticket_flow_require_commit"],
             runner_stop_after_runs=normalized["runner_stop_after_runs"],
             runner_pid=state.runner_pid,
             sessions=state.sessions,

@@ -7,6 +7,7 @@ export type SettingsSessionState = {
   approvalPolicy: string;
   sandboxMode: string;
   workspaceWriteNetwork: boolean | null;
+  ticketFlowRequireCommit: boolean;
 };
 
 export type SettingsAgentStatus = {
@@ -195,6 +196,7 @@ export function buildSessionUpdatePayload(session: SettingsSessionState): JsonRe
     autorunner_approval_policy: blankToNull(session.approvalPolicy),
     autorunner_sandbox_mode: blankToNull(session.sandboxMode),
     autorunner_workspace_write_network: session.workspaceWriteNetwork,
+    ticket_flow_require_commit: session.ticketFlowRequireCommit,
     runner_stop_after_runs: positiveIntegerOrNull(session.stopAfterRuns)
   };
 }
@@ -213,7 +215,8 @@ function mapSession(raw: JsonRecord): SettingsSessionState {
     approvalPolicy: stringValue(raw.autorunner_approval_policy),
     sandboxMode: stringValue(raw.autorunner_sandbox_mode),
     workspaceWriteNetwork:
-      typeof raw.autorunner_workspace_write_network === 'boolean' ? raw.autorunner_workspace_write_network : null
+      typeof raw.autorunner_workspace_write_network === 'boolean' ? raw.autorunner_workspace_write_network : null,
+    ticketFlowRequireCommit: typeof raw.ticket_flow_require_commit === 'boolean' ? raw.ticket_flow_require_commit : true
   };
 }
 

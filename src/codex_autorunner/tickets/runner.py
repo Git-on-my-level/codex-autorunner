@@ -379,6 +379,7 @@ class TicketRunner:
             max_lint_retries=self._config.max_lint_retries,
             max_commit_retries=self._config.max_commit_retries,
             auto_commit=self._config.auto_commit,
+            require_commit=self._config.require_commit,
             checkpoint_message_template=self._config.checkpoint_message_template,
             emit_event=emit_event,
         )
