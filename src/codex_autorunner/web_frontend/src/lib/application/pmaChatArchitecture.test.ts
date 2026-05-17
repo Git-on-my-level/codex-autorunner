@@ -1,10 +1,19 @@
 import { describe, expect, it } from 'vitest';
+import type { PmaQueuedTurn } from '$lib/api/client';
+import type { PmaRunProgress, SurfaceArtifact } from '$lib/viewModels/domain';
 import type { ChatTranscriptCard } from '$lib/viewModels/pmaChat';
 import {
+  buildOptimisticQueuedTurn,
+  buildOptimisticUserTranscriptCard,
   evaluatePmaChatArchitectureGoal,
+  mergePmaProgressUpdate,
   mergeTranscriptSnapshotWithPendingOptimistic,
+  queueContainsCommittedClientTurn,
   transcriptCardCorrelationId,
-  transcriptRowsConfirmOptimistic
+  transcriptContainsCommittedUserRow,
+  transcriptRowsConfirmOptimistic,
+  visibleChatDetailTranscriptCards,
+  withoutOptimisticQueuedTurn
 } from './pmaChatArchitecture';
 
 const now = '2026-05-16T12:00:00.000Z';
@@ -101,6 +110,74 @@ describe('PMA chat transcript optimistic reconciliation', () => {
   });
 });
 
+describe('PMA chat detail state composition', () => {
+  it('hides backend-persisted queued user rows from the active transcript', () => {
+    const queuedUser = userCard('turn:queued:user', 'queued', {});
+    const visibleAssistant = assistantCard('turn:active:assistant', 'hello');
+    const cards = visibleChatDetailTranscriptCards(
+      [
+        { ...queuedUser, turnId: 'queued-turn' },
+        { ...visibleAssistant, turnId: 'active-turn' }
+      ],
+      [queuedTurn('queued-turn')]
+    );
+
+    expect(cards.map((card) => card.id)).toEqual(['turn:active:assistant']);
+  });
+
+  it('builds and removes optimistic queue rows through the detail view model', () => {
+    const optimistic = buildOptimisticQueuedTurn('second message', 'client-1', 2, now);
+    const committed = queuedTurn('turn-2', { client_turn_id: 'client-1' });
+    const queue = [queuedTurn('turn-1'), optimistic, committed];
+
+    expect(optimistic).toMatchObject({
+      managedTurnId: 'optimistic-queue:client-1',
+      position: 2,
+      state: 'queueing',
+      promptPreview: 'second message'
+    });
+    expect(withoutOptimisticQueuedTurn(queue, 'client-1').map((turn) => turn.managedTurnId)).toEqual([
+      'turn-1',
+      'turn-2'
+    ]);
+    expect(queueContainsCommittedClientTurn(queue, 'client-1')).toBe(true);
+  });
+
+  it('builds optimistic user rows and detects backend confirmation by correlation id', () => {
+    const optimistic = buildOptimisticUserTranscriptCard('chat-1', 'hello', 'client-1', now, [
+      {
+        id: 'att-1',
+        kind: 'file',
+        title: 'notes.md',
+        url: null,
+        sizeLabel: '12 B',
+        uploadedName: 'notes.md'
+      }
+    ]);
+    const backendUser = userCard('turn:1:user', 'hello', {
+      identity: { correlation_id: 'client-1' }
+    });
+
+    expect(optimistic.message.artifacts[0]).toMatchObject({ id: 'att-1', kind: 'file' });
+    expect(
+      transcriptContainsCommittedUserRow(
+        { cardsById: { [backendUser.id]: backendUser }, order: [backendUser.id] },
+        'client-1'
+      )
+    ).toBe(true);
+  });
+
+  it('merges live progress elapsed time and deduplicates event rows', () => {
+    const previous = progress('run-1', 10, [artifact('event-1')]);
+    const next = progress('run-1', 5, [artifact('event-1'), artifact('event-2')]);
+
+    const merged = mergePmaProgressUpdate(previous, next, Date.parse(now) + 20_000);
+
+    expect(merged.elapsedSeconds).toBe(20);
+    expect(merged.events.map((event) => event.id)).toEqual(['event-1', 'event-2']);
+  });
+});
+
 function userCard(id: string, text: string, raw: Record<string, unknown>): MessageTranscriptCard {
   return {
     kind: 'message',
@@ -129,5 +206,56 @@ function assistantCard(id: string, text: string): MessageTranscriptCard {
       ...base.message,
       role: 'assistant'
     }
+  };
+}
+
+function queuedTurn(managedTurnId: string, raw: Record<string, unknown> = {}): PmaQueuedTurn {
+  return {
+    managedTurnId,
+    position: 1,
+    state: 'queued',
+    prompt: 'queued prompt',
+    promptPreview: 'queued prompt',
+    attachments: [],
+    model: null,
+    reasoning: null,
+    enqueuedAt: now,
+    raw
+  };
+}
+
+function artifact(id: string): SurfaceArtifact {
+  return {
+    id,
+    kind: 'progress',
+    title: id,
+    summary: null,
+    url: null,
+    createdAt: now,
+    raw: {}
+  };
+}
+
+function progress(id: string, elapsedSeconds: number, events: SurfaceArtifact[]): PmaRunProgress {
+  return {
+    id,
+    chatId: 'chat-1',
+    status: 'running',
+    workStatus: 'running',
+    operatorStatus: 'running',
+    terminal: false,
+    streamShouldClose: false,
+    streamCloseReason: null,
+    phase: null,
+    guidance: null,
+    queueDepth: 0,
+    elapsedSeconds,
+    startedAt: now,
+    idleSeconds: null,
+    lastEventId: null,
+    lastEventAt: null,
+    progressPercent: null,
+    events,
+    raw: {}
   };
 }
