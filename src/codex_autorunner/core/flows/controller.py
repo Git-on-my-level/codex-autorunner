@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any, AsyncGenerator, Callable, Dict, Optional, Set
 
 from ...manifest import ManifestError, load_manifest
-from ..git_utils import GitError, run_git
+from ..git_utils import git_content_sensitive_repo_fingerprint
 from ..lifecycle_events import LifecycleEventEmitter, LifecycleEventType
 from ..state_roots import resolve_hub_manifest_path
 from ..utils import find_repo_root
@@ -310,17 +310,7 @@ class FlowController:
         repo_root = self._repo_root()
         if repo_root is None:
             return None
-        try:
-            head_proc = run_git(["rev-parse", "HEAD"], cwd=repo_root, check=True)
-            status_proc = run_git(["status", "--porcelain"], cwd=repo_root, check=True)
-            head = (head_proc.stdout or "").strip()
-            status = (status_proc.stdout or "").strip()
-            if not head:
-                return None
-            return f"{head}\n{status}"
-        except GitError:
-            _logger.exception("Failed to get git state")
-            return None
+        return git_content_sensitive_repo_fingerprint(repo_root)
 
     def _has_new_user_reply_signal(
         self, *, run_id: str, input_data: dict[str, Any]

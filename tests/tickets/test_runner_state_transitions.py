@@ -481,6 +481,36 @@ class TestGetRepoFingerprint:
         assert fp is not None
         assert "dirty.txt" in fp
 
+    def test_changes_when_already_dirty_tracked_content_changes(self, tmp_path):
+        _init_git_repo(tmp_path)
+        tracked = tmp_path / "README.md"
+        tracked.write_text("first edit\n", encoding="utf-8")
+        fp1 = get_repo_fingerprint(tmp_path)
+
+        tracked.write_text("second edit\n", encoding="utf-8")
+        fp2 = get_repo_fingerprint(tmp_path)
+
+        assert fp1 is not None
+        assert fp2 is not None
+        assert "M README.md" in fp1
+        assert "M README.md" in fp2
+        assert fp1 != fp2
+
+    def test_changes_when_untracked_content_changes(self, tmp_path):
+        _init_git_repo(tmp_path)
+        untracked = tmp_path / "new.txt"
+        untracked.write_text("first\n", encoding="utf-8")
+        fp1 = get_repo_fingerprint(tmp_path)
+
+        untracked.write_text("second\n", encoding="utf-8")
+        fp2 = get_repo_fingerprint(tmp_path)
+
+        assert fp1 is not None
+        assert fp2 is not None
+        assert "new.txt" in fp1
+        assert "new.txt" in fp2
+        assert fp1 != fp2
+
 
 class TestCheckTicketFrontmatter:
     def test_rewrites_error_prefix_for_read_failure(self, tmp_path):

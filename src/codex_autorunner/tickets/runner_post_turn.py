@@ -7,7 +7,12 @@ from typing import Any, Optional
 
 from ..core.file_chat_keys import ticket_instance_token
 from ..core.flows.models import FlowEventType
-from ..core.git_utils import GitError, git_diff_stats, run_git
+from ..core.git_utils import (
+    GitError,
+    git_content_sensitive_repo_fingerprint,
+    git_diff_stats,
+    run_git,
+)
 from .files import read_ticket_frontmatter
 from .models import TicketResult
 from .outbox import (
@@ -246,17 +251,8 @@ def checkpoint_git(
 
 
 def get_repo_fingerprint(workspace_root: Path) -> Optional[str]:
-    """Return a stable snapshot of HEAD + porcelain status."""
-    try:
-        head_proc = run_git(["rev-parse", "HEAD"], cwd=workspace_root, check=True)
-        status_proc = run_git(["status", "--porcelain"], cwd=workspace_root, check=True)
-        head = (head_proc.stdout or "").strip()
-        status = (status_proc.stdout or "").strip()
-        if not head:
-            return None
-        return f"{head}\n{status}"
-    except GitError:
-        return None
+    """Return a content-sensitive snapshot of repository state."""
+    return git_content_sensitive_repo_fingerprint(workspace_root)
 
 
 def build_pause_result(

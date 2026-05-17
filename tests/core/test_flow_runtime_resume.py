@@ -218,6 +218,43 @@ async def test_ticket_flow_resume_requires_signal_or_force(tmp_path: Path) -> No
 
 
 @pytest.mark.asyncio
+async def test_ticket_flow_resume_allows_content_sensitive_repo_change(
+    tmp_path: Path,
+) -> None:
+    _init_git_repo(tmp_path)
+    dirty_file = tmp_path / "README.md"
+    dirty_file.write_text("first dirty edit\n", encoding="utf-8")
+
+    async def step(_record, _input):
+        return StepOutcome.complete()
+
+    controller = _make_controller(tmp_path, {"step": step}, flow_type="ticket_flow")
+    run_id = "run-dirty-change"
+    record = await controller.start_flow(input_data={}, run_id=run_id)
+
+    fingerprint = controller._repo_fingerprint()
+    assert isinstance(fingerprint, str)
+    blocked_state = {
+        "ticket_engine": {
+            "status": "paused",
+            "reason_code": "loop_no_diff",
+            "pause_context": {
+                "paused_reply_seq": 0,
+                "repo_fingerprint": fingerprint,
+            },
+        }
+    }
+    controller.store.update_flow_run_status(
+        run_id=record.id, status=FlowRunStatus.PAUSED, state=blocked_state
+    )
+
+    dirty_file.write_text("second dirty edit\n", encoding="utf-8")
+
+    resumed = await controller.resume_flow(record.id)
+    assert resumed.status == FlowRunStatus.RUNNING
+
+
+@pytest.mark.asyncio
 async def test_ticket_flow_resume_signal_uses_workspace_root(tmp_path: Path) -> None:
     _init_git_repo(tmp_path)
     workspace = tmp_path / "nested-workspace"
