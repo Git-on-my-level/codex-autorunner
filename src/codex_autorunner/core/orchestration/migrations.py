@@ -9,7 +9,7 @@ from ..sqlite_utils import table_columns, table_exists
 from ..time_utils import now_iso
 from .models import OrchestrationTableDefinition
 
-ORCHESTRATION_SCHEMA_VERSION = 33
+ORCHESTRATION_SCHEMA_VERSION = 34
 
 
 @dataclass(frozen=True)
@@ -1773,6 +1773,177 @@ def _apply_v33(conn: sqlite3.Connection) -> None:
     )
 
 
+def _apply_v34(conn: sqlite3.Connection) -> None:
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS orch_automation_rules (
+            rule_id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            enabled INTEGER NOT NULL DEFAULT 1,
+            system_owned INTEGER NOT NULL DEFAULT 0,
+            trigger_kind TEXT NOT NULL,
+            trigger_json TEXT NOT NULL DEFAULT '{}',
+            filters_json TEXT NOT NULL DEFAULT '{}',
+            target_policy TEXT NOT NULL,
+            target_json TEXT NOT NULL DEFAULT '{}',
+            executor_kind TEXT NOT NULL,
+            executor_json TEXT NOT NULL DEFAULT '{}',
+            policy_json TEXT NOT NULL DEFAULT '{}',
+            metadata_json TEXT NOT NULL DEFAULT '{}',
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS orch_automation_rule_versions (
+            version_id TEXT PRIMARY KEY,
+            rule_id TEXT NOT NULL,
+            rule_json TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            FOREIGN KEY (rule_id) REFERENCES orch_automation_rules(rule_id)
+                ON DELETE CASCADE
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS orch_automation_events (
+            event_id TEXT PRIMARY KEY,
+            event_type TEXT NOT NULL,
+            source TEXT,
+            observed_at TEXT NOT NULL,
+            repo_id TEXT,
+            target_json TEXT NOT NULL DEFAULT '{}',
+            payload_json TEXT NOT NULL DEFAULT '{}',
+            raw_payload_json TEXT NOT NULL DEFAULT '{}',
+            metadata_json TEXT NOT NULL DEFAULT '{}'
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS orch_automation_jobs (
+            job_id TEXT PRIMARY KEY,
+            rule_id TEXT NOT NULL,
+            event_id TEXT NOT NULL,
+            state TEXT NOT NULL,
+            dedupe_key TEXT NOT NULL UNIQUE,
+            batch_key TEXT,
+            lock_key TEXT,
+            available_at TEXT NOT NULL,
+            claimed_at TEXT,
+            started_at TEXT,
+            finished_at TEXT,
+            updated_at TEXT NOT NULL,
+            attempt_count INTEGER NOT NULL DEFAULT 0,
+            max_attempts INTEGER NOT NULL DEFAULT 3,
+            next_attempt_at TEXT,
+            retry_backoff_seconds INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL,
+            target_json TEXT NOT NULL DEFAULT '{}',
+            executor_json TEXT NOT NULL DEFAULT '{}',
+            policy_json TEXT NOT NULL DEFAULT '{}',
+            payload_json TEXT NOT NULL DEFAULT '{}',
+            managed_thread_target_id TEXT,
+            managed_thread_execution_id TEXT,
+            pma_lane_id TEXT,
+            pma_queue_item_id TEXT,
+            ticket_flow_repo_id TEXT,
+            ticket_flow_run_id TEXT,
+            ticket_flow_worktree_id TEXT,
+            publish_operation_id TEXT,
+            result_summary TEXT,
+            error_text TEXT,
+            FOREIGN KEY (rule_id) REFERENCES orch_automation_rules(rule_id)
+                ON DELETE CASCADE,
+            FOREIGN KEY (event_id) REFERENCES orch_automation_events(event_id)
+                ON DELETE CASCADE
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS orch_automation_job_attempts (
+            attempt_id TEXT PRIMARY KEY,
+            job_id TEXT NOT NULL,
+            attempt_number INTEGER NOT NULL,
+            status TEXT NOT NULL,
+            started_at TEXT NOT NULL,
+            finished_at TEXT,
+            error_text TEXT,
+            executor_result_json TEXT NOT NULL DEFAULT '{}',
+            execution_refs_json TEXT NOT NULL DEFAULT '{}',
+            created_at TEXT NOT NULL,
+            FOREIGN KEY (job_id) REFERENCES orch_automation_jobs(job_id)
+                ON DELETE CASCADE
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS orch_automation_schedules (
+            schedule_id TEXT PRIMARY KEY,
+            rule_id TEXT NOT NULL,
+            schedule_kind TEXT NOT NULL,
+            timezone TEXT NOT NULL DEFAULT 'UTC',
+            next_fire_at TEXT,
+            last_fire_at TEXT,
+            misfire_policy TEXT NOT NULL DEFAULT 'fire_once',
+            schedule_json TEXT NOT NULL DEFAULT '{}',
+            state TEXT NOT NULL DEFAULT 'active',
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            FOREIGN KEY (rule_id) REFERENCES orch_automation_rules(rule_id)
+                ON DELETE CASCADE
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_orch_automation_rules_enabled_trigger
+            ON orch_automation_rules(enabled, trigger_kind)
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_orch_automation_events_type_observed
+            ON orch_automation_events(event_type, observed_at)
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_orch_automation_jobs_state_available
+            ON orch_automation_jobs(state, available_at)
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_orch_automation_jobs_rule_state
+            ON orch_automation_jobs(rule_id, state)
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_orch_automation_jobs_event
+            ON orch_automation_jobs(event_id)
+        """
+    )
+    conn.execute(
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_orch_automation_attempts_job_number
+            ON orch_automation_job_attempts(job_id, attempt_number)
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_orch_automation_schedules_next_fire
+            ON orch_automation_schedules(state, next_fire_at)
+        """
+    )
+
+
 _MIGRATIONS = (
     _MigrationStep(1, "create_core_orchestration_schema", _apply_v1),
     _MigrationStep(2, "add_binding_and_flow_projection_scaffolding", _apply_v2),
@@ -1834,6 +2005,11 @@ _MIGRATIONS = (
         33,
         "add_chat_index_projection",
         _apply_v33,
+    ),
+    _MigrationStep(
+        34,
+        "add_unified_automation_domain_store",
+        _apply_v34,
     ),
 )
 
@@ -1953,6 +2129,36 @@ _TABLE_DEFINITIONS = (
         name="orch_chat_index_projection_meta",
         role="projection",
         description="Metadata for chat index projection rebuild freshness and source signatures.",
+    ),
+    OrchestrationTableDefinition(
+        name="orch_automation_rules",
+        role="authoritative",
+        description="Unified automation rule definitions for lifecycle, SCM, schedule, and manual triggers.",
+    ),
+    OrchestrationTableDefinition(
+        name="orch_automation_rule_versions",
+        role="authoritative",
+        description="Historical snapshots of automation rules before updates.",
+    ),
+    OrchestrationTableDefinition(
+        name="orch_automation_events",
+        role="authoritative",
+        description="Normalized append-style automation events observed by CAR.",
+    ),
+    OrchestrationTableDefinition(
+        name="orch_automation_jobs",
+        role="authoritative",
+        description="Durable automation jobs created from matched rules and events.",
+    ),
+    OrchestrationTableDefinition(
+        name="orch_automation_job_attempts",
+        role="authoritative",
+        description="Per-attempt automation executor outcomes and execution references.",
+    ),
+    OrchestrationTableDefinition(
+        name="orch_automation_schedules",
+        role="authoritative",
+        description="Derived schedule state for schedule-triggered automation rules.",
     ),
     OrchestrationTableDefinition(
         name="orch_thread_identity_bindings",
