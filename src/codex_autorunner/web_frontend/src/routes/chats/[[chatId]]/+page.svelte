@@ -41,14 +41,16 @@
     buildOptimisticUserTranscriptCard,
     chatTranscriptHasInFlightOptimisticTurn,
     isOptimisticQueuedTurn,
-    mergePmaProgressUpdate,
-    mergeTranscriptSnapshotWithPendingOptimistic,
     progressWithLiveElapsed,
     queueContainsCommittedClientTurn,
     transcriptContainsCommittedUserRow,
     visibleChatDetailTranscriptCards,
     withoutOptimisticQueuedTurn
   } from '$lib/application/pmaChatArchitecture';
+  import {
+    createChatDetailLiveProjection,
+    type ChatDetailLiveProjectionState
+  } from '$lib/application/chatDetailLiveProjection';
   import {
     activateChatDetailFromUrl,
     activateRequestedChatFromRows,
@@ -76,7 +78,6 @@
     type ChatDetailSessionState
   } from '$lib/application/chatDetailSession';
   import { withRuntimeBasePath as href } from '$lib/runtime/basePath';
-  import { openChatTranscriptEventSource, shouldUseChatTranscriptStream, type StreamSubscription } from '$lib/api/streaming';
   import {
     repoContextspaceRoute,
     repoRoute,
@@ -85,7 +86,6 @@
     worktreeRoute,
     worktreeTicketRoute
   } from '$lib/viewModels/routes';
-  import { mapPmaRunProgress } from '$lib/viewModels/domain';
   import type {
     PmaChatSummary,
     PmaRunProgress,
@@ -117,7 +117,6 @@
     chatSurfaceFilterOptions,
     chatSurfaceFilterToken,
     progressPercent,
-    mapChatTranscriptRows,
     visibleLocalChatPlaceholders as selectVisibleLocalChatPlaceholders,
     removePendingAttachment,
     statusLabel,
@@ -165,8 +164,6 @@
 
   const COMPACT_SUMMARY_PROMPT =
     'Summarize the conversation so far into a concise context block I can paste into a new thread. Include goals, constraints, decisions, and current state.';
-  const PMA_TRANSCRIPT_LIMIT = 200;
-
   let readModelState = $state(readModelEntityStore.snapshot());
   let unsubscribeReadModels: (() => void) | null = null;
   let unsubscribeChatIndexSession: (() => void) | null = null;
@@ -243,11 +240,13 @@
   let composeError = $state<ApiError | null>(null);
   let streamState = $state<'idle' | 'connecting' | 'connected' | 'interrupted'>('idle');
   let streamError = $state<string | null>(null);
-  let streamSubscription: StreamSubscription | null = null;
-  // Tracks which managed turn we've already refreshed-on-terminal for, so the
-  // SSE poll's repeated terminal progress payloads don't trigger a refresh per
-  // tick while the stream stays open across turns.
-  let refreshedTerminalTurnId: string | null = null;
+  const liveProjection = createChatDetailLiveProjection({
+    api: webApi.pma,
+    readModelStore: readModelEntityStore,
+    getActiveChatId: () => activeChatId,
+    getChatSummary: (chatId) => chatSummaryForId(chatId),
+    onStateChange: writeLiveProjectionState
+  });
   let fileInput: HTMLInputElement | null = $state(null);
   let imageInput: HTMLInputElement | null = $state(null);
   let messageStack: HTMLDivElement | null = $state(null);
@@ -355,11 +354,7 @@
     slashSuggestions;
     slashSelectedIndex = Math.min(slashSelectedIndex, Math.max(slashSuggestions.length - 1, 0));
   });
-  let pendingRefreshTimer: number | null = null;
-  let pendingQueueRefreshTimer: number | null = null;
   let activeClockInterval: number | null = null;
-  let activeRefreshSeq = 0;
-  let activeQueueRefreshSeq = 0;
   let clockNowMs = $state(Date.now());
   let lastScrolledChatId: string | null = null;
   let lastScrolledCardCount = 0;
@@ -727,8 +722,6 @@
     unsubscribeReadModels?.();
     unsubscribeChatIndexSession?.();
     chatIndexSession.stop();
-    if (pendingRefreshTimer) window.clearTimeout(pendingRefreshTimer);
-    if (pendingQueueRefreshTimer) window.clearTimeout(pendingQueueRefreshTimer);
     if (chatIndexFilterRefreshTimer) window.clearTimeout(chatIndexFilterRefreshTimer);
     if (activeClockInterval) window.clearInterval(activeClockInterval);
     closeStream();
@@ -792,6 +785,13 @@
     if (command.syncSelectors) syncSelectorsToActiveChat();
     if (command.markRead) markActiveChatRead();
     if (command.refresh) void refreshActive(command.refresh.chatId, { quiet: command.refresh.quiet });
+  }
+
+  function writeLiveProjectionState(state: ChatDetailLiveProjectionState): void {
+    loadingActive = state.loadingActive;
+    activeError = state.activeError;
+    streamState = state.streamState;
+    streamError = state.streamError;
   }
 
   function activateRequestedChatFromCurrentRows(): void {
@@ -1113,188 +1113,15 @@
   }
 
   async function refreshActive(chatId: string, options: { quiet?: boolean } = {}): Promise<void> {
-    const refreshSeq = ++activeRefreshSeq;
-    if (!options.quiet) {
-      loadingActive = true;
-      activeError = null;
-    }
-    let missingThreadError: ApiError | null = null;
-    const transcriptTask = webApi.pma.getTranscript(chatId, { limit: PMA_TRANSCRIPT_LIMIT }).then((messageResult) => {
-      if (activeChatId !== chatId || refreshSeq !== activeRefreshSeq) return;
-      if (messageResult.ok) {
-        replaceChatTranscriptPreservingPendingOptimistic(chatId, messageResult.data.rows);
-        if (messageResult.data.status) updateProgress(messageResult.data.status);
-      } else if (isMissingManagedThreadError(messageResult.error)) {
-        missingThreadError = messageResult.error;
-        readModelEntityStore.replaceChatTranscript(chatId, []);
-      } else if (!options.quiet) {
-        activeError = messageResult.error;
-      }
-    });
-    const queueTask = webApi.pma.getQueue(chatId).then((queueResult) => {
-      if (activeChatId !== chatId || refreshSeq !== activeRefreshSeq) return;
-      if (queueResult.ok) {
-        readModelEntityStore.setPmaQueue(chatId, queueResult.data.queuedTurns);
-      } else if (isMissingManagedThreadError(queueResult.error)) {
-        missingThreadError = queueResult.error;
-        readModelEntityStore.setPmaQueue(chatId, []);
-      }
-    });
-
-    await Promise.all([transcriptTask, queueTask]);
-    if (activeChatId !== chatId || refreshSeq !== activeRefreshSeq) return;
-    if (missingThreadError) {
-      activeError = missingThreadError;
-      loadingActive = false;
-      closeStream();
-      return;
-    }
-    ensureTranscriptStreamAfterSnapshot(chatId);
-    if (!options.quiet || loadingActive) loadingActive = false;
-  }
-
-  async function refreshActiveQueue(chatId: string): Promise<void> {
-    const refreshSeq = ++activeQueueRefreshSeq;
-    const queueResult = await webApi.pma.getQueue(chatId);
-    if (activeChatId !== chatId || refreshSeq !== activeQueueRefreshSeq) return;
-    if (queueResult.ok) {
-      readModelEntityStore.setPmaQueue(chatId, queueResult.data.queuedTurns);
-    } else if (isMissingManagedThreadError(queueResult.error)) {
-      readModelEntityStore.setPmaQueue(chatId, []);
-    }
+    await liveProjection.refresh(chatId, options);
   }
 
   function connectStream(chatId: string): void {
-    closeStream();
-    const seedProgress = currentProgress(chatId);
-    const seedChat = chats.find((chat) => chat.id === chatId) ?? null;
-    if (!shouldUseChatTranscriptStream(seedChat, seedProgress, currentQueueDepth(chatId))) {
-      streamState = 'idle';
-      streamError = null;
-      return;
-    }
-    streamState = 'connecting';
-    streamError = null;
-    refreshedTerminalTurnId = null;
-    streamSubscription = openChatTranscriptEventSource(chatId, {
-      sinceEventId: seedProgress?.lastEventId,
-      sinceManagedTurnId: seedProgress?.id,
-      onStatus: (status) => {
-        if (activeChatId !== chatId) return;
-        if (status === 'connecting' && streamState !== 'connected') streamState = 'connecting';
-        if (status === 'connected') {
-          streamState = 'connected';
-          streamError = null;
-        }
-        if (status === 'interrupted') streamState = 'interrupted';
-      },
-      onEvent: (event) => {
-        if (activeChatId !== chatId) return;
-        streamState = 'connected';
-        if (event.kind === 'transcript_snapshot') {
-          const rows = mapChatTranscriptRows(event.payload.rows);
-          replaceChatTranscriptPreservingPendingOptimistic(chatId, rows);
-          const status = event.payload.status;
-          if (status && typeof status === 'object' && !Array.isArray(status)) {
-            const nextProgress = mapPmaRunProgress(status as JsonRecord);
-            updateProgress(nextProgress);
-            if (
-              nextProgress.terminal &&
-              nextProgress.id &&
-              transcriptHasAssistantMessageForTurn(rows, nextProgress.id)
-            ) {
-              refreshedTerminalTurnId = nextProgress.id;
-              scheduleActiveQueueRefresh(chatId, 700);
-            }
-          }
-          return;
-        }
-        if (event.kind === 'transcript_append') {
-          const rows = mapChatTranscriptRows(event.payload.rows);
-          readModelEntityStore.upsertChatTranscriptCards(chatId, rows);
-          return;
-        }
-        if (event.kind === 'transcript_patch') {
-          const status = event.payload.status;
-          if (!status || typeof status !== 'object' || Array.isArray(status)) return;
-          const nextProgress = mapPmaRunProgress(status as JsonRecord);
-          updateProgress(nextProgress);
-          if (
-            nextProgress.terminal &&
-            nextProgress.id &&
-            refreshedTerminalTurnId !== nextProgress.id
-          ) {
-            refreshedTerminalTurnId = nextProgress.id;
-            scheduleActiveRefresh(chatId, 700);
-          }
-          if (nextProgress.streamShouldClose) {
-            closeStream();
-            return;
-          }
-        }
-      },
-      onError: () => {
-        if (activeChatId !== chatId) return;
-        if (progress?.streamShouldClose) {
-          closeStream();
-          return;
-        }
-        streamState = 'interrupted';
-        streamError = 'Live chat updates were interrupted. Reconnecting and repairing from the latest snapshot.';
-        scheduleActiveRefresh(chatId, 900);
-      }
-    });
-  }
-
-  function ensureTranscriptStreamAfterSnapshot(chatId: string): void {
-    if (activeChatId !== chatId || streamSubscription) return;
-    const seedProgress = currentProgress(chatId);
-    const seedChat = chats.find((chat) => chat.id === chatId) ?? null;
-    if (shouldUseChatTranscriptStream(seedChat, seedProgress, currentQueueDepth(chatId))) connectStream(chatId);
-  }
-
-  function scheduleActiveRefresh(chatId: string, delayMs = 600): void {
-    if (pendingRefreshTimer) window.clearTimeout(pendingRefreshTimer);
-    pendingRefreshTimer = window.setTimeout(() => {
-      pendingRefreshTimer = null;
-      if (activeChatId === chatId) void refreshActive(chatId, { quiet: true });
-    }, delayMs);
-  }
-
-  function scheduleActiveQueueRefresh(chatId: string, delayMs = 600): void {
-    if (pendingQueueRefreshTimer) window.clearTimeout(pendingQueueRefreshTimer);
-    pendingQueueRefreshTimer = window.setTimeout(() => {
-      pendingQueueRefreshTimer = null;
-      if (activeChatId === chatId) void refreshActiveQueue(chatId);
-    }, delayMs);
+    liveProjection.connect(chatId);
   }
 
   function closeStream(): void {
-    streamSubscription?.close();
-    streamSubscription = null;
-    streamState = 'idle';
-  }
-
-  function isMissingManagedThreadError(error: ApiError): boolean {
-    return error.status === 404 && error.message.toLowerCase().includes('managed thread not found');
-  }
-
-  function transcriptHasAssistantMessageForTurn(cards: ChatTranscriptCard[], turnId: string): boolean {
-    return cards.some((card) =>
-      card.kind === 'message' &&
-      card.turnId === turnId &&
-      card.message.role === 'assistant' &&
-      card.message.text.trim().length > 0
-    );
-  }
-
-  function updateProgress(nextProgress: PmaRunProgress): void {
-    const chatId = nextProgress.chatId ?? activeChatId;
-    if (!chatId) return;
-    readModelEntityStore.setPmaProgress(
-      chatId,
-      mergePmaProgressUpdate(currentProgress(chatId), nextProgress, Date.now())
-    );
+    liveProjection.close();
   }
 
   function hasCachedDetail(chatId: string): boolean {
@@ -1305,14 +1132,6 @@
       state.pmaQueues[chatId]?.length ||
       state.timelines[chatId]?.order.length ||
       state.chatDetails[chatId]?.thread
-    );
-  }
-
-  function replaceChatTranscriptPreservingPendingOptimistic(chatId: string, rows: ChatTranscriptCard[]): void {
-    const existing = readModelEntityStore.snapshot().chatTranscripts[chatId];
-    readModelEntityStore.replaceChatTranscript(
-      chatId,
-      mergeTranscriptSnapshotWithPendingOptimistic(existing, rows)
     );
   }
 
@@ -1339,19 +1158,10 @@
     return Boolean(state.chatIndexCursor || state.chatOrder.length > 0);
   }
 
-  function currentProgress(chatId: string): PmaRunProgress | null {
-    return selectPmaProgress(readModelEntityStore.snapshot(), chatId);
-  }
-
-  function currentQueueDepth(chatId: string): number {
-    return selectPmaQueue(readModelEntityStore.snapshot(), chatId).length;
-  }
-
   function retryStream(): void {
     if (!activeChatId) return;
     if (isLocalDraftChatId(activeChatId)) return;
-    connectStream(activeChatId);
-    void refreshActive(activeChatId, { quiet: true });
+    liveProjection.retry(activeChatId);
   }
 
   function syncSelectorsToActiveChat(): void {

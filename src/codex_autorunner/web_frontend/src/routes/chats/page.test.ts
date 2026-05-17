@@ -30,18 +30,23 @@ describe('/chats page', () => {
     expect(createChatBody).not.toMatch(/detailMode = 'detail';\s*newChatKind = 'pma';/);
   });
 
-  it('keeps terminal snapshot queue reconciliation separate from full transcript repair', () => {
-    const source = readFileSync(
+  it('delegates terminal snapshot queue reconciliation to the live projection service', () => {
+    const pageSource = readFileSync(
       fileURLToPath(new URL('./[[chatId]]/+page.svelte', import.meta.url)),
       'utf8'
     );
-    const snapshotBranch = source.match(
-      /if \(event\.kind === 'transcript_snapshot'\)[\s\S]*?return;\n        \}/
-    )?.[0];
-
-    expect(snapshotBranch).toContain('refreshedTerminalTurnId = nextProgress.id');
-    expect(snapshotBranch).toContain('scheduleActiveQueueRefresh(chatId, 700)');
-    expect(source).toContain('async function refreshActiveQueue');
+    const serviceSource = readFileSync(
+      fileURLToPath(new URL('../../lib/application/chatDetailLiveProjection.ts', import.meta.url)),
+      'utf8'
+    );
+    expect(serviceSource).toContain("if (event.kind === 'transcript_snapshot')");
+    expect(serviceSource).toContain('this.refreshedTerminalTurnId = nextProgress.id');
+    expect(serviceSource).toContain('this.scheduleQueueRefresh(chatId, this.queueRefreshDelayMs)');
+    expect(serviceSource).toContain('async refreshQueue(chatId: string)');
+    expect(pageSource).toContain('createChatDetailLiveProjection');
+    expect(pageSource).not.toContain('webApi.pma.getTranscript');
+    expect(pageSource).not.toContain('webApi.pma.getQueue');
+    expect(pageSource).not.toContain('openChatTranscriptEventSource');
   });
 
   it('renders filters, chat list shell, and composer affordances without global memory controls', () => {
