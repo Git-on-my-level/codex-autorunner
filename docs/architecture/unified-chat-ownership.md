@@ -125,3 +125,25 @@ Discord, and Telegram can be inspected against the same backend truth.
 - Preserve stable timeline item IDs and ordering keys when changing payloads.
 - Cover queued sends, running progress, final assistant output, delivery state,
   and cross-surface projection in backend/frontend tests.
+
+## Goal Function
+
+The target architecture is now encoded in
+`src/codex_autorunner/core/orchestration/chat_architecture_goal.py`. The goal
+function is intentionally pure: callers pass explicit evidence signals, and it
+returns a score plus prioritized gaps. The platonic score requires all lifecycle,
+thread, turn, delivery, recovery, surface identity, read-model, and agent
+registry evidence to be orchestration-owned, while rejecting surface-local
+lifecycle machines, surface-local transcript ordering, adapter-local delivery
+retry policy, agent-specific route branching, and opaque status mappings.
+
+Use `evaluate_chat_architecture_goal(...)` in focused tests or ticket planning
+when adding a chat surface or agent. A new surface should satisfy the
+`surface_as_projection` criterion by binding a protocol-neutral surface identity
+and consuming snapshot/event read models. A new agent should satisfy the
+`agent_as_capability_provider` criterion by registering a descriptor and harness
+capabilities instead of adding route-specific branches.
+
+`current_chat_architecture_goal_evaluation()` records the current migration
+posture: the shared ledgers and contracts exist, but PMA compatibility state and
+status-string mapping still keep us short of the platonic architecture.
