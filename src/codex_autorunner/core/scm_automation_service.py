@@ -983,12 +983,6 @@ def _operation_result_summary(operation: Optional[PublishOperation]) -> str:
     return "SCM reaction bridged through publish operation"
 
 
-def _scm_action_specs(
-    reaction_intents: tuple[ReactionIntent, ...],
-) -> list[dict[str, Any]]:
-    return [_action_from_legacy_intent(intent) for intent in reaction_intents]
-
-
 def _action_from_legacy_intent(intent: ReactionIntent) -> dict[str, Any]:
     return _compact_mapping(
         {
