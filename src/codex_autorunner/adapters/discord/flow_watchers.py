@@ -162,7 +162,8 @@ def _recovery_notification_is_suppressed_by_binding(
 ) -> bool:
     if not fingerprint:
         return False
-    return binding.get("last_recovery_fingerprint") == fingerprint
+    last_fp = binding.get("last_recovery_fingerprint")
+    return isinstance(last_fp, str) and last_fp == fingerprint
 
 
 def _preferred_bound_source_for_workspace(
