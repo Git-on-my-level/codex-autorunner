@@ -8,6 +8,14 @@ enqueues, status transitions (pending -> running -> completed/failed/cancelled/
 deduped), idempotency checks, and compaction all read from and write to
 ``orch_queue_items``.
 
+``src/codex_autorunner/core/pma_queue.py`` keeps those responsibilities split:
+
+- ``PmaQueue`` owns the public queue API and domain transitions.
+- ``PmaQueueRepository`` owns canonical SQLite row persistence.
+- ``PmaQueueJsonlMirror`` owns JSONL path generation and mirror rewrites.
+- ``PmaLaneScheduler`` owns in-memory lane queues, wakeup events, replay
+  bookkeeping, and cross-process mirror-mtime polling state.
+
 ## source_kind separation
 
 ``orch_queue_items`` is shared between two owners distinguished by
@@ -40,8 +48,8 @@ transitions.
 
 ## Compatibility mirrors
 
-After every canonical mutation, ``PmaQueue`` rewrites a JSONL lane file under
-``.codex-autorunner/pma/queue/`` as a **compatibility and audit artifact**.
+After every canonical mutation, the JSONL mirror adapter rewrites a lane file
+under ``.codex-autorunner/pma/queue/`` as a **compatibility and audit artifact**.
 These JSONL files are *not* the source of truth.  Deleting them does not affect
 queue behaviour — ``replay_pending`` and ``_refresh_lane_from_disk`` both read
 from SQLite, and the mirror is regenerated on the next write.
