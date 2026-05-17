@@ -1302,7 +1302,7 @@
     font-weight: 600;
     font-size: 10px;
   }
-  .ticket-settings-bar :global(.ticket-inline-field :is(input:not([type='checkbox']), select)) {
+  .ticket-settings-bar :global(.ticket-inline-field :is(input:not([type='checkbox']), select, .dropdown-select-trigger)) {
     background: transparent;
     border: 1px solid transparent;
     border-radius: 6px;
@@ -1312,10 +1312,11 @@
     min-width: 0;
     max-width: 12rem;
   }
-  .ticket-settings-bar :global(.ticket-inline-field :is(input:not([type='checkbox']), select):hover) {
+  .ticket-settings-bar :global(.ticket-inline-field :is(input:not([type='checkbox']), select, .dropdown-select-trigger):hover) {
     background: var(--color-surface-muted);
   }
-  .ticket-settings-bar :global(.ticket-inline-field :is(input:not([type='checkbox']), select):focus) {
+  .ticket-settings-bar :global(.ticket-inline-field :is(input:not([type='checkbox']), select, .dropdown-select-trigger):focus),
+  .ticket-settings-bar :global(.ticket-inline-field .dropdown-select-trigger.open) {
     outline: none;
     background: var(--color-surface);
     border-color: var(--color-border);

@@ -38,8 +38,6 @@ describe('settings page component', () => {
 
     expect(body).toContain('Appearance');
     expect(body).toContain('Color theme');
-    expect(body).toContain('Dracula');
-    expect(body).toContain('Solarized Light');
     expect(body).toContain('System (match OS)');
   });
 
@@ -58,7 +56,6 @@ describe('settings page component', () => {
     expect(body).toContain('Codex');
     expect(body).toContain('Default model');
     expect(body).toContain('Use built-in default');
-    expect(body).toContain('GPT-5.4 (gpt-5.4)');
     expect(body).toContain('Model selection unavailable');
     expect(body).not.toContain('no listing');
     expect(body).not.toContain('6 models');

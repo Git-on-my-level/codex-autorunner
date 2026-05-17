@@ -8,6 +8,9 @@ import {
   buildManagedThreadMessagePayload,
   agentCapabilityAllowed,
   buildPmaChatScopeOptions,
+  groupPmaChatScopeOptions,
+  filterPmaChatScopeGroups,
+  flattenPmaChatScopeGroupView,
   buildChatTranscriptCards,
   buildChatActivityCards,
   buildPmaLiveActivity,
@@ -1994,6 +1997,113 @@ describe('PMA chat view helpers', () => {
       name: 'New coding agent chat',
       scope_urn: 'repo:repo-1'
     });
+  });
+
+  it('groups scope options into repo buckets with their worktrees', () => {
+    const options = buildPmaChatScopeOptions(
+      [
+        {
+          id: 'repo-1',
+          name: 'Repo One',
+          path: '/hub/repo-1',
+          status: 'idle',
+          defaultBranch: 'main',
+          worktreeCount: 1,
+          activeRuns: 0,
+          openTickets: 0,
+          lastActivityAt: null,
+          raw: {}
+        }
+      ],
+      [
+        {
+          id: 'worktree-1',
+          repoId: 'repo-1',
+          name: 'Feature worktree',
+          path: '/hub/repo-1-pma',
+          branch: 'pma/feature',
+          status: 'idle',
+          activeRuns: 0,
+          openTickets: 0,
+          lastActivityAt: null,
+          raw: {}
+        },
+        {
+          id: 'worktree-orphan',
+          repoId: null,
+          name: 'Detached worktree',
+          path: '/tmp/detached',
+          branch: null,
+          status: 'idle',
+          activeRuns: 0,
+          openTickets: 0,
+          lastActivityAt: null,
+          raw: {}
+        }
+      ]
+    );
+
+    const view = groupPmaChatScopeOptions(options);
+    expect(view.local?.id).toBe('local');
+    expect(view.groups.map((group) => group.repoLabel)).toEqual(['Repo One', 'Other worktrees']);
+    expect(view.groups[0].repo?.id).toBe('repo:repo-1');
+    expect(view.groups[0].worktrees.map((worktree) => worktree.id)).toEqual(['worktree:worktree-1']);
+    expect(view.groups[1].repo).toBeNull();
+    expect(view.groups[1].worktrees.map((worktree) => worktree.id)).toEqual(['worktree:worktree-orphan']);
+
+    expect(flattenPmaChatScopeGroupView(view).map((option) => option.id)).toEqual([
+      'local',
+      'repo:repo-1',
+      'worktree:worktree-1',
+      'worktree:worktree-orphan'
+    ]);
+  });
+
+  it('keeps the owning repo header visible when a query only matches a worktree', () => {
+    const options = buildPmaChatScopeOptions(
+      [
+        {
+          id: 'repo-1',
+          name: 'Repo One',
+          path: '/hub/repo-1',
+          status: 'idle',
+          defaultBranch: 'main',
+          worktreeCount: 1,
+          activeRuns: 0,
+          openTickets: 0,
+          lastActivityAt: null,
+          raw: {}
+        }
+      ],
+      [
+        {
+          id: 'worktree-1',
+          repoId: 'repo-1',
+          name: 'Feature worktree',
+          path: '/hub/repo-1-pma',
+          branch: 'pma/feature',
+          status: 'idle',
+          activeRuns: 0,
+          openTickets: 0,
+          lastActivityAt: null,
+          raw: {}
+        }
+      ]
+    );
+
+    const view = groupPmaChatScopeOptions(options);
+    const filtered = filterPmaChatScopeGroups(view, 'feature');
+    expect(filtered.local).toBeNull();
+    expect(filtered.groups).toHaveLength(1);
+    expect(filtered.groups[0].repo?.id).toBe('repo:repo-1');
+    expect(filtered.groups[0].worktrees.map((worktree) => worktree.id)).toEqual(['worktree:worktree-1']);
+
+    const repoQuery = filterPmaChatScopeGroups(view, 'Repo One');
+    expect(repoQuery.groups[0].worktrees).toHaveLength(1);
+
+    const hubQuery = filterPmaChatScopeGroups(view, 'local');
+    expect(hubQuery.local?.id).toBe('local');
+    expect(hubQuery.groups).toHaveLength(0);
   });
 
   it('labels existing chat scopes from durable backend fields', () => {

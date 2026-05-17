@@ -20,6 +20,7 @@ import {
   type WorktreeSummary,
   type WorkStatus
 } from '$lib/viewModels/domain';
+import { stripInjectedContextBlocks } from '$lib/viewModels/injectedContext';
 import { normalizeManagedThreadChatKind } from '$lib/viewModels/managedThreadChatKind';
 import type { PmaQueuedTurn } from '$lib/api/client';
 import type { ChatTranscriptCard } from '$lib/viewModels/pmaChat';
@@ -69,10 +70,12 @@ export function legacyChatIndexRecordToChatIndexRow(raw: JsonRecord): ChatIndexR
   const lifecycle = stringValue(raw.lifecycle)?.toLowerCase() ?? '';
   const lifecycleStatus = stringValue(raw.lifecycle_status)?.toLowerCase() ?? '';
   const runtimeStatus = stringValue(raw.runtime_status ?? raw.target_runtime_status)?.toLowerCase() ?? '';
+  const rawTitle = stringValue(raw.title ?? raw.display_name, chatId) ?? chatId;
+  const title = stripInjectedContextBlocks(rawTitle).trim() || chatId;
   return {
     chatId,
     surface: surfaceFromKinds(raw.surface_kinds, raw.surface),
-    title: stringValue(raw.title ?? raw.display_name, chatId) ?? chatId,
+    title,
     status: legacyChatIndexStatus(lifecycle, lifecycleStatus, runtimeStatus, queueDepth),
     unreadCount: numberValue(raw.unread_count ?? raw.unreadCount) || (raw.unread === true ? 1 : 0),
     lastActivityAt: stringValue(raw.last_activity_at ?? raw.updated_at ?? raw.created_at),

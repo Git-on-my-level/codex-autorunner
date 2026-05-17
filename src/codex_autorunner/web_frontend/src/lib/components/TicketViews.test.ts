@@ -359,7 +359,7 @@ Users can browse tickets.
     });
 
     expect(body).toContain('Agent');
-    expect(body).toContain('hermes');
+    expect(body).toContain('Hermes');
     expect(body).not.toContain('aria-label="Model"');
     expect(body).not.toContain('aria-label="Reasoning"');
     expect(body).not.toContain('manual-model');

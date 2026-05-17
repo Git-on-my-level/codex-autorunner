@@ -5,6 +5,7 @@
    * composer (`<form class="composer">`) free of profile controls so layout stays consistent.
    */
   import AgentModelReasoningPicker from '$lib/components/AgentModelReasoningPicker.svelte';
+  import ChatScopePicker from '$lib/components/ChatScopePicker.svelte';
   import type { PickerRecord } from '$lib/viewModels/modelPickers';
   import type { PmaChatScopeOption } from '$lib/viewModels/pmaChat';
 
@@ -44,14 +45,7 @@
 </script>
 
 {#if scopeOptions.length > 1}
-  <label class="scope-picker">
-    <span>Scope</span>
-    <select bind:value={scopeValue} onchange={onScopeChange}>
-      {#each scopeOptions as scope}
-        <option value={scope.id}>{scope.label}</option>
-      {/each}
-    </select>
-  </label>
+  <ChatScopePicker {scopeOptions} bind:value={scopeValue} onChange={onScopeChange} />
 {/if}
 
 <AgentModelReasoningPicker
@@ -70,24 +64,3 @@
   onchange={onPickerChange}
 />
 
-<style>
-  .scope-picker {
-    display: grid;
-    gap: 0.35rem;
-    margin-bottom: 0.75rem;
-    color: var(--muted-foreground, #5f6368);
-    font-size: 0.78rem;
-    font-weight: 600;
-  }
-
-  .scope-picker select {
-    min-height: 2.25rem;
-    border: 1px solid var(--border, #d0d7de);
-    border-radius: 6px;
-    background: var(--background, #fff);
-    color: var(--foreground, #1f2328);
-    font: inherit;
-    font-weight: 500;
-    padding: 0.35rem 0.55rem;
-  }
-</style>

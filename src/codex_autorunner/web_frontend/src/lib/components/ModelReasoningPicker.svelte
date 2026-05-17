@@ -1,4 +1,5 @@
 <script lang="ts">
+  import DropdownSelect, { type DropdownSelectOption } from '$lib/components/DropdownSelect.svelte';
   import {
     modelExists,
     modelLabel,
@@ -52,6 +53,18 @@
   const reasoningOptions = $derived(pickerReasoningOptions(models, selectedModel));
   const showReasoningPicker = $derived(Boolean(showReasoning && reasoningOptions.length > 0));
   const currentModelMissing = $derived(Boolean(selectedModel) && !modelExists(models, selectedModel));
+  const modelOptions = $derived.by<DropdownSelectOption[]>(() => {
+    if (models.length === 0) return [{ value: '', label: emptyModelLabel }];
+    const entries: DropdownSelectOption[] = [];
+    if (allowEmptyModelOption) entries.push({ value: '', label: unsetModelLabel });
+    entries.push(...models.map((model) => ({ value: modelValue(model), label: modelLabel(model) })));
+    if (currentModelMissing) entries.push({ value: selectedModel, label: selectedModel });
+    return entries;
+  });
+  const effortOptions = $derived<DropdownSelectOption[]>([
+    { value: '', label: defaultReasoningLabel },
+    ...reasoningOptions.map((effort) => ({ value: effort, label: effort }))
+  ]);
 
   $effect(() => {
     if (reasoningValue && !reasoningOptions.includes(reasoningValue)) {
@@ -66,34 +79,26 @@
 </script>
 
 {#if showModel}
-  <label class={`${rowClass} ${modelState.state}`}>
-    <span>{modelLabelText}</span>
-    <select aria-label={modelAriaLabel} bind:value={selectedModel} disabled={modelState.disabled} onchange={handleChange}>
-      {#if models.length === 0}
-        <option value="">{emptyModelLabel}</option>
-      {:else}
-        {#if allowEmptyModelOption}
-          <option value="">{unsetModelLabel}</option>
-        {/if}
-        {#each models as model (modelValue(model))}
-          <option value={modelValue(model)}>{modelLabel(model)}</option>
-        {/each}
-        {#if currentModelMissing}
-          <option value={selectedModel}>{selectedModel}</option>
-        {/if}
-      {/if}
-    </select>
-  </label>
+  <DropdownSelect
+    bind:value={selectedModel}
+    options={modelOptions}
+    labelText={modelLabelText}
+    ariaLabel={modelAriaLabel}
+    rowClass={`${rowClass} ${modelState.state}`}
+    disabled={modelState.disabled}
+    searchable={modelOptions.length > 8}
+    searchPlaceholder="Search models"
+    onchange={handleChange}
+  />
 {/if}
 
 {#if showReasoningPicker}
-  <label class={rowClass}>
-    <span>{reasoningLabelText}</span>
-    <select aria-label={reasoningAriaLabel} bind:value={reasoningValue} onchange={handleChange}>
-      <option value="">{defaultReasoningLabel}</option>
-      {#each reasoningOptions as effort (effort)}
-        <option value={effort}>{effort}</option>
-      {/each}
-    </select>
-  </label>
+  <DropdownSelect
+    bind:value={reasoningValue}
+    options={effortOptions}
+    labelText={reasoningLabelText}
+    ariaLabel={reasoningAriaLabel}
+    rowClass={rowClass}
+    onchange={handleChange}
+  />
 {/if}
