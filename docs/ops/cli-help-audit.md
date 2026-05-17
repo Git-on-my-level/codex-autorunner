@@ -33,7 +33,7 @@ Reviewed help pages: 131 command/group pages.
 
 - `car ticket-flow --help` now states canonical form: `car ticket-flow ...`.
 - `car hub worktree list/scan` now emit canonical lifecycle hints:
-  - Human output: `recommended: car hub worktree archive <repo_id>`
+  - Human output: `recommended: car hub worktree retire <repo_id>`
   - JSON payload: `recommended_command` + `recommended_actions`
 - `car status` now includes `recommended_actions` in both human and JSON output.
 

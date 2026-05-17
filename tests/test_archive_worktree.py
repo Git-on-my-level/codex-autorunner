@@ -103,7 +103,7 @@ def test_cleanup_archive_intent_preserves_flow_store(tmp_path: Path) -> None:
         worktree_repo_id="worktree",
         branch="feature/archive-viewer",
         worktree_of="base",
-        intent="cleanup_snapshot",
+        intent="retire_snapshot",
     )
 
     assert (result.snapshot_path / "flows.db").exists()

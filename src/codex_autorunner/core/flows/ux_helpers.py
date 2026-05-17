@@ -204,7 +204,7 @@ def select_ticket_flow_run(
     return _select_ticket_flow_run(store, selection=selection)
 
 
-def resolve_ticket_flow_archive_mode(record: FlowRunRecord) -> str:
+def resolve_ticket_flow_retire_mode(record: FlowRunRecord) -> str:
     if record.status.is_terminal():
         return "ready"
     if record.status in {FlowRunStatus.PAUSED, FlowRunStatus.STOPPING}:
@@ -212,7 +212,7 @@ def resolve_ticket_flow_archive_mode(record: FlowRunRecord) -> str:
     return "blocked"
 
 
-def ticket_flow_archive_requires_force(record: FlowRunRecord) -> bool:
+def ticket_flow_retire_requires_force(record: FlowRunRecord) -> bool:
     return record.status in {FlowRunStatus.PAUSED, FlowRunStatus.STOPPING}
 
 
@@ -345,8 +345,8 @@ def _format_recovery_facets(run_state: Mapping[str, Any]) -> list[str]:
     return lines
 
 
-def _format_ticket_flow_archive_status(record: FlowRunRecord) -> str:
-    mode = resolve_ticket_flow_archive_mode(record)
+def _format_ticket_flow_retire_status(record: FlowRunRecord) -> str:
+    mode = resolve_ticket_flow_retire_mode(record)
     if mode == "ready":
         return "ready"
     if mode == "confirm":
@@ -477,7 +477,7 @@ def format_ticket_flow_status_lines(
         if isinstance(recommended, str) and recommended.strip():
             lines.append(f"Recommended: {recommended.strip()}")
 
-    lines.append(f"Archive: {_format_ticket_flow_archive_status(record)}")
+    lines.append(f"Retire: {_format_ticket_flow_retire_status(record)}")
     return lines
 
 
@@ -520,13 +520,13 @@ __all__ = [
     "format_issue_as_markdown",
     "issue_md_has_content",
     "issue_md_path",
-    "resolve_ticket_flow_archive_mode",
+    "resolve_ticket_flow_retire_mode",
     "seed_issue_from_github",
     "seed_issue_from_text",
     "select_default_ticket_flow_run",
     "select_ticket_flow_run",
     "select_ticket_flow_run_record",
     "summarize_flow_freshness",
-    "ticket_flow_archive_requires_force",
+    "ticket_flow_retire_requires_force",
     "ticket_progress",
 ]

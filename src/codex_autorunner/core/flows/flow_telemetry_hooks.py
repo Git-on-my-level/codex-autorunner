@@ -165,7 +165,7 @@ def build_store_event_emitter(store: FlowStore, run_id: str):
 def housekeep_on_worktree_cleanup(
     repo_root: Path,
 ) -> Optional[HousekeepResult]:
-    """Housekeeping before worktree archive or removal.
+    """Housekeeping before worktree retire or removal.
 
     Targets all terminal runs for the repo because this is the last chance
     to prune before the worktree disappears.

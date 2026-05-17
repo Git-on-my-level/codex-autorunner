@@ -830,7 +830,7 @@ def register_flow_commands(
             typer.echo(
                 f"warning: {len(reuse.stale_terminal_runs)} stale runs (FAILED/STOPPED). "
                 f"inspect: car ticket-flow status --run-id {stale_id}. "
-                f"archive: car ticket-flow archive --run-id {stale_id} --force. "
+                f"retire: car ticket-flow retire --run-id {stale_id} --force. "
                 f"use --force-new to suppress."
             )
 
@@ -934,7 +934,7 @@ def register_flow_commands(
             typer.echo(
                 f"warning: {len(reuse.stale_terminal_runs)} stale runs (FAILED/STOPPED). "
                 f"inspect: car ticket-flow status --run-id {stale_id}. "
-                f"archive: car ticket-flow archive --run-id {stale_id} --force. "
+                f"retire: car ticket-flow retire --run-id {stale_id} --force. "
                 f"use --force-new to suppress."
             )
 
@@ -1073,13 +1073,13 @@ def register_flow_commands(
             f"Stop requested for run: {updated.run_id} (status={updated.status})"
         )
 
-    @ticket_flow_app.command("archive")
-    def ticket_flow_archive(
+    @ticket_flow_app.command("retire")
+    def ticket_flow_retire(
         repo: Optional[Path] = typer.Option(None, "--repo", help="Repo path"),
         hub: Optional[Path] = hub_root_path_option(),
         run_id: Optional[str] = typer.Option(None, "--run-id", help="Flow run ID"),
         force: bool = typer.Option(
-            False, "--force", help="Allow archiving paused/stopping runs"
+            False, "--force", help="Allow retiring paused/stopping runs"
         ),
         force_attestation: Optional[str] = typer.Option(
             None,
@@ -1089,7 +1089,7 @@ def register_flow_commands(
         delete_run: str = typer.Option(
             "true",
             "--delete-run",
-            help="Delete flow run record after archive (true|false)",
+            help="Delete flow run record after retiring (true|false)",
         ),
         no_vacuum: bool = typer.Option(
             False,
@@ -1099,10 +1099,10 @@ def register_flow_commands(
         dry_run: bool = typer.Option(False, "--dry-run", help="Preview only"),
         output_json: bool = typer.Option(False, "--json", help="Emit JSON output"),
     ):
-        """Archive run artifacts and optionally delete the flow run record.
+        """Retire a run by preserving artifacts and clearing active flow state.
 
         Safety:
-        Use `--dry-run` before archiving paused/stopping runs with `--force` or
+        Use `--dry-run` before retiring paused/stopping runs with `--force` or
         deleting run records with `--delete-run true`.
         """
         engine = require_repo_config(repo, hub)
@@ -1132,7 +1132,7 @@ def register_flow_commands(
                 if force:
                     force_attestation_payload = _build_force_attestation(
                         force_attestation,
-                        target_scope=f"flow.ticket_flow.archive:{run_id_str}",
+                        target_scope=f"flow.ticket_flow.retire:{run_id_str}",
                     )
                     validate_force_attestation(force_attestation_payload)
                     archive_kwargs["force_attestation"] = force_attestation_payload
@@ -1146,7 +1146,7 @@ def register_flow_commands(
             typer.echo(json.dumps(summary, indent=2))
             return
         typer.echo(
-            f"Archived run {summary.get('run_id')} status={summary.get('status')} "
+            f"Retired run {summary.get('run_id')} status={summary.get('status')} "
             f"archived_tickets={summary.get('archived_tickets')} "
             f"archived_runs={summary.get('archived_runs')} "
             f"archived_contextspace={summary.get('archived_contextspace')} "

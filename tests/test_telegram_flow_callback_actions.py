@@ -61,7 +61,7 @@ class _FlowServiceStub:
         self.resume_calls: list[str] = []
         self.stop_calls: list[str] = []
         self.reconcile_calls: list[str] = []
-        self.archive_calls: list[dict[str, object]] = []
+        self.retire_calls: list[dict[str, object]] = []
 
     async def resume_flow_run(
         self, run_id: str, *, force: bool = False
@@ -77,10 +77,10 @@ class _FlowServiceStub:
         self.reconcile_calls.append(run_id)
         return SimpleNamespace(run_id=run_id, status="running"), True, False
 
-    def archive_flow_run(
+    def retire_flow_run(
         self, run_id: str, *, force: bool = False, delete_run: bool = True
     ) -> dict[str, object]:
-        self.archive_calls.append(
+        self.retire_calls.append(
             {"run_id": run_id, "force": force, "delete_run": delete_run}
         )
         return {
@@ -239,7 +239,7 @@ async def test_flow_callback_recover_latest_active(
 
 
 @pytest.mark.anyio
-async def test_flow_callback_archive_updates_message_while_archiving(
+async def test_flow_callback_retire_updates_message_while_retiring(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     store = _init_store(tmp_path)
@@ -255,15 +255,15 @@ async def test_flow_callback_archive_updates_message_while_archiving(
     )
 
     handler = _FlowCallbackHandler(tmp_path)
-    await handler._handle_flow_callback(_callback(), FlowCallback(action="archive"))
+    await handler._handle_flow_callback(_callback(), FlowCallback(action="retire"))
 
-    assert flow_service.archive_calls == [
+    assert flow_service.retire_calls == [
         {"run_id": run_id, "force": False, "delete_run": True}
     ]
     assert handler.answers == ["Working..."]
     assert handler.edits == [
         (
-            f"Archiving run `{run_id}`. This can take a few seconds.",
+            f"Retiring run `{run_id}`. This can take a few seconds.",
             {"inline_keyboard": []},
         )
     ]

@@ -274,15 +274,15 @@ class TestBuildModelEffortPicker:
 
 
 class TestBuildFlowStatusButtons:
-    def test_paused_status_has_resume_restart_and_archive(self) -> None:
+    def test_paused_status_has_resume_restart_and_retire(self) -> None:
         rows = build_flow_status_buttons("run-123", "paused")
         assert len(rows) == 2
         resume_row = rows[0]
         assert resume_row["components"][0]["label"] == "Resume"
         assert resume_row["components"][0]["style"] == DISCORD_BUTTON_STYLE_SUCCESS
         assert resume_row["components"][1]["label"] == "Restart"
-        archive_row = rows[1]
-        assert archive_row["components"][0]["label"] == "Archive"
+        retire_row = rows[1]
+        assert retire_row["components"][0]["label"] == "Retire"
 
     def test_running_status_has_stop_and_refresh(self) -> None:
         rows = build_flow_status_buttons("run-123", "running")
@@ -292,13 +292,13 @@ class TestBuildFlowStatusButtons:
         assert buttons[0]["style"] == DISCORD_BUTTON_STYLE_DANGER
         assert buttons[1]["label"] == "Refresh"
 
-    def test_terminal_status_has_restart_archive_and_refresh(self) -> None:
+    def test_terminal_status_has_restart_retire_and_refresh(self) -> None:
         for status in ["completed", "stopped", "failed"]:
             rows = build_flow_status_buttons("run-123", status)
             assert len(rows) == 1
             buttons = rows[0]["components"]
             assert buttons[0]["label"] == "Restart"
-            assert buttons[1]["label"] == "Archive"
+            assert buttons[1]["label"] == "Retire"
             assert buttons[2]["label"] == "Refresh"
 
 

@@ -63,6 +63,27 @@ def _git_stdout(path: Path, *args: str) -> str:
     return (proc.stdout or "").strip()
 
 
+def _force_attestation(
+    target_scope: str, user_request: str = "test forced worktree removal"
+):
+    return {
+        "phrase": FORCE_ATTESTATION_REQUIRED_PHRASE,
+        "user_request": user_request,
+        "target_scope": target_scope,
+    }
+
+
+def _force_delete_worktree(supervisor: HubSupervisor, worktree_repo_id: str):
+    return supervisor.delete_worktree(
+        worktree_repo_id=worktree_repo_id,
+        force=True,
+        force_attestation=_force_attestation(
+            f"hub.worktree.delete:{worktree_repo_id}",
+            "delete worktree without retiring in test",
+        ),
+    )
+
+
 def _commit_file(path: Path, rel: str, content: str, message: str) -> str:
     file_path = path / rel
     file_path.parent.mkdir(parents=True, exist_ok=True)
@@ -2006,7 +2027,7 @@ def test_create_worktree_fails_setup_and_keeps_worktree(tmp_path: Path):
     manifest = load_manifest(hub_root / ".codex-autorunner" / "manifest.yml", hub_root)
     assert manifest.get(worktree_repo_id) is not None
 
-    supervisor.cleanup_worktree(worktree_repo_id=worktree_repo_id, archive=False)
+    _force_delete_worktree(supervisor, worktree_repo_id)
     assert not worktree_path.exists()
 
 
@@ -2099,7 +2120,7 @@ def test_cleanup_worktree_with_archive_rejects_dirty_worktree(tmp_path: Path):
     with pytest.raises(
         ValueError, match="has uncommitted changes; commit or stash before archiving"
     ):
-        supervisor.cleanup_worktree(worktree_repo_id=worktree.id, archive=True)
+        supervisor.retire_worktree(worktree_repo_id=worktree.id)
 
     assert worktree.path.exists()
     manifest = load_manifest(hub_root / ".codex-autorunner" / "manifest.yml", hub_root)
@@ -2127,7 +2148,7 @@ def test_cleanup_worktree_without_archive_allows_dirty_worktree(tmp_path: Path):
     )
     (worktree.path / "DIRTY.txt").write_text("dirty\n", encoding="utf-8")
 
-    supervisor.cleanup_worktree(worktree_repo_id=worktree.id, archive=False)
+    _force_delete_worktree(supervisor, worktree.id)
     assert not worktree.path.exists()
 
 
@@ -2190,7 +2211,7 @@ def test_cleanup_worktree_removes_car_managed_docker_container(
 
     monkeypatch.setattr(WorktreeManager, "_run_docker_command", _fake_run_docker)
 
-    result = supervisor.cleanup_worktree(worktree_repo_id=worktree.id, archive=False)
+    result = _force_delete_worktree(supervisor, worktree.id)
     assert result["status"] == "ok"
     docker_cleanup = result["docker_cleanup"]
     assert isinstance(docker_cleanup, dict)
@@ -2243,7 +2264,7 @@ def test_cleanup_worktree_skips_explicit_docker_container_name(
 
     monkeypatch.setattr(WorktreeManager, "_run_docker_command", _unexpected_run_docker)
 
-    result = supervisor.cleanup_worktree(worktree_repo_id=worktree.id, archive=False)
+    result = _force_delete_worktree(supervisor, worktree.id)
     assert result["status"] == "ok"
     docker_cleanup = result["docker_cleanup"]
     assert isinstance(docker_cleanup, dict)
@@ -2309,7 +2330,7 @@ def test_cleanup_worktree_continues_when_docker_cleanup_errors(
 
     monkeypatch.setattr(WorktreeManager, "_run_docker_command", _fake_run_docker)
 
-    result = supervisor.cleanup_worktree(worktree_repo_id=worktree.id, archive=False)
+    result = _force_delete_worktree(supervisor, worktree.id)
     assert result["status"] == "ok"
     docker_cleanup = result["docker_cleanup"]
     assert isinstance(docker_cleanup, dict)
@@ -2381,8 +2402,12 @@ def test_hub_api_cleanup_worktree_returns_docker_cleanup_status(
     app = create_hub_app(hub_root)
     with TestClient(app) as client:
         resp = client.post(
-            "/hub/worktrees/cleanup",
-            json={"worktree_repo_id": worktree.id, "archive": False},
+            "/hub/worktrees/delete",
+            json={
+                "worktree_repo_id": worktree.id,
+                "force": True,
+                "force_attestation": "delete worktree without retiring in test",
+            },
         )
     assert resp.status_code == 200
     payload = resp.json()
@@ -2408,42 +2433,31 @@ def test_hub_api_cleanup_worktree_forwards_force_attestation(
     app = create_hub_app(hub_root)
     captured: dict[str, object] = {}
 
-    def _fake_cleanup_worktree(
+    def _fake_delete_worktree(
         *,
         worktree_repo_id: str,
         delete_branch: bool = False,
         delete_remote: bool = False,
-        archive: bool = True,
         force: bool = False,
-        force_archive: bool = False,
-        archive_note: Optional[str] = None,
         force_attestation: Optional[dict[str, str]] = None,
-        archive_profile: Optional[str] = None,
     ) -> dict[str, object]:
         captured["worktree_repo_id"] = worktree_repo_id
         captured["delete_branch"] = delete_branch
         captured["delete_remote"] = delete_remote
-        captured["archive"] = archive
         captured["force"] = force
-        captured["force_archive"] = force_archive
-        captured["archive_note"] = archive_note
         captured["force_attestation"] = force_attestation
-        captured["archive_profile"] = archive_profile
         return {"status": "ok"}
 
     monkeypatch.setattr(
-        app.state.hub_supervisor, "cleanup_worktree", _fake_cleanup_worktree
+        app.state.hub_supervisor, "delete_worktree", _fake_delete_worktree
     )
 
     client = TestClient(app)
     resp = client.post(
-        "/hub/worktrees/cleanup",
+        "/hub/worktrees/delete",
         json={
             "worktree_repo_id": "base--feature",
-            "archive": False,
             "force": True,
-            "force_archive": False,
-            "archive_note": "cleanup",
             "force_attestation": "REMOVE base--feature",
         },
     )
@@ -2452,15 +2466,11 @@ def test_hub_api_cleanup_worktree_forwards_force_attestation(
         "worktree_repo_id": "base--feature",
         "delete_branch": False,
         "delete_remote": False,
-        "archive": False,
         "force": True,
-        "force_archive": False,
-        "archive_note": "cleanup",
-        "archive_profile": None,
         "force_attestation": {
             "phrase": FORCE_ATTESTATION_REQUIRED_PHRASE,
             "user_request": "REMOVE base--feature",
-            "target_scope": "hub.worktree.cleanup:base--feature",
+            "target_scope": "hub.worktree.delete:base--feature",
         },
     }
 
@@ -2485,7 +2495,7 @@ def test_cleanup_worktree_allows_pma_only_bound_without_force(tmp_path: Path):
     store = ManagedThreadStore(hub_root)
     created = store.create_thread("codex", worktree.path, repo_id=worktree.id)
 
-    supervisor.cleanup_worktree(worktree_repo_id=worktree.id, archive=True)
+    supervisor.retire_worktree(worktree_repo_id=worktree.id)
     assert not worktree.path.exists()
     thread = store.get_thread(created["managed_thread_id"])
     assert thread is not None
@@ -2528,7 +2538,7 @@ def test_cleanup_worktree_failure_keeps_bound_managed_threads_active(
     monkeypatch.setattr(wtm_module, "run_git", _failing_run_git)
 
     with pytest.raises(ValueError, match="git worktree remove failed:"):
-        supervisor.cleanup_worktree(worktree_repo_id=worktree.id, archive=True)
+        supervisor.retire_worktree(worktree_repo_id=worktree.id)
 
     thread = store.get_thread(created["managed_thread_id"])
     assert thread is not None
@@ -2574,7 +2584,7 @@ def test_cleanup_worktree_removes_leftover_car_state_directory(
         _leave_only_car_state,
     )
 
-    supervisor.cleanup_worktree(worktree_repo_id=worktree.id, archive=False)
+    _force_delete_worktree(supervisor, worktree.id)
 
     assert not worktree.path.exists()
 
@@ -2627,7 +2637,7 @@ def test_cleanup_worktree_removes_leftover_car_state_via_cwd_safe_subprocess(
     )
     monkeypatch.setattr(wtm_module.subprocess, "run", _record_subprocess_run)
 
-    supervisor.cleanup_worktree(worktree_repo_id=worktree.id, archive=False)
+    _force_delete_worktree(supervisor, worktree.id)
 
     assert not worktree.path.exists()
     assert subprocess_cwds == [tempfile.gettempdir()]
@@ -2653,7 +2663,7 @@ def test_cleanup_worktree_refreshes_topology_listing(tmp_path: Path) -> None:
         start_point="HEAD",
     )
 
-    supervisor.cleanup_worktree(worktree_repo_id=worktree.id, archive=False)
+    _force_delete_worktree(supervisor, worktree.id)
 
     refreshed_ids = [snapshot.id for snapshot in supervisor.list_repos(use_cache=False)]
     assert refreshed_ids == [base.id]
@@ -2699,7 +2709,7 @@ def test_cleanup_worktree_archives_managed_threads_before_manifest_removal(
         _record_manifest_state,
     )
 
-    supervisor.cleanup_worktree(worktree_repo_id=worktree.id, archive=False)
+    _force_delete_worktree(supervisor, worktree.id)
 
     assert observed_manifest_entry_during_thread_archive is True
     manifest = load_manifest(manifest_path, hub_root)
@@ -2729,9 +2739,9 @@ def test_archive_worktree_archives_bound_managed_threads(tmp_path: Path):
     workspace_bound = store.create_thread("opencode", worktree.path)
     other = store.create_thread("codex", base.path, repo_id=base.id)
 
-    payload = supervisor.archive_worktree(worktree_repo_id=worktree.id)
+    payload = supervisor.retire_worktree(worktree_repo_id=worktree.id)
 
-    assert payload["status"] in {"complete", "partial"}
+    assert payload["status"] == "ok"
     archived_repo_bound = store.get_thread(repo_bound["managed_thread_id"])
     archived_workspace_bound = store.get_thread(workspace_bound["managed_thread_id"])
     untouched = store.get_thread(other["managed_thread_id"])
@@ -2741,6 +2751,35 @@ def test_archive_worktree_archives_bound_managed_threads(tmp_path: Path):
     assert archived_workspace_bound["lifecycle_status"] == "archived"
     assert untouched is not None
     assert untouched["lifecycle_status"] == "active"
+
+
+def test_retire_worktree_rejects_force_archive_without_force_attestation(
+    tmp_path: Path,
+) -> None:
+    hub_root = tmp_path / "hub"
+    _write_default_hub_config(hub_root)
+
+    supervisor = HubSupervisor(
+        load_hub_config(hub_root),
+        backend_factory_builder=build_agent_backend_factory,
+        app_server_supervisor_factory_builder=build_app_server_supervisor_factory,
+        backend_orchestrator_builder=build_backend_orchestrator,
+    )
+    base = supervisor.create_repo("base")
+    _init_git_repo(base.path)
+    worktree = supervisor.create_worktree(
+        base_repo_id="base",
+        branch="feature/force-archive-guard",
+        start_point="HEAD",
+    )
+
+    with pytest.raises(ValueError, match="--force requires --force-attestation"):
+        supervisor.retire_worktree(
+            worktree_repo_id=worktree.id,
+            force_archive=True,
+        )
+
+    assert worktree.path.exists()
 
 
 def test_cleanup_worktree_allows_mixed_chat_bound_with_force(tmp_path: Path):
@@ -2766,15 +2805,13 @@ def test_cleanup_worktree_allows_mixed_chat_bound_with_force(tmp_path: Path):
         hub_root, channel_id="discord-chan-force", repo_id=worktree.id
     )
 
-    supervisor.cleanup_worktree(
+    supervisor.retire_worktree(
         worktree_repo_id=worktree.id,
-        archive=True,
         force=True,
-        force_attestation={
-            "phrase": FORCE_ATTESTATION_REQUIRED_PHRASE,
-            "user_request": "cleanup mixed chat-bound worktree",
-            "target_scope": f"hub.worktree.cleanup:{worktree.id}",
-        },
+        force_attestation=_force_attestation(
+            f"hub.worktree.retire:{worktree.id}",
+            "retire mixed chat-bound worktree",
+        ),
     )
     assert not worktree.path.exists()
 
@@ -2804,9 +2841,9 @@ def test_cleanup_worktree_rejects_mixed_chat_bound_without_force(tmp_path: Path)
 
     with pytest.raises(
         ValueError,
-        match="Refusing to clean up chat-bound worktree",
+        match="Refusing to retire chat-bound worktree",
     ):
-        supervisor.cleanup_worktree(worktree_repo_id=worktree.id, archive=True)
+        supervisor.retire_worktree(worktree_repo_id=worktree.id)
 
     assert worktree.path.exists()
 
@@ -2842,7 +2879,7 @@ def test_cleanup_worktree_rejects_when_binding_lookup_fails_without_force(
         ValueError,
         match="Unable to verify active chat bindings",
     ):
-        supervisor.cleanup_worktree(worktree_repo_id=worktree.id, archive=True)
+        supervisor.retire_worktree(worktree_repo_id=worktree.id)
 
     assert worktree.path.exists()
 
@@ -2874,15 +2911,13 @@ def test_cleanup_worktree_allows_force_when_binding_lookup_fails(
         supervisor._worktree_manager, "_has_active_chat_binding", _raise_lookup_error
     )
 
-    supervisor.cleanup_worktree(
+    supervisor.retire_worktree(
         worktree_repo_id=worktree.id,
-        archive=True,
         force=True,
-        force_attestation={
-            "phrase": FORCE_ATTESTATION_REQUIRED_PHRASE,
-            "user_request": "cleanup chat-bound worktree",
-            "target_scope": f"hub.worktree.cleanup:{worktree.id}",
-        },
+        force_attestation=_force_attestation(
+            f"hub.worktree.retire:{worktree.id}",
+            "retire chat-bound worktree",
+        ),
     )
     assert not worktree.path.exists()
 
@@ -2909,9 +2944,8 @@ def test_cleanup_worktree_force_requires_attestation(tmp_path: Path):
         ValueError,
         match="--force requires --force-attestation for dangerous actions.",
     ):
-        supervisor.cleanup_worktree(
+        supervisor.retire_worktree(
             worktree_repo_id=worktree.id,
-            archive=True,
             force=True,
         )
 
@@ -2976,9 +3010,9 @@ def test_cleanup_worktree_rejects_discord_bound_worktree_without_force(tmp_path:
 
     with pytest.raises(
         ValueError,
-        match="Refusing to clean up chat-bound worktree",
+        match="Deleting a worktree without retiring it requires --force",
     ):
-        supervisor.cleanup_worktree(worktree_repo_id=worktree.id, archive=False)
+        supervisor.delete_worktree(worktree_repo_id=worktree.id)
 
     assert worktree.path.exists()
 
@@ -3965,17 +3999,6 @@ def test_normalize_pinned_parent_repo_ids_filters() -> None:
         "b",
     ]
     assert hub_module.normalize_pinned_parent_repo_ids([1, 2]) == []
-
-
-def test_runtime_preflight_blocks_enable() -> None:
-    assert hub_module._runtime_preflight_blocks_enable(None) is False
-    assert hub_module._runtime_preflight_blocks_enable({}) is False
-    assert hub_module._runtime_preflight_blocks_enable({"status": "ready"}) is False
-    assert hub_module._runtime_preflight_blocks_enable({"status": "deferred"}) is False
-    assert (
-        hub_module._runtime_preflight_blocks_enable({"status": "incompatible"}) is True
-    )
-    assert hub_module._runtime_preflight_blocks_enable({"status": "error"}) is True
 
 
 def test_git_failure_detail() -> None:

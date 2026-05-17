@@ -2513,12 +2513,10 @@ async def test_message_create_non_pma_injects_filebox_hint_for_outbox_keyword(
         assert captured_prompts
         prompt = captured_prompts[0]
         assert "outbox me" in prompt
-        assert "Artifact delivery target:" in prompt
+        assert "Artifact delivery (this turn):" in prompt
         assert "car artifacts send <file> --to current" in prompt
         assert "channel:channel-1" in prompt
         assert str(inbox_dir(workspace.resolve())) in prompt
-        assert str(outbox_dir(workspace.resolve())) in prompt
-        assert str(outbox_pending_dir(workspace.resolve())) in prompt
     finally:
         await store.close()
 
@@ -2568,9 +2566,8 @@ async def test_message_create_non_pma_injects_filebox_hint_for_inbox_keyword(
         assert captured_prompts
         prompt = captured_prompts[0]
         assert "check inbox" in prompt
+        assert "Artifact delivery (this turn):" in prompt
         assert str(inbox_dir(workspace.resolve())) in prompt
-        assert str(outbox_dir(workspace.resolve())) in prompt
-        assert str(outbox_pending_dir(workspace.resolve())) in prompt
     finally:
         await store.close()
 
@@ -2746,13 +2743,13 @@ async def test_message_create_attachment_only_downloads_to_inbox_and_runs_turn(
         assert captured_prompts
         prompt = captured_prompts[0]
         assert "Inbound Discord attachments:" in prompt
-        assert "Outbox (pending):" in prompt
+        assert "Artifact delivery (this turn):" in prompt
         inbox = inbox_dir(workspace.resolve())
         saved_files = [path for path in inbox.iterdir() if path.is_file()]
         assert len(saved_files) == 1
         assert saved_files[0].read_bytes() == b"attachment-bytes"
         assert str(saved_files[0]) in prompt
-        assert str(outbox_pending_dir(workspace.resolve())) in prompt
+        assert str(inbox) in prompt
         assert len(rest.download_requests) == 1
     finally:
         await store.close()
@@ -3422,7 +3419,7 @@ async def test_message_create_mixed_audio_and_file_attachment_keeps_outbox_hint(
         assert captured_prompts
         prompt = captured_prompts[0]
         assert "Transcript: mixed transcript" in prompt
-        assert "Outbox (pending):" in prompt
+        assert "Artifact delivery (this turn):" in prompt
         assert "voice-note.ogg" in prompt
         assert "report.txt" in prompt
         assert fake_voice.calls

@@ -742,7 +742,7 @@ def apply_pma_hygiene_report(
     report: dict[str, Any],
     *,
     include_needs_confirmation: bool = False,
-    cleanup_worktree: Optional[Callable[[str, bool], dict[str, Any]]] = None,
+    retire_worktree: Optional[Callable[[str, bool], dict[str, Any]]] = None,
 ) -> dict[str, Any]:
     selected_items = _collect_hygiene_apply_items(
         report, include_needs_confirmation=include_needs_confirmation
@@ -814,9 +814,9 @@ def apply_pma_hygiene_report(
                 thread_store.archive_thread(managed_thread_id)
                 ok = True
             elif action == "purge_worktree":
-                if cleanup_worktree is None:
-                    raise RuntimeError("Worktree cleanup callback not configured")
-                cleanup_result = cleanup_worktree(
+                if retire_worktree is None:
+                    raise RuntimeError("Worktree retire callback not configured")
+                cleanup_result = retire_worktree(
                     str(target.get("worktree_repo_id") or ""),
                     bool(target.get("archive_requested")),
                 )
@@ -825,16 +825,16 @@ def apply_pma_hygiene_report(
                     if status in {"error", "failed"}:
                         ok = False
                         msg = str(cleanup_result.get("message") or "").strip()
-                        error = msg or status or "worktree cleanup failed"
+                        error = msg or status or "worktree retire failed"
                     elif status in {"ok", "success", "applied", ""}:
                         ok = True
                     else:
                         ok = False
                         msg = str(cleanup_result.get("message") or "").strip()
-                        error = msg or f"unexpected worktree cleanup status: {status}"
+                        error = msg or f"unexpected worktree retire status: {status}"
                 else:
                     raise ValueError(
-                        "Worktree cleanup callback must return a dict with a status field"
+                        "Worktree retire callback must return a dict with a status field"
                     )
         except (
             Exception

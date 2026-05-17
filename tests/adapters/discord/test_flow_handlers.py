@@ -551,7 +551,7 @@ async def test_flow_status_without_run_id_shows_no_current_run_for_history_only(
 
         assert f"Run: {newest_completed_run_id}" in content
         assert "Status: completed" in content
-        assert "Archive: ready" in content
+        assert "Retire: ready" in content
         picker_rows = [
             row
             for row in components
@@ -796,9 +796,9 @@ async def test_flow_status_with_archived_explicit_run_id_renders_archived_state(
         assert len(rest.interaction_responses) == 1
         assert rest.interaction_responses[0]["payload"]["type"] == 5
         content = _latest_status_message(rest)["content"]
-        assert f"Run {run_id} has already been archived." in content
+        assert f"Run {run_id} has already been retired." in content
         assert "Status: archived" in content
-        assert f"Archive path: .codex-autorunner/archive/runs/{run_id}" in content
+        assert f"Retire path: .codex-autorunner/archive/runs/{run_id}" in content
         assert "not found" not in content
     finally:
         await store.close()
@@ -899,7 +899,7 @@ async def test_flow_status_with_path_traversal_run_id_does_not_render_archived_s
         content = rest.followup_messages[0]["payload"]["content"]
         assert content == f"Ticket_flow run {malicious_run_id} not found."
         assert "Status: archived" not in content
-        assert "Archive path:" not in content
+        assert "Retire path:" not in content
     finally:
         await store.close()
 

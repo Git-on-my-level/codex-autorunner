@@ -356,12 +356,12 @@ class TestResolveWorktreeArchiveIntent:
         assert resolve_worktree_archive_intent(profile="full") == "review_snapshot_full"
 
     def test_portable_cleanup(self) -> None:
-        assert resolve_worktree_archive_intent(cleanup=True) == "cleanup_snapshot"
+        assert resolve_worktree_archive_intent(retire=True) == "retire_snapshot"
 
     def test_full_cleanup(self) -> None:
         assert (
-            resolve_worktree_archive_intent(profile="full", cleanup=True)
-            == "cleanup_snapshot_full"
+            resolve_worktree_archive_intent(profile="full", retire=True)
+            == "retire_snapshot_full"
         )
 
     def test_invalid_profile(self) -> None:

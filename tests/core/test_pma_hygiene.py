@@ -4,6 +4,7 @@ import json
 import os
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from typing import Any
 
 from typer.testing import CliRunner
 
@@ -20,6 +21,7 @@ from codex_autorunner.core.config import (
     load_hub_config,
 )
 from codex_autorunner.core.filebox import ensure_structure, inbox_dir
+from codex_autorunner.core.force_attestation import FORCE_ATTESTATION_REQUIRED_PHRASE
 from codex_autorunner.core.hub import HubSupervisor
 from codex_autorunner.core.managed_thread_store import ManagedThreadStore
 from codex_autorunner.core.orchestration.bindings import OrchestrationBindingStore
@@ -71,7 +73,7 @@ def _write_dispatch(
     return path
 
 
-def _reviewed_thread_cleanup_report(managed_thread_id: str) -> dict[str, object]:
+def _reviewed_thread_retire_report(managed_thread_id: str) -> dict[str, object]:
     return {
         "groups": {
             "safe": [],
@@ -83,7 +85,7 @@ def _reviewed_thread_cleanup_report(managed_thread_id: str) -> dict[str, object]
                     "category": "threads",
                     "label": managed_thread_id,
                     "action": "archive_managed_thread",
-                    "reason": "review-approved cleanup",
+                    "reason": "review-approved retire",
                     "target": {"managed_thread_id": managed_thread_id},
                     "evidence": {"freshness": {"is_stale": True}},
                 }
@@ -274,17 +276,17 @@ def test_apply_pma_hygiene_report_only_removes_safe_items(hub_env) -> None:
     assert automation_store.list_wakeups() == []
 
 
-def test_apply_pma_hygiene_report_can_include_reviewed_thread_cleanup(hub_env) -> None:
+def test_apply_pma_hygiene_report_can_include_reviewed_thread_retire(hub_env) -> None:
     hub_root = hub_env.hub_root
     thread_store = ManagedThreadStore(hub_root)
     thread = thread_store.create_thread(
         "codex",
         hub_env.repo_root,
         repo_id=hub_env.repo_id,
-        name="reviewed-cleanup-thread",
+        name="reviewed-retire-thread",
     )
     managed_thread_id = thread["managed_thread_id"]
-    report = _reviewed_thread_cleanup_report(managed_thread_id)
+    report = _reviewed_thread_retire_report(managed_thread_id)
 
     blocked = apply_pma_hygiene_report(hub_root, report)
     assert blocked["attempted"] == 0
@@ -311,7 +313,7 @@ def test_apply_pma_hygiene_report_revalidates_reviewed_thread_binding(hub_env) -
         name="reviewed-thread-now-bound",
     )
     managed_thread_id = thread["managed_thread_id"]
-    report = _reviewed_thread_cleanup_report(managed_thread_id)
+    report = _reviewed_thread_retire_report(managed_thread_id)
 
     OrchestrationBindingStore(hub_root).upsert_binding(
         surface_kind="github_pr",
@@ -347,7 +349,7 @@ def test_apply_pma_hygiene_report_revalidates_reviewed_thread_busy_state(
         name="reviewed-thread-now-busy",
     )
     managed_thread_id = thread["managed_thread_id"]
-    report = _reviewed_thread_cleanup_report(managed_thread_id)
+    report = _reviewed_thread_retire_report(managed_thread_id)
 
     thread_store.create_turn(managed_thread_id, prompt="still running")
 
@@ -377,7 +379,7 @@ def test_apply_pma_hygiene_report_revalidates_reviewed_thread_lifecycle(
         name="reviewed-thread-now-archived",
     )
     managed_thread_id = thread["managed_thread_id"]
-    report = _reviewed_thread_cleanup_report(managed_thread_id)
+    report = _reviewed_thread_retire_report(managed_thread_id)
 
     thread_store.archive_thread(managed_thread_id)
 
@@ -687,16 +689,16 @@ def test_apply_pma_hygiene_report_purge_worktree_fails_on_error_status_payload(
         }
     }
 
-    def _fake_cleanup(_repo_id: str, _archive: bool) -> dict[str, object]:
-        return {"status": "error", "message": "cleanup refused"}
+    def _fake_retire(_repo_id: str, _archive: bool) -> dict[str, object]:
+        return {"status": "error", "message": "retire refused"}
 
     apply_result = apply_pma_hygiene_report(
-        hub_root, report, cleanup_worktree=_fake_cleanup
+        hub_root, report, retire_worktree=_fake_retire
     )
     assert apply_result["applied"] == 0
     assert apply_result["failed"] == 1
     assert apply_result["results"][0]["status"] == "failed"
-    assert apply_result["results"][0]["error"] == "cleanup refused"
+    assert apply_result["results"][0]["error"] == "retire refused"
 
 
 def test_build_pma_hygiene_report_marks_dirty_stale_worktree_needs_confirmation(
@@ -768,10 +770,80 @@ def test_apply_pma_hygiene_report_purges_safe_worktree_candidate(
     apply_result = apply_pma_hygiene_report(
         hub_root,
         report,
-        cleanup_worktree=lambda repo_id, archive: supervisor.cleanup_worktree(
+        retire_worktree=lambda repo_id, archive: supervisor.retire_worktree(
             worktree_repo_id=repo_id,
-            archive=archive,
         ),
+    )
+
+    assert apply_result["attempted"] == 1
+    assert apply_result["applied"] == 1
+    assert apply_result["failed"] == 0
+    assert not worktree.path.exists()
+    assert (
+        load_manifest(
+            load_hub_config(hub_root).manifest_path,
+            hub_root,
+        ).get(worktree.id)
+        is None
+    )
+    assert thread_store.get_thread(created["managed_thread_id"])[
+        "lifecycle_status"
+    ] == ("archived")
+
+
+def test_apply_pma_hygiene_report_purges_worktree_without_snapshot_when_archive_not_requested(
+    tmp_path: Path,
+) -> None:
+    hub_root = tmp_path / "hub"
+    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    cfg.setdefault("pma", {})["cleanup_require_archive"] = False
+    write_test_config(hub_root / CONFIG_FILENAME, cfg)
+    supervisor = HubSupervisor(
+        load_hub_config(hub_root),
+        backend_factory_builder=build_agent_backend_factory,
+        app_server_supervisor_factory_builder=build_app_server_supervisor_factory,
+        backend_orchestrator_builder=build_backend_orchestrator,
+    )
+    base = supervisor.create_repo("base")
+    _init_git_repo(base.path)
+    worktree = supervisor.create_worktree(
+        base_repo_id="base",
+        branch="feature/purge-no-snapshot",
+        start_point="HEAD",
+    )
+    thread_store = ManagedThreadStore(hub_root)
+    created = thread_store.create_thread(
+        "codex",
+        worktree.path,
+        repo_id=worktree.id,
+        name="stale-worktree-thread",
+    )
+
+    now = datetime.now(timezone.utc)
+    report = build_pma_hygiene_report(
+        hub_root,
+        categories=["threads"],
+        generated_at=_iso(now + timedelta(hours=2)),
+        stale_threshold_seconds=60,
+    )
+
+    def _hygiene_worktree(repo_id: str, archive: bool) -> dict[str, Any]:
+        if archive:
+            return supervisor.retire_worktree(worktree_repo_id=repo_id)
+        return supervisor.delete_worktree(
+            worktree_repo_id=repo_id,
+            force=True,
+            force_attestation={
+                "phrase": FORCE_ATTESTATION_REQUIRED_PHRASE,
+                "user_request": "Apply PMA hygiene automated purge without retire snapshot.",
+                "target_scope": f"hub.pma.hygiene.purge_worktree:{repo_id}",
+            },
+        )
+
+    apply_result = apply_pma_hygiene_report(
+        hub_root,
+        report,
+        retire_worktree=_hygiene_worktree,
     )
 
     assert apply_result["attempted"] == 1

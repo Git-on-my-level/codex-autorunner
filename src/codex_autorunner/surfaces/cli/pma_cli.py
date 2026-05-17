@@ -11,6 +11,7 @@ import typer
 
 from ...core.config import load_hub_config
 from ...core.filebox import BOXES
+from ...core.force_attestation import FORCE_ATTESTATION_REQUIRED_PHRASE
 from ...core.locks import file_lock
 from ...core.pma_hygiene import (
     apply_pma_hygiene_report,
@@ -442,13 +443,25 @@ def pma_hygiene(
     apply_result: Optional[dict[str, Any]] = None
     supervisor = None
 
-    def _cleanup_worktree(worktree_repo_id: str, archive: bool) -> dict[str, Any]:
+    def _retire_worktree(worktree_repo_id: str, archive: bool) -> dict[str, Any]:
         nonlocal supervisor
         if supervisor is None:
             supervisor = build_hub_supervisor(load_hub_config(hub_root))
-        return supervisor.cleanup_worktree(
+        if archive:
+            return supervisor.retire_worktree(
+                worktree_repo_id=worktree_repo_id,
+            )
+        return supervisor.delete_worktree(
             worktree_repo_id=worktree_repo_id,
-            archive=archive,
+            force=True,
+            force_attestation={
+                "phrase": FORCE_ATTESTATION_REQUIRED_PHRASE,
+                "user_request": (
+                    "Apply PMA hygiene automated purge for a candidate that selected "
+                    "no retire snapshot (archive_requested=false)."
+                ),
+                "target_scope": f"hub.pma.hygiene.purge_worktree:{worktree_repo_id}",
+            },
         )
 
     try:
@@ -464,7 +477,7 @@ def pma_hygiene(
                     hub_root,
                     report,
                     include_needs_confirmation=include_needs_confirmation,
-                    cleanup_worktree=_cleanup_worktree,
+                    retire_worktree=_retire_worktree,
                 )
     except ValueError as exc:
         exit_with_error(str(exc), cause=None)

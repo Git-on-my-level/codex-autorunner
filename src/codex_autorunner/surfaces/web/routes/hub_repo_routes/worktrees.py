@@ -10,8 +10,8 @@ from fastapi import HTTPException
 if TYPE_CHECKING:
     from ...app_state import HubAppContext
     from ...schemas import (
-        HubCleanupWorktreeRequest,
         HubCreateWorktreeRequest,
+        HubRetireWorktreeRequest,
     )
     from .mount_manager import HubMountManager
     from .services import HubRepoEnricher
@@ -90,12 +90,11 @@ class HubWorktreeService:
 
         return get_request_id()
 
-    async def cleanup_worktree(
+    async def retire_worktree(
         self,
         worktree_repo_id: str,
         delete_branch: bool,
         delete_remote: bool,
-        archive: bool,
         force: bool,
         force_attestation: Optional[str],
         force_archive: bool,
@@ -107,12 +106,11 @@ class HubWorktreeService:
         safe_log(
             self._context.logger,
             logging.INFO,
-            "Hub cleanup worktree id=%s delete_branch=%s delete_remote=%s archive=%s force=%s force_archive=%s force_attestation=%s"
+            "Hub retire worktree id=%s delete_branch=%s delete_remote=%s force=%s force_archive=%s force_attestation=%s"
             % (
                 worktree_repo_id,
                 delete_branch,
                 delete_remote,
-                archive,
                 force,
                 force_archive,
                 bool(force_attestation),
@@ -120,16 +118,15 @@ class HubWorktreeService:
         )
         try:
             result = await asyncio.to_thread(
-                self._context.supervisor.cleanup_worktree,
+                self._context.supervisor.retire_worktree,
                 worktree_repo_id=str(worktree_repo_id),
                 delete_branch=delete_branch,
                 delete_remote=delete_remote,
-                archive=archive,
                 force=force,
                 force_attestation=(
                     self._build_force_attestation_payload(
                         force_attestation,
-                        target_scope=f"hub.worktree.cleanup:{worktree_repo_id}",
+                        target_scope=f"hub.worktree.retire:{worktree_repo_id}",
                     )
                     if force_attestation is not None
                     else None
@@ -145,20 +142,19 @@ class HubWorktreeService:
             return result
         return {"status": "ok"}
 
-    async def cleanup_worktree_job(
-        self, payload: HubCleanupWorktreeRequest
+    async def retire_worktree_job(
+        self, payload: HubRetireWorktreeRequest
     ) -> dict[str, Any]:
-        def _run_cleanup_worktree():
-            result = self._context.supervisor.cleanup_worktree(
+        def _run_retire_worktree():
+            result = self._context.supervisor.retire_worktree(
                 worktree_repo_id=str(payload.worktree_repo_id),
                 delete_branch=payload.delete_branch,
                 delete_remote=payload.delete_remote,
-                archive=payload.archive,
                 force=payload.force,
                 force_attestation=(
                     self._build_force_attestation_payload(
                         payload.force_attestation,
-                        target_scope=f"hub.worktree.cleanup:{payload.worktree_repo_id}",
+                        target_scope=f"hub.worktree.retire:{payload.worktree_repo_id}",
                     )
                     if payload.force_attestation is not None
                     else None
@@ -173,31 +169,43 @@ class HubWorktreeService:
             return {"status": "ok"}
 
         job = await self._context.job_manager.submit(
-            "hub.cleanup_worktree",
-            _run_cleanup_worktree,
+            "hub.retire_worktree",
+            _run_retire_worktree,
             request_id=self._get_request_id(),
         )
         return job.to_dict()
 
-    async def archive_worktree(
+    async def delete_worktree(
         self,
         worktree_repo_id: str,
-        archive_note: Optional[str],
-        archive_profile: Optional[str],
+        delete_branch: bool,
+        delete_remote: bool,
+        force: bool,
+        force_attestation: Optional[str],
     ) -> dict[str, Any]:
         from .....core.logging_utils import safe_log
 
         safe_log(
             self._context.logger,
             logging.INFO,
-            "Hub archive worktree id=%s" % (worktree_repo_id,),
+            "Hub delete worktree id=%s force=%s force_attestation=%s"
+            % (worktree_repo_id, force, bool(force_attestation)),
         )
         try:
             result = await asyncio.to_thread(
-                self._context.supervisor.archive_worktree,
+                self._context.supervisor.delete_worktree,
                 worktree_repo_id=str(worktree_repo_id),
-                archive_note=archive_note,
-                archive_profile=archive_profile,
+                delete_branch=delete_branch,
+                delete_remote=delete_remote,
+                force=force,
+                force_attestation=(
+                    self._build_force_attestation_payload(
+                        force_attestation,
+                        target_scope=f"hub.worktree.delete:{worktree_repo_id}",
+                    )
+                    if force_attestation is not None
+                    else None
+                ),
             )
         except (RuntimeError, OSError, ValueError, TypeError, KeyError) as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc

@@ -1501,7 +1501,7 @@ def _ticket_flow_recommended_actions(
     recovery_state: Optional[str] = None,
 ) -> list[str]:
     quoted_repo = shlex.quote(str(repo_root))
-    archive_cmd = f"car ticket-flow archive --repo {quoted_repo} --run-id {run_id}"
+    retire_cmd = f"car ticket-flow retire --repo {quoted_repo} --run-id {run_id}"
     status_cmd = f"car ticket-flow status --repo {quoted_repo} --run-id {run_id}"
     resume_cmd = f"car ticket-flow start --repo {quoted_repo}"
     start_cmd = f"car ticket-flow start --repo {quoted_repo}"
@@ -1514,7 +1514,7 @@ def _ticket_flow_recommended_actions(
     if state == "completed":
         return [start_cmd]
     if record_status in {FlowRunStatus.FAILED, FlowRunStatus.STOPPED}:
-        return [archive_cmd, status_cmd]
+        return [retire_cmd, status_cmd]
     if state == "dead":
         return [f"{resume_cmd} --force-new", status_cmd, stop_cmd]
     if state == "stale_alive":

@@ -1005,11 +1005,11 @@ def hub_worktree_doctor_checks(hub_config: HubConfig) -> list[DoctorCheck]:
                     f"{len(orphans)} worktree(s) exist under {worktrees_root} "
                     "but are not in the hub manifest. "
                     "Orphaned worktrees are not auto-deleted per PMA policy; "
-                    "use explicit cleanup commands to remove them."
+                    "use explicit retire or delete commands to remove them."
                 ),
                 severity="warning",
                 fix=f"Run: car hub scan --path {hub_config.root} to register them, "
-                "or use: car hub worktree cleanup <repo_id> --archive to archive and remove.",
+                "or use: car hub worktree retire <repo_id> to preserve artifacts and remove.",
             )
         )
     else:

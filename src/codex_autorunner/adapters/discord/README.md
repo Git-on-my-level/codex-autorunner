@@ -64,7 +64,7 @@ Use `/flow ...` for ticket flow actions:
 - `/flow resume [run_id]`
 - `/flow stop [run_id]`
 - `/flow recover [run_id]`
-- `/flow archive [run_id]`
+- `/flow retire [run_id]`
 - `/flow reply text:<message> [run_id]`
 
 In PMA mode (or when unbound), `/flow status` and `/flow runs` default to a hub-wide overview.

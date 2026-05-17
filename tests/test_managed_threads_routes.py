@@ -584,14 +584,14 @@ def test_create_pr_managed_thread_fails_when_worktree_provisioning_fails(
     assert "Unable to provision PR worktree" in resp.json()["detail"]
 
 
-def test_create_managed_thread_failure_cleanup_worktree_uses_archive(
+def test_create_managed_thread_failure_retire_worktree_uses_archive(
     hub_env, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Rollback cleanup must satisfy PMA cleanup policy (archive) and must not use force without attestation."""
+    """Rollback retire must satisfy PMA retire policy (retire) and must not use force without attestation."""
     app = create_hub_app(hub_env.hub_root)
     fresh_worktree_root = hub_env.hub_root / "worktrees" / "repo--pma-fresh"
     fresh_worktree_root.mkdir(parents=True, exist_ok=True)
-    cleanup_calls: list[dict[str, object]] = []
+    retire_calls: list[dict[str, object]] = []
 
     def _fake_create_worktree(
         *, base_repo_id: str, branch: str, force: bool = False, start_point=None
@@ -603,10 +603,10 @@ def test_create_managed_thread_failure_cleanup_worktree_uses_archive(
             kind="worktree",
         )
 
-    def _fake_cleanup_worktree(
+    def _fake_retire_worktree(
         worktree_repo_id: str, **kwargs: object
     ) -> dict[str, object]:
-        cleanup_calls.append({"worktree_repo_id": worktree_repo_id, **kwargs})
+        retire_calls.append({"worktree_repo_id": worktree_repo_id, **kwargs})
         return {"status": "ok"}
 
     class _BrokenOrchestration:
@@ -617,7 +617,7 @@ def test_create_managed_thread_failure_cleanup_worktree_uses_archive(
         app.state.hub_supervisor, "create_worktree", _fake_create_worktree
     )
     monkeypatch.setattr(
-        app.state.hub_supervisor, "cleanup_worktree", _fake_cleanup_worktree
+        app.state.hub_supervisor, "retire_worktree", _fake_retire_worktree
     )
     monkeypatch.setattr(
         managed_threads,
@@ -632,11 +632,10 @@ def test_create_managed_thread_failure_cleanup_worktree_uses_archive(
         )
 
     assert resp.status_code == 400
-    assert len(cleanup_calls) == 1
-    call = cleanup_calls[0]
+    assert len(retire_calls) == 1
+    call = retire_calls[0]
     assert call["worktree_repo_id"] == "repo--pma-fresh"
     assert call.get("delete_branch") is True
-    assert call.get("archive") is True
     assert call.get("force") is not True
 
 
@@ -1181,7 +1180,7 @@ def test_managed_thread_routes_expose_chat_binding_metadata(hub_env) -> None:
         created = create_resp.json()["thread"]
         thread_id = created["managed_thread_id"]
         assert created["chat_bound"] is False
-        assert created["cleanup_protected"] is False
+        assert created["retire_protected"] is False
 
         OrchestrationBindingStore(hub_env.hub_root).upsert_binding(
             surface_kind="telegram",
@@ -1214,7 +1213,7 @@ def test_managed_thread_routes_expose_chat_binding_metadata(hub_env) -> None:
     assert fetched["binding_kinds"] == ["telegram"]
     assert fetched["binding_ids"] == ["telegram:-1001:root"]
     assert fetched["chat_display_names"] == ["CAR Workspace / Hermes"]
-    assert fetched["cleanup_protected"] is True
+    assert fetched["retire_protected"] is True
 
     listed = next(
         item
@@ -1224,7 +1223,7 @@ def test_managed_thread_routes_expose_chat_binding_metadata(hub_env) -> None:
     assert listed["chat_bound"] is True
     assert listed["binding_kind"] == "telegram"
     assert listed["chat_display_name"] == "CAR Workspace / Hermes"
-    assert listed["cleanup_protected"] is True
+    assert listed["retire_protected"] is True
     assert fetched["repo_id"] == hub_env.repo_id
     assert fetched["resource_kind"] == "repo"
     assert fetched["resource_id"] == hub_env.repo_id
@@ -1258,7 +1257,7 @@ def test_create_managed_thread_succeeds_when_binding_metadata_lookup_fails(
     assert thread["chat_bound"] is False
     assert thread["binding_kind"] is None
     assert thread["binding_count"] == 0
-    assert thread["cleanup_protected"] is False
+    assert thread["retire_protected"] is False
     assert thread["operator_status"] == "idle"
     assert thread["is_reusable"] is True
 

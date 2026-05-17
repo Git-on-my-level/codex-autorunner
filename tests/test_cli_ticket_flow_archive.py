@@ -171,7 +171,7 @@ def test_ticket_flow_archive_moves_run_artifacts_and_deletes_run(
         app,
         [
             "ticket-flow",
-            "archive",
+            "retire",
             "--repo",
             str(repo_root),
             "--run-id",
@@ -349,7 +349,7 @@ def test_ticket_flow_archive_also_archives_ticket_flow_managed_threads(
         app,
         [
             "ticket-flow",
-            "archive",
+            "retire",
             "--repo",
             str(repo_root),
             "--run-id",
@@ -445,7 +445,7 @@ def test_ticket_flow_archive_tolerates_pma_archive_failures(
         app,
         [
             "ticket-flow",
-            "archive",
+            "retire",
             "--repo",
             str(repo_root),
             "--run-id",
@@ -706,7 +706,7 @@ def test_ticket_flow_archive_no_vacuum_still_checkpoints(
         app,
         [
             "ticket-flow",
-            "archive",
+            "retire",
             "--repo",
             str(repo_root),
             "--run-id",
@@ -815,7 +815,7 @@ def test_ticket_flow_archive_dry_run_does_not_modify(tmp_path: Path) -> None:
         app,
         [
             "ticket-flow",
-            "archive",
+            "retire",
             "--repo",
             str(repo_root),
             "--run-id",
@@ -843,7 +843,7 @@ def test_ticket_flow_archive_force_requires_attestation(tmp_path: Path) -> None:
         app,
         [
             "ticket-flow",
-            "archive",
+            "retire",
             "--repo",
             str(repo_root),
             "--run-id",
@@ -869,7 +869,7 @@ def test_ticket_flow_archive_force_with_attestation_succeeds(tmp_path: Path) -> 
         app,
         [
             "ticket-flow",
-            "archive",
+            "retire",
             "--repo",
             str(repo_root),
             "--run-id",
@@ -894,7 +894,7 @@ def test_ticket_flow_archive_missing_repo_shows_repo_hint(tmp_path: Path) -> Non
             app,
             [
                 "ticket-flow",
-                "archive",
+                "retire",
                 "--run-id",
                 "ffffffff-ffff-ffff-ffff-ffffffffffff",
             ],
@@ -921,7 +921,7 @@ def test_ticket_flow_archive_alias_inherits_force_attestation(tmp_path: Path) ->
         app,
         [
             "ticket-flow",
-            "archive",
+            "retire",
             "--repo",
             str(repo_root),
             "--run-id",

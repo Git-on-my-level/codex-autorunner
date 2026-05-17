@@ -34,7 +34,7 @@ def test_ticket_flow_action_manifest_route_shape(tmp_path: Path, monkeypatch) ->
     )
     monkeypatch.setattr(
         flow_routes,
-        "resolve_ticket_flow_archive_mode",
+        "resolve_ticket_flow_retire_mode",
         lambda _record: "blocked",
     )
 

@@ -3,7 +3,7 @@
 ## Overview
 When a hub-managed worktree is cleaned up, CAR snapshots the worktree's
 `.codex-autorunner/` artifacts into the base repo. The default cleanup archive
-is a cleanup snapshot: tickets, contextspace docs, runs/dispatch history, flow
+is a retire snapshot: tickets, contextspace docs, runs/dispatch history, flow
 artifacts, the live `flows.db`, GitHub issue/PR context, and lightweight
 metadata stay available for later review in the Archive UI without copying the
 full runtime state unless you opt into a full archive profile.
@@ -21,13 +21,13 @@ CAR archive behavior is now modeled by explicit intents instead of profile
 exceptions:
 
 - `review_snapshot`: non-destructive snapshot for manual review
-- `cleanup_snapshot`: destructive worktree-cleanup snapshot that always keeps
+- `retire_snapshot`: destructive worktree-retire snapshot that always keeps
   reviewable flow state, including `flows.db`
 - `reset_car_state`: destructive CAR-state archive that preserves every CAR
   path it is about to reset
 
 The configured `portable` vs `full` profile only chooses how much additional
-runtime-only state a review or cleanup snapshot keeps. It no longer decides
+runtime-only state a review or retire snapshot keeps. It no longer decides
 whether destructive flows preserve required review artifacts.
 
 ## Storage layout
@@ -55,9 +55,9 @@ out of archive listings and retention pruning.
 
 ## Cleanup behavior
 - Worktree cleanup archives by default (`archive=true`).
-- Cleanup snapshots use the `portable` archive profile by default. Set
+- Retire snapshots use the `portable` archive profile by default. Set
   `pma.worktree_archive_profile: full` when you intentionally want a forensic
-  cleanup snapshot that also copies runner state and logs in addition to the
+  retire snapshot that also copies runner state and logs in addition to the
   default reviewable flow state.
 - If archiving fails, cleanup stops unless `force_archive=true` is passed.
   Use force only when you accept losing the archive for that worktree.

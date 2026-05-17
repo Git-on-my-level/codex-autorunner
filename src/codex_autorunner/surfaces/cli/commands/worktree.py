@@ -18,8 +18,7 @@ def _worktree_recommended_actions(
     if hub_path is not None:
         hub_suffix = f" --path {shlex.quote(str(hub_path))}"
     return [
-        f"car hub worktree archive {worktree_repo_id}{hub_suffix}",
-        f"car hub worktree cleanup {worktree_repo_id}{hub_suffix}",
+        f"car hub worktree retire {worktree_repo_id}{hub_suffix}",
         f"car hub destination show {worktree_repo_id}{hub_suffix}",
     ]
 
@@ -166,9 +165,9 @@ def register_worktree_commands(
                 + (f" cmd={cmd}" if cmd else "")
             )
 
-    @worktree_app.command("cleanup")
-    def hub_worktree_cleanup(
-        worktree_repo_id: str = typer.Argument(..., help="Worktree repo id to remove"),
+    @worktree_app.command("retire")
+    def hub_worktree_retire(
+        worktree_repo_id: str = typer.Argument(..., help="Worktree repo id to retire"),
         hub: Optional[Path] = hub_root_path_option(),
         delete_branch: bool = typer.Option(
             False, "--delete-branch", help="Delete the local branch"
@@ -176,18 +175,15 @@ def register_worktree_commands(
         delete_remote: bool = typer.Option(
             False, "--delete-remote", help="Delete the remote branch"
         ),
-        archive: bool = typer.Option(
-            True,
-            "--archive/--no-archive",
-            help="Archive worktree snapshot before cleanup (required by PMA policy)",
-        ),
         force_archive: bool = typer.Option(
-            False, "--force-archive", help="Continue cleanup if archive fails"
+            False,
+            "--force-archive",
+            help="Continue retire if artifact preservation fails",
         ),
         force: bool = typer.Option(
             False,
             "--force",
-            help="Allow cleanup of a worktree bound to an active chat thread",
+            help="Allow retire of a worktree bound to an active chat thread",
         ),
         force_attestation: Optional[str] = typer.Option(
             None,
@@ -200,14 +196,13 @@ def register_worktree_commands(
         archive_profile: Optional[str] = typer.Option(
             None,
             "--archive-profile",
-            help="Override the configured archive profile for the cleanup snapshot (portable or full).",
+            help="Override the configured archive profile for the retire snapshot (portable or full).",
         ),
     ):
-        """Cleanup a worktree repo and optionally delete branches.
+        """Retire a worktree repo and optionally delete branches.
 
         Safety:
-        This removes the worktree from disk. Keep archive enabled unless you are
-        intentionally discarding artifacts.
+        This preserves CAR artifacts, then removes the worktree from disk.
         """
         config = require_hub_config(hub)
         supervisor = build_supervisor(config)
@@ -216,14 +211,13 @@ def register_worktree_commands(
             if force or force_archive:
                 force_attestation_payload = _build_force_attestation(
                     force_attestation,
-                    target_scope=f"hub.worktree.cleanup:{worktree_repo_id}",
+                    target_scope=f"hub.worktree.retire:{worktree_repo_id}",
                 )
             if force_attestation_payload is not None:
-                result = supervisor.cleanup_worktree(
+                result = supervisor.retire_worktree(
                     worktree_repo_id=worktree_repo_id,
                     delete_branch=delete_branch,
                     delete_remote=delete_remote,
-                    archive=archive,
                     force_archive=force_archive,
                     archive_note=archive_note,
                     force=force,
@@ -231,11 +225,10 @@ def register_worktree_commands(
                     archive_profile=archive_profile,
                 )
             else:
-                result = supervisor.cleanup_worktree(
+                result = supervisor.retire_worktree(
                     worktree_repo_id=worktree_repo_id,
                     delete_branch=delete_branch,
                     delete_remote=delete_remote,
-                    archive=archive,
                     force_archive=force_archive,
                     archive_note=archive_note,
                     force=force,
@@ -245,9 +238,11 @@ def register_worktree_commands(
             raise_exit(str(exc), cause=exc)
         _emit_cleanup_status(result)
 
-    @worktree_app.command("archive")
-    def hub_worktree_archive(
-        worktree_repo_id: str = typer.Argument(..., help="Worktree repo id to archive"),
+    @worktree_app.command("delete")
+    def hub_worktree_delete(
+        worktree_repo_id: str = typer.Argument(
+            ..., help="Worktree repo id to delete without retiring"
+        ),
         hub: Optional[Path] = hub_root_path_option(),
         delete_branch: bool = typer.Option(
             False, "--delete-branch", help="Delete the local branch"
@@ -255,65 +250,45 @@ def register_worktree_commands(
         delete_remote: bool = typer.Option(
             False, "--delete-remote", help="Delete the remote branch"
         ),
-        force_archive: bool = typer.Option(
-            False, "--force-archive", help="Continue cleanup if archive fails"
-        ),
         force: bool = typer.Option(
             False,
             "--force",
-            help="Allow archive+cleanup of a worktree bound to an active chat thread",
+            help="Required: delete the worktree without preserving artifacts",
         ),
         force_attestation: Optional[str] = typer.Option(
             None,
             "--force-attestation",
             help="Attestation text required with --force/--force-archive for dangerous actions.",
         ),
-        archive_note: Optional[str] = typer.Option(
-            None, "--archive-note", help="Optional archive note"
-        ),
-        archive_profile: Optional[str] = typer.Option(
-            None,
-            "--archive-profile",
-            help="Override the configured archive profile for the cleanup snapshot (portable or full).",
-        ),
     ):
-        """Archive and cleanup a worktree (canonical lifecycle command).
+        """Delete a worktree without retiring it.
 
         Safety:
-        This removes the worktree after archiving. Use `--force` only when the
-        worktree is intentionally bound to an active chat thread.
+        This discards CAR artifacts. Prefer `retire` for normal lifecycle completion.
         """
         config = require_hub_config(hub)
         supervisor = build_supervisor(config)
         try:
             force_attestation_payload: Optional[dict[str, str]] = None
-            if force or force_archive:
+            if force:
                 force_attestation_payload = _build_force_attestation(
                     force_attestation,
-                    target_scope=f"hub.worktree.archive:{worktree_repo_id}",
+                    target_scope=f"hub.worktree.delete:{worktree_repo_id}",
                 )
             if force_attestation_payload is not None:
-                result = supervisor.cleanup_worktree(
+                result = supervisor.delete_worktree(
                     worktree_repo_id=worktree_repo_id,
                     delete_branch=delete_branch,
                     delete_remote=delete_remote,
-                    archive=True,
-                    force_archive=force_archive,
-                    archive_note=archive_note,
                     force=force,
                     force_attestation=force_attestation_payload,
-                    archive_profile=archive_profile,
                 )
             else:
-                result = supervisor.cleanup_worktree(
+                result = supervisor.delete_worktree(
                     worktree_repo_id=worktree_repo_id,
                     delete_branch=delete_branch,
                     delete_remote=delete_remote,
-                    archive=True,
-                    force_archive=force_archive,
-                    archive_note=archive_note,
                     force=force,
-                    archive_profile=archive_profile,
                 )
         except (RuntimeError, OSError, ValueError) as exc:
             raise_exit(str(exc), cause=exc)

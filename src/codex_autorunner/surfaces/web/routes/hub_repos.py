@@ -11,13 +11,13 @@ from ..app_state import HubAppContext
 from ..schemas import (
     HubArchiveRepoStateRequest,
     HubArchiveRepoStateResponse,
-    HubArchiveWorktreeRequest,
-    HubArchiveWorktreeResponse,
+    HubArchiveWorktreeStateRequest,
     HubArchiveWorktreeStateResponse,
-    HubCleanupWorktreeRequest,
     HubCreateWorktreeRequest,
+    HubDeleteWorktreeRequest,
     HubDestinationSetRequest,
     HubJobResponse,
+    HubRetireWorktreeRequest,
     RunControlRequest,
 )
 from .hub_repo_routes import (
@@ -117,13 +117,12 @@ def build_hub_repo_routes(
     async def create_worktree_job(payload: HubCreateWorktreeRequest):
         return await worktree.create_worktree_job(payload)
 
-    @router.post("/hub/worktrees/cleanup")
-    async def cleanup_worktree(payload: HubCleanupWorktreeRequest):
-        return await worktree.cleanup_worktree(
+    @router.post("/hub/worktrees/retire")
+    async def retire_worktree(payload: HubRetireWorktreeRequest):
+        return await worktree.retire_worktree(
             worktree_repo_id=payload.worktree_repo_id,
             delete_branch=payload.delete_branch,
             delete_remote=payload.delete_remote,
-            archive=payload.archive,
             force=payload.force,
             force_attestation=payload.force_attestation,
             force_archive=payload.force_archive,
@@ -131,23 +130,25 @@ def build_hub_repo_routes(
             archive_profile=payload.archive_profile,
         )
 
-    @router.post("/hub/jobs/worktrees/cleanup", response_model=HubJobResponse)
-    async def cleanup_worktree_job(payload: HubCleanupWorktreeRequest):
-        return await worktree.cleanup_worktree_job(payload)
+    @router.post("/hub/jobs/worktrees/retire", response_model=HubJobResponse)
+    async def retire_worktree_job(payload: HubRetireWorktreeRequest):
+        return await worktree.retire_worktree_job(payload)
 
-    @router.post("/hub/worktrees/archive", response_model=HubArchiveWorktreeResponse)
-    async def archive_worktree(payload: HubArchiveWorktreeRequest):
-        return await worktree.archive_worktree(
+    @router.post("/hub/worktrees/delete")
+    async def delete_worktree(payload: HubDeleteWorktreeRequest):
+        return await worktree.delete_worktree(
             worktree_repo_id=payload.worktree_repo_id,
-            archive_note=payload.archive_note,
-            archive_profile=payload.archive_profile,
+            delete_branch=payload.delete_branch,
+            delete_remote=payload.delete_remote,
+            force=payload.force,
+            force_attestation=payload.force_attestation,
         )
 
     @router.post(
         "/hub/worktrees/archive-state",
         response_model=HubArchiveWorktreeStateResponse,
     )
-    async def archive_worktree_state(payload: HubArchiveWorktreeRequest):
+    async def archive_worktree_state(payload: HubArchiveWorktreeStateRequest):
         return await worktree.archive_worktree_state(
             worktree_repo_id=payload.worktree_repo_id,
             archive_note=payload.archive_note,

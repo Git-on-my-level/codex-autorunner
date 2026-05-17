@@ -42,7 +42,7 @@ Command reference:
 - `/flow stop [run_id]`
 - `/flow recover [run_id]`
 - `/flow restart`
-- `/flow archive [run_id] [--force]`
+- `/flow retire [run_id] [--force]`
 - `/flow reply <message>`
 
 Aliases:

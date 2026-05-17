@@ -329,7 +329,7 @@ In an allowed Discord channel:
    - `/flow resume [run_id]`
    - `/flow stop [run_id]`
    - `/flow recover [run_id]`
-   - `/flow archive [run_id]`
+   - `/flow retire [run_id]`
    - `/flow reply text:<message> [run_id]`
 4. In PMA mode (or unbound channel), `/flow status` and `/flow runs` show a hub-wide flow overview.
 

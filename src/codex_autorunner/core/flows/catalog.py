@@ -42,8 +42,8 @@ FLOW_ACTION_SPECS: tuple[FlowActionSpec, ...] = (
         requires_run_picker=True,
     ),
     FlowActionSpec(
-        "archive",
-        "Archive a flow",
+        "retire",
+        "Retire a flow",
         "[run_id]",
         requires_run_picker=True,
     ),
