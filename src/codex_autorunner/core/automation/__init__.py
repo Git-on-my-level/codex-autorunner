@@ -1,3 +1,12 @@
+from .builtins import (
+    BUILTIN_PMA_REACTIVE_RULE_ID,
+    PMA_SUBSCRIPTION_RULE_PREFIX,
+    PMA_TIMER_RULE_PREFIX,
+    PMA_TIMER_SCHEDULE_PREFIX,
+    ensure_builtin_pma_reactive_rule,
+    mirror_pma_subscription_rule,
+    mirror_pma_timer_schedule,
+)
 from .engine import AutomationRuleEngine, RuleEvaluationResult, render_template
 from .models import (
     AUTOMATION_EVENT_TYPES,
@@ -38,6 +47,10 @@ from .worker import (
 
 __all__ = [
     "AUTOMATION_EVENT_TYPES",
+    "BUILTIN_PMA_REACTIVE_RULE_ID",
+    "PMA_SUBSCRIPTION_RULE_PREFIX",
+    "PMA_TIMER_RULE_PREFIX",
+    "PMA_TIMER_SCHEDULE_PREFIX",
     "AutomationExecutor",
     "AutomationExecutorRegistry",
     "AutomationExecutorResult",
@@ -67,6 +80,9 @@ __all__ = [
     "TRIGGER_KINDS",
     "WorkerProcessResult",
     "calculate_next_fire_at",
+    "ensure_builtin_pma_reactive_rule",
+    "mirror_pma_subscription_rule",
+    "mirror_pma_timer_schedule",
     "render_template",
     "validate_job_transition",
     "validate_policy",

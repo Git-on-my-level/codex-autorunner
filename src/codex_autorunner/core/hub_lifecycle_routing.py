@@ -1,25 +1,20 @@
 from __future__ import annotations
 
-import json
 import logging
 import sqlite3
 from typing import Any, Callable, List, Optional
 
-from .automation import AutomationEvent, AutomationRuleEngine
+from .automation import AutomationEvent, AutomationRuleEngine, RuleEvaluationResult
 from .config import HubConfig
 from .hub_topology import RepoSnapshot
 from .lifecycle_events import LifecycleEvent, LifecycleEventStore, LifecycleEventType
-from .pma_automation_store import PmaAutomationStore
 from .pma_dispatch_interceptor import PmaDispatchInterceptor
-from .pma_queue import PmaQueue
-from .pma_reactive import PmaReactiveStore
-from .pma_safety import PmaSafetyChecker
 from .state import now_iso
 
 
 class LifecycleEventRouter:
-    """Owns lifecycle event routing policy: dispatch interception, reactive
-    gating, automation wakeup enqueueing, and lifecycle-event acknowledgement.
+    """Owns lifecycle event routing policy: dispatch interception, normalized
+    automation event recording, and lifecycle-event acknowledgement.
 
     ``HubSupervisor`` wires this router with injected callbacks so that routing
     decisions are independently testable without a full hub stack.
@@ -31,8 +26,6 @@ class LifecycleEventRouter:
         hub_config: HubConfig,
         lifecycle_store: LifecycleEventStore,
         list_repos_fn: Callable[[], List[RepoSnapshot]],
-        ensure_pma_automation_store_fn: Callable[[], PmaAutomationStore],
-        ensure_pma_safety_checker_fn: Callable[[], PmaSafetyChecker],
         run_coroutine_fn: Callable[[Any], Any],
         automation_rule_engine: Optional[AutomationRuleEngine] = None,
         logger: Optional[logging.Logger] = None,
@@ -40,8 +33,6 @@ class LifecycleEventRouter:
         self._hub_config = hub_config
         self._lifecycle_store = lifecycle_store
         self._list_repos_fn = list_repos_fn
-        self._ensure_pma_automation_store_fn = ensure_pma_automation_store_fn
-        self._ensure_pma_safety_checker_fn = ensure_pma_safety_checker_fn
         self._run_coroutine_fn = run_coroutine_fn
         self._automation_rule_engine = automation_rule_engine
         self._logger = logger or logging.getLogger("codex_autorunner.hub")
@@ -56,23 +47,6 @@ class LifecycleEventRouter:
 
         decision = "skip"
         processed = False
-        automation_wakeups = 0
-        try:
-            self._record_automation_event(event)
-        except (sqlite3.Error, OSError, ValueError, TypeError, RuntimeError):
-            self._logger.exception(
-                "Failed to record lifecycle automation event %s",
-                event.event_id,
-            )
-        try:
-            automation_wakeups = self._enqueue_automation_wakeups(event)
-        except (sqlite3.Error, OSError, ValueError, TypeError, RuntimeError):
-            self._logger.exception(
-                "Failed to enqueue lifecycle automation wake-ups for event %s",
-                event.event_id,
-            )
-            automation_wakeups = 0
-
         if event.event_type == LifecycleEventType.DISPATCH_CREATED:
             if not self._hub_config.pma.enabled:
                 decision = "pma_disabled"
@@ -106,25 +80,17 @@ class LifecycleEventRouter:
                         decision = "dispatch_ignored"
                         processed = True
                     else:
-                        allowed, gate_reason = self.check_reactive_gate(event)
-                        if not allowed:
-                            decision = gate_reason
-                            processed = True
-                        else:
-                            decision = "dispatch_escalated"
-                            processed = self._enqueue_pma_for_event(
-                                event, reason="dispatch_escalated"
-                            )
-                else:
-                    allowed, gate_reason = self.check_reactive_gate(event)
-                    if not allowed:
-                        decision = gate_reason
-                        processed = True
-                    else:
-                        decision = "dispatch_enqueued"
-                        processed = self._enqueue_pma_for_event(
-                            event, reason="dispatch_created"
+                        evaluation = self._record_automation_event(event)
+                        decision = self._automation_decision(
+                            evaluation, fallback="dispatch_escalated"
                         )
+                        processed = True
+                else:
+                    evaluation = self._record_automation_event(event)
+                    decision = self._automation_decision(
+                        evaluation, fallback="dispatch_enqueued"
+                    )
+                    processed = True
         elif event.event_type in (
             LifecycleEventType.FLOW_STARTED,
             LifecycleEventType.FLOW_RESUMED,
@@ -137,15 +103,11 @@ class LifecycleEventRouter:
                 decision = "pma_disabled"
                 processed = True
             else:
-                allowed, gate_reason = self.check_reactive_gate(event)
-                if not allowed:
-                    decision = gate_reason
-                    processed = True
-                else:
-                    decision = "flow_enqueued"
-                    processed = self._enqueue_pma_for_event(
-                        event, reason=event.event_type.value
-                    )
+                evaluation = self._record_automation_event(event)
+                decision = self._automation_decision(
+                    evaluation, fallback="flow_enqueued"
+                )
+                processed = True
 
         if processed:
             self._lifecycle_store.mark_processed(event_id)
@@ -153,23 +115,28 @@ class LifecycleEventRouter:
 
         self._logger.info(
             "Lifecycle event processed: event_id=%s type=%s repo_id=%s "
-            "run_id=%s decision=%s processed=%s automation_wakeups=%s",
+            "run_id=%s decision=%s processed=%s",
             event.event_id,
             event.event_type.value,
             event.repo_id,
             event.run_id,
             decision,
             processed,
-            automation_wakeups,
         )
 
-    def _record_automation_event(self, event: LifecycleEvent) -> None:
+    def _record_automation_event(
+        self, event: LifecycleEvent
+    ) -> Optional[RuleEvaluationResult]:
         if self._automation_rule_engine is None:
-            return
+            return None
         event_type = _automation_lifecycle_event_type(event.event_type)
         if event_type is None:
-            return
+            return None
         data = event.data if isinstance(event.data, dict) else {}
+        transition = self._build_transition_payload(event)
+        legacy_event_type = data.get("event_type")
+        if not isinstance(legacy_event_type, str) or not legacy_event_type.strip():
+            legacy_event_type = event.event_type.value
         automation_event = AutomationEvent.create(
             event_id=f"lifecycle:{event.event_id}",
             event_type=event_type,
@@ -179,8 +146,8 @@ class LifecycleEventRouter:
             target={"repo_id": event.repo_id, "run_id": event.run_id},
             payload={
                 **dict(data),
-                "repo_id": event.repo_id,
-                "run_id": event.run_id,
+                **{k: v for k, v in transition.items() if v is not None},
+                "event_type": legacy_event_type,
                 "origin": event.origin,
             },
             raw_payload={
@@ -194,49 +161,31 @@ class LifecycleEventRouter:
             },
             metadata={"lifecycle_event_id": event.event_id},
         )
-        self._automation_rule_engine.record_event_and_enqueue_jobs(automation_event)
-
-    def check_reactive_gate(self, event: LifecycleEvent) -> tuple[bool, str]:
-        pma = self._hub_config.pma
-        reactive_enabled = getattr(pma, "reactive_enabled", True)
-        if not reactive_enabled:
-            return False, "reactive_disabled"
-
-        origin = (event.origin or "").strip().lower()
-        blocked_origins = getattr(pma, "reactive_origin_blocklist", [])
-        if blocked_origins:
-            blocked = {str(value).strip().lower() for value in blocked_origins}
-            if origin and origin in blocked:
-                self._logger.info(
-                    "Skipping PMA reactive trigger for event %s due to origin=%s",
-                    event.event_id,
-                    origin,
-                )
-                return False, "reactive_origin_blocked"
-
-        allowlist = getattr(pma, "reactive_event_types", None)
-        if allowlist:
-            if event.event_type.value not in set(allowlist):
-                return False, "reactive_filtered"
-
-        debounce_seconds = int(getattr(pma, "reactive_debounce_seconds", 0) or 0)
-        if debounce_seconds > 0:
-            key = f"{event.event_type.value}:{event.repo_id}:{event.run_id}"
-            store = PmaReactiveStore(self._hub_config.root)
-            if not store.check_and_update(key, debounce_seconds):
-                return False, "reactive_debounced"
-
-        safety_checker = self._ensure_pma_safety_checker_fn()
-        safety_check = safety_checker.check_reactive_turn()
-        if not safety_check.allowed:
-            self._logger.info(
-                "Blocked PMA reactive trigger for event %s: %s",
-                event.event_id,
-                safety_check.reason,
+        try:
+            return self._automation_rule_engine.record_event_and_enqueue_jobs(
+                automation_event
             )
-            return False, safety_check.reason or "reactive_blocked"
+        except (sqlite3.Error, OSError, ValueError, TypeError, RuntimeError):
+            self._logger.exception(
+                "Failed to record lifecycle automation event %s",
+                event.event_id,
+            )
+            return None
 
-        return True, "reactive_allowed"
+    def _automation_decision(
+        self, evaluation: Optional[RuleEvaluationResult], *, fallback: str
+    ) -> str:
+        if evaluation is None:
+            return "automation_unavailable"
+        if evaluation.jobs_created:
+            return fallback
+        if evaluation.jobs_deduped:
+            return "automation_deduped"
+        if evaluation.jobs_skipped:
+            return "automation_policy_skipped"
+        if evaluation.matched_rules:
+            return "automation_matched_no_job"
+        return "automation_no_matching_rule"
 
     def _build_transition_payload(
         self, event: LifecycleEvent
@@ -316,89 +265,6 @@ class LifecycleEventRouter:
             "reason": reason,
             "timestamp": timestamp,
         }
-
-    def _enqueue_automation_wakeups(self, event: LifecycleEvent) -> int:
-        transition = self._build_transition_payload(event)
-        try:
-            store = self._ensure_pma_automation_store_fn()
-            result = store.notify_transition(
-                event_type=event.event_type.value,
-                repo_id=transition.get("repo_id"),
-                run_id=transition.get("run_id"),
-                thread_id=transition.get("thread_id"),
-                from_state=transition.get("from_state"),
-                to_state=transition.get("to_state"),
-                reason=transition.get("reason"),
-                timestamp=transition.get("timestamp"),
-                transition_id=event.event_id,
-                event_id=event.event_id,
-                origin=event.origin,
-                event_data=event.data if isinstance(event.data, dict) else {},
-            )
-            return int(result.get("created", 0) or 0)
-        except (sqlite3.Error, OSError, ValueError, TypeError, RuntimeError):
-            self._logger.exception(
-                "Failed to enqueue lifecycle automation wake-ups for event %s",
-                event.event_id,
-            )
-            return 0
-
-    def _enqueue_pma_for_event(self, event: LifecycleEvent, *, reason: str) -> bool:
-        if not self._hub_config.pma.enabled:
-            return False
-
-        async def _enqueue() -> tuple[object, Optional[str]]:
-            queue = PmaQueue(self._hub_config.root)
-            message = self._build_lifecycle_message(event, reason=reason)
-            payload = {
-                "message": message,
-                "agent": None,
-                "model": None,
-                "reasoning": None,
-                "client_turn_id": event.event_id,
-                "stream": False,
-                "hub_root": str(self._hub_config.root),
-                "lifecycle_event": {
-                    "event_id": event.event_id,
-                    "event_type": event.event_type.value,
-                    "repo_id": event.repo_id,
-                    "run_id": event.run_id,
-                    "timestamp": event.timestamp,
-                    "data": event.data,
-                    "origin": event.origin,
-                },
-            }
-            idempotency_key = f"lifecycle:{event.event_id}"
-            return await queue.enqueue("pma:default", idempotency_key, payload)
-
-        _, dupe_reason = self._run_coroutine_fn(_enqueue())
-        if dupe_reason:
-            self._logger.info(
-                "Deduped PMA queue item for lifecycle event %s: %s",
-                event.event_id,
-                dupe_reason,
-            )
-        return True
-
-    def _build_lifecycle_message(self, event: LifecycleEvent, *, reason: str) -> str:
-        lines = [
-            "Lifecycle event received.",
-            f"type: {event.event_type.value}",
-            f"repo_id: {event.repo_id}",
-            f"run_id: {event.run_id}",
-            f"event_id: {event.event_id}",
-        ]
-        if reason:
-            lines.append(f"reason: {reason}")
-        if event.data:
-            try:
-                payload = json.dumps(event.data, sort_keys=True, ensure_ascii=True)
-            except (TypeError, ValueError):
-                payload = str(event.data)
-            lines.append(f"data: {payload}")
-        if event.event_type == LifecycleEventType.DISPATCH_CREATED:
-            lines.append("Dispatch requires attention; check the repo inbox.")
-        return "\n".join(lines)
 
     def _on_dispatch_intercept(self, event_id: str, result: Any) -> None:
         self._logger.info(

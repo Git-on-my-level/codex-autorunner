@@ -419,8 +419,6 @@ def test_hub_lifecycle_cycle_calls_automation_processors(tmp_path) -> None:
     orchestrator = HubLifecycleOrchestrator(
         load_hub_config(tmp_path),
         list_repos_fn=lambda: [],
-        ensure_pma_automation_store_fn=lambda: object(),
-        ensure_pma_safety_checker_fn=lambda: object(),
         run_coroutine_fn=lambda coro: None,
         process_scm_polls_fn=lambda: {"polled": 0, "events_emitted": 0},
     )

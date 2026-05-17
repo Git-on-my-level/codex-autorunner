@@ -50,6 +50,40 @@ def _load_json_array(value: Any) -> list[Any]:
     return list(parsed) if isinstance(parsed, list) else []
 
 
+def _legacy_wakeup_payload_from_row(
+    row: sqlite3.Row, payload: dict[str, Any]
+) -> dict[str, Any]:
+    metadata = payload.get("metadata")
+    event_data = payload.get("event_data")
+    wake_up = {
+        "wakeup_id": row["wakeup_id"],
+        "repo_id": row["repo_id"],
+        "run_id": row["run_id"],
+        "thread_id": row["thread_target_id"],
+        "lane_id": row["lane_id"] or "pma:default",
+        "from_state": payload.get("from_state"),
+        "to_state": payload.get("to_state"),
+        "reason": row["reason_text"],
+        "timestamp": row["timestamp"] or row["available_at"],
+        "source": row["wakeup_kind"],
+        "event_type": row["event_type"],
+        "subscription_id": row["subscription_id"],
+        "timer_id": row["timer_id"],
+    }
+    if isinstance(metadata, dict):
+        wake_up["metadata"] = dict(metadata)
+        delivery_target = metadata.get("delivery_target")
+        if isinstance(delivery_target, dict):
+            wake_up["delivery_target"] = dict(delivery_target)
+    if isinstance(event_data, dict):
+        wake_up["event_data"] = dict(event_data)
+    return {
+        key: value
+        for key, value in wake_up.items()
+        if value is not None and value != ""
+    }
+
+
 class AutomationStore:
     def __init__(self, hub_root: Path, *, durable: bool = True) -> None:
         self._hub_root = Path(hub_root)
@@ -145,6 +179,23 @@ class AutomationStore:
                     (1 if enabled else 0, now_iso(), rule_id),
                 )
         return self.get_rule(rule_id)
+
+    def cancel_schedule(self, schedule_id: str) -> Optional[AutomationSchedule]:
+        stamp = now_iso()
+        with open_orchestration_sqlite(self._hub_root, durable=self._durable) as conn:
+            with conn:
+                conn.execute(
+                    """
+                    UPDATE orch_automation_schedules
+                       SET state = 'cancelled',
+                           next_fire_at = NULL,
+                           updated_at = ?
+                     WHERE schedule_id = ?
+                       AND state != 'cancelled'
+                    """,
+                    (stamp, schedule_id),
+                )
+        return self.get_schedule(schedule_id)
 
     def record_event(self, event: AutomationEvent) -> AutomationEvent:
         with open_orchestration_sqlite(self._hub_root, durable=self._durable) as conn:
@@ -781,6 +832,8 @@ class AutomationStore:
             event_id = f"legacy-pma-wakeup:{row['wakeup_id']}"
             event_type = "manual.run"
             payload = _json_object_from_row(row, "payload_json")
+            wake_up_payload = _legacy_wakeup_payload_from_row(row, payload)
+            payload = {**payload, "wake_up": wake_up_payload}
             legacy_event_type = optional_text(row["event_type"])
             lifecycle_map = {
                 "flow_started": "lifecycle.flow_started",
@@ -833,7 +886,10 @@ class AutomationStore:
                         "thread_target_id": row["thread_target_id"],
                     },
                     executor_kind=EXECUTOR_PMA_TURN,
-                    executor={"lane_id": row["lane_id"]},
+                    executor={
+                        "lane_id": row["lane_id"],
+                        "wake_up_kind": "pma_legacy_wakeup",
+                    },
                     metadata={
                         "legacy_source": "orch_automation_wakeups",
                         "legacy_wakeup_id": row["wakeup_id"],
@@ -852,7 +908,18 @@ class AutomationStore:
                     "repo_id": row["repo_id"],
                     "thread_target_id": row["thread_target_id"],
                 },
-                executor={"kind": EXECUTOR_PMA_TURN, "lane_id": row["lane_id"]},
+                executor={
+                    "kind": EXECUTOR_PMA_TURN,
+                    "lane_id": row["lane_id"],
+                    "wake_up_kind": "pma_legacy_wakeup",
+                },
+                policy={
+                    "max_attempts": 3,
+                    "retry_backoff_seconds": 0,
+                    "retry_backoff_max_seconds": 0,
+                    "max_concurrent_per_rule": 1,
+                    "max_concurrent_per_target": 1,
+                },
                 payload=payload,
             )
             job.state = JOB_SUCCEEDED if row["completed_at"] else JOB_PENDING

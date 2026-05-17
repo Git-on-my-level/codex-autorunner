@@ -233,27 +233,32 @@ class AutomationRuleEngine:
     ) -> dict[str, Any]:
         payload = event.payload if isinstance(event.payload, dict) else {}
         target = event.target if isinstance(event.target, dict) else {}
+        schedule = dict(
+            payload.get("schedule", {})
+            if isinstance(payload.get("schedule"), dict)
+            else {}
+        )
+        schedule_config_raw = schedule.get("schedule")
+        schedule_config = (
+            dict(schedule_config_raw) if isinstance(schedule_config_raw, dict) else {}
+        )
+        target_repo_raw = target.get("repo")
         return {
             "event": event.to_dict(),
             "repo": {
                 "repo_id": event.repo_id,
-                **dict(
-                    target.get("repo", {})
-                    if isinstance(target.get("repo"), dict)
-                    else {}
-                ),
+                **(dict(target_repo_raw) if isinstance(target_repo_raw, dict) else {}),
             },
             "target": dict(target),
             "pr": dict(
                 payload.get("pr", {}) if isinstance(payload.get("pr"), dict) else {}
             ),
-            "schedule": dict(
-                payload.get("schedule", {})
-                if isinstance(payload.get("schedule"), dict)
-                else {}
-            ),
+            "schedule": {**schedule, **schedule_config},
             "job": dict(job if isinstance(job, dict) else {}),
-            "metadata": dict(rule.metadata if rule is not None else event.metadata),
+            "metadata": {
+                **dict(event.metadata),
+                **dict(rule.metadata if rule is not None else {}),
+            },
         }
 
     def _render_policy_key(

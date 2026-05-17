@@ -34,13 +34,12 @@ from .....core.chat_bindings import (
     DISCORD_STATE_FILE_DEFAULT,
     TELEGRAM_STATE_FILE_DEFAULT,
 )
+from .....core.lifecycle_events import LifecycleEvent, LifecycleEventType
 from .....core.managed_thread_store import ManagedThreadStore
 from .....core.orchestration import OrchestrationBindingStore
 from .....core.orchestration.cold_trace_store import ColdTraceStore
 from .....core.time_utils import now_iso
 from .automation_adapter import (
-    first_callable,
-    get_automation_store,
     normalize_optional_text,
 )
 from .publish import enqueue_with_retry, resolve_chat_state_path
@@ -52,6 +51,20 @@ MANAGED_THREAD_INTERRUPT_FAILED_DETAIL = (
     "Interrupt attempt failed; the active managed turn is still running"
 )
 BOUND_CHAT_SURFACE_KINDS = frozenset({"discord", "telegram"})
+_LIFECYCLE_EVENT_BY_TO_STATE = {
+    "running": LifecycleEventType.FLOW_STARTED,
+    "started": LifecycleEventType.FLOW_STARTED,
+    "resumed": LifecycleEventType.FLOW_RESUMED,
+    "paused": LifecycleEventType.FLOW_PAUSED,
+    "blocked": LifecycleEventType.FLOW_PAUSED,
+    "completed": LifecycleEventType.FLOW_COMPLETED,
+    "succeeded": LifecycleEventType.FLOW_COMPLETED,
+    "failed": LifecycleEventType.FLOW_FAILED,
+    "error": LifecycleEventType.FLOW_FAILED,
+    "stopped": LifecycleEventType.FLOW_STOPPED,
+    "cancelled": LifecycleEventType.FLOW_STOPPED,
+    "canceled": LifecycleEventType.FLOW_STOPPED,
+}
 
 
 @dataclass(frozen=True)
@@ -710,12 +723,12 @@ async def _notify_hub_automation_transition(
         payload.update(extra)
 
     supervisor = getattr(request.app.state, "hub_supervisor", None)
-    store = await get_automation_store(request, None)
-    if store is None:
-        return
-
-    method = first_callable(store, ("notify_transition",))
-    if method is None:
+    trigger = (
+        getattr(supervisor, "trigger_pma_from_lifecycle_event", None)
+        if supervisor is not None
+        else None
+    )
+    if not callable(trigger):
         return
 
     async def await_if_needed(value: Any) -> Any:
@@ -723,28 +736,9 @@ async def _notify_hub_automation_transition(
             return await value
         return value
 
-    async def call_with_fallbacks(
-        method: Any, attempts: list[tuple[tuple[Any, ...], dict[str, Any]]]
-    ) -> Any:
-        last_type_error: Optional[TypeError] = None
-        for args, kwargs in attempts:
-            try:
-                return await await_if_needed(method(*args, **kwargs))
-            except TypeError as exc:
-                last_type_error = exc
-                continue
-        if last_type_error is not None:
-            raise last_type_error
-        raise RuntimeError("No automation method call attempts were provided")
-
     try:
-        await call_with_fallbacks(
-            method,
-            [
-                ((dict(payload),), {}),
-                ((), {"payload": dict(payload)}),
-                ((), dict(payload)),
-            ],
+        await await_if_needed(
+            trigger(_lifecycle_event_from_transition_payload(payload))
         )
     except (
         AttributeError,
@@ -776,6 +770,25 @@ async def _notify_hub_automation_transition(
         RuntimeError,
     ):  # intentional: defensive catch for dynamic supervisor call
         logger.exception("Failed immediate PMA automation processing")
+
+
+def _lifecycle_event_from_transition_payload(payload: dict[str, Any]) -> LifecycleEvent:
+    to_state = str(payload.get("to_state") or "").strip().lower()
+    event_type = _LIFECYCLE_EVENT_BY_TO_STATE.get(
+        to_state, LifecycleEventType.FLOW_FAILED
+    )
+    event_id = normalize_optional_text(
+        payload.get("transition_id")
+    ) or normalize_optional_text(payload.get("idempotency_key"))
+    return LifecycleEvent(
+        event_type=event_type,
+        repo_id=normalize_optional_text(payload.get("repo_id")) or "",
+        run_id=normalize_optional_text(payload.get("run_id")) or "",
+        data=dict(payload),
+        origin="web_pma_route",
+        timestamp=normalize_optional_text(payload.get("timestamp")) or now_iso(),
+        event_id=event_id or "",
+    )
 
 
 __all__ = [

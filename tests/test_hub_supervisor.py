@@ -3417,43 +3417,50 @@ def test_process_pma_automation_timers_returns_zero_for_bad_limit(
         supervisor.shutdown()
 
 
-def test_process_pma_automation_timers_returns_zero_when_no_dequeue(
+def test_process_pma_automation_timers_does_not_call_legacy_dequeue(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     hub_root = tmp_path / "hub"
     supervisor = _make_basic_supervisor(hub_root)
     try:
         store = supervisor.ensure_pma_automation_store()
-        monkeypatch.setattr(store, "dequeue_due_timers", None, raising=False)
-        assert supervisor.process_pma_automation_timers() == 0
+        store.upsert_timer(
+            due_at="2000-01-01T00:00:00+00:00",
+            repo_id="demo",
+            lane_id="pma:default",
+            idempotency_key="unified-scheduler-no-legacy-dequeue",
+        )
+        monkeypatch.setattr(
+            store,
+            "dequeue_due_timers",
+            lambda **_: (_ for _ in ()).throw(
+                AssertionError("legacy timer dequeue should not be called")
+            ),
+            raising=False,
+        )
+        assert supervisor.process_pma_automation_timers() == 1
     finally:
         supervisor.shutdown()
 
 
-def test_process_pma_automation_timers_processes_due_timers(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+def test_process_pma_automation_timers_processes_due_unified_schedules(
+    tmp_path: Path,
 ) -> None:
     hub_root = tmp_path / "hub"
     supervisor = _make_basic_supervisor(hub_root)
+    started_lanes = []
+    supervisor.set_pma_lane_worker_starter(started_lanes.append)
     try:
         store = supervisor.ensure_pma_automation_store()
-        timers = [
-            {
-                "timer_id": "t1",
-                "fired_at": "2025-01-01T00:00:00Z",
-                "repo_id": "demo",
-                "run_id": None,
-                "thread_id": None,
-                "lane_id": None,
-                "from_state": None,
-                "to_state": None,
-                "reason": None,
-                "metadata": None,
-            },
-        ]
-        monkeypatch.setattr(store, "dequeue_due_timers", lambda limit=100: timers)
+        store.upsert_timer(
+            due_at="2000-01-01T00:00:00+00:00",
+            repo_id="demo",
+            lane_id="pma:default",
+            idempotency_key="unified-scheduler-due-timer",
+        )
         created = supervisor.process_pma_automation_timers()
-        assert created >= 1
+        assert created == 1
+        assert started_lanes == ["pma:default"]
     finally:
         supervisor.shutdown()
 
@@ -3483,9 +3490,7 @@ def test_drain_pma_automation_wakeups_returns_zero_when_pma_disabled(
         supervisor.shutdown()
 
 
-def test_drain_pma_automation_wakeups_processes_pending(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_drain_pma_automation_wakeups_processes_pending(tmp_path: Path) -> None:
     hub_root = tmp_path / "hub"
     supervisor = _make_basic_supervisor(hub_root)
     started_lanes = []
@@ -3494,35 +3499,22 @@ def test_drain_pma_automation_wakeups_processes_pending(
     )
     try:
         store = supervisor.ensure_pma_automation_store()
-        wakeups = [
-            {
-                "wakeup_id": "w1",
-                "repo_id": "demo",
-                "run_id": "r1",
-                "thread_id": None,
-                "lane_id": "pma:default",
-                "from_state": None,
-                "to_state": None,
-                "reason": "timer_due",
-                "timestamp": "2025-01-01T00:00:00Z",
-                "source": "timer",
-                "event_type": None,
-                "subscription_id": None,
-                "timer_id": "t1",
-                "event_id": None,
-                "idempotency_key": "timer:t1:2025-01-01T00:00:00Z",
-            },
-        ]
-        monkeypatch.setattr(
-            store,
-            "list_pending_wakeups",
-            lambda limit=100, **_kwargs: wakeups,
+        created, deduped = store.enqueue_wakeup(
+            source="timer",
+            repo_id="demo",
+            run_id="r1",
+            lane_id="pma:default",
+            reason="timer_due",
+            timestamp="2025-01-01T00:00:00Z",
+            idempotency_key="timer:t1:2025-01-01T00:00:00Z",
+            timer_id="t1",
         )
-        monkeypatch.setattr(store, "mark_wakeup_queued", lambda wid: True)
-        monkeypatch.setattr(store, "mark_wakeup_dispatched", lambda wid: True)
+        assert deduped is False
         drained = supervisor.drain_pma_automation_wakeups()
         assert drained == 1
         assert started_lanes == ["pma:default"]
+        worker_started = store.list_wakeups(state_filter="worker_started")
+        assert [entry["wakeup_id"] for entry in worker_started] == [created.wakeup_id]
     finally:
         supervisor.shutdown()
 
@@ -3600,16 +3592,26 @@ def test_ensure_pma_safety_checker_creates_checker(tmp_path: Path) -> None:
         supervisor.shutdown()
 
 
-def test_process_pma_automation_now_combines_timers_and_wakeups(
+def test_process_pma_automation_now_advances_unified_automation_only(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     hub_root = tmp_path / "hub"
     supervisor = _make_basic_supervisor(hub_root)
     try:
+        drained = []
         monkeypatch.setattr(supervisor, "process_pma_automation_timers", lambda **kw: 3)
-        monkeypatch.setattr(supervisor, "drain_pma_automation_wakeups", lambda **kw: 5)
+        monkeypatch.setattr(
+            supervisor,
+            "drain_pma_automation_wakeups",
+            lambda **kw: drained.append(1) or 5,
+        )
         result = supervisor.process_pma_automation_now()
-        assert result == {"timers_processed": 3, "wakeups_dispatched": 5}
+        assert result == {
+            "timers_processed": 3,
+            "automation_processed": 0,
+            "wakeups_dispatched": 0,
+        }
+        assert drained == []
     finally:
         supervisor.shutdown()
 
@@ -3620,9 +3622,19 @@ def test_process_pma_automation_now_skips_timers_when_disabled(
     hub_root = tmp_path / "hub"
     supervisor = _make_basic_supervisor(hub_root)
     try:
-        monkeypatch.setattr(supervisor, "drain_pma_automation_wakeups", lambda **kw: 2)
+        drained = []
+        monkeypatch.setattr(
+            supervisor,
+            "drain_pma_automation_wakeups",
+            lambda **kw: drained.append(1) or 2,
+        )
         result = supervisor.process_pma_automation_now(include_timers=False)
-        assert result == {"timers_processed": 0, "wakeups_dispatched": 2}
+        assert result == {
+            "timers_processed": 0,
+            "automation_processed": 0,
+            "wakeups_dispatched": 0,
+        }
+        assert drained == []
     finally:
         supervisor.shutdown()
 
@@ -3651,7 +3663,7 @@ def test_trigger_pma_from_lifecycle_event(tmp_path: Path) -> None:
         supervisor.shutdown()
 
 
-def test_process_lifecycle_events_drains_wakeups(
+def test_process_lifecycle_events_does_not_drain_legacy_wakeups(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     hub_root = tmp_path / "hub"
@@ -3669,12 +3681,12 @@ def test_process_lifecycle_events_drains_wakeups(
             lambda **kw: drained.append(1) or 0,
         )
         supervisor.process_lifecycle_events()
-        assert drained == [1]
+        assert drained == []
     finally:
         supervisor.shutdown()
 
 
-def test_process_lifecycle_events_handles_drain_exception(
+def test_process_lifecycle_events_ignores_legacy_drain_path(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     hub_root = tmp_path / "hub"
@@ -3803,144 +3815,6 @@ def test_build_lifecycle_retry_policy_clamps_max_to_initial(tmp_path: Path) -> N
     try:
         policy = supervisor._build_lifecycle_retry_policy()
         assert policy.max_backoff_seconds == 500.0
-    finally:
-        supervisor.shutdown()
-
-
-def test_build_pma_lifecycle_message(tmp_path: Path) -> None:
-    hub_root = tmp_path / "hub"
-    supervisor = _make_basic_supervisor(hub_root)
-    try:
-        from codex_autorunner.core.lifecycle_events import (
-            LifecycleEvent,
-            LifecycleEventType,
-        )
-
-        event = LifecycleEvent(
-            event_id="e1",
-            event_type=LifecycleEventType.DISPATCH_CREATED,
-            repo_id="demo",
-            run_id="r1",
-            timestamp="2025-01-01T00:00:00Z",
-            data={"key": "val"},
-            origin="test",
-        )
-        msg = supervisor._lifecycle_router._build_lifecycle_message(  # noqa: SLF001
-            event, reason="auto"
-        )
-        assert "dispatch_created" in msg
-        assert "demo" in msg
-        assert "reason: auto" in msg
-        assert "Dispatch requires attention" in msg
-    finally:
-        supervisor.shutdown()
-
-
-def test_pma_reactive_gate_allows_by_default(tmp_path: Path) -> None:
-    hub_root = tmp_path / "hub"
-    supervisor = _make_basic_supervisor(hub_root)
-    try:
-        from codex_autorunner.core.lifecycle_events import (
-            LifecycleEvent,
-            LifecycleEventType,
-        )
-
-        event = LifecycleEvent(
-            event_id="e1",
-            event_type=LifecycleEventType.FLOW_COMPLETED,
-            repo_id="demo",
-            run_id="r1",
-            timestamp="2025-01-01T00:00:00Z",
-            data=None,
-            origin="test",
-        )
-        allowed, reason = supervisor._lifecycle_router.check_reactive_gate(event)
-        assert allowed is True
-        assert reason == "reactive_allowed"
-    finally:
-        supervisor.shutdown()
-
-
-def test_pma_reactive_gate_blocks_disabled(tmp_path: Path) -> None:
-    hub_root = tmp_path / "hub"
-    cfg = _default_hub_config()
-    cfg["pma"]["reactive_enabled"] = False
-    write_test_config(hub_root / CONFIG_FILENAME, cfg)
-    supervisor = HubSupervisor(load_hub_config(hub_root))
-    try:
-        from codex_autorunner.core.lifecycle_events import (
-            LifecycleEvent,
-            LifecycleEventType,
-        )
-
-        event = LifecycleEvent(
-            event_id="e1",
-            event_type=LifecycleEventType.FLOW_COMPLETED,
-            repo_id="demo",
-            run_id="r1",
-            timestamp="2025-01-01T00:00:00Z",
-            data=None,
-            origin="test",
-        )
-        allowed, reason = supervisor._lifecycle_router.check_reactive_gate(event)
-        assert allowed is False
-        assert reason == "reactive_disabled"
-    finally:
-        supervisor.shutdown()
-
-
-def test_pma_reactive_gate_blocks_origin(tmp_path: Path) -> None:
-    hub_root = tmp_path / "hub"
-    cfg = _default_hub_config()
-    cfg["pma"]["reactive_origin_blocklist"] = ["blocked_bot"]
-    write_test_config(hub_root / CONFIG_FILENAME, cfg)
-    supervisor = HubSupervisor(load_hub_config(hub_root))
-    try:
-        from codex_autorunner.core.lifecycle_events import (
-            LifecycleEvent,
-            LifecycleEventType,
-        )
-
-        event = LifecycleEvent(
-            event_id="e1",
-            event_type=LifecycleEventType.FLOW_COMPLETED,
-            repo_id="demo",
-            run_id="r1",
-            timestamp="2025-01-01T00:00:00Z",
-            data=None,
-            origin="blocked_bot",
-        )
-        allowed, reason = supervisor._lifecycle_router.check_reactive_gate(event)
-        assert allowed is False
-        assert reason == "reactive_origin_blocked"
-    finally:
-        supervisor.shutdown()
-
-
-def test_pma_reactive_gate_filters_event_types(tmp_path: Path) -> None:
-    hub_root = tmp_path / "hub"
-    cfg = _default_hub_config()
-    cfg["pma"]["reactive_event_types"] = ["dispatch_created"]
-    write_test_config(hub_root / CONFIG_FILENAME, cfg)
-    supervisor = HubSupervisor(load_hub_config(hub_root))
-    try:
-        from codex_autorunner.core.lifecycle_events import (
-            LifecycleEvent,
-            LifecycleEventType,
-        )
-
-        event = LifecycleEvent(
-            event_id="e1",
-            event_type=LifecycleEventType.FLOW_COMPLETED,
-            repo_id="demo",
-            run_id="r1",
-            timestamp="2025-01-01T00:00:00Z",
-            data=None,
-            origin="test",
-        )
-        allowed, reason = supervisor._lifecycle_router.check_reactive_gate(event)
-        assert allowed is False
-        assert reason == "reactive_filtered"
     finally:
         supervisor.shutdown()
 

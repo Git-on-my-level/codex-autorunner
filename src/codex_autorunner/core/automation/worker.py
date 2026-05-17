@@ -10,6 +10,7 @@ from .models import (
     JOB_CANCELLED,
     JOB_DEAD_LETTERED,
     JOB_FAILED,
+    JOB_SKIPPED,
     JOB_SUCCEEDED,
     AutomationJob,
     AutomationJobAttempt,
@@ -113,6 +114,12 @@ class AutomationJobWorker:
                         now=stamp,
                     )
                     dead += 1
+                elif status == JOB_SKIPPED:
+                    self._store.skip_job(
+                        running.job_id,
+                        result_summary=result.summary or "skipped",
+                    )
+                    skipped += 1
                 elif status == JOB_FAILED:
                     self._handle_failure(
                         running, result.summary or "executor_failed", stamp
@@ -201,8 +208,8 @@ class AutomationJobWorker:
         )
 
     def _retry_delay(self, job: AutomationJob) -> int:
-        base = int(job.policy.get("retry_backoff_seconds") or 30)
-        cap = int(job.policy.get("retry_backoff_max_seconds") or 300)
+        base = _policy_int(job.policy.get("retry_backoff_seconds"), fallback=30)
+        cap = _policy_int(job.policy.get("retry_backoff_max_seconds"), fallback=300)
         delay = min(max(base, 0) * (2 ** max(0, job.attempt_count - 1)), max(cap, 0))
         return int(delay)
 
@@ -214,6 +221,15 @@ def _add_seconds(value: str, seconds: int) -> str:
         .astimezone(timezone.utc)
         .strftime("%Y-%m-%dT%H:%M:%SZ")
     )
+
+
+def _policy_int(value: Any, *, fallback: int) -> int:
+    if value is None:
+        return fallback
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return fallback
 
 
 __all__ = [

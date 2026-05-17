@@ -14,6 +14,12 @@ from codex_autorunner.agents.hermes.harness import HermesHarness
 from codex_autorunner.agents.hermes.supervisor import HermesSupervisor
 from codex_autorunner.agents.registry import AgentDescriptor
 from codex_autorunner.agents.types import TerminalTurnResult
+from codex_autorunner.core.automation import AutomationRule, AutomationStore
+from codex_autorunner.core.automation.models import (
+    EXECUTOR_PMA_TURN,
+    TARGET_POLICY_HUB,
+    TRIGGER_KIND_EVENT,
+)
 from codex_autorunner.core.hub_control_plane import HubControlPlaneError
 from codex_autorunner.core.managed_thread_store import ManagedThreadStore
 from codex_autorunner.core.orchestration import (
@@ -37,6 +43,7 @@ from codex_autorunner.core.orchestration.service import (
 )
 from codex_autorunner.core.orchestration.sqlite import open_orchestration_sqlite
 from codex_autorunner.core.orchestration.transcript_mirror import TranscriptMirrorStore
+from codex_autorunner.core.pma_automation_store import PmaAutomationStore
 
 FIXTURE_PATH = Path(__file__).resolve().parents[2] / "fixtures" / "fake_acp_server.py"
 
@@ -1094,6 +1101,58 @@ async def test_send_message_recovers_missing_hermes_session_load_end_to_end(
     assert execution.backend_id == "turn-1"
     assert binding is not None
     assert binding.backend_thread_id == "session-1"
+
+
+async def test_record_execution_result_routes_pma_notification_through_unified_jobs(
+    tmp_path: Path,
+) -> None:
+    harness = _FakeHarness()
+    service = _build_service(tmp_path, harness)
+    hub_root = tmp_path / "hub"
+    workspace_root = tmp_path / "workspace"
+    workspace_root.mkdir()
+    thread = service.create_thread_target(
+        "codex", workspace_root, repo_id="repo-pma-unified"
+    )
+    AutomationStore(hub_root).upsert_rule(
+        AutomationRule.create(
+            rule_id="test-pma-managed-thread-terminal",
+            name="Test PMA managed-thread terminal notification",
+            enabled=True,
+            system_owned=True,
+            trigger_kind=TRIGGER_KIND_EVENT,
+            trigger={"event_types": ["lifecycle.flow_completed"]},
+            filters={"thread_id": thread.thread_target_id},
+            target_policy=TARGET_POLICY_HUB,
+            target={"thread_id": "{{ event.payload.thread_id }}"},
+            executor_kind=EXECUTOR_PMA_TURN,
+            executor={"lane_id": "pma:default"},
+            policy={"dedupe_key": "{{ metadata.lifecycle_event_id }}"},
+            metadata={"purpose": "pma_lifecycle_subscription"},
+        )
+    )
+
+    execution = await service.send_message(
+        MessageRequest(
+            target_id=thread.thread_target_id,
+            target_kind="thread",
+            message_text="finish this",
+        )
+    )
+    service.record_execution_result(
+        thread.thread_target_id,
+        execution.execution_id,
+        status="ok",
+        assistant_text="done",
+    )
+
+    automation_store = AutomationStore(hub_root)
+    jobs = automation_store.list_jobs()
+    assert len(jobs) == 1
+    assert (
+        jobs[0].event_id == f"lifecycle:managed_turn:{execution.execution_id}:completed"
+    )
+    assert PmaAutomationStore(hub_root).list_pending_wakeups(limit=10) == []
 
 
 async def test_send_message_rehydrates_from_transcripts_after_runtime_binding_restart(

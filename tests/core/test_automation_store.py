@@ -255,9 +255,9 @@ def test_backfill_legacy_pma_rows_creates_unified_rows(tmp_path) -> None:
     assert counts["events"] == 1
     assert counts["jobs"] == 1
     assert counts["schedules"] == 1
-    assert (
-        store.list_rules()[0].metadata["legacy_source"]
-        == "orch_automation_subscriptions"
+    assert any(
+        rule.metadata.get("legacy_source") == "orch_automation_subscriptions"
+        for rule in store.list_rules()
     )
     assert store.list_events()[0].event_type == "lifecycle.flow_failed"
     assert store.list_jobs()[0].pma_lane_id == "pma:default"
