@@ -7,8 +7,6 @@ from pathlib import Path
 from typing import Any, Mapping, Optional
 
 from ...core.chat_bindings import (
-    normalize_workspace_path,
-    resolve_bound_repo_id,
     resolve_repo_id_by_workspace_path,
     resolve_telegram_state_path,
 )
@@ -21,8 +19,15 @@ from ..chat.pma_delivery import (
     PmaChatDeliveryAdapterResult,
     PmaChatDeliveryRecord,
 )
+from ..chat.pma_delivery_targets import (
+    PmaChatSurfaceBinding,
+    select_bound_pma_targets,
+    select_explicit_pma_target,
+    select_primary_pma_target,
+)
 from .state import OutboxRecord as TelegramOutboxRecord
 from .state import TelegramStateStore, parse_topic_key
+from .state_types import TelegramTopicRecord
 
 
 def _build_telegram_record_id(
@@ -55,6 +60,44 @@ def _notification_record(
         delivery_record_id=delivery_record_id,
         workspace_root=workspace_root,
     )
+
+
+async def _telegram_surface_bindings_and_targets(
+    store: TelegramStateStore,
+    topics: Mapping[str, TelegramTopicRecord],
+) -> tuple[
+    tuple[PmaChatSurfaceBinding, ...],
+    dict[str, tuple[int, Optional[int]]],
+]:
+    projected: list[PmaChatSurfaceBinding] = []
+    parsed_targets: dict[str, tuple[int, Optional[int]]] = {}
+    for surface_key in sorted(topics):
+        topic = topics[surface_key]
+        try:
+            chat_id, thread_id, scope = parse_topic_key(surface_key)
+        except ValueError:
+            continue
+        base_key = f"{chat_id}:{thread_id or 'root'}"
+        if scope != await store.get_topic_scope(base_key):
+            continue
+        parsed_targets[surface_key] = (chat_id, thread_id)
+        projected.append(
+            PmaChatSurfaceBinding(
+                surface_key=surface_key,
+                workspace_path=_normalize_optional_text(
+                    getattr(topic, "workspace_path", None)
+                ),
+                repo_id=_normalize_optional_text(getattr(topic, "repo_id", None)),
+                is_primary_pma=bool(getattr(topic, "pma_enabled", False)),
+                previous_workspace_path=_normalize_optional_text(
+                    getattr(topic, "pma_prev_workspace_path", None)
+                ),
+                previous_repo_id=_normalize_optional_text(
+                    getattr(topic, "pma_prev_repo_id", None)
+                ),
+            )
+        )
+    return tuple(projected), parsed_targets
 
 
 class TelegramPmaChatDeliveryAdapter(PmaChatDeliveryAdapter):
@@ -114,28 +157,20 @@ class TelegramPmaChatDeliveryAdapter(PmaChatDeliveryAdapter):
         store = TelegramStateStore(resolve_telegram_state_path(hub_root, raw_config))
         try:
             topics = await store.list_topics()
-            topic = topics.get(topic_surface_key)
-            if topic is None:
+            bindings, parsed_targets = await _telegram_surface_bindings_and_targets(
+                store, topics
+            )
+            target = select_explicit_pma_target(
+                surface_key=topic_surface_key,
+                bindings=bindings,
+            )
+            if target is None:
                 return PmaChatDeliveryAdapterResult(
                     route="explicit",
                     targets=0,
                     published=0,
                 )
-            try:
-                chat_id, thread_id, scope = parse_topic_key(topic_surface_key)
-            except ValueError:
-                return PmaChatDeliveryAdapterResult(
-                    route="explicit",
-                    targets=0,
-                    published=0,
-                )
-            base_key = f"{chat_id}:{thread_id or 'root'}"
-            if scope != await store.get_topic_scope(base_key):
-                return PmaChatDeliveryAdapterResult(
-                    route="explicit",
-                    targets=0,
-                    published=0,
-                )
+            chat_id, thread_id = parsed_targets[target.surface_key]
             record_id = _build_telegram_record_id(
                 correlation_id=intent.correlation_id,
                 delivery_mode=attempt.delivery_mode,
@@ -189,42 +224,25 @@ class TelegramPmaChatDeliveryAdapter(PmaChatDeliveryAdapter):
         raw_config: Mapping[str, Any],
     ) -> PmaChatDeliveryAdapterResult:
         workspace_root = attempt.workspace_root
-        if workspace_root is None:
-            return PmaChatDeliveryAdapterResult(route="bound", targets=0, published=0)
-        normalized_repo_id = _normalize_optional_text(intent.repo_id)
         repo_id_by_workspace = resolve_repo_id_by_workspace_path(hub_root, raw_config)
         created_at = now_iso()
-        targets = 0
         published = 0
         store = TelegramStateStore(resolve_telegram_state_path(hub_root, raw_config))
         try:
             topics = await store.list_topics()
+            bindings, parsed_targets = await _telegram_surface_bindings_and_targets(
+                store, topics
+            )
+            targets = select_bound_pma_targets(
+                workspace_root=workspace_root,
+                repo_id=intent.repo_id,
+                bindings=bindings,
+                repo_id_by_workspace=repo_id_by_workspace,
+            )
             delivery_records: list[PmaChatDeliveryRecord] = []
-            for surface_key in sorted(topics):
-                topic = topics[surface_key]
-                if bool(getattr(topic, "pma_enabled", False)):
-                    continue
-                try:
-                    chat_id, thread_id, scope = parse_topic_key(surface_key)
-                except ValueError:
-                    continue
-                base_key = f"{chat_id}:{thread_id or 'root'}"
-                if scope != await store.get_topic_scope(base_key):
-                    continue
-                if normalize_workspace_path(
-                    getattr(topic, "workspace_path", None)
-                ) != normalize_workspace_path(workspace_root):
-                    continue
-                binding_repo_id = resolve_bound_repo_id(
-                    repo_id=getattr(topic, "repo_id", None),
-                    repo_id_by_workspace=repo_id_by_workspace,
-                    workspace_values=(getattr(topic, "workspace_path", None),),
-                )
-                if normalized_repo_id and binding_repo_id not in {
-                    None,
-                    normalized_repo_id,
-                }:
-                    continue
+            for target in targets:
+                surface_key = target.surface_key
+                chat_id, thread_id = parsed_targets[surface_key]
                 record_id = _build_telegram_record_id(
                     correlation_id=intent.correlation_id,
                     delivery_mode=attempt.delivery_mode,
@@ -236,11 +254,10 @@ class TelegramPmaChatDeliveryAdapter(PmaChatDeliveryAdapter):
                         attempt=attempt,
                         surface_key=surface_key,
                         delivery_record_id=record_id,
-                        workspace_root=workspace_root,
+                        workspace_root=target.workspace_root,
                     )
                 )
                 if await store.get_outbox(record_id) is not None:
-                    targets += 1
                     continue
                 await store.enqueue_outbox(
                     TelegramOutboxRecord(
@@ -258,11 +275,10 @@ class TelegramPmaChatDeliveryAdapter(PmaChatDeliveryAdapter):
                         ),
                     )
                 )
-                targets += 1
                 published += 1
             return PmaChatDeliveryAdapterResult(
                 route="bound",
-                targets=targets,
+                targets=len(targets),
                 published=published,
                 delivery_records=tuple(delivery_records),
             )
@@ -277,59 +293,33 @@ class TelegramPmaChatDeliveryAdapter(PmaChatDeliveryAdapter):
         hub_root: Path,
         raw_config: Mapping[str, Any],
     ) -> PmaChatDeliveryAdapterResult:
-        repo_id = _normalize_optional_text(intent.repo_id)
-        if repo_id is None:
-            return PmaChatDeliveryAdapterResult(
-                route="primary_pma",
-                targets=0,
-                published=0,
-            )
         repo_id_by_workspace = resolve_repo_id_by_workspace_path(hub_root, raw_config)
         created_at = now_iso()
         store = TelegramStateStore(resolve_telegram_state_path(hub_root, raw_config))
         try:
             topics = await store.list_topics()
-            for surface_key in sorted(topics):
-                topic = topics[surface_key]
-                if not bool(getattr(topic, "pma_enabled", False)):
-                    continue
-                try:
-                    chat_id, thread_id, scope = parse_topic_key(surface_key)
-                except ValueError:
-                    continue
-                base_key = f"{chat_id}:{thread_id or 'root'}"
-                if scope != await store.get_topic_scope(base_key):
-                    continue
-                binding_repo_id = resolve_bound_repo_id(
-                    repo_id=getattr(topic, "repo_id", None),
-                    repo_id_by_workspace=repo_id_by_workspace,
-                    workspace_values=(getattr(topic, "workspace_path", None),),
-                )
-                prev_binding_repo_id = resolve_bound_repo_id(
-                    repo_id=getattr(topic, "pma_prev_repo_id", None),
-                    repo_id_by_workspace=repo_id_by_workspace,
-                    workspace_values=(getattr(topic, "pma_prev_workspace_path", None),),
-                )
-                prev_repo_id = _normalize_optional_text(
-                    getattr(topic, "pma_prev_repo_id", None)
-                )
-                if repo_id not in {binding_repo_id, prev_repo_id, prev_binding_repo_id}:
-                    continue
+            bindings, parsed_targets = await _telegram_surface_bindings_and_targets(
+                store, topics
+            )
+            target = select_primary_pma_target(
+                repo_id=intent.repo_id,
+                bindings=bindings,
+                repo_id_by_workspace=repo_id_by_workspace,
+            )
+            if target is not None:
+                surface_key = target.surface_key
+                chat_id, thread_id = parsed_targets[surface_key]
                 record_id = _build_telegram_record_id(
                     correlation_id=intent.correlation_id,
                     delivery_mode=attempt.delivery_mode,
                     chat_id=chat_id,
                     thread_id=thread_id,
                 )
-                workspace_path_raw = _normalize_optional_text(
-                    getattr(topic, "pma_prev_workspace_path", None)
-                    or getattr(topic, "workspace_path", None)
-                )
                 delivery_record = _notification_record(
                     attempt=attempt,
                     surface_key=surface_key,
                     delivery_record_id=record_id,
-                    workspace_root=workspace_path_raw,
+                    workspace_root=target.workspace_root,
                 )
                 if await store.get_outbox(record_id) is not None:
                     return PmaChatDeliveryAdapterResult(

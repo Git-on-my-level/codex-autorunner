@@ -7,8 +7,6 @@ from pathlib import Path
 from typing import Any, Mapping, Optional
 
 from ...core.chat_bindings import (
-    normalize_workspace_path,
-    resolve_bound_repo_id,
     resolve_discord_state_path,
     resolve_repo_id_by_workspace_path,
 )
@@ -21,8 +19,14 @@ from ..chat.pma_delivery import (
     PmaChatDeliveryAdapterResult,
     PmaChatDeliveryRecord,
 )
+from ..chat.pma_delivery_targets import (
+    PmaChatSurfaceBinding,
+    select_bound_pma_targets,
+    select_explicit_pma_target,
+    select_primary_pma_target,
+)
 from .rendering import chunk_discord_message, format_discord_message
-from .state import DiscordStateStore
+from .state import ChannelBinding, DiscordStateStore
 from .state import OutboxRecord as DiscordOutboxRecord
 
 _DISCORD_MESSAGE_MAX_LEN = 1900
@@ -56,6 +60,32 @@ def _notification_record(
         delivery_record_id=delivery_record_id,
         workspace_root=workspace_root,
     )
+
+
+def _discord_surface_bindings(
+    bindings: list[ChannelBinding],
+) -> tuple[PmaChatSurfaceBinding, ...]:
+    projected: list[PmaChatSurfaceBinding] = []
+    for binding in bindings:
+        channel_id = _normalize_optional_text(binding.get("channel_id"))
+        if channel_id is None:
+            continue
+        projected.append(
+            PmaChatSurfaceBinding(
+                surface_key=channel_id,
+                workspace_path=_normalize_optional_text(binding.get("workspace_path")),
+                repo_id=_normalize_optional_text(binding.get("repo_id")),
+                is_primary_pma=bool(binding.get("pma_enabled")),
+                previous_workspace_path=_normalize_optional_text(
+                    binding.get("pma_prev_workspace_path")
+                ),
+                previous_repo_id=_normalize_optional_text(
+                    binding.get("pma_prev_repo_id")
+                ),
+                updated_at=_normalize_optional_text(binding.get("updated_at")),
+            )
+        )
+    return tuple(projected)
 
 
 class DiscordPmaChatDeliveryAdapter(PmaChatDeliveryAdapter):
@@ -115,10 +145,11 @@ class DiscordPmaChatDeliveryAdapter(PmaChatDeliveryAdapter):
         store = DiscordStateStore(resolve_discord_state_path(hub_root, raw_config))
         try:
             bindings = await store.list_bindings()
-            if not any(
-                _normalize_optional_text(binding.get("channel_id")) == channel_id
-                for binding in bindings
-            ):
+            target = select_explicit_pma_target(
+                surface_key=channel_id,
+                bindings=_discord_surface_bindings(bindings),
+            )
+            if target is None:
                 return PmaChatDeliveryAdapterResult(
                     route="explicit",
                     targets=0,
@@ -179,39 +210,19 @@ class DiscordPmaChatDeliveryAdapter(PmaChatDeliveryAdapter):
         raw_config: Mapping[str, Any],
     ) -> PmaChatDeliveryAdapterResult:
         workspace_root = attempt.workspace_root
-        if workspace_root is None:
-            return PmaChatDeliveryAdapterResult(route="bound", targets=0, published=0)
-        normalized_repo_id = _normalize_optional_text(intent.repo_id)
         repo_id_by_workspace = resolve_repo_id_by_workspace_path(hub_root, raw_config)
         created_at = now_iso()
-        targets = 0
         published = 0
         store = DiscordStateStore(resolve_discord_state_path(hub_root, raw_config))
         try:
             bindings = await store.list_bindings()
-            channels: list[str] = []
-            for binding in bindings:
-                if bool(binding.get("pma_enabled")):
-                    continue
-                if normalize_workspace_path(
-                    binding.get("workspace_path")
-                ) != normalize_workspace_path(workspace_root):
-                    continue
-                binding_repo_id = resolve_bound_repo_id(
-                    repo_id=binding.get("repo_id"),
-                    repo_id_by_workspace=repo_id_by_workspace,
-                    workspace_values=(binding.get("workspace_path"),),
-                )
-                if normalized_repo_id and binding_repo_id not in {
-                    None,
-                    normalized_repo_id,
-                }:
-                    continue
-                channel_id = _normalize_optional_text(binding.get("channel_id"))
-                if channel_id is None or channel_id in channels:
-                    continue
-                channels.append(channel_id)
-            if not channels:
+            targets = select_bound_pma_targets(
+                workspace_root=workspace_root,
+                repo_id=intent.repo_id,
+                bindings=_discord_surface_bindings(bindings),
+                repo_id_by_workspace=repo_id_by_workspace,
+            )
+            if not targets:
                 return PmaChatDeliveryAdapterResult(
                     route="bound", targets=0, published=0
                 )
@@ -223,8 +234,8 @@ class DiscordPmaChatDeliveryAdapter(PmaChatDeliveryAdapter):
             if not chunks:
                 chunks = [format_discord_message(intent.message)]
             delivery_records: list[PmaChatDeliveryRecord] = []
-            for channel_id in channels:
-                targets += 1
+            for target in targets:
+                channel_id = target.surface_key
                 for index, chunk in enumerate(chunks, start=1):
                     record_id = _build_discord_record_id(
                         correlation_id=intent.correlation_id,
@@ -237,7 +248,7 @@ class DiscordPmaChatDeliveryAdapter(PmaChatDeliveryAdapter):
                             attempt=attempt,
                             surface_key=channel_id,
                             delivery_record_id=record_id,
-                            workspace_root=workspace_root,
+                            workspace_root=target.workspace_root,
                         )
                     )
                     if await store.get_outbox(record_id) is not None:
@@ -255,7 +266,7 @@ class DiscordPmaChatDeliveryAdapter(PmaChatDeliveryAdapter):
                     published += 1
             return PmaChatDeliveryAdapterResult(
                 route="bound",
-                targets=targets,
+                targets=len(targets),
                 published=published,
                 delivery_records=tuple(delivery_records),
             )
@@ -270,56 +281,22 @@ class DiscordPmaChatDeliveryAdapter(PmaChatDeliveryAdapter):
         hub_root: Path,
         raw_config: Mapping[str, Any],
     ) -> PmaChatDeliveryAdapterResult:
-        repo_id = _normalize_optional_text(intent.repo_id)
-        if repo_id is None:
-            return PmaChatDeliveryAdapterResult(
-                route="primary_pma",
-                targets=0,
-                published=0,
-            )
         repo_id_by_workspace = resolve_repo_id_by_workspace_path(hub_root, raw_config)
         created_at = now_iso()
-        candidates: list[tuple[str, str, Optional[str]]] = []
         store = DiscordStateStore(resolve_discord_state_path(hub_root, raw_config))
         try:
-            for binding in await store.list_bindings():
-                if not bool(binding.get("pma_enabled")):
-                    continue
-                binding_repo_id = resolve_bound_repo_id(
-                    repo_id=binding.get("repo_id"),
-                    repo_id_by_workspace=repo_id_by_workspace,
-                    workspace_values=(binding.get("workspace_path"),),
-                )
-                prev_binding_repo_id = resolve_bound_repo_id(
-                    repo_id=binding.get("pma_prev_repo_id"),
-                    repo_id_by_workspace=repo_id_by_workspace,
-                    workspace_values=(binding.get("pma_prev_workspace_path"),),
-                )
-                prev_repo_id = _normalize_optional_text(binding.get("pma_prev_repo_id"))
-                if repo_id not in {binding_repo_id, prev_repo_id, prev_binding_repo_id}:
-                    continue
-                channel_id = _normalize_optional_text(binding.get("channel_id"))
-                updated_at = _normalize_optional_text(binding.get("updated_at")) or ""
-                workspace_path = _normalize_optional_text(
-                    binding.get("pma_prev_workspace_path")
-                    or binding.get("workspace_path")
-                )
-                if channel_id is not None:
-                    candidates.append(
-                        (
-                            updated_at,
-                            channel_id,
-                            workspace_path,
-                        )
-                    )
-            if not candidates:
+            target = select_primary_pma_target(
+                repo_id=intent.repo_id,
+                bindings=_discord_surface_bindings(await store.list_bindings()),
+                repo_id_by_workspace=repo_id_by_workspace,
+            )
+            if target is None:
                 return PmaChatDeliveryAdapterResult(
                     route="primary_pma",
                     targets=0,
                     published=0,
                 )
-            candidates.sort(key=lambda item: (item[0], item[1]), reverse=True)
-            _updated_at, channel_id, candidate_workspace_root = candidates[0]
+            channel_id = target.surface_key
             chunks = chunk_discord_message(
                 format_discord_message(intent.message),
                 max_len=_DISCORD_MESSAGE_MAX_LEN,
@@ -341,7 +318,7 @@ class DiscordPmaChatDeliveryAdapter(PmaChatDeliveryAdapter):
                         attempt=attempt,
                         surface_key=channel_id,
                         delivery_record_id=record_id,
-                        workspace_root=candidate_workspace_root,
+                        workspace_root=target.workspace_root,
                     )
                 )
                 if await store.get_outbox(record_id) is not None:
