@@ -1,40 +1,27 @@
 from __future__ import annotations
 
-import inspect
-import logging
-import sqlite3
 from pathlib import Path
-from typing import Any, Callable, Mapping, Optional
+from typing import Any, Mapping, Optional
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
 
 from ....adapters.github import GitHubWebhookConfig, normalize_github_webhook
-from ....adapters.github.publisher import build_github_publish_executors
-from ....core.pr_bindings import PrBindingStore
-from ....core.publish_journal import PublishJournalStore
-from ....core.scm_automation_service import ScmAutomationService
-from ....core.scm_events import ScmEvent, ScmEventStore
-from ....core.scm_observability import (
-    SCM_AUDIT_INGEST,
-    ScmAuditRecorder,
-    create_or_preserve_correlation_id,
-)
-from ....core.scm_reaction_state import ScmReactionStateStore
 from ....core.scm_webhook_config import (
     drain_inline_enabled,
-    github_automation_config,
     github_automation_enabled,
     github_webhook_ingress_enabled,
     resolve_github_webhook_config,
     resolve_payload_limits,
 )
-from ..services.pma.managed_thread_runtime import ensure_managed_thread_queue_worker
+from ..services.scm_webhooks import (
+    ScmDrainCallback,
+    ScmWebhookIngestRequest,
+    ScmWebhookInspectService,
+    ingest_scm_webhook_event,
+)
 
-ScmDrainCallback = Callable[[Request, ScmEvent], object]
 _DEFAULT_INSPECT_LIMIT = 50
-_MAX_INSPECT_LIMIT = 200
-logger = logging.getLogger(__name__)
 
 
 def _to_webhook_config(resolved) -> GitHubWebhookConfig:
@@ -43,12 +30,6 @@ def _to_webhook_config(resolved) -> GitHubWebhookConfig:
         verify_signatures=resolved.verify_signatures,
         allow_unsigned=resolved.allow_unsigned,
     )
-
-
-def _resolve_limit(value: object, *, default: int) -> int:
-    if not (isinstance(value, int) and value > 0):
-        value = default
-    return min(value, _MAX_INSPECT_LIMIT)
 
 
 def _compact(payload: Mapping[str, Any]) -> dict[str, Any]:
@@ -81,97 +62,9 @@ def _require_scm_automation_enabled(raw_config: object) -> None:
         raise HTTPException(status_code=404, detail="SCM automation disabled")
 
 
-def _serialize_items(items: list[Any]) -> list[dict[str, Any]]:
-    serialized: list[dict[str, Any]] = []
-    for item in items:
-        to_dict = getattr(item, "to_dict", None)
-        if callable(to_dict):
-            serialized.append(to_dict())
-    return serialized
-
-
-def _inspect_preamble(
-    request: Request, *, limit: int = _DEFAULT_INSPECT_LIMIT
-) -> tuple[Path, int]:
+def _inspect_service(request: Request) -> ScmWebhookInspectService:
     _require_scm_automation_enabled(_request_raw_config(request))
-    return _require_hub_root(request), _resolve_limit(
-        limit, default=_DEFAULT_INSPECT_LIMIT
-    )
-
-
-async def _run_drain_callback(
-    *,
-    request: Request,
-    event: ScmEvent,
-    route_callback: Optional[ScmDrainCallback],
-) -> None:
-    callback = getattr(request.app.state, "scm_webhook_drain_callback", None)
-    if not callable(callback):
-        callback = route_callback
-    if not callable(callback):
-        config = getattr(request.app.state, "config", None)
-        hub_root = getattr(config, "root", None)
-        if hub_root is None:
-            return
-        raw_config = getattr(config, "raw", {})
-        callback = _default_drain_callback_factory(
-            hub_root=hub_root,
-            raw_config=raw_config,
-        )
-    result = callback(request, event)
-    if inspect.isawaitable(result):
-        await result
-
-
-def _default_drain_callback_factory(
-    *,
-    hub_root: Path,
-    raw_config: object,
-) -> ScmDrainCallback:
-    service = ScmAutomationService(
-        hub_root,
-        reaction_config=github_automation_config(raw_config),
-        publish_executor_factory=build_github_publish_executors,
-        schedule_deferred_publish_drain=True,
-    )
-
-    def callback(_request: Request, event: ScmEvent) -> None:
-        ingested = service.ingest_event(event, execute_automation_jobs=False)
-        service.process_scm_automation_jobs(automation_jobs=ingested.automation_jobs)
-        processed = service.process_now()
-        _ensure_managed_thread_queue_workers_for_scm_operations(_request, processed)
-
-    return callback
-
-
-def _ensure_managed_thread_queue_workers_for_scm_operations(
-    request: Request,
-    processed_operations: object,
-) -> None:
-    if not isinstance(processed_operations, (list, tuple)):
-        return
-    ensured_thread_ids: set[str] = set()
-    for operation in processed_operations:
-        if getattr(operation, "operation_kind", None) != "enqueue_managed_turn":
-            continue
-        if getattr(operation, "state", None) not in {"succeeded", "effect_applied"}:
-            continue
-        response = getattr(operation, "response", None)
-        if not isinstance(response, dict):
-            continue
-        thread_target_id = str(response.get("thread_target_id") or "").strip()
-        if not thread_target_id or thread_target_id in ensured_thread_ids:
-            continue
-        ensured_thread_ids.add(thread_target_id)
-        try:
-            ensure_managed_thread_queue_worker(request.app, thread_target_id)
-        except Exception:
-            logger.exception(
-                "Failed to ensure managed-thread queue worker after SCM enqueue "
-                "(thread_target_id=%s, operation_id=%s)",
-                thread_target_id,
-                getattr(operation, "operation_id", None),
-            )
+    return ScmWebhookInspectService(_require_hub_root(request))
 
 
 def build_scm_webhook_routes(
@@ -192,9 +85,8 @@ def build_scm_webhook_routes(
         occurred_before: Optional[str] = None,
         limit: int = _DEFAULT_INSPECT_LIMIT,
     ) -> dict[str, Any]:
-        hub_root, resolved_limit = _inspect_preamble(request, limit=limit)
         try:
-            events = ScmEventStore(hub_root).list_events(
+            return _inspect_service(request).list_events(
                 provider=provider,
                 event_type=event_type,
                 repo_slug=repo_slug,
@@ -203,11 +95,10 @@ def build_scm_webhook_routes(
                 delivery_id=delivery_id,
                 occurred_after=occurred_after,
                 occurred_before=occurred_before,
-                limit=resolved_limit,
+                limit=limit,
             )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        return {"events": _serialize_items(events), "limit": resolved_limit}
 
     @router.get("/inspect/bindings")
     def list_pr_bindings(
@@ -220,20 +111,18 @@ def build_scm_webhook_routes(
         thread_target_id: Optional[str] = None,
         limit: int = _DEFAULT_INSPECT_LIMIT,
     ) -> dict[str, Any]:
-        hub_root, resolved_limit = _inspect_preamble(request, limit=limit)
         try:
-            bindings = PrBindingStore(hub_root).list_bindings(
+            return _inspect_service(request).list_pr_bindings(
                 provider=provider,
                 repo_slug=repo_slug,
                 repo_id=repo_id,
                 pr_state=pr_state,
                 head_branch=head_branch,
                 thread_target_id=thread_target_id,
-                limit=resolved_limit,
+                limit=limit,
             )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        return {"bindings": _serialize_items(bindings), "limit": resolved_limit}
 
     @router.get("/inspect/reactions")
     def list_scm_reaction_states(
@@ -244,15 +133,13 @@ def build_scm_webhook_routes(
         last_event_id: Optional[str] = None,
         limit: int = _DEFAULT_INSPECT_LIMIT,
     ) -> dict[str, Any]:
-        hub_root, resolved_limit = _inspect_preamble(request, limit=limit)
-        reactions = ScmReactionStateStore(hub_root).list_reaction_states(
+        return _inspect_service(request).list_reaction_states(
             binding_id=binding_id,
             reaction_kind=reaction_kind,
             state=state,
             last_event_id=last_event_id,
-            limit=resolved_limit,
+            limit=limit,
         )
-        return {"reactions": _serialize_items(reactions), "limit": resolved_limit}
 
     @router.get("/inspect/publish-operations")
     def list_publish_operations(
@@ -261,14 +148,11 @@ def build_scm_webhook_routes(
         operation_kind: Optional[str] = None,
         limit: int = _DEFAULT_INSPECT_LIMIT,
     ) -> dict[str, Any]:
-        hub_root, resolved_limit = _inspect_preamble(request, limit=limit)
-        operations = PublishJournalStore(hub_root).list_operations(
+        return _inspect_service(request).list_publish_operations(
             state=state,
             operation_kind=operation_kind,
-            limit=resolved_limit,
-            newest_first=True,
+            limit=limit,
         )
-        return {"operations": _serialize_items(operations), "limit": resolved_limit}
 
     @router.post("/webhooks/github")
     async def ingest_github_webhook(request: Request):
@@ -326,125 +210,30 @@ def build_scm_webhook_routes(
         if event is None:  # pragma: no cover - defensive
             raise HTTPException(status_code=500, detail="Normalized SCM event missing")
 
-        store = ScmEventStore(hub_root)
-        correlation_id = create_or_preserve_correlation_id(
-            provider=event.provider,
-            event_id=event.event_id,
-            correlation_id=event.correlation_id,
-            headers=request.headers,
-            payload=event.payload,
-        )
-        try:
-            persisted = store.record_event(
-                event_id=event.event_id,
-                provider=event.provider,
-                event_type=event.event_type,
-                occurred_at=event.occurred_at,
-                received_at=event.received_at,
-                repo_slug=event.repo_slug,
-                repo_id=event.repo_id,
-                pr_number=event.pr_number,
-                delivery_id=event.delivery_id,
-                correlation_id=correlation_id,
-                payload=event.payload,
-                raw_payload=event.raw_payload if store_raw_payload else None,
+        outcome = await ingest_scm_webhook_event(
+            ScmWebhookIngestRequest(
+                hub_root=hub_root,
+                raw_config=raw_config,
+                event=event,
+                headers=request.headers,
+                store_raw_payload=store_raw_payload,
                 max_raw_payload_bytes=max_raw_payload_bytes,
+                drain_inline=drain_inline_enabled(raw_config),
+                request_context=request,
+                app=request.app,
+                app_drain_callback=getattr(
+                    request.app.state, "scm_webhook_drain_callback", None
+                ),
+                route_drain_callback=drain_callback,
+                logger=getattr(request.app.state, "logger", None),
             )
-        except sqlite3.IntegrityError:
-            return _compact(
-                {
-                    "status": "accepted",
-                    "event_id": event.event_id,
-                    "provider": event.provider,
-                    "event_type": event.event_type,
-                    "repo_slug": event.repo_slug,
-                    "repo_id": event.repo_id,
-                    "pr_number": event.pr_number,
-                    "delivery_id": event.delivery_id,
-                    "correlation_id": correlation_id,
-                    "drained_inline": False,
-                    "deduped": True,
-                }
-            )
-        except ValueError as exc:
-            reason = (
-                "raw_payload_too_large"
-                if "raw_payload exceeds" in str(exc)
-                else "invalid_event"
-            )
-            detail = (
-                "SCM event payload exceeds configured storage limits"
-                if reason == "raw_payload_too_large"
-                else "SCM event payload could not be processed"
-            )
-            return JSONResponse(
-                status_code=413 if reason == "raw_payload_too_large" else 400,
-                content={
-                    "status": "rejected",
-                    "reason": reason,
-                    "detail": detail,
-                },
-            )
-
-        drained_inline = False
-        audit_error: Optional[str] = None
-        drain_error: Optional[str] = None
-        try:
-            ScmAuditRecorder(hub_root).record(
-                action_type=SCM_AUDIT_INGEST,
-                correlation_id=correlation_id,
-                event=persisted,
-            )
-        except (
-            OSError,
-            ValueError,
-            sqlite3.Error,
-        ):  # pragma: no cover - defensive audit logging
-            logger = getattr(request.app.state, "logger", None)
-            if isinstance(logger, logging.Logger):
-                logger.warning(
-                    "SCM ingest audit recording failed for %s",
-                    persisted.event_id,
-                    exc_info=True,
-                )
-            audit_error = "ingest_audit_failed"
-        if drain_inline_enabled(raw_config):
-            try:
-                await _run_drain_callback(
-                    request=request,
-                    event=persisted,
-                    route_callback=drain_callback,
-                )
-                drained_inline = True
-            except (
-                Exception
-            ) as exc:  # pragma: no cover - intentional: drain callback exception types unknown
-                logger = getattr(request.app.state, "logger", None)
-                if isinstance(logger, logging.Logger):
-                    logger.warning(
-                        "SCM inline drain failed for %s: %s",
-                        persisted.event_id,
-                        exc,
-                        exc_info=True,
-                    )
-                drain_error = "inline_drain_failed"
-
-        return _compact(
-            {
-                "status": "accepted",
-                "event_id": persisted.event_id,
-                "provider": persisted.provider,
-                "event_type": persisted.event_type,
-                "repo_slug": persisted.repo_slug,
-                "repo_id": persisted.repo_id,
-                "pr_number": persisted.pr_number,
-                "delivery_id": persisted.delivery_id,
-                "correlation_id": persisted.correlation_id,
-                "drained_inline": drained_inline,
-                "audit_error": audit_error,
-                "drain_error": drain_error,
-            }
         )
+        if outcome.status == "rejected":
+            return JSONResponse(
+                status_code=outcome.status_code,
+                content=outcome.to_response_payload(),
+            )
+        return outcome.to_response_payload()
 
     return router
 
