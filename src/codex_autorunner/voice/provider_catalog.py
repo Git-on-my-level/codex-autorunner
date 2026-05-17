@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import importlib
-import logging
 from typing import Any, Optional, Sequence, Tuple, Union
 
 from ..core.utils import resolve_executable
@@ -56,11 +55,7 @@ def missing_local_voice_runtime_commands(provider: Any) -> list[str]:
     return [command for command in commands if resolve_executable(command) is None]
 
 
-def check_local_voice_provider_available(
-    provider: Any,
-    *,
-    logger: Optional[logging.Logger] = None,
-) -> Optional[str]:
+def check_local_voice_provider_available(provider: Any) -> Optional[str]:
     """Check whether a local voice provider's Python package is importable.
 
     Returns ``None`` when the provider is available (or is not a local
@@ -68,24 +63,27 @@ def check_local_voice_provider_available(
     string describing what is missing so the caller can log / raise
     appropriately.
     """
-    _log = logger or logging.getLogger(__name__)
     spec = local_voice_provider_spec(provider)
     if spec is None:
         # Not a local provider (e.g. openai_whisper) – nothing to check here.
         return None
 
     _name, dep_groups, extra = spec
-    for group in dep_groups:
-        for import_name in group:
+    for module_names, _display_name in dep_groups:
+        candidates = (
+            [module_names] if isinstance(module_names, str) else list(module_names)
+        )
+        for import_name in candidates:
             try:
                 importlib.import_module(import_name)
-                return None  # first successful import means we're good
+                break
             except ImportError:
                 continue
+        else:
+            return (
+                f"Local voice provider '{_name}' is configured but its Python "
+                f"package is not installed.  Install it with:\n"
+                f"  pip install 'codex-autorunner[{extra}]'"
+            )
 
-    # All import candidates exhausted – report the install command.
-    return (
-        f"Local voice provider '{_name}' is configured but its Python "
-        f"package is not installed.  Install it with:\n"
-        f"  pip install 'codex-autorunner[{extra}]'"
-    )
+    return None

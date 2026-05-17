@@ -92,9 +92,7 @@ class VoiceService:
         # startup so the operator gets a clear error instead of a silent
         # failure on the first voice message.
         if config.enabled:
-            dep_error = check_local_voice_provider_available(
-                config.provider, logger=self._logger
-            )
+            dep_error = check_local_voice_provider_available(config.provider)
             if dep_error is not None:
                 self._logger.error(
                     "Voice provider dependency check failed at startup:\n%s",
