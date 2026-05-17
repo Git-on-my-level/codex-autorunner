@@ -2391,30 +2391,34 @@
               {/if}
             </span>
           </span>
-          <span class="chat-meta-row">
-            {#if !nested}
-              <span class="chat-scope-tags">
-                <span
-                  class="chat-scope-detail-tag"
-                  style={listScopeAccentHex ? `color: ${listScopeAccentHex}` : undefined}
-                  title={scopeTags.detailFull ?? scopeTags.detail}
-                >{scopeTags.detail}</span>
-              </span>
-              {#if chat.ticketId}
-                <span class="chat-meta-dot" aria-hidden="true">·</span>
-                <code>{chat.ticketId}</code>
+          <span class="chat-meta-group">
+            <span class="chat-meta-row chat-meta-row--scope">
+              {#if !nested}
+                <span class="chat-scope-tags">
+                  <span
+                    class="chat-scope-detail-tag"
+                    style={listScopeAccentHex ? `color: ${listScopeAccentHex}` : undefined}
+                    title={scopeTags.detailFull ?? scopeTags.detail}
+                  >{scopeTags.detail}</span>
+                </span>
+                {#if chat.ticketId}
+                  <span class="chat-meta-dot" aria-hidden="true">·</span>
+                  <code>{chat.ticketId}</code>
+                {/if}
+              {:else if chat.title && chat.title !== chat.ticketId}
+                <span class="chat-nested-title" title={chat.title}>{chat.title}</span>
               {/if}
-            {:else if chat.title && chat.title !== chat.ticketId}
-              <span class="chat-nested-title" title={chat.title}>{chat.title}</span>
-            {/if}
+            </span>
             {#if listAgentLabel || chat.model}
-              {#if !nested || (chat.title && chat.title !== chat.ticketId)}
-                <span class="chat-meta-dot" aria-hidden="true">·</span>
-              {/if}
-              <span class="chat-agent-model">
-                {#if listAgentLabel}<span class="chat-agent">{listAgentLabel}</span>{/if}
-                {#if listAgentLabel && chat.model}<span class="chat-meta-dot" aria-hidden="true">·</span>{/if}
-                {#if chat.model}<span class="chat-model">{chat.model}</span>{/if}
+              <span class="chat-meta-row chat-meta-row--agent">
+                {#if !nested || (chat.title && chat.title !== chat.ticketId)}
+                  <span class="chat-meta-dot" aria-hidden="true">·</span>
+                {/if}
+                <span class="chat-agent-model">
+                  {#if listAgentLabel}<span class="chat-agent">{listAgentLabel}</span>{/if}
+                  {#if listAgentLabel && chat.model}<span class="chat-meta-dot" aria-hidden="true">·</span>{/if}
+                  {#if chat.model}<span class="chat-model">{chat.model}</span>{/if}
+                </span>
               </span>
             {/if}
           </span>

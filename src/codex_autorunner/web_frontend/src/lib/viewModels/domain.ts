@@ -1,3 +1,4 @@
+import { stripInjectedContextBlocks } from './injectedContext';
 import { normalizeManagedThreadChatKind } from './managedThreadChatKind';
 
 type JsonRecord = Record<string, unknown>;
@@ -734,7 +735,11 @@ function normalizeMessageText(raw: JsonRecord, role: PmaChatMessage['role']): st
 }
 
 function readableThreadTitle(raw: JsonRecord, fallback: string, ticketId: string | null): string {
-  const explicit = stringValue(raw.display_name ?? raw.name ?? raw.title, fallback);
+  const explicitRaw = stringValue(raw.display_name ?? raw.name ?? raw.title, fallback);
+  let explicit = stripInjectedContextBlocks(explicitRaw).trim();
+  if (!explicit) {
+    explicit = explicitRaw === fallback ? fallback : '';
+  }
   const chatDisplayName = nullableString(raw.chat_display_name);
   if (chatDisplayName && isChatSurfaceIdTitle(explicit, raw)) return chatDisplayName;
   if (
@@ -781,12 +786,14 @@ function isChatSurfaceIdTitle(value: string, raw: JsonRecord): boolean {
 }
 
 function firstUserMessageExcerpt(raw: JsonRecord): string | null {
-  const candidate = firstText(
-    raw.first_message_excerpt,
-    raw.first_user_message,
-    raw.last_user_message,
-    raw.last_message_preview,
-    raw.prompt_preview
+  const candidate = stripInjectedContextBlocks(
+    firstText(
+      raw.first_message_excerpt,
+      raw.first_user_message,
+      raw.last_user_message,
+      raw.last_message_preview,
+      raw.prompt_preview
+    )
   );
   if (!candidate) return null;
   const trimmed = candidate.trim();

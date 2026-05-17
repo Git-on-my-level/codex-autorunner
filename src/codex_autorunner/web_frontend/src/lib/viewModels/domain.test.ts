@@ -110,6 +110,49 @@ describe('view model mappers', () => {
     });
   });
 
+  it('strips injected CAR context blocks from summary titles', () => {
+    const vm = mapPmaChatSummary({
+      thread_target_id: 'thread-inj',
+      display_name:
+        '<injected context>\nYou are operating inside a Codex Autorunner (CAR) managed repo.\n</injected context>\n\nThe web UI gets frozen after a while',
+      agent_id: 'codex',
+      lifecycle_status: 'active',
+      normalized_status: 'idle',
+      repo_id: 'repo-1'
+    });
+
+    expect(vm.title).toBe('The web UI gets frozen after a while');
+  });
+
+  it('falls back to first message excerpt when display title is only injected context', () => {
+    const vm = mapPmaChatSummary({
+      thread_target_id: 'thread-inj-only',
+      display_name: '<injected context>\nCAR hint\n</injected context>',
+      first_message_excerpt: 'User-visible first line',
+      agent_id: 'codex',
+      lifecycle_status: 'active',
+      normalized_status: 'idle',
+      repo_id: 'repo-1'
+    });
+
+    expect(vm.title).toBe('User-visible first line');
+  });
+
+  it('strips injected context from first message excerpt when name is generic', () => {
+    const vm = mapPmaChatSummary({
+      thread_target_id: 'thread-ex-inj',
+      name: 'New chat',
+      first_message_excerpt:
+        '<injected context>\nCAR\n</injected context>\n\nReal question here',
+      repo_id: 'my-repo',
+      agent_id: 'codex',
+      lifecycle_status: 'active',
+      normalized_status: 'idle'
+    });
+
+    expect(vm.title).toBe('Real question here');
+  });
+
   it('uses chat channel display names instead of surface id fallback titles', () => {
     const vm = mapPmaChatSummary({
       thread_target_id: 'thread-1',

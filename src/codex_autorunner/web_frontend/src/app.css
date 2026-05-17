@@ -1204,6 +1204,15 @@ a.scope-chip-label:hover {
   min-width: max-content;
 }
 
+.chat-meta-group {
+  display: flex;
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0;
+  min-width: 0;
+}
+
 .chat-meta-row {
   display: flex;
   align-items: center;
@@ -2064,6 +2073,9 @@ textarea:hover {
   align-self: flex-end;
   width: min(560px, 100%);
   margin-left: auto;
+  /* Never let the flex column shrink this card: it must size to its own
+     content so the header stays one row and the body is fully visible. */
+  flex: none;
   border: 1px solid var(--color-border-subtle);
   border-radius: 8px;
   background: color-mix(in srgb, var(--color-surface-muted) 84%, var(--color-bg));
@@ -2082,6 +2094,16 @@ textarea:hover {
   color: var(--color-ink-muted);
   font-size: var(--font-size-0);
   font-weight: 700;
+  transition: color 120ms ease, background-color 120ms ease;
+}
+
+.injected-prompt-card > summary:hover {
+  color: var(--color-ink);
+  background: color-mix(in srgb, var(--color-surface-muted) 60%, var(--color-bg));
+}
+
+.injected-prompt-card[open] > summary {
+  border-bottom: 1px solid var(--color-border-subtle);
 }
 
 .injected-prompt-card > summary::-webkit-details-marker {
@@ -2111,9 +2133,8 @@ textarea:hover {
 }
 
 .injected-prompt-body {
-  max-height: min(48vh, 520px);
-  overflow: auto;
-  border-top: 1px solid var(--color-border-subtle);
+  /* Non-scrollable: the card grows to fit the full prompt so it can be read
+     inline and scrolled with the rest of the transcript. */
   padding: var(--space-3);
   color: var(--color-ink-soft);
   font-size: var(--font-size-1);
@@ -3288,7 +3309,7 @@ textarea:hover {
   min-width: 0;
 }
 
-.settings-form-grid label span {
+.settings-form-grid label > span {
   color: var(--color-ink-muted);
   font-size: 11px;
   font-weight: 500;
@@ -3421,7 +3442,7 @@ textarea:hover {
   min-width: 0;
 }
 
-.agent-model-control label span {
+.agent-model-control label > span {
   color: var(--color-ink-muted);
   font-size: 11px;
   font-weight: 500;
@@ -3437,8 +3458,8 @@ textarea:hover {
   border-top: 1px solid var(--color-border-subtle);
 }
 
-.agent-status-row strong,
-.agent-status-row span {
+.agent-status-id strong,
+.agent-model-muted {
   display: block;
 }
 
@@ -6082,6 +6103,60 @@ textarea:disabled {
   .detail-heading,
   .sensitive-action {
     flex-direction: column;
+  }
+
+  /* Chat list: pull status + timestamp onto the scope/workspace line instead of
+     stacking them under the title (saves a full row on narrow viewports). */
+  .chat-card-main,
+  .chat-run-group-main {
+    grid-template-columns: minmax(0, 1fr) auto;
+    column-gap: var(--space-2);
+  }
+
+  .chat-card-main > .chat-title-row,
+  .chat-card-main > .chat-meta-group,
+  .chat-run-group-main > .chat-title-row {
+    display: contents;
+  }
+
+  .chat-card-main > .chat-title-row > .chat-title-cluster,
+  .chat-run-group-main > .chat-title-row > .chat-title-cluster {
+    grid-column: 1 / -1;
+    grid-row: 1;
+  }
+
+  .chat-card-main > .chat-meta-group > .chat-meta-row--scope {
+    grid-column: 1;
+    grid-row: 2;
+    min-width: 0;
+  }
+
+  .chat-run-group-main > .chat-meta-row.chat-run-meta {
+    grid-column: 1;
+    grid-row: 2;
+    min-width: 0;
+  }
+
+  .chat-card-main > .chat-title-row > .chat-title-trailing,
+  .chat-run-group-main > .chat-title-row > .chat-title-trailing {
+    grid-column: 2;
+    grid-row: 2;
+    justify-self: end;
+    align-self: center;
+  }
+
+  .chat-card-main > .chat-meta-group > .chat-meta-row--agent {
+    grid-column: 1 / -1;
+    grid-row: 3;
+  }
+
+  /* Agent line is on its own row; drop the leading · used for same-line scope separation on desktop. */
+  .chat-card-main .chat-meta-row--agent > .chat-meta-dot:first-child {
+    display: none;
+  }
+
+  .chat-card-main > .chat-card-footer {
+    grid-column: 1 / -1;
   }
 
   .workspace-row-shell,

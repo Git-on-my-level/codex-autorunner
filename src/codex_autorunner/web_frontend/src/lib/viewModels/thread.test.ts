@@ -123,6 +123,18 @@ describe('mapThreadSummary', () => {
     expect(vm.title).toBe('Please fix the login bug');
   });
 
+  it('strips injected context from display title', () => {
+    const vm = mapThreadSummary({
+      managed_thread_id: 'thread-inj',
+      display_name:
+        '<injected context>\nCAR managed repo\n</injected context>\n\nFix login',
+      agent: 'codex',
+      status: 'idle'
+    });
+
+    expect(vm.title).toBe('Fix login');
+  });
+
   it('builds title from scope for generic chat name', () => {
     const vm = mapThreadSummary({
       managed_thread_id: 'thread-generic',

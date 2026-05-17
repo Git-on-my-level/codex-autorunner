@@ -7,6 +7,7 @@
    * chat composer form.
    */
   import ModelReasoningPicker from '$lib/components/ModelReasoningPicker.svelte';
+  import DropdownSelect, { type DropdownSelectOption } from '$lib/components/DropdownSelect.svelte';
   import {
     agentCanListModels,
     agentId,
@@ -73,6 +74,13 @@
     }
     return fallbackAgentIds.map((id) => ({ id, label: id }));
   });
+  const agentOptions = $derived.by<DropdownSelectOption[]>(() => {
+    const entries = agentPickerEntries.map((entry) => ({ value: entry.id, label: entry.label }));
+    if (agentValue && !agentPickerEntries.some((entry) => entry.id === agentValue)) {
+      return [{ value: agentValue, label: agentValue }, ...entries];
+    }
+    return entries;
+  });
 
   const resolvedShowAgent = $derived(showAgent ?? agentPickerEntries.length > 0);
 
@@ -83,6 +91,14 @@
   );
 
   const profilePickerEntries = $derived(agentProfileEntriesForRecord(selectedAgentRecord));
+  const profileOptions = $derived.by<DropdownSelectOption[]>(() => {
+    const entries: DropdownSelectOption[] = [{ value: '', label: 'Default' }];
+    if (profileValue && !profilePickerEntries.some((entry) => entry.id === profileValue)) {
+      entries.push({ value: profileValue, label: profileValue });
+    }
+    entries.push(...profilePickerEntries.map((entry) => ({ value: entry.id, label: entry.label })));
+    return entries;
+  });
   const showHermesProfilePicker = $derived.by(() => {
     if (!enableHermesProfile) return false;
     if ((agentValue || '').toLowerCase() !== 'hermes') return false;
@@ -111,32 +127,29 @@
 </script>
 
 {#if resolvedShowAgent}
-  <label class={rowClass}>
-    <span>{agentSpanLabel}</span>
-    <select aria-label="Agent" bind:value={agentValue} onchange={handleAgentSelectChange}>
-      {#if agentValue && !agentPickerEntries.some((entry) => entry.id === agentValue)}
-        <option value={agentValue}>{agentValue}</option>
-      {/if}
-      {#each agentPickerEntries as entry (entry.id)}
-        <option value={entry.id}>{entry.label}</option>
-      {/each}
-    </select>
-  </label>
+  <DropdownSelect
+    bind:value={agentValue}
+    options={agentOptions}
+    labelText={agentSpanLabel}
+    ariaLabel="Agent"
+    rowClass={rowClass}
+    searchable={agentOptions.length > 8}
+    searchPlaceholder="Search agents"
+    onchange={handleAgentSelectChange}
+  />
 {/if}
 
 {#if showHermesProfilePicker}
-  <label class={rowClass}>
-    <span>{profileSpanLabel}</span>
-    <select aria-label="Hermes profile" bind:value={profileValue} onchange={handleProfileChange}>
-      <option value="">Default</option>
-      {#if profileValue && !profilePickerEntries.some((entry) => entry.id === profileValue)}
-        <option value={profileValue}>{profileValue}</option>
-      {/if}
-      {#each profilePickerEntries as entry (entry.id)}
-        <option value={entry.id}>{entry.label}</option>
-      {/each}
-    </select>
-  </label>
+  <DropdownSelect
+    bind:value={profileValue}
+    options={profileOptions}
+    labelText={profileSpanLabel}
+    ariaLabel="Hermes profile"
+    rowClass={rowClass}
+    searchable={profileOptions.length > 8}
+    searchPlaceholder="Search profiles"
+    onchange={handleProfileChange}
+  />
 {/if}
 
 <ModelReasoningPicker

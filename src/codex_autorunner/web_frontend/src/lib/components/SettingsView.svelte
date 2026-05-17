@@ -7,6 +7,7 @@
   } from '$lib/viewModels/settings';
   import PageHero from './PageHero.svelte';
   import AutoDismissNotice from './AutoDismissNotice.svelte';
+  import DropdownSelect, { type DropdownSelectGroup, type DropdownSelectOption } from './DropdownSelect.svelte';
   import {
     applyThemePreference,
     isThemePreference,
@@ -53,10 +54,52 @@
     applyThemePreference(pref);
   }
 
-  function onThemeSelectChange(event: Event): void {
-    const v = (event.currentTarget as HTMLSelectElement).value;
-    if (!isThemePreference(v)) return;
-    pickThemePreference(v);
+  const themeGroups: DropdownSelectGroup[] = [
+    {
+      label: 'PMA Hub default',
+      options: [
+        { value: 'system', label: 'System (match OS)' },
+        { value: 'light', label: 'Light' },
+        { value: 'dark', label: 'Dark' }
+      ]
+    },
+    {
+      label: 'Solarized',
+      options: [
+        { value: 'solarized-light', label: 'Solarized Light' },
+        { value: 'solarized-dark', label: 'Solarized Dark' }
+      ]
+    },
+    {
+      label: 'IDE-style',
+      options: [
+        { value: 'dracula', label: 'Dracula' },
+        { value: 'nord', label: 'Nord' },
+        { value: 'one-dark', label: 'One Dark' },
+        { value: 'github-light', label: 'GitHub Light' },
+        { value: 'github-dark', label: 'GitHub Dark' }
+      ]
+    }
+  ];
+  const approvalPolicyOptions: DropdownSelectOption[] = [
+    { value: '', label: 'Use server default' },
+    { value: 'never', label: 'never' },
+    { value: 'unlessTrusted', label: 'unlessTrusted' }
+  ];
+  const sandboxModeOptions: DropdownSelectOption[] = [
+    { value: '', label: 'Use server default' },
+    { value: 'dangerFullAccess', label: 'dangerFullAccess' },
+    { value: 'workspaceWrite', label: 'workspaceWrite' }
+  ];
+  const workspaceWriteNetworkOptions: DropdownSelectOption[] = [
+    { value: '', label: 'Use server default' },
+    { value: 'true', label: 'Enabled' },
+    { value: 'false', label: 'Disabled' }
+  ];
+
+  function onThemeSelectChange(value: string): void {
+    if (!isThemePreference(value)) return;
+    pickThemePreference(value);
   }
 
   $effect(() => {
@@ -109,6 +152,13 @@
     return agent.modelOptions.some((model) => model.id === selected) ? selected : '';
   }
 
+  function agentModelOptions(agent: SettingsAgentStatus): DropdownSelectOption[] {
+    return [
+      { value: '', label: 'Use built-in default' },
+      ...agent.modelOptions.map((model) => ({ value: model.id, label: model.label }))
+    ];
+  }
+
   function patchNetwork(value: string): void {
     patchSession('workspaceWriteNetwork', value === '' ? null : value === 'true');
   }
@@ -152,27 +202,16 @@
 
     <section class="settings-section">
       <h2 class="settings-section-title">Appearance</h2>
-      <label class="theme-select-field">
-        <span>Theme</span>
-        <select aria-label="Color theme" value={themePreference} onchange={onThemeSelectChange}>
-          <optgroup label="PMA Hub default">
-            <option value="system">System (match OS)</option>
-            <option value="light">Light</option>
-            <option value="dark">Dark</option>
-          </optgroup>
-          <optgroup label="Solarized">
-            <option value="solarized-light">Solarized Light</option>
-            <option value="solarized-dark">Solarized Dark</option>
-          </optgroup>
-          <optgroup label="IDE-style">
-            <option value="dracula">Dracula</option>
-            <option value="nord">Nord</option>
-            <option value="one-dark">One Dark</option>
-            <option value="github-light">GitHub Light</option>
-            <option value="github-dark">GitHub Dark</option>
-          </optgroup>
-        </select>
-      </label>
+      <DropdownSelect
+        value={themePreference}
+        groups={themeGroups}
+        labelText="Theme"
+        ariaLabel="Color theme"
+        rowClass="theme-select-field"
+        searchable={true}
+        searchPlaceholder="Search themes"
+        onchange={onThemeSelectChange}
+      />
     </section>
 
     <section class="settings-section">
@@ -228,39 +267,27 @@
             oninput={(event) => patchSession('stopAfterRuns', event.currentTarget.value)}
           />
         </label>
-        <label>
-          <span>Approval policy</span>
-          <select
-            value={view.session.approvalPolicy}
-            onchange={(event) => patchSession('approvalPolicy', event.currentTarget.value)}
-          >
-            <option value="">Use server default</option>
-            <option value="never">never</option>
-            <option value="unlessTrusted">unlessTrusted</option>
-          </select>
-        </label>
-        <label>
-          <span>Sandbox mode</span>
-          <select
-            value={view.session.sandboxMode}
-            onchange={(event) => patchSession('sandboxMode', event.currentTarget.value)}
-          >
-            <option value="">Use server default</option>
-            <option value="dangerFullAccess">dangerFullAccess</option>
-            <option value="workspaceWrite">workspaceWrite</option>
-          </select>
-        </label>
-        <label>
-          <span>Workspace-write network</span>
-          <select
-            value={view.session.workspaceWriteNetwork === null ? '' : String(view.session.workspaceWriteNetwork)}
-            onchange={(event) => patchNetwork(event.currentTarget.value)}
-          >
-            <option value="">Use server default</option>
-            <option value="true">Enabled</option>
-            <option value="false">Disabled</option>
-          </select>
-        </label>
+        <DropdownSelect
+          value={view.session.approvalPolicy}
+          options={approvalPolicyOptions}
+          labelText="Approval policy"
+          ariaLabel="Approval policy"
+          onchange={(value) => patchSession('approvalPolicy', value)}
+        />
+        <DropdownSelect
+          value={view.session.sandboxMode}
+          options={sandboxModeOptions}
+          labelText="Sandbox mode"
+          ariaLabel="Sandbox mode"
+          onchange={(value) => patchSession('sandboxMode', value)}
+        />
+        <DropdownSelect
+          value={view.session.workspaceWriteNetwork === null ? '' : String(view.session.workspaceWriteNetwork)}
+          options={workspaceWriteNetworkOptions}
+          labelText="Workspace-write network"
+          ariaLabel="Workspace-write network"
+          onchange={patchNetwork}
+        />
       </div>
       <AutoDismissNotice message={saveError} tone="danger" />
     </section>
@@ -324,19 +351,15 @@
           </div>
           {#if agent.modelStatus === 'available'}
             <div class="agent-model-control">
-              <label>
-                <span>Default model</span>
-                <select
-                  aria-label={`${agent.name} default model`}
-                  value={selectedAgentModel(agent, session)}
-                  onchange={(event) => patchAgentModel(agent.id, event.currentTarget.value)}
-                >
-                  <option value="">Use built-in default</option>
-                  {#each agent.modelOptions as model}
-                    <option value={model.id}>{model.label}</option>
-                  {/each}
-                </select>
-              </label>
+              <DropdownSelect
+                value={selectedAgentModel(agent, session)}
+                options={agentModelOptions(agent)}
+                labelText="Default model"
+                ariaLabel={`${agent.name} default model`}
+                searchable={agent.modelOptions.length > 8}
+                searchPlaceholder="Search models"
+                onchange={(value) => patchAgentModel(agent.id, value)}
+              />
             </div>
           {:else if agent.modelStatus === 'unavailable'}
             <span class="agent-model-muted">Models unavailable</span>

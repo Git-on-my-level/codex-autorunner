@@ -2306,7 +2306,7 @@ export function agentCapabilityAllowed(
   return Boolean(result && typeof result === 'object' && (result as Record<string, unknown>).allowed === true);
 }
 
-export function localPmaChatScopeOption(): PmaChatScopeOption {
+export function localPmaChatScopeOption(): PmaChatScopeLocalOption {
   return {
     id: 'local',
     kind: 'local',
@@ -2346,6 +2346,116 @@ export function buildPmaChatScopeOptions(
           : `filesystem:${encodeURIComponent(worktree.path || '.')}`
       }))
   ];
+}
+
+export type PmaChatScopeLocalOption = Extract<PmaChatScopeOption, { kind: 'local' }>;
+export type PmaChatScopeRepoOption = Extract<PmaChatScopeOption, { kind: 'repo' }>;
+export type PmaChatScopeWorktreeOption = Extract<PmaChatScopeOption, { kind: 'worktree' }>;
+
+/** A repo and the worktrees that belong to it, mirroring the repos-page grouping. */
+export type PmaChatScopeGroup = {
+  /** Stable key — repo id, or a synthetic key for worktrees with no catalogued repo. */
+  key: string;
+  /** Header label shown above the group's worktrees. */
+  repoLabel: string;
+  /** The repo itself as a selectable scope, when one exists in the catalog. */
+  repo: PmaChatScopeRepoOption | null;
+  /** Worktrees belonging to this repo. */
+  worktrees: PmaChatScopeWorktreeOption[];
+};
+
+export type PmaChatScopeGroupView = {
+  /** Local hub option, or null when filtered out by a search query. */
+  local: PmaChatScopeLocalOption | null;
+  groups: PmaChatScopeGroup[];
+};
+
+const ORPHAN_SCOPE_GROUP_KEY = '__orphan__';
+
+/**
+ * Group flat scope options into repo → worktree buckets so the picker can show which repo a
+ * worktree belongs to. Repo order is preserved; worktrees with no catalogued repo collapse into a
+ * single trailing "Other worktrees" group.
+ */
+export function groupPmaChatScopeOptions(options: PmaChatScopeOption[]): PmaChatScopeGroupView {
+  // The local-hub option is a static constant; `buildPmaChatScopeOptions` always prepends it.
+  const local: PmaChatScopeLocalOption = localPmaChatScopeOption();
+  const groups: PmaChatScopeGroup[] = [];
+  const byKey = new Map<string, PmaChatScopeGroup>();
+
+  const ensureGroup = (key: string, label: string, repo: PmaChatScopeRepoOption | null): PmaChatScopeGroup => {
+    let group = byKey.get(key);
+    if (!group) {
+      group = { key, repoLabel: label, repo, worktrees: [] };
+      byKey.set(key, group);
+      groups.push(group);
+    } else if (repo && !group.repo) {
+      group.repo = repo;
+      group.repoLabel = label;
+    }
+    return group;
+  };
+
+  for (const opt of options) {
+    if (opt.kind === 'repo') ensureGroup(opt.resourceId, opt.label, opt);
+  }
+  for (const opt of options) {
+    if (opt.kind !== 'worktree') continue;
+    const key = opt.parentRepoId ?? ORPHAN_SCOPE_GROUP_KEY;
+    const label = opt.parentRepoId ?? 'Other worktrees';
+    ensureGroup(key, label, null).worktrees.push(opt);
+  }
+
+  return { local, groups };
+}
+
+function scopeOptionMatchesQuery(option: PmaChatScopeOption, query: string): boolean {
+  if (!query) return true;
+  const haystack = `${option.label} ${option.detail} ${option.scopeUrn}`.toLowerCase();
+  return query
+    .toLowerCase()
+    .split(/\s+/)
+    .filter(Boolean)
+    .every((term) => haystack.includes(term));
+}
+
+/**
+ * Filter a grouped scope view by a free-text query. A repo header that matches keeps all of its
+ * worktrees; otherwise only matching worktrees are kept — but the repo header always stays so the
+ * worktree's owning repo remains visible while searching.
+ */
+export function filterPmaChatScopeGroups(
+  view: PmaChatScopeGroupView,
+  query: string
+): PmaChatScopeGroupView {
+  const trimmed = query.trim();
+  if (!trimmed) return view;
+  const needle = trimmed.toLowerCase();
+  const groups: PmaChatScopeGroup[] = [];
+  for (const group of view.groups) {
+    const headerMatches =
+      group.repoLabel.toLowerCase().includes(needle) ||
+      (group.repo ? scopeOptionMatchesQuery(group.repo, trimmed) : false);
+    const worktrees = headerMatches
+      ? group.worktrees
+      : group.worktrees.filter((worktree) => scopeOptionMatchesQuery(worktree, trimmed));
+    if (headerMatches || worktrees.length > 0) {
+      groups.push({ ...group, worktrees });
+    }
+  }
+  const local = view.local && scopeOptionMatchesQuery(view.local, trimmed) ? view.local : null;
+  return { local, groups };
+}
+
+/** Selectable options in keyboard-navigation order: local hub, then each repo before its worktrees. */
+export function flattenPmaChatScopeGroupView(view: PmaChatScopeGroupView): PmaChatScopeOption[] {
+  const flat: PmaChatScopeOption[] = [];
+  if (view.local) flat.push(view.local);
+  for (const group of view.groups) {
+    if (group.repo) flat.push(group.repo);
+    flat.push(...group.worktrees);
+  }
+  return flat;
 }
 
 export function pmaChatScopeLabel(scope: PmaChatScopeOption | null): string {
