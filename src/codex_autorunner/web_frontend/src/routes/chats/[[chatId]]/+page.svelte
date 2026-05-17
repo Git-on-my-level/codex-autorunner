@@ -49,6 +49,32 @@
     visibleChatDetailTranscriptCards,
     withoutOptimisticQueuedTurn
   } from '$lib/application/pmaChatArchitecture';
+  import {
+    activateChatDetailFromUrl,
+    activateRequestedChatFromRows,
+    archivedFilterForSelectedChat,
+    chatListVirtualKey as chatListVirtualKeyForPins,
+    chatSummaryForSessionId,
+    clearCommittedDraftPlaceholderIfPersisted,
+    commitLocalDraftChat,
+    initialChatDetailSessionState,
+    isLocalDraftChatId,
+    loadPinnedChats,
+    markActiveSummaryRead,
+    markChatGroupRead,
+    markSessionChatRead,
+    markVisibleChatsRead,
+    pinAwareChatRowKey as pinAwareChatRowKeyForPins,
+    requestedChatDetailFromUrl,
+    replacementForArchivedActiveChat,
+    savePinnedChats,
+    selectChatDetail,
+    sortEntriesForPinnedChats,
+    startLocalDraftChat,
+    togglePinnedChatId,
+    type ChatDetailSelectionCommand,
+    type ChatDetailSessionState
+  } from '$lib/application/chatDetailSession';
   import { withRuntimeBasePath as href } from '$lib/runtime/basePath';
   import { openChatTranscriptEventSource, shouldUseChatTranscriptStream, type StreamSubscription } from '$lib/api/streaming';
   import {
@@ -72,14 +98,11 @@
     buildPmaLiveActivity,
     buildManagedThreadMessagePayload,
     buildPmaStatusBar,
-    chooseActiveChatId,
-    committedDraftChatPlaceholder,
     composeMessageWithAttachments,
     countTicketRunGroups,
     filterChatEntries,
     formatBytes,
     formatRelativeTime,
-    isLocalChatPlaceholder,
     isPmaChatArchived,
     localPmaChatScopeOption,
     mergeChatFacetSourceChats,
@@ -88,7 +111,6 @@
     CHAT_TICKET_RUNS_FILTER,
     pmaChatKind,
     pmaChatKindLabel,
-    pmaChatBindingKey,
     pmaChatHeaderScopeLine,
     chatMessengerSurface,
     pmaChatScopeTagView,
@@ -111,11 +133,8 @@
     type PmaChatScopeSource
   } from '$lib/viewModels/pmaChat';
   import {
-    isChatUnread,
     loadLastSeenMap,
-    markAllChatsRead,
-    markChatRead,
-    saveLastSeenMap,
+    isChatUnread,
     type ChatLastSeenMap
   } from '$lib/viewModels/unread';
   import { repoAccent, repoInitials } from '$lib/viewModels/repoIdentity';
@@ -146,7 +165,6 @@
 
   const COMPACT_SUMMARY_PROMPT =
     'Summarize the conversation so far into a concise context block I can paste into a new thread. Include goals, constraints, decisions, and current state.';
-  const PINNED_CHATS_STORAGE_KEY = 'car.webHub.pinnedChats.v1';
   const PMA_TRANSCRIPT_LIMIT = 200;
 
   let readModelState = $state(readModelEntityStore.snapshot());
@@ -197,9 +215,7 @@
   );
 
   function chatSummaryForId(chatId: string | null): PmaChatSummary | null {
-    if (!chatId) return null;
-    if (localDraftChat?.id === chatId) return localDraftChat;
-    return chats.find((c) => c.id === chatId) ?? null;
+    return chatSummaryForSessionId(chatId, chats, localDraftChat);
   }
   const transcriptCards = $derived<ChatTranscriptCard[]>(selectChatTranscript(readModelState, activeChatId));
   const progress = $derived<PmaRunProgress | null>(selectPmaProgress(readModelState, activeChatId));
@@ -365,7 +381,7 @@
       groupRuns: true
     })
   );
-  const filteredEntries = $derived(sortEntriesForPins(filterChatEntries(chatListEntries, filter, search, lastSeenMap), pinnedChatIds));
+  const filteredEntries = $derived(sortEntriesForPinnedChats(filterChatEntries(chatListEntries, filter, search, lastSeenMap), pinnedChatIds));
   const filterCounts = $derived(chatStatusFilterCounts());
   const surfaceFilterChips = $derived(chatSurfaceFilterOptions(facetChats));
   const ticketRunGroupCount = $derived(countTicketRunGroups(facetChats));
@@ -388,102 +404,28 @@
     expandedRunGroups = { ...expandedRunGroups, [group.key]: !isGroupExpanded(group) };
   }
 
-  function loadPinnedChats(): Record<string, true> {
-    try {
-      const raw = localStorage.getItem(PINNED_CHATS_STORAGE_KEY);
-      const parsed = raw ? JSON.parse(raw) : [];
-      if (!Array.isArray(parsed)) return {};
-      return Object.fromEntries(parsed.filter((id): id is string => typeof id === 'string' && id.trim().length > 0).map((id) => [id, true]));
-    } catch {
-      return {};
-    }
-  }
-
-  function savePinnedChats(next: Record<string, true>): void {
-    try {
-      localStorage.setItem(PINNED_CHATS_STORAGE_KEY, JSON.stringify(Object.keys(next).sort()));
-    } catch {
-      // Private mode / quota.
-    }
-  }
-
   function toggleChatPinned(event: MouseEvent, chatId: string): void {
     event.preventDefault();
     event.stopPropagation();
     pendingPointerChatId = null;
-    const next = { ...pinnedChatIds };
-    if (next[chatId]) delete next[chatId];
-    else next[chatId] = true;
+    const next = togglePinnedChatId(pinnedChatIds, chatId);
     pinnedChatIds = next;
     savePinnedChats(next);
   }
 
   /** VirtualList keys must change when pin state or pin-driven order changes, or keyed {#each} reuses stale row DOM. */
   function chatListVirtualKey(entry: ChatListEntry): string {
-    if (entry.kind === 'group') {
-      const pinOrder = entry.group.chats
-        .map((c) => `${c.id}:${pinnedChatIds[c.id] ? 1 : 0}`)
-        .join('|');
-      return `group:${entry.group.key}:${pinOrder}`;
-    }
-    return `chat:${entry.chat.id}:${pinnedChatIds[entry.chat.id] ? 1 : 0}`;
+    return chatListVirtualKeyForPins(entry, pinnedChatIds);
   }
 
   function pinAwareChatRowKey(chat: PmaChatSummary): string {
-    return `${chat.id}:${pinnedChatIds[chat.id] ? 1 : 0}`;
-  }
-
-  function sortEntriesForPins(entries: ChatListEntry[], pinned: Record<string, true>): ChatListEntry[] {
-    const decorated = entries.map((entry) => {
-      if (entry.kind === 'chat') {
-        return {
-          entry,
-          pinned: pinned[entry.chat.id] === true,
-          placeholder: isLocalChatPlaceholder(entry.chat),
-          sort: entry.chat.updatedAt ?? '',
-          id: entry.chat.id
-        };
-      }
-      const chats = [...entry.group.chats].sort((left, right) => {
-        const pinnedDiff = Number(pinned[right.id] === true) - Number(pinned[left.id] === true);
-        if (pinnedDiff !== 0) return pinnedDiff;
-        return (right.updatedAt ?? '').localeCompare(left.updatedAt ?? '');
-      });
-      return {
-        entry: { kind: 'group' as const, group: { ...entry.group, chats } },
-        pinned: chats.some((chat) => pinned[chat.id] === true),
-        placeholder: false,
-        sort: entry.group.updatedAt ?? '',
-        id: entry.group.key
-      };
-    });
-    decorated.sort((left, right) => {
-      const placeholderDiff = Number(right.placeholder) - Number(left.placeholder);
-      if (placeholderDiff !== 0) return placeholderDiff;
-      const pinnedDiff = Number(right.pinned) - Number(left.pinned);
-      if (pinnedDiff !== 0) return pinnedDiff;
-      const timeDiff = right.sort.localeCompare(left.sort);
-      if (timeDiff !== 0) return timeDiff;
-      return left.id.localeCompare(right.id);
-    });
-    return decorated.map((item) => item.entry);
+    return pinAwareChatRowKeyForPins(chat, pinnedChatIds);
   }
 
   function markGroupRead(group: ChatRunGroup): void {
-    let next = lastSeenMap;
-    const now = new Date().toISOString();
-    for (const chat of group.chats) {
-      if (!chat.updatedAt && !next[chat.id]) {
-        next = markChatRead(next, chat.id, now);
-        continue;
-      }
-      const stamp = chat.updatedAt ?? now;
-      if (next[chat.id] && next[chat.id] >= stamp) continue;
-      next = markChatRead(next, chat.id, stamp);
-    }
+    const next = markChatGroupRead(lastSeenMap, group.chats);
     if (next === lastSeenMap) return;
     readModelEntityStore.optimisticReadMarkers(next, `read-group:${group.key}:${Date.now()}`);
-    saveLastSeenMap(next);
   }
 
   function groupBadgeClass(group: ChatRunGroup): string {
@@ -728,28 +670,17 @@
 
   $effect(() => {
     const requestedDetail = requestedDetailFromUrl();
-    if (!requestedDetail) {
-      if (isLocalDraftChatId(activeChatId)) return;
-      if (pendingCommittedDetailUrlChatId && activeChatId === pendingCommittedDetailUrlChatId) return;
-      if (activeChatId !== null) {
-        closeStream();
-        activeChatId = null;
-        detailMode = 'list';
-      }
-      return;
-    }
-    // `goto('/chats')` after starting a draft is async; until the URL drops the
-    // prior `[chatId]`, this effect would otherwise reconcile back to that chat
-    // and clear the draft on the first click.
-    if (isLocalDraftChatId(activeChatId)) return;
-    void activateDetailFromUrl(requestedDetail);
+    const command = activateChatDetailFromUrl(readChatDetailSessionState(), {
+      detailId: requestedDetail,
+      chats: requestedDetail ? chats : [],
+      hasCachedDetail,
+      activeDetailLoadResult
+    });
+    applyChatDetailSelectionCommand(command);
   });
 
   $effect(() => {
-    if (!committedDraftChat) return;
-    if (persistedChats.some((chat) => chat.id === committedDraftChat?.id)) {
-      committedDraftChat = null;
-    }
+    writeChatDetailSessionState(clearCommittedDraftPlaceholderIfPersisted(readChatDetailSessionState(), persistedChats));
   });
 
   $effect(() => {
@@ -786,14 +717,9 @@
 
   $effect(() => {
     if (!activeChat) return;
-    const stamp = activeChat.updatedAt;
-    if (!stamp) return;
-    const seen = lastSeenMap[activeChat.id];
-    if (seen && seen >= stamp) return;
-    const next = markChatRead(lastSeenMap, activeChat.id, stamp);
+    const next = markActiveSummaryRead(lastSeenMap, activeChat);
     if (next === lastSeenMap) return;
     readModelEntityStore.optimisticReadMarkers(next, `read-active:${activeChat.id}:${Date.now()}`);
-    saveLastSeenMap(next);
   });
 
   onDestroy(() => {
@@ -826,35 +752,69 @@
     if (followBottom) void scrollMessagesToBottom();
   });
 
+  function readChatDetailSessionState(): ChatDetailSessionState {
+    return {
+      ...initialChatDetailSessionState(),
+      activeChatId,
+      detailMode,
+      localDraftChat,
+      committedDraftChat,
+      pendingCommittedDetailUrlChatId,
+      loadingActive,
+      activeError
+    };
+  }
+
+  function writeChatDetailSessionState(state: ChatDetailSessionState): void {
+    if (
+      activeChatId === state.activeChatId &&
+      detailMode === state.detailMode &&
+      localDraftChat === state.localDraftChat &&
+      committedDraftChat === state.committedDraftChat &&
+      pendingCommittedDetailUrlChatId === state.pendingCommittedDetailUrlChatId &&
+      loadingActive === state.loadingActive &&
+      activeError === state.activeError
+    ) {
+      return;
+    }
+    activeChatId = state.activeChatId;
+    detailMode = state.detailMode;
+    localDraftChat = state.localDraftChat;
+    committedDraftChat = state.committedDraftChat;
+    pendingCommittedDetailUrlChatId = state.pendingCommittedDetailUrlChatId;
+    loadingActive = state.loadingActive;
+    activeError = state.activeError;
+  }
+
+  function applyChatDetailSelectionCommand(command: ChatDetailSelectionCommand): void {
+    writeChatDetailSessionState(command.state);
+    if (command.closeStream) closeStream();
+    if (command.syncSelectors) syncSelectorsToActiveChat();
+    if (command.markRead) markActiveChatRead();
+    if (command.refresh) void refreshActive(command.refresh.chatId, { quiet: command.refresh.quiet });
+  }
+
   function activateRequestedChatFromCurrentRows(): void {
-    if (isLocalDraftChatId(activeChatId)) return;
     const loadedChats = selectPmaChats(readModelEntityStore.snapshot(), currentChatIndexRequest);
     const requestedChat = page.params.chatId ?? page.url.searchParams.get('chat');
-    const selectedChatId = chooseActiveChatId(loadedChats, activeChatId, requestedChat);
-    if (!selectedChatId || activeChatId === selectedChatId) return;
-    activeChatId = selectedChatId;
-    detailMode = 'detail';
-    const selected = loadedChats.find((chat) => chat.id === activeChatId);
-    if (selected && isPmaChatArchived(selected)) filter = 'archived';
-    syncSelectorsToActiveChat();
-    void refreshActive(selectedChatId, { quiet: hasCachedDetail(selectedChatId) });
+    const command = activateRequestedChatFromRows(readChatDetailSessionState(), {
+      loadedChats,
+      requestedChatId: requestedChat,
+      hasCachedDetail
+    });
+    applyChatDetailSelectionCommand(command);
+    if (archivedFilterForSelectedChat(loadedChats, command.state.activeChatId)) filter = 'archived';
   }
 
   function replacementForActiveChat(
     previousState: typeof readModelState,
     nextState: typeof readModelState
   ): string | null {
-    if (!activeChatId) return null;
-    const previousActive = selectPmaChats(previousState, currentChatIndexRequest).find((chat) => chat.id === activeChatId) ?? null;
-    const previousBinding = pmaChatBindingKey(previousActive);
-    if (!previousBinding) return null;
-    const nextChats = selectPmaChats(nextState, currentChatIndexRequest);
-    const nextActive = nextChats.find((chat) => chat.id === activeChatId) ?? null;
-    if (nextActive && !isPmaChatArchived(nextActive)) return null;
-    const replacement = nextChats.find(
-      (chat) => chat.id !== activeChatId && pmaChatBindingKey(chat) === previousBinding && !isPmaChatArchived(chat)
+    return replacementForArchivedActiveChat(
+      selectPmaChats(previousState, currentChatIndexRequest),
+      selectPmaChats(nextState, currentChatIndexRequest),
+      activeChatId
     );
-    return replacement?.id ?? null;
   }
 
   async function loadInitialSupportingData(
@@ -995,17 +955,9 @@
 
   async function selectChat(chatId: string): Promise<void> {
     const cached = hasCachedDetail(chatId);
-    if (!isLocalDraftChatId(chatId)) localDraftChat = null;
-    if (committedDraftChat?.id !== chatId) committedDraftChat = null;
-    pendingCommittedDetailUrlChatId = null;
-    activeChatId = chatId;
-    detailMode = 'detail';
-    loadingActive = !cached;
-    activeError = null;
-    syncSelectorsToActiveChat();
-    markActiveChatRead();
+    const command = selectChatDetail(readChatDetailSessionState(), chatId, { cached, syncUrl: true });
+    applyChatDetailSelectionCommand(command);
     const urlPromise = syncDetailUrl(chatId);
-    void refreshActive(chatId, { quiet: cached });
     await urlPromise;
   }
 
@@ -1037,68 +989,43 @@
   }
 
   function requestedDetailFromUrl(): string | null {
-    if (page.params.chatId) return page.params.chatId;
-    const detail = page.url.searchParams.get('detail');
-    if (detail?.startsWith('chat:')) return detail.slice('chat:'.length);
-    return page.url.searchParams.get('chat');
+    return requestedChatDetailFromUrl(page.params.chatId, page.url.searchParams);
   }
 
   async function activateDetailFromUrl(detailId: string): Promise<void> {
-    if (detailId === activeChatId) return;
-    if (localDraftChat && detailId === localDraftChat.id) {
-      await selectChatWithoutUrl(detailId);
-      return;
-    }
-    if (!chats.some((chat) => chat.id === detailId)) {
-      closeStream();
-      if (committedDraftChat?.id !== detailId) committedDraftChat = null;
-      pendingCommittedDetailUrlChatId = null;
-      activeChatId = detailId;
-      detailMode = 'detail';
-      loadingActive = true;
-      const loaderResult = activeDetailLoadResult(detailId);
-      activeError = loaderResult?.status === 'error' ? loaderResult.error : null;
-      if (activeError) {
-        loadingActive = false;
-        return;
-      }
-      void refreshActive(detailId);
-      return;
-    }
-    await selectChatWithoutUrl(detailId);
+    applyChatDetailSelectionCommand(
+      activateChatDetailFromUrl(readChatDetailSessionState(), {
+        detailId,
+        chats,
+        hasCachedDetail,
+        activeDetailLoadResult
+      })
+    );
   }
 
   async function selectChatWithoutUrl(chatId: string): Promise<void> {
     const cached = hasCachedDetail(chatId);
     const loaderResult = activeDetailLoadResult(chatId);
-    const loaderOwnsInitialDetail = Boolean(loaderResult && loaderResult.status !== 'cold');
-    if (!isLocalDraftChatId(chatId)) localDraftChat = null;
-    if (committedDraftChat?.id !== chatId) committedDraftChat = null;
-    pendingCommittedDetailUrlChatId = null;
-    activeChatId = chatId;
-    detailMode = 'detail';
-    loadingActive = !(cached || loaderOwnsInitialDetail);
-    activeError = loaderResult?.status === 'error' ? loaderResult.error : null;
-    syncSelectorsToActiveChat();
-    markActiveChatRead();
-    void refreshActive(chatId, { quiet: cached || loaderOwnsInitialDetail });
+    applyChatDetailSelectionCommand(
+      selectChatDetail(readChatDetailSessionState(), chatId, {
+        cached,
+        loaderOwnsInitialDetail: Boolean(loaderResult && loaderResult.status !== 'cold'),
+        activeError: loaderResult?.status === 'error' ? loaderResult.error : null,
+        syncUrl: false
+      })
+    );
   }
 
   function markActiveChatRead(): void {
-    if (!activeChatId) return;
-    const chat = chatSummaryForId(activeChatId);
-    const stamp = chat?.updatedAt ?? new Date().toISOString();
-    const next = markChatRead(lastSeenMap, activeChatId, stamp);
+    const next = markSessionChatRead(lastSeenMap, activeChatId, chats, localDraftChat);
     if (next === lastSeenMap) return;
     readModelEntityStore.optimisticReadMarkers(next, `read-chat:${activeChatId}:${Date.now()}`);
-    saveLastSeenMap(next);
   }
 
   function markAllUnreadChatsRead(): void {
-    const next = markAllChatsRead(lastSeenMap, chats.filter((chat) => !isPmaChatArchived(chat)));
+    const next = markVisibleChatsRead(lastSeenMap, chats);
     if (next === lastSeenMap) return;
     readModelEntityStore.optimisticReadMarkers(next, `read-all:${Date.now()}`);
-    saveLastSeenMap(next);
   }
 
   function invalidateChatMutation(chatId: string): Promise<void> {
@@ -1514,10 +1441,6 @@
     };
   }
 
-  function isLocalDraftChatId(chatId: string | null): boolean {
-    return Boolean(chatId && chatId.startsWith('draft:pma:'));
-  }
-
   function worktreeScopeOption(worktreeId: string): Extract<PmaChatScopeOption, { kind: 'worktree' }> | null {
     return scopeOptions.find(
       (scope): scope is Extract<PmaChatScopeOption, { kind: 'worktree' }> =>
@@ -1625,9 +1548,7 @@
       selectedScopeSource = 'default_hub';
       newChatKind = 'pma';
     }
-    localDraftChat = newDraftChatSummary();
-    activeChatId = localDraftChat.id;
-    detailMode = 'detail';
+    writeChatDetailSessionState(startLocalDraftChat(readChatDetailSessionState(), newDraftChatSummary()));
     closeStream();
     void goto(href('/chats'), { replaceState: true });
     creating = false;
@@ -1821,17 +1742,9 @@
             : activeChat && activeChat.id === targetChatId
               ? activeChat
               : null;
-        if (draftChatForPlaceholder) {
-          committedDraftChat = committedDraftChatPlaceholder(
-            draftChatForPlaceholder,
-            committedChatId,
-            optimisticTimestamp
-          );
-        }
-        localDraftChat = null;
-        activeChatId = committedChatId;
-        detailMode = 'detail';
-        pendingCommittedDetailUrlChatId = committedChatId;
+        writeChatDetailSessionState(
+          commitLocalDraftChat(readChatDetailSessionState(), draftChatForPlaceholder, committedChatId, optimisticTimestamp)
+        );
         moveOptimisticToCommittedChat(committedChatId);
         try {
           await syncDetailUrl(committedChatId);
