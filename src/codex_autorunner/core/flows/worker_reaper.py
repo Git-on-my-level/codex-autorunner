@@ -32,6 +32,8 @@ class FlowWorkerDiagnostic:
     status: Optional[str]
     metadata_path: Path
     metadata_age_seconds: Optional[float]
+    last_activity_at: Optional[str] = None
+    idle_seconds: Optional[float] = None
     rss_kb: Optional[int] = None
     command: Optional[str] = None
     reason: Optional[str] = None
@@ -45,6 +47,8 @@ class FlowWorkerDiagnostic:
             "status": self.status,
             "metadata_path": str(self.metadata_path),
             "metadata_age_seconds": self.metadata_age_seconds,
+            "last_activity_at": self.last_activity_at,
+            "idle_seconds": self.idle_seconds,
             "rss_kb": self.rss_kb,
             "command": self.command,
             "reason": self.reason,
@@ -86,7 +90,7 @@ def _scan_flow_worker_diagnostics(
     if not flows_root.exists():
         return [], [], {}
 
-    runs_by_id, load_errors = _load_flow_runs(repo_root)
+    runs_by_id, activity_by_id, load_errors = _load_flow_run_state(repo_root)
     process_by_pid = {
         proc.pid: proc
         for proc in collect_processes().car_service_processes
@@ -111,8 +115,15 @@ def _scan_flow_worker_diagnostics(
         record = runs_by_id.get(run_id)
         proc = process_by_pid.get(pid)
         metadata_age = _metadata_age_seconds(metadata, metadata_path)
+        last_activity_at = activity_by_id.get(run_id)
+        idle_seconds = _idle_seconds(last_activity_at)
         classification, reason = _classify_worker(
-            record, alive, metadata_age, stale_age_seconds=stale_age_seconds
+            record,
+            alive,
+            metadata_age,
+            last_activity_at=last_activity_at,
+            idle_seconds=idle_seconds,
+            stale_age_seconds=stale_age_seconds,
         )
         diagnostics.append(
             FlowWorkerDiagnostic(
@@ -123,6 +134,8 @@ def _scan_flow_worker_diagnostics(
                 status=record.status.value if record is not None else None,
                 metadata_path=metadata_path,
                 metadata_age_seconds=metadata_age,
+                last_activity_at=last_activity_at,
+                idle_seconds=idle_seconds,
                 rss_kb=proc.rss_kb if proc is not None else None,
                 command=proc.command if proc is not None else None,
                 reason=reason,
@@ -219,18 +232,48 @@ def reap_stale_flow_workers(
     )
 
 
-def _load_flow_runs(repo_root: Path) -> tuple[dict[str, FlowRunRecord], list[str]]:
+def _load_flow_run_state(
+    repo_root: Path,
+) -> tuple[dict[str, FlowRunRecord], dict[str, str], list[str]]:
     db_path = resolve_repo_flows_db_path(repo_root)
     if not db_path.exists():
-        return {}, []
+        return {}, {}, []
     try:
         with FlowStore.connect_readonly(db_path) as store:
-            return (
-                {record.id: record for record in store.list_flow_runs()},
-                [],
-            )
+            records = {record.id: record for record in store.list_flow_runs()}
+            activity_by_id = {
+                run_id: activity
+                for run_id in records
+                if (activity := _last_activity_at(store, run_id)) is not None
+            }
+            return records, activity_by_id, []
     except (OSError, RuntimeError, ValueError) as exc:
-        return {}, [f"flows_db_read_failed:{exc}"]
+        return {}, {}, [f"flows_db_read_failed:{exc}"]
+
+
+def _last_activity_at(store: FlowStore, run_id: str) -> Optional[str]:
+    _event_seq, event_at = store.get_last_event_meta(run_id)
+    _telemetry_seq, telemetry_at = store.get_last_telemetry_meta(run_id)
+    parsed = [
+        dt
+        for dt in (parse_flow_timestamp(event_at), parse_flow_timestamp(telemetry_at))
+        if dt is not None
+    ]
+    if not parsed:
+        return None
+    return max(dt.astimezone(timezone.utc) for dt in parsed).isoformat()
+
+
+def _idle_seconds(last_activity_at: Optional[str]) -> Optional[float]:
+    last_activity_dt = parse_flow_timestamp(last_activity_at)
+    if last_activity_dt is None:
+        return None
+    return max(
+        0.0,
+        (
+            datetime.now(timezone.utc) - last_activity_dt.astimezone(timezone.utc)
+        ).total_seconds(),
+    )
 
 
 def _read_json(path: Path) -> dict[str, Any]:
@@ -258,6 +301,8 @@ def _classify_worker(
     alive: bool,
     metadata_age_seconds: Optional[float],
     *,
+    last_activity_at: Optional[str] = None,
+    idle_seconds: Optional[float] = None,
     stale_age_seconds: float,
 ) -> tuple[str, str]:
     if not alive:
@@ -267,6 +312,10 @@ def _classify_worker(
     if record.status.is_terminal():
         return "stale", f"run_{record.status.value}"
     if metadata_age_seconds is not None and metadata_age_seconds >= stale_age_seconds:
+        if idle_seconds is not None and idle_seconds < stale_age_seconds:
+            return "active", "recent_activity"
+        if last_activity_at is not None:
+            return "stale", "idle_stale"
         return "stale", "metadata_age_exceeded"
     return "active", f"run_{record.status.value}"
 
@@ -278,6 +327,8 @@ def _eligible_for_reap(
     max_age_seconds: float,
     terminal_grace_seconds: float,
 ) -> bool:
+    if worker.classification == "active" and worker.reason == "recent_activity":
+        return False
     if worker.classification == "zombie":
         return True
     record = runs_by_id.get(worker.run_id)
@@ -295,6 +346,12 @@ def _eligible_for_reap(
     ):
         return False
     if worker.metadata_age_seconds is not None:
+        if (
+            worker.classification == "stale"
+            and worker.reason == "idle_stale"
+            and worker.idle_seconds is not None
+        ):
+            return worker.idle_seconds >= max_age_seconds
         return worker.metadata_age_seconds >= max_age_seconds
     return False
 

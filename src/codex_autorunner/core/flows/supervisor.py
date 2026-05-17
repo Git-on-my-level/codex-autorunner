@@ -84,6 +84,10 @@ class WorkerExitObservation:
         if self.exit_kind in {
             "max_wall_time",
             "opencode_stream_stalled_timeout",
+            "app_server_stalled",
+            "idle_stale",
+            "missing_worker",
+            "rotation_requested",
         }:
             return True
         # SIGTERM from the parent uses the same handler as an external signal, but
