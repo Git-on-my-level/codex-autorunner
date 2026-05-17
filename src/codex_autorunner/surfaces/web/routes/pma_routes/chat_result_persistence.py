@@ -231,8 +231,7 @@ async def persist_transcript(
         return None
     return {
         "turn_id": pointer.turn_id,
-        "metadata_path": pointer.metadata_path,
-        "content_path": pointer.content_path,
+        "transcript_mirror_id": pointer.transcript_mirror_id,
         "created_at": pointer.created_at,
     }
 

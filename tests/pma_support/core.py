@@ -741,6 +741,9 @@ def test_pma_chat_persists_transcript_and_history_entry(hub_env) -> None:
     transcript_pointer = last_result.get("transcript") or {}
     transcript_turn_id = str(transcript_pointer.get("turn_id") or "")
     assert transcript_turn_id
+    assert transcript_pointer["transcript_mirror_id"] == transcript_turn_id
+    assert "metadata_path" not in transcript_pointer
+    assert "content_path" not in transcript_pointer
 
     transcript = PmaTranscriptStore(hub_env.hub_root).read_transcript(
         transcript_turn_id

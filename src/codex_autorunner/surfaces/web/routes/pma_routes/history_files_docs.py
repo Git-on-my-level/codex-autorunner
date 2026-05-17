@@ -247,11 +247,20 @@ def build_history_files_docs_router(
     @router.get("/history")
     def list_pma_history(request: Request, limit: int = 50) -> dict[str, Any]:
         context = get_pma_request_context(request)
-        # The transcript store serves the canonical sqlite mirror and falls back to
-        # legacy files only while older history is being migrated.
         store = context.transcript_store()
         entries = store.list_recent(limit=limit)
         return {"entries": entries}
+
+    @router.get("/history/status")
+    def get_pma_history_status(request: Request) -> dict[str, Any]:
+        context = get_pma_request_context(request)
+        status = context.transcript_store().coverage_status()
+        return {
+            "mirrored_transcripts": status.mirrored_count,
+            "legacy_metadata_files": status.legacy_metadata_files_count,
+            "legacy_files_not_mirrored": status.legacy_unmirrored_files_count,
+            "last_backfill_status": status.last_backfill_status,
+        }
 
     @router.get("/history/{turn_id}")
     def get_pma_history(turn_id: str, request: Request) -> dict[str, Any]:
