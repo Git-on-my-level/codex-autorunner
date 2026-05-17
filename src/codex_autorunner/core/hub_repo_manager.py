@@ -66,7 +66,7 @@ class RepoManager:
         on_invalidate_cache: Callable[[], None],
         on_snapshot_for_repo: Callable[[str], RepoSnapshot],
         on_stop_runner: Optional[Callable[..., None]] = None,
-        on_cleanup_worktree: Optional[Callable[..., Dict[str, object]]] = None,
+        on_retire_worktree: Optional[Callable[..., Dict[str, object]]] = None,
         on_list_repos: Optional[Callable[..., List[RepoSnapshot]]] = None,
         runners: Optional[Dict[str, Any]] = None,
     ):
@@ -75,7 +75,7 @@ class RepoManager:
         self._on_invalidate_cache = on_invalidate_cache
         self._on_snapshot_for_repo = on_snapshot_for_repo
         self._on_stop_runner = on_stop_runner
-        self._on_cleanup_worktree = on_cleanup_worktree
+        self._on_retire_worktree = on_retire_worktree
         self._on_list_repos = on_list_repos
         self._runners = runners
 
@@ -173,7 +173,7 @@ class RepoManager:
         )
 
         if repo.kind == "worktree":
-            self._delegate_cleanup_worktree(
+            self._delegate_retire_worktree(
                 worktree_repo_id=repo_id,
                 force=force,
                 force_attestation=force_attestation,
@@ -190,7 +190,7 @@ class RepoManager:
             raise ValueError(f"Repo {repo_id} has worktrees: {ids}")
         if worktrees and delete_worktrees:
             for worktree in worktrees:
-                self._delegate_cleanup_worktree(
+                self._delegate_retire_worktree(
                     worktree_repo_id=worktree.id,
                     force=force,
                     force_attestation=force_attestation,
@@ -198,7 +198,7 @@ class RepoManager:
             manifest = self._topology_repository.load_manifest()
             repo = manifest.get(repo_id)
             if not repo:
-                raise ValueError(f"Repo {repo_id} missing after worktree cleanup")
+                raise ValueError(f"Repo {repo_id} missing after worktree retire")
 
         repo_root = (self._hub_config.root / repo.path).resolve()
         if repo_root.exists() and git_available(repo_root):
@@ -667,16 +667,16 @@ class RepoManager:
         )
         save_manifest(self._hub_config.manifest_path, manifest, self._hub_config.root)
 
-    def _delegate_cleanup_worktree(
+    def _delegate_retire_worktree(
         self,
         *,
         worktree_repo_id: str,
         force: bool,
         force_attestation: Optional[Mapping[str, object]],
     ) -> None:
-        if self._on_cleanup_worktree is None:
-            raise RuntimeError("cleanup_worktree callback not configured")
-        self._on_cleanup_worktree(
+        if self._on_retire_worktree is None:
+            raise RuntimeError("retire_worktree callback not configured")
+        self._on_retire_worktree(
             worktree_repo_id=worktree_repo_id,
             force=force,
             force_attestation=force_attestation,

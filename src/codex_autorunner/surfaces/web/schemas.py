@@ -160,7 +160,7 @@ class HubCreateWorktreeRequest(Payload):
     )
 
 
-class HubCleanupWorktreeRequest(Payload):
+class HubRetireWorktreeRequest(Payload):
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
     worktree_repo_id: str = Field(
@@ -173,7 +173,6 @@ class HubCleanupWorktreeRequest(Payload):
         default=None,
         validation_alias=AliasChoices("force_attestation", "forceAttestation"),
     )
-    archive: bool = True
     force_archive: bool = Field(
         default=False, validation_alias=AliasChoices("force_archive", "forceArchive")
     )
@@ -185,7 +184,22 @@ class HubCleanupWorktreeRequest(Payload):
     )
 
 
-class HubArchiveWorktreeRequest(Payload):
+class HubDeleteWorktreeRequest(Payload):
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+    worktree_repo_id: str = Field(
+        validation_alias=AliasChoices("worktree_repo_id", "worktreeRepoId")
+    )
+    delete_branch: bool = False
+    delete_remote: bool = False
+    force: bool = False
+    force_attestation: Optional[str] = Field(
+        default=None,
+        validation_alias=AliasChoices("force_attestation", "forceAttestation"),
+    )
+
+
+class HubArchiveWorktreeStateRequest(Payload):
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
     worktree_repo_id: str = Field(
@@ -209,17 +223,6 @@ class HubArchiveRepoStateRequest(Payload):
     archive_profile: Optional[str] = Field(
         default=None, validation_alias=AliasChoices("archive_profile", "archiveProfile")
     )
-
-
-class HubArchiveWorktreeResponse(ResponseModel):
-    snapshot_id: str
-    snapshot_path: str
-    meta_path: str
-    status: str
-    file_count: int
-    total_bytes: int
-    flow_run_count: int
-    latest_flow_run_id: Optional[str]
 
 
 class HubArchiveWorktreeStateResponse(ResponseModel):
@@ -446,15 +449,15 @@ __all__ = [
     "GithubPrSyncRequest",
     "HubArchiveRepoStateRequest",
     "HubArchiveRepoStateResponse",
-    "HubArchiveWorktreeRequest",
-    "HubArchiveWorktreeResponse",
+    "HubArchiveWorktreeStateRequest",
     "HubArchiveWorktreeStateResponse",
-    "HubCleanupWorktreeRequest",
     "HubCreateRepoRequest",
     "HubCreateWorktreeRequest",
+    "HubDeleteWorktreeRequest",
     "HubDestinationMountRequest",
     "HubDestinationSetRequest",
     "HubJobResponse",
+    "HubRetireWorktreeRequest",
     "InteractionPromptResponseRequest",
     "HubMessageSnapshotResponse",
     "HubMessagesFreshnessResponse",

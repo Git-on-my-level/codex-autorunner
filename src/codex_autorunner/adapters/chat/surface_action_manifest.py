@@ -38,7 +38,7 @@ class SurfaceActionManifestContext:
     resource_id: Optional[str] = None
     lifecycle_state: Optional[str] = None
     worker_health_status: Optional[str] = None
-    archive_mode: str = "blocked"
+    retire_mode: str = "blocked"
     has_run: bool = False
     has_open_tickets: bool = False
     capabilities: frozenset[str] = frozenset()
@@ -117,7 +117,7 @@ _FLOW_COMMAND_IDS = {
     "resume": "car.flow.resume",
     "stop": "car.flow.stop",
     "restart": "car.flow.restart",
-    "archive": "car.flow.archive",
+    "retire": "car.flow.retire",
     "recover": "car.flow.recover",
     "refresh": "car.flow.status",
 }
@@ -127,7 +127,7 @@ _FLOW_DESCRIPTIONS = {
     "resume": "Resume a paused ticket-flow run.",
     "stop": "Stop the active ticket-flow run.",
     "restart": "Start a new ticket-flow run after stopping the current one.",
-    "archive": "Archive a completed ticket-flow run.",
+    "retire": "Retire a completed ticket-flow run.",
     "recover": "Recover an unhealthy ticket-flow worker.",
     "refresh": "Refresh ticket-flow status.",
 }
@@ -165,7 +165,7 @@ def _ticket_flow_actions(
         FlowActionPolicySnapshot(
             status=context.lifecycle_state,
             worker_health_status=context.worker_health_status,
-            archive_mode=context.archive_mode,
+            retire_mode=context.retire_mode,
             has_run=context.has_run,
             has_open_tickets=context.has_open_tickets,
             has_queue_scope=bool(context.resource_kind and context.resource_id),

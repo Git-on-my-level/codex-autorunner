@@ -53,7 +53,7 @@ def _seed_ticket_state(repo_root: Path, run_id: str) -> None:
     (live_flow_dir / "outbound.jsonl").write_text("{}", encoding="utf-8")
 
 
-def test_archive_route_deletes_run_record_by_default(
+def test_retire_route_deletes_run_record_by_default(
     _flow_archive_env, monkeypatch
 ) -> None:
     client, repo_root = _flow_archive_env
@@ -79,7 +79,7 @@ def test_archive_route_deletes_run_record_by_default(
         _archive_flow_run_artifacts,
     )
 
-    response = client.post(f"/api/flows/{run_id}/archive")
+    response = client.post(f"/api/flows/{run_id}/retire")
 
     assert response.status_code == 200
     assert captured == [
@@ -92,7 +92,7 @@ def test_archive_route_deletes_run_record_by_default(
     ]
 
 
-def test_archive_route_cleans_live_contextspace_after_archiving(
+def test_retire_route_cleans_live_contextspace_after_archiving(
     _flow_archive_env,
 ) -> None:
     client, repo_root = _flow_archive_env
@@ -100,7 +100,7 @@ def test_archive_route_cleans_live_contextspace_after_archiving(
     _create_run(repo_root, run_id, FlowRunStatus.COMPLETED)
     _seed_ticket_state(repo_root, run_id)
 
-    response = client.post(f"/api/flows/{run_id}/archive")
+    response = client.post(f"/api/flows/{run_id}/retire")
 
     assert response.status_code == 200
     payload = response.json()

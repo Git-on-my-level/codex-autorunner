@@ -309,9 +309,9 @@ async def test_flow_archive_defaults_latest_paused_prompts_confirmation(
     (live_flow_dir / "outbound.jsonl").write_text("{}", encoding="utf-8")
 
     handler = _FlowLifecycleHandler()
-    await handler._handle_flow_archive(_message(), tmp_path, argv=[])
+    await handler._handle_flow_retire(_message(), tmp_path, argv=[])
 
-    assert any("Archive it anyway?" in text for text in handler.sent)
+    assert any("Retire it anyway?" in text for text in handler.sent)
     assert handler.reply_markups[-1] is not None
     archive_dir = (
         tmp_path
@@ -360,7 +360,7 @@ async def test_flow_archive_force_archives_latest_paused(
     (live_flow_dir / "outbound.jsonl").write_text("{}", encoding="utf-8")
 
     handler = _FlowLifecycleHandler()
-    await handler._handle_flow_archive(_message(), tmp_path, argv=["--force"])
+    await handler._handle_flow_retire(_message(), tmp_path, argv=["--force"])
 
     archive_dir = (
         tmp_path

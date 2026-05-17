@@ -116,7 +116,7 @@ class _FlowServiceStub:
         self.summary = summary
         self.archive_calls: list[dict[str, Any]] = []
 
-    def archive_flow_run(
+    def retire_flow_run(
         self, run_id: str, *, force: bool = False, delete_run: bool = True
     ) -> dict[str, Any]:
         self.archive_calls.append(
@@ -126,7 +126,7 @@ class _FlowServiceStub:
 
 
 class _FlowServiceKeyErrorStub:
-    def archive_flow_run(
+    def retire_flow_run(
         self, run_id: str, *, force: bool = False, delete_run: bool = True
     ) -> dict[str, Any]:
         _ = (force, delete_run)
@@ -134,11 +134,11 @@ class _FlowServiceKeyErrorStub:
 
 
 class _FlowServiceValueErrorStub:
-    def archive_flow_run(
+    def retire_flow_run(
         self, run_id: str, *, force: bool = False, delete_run: bool = True
     ) -> dict[str, Any]:
         _ = (run_id, force, delete_run)
-        raise ValueError("Can only archive completed/stopped/failed flows")
+        raise ValueError("Can only retire completed/stopped/failed flows")
 
 
 def _config(root: Path, *, ack_budget_ms: int = 10_000) -> DiscordBotConfig:
@@ -239,7 +239,7 @@ async def test_flow_archive_command_deletes_run_record_by_default(
             interaction_id=interaction_id,
             interaction_token=interaction_token,
         )
-        await service._handle_flow_archive(
+        await service._handle_flow_retire(
             interaction_id,
             interaction_token,
             workspace_root=workspace,
@@ -257,7 +257,7 @@ async def test_flow_archive_command_deletes_run_record_by_default(
         store.initialize()
         assert store.get_flow_run(run_id) is not None
     assert rest.interaction_responses[0]["payload"]["type"] == 5
-    assert "Archived run" in rest.followup_messages[0]["payload"]["content"]
+    assert "Retired run" in rest.followup_messages[0]["payload"]["content"]
 
 
 @pytest.mark.anyio
@@ -300,7 +300,7 @@ async def test_flow_archive_command_without_run_id_uses_latest_run_without_picke
             interaction_id=interaction_id,
             interaction_token=interaction_token,
         )
-        await service._handle_flow_archive(
+        await service._handle_flow_retire(
             interaction_id,
             interaction_token,
             workspace_root=workspace,
@@ -316,7 +316,7 @@ async def test_flow_archive_command_without_run_id_uses_latest_run_without_picke
         {"run_id": latest_run_id, "force": False, "delete_run": True}
     ]
     assert rest.interaction_responses[0]["payload"]["type"] == 5
-    assert "Archived run" in rest.followup_messages[0]["payload"]["content"]
+    assert "Retired run" in rest.followup_messages[0]["payload"]["content"]
 
 
 @pytest.mark.anyio
@@ -353,7 +353,7 @@ async def test_flow_archive_command_without_run_id_blocks_latest_active_run(
             interaction_id=interaction_id,
             interaction_token=interaction_token,
         )
-        await service._handle_flow_archive(
+        await service._handle_flow_retire(
             interaction_id,
             interaction_token,
             workspace_root=workspace,
@@ -369,7 +369,7 @@ async def test_flow_archive_command_without_run_id_blocks_latest_active_run(
     assert len(rest.followup_messages) == 1
     content = rest.followup_messages[0]["payload"]["content"]
     assert latest_run_id in content
-    assert "Stop or pause it before archiving" in content
+    assert "Stop or pause it before retiring" in content
 
 
 @pytest.mark.anyio
@@ -401,7 +401,7 @@ async def test_flow_archive_button_deletes_run_record_by_default(
             "interaction-2",
             "token-2",
             workspace_root=workspace,
-            custom_id=f"flow:{run_id}:archive",
+            custom_id=f"flow:{run_id}:retire",
             channel_id="channel-1",
             guild_id="guild-1",
         )
@@ -413,9 +413,9 @@ async def test_flow_archive_button_deletes_run_record_by_default(
     ]
     assert rest.interaction_responses[0]["payload"]["type"] == 6
     assert len(rest.followup_messages) == 1
-    assert "Archiving run" in rest.followup_messages[0]["payload"]["content"]
+    assert "Retiring run" in rest.followup_messages[0]["payload"]["content"]
     edited = rest.edited_original_interaction_responses[0]["payload"]
-    assert "Archived run" in edited["content"]
+    assert "Retired run" in edited["content"]
 
 
 @pytest.mark.anyio
@@ -449,7 +449,7 @@ async def test_flow_archive_button_real_archive_renders_archived_state(
             "interaction-2-real",
             "token-2-real",
             workspace_root=workspace,
-            custom_id=f"flow:{run_id}:archive",
+            custom_id=f"flow:{run_id}:retire",
             channel_id="channel-1",
             guild_id="guild-1",
         )
@@ -458,11 +458,11 @@ async def test_flow_archive_button_real_archive_renders_archived_state(
 
     assert rest.interaction_responses[0]["payload"]["type"] == 6
     assert len(rest.followup_messages) == 1
-    assert "Archiving run" in rest.followup_messages[0]["payload"]["content"]
+    assert "Retiring run" in rest.followup_messages[0]["payload"]["content"]
     edited = rest.edited_original_interaction_responses[0]["payload"]
-    assert "Archived run" in edited["content"]
+    assert "Retired run" in edited["content"]
     assert "Status: archived" in edited["content"]
-    assert f"Archive path: .codex-autorunner/archive/runs/{run_id}" in edited["content"]
+    assert f"Retire path: .codex-autorunner/archive/runs/{run_id}" in edited["content"]
     assert edited["components"] == []
 
 
@@ -518,7 +518,7 @@ async def test_flow_archive_button_falls_back_when_status_refresh_is_transient(
             "interaction-2-transient",
             "token-2-transient",
             workspace_root=workspace,
-            custom_id=f"flow:{run_id}:archive",
+            custom_id=f"flow:{run_id}:retire",
             channel_id="channel-1",
             guild_id="guild-1",
         )
@@ -527,16 +527,16 @@ async def test_flow_archive_button_falls_back_when_status_refresh_is_transient(
 
     assert rest.interaction_responses[0]["payload"]["type"] == 6
     assert len(rest.followup_messages) == 1
-    assert "Archiving run" in rest.followup_messages[0]["payload"]["content"]
+    assert "Retiring run" in rest.followup_messages[0]["payload"]["content"]
     edited = rest.edited_original_interaction_responses[0]["payload"]
-    assert "Archived run" in edited["content"]
+    assert "Retired run" in edited["content"]
     assert "Status: archived" in edited["content"]
-    assert f"Archive path: .codex-autorunner/archive/runs/{run_id}" in edited["content"]
+    assert f"Retire path: .codex-autorunner/archive/runs/{run_id}" in edited["content"]
     assert "Flow state archived: yes" in edited["content"]
     assert edited["components"] == []
     assert logged_events == [
         "discord.flow.store_open_failed",
-        "discord.flow.archive.status_refresh_failed",
+        "discord.flow.retire.status_refresh_failed",
     ]
 
 
@@ -572,7 +572,7 @@ async def test_flow_archive_button_classifies_open_sqlite_errors_as_store_open_f
                 "interaction-archive-db-open-fail",
                 "token-archive-db-open-fail",
                 workspace_root=workspace,
-                custom_id=f"flow:{run_id}:archive",
+                custom_id=f"flow:{run_id}:retire",
                 channel_id="channel-1",
                 guild_id="guild-1",
             )
@@ -688,7 +688,7 @@ async def test_flow_archive_button_retires_stale_card_on_missing_run(
             "interaction-stale",
             "token-stale",
             workspace_root=workspace,
-            custom_id=f"flow:{run_id}:archive",
+            custom_id=f"flow:{run_id}:retire",
             channel_id="channel-1",
             guild_id="guild-1",
         )
@@ -724,7 +724,7 @@ async def test_flow_archive_button_keeps_original_card_on_validation_error(
             "interaction-invalid",
             "token-invalid",
             workspace_root=workspace,
-            custom_id=f"flow:{run_id}:archive",
+            custom_id=f"flow:{run_id}:retire",
             channel_id="channel-1",
             guild_id="guild-1",
         )
@@ -734,10 +734,10 @@ async def test_flow_archive_button_keeps_original_card_on_validation_error(
     assert rest.interaction_responses[0]["payload"]["type"] == 6
     assert rest.edited_original_interaction_responses == []
     assert len(rest.followup_messages) == 2
-    assert "Archiving run" in rest.followup_messages[0]["payload"]["content"]
+    assert "Retiring run" in rest.followup_messages[0]["payload"]["content"]
     assert (
         rest.followup_messages[1]["payload"]["content"]
-        == "Can only archive completed/stopped/failed flows"
+        == "Can only retire completed/stopped/failed flows"
     )
 
 
@@ -769,7 +769,7 @@ async def test_flow_archive_command_cleans_live_contextspace(
     service = _service(tmp_path, rest)
 
     try:
-        await service._handle_flow_archive(
+        await service._handle_flow_retire(
             "interaction-3",
             "token-3",
             workspace_root=workspace,

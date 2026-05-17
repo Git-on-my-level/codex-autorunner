@@ -14,7 +14,7 @@ export type ActionNotice = {
   navigateTo?: string;
 };
 
-export type CleanupWorktreeTarget = {
+export type RetireWorktreeTarget = {
   id: string;
   label: string;
   chatBound: boolean;
@@ -29,41 +29,40 @@ export type ArchiveStateTarget = {
   unboundManagedThreadCount: number;
 };
 
-export async function confirmAndCleanupWorktree(target: CleanupWorktreeTarget): Promise<ActionNotice | null> {
+export async function confirmAndRetireWorktree(target: RetireWorktreeTarget): Promise<ActionNotice | null> {
   if (typeof window === 'undefined') return null;
 
   const requiresTypedConfirmation = target.chatBound || target.cleanupBlockedByChatBinding;
-  const confirmationText = `cleanup ${target.id}`;
+  const confirmationText = `retire ${target.id}`;
   let forceAttestation: string | null = null;
 
   if (requiresTypedConfirmation) {
     const entered = await confirmDialogTyped({
-      title: `Cleanup worktree "${target.label}"`,
+      title: `Retire worktree "${target.label}"`,
       message:
-        `This worktree is bound to chat state. CAR will archive a review snapshot, stop any runner, remove the worktree checkout, and unregister it from the hub.`,
-      confirmText: 'Archive & remove',
+        `This worktree is bound to chat state. CAR will preserve review artifacts, stop any runner, remove the worktree checkout, and unregister it from the hub.`,
+      confirmText: 'Retire',
       danger: true,
       requireType: confirmationText
     });
     if (entered === null) return null;
     if (entered !== confirmationText) {
-      return { tone: 'warning', message: 'Cleanup cancelled; confirmation text did not match.' };
+      return { tone: 'warning', message: 'Retire cancelled; confirmation text did not match.' };
     }
     forceAttestation = entered;
   } else {
     const ok = await confirmDialog({
-      title: `Cleanup worktree "${target.label}"`,
+      title: `Retire worktree "${target.label}"`,
       message:
-        'CAR will archive a review snapshot, stop any runner, remove the worktree checkout, and unregister it from the hub.',
-      confirmText: 'Archive & remove',
+        'CAR will preserve review artifacts, stop any runner, remove the worktree checkout, and unregister it from the hub.',
+      confirmText: 'Retire',
       danger: true
     });
     if (!ok) return null;
   }
 
-  const result = await webApi.hub.cleanupWorktree({
+  const result = await webApi.hub.retireWorktree({
     worktreeRepoId: target.id,
-    archive: true,
     force: requiresTypedConfirmation,
     forceAttestation,
     forceArchive: false,
@@ -74,7 +73,7 @@ export async function confirmAndCleanupWorktree(target: CleanupWorktreeTarget): 
     readModelEntityTags.repoWorktreeIndex,
     readModelEntityTags.worktree(target.id)
   ]);
-  return { tone: 'success', message: `Cleaned up worktree ${target.label}.` };
+  return { tone: 'success', message: `Retired worktree ${target.label}.` };
 }
 
 export async function confirmAndArchiveState(target: ArchiveStateTarget): Promise<ActionNotice | null> {

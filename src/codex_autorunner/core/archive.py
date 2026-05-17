@@ -55,8 +55,8 @@ ArchiveProfile = Literal["portable", "full"]
 ArchiveIntent = Literal[
     "review_snapshot",
     "review_snapshot_full",
-    "cleanup_snapshot",
-    "cleanup_snapshot_full",
+    "retire_snapshot",
+    "retire_snapshot_full",
     "reset_car_state",
 ]
 CarStatePayloadKind = Literal["review_relevant", "runtime_only", "both"]
@@ -389,8 +389,8 @@ CAR_STATE_PATH_SPECS = (
             {
                 "review_snapshot",
                 "review_snapshot_full",
-                "cleanup_snapshot",
-                "cleanup_snapshot_full",
+                "retire_snapshot",
+                "retire_snapshot_full",
                 "reset_car_state",
             }
         ),
@@ -407,8 +407,8 @@ CAR_STATE_PATH_SPECS = (
             {
                 "review_snapshot",
                 "review_snapshot_full",
-                "cleanup_snapshot",
-                "cleanup_snapshot_full",
+                "retire_snapshot",
+                "retire_snapshot_full",
                 "reset_car_state",
             }
         ),
@@ -426,8 +426,8 @@ CAR_STATE_PATH_SPECS = (
             {
                 "review_snapshot",
                 "review_snapshot_full",
-                "cleanup_snapshot",
-                "cleanup_snapshot_full",
+                "retire_snapshot",
+                "retire_snapshot_full",
                 "reset_car_state",
             }
         ),
@@ -444,8 +444,8 @@ CAR_STATE_PATH_SPECS = (
             {
                 "review_snapshot",
                 "review_snapshot_full",
-                "cleanup_snapshot",
-                "cleanup_snapshot_full",
+                "retire_snapshot",
+                "retire_snapshot_full",
                 "reset_car_state",
             }
         ),
@@ -461,8 +461,8 @@ CAR_STATE_PATH_SPECS = (
         archive_intents=frozenset(
             {
                 "review_snapshot_full",
-                "cleanup_snapshot",
-                "cleanup_snapshot_full",
+                "retire_snapshot",
+                "retire_snapshot_full",
                 "reset_car_state",
             }
         ),
@@ -478,7 +478,7 @@ CAR_STATE_PATH_SPECS = (
         archive_intents=frozenset(
             {
                 "review_snapshot_full",
-                "cleanup_snapshot_full",
+                "retire_snapshot_full",
                 "reset_car_state",
             }
         ),
@@ -494,7 +494,7 @@ CAR_STATE_PATH_SPECS = (
         archive_intents=frozenset(
             {
                 "review_snapshot_full",
-                "cleanup_snapshot_full",
+                "retire_snapshot_full",
                 "reset_car_state",
             }
         ),
@@ -522,8 +522,8 @@ CAR_STATE_PATH_SPECS = (
             {
                 "review_snapshot",
                 "review_snapshot_full",
-                "cleanup_snapshot",
-                "cleanup_snapshot_full",
+                "retire_snapshot",
+                "retire_snapshot_full",
                 "reset_car_state",
             }
         ),
@@ -550,7 +550,7 @@ CAR_STATE_PATH_SPECS = (
         archive_intents=frozenset(
             {
                 "review_snapshot_full",
-                "cleanup_snapshot_full",
+                "retire_snapshot_full",
                 "reset_car_state",
             }
         ),
@@ -566,7 +566,7 @@ CAR_STATE_PATH_SPECS = (
         archive_intents=frozenset(
             {
                 "review_snapshot_full",
-                "cleanup_snapshot_full",
+                "retire_snapshot_full",
                 "reset_car_state",
             }
         ),
@@ -596,12 +596,12 @@ def _resolve_car_state_source(spec: CarStatePathSpec, source_root: Path) -> Path
 def resolve_worktree_archive_intent(
     *,
     profile: ArchiveProfile = "portable",
-    cleanup: bool = False,
+    retire: bool = False,
 ) -> ArchiveIntent:
     if profile not in {"portable", "full"}:
         raise ValueError(f"Unsupported archive profile: {profile}")
-    if cleanup:
-        return "cleanup_snapshot_full" if profile == "full" else "cleanup_snapshot"
+    if retire:
+        return "retire_snapshot_full" if profile == "full" else "retire_snapshot"
     return "review_snapshot_full" if profile == "full" else "review_snapshot"
 
 
@@ -1070,8 +1070,8 @@ def archive_worktree_snapshot(
     if resolved_intent not in {
         "review_snapshot",
         "review_snapshot_full",
-        "cleanup_snapshot",
-        "cleanup_snapshot_full",
+        "retire_snapshot",
+        "retire_snapshot_full",
     }:
         raise ValueError(f"Unsupported worktree archive intent: {resolved_intent}")
     _, staging_root = _prepare_snapshot_roots(final_snapshot_root)

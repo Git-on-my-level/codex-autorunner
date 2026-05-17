@@ -76,7 +76,7 @@ def test_manifest_for_paused_ticket_flow_exposes_resume_and_restart() -> None:
             resource_id="repo-1",
             run_id="run-1",
             lifecycle_state="paused",
-            archive_mode="confirm",
+            retire_mode="confirm",
             has_run=True,
             capabilities=frozenset({"ticket_flow"}),
         )

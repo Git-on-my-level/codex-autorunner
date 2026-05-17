@@ -25,7 +25,7 @@ _UNHEALTHY_WORKER_STATUSES = {"dead", "mismatch", "invalid", "absent"}
 class FlowActionPolicySnapshot:
     status: Optional[str] = None
     worker_health_status: Optional[str] = None
-    archive_mode: str = "blocked"
+    retire_mode: str = "blocked"
     has_run: bool = False
     has_open_tickets: bool = False
     has_queue_scope: bool = True
@@ -161,22 +161,22 @@ def build_flow_action_policy(
         )
     )
 
-    archive_enabled = has_run and snapshot.archive_mode in {"ready", "confirm"}
+    retire_enabled = has_run and snapshot.retire_mode in {"ready", "confirm"}
     actions.append(
         FlowActionDescriptor(
-            action="archive",
-            enabled=archive_enabled,
-            label="Archive",
+            action="retire",
+            enabled=retire_enabled,
+            label="Retire",
             tone="secondary",
             style="secondary",
-            requires_confirmation=snapshot.archive_mode == "confirm",
+            requires_confirmation=snapshot.retire_mode == "confirm",
             disabled_reason=(
                 None
-                if archive_enabled
+                if retire_enabled
                 else (
-                    "No flow run to archive"
+                    "No flow run to retire"
                     if not has_run
-                    else "Archive is blocked while the run is active"
+                    else "Retire is blocked while the run is active"
                 )
             ),
             surface_visibility={"queue": False, "flow_status": True},

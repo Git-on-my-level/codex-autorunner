@@ -91,16 +91,16 @@ async def _wait_for_ticket_flow_terminal(
     )
 
 
-def _archive_ticket_flow_run(
+def _retire_ticket_flow_run(
     repo_root: Path,
     run_id: str,
     *,
     force: bool = False,
     delete_run: bool = True,
 ) -> dict[str, Any]:
-    from ...flows.ticket_flow.runtime_helpers import archive_ticket_flow_run
+    from ...flows.ticket_flow.runtime_helpers import retire_ticket_flow_run
 
-    return archive_ticket_flow_run(
+    return retire_ticket_flow_run(
         repo_root,
         run_id,
         force=force,
@@ -183,7 +183,7 @@ class TicketFlowTargetWrapper:
     wait_for_terminal_fn: Callable[..., Awaitable[Optional[FlowRunRecord]]] = (
         _wait_for_ticket_flow_terminal
     )
-    archive_flow_run_fn: Callable[..., dict[str, Any]] = _archive_ticket_flow_run
+    retire_flow_run_fn: Callable[..., dict[str, Any]] = _retire_ticket_flow_run
     get_flow_run_status_fn: Callable[..., Optional[FlowRunRecord]] = (
         _get_ticket_flow_run_status
     )
@@ -260,14 +260,14 @@ class TicketFlowTargetWrapper:
             return None
         return _flow_run_target_from_record(record, flow_target=self.flow_target)
 
-    def archive_run(
+    def retire_run(
         self,
         run_id: str,
         *,
         force: bool = False,
         delete_run: bool = True,
     ) -> dict[str, Any]:
-        return self.archive_flow_run_fn(
+        return self.retire_flow_run_fn(
             self._workspace_root(),
             run_id,
             force=force,
@@ -308,7 +308,7 @@ def build_ticket_flow_target_wrapper(
         ensure_worker_fn=_ensure_ticket_flow_worker,
         reconcile_flow_run_fn=_reconcile_ticket_flow_run,
         wait_for_terminal_fn=_wait_for_ticket_flow_terminal,
-        archive_flow_run_fn=_archive_ticket_flow_run,
+        retire_flow_run_fn=_retire_ticket_flow_run,
         get_flow_run_status_fn=_get_ticket_flow_run_status,
         list_flow_runs_fn=_list_ticket_flow_runs,
         list_active_flow_runs_fn=_list_active_ticket_flow_runs,

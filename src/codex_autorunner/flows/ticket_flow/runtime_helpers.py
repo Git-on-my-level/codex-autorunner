@@ -317,7 +317,7 @@ async def wait_for_ticket_flow_terminal(
     return latest
 
 
-def archive_ticket_flow_run(
+def retire_ticket_flow_run(
     repo_root: Path,
     run_id: str,
     *,
@@ -332,7 +332,7 @@ def archive_ticket_flow_run(
             stop_ticket_flow_worker(repo_root, run_id)
         else:
             raise ValueError(
-                "Can only archive completed/stopped/failed flows (use force=true for stuck flows)"
+                "Can only retire completed/stopped/failed flows (use force=true for stuck flows)"
             )
     return archive_flow_run_artifacts(
         repo_root,

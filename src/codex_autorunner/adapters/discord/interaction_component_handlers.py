@@ -320,7 +320,7 @@ async def _handle_flow_action_select_component(service: Any, ctx: Any) -> None:
         "restart": "_handle_flow_restart",
         "resume": "_handle_flow_resume",
         "stop": "_handle_flow_stop",
-        "archive": "_handle_flow_archive",
+        "retire": "_handle_flow_retire",
         "recover": "_handle_flow_recover",
         "reply": "_handle_flow_reply",
     }.get(action)
@@ -335,7 +335,7 @@ async def _handle_flow_action_select_component(service: Any, ctx: Any) -> None:
         "workspace_root": workspace_root,
         "options": {"run_id": run_id},
     }
-    if action in {"status", "resume", "stop", "archive", "reply"}:
+    if action in {"status", "resume", "stop", "retire", "reply"}:
         kwargs["channel_id"] = ctx.channel_id
         kwargs["guild_id"] = ctx.guild_id
     if action == "reply":

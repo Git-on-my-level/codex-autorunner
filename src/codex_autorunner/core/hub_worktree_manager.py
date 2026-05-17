@@ -58,8 +58,8 @@ from .git_utils import (
 from .hub_topology import HubTopologyRepository
 from .hub_worktree_lifecycle import (
     ResolvedWorktreeEntry,
-    WorktreeCleanupReport,
     WorktreeHubContext,
+    WorktreeRetireReport,
 )
 from .state import now_iso
 from .state_roots import resolve_repo_flows_db_path
@@ -321,7 +321,7 @@ class WorktreeManager:
         archive_note: Optional[str] = None,
         force: bool = False,
         archive_profile: Optional[str] = None,
-        cleanup: bool = False,
+        retire: bool = False,
     ):
         from .archive import ArchiveResult
 
@@ -341,7 +341,7 @@ class WorktreeManager:
             ArchiveProfile,
             archive_profile or self._hub_config.pma.worktree_archive_profile,
         )
-        intent = resolve_worktree_archive_intent(profile=profile, cleanup=cleanup)
+        intent = resolve_worktree_archive_intent(profile=profile, retire=retire)
         retention_policy = resolve_worktree_archive_retention_policy(
             self._hub_config.pma
         )
@@ -429,7 +429,7 @@ class WorktreeManager:
         *,
         worktree_repo_id: str,
         worktree_path: Path,
-        report: Optional[WorktreeCleanupReport] = None,
+        report: Optional[WorktreeRetireReport] = None,
     ) -> None:
         try:
             from .flows.flow_telemetry_hooks import housekeep_on_worktree_cleanup
@@ -959,41 +959,20 @@ print(
             except GitError as exc:
                 logger.warning("git push delete failed: %s", exc)
 
-    def _validate_cleanup_worktree(
+    def _validate_retire_worktree(
         self,
         *,
         worktree_repo_id: str,
-        archive: bool,
         force: bool,
-        force_archive: bool,
         force_attestation: Optional[Mapping[str, object]],
     ) -> ResolvedWorktreeEntry:
         self._ctx.invalidate_cache()
-        resolved: Optional[ResolvedWorktreeEntry] = None
-        if self._hub_config.pma.cleanup_require_archive and not archive:
-            try:
-                resolved = self._resolve_worktree_entry(worktree_repo_id)
-            except ValueError as exc:
-                raise ValueError(
-                    "Worktree cleanup requires archiving per PMA policy "
-                    "(pma.cleanup_require_archive is enabled). "
-                    "Use archive=True or omit the --no-archive flag."
-                ) from exc
-            worktree_path = resolved.worktree_path
-            archive_possible = worktree_path.exists() and git_available(worktree_path)
-            if archive_possible:
-                raise ValueError(
-                    "Worktree cleanup requires archiving per PMA policy "
-                    "(pma.cleanup_require_archive is enabled). "
-                    "Use archive=True or omit the --no-archive flag."
-                )
-        if resolved is None:
-            resolved = self._resolve_worktree_entry(worktree_repo_id)
+        resolved = self._resolve_worktree_entry(worktree_repo_id)
         enforce_force_attestation(
-            force=force or force_archive,
+            force=force,
             force_attestation=force_attestation,
             logger=logger,
-            action="hub.cleanup_worktree",
+            action="hub.retire_worktree",
         )
         branch_name = resolved.entry.branch or "unknown"
         try:
@@ -1002,11 +981,11 @@ print(
             if not force:
                 raise ValueError(
                     "Unable to verify active chat bindings for "
-                    f"{worktree_repo_id} (branch={branch_name}); refusing cleanup. "
+                    f"{worktree_repo_id} (branch={branch_name}); refusing retire. "
                     "Re-run with --force to proceed."
                 ) from exc
             logger.warning(
-                "Proceeding with forced worktree cleanup despite chat-binding "
+                "Proceeding with forced worktree retire despite chat-binding "
                 "lookup failure for repo %s",
                 worktree_repo_id,
                 exc_info=exc,
@@ -1014,33 +993,48 @@ print(
             has_active_chat_binding = False
         if has_active_chat_binding and not force:
             raise ValueError(
-                f"Refusing to clean up chat-bound worktree {worktree_repo_id} "
+                f"Refusing to retire chat-bound worktree {worktree_repo_id} "
                 f"(branch={branch_name}). This worktree is bound to a chat. "
                 "Re-run with --force to proceed."
             )
         return resolved
 
-    def cleanup_worktree(
+    def _validate_delete_worktree(
         self,
         *,
+        worktree_repo_id: str,
+        force: bool,
+        force_attestation: Optional[Mapping[str, object]],
+    ) -> ResolvedWorktreeEntry:
+        if not force:
+            raise ValueError(
+                "Deleting a worktree without retiring it requires --force and "
+                "force attestation."
+            )
+        self._ctx.invalidate_cache()
+        resolved = self._resolve_worktree_entry(worktree_repo_id)
+        enforce_force_attestation(
+            force=True,
+            force_attestation=force_attestation,
+            logger=logger,
+            action="hub.delete_worktree",
+        )
+        return resolved
+
+    def _remove_worktree(
+        self,
+        *,
+        action: str,
+        resolved: ResolvedWorktreeEntry,
         worktree_repo_id: str,
         delete_branch: bool = False,
         delete_remote: bool = False,
         archive: bool = True,
         force_archive: bool = False,
         archive_note: Optional[str] = None,
-        force: bool = False,
-        force_attestation: Optional[Mapping[str, object]] = None,
         archive_profile: Optional[str] = None,
     ) -> Dict[str, object]:
-        report = WorktreeCleanupReport()
-        resolved = self._validate_cleanup_worktree(
-            worktree_repo_id=worktree_repo_id,
-            archive=archive,
-            force=force,
-            force_archive=force_archive,
-            force_attestation=force_attestation,
-        )
+        report = WorktreeRetireReport()
         worktree_path = resolved.worktree_path
         report.add_step("validate", "ok")
 
@@ -1066,9 +1060,9 @@ print(
                 archive_note=archive_note,
                 force=force_archive,
                 archive_profile=archive_profile,
-                cleanup=True,
+                retire=True,
             )
-            report.add_step("archive_snapshot", "ok")
+            report.add_step("retire_snapshot", "ok")
 
         repos_by_id = {repo.id: repo for repo in resolved.manifest.repos}
         effective_destination = resolve_effective_repo_destination(
@@ -1119,7 +1113,7 @@ print(
         orphan_dir_cleanup = self._remove_orphaned_worktree_dir(worktree_path)
         orphan_dir_status = str(orphan_dir_cleanup.get("status", "unknown"))
         report.add_step(
-            "worktree_dir_cleanup",
+            "worktree_dir_remove",
             "ok" if orphan_dir_status in {"removed", "missing"} else "error",
             detail=(
                 None
@@ -1132,7 +1126,7 @@ print(
             if detail:
                 raise ValueError(f"{orphan_dir_status}: {detail}")
             raise ValueError(
-                f"worktree directory cleanup did not complete (status={orphan_dir_status})"
+                f"worktree directory removal did not complete (status={orphan_dir_status})"
             )
 
         resolved.manifest.repos = [
@@ -1147,75 +1141,70 @@ print(
 
         return {
             "status": "ok",
+            "action": action,
             "docker_cleanup": docker_cleanup,
-            "cleanup_steps": [
+            "retire_steps": [
                 {"step": s.step, "status": s.status, "detail": s.detail}
                 for s in report.steps
             ],
         }
 
-    def archive_worktree(
+    def retire_worktree(
         self,
         *,
         worktree_repo_id: str,
+        delete_branch: bool = False,
+        delete_remote: bool = False,
+        force_archive: bool = False,
         archive_note: Optional[str] = None,
+        force: bool = False,
+        force_attestation: Optional[Mapping[str, object]] = None,
         archive_profile: Optional[str] = None,
     ) -> Dict[str, object]:
-        report = WorktreeCleanupReport()
-        resolved = self._resolve_worktree_entry(worktree_repo_id)
-        worktree_path = resolved.worktree_path
-
-        if not worktree_path.exists():
-            raise ValueError(f"Worktree path does not exist: {worktree_path}")
-        report.add_step("validate", "ok")
-
-        self._ctx.stop_runner(
-            repo_id=worktree_repo_id,
-            repo_path=worktree_path,
-        )
-        report.add_step("stop_runner", "ok")
-
-        self._run_telemetry_housekeeping(
+        resolved = self._validate_retire_worktree(
             worktree_repo_id=worktree_repo_id,
-            worktree_path=worktree_path,
-            report=report,
+            force=force,
+            force_attestation=force_attestation,
         )
-
+        worktree_path = resolved.worktree_path
         self._ensure_worktree_clean_for_archive(
             worktree_repo_id=worktree_repo_id,
             worktree_path=worktree_path,
         )
-
-        result = self._archive_worktree_snapshot(
-            resolved,
+        return self._remove_worktree(
+            action="retired",
+            resolved=resolved,
+            worktree_repo_id=worktree_repo_id,
+            delete_branch=delete_branch,
+            delete_remote=delete_remote,
+            archive=True,
+            force_archive=force_archive,
             archive_note=archive_note,
-            force=False,
             archive_profile=archive_profile,
         )
-        report.add_step("archive_snapshot", "ok")
 
-        archived_thread_ids = self._archive_bound_managed_threads(
+    def delete_worktree(
+        self,
+        *,
+        worktree_repo_id: str,
+        delete_branch: bool = False,
+        delete_remote: bool = False,
+        force: bool = False,
+        force_attestation: Optional[Mapping[str, object]] = None,
+    ) -> Dict[str, object]:
+        resolved = self._validate_delete_worktree(
             worktree_repo_id=worktree_repo_id,
-            worktree_path=worktree_path,
+            force=force,
+            force_attestation=force_attestation,
         )
-        report.add_step(
-            "archive_managed_threads",
-            "ok",
-            detail=f"archived={len(archived_thread_ids)}",
+        return self._remove_worktree(
+            action="deleted",
+            resolved=resolved,
+            worktree_repo_id=worktree_repo_id,
+            delete_branch=delete_branch,
+            delete_remote=delete_remote,
+            archive=False,
         )
-
-        if result is None:
-            raise ValueError("Archive failed unexpectedly")
-        return {
-            "snapshot_id": result.snapshot_id,
-            "snapshot_path": str(result.snapshot_path),
-            "meta_path": str(result.meta_path),
-            "status": result.status,
-            "file_count": result.file_count,
-            "total_bytes": result.total_bytes,
-            "flow_run_count": result.flow_run_count,
-            "latest_flow_run_id": result.latest_flow_run_id,
-        }
 
     def archive_worktree_state(
         self,
@@ -1293,16 +1282,15 @@ print(
                 worktree_items.append({"id": entry.id, "branch": branch_name})
                 continue
             try:
-                self.cleanup_worktree(
+                self.retire_worktree(
                     worktree_repo_id=entry.id,
-                    archive=True,
                 )
                 worktree_items.append({"id": entry.id, "branch": branch_name})
             except (
                 Exception
-            ) as exc:  # intentional: cleanup_worktree orchestrates git, archive, docker, and state with diverse failure modes
+            ) as exc:  # intentional: retire_worktree orchestrates git, archive, docker, and state with diverse failure modes
                 logger.warning(
-                    "cleanup_all: worktree cleanup failed for %s",
+                    "cleanup_all: worktree retire failed for %s",
                     entry.id,
                     exc_info=exc,
                 )

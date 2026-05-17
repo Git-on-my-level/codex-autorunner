@@ -826,7 +826,7 @@ def test_build_hub_snapshot_failed_run_queue_item_recommends_archive_with_repo(
     assert failed_item["queue_source"] == "ticket_flow_inbox"
     assert failed_item["recommended_action"] == "diagnose_or_restart"
     assert failed_item["recommended_detail"] == (
-        f"car ticket-flow archive --repo {hub_env.repo_root} --run-id {run_id}"
+        f"car ticket-flow retire --repo {hub_env.repo_root} --run-id {run_id}"
     )
 
 

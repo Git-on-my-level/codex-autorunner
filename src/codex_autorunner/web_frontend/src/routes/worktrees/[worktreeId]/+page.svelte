@@ -4,7 +4,7 @@
   import { onMount } from 'svelte';
   import AutoDismissNotice from '$lib/components/AutoDismissNotice.svelte';
   import RepoWorktreeViews from '$lib/components/RepoWorktreeViews.svelte';
-  import { confirmAndArchiveState, confirmAndCleanupWorktree, type ActionNotice } from '$lib/actions/repoWorktreeActions';
+  import { confirmAndArchiveState, confirmAndRetireWorktree, type ActionNotice } from '$lib/actions/repoWorktreeActions';
   import { webApi, type ApiError, type JsonRecord, type PartialPageIssue } from '$lib/api/client';
   import { mapContextspaceDocument, mapPmaChatSummary, mapPmaRunProgress, mapSurfaceArtifact, mapTicketSummary, mapWorktreeSummary } from '$lib/viewModels/domain';
   import { stripRuntimeBasePath, withRuntimeBasePath as href } from '$lib/runtime/basePath';
@@ -98,8 +98,8 @@
     loading = false;
   }
 
-  async function handleCleanupWorktree(target: Parameters<typeof confirmAndCleanupWorktree>[0]): Promise<void> {
-    const result = await confirmAndCleanupWorktree(target);
+  async function handleRetireWorktree(target: Parameters<typeof confirmAndRetireWorktree>[0]): Promise<void> {
+    const result = await confirmAndRetireWorktree(target);
     if (!result) return;
     notice = result;
     if (result.tone === 'success') await loadWorktreeDetail();
@@ -146,7 +146,7 @@
   {detail}
   {sectionIssues}
   onRetry={() => loadWorktreeDetail()}
-  onCleanupWorktree={handleCleanupWorktree}
+  onRetireWorktree={handleRetireWorktree}
   onArchiveState={handleArchiveState}
   onSyncRepo={handleSyncRepo}
   syncRepoBusy={syncRepoBusy}

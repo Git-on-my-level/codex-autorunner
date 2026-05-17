@@ -413,7 +413,7 @@ CHAT_ACTION_UX_CONTRACT: tuple[ChatActionUxContractEntry, ...] = (
         visibility="public",
     ),
     _discord_slash_entry(
-        "car.flow.archive",
+        "car.flow.retire",
         ack_class="defer_ephemeral",
         visibility="public",
     ),
@@ -785,7 +785,7 @@ def discord_autocomplete_ux_contract_for_route(
             "restart",
             "resume",
             "stop",
-            "archive",
+            "retire",
             "recover",
             "reply",
         }
