@@ -55,8 +55,8 @@ def test_reduce_turn_output_trims_mutated_cumulative_transcript_prefix() -> None
     )
     current = (
         previous.replace("```text\n", "``\n", 1).replace(
-            "that venv.\nEarlier diagnosis.",
-            "that venv.Earlier diagnosis.",
+            "Earlier diagnosis.\n\n```text",
+            "Earlier diagnosis.\n```text",
             1,
         )
         + "\n\nCurrent turn answer only."
