@@ -845,6 +845,8 @@ class AutomationStore:
                 counts["schedules"] += 1
             self.upsert_schedule(schedule)
 
+        from .builtins import _LIFECYCLE_EVENT_MAP as _legacy_wakeup_lifecycle_map
+
         for row in wakeups:
             event_id = f"legacy-pma-wakeup:{row['wakeup_id']}"
             event_type = "manual.run"
@@ -852,16 +854,8 @@ class AutomationStore:
             wake_up_payload = _legacy_wakeup_payload_from_row(row, payload)
             payload = {**payload, "wake_up": wake_up_payload}
             legacy_event_type = optional_text(row["event_type"])
-            lifecycle_map = {
-                "flow_started": "lifecycle.flow_started",
-                "flow_resumed": "lifecycle.flow_resumed",
-                "flow_paused": "lifecycle.flow_paused",
-                "flow_completed": "lifecycle.flow_completed",
-                "flow_failed": "lifecycle.flow_failed",
-                "flow_stopped": "lifecycle.flow_stopped",
-            }
-            if legacy_event_type in lifecycle_map:
-                event_type = lifecycle_map[legacy_event_type]
+            if legacy_event_type in _legacy_wakeup_lifecycle_map:
+                event_type = _legacy_wakeup_lifecycle_map[legacy_event_type]
             event = AutomationEvent.create(
                 event_id=event_id,
                 event_type=event_type,
@@ -938,6 +932,7 @@ class AutomationStore:
                     "max_concurrent_per_target": 1,
                 },
                 payload=payload,
+                created_at=row["created_at"],
             )
             job.state = JOB_SUCCEEDED if row["completed_at"] else JOB_PENDING
             job.pma_lane_id = row["lane_id"]
@@ -1107,6 +1102,7 @@ class AutomationStore:
             executor=_json_object_from_row(row, "executor_json"),
             policy=_json_object_from_row(row, "policy_json"),
             payload=_json_object_from_row(row, "payload_json"),
+            created_at=row["created_at"],
         )
         job.claimed_at = row["claimed_at"]
         job.started_at = row["started_at"]
@@ -1194,7 +1190,7 @@ class AutomationStore:
             job.max_attempts,
             job.next_attempt_at,
             job.retry_backoff_seconds,
-            job.updated_at,
+            job.created_at,
             _json_dumps(job.target),
             _json_dumps(job.executor),
             _json_dumps(job.policy),

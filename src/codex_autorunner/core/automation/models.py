@@ -367,6 +367,7 @@ class AutomationJob:
     claimed_at: Optional[str]
     started_at: Optional[str]
     finished_at: Optional[str]
+    created_at: str
     updated_at: str
     attempt_count: int
     max_attempts: int
@@ -404,6 +405,7 @@ class AutomationJob:
         max_attempts: Optional[int] = None,
         job_id: Optional[str] = None,
         state: str = JOB_PENDING,
+        created_at: Optional[str] = None,
     ) -> "AutomationJob":
         normalized_policy = validate_policy(
             normalize_json_object(policy, field_name="policy")
@@ -420,6 +422,8 @@ class AutomationJob:
             event_id=resolved_event_id,
             target=resolved_target,
         )
+        stamp = now_iso()
+        resolved_created_at = normalize_timestamp(created_at, fallback=stamp)
         return cls(
             job_id=optional_text(job_id) or str(uuid.uuid4()),
             rule_id=resolved_rule_id,
@@ -432,7 +436,8 @@ class AutomationJob:
             claimed_at=None,
             started_at=None,
             finished_at=None,
-            updated_at=now_iso(),
+            created_at=resolved_created_at,
+            updated_at=stamp,
             attempt_count=0,
             max_attempts=normalize_positive_int(
                 max_attempts or normalized_policy.get("max_attempts"), fallback=3
