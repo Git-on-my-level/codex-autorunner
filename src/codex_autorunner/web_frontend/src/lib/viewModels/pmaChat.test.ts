@@ -848,6 +848,23 @@ describe('PMA chat view helpers', () => {
     });
   });
 
+  it('resolvePmaChatSelectorsForActiveChat keeps a Hermes chat on Hermes even when the hub default is codex', () => {
+    // Regression: a Hermes chat opened by URL before its summary loaded would
+    // resolve to the hub default agent (codex), load Codex models, and send
+    // `model=gpt-5.4-mini` on every turn. The Hermes backend produces no
+    // assistant output for a foreign model, so the agent silently stopped
+    // responding. Once the summary is available the resolver must bind to the
+    // chat's own agent, never the default.
+    const resolved = resolvePmaChatSelectorsForActiveChat(
+      { ...baseChat, id: 'hermes-chat', agentId: 'hermes', agentProfile: null, model: 'gpt-5.4-mini', raw: {} },
+      [{ id: 'codex' }, { id: 'hermes' }],
+      'codex',
+      'profile-a'
+    );
+    expect(resolved.mode).toBe('chat-bound');
+    expect(resolved.agentId).toBe('hermes');
+  });
+
   it('filters chats by messenger surface slug', () => {
     const discordChat = { ...baseChat, id: 'd1', title: 'Engineering', raw: { surface_kind: 'discord' } };
     const hubChat = { ...baseChat, id: 'h1', title: 'Chat · repo', raw: {} };

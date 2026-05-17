@@ -3969,35 +3969,116 @@ textarea:hover {
   border-bottom: 1px dashed var(--color-border-subtle);
 }
 
-.queued-message-list {
+.queue-panel {
   grid-area: queue;
   display: grid;
-  gap: var(--space-1);
-  padding-bottom: var(--space-2);
+  gap: var(--space-3);
+  padding-bottom: var(--space-3);
   border-bottom: 1px dashed var(--color-border-subtle);
 }
 
-.queued-message-row {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto auto auto;
-  align-items: center;
-  gap: var(--space-2);
-  min-height: 28px;
-  padding: var(--space-1) var(--space-2);
-  border: 1px solid var(--color-border-subtle);
-  border-radius: var(--radius-3);
-  background: var(--color-surface-muted);
+.queue-panel-head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-3);
 }
 
-.queued-message-position,
-.queued-message-state {
+.queue-panel-title {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  color: var(--color-ink-muted);
+  font-size: var(--font-size-0);
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.queue-panel-count {
+  display: inline-grid;
+  place-items: center;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 var(--space-2);
+  border-radius: 999px;
+  background: var(--color-accent-soft);
+  color: var(--color-accent);
+  font-size: var(--font-size-0);
+  font-weight: 700;
+  letter-spacing: 0;
+}
+
+.queue-panel-hint {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--color-ink-faint);
+  font-size: var(--font-size-0);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.queue-panel-clear {
+  padding: 0;
+  border: 0;
+  background: transparent;
   color: var(--color-ink-faint);
   font-size: var(--font-size-0);
   font-weight: 650;
-  text-transform: lowercase;
+  transition: color var(--transition-fast);
 }
 
-.queued-message-copy {
+.queue-panel-clear:hover {
+  color: var(--color-danger);
+}
+
+.queue-list {
+  display: grid;
+  gap: var(--space-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.queue-item {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--space-3);
+  min-height: 32px;
+  padding: var(--space-2) var(--space-2) var(--space-2) var(--space-3);
+  border: 1px solid var(--color-border-subtle);
+  border-left: 2px solid var(--color-accent);
+  border-radius: var(--radius-3);
+  background: var(--color-surface-muted);
+  transition: border-color var(--transition-fast),
+    background var(--transition-fast);
+}
+
+.queue-item:hover {
+  border-color: var(--color-border);
+  border-left-color: var(--color-accent);
+}
+
+.queue-item.pending {
+  border-left-color: var(--color-border);
+  opacity: 0.72;
+}
+
+.queue-item-index {
+  display: inline-grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 999px;
+  background: var(--color-surface);
+  color: var(--color-ink-faint);
+  font-family: var(--font-mono);
+  font-size: var(--font-size-0);
+  font-weight: 700;
+}
+
+.queue-item-text {
   min-width: 0;
   overflow: hidden;
   color: var(--color-ink-soft);
@@ -4006,23 +4087,61 @@ textarea:hover {
   white-space: nowrap;
 }
 
-.queued-message-action {
+.queue-item.pending .queue-item-text {
+  font-style: italic;
+  color: var(--color-ink-faint);
+}
+
+.queue-item-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.queue-item-run {
   min-height: 22px;
-  padding: 0 var(--space-2);
+  padding: 0 var(--space-3);
   border: 1px solid var(--color-border);
   border-radius: var(--radius-2);
   background: var(--color-surface);
   color: var(--color-accent);
   font-size: var(--font-size-0);
   font-weight: 700;
+  transition: border-color var(--transition-fast),
+    background var(--transition-fast);
 }
 
-.queued-message-action:hover:not(:disabled) {
+.queue-item-run:hover:not(:disabled) {
   border-color: var(--color-accent);
+  background: var(--color-accent-soft);
 }
 
-.queued-message-action.subtle {
-  color: var(--color-ink-muted);
+.queue-item-cancel {
+  display: inline-grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border: 0;
+  border-radius: var(--radius-2);
+  background: transparent;
+  color: var(--color-ink-faint);
+  transition: color var(--transition-fast),
+    background var(--transition-fast);
+}
+
+.queue-item-cancel:hover:not(:disabled) {
+  background: var(--color-surface);
+  color: var(--color-ink);
+}
+
+.queue-item-cancel svg {
+  width: 13px;
+  height: 13px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  pointer-events: none;
 }
 
 .pending-attachment {

@@ -206,6 +206,13 @@
   let loadingModels = $state(false);
   /** Invalidates in-flight `listAgentModels` results when the user switches agents quickly. */
   let loadModelsSeq = 0;
+  /**
+   * `${chatId}|${agentId}` of the chat the selectors were last synced against,
+   * or null if the last sync ran before the chat summary (and its bound agent)
+   * was available. Lets the reactive re-sync fire exactly once per chat once
+   * the summary arrives. See the syncSelectorsToActiveChat effect below.
+   */
+  let syncedSelectorKey: string | null = null;
   let chatError = $state<ApiError | null>(null);
   let activeError = $state<ApiError | null>(null);
   let composeError = $state<ApiError | null>(null);
@@ -484,7 +491,20 @@
   }
   const displayedProgress = $derived(progressWithLiveElapsed(progress, clockNowMs));
   const liveActivity = $derived(buildPmaLiveActivity(displayedProgress));
-  const activeCards = $derived<ChatTranscriptCard[]>(transcriptCards);
+  const activeCards = $derived.by<ChatTranscriptCard[]>(() => {
+    if (queuedTurns.length === 0) return transcriptCards;
+    // The backend persists a queued turn's user message into the transcript as
+    // soon as it is enqueued, but a queued turn has not entered the
+    // conversation yet — it belongs to the QUEUE panel only. Hide its cards
+    // from the transcript until the turn actually runs.
+    const queuedTurnIds = new Set(
+      queuedTurns.map((turn) => turn.managedTurnId).filter(Boolean)
+    );
+    if (queuedTurnIds.size === 0) return transcriptCards;
+    return transcriptCards.filter(
+      (card) => !('turnId' in card && card.turnId && queuedTurnIds.has(card.turnId))
+    );
+  });
   const lastAssistantMessageCard = $derived.by<ChatTranscriptCard | null>(() => {
     for (let i = activeCards.length - 1; i >= 0; i -= 1) {
       const card = activeCards[i];
@@ -574,6 +594,14 @@
   const showStartPicker = $derived(Boolean(activeChat) && !loadingActive && !activeError && !chatHasActivity);
   const hasRunnableDraft = $derived(Boolean(activeChat && (draft.trim() || pendingAttachments.length > 0)));
   const canInterruptWithDraft = $derived(Boolean(activeChat && displayedProgress?.status === 'running' && hasRunnableDraft));
+  /** A new message lands in the queue when the chat is running or already has queued turns. */
+  const composerWillQueue = $derived(
+    Boolean(
+      activeChat &&
+        !isLocalDraftChatId(activeChat.id) &&
+        (displayedProgress?.status === 'running' || queuedTurns.length > 0)
+    )
+  );
   const slashSuggestions = $derived<SlashCommandSuggestion[]>(
     buildSlashCommandSuggestions(draft, {
       hasActiveChat: Boolean(activeChat),
@@ -745,6 +773,19 @@
 
   $effect(() => {
     if (selectedReasoning && !reasoningOptions.includes(selectedReasoning)) selectedReasoning = '';
+  });
+
+  // Re-sync the agent/model/reasoning selectors once the active chat's summary
+  // arrives. Opening a chat by URL before the chat index has loaded runs the
+  // initial sync against a null summary, leaving the composer on the hub
+  // default agent (codex). A Hermes chat would then send `model=gpt-5.4-mini`
+  // (a Codex model) on every turn — the Hermes backend produces no assistant
+  // output for a foreign model, so the agent silently stops responding.
+  $effect(() => {
+    const chat = activeChat;
+    if (!chat || isLocalDraftChatId(chat.id) || !chat.agentId) return;
+    if (`${chat.id}|${chat.agentId}` === syncedSelectorKey) return;
+    syncSelectorsToActiveChat();
   });
 
   $effect(() => {
@@ -1425,6 +1466,10 @@
 
   function syncSelectorsToActiveChat(): void {
     const chat = chatSummaryForId(activeChatId);
+    // Record what we synced against. When the chat summary has not loaded yet
+    // (URL deep-link before the chat index arrives), `chat.agentId` is absent;
+    // leave the key null so the re-sync effect runs once the summary lands.
+    syncedSelectorKey = chat?.agentId ? `${activeChatId}|${chat.agentId}` : null;
     const scopeId = scopeIdForChat(chat);
     if (scopeId) selectedScopeId = scopeId;
     const resolved = resolvePmaChatSelectorsForActiveChat(
@@ -1625,11 +1670,101 @@
     creating = false;
   }
 
+  function buildOptimisticUserCard(
+    chatId: string,
+    text: string,
+    clientTurnId: string,
+    timestamp: string
+  ): ChatTranscriptCard {
+    return {
+      kind: 'message',
+      id: clientTurnId,
+      turnId: null,
+      orderKey: `optimistic|${timestamp}|${clientTurnId}`,
+      timestamp,
+      message: {
+        id: clientTurnId,
+        chatId,
+        role: 'user',
+        text,
+        createdAt: timestamp,
+        status: null,
+        artifacts: [],
+        raw: {
+          optimistic: true,
+          client_turn_id: clientTurnId,
+          correlation_id: clientTurnId,
+          identity: { correlation_id: clientTurnId }
+        }
+      }
+    };
+  }
+
+  function isOptimisticQueuedTurn(turn: PmaQueuedTurn): boolean {
+    return turn.managedTurnId.startsWith('optimistic-queue:');
+  }
+
+  function pushOptimisticQueuedTurn(chatId: string, text: string, clientTurnId: string): void {
+    const current = selectPmaQueue(readModelEntityStore.snapshot(), chatId);
+    const turn: PmaQueuedTurn = {
+      managedTurnId: `optimistic-queue:${clientTurnId}`,
+      position: current.length + 1,
+      state: 'queueing',
+      prompt: text,
+      promptPreview: text,
+      attachments: [],
+      model: null,
+      reasoning: null,
+      enqueuedAt: new Date().toISOString(),
+      raw: { optimistic: true }
+    };
+    readModelEntityStore.setPmaQueue(chatId, [...current, turn]);
+  }
+
+  /**
+   * True when the authoritative queue contains a turn for this client turn id.
+   * The backend queues a message whenever a turn is already running, even if
+   * the client thought the chat was idle at send time — so we reconcile against
+   * the authoritative queue rather than trusting the optimistic guess.
+   */
+  function turnLandedInQueue(chatId: string, clientTurnId: string): boolean {
+    const turns = selectPmaQueue(readModelEntityStore.snapshot(), chatId);
+    return turns.some((turn) => {
+      if (isOptimisticQueuedTurn(turn)) return false;
+      const raw = turn.raw as { client_turn_id?: unknown } | null | undefined;
+      return typeof raw?.client_turn_id === 'string' && raw.client_turn_id === clientTurnId;
+    });
+  }
+
+  function removeOptimisticQueuedTurn(chatId: string, clientTurnId: string): void {
+    const id = `optimistic-queue:${clientTurnId}`;
+    const current = selectPmaQueue(readModelEntityStore.snapshot(), chatId);
+    if (!current.some((turn) => turn.managedTurnId === id)) return;
+    readModelEntityStore.setPmaQueue(
+      chatId,
+      current.filter((turn) => turn.managedTurnId !== id)
+    );
+  }
+
   async function sendMessage(busyPolicy: 'queue' | 'interrupt' | null = null): Promise<void> {
     if ((!draft.trim() && pendingAttachments.length === 0) || !activeChatId) return;
     const draftSnapshot = draft;
     const attachmentsSnapshot = pendingAttachments;
     const optimisticChatId = activeChatId;
+    // A prior optimistic send still sitting in the transcript means the chat is
+    // effectively busy: even if `displayedProgress` has not caught up yet, a
+    // back-to-back message will queue behind that turn. Treating it as a queue
+    // up front keeps a queued message out of the conversation as a bubble.
+    const hasInFlightOptimisticTurn = (() => {
+      const transcript = readModelEntityStore.snapshot().chatTranscripts[optimisticChatId];
+      return Boolean(transcript?.order.some((id) => id.startsWith('optimistic:user:')));
+    })();
+    const willQueueOptimistically =
+      !isLocalDraftChatId(optimisticChatId) &&
+      busyPolicy !== 'interrupt' &&
+      (busyPolicy === 'queue' ||
+        displayedProgress?.status === 'running' ||
+        hasInFlightOptimisticTurn);
     const optimisticId = `optimistic:user:${Date.now()}:${Math.random().toString(36).slice(2, 8)}`;
     const optimisticTimestamp = new Date().toISOString();
     const optimisticPlaceholder: ChatTranscriptCard = {
@@ -1662,20 +1797,27 @@
         }
       }
     };
-    readModelEntityStore.optimisticSend(
-      optimisticChatId,
-      {
-        itemId: optimisticId,
-        kind: 'user_message',
-        role: 'user',
-        createdAt: optimisticTimestamp,
-        text: draftSnapshot,
-        artifactIds: [],
-        clientMessageId: optimisticId
-      },
-      optimisticId
-    );
-    readModelEntityStore.upsertChatTranscriptCards(optimisticChatId, [optimisticPlaceholder]);
+    if (willQueueOptimistically) {
+      // A queued message has not entered the conversation yet — show it only in
+      // the queue panel, never as a transcript card. Injecting an optimistic
+      // transcript card here would leave an orphan once the turn actually runs.
+      pushOptimisticQueuedTurn(optimisticChatId, draftSnapshot, optimisticId);
+    } else {
+      readModelEntityStore.optimisticSend(
+        optimisticChatId,
+        {
+          itemId: optimisticId,
+          kind: 'user_message',
+          role: 'user',
+          createdAt: optimisticTimestamp,
+          text: draftSnapshot,
+          artifactIds: [],
+          clientMessageId: optimisticId
+        },
+        optimisticId
+      );
+      readModelEntityStore.upsertChatTranscriptCards(optimisticChatId, [optimisticPlaceholder]);
+    }
     draft = '';
     pendingAttachments = [];
     const composerVersionAtClear = composerEditVersion;
@@ -1711,8 +1853,12 @@
       return true;
     };
     const restoreDraft = () => {
-      removeOptimistic();
-      readModelEntityStore.failOptimisticMutation(optimisticId);
+      if (willQueueOptimistically) {
+        removeOptimisticQueuedTurn(optimisticChatId, optimisticId);
+      } else {
+        removeOptimistic();
+        readModelEntityStore.failOptimisticMutation(optimisticId);
+      }
       if (composerEditVersion !== composerVersionAtClear) return;
       draft = draftSnapshot;
       pendingAttachments = attachmentsSnapshot;
@@ -1814,7 +1960,20 @@
       }
       await invalidateChatMutation(committedChatId);
       await refreshActive(committedChatId, { quiet: true });
-      removeOptimistic(committedChatId, { requireBackendRow: true });
+      if (willQueueOptimistically) {
+        // refreshActive already replaced the queue with authoritative data;
+        // this clears the optimistic stand-in if that refresh was skipped.
+        removeOptimisticQueuedTurn(committedChatId, optimisticId);
+      } else if (turnLandedInQueue(committedChatId, optimisticId)) {
+        // The client believed the chat was idle, but the backend queued this
+        // turn behind one that was already running. It now belongs to the
+        // queue panel — drop the optimistic transcript bubble so a queued
+        // message is never shown as if it had entered the conversation.
+        removeOptimistic(committedChatId);
+        readModelEntityStore.failOptimisticMutation(optimisticId);
+      } else {
+        removeOptimistic(committedChatId, { requireBackendRow: true });
+      }
     } else {
       restoreDraft();
       composeError = result.error;
@@ -1829,6 +1988,7 @@
 
   async function cancelQueuedTurn(turn: PmaQueuedTurn, options: { confirmed?: boolean } = {}): Promise<void> {
     if (!activeChatId || !turn.managedTurnId) return;
+    if (isOptimisticQueuedTurn(turn)) return;
     if (!options.confirmed) {
       const ok = await confirmDialog({
         title: 'Cancel queued message',
@@ -1852,7 +2012,7 @@
   }
 
   async function interruptWithQueuedTurn(turn: PmaQueuedTurn): Promise<void> {
-    if (!activeChatId || !turn.prompt.trim()) return;
+    if (!activeChatId || !turn.prompt.trim() || isOptimisticQueuedTurn(turn)) return;
     const chatId = activeChatId;
     composeError = null;
     const cancelResult = await webApi.pma.cancelQueuedTurn(chatId, turn.managedTurnId);
@@ -1864,6 +2024,13 @@
       chatId,
       queuedTurns.filter((item) => item.managedTurnId !== turn.managedTurnId)
     );
+    // The queued message now leaves the queue panel and enters the conversation:
+    // show it immediately, tagged with a client turn id so the backend row
+    // reconciles against it instead of rendering a duplicate.
+    const clientTurnId = `optimistic:user:${Date.now()}:${Math.random().toString(36).slice(2, 8)}`;
+    readModelEntityStore.upsertChatTranscriptCards(chatId, [
+      buildOptimisticUserCard(chatId, turn.prompt, clientTurnId, new Date().toISOString())
+    ]);
     const profileForSend =
       activeChat?.agentProfile?.trim() || selectedProfile?.trim() || '';
     const result = await executePmaChatCommandPlan(
@@ -1872,12 +2039,35 @@
         model: turn.model ?? selectedModel,
         attachments: turn.attachments as DocumentFileIntentPayload[],
         reasoning: turn.reasoning ?? selectedReasoning,
-        profile: profileForSend
+        profile: profileForSend,
+        clientTurnId
       })
     );
     if (result.ok) {
       await invalidateChatMutation(chatId);
       await refreshActive(chatId, { quiet: true });
+    } else {
+      readModelEntityStore.removeOptimisticChatTranscriptCards(chatId);
+      composeError = result.error;
+    }
+  }
+
+  async function clearQueueFromPanel(): Promise<void> {
+    if (!activeChatId) return;
+    const realTurns = queuedTurns.filter((turn) => !isOptimisticQueuedTurn(turn));
+    if (realTurns.length === 0) return;
+    const ok = await confirmDialog({
+      title: 'Clear queue',
+      message: `Cancel all ${realTurns.length} queued message${realTurns.length === 1 ? '' : 's'}?`,
+      confirmText: 'Clear queue',
+      danger: true
+    });
+    if (!ok) return;
+    composeError = null;
+    const result = await webApi.pma.clearQueue(activeChatId);
+    if (result.ok) {
+      readModelEntityStore.setPmaQueue(activeChatId, []);
+      await refreshActive(activeChatId, { quiet: true });
     } else {
       composeError = result.error;
     }
@@ -2851,32 +3041,56 @@
         />
       </div>
       {#if queuedTurns.length > 0}
-        <div class="queued-message-list" aria-label="Queued messages">
-          {#each queuedTurns as turn (turn.managedTurnId)}
-            <div class="queued-message-row">
-              <span class="queued-message-position">#{turn.position}</span>
-              <span class="queued-message-copy" title={turn.prompt}>{turn.promptPreview || turn.prompt}</span>
-              <span class="queued-message-state">{turn.state || 'queued'}</span>
+        <div class="queue-panel" aria-label="Queued messages">
+          <div class="queue-panel-head">
+            <span class="queue-panel-title">
+              Queued
+              <span class="queue-panel-count">{queuedTurns.length}</span>
+            </span>
+            <span class="queue-panel-hint">Runs after the current turn</span>
+            {#if queuedTurns.length > 1}
               <button
-                class="queued-message-action"
+                class="queue-panel-clear"
                 type="button"
-                aria-label={`Interrupt with queued message ${turn.position}`}
-                title="Interrupt with this queued message"
-                onclick={() => interruptWithQueuedTurn(turn)}
+                onclick={clearQueueFromPanel}
               >
-                Interrupt
+                Clear all
               </button>
-              <button
-                class="queued-message-action subtle"
-                type="button"
-                aria-label={`Cancel queued message ${turn.position}`}
-                title="Cancel queued message"
-                onclick={() => cancelQueuedTurn(turn)}
-              >
-                Cancel
-              </button>
-            </div>
-          {/each}
+            {/if}
+          </div>
+          <ul class="queue-list">
+            {#each queuedTurns as turn, index (turn.managedTurnId)}
+              {@const pending = isOptimisticQueuedTurn(turn)}
+              <li class="queue-item" class:pending>
+                <span class="queue-item-index" aria-hidden="true">{index + 1}</span>
+                <span class="queue-item-text" title={turn.prompt}>{turn.promptPreview || turn.prompt}</span>
+                <span class="queue-item-actions">
+                  <button
+                    class="queue-item-run"
+                    type="button"
+                    disabled={pending}
+                    aria-label={`Interrupt the current turn and run queued message ${index + 1}`}
+                    title="Interrupt the current turn and run this next"
+                    onclick={() => interruptWithQueuedTurn(turn)}
+                  >
+                    Interrupt
+                  </button>
+                  <button
+                    class="queue-item-cancel"
+                    type="button"
+                    disabled={pending}
+                    aria-label={`Cancel queued message ${index + 1}`}
+                    title="Cancel this queued message"
+                    onclick={() => cancelQueuedTurn(turn)}
+                  >
+                    <svg viewBox="0 0 24 24" aria-hidden="true">
+                      <path d="M6 6l12 12M18 6 6 18" />
+                    </svg>
+                  </button>
+                </span>
+              </li>
+            {/each}
+          </ul>
         </div>
       {/if}
       {#if pendingAttachments.length > 0}
@@ -2937,7 +3151,7 @@
         disabled={!hasRunnableDraft}
         title="Send (⌘/Ctrl+Enter)"
       >
-        {sending ? 'Queueing' : displayedProgress?.status === 'running' ? 'Queue' : 'Send'}
+        {sending ? (composerWillQueue ? 'Queueing' : 'Sending') : composerWillQueue ? 'Queue' : 'Send'}
       </button>
     </form>
     {#if linkDialogOpen}
