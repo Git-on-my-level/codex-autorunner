@@ -311,7 +311,7 @@ async def handle_queue_cancel_button(
         queued_user_message_id=source_message_id,
         component_source_message_id=message_id,
     )
-    cancelled = await service._dispatcher.cancel_pending_message(
+    cancelled = await service._chat_queue_control_plane.cancel_pending_item(
         action.conversation_id,
         action.queued_user_message_id,
     )
@@ -372,7 +372,7 @@ async def handle_queue_interrupt_send_button(
         queued_user_message_id=source_message_id,
         component_source_message_id=message_id,
     )
-    promoted = await service._dispatcher.promote_pending_message(
+    promoted = await service._chat_queue_control_plane.promote_pending_item(
         action.conversation_id,
         action.queued_user_message_id,
     )

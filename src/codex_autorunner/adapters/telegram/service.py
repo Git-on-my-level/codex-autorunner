@@ -19,6 +19,7 @@ if TYPE_CHECKING:
     from .state import TelegramTopicRecord
 
 from ...agents.opencode.supervisor import OpenCodeSupervisor
+from ...core.chat_queue_control import ChatQueueControlPlane, ChatQueueControlStore
 from ...core.config import load_hub_config, load_repo_config
 from ...core.config_contract import ConfigError
 from ...core.filebox_retention import (
@@ -305,6 +306,7 @@ class TelegramBotService(
                     exc=exc,
                 )
         self._hub_client: Optional[HttpHubControlPlaneClient] = None
+        self._chat_queue_control_store = ChatQueueControlStore(config_root)
         self._hub_handshake_compatibility: Optional[HandshakeCompatibility] = None
         try:
             hub_config = load_hub_config(config_root)
@@ -2139,11 +2141,15 @@ class TelegramBotService(
         self, topic_key: str
     ) -> list[QueueStatusItem]:
         runtime = self._router.runtime_for(topic_key)
-        pending_items = getattr(runtime.queue, "pending_items", None)
-        if not callable(pending_items):
+        control_plane = ChatQueueControlPlane(
+            self._chat_queue_control_store,
+            runtime=runtime.queue,
+        )
+        snapshot = await control_plane.queue_status(topic_key)
+        if snapshot is None:
             return []
         return coerce_queue_status_items(
-            pending_items(),
+            [item.to_dict() for item in snapshot.pending_items],
             fallback_prefix="Request",
         )
 

@@ -15,16 +15,16 @@ from ....adapters.chat.channel_directory import (
     channel_entry_key,
 )
 from ....adapters.chat.dispatcher import conversation_id_for
-from ....adapters.chat.queue_control import (
-    ChatQueueControlStore,
-    normalize_chat_thread_id,
-)
 from ....adapters.discord.config import (
     DEFAULT_BOT_TOKEN_ENV as DEFAULT_DISCORD_BOT_TOKEN_ENV,
 )
 from ....adapters.discord.rest import DiscordRestClient
 from ....adapters.telegram.client import TelegramBotClient
 from ....adapters.telegram.state_types import parse_topic_key
+from ....core.chat_queue_control import (
+    ChatQueueControlStore,
+    normalize_chat_thread_id,
+)
 from ....core.config import ConfigError, load_hub_config
 from ....core.orchestration import ChatSurfaceReadService
 from ....core.orchestration.sqlite import resolve_orchestration_sqlite_path

@@ -283,23 +283,23 @@ async def run_chat_queue_reset_loop(service: Any) -> None:
 
 
 async def apply_pending_chat_queue_resets(service: Any) -> None:
-    requests = service._chat_queue_control_store.take_reset_requests(platform="discord")
+    requests = service._chat_queue_control_plane.take_reset_requests(platform="discord")
     for request in requests:
-        conversation_id = str(request.get("conversation_id") or "").strip()
+        conversation_id = request.conversation_id.strip()
         if not conversation_id:
             continue
-        result = await service._dispatcher.force_reset(conversation_id)
+        result = await service._chat_queue_control_plane.force_reset(conversation_id)
         log_event(
             service._logger,
             logging.WARNING,
             "discord.chat_queue.reset_applied",
             conversation_id=conversation_id,
-            chat_id=request.get("chat_id"),
-            thread_id=request.get("thread_id"),
-            requested_at=request.get("requested_at"),
-            requested_by=request.get("requested_by"),
-            cancelled_pending=result.get("cancelled_pending"),
-            cancelled_active=result.get("cancelled_active"),
+            chat_id=request.chat_id,
+            thread_id=request.thread_id,
+            requested_at=request.requested_at,
+            requested_by=request.requested_by,
+            cancelled_pending=result.cancelled_pending,
+            cancelled_active=result.cancelled_active,
         )
 
 
