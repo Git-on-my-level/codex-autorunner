@@ -10,9 +10,7 @@ from fastapi import HTTPException, Request
 from .....core.lifecycle_events import LifecycleEvent, LifecycleEventType
 from .....core.time_utils import now_iso
 from ...services.pma import get_pma_request_context
-from ...services.pma.common import (
-    normalize_optional_text as service_normalize_optional_text,
-)
+from ...services.pma.common import normalize_optional_text
 
 logger = logging.getLogger(__name__)
 
@@ -207,15 +205,13 @@ async def get_automation_store(
     return None
 
 
-def normalize_optional_text(value: Any) -> Optional[str]:
-    return service_normalize_optional_text(value)
-
-
 async def notify_hub_automation_transition(
     request: Request,
-    runtime_state: Any,
+    runtime_state: Any = None,
     *,
     repo_id: Optional[str] = None,
+    resource_kind: Optional[str] = None,
+    resource_id: Optional[str] = None,
     run_id: Optional[str] = None,
     thread_id: Optional[str] = None,
     from_state: str,
@@ -231,10 +227,16 @@ async def notify_hub_automation_transition(
         "timestamp": normalize_optional_text(timestamp) or now_iso(),
     }
     normalized_repo_id = normalize_optional_text(repo_id)
+    normalized_resource_kind = normalize_optional_text(resource_kind)
+    normalized_resource_id = normalize_optional_text(resource_id)
     normalized_run_id = normalize_optional_text(run_id)
     normalized_thread_id = normalize_optional_text(thread_id)
     if normalized_repo_id:
         payload["repo_id"] = normalized_repo_id
+    if normalized_resource_kind:
+        payload["resource_kind"] = normalized_resource_kind
+    if normalized_resource_id:
+        payload["resource_id"] = normalized_resource_id
     if normalized_run_id:
         payload["run_id"] = normalized_run_id
     if normalized_thread_id:
@@ -300,7 +302,7 @@ def _lifecycle_event_from_transition_payload(payload: dict[str, Any]) -> Lifecyc
 
 async def notify_managed_thread_terminal_transition(
     request: Request,
-    runtime_state: Any,
+    runtime_state: Any = None,
     *,
     thread: dict[str, Any],
     managed_thread_id: str,
@@ -313,6 +315,8 @@ async def notify_managed_thread_terminal_transition(
         request,
         runtime_state,
         repo_id=normalize_optional_text(thread.get("repo_id")),
+        resource_kind=normalize_optional_text(thread.get("resource_kind")),
+        resource_id=normalize_optional_text(thread.get("resource_id")),
         run_id=None,
         thread_id=managed_thread_id,
         from_state="running",

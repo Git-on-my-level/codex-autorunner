@@ -24,6 +24,11 @@ from typing import (
     Union,
 )
 
+from ...core.chat_queue_control import (
+    ChatQueueControlPlane,
+    ChatQueueControlStore,
+    ChatQueueSnapshot,
+)
 from ...core.logging_utils import log_event
 from ...core.time_utils import now_iso
 from .callbacks import (
@@ -35,7 +40,6 @@ from .callbacks import (
     decode_logical_callback,
 )
 from .models import ChatEvent, ChatInteractionEvent, ChatMessageEvent
-from .queue_control import ChatQueueControlStore
 from .queue_status import build_queue_item_preview
 
 DEFAULT_BYPASS_INTERACTION_PREFIXES = (
@@ -144,6 +148,7 @@ class ChatDispatcher:
         *,
         logger: Optional[logging.Logger] = None,
         queue_control_store: Optional[ChatQueueControlStore] = None,
+        queue_control_plane: Optional[ChatQueueControlPlane] = None,
         allowlist_predicate: Optional[DispatchPredicate] = None,
         dedupe_predicate: Optional[DispatchPredicate] = None,
         bypass_predicate: Optional[DispatchPredicate] = None,
@@ -155,7 +160,15 @@ class ChatDispatcher:
         handler_stalled_warning_seconds: Optional[float] = 60.0,
     ) -> None:
         self._logger = logger or logging.getLogger(__name__)
-        self._queue_control_store = queue_control_store
+        self._queue_control_plane = (
+            queue_control_plane
+            if queue_control_plane is not None
+            else (
+                ChatQueueControlPlane(queue_control_store)
+                if queue_control_store is not None
+                else None
+            )
+        )
         self._allowlist_predicate = allowlist_predicate
         self._dedupe_predicate = dedupe_predicate
         self._bypass_predicate = bypass_predicate
@@ -673,15 +686,17 @@ class ChatDispatcher:
         }
 
     def _publish_queue_state_locked(self, conversation_id: str) -> None:
-        if self._queue_control_store is None:
+        if self._queue_control_plane is None:
             return
-        snapshot = self._build_queue_snapshot_locked(conversation_id)
-        if int(snapshot.get("pending_count") or 0) <= 0 and not bool(
-            snapshot.get("active")
-        ):
-            self._queue_control_store.clear_snapshot(conversation_id)
+        snapshot = ChatQueueSnapshot.from_mapping(
+            self._build_queue_snapshot_locked(conversation_id)
+        )
+        if snapshot is None:
             return
-        self._queue_control_store.record_snapshot(snapshot)
+        if snapshot.pending_count <= 0 and not snapshot.active:
+            self._queue_control_plane.clear_snapshot(conversation_id)
+            return
+        self._queue_control_plane.record_snapshot(snapshot)
 
     async def _warn_on_stalled_handler(
         self,

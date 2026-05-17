@@ -363,9 +363,9 @@ class RepoWorktreeDetailSnapshot(ReadModelContract):
     parent_links: dict[str, Any] = Field(default_factory=dict)
     topology: dict[str, Any] = Field(default_factory=dict)
     runtime: dict[str, Any] = Field(default_factory=dict)
-    scoped_tickets: list[dict[str, Any]] = Field(default_factory=list)
-    scoped_runs: list[dict[str, Any]] = Field(default_factory=list)
-    scoped_chats: list[dict[str, Any]] = Field(default_factory=list)
+    ticket_queue: list[dict[str, Any]] = Field(default_factory=list)
+    run_queue: list[dict[str, Any]] = Field(default_factory=list)
+    chat_queue: list[dict[str, Any]] = Field(default_factory=list)
     contextspace_summary: list[dict[str, Any]] = Field(default_factory=list)
     current_artifacts: list[dict[str, Any]] = Field(default_factory=list)
     ticket_window: PageWindow
@@ -419,6 +419,10 @@ class TicketDetailSnapshot(ReadModelContract):
     dispatch_window: PageWindow
     dispatches: list[dict[str, Any]] = Field(default_factory=list)
     repair: RepairPolicy
+    ticket_detail: dict[str, Any] = Field(default_factory=dict)
+    ticket_queue: list[dict[str, Any]] = Field(default_factory=list)
+    run_queue: list[dict[str, Any]] = Field(default_factory=list)
+    chat_queue: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class TicketDetailPatch(ReadModelContract):

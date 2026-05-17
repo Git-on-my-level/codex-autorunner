@@ -5,3 +5,4 @@ export * from './readModelLoaders';
 export * from './readModelStore';
 export * from './readModelStream';
 export * from './readModelViewModels';
+export * from './scopedTicketSessions';

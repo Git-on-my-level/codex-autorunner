@@ -160,6 +160,30 @@ class TranscriptMirrorStore:
         sanitized.setdefault("turn_id", turn_id)
         created_at = _normalize_created_at(sanitized)
         sanitized.setdefault("created_at", created_at)
+        resolved_user_text = _resolve_user_text(sanitized, explicit_user_text=user_text)
+        text_content = build_plain_text_transcript(
+            user_text=resolved_user_text,
+            assistant_text=assistant_text or "",
+        )
+        self.write_mirror_content(
+            turn_id=turn_id,
+            metadata=sanitized,
+            text_content=text_content,
+            message_role="transcript" if resolved_user_text else "assistant",
+        )
+
+    def write_mirror_content(
+        self,
+        *,
+        turn_id: str,
+        metadata: Mapping[str, Any],
+        text_content: str,
+        message_role: str = "transcript",
+    ) -> None:
+        sanitized = sanitize_transcript_metadata(metadata)
+        sanitized.setdefault("turn_id", turn_id)
+        created_at = _normalize_created_at(sanitized)
+        sanitized.setdefault("created_at", created_at)
         target_kind, target_id = _normalize_target(sanitized, turn_id=turn_id)
         execution_id = str(
             sanitized.get("managed_turn_id") or sanitized.get("turn_id") or turn_id
@@ -167,11 +191,6 @@ class TranscriptMirrorStore:
         agent_id = str(sanitized.get("agent") or "").strip() or None
         model_id = str(sanitized.get("model") or "").strip() or None
         repo_id = str(sanitized.get("repo_id") or "").strip() or None
-        resolved_user_text = _resolve_user_text(sanitized, explicit_user_text=user_text)
-        text_content = build_plain_text_transcript(
-            user_text=resolved_user_text,
-            assistant_text=assistant_text or "",
-        )
         text_preview = build_text_preview(text_content)
         with open_orchestration_sqlite(self._hub_root) as conn:
             conn.execute(
@@ -210,7 +229,7 @@ class TranscriptMirrorStore:
                     target_kind,
                     target_id,
                     execution_id or None,
-                    "transcript" if resolved_user_text else "assistant",
+                    message_role,
                     text_content,
                     text_preview,
                     repo_id,

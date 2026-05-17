@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import dataclasses
 import logging
+from collections import deque
 from dataclasses import dataclass
-from typing import Any, Awaitable, Callable, Optional, TypeVar, cast
+from typing import Any, Awaitable, Callable, Deque, Optional, TypeVar, cast
 
 logger = logging.getLogger("codex_autorunner.adapters.telegram.topic_queue")
 
@@ -23,6 +25,7 @@ class _TopicQueueEntry:
 class TopicQueue:
     def __init__(self) -> None:
         self._queue: asyncio.Queue[object] = asyncio.Queue()
+        self._pending_entries: Deque[_TopicQueueEntry] = deque()
         self._worker: Optional[asyncio.Task[None]] = None
         self._closed = False
         self._current_task: Optional[asyncio.Task[Any]] = None
@@ -33,10 +36,7 @@ class TopicQueue:
 
     def pending_items(self) -> list[dict[str, str]]:
         items: list[dict[str, str]] = []
-        for item in list(getattr(self._queue, "_queue", ())):
-            if item is _QUEUE_STOP:
-                continue
-            entry = cast(_TopicQueueEntry, item)
+        for entry in list(self._pending_entries):
             if not isinstance(entry.item_id, str) or not entry.item_id:
                 continue
             payload = {"item_id": entry.item_id}
@@ -44,6 +44,24 @@ class TopicQueue:
                 payload["preview"] = entry.item_label
             items.append(payload)
         return items
+
+    def queue_status(self, conversation_id: str) -> dict[str, Any]:
+        return {
+            "conversation_id": conversation_id,
+            "pending_count": self.pending(),
+            "pending_items": self.pending_items(),
+            "active": self._current_task is not None and not self._current_task.done(),
+            "updated_at": None,
+        }
+
+    def force_reset(self, conversation_id: str) -> dict[str, Any]:
+        cancelled_pending = self.cancel_pending()
+        cancelled_active = self.cancel_active()
+        return {
+            "conversation_id": conversation_id,
+            "cancelled_pending": cancelled_pending,
+            "cancelled_active": cancelled_active,
+        }
 
     async def join_idle(self) -> None:
         """Block until the queue has no backlog and no in-flight work item."""
@@ -88,6 +106,7 @@ class TopicQueue:
                 self._queue.put_nowait(_QUEUE_STOP)
             except asyncio.QueueFull:
                 pass
+        self._pending_entries.clear()
         return cancelled
 
     def cancel_pending_item(self, item_id: str) -> bool:
@@ -119,6 +138,7 @@ class TopicQueue:
             self._queue.put_nowait(entry)
         if requeue_stop:
             self._queue.put_nowait(_QUEUE_STOP)
+        self._pending_entries = deque(entries)
         return cancelled
 
     def promote_pending_item(self, item_id: str) -> bool:
@@ -149,6 +169,9 @@ class TopicQueue:
             self._queue.put_nowait(entry)
         if requeue_stop:
             self._queue.put_nowait(_QUEUE_STOP)
+        self._pending_entries = deque(
+            ([target] if target is not None else []) + entries
+        )
         return target is not None
 
     def enqueue_detached(
@@ -160,9 +183,9 @@ class TopicQueue:
     ) -> Optional[str]:
         if self._closed:
             raise RuntimeError("topic queue is closed")
-        self._queue.put_nowait(
-            _TopicQueueEntry(work=work, item_id=item_id, item_label=item_label)
-        )
+        entry = _TopicQueueEntry(work=work, item_id=item_id, item_label=item_label)
+        self._pending_entries.append(entry)
+        self._queue.put_nowait(entry)
         self._ensure_worker()
         return item_id
 
@@ -171,7 +194,9 @@ class TopicQueue:
             raise RuntimeError("topic queue is closed")
         loop = asyncio.get_running_loop()
         future: asyncio.Future[T] = loop.create_future()
-        await self._queue.put(_TopicQueueEntry(work=work, future=future))
+        entry = _TopicQueueEntry(work=work, future=future)
+        self._pending_entries.append(entry)
+        await self._queue.put(entry)
         self._ensure_worker()
         return await future
 
@@ -193,6 +218,11 @@ class TopicQueue:
                 if item is _QUEUE_STOP:
                     return
                 entry = cast(_TopicQueueEntry, item)
+                if self._pending_entries and self._pending_entries[0] is entry:
+                    self._pending_entries.popleft()
+                else:
+                    with contextlib.suppress(ValueError):
+                        self._pending_entries.remove(entry)
                 future = entry.future
                 if future is not None and future.cancelled():
                     continue

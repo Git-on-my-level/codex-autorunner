@@ -39,21 +39,6 @@ def _stamp_now() -> str:
     return datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
 
 
-def _read_preview(path: Path) -> str:
-    if not path.exists():
-        return ""
-    try:
-        with open(path, "r", encoding="utf-8") as handle:
-            text = handle.read(PMA_TRANSCRIPT_PREVIEW_CHARS + 1)
-    except OSError as exc:
-        logger.warning("Failed to read PMA transcript content at %s: %s", path, exc)
-        return ""
-    text = text.strip()
-    if len(text) <= PMA_TRANSCRIPT_PREVIEW_CHARS:
-        return text
-    return text[:PMA_TRANSCRIPT_PREVIEW_CHARS].rstrip() + "..."
-
-
 @dataclass(frozen=True)
 class PmaTranscriptPointer:
     turn_id: str
@@ -62,9 +47,14 @@ class PmaTranscriptPointer:
     created_at: str
 
 
+@dataclass(frozen=True)
+class PmaTranscriptBackfillResult:
+    imported_count: int
+    skipped_count: int
+
+
 class PmaTranscriptStore:
     def __init__(self, hub_root: Path) -> None:
-        self._root = hub_root
         self._dir = default_pma_transcripts_dir(hub_root)
         self._mirror_store = TranscriptMirrorStore(hub_root)
 
@@ -142,79 +132,65 @@ class PmaTranscriptStore:
         )
 
     def list_recent(self, *, limit: int = 50) -> list[dict[str, Any]]:
-        entries = self._mirror_store.list_recent(limit=limit)
-        if entries:
-            return entries
-        return self._list_recent_legacy(limit=limit)
-
-    def _list_recent_legacy(self, *, limit: int = 50) -> list[dict[str, Any]]:
-        if limit <= 0:
-            return []
-        if not self._dir.exists():
-            return []
-        entries: list[dict[str, Any]] = []
-        for path in sorted(self._dir.glob("*.json"), reverse=True):
-            try:
-                raw = path.read_text(encoding="utf-8")
-                data = json.loads(raw)
-            except (OSError, json.JSONDecodeError) as exc:
-                logger.warning(
-                    "Failed to read PMA transcript metadata at %s: %s", path, exc
-                )
-                continue
-            if not isinstance(data, dict):
-                continue
-            content_path = Path(str(data.get("content_path") or ""))
-            if not content_path.is_absolute():
-                content_path = (path.parent / content_path).resolve()
-            data = dict(data)
-            data["preview"] = _read_preview(content_path)
-            entries.append(data)
-            if len(entries) >= limit:
-                break
-        return entries
+        return self._mirror_store.list_recent(limit=limit)
 
     def read_transcript(self, turn_id: str) -> Optional[dict[str, Any]]:
-        transcript = self._mirror_store.read_transcript(turn_id)
-        if transcript is not None:
-            return transcript
-        return self._read_transcript_legacy(turn_id)
+        return self._mirror_store.read_transcript(turn_id)
 
-    def _read_transcript_legacy(self, turn_id: str) -> Optional[dict[str, Any]]:
-        match = self._find_metadata(turn_id)
-        if not match:
-            return None
-        meta, meta_path = match
-        content_path = Path(str(meta.get("content_path") or ""))
+
+class PmaTranscriptLegacyBackfill:
+    """One-time importer for pre-mirror PMA transcript files.
+
+    Normal `PmaTranscriptStore` reads intentionally do not inspect legacy
+    Markdown/JSON files. Operators with old transcript files can run this
+    service once before relying on mirror-only reads.
+    """
+
+    def __init__(self, hub_root: Path) -> None:
+        self._dir = default_pma_transcripts_dir(hub_root)
+        self._mirror_store = TranscriptMirrorStore(hub_root)
+
+    def run(self) -> PmaTranscriptBackfillResult:
+        if not self._dir.exists():
+            return PmaTranscriptBackfillResult(imported_count=0, skipped_count=0)
+
+        imported_count = 0
+        skipped_count = 0
+        for metadata_path in sorted(self._dir.glob("*.json")):
+            meta = self._read_metadata(metadata_path)
+            if meta is None:
+                skipped_count += 1
+                continue
+            turn_id = str(meta.get("turn_id") or "").strip()
+            if not turn_id:
+                skipped_count += 1
+                continue
+            content = self._read_content(meta, metadata_path)
+            self._mirror_store.write_mirror_content(
+                turn_id=turn_id,
+                metadata=meta,
+                text_content=content,
+            )
+            imported_count += 1
+        return PmaTranscriptBackfillResult(
+            imported_count=imported_count,
+            skipped_count=skipped_count,
+        )
+
+    def _read_content(self, meta: dict[str, Any], metadata_path: Path) -> str:
+        content_path_text = str(meta.get("content_path") or "").strip()
+        if not content_path_text:
+            return ""
+        content_path = Path(content_path_text)
         if not content_path.is_absolute():
-            content_path = (meta_path.parent / content_path).resolve()
+            content_path = (metadata_path.parent / content_path).resolve()
         try:
-            content = content_path.read_text(encoding="utf-8")
+            return content_path.read_text(encoding="utf-8")
         except OSError as exc:
             logger.warning(
                 "Failed to read PMA transcript content at %s: %s", content_path, exc
             )
-            content = ""
-        return {"metadata": meta, "content": content}
-
-    def _find_metadata(self, turn_id: str) -> Optional[tuple[dict[str, Any], Path]]:
-        if not self._dir.exists():
-            return None
-        safe_turn_id = _safe_segment(turn_id)
-        candidates = sorted(self._dir.glob(f"*_{safe_turn_id}.json"), reverse=True)
-        for path in candidates:
-            meta = self._read_metadata(path)
-            if meta and str(meta.get("turn_id")) == turn_id:
-                return meta, path
-        if candidates:
-            meta = self._read_metadata(candidates[0])
-            if meta:
-                return meta, candidates[0]
-        for path in sorted(self._dir.glob("*.json"), reverse=True):
-            meta = self._read_metadata(path)
-            if meta and str(meta.get("turn_id")) == turn_id:
-                return meta, path
-        return None
+            return ""
 
     def _read_metadata(self, path: Path) -> Optional[dict[str, Any]]:
         try:
@@ -232,6 +208,8 @@ __all__ = [
     "PMA_TRANSCRIPTS_DIRNAME",
     "PMA_TRANSCRIPT_PREVIEW_CHARS",
     "PMA_TRANSCRIPT_VERSION",
+    "PmaTranscriptBackfillResult",
+    "PmaTranscriptLegacyBackfill",
     "PmaTranscriptPointer",
     "PmaTranscriptStore",
     "default_pma_transcripts_dir",

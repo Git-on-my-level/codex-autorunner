@@ -141,6 +141,10 @@ function ticketDetailSnapshot(ticketId = 't-1', ownerId = 'wt-1'): TicketDetailS
     artifacts: [],
     dispatchWindow: { limit: 20, totalEstimate: 0, totalIsExact: true },
     dispatches: [],
+    ticketDetail: {},
+    ticketQueue: [],
+    runQueue: [],
+    chatQueue: [],
     repair: repair('/hub/read-models/tickets/t-1')
   };
 }

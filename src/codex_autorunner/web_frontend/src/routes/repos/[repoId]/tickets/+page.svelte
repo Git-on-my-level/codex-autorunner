@@ -3,27 +3,23 @@
   import { onDestroy, onMount } from 'svelte';
   import TicketViews from '$lib/components/TicketViews.svelte';
   import { confirmDialog } from '$lib/components/confirmDialog';
-  import { dataOr, partialPageIssue, webApi, type ApiError, type PartialPageIssue } from '$lib/api/client';
+  import { webApi, type ApiError, type PartialPageIssue } from '$lib/api/client';
   import {
     invalidateReadModelTags,
+    loadScopedTicketListSession,
     readModelEntityStore,
     readModelEntityTags,
-    scopedOwnerKey,
     selectTicketListView
   } from '$lib/data';
   import {
-    loadScopedActionManifest,
     reorderScopedTicket,
     runScopedTicketQueueCommand,
     scopedTicketActionStatus,
-    scopedTicketQueueOwner,
     scopedTicketQueueScope,
     type ScopedTicketQueueConfig
   } from '$lib/viewModels/scopedTicketQueue';
   import type { SurfaceActionManifest } from '$lib/viewModels/ticket';
   import type { TicketFilter, TicketListViewModel } from '$lib/viewModels/ticket';
-  import { rememberTickets } from '$lib/viewModels/ticketCache';
-  import { mapPmaRunProgress, mapTicketSummary } from '$lib/viewModels/domain';
 
   const repoId = $derived(page.params.repoId ?? 'unknown-repo');
   const queueConfig = $derived<ScopedTicketQueueConfig>({
@@ -36,7 +32,6 @@
   let unsubscribeReadModels: (() => void) | null = null;
   let actionManifest = $state<SurfaceActionManifest | null>(null);
   const ownerScope = $derived(scopedTicketQueueScope(queueConfig));
-  const ownerKey = $derived(scopedOwnerKey(ownerScope));
   const list = $derived<TicketListViewModel | null>(selectTicketListView(readModelState, ownerScope, actionManifest));
   let selectedFilter = $state<TicketFilter>('all');
   let loading = $state(true);
@@ -59,25 +54,12 @@
     if (showLoading) loading = true;
     error = null;
     sectionIssues = [];
-    const owner = scopedTicketQueueOwner(queueConfig);
-    const snapshot = await webApi.readModels.repoDetail(repoId);
-    if (!snapshot.ok) {
-      error = snapshot.error;
-      loading = false;
-      return;
+    const session = await loadScopedTicketListSession(webApi, queueConfig);
+    if (!session.ok) error = session.error;
+    else {
+      actionManifest = session.actionManifest;
+      sectionIssues = session.sectionIssues;
     }
-    const tickets = snapshot.data.scopedTickets.map(mapTicketSummary);
-    const runs = snapshot.data.scopedRuns.map(mapPmaRunProgress);
-    rememberTickets(owner, tickets);
-    readModelEntityStore.replaceScopedTicketSummaries(ownerKey, tickets);
-    readModelEntityStore.replaceScopedRuns(ownerKey, runs);
-    selectedFilter = 'all';
-    loading = false;
-    const manifest = await loadScopedActionManifest(webApi, queueConfig);
-    actionManifest = dataOr(manifest, null);
-    sectionIssues = [
-      !manifest.ok ? partialPageIssue('action_manifest', 'Action manifest unavailable', manifest.error) : null
-    ].filter((issue): issue is PartialPageIssue => Boolean(issue));
     selectedFilter = 'all';
     loading = false;
   }

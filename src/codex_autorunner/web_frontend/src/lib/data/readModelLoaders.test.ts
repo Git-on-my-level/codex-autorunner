@@ -348,6 +348,10 @@ function ticketDetailSnapshot(): TicketDetailSnapshot {
     artifacts: [],
     dispatchWindow: { limit: 20, totalEstimate: 0, totalIsExact: true },
     dispatches: [],
+    ticketDetail: {},
+    ticketQueue: [],
+    runQueue: [],
+    chatQueue: [],
     repair: repair('/hub/read-models/tickets/ticket-1')
   };
 }

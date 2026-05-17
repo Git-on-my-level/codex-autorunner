@@ -265,6 +265,145 @@ def test_consumed_pma_files_do_not_appear_in_action_queue(tmp_path: Path) -> Non
     assert not any(item.get("queue_source") == "pma_file_inbox" for item in queue)
 
 
+def test_action_queue_source_adapters_project_typed_source_payloads() -> None:
+    from codex_autorunner.core.pma_action_queue import (
+        AutomationWakeupActionSource,
+        ManagedThreadActionSource,
+        PmaFileInboxActionSource,
+        TicketFlowActionSource,
+    )
+
+    ticket_items = TicketFlowActionSource(
+        inbox=[
+            {
+                "item_type": "run_dispatch",
+                "next_action": "reply_and_resume",
+                "repo_id": "repo-1",
+                "run_id": "run-1",
+                "seq": 2,
+                "dispatch_actionable": True,
+                "freshness": {"basis_at": "2026-03-16T12:00:00Z"},
+            }
+        ]
+    ).project()
+    assert ticket_items[0]["action_queue_id"] == "ticket_flow_inbox:repo-1:run-1:2"
+    assert ticket_items[0]["recommended_action"] == "reply_and_resume"
+    assert ticket_items[0]["precedence"] == {
+        "rank": 10,
+        "label": "ticket_flow_inbox",
+    }
+
+    thread_items = ManagedThreadActionSource(
+        managed_threads=[
+            {
+                "managed_thread_id": "thread-1",
+                "agent": "codex",
+                "repo_id": "repo-1",
+                "name": "needs attention",
+                "normalized_status": "paused",
+                "status_changed_at": "2026-03-16T11:00:00Z",
+                "freshness": {
+                    "generated_at": "2026-03-16T12:00:00Z",
+                    "basis_at": "2026-03-16T11:00:00Z",
+                    "is_stale": False,
+                },
+            }
+        ]
+    ).project()
+    assert thread_items[0]["queue_source"] == "managed_thread_followup"
+    assert thread_items[0]["action_queue_id"] == "managed_thread_followup:thread-1"
+    assert "open_url" not in thread_items[0]
+
+    file_items = PmaFileInboxActionSource(
+        pma_files_detail={
+            "inbox": [
+                {
+                    "item_type": "pma_file",
+                    "next_action": "process_uploaded_file",
+                    "box": "inbox",
+                    "name": "upload.md",
+                    "source": "filebox",
+                    "size": "100",
+                    "modified_at": "2026-03-16T10:00:00Z",
+                }
+            ],
+            "outbox": [],
+        }
+    ).project()
+    assert file_items[0]["action_queue_id"] == "pma_file_inbox:upload.md"
+    assert file_items[0]["queue_source"] == "pma_file_inbox"
+
+    automation_items = AutomationWakeupActionSource(
+        automation={
+            "wakeups": {
+                "pending_sample": [
+                    {
+                        "wakeup_id": "wakeup-1",
+                        "repo_id": "repo-1",
+                        "thread_id": "thread-1",
+                        "lane_id": "lane-1",
+                        "timestamp": "2026-03-16T11:30:00Z",
+                    }
+                ]
+            }
+        },
+        generated_at="2026-03-16T12:00:00Z",
+        stale_threshold_seconds=3600,
+    ).project()
+    assert automation_items[0]["action_queue_id"] == "automation_wakeup:wakeup-1"
+    assert automation_items[0]["recommended_detail"] == "Continue lane lane-1"
+
+
+def test_action_queue_ranking_supersession_and_ui_hints_are_separate() -> None:
+    from codex_autorunner.core.pma_action_queue import (
+        _apply_action_queue_supersession,
+        _rank_action_queue_items,
+        project_action_queue_ui_hints,
+    )
+
+    ranked = _rank_action_queue_items(
+        [
+            {
+                "item_type": "automation_wakeup",
+                "action_queue_id": "automation_wakeup:wakeup-1",
+                "queue_source": "automation_wakeup",
+                "repo_id": "repo-1",
+                "precedence": {"rank": 15, "label": "automation_wakeup"},
+                "scope": {"kind": "thread", "key": "thread:thread-1"},
+                "sort_timestamp": 2.0,
+            },
+            {
+                "item_type": "managed_thread_followup",
+                "action_queue_id": "managed_thread_followup:thread-1",
+                "queue_source": "managed_thread_followup",
+                "repo_id": "repo-1",
+                "managed_thread_id": "thread-1",
+                "followup_state": "attention_required",
+                "operator_need": "urgent",
+                "precedence": {"rank": 20, "label": "managed_thread_followup"},
+                "scope": {"kind": "thread", "key": "thread:thread-1"},
+                "sort_timestamp": 1.0,
+            },
+        ]
+    )
+
+    assert [item["action_queue_id"] for item in ranked] == [
+        "automation_wakeup:wakeup-1",
+        "managed_thread_followup:thread-1",
+    ]
+    superseded = _apply_action_queue_supersession(ranked)
+    assert superseded[0]["supersession"]["status"] == "primary"
+    assert superseded[1]["supersession"]["status"] == "superseded"
+    assert (
+        superseded[1]["supersession"]["superseded_by"] == "automation_wakeup:wakeup-1"
+    )
+    assert "open_url" not in superseded[1]
+
+    projected = project_action_queue_ui_hints(superseded)
+    assert projected[1]["open_url"] == "/hub/pma/threads/thread-1"
+    assert "open_url" not in superseded[1]
+
+
 def test_format_pma_prompt_includes_workspace_docs(tmp_path: Path) -> None:
     """Test that format_pma_prompt with hub_root includes the PMA docs block."""
     result = _format_seeded_pma_prompt(tmp_path)

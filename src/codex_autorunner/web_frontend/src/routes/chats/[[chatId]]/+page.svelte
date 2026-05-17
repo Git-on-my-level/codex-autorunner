@@ -37,8 +37,17 @@
     planStartAndSendChat
   } from '$lib/application/pmaChatCommands';
   import {
+    buildOptimisticQueuedTurn,
+    buildOptimisticUserTranscriptCard,
+    chatTranscriptHasInFlightOptimisticTurn,
+    isOptimisticQueuedTurn,
+    mergePmaProgressUpdate,
     mergeTranscriptSnapshotWithPendingOptimistic,
-    transcriptCardCorrelationId
+    progressWithLiveElapsed,
+    queueContainsCommittedClientTurn,
+    transcriptContainsCommittedUserRow,
+    visibleChatDetailTranscriptCards,
+    withoutOptimisticQueuedTurn
   } from '$lib/application/pmaChatArchitecture';
   import { withRuntimeBasePath as href } from '$lib/runtime/basePath';
   import { openChatTranscriptEventSource, shouldUseChatTranscriptStream, type StreamSubscription } from '$lib/api/streaming';
@@ -491,20 +500,7 @@
   }
   const displayedProgress = $derived(progressWithLiveElapsed(progress, clockNowMs));
   const liveActivity = $derived(buildPmaLiveActivity(displayedProgress));
-  const activeCards = $derived.by<ChatTranscriptCard[]>(() => {
-    if (queuedTurns.length === 0) return transcriptCards;
-    // The backend persists a queued turn's user message into the transcript as
-    // soon as it is enqueued, but a queued turn has not entered the
-    // conversation yet — it belongs to the QUEUE panel only. Hide its cards
-    // from the transcript until the turn actually runs.
-    const queuedTurnIds = new Set(
-      queuedTurns.map((turn) => turn.managedTurnId).filter(Boolean)
-    );
-    if (queuedTurnIds.size === 0) return transcriptCards;
-    return transcriptCards.filter(
-      (card) => !('turnId' in card && card.turnId && queuedTurnIds.has(card.turnId))
-    );
-  });
+  const activeCards = $derived<ChatTranscriptCard[]>(visibleChatDetailTranscriptCards(transcriptCards, queuedTurns));
   const lastAssistantMessageCard = $derived.by<ChatTranscriptCard | null>(() => {
     for (let i = activeCards.length - 1; i >= 0; i -= 1) {
       const card = activeCards[i];
@@ -1365,46 +1361,13 @@
     );
   }
 
-  /** Elapsed seconds capped by wall clock while status is running (matches live UI). */
-  function progressElapsedWithLiveWall(value: PmaRunProgress, nowMs: number): number {
-    const base = value.elapsedSeconds ?? 0;
-    if (value.status !== 'running' || !value.startedAt) return base;
-    const startedMs = Date.parse(value.startedAt);
-    if (!Number.isFinite(startedMs)) return base;
-    const wallElapsed = Math.max(0, Math.floor((nowMs - startedMs) / 1000));
-    return Math.max(base, wallElapsed);
-  }
-
   function updateProgress(nextProgress: PmaRunProgress): void {
     const chatId = nextProgress.chatId ?? activeChatId;
     if (!chatId) return;
-    const nowMs = Date.now();
-    const previousProgress = currentProgress(chatId);
-    if (previousProgress && previousProgress.id === nextProgress.id) {
-      const incomingElapsed = nextProgress.elapsedSeconds ?? 0;
-      const mergedElapsed = Math.max(progressElapsedWithLiveWall(previousProgress, nowMs), incomingElapsed);
-      const seen = new Set<string>();
-      const merged: SurfaceArtifact[] = [];
-      for (const ev of [...previousProgress.events, ...nextProgress.events]) {
-        if (!ev.id || seen.has(ev.id)) continue;
-        seen.add(ev.id);
-        merged.push(ev);
-      }
-      readModelEntityStore.setPmaProgress(chatId, {
-        ...nextProgress,
-        startedAt: nextProgress.startedAt ?? previousProgress.startedAt,
-        elapsedSeconds: mergedElapsed,
-        events: merged
-      });
-    } else {
-      readModelEntityStore.setPmaProgress(chatId, nextProgress);
-    }
-  }
-
-  function progressWithLiveElapsed(value: PmaRunProgress | null, nowMs: number): PmaRunProgress | null {
-    if (!value) return value;
-    const elapsedSeconds = progressElapsedWithLiveWall(value, nowMs);
-    return elapsedSeconds === value.elapsedSeconds ? value : { ...value, elapsedSeconds };
+    readModelEntityStore.setPmaProgress(
+      chatId,
+      mergePmaProgressUpdate(currentProgress(chatId), nextProgress, Date.now())
+    );
   }
 
   function hasCachedDetail(chatId: string): boolean {
@@ -1670,54 +1633,9 @@
     creating = false;
   }
 
-  function buildOptimisticUserCard(
-    chatId: string,
-    text: string,
-    clientTurnId: string,
-    timestamp: string
-  ): ChatTranscriptCard {
-    return {
-      kind: 'message',
-      id: clientTurnId,
-      turnId: null,
-      orderKey: `optimistic|${timestamp}|${clientTurnId}`,
-      timestamp,
-      message: {
-        id: clientTurnId,
-        chatId,
-        role: 'user',
-        text,
-        createdAt: timestamp,
-        status: null,
-        artifacts: [],
-        raw: {
-          optimistic: true,
-          client_turn_id: clientTurnId,
-          correlation_id: clientTurnId,
-          identity: { correlation_id: clientTurnId }
-        }
-      }
-    };
-  }
-
-  function isOptimisticQueuedTurn(turn: PmaQueuedTurn): boolean {
-    return turn.managedTurnId.startsWith('optimistic-queue:');
-  }
-
   function pushOptimisticQueuedTurn(chatId: string, text: string, clientTurnId: string): void {
     const current = selectPmaQueue(readModelEntityStore.snapshot(), chatId);
-    const turn: PmaQueuedTurn = {
-      managedTurnId: `optimistic-queue:${clientTurnId}`,
-      position: current.length + 1,
-      state: 'queueing',
-      prompt: text,
-      promptPreview: text,
-      attachments: [],
-      model: null,
-      reasoning: null,
-      enqueuedAt: new Date().toISOString(),
-      raw: { optimistic: true }
-    };
+    const turn = buildOptimisticQueuedTurn(text, clientTurnId, current.length + 1, new Date().toISOString());
     readModelEntityStore.setPmaQueue(chatId, [...current, turn]);
   }
 
@@ -1728,22 +1646,14 @@
    * the authoritative queue rather than trusting the optimistic guess.
    */
   function turnLandedInQueue(chatId: string, clientTurnId: string): boolean {
-    const turns = selectPmaQueue(readModelEntityStore.snapshot(), chatId);
-    return turns.some((turn) => {
-      if (isOptimisticQueuedTurn(turn)) return false;
-      const raw = turn.raw as { client_turn_id?: unknown } | null | undefined;
-      return typeof raw?.client_turn_id === 'string' && raw.client_turn_id === clientTurnId;
-    });
+    return queueContainsCommittedClientTurn(selectPmaQueue(readModelEntityStore.snapshot(), chatId), clientTurnId);
   }
 
   function removeOptimisticQueuedTurn(chatId: string, clientTurnId: string): void {
-    const id = `optimistic-queue:${clientTurnId}`;
     const current = selectPmaQueue(readModelEntityStore.snapshot(), chatId);
-    if (!current.some((turn) => turn.managedTurnId === id)) return;
-    readModelEntityStore.setPmaQueue(
-      chatId,
-      current.filter((turn) => turn.managedTurnId !== id)
-    );
+    const next = withoutOptimisticQueuedTurn(current, clientTurnId);
+    if (next.length === current.length) return;
+    readModelEntityStore.setPmaQueue(chatId, next);
   }
 
   async function sendMessage(busyPolicy: 'queue' | 'interrupt' | null = null): Promise<void> {
@@ -1757,7 +1667,7 @@
     // up front keeps a queued message out of the conversation as a bubble.
     const hasInFlightOptimisticTurn = (() => {
       const transcript = readModelEntityStore.snapshot().chatTranscripts[optimisticChatId];
-      return Boolean(transcript?.order.some((id) => id.startsWith('optimistic:user:')));
+      return chatTranscriptHasInFlightOptimisticTurn(transcript);
     })();
     const willQueueOptimistically =
       !isLocalDraftChatId(optimisticChatId) &&
@@ -1767,36 +1677,13 @@
         hasInFlightOptimisticTurn);
     const optimisticId = `optimistic:user:${Date.now()}:${Math.random().toString(36).slice(2, 8)}`;
     const optimisticTimestamp = new Date().toISOString();
-    const optimisticPlaceholder: ChatTranscriptCard = {
-      kind: 'message',
-      id: optimisticId,
-      turnId: null,
-      orderKey: `optimistic|${optimisticTimestamp}|${optimisticId}`,
-      timestamp: optimisticTimestamp,
-      message: {
-        id: optimisticId,
-        chatId: optimisticChatId,
-        role: 'user',
-        text: draftSnapshot,
-        createdAt: optimisticTimestamp,
-        status: null,
-        artifacts: attachmentsSnapshot.map((att) => ({
-          id: att.id,
-          kind: att.kind,
-          title: att.title,
-          summary: null,
-          url: att.url,
-          createdAt: optimisticTimestamp,
-          raw: { size_label: att.sizeLabel, uploadedName: att.uploadedName }
-        })),
-        raw: {
-          optimistic: true,
-          client_turn_id: optimisticId,
-          correlation_id: optimisticId,
-          identity: { correlation_id: optimisticId }
-        }
-      }
-    };
+    const optimisticPlaceholder = buildOptimisticUserTranscriptCard(
+      optimisticChatId,
+      draftSnapshot,
+      optimisticId,
+      optimisticTimestamp,
+      attachmentsSnapshot
+    );
     if (willQueueOptimistically) {
       // A queued message has not entered the conversation yet — show it only in
       // the queue panel, never as a transcript card. Injecting an optimistic
@@ -1838,14 +1725,10 @@
       readModelEntityStore.removeOptimisticChatTranscriptCards(optimisticChatId);
     };
     const transcriptHasBackendUserRow = (chatId: string) => {
-      const transcript = readModelEntityStore.snapshot().chatTranscripts[chatId];
-      if (!transcript) return false;
-      return transcript.order.some((id) => {
-        if (id.startsWith('optimistic:')) return false;
-        const card = transcript.cardsById[id];
-        if (!card || card.kind !== 'message' || card.message.role !== 'user') return false;
-        return transcriptCardCorrelationId(card) === optimisticId;
-      });
+      return transcriptContainsCommittedUserRow(
+        readModelEntityStore.snapshot().chatTranscripts[chatId],
+        optimisticId
+      );
     };
     const removeOptimistic = (chatId = optimisticChatId, options: { requireBackendRow?: boolean } = {}) => {
       if (options.requireBackendRow && !transcriptHasBackendUserRow(chatId)) return false;
@@ -2029,7 +1912,7 @@
     // reconciles against it instead of rendering a duplicate.
     const clientTurnId = `optimistic:user:${Date.now()}:${Math.random().toString(36).slice(2, 8)}`;
     readModelEntityStore.upsertChatTranscriptCards(chatId, [
-      buildOptimisticUserCard(chatId, turn.prompt, clientTurnId, new Date().toISOString())
+      buildOptimisticUserTranscriptCard(chatId, turn.prompt, clientTurnId, new Date().toISOString())
     ]);
     const profileForSend =
       activeChat?.agentProfile?.trim() || selectedProfile?.trim() || '';

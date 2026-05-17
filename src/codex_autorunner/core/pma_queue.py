@@ -91,33 +91,352 @@ class PmaQueueItem:
         return cls(**data)
 
 
+class PmaQueueRepository:
+    """SQLite repository for canonical PMA lane queue rows."""
+
+    def __init__(self, hub_root: Path) -> None:
+        self._hub_root = hub_root
+        prepare_orchestration_sqlite(self._hub_root, durable=True)
+
+    def insert_or_update_item(
+        self, conn: sqlite3.Connection, item: PmaQueueItem
+    ) -> None:
+        conn.execute(
+            """
+            INSERT INTO orch_queue_items (
+                queue_item_id,
+                lane_id,
+                source_kind,
+                source_key,
+                dedupe_key,
+                state,
+                visible_at,
+                claimed_at,
+                completed_at,
+                payload_json,
+                created_at,
+                updated_at,
+                idempotency_key,
+                error_text,
+                dedupe_reason,
+                result_json
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(queue_item_id) DO UPDATE SET
+                lane_id = excluded.lane_id,
+                source_kind = excluded.source_kind,
+                source_key = excluded.source_key,
+                dedupe_key = excluded.dedupe_key,
+                state = excluded.state,
+                visible_at = excluded.visible_at,
+                claimed_at = excluded.claimed_at,
+                completed_at = excluded.completed_at,
+                payload_json = excluded.payload_json,
+                created_at = excluded.created_at,
+                updated_at = excluded.updated_at,
+                idempotency_key = excluded.idempotency_key,
+                error_text = excluded.error_text,
+                dedupe_reason = excluded.dedupe_reason,
+                result_json = excluded.result_json
+            """,
+            self.item_db_tuple(item),
+        )
+
+    def find_active_item_by_idempotency_key_conn(
+        self, conn: sqlite3.Connection, lane_id: str, idempotency_key: str
+    ) -> Optional[PmaQueueItem]:
+        row = conn.execute(
+            """
+            SELECT *
+              FROM orch_queue_items
+             WHERE lane_id = ?
+               AND source_kind = ?
+               AND idempotency_key = ?
+               AND state IN ('pending', 'running')
+             ORDER BY rowid ASC
+             LIMIT 1
+            """,
+            (lane_id, PMA_LANE_SOURCE_KIND, idempotency_key),
+        ).fetchone()
+        return self.row_to_item(row) if row is not None else None
+
+    def update_item(self, item: PmaQueueItem) -> None:
+        with open_orchestration_sqlite(self._hub_root, durable=True) as conn:
+            with conn:
+                conn.execute(
+                    """
+                    UPDATE orch_queue_items
+                       SET lane_id = ?,
+                           source_kind = ?,
+                           source_key = ?,
+                           dedupe_key = ?,
+                           state = ?,
+                           visible_at = ?,
+                           claimed_at = ?,
+                           completed_at = ?,
+                           payload_json = ?,
+                           created_at = ?,
+                           updated_at = ?,
+                           idempotency_key = ?,
+                           error_text = ?,
+                           dedupe_reason = ?,
+                           result_json = ?
+                     WHERE queue_item_id = ?
+                    """,
+                    (
+                        item.lane_id,
+                        PMA_LANE_SOURCE_KIND,
+                        item.item_id,
+                        item.idempotency_key,
+                        item.state.value,
+                        item.enqueued_at,
+                        item.started_at,
+                        item.finished_at,
+                        json.dumps(item.payload, separators=(",", ":")),
+                        item.enqueued_at,
+                        item.finished_at or item.started_at or item.enqueued_at,
+                        item.idempotency_key,
+                        item.error,
+                        item.dedupe_reason,
+                        json.dumps(item.result or {}, separators=(",", ":")),
+                        item.item_id,
+                    ),
+                )
+
+    def read_items(self, lane_id: str) -> list[PmaQueueItem]:
+        with open_orchestration_sqlite(self._hub_root, durable=True) as conn:
+            rows = conn.execute(
+                """
+                SELECT *
+                  FROM orch_queue_items
+                 WHERE lane_id = ?
+                   AND source_kind = ?
+                 ORDER BY rowid ASC
+                """,
+                (lane_id, PMA_LANE_SOURCE_KIND),
+            ).fetchall()
+        return [self.row_to_item(row) for row in rows]
+
+    def delete_items(self, item_ids: list[str]) -> None:
+        with open_orchestration_sqlite(self._hub_root, durable=True) as conn:
+            with conn:
+                conn.executemany(
+                    "DELETE FROM orch_queue_items WHERE queue_item_id = ?",
+                    [(item_id,) for item_id in item_ids],
+                )
+
+    def count_terminal_rows(self, lane_id: str) -> int:
+        placeholders = ",".join("?" for _ in TERMINAL_STATES)
+        with open_orchestration_sqlite(self._hub_root, durable=True) as conn:
+            row = conn.execute(
+                f"""
+                SELECT COUNT(*) AS cnt
+                  FROM orch_queue_items
+                 WHERE lane_id = ?
+                   AND source_kind = ?
+                   AND state IN ({placeholders})
+                """,
+                (lane_id, PMA_LANE_SOURCE_KIND, *TERMINAL_STATES),
+            ).fetchone()
+        return int(row["cnt"]) if row else 0
+
+    def get_all_lanes(self) -> list[str]:
+        with open_orchestration_sqlite(self._hub_root, durable=True) as conn:
+            rows = conn.execute(
+                """
+                SELECT DISTINCT lane_id
+                  FROM orch_queue_items
+                 WHERE source_kind = ?
+                 ORDER BY lane_id ASC
+                """,
+                (PMA_LANE_SOURCE_KIND,),
+            ).fetchall()
+        return [str(row["lane_id"]) for row in rows if row["lane_id"]]
+
+    def item_db_tuple(self, item: PmaQueueItem) -> tuple[Any, ...]:
+        return (
+            item.item_id,
+            item.lane_id,
+            PMA_LANE_SOURCE_KIND,
+            item.item_id,
+            item.idempotency_key,
+            item.state.value,
+            item.enqueued_at,
+            item.started_at,
+            item.finished_at,
+            json.dumps(item.payload, separators=(",", ":")),
+            item.enqueued_at,
+            item.finished_at or item.started_at or item.enqueued_at,
+            item.idempotency_key,
+            item.error,
+            item.dedupe_reason,
+            json.dumps(item.result or {}, separators=(",", ":")),
+        )
+
+    def row_to_item(self, row: Any) -> PmaQueueItem:
+        payload = _json_loads_object(row["payload_json"])
+        result = _json_loads_object(row["result_json"])
+        state_raw = str(row["state"] or QueueItemState.PENDING.value)
+        try:
+            state = QueueItemState(state_raw)
+        except ValueError:
+            state = QueueItemState.PENDING
+        return PmaQueueItem(
+            item_id=str(row["queue_item_id"]),
+            lane_id=str(row["lane_id"]),
+            enqueued_at=str(row["created_at"]),
+            idempotency_key=str(row["idempotency_key"] or row["dedupe_key"] or ""),
+            payload=payload,
+            state=state,
+            started_at=row["claimed_at"],
+            finished_at=row["completed_at"],
+            error=row["error_text"],
+            dedupe_reason=row["dedupe_reason"],
+            result=result or None,
+        )
+
+
+class PmaQueueJsonlMirror:
+    """Compatibility JSONL adapter for PMA lane queue rows."""
+
+    def __init__(self, hub_root: Path) -> None:
+        self._queue_dir = hub_root / PMA_QUEUE_DIR
+        self._queue_dir.mkdir(parents=True, exist_ok=True)
+
+    def lane_queue_path(self, lane_id: str) -> Path:
+        safe_lane_id = lane_id.replace(":", "__COLON__").replace("/", "__SLASH__")
+        return self._queue_dir / f"{safe_lane_id}{QUEUE_FILE_SUFFIX}"
+
+    def lane_queue_lock_path(self, lane_id: str) -> Path:
+        path = self.lane_queue_path(lane_id)
+        return path.with_suffix(path.suffix + ".lock")
+
+    def lane_mtime(self, lane_id: str) -> float:
+        try:
+            return self.lane_queue_path(lane_id).stat().st_mtime
+        except OSError:
+            return 0.0
+
+    def write_lane(self, lane_id: str, items: list[PmaQueueItem]) -> None:
+        path = self.lane_queue_path(lane_id)
+        with file_lock(self.lane_queue_lock_path(lane_id)):
+            path.parent.mkdir(parents=True, exist_ok=True)
+            lines = [
+                json.dumps(item.to_dict(), separators=(",", ":")) for item in items
+            ]
+            content = "\n".join(lines)
+            atomic_write(path, (content + "\n") if content else "")
+
+
+class PmaLaneScheduler:
+    """In-memory lane wakeup and queue boundary for running workers."""
+
+    def __init__(self) -> None:
+        self._lane_queues: dict[str, asyncio.Queue[PmaQueueItem]] = {}
+        self._lane_events: dict[str, asyncio.Event] = {}
+        self._lane_known_ids: dict[str, set[str]] = {}
+        self._lane_mirror_mtimes: dict[str, float] = {}
+        self._replayed_lanes: set[str] = set()
+        self._loop: Optional[asyncio.AbstractEventLoop] = None
+
+    def record_loop(self) -> None:
+        if self._loop is not None:
+            return
+        try:
+            self._loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+
+    def ensure_lane_event(self, lane_id: str) -> asyncio.Event:
+        event = self._lane_events.get(lane_id)
+        if event is None:
+            event = asyncio.Event()
+            self._lane_events[lane_id] = event
+        return event
+
+    def lane_event(self, lane_id: str) -> Optional[asyncio.Event]:
+        return self._lane_events.get(lane_id)
+
+    def ensure_lane_queue(self, lane_id: str) -> asyncio.Queue[PmaQueueItem]:
+        queue = self._lane_queues.get(lane_id)
+        if queue is None:
+            queue = asyncio.Queue()
+            self._lane_queues[lane_id] = queue
+        return queue
+
+    def lane_queue(self, lane_id: str) -> Optional[asyncio.Queue[PmaQueueItem]]:
+        return self._lane_queues.get(lane_id)
+
+    def ensure_lane_known_ids(self, lane_id: str) -> set[str]:
+        known = self._lane_known_ids.get(lane_id)
+        if known is None:
+            known = set()
+            self._lane_known_ids[lane_id] = known
+        return known
+
+    def mark_replayed_once(self, lane_id: str) -> bool:
+        if lane_id in self._replayed_lanes:
+            return False
+        self._replayed_lanes.add(lane_id)
+        return True
+
+    def mirror_mtime(self, lane_id: str) -> float:
+        return self._lane_mirror_mtimes.get(lane_id, 0.0)
+
+    def set_mirror_mtime(self, lane_id: str, mtime: float) -> None:
+        self._lane_mirror_mtimes[lane_id] = mtime
+
+    async def enqueue_items(
+        self, lane_id: str, items: list[PmaQueueItem], *, mark_known: bool = True
+    ) -> int:
+        if not items:
+            return 0
+        queue = self.ensure_lane_queue(lane_id)
+        known = self.ensure_lane_known_ids(lane_id)
+        for item in items:
+            if mark_known:
+                known.add(item.item_id)
+            await queue.put(item)
+        self.ensure_lane_event(lane_id).set()
+        return len(items)
+
+    def notify_enqueue(self, item: PmaQueueItem) -> None:
+        queue = self._lane_queues.get(item.lane_id)
+        event = self._lane_events.get(item.lane_id)
+        loop = self._loop
+        if loop is None or loop.is_closed() or queue is None or event is None:
+            return
+
+        def _enqueue() -> None:
+            self.ensure_lane_known_ids(item.lane_id).add(item.item_id)
+            queue.put_nowait(item)
+            event.set()
+
+        try:
+            loop.call_soon_threadsafe(_enqueue)
+        except RuntimeError:
+            return
+
+
 class PmaQueue:
     """PMA queue backed by orchestration SQLite with JSONL compatibility mirrors."""
 
     def __init__(self, hub_root: Path) -> None:
         self._hub_root = hub_root
-        self._queue_dir = hub_root / PMA_QUEUE_DIR
-        self._queue_dir.mkdir(parents=True, exist_ok=True)
-        self._lane_queues: dict[str, asyncio.Queue[PmaQueueItem]] = {}
+        self._repository = PmaQueueRepository(hub_root)
+        self._mirror = PmaQueueJsonlMirror(hub_root)
+        self._scheduler = PmaLaneScheduler()
         self._lane_locks: dict[str, asyncio.Lock] = {}
-        self._lane_events: dict[str, asyncio.Event] = {}
-        self._lane_known_ids: dict[str, set[str]] = {}
-        self._replayed_lanes: set[str] = set()
         self._lock: Optional[asyncio.Lock] = None
-        self._loop: Optional[asyncio.AbstractEventLoop] = None
-        self._lane_mirror_mtimes: dict[str, float] = {}
         self._initialize_canonical_state()
 
     def _initialize_canonical_state(self) -> None:
         prepare_orchestration_sqlite(self._hub_root, durable=True)
 
     def _lane_queue_path(self, lane_id: str) -> Path:
-        safe_lane_id = lane_id.replace(":", "__COLON__").replace("/", "__SLASH__")
-        return self._queue_dir / f"{safe_lane_id}{QUEUE_FILE_SUFFIX}"
+        return self._mirror.lane_queue_path(lane_id)
 
     def _lane_queue_lock_path(self, lane_id: str) -> Path:
-        path = self._lane_queue_path(lane_id)
-        return path.with_suffix(path.suffix + ".lock")
+        return self._mirror.lane_queue_lock_path(lane_id)
 
     def _ensure_lock(self) -> asyncio.Lock:
         lock = self._lock
@@ -134,33 +453,16 @@ class PmaQueue:
         return lock
 
     def _ensure_lane_event(self, lane_id: str) -> asyncio.Event:
-        event = self._lane_events.get(lane_id)
-        if event is None:
-            event = asyncio.Event()
-            self._lane_events[lane_id] = event
-        return event
+        return self._scheduler.ensure_lane_event(lane_id)
 
     def _ensure_lane_queue(self, lane_id: str) -> asyncio.Queue[PmaQueueItem]:
-        queue = self._lane_queues.get(lane_id)
-        if queue is None:
-            queue = asyncio.Queue()
-            self._lane_queues[lane_id] = queue
-        return queue
+        return self._scheduler.ensure_lane_queue(lane_id)
 
     def _ensure_lane_known_ids(self, lane_id: str) -> set[str]:
-        known = self._lane_known_ids.get(lane_id)
-        if known is None:
-            known = set()
-            self._lane_known_ids[lane_id] = known
-        return known
+        return self._scheduler.ensure_lane_known_ids(lane_id)
 
     def _record_loop(self) -> None:
-        if self._loop is not None:
-            return
-        try:
-            self._loop = asyncio.get_running_loop()
-        except RuntimeError:
-            return
+        self._scheduler.record_loop()
 
     async def enqueue(
         self,
@@ -246,7 +548,7 @@ class PmaQueue:
 
     async def dequeue(self, lane_id: str) -> Optional[PmaQueueItem]:
         self._record_loop()
-        queue = self._lane_queues.get(lane_id)
+        queue = self._scheduler.lane_queue(lane_id)
         if queue is None or queue.empty():
             return None
         try:
@@ -287,7 +589,7 @@ class PmaQueue:
                 cancelled += 1
                 cancelled_ids.add(item.item_id)
 
-        queue = self._lane_queues.get(lane_id)
+        queue = self._scheduler.lane_queue(lane_id)
         if queue is not None:
             while not queue.empty():
                 try:
@@ -304,7 +606,7 @@ class PmaQueue:
                 cancelled += 1
                 cancelled_ids.add(queued_item.item_id)
 
-        event = self._lane_events.get(lane_id)
+        event = self._scheduler.lane_event(lane_id)
         if event is not None:
             event.set()
 
@@ -313,9 +615,8 @@ class PmaQueue:
     async def replay_pending(self, lane_id: str) -> int:
         async with self._ensure_lock():
             self._record_loop()
-            if lane_id in self._replayed_lanes:
+            if not self._scheduler.mark_replayed_once(lane_id):
                 return 0
-            self._replayed_lanes.add(lane_id)
 
             items = await self.list_items(lane_id)
             known = self._ensure_lane_known_ids(lane_id)
@@ -336,11 +637,7 @@ class PmaQueue:
             if not replayable:
                 return 0
 
-            queue = self._ensure_lane_queue(lane_id)
-            for item in replayable:
-                await queue.put(item)
-            self._ensure_lane_event(lane_id).set()
-            return len(replayable)
+            return await self._scheduler.enqueue_items(lane_id, replayable)
 
     async def wait_for_lane_item(
         self,
@@ -380,12 +677,8 @@ class PmaQueue:
                 event.clear()
                 return True
 
-            mirror_path = self._lane_queue_path(lane_id)
-            try:
-                current_mtime = mirror_path.stat().st_mtime
-            except OSError:
-                current_mtime = 0.0
-            prev_mtime = self._lane_mirror_mtimes.get(lane_id, 0.0)
+            current_mtime = self._mirror.lane_mtime(lane_id)
+            prev_mtime = self._scheduler.mirror_mtime(lane_id)
 
             if current_mtime == prev_mtime:
                 continue
@@ -394,7 +687,7 @@ class PmaQueue:
             if added:
                 return True
 
-            self._lane_mirror_mtimes[lane_id] = current_mtime
+            self._scheduler.set_mirror_mtime(lane_id, current_mtime)
 
     async def list_items(self, lane_id: str) -> list[PmaQueueItem]:
         async with self._ensure_lane_lock(lane_id):
@@ -417,11 +710,7 @@ class PmaQueue:
         if not new_pending:
             return 0
 
-        queue = self._ensure_lane_queue(lane_id)
-        for item in new_pending:
-            await queue.put(item)
-        self._ensure_lane_event(lane_id).set()
-        return len(new_pending)
+        return await self._scheduler.enqueue_items(lane_id, new_pending)
 
     async def _find_by_idempotency_key(
         self, lane_id: str, idempotency_key: str
@@ -517,106 +806,17 @@ class PmaQueue:
     def _insert_or_update_item(
         self, conn: sqlite3.Connection, item: PmaQueueItem
     ) -> None:
-        conn.execute(
-            """
-            INSERT INTO orch_queue_items (
-                queue_item_id,
-                lane_id,
-                source_kind,
-                source_key,
-                dedupe_key,
-                state,
-                visible_at,
-                claimed_at,
-                completed_at,
-                payload_json,
-                created_at,
-                updated_at,
-                idempotency_key,
-                error_text,
-                dedupe_reason,
-                result_json
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(queue_item_id) DO UPDATE SET
-                lane_id = excluded.lane_id,
-                source_kind = excluded.source_kind,
-                source_key = excluded.source_key,
-                dedupe_key = excluded.dedupe_key,
-                state = excluded.state,
-                visible_at = excluded.visible_at,
-                claimed_at = excluded.claimed_at,
-                completed_at = excluded.completed_at,
-                payload_json = excluded.payload_json,
-                created_at = excluded.created_at,
-                updated_at = excluded.updated_at,
-                idempotency_key = excluded.idempotency_key,
-                error_text = excluded.error_text,
-                dedupe_reason = excluded.dedupe_reason,
-                result_json = excluded.result_json
-            """,
-            self._item_db_tuple(item),
-        )
+        self._repository.insert_or_update_item(conn, item)
 
     def _find_active_item_by_idempotency_key_conn(
         self, conn: sqlite3.Connection, lane_id: str, idempotency_key: str
     ) -> Optional[PmaQueueItem]:
-        row = conn.execute(
-            """
-            SELECT *
-              FROM orch_queue_items
-             WHERE lane_id = ?
-               AND source_kind = ?
-               AND idempotency_key = ?
-               AND state IN ('pending', 'running')
-             ORDER BY rowid ASC
-             LIMIT 1
-            """,
-            (lane_id, PMA_LANE_SOURCE_KIND, idempotency_key),
-        ).fetchone()
-        return self._row_to_item(row) if row is not None else None
+        return self._repository.find_active_item_by_idempotency_key_conn(
+            conn, lane_id, idempotency_key
+        )
 
     def _update_in_file_sync(self, item: PmaQueueItem) -> None:
-        with open_orchestration_sqlite(self._hub_root, durable=True) as conn:
-            with conn:
-                conn.execute(
-                    """
-                    UPDATE orch_queue_items
-                       SET lane_id = ?,
-                           source_kind = ?,
-                           source_key = ?,
-                           dedupe_key = ?,
-                           state = ?,
-                           visible_at = ?,
-                           claimed_at = ?,
-                           completed_at = ?,
-                           payload_json = ?,
-                           created_at = ?,
-                           updated_at = ?,
-                           idempotency_key = ?,
-                           error_text = ?,
-                           dedupe_reason = ?,
-                           result_json = ?
-                     WHERE queue_item_id = ?
-                    """,
-                    (
-                        item.lane_id,
-                        PMA_LANE_SOURCE_KIND,
-                        item.item_id,
-                        item.idempotency_key,
-                        item.state.value,
-                        item.enqueued_at,
-                        item.started_at,
-                        item.finished_at,
-                        json.dumps(item.payload, separators=(",", ":")),
-                        item.enqueued_at,
-                        item.finished_at or item.started_at or item.enqueued_at,
-                        item.idempotency_key,
-                        item.error,
-                        item.dedupe_reason,
-                        json.dumps(item.result or {}, separators=(",", ":")),
-                        item.item_id,
-                    ),
-                )
+        self._repository.update_item(item)
         self._sync_lane_mirror_sync(item.lane_id)
 
     def _read_items_sync(self, lane_id: str) -> list[PmaQueueItem]:
@@ -635,21 +835,7 @@ class PmaQueue:
         return None
 
     def _notify_in_memory_enqueue(self, item: PmaQueueItem) -> None:
-        queue = self._lane_queues.get(item.lane_id)
-        event = self._lane_events.get(item.lane_id)
-        loop = self._loop
-        if loop is None or loop.is_closed() or queue is None or event is None:
-            return
-
-        def _enqueue() -> None:
-            self._ensure_lane_known_ids(item.lane_id).add(item.item_id)
-            queue.put_nowait(item)
-            event.set()
-
-        try:
-            loop.call_soon_threadsafe(_enqueue)
-        except RuntimeError:
-            return
+        self._scheduler.notify_enqueue(item)
 
     async def get_lane_stats(self, lane_id: str) -> dict[str, Any]:
         items = await self.list_items(lane_id)
@@ -676,108 +862,27 @@ class PmaQueue:
         return summary
 
     def _item_db_tuple(self, item: PmaQueueItem) -> tuple[Any, ...]:
-        return (
-            item.item_id,
-            item.lane_id,
-            PMA_LANE_SOURCE_KIND,
-            item.item_id,
-            item.idempotency_key,
-            item.state.value,
-            item.enqueued_at,
-            item.started_at,
-            item.finished_at,
-            json.dumps(item.payload, separators=(",", ":")),
-            item.enqueued_at,
-            item.finished_at or item.started_at or item.enqueued_at,
-            item.idempotency_key,
-            item.error,
-            item.dedupe_reason,
-            json.dumps(item.result or {}, separators=(",", ":")),
-        )
+        return self._repository.item_db_tuple(item)
 
     def _row_to_item(self, row: Any) -> PmaQueueItem:
-        payload = _json_loads_object(row["payload_json"])
-        result = _json_loads_object(row["result_json"])
-        state_raw = str(row["state"] or QueueItemState.PENDING.value)
-        try:
-            state = QueueItemState(state_raw)
-        except ValueError:
-            state = QueueItemState.PENDING
-        return PmaQueueItem(
-            item_id=str(row["queue_item_id"]),
-            lane_id=str(row["lane_id"]),
-            enqueued_at=str(row["created_at"]),
-            idempotency_key=str(row["idempotency_key"] or row["dedupe_key"] or ""),
-            payload=payload,
-            state=state,
-            started_at=row["claimed_at"],
-            finished_at=row["completed_at"],
-            error=row["error_text"],
-            dedupe_reason=row["dedupe_reason"],
-            result=result or None,
-        )
+        return self._repository.row_to_item(row)
 
     def _read_items_from_sqlite(self, lane_id: str) -> list[PmaQueueItem]:
-        with open_orchestration_sqlite(self._hub_root, durable=True) as conn:
-            rows = conn.execute(
-                """
-                SELECT *
-                  FROM orch_queue_items
-                 WHERE lane_id = ?
-                   AND source_kind = ?
-                 ORDER BY rowid ASC
-                """,
-                (lane_id, PMA_LANE_SOURCE_KIND),
-            ).fetchall()
-        return [self._row_to_item(row) for row in rows]
+        return self._repository.read_items(lane_id)
 
     def _sync_lane_mirror_sync(self, lane_id: str) -> None:
-        path = self._lane_queue_path(lane_id)
         items = self._read_items_from_sqlite(lane_id)
-        with file_lock(self._lane_queue_lock_path(lane_id)):
-            path.parent.mkdir(parents=True, exist_ok=True)
-            lines = [
-                json.dumps(item.to_dict(), separators=(",", ":")) for item in items
-            ]
-            content = "\n".join(lines)
-            atomic_write(path, (content + "\n") if content else "")
+        self._mirror.write_lane(lane_id, items)
 
     def _delete_items_sync(self, lane_id: str, item_ids: list[str]) -> None:
-        with open_orchestration_sqlite(self._hub_root, durable=True) as conn:
-            with conn:
-                conn.executemany(
-                    "DELETE FROM orch_queue_items WHERE queue_item_id = ?",
-                    [(item_id,) for item_id in item_ids],
-                )
+        self._repository.delete_items(item_ids)
         self._sync_lane_mirror_sync(lane_id)
 
     def _count_terminal_rows_sync(self, lane_id: str) -> int:
-        placeholders = ",".join("?" for _ in TERMINAL_STATES)
-        with open_orchestration_sqlite(self._hub_root, durable=True) as conn:
-            row = conn.execute(
-                f"""
-                SELECT COUNT(*) AS cnt
-                  FROM orch_queue_items
-                 WHERE lane_id = ?
-                   AND source_kind = ?
-                   AND state IN ({placeholders})
-                """,
-                (lane_id, PMA_LANE_SOURCE_KIND, *TERMINAL_STATES),
-            ).fetchone()
-        return int(row["cnt"]) if row else 0
+        return self._repository.count_terminal_rows(lane_id)
 
     def _get_all_lanes_sync(self) -> list[str]:
-        with open_orchestration_sqlite(self._hub_root, durable=True) as conn:
-            rows = conn.execute(
-                """
-                SELECT DISTINCT lane_id
-                  FROM orch_queue_items
-                 WHERE source_kind = ?
-                 ORDER BY lane_id ASC
-                """,
-                (PMA_LANE_SOURCE_KIND,),
-            ).fetchall()
-        return [str(row["lane_id"]) for row in rows if row["lane_id"]]
+        return self._repository.get_all_lanes()
 
 
 __all__ = [

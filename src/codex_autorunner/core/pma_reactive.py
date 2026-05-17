@@ -40,9 +40,6 @@ class PmaReactiveStore:
             state = self._load_unlocked()
             if state is not None:
                 return state
-            state = self._load_legacy_file_unlocked()
-            if state is not None:
-                return state
             state = default_pma_reactive_state()
             self._save_unlocked(state)
             return state
@@ -55,8 +52,6 @@ class PmaReactiveStore:
         now = time.time()
         with file_lock(self._lock_path()):
             state = self._load_unlocked()
-            if state is None:
-                state = self._load_legacy_file_unlocked()
             if state is None:
                 state = default_pma_reactive_state()
             last_enqueued = state.get("last_enqueued")
@@ -102,16 +97,6 @@ class PmaReactiveStore:
                 and row["last_enqueued_at"] is not None
             },
         }
-
-    def _load_legacy_file_unlocked(self) -> Optional[dict[str, Any]]:
-        if not self._path.exists():
-            return None
-        try:
-            raw = self._path.read_text(encoding="utf-8")
-            parsed = json.loads(raw)
-        except (OSError, json.JSONDecodeError):
-            return default_pma_reactive_state()
-        return parsed if isinstance(parsed, dict) else default_pma_reactive_state()
 
     def _save_unlocked(self, state: dict[str, Any]) -> None:
         last_enqueued = state.get("last_enqueued")

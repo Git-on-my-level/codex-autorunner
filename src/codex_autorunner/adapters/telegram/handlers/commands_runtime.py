@@ -15,6 +15,7 @@ from ....core.chat_bindings import (
     emit_adapter_archive_chat_surface_event,
     emit_adapter_binding_chat_surface_event,
 )
+from ....core.chat_queue_control import ChatQueueControlPlane, ChatQueueControlStore
 from ....core.coercion import coerce_int
 from ....core.config import load_hub_config
 from ....core.logging_utils import log_event
@@ -588,7 +589,11 @@ class TelegramCommandHandlers(
             return
         key = await self._resolve_topic_key(callback.chat_id, callback.thread_id)
         runtime = self._router.runtime_for(key)
-        cancelled = runtime.queue.cancel_pending_item(str(source_message_id))
+        store = getattr(self, "_chat_queue_control_store", None)
+        if not isinstance(store, ChatQueueControlStore):
+            store = ChatQueueControlStore(self._config.root)
+        control_plane = ChatQueueControlPlane(store, runtime=runtime.queue)
+        cancelled = await control_plane.cancel_pending_item(key, str(source_message_id))
         if not cancelled:
             await self._answer_callback(callback, "Queue item is no longer pending")
             return
@@ -617,7 +622,11 @@ class TelegramCommandHandlers(
             return
         key = await self._resolve_topic_key(callback.chat_id, callback.thread_id)
         runtime = self._router.runtime_for(key)
-        promoted = runtime.queue.promote_pending_item(str(source_message_id))
+        store = getattr(self, "_chat_queue_control_store", None)
+        if not isinstance(store, ChatQueueControlStore):
+            store = ChatQueueControlStore(self._config.root)
+        control_plane = ChatQueueControlPlane(store, runtime=runtime.queue)
+        promoted = await control_plane.promote_pending_item(key, str(source_message_id))
         if not promoted:
             await self._answer_callback(callback, "Queue item is no longer pending")
             return

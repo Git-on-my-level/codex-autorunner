@@ -11,6 +11,7 @@ import time
 import traceback
 import uuid
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Optional, cast
 
@@ -31,11 +32,18 @@ from ....core.flows.models import (
     FlowRunStatus,
     flow_run_duration_seconds,
     format_flow_duration,
+    parse_flow_timestamp,
 )
 from ....core.flows.telemetry_export import export_all_runs
 from ....core.flows.ux_helpers import (
     build_flow_status_snapshot,
     format_ticket_flow_app_label,
+)
+from ....core.flows.worker_health_policy import (
+    AppServerStatus,
+    WorkerHealthAction,
+    build_worker_health_snapshot,
+    decide_worker_health,
 )
 from ....core.flows.worker_process import (
     register_worker_metadata,
@@ -518,31 +526,97 @@ def register_flow_commands(
             method = event.data.get("method")
             return method if isinstance(method, str) else None
 
-        def _last_app_server_method_after_seq(min_seq_exclusive: int) -> Optional[str]:
+        def _max_timestamp(*values: Optional[str]) -> Optional[str]:
+            parsed: list[datetime] = []
+            for value in values:
+                dt = parse_flow_timestamp(value)
+                if dt is not None:
+                    parsed.append(dt.astimezone(timezone.utc))
+            if not parsed:
+                return None
+            return max(parsed).isoformat()
+
+        def _current_ticket_from_record(
+            record: Optional[FlowRunRecord],
+        ) -> Optional[str]:
+            if record is None or not isinstance(record.state, dict):
+                return None
+            ticket_engine = record.state.get("ticket_engine")
+            if not isinstance(ticket_engine, dict):
+                return None
+            ticket = ticket_engine.get("current_ticket")
+            return (
+                ticket.strip() if isinstance(ticket, str) and ticket.strip() else None
+            )
+
+        def _watchdog_snapshot_after_seq(
+            min_seq_exclusive: int, *, worker_age_seconds: float
+        ):
             try:
                 with FlowStore.connect_readonly(db_path) as watchdog_store:
-                    event = watchdog_store.get_last_telemetry_by_type(
+                    record = watchdog_store.get_flow_run(worker_run_id)
+                    _event_seq, last_event_at = watchdog_store.get_last_event_meta(
+                        worker_run_id
+                    )
+                    _telemetry_seq, last_telemetry_at = (
+                        watchdog_store.get_last_telemetry_meta(worker_run_id)
+                    )
+                    app_event = watchdog_store.get_last_telemetry_by_type(
                         worker_run_id, FlowEventType.APP_SERVER_EVENT
                     )
             except (OSError, RuntimeError, ValueError):
-                return None
-            if event is None or event.seq <= min_seq_exclusive:
-                return None
-            return _extract_app_server_method_from_event(event)
+                return (
+                    build_worker_health_snapshot(
+                        process_status="alive",
+                        worker_age_seconds=worker_age_seconds,
+                        app_server_status="unknown",
+                    ),
+                    None,
+                )
+            method = None
+            if app_event is not None and app_event.seq > min_seq_exclusive:
+                method = _extract_app_server_method_from_event(app_event)
+            app_status: AppServerStatus = (
+                "stalled_timeout"
+                if method == _OPENCODE_STALL_TIMEOUT_METHOD
+                else "connected"
+            )
+            return (
+                build_worker_health_snapshot(
+                    process_status="alive",
+                    worker_age_seconds=worker_age_seconds,
+                    last_activity_at=_max_timestamp(last_event_at, last_telemetry_at),
+                    last_semantic_progress_at=last_event_at,
+                    current_ticket=_current_ticket_from_record(record),
+                    current_turn=record.current_step if record is not None else None,
+                    app_server_status=app_status,
+                    now=datetime.now(timezone.utc),
+                ),
+                method,
+            )
 
         def _watchdog_loop() -> None:
             max_wall_seconds = _resolve_worker_max_wall_seconds()
-            deadline = time.monotonic() + max_wall_seconds
+            started_monotonic = time.monotonic()
+            rotation_reported = False
             while not shutdown_event.wait(_FLOW_WORKER_WATCHDOG_POLL_SECONDS):
                 floor = watchdog_app_server_floor_seq["value"]
                 if floor is None:
                     continue
-                method = _last_app_server_method_after_seq(floor)
-                if method == _OPENCODE_STALL_TIMEOUT_METHOD:
+                snapshot, method = _watchdog_snapshot_after_seq(
+                    floor,
+                    worker_age_seconds=time.monotonic() - started_monotonic,
+                )
+                decision = decide_worker_health(
+                    snapshot,
+                    max_wall_seconds=max_wall_seconds,
+                    idle_stale_seconds=None,
+                )
+                if decision.force_restart and method == _OPENCODE_STALL_TIMEOUT_METHOD:
                     watchdog_reason["value"] = method
                     exit_code_holder[0] = 1
                     shutdown_exit_origin["value"] = "worker_watchdog"
-                    shutdown_exit_kind["value"] = "opencode_stream_stalled_timeout"
+                    shutdown_exit_kind["value"] = decision.exit_kind
                     write_worker_crash_info(
                         _repo_root,
                         worker_run_id,
@@ -554,30 +628,19 @@ def register_flow_commands(
                     )
                     _write_exit_info(shutdown_intent=True)
                     os._exit(1)
-                if time.monotonic() < deadline:
-                    continue
-                watchdog_reason["value"] = "max_wall_time"
-                exit_code_holder[0] = -signal.SIGTERM
-                shutdown_signal["value"] = "SIGTERM"
-                shutdown_exit_origin["value"] = "worker_watchdog"
-                shutdown_exit_kind["value"] = "max_wall_time"
-                write_worker_crash_info(
-                    _repo_root,
-                    worker_run_id,
-                    worker_pid=os.getpid(),
-                    exit_code=-signal.SIGTERM,
-                    signal="SIGTERM",
-                    last_event="max_wall_time",
-                    exception=(
-                        "flow worker exceeded max wall time "
-                        f"({max_wall_seconds:.0f}s)"
-                    ),
-                    artifacts_root=_artifacts_root,
-                )
-                _write_exit_info(shutdown_intent=True)
-                shutdown_event.set()
-                time.sleep(_FLOW_WORKER_WATCHDOG_GRACE_SECONDS)
-                os._exit(137)
+                if (
+                    decision.action == WorkerHealthAction.ROTATE_REQUESTED
+                    and not rotation_reported
+                ):
+                    rotation_reported = True
+                    logger.info(
+                        "flow worker exceeded wall-clock budget; requesting cooperative rotation "
+                        "run_id=%s age=%.1fs last_activity_at=%s current_ticket=%s",
+                        worker_run_id,
+                        snapshot.worker_age_seconds or 0.0,
+                        snapshot.last_activity_at,
+                        snapshot.current_ticket,
+                    )
 
         atexit.register(_write_exit_info)
         signal.signal(signal.SIGTERM, _signal_handler)
@@ -731,8 +794,6 @@ def register_flow_commands(
                         await shutdown_wait_task
                     except asyncio.CancelledError:
                         pass
-                if watchdog_reason["value"] == "max_wall_time":
-                    raise typer.Exit(code=1)
             except (
                 Exception
             ) as exc:  # intentional: top-level worker crash handler; re-raises after logging

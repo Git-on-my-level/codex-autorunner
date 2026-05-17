@@ -10,7 +10,7 @@ from typer.testing import CliRunner
 
 from codex_autorunner.cli import app
 from codex_autorunner.core.flows import worker_reaper
-from codex_autorunner.core.flows.models import FlowRunStatus
+from codex_autorunner.core.flows.models import FlowEventType, FlowRunStatus
 from codex_autorunner.core.flows.store import FlowStore
 from codex_autorunner.core.flows.worker_reaper import (
     inspect_flow_workers,
@@ -153,6 +153,42 @@ def test_reap_stale_flow_workers_exit_metadata_distinguishes_reaper_from_user_sh
     assert exit_info["reap_reason"] == "metadata_age_exceeded"
 
 
+def test_reap_stale_flow_workers_keeps_old_active_worker_with_recent_activity(
+    tmp_path: Path, monkeypatch
+) -> None:
+    repo = _repo(tmp_path)
+    run_id = str(uuid.uuid4())
+    _create_run(repo, run_id, FlowRunStatus.RUNNING)
+    _write_worker(repo, run_id, 447, time.time() - 7200)
+    with FlowStore(repo / ".codex-autorunner" / "flows.db") as store:
+        store.create_event(
+            str(uuid.uuid4()),
+            run_id,
+            FlowEventType.DIFF_UPDATED,
+            {"method": "turn/diff/updated"},
+        )
+    signals: list[tuple[int, signal.Signals]] = []
+
+    monkeypatch.setattr(
+        "codex_autorunner.core.flows.worker_reaper._pid_is_running",
+        lambda pid: True,
+    )
+    monkeypatch.setattr(
+        "codex_autorunner.core.flows.worker_reaper._send_signal",
+        lambda pid, sig: signals.append((pid, sig)),
+    )
+
+    summary = reap_stale_flow_workers(
+        repo, max_age_seconds=60.0, terminate_grace_seconds=0.01
+    )
+    by_run = {worker.run_id: worker for worker in summary.workers}
+
+    assert summary.pruned_count == 0
+    assert signals == []
+    assert by_run[run_id].classification == "active"
+    assert by_run[run_id].reason == "recent_activity"
+
+
 def test_reap_stale_flow_workers_overrides_prior_shutdown_intent(
     tmp_path: Path, monkeypatch
 ) -> None:
@@ -239,11 +275,24 @@ def test_reap_stale_flow_workers_eligible_despite_misclassified_active(
 
     _real_classify = worker_reaper._classify_worker
 
-    def _force_active(record, alive, metadata_age_seconds, *, stale_age_seconds):
+    def _force_active(
+        record,
+        alive,
+        metadata_age_seconds,
+        *,
+        last_activity_at=None,
+        idle_seconds=None,
+        stale_age_seconds,
+    ):
         if record is not None and record.id == run_id:
             return "active", "forced_active_for_test"
         return _real_classify(
-            record, alive, metadata_age_seconds, stale_age_seconds=stale_age_seconds
+            record,
+            alive,
+            metadata_age_seconds,
+            last_activity_at=last_activity_at,
+            idle_seconds=idle_seconds,
+            stale_age_seconds=stale_age_seconds,
         )
 
     monkeypatch.setattr(

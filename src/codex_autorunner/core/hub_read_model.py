@@ -89,6 +89,17 @@ class RepoProjectionProvider(Protocol):
 
 
 @dataclass(frozen=True)
+class HubMessageSnapshotCollectors:
+    gather_inbox: Callable[..., list[dict[str, Any]]]
+    collect_pma_files_detail: Callable[..., dict[str, list[dict[str, Any]]]]
+    collect_managed_threads: Callable[..., list[dict[str, Any]]]
+    snapshot_pma_automation: Callable[..., dict[str, Any]]
+    build_hub_capability_hints: Callable[..., list[dict[str, Any]]]
+    build_repo_capability_hints: Callable[..., list[dict[str, Any]]]
+    load_hub_inbox_dismissals: Callable[[Path], dict[str, dict[str, Any]]]
+
+
+@dataclass(frozen=True)
 class _HubSnapshotCacheEntry:
     fingerprint: tuple[Any, ...]
     expires_at: float
@@ -317,8 +328,22 @@ def _collect_unified_automation_snapshot(
     }
 
 
+def default_hub_message_snapshot_collectors() -> HubMessageSnapshotCollectors:
+    return HubMessageSnapshotCollectors(
+        gather_inbox=_gather_inbox,
+        collect_pma_files_detail=_collect_pma_files_detail,
+        collect_managed_threads=_collect_managed_threads,
+        snapshot_pma_automation=_snapshot_pma_automation,
+        build_hub_capability_hints=build_hub_capability_hints,
+        build_repo_capability_hints=build_repo_capability_hints,
+        load_hub_inbox_dismissals=load_hub_inbox_dismissals,
+    )
+
+
 def _load_repo_message_context(
-    context: Any, requested: set[str]
+    context: Any,
+    requested: set[str],
+    collectors: HubMessageSnapshotCollectors,
 ) -> tuple[_HubRepoMessageContext, list[dict[str, str]]]:
     unreadable_diagnostics: list[dict[str, str]] = []
     snapshots: list[Any] = []
@@ -343,7 +368,7 @@ def _load_repo_message_context(
         }
         config_root = getattr(getattr(context, "config", None), "root", None)
         if isinstance(config_root, Path):
-            hub_dismissals = load_hub_inbox_dismissals(config_root)
+            hub_dismissals = collectors.load_hub_inbox_dismissals(config_root)
     return (
         _HubRepoMessageContext(
             snapshots=snapshots,
@@ -359,13 +384,14 @@ def _repo_dismissals(
     repo_context: _HubRepoMessageContext,
     repo_id: str,
     repo_root: Optional[Path],
+    collectors: HubMessageSnapshotCollectors,
 ) -> dict[str, dict[str, Any]]:
     dismissals = repo_context.repo_dismissals_by_id.get(repo_id)
     if dismissals is not None:
         return dismissals
     if not repo_id or not isinstance(repo_root, Path):
         return {}
-    dismissals = load_hub_inbox_dismissals(repo_root)
+    dismissals = collectors.load_hub_inbox_dismissals(repo_root)
     repo_context.repo_dismissals_by_id[repo_id] = dismissals
     return dismissals
 
@@ -449,6 +475,7 @@ def _cached_repo_capability_hints(
     repo_id: str,
     repo_root: Path,
     repo_display_name: str,
+    collectors: HubMessageSnapshotCollectors,
     unreadable_diagnostics: Optional[list[dict[str, str]]] = None,
 ) -> list[dict[str, Any]]:
     hub_root = getattr(getattr(context, "config", None), "root", None)
@@ -495,7 +522,7 @@ def _cached_repo_capability_hints(
                 )
             return [dict(item) for item in promoted_items]
     try:
-        hint_items = build_repo_capability_hints(
+        hint_items = collectors.build_repo_capability_hints(
             hub_config=context.config,
             repo_id=repo_id,
             repo_root=repo_root,
@@ -536,6 +563,7 @@ def _filter_action_queue_items(
     *,
     repo_context: _HubRepoMessageContext,
     scope_key: Optional[str],
+    collectors: HubMessageSnapshotCollectors,
 ) -> list[dict[str, Any]]:
     filtered_items: list[dict[str, Any]] = []
     for item in action_queue:
@@ -552,7 +580,7 @@ def _filter_action_queue_items(
             repo_root = repo_context.repo_roots.get(repo_id)
         if repo_root is None:
             continue
-        dismissals = _repo_dismissals(repo_context, repo_id, repo_root)
+        dismissals = _repo_dismissals(repo_context, repo_id, repo_root, collectors)
         item_type = str(item.get("item_type") or "run_dispatch")
         seq_raw = item.get("seq")
         item_seq = seq_raw if isinstance(seq_raw, int) and seq_raw > 0 else None
@@ -595,13 +623,16 @@ def _collect_inbox_messages(
     scope_key: Optional[str],
     repo_context: _HubRepoMessageContext,
     filtered_action_queue: list[dict[str, Any]],
+    collectors: HubMessageSnapshotCollectors,
     unreadable_diagnostics: list[dict[str, str]],
 ) -> list[dict[str, Any]]:
     if "inbox" not in requested:
         return []
     messages: list[dict[str, Any]] = []
     try:
-        hub_hint_items = build_hub_capability_hints(hub_config=context.config)
+        hub_hint_items = collectors.build_hub_capability_hints(
+            hub_config=context.config
+        )
     except (AttributeError, OSError, ValueError, RuntimeError) as exc:
         hub_hint_items = []
         unreadable_diagnostics.append(
@@ -630,7 +661,12 @@ def _collect_inbox_messages(
                 repo_root = getattr(snap, "path", None)
                 if not repo_id or not isinstance(repo_root, Path):
                     continue
-                dismissals = _repo_dismissals(repo_context, repo_id, repo_root)
+                dismissals = _repo_dismissals(
+                    repo_context,
+                    repo_id,
+                    repo_root,
+                    collectors,
+                )
                 resolution = find_message_resolution(
                     dismissals,
                     run_id=run_id,
@@ -658,9 +694,10 @@ def _collect_inbox_messages(
             repo_id=repo_id,
             repo_root=repo_root,
             repo_display_name=repo_display_name,
+            collectors=collectors,
             unreadable_diagnostics=unreadable_diagnostics,
         )
-        dismissals = _repo_dismissals(repo_context, repo_id, repo_root)
+        dismissals = _repo_dismissals(repo_context, repo_id, repo_root, collectors)
         for item in hint_items:
             item_type = str(item.get("item_type") or "")
             run_id = str(item.get("run_id") or "").strip()
@@ -767,10 +804,14 @@ class HubReadModelService:
         *,
         repo_projection_provider: Optional[RepoProjectionProvider] = None,
         prepare_repo_snapshots: Optional[Callable[[list[Any]], Any]] = None,
+        message_snapshot_collectors: Optional[HubMessageSnapshotCollectors] = None,
     ) -> None:
         self._context = context
         self._repo_projection_provider = repo_projection_provider
         self._prepare_repo_snapshots = prepare_repo_snapshots
+        self._message_snapshot_collectors = (
+            message_snapshot_collectors or default_hub_message_snapshot_collectors()
+        )
         self._response_cache: dict[tuple[str, ...], _RepoListingCacheEntry] = {}
         self._response_cache_lock = threading.Lock()
         self._response_refresh_tasks: dict[tuple[str, ...], asyncio.Task[None]] = {}
@@ -781,11 +822,14 @@ class HubReadModelService:
         *,
         repo_projection_provider: Optional[RepoProjectionProvider] = None,
         prepare_repo_snapshots: Optional[Callable[[list[Any]], Any]] = None,
+        message_snapshot_collectors: Optional[HubMessageSnapshotCollectors] = None,
     ) -> None:
         if repo_projection_provider is not None:
             self._repo_projection_provider = repo_projection_provider
         if prepare_repo_snapshots is not None:
             self._prepare_repo_snapshots = prepare_repo_snapshots
+        if message_snapshot_collectors is not None:
+            self._message_snapshot_collectors = message_snapshot_collectors
 
     def _projection_store(self) -> Any:
         return getattr(self._context, "projection_store", None)
@@ -1306,7 +1350,7 @@ class HubReadModelService:
             settings.include_inbox_queue_metadata
             or settings.include_full_action_queue_context
         ):
-            inbox = _gather_inbox(
+            inbox = self._message_snapshot_collectors.gather_inbox(
                 self._context.supervisor,
                 max_text_chars=settings.max_text_chars,
                 stale_threshold_seconds=settings.stale_threshold_seconds,
@@ -1316,7 +1360,9 @@ class HubReadModelService:
         pma_files_detail: dict[str, list[dict[str, Any]]] = empty_listing()
         managed_threads: list[dict[str, Any]] = []
         automation = (
-            _snapshot_pma_automation(self._context.supervisor)
+            self._message_snapshot_collectors.snapshot_pma_automation(
+                self._context.supervisor
+            )
             if requested & {"automation"} or settings.include_full_action_queue_context
             else {"items": [], "summary": {}}
         )
@@ -1330,19 +1376,23 @@ class HubReadModelService:
                 requested & {"pma_files_detail"}
                 or settings.include_full_action_queue_context
             ):
-                pma_files_detail = _collect_pma_files_detail(
-                    hub_root,
-                    generated_at=settings.generated_at,
-                    stale_threshold_seconds=settings.stale_threshold_seconds,
+                pma_files_detail = (
+                    self._message_snapshot_collectors.collect_pma_files_detail(
+                        hub_root,
+                        generated_at=settings.generated_at,
+                        stale_threshold_seconds=settings.stale_threshold_seconds,
+                    )
                 )
             if (
                 requested & {"managed_threads"}
                 or settings.include_full_action_queue_context
             ):
-                managed_threads = _collect_managed_threads(
-                    hub_root,
-                    generated_at=settings.generated_at,
-                    stale_threshold_seconds=settings.stale_threshold_seconds,
+                managed_threads = (
+                    self._message_snapshot_collectors.collect_managed_threads(
+                        hub_root,
+                        generated_at=settings.generated_at,
+                        stale_threshold_seconds=settings.stale_threshold_seconds,
+                    )
                 )
 
         action_queue: list[dict[str, Any]] = []
@@ -1360,13 +1410,16 @@ class HubReadModelService:
             )
 
         repo_context, repo_diagnostics = _load_repo_message_context(
-            self._context, requested
+            self._context,
+            requested,
+            self._message_snapshot_collectors,
         )
         unreadable_diagnostics: list[dict[str, str]] = list(repo_diagnostics)
         filtered_action_queue = _filter_action_queue_items(
             action_queue,
             repo_context=repo_context,
             scope_key=scope_key,
+            collectors=self._message_snapshot_collectors,
         )
         messages = _collect_inbox_messages(
             self._context,
@@ -1375,6 +1428,7 @@ class HubReadModelService:
             scope_key=scope_key,
             repo_context=repo_context,
             filtered_action_queue=filtered_action_queue,
+            collectors=self._message_snapshot_collectors,
             unreadable_diagnostics=unreadable_diagnostics,
         )
         if isinstance(hub_root, Path):
@@ -1418,6 +1472,7 @@ def get_hub_read_model_service(
     *,
     repo_projection_provider: Optional[RepoProjectionProvider] = None,
     prepare_repo_snapshots: Optional[Callable[[list[Any]], Any]] = None,
+    message_snapshot_collectors: Optional[HubMessageSnapshotCollectors] = None,
 ) -> HubReadModelService:
     with _service_registry_lock:
         service = _service_registry.get(id(context))
@@ -1426,12 +1481,14 @@ def get_hub_read_model_service(
                 context,
                 repo_projection_provider=repo_projection_provider,
                 prepare_repo_snapshots=prepare_repo_snapshots,
+                message_snapshot_collectors=message_snapshot_collectors,
             )
             _service_registry[id(context)] = service
         else:
             service.bind_repo_projection_provider(
                 repo_projection_provider=repo_projection_provider,
                 prepare_repo_snapshots=prepare_repo_snapshots,
+                message_snapshot_collectors=message_snapshot_collectors,
             )
         return service
 
@@ -1459,6 +1516,7 @@ __all__ = [
     "HUB_SNAPSHOT_PROJECTION_NAMESPACE",
     "REPO_CAPABILITY_HINT_PROJECTION_NAMESPACE",
     "REPO_LISTING_SECTIONS",
+    "HubMessageSnapshotCollectors",
     "HubReadModelService",
     "HubRepoListingProjection",
     "RepoProjectionProvider",
@@ -1472,6 +1530,7 @@ __all__ = [
     "_snapshot_pma_automation",
     "build_hub_capability_hints",
     "build_repo_capability_hints",
+    "default_hub_message_snapshot_collectors",
     "get_hub_read_model_service",
     "invalidate_hub_message_snapshot_cache",
     "latest_dispatch",

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass
 from typing import Any, Mapping, Optional, Sequence
 
 from .freshness import build_freshness_payload, iso_now, resolve_stale_threshold_seconds
@@ -18,6 +19,8 @@ from .pma_thread_classification import (
 )
 
 _logger = logging.getLogger(__name__)
+
+ActionQueueItem = dict[str, Any]
 
 PMA_ACTION_QUEUE_PRECEDENCE: dict[str, tuple[int, str]] = {
     "ticket_flow_inbox": (10, "ticket_flow_inbox"),
@@ -237,13 +240,51 @@ def _collapse_low_signal_thread_queue_items(
     return collapsed
 
 
+@dataclass(frozen=True)
+class TicketFlowActionSource:
+    inbox: Sequence[Mapping[str, Any]]
+
+    def project(self) -> list[ActionQueueItem]:
+        return _build_ticket_flow_queue_items(self.inbox)
+
+
+@dataclass(frozen=True)
+class ManagedThreadActionSource:
+    managed_threads: Sequence[Mapping[str, Any]]
+
+    def project(self) -> list[ActionQueueItem]:
+        return _build_thread_queue_items(self.managed_threads)
+
+
+@dataclass(frozen=True)
+class PmaFileInboxActionSource:
+    pma_files_detail: Mapping[str, Sequence[Mapping[str, Any]]]
+
+    def project(self) -> list[ActionQueueItem]:
+        return _build_file_queue_items(self.pma_files_detail)
+
+
+@dataclass(frozen=True)
+class AutomationWakeupActionSource:
+    automation: Mapping[str, Any]
+    generated_at: str
+    stale_threshold_seconds: int
+
+    def project(self) -> list[ActionQueueItem]:
+        return _build_automation_queue_items(
+            self.automation,
+            generated_at=self.generated_at,
+            stale_threshold_seconds=self.stale_threshold_seconds,
+        )
+
+
 def _build_ticket_flow_queue_items(
-    inbox: list[dict[str, Any]],
-) -> list[dict[str, Any]]:
-    items: list[dict[str, Any]] = []
+    inbox: Sequence[Mapping[str, Any]],
+) -> list[ActionQueueItem]:
+    items: list[ActionQueueItem] = []
     rank, label = _queue_precedence("ticket_flow_inbox")
     for entry in inbox:
-        if not isinstance(entry, dict):
+        if not isinstance(entry, Mapping):
             continue
         copied = dict(entry)
         repo_id = str(copied.get("repo_id") or "").strip()
@@ -289,12 +330,12 @@ def _build_ticket_flow_queue_items(
 
 
 def _build_thread_queue_items(
-    managed_threads: list[dict[str, Any]],
-) -> list[dict[str, Any]]:
-    items: list[dict[str, Any]] = []
+    managed_threads: Sequence[Mapping[str, Any]],
+) -> list[ActionQueueItem]:
+    items: list[ActionQueueItem] = []
     rank, label = _queue_precedence("managed_thread_followup")
     for entry in managed_threads:
-        if not isinstance(entry, dict):
+        if not isinstance(entry, Mapping):
             continue
         status = (
             str(entry.get("normalized_status") or entry.get("status") or "")
@@ -350,11 +391,6 @@ def _build_thread_queue_items(
         item.update(
             {
                 "item_type": "managed_thread_followup",
-                "open_url": (
-                    f"/hub/pma/threads/{managed_thread_id}"
-                    if managed_thread_id
-                    else None
-                ),
                 "action_queue_id": f"managed_thread_followup:{managed_thread_id or '-'}",
                 "queue_source": "managed_thread_followup",
                 "precedence": {"rank": rank, "label": label},
@@ -389,15 +425,15 @@ def _build_thread_queue_items(
 
 
 def _build_file_queue_items(
-    pma_files_detail: Mapping[str, list[dict[str, Any]]],
-) -> list[dict[str, Any]]:
-    items: list[dict[str, Any]] = []
-    stale_items: list[dict[str, Any]] = []
+    pma_files_detail: Mapping[str, Sequence[Mapping[str, Any]]],
+) -> list[ActionQueueItem]:
+    items: list[ActionQueueItem] = []
+    stale_items: list[ActionQueueItem] = []
     rank, label = _queue_precedence("pma_file_inbox")
     for entry in pma_files_detail.get("inbox") or []:
-        if not isinstance(entry, dict):
+        if not isinstance(entry, Mapping):
             continue
-        copied = enrich_pma_file_inbox_entry(entry)
+        copied = enrich_pma_file_inbox_entry(dict(entry))
         freshness = _extract_entry_freshness(copied)
         name = str(copied.get("name") or "").strip()
         copied.update(
@@ -472,12 +508,12 @@ def _build_automation_queue_items(
     *,
     generated_at: str,
     stale_threshold_seconds: int,
-) -> list[dict[str, Any]]:
-    items: list[dict[str, Any]] = []
+) -> list[ActionQueueItem]:
+    items: list[ActionQueueItem] = []
     rank, label = _queue_precedence("automation_wakeup")
     wakeups = (automation.get("wakeups") or {}).get("pending_sample") or []
     for entry in wakeups:
-        if not isinstance(entry, dict):
+        if not isinstance(entry, Mapping):
             continue
         repo_id = str(entry.get("repo_id") or "").strip()
         thread_id = str(entry.get("thread_id") or "").strip()
@@ -559,29 +595,8 @@ def _is_strong_action_queue_item(item: Mapping[str, Any]) -> bool:
     return operator_need in {"urgent", "normal"}
 
 
-def build_pma_action_queue(
-    *,
-    inbox: list[dict[str, Any]],
-    managed_threads: list[dict[str, Any]],
-    pma_files_detail: Mapping[str, list[dict[str, Any]]],
-    automation: Mapping[str, Any],
-    generated_at: Optional[str] = None,
-    stale_threshold_seconds: Optional[int] = None,
-) -> list[dict[str, Any]]:
-    resolved_generated_at = generated_at or iso_now()
-    resolved_stale_threshold = resolve_stale_threshold_seconds(stale_threshold_seconds)
-    items = [
-        *_build_ticket_flow_queue_items(inbox),
-        *_build_thread_queue_items(managed_threads),
-        *_build_file_queue_items(pma_files_detail),
-        *_build_automation_queue_items(
-            automation,
-            generated_at=resolved_generated_at,
-            stale_threshold_seconds=resolved_stale_threshold,
-        ),
-    ]
-
-    items = sorted(
+def _rank_action_queue_items(items: Sequence[ActionQueueItem]) -> list[ActionQueueItem]:
+    return sorted(
         items,
         key=lambda item: (
             int(((item.get("precedence") or {}).get("rank") or 999)),
@@ -591,8 +606,12 @@ def build_pma_action_queue(
         ),
     )
 
-    winning_scope: dict[str, dict[str, Any]] = {}
-    winning_repo_blocker: dict[str, dict[str, Any]] = {}
+
+def _apply_action_queue_supersession(
+    items: Sequence[ActionQueueItem],
+) -> list[ActionQueueItem]:
+    winning_scope: dict[str, ActionQueueItem] = {}
+    winning_repo_blocker: dict[str, ActionQueueItem] = {}
     primary_queue_id = next(
         (
             str(item.get("action_queue_id") or "")
@@ -601,7 +620,9 @@ def build_pma_action_queue(
         ),
         None,
     )
-    for index, item in enumerate(items, start=1):
+    projected: list[ActionQueueItem] = []
+    for index, source_item in enumerate(items, start=1):
+        item = source_item
         scope = item.get("scope") or {}
         scope_key = str(scope.get("key") or "")
         queue_id = str(item.get("action_queue_id") or "")
@@ -646,4 +667,48 @@ def build_pma_action_queue(
             winning_repo_blocker[repo_key] = item
         item["queue_rank"] = index
         item.pop("sort_timestamp", None)
-    return items
+        projected.append(item)
+    return projected
+
+
+def project_action_queue_ui_hints(
+    items: Sequence[ActionQueueItem],
+) -> list[ActionQueueItem]:
+    projected: list[ActionQueueItem] = []
+    for item in items:
+        copied = dict(item)
+        if copied.get("item_type") == "managed_thread_followup" and not copied.get(
+            "open_url"
+        ):
+            managed_thread_id = str(copied.get("managed_thread_id") or "").strip()
+            if managed_thread_id:
+                copied["open_url"] = f"/hub/pma/threads/{managed_thread_id}"
+        projected.append(copied)
+    return projected
+
+
+def build_pma_action_queue(
+    *,
+    inbox: list[dict[str, Any]],
+    managed_threads: list[dict[str, Any]],
+    pma_files_detail: Mapping[str, list[dict[str, Any]]],
+    automation: Mapping[str, Any],
+    generated_at: Optional[str] = None,
+    stale_threshold_seconds: Optional[int] = None,
+) -> list[dict[str, Any]]:
+    resolved_generated_at = generated_at or iso_now()
+    resolved_stale_threshold = resolve_stale_threshold_seconds(stale_threshold_seconds)
+    sources = (
+        TicketFlowActionSource(inbox=inbox),
+        ManagedThreadActionSource(managed_threads=managed_threads),
+        PmaFileInboxActionSource(pma_files_detail=pma_files_detail),
+        AutomationWakeupActionSource(
+            automation=automation,
+            generated_at=resolved_generated_at,
+            stale_threshold_seconds=resolved_stale_threshold,
+        ),
+    )
+    source_items = [item for source in sources for item in source.project()]
+    ranked_items = _rank_action_queue_items(source_items)
+    superseded_items = _apply_action_queue_supersession(ranked_items)
+    return project_action_queue_ui_hints(superseded_items)

@@ -23,7 +23,14 @@ _PROTECTION_REASON_UNPROTECTED = (
 
 def is_pma_self_thread(entry: Mapping[str, Any]) -> bool:
     thread_kind = str(entry.get("thread_kind") or "").strip().lower()
-    return thread_kind == "pma"
+    if thread_kind:
+        return thread_kind == "pma"
+    workspace_root = str(entry.get("workspace_root") or "").strip()
+    if workspace_root != ".":
+        return False
+    agent = str(entry.get("agent") or "").strip().lower()
+    name = str(entry.get("name") or "").strip().lower()
+    return agent.endswith("-pma") or name.startswith("pma ")
 
 
 def is_thread_cleanup_protected(

@@ -90,7 +90,6 @@ from ...adapters.chat.models import (
 from ...adapters.chat.picker_filter import (
     filter_picker_items,
 )
-from ...adapters.chat.queue_control import ChatQueueControlStore
 from ...adapters.chat.queue_status import (
     QUEUE_STATUS_ITEM_LIMIT,
     coerce_queue_status_items,
@@ -115,6 +114,7 @@ from ...core.artifact_delivery import (
     DeliveryIntent,
     delivery_filename,
 )
+from ...core.chat_queue_control import ChatQueueControlPlane, ChatQueueControlStore
 from ...core.config import (
     ConfigError,
     ensure_hub_config_at,
@@ -842,6 +842,10 @@ class DiscordBotService(DiscordInteractionResponseMixin):
             handler_stalled_warning_seconds=(
                 config.dispatch.handler_stalled_warning_seconds
             ),
+        )
+        self._chat_queue_control_plane = ChatQueueControlPlane(
+            self._chat_queue_control_store,
+            runtime=self._dispatcher,
         )
         self._hub_config_path: Optional[Path] = None
         generated_hub_config = self._config.root / ".codex-autorunner" / "config.yml"
@@ -2042,7 +2046,8 @@ class DiscordBotService(DiscordInteractionResponseMixin):
         cleanup_policy: QueueStatusCleanupPolicy = QueueStatusCleanupPolicy.DELETE_STALE,
         component_source_message_id: Optional[str] = None,
     ) -> None:
-        queue_status = await self._dispatcher.queue_status(conversation_id)
+        snapshot = await self._chat_queue_control_plane.queue_status(conversation_id)
+        queue_status = snapshot.to_dict() if snapshot is not None else None
         pending_items_raw = []
         if isinstance(queue_status, dict):
             pending_items_raw = list(queue_status.get("pending_items") or [])

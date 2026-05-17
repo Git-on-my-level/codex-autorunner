@@ -110,10 +110,11 @@ def test_worktree_detail_snapshot_is_scoped_and_does_not_include_global_tickets(
     assert payload["kind"] == "repo_worktree.detail.snapshot"
     assert payload["ownerKind"] == "worktree"
     assert payload["parentLinks"]["repo_id"] == hub_env.repo_id
-    assert len(payload["scopedTickets"]) == 5
-    assert {ticket["workspace_id"] for ticket in payload["scopedTickets"]} == {
+    assert len(payload["ticketQueue"]) == 5
+    assert {ticket["workspace_id"] for ticket in payload["ticketQueue"]} == {
         "repo--feature"
     }
+    assert payload["scopedTickets"] == payload["ticketQueue"]
     assert payload["ticketWindow"]["limit"] == 5
 
 
@@ -133,6 +134,10 @@ def test_ticket_detail_snapshot_uses_owner_scoped_ticket_queue(hub_env) -> None:
     assert payload["contractVersion"] == "web-read-models.v1"
     assert payload["kind"] == "ticket.detail.snapshot"
     assert payload["ticket"]["routeId"] == "7"
+    assert payload["ticketDetail"]["workspace_id"] == hub_env.repo_id
+    assert {ticket["workspace_id"] for ticket in payload["ticketQueue"]} == {
+        hub_env.repo_id
+    }
     assert payload["legacyTicket"]["workspace_id"] == hub_env.repo_id
     assert {ticket["workspace_id"] for ticket in payload["scopedTickets"]} == {
         hub_env.repo_id

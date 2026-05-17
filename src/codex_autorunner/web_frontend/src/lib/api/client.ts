@@ -590,12 +590,11 @@ export class WebApiClient {
     ticketDetail: async (
       ticketId: string,
       owner: { kind: 'repo' | 'worktree'; id: string }
-    ): Promise<ApiResult<TicketDetailSnapshot & { legacyTicket?: JsonRecord; scopedTickets?: JsonRecord[]; scopedRuns?: JsonRecord[]; scopedChats?: JsonRecord[] }>> => {
+    ): Promise<ApiResult<TicketDetailSnapshot>> => {
       const params = new URLSearchParams({ owner_kind: owner.kind, owner_id: owner.id });
       return mapResult(
         await this.getJson<JsonRecord>(`/hub/read-models/tickets/${encodeURIComponent(ticketId)}?${params.toString()}`),
-        (payload) =>
-          mapReadModelContract<TicketDetailSnapshot & { legacyTicket?: JsonRecord; scopedTickets?: JsonRecord[]; scopedRuns?: JsonRecord[]; scopedChats?: JsonRecord[] }>(payload)
+        (payload) => mapReadModelContract<TicketDetailSnapshot>(payload)
       );
     }
   };
@@ -615,7 +614,7 @@ export class WebApiClient {
         return mapResult(hubResult, (payload) => asArray(payload.tickets).map(mapTicketSummary));
       }
       if (!owner) return this.listLegacyMountedTickets();
-      const legacyResult = await this.getJson<JsonRecord>(legacyTicketPath(owner));
+      const legacyResult = await this.getJson<JsonRecord>(ticketApiPath(owner));
       return mapResult(legacyResult, (payload) =>
         asArray(payload.tickets).map((ticket) => mapTicketSummary(ticketWithFallbackOwner(ticket, owner)))
       );
@@ -628,7 +627,7 @@ export class WebApiClient {
       owner?: { repo?: string; worktree?: string }
     ): Promise<ApiResult<TicketDetail>> =>
       mapResult(
-        await this.requestJson<JsonRecord>(`${legacyTicketPath(owner)}/${encodeURIComponent(index)}`, {
+        await this.requestJson<JsonRecord>(`${ticketApiPath(owner)}/${encodeURIComponent(index)}`, {
           method: 'PUT',
           body: { content }
         }),
@@ -639,7 +638,7 @@ export class WebApiClient {
       owner?: { repo?: string; worktree?: string }
     ): Promise<ApiResult<TicketDetail>> =>
       mapResult(
-        await this.requestJson<JsonRecord>(legacyTicketPath(owner), {
+        await this.requestJson<JsonRecord>(ticketApiPath(owner), {
           method: 'POST',
           body
         }),
@@ -651,7 +650,7 @@ export class WebApiClient {
       placeAfter: boolean,
       owner?: { repo?: string; worktree?: string }
     ): Promise<ApiResult<JsonRecord>> =>
-      this.requestJson<JsonRecord>(`${legacyTicketPath(owner)}/reorder`, {
+      this.requestJson<JsonRecord>(`${ticketApiPath(owner)}/reorder`, {
         method: 'POST',
         body: {
           source_index: sourceIndex,
@@ -687,7 +686,7 @@ export class WebApiClient {
   private async listLegacyMountedTickets(): Promise<ApiResult<TicketSummary[]>> {
     const topologyResult = await this.readModels.repoWorktreeTopology('all', 200);
     if (!topologyResult.ok) {
-      const legacyResult = await this.getJson<JsonRecord>(legacyTicketPath());
+      const legacyResult = await this.getJson<JsonRecord>(ticketApiPath());
       return mapResult(legacyResult, (payload) => asArray(payload.tickets).map((ticket) => mapTicketSummary(ticketWithFallbackOwner(ticket))));
     }
     const owners = [
@@ -697,7 +696,7 @@ export class WebApiClient {
     const results = await Promise.all(
       owners.map(async (owner) => ({
         owner,
-        result: await this.getJson<JsonRecord>(legacyTicketPath(owner))
+        result: await this.getJson<JsonRecord>(ticketApiPath(owner))
       }))
     );
     const failed = results.find(({ result }) => !result.ok && result.error.status !== 404);
@@ -883,7 +882,7 @@ function hubTicketPath(owner?: { repo?: string; worktree?: string }): string {
   return query ? `/hub/tickets?${query}` : '/hub/tickets';
 }
 
-function legacyTicketPath(owner?: { repo?: string; worktree?: string }): string {
+function ticketApiPath(owner?: { repo?: string; worktree?: string }): string {
   const workspaceId = owner?.repo ?? owner?.worktree;
   if (workspaceId) return `/repos/${encodeURIComponent(workspaceId)}/api/flows/ticket_flow/tickets`;
   return '/api/flows/ticket_flow/tickets';
