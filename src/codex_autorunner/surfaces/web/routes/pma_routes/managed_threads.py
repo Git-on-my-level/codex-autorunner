@@ -20,8 +20,6 @@ from .....core.automation import (
     PMA_TIMER_SCHEDULE_PREFIX,
     AutomationSchedule,
     AutomationStore,
-    mirror_pma_subscription_rule,
-    mirror_pma_timer_schedule,
 )
 from .....core.automation.builtins import _normalize_reactive_event_types
 from .....core.managed_thread_store import ManagedThreadStore
@@ -54,6 +52,7 @@ from .....core.pma_automation_types import (
     _normalize_positive_int,
     _normalize_timer_type,
 )
+from .....core.pma_automation_unified import PmaUnifiedAutomationAdapter
 from .....core.text_utils import _truncate_text
 from .....core.time_utils import now_iso
 from ...schemas import (
@@ -319,7 +318,9 @@ def _create_unified_pma_subscription(
         max_matches=_normalize_positive_int(payload.get("max_matches"), fallback=None),
         metadata=metadata,
     )
-    mirror_pma_subscription_rule(store, subscription=subscription)
+    PmaUnifiedAutomationAdapter(store).mirror_subscription_rule(
+        subscription=subscription
+    )
     return {"subscription": subscription.to_dict(), "deduped": False}
 
 
@@ -589,7 +590,7 @@ def _create_unified_pma_timer(
     requested_timer_id = normalize_optional_text(payload.get("timer_id"))
     if requested_timer_id is not None:
         timer.timer_id = requested_timer_id
-    mirror_pma_timer_schedule(store, timer=timer)
+    PmaUnifiedAutomationAdapter(store).mirror_timer_schedule(timer=timer)
     return {"timer": timer.to_dict(), "deduped": False}
 
 

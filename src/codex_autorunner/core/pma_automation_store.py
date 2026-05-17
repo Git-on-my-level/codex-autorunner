@@ -8,7 +8,7 @@ from typing import Any, Optional
 
 from .locks import file_lock
 from .pma_automation_domain_translation import PmaAutomationDomainTranslator
-from .pma_automation_mirror import PmaAutomationMirror
+from .pma_automation_mirror import PmaAutomationMirror, PmaUnifiedMirrorResult
 from .pma_automation_persistence import PmaAutomationPersistence
 from .pma_automation_records import (
     PmaAutomationTimer,
@@ -350,8 +350,10 @@ class PmaAutomationStore:
                     )
             return changed
 
-    def _mirror_subscription_rule(self, subscription: PmaLifecycleSubscription) -> None:
-        self._mirror.mirror_subscription_rule(subscription)
+    def _mirror_subscription_rule(
+        self, subscription: PmaLifecycleSubscription
+    ) -> PmaUnifiedMirrorResult:
+        return self._mirror.mirror_subscription_rule(subscription)
 
     def purge_subscription(
         self, subscription_id: str, *, require_inactive: bool = True
@@ -689,8 +691,10 @@ class PmaAutomationStore:
                     return {"status": "ok", "timer": entry.to_dict(), "touched": True}
         return {"status": "ok", "timer_id": target_id, "touched": False}
 
-    def _mirror_timer_schedule(self, timer: PmaAutomationTimer) -> None:
-        self._mirror.mirror_timer_schedule(timer)
+    def _mirror_timer_schedule(
+        self, timer: PmaAutomationTimer
+    ) -> PmaUnifiedMirrorResult:
+        return self._mirror.mirror_timer_schedule(timer)
 
     def dequeue_due_timers(
         self,
