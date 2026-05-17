@@ -24,8 +24,8 @@ from .....core.orchestration.runtime_thread_events import (
 )
 from .....core.orchestration.turn_timeline import list_turn_timeline
 from ...services.pma import get_pma_request_context
+from ...services.pma.common import normalize_optional_text
 from ..shared import SSE_HEADERS
-from .automation_adapter import normalize_optional_text
 from .managed_thread_tail_serializers import (
     _derive_active_turn_diagnostics,
     _derive_progress_phase,

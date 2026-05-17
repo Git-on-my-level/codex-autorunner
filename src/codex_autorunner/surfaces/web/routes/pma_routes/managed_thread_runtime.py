@@ -54,12 +54,13 @@ from .....core.orchestration.runtime_threads import (
 from .....core.orchestration.service import BusyInterruptFailedError
 from .....core.text_utils import _truncate_text
 from ...schemas import ManagedThreadMessageRequest, ManagedThreadStartMessageRequest
+from ...services.pma.automation import notify_managed_thread_terminal_transition
+from ...services.pma.common import normalize_optional_text
 from ...services.pma.managed_thread_followup import (
     ManagedThreadAutomationClient,
     ManagedThreadAutomationUnavailable,
 )
-from .automation_adapter import normalize_optional_text
-from .managed_thread_route_helpers import (
+from ...services.pma.managed_thread_scope import (
     managed_thread_metadata_for_provisioned_workspace,
     provision_managed_thread_workspace,
     resolve_managed_thread_create_resolution,
@@ -68,7 +69,6 @@ from .managed_thread_runtime_control import (
     deliver_bound_chat_assistant_output,
     ensure_queue_worker,
     interrupt_managed_thread_via_orchestration,
-    notify_managed_thread_terminal_transition,
     recover_orphaned_executions,
     restart_queue_workers,
 )

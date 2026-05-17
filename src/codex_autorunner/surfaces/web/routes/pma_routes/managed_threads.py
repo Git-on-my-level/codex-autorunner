@@ -23,6 +23,8 @@ from .....core.automation import (
     mirror_pma_subscription_rule,
     mirror_pma_timer_schedule,
 )
+from .....core.automation.builtins import _normalize_reactive_event_types
+from .....core.managed_thread_store import ManagedThreadStore
 from .....core.orchestration import (
     ChatSurfaceReadService,
     build_harness_backed_orchestration_service,
@@ -35,16 +37,19 @@ from .....core.orchestration.managed_thread_timeline import (
 )
 from .....core.orchestration.turn_timeline import list_turn_timeline
 from .....core.pma_automation_store import (
+    MANAGED_THREAD_AUTO_SUBSCRIPTION_PREFIXES,
     PmaAutomationStore,
     PmaAutomationThreadNotFoundError,
     PmaAutomationTimer,
     PmaLifecycleSubscription,
 )
 from .....core.pma_automation_types import (
+    DEFAULT_PMA_LANE_ID,
     DEFAULT_WATCHDOG_IDLE_SECONDS,
     TIMER_TYPE_WATCHDOG,
     _iso_after_seconds,
     _normalize_due_timestamp,
+    _normalize_lane_id,
     _normalize_non_negative_int,
     _normalize_positive_int,
     _normalize_timer_type,
@@ -63,17 +68,22 @@ from ...schemas import (
     PmaAutomationTimerTouchRequest,
 )
 from ...services.pma import get_pma_request_context
-from ...services.pma.managed_thread_followup import (
-    ManagedThreadAutomationClient,
-    ManagedThreadAutomationUnavailable,
-    apply_origin_followup_context,
-)
-from .automation_adapter import (
+from ...services.pma.automation import (
     call_store_action_with_id,
     call_store_create_with_payload,
     call_store_list,
     get_automation_store,
     normalize_optional_text,
+)
+from ...services.pma.managed_thread_followup import (
+    ManagedThreadAutomationClient,
+    ManagedThreadAutomationUnavailable,
+    apply_origin_followup_context,
+)
+from ...services.pma.managed_thread_scope import (
+    managed_thread_metadata_for_provisioned_workspace,
+    provision_managed_thread_workspace,
+    resolve_managed_thread_create_resolution,
 )
 from .hermes_supervisors import resolve_cached_hermes_supervisor
 from .managed_thread_route_helpers import (
@@ -83,9 +93,6 @@ from .managed_thread_route_helpers import (
     _resolve_running_or_latest_execution,
     _serialize_managed_thread,
     _serialize_thread_target,
-    managed_thread_metadata_for_provisioned_workspace,
-    provision_managed_thread_workspace,
-    resolve_managed_thread_create_resolution,
     resolve_managed_thread_list_query,
     resolve_owner_scoped_query,
     serialize_active_work_summary,
@@ -235,8 +242,13 @@ def _is_builtin_pma_store(store: Any) -> bool:
 def _create_unified_pma_subscription(
     request: Request, payload: dict[str, Any]
 ) -> dict[str, Any]:
-    store = AutomationStore(get_pma_request_context(request).hub_root)
+    context = get_pma_request_context(request)
+    hub_root = context.hub_root
+    store = AutomationStore(hub_root)
     idempotency_key = normalize_optional_text(payload.get("idempotency_key"))
+    normalized_thread_id = normalize_optional_text(payload.get("thread_id"))
+    if normalized_thread_id is not None:
+        return PmaAutomationStore(hub_root).create_subscription(payload)
     if idempotency_key is not None:
         existing = _find_pma_rule_by_idempotency(
             store,
@@ -249,15 +261,59 @@ def _create_unified_pma_subscription(
                 "deduped": True,
             }
 
-    metadata = _pma_origin_metadata_from_payload(payload)
+    event_types = payload.get("event_types")
+    normalized_repo_id = normalize_optional_text(payload.get("repo_id"))
+    normalized_run_id = normalize_optional_text(payload.get("run_id"))
+    normalized_from_state = normalize_optional_text(payload.get("from_state"))
+    normalized_to_state = normalize_optional_text(payload.get("to_state"))
+    normalized_event_types = [
+        str(item).strip().lower() for item in event_types or [] if str(item).strip()
+    ]
+    normalized_event_types_for_match = (
+        _normalize_reactive_event_types(normalized_event_types)
+        if normalized_event_types
+        else []
+    )
+    confirm_duplicate = bool(payload.get("confirm"))
+    if not confirm_duplicate:
+        existing_auto = _find_covering_auto_subscription_rule(
+            store,
+            event_types=normalized_event_types_for_match,
+            repo_id=normalized_repo_id,
+            run_id=normalized_run_id,
+            thread_id=normalized_thread_id,
+            from_state=normalized_from_state,
+            to_state=normalized_to_state,
+        )
+        if existing_auto is not None:
+            row = _subscription_row_from_rule(existing_auto)
+            if _is_auto_subscription_key(idempotency_key):
+                return {"subscription": row, "deduped": True}
+            return {
+                "subscription": row,
+                "deduped": True,
+                "warning": _covering_auto_subscription_warning(
+                    existing=row,
+                    requested_event_types=normalized_event_types,
+                    repo_id=normalized_repo_id,
+                    run_id=normalized_run_id,
+                    thread_id=normalized_thread_id,
+                ),
+            }
+
+    metadata = _resolved_unified_subscription_metadata(hub_root, payload)
     subscription = PmaLifecycleSubscription.create(
-        event_types=payload.get("event_types"),
-        repo_id=normalize_optional_text(payload.get("repo_id")),
-        run_id=normalize_optional_text(payload.get("run_id")),
-        thread_id=normalize_optional_text(payload.get("thread_id")),
-        lane_id=normalize_optional_text(payload.get("lane_id")),
-        from_state=normalize_optional_text(payload.get("from_state")),
-        to_state=normalize_optional_text(payload.get("to_state")),
+        event_types=normalized_event_types or None,
+        repo_id=normalized_repo_id,
+        run_id=normalized_run_id,
+        thread_id=normalized_thread_id,
+        lane_id=_resolve_unified_subscription_lane_id(
+            hub_root,
+            payload,
+            metadata=metadata,
+        ),
+        from_state=normalized_from_state,
+        to_state=normalized_to_state,
         reason=normalize_optional_text(payload.get("reason")),
         idempotency_key=idempotency_key,
         max_matches=_normalize_positive_int(payload.get("max_matches"), fallback=None),
@@ -265,6 +321,207 @@ def _create_unified_pma_subscription(
     )
     mirror_pma_subscription_rule(store, subscription=subscription)
     return {"subscription": subscription.to_dict(), "deduped": False}
+
+
+def _is_auto_subscription_key(idempotency_key: Optional[str]) -> bool:
+    normalized_key = normalize_optional_text(idempotency_key)
+    if normalized_key is None:
+        return False
+    return normalized_key.startswith(MANAGED_THREAD_AUTO_SUBSCRIPTION_PREFIXES)
+
+
+def _subscription_scope_value_is_covered(
+    *, requested: Optional[str], existing: Optional[str]
+) -> bool:
+    if existing is None:
+        return True
+    if requested is None:
+        return False
+    return existing == requested
+
+
+def _subscription_event_types_are_covered(
+    *, requested: list[str], existing: list[str]
+) -> bool:
+    if not existing:
+        return True
+    if not requested:
+        return False
+    existing_set = set(existing)
+    return all(event_type in existing_set for event_type in requested)
+
+
+def _find_covering_auto_subscription_rule(
+    store: AutomationStore,
+    *,
+    event_types: list[str],
+    repo_id: Optional[str],
+    run_id: Optional[str],
+    thread_id: Optional[str],
+    from_state: Optional[str],
+    to_state: Optional[str],
+) -> Optional[Any]:
+    for rule in store.list_rules(enabled=True):
+        if rule.metadata.get("purpose") != "pma_lifecycle_subscription":
+            continue
+        row = _subscription_row_from_rule(rule)
+        if not _is_auto_subscription_key(row.get("idempotency_key")):
+            continue
+        if not _subscription_event_types_are_covered(
+            requested=event_types,
+            existing=list(row.get("event_types") or []),
+        ):
+            continue
+        if not _subscription_scope_value_is_covered(
+            requested=repo_id,
+            existing=normalize_optional_text(row.get("repo_id")),
+        ):
+            continue
+        if not _subscription_scope_value_is_covered(
+            requested=run_id,
+            existing=normalize_optional_text(row.get("run_id")),
+        ):
+            continue
+        if not _subscription_scope_value_is_covered(
+            requested=thread_id,
+            existing=normalize_optional_text(row.get("thread_id")),
+        ):
+            continue
+        if not _subscription_scope_value_is_covered(
+            requested=from_state,
+            existing=normalize_optional_text(row.get("from_state")),
+        ):
+            continue
+        if not _subscription_scope_value_is_covered(
+            requested=to_state,
+            existing=normalize_optional_text(row.get("to_state")),
+        ):
+            continue
+        return rule
+    return None
+
+
+def _covering_auto_subscription_warning(
+    *,
+    existing: dict[str, Any],
+    requested_event_types: list[str],
+    repo_id: Optional[str],
+    run_id: Optional[str],
+    thread_id: Optional[str],
+) -> str:
+    scope_label = "this scope"
+    if thread_id is not None:
+        scope_label = "this thread"
+    elif run_id is not None:
+        scope_label = "this run"
+    elif repo_id is not None:
+        scope_label = "this repo"
+    event_label = (
+        requested_event_types[0]
+        if len(requested_event_types) == 1
+        else "the requested event scope"
+    )
+    return (
+        "An active auto-subscription "
+        f"({existing.get('idempotency_key') or existing.get('subscription_id')}) "
+        f"already covers {event_label} for {scope_label}. "
+        "Pass confirm=true to create a duplicate subscription."
+    )
+
+
+def _thread_binding_metadata(
+    hub_root: Path, thread_id: str
+) -> Optional[dict[str, Any]]:
+    thread = ManagedThreadStore(hub_root).get_thread(thread_id)
+    if thread is None:
+        raise PmaAutomationThreadNotFoundError(thread_id)
+    binding_metadata = _load_chat_binding_metadata_by_thread(hub_root).get(thread_id)
+    return binding_metadata if isinstance(binding_metadata, dict) else None
+
+
+def _delivery_target_for_thread(
+    hub_root: Path, thread_id: str
+) -> Optional[dict[str, str]]:
+    binding_metadata = _thread_binding_metadata(hub_root, thread_id)
+    if not isinstance(binding_metadata, dict):
+        return None
+    surface_kind = normalize_optional_text(binding_metadata.get("binding_kind"))
+    surface_key = normalize_optional_text(binding_metadata.get("binding_id"))
+    if surface_kind in {"discord", "telegram"} and surface_key is not None:
+        return {"surface_kind": surface_kind, "surface_key": surface_key}
+    return None
+
+
+def _lane_id_for_thread(hub_root: Path, thread_id: str) -> str:
+    binding_metadata = _thread_binding_metadata(hub_root, thread_id)
+    if not isinstance(binding_metadata, dict):
+        return DEFAULT_PMA_LANE_ID
+    binding_kind = normalize_optional_text(binding_metadata.get("binding_kind"))
+    if binding_kind in {"discord", "telegram"}:
+        return binding_kind
+    return DEFAULT_PMA_LANE_ID
+
+
+def _resolved_unified_subscription_metadata(
+    hub_root: Path, payload: dict[str, Any]
+) -> dict[str, Any]:
+    metadata = _pma_origin_metadata_from_payload(payload)
+    origin = metadata.get("pma_origin") if isinstance(metadata, dict) else None
+    origin_thread_id = (
+        normalize_optional_text(origin.get("thread_id"))
+        if isinstance(origin, dict)
+        else normalize_optional_text(payload.get("origin_thread_id"))
+    )
+    thread_id = normalize_optional_text(payload.get("thread_id"))
+    delivery_target = None
+    if origin_thread_id is not None:
+        try:
+            delivery_target = _delivery_target_for_thread(hub_root, origin_thread_id)
+        except PmaAutomationThreadNotFoundError:
+            delivery_target = None
+    if delivery_target is None and thread_id is not None:
+        delivery_target = _delivery_target_for_thread(hub_root, thread_id)
+    if delivery_target is not None:
+        metadata["delivery_target"] = delivery_target
+    return metadata
+
+
+def _resolve_unified_subscription_lane_id(
+    hub_root: Path,
+    payload: dict[str, Any],
+    *,
+    metadata: dict[str, Any],
+) -> str:
+    lane_id = normalize_optional_text(payload.get("lane_id"))
+    if lane_id is not None:
+        return _normalize_lane_id(lane_id)
+    origin = metadata.get("pma_origin") if isinstance(metadata, dict) else None
+    origin_lane_id = (
+        normalize_optional_text(origin.get("lane_id"))
+        if isinstance(origin, dict)
+        else normalize_optional_text(payload.get("origin_lane_id"))
+    )
+    if origin_lane_id is not None:
+        return _normalize_lane_id(origin_lane_id)
+    origin_thread_id = (
+        normalize_optional_text(origin.get("thread_id"))
+        if isinstance(origin, dict)
+        else normalize_optional_text(payload.get("origin_thread_id"))
+    )
+    if origin_thread_id is not None:
+        try:
+            resolved_origin_lane = _lane_id_for_thread(hub_root, origin_thread_id)
+        except PmaAutomationThreadNotFoundError:
+            resolved_origin_lane = DEFAULT_PMA_LANE_ID
+        if resolved_origin_lane != DEFAULT_PMA_LANE_ID:
+            return resolved_origin_lane
+    thread_id = normalize_optional_text(payload.get("thread_id"))
+    if thread_id is None:
+        return DEFAULT_PMA_LANE_ID
+    resolved_lane = _lane_id_for_thread(hub_root, thread_id)
+    if resolved_lane != DEFAULT_PMA_LANE_ID:
+        return resolved_lane
+    return DEFAULT_PMA_LANE_ID
 
 
 def _create_unified_pma_timer(
@@ -405,17 +662,31 @@ def _find_pma_rule_by_idempotency(
 
 
 def _pma_origin_metadata_from_payload(payload: dict[str, Any]) -> dict[str, Any]:
-    origin = {
-        key: value
-        for key, value in {
-            "thread_id": normalize_optional_text(payload.get("origin_thread_id")),
-            "lane_id": normalize_optional_text(payload.get("origin_lane_id")),
-            "surface_kind": normalize_optional_text(payload.get("origin_surface_kind")),
-            "surface_key": normalize_optional_text(payload.get("origin_surface_key")),
-        }.items()
-        if value is not None
-    }
-    return {"pma_origin": origin} if origin else {}
+    raw_metadata = payload.get("metadata")
+    metadata = dict(raw_metadata) if isinstance(raw_metadata, dict) else {}
+    existing_origin = metadata.get("pma_origin")
+    origin = dict(existing_origin) if isinstance(existing_origin, dict) else {}
+    origin.update(
+        {
+            key: value
+            for key, value in {
+                "thread_id": normalize_optional_text(payload.get("origin_thread_id")),
+                "lane_id": normalize_optional_text(payload.get("origin_lane_id")),
+                "agent": normalize_optional_text(payload.get("origin_agent")),
+                "profile": normalize_optional_text(payload.get("origin_profile")),
+                "surface_kind": normalize_optional_text(
+                    payload.get("origin_surface_kind")
+                ),
+                "surface_key": normalize_optional_text(
+                    payload.get("origin_surface_key")
+                ),
+            }.items()
+            if value is not None
+        }
+    )
+    if origin:
+        metadata["pma_origin"] = origin
+    return metadata
 
 
 def _subscription_row_from_rule(rule: Any) -> dict[str, Any]:

@@ -12,6 +12,10 @@ from .....core.pma_origin import (
     resolve_runtime_pma_origin,
 )
 from ...schemas import ManagedThreadCreateRequest, ManagedThreadMessageRequest
+from ...services.pma.automation import (
+    call_store_create_with_payload,
+    get_automation_store,
+)
 from ...services.pma.common import normalize_optional_text
 
 
@@ -26,31 +30,6 @@ class ManagedThreadFollowupPolicy:
 
 class ManagedThreadAutomationUnavailable(RuntimeError):
     pass
-
-
-async def get_automation_store(
-    request: Request,
-    runtime_state: Any,
-    *,
-    required: bool,
-) -> Any:
-    from ...routes.pma_routes.automation_adapter import (
-        get_automation_store as _get_automation_store,
-    )
-
-    return await _get_automation_store(request, runtime_state, required=required)
-
-
-async def call_store_create_with_payload(
-    store: Any,
-    method_names: tuple[str, ...],
-    payload: dict[str, Any],
-) -> Any:
-    from ...routes.pma_routes.automation_adapter import (
-        call_store_create_with_payload as _call_store_create_with_payload,
-    )
-
-    return await _call_store_create_with_payload(store, method_names, payload)
 
 
 def build_managed_thread_terminal_notify_payload(

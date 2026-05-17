@@ -11,14 +11,16 @@ from codex_autorunner.surfaces.web.routes.pma_routes.managed_thread_route_helper
     _apply_chat_binding_fields,
     _attach_latest_execution_fields,
     _build_operator_status_fields,
-    _normalize_resource_owner,
-    _normalize_workspace_root_input,
     _serialize_managed_thread,
     _serialize_thread_target,
     resolve_managed_thread_list_query,
     serialize_managed_thread_turn_summary,
 )
 from codex_autorunner.surfaces.web.schemas import ManagedThreadStartMessageRequest
+from codex_autorunner.surfaces.web.services.pma.managed_thread_scope import (
+    _normalize_resource_owner,
+    _normalize_workspace_root_input,
+)
 
 
 def test_start_schema_accepts_nested_genesis_aliases() -> None:
