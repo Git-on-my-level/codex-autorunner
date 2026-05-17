@@ -74,12 +74,16 @@ class ChatQueueSnapshot:
             )
             if item is not None
         )
+        pending_count_raw = payload.get("pending_count")
+        pending_count = (
+            int(pending_count_raw) if pending_count_raw is not None else len(items)
+        )
         return cls(
             conversation_id=conversation_id,
             platform=_optional_str(payload.get("platform")),
             chat_id=_optional_str(payload.get("chat_id")),
             thread_id=normalize_chat_thread_id(payload.get("thread_id")),
-            pending_count=int(payload.get("pending_count") or len(items)),
+            pending_count=pending_count,
             pending_items=items,
             active=bool(payload.get("active")),
             active_update_id=_optional_str(payload.get("active_update_id")),
