@@ -436,6 +436,14 @@ class ManagedThreadExecutionStore(ThreadExecutionStore):
             return None
         return _execution_record_from_store_row(record)
 
+    def list_turns(
+        self, thread_target_id: str, *, limit: int = 50
+    ) -> list[ExecutionRecord]:
+        return [
+            _execution_record_from_store_row(record)
+            for record in self._store.list_turns(thread_target_id, limit=limit)
+        ]
+
     def list_queued_executions(
         self, thread_target_id: str, *, limit: int = 200
     ) -> list[ExecutionRecord]:
