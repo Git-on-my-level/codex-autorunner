@@ -727,7 +727,7 @@ def test_compute_dispatch_decision_for_wakeup_passes_lane_id(
         return PmaDispatchDecision(requested_delivery="auto")
 
     monkeypatch.setattr(
-        "codex_autorunner.core.pma_automation_store.build_pma_dispatch_decision",
+        "codex_autorunner.core.pma_automation_services.build_pma_dispatch_decision",
         _fake_build_pma_dispatch_decision,
     )
 
@@ -774,7 +774,7 @@ def test_enqueue_wakeup_tolerates_runtime_error_while_loading_binding_metadata(
         raise RuntimeError("bindings unavailable")
 
     monkeypatch.setattr(
-        "codex_autorunner.core.pma_automation_store.active_chat_binding_metadata_by_thread",
+        "codex_autorunner.core.pma_automation_services.active_chat_binding_metadata_by_thread",
         _raise_runtime_error,
     )
 
@@ -807,7 +807,7 @@ def test_notify_transition_tolerates_runtime_error_while_loading_workspace_prefe
         raise RuntimeError("workspace preference unavailable")
 
     monkeypatch.setattr(
-        "codex_autorunner.core.pma_automation_store.preferred_non_pma_chat_notification_source_for_workspace",
+        "codex_autorunner.core.pma_automation_services.preferred_non_pma_chat_notification_source_for_workspace",
         _raise_runtime_error,
     )
 

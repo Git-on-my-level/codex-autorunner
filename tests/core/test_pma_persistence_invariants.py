@@ -225,6 +225,75 @@ class TestAutomationCanonicalInvariants:
         assert len(matched) == 1
         assert matched[0]["state"] == "cancelled"
 
+    def test_timer_touch_uses_row_level_update(self, tmp_path: Path) -> None:
+        hub_root = tmp_path / "hub"
+        store = PmaAutomationStore(hub_root)
+        thread_id = _create_thread(hub_root)
+        store.create_subscription(
+            thread_id=thread_id,
+            event_types=["lifecycle"],
+            from_state="running",
+            to_state="completed",
+            lane_id="pma:default",
+        )
+        sub_id = store.list_subscriptions(state="active")[0]["subscription_id"]
+        timer_id = store.create_timer(
+            subscription_id=sub_id,
+            timer_type="watchdog",
+            due_at="2026-01-01T00:00:00Z",
+            lane_id="pma:default",
+        )["timer"]["timer_id"]
+        store.enqueue_wakeup(
+            subscription_id=sub_id,
+            lane_id="pma:default",
+            source="timer",
+        )
+
+        with open_orchestration_sqlite(hub_root, durable=False) as conn:
+            conn.execute(
+                """
+                CREATE TABLE automation_row_audit (
+                    table_name TEXT NOT NULL,
+                    op TEXT NOT NULL
+                )
+                """
+            )
+            for table_name in (
+                "orch_automation_subscriptions",
+                "orch_automation_timers",
+                "orch_automation_wakeups",
+            ):
+                conn.execute(
+                    f"""
+                    CREATE TRIGGER audit_{table_name}_delete
+                    AFTER DELETE ON {table_name}
+                    BEGIN
+                        INSERT INTO automation_row_audit(table_name, op)
+                        VALUES ('{table_name}', 'DELETE');
+                    END
+                    """
+                )
+                conn.execute(
+                    f"""
+                    CREATE TRIGGER audit_{table_name}_insert
+                    AFTER INSERT ON {table_name}
+                    BEGIN
+                        INSERT INTO automation_row_audit(table_name, op)
+                        VALUES ('{table_name}', 'INSERT');
+                    END
+                    """
+                )
+
+        touched = store.touch_timer(timer_id, {"due_at": "2026-01-02T00:00:00Z"})
+        assert touched["touched"] is True
+
+        with open_orchestration_sqlite(hub_root, durable=False) as conn:
+            audit_rows = conn.execute(
+                "SELECT table_name, op FROM automation_row_audit"
+            ).fetchall()
+
+        assert audit_rows == []
+
     def test_cancel_then_purge_subscription_removes_rows(self, tmp_path: Path) -> None:
         hub_root = tmp_path / "hub"
         store = PmaAutomationStore(hub_root)
