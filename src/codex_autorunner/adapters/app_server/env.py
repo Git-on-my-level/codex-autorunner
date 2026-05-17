@@ -77,34 +77,52 @@ def seed_codex_home(
 
     source_auth = source_root / "auth.json"
     auth_path = codex_home / "auth.json"
-    if auth_path.exists():
-        if not (
-            auth_path.is_symlink() and auth_path.resolve() == source_auth.resolve()
-        ):
+    if source_auth.exists():
+        should_seed_auth = True
+        if auth_path.exists() or auth_path.is_symlink():
+            try:
+                should_seed_auth = not (
+                    auth_path.is_symlink()
+                    and auth_path.resolve() == source_auth.resolve()
+                )
+            except OSError:
+                should_seed_auth = True
+        if should_seed_auth:
+            temp_auth_path = auth_path.with_name(f".{auth_path.name}.tmp.{os.getpid()}")
+            try:
+                if temp_auth_path.exists() or temp_auth_path.is_symlink():
+                    temp_auth_path.unlink()
+                temp_auth_path.symlink_to(source_auth)
+                os.replace(temp_auth_path, auth_path)
+                log_event(
+                    logger,
+                    __import__("logging").INFO,
+                    f"{event_prefix}.codex_home.seeded",
+                    source=str(source_root),
+                    target=str(codex_home),
+                )
+            except OSError as exc:
+                log_event(
+                    logger,
+                    __import__("logging").WARNING,
+                    f"{event_prefix}.codex_home.seed.failed",
+                    exc=exc,
+                    source=str(source_auth),
+                    target=str(auth_path),
+                )
+            finally:
+                try:
+                    if temp_auth_path.exists() or temp_auth_path.is_symlink():
+                        temp_auth_path.unlink()
+                except OSError:
+                    pass
+    elif auth_path.exists():
+        if not auth_path.is_symlink():
             log_event(
                 logger,
                 __import__("logging").INFO,
                 f"{event_prefix}.codex_home.seed.skipped",
                 reason="auth_exists",
-                source=str(source_root),
-                target=str(codex_home),
-            )
-    elif source_auth.exists():
-        try:
-            auth_path.symlink_to(source_auth)
-            log_event(
-                logger,
-                __import__("logging").INFO,
-                f"{event_prefix}.codex_home.seeded",
-                source=str(source_root),
-                target=str(codex_home),
-            )
-        except OSError as exc:
-            log_event(
-                logger,
-                __import__("logging").WARNING,
-                f"{event_prefix}.codex_home.seed.failed",
-                exc=exc,
                 source=str(source_root),
                 target=str(codex_home),
             )
