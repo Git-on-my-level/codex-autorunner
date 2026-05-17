@@ -2,17 +2,12 @@ from __future__ import annotations
 
 import json
 import logging
-import re
 from dataclasses import dataclass
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
 
 from .orchestration.sqlite import open_orchestration_sqlite
-from .orchestration.transcript_mirror import (
-    TranscriptMirrorStore,
-    build_plain_text_transcript,
-)
+from .orchestration.transcript_mirror import TranscriptMirrorStore
 from .redaction import redact_jsonable, redact_text
 from .time_utils import now_iso
 
@@ -25,18 +20,6 @@ PMA_TRANSCRIPT_PREVIEW_CHARS = 400
 
 def default_pma_transcripts_dir(hub_root: Path) -> Path:
     return hub_root / ".codex-autorunner" / "pma" / PMA_TRANSCRIPTS_DIRNAME
-
-
-def _safe_segment(value: str) -> str:
-    cleaned = re.sub(r"[^A-Za-z0-9._-]+", "-", (value or "").strip())
-    cleaned = cleaned.strip("-._")
-    if not cleaned:
-        return "unknown"
-    return cleaned[:120]
-
-
-def _stamp_now() -> str:
-    return datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
 
 
 @dataclass(frozen=True)
@@ -173,7 +156,7 @@ class PmaTranscriptLegacyBackfill:
                 )
                 error_count += 1
                 continue
-            if self._mirror_store.read_transcript(turn_id) is not None:
+            if turn_id in self._mirrored_ids(conn=conn):
                 skipped_count += 1
                 continue
             content = self._read_content(meta, metadata_path)
@@ -181,6 +164,7 @@ class PmaTranscriptLegacyBackfill:
                 turn_id=turn_id,
                 metadata=meta,
                 text_content=content,
+                conn=conn,
             )
             imported_count += 1
         result = PmaTranscriptBackfillResult(
@@ -193,7 +177,7 @@ class PmaTranscriptLegacyBackfill:
 
     def coverage_status(self) -> PmaTranscriptCoverageStatus:
         legacy_metadata_paths = list(self._legacy_metadata_paths())
-        mirrored_ids = self._mirrored_ids()
+        mirrored_ids = self._mirrored_ids(conn=None)
         legacy_unmirrored = 0
         for metadata_path in legacy_metadata_paths:
             meta = self._read_metadata(metadata_path, log_errors=False)
@@ -251,12 +235,19 @@ class PmaTranscriptLegacyBackfill:
             return None
         return data
 
-    def _mirrored_ids(self) -> set[str]:
+    def _mirrored_ids(self, *, conn: Any | None) -> set[str]:
         try:
-            with open_orchestration_sqlite(self._hub_root, migrate=False) as conn:
+            if conn is not None:
                 rows = conn.execute(
                     "SELECT transcript_mirror_id FROM orch_transcript_mirrors"
                 ).fetchall()
+            else:
+                with open_orchestration_sqlite(
+                    self._hub_root, migrate=False
+                ) as owned_conn:
+                    rows = owned_conn.execute(
+                        "SELECT transcript_mirror_id FROM orch_transcript_mirrors"
+                    ).fetchall()
         except Exception:
             return set()
         return {str(row["transcript_mirror_id"]) for row in rows}
@@ -267,11 +258,12 @@ class PmaTranscriptLegacyBackfill:
         *,
         conn: Any | None,
     ) -> None:
+        completed_at = now_iso()
         payload = {
             "imported_count": result.imported_count,
             "skipped_count": result.skipped_count,
             "error_count": result.error_count,
-            "completed_at": now_iso(),
+            "completed_at": completed_at,
         }
         status_path = self._dir.parent / "transcript_backfill_status.json"
         try:
@@ -287,9 +279,9 @@ class PmaTranscriptLegacyBackfill:
             target_conn = conn
             if target_conn is None:
                 with open_orchestration_sqlite(self._hub_root) as owned_conn:
-                    self._record_status_flag(owned_conn, payload["completed_at"])
+                    self._record_status_flag(owned_conn, completed_at)
                 return
-            self._record_status_flag(target_conn, payload["completed_at"])
+            self._record_status_flag(target_conn, completed_at)
         except Exception:
             logger.warning("Failed to record PMA transcript backfill status flag")
 

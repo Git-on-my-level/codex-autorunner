@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import sqlite3
 from pathlib import Path
 
@@ -9,6 +10,9 @@ from codex_autorunner.core.orchestration import (
     current_orchestration_schema_version,
 )
 from codex_autorunner.core.orchestration import migrations as migrations_module
+from codex_autorunner.core.orchestration.migrate_legacy_state import (
+    backfill_legacy_transcript_mirrors,
+)
 
 
 def _connect(db_path: Path) -> sqlite3.Connection:
@@ -59,6 +63,51 @@ def test_apply_orchestration_migrations_adds_chat_index_projection(
     assert "idx_orch_chat_index_projection_surface" in index_names
     assert "idx_orch_chat_index_projection_group" in index_names
     assert "idx_orch_chat_index_projection_activity" in index_names
+
+
+def test_legacy_transcript_backfill_uses_shared_importer_shape(
+    tmp_path: Path,
+) -> None:
+    hub_root = tmp_path / "hub"
+    legacy_dir = hub_root / ".codex-autorunner" / "pma" / "transcripts"
+    legacy_dir.mkdir(parents=True)
+    (legacy_dir / "legacy.md").write_text("legacy transcript\n", encoding="utf-8")
+    (legacy_dir / "legacy.json").write_text(
+        json.dumps(
+            {
+                "turn_id": "legacy-turn",
+                "created_at": "2026-01-01T00:00:00Z",
+                "content_path": "legacy.md",
+                "managed_thread_id": "thread-1",
+                "repo_id": "repo-1",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    with _connect(hub_root / ".codex-autorunner" / "orchestration.sqlite3") as conn:
+        apply_orchestration_migrations(conn)
+        result = backfill_legacy_transcript_mirrors(hub_root, conn)
+        row = conn.execute(
+            """
+            SELECT target_kind, target_id, text_content, text_preview, metadata_json
+              FROM orch_transcript_mirrors
+             WHERE transcript_mirror_id = 'legacy-turn'
+            """
+        ).fetchone()
+
+    assert result == {
+        "transcripts": 1,
+        "transcripts_skipped": 0,
+        "transcripts_errors": 0,
+    }
+    assert row is not None
+    assert row["target_kind"] == "thread_target"
+    assert row["target_id"] == "thread-1"
+    assert row["text_content"] == "legacy transcript\n"
+    assert row["text_preview"] == "legacy transcript"
+    assert json.loads(row["metadata_json"])["repo_id"] == "repo-1"
 
 
 def test_apply_orchestration_migrations_copies_legacy_backfill_flags_into_operation_flags(
