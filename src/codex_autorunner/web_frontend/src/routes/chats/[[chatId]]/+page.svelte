@@ -30,23 +30,11 @@
     selectReadMarkers
   } from '$lib/data';
   import {
-    executePmaChatCommandPlan,
-    planInterruptExistingChat,
-    planQueueExistingChat,
-    planSendExistingChat,
-    planStartAndSendChat
-  } from '$lib/application/pmaChatCommands';
-  import {
-    buildOptimisticQueuedTurn,
-    buildOptimisticUserTranscriptCard,
-    chatTranscriptHasInFlightOptimisticTurn,
     isOptimisticQueuedTurn,
     progressWithLiveElapsed,
-    queueContainsCommittedClientTurn,
-    transcriptContainsCommittedUserRow,
-    visibleChatDetailTranscriptCards,
-    withoutOptimisticQueuedTurn
+    visibleChatDetailTranscriptCards
   } from '$lib/application/pmaChatArchitecture';
+  import { createChatSendController } from '$lib/application/chatSendController';
   import {
     createChatDetailLiveProjection,
     type ChatDetailLiveProjectionState
@@ -58,7 +46,6 @@
     chatListVirtualKey as chatListVirtualKeyForPins,
     chatSummaryForSessionId,
     clearCommittedDraftPlaceholderIfPersisted,
-    commitLocalDraftChat,
     initialChatDetailSessionState,
     isLocalDraftChatId,
     loadPinnedChats,
@@ -98,7 +85,6 @@
     buildPmaLiveActivity,
     buildManagedThreadMessagePayload,
     buildPmaStatusBar,
-    composeMessageWithAttachments,
     countTicketRunGroups,
     filterChatEntries,
     formatBytes,
@@ -121,7 +107,6 @@
     removePendingAttachment,
     statusLabel,
     summarizeVisibleLocalPlaceholderStatusCounts,
-    type DocumentFileIntentPayload,
     type PendingAttachment,
     type ChatTranscriptCard,
     type ChatFilter,
@@ -471,6 +456,44 @@
     const selectedTrim = selectedAgent?.trim();
     if (selectedTrim) return selectedTrim;
     return activeChatKindLabel;
+  });
+  const chatSendController = createChatSendController({
+    api: webApi,
+    readModelStore: readModelEntityStore,
+    getActiveChatId: () => activeChatId,
+    getActiveChat: () => activeChat,
+    getDisplayedProgress: () => displayedProgress,
+    getDraft: () => draft,
+    setDraft: (value) => {
+      draft = value;
+    },
+    getPendingAttachments: () => pendingAttachments,
+    setPendingAttachments: (value) => {
+      pendingAttachments = value;
+    },
+    getComposerEditVersion: () => composerEditVersion,
+    getSelectedScope: () => selectedScope,
+    getSelectedScopeSource: () => selectedScopeSource,
+    getSelectedAgent: () => selectedAgent,
+    getSelectedProfile: () => selectedProfile,
+    getSelectedModel: () => selectedModel,
+    getSelectedReasoning: () => selectedReasoning,
+    getNewChatKind: () => newChatKind,
+    canStartCodingAgentChat: () => canStartCodingAgentChat,
+    newChatDisplayName,
+    readSessionState: readChatDetailSessionState,
+    writeSessionState: writeChatDetailSessionState,
+    getLocalDraftChat: () => localDraftChat,
+    syncDetailUrl: syncCommittedDetailUrl,
+    invalidateChatMutation,
+    refreshActive,
+    setSending: (value) => {
+      sending = value;
+    },
+    setComposeError: (error) => {
+      composeError = error;
+    },
+    confirm: confirmDialog
   });
   const streamingMessageId = $derived.by<string | null>(() => {
     if (displayedProgress?.status !== 'running') return null;
@@ -1112,6 +1135,16 @@
     await goto(href(target), { keepFocus: true, noScroll: true });
   }
 
+  async function syncCommittedDetailUrl(detailId: string): Promise<void> {
+    try {
+      await syncDetailUrl(detailId);
+    } finally {
+      if (pendingCommittedDetailUrlChatId === detailId) {
+        pendingCommittedDetailUrlChatId = null;
+      }
+    }
+  }
+
   async function refreshActive(chatId: string, options: { quiet?: boolean } = {}): Promise<void> {
     await liveProjection.refresh(chatId, options);
   }
@@ -1364,319 +1397,24 @@
     creating = false;
   }
 
-  function pushOptimisticQueuedTurn(chatId: string, text: string, clientTurnId: string): void {
-    const current = selectPmaQueue(readModelEntityStore.snapshot(), chatId);
-    const turn = buildOptimisticQueuedTurn(text, clientTurnId, current.length + 1, new Date().toISOString());
-    readModelEntityStore.setPmaQueue(chatId, [...current, turn]);
-  }
-
-  /**
-   * True when the authoritative queue contains a turn for this client turn id.
-   * The backend queues a message whenever a turn is already running, even if
-   * the client thought the chat was idle at send time — so we reconcile against
-   * the authoritative queue rather than trusting the optimistic guess.
-   */
-  function turnLandedInQueue(chatId: string, clientTurnId: string): boolean {
-    return queueContainsCommittedClientTurn(selectPmaQueue(readModelEntityStore.snapshot(), chatId), clientTurnId);
-  }
-
-  function removeOptimisticQueuedTurn(chatId: string, clientTurnId: string): void {
-    const current = selectPmaQueue(readModelEntityStore.snapshot(), chatId);
-    const next = withoutOptimisticQueuedTurn(current, clientTurnId);
-    if (next.length === current.length) return;
-    readModelEntityStore.setPmaQueue(chatId, next);
-  }
-
   async function sendMessage(busyPolicy: 'queue' | 'interrupt' | null = null): Promise<void> {
-    if ((!draft.trim() && pendingAttachments.length === 0) || !activeChatId) return;
-    const draftSnapshot = draft;
-    const attachmentsSnapshot = pendingAttachments;
-    const optimisticChatId = activeChatId;
-    // A prior optimistic send still sitting in the transcript means the chat is
-    // effectively busy: even if `displayedProgress` has not caught up yet, a
-    // back-to-back message will queue behind that turn. Treating it as a queue
-    // up front keeps a queued message out of the conversation as a bubble.
-    const hasInFlightOptimisticTurn = (() => {
-      const transcript = readModelEntityStore.snapshot().chatTranscripts[optimisticChatId];
-      return chatTranscriptHasInFlightOptimisticTurn(transcript);
-    })();
-    const willQueueOptimistically =
-      !isLocalDraftChatId(optimisticChatId) &&
-      busyPolicy !== 'interrupt' &&
-      (busyPolicy === 'queue' ||
-        displayedProgress?.status === 'running' ||
-        hasInFlightOptimisticTurn);
-    const optimisticId = `optimistic:user:${Date.now()}:${Math.random().toString(36).slice(2, 8)}`;
-    const optimisticTimestamp = new Date().toISOString();
-    const optimisticPlaceholder = buildOptimisticUserTranscriptCard(
-      optimisticChatId,
-      draftSnapshot,
-      optimisticId,
-      optimisticTimestamp,
-      attachmentsSnapshot
-    );
-    if (willQueueOptimistically) {
-      // A queued message has not entered the conversation yet — show it only in
-      // the queue panel, never as a transcript card. Injecting an optimistic
-      // transcript card here would leave an orphan once the turn actually runs.
-      pushOptimisticQueuedTurn(optimisticChatId, draftSnapshot, optimisticId);
-    } else {
-      readModelEntityStore.optimisticSend(
-        optimisticChatId,
-        {
-          itemId: optimisticId,
-          kind: 'user_message',
-          role: 'user',
-          createdAt: optimisticTimestamp,
-          text: draftSnapshot,
-          artifactIds: [],
-          clientMessageId: optimisticId
-        },
-        optimisticId
-      );
-      readModelEntityStore.upsertChatTranscriptCards(optimisticChatId, [optimisticPlaceholder]);
-    }
-    draft = '';
-    pendingAttachments = [];
-    const composerVersionAtClear = composerEditVersion;
-    sending = true;
-    composeError = null;
-
-    const moveOptimisticToCommittedChat = (committedChatId: string) => {
-      if (committedChatId === optimisticChatId) return;
-      readModelEntityStore.upsertChatTranscriptCards(committedChatId, [
-        {
-          ...optimisticPlaceholder,
-          message: {
-            ...optimisticPlaceholder.message,
-            chatId: committedChatId
-          }
-        }
-      ]);
-      readModelEntityStore.removeOptimisticChatTranscriptCards(optimisticChatId);
-    };
-    const transcriptHasBackendUserRow = (chatId: string) => {
-      return transcriptContainsCommittedUserRow(
-        readModelEntityStore.snapshot().chatTranscripts[chatId],
-        optimisticId
-      );
-    };
-    const removeOptimistic = (chatId = optimisticChatId, options: { requireBackendRow?: boolean } = {}) => {
-      if (options.requireBackendRow && !transcriptHasBackendUserRow(chatId)) return false;
-      readModelEntityStore.removeOptimisticChatTranscriptCards(chatId);
-      return true;
-    };
-    const restoreDraft = () => {
-      if (willQueueOptimistically) {
-        removeOptimisticQueuedTurn(optimisticChatId, optimisticId);
-      } else {
-        removeOptimistic();
-        readModelEntityStore.failOptimisticMutation(optimisticId);
-      }
-      if (composerEditVersion !== composerVersionAtClear) return;
-      draft = draftSnapshot;
-      pendingAttachments = attachmentsSnapshot;
-    };
-
-    const uploaded = await ensureAttachmentsUploaded(attachmentsSnapshot);
-    if (!uploaded) {
-      restoreDraft();
-      sending = false;
-      return;
-    }
-    const attachmentsForMessage = uploaded;
-    const message = composeMessageWithAttachments(draftSnapshot, attachmentsForMessage);
-    const targetChatId = activeChatId;
-    const targetIsDraft = isLocalDraftChatId(targetChatId);
-    const targetIsRunning = displayedProgress?.status === 'running';
-    const profileForSend =
-      activeChat?.agentProfile?.trim() || selectedProfile?.trim() || '';
-    const commandPlan =
-      targetIsDraft
-        ? planStartAndSendChat(
-            selectedScope,
-            selectedAgent,
-            selectedProfile,
-            selectedModel,
-            message,
-            {
-              name: activeChat?.title || newChatDisplayName(),
-              chatKind: newChatKind === 'agent' && canStartCodingAgentChat ? 'coding_agent' : 'pma',
-              attachments: attachmentsForMessage,
-              reasoning: selectedReasoning,
-              clientTurnId: optimisticId,
-              scopeSource: selectedScopeSource
-            }
-          )
-        : busyPolicy === 'interrupt'
-        ? planInterruptExistingChat(targetChatId, message, {
-            model: selectedModel,
-            attachments: attachmentsForMessage,
-            reasoning: selectedReasoning,
-            profile: profileForSend,
-            clientTurnId: optimisticId
-          })
-        : busyPolicy === 'queue' || targetIsRunning
-          ? planQueueExistingChat(targetChatId, message, {
-              model: selectedModel,
-              attachments: attachmentsForMessage,
-              reasoning: selectedReasoning,
-              profile: profileForSend,
-              clientTurnId: optimisticId
-            })
-          : planSendExistingChat(targetChatId, message, {
-              model: selectedModel,
-              attachments: attachmentsForMessage,
-              reasoning: selectedReasoning,
-              profile: profileForSend,
-              clientTurnId: optimisticId
-            });
-    const result = await executePmaChatCommandPlan(webApi, commandPlan);
-    if (result.ok) {
-      const committedChatId = targetIsDraft ? result.data.chatId : targetChatId;
-      if (!committedChatId) {
-        removeOptimistic();
-        composeError = {
-          kind: 'parse',
-          status: null,
-          code: 'missing_chat_id',
-          message: 'Started chat response did not include a managed thread id.'
-        };
-        sending = false;
-        return;
-      }
-      if (targetIsDraft) {
-        const draftChatForPlaceholder =
-          localDraftChat?.id === targetChatId
-            ? localDraftChat
-            : activeChat && activeChat.id === targetChatId
-              ? activeChat
-              : null;
-        writeChatDetailSessionState(
-          commitLocalDraftChat(readChatDetailSessionState(), draftChatForPlaceholder, committedChatId, optimisticTimestamp)
-        );
-        moveOptimisticToCommittedChat(committedChatId);
-        try {
-          await syncDetailUrl(committedChatId);
-        } finally {
-          if (pendingCommittedDetailUrlChatId === committedChatId) {
-            pendingCommittedDetailUrlChatId = null;
-          }
-        }
-      }
-      await invalidateChatMutation(committedChatId);
-      await refreshActive(committedChatId, { quiet: true });
-      if (willQueueOptimistically) {
-        // refreshActive already replaced the queue with authoritative data;
-        // this clears the optimistic stand-in if that refresh was skipped.
-        removeOptimisticQueuedTurn(committedChatId, optimisticId);
-      } else if (turnLandedInQueue(committedChatId, optimisticId)) {
-        // The client believed the chat was idle, but the backend queued this
-        // turn behind one that was already running. It now belongs to the
-        // queue panel — drop the optimistic transcript bubble so a queued
-        // message is never shown as if it had entered the conversation.
-        removeOptimistic(committedChatId);
-        readModelEntityStore.failOptimisticMutation(optimisticId);
-      } else {
-        removeOptimistic(committedChatId, { requireBackendRow: true });
-      }
-    } else {
-      restoreDraft();
-      composeError = result.error;
-    }
-    sending = false;
+    await chatSendController.sendMessage(busyPolicy);
   }
 
   async function interruptWithDraft(): Promise<void> {
-    if (!canInterruptWithDraft) return;
-    await sendMessage('interrupt');
+    await chatSendController.interruptWithDraft(canInterruptWithDraft);
   }
 
   async function cancelQueuedTurn(turn: PmaQueuedTurn, options: { confirmed?: boolean } = {}): Promise<void> {
-    if (!activeChatId || !turn.managedTurnId) return;
-    if (isOptimisticQueuedTurn(turn)) return;
-    if (!options.confirmed) {
-      const ok = await confirmDialog({
-        title: 'Cancel queued message',
-        message: `Cancel queued message ${turn.position}?`,
-        confirmText: 'Cancel message',
-        danger: true
-      });
-      if (!ok) return;
-    }
-    composeError = null;
-    const result = await webApi.pma.cancelQueuedTurn(activeChatId, turn.managedTurnId);
-    if (result.ok) {
-      readModelEntityStore.setPmaQueue(
-        activeChatId,
-        queuedTurns.filter((item) => item.managedTurnId !== turn.managedTurnId)
-      );
-      await refreshActive(activeChatId, { quiet: true });
-    } else {
-      composeError = result.error;
-    }
+    await chatSendController.cancelQueuedTurn(turn, options);
   }
 
   async function interruptWithQueuedTurn(turn: PmaQueuedTurn): Promise<void> {
-    if (!activeChatId || !turn.prompt.trim() || isOptimisticQueuedTurn(turn)) return;
-    const chatId = activeChatId;
-    composeError = null;
-    const cancelResult = await webApi.pma.cancelQueuedTurn(chatId, turn.managedTurnId);
-    if (!cancelResult.ok) {
-      composeError = cancelResult.error;
-      return;
-    }
-    readModelEntityStore.setPmaQueue(
-      chatId,
-      queuedTurns.filter((item) => item.managedTurnId !== turn.managedTurnId)
-    );
-    // The queued message now leaves the queue panel and enters the conversation:
-    // show it immediately, tagged with a client turn id so the backend row
-    // reconciles against it instead of rendering a duplicate.
-    const clientTurnId = `optimistic:user:${Date.now()}:${Math.random().toString(36).slice(2, 8)}`;
-    readModelEntityStore.upsertChatTranscriptCards(chatId, [
-      buildOptimisticUserTranscriptCard(chatId, turn.prompt, clientTurnId, new Date().toISOString())
-    ]);
-    const profileForSend =
-      activeChat?.agentProfile?.trim() || selectedProfile?.trim() || '';
-    const result = await executePmaChatCommandPlan(
-      webApi,
-      planInterruptExistingChat(chatId, turn.prompt, {
-        model: turn.model ?? selectedModel,
-        attachments: turn.attachments as DocumentFileIntentPayload[],
-        reasoning: turn.reasoning ?? selectedReasoning,
-        profile: profileForSend,
-        clientTurnId
-      })
-    );
-    if (result.ok) {
-      await invalidateChatMutation(chatId);
-      await refreshActive(chatId, { quiet: true });
-    } else {
-      readModelEntityStore.removeOptimisticChatTranscriptCards(chatId);
-      composeError = result.error;
-    }
+    await chatSendController.interruptWithQueuedTurn(turn);
   }
 
   async function clearQueueFromPanel(): Promise<void> {
-    if (!activeChatId) return;
-    const realTurns = queuedTurns.filter((turn) => !isOptimisticQueuedTurn(turn));
-    if (realTurns.length === 0) return;
-    const ok = await confirmDialog({
-      title: 'Clear queue',
-      message: `Cancel all ${realTurns.length} queued message${realTurns.length === 1 ? '' : 's'}?`,
-      confirmText: 'Clear queue',
-      danger: true
-    });
-    if (!ok) return;
-    composeError = null;
-    const result = await webApi.pma.clearQueue(activeChatId);
-    if (result.ok) {
-      readModelEntityStore.setPmaQueue(activeChatId, []);
-      await refreshActive(activeChatId, { quiet: true });
-    } else {
-      composeError = result.error;
-    }
+    await chatSendController.clearQueue();
   }
 
   async function autoCompactActiveThread(chatId: string): Promise<void> {
@@ -2028,32 +1766,6 @@
   function handleComposerInput(): void {
     markComposerEdited();
     autosizeComposer();
-  }
-
-  async function ensureAttachmentsUploaded(attachments: PendingAttachment[]): Promise<PendingAttachment[] | null> {
-    const uploaded: PendingAttachment[] = [];
-    for (const attachment of attachments) {
-      const file = (attachment as PendingAttachment & { file?: File }).file;
-      if (!file || attachment.uploadedName) {
-        uploaded.push(attachment);
-        continue;
-      }
-      const result = await webApi.pma.uploadInboxFile(file);
-      if (!result.ok || !result.data[0]) {
-        composeError = result.ok
-          ? { kind: 'parse', status: null, code: 'upload_missing_file', message: 'Upload did not return a file name.' }
-          : result.error;
-        return null;
-      }
-      const uploadedName = result.data[0];
-      uploaded.push({
-        ...attachment,
-        uploadedName,
-        url: `/hub/pma/files/inbox/${encodeURIComponent(uploadedName)}`,
-        uploadState: 'uploaded'
-      });
-    }
-    return uploaded;
   }
 
 </script>
