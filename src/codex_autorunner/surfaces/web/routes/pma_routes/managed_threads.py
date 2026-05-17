@@ -79,13 +79,7 @@ from ...services.pma.managed_thread_followup import (
     ManagedThreadAutomationUnavailable,
     apply_origin_followup_context,
 )
-from ...services.pma.managed_thread_scope import (
-    managed_thread_metadata_for_provisioned_workspace,
-    provision_managed_thread_workspace,
-    resolve_managed_thread_create_resolution,
-)
-from .hermes_supervisors import resolve_cached_hermes_supervisor
-from .managed_thread_route_helpers import (
+from ...services.pma.managed_thread_read_models import (
     _apply_chat_binding_fields,
     _attach_latest_execution_fields,
     _load_chat_binding_metadata_by_thread,
@@ -98,6 +92,12 @@ from .managed_thread_route_helpers import (
     serialize_binding_record,
     serialize_managed_thread_turn_summary,
 )
+from ...services.pma.managed_thread_scope import (
+    managed_thread_metadata_for_provisioned_workspace,
+    provision_managed_thread_workspace,
+    resolve_managed_thread_create_resolution,
+)
+from .hermes_supervisors import resolve_cached_hermes_supervisor
 
 _logger = logging.getLogger(__name__)
 
