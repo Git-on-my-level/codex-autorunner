@@ -4,6 +4,8 @@ import httpx
 import pytest
 
 from codex_autorunner.core.hub_control_plane import (
+    AutomationRuleListRequest,
+    AutomationRuleUpsertRequest,
     ControlPlaneVersion,
     ExecutionBackendIdUpdateRequest,
     ExecutionClaimNextResponse,
@@ -19,6 +21,7 @@ from codex_autorunner.core.hub_control_plane import (
     NotificationReplyTargetLookupRequest,
     ThreadTargetResponse,
     evaluate_handshake_compatibility,
+    redact_automation_mapping,
 )
 
 
@@ -219,6 +222,33 @@ def test_notification_request_models_accept_numeric_message_ids() -> None:
         "delivery_record_id": "delivery-1",
         "delivered_message_id": "88",
     }
+
+
+def test_automation_rule_request_models_and_redaction() -> None:
+    request = AutomationRuleUpsertRequest.from_mapping(
+        {
+            "name": "Daily check",
+            "trigger_kind": "schedule",
+            "executor_kind": "pma_turn",
+            "executor": {"api_token": "secret-token", "lane_id": "pma:default"},
+            "schedule": {
+                "schedule_kind": "daily",
+                "next_fire_at": "2026-04-12T01:02:03Z",
+            },
+        }
+    )
+    list_request = AutomationRuleListRequest.from_mapping(
+        {"enabled": "false", "limit": 5}
+    )
+
+    assert request.rule["name"] == "Daily check"
+    assert request.schedule is not None
+    assert request.schedule["schedule_kind"] == "daily"
+    assert list_request.enabled is False
+    assert list_request.limit == 5
+    assert redact_automation_mapping(request.rule)["executor"]["api_token"] == (
+        "[redacted]"
+    )
 
 
 def test_thread_target_response_uses_existing_generic_thread_model() -> None:

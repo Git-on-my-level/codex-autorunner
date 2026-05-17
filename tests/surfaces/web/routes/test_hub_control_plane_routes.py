@@ -138,6 +138,50 @@ def test_hub_control_plane_list_surface_bindings_route_validates_limit(
     assert "limit must be an integer" in response.json()["error"]["message"]
 
 
+def test_hub_control_plane_automation_routes_create_run_and_cancel(
+    tmp_path: Path,
+) -> None:
+    app, _thread_target_id = _build_test_app(tmp_path)
+
+    with TestClient(app) as client:
+        create_response = client.put(
+            "/hub/api/control-plane/automations/rules",
+            json={
+                "rule_id": "rule-1",
+                "name": "Manual PMA",
+                "trigger_kind": "manual",
+                "target_policy": "hub",
+                "executor_kind": "pma_turn",
+                "executor": {"api_token": "secret-value"},
+            },
+        )
+        run_response = client.post(
+            "/hub/api/control-plane/automations/rules/rule-1/run",
+            json={
+                "dedupe_key": "manual-route-run",
+                "payload": {"secret": "hide me"},
+            },
+        )
+        job_id = run_response.json()["job"]["job_id"]
+        list_response = client.post(
+            "/hub/api/control-plane/automations/jobs/query",
+            json={"rule_id": "rule-1"},
+        )
+        cancel_response = client.post(
+            f"/hub/api/control-plane/automations/jobs/{job_id}/cancel",
+            json={},
+        )
+
+    assert create_response.status_code == 200
+    assert create_response.json()["rule"]["executor"]["api_token"] == "[redacted]"
+    assert run_response.status_code == 200
+    assert run_response.json()["job"]["payload"]["request"]["secret"] == "[redacted]"
+    assert list_response.status_code == 200
+    assert [job["job_id"] for job in list_response.json()["jobs"]] == [job_id]
+    assert cancel_response.status_code == 200
+    assert cancel_response.json()["job"]["state"] == "cancelled"
+
+
 @pytest.mark.parametrize(
     ("error", "expected_status"),
     [

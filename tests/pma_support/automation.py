@@ -350,6 +350,42 @@ def test_pma_automation_list_endpoints_include_unified_read_model(hub_env) -> No
     assert timer_schedules and timer_schedules[0]["schedule_kind"] == "one_shot"
 
 
+def test_pma_automation_created_rules_are_visible_through_control_plane(
+    hub_env,
+) -> None:
+    _enable_pma(hub_env.hub_root)
+    app = create_hub_app(hub_env.hub_root)
+
+    with TestClient(app) as client:
+        create_resp = client.post(
+            "/hub/pma/subscriptions",
+            json={
+                "event_types": ["flow_completed"],
+                "repo_id": "repo-control-plane",
+                "run_id": "run-control-plane",
+                "idempotency_key": "route-sub-control-plane",
+            },
+        )
+        assert create_resp.status_code == 200
+        rule_id = (
+            f"{PMA_SUBSCRIPTION_RULE_PREFIX}"
+            f"{create_resp.json()['subscription']['subscription_id']}"
+        )
+
+        list_resp = client.post(
+            "/hub/api/control-plane/automations/rules/query",
+            json={"enabled": True},
+        )
+        detail_resp = client.get(f"/hub/api/control-plane/automations/rules/{rule_id}")
+
+    assert list_resp.status_code == 200
+    assert any(rule["rule_id"] == rule_id for rule in list_resp.json()["rules"])
+    assert detail_resp.status_code == 200
+    assert detail_resp.json()["rule"]["metadata"]["purpose"] == (
+        "pma_lifecycle_subscription"
+    )
+
+
 def test_pma_automation_real_create_routes_write_unified_records_only(hub_env) -> None:
     _enable_pma(hub_env.hub_root)
     app = create_hub_app(hub_env.hub_root)

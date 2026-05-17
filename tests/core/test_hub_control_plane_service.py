@@ -3,7 +3,16 @@ from __future__ import annotations
 from pathlib import Path
 
 from codex_autorunner.core.hub_control_plane import (
+    AutomationEventListRequest,
+    AutomationJobActionRequest,
+    AutomationJobListRequest,
+    AutomationJobLookupRequest,
     AutomationRequest,
+    AutomationRuleEnabledRequest,
+    AutomationRuleListRequest,
+    AutomationRuleRunRequest,
+    AutomationRuleUpsertRequest,
+    AutomationScheduleListRequest,
     ExecutionBackendIdUpdateRequest,
     ExecutionCancelAllRequest,
     ExecutionCancelRequest,
@@ -573,3 +582,136 @@ def test_shared_state_service_execution_queue_controls_delegate_to_thread_store(
     assert cancel.cancelled is True
     assert cancel_all.cancelled_count == 1
     assert queue_depth.queue_depth == 0
+
+
+def test_shared_state_service_automation_rule_crud_and_manual_run(
+    tmp_path: Path,
+) -> None:
+    service, _thread_target_id = _build_service(tmp_path)
+
+    created = service.upsert_automation_rule(
+        AutomationRuleUpsertRequest.from_mapping(
+            {
+                "rule": {
+                    "rule_id": "rule-1",
+                    "name": "Daily PMA check",
+                    "trigger_kind": "schedule",
+                    "trigger": {"schedule_kind": "daily"},
+                    "target_policy": "hub",
+                    "target": {"repo_id": "repo-1"},
+                    "executor_kind": "pma_turn",
+                    "executor": {
+                        "lane_id": "pma:default",
+                        "api_token": "secret-value",
+                    },
+                    "policy": {"approval_mode": "pause_and_request_user"},
+                },
+                "schedule": {
+                    "schedule_id": "schedule-1",
+                    "schedule_kind": "daily",
+                    "next_fire_at": "2026-04-12T01:02:03Z",
+                },
+            }
+        )
+    )
+    disabled = service.set_automation_rule_enabled(
+        AutomationRuleEnabledRequest.from_mapping(
+            {"rule_id": "rule-1", "enabled": False}
+        )
+    )
+    enabled = service.set_automation_rule_enabled(
+        AutomationRuleEnabledRequest.from_mapping(
+            {"rule_id": "rule-1", "enabled": True}
+        )
+    )
+    rules = service.list_automation_rules(
+        AutomationRuleListRequest.from_mapping({"enabled": True})
+    )
+    schedules = service.list_automation_schedules(
+        AutomationScheduleListRequest.from_mapping({"rule_id": "rule-1"})
+    )
+    run = service.run_automation_rule(
+        AutomationRuleRunRequest.from_mapping(
+            {
+                "rule_id": "rule-1",
+                "payload": {"prompt": "check now", "secret": "hide me"},
+                "dedupe_key": "manual-run-1",
+            }
+        )
+    )
+    jobs = service.list_automation_jobs(
+        AutomationJobListRequest.from_mapping({"rule_id": "rule-1"})
+    )
+    events = service.list_automation_events(
+        AutomationEventListRequest.from_mapping({"event_type": "manual.run"})
+    )
+
+    assert created.rule is not None
+    assert created.rule["executor"]["api_token"] == "[redacted]"
+    assert created.schedule is not None
+    assert created.schedule["schedule_id"] == "schedule-1"
+    assert disabled.rule is not None and disabled.rule["enabled"] is False
+    assert enabled.rule is not None and enabled.rule["enabled"] is True
+    assert [rule["rule_id"] for rule in rules.rules] == ["rule-1"]
+    assert [schedule["schedule_id"] for schedule in schedules.schedules] == [
+        "schedule-1"
+    ]
+    assert run.job is not None
+    assert run.job["payload"]["request"]["secret"] == "[redacted]"
+    assert [job["job_id"] for job in jobs.jobs] == [run.job["job_id"]]
+    assert len(events.events) == 1
+    assert events.events[0]["raw_payload"]["secret"] == "[redacted]"
+
+
+def test_shared_state_service_automation_job_cancel_retry_and_detail(
+    tmp_path: Path,
+) -> None:
+    service, _thread_target_id = _build_service(tmp_path)
+    service.upsert_automation_rule(
+        AutomationRuleUpsertRequest.from_mapping(
+            {
+                "rule_id": "rule-1",
+                "name": "PR event",
+                "trigger_kind": "event",
+                "trigger": {
+                    "event_types": ["scm.github.pull_request.opened"],
+                },
+                "target_policy": "hub",
+                "executor_kind": "pma_turn",
+            }
+        )
+    )
+    cancelled = service.run_automation_rule(
+        AutomationRuleRunRequest.from_mapping(
+            {"rule_id": "rule-1", "dedupe_key": "cancel-job"}
+        )
+    )
+    assert cancelled.job is not None
+    cancelled_job = service.cancel_automation_job(
+        AutomationJobActionRequest.from_mapping({"job_id": cancelled.job["job_id"]})
+    )
+
+    failed = service.run_automation_rule(
+        AutomationRuleRunRequest.from_mapping(
+            {"rule_id": "rule-1", "dedupe_key": "retry-job"}
+        )
+    )
+    assert failed.job is not None
+    service._automation_store.start_job(failed.job["job_id"])
+    service._automation_store.fail_job(
+        failed.job["job_id"],
+        error_text="temporary failure",
+    )
+    retried = service.retry_automation_job(
+        AutomationJobActionRequest.from_mapping({"job_id": failed.job["job_id"]})
+    )
+    detail = service.get_automation_job(
+        AutomationJobLookupRequest.from_mapping({"job_id": failed.job["job_id"]})
+    )
+
+    assert cancelled_job.job is not None
+    assert cancelled_job.job["state"] == "cancelled"
+    assert retried.job is not None
+    assert retried.job["state"] == "pending"
+    assert detail.job is not None
+    assert detail.job["job_id"] == failed.job["job_id"]

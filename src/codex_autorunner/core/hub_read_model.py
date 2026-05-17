@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Optional, Protocol, cast
 
+from .automation import AutomationStore
 from .capability_hints import build_hub_capability_hints, build_repo_capability_hints
 from .chat_bindings import active_chat_binding_counts_by_source
 from .config import (
@@ -26,6 +27,7 @@ from .freshness import (
     resolve_stale_threshold_seconds,
     summarize_section_freshness,
 )
+from .hub_control_plane.models import redact_automation_mapping
 from .hub_inbox_resolution import (
     find_message_resolution,
     load_hub_inbox_dismissals,
@@ -260,6 +262,59 @@ def _collect_managed_threads(
         generated_at=generated_at,
         stale_threshold_seconds=stale_threshold_seconds,
     )
+
+
+def _collect_unified_automation_snapshot(
+    hub_root: Path,
+    legacy_automation: dict[str, Any],
+    *,
+    limit: int = 20,
+) -> dict[str, Any]:
+    try:
+        store = AutomationStore(hub_root)
+        store.backfill_legacy_pma_automation()
+        rules = store.list_rules()[:limit]
+        schedules = store.list_schedules()[:limit]
+        jobs = store.list_jobs(limit=limit)
+    except (RuntimeError, OSError, ValueError, TypeError):
+        safe_log(
+            logging.getLogger(__name__),
+            logging.WARNING,
+            "Failed to build unified automation snapshot",
+        )
+        return {
+            **dict(legacy_automation),
+            "rules": [],
+            "schedules": [],
+            "recent_jobs": [],
+            "recent_failures": [],
+            "unified_error": True,
+        }
+
+    failures = [
+        job
+        for job in jobs
+        if job.state in {"failed", "dead_lettered"} or job.error_text is not None
+    ]
+    return {
+        **dict(legacy_automation),
+        "schema_version": 2,
+        "rules": [redact_automation_mapping(rule.to_dict()) for rule in rules],
+        "schedules": [
+            redact_automation_mapping(schedule.to_dict()) for schedule in schedules
+        ],
+        "recent_jobs": [redact_automation_mapping(job.to_dict()) for job in jobs],
+        "recent_failures": [
+            redact_automation_mapping(job.to_dict()) for job in failures[:limit]
+        ],
+        "summary": {
+            **dict(legacy_automation.get("summary") or {}),
+            "rule_count": len(rules),
+            "schedule_count": len(schedules),
+            "recent_job_count": len(jobs),
+            "recent_failure_count": len(failures),
+        },
+    }
 
 
 def _load_repo_message_context(
@@ -1266,6 +1321,11 @@ class HubReadModelService:
             else {"items": [], "summary": {}}
         )
         if isinstance(hub_root, Path):
+            if requested & {"automation"} or settings.include_full_action_queue_context:
+                automation = _collect_unified_automation_snapshot(
+                    hub_root,
+                    automation,
+                )
             if (
                 requested & {"pma_files_detail"}
                 or settings.include_full_action_queue_context

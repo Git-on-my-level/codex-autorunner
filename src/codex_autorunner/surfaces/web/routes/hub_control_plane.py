@@ -7,7 +7,19 @@ from fastapi import APIRouter, HTTPException, Request, Response
 from fastapi.responses import JSONResponse
 
 from ....core.hub_control_plane import (
+    AutomationEventListRequest,
+    AutomationEventLookupRequest,
+    AutomationJobActionRequest,
+    AutomationJobListRequest,
+    AutomationJobLookupRequest,
     AutomationRequest,
+    AutomationRuleEnabledRequest,
+    AutomationRuleListRequest,
+    AutomationRuleLookupRequest,
+    AutomationRuleRunRequest,
+    AutomationRuleUpsertRequest,
+    AutomationScheduleListRequest,
+    AutomationScheduleLookupRequest,
     ExecutionBackendIdUpdateRequest,
     ExecutionCancelAllRequest,
     ExecutionCancelRequest,
@@ -176,6 +188,146 @@ def build_hub_control_plane_routes() -> APIRouter:
                 payload
             ),
             operation=service.mark_notification_delivered,
+        )
+
+    @router.put("/automations/rules")
+    async def upsert_automation_rule(request: Request, payload: dict[str, Any]):
+        service = _require_control_plane_service(request)
+        return await _run_control_plane_call(
+            request_factory=lambda: AutomationRuleUpsertRequest.from_mapping(payload),
+            operation=service.upsert_automation_rule,
+        )
+
+    @router.post("/automations/rules/query")
+    async def list_automation_rules(request: Request, payload: dict[str, Any]):
+        service = _require_control_plane_service(request)
+        return await _run_control_plane_call(
+            request_factory=lambda: AutomationRuleListRequest.from_mapping(payload),
+            operation=service.list_automation_rules,
+        )
+
+    @router.get("/automations/rules/{rule_id}")
+    async def get_automation_rule(request: Request, rule_id: str):
+        service = _require_control_plane_service(request)
+        return await _run_control_plane_call(
+            request_factory=lambda: AutomationRuleLookupRequest.from_mapping(
+                {"rule_id": rule_id}
+            ),
+            operation=service.get_automation_rule,
+        )
+
+    @router.post("/automations/rules/{rule_id}/enabled")
+    async def set_automation_rule_enabled(
+        request: Request,
+        rule_id: str,
+        payload: dict[str, Any],
+    ):
+        service = _require_control_plane_service(request)
+        request_payload = {"rule_id": rule_id, **dict(payload)}
+        return await _run_control_plane_call(
+            request_factory=lambda: AutomationRuleEnabledRequest.from_mapping(
+                request_payload
+            ),
+            operation=service.set_automation_rule_enabled,
+        )
+
+    @router.post("/automations/rules/{rule_id}/run")
+    async def run_automation_rule(
+        request: Request,
+        rule_id: str,
+        payload: dict[str, Any],
+    ):
+        service = _require_control_plane_service(request)
+        request_payload = {"rule_id": rule_id, **dict(payload)}
+        return await _run_control_plane_call(
+            request_factory=lambda: AutomationRuleRunRequest.from_mapping(
+                request_payload
+            ),
+            operation=service.run_automation_rule,
+        )
+
+    @router.post("/automations/jobs/query")
+    async def list_automation_jobs(request: Request, payload: dict[str, Any]):
+        service = _require_control_plane_service(request)
+        return await _run_control_plane_call(
+            request_factory=lambda: AutomationJobListRequest.from_mapping(payload),
+            operation=service.list_automation_jobs,
+        )
+
+    @router.get("/automations/jobs/{job_id}")
+    async def get_automation_job(request: Request, job_id: str):
+        service = _require_control_plane_service(request)
+        return await _run_control_plane_call(
+            request_factory=lambda: AutomationJobLookupRequest.from_mapping(
+                {"job_id": job_id}
+            ),
+            operation=service.get_automation_job,
+        )
+
+    @router.post("/automations/jobs/{job_id}/cancel")
+    async def cancel_automation_job(
+        request: Request,
+        job_id: str,
+        payload: Optional[dict[str, Any]] = None,
+    ):
+        service = _require_control_plane_service(request)
+        request_payload = {"job_id": job_id, **dict(payload or {})}
+        return await _run_control_plane_call(
+            request_factory=lambda: AutomationJobActionRequest.from_mapping(
+                request_payload
+            ),
+            operation=service.cancel_automation_job,
+        )
+
+    @router.post("/automations/jobs/{job_id}/retry")
+    async def retry_automation_job(
+        request: Request,
+        job_id: str,
+        payload: Optional[dict[str, Any]] = None,
+    ):
+        service = _require_control_plane_service(request)
+        request_payload = {"job_id": job_id, **dict(payload or {})}
+        return await _run_control_plane_call(
+            request_factory=lambda: AutomationJobActionRequest.from_mapping(
+                request_payload
+            ),
+            operation=service.retry_automation_job,
+        )
+
+    @router.post("/automations/events/query")
+    async def list_automation_events(request: Request, payload: dict[str, Any]):
+        service = _require_control_plane_service(request)
+        return await _run_control_plane_call(
+            request_factory=lambda: AutomationEventListRequest.from_mapping(payload),
+            operation=service.list_automation_events,
+        )
+
+    @router.get("/automations/events/{event_id}")
+    async def get_automation_event(request: Request, event_id: str):
+        service = _require_control_plane_service(request)
+        return await _run_control_plane_call(
+            request_factory=lambda: AutomationEventLookupRequest.from_mapping(
+                {"event_id": event_id}
+            ),
+            operation=service.get_automation_event,
+        )
+
+    @router.post("/automations/schedules/query")
+    async def list_automation_schedules(request: Request, payload: dict[str, Any]):
+        service = _require_control_plane_service(request)
+        return await _run_control_plane_call(
+            request_factory=lambda: AutomationScheduleListRequest.from_mapping(payload),
+            operation=service.list_automation_schedules,
+        )
+
+    @router.get("/automations/schedules/{schedule_id}")
+    async def get_automation_schedule(request: Request, schedule_id: str):
+        service = _require_control_plane_service(request)
+        return await _run_control_plane_call(
+            request_factory=lambda: AutomationScheduleLookupRequest.from_mapping(
+                {"schedule_id": schedule_id}
+            ),
+            operation=service.get_automation_schedule,
         )
 
     @router.get("/surface-bindings")
