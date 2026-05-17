@@ -11,7 +11,11 @@ from ..core.exceptions import CodexError, PermanentError, TransientError
 from .capture import CaptureCallbacks, CaptureState, PushToTalkCapture
 from .config import VoiceConfig
 from .provider import SpeechSessionMetadata
-from .provider_catalog import local_voice_provider_spec, normalize_voice_provider
+from .provider_catalog import (
+    check_local_voice_provider_available,
+    local_voice_provider_spec,
+    normalize_voice_provider,
+)
 from .resolver import resolve_speech_provider
 
 
@@ -83,6 +87,19 @@ class VoiceService:
         self._provider = provider
         self._env = env if env is not None else os.environ
         self._circuit_breaker = CircuitBreaker("Voice", logger=self._logger)
+
+        # Fail-fast: detect missing local voice provider dependencies at
+        # startup so the operator gets a clear error instead of a silent
+        # failure on the first voice message.
+        if config.enabled:
+            dep_error = check_local_voice_provider_available(
+                config.provider, logger=self._logger
+            )
+            if dep_error is not None:
+                self._logger.error(
+                    "Voice provider dependency check failed at startup:\n%s",
+                    dep_error,
+                )
 
     def config_payload(self) -> dict:
         """Expose safe config fields to the UI."""
