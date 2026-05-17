@@ -1,139 +1,54 @@
 <script lang="ts">
   import { page } from '$app/state';
-  import { onMount } from 'svelte';
+  import { onMount, untrack } from 'svelte';
   import AutoDismissNotice from '$lib/components/AutoDismissNotice.svelte';
   import RepoWorktreeViews from '$lib/components/RepoWorktreeViews.svelte';
-  import { confirmAndArchiveState, confirmAndRetireWorktree, type ActionNotice } from '$lib/actions/repoWorktreeActions';
-  import { webApi, type ApiError, type JsonRecord, type PartialPageIssue } from '$lib/api/client';
-  import { ensureRepoDetailLoaded, invalidateReadModelTags, readModelEntityStore, readModelEntityTags } from '$lib/data';
+  import { confirmAndArchiveState, confirmAndRetireWorktree } from '$lib/actions/repoWorktreeActions';
+  import { webApi } from '$lib/api/client';
   import {
-    mapContextspaceDocument,
-    mapPmaChatSummary,
-    mapPmaRunProgress,
-    mapRepoSummary,
-    mapSurfaceArtifact,
-    mapTicketSummary,
-    mapWorktreeSummary
-  } from '$lib/viewModels/domain';
-  import {
-    buildRepoWorktreeDetailViewModel,
-    type RepoWorktreeDetailViewModel
-  } from '$lib/viewModels/repoWorktree';
+    createRepoWorktreeDetailSession,
+    type RepoWorktreeDetailSessionState
+  } from '$lib/application/repoWorktreeDetailSession';
 
   let { data = { repoId: '', result: { status: 'cold' as const, tags: [] } } } = $props();
   const repoId = $derived(page.params.repoId ?? 'unknown-repo');
-  let detail = $state<RepoWorktreeDetailViewModel | null>(null);
-  let loading = $state<boolean>(true);
-  let error = $state<ApiError | null>(null);
+  const session = createRepoWorktreeDetailSession({
+    ownerKind: 'repo',
+    ownerId: untrack(() => repoId),
+    loaderResult: untrack(() => data.result),
+    dependencies: {
+      syncRepoMain: webApi.hub.syncRepoMain,
+      retireWorktree: confirmAndRetireWorktree,
+      archiveState: confirmAndArchiveState
+    }
+  });
+  let sessionState = $state<RepoWorktreeDetailSessionState>(session.state);
 
   $effect(() => {
-    const r = data.result;
-    const id = repoId;
-    loading = r.status === 'cold' && !readModelEntityStore.snapshot().repoDetails[id];
-    error = r.status === 'error' ? r.error : null;
+    session.setOwner('repo', repoId, data.result);
+    sessionState = session.state;
   });
-  let sectionIssues = $state<PartialPageIssue[]>([]);
-  let notice = $state<ActionNotice | null>(null);
-  let syncRepoBusy = $state(false);
-
-  function buildDetailFromSnapshot(snapshot: Record<string, unknown>): RepoWorktreeDetailViewModel {
-    const payload = snapshot as {
-      identity: Record<string, unknown>;
-      topology: Record<string, unknown>;
-      runQueue: Record<string, unknown>[];
-      chatQueue: Record<string, unknown>[];
-      ticketQueue: Record<string, unknown>[];
-      contextspaceSummary: Record<string, unknown>[];
-      currentArtifacts: Record<string, unknown>[];
-    };
-    const baseSource = {
-      repos: [mapRepoSummary(payload.identity)],
-      worktrees: childrenFromTopology(payload.topology).map(mapWorktreeSummary),
-      runs: payload.runQueue.map(mapPmaRunProgress),
-      chats: payload.chatQueue.map(mapPmaChatSummary),
-      tickets: payload.ticketQueue.map(mapTicketSummary),
-      contextspaceDocs: payload.contextspaceSummary.map(mapContextspaceDocument),
-      artifacts: payload.currentArtifacts.map(mapSurfaceArtifact)
-    };
-    return buildRepoWorktreeDetailViewModel(baseSource, 'repo', repoId);
-  }
 
   onMount(() => {
-    const snapshot = readModelEntityStore.snapshot().repoDetails[repoId];
-    if (snapshot) {
-      detail = buildDetailFromSnapshot(snapshot as unknown as Record<string, unknown>);
-      loading = false;
-      return;
-    }
-    void loadRepoDetail(true);
+    void runSessionCommand(() => session.hydrate());
   });
 
-  async function loadRepoDetail(showLoading = true): Promise<void> {
-    if (showLoading) loading = true;
-    error = null;
-    sectionIssues = [];
-    const result = await ensureRepoDetailLoaded(repoId, { refresh: true });
-    if (result.status === 'error') {
-      error = result.error;
-      loading = false;
-      return;
-    }
-    const snapshot = readModelEntityStore.snapshot().repoDetails[repoId];
-    if (snapshot) {
-      detail = buildDetailFromSnapshot(snapshot as unknown as Record<string, unknown>);
-    }
-    loading = false;
-  }
-
-  function childrenFromTopology(topology: Record<string, unknown>): JsonRecord[] {
-    return Array.isArray(topology.children) ? (topology.children as JsonRecord[]) : [];
-  }
-
-  async function handleRetireWorktree(target: Parameters<typeof confirmAndRetireWorktree>[0]): Promise<void> {
-    const result = await confirmAndRetireWorktree(target);
-    if (!result) return;
-    notice = result;
-    if (result.tone === 'success') await loadRepoDetail();
-  }
-
-  async function handleArchiveState(target: Parameters<typeof confirmAndArchiveState>[0]): Promise<void> {
-    const result = await confirmAndArchiveState(target);
-    if (!result) return;
-    notice = result;
-    if (result.tone === 'success') await loadRepoDetail();
-  }
-
-  async function handleSyncRepo(): Promise<void> {
-    if (syncRepoBusy) return;
-    syncRepoBusy = true;
-    try {
-      const result = await webApi.hub.syncRepoMain(repoId);
-      if (!result.ok) {
-        notice = { tone: 'danger', message: result.error.message };
-        return;
-      }
-      await invalidateReadModelTags([
-        readModelEntityTags.repoWorktreeIndex,
-        readModelEntityTags.repo(repoId)
-      ]);
-      notice = { tone: 'success', message: 'Synced default branch with origin.' };
-      await loadRepoDetail(false);
-    } finally {
-      syncRepoBusy = false;
-    }
+  async function runSessionCommand(command: () => Promise<void>): Promise<void> {
+    await command();
+    sessionState = session.state;
   }
 </script>
 
-<AutoDismissNotice message={notice?.message ?? null} tone={notice?.tone ?? 'neutral'} />
+<AutoDismissNotice message={sessionState.notice?.message ?? null} tone={sessionState.notice?.tone ?? 'neutral'} />
 <RepoWorktreeViews
-  state={loading ? 'loading' : error ? 'error' : 'ready'}
+  state={sessionState.loading ? 'loading' : sessionState.error ? 'error' : 'ready'}
   mode="detail"
-  {detail}
-  {sectionIssues}
-  onRetry={() => loadRepoDetail()}
-  onRetireWorktree={handleRetireWorktree}
-  onArchiveState={handleArchiveState}
-  onSyncRepo={handleSyncRepo}
-  syncRepoBusy={syncRepoBusy}
-  errorMessage={error?.message ?? null}
+  detail={sessionState.detail}
+  sectionIssues={sessionState.sectionIssues}
+  onRetry={() => runSessionCommand(() => session.load())}
+  onRetireWorktree={(target) => runSessionCommand(() => session.retireWorktree(target))}
+  onArchiveState={(target) => runSessionCommand(() => session.archiveState(target))}
+  onSyncRepo={() => runSessionCommand(() => session.syncRepo())}
+  syncRepoBusy={sessionState.syncRepoBusy}
+  errorMessage={sessionState.error?.message ?? null}
 />
