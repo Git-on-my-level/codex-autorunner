@@ -14,6 +14,9 @@ from pathlib import Path
 import pytest
 
 from codex_autorunner.core.managed_thread_store import ManagedThreadStore
+from codex_autorunner.core.orchestration.migrate_legacy_state import (
+    backfill_legacy_reactive_state,
+)
 from codex_autorunner.core.orchestration.sqlite import open_orchestration_sqlite
 from codex_autorunner.core.pma_automation_store import PmaAutomationStore
 from codex_autorunner.core.pma_queue import PmaQueue
@@ -608,6 +611,69 @@ class TestReactiveCanonicalInvariants:
         state = store.load()
         assert state["version"] == 1
         assert isinstance(state["last_enqueued"], dict)
+
+    def test_load_ignores_legacy_file_when_sqlite_empty(self, tmp_path: Path) -> None:
+        hub_root = tmp_path / "hub"
+        mirror_path = _reactive_json_mirror_path(hub_root)
+        mirror_path.parent.mkdir(parents=True)
+        mirror_path.write_text(
+            json.dumps(
+                {
+                    "version": 1,
+                    "last_enqueued": {"legacy-key": 123.0},
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        store = PmaReactiveStore(hub_root)
+        state = store.load()
+
+        assert state == {"version": 1, "last_enqueued": {}}
+
+    def test_check_and_update_ignores_legacy_file_when_sqlite_empty(
+        self, tmp_path: Path
+    ) -> None:
+        hub_root = tmp_path / "hub"
+        mirror_path = _reactive_json_mirror_path(hub_root)
+        mirror_path.parent.mkdir(parents=True)
+        mirror_path.write_text(
+            json.dumps(
+                {
+                    "version": 1,
+                    "last_enqueued": {"legacy-key": 123.0},
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        store = PmaReactiveStore(hub_root)
+        assert store.check_and_update("legacy-key", 3600) is True
+
+    def test_explicit_legacy_backfill_imports_reactive_state(
+        self, tmp_path: Path
+    ) -> None:
+        hub_root = tmp_path / "hub"
+        mirror_path = _reactive_json_mirror_path(hub_root)
+        mirror_path.parent.mkdir(parents=True)
+        mirror_path.write_text(
+            json.dumps(
+                {
+                    "version": 1,
+                    "last_enqueued": {"legacy-key": 123.0},
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        with open_orchestration_sqlite(hub_root, durable=False) as conn:
+            with conn:
+                counts = backfill_legacy_reactive_state(hub_root, conn)
+
+        assert counts == {"keys": 1}
+        store = PmaReactiveStore(hub_root)
+        state = store.load()
+        assert state["last_enqueued"] == {"legacy-key": 123.0}
 
     def test_save_does_full_table_rewrite(self, tmp_path: Path) -> None:
         hub_root = tmp_path / "hub"
