@@ -10,12 +10,19 @@ from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple
 from ..discovery import discover_and_init
 from ..manifest import Manifest
 from .automation import (
+    EXECUTOR_GITHUB_COMMENT,
+    EXECUTOR_GITHUB_REACTION,
+    EXECUTOR_MANAGED_THREAD_TURN,
     EXECUTOR_PMA_TURN,
+    EXECUTOR_PUBLISH_CHAT_NOTIFICATION,
+    EXECUTOR_PUBLISH_OPERATION,
     EXECUTOR_TICKET_FLOW,
     AutomationExecutorRegistry,
     AutomationExecutorResult,
     AutomationJob,
     AutomationStore,
+    ManagedThreadTurnAutomationExecutor,
+    PublishOperationAutomationExecutor,
 )
 from .automation.models import JOB_SKIPPED, JOB_SUCCEEDED
 from .automation.ticket_flow_executor import TicketFlowAutomationExecutor
@@ -51,6 +58,11 @@ from .pma_reactive import PmaReactiveStore
 from .pma_safety import PmaSafetyChecker, PmaSafetyConfig
 from .ports.backend_orchestrator import (
     BackendOrchestrator as BackendOrchestratorProtocol,
+)
+from .publish_executor import PublishExecutorRegistry
+from .publish_operation_executors import (
+    build_enqueue_managed_turn_executor,
+    build_notify_chat_executor,
 )
 from .runner_controller import ProcessRunnerController, SpawnRunnerFn
 from .runtime import RuntimeContext
@@ -535,6 +547,30 @@ class HubSupervisor:
                 run_coroutine_fn=self._run_coroutine,
             ),
         )
+        automation_executor_registry.register(
+            EXECUTOR_MANAGED_THREAD_TURN,
+            ManagedThreadTurnAutomationExecutor(hub_root=hub_config.root),
+        )
+        publish_registry = PublishExecutorRegistry(
+            {
+                "enqueue_managed_turn": build_enqueue_managed_turn_executor(
+                    hub_root=hub_config.root
+                ),
+                "notify_chat": build_notify_chat_executor(hub_root=hub_config.root),
+            },
+            mutation_policy_config=hub_config.raw,
+        )
+        publish_executor = PublishOperationAutomationExecutor(
+            hub_root=hub_config.root,
+            executor_registry=publish_registry,
+        )
+        for executor_kind in (
+            EXECUTOR_PUBLISH_OPERATION,
+            EXECUTOR_PUBLISH_CHAT_NOTIFICATION,
+            EXECUTOR_GITHUB_REACTION,
+            EXECUTOR_GITHUB_COMMENT,
+        ):
+            automation_executor_registry.register(executor_kind, publish_executor)
         self._lifecycle_orchestrator = HubLifecycleOrchestrator(
             hub_config,
             list_repos_fn=lambda: self.list_repos(),

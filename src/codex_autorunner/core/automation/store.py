@@ -15,6 +15,7 @@ from .models import (
     JOB_CLAIMED,
     JOB_DEAD_LETTERED,
     JOB_FAILED,
+    JOB_PAUSED,
     JOB_PENDING,
     JOB_RUNNING,
     JOB_SKIPPED,
@@ -479,6 +480,22 @@ class AutomationStore:
             JOB_SKIPPED,
             result_summary=result_summary,
             finished=True,
+        )
+
+    def pause_job(
+        self,
+        job_id: str,
+        *,
+        result_summary: Optional[str] = None,
+        execution_refs: Optional[dict[str, Any]] = None,
+        now: Optional[str] = None,
+    ) -> AutomationJob:
+        return self._transition_job(
+            job_id,
+            JOB_PAUSED,
+            now=now,
+            result_summary=result_summary,
+            execution_refs=execution_refs,
         )
 
     def record_attempt(self, attempt: AutomationJobAttempt) -> AutomationJobAttempt:

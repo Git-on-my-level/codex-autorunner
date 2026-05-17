@@ -10,6 +10,7 @@ from .models import (
     JOB_CANCELLED,
     JOB_DEAD_LETTERED,
     JOB_FAILED,
+    JOB_PAUSED,
     JOB_SKIPPED,
     JOB_SUCCEEDED,
     AutomationJob,
@@ -57,6 +58,8 @@ class WorkerProcessResult:
     dead_lettered: int = 0
     cancelled: int = 0
     skipped: int = 0
+    paused: int = 0
+    escalated: int = 0
 
 
 class AutomationJobWorker:
@@ -81,6 +84,7 @@ class AutomationJobWorker:
             stale_before=_add_seconds(stamp, -self._claim_lease_seconds), now=stamp
         )
         claimed = succeeded = failed = retried = dead = cancelled = skipped = 0
+        paused = escalated = 0
         for _ in range(max(0, int(limit))):
             job = self._store.claim_next_job(lock_key=self._worker_id, now=stamp)
             if job is None:
@@ -120,13 +124,22 @@ class AutomationJobWorker:
                         result_summary=result.summary or "skipped",
                     )
                     skipped += 1
+                elif status == JOB_PAUSED:
+                    self._store.pause_job(
+                        running.job_id,
+                        result_summary=result.summary or "paused",
+                        execution_refs=result.execution_refs,
+                        now=stamp,
+                    )
+                    paused += 1
                 elif status == JOB_FAILED:
-                    self._handle_failure(
+                    did_escalate = self._handle_failure(
                         running, result.summary or "executor_failed", stamp
                     )
                     failed += 1
                     if running.attempt_count >= running.max_attempts:
                         dead += 1
+                        escalated += int(did_escalate)
                     else:
                         retried += 1
                 else:
@@ -151,10 +164,11 @@ class AutomationJobWorker:
                 )
             except Exception as exc:
                 error = "".join(traceback.format_exception_only(type(exc), exc)).strip()
-                self._handle_failure(running, error, stamp)
+                did_escalate = self._handle_failure(running, error, stamp)
                 failed += 1
                 if running.attempt_count >= running.max_attempts:
                     dead += 1
+                    escalated += int(did_escalate)
                     attempt_status = JOB_DEAD_LETTERED
                 else:
                     retried += 1
@@ -177,6 +191,8 @@ class AutomationJobWorker:
             dead_lettered=dead,
             cancelled=cancelled,
             skipped=skipped,
+            paused=paused,
+            escalated=escalated,
         )
 
     def _blocked_by_concurrency(self, job: AutomationJob) -> bool:
@@ -194,18 +210,50 @@ class AutomationJobWorker:
             return True
         return False
 
-    def _handle_failure(self, job: AutomationJob, error: str, now: str) -> None:
+    def _handle_failure(self, job: AutomationJob, error: str, now: str) -> bool:
         if job.attempt_count >= job.max_attempts:
             self._store.fail_job(
                 job.job_id, error_text=error, dead_letter=True, now=now
             )
-            return
+            return self._enqueue_failure_escalation(job, error=error, now=now)
         self._store.fail_job(job.job_id, error_text=error, now=now)
         self._store.retry_job(
             job.job_id,
             available_at=_add_seconds(now, self._retry_delay(job)),
             retry_backoff_seconds=self._retry_delay(job),
         )
+        return False
+
+    def _enqueue_failure_escalation(
+        self, job: AutomationJob, *, error: str, now: str
+    ) -> bool:
+        config = job.policy.get("on_failure")
+        if not isinstance(config, dict) or not config:
+            return False
+        executor = config.get("executor")
+        if not isinstance(executor, dict):
+            return False
+        target = config.get("target")
+        policy = config.get("policy")
+        payload = config.get("payload")
+        escalation_job = AutomationJob.create(
+            rule_id=str(config.get("rule_id") or job.rule_id),
+            event_id=str(config.get("event_id") or job.event_id),
+            target=target if isinstance(target, dict) else dict(job.target),
+            executor=dict(executor),
+            policy=policy if isinstance(policy, dict) else {},
+            payload={
+                **(payload if isinstance(payload, dict) else {}),
+                "failed_job": job.to_dict(),
+                "failure_error": error,
+            },
+            dedupe_key=str(
+                config.get("dedupe_key") or f"failure-escalation:{job.job_id}"
+            ),
+            available_at=str(config.get("available_at") or now),
+        )
+        _, deduped = self._store.enqueue_job(escalation_job)
+        return not deduped
 
     def _retry_delay(self, job: AutomationJob) -> int:
         base = _policy_int(job.policy.get("retry_backoff_seconds"), fallback=30)
