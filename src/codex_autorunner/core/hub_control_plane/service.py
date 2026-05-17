@@ -959,6 +959,15 @@ class HubSharedStateService:
         )
         return AutomationJobResponse(job=redact_automation_mapping(job.to_dict()))
 
+    def revive_dead_lettered_automation_job(
+        self, request: AutomationJobActionRequest
+    ) -> AutomationJobResponse:
+        job = self._automation_store.revive_dead_lettered_job(
+            request.job_id,
+            available_at=request.available_at,
+        )
+        return AutomationJobResponse(job=redact_automation_mapping(job.to_dict()))
+
     def list_automation_events(
         self, request: AutomationEventListRequest
     ) -> AutomationEventListResponse:

@@ -294,6 +294,21 @@ def build_hub_control_plane_routes() -> APIRouter:
             operation=service.retry_automation_job,
         )
 
+    @router.post("/automations/jobs/{job_id}/revive")
+    async def revive_dead_lettered_automation_job(
+        request: Request,
+        job_id: str,
+        payload: Optional[dict[str, Any]] = None,
+    ):
+        service = _require_control_plane_service(request)
+        request_payload = {"job_id": job_id, **dict(payload or {})}
+        return await _run_control_plane_call(
+            request_factory=lambda: AutomationJobActionRequest.from_mapping(
+                request_payload
+            ),
+            operation=service.revive_dead_lettered_automation_job,
+        )
+
     @router.post("/automations/events/query")
     async def list_automation_events(request: Request, payload: dict[str, Any]):
         service = _require_control_plane_service(request)

@@ -277,6 +277,46 @@ def test_runtime_step_completion_emits_transition_telemetry(tmp_path: Path) -> N
     assert ce["resulting_status"] == "completed"
 
 
+def test_runtime_lifecycle_event_includes_automation_metadata(tmp_path: Path) -> None:
+    store = _make_store(tmp_path)
+    emitted = []
+
+    async def _step(record, data):
+        return StepOutcome(status=FlowRunStatus.COMPLETED, output={})
+
+    definition = FlowDefinition(
+        flow_type="test",
+        initial_step="step_a",
+        steps={"step_a": _step},
+    )
+    runtime = FlowRuntime(
+        definition,
+        store,
+        emit_lifecycle_event=lambda event_type, repo_id, run_id, data, origin: emitted.append(
+            (event_type, repo_id, run_id, data, origin)
+        ),
+    )
+    store.create_flow_run(
+        run_id="run-automation",
+        flow_type="test",
+        input_data={},
+        state={},
+        metadata={
+            "automation_job_id": "job-1",
+            "automation_rule_id": "rule-1",
+            "ignored": "not propagated",
+        },
+    )
+
+    asyncio.run(runtime.run_flow("run-automation"))
+
+    assert emitted
+    payloads = [item[3] for item in emitted]
+    assert any(payload.get("automation_job_id") == "job-1" for payload in payloads)
+    assert any(payload.get("automation_rule_id") == "rule-1" for payload in payloads)
+    assert all("ignored" not in payload for payload in payloads)
+
+
 def test_runtime_step_failure_emits_failure_projection(tmp_path: Path) -> None:
     store = _make_store(tmp_path)
 

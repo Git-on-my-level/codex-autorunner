@@ -82,15 +82,30 @@ def calculate_next_fire_at(
 ) -> Optional[str]:
     if schedule.schedule_kind == SCHEDULE_ONE_SHOT:
         return None
+    now_dt = _parse(now)
     current = _parse(schedule.next_fire_at or now)
     if current is None:
         current = _parse(now)
     if current is None:
-        current = datetime.now(timezone.utc)
+        current = now_dt or datetime.now(timezone.utc)
+    advance_to_future = (
+        str(schedule.misfire_policy or "fire_once").strip()
+        in {
+            "fire_once",
+            "fire_once_then_advance_to_future",
+            "skip_missed",
+        }
+        and now_dt is not None
+    )
+    advance_until = now_dt if advance_to_future else None
     schedule_json = schedule.schedule if isinstance(schedule.schedule, dict) else {}
     if schedule.schedule_kind == SCHEDULE_INTERVAL:
         seconds = _positive_int(schedule_json.get("interval_seconds"), fallback=60)
-        return _iso(current + timedelta(seconds=seconds))
+        candidate = current + timedelta(seconds=seconds)
+        if advance_until is not None:
+            while candidate <= advance_until:
+                candidate = candidate + timedelta(seconds=seconds)
+        return _iso(candidate)
 
     tz = _zone(schedule.timezone)
     local = current.astimezone(tz)
@@ -104,6 +119,9 @@ def calculate_next_fire_at(
         candidate = (local + timedelta(days=1)).replace(
             hour=hour, minute=minute, second=second, microsecond=0
         )
+        if advance_until is not None:
+            while candidate.astimezone(timezone.utc) <= advance_until:
+                candidate = candidate + timedelta(days=1)
         return _iso(candidate.astimezone(timezone.utc))
 
     if schedule.schedule_kind == SCHEDULE_WEEKLY:
@@ -123,6 +141,9 @@ def calculate_next_fire_at(
             candidate = candidate_day.replace(
                 hour=hour, minute=minute, second=second, microsecond=0
             )
+            if advance_until is not None:
+                while candidate.astimezone(timezone.utc) <= advance_until:
+                    candidate = candidate + timedelta(days=7)
             return _iso(candidate.astimezone(timezone.utc))
     return None
 

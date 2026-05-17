@@ -518,6 +518,48 @@ class AutomationStore:
             raise RuntimeError("failed to retry automation job")
         return self._row_to_job(saved)
 
+    def revive_dead_lettered_job(
+        self,
+        job_id: str,
+        *,
+        available_at: Optional[str] = None,
+    ) -> AutomationJob:
+        stamp = normalize_timestamp(available_at)
+        with open_orchestration_sqlite(self._hub_root, durable=self._durable) as conn:
+            with conn:
+                row = conn.execute(
+                    "SELECT * FROM orch_automation_jobs WHERE job_id = ?",
+                    (job_id,),
+                ).fetchone()
+                if row is None:
+                    raise ValueError(f"Unknown automation job: {job_id}")
+                if str(row["state"]) != JOB_DEAD_LETTERED:
+                    raise ValueError(
+                        "Only dead_lettered automation jobs can be revived"
+                    )
+                conn.execute(
+                    """
+                    UPDATE orch_automation_jobs
+                       SET state = ?,
+                           available_at = ?,
+                           next_attempt_at = ?,
+                           lock_key = NULL,
+                           claimed_at = NULL,
+                           finished_at = NULL,
+                           error_text = NULL,
+                           updated_at = ?
+                     WHERE job_id = ?
+                    """,
+                    (JOB_PENDING, stamp, stamp, stamp, job_id),
+                )
+                saved = conn.execute(
+                    "SELECT * FROM orch_automation_jobs WHERE job_id = ?",
+                    (job_id,),
+                ).fetchone()
+        if saved is None:
+            raise RuntimeError("failed to revive automation job")
+        return self._row_to_job(saved)
+
     def cancel_job(self, job_id: str, *, now: Optional[str] = None) -> AutomationJob:
         return self._transition_job(job_id, JOB_CANCELLED, now=now, finished=True)
 

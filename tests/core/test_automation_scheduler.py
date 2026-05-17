@@ -118,3 +118,32 @@ def test_interval_daily_and_weekly_next_fire_calculation() -> None:
         schedule={"weekdays": [0], "hour": 10, "minute": 0},
     )
     assert calculate_next_fire_at(weekly) == "2026-01-12T10:00:00Z"
+
+
+def test_missed_daily_schedule_advances_to_future_after_single_fire() -> None:
+    daily = AutomationSchedule.create(
+        rule_id="rule",
+        schedule_kind=SCHEDULE_DAILY,
+        timezone="UTC",
+        next_fire_at="2026-01-01T09:00:00Z",
+        schedule={"hour": 9, "minute": 0},
+    )
+
+    assert (
+        calculate_next_fire_at(daily, now="2026-01-05T12:00:00Z")
+        == "2026-01-06T09:00:00Z"
+    )
+
+
+def test_missed_interval_schedule_advances_to_future_after_single_fire() -> None:
+    interval = AutomationSchedule.create(
+        rule_id="rule",
+        schedule_kind=SCHEDULE_INTERVAL,
+        next_fire_at="2026-01-01T00:00:00Z",
+        schedule={"interval_seconds": 60},
+    )
+
+    assert (
+        calculate_next_fire_at(interval, now="2026-01-01T00:05:30Z")
+        == "2026-01-01T00:06:00Z"
+    )

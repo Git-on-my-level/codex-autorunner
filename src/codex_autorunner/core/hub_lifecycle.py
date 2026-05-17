@@ -5,6 +5,7 @@ import threading
 import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Any, Callable, Optional, Protocol
 
 from .automation import (
@@ -15,6 +16,7 @@ from .automation import (
     AutomationStore,
     ensure_builtin_pma_reactive_rule,
 )
+from .automation.child_reconciler import AutomationChildRunReconciler
 from .config import HubConfig
 from .hub_lifecycle_routing import LifecycleEventRouter
 from .hub_topology import RepoSnapshot
@@ -344,6 +346,7 @@ class HubLifecycleOrchestrator:
         logger: Optional[logging.Logger] = None,
     ) -> None:
         self._hub_config = hub_config
+        self._list_repos_fn = list_repos_fn
         self._lifecycle_emitter = LifecycleEventEmitter(hub_config.root)
         self._automation_store = AutomationStore(hub_config.root)
         self._automation_store.backfill_legacy_pma_automation()
@@ -353,6 +356,11 @@ class HubLifecycleOrchestrator:
         self._automation_rule_engine = AutomationRuleEngine(self._automation_store)
         self._automation_scheduler = AutomationScheduler(
             self._automation_store, self._automation_rule_engine
+        )
+        self._automation_child_reconciler = AutomationChildRunReconciler(
+            self._automation_store,
+            resolve_repo_path=self._resolve_repo_path_for_automation,
+            logger=logger,
         )
         self._automation_executor_registry = (
             automation_executor_registry or AutomationExecutorRegistry()
@@ -433,13 +441,31 @@ class HubLifecycleOrchestrator:
         return processed
 
     def process_automation(self) -> int:
+        reconcile_before = self._automation_child_reconciler.reconcile_running_jobs(
+            limit=100
+        )
         scheduler_result = self._automation_scheduler.process_due(limit=100)
         worker_result = self._automation_job_worker.process_once(limit=25)
+        reconcile_after = self._automation_child_reconciler.reconcile_running_jobs(
+            limit=100
+        )
         return (
-            scheduler_result.schedules_fired
+            reconcile_before.changed
+            + scheduler_result.schedules_fired
             + scheduler_result.jobs_created
             + worker_result.claimed
+            + reconcile_after.changed
         )
+
+    def _resolve_repo_path_for_automation(self, repo_id: str) -> Optional[Path]:
+        try:
+            snapshots = self._list_repos_fn()
+        except (RuntimeError, OSError, ValueError, TypeError):
+            return None
+        for snapshot in snapshots:
+            if snapshot.id == repo_id and snapshot.exists_on_disk:
+                return Path(snapshot.path)
+        return None
 
     def trigger_pma_from_lifecycle_event(self, event: LifecycleEvent) -> None:
         self._process_lifecycle_event(event)

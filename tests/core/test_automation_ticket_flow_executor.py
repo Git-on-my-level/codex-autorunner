@@ -53,6 +53,10 @@ Do the work.
 """
 
 
+def _done_ticket(ticket_id: str = "tkt_ticket_001") -> str:
+    return _ticket(ticket_id).replace("done: false", "done: true")
+
+
 def _job(*, target: dict, executor: dict | None = None) -> AutomationJob:
     return AutomationJob.create(
         job_id="job-abcdef1234567890",
@@ -309,6 +313,43 @@ def test_ticket_flow_executor_rejects_duplicate_ticket_ids(hub: Path) -> None:
     )
 
     with pytest.raises(ValueError, match="Duplicate ticket_id"):
+        executor.execute(job)
+
+
+def test_ticket_flow_executor_rejects_depends_on_in_pack(hub: Path) -> None:
+    fake_wm = _FakeWorktreeManager(hub)
+    executor = _executor(hub, fake_wm)
+    ticket = _ticket().replace(
+        'title: "Do work"', 'depends_on: ["tkt_other"]\ntitle: "Do work"'
+    )
+    job = _job(
+        target={"policy": TARGET_POLICY_EXISTING_REPO, "repo_id": "base"},
+        executor={
+            "ticket_pack": {
+                "source": "inline",
+                "tickets": [{"path": "TICKET-001.md", "content": ticket}],
+            }
+        },
+    )
+
+    with pytest.raises(ValueError, match="depends_on is not supported"):
+        executor.execute(job)
+
+
+def test_ticket_flow_executor_requires_unfinished_ticket(hub: Path) -> None:
+    fake_wm = _FakeWorktreeManager(hub)
+    executor = _executor(hub, fake_wm)
+    job = _job(
+        target={"policy": TARGET_POLICY_EXISTING_REPO, "repo_id": "base"},
+        executor={
+            "ticket_pack": {
+                "source": "inline",
+                "tickets": [{"path": "TICKET-001.md", "content": _done_ticket()}],
+            }
+        },
+    )
+
+    with pytest.raises(ValueError, match="at least one unfinished ticket"):
         executor.execute(job)
 
 

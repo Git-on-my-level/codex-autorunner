@@ -317,14 +317,19 @@ def _validate_materialized_tickets(ticket_dir: Path) -> list[str]:
     errors: list[str] = []
     index_to_paths: dict[int, list[str]] = {}
     ticket_id_to_paths: dict[str, list[str]] = {}
+    ticket_count = 0
+    unfinished_count = 0
     for path in sorted(ticket_dir.iterdir(), key=lambda item: item.name):
         if not path.is_file():
             continue
         index = _parse_ticket_index(path.name)
         if index is None:
             continue
+        ticket_count += 1
         index_to_paths.setdefault(index, []).append(path.name)
-        ticket_errors, ticket_id = _validate_ticket_content(path)
+        ticket_errors, ticket_id, done = _validate_ticket_content(path)
+        if done is False:
+            unfinished_count += 1
         errors.extend([f"{path.name}: {error}" for error in ticket_errors])
         if ticket_id:
             ticket_id_to_paths.setdefault(ticket_id, []).append(path.name)
@@ -338,6 +343,8 @@ def _validate_materialized_tickets(ticket_dir: Path) -> list[str]:
             errors.append(
                 f"Duplicate ticket_id {ticket_id!r}: multiple files share the same logical ticket identity"
             )
+    if ticket_count > 0 and unfinished_count == 0:
+        errors.append("Ticket pack must include at least one unfinished ticket.")
     return errors
 
 
@@ -351,14 +358,16 @@ def _parse_ticket_index(name: str) -> Optional[int]:
         return None
 
 
-def _validate_ticket_content(path: Path) -> tuple[list[str], Optional[str]]:
+def _validate_ticket_content(
+    path: Path,
+) -> tuple[list[str], Optional[str], Optional[bool]]:
     try:
         raw = path.read_text(encoding="utf-8")
     except OSError:
-        return ["Failed to read ticket"], None
+        return ["Failed to read ticket"], None, None
     data = _parse_frontmatter(raw)
     if data is None:
-        return ["Missing or invalid YAML frontmatter (expected a mapping)."], None
+        return ["Missing or invalid YAML frontmatter (expected a mapping)."], None, None
     errors: list[str] = []
     ticket_id = data.get("ticket_id")
     if not isinstance(ticket_id, str) or not _TICKET_ID_RE.match(ticket_id.strip()):
@@ -371,9 +380,15 @@ def _validate_ticket_content(path: Path) -> tuple[list[str], Optional[str]]:
     agent = data.get("agent")
     if not isinstance(agent, str) or not agent.strip():
         errors.append("frontmatter.agent is required (e.g. 'codex' or 'opencode').")
-    if not isinstance(data.get("done"), bool):
+    done = data.get("done")
+    if not isinstance(done, bool):
         errors.append("frontmatter.done is required and must be a boolean.")
-    return errors, ticket_id_text
+        done_value = None
+    else:
+        done_value = done
+    if "depends_on" in data:
+        errors.append("frontmatter.depends_on is not supported in automation packs.")
+    return errors, ticket_id_text, done_value
 
 
 def _parse_frontmatter(raw: str) -> Optional[dict[str, Any]]:

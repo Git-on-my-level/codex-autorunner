@@ -14,6 +14,7 @@ from codex_autorunner.core.automation.models import (
     EXECUTOR_MANAGED_THREAD_TURN,
     EXECUTOR_PMA_TURN,
     JOB_CLAIMED,
+    JOB_DEAD_LETTERED,
     JOB_FAILED,
     JOB_PENDING,
     JOB_RUNNING,
@@ -240,6 +241,42 @@ def test_failed_job_can_be_requeued_explicitly(tmp_path) -> None:
 
     requeued = store.retry_job("job-fail", available_at="2026-01-01T00:00:03Z")
     assert requeued.state == JOB_PENDING
+
+
+def test_dead_lettered_job_requires_explicit_revive(tmp_path) -> None:
+    store = AutomationStore(tmp_path)
+    store.upsert_rule(_rule())
+    store.record_event(_event())
+    store.create_job(
+        job_id="job-dead",
+        rule_id="rule-1",
+        event_id="event-1",
+        target={"repo_id": "repo-1"},
+        executor={"kind": EXECUTOR_MANAGED_THREAD_TURN},
+        available_at="2026-01-01T00:00:00Z",
+    )
+    store.claim_next_job(now="2026-01-01T00:00:00Z")
+    store.start_job("job-dead", now="2026-01-01T00:00:01Z")
+    dead = store.fail_job(
+        "job-dead",
+        error_text="exhausted",
+        dead_letter=True,
+        now="2026-01-01T00:00:02Z",
+    )
+    assert dead.state == JOB_DEAD_LETTERED
+
+    with pytest.raises(ValueError, match="terminal"):
+        store.retry_job("job-dead", available_at="2026-01-01T00:00:03Z")
+
+    revived = store.revive_dead_lettered_job(
+        "job-dead",
+        available_at="2026-01-01T00:00:04Z",
+    )
+
+    assert revived.state == JOB_PENDING
+    assert revived.available_at == "2026-01-01T00:00:04Z"
+    assert revived.error_text is None
+    assert revived.finished_at is None
 
 
 def test_claim_next_job_counts_claimed_jobs_against_concurrency(tmp_path) -> None:
