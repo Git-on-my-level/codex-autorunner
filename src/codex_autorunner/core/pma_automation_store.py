@@ -21,7 +21,6 @@ from .pma_automation_services import (
     PmaAutomationThreadNotFoundError,
     PmaSubscriptionCommandService,
     PmaWakeupDispatchDecisionService,
-    normalize_delivery_target,
 )
 from .pma_automation_types import (
     DEFAULT_PMA_LANE_ID,
@@ -56,10 +55,6 @@ from .pma_domain.subscription_reducer import (
 )
 
 logger = logging.getLogger(__name__)
-
-
-def _normalize_delivery_target(value: Any) -> Optional[dict[str, str]]:
-    return normalize_delivery_target(value)
 
 
 class PmaAutomationStore:
