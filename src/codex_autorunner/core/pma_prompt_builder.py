@@ -85,7 +85,8 @@ First-turn routine:
       - Only route it like a fresh upload when evidence says it is still pending work.
     - Only ask the user "which file first?" or "which repo?" when routing is truly ambiguous.
 5) BRANCH D - Automation continuity (subscriptions + timers):
-    - If work should continue without manual polling, use PMA automation primitives.
+    - If work should continue without manual polling, use the unified automation plane.
+    - PMA subscription and timer endpoints are compatibility adapters backed by automation rules, schedules, jobs, and attempts.
     - Subscriptions:
       - Create/list/delete via `/hub/pma/subscriptions`.
       - Common event_types:
@@ -96,7 +97,7 @@ First-turn routine:
       - watchdog (`timer_type=watchdog`, `idle_seconds`; touch/cancel as progress changes)
       - Endpoints: `/hub/pma/timers`, `/hub/pma/timers/{timer_id}/touch`, `/hub/pma/timers/{timer_id}/cancel`
     - Prefer idempotency keys and lane-specific routing (`lane_id`) for chainable plans.
-    - Consult the hub-scoped PMA operations guide section "PMA automation wake-ups" for recipes.
+    - Consult the hub-scoped PMA operations guide section "PMA automation wake-ups" for adapter recipes and migration notes.
 6) If the request is new work (not inbox/file processing):
     - Identify the target managed resource(s): repo(s) and/or agent workspace(s).
     - Prefer hub-owned worktrees for changes.
@@ -169,8 +170,8 @@ def render_pma_discoverability_preamble(
             f"Hub PMA working context: `{pma_docs_dir / 'active_context.md'}`.\n"
             f"Hub PMA history: `{pma_docs_dir / 'context_log.md'}`.\n"
             f"Docs discovery: `car docs list --path {resolved_hub}` and `car docs search <query> --path {resolved_hub}`.\n"
-            "Automation quickstart: `/hub/pma/subscriptions` (event triggers) and `/hub/pma/timers` (one-shot/watchdog).\n"
-            f'Automation recipes: `{pma_docs_dir / "ABOUT_CAR.md"}` -> "PMA automation wake-ups".\n'
+            "Automation quickstart: unified automation plane via `/hub/pma/subscriptions` (event triggers) and `/hub/pma/timers` (one-shot/watchdog) compatibility adapters.\n"
+            f'Automation recipes and migration notes: `{pma_docs_dir / "ABOUT_CAR.md"}` -> "PMA automation wake-ups".\n'
             "Ticket templates: pass `--repo <path>` (a git worktree) for every `car templates` subcommand; add `--path <hub_root>` when the shell cwd is not inside the hub tree. Examples: `car templates list --repo <path>`, `car templates search <query> --repo <path>`, `car templates show <id> --repo <path>`, `car templates apply <id> --repo <path>`.\n"
             "To send a file to the user, use `car artifacts send <file> --to current` when an artifact delivery target is active.\n"
             f"User uploaded files are in `{resolved_hub / '.codex-autorunner' / 'filebox' / 'inbox'}`.\n\n"
@@ -184,8 +185,8 @@ def render_pma_discoverability_preamble(
             "Hub PMA working context: `<hub_root>/.codex-autorunner/pma/docs/active_context.md`.\n"
             "Hub PMA history: `<hub_root>/.codex-autorunner/pma/docs/context_log.md`.\n"
             "Docs discovery: `car docs list --path <hub_root>` and `car docs search <query> --path <hub_root>`.\n"
-            "Automation quickstart: `/hub/pma/subscriptions` (event triggers) and `/hub/pma/timers` (one-shot/watchdog).\n"
-            'Automation recipes: `<hub_root>/.codex-autorunner/pma/docs/ABOUT_CAR.md` -> "PMA automation wake-ups".\n'
+            "Automation quickstart: unified automation plane via `/hub/pma/subscriptions` (event triggers) and `/hub/pma/timers` (one-shot/watchdog) compatibility adapters.\n"
+            'Automation recipes and migration notes: `<hub_root>/.codex-autorunner/pma/docs/ABOUT_CAR.md` -> "PMA automation wake-ups".\n'
             "Ticket templates: pass `--repo <path>` (a git worktree) for every `car templates` subcommand; add `--path <hub_root>` when the shell cwd is not inside the hub tree. Examples: `car templates list --repo <path>`, `car templates search <query>`, `car templates show <id>`, `car templates apply <id>`.\n"
             "To send a file to the user, use `car artifacts send <file> --to current` when an artifact delivery target is active.\n"
             "User uploaded files are in `<hub_root>/.codex-autorunner/filebox/inbox/`.\n\n"

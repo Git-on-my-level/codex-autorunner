@@ -97,6 +97,35 @@ def test_rule_engine_dedupe_batch_cooldown_and_max_runs_policy(tmp_path) -> None
     assert result.jobs_skipped >= 1
 
 
+def test_rule_engine_dedupe_survives_store_restart(tmp_path) -> None:
+    first_store = AutomationStore(tmp_path)
+    first_store.upsert_rule(_rule(policy={"dedupe_key": "stable"}))
+    first = AutomationRuleEngine(first_store).record_event_and_enqueue_jobs(
+        _event("event-1")
+    )
+
+    restarted_store = AutomationStore(tmp_path)
+    duplicate = AutomationRuleEngine(restarted_store).record_event_and_enqueue_jobs(
+        _event("event-2")
+    )
+
+    assert first.jobs_created == 1
+    assert duplicate.jobs_deduped == 1
+    assert [job.dedupe_key for job in restarted_store.list_jobs()] == ["stable"]
+
+
+def test_rule_engine_records_event_but_does_not_enqueue_disabled_rule(tmp_path) -> None:
+    store = AutomationStore(tmp_path)
+    store.upsert_rule(_rule(enabled=False))
+
+    result = AutomationRuleEngine(store).record_event_and_enqueue_jobs(_event())
+
+    assert result.matched_rules == 0
+    assert result.jobs_created == 0
+    assert store.get_event("event-1") is not None
+    assert store.list_jobs() == []
+
+
 def test_rule_engine_rejects_non_matching_event_type_and_filter(tmp_path) -> None:
     store = AutomationStore(tmp_path)
     store.upsert_rule(_rule(filters={"repo_id": "other"}))

@@ -90,9 +90,11 @@ def test_pma_files_created_on_hub_init(tmp_path: Path) -> None:
     assert "docs/configuration/destinations.md" in about_content
     assert ".codex-autorunner/filebox/inbox/" in about_content
     assert "PMA automation wake-ups (subscriptions + timers)" in about_content
+    assert "automation tables" in about_content
     assert "flow_completed" in about_content
     assert "managed_thread_failed" in about_content
     assert ".codex-autorunner/pma/automation_store.json" in about_content
+    assert "Compatibility mirror" in about_content
 
     agents_path = docs_dir / "AGENTS.md"
     assert agents_path.exists()
