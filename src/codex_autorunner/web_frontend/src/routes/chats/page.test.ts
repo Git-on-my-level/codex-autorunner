@@ -30,6 +30,20 @@ describe('/chats page', () => {
     expect(createChatBody).not.toMatch(/detailMode = 'detail';\s*newChatKind = 'pma';/);
   });
 
+  it('keeps terminal snapshot queue reconciliation separate from full transcript repair', () => {
+    const source = readFileSync(
+      fileURLToPath(new URL('./[[chatId]]/+page.svelte', import.meta.url)),
+      'utf8'
+    );
+    const snapshotBranch = source.match(
+      /if \(event\.kind === 'transcript_snapshot'\)[\s\S]*?return;\n        \}/
+    )?.[0];
+
+    expect(snapshotBranch).toContain('refreshedTerminalTurnId = nextProgress.id');
+    expect(snapshotBranch).toContain('scheduleActiveQueueRefresh(chatId, 700)');
+    expect(source).toContain('async function refreshActiveQueue');
+  });
+
   it('renders filters, chat list shell, and composer affordances without global memory controls', () => {
     const { body } = render(Page);
 

@@ -19,6 +19,7 @@ import {
   selectChatIndexWindowView,
   selectorFingerprint
 } from './readModelStore';
+import { selectChatTranscript } from './readModelViewModels';
 
 const now = '2026-05-11T12:00:00Z';
 
@@ -327,6 +328,16 @@ describe('read model entity store', () => {
     store.setPmaProgress('chat-1', progress('chat-1', 1));
 
     expect(store.snapshot().chatTranscripts['chat-2']).toBe(inactiveBefore);
+  });
+
+  it('keeps selected transcript arrays stable across unrelated state updates', () => {
+    const store = new ReadModelEntityStore();
+    store.replaceChatTranscript('chat-1', [pmaMessageCard('chat-1', 'turn:1:user', 'hello')]);
+    const selectedBefore = selectChatTranscript(store.snapshot(), 'chat-1');
+
+    store.setPmaProgress('chat-1', progress('chat-1', 1));
+
+    expect(selectChatTranscript(store.snapshot(), 'chat-1')).toBe(selectedBefore);
   });
 
   it('does not clone untouched cached details when another detail patches', () => {

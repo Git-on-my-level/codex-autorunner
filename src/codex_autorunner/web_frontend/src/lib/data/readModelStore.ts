@@ -455,16 +455,20 @@ export class ReadModelEntityStore implements Readable<ReadModelEntityState> {
     if (!cards.length) return;
     const next = cloneState(this.state);
     const transcript = cloneChatTranscript(next.chatTranscripts[chatId] ?? { cardsById: {}, order: [] });
-    const knownIds = new Set(transcript.order);
+    let changed = false;
     for (const card of cards) {
       const id = chatTranscriptCardEntityId(card);
+      const previous = transcript.cardsById[id];
+      if (previous === card) continue;
       transcript.cardsById[id] = card;
-      if (!knownIds.has(id)) {
-        knownIds.add(id);
-        transcript.order.push(id);
+      if (previous) {
+        const currentIndex = transcript.order.indexOf(id);
+        if (currentIndex >= 0) transcript.order.splice(currentIndex, 1);
       }
+      insertOrderedChatTranscriptId(transcript, id);
+      changed = true;
     }
-    transcript.order = orderChatTranscriptCards(transcript.order.map((id) => transcript.cardsById[id]).filter(Boolean)).map(chatTranscriptCardEntityId);
+    if (!changed) return;
     next.chatTranscripts[chatId] = transcript;
     bump(next, 'timeline', chatId);
     this.commit(next);
@@ -1183,6 +1187,23 @@ function chatTranscriptCardEntityId(card: ChatTranscriptCard): string {
 
 function orderChatTranscriptCards(cards: ChatTranscriptCard[]): ChatTranscriptCard[] {
   return [...cards].sort(compareChatTranscriptCards);
+}
+
+function insertOrderedChatTranscriptId(
+  transcript: { cardsById: Record<string, ChatTranscriptCard>; order: string[] },
+  id: string
+): void {
+  const card = transcript.cardsById[id];
+  if (!card) return;
+  let low = 0;
+  let high = transcript.order.length;
+  while (low < high) {
+    const mid = Math.floor((low + high) / 2);
+    const midCard = transcript.cardsById[transcript.order[mid]];
+    if (!midCard || compareChatTranscriptCards(midCard, card) <= 0) low = mid + 1;
+    else high = mid;
+  }
+  transcript.order.splice(low, 0, id);
 }
 
 function compareChatTranscriptCards(left: ChatTranscriptCard, right: ChatTranscriptCard): number {
