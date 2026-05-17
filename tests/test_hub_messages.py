@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -204,7 +205,7 @@ def _write_ticket(repo_root: Path, ticket_name: str) -> None:
     ticket_dir = repo_root / ".codex-autorunner" / "tickets"
     ticket_dir.mkdir(parents=True, exist_ok=True)
     (ticket_dir / ticket_name).write_text(
-        ("---\n" f"title: {ticket_name}\n" "done: false\n" "---\n\n" "Body\n"),
+        (f"---\ntitle: {ticket_name}\ndone: false\n---\n\nBody\n"),
         encoding="utf-8",
     )
 
@@ -1434,6 +1435,49 @@ def test_hub_messages_default_inbox_avoids_full_action_queue_collectors(
     payload = res.json()
     assert payload["items"][0]["run_id"] == run_id
     assert payload["items"][0]["queue_source"] == "ticket_flow_inbox"
+
+
+def test_gather_hub_message_snapshot_accepts_injected_collectors(hub_env) -> None:
+    run_id = "72727272-7272-7272-7272-727272727272"
+
+    def _hub_hints(**_kwargs):  # type: ignore[no-untyped-def]
+        return [
+            {
+                "item_type": "hub_capability_hint",
+                "run_id": run_id,
+                "hint_id": "test-port",
+                "queue_rank": 5,
+            }
+        ]
+
+    base_collectors = hub_gather_service.default_message_snapshot_collectors()
+    collectors = replace(
+        base_collectors,
+        gather_inbox=lambda *_args, **_kwargs: [],
+        build_hub_capability_hints=_hub_hints,
+        build_repo_capability_hints=lambda **_kwargs: [],
+        load_hub_inbox_dismissals=lambda _root: {},
+    )
+    context = SimpleNamespace(
+        supervisor=SimpleNamespace(
+            list_repos=lambda: [],
+            state=SimpleNamespace(last_scan_at="2026-04-05T00:00:00Z"),
+        ),
+        config=SimpleNamespace(
+            root=hub_env.hub_root,
+            pma=SimpleNamespace(enabled=True),
+            raw={},
+        ),
+    )
+
+    payload = hub_gather_service.gather_hub_message_snapshot(
+        context,
+        sections={"inbox"},
+        collectors=collectors,
+    )
+
+    assert payload["items"][0]["run_id"] == run_id
+    assert payload["items"][0]["hint_id"] == "test-port"
 
 
 def test_hub_messages_surfaces_mismatched_ticket_engine_state(
