@@ -96,9 +96,9 @@ def automation_overview(store: AutomationStore, *, limit: int = 100) -> dict[str
 
 def automation_row(store: AutomationStore, rule: AutomationRule) -> dict[str, Any]:
     schedules = store.list_schedules(rule_id=rule.rule_id)
-    jobs = store.list_jobs(rule_id=rule.rule_id, limit=25)
-    recent_jobs = sorted(jobs, key=lambda item: item.updated_at, reverse=True)
-    last_job = max(jobs, key=lambda item: item.updated_at, default=None)
+    recent_jobs = store.list_jobs(rule_id=rule.rule_id, limit=25, order="newest")
+    last_job = recent_jobs[0] if recent_jobs else None
+    job_count = store.count_jobs(rule_id=rule.rule_id)
     schedule = schedules[0] if schedules else None
     return {
         "id": rule.rule_id,
@@ -117,7 +117,7 @@ def automation_row(store: AutomationStore, rule: AutomationRule) -> dict[str, An
         "schedule": schedule.to_dict() if schedule is not None else None,
         "last_job": last_job.to_dict() if last_job is not None else None,
         "jobs": [_automation_job_row(job) for job in recent_jobs],
-        "job_count": len(jobs),
+        "job_count": job_count,
         "created_at": rule.created_at,
         "updated_at": rule.updated_at,
     }
@@ -300,7 +300,9 @@ def run_automation_now(
         raise KeyError(rule_id)
     schedule = store.list_schedules(rule_id=rule_id)
     schedule_payload = schedule[0].to_dict() if schedule else {"rule_id": rule_id}
-    schedule_payload["next_fire_at"] = normalize_timestamp(None)
+    manual_run_id = f"manual:{uuid.uuid4().hex}"
+    schedule_payload["next_fire_at"] = manual_run_id
+    schedule_payload["manual_run_id"] = manual_run_id
     event = AutomationEvent.create(
         event_type="schedule.fire",
         source=source,

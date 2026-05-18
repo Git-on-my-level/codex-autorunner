@@ -70,16 +70,26 @@ def test_hub_automations_create_weekly_ticket_flow_and_run_now(tmp_path):
     run = client.post(f"/hub/automations/{rule_id}/run")
     assert run.status_code == 200
     assert run.json()["jobs_created"] == 1
+    second_run = client.post(f"/hub/automations/{rule_id}/run")
+    assert second_run.status_code == 200
+    assert second_run.json()["jobs_created"] == 1
 
     jobs = AutomationStore(hub_root).list_jobs(rule_id=rule_id)
-    assert len(jobs) == 1
+    assert len(jobs) == 2
     assert jobs[0].executor["kind"] == "ticket_flow"
+    assert jobs[0].dedupe_key != jobs[1].dedupe_key
+
+    for _ in range(24):
+        extra_run = client.post(f"/hub/automations/{rule_id}/run")
+        assert extra_run.status_code == 200
+        assert extra_run.json()["jobs_created"] == 1
 
     detail = client.get(f"/hub/automations/{rule_id}")
     assert detail.status_code == 200
+    assert detail.json()["automation"]["job_count"] == 26
     job_rows = detail.json()["automation"]["jobs"]
-    assert len(job_rows) == 1
-    assert job_rows[0]["job_id"] == jobs[0].job_id
+    assert len(job_rows) == 25
+    assert detail.json()["automation"]["last_job"]["job_id"] == job_rows[0]["job_id"]
     assert "executor" not in job_rows[0]
     assert "payload" not in job_rows[0]
 

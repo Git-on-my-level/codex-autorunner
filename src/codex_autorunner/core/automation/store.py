@@ -3,7 +3,7 @@ from __future__ import annotations
 import sqlite3
 import uuid
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Literal, Optional
 
 from ..orchestration.sqlite import open_orchestration_sqlite
 from ..text_utils import _json_dumps, _json_loads_object
@@ -266,6 +266,7 @@ class AutomationStore:
         state: Optional[str] = None,
         rule_id: Optional[str] = None,
         limit: Optional[int] = None,
+        order: Literal["available", "newest"] = "available",
     ) -> list[AutomationJob]:
         clauses: list[str] = []
         params: list[Any] = []
@@ -279,18 +280,42 @@ class AutomationStore:
         limit_sql = "LIMIT ?" if limit is not None else ""
         if limit is not None:
             params.append(max(0, int(limit)))
+        order_sql = (
+            "updated_at DESC, available_at DESC, job_id DESC"
+            if order == "newest"
+            else "available_at ASC, updated_at ASC, job_id ASC"
+        )
         with open_orchestration_sqlite(self._hub_root, durable=self._durable) as conn:
             rows = conn.execute(
                 f"""
                 SELECT *
                   FROM orch_automation_jobs
                   {where}
-                 ORDER BY available_at ASC, updated_at ASC, job_id ASC
+                 ORDER BY {order_sql}
                   {limit_sql}
                 """,
                 tuple(params),
             ).fetchall()
         return [self._row_to_job(row) for row in rows]
+
+    def count_jobs(
+        self, *, state: Optional[str] = None, rule_id: Optional[str] = None
+    ) -> int:
+        clauses: list[str] = []
+        params: list[Any] = []
+        if state is not None:
+            clauses.append("state = ?")
+            params.append(state)
+        if rule_id is not None:
+            clauses.append("rule_id = ?")
+            params.append(rule_id)
+        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        with open_orchestration_sqlite(self._hub_root, durable=self._durable) as conn:
+            row = conn.execute(
+                f"SELECT COUNT(*) AS count FROM orch_automation_jobs {where}",
+                tuple(params),
+            ).fetchone()
+        return int(row["count"] if row is not None else 0)
 
     def claim_next_job(
         self, *, lock_key: Optional[str] = None, now: Optional[str] = None
