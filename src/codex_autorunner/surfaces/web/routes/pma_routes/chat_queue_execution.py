@@ -7,7 +7,7 @@ from typing import Any, Optional
 from fastapi import HTTPException
 
 from .....adapters.github.context_injection import maybe_inject_github_context
-from .....core.agent_model_defaults import resolve_model_for_agent
+from .....agents.runtime_options import resolve_agent_runtime_options
 from .....core.orchestration import (
     SurfaceThreadMessageRequest,
     build_surface_orchestration_ingress,
@@ -59,13 +59,15 @@ def _resolve_queue_default_model(
     except (OSError, ValueError, AttributeError):
         state = None
     defaults = _get_pma_config(request)
-    return resolve_model_for_agent(
+    options = resolve_agent_runtime_options(
         agent or defaults.get("default_agent") or "codex",
         state=state,
         config=request.app.state.config,
-        configured_default=configured_default,
-        include_builtin=False,
+        workspace_root=getattr(request.app.state.config, "root", None),
+        configured_model_default=configured_default,
+        include_builtin_model=False,
     )
+    return options.model
 
 
 def _resolve_profile_with_stale_pma_origin_fallback(

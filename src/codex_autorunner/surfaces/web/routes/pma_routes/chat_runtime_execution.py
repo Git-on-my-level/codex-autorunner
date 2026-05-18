@@ -20,6 +20,7 @@ from .....agents.registry import (
     resolve_agent_runtime,
     wrap_requested_agent_context,
 )
+from .....agents.runtime_options import resolve_opencode_model_payload
 from .....core.orchestration.runtime_thread_events import (
     RuntimeThreadRunEventState,
     merge_runtime_thread_raw_events,
@@ -640,7 +641,6 @@ async def execute_opencode(
         collect_opencode_output,
         extract_session_id,
         opencode_stream_timeouts,
-        split_model_id,
     )
 
     client = await supervisor.get_client(hub_root)
@@ -675,7 +675,7 @@ async def execute_opencode(
         await opencode_harness.interrupt(hub_root, session_id, None)
         return {"status": "interrupted", "detail": "PMA chat interrupted"}
 
-    model_payload = split_model_id(model)
+    model_payload = resolve_opencode_model_payload(model)
     await supervisor.mark_turn_started(hub_root)
 
     ready_event = asyncio.Event()

@@ -5,8 +5,8 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Request
 
 from .....agents.registry import get_agent_descriptor, get_available_agents
+from .....agents.runtime_options import resolve_agent_runtime_options
 from .....core.agent_capability_projection import project_agent_capabilities
-from .....core.agent_model_defaults import resolve_model_for_agent
 from .....core.orchestration.catalog import map_agent_capabilities
 from .....core.state import load_state
 from ...services.pma import get_pma_request_context
@@ -191,13 +191,15 @@ def build_pma_meta_routes(
             state = load_state(request.app.state.engine.state_path)
         except (OSError, ValueError, AttributeError):
             state = None
-        default_model = resolve_model_for_agent(
+        runtime_options = resolve_agent_runtime_options(
             effective_default_agent,
             state=state,
             config=request.app.state.config,
-            configured_default=defaults.get("model"),
-            include_builtin=False,
+            workspace_root=getattr(request.app.state.config, "root", None),
+            configured_model_default=defaults.get("model"),
+            include_builtin_model=False,
         )
+        default_model = runtime_options.model
         payload: dict[str, Any] = {
             "agents": enriched_agents,
             "default": effective_default_agent,

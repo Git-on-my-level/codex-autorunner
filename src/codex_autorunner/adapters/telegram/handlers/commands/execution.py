@@ -88,13 +88,13 @@ from .....agents.opencode.runtime import (
     map_approval_policy_to_permission,
     opencode_missing_env,
     opencode_stream_timeouts,
-    split_model_id,
 )
 from .....agents.registry import (
     get_registered_agents,
     resolve_agent_runtime,
     wrap_requested_agent_context,
 )
+from .....agents.runtime_options import resolve_opencode_model_payload
 from .....core.artifact_instructions import (
     ArtifactDeliveryContext,
     render_agent_artifact_instructions,
@@ -2240,7 +2240,7 @@ class ExecutionCommands(TelegramCommandSupportMixin):
                 try:
                     await supervisor.mark_turn_started(workspace_root)
                     opencode_turn_started = True
-                    model_payload = split_model_id(record.model)
+                    model_payload = resolve_opencode_model_payload(record.model)
                     missing_env = await opencode_missing_env(
                         opencode_client,
                         str(workspace_root),

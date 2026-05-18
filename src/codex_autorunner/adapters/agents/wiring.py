@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any, Awaitable, Callable, Mapping, Optional, cast
 
 from ...agents.registry import get_agent_descriptor, resolve_agent_execution_target
-from ...core.agent_model_defaults import resolve_model_for_agent
+from ...agents.runtime_options import resolve_agent_runtime_options
 from ...core.config import RepoConfig
 from ...core.destinations import DockerDestination
 from ...core.ports.agent_backend import AgentBackend
@@ -94,27 +94,13 @@ class AgentBackendFactory:
         if not self._config.app_server.command:
             raise ValueError("app_server.command is required for codex backend")
 
-        approval_policy = state.autorunner_approval_policy or "never"
-        sandbox_mode = state.autorunner_sandbox_mode or "dangerFullAccess"
-        if sandbox_mode == "workspaceWrite":
-            sandbox_policy: Any = {
-                "type": "workspaceWrite",
-                "writableRoots": [str(self._repo_root)],
-                "networkAccess": bool(state.autorunner_workspace_write_network),
-            }
-        else:
-            sandbox_policy = sandbox_mode
-
-        model = resolve_model_for_agent(
-            target.runtime_agent_id,
+        options = resolve_agent_runtime_options(
+            getattr(target, "requested_agent_id", target.runtime_agent_id),
+            profile=getattr(target, "requested_profile", target.runtime_profile),
             state=state,
             config=self._config,
+            workspace_root=self._repo_root,
         )
-        reasoning_effort = (
-            state.autorunner_effort_override or self._config.codex_reasoning
-        )
-        default_approval_decision = self._config.ticket_flow.default_approval_decision
-        turn_timeout_seconds = self._config.app_server.turn_timeout_seconds
 
         cache_key = self._runtime_cache_key(
             target.runtime_agent_id, target.runtime_profile
@@ -124,13 +110,13 @@ class AgentBackendFactory:
             cached = CodexAppServerBackend(
                 supervisor=self._ensure_codex_supervisor(),
                 workspace_root=self._repo_root,
-                approval_policy=approval_policy,
-                sandbox_policy=sandbox_policy,
-                model=model,
-                reasoning_effort=reasoning_effort,
-                turn_timeout_seconds=turn_timeout_seconds,
+                approval_policy=options.effective_approval_policy,
+                sandbox_policy=options.sandbox.policy,
+                model=options.model,
+                reasoning_effort=options.reasoning,
+                turn_timeout_seconds=options.turn_timeout_seconds,
                 auto_restart=self._config.app_server.auto_restart,
-                request_timeout=self._config.app_server.request_timeout,
+                request_timeout=options.request_timeout_seconds,
                 turn_stall_timeout_seconds=self._config.app_server.turn_stall_timeout_seconds,
                 turn_stall_poll_interval_seconds=self._config.app_server.turn_stall_poll_interval_seconds,
                 turn_stall_recovery_min_interval_seconds=self._config.app_server.turn_stall_recovery_min_interval_seconds,
@@ -140,23 +126,23 @@ class AgentBackendFactory:
                 restart_backoff_initial_seconds=self._config.app_server.client.restart_backoff_initial_seconds,
                 restart_backoff_max_seconds=self._config.app_server.client.restart_backoff_max_seconds,
                 restart_backoff_jitter_ratio=self._config.app_server.client.restart_backoff_jitter_ratio,
-                output_policy=self._config.app_server.output.policy,
+                output_policy=options.output_policy,
                 notification_handler=notification_handler,
                 approval_handler=approval_handler,
                 logger=self._logger,
-                default_approval_decision=default_approval_decision,
+                default_approval_decision=options.default_approval_decision,
             )
             self._backend_cache[cache_key] = cached
         elif isinstance(cached, CodexAppServerBackend):
             cached.configure(
-                approval_policy=approval_policy,
-                sandbox_policy=sandbox_policy,
-                model=model,
-                reasoning_effort=reasoning_effort,
-                turn_timeout_seconds=turn_timeout_seconds,
+                approval_policy=options.effective_approval_policy,
+                sandbox_policy=options.sandbox.policy,
+                model=options.model,
+                reasoning_effort=options.reasoning,
+                turn_timeout_seconds=options.turn_timeout_seconds,
                 notification_handler=notification_handler,
                 approval_handler=approval_handler,
-                default_approval_decision=default_approval_decision,
+                default_approval_decision=options.default_approval_decision,
             )
         return cached
 
@@ -170,6 +156,13 @@ class AgentBackendFactory:
         agent_cfg = self._config.resolved_agent_config(
             target.runtime_agent_id,
             profile=target.runtime_profile,
+        )
+        options = resolve_agent_runtime_options(
+            getattr(target, "requested_agent_id", target.runtime_agent_id),
+            profile=getattr(target, "requested_profile", target.runtime_profile),
+            state=state,
+            config=self._config,
+            workspace_root=self._repo_root,
         )
         base_url = agent_cfg.base_url if agent_cfg else None
         username = os.environ.get("OPENCODE_SERVER_USERNAME")
@@ -194,15 +187,11 @@ class AgentBackendFactory:
                     supervisor=supervisor,
                     workspace_root=self._repo_root,
                     auth=auth,
-                    timeout=self._config.app_server.request_timeout,
-                    model=resolve_model_for_agent(
-                        target.runtime_agent_id,
-                        state=state,
-                        config=self._config,
-                    ),
-                    reasoning=state.autorunner_effort_override,
-                    approval_policy=state.autorunner_approval_policy,
-                    session_stall_timeout_seconds=self._config.opencode.session_stall_timeout_seconds,
+                    timeout=options.request_timeout_seconds,
+                    model=options.model,
+                    reasoning=options.reasoning,
+                    approval_policy=options.approval_policy,
+                    session_stall_timeout_seconds=options.session_stall_timeout_seconds,
                     logger=self._logger,
                 )
             else:
@@ -210,27 +199,19 @@ class AgentBackendFactory:
                     base_url=base_url,
                     workspace_root=self._repo_root,
                     auth=auth,
-                    timeout=self._config.app_server.request_timeout,
-                    model=resolve_model_for_agent(
-                        target.runtime_agent_id,
-                        state=state,
-                        config=self._config,
-                    ),
-                    reasoning=state.autorunner_effort_override,
-                    approval_policy=state.autorunner_approval_policy,
-                    session_stall_timeout_seconds=self._config.opencode.session_stall_timeout_seconds,
+                    timeout=options.request_timeout_seconds,
+                    model=options.model,
+                    reasoning=options.reasoning,
+                    approval_policy=options.approval_policy,
+                    session_stall_timeout_seconds=options.session_stall_timeout_seconds,
                     logger=self._logger,
                 )
             self._backend_cache[cache_key] = cached
         elif isinstance(cached, OpenCodeBackend):
             cached.configure(
-                model=resolve_model_for_agent(
-                    target.runtime_agent_id,
-                    state=state,
-                    config=self._config,
-                ),
-                reasoning=state.autorunner_effort_override,
-                approval_policy=state.autorunner_approval_policy,
+                model=options.model,
+                reasoning=options.reasoning,
+                approval_policy=options.approval_policy,
             )
         return cached
 

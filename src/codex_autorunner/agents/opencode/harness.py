@@ -19,14 +19,12 @@ from typing import Any, AsyncIterator, Awaitable, Callable, Optional
 
 import httpx
 
-from ...core.agent_model_defaults import resolve_model_for_agent
 from ...core.logging_utils import log_event
 from ...core.orchestration.interfaces import FreshConversationRequiredError
 from ...core.orchestration.runtime_thread_events import (
     RuntimeEventDriver,
 )
 from ...core.orchestration.turn_event_buffer import TurnEventBuffer
-from ...core.sse import SSEEvent
 from ..base import AgentHarness
 from ..types import (
     AgentId,
@@ -57,9 +55,14 @@ from .runtime import (
     extract_turn_id,
     map_approval_policy_to_permission,
     opencode_stream_timeouts,
-    split_model_id,
 )
 from .supervisor_protocol import OpenCodeHarnessSupervisorProtocol
+from .turn_lifecycle import (
+    OpenCodeTurnObservation,
+    OpenCodeTurnOutputSource,
+    lifecycle_result_from_observation,
+    terminal_signal_from_payloads,
+)
 from .turn_runtime import (
     OpenCodeTurnCommand,
     append_synthetic_acceptance_events,
@@ -68,15 +71,21 @@ from .turn_runtime import (
     pre_connect_event_stream,
     start_command,
 )
-from .turn_lifecycle import (
-    OpenCodeTurnObservation,
-    OpenCodeTurnOutputSource,
-    lifecycle_result_from_observation,
-    terminal_signal_from_payloads,
-)
 
 _logger = logging.getLogger(__name__)
 _GLOB_META_RE = re.compile(r"[*?\[\]{}]")
+
+
+def _resolve_runtime_model_payload(model: Optional[str]) -> Optional[dict[str, str]]:
+    from ..runtime_options import (
+        resolve_agent_runtime_options,
+        resolve_opencode_model_payload,
+    )
+
+    resolved_model = model
+    if resolved_model is None:
+        resolved_model = resolve_agent_runtime_options("opencode").model
+    return resolve_opencode_model_payload(resolved_model)
 
 
 def _first_text_field(entry: dict[str, Any], keys: tuple[str, ...]) -> Optional[str]:
@@ -586,9 +595,7 @@ class OpenCodeHarness(AgentHarness):
             )
             await self._release_turn_client(reserved_workspace)
             raise
-        if model is None:
-            model = resolve_model_for_agent("opencode")
-        model_payload = split_model_id(model)
+        model_payload = _resolve_runtime_model_payload(model)
         preconnected = await pre_connect_event_stream(
             client,
             canonical_workspace,
@@ -716,8 +723,7 @@ class OpenCodeHarness(AgentHarness):
             )
             await self._release_turn_client(reserved_workspace)
             raise
-        if model is None:
-            model = resolve_model_for_agent("opencode")
+        model_payload = _resolve_runtime_model_payload(model)
         arguments = prompt if prompt else ""
         preconnected = await pre_connect_event_stream(
             client,
@@ -726,7 +732,7 @@ class OpenCodeHarness(AgentHarness):
         )
         turn_id = build_turn_id(conversation_id)
         pending = _PendingTurnConfig(
-            model_payload=split_model_id(model),
+            model_payload=model_payload,
             approval_mode=approval_mode,
             sandbox_policy=sandbox_policy,
             prompt=prompt,

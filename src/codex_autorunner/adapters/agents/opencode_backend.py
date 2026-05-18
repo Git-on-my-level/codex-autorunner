@@ -295,14 +295,16 @@ class OpenCodeBackend(AgentBackend):
                 target={},
                 context={"workspace": str(workspace_root)},
             )
+        if not self._session_id:
+            raise RuntimeError("Failed to create OpenCode session: missing session ID")
 
-        _logger.info("Running turn events on session %s", self._session_id)
         active_session_id = self._session_id
+        _logger.info("Running turn events on session %s", active_session_id)
 
         try:
-            self._last_turn_id = build_turn_id(self._session_id)
+            self._last_turn_id = build_turn_id(active_session_id)
 
-            yield Started(timestamp=now_iso(), session_id=self._session_id)
+            yield Started(timestamp=now_iso(), session_id=active_session_id)
 
             yield OutputDelta(
                 timestamp=now_iso(), content=message, delta_type="user_message"
@@ -402,7 +404,7 @@ class OpenCodeBackend(AgentBackend):
 
             async def _run_prompt() -> Any:
                 return await client.prompt_async(
-                    self._session_id,
+                    active_session_id,
                     message=message,
                     agent=self._agent,
                     model=model_payload,
@@ -412,7 +414,7 @@ class OpenCodeBackend(AgentBackend):
             started_command = start_command(
                 OpenCodeTurnCommand(
                     kind="prompt",
-                    conversation_id=self._session_id,
+                    conversation_id=active_session_id,
                     executor=_run_prompt,
                 )
             )

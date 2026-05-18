@@ -13,7 +13,7 @@ from .....adapters.github.context_injection import (
 from .....agents.base import harness_supports_event_streaming
 from .....agents.codex.harness import CodexHarness
 from .....agents.registry import get_registered_agents as _get_registered_agents
-from .....core.agent_model_defaults import resolve_model_for_agent
+from .....agents.runtime_options import resolve_agent_runtime_options
 from .....core.orchestration import (
     build_surface_orchestration_ingress as _build_surface_orchestration_ingress,
 )
@@ -75,13 +75,15 @@ def _resolve_pma_default_model(
     except (OSError, ValueError, AttributeError):
         state = None
     pma_config = _get_pma_config(request)
-    return resolve_model_for_agent(
+    options = resolve_agent_runtime_options(
         agent or pma_config.get("default_agent") or "codex",
         state=state,
         config=request.app.state.config,
-        configured_default=configured_default,
-        include_builtin=False,
+        workspace_root=getattr(request.app.state.config, "root", None),
+        configured_model_default=configured_default,
+        include_builtin_model=False,
     )
+    return options.model
 
 
 def _pma_turn_idle_timeout_seconds(request: Request) -> float:

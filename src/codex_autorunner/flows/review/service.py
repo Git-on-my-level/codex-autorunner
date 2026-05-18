@@ -14,7 +14,7 @@ from ...agents.opencode.run_prompt import OpenCodeRunConfig, run_opencode_prompt
 from ...agents.opencode.runtime import PERMISSION_ALLOW
 from ...agents.opencode.supervisor import OpenCodeSupervisor
 from ...agents.registry import has_capability, validate_agent_id
-from ...core.agent_model_defaults import resolve_model_for_agent
+from ...agents.runtime_options import resolve_agent_runtime_options
 from ...core.config import RepoConfig
 from ...core.locks import (
     FileLock,
@@ -666,13 +666,17 @@ class ReviewService:
                 status_code=400,
             ) from exc
 
-        model = payload.get("model") or resolve_model_for_agent(
-            "opencode",
+        runtime_options = resolve_agent_runtime_options(
+            agent_id,
             state=runner_state,
             config=config,
-            configured_default=review_cfg.get("model"),
+            workspace_root=self.ctx.repo_root,
+            explicit_model=payload.get("model"),
+            configured_model_default=review_cfg.get("model"),
+            explicit_reasoning=payload.get("reasoning") or review_cfg.get("reasoning"),
         )
-        reasoning = payload.get("reasoning") or review_cfg.get("reasoning")
+        model = runtime_options.model
+        reasoning = runtime_options.reasoning
         max_wallclock_seconds = payload.get("max_wallclock_seconds") or review_cfg.get(
             "max_wallclock_seconds"
         )

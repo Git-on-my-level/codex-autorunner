@@ -6,7 +6,7 @@ from typing import Any
 from fastapi import HTTPException, Request
 
 from .....adapters.chat.approval_modes import resolve_approval_mode_policies
-from .....core.agent_model_defaults import resolve_model_for_agent
+from .....agents.runtime_options import resolve_agent_runtime_options
 from .....core.pma.attachments import (
     normalize_managed_thread_attachments as _core_normalize_managed_thread_attachments,
 )
@@ -71,13 +71,15 @@ def _resolve_managed_thread_default_model(
         state = load_state(request.app.state.engine.state_path)
     except (OSError, ValueError, AttributeError):
         state = None
-    return resolve_model_for_agent(
+    options = resolve_agent_runtime_options(
         _normalize_optional_text(agent) or "codex",
         state=state,
         config=request.app.state.config,
-        configured_default=configured_default,
-        include_builtin=False,
+        workspace_root=getattr(request.app.state.config, "root", None),
+        configured_model_default=configured_default,
+        include_builtin_model=False,
     )
+    return options.model
 
 
 def get_live_thread_runtime_binding(service: Any, managed_thread_id: str) -> Any:

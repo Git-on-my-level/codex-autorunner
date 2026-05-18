@@ -35,7 +35,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, AsyncGenerator, Optional
 
-from ...core.agent_model_defaults import resolve_model_for_agent
+from ...agents.runtime_options import resolve_agent_runtime_options
 from ...core.config import RepoConfig
 from ...core.managed_thread_identity import (
     FILE_CHAT_OPENCODE_KEY,
@@ -140,10 +140,14 @@ class BackendOrchestrator:
         backend = await self.get_backend(agent_id, state)
 
         effective_workspace = workspace_root or self._repo_root
-        context: dict[str, Any] = {"workspace": str(effective_workspace)}
-        context["reuse_session"] = bool(
-            getattr(self._config, "autorunner_reuse_session", False)
+        options = resolve_agent_runtime_options(
+            agent_id,
+            state=state,
+            config=self._config,
+            workspace_root=effective_workspace,
         )
+        context: dict[str, Any] = {"workspace": str(effective_workspace)}
+        context["reuse_session"] = options.reuse_session
         if session_id:
             context["session_id"] = session_id
 
@@ -177,7 +181,15 @@ class BackendOrchestrator:
 
         Yields RunEvent objects.
         """
-        reuse_session = bool(getattr(self._config, "autorunner_reuse_session", False))
+        options = resolve_agent_runtime_options(
+            agent_id,
+            state=state,
+            config=self._config,
+            workspace_root=workspace_root or self._repo_root,
+            explicit_model=model,
+            explicit_reasoning=reasoning,
+        )
+        reuse_session = options.reuse_session
         effective_session_id = session_id
         if reuse_session and session_key and not effective_session_id:
             effective_session_id = self.get_thread_id(session_key)
@@ -195,28 +207,9 @@ class BackendOrchestrator:
 
         backend = self._active_backend
         assert backend is not None, "backend should be initialized before run_turn"
-        app_server_cfg = getattr(self._config, "app_server", None)
-        turn_timeout_seconds = getattr(app_server_cfg, "turn_timeout_seconds", None)
-
-        effective_model = resolve_model_for_agent(
-            agent_id,
-            model,
-            state=state,
-            config=self._config,
-        )
-
         backend.configure(
-            approval_policy=state.autorunner_approval_policy,
-            approval_policy_default="never",
-            sandbox_policy=state.autorunner_sandbox_mode,
-            sandbox_policy_default="dangerFullAccess",
-            reuse_session=reuse_session,
-            model=effective_model,
-            reasoning=reasoning,
-            reasoning_effort=reasoning,
-            turn_timeout_seconds=turn_timeout_seconds,
+            **options.backend_configure_kwargs(),
             notification_handler=self._notification_handler,
-            default_approval_decision=self._config.ticket_flow.default_approval_decision,
         )
 
         event_stream: AsyncGenerator[RunEvent, None]
