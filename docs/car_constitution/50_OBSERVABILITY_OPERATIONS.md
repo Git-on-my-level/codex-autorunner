@@ -68,6 +68,8 @@ From artifacts alone, a debugger must be able to answer:
   budget.
 - Use `docs/ops/web-read-models.md` for the concrete rebuild and diagnostic
   commands before changing projection code.
+- Chat index/detail stream cursor repair is surfaced as `projection.cursor_gap`
+  with a `repair.snapshotRoute` pointing back to `/hub/read-models/chats*`.
 - A stream or snapshot regression must identify the failing family: chat index,
   chat detail, repo/worktree topology, repo/worktree runtime, ticket detail, or
   a newer documented family.

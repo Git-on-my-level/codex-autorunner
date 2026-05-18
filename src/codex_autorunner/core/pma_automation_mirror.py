@@ -43,6 +43,7 @@ class PmaAutomationMirror:
                 identifier=str(subscription_id or ""),
                 ok=False,
                 error=str(exc),
+                error_code=type(exc).__name__,
             )
 
     def mirror_timer_schedule(
@@ -70,6 +71,7 @@ class PmaAutomationMirror:
                 identifier=str(timer_id or ""),
                 ok=False,
                 error=str(exc),
+                error_code=type(exc).__name__,
             )
 
 

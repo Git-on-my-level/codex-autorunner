@@ -202,6 +202,9 @@ _run_guardrails() {
   echo "Checking keyword contracts..."
   "$PYTHON_BIN" scripts/check_keyword_contracts.py --report-only
 
+  echo "Checking migration observability docs-code sync..."
+  "$PYTHON_BIN" scripts/check_migration_observability_docs.py
+
   echo "Checking test /tmp hermetic usage..."
   "$PYTHON_BIN" scripts/check_test_tmp_usage.py
 }

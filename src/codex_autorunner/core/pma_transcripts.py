@@ -38,6 +38,11 @@ class PmaTranscriptBackfillResult:
 
 @dataclass(frozen=True)
 class PmaTranscriptCoverageStatus:
+    operation: str
+    scope: str
+    owner: str
+    canonical_store: str
+    legacy_primary_path: bool
     mirrored_count: int
     legacy_metadata_files_count: int
     legacy_unmirrored_files_count: int
@@ -188,6 +193,11 @@ class PmaTranscriptLegacyBackfill:
             if not turn_id or turn_id not in mirrored_ids:
                 legacy_unmirrored += 1
         return PmaTranscriptCoverageStatus(
+            operation="pma_transcript_mirror_coverage",
+            scope="pma",
+            owner="orchestration_transcript_mirrors",
+            canonical_store="orch_transcript_mirrors",
+            legacy_primary_path=False,
             mirrored_count=len(mirrored_ids),
             legacy_metadata_files_count=len(legacy_metadata_paths),
             legacy_unmirrored_files_count=legacy_unmirrored,

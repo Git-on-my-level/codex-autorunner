@@ -27,6 +27,7 @@ from ..read_model_contracts import (
     ChatTimelineIdentity,
     ChatTimelineItem,
     ChatTimelineProvenance,
+    CursorGapRepair,
     PageWindow,
     ProjectionCursor,
     ReadModelEventEnvelope,
@@ -198,6 +199,18 @@ class ChatReadModelService:
             if isinstance(group, Mapping)
         ]
         counters = _chat_index_counters_from_raw(patch_map.get("counters"), rows)
+        repair = None
+        repair_raw = raw.get("repair")
+        if isinstance(repair_raw, Mapping):
+            repair = CursorGapRepair(
+                snapshot_route=str(
+                    repair_raw.get("snapshot_route") or SNAPSHOT_CHAT_INDEX_ROUTE
+                ),
+                requested_cursor=max(
+                    0, _int_fallback(repair_raw.get("requested_cursor"), 0)
+                ),
+                latest_cursor=max(0, _int_fallback(repair_raw.get("latest_cursor"), 0)),
+            )
         return ChatIndexPatchEvent(
             envelope=ReadModelEventEnvelope(
                 event_type=event_type,
@@ -229,6 +242,7 @@ class ChatReadModelService:
                 ),
                 counters=counters,
             ),
+            repair=repair,
         )
 
     def chat_detail_contract(

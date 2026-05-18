@@ -115,6 +115,11 @@ def test_pma_transcript_legacy_backfill_reports_errors_and_coverage(
     assert result.imported_count == 0
     assert result.skipped_count == 0
     assert result.error_count == 2
+    assert status.operation == "pma_transcript_mirror_coverage"
+    assert status.scope == "pma"
+    assert status.owner == "orchestration_transcript_mirrors"
+    assert status.canonical_store == "orch_transcript_mirrors"
+    assert status.legacy_primary_path is False
     assert status.mirrored_count == 0
     assert status.legacy_metadata_files_count == 2
     assert status.legacy_unmirrored_files_count == 2

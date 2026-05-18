@@ -140,6 +140,8 @@ def test_subscription_mirror_returns_structured_success(tmp_path) -> None:
     assert result.ok is True
     assert result.operation == "mirror_subscription_rule"
     assert result.identifier == subscription.subscription_id
+    assert result.owner == "pma_automation"
+    assert result.scope == "unified_automation"
     assert result.rule_id == f"builtin:pma:subscription:{subscription.subscription_id}"
     assert AutomationStore(tmp_path).get_rule(result.rule_id) is not None
 
@@ -172,7 +174,10 @@ def test_timer_mirror_failure_returns_structured_error_and_logs(
     assert result.ok is False
     assert result.operation == "mirror_timer_schedule"
     assert result.identifier == timer.timer_id
+    assert result.owner == "pma_automation"
+    assert result.scope == "unified_automation"
     assert "unified store unavailable" in result.error
+    assert result.error_code == "RuntimeError"
     assert any(
         "Failed to mirror PMA timer into unified automation schedule"
         in record.getMessage()

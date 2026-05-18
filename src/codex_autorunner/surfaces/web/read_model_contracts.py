@@ -37,6 +37,7 @@ __all__ = [
     "ReadModelContract",
     "ReadModelEventEnvelope",
     "RepairPolicy",
+    "CursorGapRepair",
     "RepoTopology",
     "RepoWorktreeDetailSnapshot",
     "RepoWorktreePatch",
@@ -89,6 +90,11 @@ class RepairPolicy(ReadModelContract):
     cursor_query_param: str = "after"
     gap_event_type: Literal["projection.cursor_gap"] = "projection.cursor_gap"
     behavior: Literal["repair_snapshot_required"] = "repair_snapshot_required"
+
+
+class CursorGapRepair(RepairPolicy):
+    requested_cursor: int = Field(ge=0)
+    latest_cursor: int = Field(ge=0)
 
 
 class PageWindow(ReadModelContract):
@@ -184,6 +190,7 @@ class ChatIndexPatch(ReadModelContract):
 class ChatIndexPatchEvent(ReadModelContract):
     envelope: ReadModelEventEnvelope
     patch: ChatIndexPatch
+    repair: Optional[CursorGapRepair] = None
 
 
 class ChatTimelineIdentity(ReadModelContract):

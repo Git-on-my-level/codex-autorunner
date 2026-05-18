@@ -38,9 +38,12 @@ class PmaUnifiedMirrorResult:
     operation: str
     identifier: str
     ok: bool
+    owner: str = "pma_automation"
+    scope: str = "unified_automation"
     rule_id: Optional[str] = None
     schedule_id: Optional[str] = None
     error: Optional[str] = None
+    error_code: Optional[str] = None
 
 
 class PmaUnifiedAutomationAdapter:

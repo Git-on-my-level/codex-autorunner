@@ -256,10 +256,16 @@ def build_history_files_docs_router(
         context = get_pma_request_context(request)
         status = context.transcript_store().coverage_status()
         return {
+            "operation": status.operation,
+            "scope": status.scope,
+            "owner": status.owner,
+            "canonical_store": status.canonical_store,
+            "legacy_primary_path": status.legacy_primary_path,
             "mirrored_transcripts": status.mirrored_count,
             "legacy_metadata_files": status.legacy_metadata_files_count,
             "legacy_files_not_mirrored": status.legacy_unmirrored_files_count,
             "last_backfill_status": status.last_backfill_status,
+            "repair_status": status.last_backfill_status,
         }
 
     @router.get("/history/{turn_id}")

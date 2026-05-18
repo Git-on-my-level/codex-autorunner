@@ -1010,6 +1010,11 @@ def test_hub_read_models_chats_patch_stream_uses_projection_revisions(hub_env) -
     assert len(repairs) == 1
     assert repairs[0]["envelope"]["cursor"]["sequence"] == snapshot_cursor + 1
     assert repairs[0]["envelope"]["eventType"] == "projection.cursor_gap"
+    assert repairs[0]["envelope"]["entityKind"] == "chat"
+    assert repairs[0]["envelope"]["entityId"] == "chat.index"
+    assert repairs[0]["envelope"]["operation"] == "invalidate"
+    assert repairs[0]["repair"]["requestedCursor"] == snapshot_cursor
+    assert repairs[0]["repair"]["snapshotRoute"] == "/hub/read-models/chats"
     assert repairs[0]["patch"]["rows"] == []
     assert repairs[0]["patch"]["counters"]["total"] == 2
 
@@ -1090,6 +1095,9 @@ def test_hub_read_models_chats_patch_stream_repairs_future_cursor(hub_env) -> No
     repairs = _event_payloads(response.text, "projection.cursor_gap")
     assert repairs[0]["envelope"]["operation"] == "invalidate"
     assert repairs[0]["envelope"]["eventType"] == "projection.cursor_gap"
+    assert repairs[0]["envelope"]["entityId"] == "chat.index"
+    assert repairs[0]["repair"]["requestedCursor"] == 999
+    assert repairs[0]["repair"]["snapshotRoute"] == "/hub/read-models/chats"
 
 
 def test_hub_read_models_chats_patch_stream_repairs_future_cursor_with_empty_journal(

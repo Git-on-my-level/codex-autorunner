@@ -798,6 +798,11 @@ def test_pma_history_route_reports_legacy_coverage_before_and_after_import(
         )
         assert client.get("/hub/pma/history").json()["entries"] == []
         before_status = client.get("/hub/pma/history/status").json()
+        assert before_status["operation"] == "pma_transcript_mirror_coverage"
+        assert before_status["scope"] == "pma"
+        assert before_status["owner"] == "orchestration_transcript_mirrors"
+        assert before_status["canonical_store"] == "orch_transcript_mirrors"
+        assert before_status["legacy_primary_path"] is False
         assert before_status["mirrored_transcripts"] == 0
         assert before_status["legacy_metadata_files"] == 1
         assert before_status["legacy_files_not_mirrored"] == 1
@@ -813,6 +818,7 @@ def test_pma_history_route_reports_legacy_coverage_before_and_after_import(
     assert after_status["legacy_metadata_files"] == 1
     assert after_status["legacy_files_not_mirrored"] == 0
     assert after_status["last_backfill_status"]["imported_count"] == 1
+    assert after_status["repair_status"]["imported_count"] == 1
 
 
 def test_pma_history_detail_includes_turn_timeline(hub_env) -> None:
