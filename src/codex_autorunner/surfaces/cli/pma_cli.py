@@ -9,6 +9,7 @@ from typing import Any, Optional
 import httpx
 import typer
 
+from ...adapters.chat.automation_surface import _resolve_rule
 from ...core.automation.product import (
     AutomationPresetRequest,
     automation_overview,
@@ -125,23 +126,20 @@ def _is_json_response_error(data: dict) -> Optional[str]:
 
 
 def _resolve_automation_rule(store: Any, rule_id: str) -> Any:
-    query = str(rule_id or "").strip()
-    if not query:
-        exit_with_error("Automation id is required")
-    exact = store.get_rule(query)
-    if exact is not None:
-        return exact
-    matches = [
-        rule
-        for rule in store.list_rules()
-        if rule.rule_id.startswith(query) or query in rule.rule_id
-    ]
-    if not matches:
+    try:
+        return _resolve_rule(store, rule_id)
+    except ValueError as exc:
+        msg = str(exc)
+        if msg == "automation id is required":
+            exit_with_error("Automation id is required")
+        prefix = "automation id is ambiguous:"
+        if msg.lower().startswith(prefix):
+            rest = msg[len(prefix) :].lstrip()
+            exit_with_error(f"Automation id is ambiguous: {rest}")
+        raise
+    except KeyError as exc:
+        query = exc.args[0] if exc.args else rule_id
         exit_with_error(f"Automation not found: {query}")
-    if len(matches) > 1:
-        choices = ", ".join(rule.rule_id for rule in matches[:5])
-        exit_with_error(f"Automation id is ambiguous: {choices}")
-    return matches[0]
 
 
 @automation_app.command("list")
