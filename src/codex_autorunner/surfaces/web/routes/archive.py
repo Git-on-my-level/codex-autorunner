@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Optional
+from typing import NoReturn, Optional
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import FileResponse, PlainTextResponse
@@ -13,32 +13,29 @@ from ..schemas import (
     ArchiveTreeResponse,
     LocalRunArchivesResponse,
 )
-from .archive_helpers import (
-    iter_local_run_archives,
-    iter_snapshots,
-    list_tree,
-    load_meta,
-    normalize_archive_rel_path,
-    resolve_local_run_root,
-    resolve_snapshot_root,
-    snapshot_summary,
+from ..services.workspace_resources import (
+    ArchiveResourceService,
+    WorkspaceResourceError,
 )
+
+
+def _raise_http(exc: WorkspaceResourceError) -> NoReturn:
+    raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
 
 
 def build_archive_routes() -> APIRouter:
     router = APIRouter(prefix="/api/archive", tags=["archive"])
+    service = ArchiveResourceService()
 
     @router.get("/snapshots", response_model=ArchiveSnapshotsResponse)
     def list_snapshots(request: Request):
         repo_root = request.app.state.engine.repo_root
-        snapshots = iter_snapshots(repo_root)
-        return {"snapshots": snapshots}
+        return service.list_snapshots(repo_root)
 
     @router.get("/local-runs", response_model=LocalRunArchivesResponse)
     def list_local_runs(request: Request):
         repo_root = request.app.state.engine.repo_root
-        archives = iter_local_run_archives(repo_root)
-        return {"archives": archives}
+        return service.list_local_runs(repo_root)
 
     @router.get(
         "/snapshots/{snapshot_id}", response_model=ArchiveSnapshotDetailResponse
@@ -48,19 +45,9 @@ def build_archive_routes() -> APIRouter:
     ):
         repo_root = request.app.state.engine.repo_root
         try:
-            snapshot_root, worktree_id = resolve_snapshot_root(
-                repo_root, snapshot_id, worktree_repo_id
-            )
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        except FileNotFoundError as exc:
-            raise HTTPException(status_code=404, detail=str(exc)) from exc
-        except RuntimeError as exc:
-            raise HTTPException(status_code=409, detail=str(exc)) from exc
-
-        meta = load_meta(snapshot_root / "META.json")
-        summary = snapshot_summary(snapshot_root, worktree_id, meta)
-        return {"snapshot": summary, "meta": meta}
+            return service.snapshot_detail(repo_root, snapshot_id, worktree_repo_id)
+        except WorkspaceResourceError as exc:
+            _raise_http(exc)
 
     @router.get("/tree", response_model=ArchiveTreeResponse)
     def list_tree_endpoint(
@@ -71,17 +58,9 @@ def build_archive_routes() -> APIRouter:
     ):
         repo_root = request.app.state.engine.repo_root
         try:
-            snapshot_root, _ = resolve_snapshot_root(
-                repo_root, snapshot_id, worktree_repo_id
-            )
-            response = list_tree(snapshot_root, path)
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        except FileNotFoundError as exc:
-            raise HTTPException(status_code=404, detail=str(exc)) from exc
-        except RuntimeError as exc:
-            raise HTTPException(status_code=409, detail=str(exc)) from exc
-        return response
+            return service.snapshot_tree(repo_root, snapshot_id, path, worktree_repo_id)
+        except WorkspaceResourceError as exc:
+            _raise_http(exc)
 
     @router.get("/local/tree", response_model=ArchiveTreeResponse)
     def list_local_tree(
@@ -91,13 +70,9 @@ def build_archive_routes() -> APIRouter:
     ):
         repo_root = request.app.state.engine.repo_root
         try:
-            run_root = resolve_local_run_root(repo_root, run_id)
-            response = list_tree(run_root, path)
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        except FileNotFoundError as exc:
-            raise HTTPException(status_code=404, detail=str(exc)) from exc
-        return response
+            return service.local_run_tree(repo_root, run_id, path)
+        except WorkspaceResourceError as exc:
+            _raise_http(exc)
 
     @router.get("/file", response_class=PlainTextResponse)
     def read_file(
@@ -108,27 +83,16 @@ def build_archive_routes() -> APIRouter:
     ):
         repo_root = request.app.state.engine.repo_root
         try:
-            snapshot_root, _ = resolve_snapshot_root(
-                repo_root, snapshot_id, worktree_repo_id
+            resource = service.snapshot_file(
+                repo_root,
+                snapshot_id,
+                path,
+                worktree_repo_id=worktree_repo_id,
+                include_content=True,
             )
-            target, _ = normalize_archive_rel_path(snapshot_root, path)
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        except FileNotFoundError as exc:
-            raise HTTPException(status_code=404, detail=str(exc)) from exc
-        except RuntimeError as exc:
-            raise HTTPException(status_code=409, detail=str(exc)) from exc
-
-        if not target.exists():
-            raise HTTPException(status_code=404, detail="file not found")
-        if target.is_dir():
-            raise HTTPException(status_code=404, detail="file not found")
-
-        try:
-            content = target.read_text(encoding="utf-8", errors="replace")
-        except OSError as exc:
-            raise HTTPException(status_code=500, detail=str(exc)) from exc
-        return PlainTextResponse(content)
+        except WorkspaceResourceError as exc:
+            _raise_http(exc)
+        return PlainTextResponse(resource.content or "")
 
     @router.get("/local/file", response_class=PlainTextResponse)
     def read_local_file(
@@ -138,25 +102,12 @@ def build_archive_routes() -> APIRouter:
     ):
         repo_root = request.app.state.engine.repo_root
         try:
-            run_root = resolve_local_run_root(repo_root, run_id)
-            target, rel_posix = normalize_archive_rel_path(run_root, path)
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        except FileNotFoundError as exc:
-            raise HTTPException(status_code=404, detail=str(exc)) from exc
-
-        if not rel_posix:
-            raise HTTPException(status_code=404, detail="file not found")
-        if not target.exists():
-            raise HTTPException(status_code=404, detail="file not found")
-        if not target.is_file():
-            raise HTTPException(status_code=404, detail="file not found")
-
-        try:
-            content = target.read_text(encoding="utf-8", errors="replace")
-        except OSError as exc:
-            raise HTTPException(status_code=500, detail=str(exc)) from exc
-        return PlainTextResponse(content)
+            resource = service.local_run_file(
+                repo_root, run_id, path, include_content=True
+            )
+        except WorkspaceResourceError as exc:
+            _raise_http(exc)
+        return PlainTextResponse(resource.content or "")
 
     @router.get("/download")
     def download_file(
@@ -167,25 +118,19 @@ def build_archive_routes() -> APIRouter:
     ):
         repo_root = request.app.state.engine.repo_root
         try:
-            snapshot_root, _ = resolve_snapshot_root(
-                repo_root, snapshot_id, worktree_repo_id
+            resource = service.snapshot_file(
+                repo_root,
+                snapshot_id,
+                path,
+                worktree_repo_id=worktree_repo_id,
+                include_content=False,
             )
-            target, _ = normalize_archive_rel_path(snapshot_root, path)
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        except FileNotFoundError as exc:
-            raise HTTPException(status_code=404, detail=str(exc)) from exc
-        except RuntimeError as exc:
-            raise HTTPException(status_code=409, detail=str(exc)) from exc
-
-        if not target.exists():
-            raise HTTPException(status_code=404, detail="file not found")
-        if target.is_dir():
-            raise HTTPException(status_code=404, detail="file not found")
+        except WorkspaceResourceError as exc:
+            _raise_http(exc)
 
         return FileResponse(
-            path=target,
-            filename=target.name,
+            path=resource.path,
+            filename=resource.filename,
         )
 
     @router.get("/local/download")
@@ -196,23 +141,15 @@ def build_archive_routes() -> APIRouter:
     ):
         repo_root = request.app.state.engine.repo_root
         try:
-            run_root = resolve_local_run_root(repo_root, run_id)
-            target, rel_posix = normalize_archive_rel_path(run_root, path)
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        except FileNotFoundError as exc:
-            raise HTTPException(status_code=404, detail=str(exc)) from exc
-
-        if not rel_posix:
-            raise HTTPException(status_code=404, detail="file not found")
-        if not target.exists():
-            raise HTTPException(status_code=404, detail="file not found")
-        if not target.is_file():
-            raise HTTPException(status_code=404, detail="file not found")
+            resource = service.local_run_file(
+                repo_root, run_id, path, include_content=False
+            )
+        except WorkspaceResourceError as exc:
+            _raise_http(exc)
 
         return FileResponse(
-            path=target,
-            filename=target.name,
+            path=resource.path,
+            filename=resource.filename,
         )
 
     return router

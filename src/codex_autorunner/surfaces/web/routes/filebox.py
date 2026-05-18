@@ -5,50 +5,28 @@ import mimetypes
 from datetime import datetime
 from email.utils import format_datetime
 from pathlib import Path
-from typing import Any, BinaryIO, Iterator, Optional
+from typing import Any, BinaryIO, Iterator, NoReturn, Optional
 from urllib.parse import quote
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
-from starlette.datastructures import UploadFile
 
-from ....core.artifact_delivery import ArtifactDeliveryService, serialize_delivery
-from ....core.artifact_filebox_storage import ArtifactFileBoxStorage
-from ....core.filebox import (
-    BOXES,
-    FileBoxEntry,
-    ensure_structure,
-    sanitize_filename,
-)
+from ....core.filebox import FileBoxEntry
 from ....core.hub import HubSupervisor
 from ....core.utils import find_repo_root
+from ..services.workspace_resources import (
+    FileBoxResourceService,
+    FileBoxUrlScope,
+    WorkspaceResourceError,
+    read_upload_limited,
+    resolve_max_upload_bytes,
+)
 
 logger = logging.getLogger(__name__)
-DEFAULT_FILEBOX_MAX_UPLOAD_BYTES = 10_000_000
-UPLOAD_CHUNK_BYTES = 1024 * 1024
 
 
-def _serialize_entry(entry: FileBoxEntry, *, request: Request) -> dict[str, Any]:
-    base = request.scope.get("root_path", "") or ""
-    # Provide a download URL that survives base_path rewrites.
-    download = f"{base}/api/filebox/{entry.box}/{quote(entry.name, safe='')}"
-    return {
-        "name": entry.name,
-        "box": entry.box,
-        "size": entry.size,
-        "modified_at": entry.modified_at,
-        "source": entry.source,
-        "url": download,
-    }
-
-
-def _serialize_listing(
-    entries: dict[str, list[FileBoxEntry]], *, request: Request
-) -> dict[str, Any]:
-    return {
-        box: [_serialize_entry(e, request=request) for e in files]
-        for box, files in entries.items()
-    }
+def _raise_http(exc: WorkspaceResourceError) -> NoReturn:
+    raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
 
 
 def _resolve_repo_root(request: Request) -> Path:
@@ -98,74 +76,46 @@ def _file_download_response(entry: FileBoxEntry, handle: BinaryIO) -> StreamingR
 async def _upload_files_to_box(
     *, repo_root: Path, box: str, request: Request
 ) -> dict[str, Any]:
-    ensure_structure(repo_root)
     form = await request.form()
-    max_upload_bytes = _resolve_max_upload_bytes(request)
-    pending: list[tuple[str, bytes]] = []
-    for filename, file in form.items():
-        if not isinstance(file, UploadFile):
-            continue
-        try:
-            sanitize_filename(filename)
-            effective_filename = sanitize_filename(file.filename or filename)
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        try:
-            data = await _read_upload_limited(file, max_upload_bytes=max_upload_bytes)
-        except OSError as exc:
-            logger.warning("Failed to read upload: %s", exc)
-            continue
-        except ValueError as exc:
-            raise HTTPException(status_code=413, detail=str(exc)) from exc
-        pending.append((effective_filename, data))
-
-    saved = []
-    storage = ArtifactFileBoxStorage(repo_root)
-    for filename, data in pending:
-        try:
-            path = storage.save_filebox_file(box, filename, data)
-            saved.append(path.name)
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return {"status": "ok", "saved": saved}
+    try:
+        return await FileBoxResourceService().upload_files_to_box(
+            repo_root=repo_root,
+            box=box,
+            form=form,
+            max_upload_bytes=_resolve_max_upload_bytes(request),
+        )
+    except WorkspaceResourceError as exc:
+        _raise_http(exc)
 
 
 def _resolve_max_upload_bytes(request: Request) -> int:
     config = getattr(request.app.state, "config", None)
     pma_config = getattr(config, "pma", None)
-    raw = getattr(pma_config, "max_upload_bytes", None)
-    if raw is None:
-        return DEFAULT_FILEBOX_MAX_UPLOAD_BYTES
-    try:
-        value = int(raw)
-    except (TypeError, ValueError):
-        value = DEFAULT_FILEBOX_MAX_UPLOAD_BYTES
-    return value if value > 0 else DEFAULT_FILEBOX_MAX_UPLOAD_BYTES
+    return resolve_max_upload_bytes(getattr(pma_config, "max_upload_bytes", None))
 
 
-async def _read_upload_limited(file: UploadFile, *, max_upload_bytes: int) -> bytes:
-    chunks: list[bytes] = []
-    total = 0
-    while True:
-        chunk = await file.read(UPLOAD_CHUNK_BYTES)
-        if not chunk:
-            break
-        total += len(chunk)
-        if total > max_upload_bytes:
-            raise ValueError(f"File too large (max {max_upload_bytes} bytes)")
-        chunks.append(chunk)
-    return b"".join(chunks)
+_read_upload_limited = read_upload_limited
+
+
+def _filebox_url_scope(request: Request, repo_id: str | None = None) -> FileBoxUrlScope:
+    return FileBoxUrlScope(
+        root_path=request.scope.get("root_path", "") or "", repo_id=repo_id
+    )
 
 
 def build_filebox_routes() -> APIRouter:
     router = APIRouter(prefix="/api", tags=["filebox"])
+    service = FileBoxResourceService()
 
     @router.get("/filebox")
     def list_box(request: Request) -> dict[str, Any]:
         repo_root = _resolve_repo_root(request)
-        ensure_structure(repo_root)
-        entries = ArtifactFileBoxStorage(repo_root).list_filebox()
-        return _serialize_listing(entries, request=request)
+        try:
+            return service.list_filebox(
+                repo_root, url_scope=_filebox_url_scope(request)
+            )
+        except WorkspaceResourceError as exc:
+            _raise_http(exc)
 
     @router.get("/artifacts/deliveries")
     def list_artifact_deliveries(
@@ -175,72 +125,41 @@ def build_filebox_routes() -> APIRouter:
         conversation: Optional[str] = None,
     ) -> dict[str, Any]:
         repo_root = _resolve_repo_root(request)
-        states = (
-            tuple(item.strip() for item in (state or "").split(",") if item.strip())
-            or None
+        return service.list_artifact_deliveries(
+            repo_root, state=state, surface=surface, conversation=conversation
         )
-        service = ArtifactDeliveryService(repo_root)
-        deliveries = service.list_deliveries(
-            states=states,  # type: ignore[arg-type]
-            target_surface=surface,
-            target_conversation_key=conversation,
-        )
-        return {
-            "root": str(repo_root),
-            "deliveries": [
-                serialize_delivery(
-                    intent,
-                    artifact=service.store.get_artifact(intent.artifact_id),
-                )
-                for intent in deliveries
-            ],
-        }
 
     @router.get("/filebox/{box}")
     def list_single_box(box: str, request: Request) -> dict[str, Any]:
-        if box not in BOXES:
-            raise HTTPException(status_code=400, detail="Invalid box")
         repo_root = _resolve_repo_root(request)
-        ensure_structure(repo_root)
-        entries = ArtifactFileBoxStorage(repo_root).list_filebox()
-        return {box: _serialize_listing(entries, request=request).get(box, [])}
+        try:
+            return service.list_single_box(
+                repo_root, box, url_scope=_filebox_url_scope(request)
+            )
+        except WorkspaceResourceError as exc:
+            _raise_http(exc)
 
     @router.post("/filebox/{box}")
     async def upload_file(box: str, request: Request) -> dict[str, Any]:
-        if box not in BOXES:
-            raise HTTPException(status_code=400, detail="Invalid box")
         repo_root = _resolve_repo_root(request)
         return await _upload_files_to_box(repo_root=repo_root, box=box, request=request)
 
     @router.get("/filebox/{box}/{filename}")
     def download_file(box: str, filename: str, request: Request):
-        if box not in BOXES:
-            raise HTTPException(status_code=400, detail="Invalid box")
         repo_root = _resolve_repo_root(request)
-        result = ArtifactFileBoxStorage(repo_root).open_filebox_file(box, filename)
-        if result is None:
-            raise HTTPException(status_code=404, detail="File not found")
-        entry, handle = result
-        return _file_download_response(entry, handle)
+        try:
+            resource = service.open_download(repo_root, box, filename)
+        except WorkspaceResourceError as exc:
+            _raise_http(exc)
+        return _file_download_response(resource.entry, resource.handle)
 
     @router.delete("/filebox/{box}/{filename}")
     def delete_file_entry(box: str, filename: str, request: Request) -> dict[str, Any]:
-        if box not in BOXES:
-            raise HTTPException(status_code=400, detail="Invalid box")
         repo_root = _resolve_repo_root(request)
         try:
-            removed = ArtifactFileBoxStorage(repo_root).delete_filebox_file(
-                box, filename
-            )
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        except OSError as exc:
-            raise HTTPException(
-                status_code=500, detail="Failed to delete file"
-            ) from exc
-        if not removed:
-            raise HTTPException(status_code=404, detail="File not found") from None
-        return {"status": "ok"}
+            return service.delete_file(repo_root, box, filename)
+        except WorkspaceResourceError as exc:
+            _raise_http(exc)
 
     return router
 
@@ -268,39 +187,19 @@ def _resolve_hub_repo_root(request: Request, repo_id: Optional[str]) -> Path:
     return target.path
 
 
-def _serialize_hub_entry(
-    entry: FileBoxEntry, *, request: Request, repo_id: str
-) -> dict[str, Any]:
-    base = request.scope.get("root_path", "") or ""
-    download = (
-        f"{base}/hub/filebox/{quote(repo_id, safe='')}/{entry.box}/"
-        f"{quote(entry.name, safe='')}"
-    )
-    return {
-        "name": entry.name,
-        "box": entry.box,
-        "size": entry.size,
-        "modified_at": entry.modified_at,
-        "source": entry.source,
-        "url": download,
-        "repo_id": repo_id,
-    }
-
-
 def build_hub_filebox_routes() -> APIRouter:
     router = APIRouter(prefix="/hub/filebox", tags=["filebox"])
+    service = FileBoxResourceService()
 
     @router.get("/{repo_id}")
     def list_repo_filebox(repo_id: str, request: Request) -> dict[str, Any]:
         repo_root = _resolve_hub_repo_root(request, repo_id)
-        entries = ArtifactFileBoxStorage(repo_root).list_filebox()
-        serialized = {
-            box: [
-                _serialize_hub_entry(e, request=request, repo_id=repo_id) for e in files
-            ]
-            for box, files in entries.items()
-        }
-        return serialized
+        try:
+            return service.list_filebox(
+                repo_root, url_scope=_filebox_url_scope(request, repo_id)
+            )
+        except WorkspaceResourceError as exc:
+            _raise_http(exc)
 
     @router.get("/{repo_id}/artifacts/deliveries")
     def list_repo_artifact_deliveries(
@@ -311,66 +210,37 @@ def build_hub_filebox_routes() -> APIRouter:
         conversation: Optional[str] = None,
     ) -> dict[str, Any]:
         repo_root = _resolve_hub_repo_root(request, repo_id)
-        states = (
-            tuple(item.strip() for item in (state or "").split(",") if item.strip())
-            or None
+        return service.list_artifact_deliveries(
+            repo_root,
+            state=state,
+            surface=surface,
+            conversation=conversation,
+            repo_id=repo_id,
         )
-        service = ArtifactDeliveryService(repo_root)
-        deliveries = service.list_deliveries(
-            states=states,  # type: ignore[arg-type]
-            target_surface=surface,
-            target_conversation_key=conversation,
-        )
-        return {
-            "repo_id": repo_id,
-            "root": str(repo_root),
-            "deliveries": [
-                serialize_delivery(
-                    intent,
-                    artifact=service.store.get_artifact(intent.artifact_id),
-                )
-                for intent in deliveries
-            ],
-        }
 
     @router.post("/{repo_id}/{box}")
     async def hub_upload(repo_id: str, box: str, request: Request) -> dict[str, Any]:
-        if box not in BOXES:
-            raise HTTPException(status_code=400, detail="Invalid box")
         repo_root = _resolve_hub_repo_root(request, repo_id)
         return await _upload_files_to_box(repo_root=repo_root, box=box, request=request)
 
     @router.get("/{repo_id}/{box}/{filename}")
     def hub_download(repo_id: str, box: str, filename: str, request: Request):
-        if box not in BOXES:
-            raise HTTPException(status_code=400, detail="Invalid box")
         repo_root = _resolve_hub_repo_root(request, repo_id)
-        result = ArtifactFileBoxStorage(repo_root).open_filebox_file(box, filename)
-        if result is None:
-            raise HTTPException(status_code=404, detail="File not found")
-        entry, handle = result
-        return _file_download_response(entry, handle)
+        try:
+            resource = service.open_download(repo_root, box, filename)
+        except WorkspaceResourceError as exc:
+            _raise_http(exc)
+        return _file_download_response(resource.entry, resource.handle)
 
     @router.delete("/{repo_id}/{box}/{filename}")
     def hub_delete(
         repo_id: str, box: str, filename: str, request: Request
     ) -> dict[str, Any]:
-        if box not in BOXES:
-            raise HTTPException(status_code=400, detail="Invalid box")
         repo_root = _resolve_hub_repo_root(request, repo_id)
         try:
-            removed = ArtifactFileBoxStorage(repo_root).delete_filebox_file(
-                box, filename
-            )
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        except OSError as exc:
-            raise HTTPException(
-                status_code=500, detail="Failed to delete file"
-            ) from exc
-        if not removed:
-            raise HTTPException(status_code=404, detail="File not found") from None
-        return {"status": "ok"}
+            return service.delete_file(repo_root, box, filename)
+        except WorkspaceResourceError as exc:
+            _raise_http(exc)
 
     return router
 
