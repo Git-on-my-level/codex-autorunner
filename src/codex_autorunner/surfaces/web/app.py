@@ -26,6 +26,7 @@ from .middleware import (
     SecurityHeadersMiddleware,
 )
 from .routes.auth import build_auth_routes
+from .routes.automations import build_automation_routes
 from .routes.chat_events import build_chat_surface_event_routes
 from .routes.contextspace import build_contextspace_routes
 from .routes.feedback_reports import build_feedback_report_routes
@@ -115,6 +116,7 @@ def create_hub_app(
         )
     app.include_router(build_feedback_report_routes())
     app.include_router(build_scm_webhook_routes())
+    app.include_router(build_automation_routes(context))
     app.include_router(build_hub_filebox_routes())
     app.include_router(build_hub_control_plane_routes())
     app.include_router(build_hub_state_routes(context))
@@ -211,6 +213,7 @@ def create_hub_app(
     @app.get("/repos/{repo_id}/tickets/{ticket_id}/", include_in_schema=False)
     @app.get("/tickets", include_in_schema=False)
     @app.get("/tickets/{ticket_id}", include_in_schema=False)
+    @app.get("/automations", include_in_schema=False)
     @app.get("/settings", include_in_schema=False)
     @app.get("/hub", include_in_schema=False)
     def web_hub_index(rest: Optional[str] = None):

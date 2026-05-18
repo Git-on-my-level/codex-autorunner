@@ -125,6 +125,66 @@ export type HubState = {
   title: string;
 };
 
+export type AutomationScheduleSummary = {
+  scheduleId: string;
+  scheduleKind: string;
+  timezone: string;
+  nextFireAt: string | null;
+  lastFireAt: string | null;
+  state: string;
+  schedule: JsonRecord;
+  raw: JsonRecord;
+};
+
+export type AutomationJobSummary = {
+  jobId: string;
+  state: string;
+  updatedAt: string | null;
+  resultSummary: string | null;
+  errorText: string | null;
+  ticketFlowRunId: string | null;
+  raw: JsonRecord;
+};
+
+export type AutomationSummary = {
+  id: string;
+  name: string;
+  enabled: boolean;
+  kind: string;
+  executorKind: string;
+  targetPolicy: string;
+  target: JsonRecord;
+  metadata: JsonRecord;
+  schedule: AutomationScheduleSummary | null;
+  lastJob: AutomationJobSummary | null;
+  jobCount: number;
+  createdAt: string | null;
+  updatedAt: string | null;
+  raw: JsonRecord;
+};
+
+export type AutomationOverview = {
+  automations: AutomationSummary[];
+  summary: {
+    total: number;
+    active: number;
+    paused: number;
+    failedJobs: number;
+  };
+};
+
+export type AutomationCreateRequest = {
+  preset: 'security_scan_pr' | 'weekly_ticket_flow';
+  name?: string | null;
+  repo_id?: string | null;
+  timezone?: string;
+  hour?: number;
+  minute?: number;
+  weekday?: number;
+  prompt?: string | null;
+  enabled?: boolean;
+};
+
 export type RequestOptions = Omit<RequestInit, 'body'> & {
   body?: unknown;
 };
@@ -483,6 +543,26 @@ export class WebApiClient {
         await this.getJson<JsonRecord>('/hub/messages?sections=inbox,managed_threads,pma_files_detail,automation,action_queue,freshness'),
         mapDashboardSummary
       ),
+    listAutomations: async (): Promise<ApiResult<AutomationOverview>> =>
+      mapResult(await this.getJson<JsonRecord>('/hub/automations'), mapAutomationOverview),
+    createAutomation: async (request: AutomationCreateRequest): Promise<ApiResult<AutomationSummary>> =>
+      mapResult(
+        await this.requestJson<JsonRecord>('/hub/automations', {
+          method: 'POST',
+          body: request
+        }),
+        (payload) => mapAutomationSummary(asRecord(payload.automation ?? payload))
+      ),
+    runAutomation: async (ruleId: string): Promise<ApiResult<JsonRecord>> =>
+      this.requestJson<JsonRecord>(`/hub/automations/${encodeURIComponent(ruleId)}/run`, { method: 'POST' }),
+    setAutomationEnabled: async (ruleId: string, enabled: boolean): Promise<ApiResult<AutomationSummary>> =>
+      mapResult(
+        await this.requestJson<JsonRecord>(`/hub/automations/${encodeURIComponent(ruleId)}/enabled`, {
+          method: 'POST',
+          body: { enabled }
+        }),
+        (payload) => mapAutomationSummary(asRecord(payload.automation ?? payload))
+      ),
     // Legacy diagnostics and mutation follow-up only. Screen inventory uses repo/worktree read models.
     listRepos: async (): Promise<ApiResult<RepoSummary[]>> =>
       mapResult(await this.getJson<JsonRecord>('/hub/repos'), (payload) =>
@@ -839,6 +919,65 @@ function mapPmaQueuedTurn(raw: JsonRecord): PmaQueuedTurn {
 function mapHubState(raw: JsonRecord): HubState {
   return {
     title: stringValue(raw.title, 'Web Hub').trim() || 'Web Hub'
+  };
+}
+
+function mapAutomationOverview(raw: JsonRecord): AutomationOverview {
+  const summary = asRecord(raw.summary);
+  return {
+    automations: asArray(raw.automations).map(mapAutomationSummary),
+    summary: {
+      total: numberValue(summary.total, 0),
+      active: numberValue(summary.active, 0),
+      paused: numberValue(summary.paused, 0),
+      failedJobs: numberValue(summary.failed_jobs ?? summary.failedJobs, 0)
+    }
+  };
+}
+
+function mapAutomationSummary(raw: JsonRecord): AutomationSummary {
+  const schedule = asRecord(raw.schedule);
+  const lastJob = asRecord(raw.last_job ?? raw.lastJob);
+  return {
+    id: stringValue(raw.id, ''),
+    name: stringValue(raw.name, 'Untitled automation'),
+    enabled: Boolean(raw.enabled),
+    kind: stringValue(raw.kind, ''),
+    executorKind: stringValue(raw.executor_kind ?? raw.executorKind, ''),
+    targetPolicy: stringValue(raw.target_policy ?? raw.targetPolicy, ''),
+    target: asRecord(raw.target),
+    metadata: asRecord(raw.metadata),
+    schedule: Object.keys(schedule).length ? mapAutomationSchedule(schedule) : null,
+    lastJob: Object.keys(lastJob).length ? mapAutomationJob(lastJob) : null,
+    jobCount: numberValue(raw.job_count ?? raw.jobCount, 0),
+    createdAt: nullableString(raw.created_at ?? raw.createdAt),
+    updatedAt: nullableString(raw.updated_at ?? raw.updatedAt),
+    raw
+  };
+}
+
+function mapAutomationSchedule(raw: JsonRecord): AutomationScheduleSummary {
+  return {
+    scheduleId: stringValue(raw.schedule_id ?? raw.scheduleId, ''),
+    scheduleKind: stringValue(raw.schedule_kind ?? raw.scheduleKind, ''),
+    timezone: stringValue(raw.timezone, 'UTC'),
+    nextFireAt: nullableString(raw.next_fire_at ?? raw.nextFireAt),
+    lastFireAt: nullableString(raw.last_fire_at ?? raw.lastFireAt),
+    state: stringValue(raw.state, ''),
+    schedule: asRecord(raw.schedule),
+    raw
+  };
+}
+
+function mapAutomationJob(raw: JsonRecord): AutomationJobSummary {
+  return {
+    jobId: stringValue(raw.job_id ?? raw.jobId, ''),
+    state: stringValue(raw.state, ''),
+    updatedAt: nullableString(raw.updated_at ?? raw.updatedAt),
+    resultSummary: nullableString(raw.result_summary ?? raw.resultSummary),
+    errorText: nullableString(raw.error_text ?? raw.errorText),
+    ticketFlowRunId: nullableString(raw.ticket_flow_run_id ?? raw.ticketFlowRunId),
+    raw
   };
 }
 

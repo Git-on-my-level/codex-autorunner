@@ -36,6 +36,7 @@ GROUP_DESCRIPTIONS: dict[tuple[str, str], str] = {
     ("car", "session"): "Session management commands",
     ("car", "files"): "Manage file inbox/outbox",
     ("car", "admin"): "Admin and operator commands",
+    ("car", "automation"): "Scheduled automation commands",
 }
 
 
@@ -93,6 +94,16 @@ def _pma_on_options(_context: Any = None) -> list[dict[str, Any]]:
         _string_option(
             "repo",
             "Optional repo id for explicit repo-context PMA; omitted means hub context",
+        )
+    ]
+
+
+def _automation_id_options(_context: Any = None) -> list[dict[str, Any]]:
+    return [
+        _string_option(
+            "id",
+            "Automation id or unique id fragment",
+            required=True,
         )
     ]
 

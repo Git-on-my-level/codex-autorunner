@@ -9,6 +9,17 @@ from typing import Any, Optional
 import httpx
 import typer
 
+from ...core.automation.product import (
+    AutomationPresetRequest,
+    automation_overview,
+    automation_row,
+    automation_store,
+    create_preset_automation,
+    format_automation_list,
+    format_automation_status,
+    run_automation_now,
+    set_automation_enabled,
+)
 from ...core.config import load_hub_config
 from ...core.filebox import BOXES
 from ...core.force_attestation import FORCE_ATTESTATION_REQUIRED_PHRASE
@@ -78,6 +89,12 @@ file_app = typer.Typer(
     name="file",
     help="Manage PMA inbox file lifecycle state without deleting recoverable files.",
 )
+automation_app = typer.Typer(
+    add_completion=False,
+    rich_markup_mode=None,
+    name="automation",
+    help="Create, list, monitor, and run scheduled PMA automations.",
+)
 
 register_docs_commands(docs_app)
 register_context_commands(context_app)
@@ -90,6 +107,7 @@ pma_app.add_typer(context_app)
 pma_app.add_typer(thread_app, name="thread")
 pma_app.add_typer(binding_app, name="binding")
 pma_app.add_typer(file_app, name="file")
+pma_app.add_typer(automation_app, name="automation")
 
 
 def _resolve_hub_path(path: Optional[Path]) -> Path:
@@ -104,6 +122,218 @@ def _is_json_response_error(data: dict) -> Optional[str]:
     if data.get("error"):
         return str(data["error"])
     return None
+
+
+def _resolve_automation_rule(store: Any, rule_id: str) -> Any:
+    query = str(rule_id or "").strip()
+    if not query:
+        exit_with_error("Automation id is required")
+    exact = store.get_rule(query)
+    if exact is not None:
+        return exact
+    matches = [
+        rule
+        for rule in store.list_rules()
+        if rule.rule_id.startswith(query) or query in rule.rule_id
+    ]
+    if not matches:
+        exit_with_error(f"Automation not found: {query}")
+    if len(matches) > 1:
+        choices = ", ".join(rule.rule_id for rule in matches[:5])
+        exit_with_error(f"Automation id is ambiguous: {choices}")
+    return matches[0]
+
+
+@automation_app.command("list")
+def pma_automation_list(
+    limit: int = typer.Option(
+        10, "--limit", min=1, max=100, help="Maximum automations to show"
+    ),
+    output_json: bool = typer.Option(False, "--json", help="Emit JSON output"),
+    path: Optional[Path] = hub_root_path_option(),
+):
+    """List scheduled PMA automations."""
+    hub_root = resolve_hub_path(path)
+    store = automation_store(hub_root)
+    overview = automation_overview(store, limit=limit)
+    if output_json:
+        echo_json(overview)
+        return
+    typer.echo(format_automation_list(overview, limit=limit))
+
+
+@automation_app.command("status")
+def pma_automation_status(
+    automation_id: str = typer.Argument(..., help="Automation id or unique fragment"),
+    output_json: bool = typer.Option(False, "--json", help="Emit JSON output"),
+    path: Optional[Path] = hub_root_path_option(),
+):
+    """Show one scheduled PMA automation."""
+    hub_root = resolve_hub_path(path)
+    store = automation_store(hub_root)
+    rule = _resolve_automation_rule(store, automation_id)
+    row = automation_row(store, rule)
+    if output_json:
+        echo_json(row)
+        return
+    typer.echo(format_automation_status(row))
+
+
+@automation_app.command("run")
+def pma_automation_run(
+    automation_id: str = typer.Argument(..., help="Automation id or unique fragment"),
+    output_json: bool = typer.Option(False, "--json", help="Emit JSON output"),
+    path: Optional[Path] = hub_root_path_option(),
+):
+    """Queue one scheduled PMA automation immediately."""
+    hub_root = resolve_hub_path(path)
+    store = automation_store(hub_root)
+    rule = _resolve_automation_rule(store, automation_id)
+    supervisor = build_hub_supervisor(load_hub_config(hub_root))
+    result = run_automation_now(
+        store, rule.rule_id, source="pma_cli", supervisor=supervisor
+    )
+    if output_json:
+        echo_json(result)
+        return
+    typer.echo(
+        f"Queued automation: {rule.name}\n"
+        f"Jobs created: {result.get('jobs_created', 0)} "
+        f"(deduped: {result.get('jobs_deduped', 0)})"
+    )
+
+
+@automation_app.command("pause")
+def pma_automation_pause(
+    automation_id: str = typer.Argument(..., help="Automation id or unique fragment"),
+    output_json: bool = typer.Option(False, "--json", help="Emit JSON output"),
+    path: Optional[Path] = hub_root_path_option(),
+):
+    """Pause one scheduled PMA automation."""
+    _set_pma_automation_enabled(
+        automation_id,
+        enabled=False,
+        output_json=output_json,
+        path=path,
+    )
+
+
+@automation_app.command("resume")
+def pma_automation_resume(
+    automation_id: str = typer.Argument(..., help="Automation id or unique fragment"),
+    output_json: bool = typer.Option(False, "--json", help="Emit JSON output"),
+    path: Optional[Path] = hub_root_path_option(),
+):
+    """Resume one scheduled PMA automation."""
+    _set_pma_automation_enabled(
+        automation_id,
+        enabled=True,
+        output_json=output_json,
+        path=path,
+    )
+
+
+@automation_app.command("security-scan")
+def pma_automation_security_scan(
+    repo: str = typer.Argument(..., help="Hub repo id to scan"),
+    hour: int = typer.Option(
+        9, "--hour", min=0, max=23, help="Scheduled UTC/local hour"
+    ),
+    minute: int = typer.Option(0, "--minute", min=0, max=59, help="Scheduled minute"),
+    timezone: str = typer.Option("UTC", "--timezone", help="IANA timezone name"),
+    name: Optional[str] = typer.Option(None, "--name", help="Automation display name"),
+    enabled: bool = typer.Option(
+        False, "--enabled", help="Enable immediately after saving"
+    ),
+    output_json: bool = typer.Option(False, "--json", help="Emit JSON output"),
+    path: Optional[Path] = hub_root_path_option(),
+):
+    """Save a daily security scan automation that opens a PR when issues are found."""
+    _create_pma_automation(
+        AutomationPresetRequest(
+            preset="security_scan_pr",
+            repo_id=repo,
+            name=name,
+            timezone=timezone,
+            hour=hour,
+            minute=minute,
+            enabled=enabled,
+        ),
+        output_json=output_json,
+        path=path,
+    )
+
+
+@automation_app.command("weekly-ticket-flow")
+def pma_automation_weekly_ticket_flow(
+    repo: str = typer.Argument(..., help="Hub repo id to run in a fresh worktree"),
+    weekday: int = typer.Option(
+        0, "--weekday", min=0, max=6, help="Scheduled weekday, Monday=0"
+    ),
+    hour: int = typer.Option(
+        9, "--hour", min=0, max=23, help="Scheduled UTC/local hour"
+    ),
+    minute: int = typer.Option(0, "--minute", min=0, max=59, help="Scheduled minute"),
+    timezone: str = typer.Option("UTC", "--timezone", help="IANA timezone name"),
+    name: Optional[str] = typer.Option(None, "--name", help="Automation display name"),
+    enabled: bool = typer.Option(
+        False, "--enabled", help="Enable immediately after saving"
+    ),
+    output_json: bool = typer.Option(False, "--json", help="Emit JSON output"),
+    path: Optional[Path] = hub_root_path_option(),
+):
+    """Save a weekly preset ticket-flow automation in a new automation worktree."""
+    _create_pma_automation(
+        AutomationPresetRequest(
+            preset="weekly_ticket_flow",
+            repo_id=repo,
+            name=name,
+            timezone=timezone,
+            weekday=weekday,
+            hour=hour,
+            minute=minute,
+            enabled=enabled,
+        ),
+        output_json=output_json,
+        path=path,
+    )
+
+
+def _set_pma_automation_enabled(
+    automation_id: str,
+    *,
+    enabled: bool,
+    output_json: bool,
+    path: Optional[Path],
+) -> None:
+    hub_root = resolve_hub_path(path)
+    store = automation_store(hub_root)
+    rule = _resolve_automation_rule(store, automation_id)
+    row = set_automation_enabled(store, rule.rule_id, enabled)
+    if output_json:
+        echo_json(row)
+        return
+    state = "resumed" if enabled else "paused"
+    typer.echo(f"Automation {state}: {row.get('name') or row.get('id')}")
+
+
+def _create_pma_automation(
+    request: AutomationPresetRequest,
+    *,
+    output_json: bool,
+    path: Optional[Path],
+) -> None:
+    hub_root = resolve_hub_path(path)
+    try:
+        row = create_preset_automation(automation_store(hub_root), request)
+    except ValueError as exc:
+        exit_with_error(str(exc))
+    if output_json:
+        echo_json({"automation": row})
+        return
+    state = "enabled" if row.get("enabled") else "paused"
+    typer.echo(f"Saved automation ({state}):")
+    typer.echo(format_automation_status(row))
 
 
 @pma_app.command("chat")

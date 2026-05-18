@@ -38,6 +38,7 @@ def test_pma_cli_has_required_commands():
     assert "docs" in output, "PMA CLI should have 'docs' command group"
     assert "context" in output, "PMA CLI should have 'context' command group"
     assert "thread" in output, "PMA CLI should have 'thread' command group"
+    assert "automation" in output, "PMA CLI should have 'automation' command group"
     assert "targets" not in output, "PMA CLI should not expose 'targets' commands"
 
 
@@ -77,6 +78,20 @@ def test_pma_file_group_has_required_commands() -> None:
     assert "dismiss" in output
     assert "restore" in output
     assert "list" in output
+
+
+def test_pma_automation_group_has_required_commands() -> None:
+    runner = CliRunner()
+    result = runner.invoke(pma_app, ["automation", "--help"])
+    assert result.exit_code == 0
+    output = result.stdout
+    assert "list" in output
+    assert "status" in output
+    assert "run" in output
+    assert "pause" in output
+    assert "resume" in output
+    assert "security-scan" in output
+    assert "weekly-ticket-flow" in output
 
 
 def test_pma_upload_help():
