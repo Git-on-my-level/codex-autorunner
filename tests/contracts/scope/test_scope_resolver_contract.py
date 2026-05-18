@@ -33,11 +33,13 @@ _safe_id = st.text(
     max_size=32,
 )
 
-_safe_path = st.text(
-    alphabet="abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_/- ",
+_safe_path_segment = st.text(
+    alphabet="abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_- ",
     min_size=1,
-    max_size=64,
-).filter(lambda s: s.strip("/"))
+    max_size=16,
+).filter(str.strip)
+
+_safe_path = st.lists(_safe_path_segment, min_size=1, max_size=4).map("/".join)
 
 scope_ref_strategy = st.one_of(
     st.just(ScopeRef(kind="hub")),

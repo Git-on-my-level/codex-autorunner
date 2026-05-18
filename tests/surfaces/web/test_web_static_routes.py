@@ -261,6 +261,10 @@ def test_repo_mount_frontend_routes_redirect_to_pma_by_default(hub_env):
     assert legacy_prompt.status_code == 307
     assert legacy_prompt.headers["location"] == f"/repos/{repo_id}"
 
+    legacy_terminal_deep_link = client.get(f"/repos/{repo_id}/terminal/sessions")
+    assert legacy_terminal_deep_link.status_code == 307
+    assert legacy_terminal_deep_link.headers["location"] == f"/repos/{repo_id}"
+
     legacy_terminal = client.get(f"/legacy/repos/{repo_id}/terminal")
     assert legacy_terminal.status_code == 404
 

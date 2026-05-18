@@ -110,3 +110,69 @@ def test_hub_terminal_sessions_stay_isolated(
         assert beta_sessions[0]["session_id"] == beta_session
         assert alpha_sessions[0]["repo_path"] == "."
         assert beta_sessions[0]["repo_path"] == "."
+
+
+@pytest.mark.slow
+def test_hub_terminal_websocket_selects_supported_subprotocol(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
+    hub_root = tmp_path / "hub"
+    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    repos_root = cfg["hub"]["repos_root"]
+    write_test_config(hub_root / CONFIG_FILENAME, cfg)
+
+    repo_root = hub_root / repos_root
+    repo_root.mkdir(parents=True, exist_ok=True)
+    _create_repo(repo_root, "alpha")
+
+    monkeypatch.setattr(
+        "codex_autorunner.surfaces.web.routes.base.PTYSession", FakePTYSession
+    )
+    app = create_hub_app(hub_root)
+
+    with TestClient(app) as client:
+        assert client.get("/hub/repos").status_code == 200
+        with client.websocket_connect(
+            "/repos/alpha/api/terminal",
+            subprotocols=["unknown", "car-token-b64.abc"],
+        ) as ws:
+            assert getattr(ws, "accepted_subprotocol", None) == "car-token-b64.abc"
+            assert _receive_json_text(ws)["type"] == "hello"
+
+
+def test_hub_terminal_image_upload_contracts(tmp_path: Path):
+    hub_root = tmp_path / "hub"
+    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    repos_root = cfg["hub"]["repos_root"]
+    write_test_config(hub_root / CONFIG_FILENAME, cfg)
+
+    repo_root = hub_root / repos_root
+    repo_root.mkdir(parents=True, exist_ok=True)
+    _create_repo(repo_root, "alpha")
+
+    with TestClient(create_hub_app(hub_root)) as client:
+        assert client.get("/hub/repos").status_code == 200
+        accepted = client.post(
+            "/repos/alpha/api/terminal/image",
+            files={"file": ("screen.bin", b"PNGDATA", "image/png")},
+        )
+        unsupported = client.post(
+            "/repos/alpha/api/terminal/image",
+            files={"file": ("note.txt", b"hello", "text/plain")},
+        )
+        oversized = client.post(
+            "/repos/alpha/api/terminal/image",
+            files={"file": ("large.png", b"x" * (10 * 1024 * 1024 + 1), "image/png")},
+        )
+
+    assert accepted.status_code == 200
+    payload = accepted.json()
+    assert payload["status"] == "ok"
+    assert payload["path"].startswith(".codex-autorunner/uploads/terminal-images/")
+    assert payload["filename"].endswith(".png")
+    assert "abs_path" not in payload
+    assert (repo_root / "alpha" / payload["path"]).read_bytes() == b"PNGDATA"
+    assert unsupported.status_code == 400
+    assert unsupported.json()["detail"] == "unsupported content type"
+    assert oversized.status_code == 413
+    assert oversized.json()["detail"] == "image too large"
