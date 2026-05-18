@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from difflib import SequenceMatcher
 from typing import Any, Literal, Mapping, Sequence
 
 from .runtime_thread_events import RuntimeThreadRunEventState
@@ -95,6 +96,30 @@ def _whitespace_insensitive_prefix_end(value: str, prefix: str) -> int | None:
     return value_index
 
 
+def _near_prefix_end(value: str, prefix: str) -> int | None:
+    current = str(value or "")
+    previous = str(prefix or "")
+    if len(previous.strip()) < 500 or not current.strip():
+        return None
+    window = current[: min(len(current), len(previous) + 1000)]
+    matcher = SequenceMatcher(None, previous, window, autojunk=False)
+    blocks = [block for block in matcher.get_matching_blocks() if block.size]
+    if not blocks:
+        return None
+    first = blocks[0]
+    if first.a > 0 or first.b > len(current) - len(current.lstrip()):
+        return None
+    matched = sum(block.size for block in blocks)
+    if matched / len(previous) < 0.98:
+        return None
+    last_end_in_previous = max(block.a + block.size for block in blocks)
+    if last_end_in_previous / len(previous) < 0.95:
+        return None
+    leading = len(current) - len(current.lstrip())
+    nominal_prefix_end = leading + len(previous)
+    return min(max(block.b + block.size for block in blocks), nominal_prefix_end)
+
+
 def assistant_text_extends_prefix(assistant_text: str, prefix: str) -> bool:
     current = str(assistant_text or "")
     previous = str(prefix or "")
@@ -108,7 +133,10 @@ def assistant_text_extends_prefix(assistant_text: str, prefix: str) -> bool:
     previous_stripped = previous.strip()
     if current_lstrip.startswith(previous_stripped):
         return True
-    return _whitespace_insensitive_prefix_end(current, previous) is not None
+    return (
+        _whitespace_insensitive_prefix_end(current, previous) is not None
+        or _near_prefix_end(current, previous) is not None
+    )
 
 
 def trim_cumulative_assistant_text(
@@ -149,6 +177,8 @@ def trim_cumulative_assistant_text(
             else ("", "stale_prior_output")
         )
     prefix_end = _whitespace_insensitive_prefix_end(current, previous)
+    if prefix_end is None:
+        prefix_end = _near_prefix_end(current, previous)
     if prefix_end is None:
         return current, "current_turn_final"
     trimmed = current[prefix_end:].lstrip()
