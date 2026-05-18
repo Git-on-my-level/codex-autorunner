@@ -148,17 +148,15 @@ async def test_file_chat_service_non_stream_and_stream_share_turn_lifecycle(
     assert state.current_by_client == {}
     assert state.last_by_client["client-nonstream"]["turn_id"] == "turn-nonstream"
 
-    stream_items = [
-        item
-        async for item in file_chat_service.stream_turn(
-            request,
-            file_chat_service.FileChatTurnRequest(
-                target="contextspace:spec",
-                message="stream",
-                client_turn_id="client-stream",
-            ),
-        )
-    ]
+    stream_iter = await file_chat_service.open_stream_turn(
+        request,
+        file_chat_service.FileChatTurnRequest(
+            target="contextspace:spec",
+            message="stream",
+            client_turn_id="client-stream",
+        ),
+    )
+    stream_items = [item async for item in stream_iter]
     assert calls == ["nonstream", "stream"]
     assert [item.event for item in stream_items] == [
         "status",

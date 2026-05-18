@@ -95,11 +95,6 @@ def _normalize_optional_text(value: object) -> Optional[str]:
     return text or None
 
 
-def _normalize_runtime_text(value: object) -> Optional[str]:
-    text = _normalize_optional_text(value)
-    return text.lower() if text is not None else None
-
-
 def _validate_choice(
     *,
     name: str,

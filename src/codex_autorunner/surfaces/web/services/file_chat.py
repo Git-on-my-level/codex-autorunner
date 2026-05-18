@@ -36,7 +36,6 @@ from ..routes.file_chat_routes.runtime import (
 from ..routes.file_chat_routes.targets import (
     FileChatTarget,
     parse_target,
-    read_file,
     resolve_repo_root,
 )
 
@@ -253,22 +252,6 @@ def _stream_events_for_result(
     ]
 
 
-async def stream_turn(
-    request: Request,
-    payload: FileChatTurnRequest,
-) -> AsyncIterator[FileChatStreamItem]:
-    repo_root, target, agent_id, profile = await prepare_turn(request, payload)
-    async for item in stream_prepared_turn(
-        request,
-        payload,
-        repo_root=repo_root,
-        target=target,
-        agent_id=agent_id,
-        profile=profile,
-    ):
-        yield item
-
-
 async def stream_prepared_turn(
     request: Request,
     payload: FileChatTurnRequest,
@@ -390,7 +373,3 @@ async def reset_ticket_thread(
         key=selection.thread_key,
         cleared=cleared,
     )
-
-
-def read_target_content(request: Request, target_raw: str) -> str:
-    return read_file(resolve_target(request, target_raw).path)
