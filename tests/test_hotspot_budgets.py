@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ast
+import re
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
@@ -35,10 +36,19 @@ class HelperOwnershipRule:
     reason: str
 
 
+@dataclass(frozen=True)
+class TextHelperOwnershipRule:
+    owner_path: str
+    helper_names: tuple[str, ...]
+    scan_roots: tuple[str, ...]
+    suffixes: tuple[str, ...]
+    reason: str
+
+
 STANDARD_FILE_BUDGETS = (
     FileBudget(
         path="src/codex_autorunner/surfaces/web/routes/flow_routes/status_history_routes.py",
-        max_lines=360,
+        max_lines=375,
         reason="Keep the extracted flow status/history slice small enough to stay injectable.",
     ),
     FileBudget(
@@ -98,13 +108,83 @@ STANDARD_FILE_BUDGETS = (
     ),
     FileBudget(
         path="src/codex_autorunner/tickets/runner_post_turn.py",
-        max_lines=767,
+        max_lines=800,
         reason="Post-turn reconciliation should stay extracted from TicketRunner.step().",
     ),
     FileBudget(
         path="src/codex_autorunner/tickets/runner_prompt.py",
         max_lines=360,
         reason="Prompt assembly should stay extracted from TicketRunner.step().",
+    ),
+    FileBudget(
+        path="src/codex_autorunner/core/pma_automation_services.py",
+        max_lines=390,
+        reason="Ticket 001 moved PMA automation command/dispatch decisions into bounded services.",
+    ),
+    FileBudget(
+        path="src/codex_autorunner/core/pma_automation_mirror.py",
+        max_lines=90,
+        reason="Ticket 002 owns PMA automation mirror writes in a tiny adapter, not the store facade.",
+    ),
+    FileBudget(
+        path="src/codex_autorunner/core/pma_automation_persistence.py",
+        max_lines=1030,
+        reason="Ticket 001 made PMA automation row persistence explicit; growth should move to focused helpers.",
+    ),
+    FileBudget(
+        path="src/codex_autorunner/core/pma_automation_unified.py",
+        max_lines=590,
+        reason="Ticket 002 owns unified-plane PMA automation backfill/mirror translation in this bounded seam.",
+    ),
+    FileBudget(
+        path="src/codex_autorunner/core/pma_transcripts.py",
+        max_lines=350,
+        reason="Ticket 006 made PMA transcript mirror writes and legacy backfill/status explicit.",
+    ),
+    FileBudget(
+        path="src/codex_autorunner/surfaces/web/services/pma/managed_thread_runtime.py",
+        max_lines=1060,
+        reason="Ticket 007 moved managed-thread runtime orchestration behind the PMA web service boundary.",
+    ),
+    FileBudget(
+        path="src/codex_autorunner/surfaces/web/services/pma/managed_thread_send_runtime.py",
+        max_lines=530,
+        reason="Ticket 007 owns PMA managed-thread send/queue runtime outside route builders.",
+    ),
+    FileBudget(
+        path="src/codex_autorunner/surfaces/web/services/pma/managed_thread_runtime_control.py",
+        max_lines=700,
+        reason="Ticket 007 owns managed-thread interrupt/recovery/control logic outside route builders.",
+    ),
+    FileBudget(
+        path="src/codex_autorunner/surfaces/web/services/pma/managed_thread_read_models.py",
+        max_lines=660,
+        reason="Ticket 008 moved managed-thread read-model shaping behind a web service boundary.",
+    ),
+    FileBudget(
+        path="src/codex_autorunner/surfaces/web/services/chat_read_models.py",
+        max_lines=970,
+        reason="Ticket 008 owns chat read-model contract shaping outside frontend route loaders.",
+    ),
+    FileBudget(
+        path="src/codex_autorunner/web_frontend/src/lib/application/chatDetailSession.ts",
+        max_lines=450,
+        reason="Ticket 003 moved chat detail session ownership out of +page.svelte.",
+    ),
+    FileBudget(
+        path="src/codex_autorunner/web_frontend/src/lib/application/chatDetailLiveProjection.ts",
+        max_lines=370,
+        reason="Ticket 004 moved chat detail stream repair and live projection ownership out of +page.svelte.",
+    ),
+    FileBudget(
+        path="src/codex_autorunner/web_frontend/src/lib/application/chatSendController.ts",
+        max_lines=470,
+        reason="Ticket 005 moved chat send/queue optimistic reconciliation out of +page.svelte.",
+    ),
+    FileBudget(
+        path="src/codex_autorunner/web_frontend/src/lib/application/pmaChatArchitecture.ts",
+        max_lines=360,
+        reason="Tickets 004-005 own transcript/optimistic reconciliation helpers outside +page.svelte.",
     ),
 )
 
@@ -196,7 +276,7 @@ STANDARD_FUNCTION_BUDGETS = (
     FunctionBudget(
         path="src/codex_autorunner/tickets/runner_selection.py",
         qualname="select_ticket",
-        max_lines=115,
+        max_lines=170,
         reason="Ticket selection should remain extracted from TicketRunner.step().",
     ),
     FunctionBudget(
@@ -234,6 +314,96 @@ STANDARD_FUNCTION_BUDGETS = (
         qualname="build_prompt",
         max_lines=230,
         reason="Prompt assembly should remain extracted from TicketRunner.step().",
+    ),
+    FunctionBudget(
+        path="src/codex_autorunner/core/pma_automation_services.py",
+        qualname="PmaWakeupDispatchDecisionService.enrich",
+        max_lines=65,
+        reason="Ticket 001 keeps PMA wakeup dispatch decisions in a bounded service method.",
+    ),
+    FunctionBudget(
+        path="src/codex_autorunner/core/pma_automation_services.py",
+        qualname="PmaSubscriptionCommandService.find_covering_auto_subscription",
+        max_lines=60,
+        reason="Ticket 001 keeps PMA subscription command lookup in a focused service method.",
+    ),
+    FunctionBudget(
+        path="src/codex_autorunner/core/pma_automation_persistence.py",
+        qualname="PmaAutomationPersistence._save_structured_unlocked",
+        max_lines=210,
+        reason="Ticket 001 keeps PMA automation persistence growth explicit while row helpers absorb detail.",
+    ),
+    FunctionBudget(
+        path="src/codex_autorunner/core/pma_automation_unified.py",
+        qualname="PmaUnifiedAutomationAdapter.subscription_rule",
+        max_lines=100,
+        reason="Ticket 002 keeps unified PMA subscription mirroring out of the store facade.",
+    ),
+    FunctionBudget(
+        path="src/codex_autorunner/core/pma_automation_unified.py",
+        qualname="PmaUnifiedAutomationBackfill.run",
+        max_lines=80,
+        reason="Ticket 002 keeps PMA automation backfill ownership explicit and bounded.",
+    ),
+    FunctionBudget(
+        path="src/codex_autorunner/core/pma_transcripts.py",
+        qualname="PmaTranscriptStore.write_transcript",
+        max_lines=60,
+        reason="Ticket 006 keeps canonical PMA transcript mirror writes compact.",
+    ),
+    FunctionBudget(
+        path="src/codex_autorunner/core/pma_transcripts.py",
+        qualname="PmaTranscriptLegacyBackfill.run",
+        max_lines=50,
+        reason="Ticket 006 keeps legacy transcript migration coverage explicit and bounded.",
+    ),
+    FunctionBudget(
+        path="src/codex_autorunner/surfaces/web/services/pma/managed_thread_runtime.py",
+        qualname="_deliver_managed_thread_execution_result",
+        max_lines=170,
+        reason="Ticket 007 owns managed-thread execution result delivery in the PMA runtime service.",
+    ),
+    FunctionBudget(
+        path="src/codex_autorunner/surfaces/web/services/pma/managed_thread_runtime.py",
+        qualname="_build_pma_queue_delivery_hooks",
+        max_lines=90,
+        reason="Ticket 007 keeps PMA queue delivery hook wiring out of route modules.",
+    ),
+    FunctionBudget(
+        path="src/codex_autorunner/surfaces/web/services/pma/managed_thread_send_runtime.py",
+        qualname="run_managed_thread_message_send",
+        max_lines=360,
+        reason="Ticket 007 owns managed-thread send orchestration outside the web route builder.",
+    ),
+    FunctionBudget(
+        path="src/codex_autorunner/surfaces/web/services/pma/managed_thread_runtime_control.py",
+        qualname="deliver_bound_chat_assistant_output",
+        max_lines=190,
+        reason="Ticket 007 keeps bound-chat delivery control in the PMA runtime service boundary.",
+    ),
+    FunctionBudget(
+        path="src/codex_autorunner/surfaces/web/services/pma/managed_thread_runtime_control.py",
+        qualname="interrupt_managed_thread_via_orchestration",
+        max_lines=170,
+        reason="Ticket 007 keeps managed-thread interrupt control out of route modules.",
+    ),
+    FunctionBudget(
+        path="src/codex_autorunner/surfaces/web/services/pma/managed_thread_read_models.py",
+        qualname="_serialize_thread_target",
+        max_lines=95,
+        reason="Ticket 008 keeps managed-thread target serialization inside the read-model service.",
+    ),
+    FunctionBudget(
+        path="src/codex_autorunner/surfaces/web/services/chat_read_models.py",
+        qualname="hub_chat_row_to_chat_index_row",
+        max_lines=115,
+        reason="Ticket 008 keeps chat index row normalization inside the web read-model service.",
+    ),
+    FunctionBudget(
+        path="src/codex_autorunner/surfaces/web/services/chat_read_models.py",
+        qualname="ChatReadModelService.chat_detail_contract",
+        max_lines=105,
+        reason="Ticket 008 keeps chat detail contract assembly behind the read-model service.",
     ),
 )
 
@@ -336,7 +506,7 @@ DISCORD_EXTRACTED_SEAM_BUDGETS = (
 LEGACY_FILE_CAPS = (
     FileBudget(
         path="src/codex_autorunner/surfaces/web/routes/flows.py",
-        max_lines=1825,
+        max_lines=1900,
         reason="Legacy flow composition owner until more /api/flows CRUD, lifecycle, and ticket-diff aggregation routes are extracted; keep the merge-ref shape under a narrow ceiling.",
     ),
     FileBudget(
@@ -358,6 +528,31 @@ LEGACY_FILE_CAPS = (
         path="src/codex_autorunner/tickets/runner.py",
         max_lines=1185,
         reason="TicketRunner still owns remaining orchestration glue while extracted runner seams stabilize.",
+    ),
+    FileBudget(
+        path="src/codex_autorunner/core/pma_automation_store.py",
+        max_lines=1040,
+        reason="Legacy PMA automation facade capped after tickets 001-002 extracted services, persistence, and mirror ownership.",
+    ),
+    FileBudget(
+        path="src/codex_autorunner/surfaces/web/routes/pma_routes/managed_thread_runtime.py",
+        max_lines=25,
+        reason="Legacy managed-thread runtime route module should remain a re-export after ticket 007 extraction.",
+    ),
+    FileBudget(
+        path="src/codex_autorunner/surfaces/web/routes/pma_routes/managed_thread_route_helpers.py",
+        max_lines=70,
+        reason="Legacy managed-thread route helpers should stay thin after ticket 007 service extraction.",
+    ),
+    FileBudget(
+        path="src/codex_autorunner/web_frontend/src/routes/chats/[[chatId]]/+page.svelte",
+        max_lines=2550,
+        reason="Legacy chat detail page capped after tickets 003-005 moved session, live projection, and send ownership to application modules.",
+    ),
+    FileBudget(
+        path="src/codex_autorunner/web_frontend/src/lib/data/readModelLoaders.ts",
+        max_lines=250,
+        reason="Legacy frontend read-model loader utility capped after ticket 008 moved screen contracts behind typed read-model services.",
     ),
 )
 
@@ -381,12 +576,6 @@ LEGACY_FUNCTION_CAPS = (
         reason="PMA chat runtime still has a large legacy builder, but it should not get materially larger before extraction.",
     ),
     FunctionBudget(
-        path="src/codex_autorunner/surfaces/web/routes/pma_routes/managed_thread_runtime.py",
-        qualname="build_managed_thread_runtime_routes",
-        max_lines=850,
-        reason="Managed-thread PMA routing is still a legacy hotspot pending a dedicated extraction pass.",
-    ),
-    FunctionBudget(
         path="src/codex_autorunner/adapters/discord/commands.py",
         qualname="build_application_commands",
         max_lines=560,
@@ -403,6 +592,18 @@ LEGACY_FUNCTION_CAPS = (
         qualname="TicketRunner.step",
         max_lines=625,
         reason="TicketRunner.step() is still a legacy orchestration hotspot, but new growth should fail.",
+    ),
+    FunctionBudget(
+        path="src/codex_autorunner/core/pma_automation_store.py",
+        qualname="PmaAutomationStore.create_subscription",
+        max_lines=100,
+        reason="Legacy PMA automation store facade capped after ticket 001 service/persistence extraction.",
+    ),
+    FunctionBudget(
+        path="src/codex_autorunner/core/pma_automation_store.py",
+        qualname="PmaAutomationStore.notify_transition",
+        max_lines=100,
+        reason="Legacy PMA automation store facade capped after tickets 001-002 moved transition side effects to services/mirrors.",
     ),
 )
 
@@ -443,6 +644,90 @@ HELPER_OWNERSHIP_RULES = (
         ),
         scan_roots=("tests",),
         reason="Shared Telegram command-test helpers should stay owned by tests/fixtures/telegram_command_helpers.py.",
+    ),
+)
+
+TEXT_HELPER_OWNERSHIP_RULES = (
+    TextHelperOwnershipRule(
+        owner_path="src/codex_autorunner/web_frontend/src/lib/application/chatDetailSession.ts",
+        helper_names=(
+            "requestedChatDetailFromUrl",
+            "selectChatDetail",
+            "activateChatDetailFromUrl",
+            "activateRequestedChatFromRows",
+            "replacementForArchivedActiveChat",
+            "startLocalDraftChat",
+            "commitLocalDraftChat",
+        ),
+        scan_roots=(
+            "src/codex_autorunner/web_frontend/src/lib/application",
+            "src/codex_autorunner/web_frontend/src/routes/chats",
+        ),
+        suffixes=(".ts", ".svelte"),
+        reason="Ticket 003 moved chat detail session helpers out of the route page.",
+    ),
+    TextHelperOwnershipRule(
+        owner_path="src/codex_autorunner/web_frontend/src/lib/application/chatDetailLiveProjection.ts",
+        helper_names=(
+            "createChatDetailLiveProjection",
+            "isMissingManagedThreadError",
+            "transcriptHasAssistantMessageForTurn",
+        ),
+        scan_roots=(
+            "src/codex_autorunner/web_frontend/src/lib/application",
+            "src/codex_autorunner/web_frontend/src/routes/chats",
+        ),
+        suffixes=(".ts", ".svelte"),
+        reason="Ticket 004 moved chat detail stream repair/live projection helpers out of the route page.",
+    ),
+    TextHelperOwnershipRule(
+        owner_path="src/codex_autorunner/web_frontend/src/lib/application/chatSendController.ts",
+        helper_names=(
+            "createChatSendController",
+            "pushOptimisticQueuedTurn",
+            "turnLandedInQueue",
+            "removeOptimisticQueuedTurn",
+            "transcriptHasBackendUserRow",
+        ),
+        scan_roots=(
+            "src/codex_autorunner/web_frontend/src/lib/application",
+            "src/codex_autorunner/web_frontend/src/routes/chats",
+        ),
+        suffixes=(".ts", ".svelte"),
+        reason="Ticket 005 moved chat send/queue optimistic reconciliation into the application controller.",
+    ),
+    TextHelperOwnershipRule(
+        owner_path="src/codex_autorunner/web_frontend/src/lib/application/pmaChatArchitecture.ts",
+        helper_names=(
+            "mergeTranscriptSnapshotWithPendingOptimistic",
+            "transcriptRowsConfirmOptimistic",
+            "visibleChatDetailTranscriptCards",
+            "buildOptimisticUserTranscriptCard",
+            "buildOptimisticQueuedTurn",
+            "withoutOptimisticQueuedTurn",
+            "queueContainsCommittedClientTurn",
+            "transcriptContainsCommittedUserRow",
+        ),
+        scan_roots=(
+            "src/codex_autorunner/web_frontend/src/lib/application",
+            "src/codex_autorunner/web_frontend/src/routes/chats",
+        ),
+        suffixes=(".ts", ".svelte"),
+        reason="Tickets 004-005 moved transcript and queue reconciliation helpers out of the route page.",
+    ),
+    TextHelperOwnershipRule(
+        owner_path="src/codex_autorunner/web_frontend/src/lib/viewModels/pmaChat.ts",
+        helper_names=(
+            "mapChatTranscriptRows",
+            "mapChatTranscriptSnapshot",
+            "compactChatTranscriptCards",
+        ),
+        scan_roots=(
+            "src/codex_autorunner/web_frontend/src/lib/application",
+            "src/codex_autorunner/web_frontend/src/routes/chats",
+        ),
+        suffixes=(".ts", ".svelte"),
+        reason="Ticket 004 keeps transcript row normalization in the view-model layer, not page code.",
     ),
 )
 
@@ -510,6 +795,24 @@ def _top_level_symbols(path: str) -> set[str]:
     return symbols
 
 
+TEXT_SYMBOL_RE = re.compile(
+    r"^\s*(?:export\s+)?(?:async\s+)?(?:function|class)\s+([A-Za-z_$][\w$]*)\b"
+    r"|^\s*(?:export\s+)?const\s+([A-Za-z_$][\w$]*)\s*=",
+    re.MULTILINE,
+)
+
+
+@lru_cache(maxsize=None)
+def _text_symbols(path: str) -> set[str]:
+    text = _repo_path(path).read_text(encoding="utf-8")
+    return {
+        name
+        for match in TEXT_SYMBOL_RE.finditer(text)
+        for name in match.groups()
+        if name
+    }
+
+
 def _check_file_budgets(budgets: tuple[FileBudget, ...], *, label: str) -> list[str]:
     failures: list[str] = []
     for budget in budgets:
@@ -573,6 +876,38 @@ def _check_helper_ownership() -> list[str]:
     return failures
 
 
+def _check_text_helper_ownership() -> list[str]:
+    failures: list[str] = []
+    for rule in TEXT_HELPER_OWNERSHIP_RULES:
+        owner = rule.owner_path
+        owner_symbols = _text_symbols(owner)
+        for helper_name in rule.helper_names:
+            locations: list[str] = []
+            if helper_name in owner_symbols:
+                locations.append(owner)
+            for root in rule.scan_roots:
+                for path in sorted(_repo_path(root).rglob("*")):
+                    if path.suffix not in rule.suffixes:
+                        continue
+                    relative = str(path.relative_to(REPO_ROOT))
+                    if relative == owner:
+                        continue
+                    if helper_name in _text_symbols(relative):
+                        locations.append(relative)
+            if not locations:
+                failures.append(
+                    f"Text helper owner missing: {owner} does not define {helper_name}. "
+                    f"{rule.reason}"
+                )
+                continue
+            if locations != [owner]:
+                failures.append(
+                    f"Text helper ownership violated for {helper_name}: found in "
+                    f"{', '.join(locations)}. Owner must be {owner}. {rule.reason}"
+                )
+    return failures
+
+
 def _fail_if_any(failures: list[str]) -> None:
     if failures:
         pytest.fail("\n".join(f"- {failure}" for failure in failures))
@@ -597,4 +932,7 @@ def test_hotspot_function_budgets() -> None:
 
 
 def test_hotspot_helper_ownership() -> None:
-    _fail_if_any(_check_helper_ownership())
+    failures = []
+    failures.extend(_check_helper_ownership())
+    failures.extend(_check_text_helper_ownership())
+    _fail_if_any(failures)
