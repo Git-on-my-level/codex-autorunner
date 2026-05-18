@@ -678,6 +678,10 @@ def register_doctor_commands(
             ExecutionHistoryThresholds,
             run_execution_history_diagnostics,
         )
+        from ....core.orchestration.execution_history_maintenance import (
+            collect_orchestration_storage_maintenance_read_model,
+            resolve_execution_history_maintenance_policy,
+        )
 
         try:
             start_path = repo or Path.cwd()
@@ -690,12 +694,24 @@ def register_doctor_commands(
             hub_config.root,
             thresholds=thresholds,
         )
+        maintenance = collect_orchestration_storage_maintenance_read_model(
+            hub_config.root,
+            policy=resolve_execution_history_maintenance_policy(hub_config.pma),
+        )
 
         if json_output:
-            typer.echo(json.dumps(report.to_dict(), indent=2))
+            payload = report.to_dict()
+            payload["maintenance"] = maintenance.to_dict()
+            typer.echo(json.dumps(payload, indent=2))
             return
 
         m = report.metrics
+        typer.echo(
+            "schema: "
+            f"{maintenance.schema_version}/{maintenance.target_schema_version} "
+            f"pending={len(maintenance.pending_migration_versions)} "
+            f"db_health={maintenance.database.status}"
+        )
         typer.echo(
             f"executions: total={m.total_executions} terminal={m.terminal_executions}"
         )

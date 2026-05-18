@@ -85,6 +85,7 @@ from .cold_trace_store import ColdTraceStore
 from .execution_history_maintenance import (
     audit_execution_history,
     backfill_legacy_execution_history,
+    collect_orchestration_storage_maintenance_read_model,
     compact_completed_execution_history,
     export_execution_history_bundle,
     resolve_execution_history_maintenance_policy,
@@ -134,6 +135,7 @@ from .managed_thread_side_effects import (
 from .migrations import (
     ORCHESTRATION_SCHEMA_VERSION,
     apply_orchestration_migrations,
+    collect_orchestration_migration_status,
     current_orchestration_schema_version,
     list_orchestration_table_definitions,
 )
@@ -366,6 +368,8 @@ __all__ = [
     "plan_chat_operation_recovery",
     "plan_managed_thread_delivery_recovery",
     "chat_surface_key",
+    "collect_orchestration_migration_status",
+    "collect_orchestration_storage_maintenance_read_model",
     "record_from_intent",
     "resolve_execution_history_maintenance_policy",
     "resolve_orchestration_sqlite_path",

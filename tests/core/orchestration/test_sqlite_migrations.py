@@ -7,6 +7,7 @@ from pathlib import Path
 from codex_autorunner.core.orchestration import (
     ORCHESTRATION_SCHEMA_VERSION,
     apply_orchestration_migrations,
+    collect_orchestration_migration_status,
     current_orchestration_schema_version,
 )
 from codex_autorunner.core.orchestration import migrations as migrations_module
@@ -29,12 +30,15 @@ def test_apply_orchestration_migrations_sets_latest_schema_version(
     with _connect(db_path) as conn:
         version = apply_orchestration_migrations(conn)
         runs = conn.execute("SELECT * FROM orch_migration_runs").fetchall()
+        attempts = conn.execute("SELECT * FROM orch_migration_attempts").fetchall()
 
     assert version == ORCHESTRATION_SCHEMA_VERSION
     assert len(runs) == 1
     assert runs[0]["status"] == "completed"
     assert runs[0]["from_version"] == 0
     assert runs[0]["target_version"] == ORCHESTRATION_SCHEMA_VERSION
+    assert len(attempts) == ORCHESTRATION_SCHEMA_VERSION
+    assert {row["status"] for row in attempts} == {"completed"}
 
 
 def test_apply_orchestration_migrations_adds_chat_index_projection(
@@ -260,6 +264,45 @@ def test_apply_orchestration_migrations_is_idempotent_at_latest_version(
     assert version == ORCHESTRATION_SCHEMA_VERSION
     assert int(first_run_count["count"] or 0) == 1
     assert int(second_run_count["count"] or 0) == 1
+
+
+def test_failed_migration_attempt_is_observable_without_schema_metadata(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    db_path = tmp_path / "orchestration.sqlite3"
+
+    def _raise(_conn: sqlite3.Connection) -> None:
+        raise RuntimeError("boom")
+
+    failing_step = migrations_module._MigrationStep(  # noqa: SLF001
+        version=1,
+        name="failing_step",
+        apply=_raise,
+    )
+    monkeypatch.setattr(migrations_module, "_MIGRATIONS", (failing_step,))
+    monkeypatch.setattr(migrations_module, "ORCHESTRATION_SCHEMA_VERSION", 1)
+
+    with _connect(db_path) as conn:
+        try:
+            apply_orchestration_migrations(conn)
+        except RuntimeError:
+            pass
+        else:  # pragma: no cover - defensive assertion
+            raise AssertionError("expected migration failure")
+        status = collect_orchestration_migration_status(conn)
+        schema_rows = conn.execute("SELECT * FROM orch_schema_migrations").fetchall()
+        run_rows = conn.execute("SELECT * FROM orch_migration_runs").fetchall()
+
+    assert status.current_version == 0
+    assert status.pending_versions == (1,)
+    assert schema_rows == []
+    assert len(run_rows) == 1
+    assert run_rows[0]["status"] == "failed"
+    assert len(status.attempts) == 1
+    assert status.attempts[0].version == 1
+    assert status.attempts[0].status == "failed"
+    assert status.attempts[0].error_text == "boom"
 
 
 def test_apply_orchestration_migrations_backfills_thread_projection_columns(

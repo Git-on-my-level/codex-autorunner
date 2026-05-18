@@ -17,6 +17,7 @@ from codex_autorunner.core.orchestration.execution_history_maintenance import (
     audit_execution_history,
     backfill_legacy_execution_history,
     collect_execution_history_database_health,
+    collect_orchestration_storage_maintenance_read_model,
     compact_completed_execution_history,
     execution_history_database_size_bytes,
     export_execution_history_bundle,
@@ -725,6 +726,37 @@ def test_collect_execution_history_database_health_reports_threshold_status(
     )
     assert health.size_bytes == size_bytes
     assert health.status == "warning"
+
+
+def test_collect_orchestration_storage_maintenance_read_model_reports_contract(
+    tmp_path: Path,
+) -> None:
+    hub_root = tmp_path / "hub"
+    hub_root.mkdir()
+    _seed_execution(hub_root, execution_id="exec-maintenance", output_chunks=18)
+
+    status = collect_orchestration_storage_maintenance_read_model(
+        hub_root,
+        policy=ExecutionHistoryMaintenancePolicy(
+            max_hot_rows_per_completed_execution=4,
+            hot_history_retention_days=30,
+            cold_trace_retention_days=90,
+        ),
+        last_maintenance_result={"status": "completed", "rows_deleted": 3},
+    )
+    payload = status.to_dict()
+
+    assert payload["schema_version"] == payload["target_schema_version"]
+    assert payload["pending_migration_versions"] == []
+    assert payload["database"]["database_path"].endswith("orchestration.sqlite3")
+    assert payload["database"]["status"] in {"ok", "warning", "error"}
+    assert payload["retention_policy"]["hot_history_retention_days"] == 30
+    assert payload["compaction"]["oversized_execution_count"] == 1
+    assert payload["cold_trace_health"]["missing_manifest_count"] == 1
+    assert payload["last_maintenance_result"] == {
+        "status": "completed",
+        "rows_deleted": 3,
+    }
 
 
 def test_compaction_never_keeps_more_than_policy_limit(

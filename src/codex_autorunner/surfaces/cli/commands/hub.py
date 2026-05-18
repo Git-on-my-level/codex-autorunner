@@ -26,6 +26,7 @@ from ....core.hub_repo_projection import HubRepoProjectionService
 from ....core.orchestration import (
     audit_execution_history,
     backfill_legacy_execution_history,
+    collect_orchestration_storage_maintenance_read_model,
     compact_completed_execution_history,
     export_execution_history_bundle,
     resolve_execution_history_maintenance_policy,
@@ -663,6 +664,30 @@ def register_hub_commands(
         typer.echo(f"  oversized: {len(summary.oversized_execution_ids)}")
         typer.echo(
             f"  missing_trace_artifact: {len(summary.missing_trace_artifact_ids)}"
+        )
+
+    @orchestration_app.command("maintenance-status")
+    def orchestration_maintenance_status(
+        path: Optional[Path] = typer.Option(None, "--path", help="Hub root path"),
+        output_json: bool = typer.Option(
+            False, "--json", help="Emit JSON payload for scripting"
+        ),
+    ) -> None:
+        """Report orchestration.sqlite3 schema, retention, trace, and DB health."""
+        config = require_hub_config(path)
+        status = collect_orchestration_storage_maintenance_read_model(
+            config.root,
+            policy=resolve_execution_history_maintenance_policy(config.pma),
+        )
+        if output_json:
+            typer.echo(json.dumps(status.to_dict(), indent=2))
+            return
+        typer.echo(
+            "maintenance: "
+            f"schema={status.schema_version}/{status.target_schema_version} "
+            f"pending_migrations={len(status.pending_migration_versions)} "
+            f"db_health={status.database.status} "
+            f"cold_trace_health={status.cold_trace_health.status}"
         )
 
     @orchestration_app.command("migrate-history")
