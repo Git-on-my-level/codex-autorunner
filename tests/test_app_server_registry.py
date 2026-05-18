@@ -175,9 +175,7 @@ async def test_thread_archive_unregisters_thread_runtime_callbacks(
         "method": "thread/archive",
         "params": {"threadId": "thread-archive"},
     }
-    assert "thread-archive" not in client._thread_approval_handlers
-    assert "thread-archive" not in client._thread_user_input_handlers
-    assert "thread-archive" not in client._thread_notification_handlers
+    assert not client._callback_registry.has_thread_callbacks("thread-archive")
 
 
 @pytest.mark.anyio
