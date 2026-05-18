@@ -2,6 +2,7 @@
   import { goto } from '$app/navigation';
   import { page } from '$app/state';
   import { onDestroy, onMount } from 'svelte';
+  import { agentModelCatalogStore } from '$lib/application/agentModelCatalogStore';
   import { createScopedTicketDetailController } from '$lib/application/scopedTicketDetailController';
   import TicketViews from '$lib/components/TicketViews.svelte';
   import { webApi } from '$lib/api/client';
@@ -18,6 +19,7 @@
       ticketId: 'unknown-ticket'
     },
     store: readModelEntityStore,
+    agentModelCatalogStore,
     openFlowRunEventSource,
     navigate: (path, options) => goto(href(path), options)
   });

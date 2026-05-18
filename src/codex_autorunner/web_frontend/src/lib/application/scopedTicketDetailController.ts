@@ -1,6 +1,11 @@
 import type { ApiError, ApiResult, JsonRecord, PartialPageIssue, WebApiClient } from '$lib/api/client';
 import type { FlowRunStreamEvent, StreamSubscription } from '$lib/api/streaming';
 import {
+  createAgentModelCatalogStore,
+  type AgentModelCatalogState,
+  type AgentModelCatalogStore
+} from '$lib/application/agentModelCatalogStore';
+import {
   invalidateReadModelTags,
   loadScopedTicketDetailSession,
   readModelEntityStore,
@@ -23,7 +28,6 @@ import {
   type TicketOwnerScope,
   type TicketWorkerActivity
 } from '$lib/viewModels/ticket';
-import { agentCanListModels, agentId } from '$lib/viewModels/modelPickers';
 
 export type ScopedTicketDetailOwnerKind = 'repo' | 'worktree';
 
@@ -62,6 +66,7 @@ export type ScopedTicketDetailControllerDeps = {
   api: ScopedTicketDetailApi;
   route: ScopedTicketDetailRoute;
   store?: ReadModelEntityStore;
+  agentModelCatalogStore?: AgentModelCatalogStore;
   openFlowRunEventSource: (
     runId: string,
     owner: { repo?: string; worktree?: string },
@@ -77,11 +82,13 @@ export type ScopedTicketDetailControllerDeps = {
 export class ScopedTicketDetailController {
   private readonly api: ScopedTicketDetailApi;
   private readonly store: ReadModelEntityStore;
+  private readonly agentModelCatalogStore: AgentModelCatalogStore;
   private readonly openFlowRunEventSource: ScopedTicketDetailControllerDeps['openFlowRunEventSource'];
   private readonly invalidateTags: (tags: ReadModelDependency[]) => Promise<void>;
   private readonly navigate: ScopedTicketDetailControllerDeps['navigate'];
   private readonly listeners = new Set<(state: ScopedTicketDetailControllerState) => void>();
   private unsubscribeReadModels: (() => void) | null = null;
+  private unsubscribeAgentModelCatalog: (() => void) | null = null;
   private streamSubscription: StreamSubscription | null = null;
   private readModelState: ReadModelEntityState;
   private detailRequestSeq = 0;
@@ -91,6 +98,7 @@ export class ScopedTicketDetailController {
   constructor(deps: ScopedTicketDetailControllerDeps) {
     this.api = deps.api;
     this.store = deps.store ?? readModelEntityStore;
+    this.agentModelCatalogStore = deps.agentModelCatalogStore ?? createAgentModelCatalogStore(deps.api.pma);
     this.openFlowRunEventSource = deps.openFlowRunEventSource;
     this.invalidateTags = deps.invalidateTags ?? invalidateReadModelTags;
     this.navigate = deps.navigate;
@@ -109,12 +117,17 @@ export class ScopedTicketDetailController {
     this.unsubscribeReadModels = this.store.subscribe((state) => {
       this.readModelState = state;
     });
-    void this.loadPickerSupport();
+    this.unsubscribeAgentModelCatalog = this.agentModelCatalogStore.subscribe((state) => {
+      this.applyAgentModelCatalogState(state);
+    });
+    void this.agentModelCatalogStore.ensureLoaded();
   }
 
   destroy(): void {
     this.unsubscribeReadModels?.();
     this.unsubscribeReadModels = null;
+    this.unsubscribeAgentModelCatalog?.();
+    this.unsubscribeAgentModelCatalog = null;
     this.closeFlowStream();
   }
 
@@ -290,20 +303,8 @@ export class ScopedTicketDetailController {
     this.streamSubscription = null;
   }
 
-  private async loadPickerSupport(): Promise<void> {
-    const result = await this.api.pma.listAgents();
-    if (!result.ok) return;
-    this.setState({ agents: result.data.agents });
-    const entries = await Promise.all(
-      result.data.agents
-        .filter((agent) => agentCanListModels(agent))
-        .map(async (agent) => {
-          const id = agentId(agent);
-          const models = await this.api.pma.listAgentModels(id);
-          return [id, models.ok ? models.data : null] as const;
-        })
-    );
-    this.setState({ modelCatalogs: Object.fromEntries(entries) });
+  private applyAgentModelCatalogState(catalog: AgentModelCatalogState): void {
+    this.setState({ agents: catalog.agents, modelCatalogs: catalog.modelCatalogs });
   }
 
   private ownerMutationTags(
