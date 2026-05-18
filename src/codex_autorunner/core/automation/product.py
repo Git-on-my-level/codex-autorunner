@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any, Optional
 from zoneinfo import ZoneInfo
 
+from ..time_utils import now_iso
 from .engine import AutomationRuleEngine
 from .models import (
     EXECUTOR_PMA_TURN,
@@ -38,7 +39,36 @@ class AutomationPresetRequest:
     minute: int = 0
     weekday: int = 0
     prompt: Optional[str] = None
+    agent: Optional[str] = None
+    model: Optional[str] = None
+    reasoning: Optional[str] = None
+    profile: Optional[str] = None
     enabled: bool = False
+
+
+@dataclass(frozen=True)
+class AutomationUpdateRequest:
+    name: Optional[str] = None
+    enabled: Optional[bool] = None
+    timezone: Optional[str] = None
+    hour: Optional[int] = None
+    minute: Optional[int] = None
+    weekday: Optional[int] = None
+    prompt: Optional[str] = None
+    ticket_body: Optional[str] = None
+    agent: Optional[str] = None
+    model: Optional[str] = None
+    reasoning: Optional[str] = None
+    profile: Optional[str] = None
+    trigger_kind: Optional[str] = None
+    trigger: Optional[dict[str, Any]] = None
+    filters: Optional[dict[str, Any]] = None
+    target_policy: Optional[str] = None
+    target: Optional[dict[str, Any]] = None
+    executor_kind: Optional[str] = None
+    executor: Optional[dict[str, Any]] = None
+    policy: Optional[dict[str, Any]] = None
+    metadata: Optional[dict[str, Any]] = None
 
 
 def automation_store(hub_root: Path) -> AutomationStore:
@@ -73,9 +103,13 @@ def automation_row(store: AutomationStore, rule: AutomationRule) -> dict[str, An
         "enabled": rule.enabled,
         "kind": display_kind(rule),
         "executor_kind": rule.executor_kind,
+        "executor": rule.executor,
         "trigger_kind": rule.trigger_kind,
+        "trigger": rule.trigger,
+        "filters": rule.filters,
         "target_policy": rule.target_policy,
         "target": rule.target,
+        "policy": rule.policy,
         "metadata": rule.metadata,
         "schedule": schedule.to_dict() if schedule is not None else None,
         "last_job": last_job.to_dict() if last_job is not None else None,
@@ -83,6 +117,13 @@ def automation_row(store: AutomationStore, rule: AutomationRule) -> dict[str, An
         "created_at": rule.created_at,
         "updated_at": rule.updated_at,
     }
+
+
+def automation_detail(store: AutomationStore, rule_id: str) -> dict[str, Any]:
+    rule = store.get_rule(rule_id)
+    if rule is None:
+        raise KeyError(rule_id)
+    return automation_row(store, rule)
 
 
 def create_preset_automation(
@@ -106,6 +147,125 @@ def create_preset_automation(
         **automation_row(store, saved_rule),
         "schedule": saved_schedule.to_dict(),
     }
+
+
+def update_automation(
+    store: AutomationStore, rule_id: str, payload: AutomationUpdateRequest
+) -> dict[str, Any]:
+    existing = store.get_rule(rule_id)
+    if existing is None:
+        raise KeyError(rule_id)
+
+    executor = (
+        dict(payload.executor)
+        if payload.executor is not None
+        else dict(existing.executor)
+    )
+    if payload.prompt is not None:
+        executor["message"] = payload.prompt
+    if payload.ticket_body is not None:
+        ticket_pack = dict(executor.get("ticket_pack") or {})
+        tickets = list(ticket_pack.get("tickets") or [])
+        if tickets:
+            first_ticket = dict(tickets[0])
+            first_ticket["content"] = payload.ticket_body
+            tickets[0] = first_ticket
+        else:
+            tickets = [{"path": "TICKET-001.md", "content": payload.ticket_body}]
+        ticket_pack["tickets"] = tickets
+        executor["ticket_pack"] = ticket_pack
+    _apply_executor_option(executor, "agent", payload.agent)
+    _apply_executor_option(executor, "model", payload.model)
+    _apply_executor_option(executor, "reasoning", payload.reasoning)
+    _apply_executor_option(executor, "profile", payload.profile)
+    _apply_executor_option(executor, "agent_profile", payload.profile)
+
+    updated_rule = AutomationRule.create(
+        rule_id=existing.rule_id,
+        name=_optional_text(payload.name) or existing.name,
+        enabled=existing.enabled if payload.enabled is None else payload.enabled,
+        system_owned=existing.system_owned,
+        trigger_kind=payload.trigger_kind or existing.trigger_kind,
+        trigger=payload.trigger if payload.trigger is not None else existing.trigger,
+        filters=payload.filters if payload.filters is not None else existing.filters,
+        target_policy=payload.target_policy or existing.target_policy,
+        target=payload.target if payload.target is not None else existing.target,
+        executor_kind=payload.executor_kind or existing.executor_kind,
+        executor=executor,
+        policy=payload.policy if payload.policy is not None else existing.policy,
+        metadata=(
+            payload.metadata if payload.metadata is not None else existing.metadata
+        ),
+        created_at=existing.created_at,
+        updated_at=now_iso(),
+    )
+    saved_rule = store.upsert_rule(updated_rule)
+
+    schedules = store.list_schedules(rule_id=rule_id)
+    if schedules:
+        current = schedules[0]
+        schedule_payload = dict(current.schedule)
+        timezone_name = payload.timezone or current.timezone
+        if payload.hour is not None:
+            schedule_payload["hour"] = _bounded_int(
+                payload.hour, field_name="hour", low=0, high=23
+            )
+        if payload.minute is not None:
+            schedule_payload["minute"] = _bounded_int(
+                payload.minute, field_name="minute", low=0, high=59
+            )
+        if payload.weekday is not None:
+            schedule_payload["weekdays"] = [
+                _bounded_int(payload.weekday, field_name="weekday", low=0, high=6)
+            ]
+        hour_value = _bounded_int(
+            int(schedule_payload.get("hour", 0)), field_name="hour", low=0, high=23
+        )
+        minute_value = _bounded_int(
+            int(schedule_payload.get("minute", 0)),
+            field_name="minute",
+            low=0,
+            high=59,
+        )
+        next_fire_at: Optional[str]
+        if current.schedule_kind == SCHEDULE_WEEKLY:
+            weekdays = schedule_payload.get("weekdays")
+            weekday_value = 0
+            if isinstance(weekdays, list) and weekdays:
+                weekday_value = int(weekdays[0])
+            weekday_value = _bounded_int(
+                weekday_value, field_name="weekday", low=0, high=6
+            )
+            next_fire_at = _next_weekly_fire_at(
+                timezone_name, hour_value, minute_value, weekday_value
+            )
+            schedule_payload["weekdays"] = [weekday_value]
+        elif current.schedule_kind == SCHEDULE_DAILY:
+            next_fire_at = _next_daily_fire_at(timezone_name, hour_value, minute_value)
+        else:
+            next_fire_at = current.next_fire_at
+
+        saved_schedule = store.upsert_schedule(
+            AutomationSchedule.create(
+                schedule_id=current.schedule_id,
+                rule_id=current.rule_id,
+                schedule_kind=current.schedule_kind,
+                timezone=timezone_name,
+                next_fire_at=next_fire_at,
+                last_fire_at=current.last_fire_at,
+                misfire_policy=current.misfire_policy,
+                schedule=schedule_payload,
+                state=current.state,
+                created_at=current.created_at,
+                updated_at=now_iso(),
+            )
+        )
+        return {
+            **automation_row(store, saved_rule),
+            "schedule": saved_schedule.to_dict(),
+        }
+
+    return automation_row(store, saved_rule)
 
 
 def run_automation_now(
@@ -273,7 +433,9 @@ def _build_security_scan_pr(
         target_policy=TARGET_POLICY_HUB,
         target={"repo_id": repo_id},
         executor_kind=EXECUTOR_PMA_TURN,
-        executor={"lane_id": "pma:default", "message": prompt},
+        executor=_executor_with_agent_options(
+            {"lane_id": "pma:default", "message": prompt}, payload
+        ),
         enabled=payload.enabled,
         policy={
             "dedupe_key": f"{rule_id}:{{{{ schedule.next_fire_at }}}}",
@@ -333,10 +495,15 @@ You are running a scheduled weekly ticket flow for `{repo_id}`.
         target={"base_repo_id": repo_id, "rule_slug": _slug(name)},
         executor_kind=EXECUTOR_TICKET_FLOW,
         executor={
-            "ticket_pack": {
-                "source": "inline",
-                "tickets": [{"path": "TICKET-001.md", "content": ticket_body}],
-            }
+            **_executor_with_agent_options(
+                {
+                    "ticket_pack": {
+                        "source": "inline",
+                        "tickets": [{"path": "TICKET-001.md", "content": ticket_body}],
+                    }
+                },
+                payload,
+            )
         },
         enabled=payload.enabled,
         policy={
@@ -467,8 +634,34 @@ def _bounded_int(value: int, *, field_name: str, low: int, high: int) -> int:
     return parsed
 
 
+def _apply_executor_option(
+    executor: dict[str, Any], key: str, value: Optional[str]
+) -> None:
+    if value is None:
+        return
+    text = value.strip()
+    if text:
+        executor[key] = text
+    else:
+        executor.pop(key, None)
+
+
+def _executor_with_agent_options(
+    executor: dict[str, Any], payload: AutomationPresetRequest
+) -> dict[str, Any]:
+    configured = dict(executor)
+    _apply_executor_option(configured, "agent", payload.agent)
+    _apply_executor_option(configured, "model", payload.model)
+    _apply_executor_option(configured, "reasoning", payload.reasoning)
+    _apply_executor_option(configured, "profile", payload.profile)
+    _apply_executor_option(configured, "agent_profile", payload.profile)
+    return configured
+
+
 __all__ = [
     "AutomationPresetRequest",
+    "AutomationUpdateRequest",
+    "automation_detail",
     "automation_overview",
     "automation_row",
     "automation_store",
@@ -477,4 +670,5 @@ __all__ = [
     "format_automation_status",
     "run_automation_now",
     "set_automation_enabled",
+    "update_automation",
 ]

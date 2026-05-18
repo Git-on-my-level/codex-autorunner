@@ -182,7 +182,35 @@ export type AutomationCreateRequest = {
   minute?: number;
   weekday?: number;
   prompt?: string | null;
+  agent?: string | null;
+  model?: string | null;
+  reasoning?: string | null;
+  profile?: string | null;
   enabled?: boolean;
+};
+
+export type AutomationUpdateRequest = {
+  name?: string | null;
+  enabled?: boolean;
+  timezone?: string;
+  hour?: number;
+  minute?: number;
+  weekday?: number;
+  prompt?: string | null;
+  ticket_body?: string | null;
+  agent?: string | null;
+  model?: string | null;
+  reasoning?: string | null;
+  profile?: string | null;
+  trigger_kind?: string | null;
+  trigger?: JsonRecord;
+  filters?: JsonRecord;
+  target_policy?: string | null;
+  target?: JsonRecord;
+  executor_kind?: string | null;
+  executor?: JsonRecord;
+  policy?: JsonRecord;
+  metadata?: JsonRecord;
 };
 
 export type RequestOptions = Omit<RequestInit, 'body'> & {
@@ -545,10 +573,23 @@ export class WebApiClient {
       ),
     listAutomations: async (): Promise<ApiResult<AutomationOverview>> =>
       mapResult(await this.getJson<JsonRecord>('/hub/automations'), mapAutomationOverview),
+    getAutomation: async (ruleId: string): Promise<ApiResult<AutomationSummary>> =>
+      mapResult(
+        await this.getJson<JsonRecord>(`/hub/automations/${encodeURIComponent(ruleId)}`),
+        (payload) => mapAutomationSummary(asRecord(payload.automation ?? payload))
+      ),
     createAutomation: async (request: AutomationCreateRequest): Promise<ApiResult<AutomationSummary>> =>
       mapResult(
         await this.requestJson<JsonRecord>('/hub/automations', {
           method: 'POST',
+          body: request
+        }),
+        (payload) => mapAutomationSummary(asRecord(payload.automation ?? payload))
+      ),
+    updateAutomation: async (ruleId: string, request: AutomationUpdateRequest): Promise<ApiResult<AutomationSummary>> =>
+      mapResult(
+        await this.requestJson<JsonRecord>(`/hub/automations/${encodeURIComponent(ruleId)}`, {
+          method: 'PATCH',
           body: request
         }),
         (payload) => mapAutomationSummary(asRecord(payload.automation ?? payload))

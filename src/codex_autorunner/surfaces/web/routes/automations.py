@@ -8,9 +8,12 @@ from pydantic import BaseModel, ConfigDict
 from ....core.automation import AutomationStore
 from ....core.automation.product import (
     AutomationPresetRequest,
+    AutomationUpdateRequest,
+    automation_detail,
     automation_overview,
     create_preset_automation,
     run_automation_now,
+    update_automation,
 )
 from ....core.automation.product import (
     set_automation_enabled as set_automation_enabled_core,
@@ -29,6 +32,10 @@ class AutomationCreateRequest(BaseModel):
     minute: int = 0
     weekday: int = 0
     prompt: Optional[str] = None
+    agent: Optional[str] = None
+    model: Optional[str] = None
+    reasoning: Optional[str] = None
+    profile: Optional[str] = None
     enabled: bool = False
 
 
@@ -36,6 +43,32 @@ class AutomationEnabledRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     enabled: bool
+
+
+class AutomationUpdatePayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: Optional[str] = None
+    enabled: Optional[bool] = None
+    timezone: Optional[str] = None
+    hour: Optional[int] = None
+    minute: Optional[int] = None
+    weekday: Optional[int] = None
+    prompt: Optional[str] = None
+    ticket_body: Optional[str] = None
+    agent: Optional[str] = None
+    model: Optional[str] = None
+    reasoning: Optional[str] = None
+    profile: Optional[str] = None
+    trigger_kind: Optional[str] = None
+    trigger: Optional[dict[str, Any]] = None
+    filters: Optional[dict[str, Any]] = None
+    target_policy: Optional[str] = None
+    target: Optional[dict[str, Any]] = None
+    executor_kind: Optional[str] = None
+    executor: Optional[dict[str, Any]] = None
+    policy: Optional[dict[str, Any]] = None
+    metadata: Optional[dict[str, Any]] = None
 
 
 def build_automation_routes(context: HubAppContext) -> APIRouter:
@@ -47,6 +80,15 @@ def build_automation_routes(context: HubAppContext) -> APIRouter:
     @router.get("")
     async def list_automations(limit: int = 100) -> dict[str, Any]:
         return automation_overview(store(), limit=limit)
+
+    @router.get("/{rule_id}")
+    async def get_automation(rule_id: str) -> dict[str, Any]:
+        try:
+            return {"automation": automation_detail(store(), rule_id)}
+        except KeyError as exc:
+            raise HTTPException(
+                status_code=404, detail=f"Automation not found: {rule_id}"
+            ) from exc
 
     @router.post("")
     async def create_automation(payload: AutomationCreateRequest) -> dict[str, Any]:
@@ -62,12 +104,34 @@ def build_automation_routes(context: HubAppContext) -> APIRouter:
                     minute=payload.minute,
                     weekday=payload.weekday,
                     prompt=payload.prompt,
+                    agent=payload.agent,
+                    model=payload.model,
+                    reasoning=payload.reasoning,
+                    profile=payload.profile,
                     enabled=payload.enabled,
                 ),
             )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return {"automation": created}
+
+    @router.patch("/{rule_id}")
+    async def update_automation_route(
+        rule_id: str, payload: AutomationUpdatePayload
+    ) -> dict[str, Any]:
+        try:
+            updated = update_automation(
+                store(),
+                rule_id,
+                AutomationUpdateRequest(**payload.model_dump(exclude_unset=True)),
+            )
+        except KeyError as exc:
+            raise HTTPException(
+                status_code=404, detail=f"Automation not found: {rule_id}"
+            ) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"automation": updated}
 
     @router.post("/{rule_id}/run")
     async def run_automation(rule_id: str) -> dict[str, Any]:

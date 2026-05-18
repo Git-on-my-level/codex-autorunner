@@ -109,6 +109,46 @@ export function pickerReasoningOptions(catalog: PickerRecord[], selectedModel: s
   return modelReasoningOptions(modelRecordForValue(catalog, selectedModel));
 }
 
+export type AgentModelSelectionRequest = {
+  agents: PickerRecord[];
+  agentId: string;
+  catalog?: PickerRecord[];
+  preferredModel?: string | null;
+  rememberedModel?: string | null;
+  currentModel?: string | null;
+  currentReasoning?: string | null;
+  keepReasoning?: boolean;
+  allowEmptyModel?: boolean;
+};
+
+export type AgentModelSelection = {
+  canListModels: boolean;
+  model: string;
+  reasoning: string;
+};
+
+export function resolveAgentModelSelection(request: AgentModelSelectionRequest): AgentModelSelection {
+  if (!agentCanListModels(agentRecordForId(request.agents, request.agentId))) {
+    return { canListModels: false, model: '', reasoning: '' };
+  }
+  const catalog = request.catalog ?? [];
+  const candidates = [request.preferredModel, request.rememberedModel, request.currentModel]
+    .map((value) => (typeof value === 'string' ? value.trim() : ''))
+    .filter(Boolean);
+  let model = '';
+  for (const candidate of candidates) {
+    if (modelExists(catalog, candidate)) {
+      model = candidate;
+      break;
+    }
+  }
+  if (!model && !request.allowEmptyModel) model = firstModelValue(catalog);
+  const reasoningOptions = pickerReasoningOptions(catalog, model);
+  const currentReasoning = typeof request.currentReasoning === 'string' ? request.currentReasoning.trim() : '';
+  const reasoning = request.keepReasoning && currentReasoning && reasoningOptions.includes(currentReasoning) ? currentReasoning : '';
+  return { canListModels: true, model, reasoning };
+}
+
 export type AgentProfileOption = { id: string; label: string };
 
 /** Hermes profile rows from `/hub/pma/agents` catalog (`profiles[].id` / `display_name`). */
