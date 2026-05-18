@@ -53,6 +53,12 @@ from ..hub_worktree_read_models import (
     summarize_snapshot_repo,
     truncate_table_cell,
 )
+from ..ops_cleanup import (
+    HubCleanupPlan,
+    HubCleanupResult,
+    render_hub_cleanup_human,
+    render_hub_cleanup_json,
+)
 from ..output import echo_json
 
 
@@ -1031,11 +1037,14 @@ def register_hub_commands(
             ValueError,
         ) as exc:  # intentional: top-level error handler
             raise_exit(str(exc), cause=exc)
+        cleanup_result = HubCleanupResult(
+            plan=HubCleanupPlan(dry_run=dry_run),
+            payload=result,
+        )
         if output_json:
-            indent = 2 if pretty else None
-            typer.echo(json.dumps(result, indent=indent, default=str))
+            typer.echo(render_hub_cleanup_json(cleanup_result, pretty=pretty))
         else:
-            typer.echo(str(result.get("message", "Done")))
+            typer.echo(render_hub_cleanup_human(cleanup_result))
 
     @hub_app.command("snapshot")
     def hub_snapshot(

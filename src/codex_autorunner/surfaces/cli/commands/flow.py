@@ -63,6 +63,12 @@ from ....core.utils import resolve_executable  # noqa: F401
 from ....flows.ticket_flow.runtime_helpers import flow_run_record_from_target
 from ....tickets import DEFAULT_MAX_TOTAL_TURNS, AgentPool
 from ..hub_path_option import hub_root_path_option
+from ..ops_cleanup import (
+    FlowHousekeepPlan,
+    FlowHousekeepResult,
+    render_flow_housekeep_human,
+    render_flow_housekeep_json,
+)
 from .ticket_flow_controller import (
     TicketFlowCliController,
     normalize_flow_run_id,
@@ -999,6 +1005,12 @@ def register_flow_commands(
 
             if stats_only:
                 hk_stats = gather_stats(store, db_path, retention_config)
+                housekeep_plan = FlowHousekeepPlan(
+                    mode="stats",
+                    retention_days=retention_config.retention_days,
+                    run_id=run_id,
+                    output_json=output_json,
+                )
                 payload: dict[str, Any] = {
                     "db_path": hk_stats.db_path,
                     "db_size_bytes": hk_stats.db_size_bytes,
@@ -1027,29 +1039,15 @@ def register_flow_commands(
                         for r in hk_stats.run_details
                     ],
                 }
+                housekeep_result = FlowHousekeepResult(
+                    plan=housekeep_plan,
+                    payload=payload,
+                )
                 if output_json:
-                    typer.echo(json.dumps(payload, indent=2))
+                    typer.echo(render_flow_housekeep_json(housekeep_result))
                 else:
-                    typer.echo(
-                        f"db={hk_stats.db_path} size={hk_stats.db_size_bytes:,} "
-                        f"runs={hk_stats.runs_total}(active={hk_stats.runs_active},"
-                        f"terminal={hk_stats.runs_terminal},expired={hk_stats.runs_expired}) "
-                        f"events={hk_stats.events_total}(telemetry={hk_stats.telemetry_total},wire={hk_stats.wire_events_total}) "
-                        f"retention={retention_config.retention_days}d"
-                    )
-                    for r in hk_stats.run_details:
-                        flags = []
-                        if r.is_active:
-                            flags.append("active")
-                        if r.is_terminal:
-                            flags.append("terminal")
-                        if r.is_expired:
-                            flags.append("expired")
-                        flag_str = ",".join(flags) if flags else "other"
-                        typer.echo(
-                            f"  {r.run_id}: {r.run_status} [{flag_str}] "
-                            f"events={r.events_total} telemetry={r.telemetry_total} wire={r.wire_events}"
-                        )
+                    for line in render_flow_housekeep_human(housekeep_result):
+                        typer.echo(line)
                 return
 
             target_run_ids = [run_id] if run_id else None
@@ -1057,6 +1055,12 @@ def register_flow_commands(
             if dry_run:
                 hk_plan = build_plan(
                     store, db_path, retention_config, run_ids=target_run_ids
+                )
+                housekeep_plan = FlowHousekeepPlan(
+                    mode="dry_run",
+                    retention_days=retention_config.retention_days,
+                    run_id=run_id,
+                    output_json=output_json,
                 )
                 plan_payload: dict[str, Any] = {
                     "dry_run": True,
@@ -1079,22 +1083,15 @@ def register_flow_commands(
                         for r in hk_plan.runs_to_process
                     ],
                 }
+                housekeep_result = FlowHousekeepResult(
+                    plan=housekeep_plan,
+                    payload=plan_payload,
+                )
                 if output_json:
-                    typer.echo(json.dumps(plan_payload, indent=2))
+                    typer.echo(render_flow_housekeep_json(housekeep_result))
                 else:
-                    typer.echo(
-                        f"housekeep(dry-run) retention={retention_config.retention_days}d "
-                        f"process={plan_payload['runs_to_process']} "
-                        f"skip_active={plan_payload['runs_skipped_active']} "
-                        f"skip_not_expired={plan_payload['runs_skipped_not_expired']} "
-                        f"export={plan_payload['events_to_export']} prune={plan_payload['events_to_prune']} "
-                        f"size={plan_payload['estimated_export_bytes']:,} db={plan_payload['db_size_bytes']:,}"
-                    )
-                    for r in hk_plan.runs_to_process:
-                        typer.echo(
-                            f"  {r.run_id}: {r.run_status} finished={r.finished_at} "
-                            f"events={r.events_total} wire={r.wire_events}"
-                        )
+                    for line in render_flow_housekeep_human(housekeep_result):
+                        typer.echo(line)
                 return
 
             hk_result = execute_housekeep(
@@ -1106,19 +1103,31 @@ def register_flow_commands(
                 dry_run=False,
             )
             result_payload = hk_result.to_dict()
+            result_payload.setdefault("events_exported", hk_result.events_exported)
+            result_payload.setdefault("events_pruned", hk_result.events_pruned)
+            result_payload.setdefault("exported_bytes", hk_result.exported_bytes)
+            result_payload.setdefault("vacuum_performed", hk_result.vacuum_performed)
+            result_payload.setdefault(
+                "db_size_before_bytes", hk_result.db_size_before_bytes
+            )
+            result_payload.setdefault(
+                "db_size_after_bytes", hk_result.db_size_after_bytes
+            )
+            housekeep_result = FlowHousekeepResult(
+                plan=FlowHousekeepPlan(
+                    mode="execute",
+                    retention_days=retention_config.retention_days,
+                    run_id=run_id,
+                    output_json=output_json,
+                ),
+                payload=result_payload,
+                errors=tuple(hk_result.errors),
+            )
             if output_json:
-                typer.echo(json.dumps(result_payload, indent=2))
+                typer.echo(render_flow_housekeep_json(housekeep_result))
             else:
-                typer.echo(
-                    f"housekeep: {hk_result.runs_processed} runs "
-                    f"exported={hk_result.events_exported}({hk_result.exported_bytes:,} bytes) "
-                    f"pruned={hk_result.events_pruned}"
-                )
-                if hk_result.vacuum_performed:
-                    typer.echo("  vacuum: performed")
-                typer.echo(
-                    f"  db: {hk_result.db_size_before_bytes:,} -> {hk_result.db_size_after_bytes:,}"
-                )
+                for line in render_flow_housekeep_human(housekeep_result):
+                    typer.echo(line)
                 for err in hk_result.errors:
                     typer.echo(f"  error: {err}", err=True)
         finally:

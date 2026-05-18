@@ -64,8 +64,6 @@ from ....core.state_retention import (
     adapt_housekeeping_rule_result_to_result,
     adapt_report_prune_summary_to_result,
     adapt_workspace_summary_to_result,
-    aggregate_cleanup_results,
-    summarize_cleanup_plan_lifecycle,
 )
 from ....core.state_roots import resolve_global_state_root
 from ....housekeeping import (
@@ -78,6 +76,21 @@ from ....housekeeping import (
 from ....manifest import load_manifest
 from ....workspace import workspace_id_for_path
 from ..hub_path_option import hub_root_path_option
+from ..ops_cleanup import (
+    CleanupArchivesResult,
+    CleanupFileboxResult,
+    CleanupProcessesResult,
+    CleanupReportsResult,
+    CleanupStatePlan,
+    CleanupStateResult,
+    CleanupTempResult,
+    render_cleanup_archives_human,
+    render_cleanup_filebox_human,
+    render_cleanup_processes_human,
+    render_cleanup_reports_human,
+    render_cleanup_state_human,
+    render_cleanup_temp_human,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -131,9 +144,10 @@ def register_cleanup_commands(
             force=force,
             force_attestation=force_attestation_payload,
         )
-        prefix = "dry-run: " if dry_run else ""
         typer.echo(
-            f"{prefix}killed={summary.killed} signaled={summary.signaled} removed={summary.removed} skipped={summary.skipped}"
+            render_cleanup_processes_human(
+                CleanupProcessesResult(summary=summary, dry_run=dry_run)
+            )
         )
 
     @cleanup_app.command("reports")
@@ -161,9 +175,7 @@ def register_cleanup_commands(
             max_history_files=max_history_files,
             max_total_bytes=max_total_bytes,
         )
-        typer.echo(
-            f"reports: kept={summary.kept} pruned={summary.pruned} bytes={summary.bytes_after}/{summary.bytes_before}"
-        )
+        typer.echo(render_cleanup_reports_human(CleanupReportsResult(summary=summary)))
 
     @cleanup_app.command("archives")
     def cleanup_archives(
@@ -207,8 +219,11 @@ def register_cleanup_commands(
                 f"kept={run_summary.kept} pruned={run_summary.pruned} "
                 f"bytes_before={run_summary.bytes_before} bytes_after={run_summary.bytes_after}"
             )
-        prefix = "Dry run: " if dry_run else ""
-        typer.echo(prefix + " | ".join(outputs))
+        typer.echo(
+            render_cleanup_archives_human(
+                CleanupArchivesResult(outputs=tuple(outputs), dry_run=dry_run)
+            )
+        )
 
     @cleanup_app.command("filebox")
     def cleanup_filebox(
@@ -234,16 +249,9 @@ def register_cleanup_commands(
             scope=scope_value,
             dry_run=dry_run,
         )
-        prefix = "Dry run: " if dry_run else ""
         typer.echo(
-            prefix
-            + " | ".join(
-                [
-                    f"inbox: kept={summary.inbox_kept} pruned={summary.inbox_pruned}",
-                    f"outbox: kept={summary.outbox_kept} pruned={summary.outbox_pruned}",
-                    f"bytes_before={summary.bytes_before}",
-                    f"bytes_after={summary.bytes_after}",
-                ]
+            render_cleanup_filebox_human(
+                CleanupFileboxResult(summary=summary, dry_run=dry_run)
             )
         )
 
@@ -260,25 +268,14 @@ def register_cleanup_commands(
         """Prune inactive repo-specific pytest temp roots under the shared cp-* tree."""
         engine = require_repo_config(repo, hub)
         summary = cleanup_repo_pytest_temp_runs(engine.repo_root, dry_run=dry_run)
-        prefix = "Dry run: " if dry_run else ""
-        typer.echo(
-            prefix
-            + "pytest tmp cleanup: "
-            + " ".join(
-                [
-                    f"scanned={summary.scanned}",
-                    f"deleted={summary.deleted}",
-                    f"active={summary.active}",
-                    f"failed={summary.failed}",
-                    f"bytes_before={summary.bytes_before}",
-                    f"bytes_after={summary.bytes_after}",
-                ]
+        for line in render_cleanup_temp_human(
+            CleanupTempResult(
+                label="pytest tmp cleanup",
+                summary=summary,
+                dry_run=dry_run,
             )
-        )
-        for path in summary.active_paths:
-            typer.echo(f"ACTIVE {path}")
-        for detail in summary.failed_paths:
-            typer.echo(f"FAILED {detail}")
+        ):
+            typer.echo(line)
 
     @cleanup_app.command("temp-roots")
     def cleanup_temp_roots(
@@ -293,25 +290,14 @@ def register_cleanup_commands(
         """Prune stale CAR-managed temp roots outside repo-local state."""
         engine = require_repo_config(repo, hub)
         summary = cleanup_repo_managed_temp_paths(engine.repo_root, dry_run=dry_run)
-        prefix = "Dry run: " if dry_run else ""
-        typer.echo(
-            prefix
-            + "temp root cleanup: "
-            + " ".join(
-                [
-                    f"scanned={summary.scanned}",
-                    f"deleted={summary.deleted}",
-                    f"active={summary.active}",
-                    f"failed={summary.failed}",
-                    f"bytes_before={summary.bytes_before}",
-                    f"bytes_after={summary.bytes_after}",
-                ]
+        for line in render_cleanup_temp_human(
+            CleanupTempResult(
+                label="temp root cleanup",
+                summary=summary,
+                dry_run=dry_run,
             )
-        )
-        for path in summary.active_paths:
-            typer.echo(f"ACTIVE {path}")
-        for detail in summary.failed_paths:
-            typer.echo(f"FAILED {detail}")
+        ):
+            typer.echo(line)
 
     @cleanup_app.command("state")
     def cleanup_state(
@@ -328,19 +314,20 @@ def register_cleanup_commands(
     ) -> None:
         """Umbrella cleanup for CAR state retention across all families."""
         engine = require_repo_config(repo, hub)
-        scope_value = scope.strip().lower()
-        if scope_value not in {"repo", "global", "all"}:
-            raise typer.BadParameter("scope must be one of: repo, global, all")
+        try:
+            plan = CleanupStatePlan.parse(scope=scope, dry_run=dry_run)
+        except ValueError as exc:
+            raise typer.BadParameter(str(exc)) from exc
 
         results: list[CleanupResult] = []
 
-        if scope_value in {"repo", "all"}:
+        if plan.scope in {"repo", "all"}:
             _run_repo_cleanup(engine, dry_run, results)
 
-        if scope_value in {"global", "all"}:
+        if plan.scope in {"global", "all"}:
             _run_global_cleanup(engine, dry_run, results)
 
-        _print_cleanup_report(results, dry_run)
+        _print_cleanup_report(CleanupStateResult(plan=plan, results=tuple(results)))
 
     def _run_repo_cleanup(engine: RuntimeContext, dry_run: bool, results: list) -> None:
         repo_root = engine.repo_root
@@ -598,84 +585,8 @@ def register_cleanup_commands(
                 )
             )
 
-    def _print_cleanup_report(results: list, dry_run: bool) -> None:
-        aggregated = aggregate_cleanup_results(results)
-        prefix = "DRY RUN: " if dry_run else ""
-
-        lines = []
-
-        family_scope_counts: dict[str, set[str]] = {}
-        for result in results:
-            family_scope_counts.setdefault(result.bucket.family, set()).add(
-                result.bucket.scope.value
-            )
-
-        by_bucket = {}
-        for result in results:
-            key = (result.bucket.scope.value, result.bucket.family)
-            if key not in by_bucket:
-                by_bucket[key] = {
-                    "action_count": 0,
-                    "action_bytes": 0,
-                    "blocked_count": 0,
-                }
-            action_count = result.plan.prune_count if dry_run else result.deleted_count
-            action_bytes = (
-                result.plan.reclaimable_bytes if dry_run else result.deleted_bytes
-            )
-            by_bucket[key]["action_count"] += action_count
-            by_bucket[key]["action_bytes"] += action_bytes
-            by_bucket[key]["blocked_count"] += len(result.plan.blocked_candidates)
-
-        for (scope_name, family), stats in sorted(by_bucket.items()):
-            action_count = stats["action_count"]
-            action_bytes = stats["action_bytes"]
-            blocked_count = stats["blocked_count"]
-            if action_count > 0 or blocked_count > 0:
-                label = (
-                    f"{scope_name}/{family}"
-                    if len(family_scope_counts.get(family, set())) > 1
-                    else family
-                )
-                lines.append(f"{label}:")
-                action_label = "prune"
-                matching_result = next(
-                    (
-                        result
-                        for result in results
-                        if result.bucket.family == family
-                        and result.bucket.scope.value == scope_name
-                    ),
-                    None,
-                )
-                if matching_result is not None:
-                    lifecycle = summarize_cleanup_plan_lifecycle(matching_result.plan)
-                    actions = lifecycle.get("actions", {})
-                    if actions:
-                        action_label = ",".join(sorted(actions))
-                lines.append(f"  pruned={action_count} bytes={action_bytes}")
-                if action_label != "prune":
-                    lines.append(f"  lifecycle_actions={action_label}")
-                if blocked_count > 0:
-                    lines.append(f"  blocked={blocked_count}")
-
-        total_count = (
-            sum(result.plan.prune_count for result in results)
-            if dry_run
-            else aggregated.total_deleted_count
-        )
-        total_bytes = (
-            sum(result.plan.reclaimable_bytes for result in results)
-            if dry_run
-            else aggregated.total_deleted_bytes
-        )
-        lines.append(f"{prefix}total: pruned={total_count} bytes={total_bytes}")
-        if aggregated.has_errors:
-            lines.append("errors:")
-            for error in aggregated.all_errors:
-                lines.append(f"  {error}")
-
-        typer.echo("\n".join(lines))
+    def _print_cleanup_report(result: CleanupStateResult) -> None:
+        typer.echo(render_cleanup_state_human(result))
 
     def _report_max_history_files(engine: RuntimeContext) -> int:
         return max(
