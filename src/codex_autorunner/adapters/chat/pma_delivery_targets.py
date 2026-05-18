@@ -125,8 +125,7 @@ def select_primary_pma_target(
         )
     if not candidates:
         return None
-    candidates.sort(key=lambda item: item[1])
-    candidates.sort(key=lambda item: item[0], reverse=True)
+    candidates.sort(key=lambda item: (item[0], item[1]), reverse=True)
     return candidates[0][2]
 
 

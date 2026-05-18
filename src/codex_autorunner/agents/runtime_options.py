@@ -138,12 +138,7 @@ def _runtime_kind(target: AgentExecutionTarget, config: Any) -> str:
 
 
 def resolve_opencode_model_payload(model: Optional[str]) -> Optional[dict[str, str]]:
-    payload = split_model_id(model)
-    if model and payload is None:
-        raise AgentRuntimeOptionsError(
-            "OpenCode model must include provider/model, for example 'zai/glm-5.1'"
-        )
-    return payload
+    return split_model_id(model)
 
 
 def resolve_agent_runtime_options(
@@ -228,6 +223,10 @@ def resolve_agent_runtime_options(
     opencode_model_payload = (
         resolve_opencode_model_payload(model) if runtime_kind == "opencode" else None
     )
+    if runtime_kind == "opencode" and model and opencode_model_payload is None:
+        raise AgentRuntimeOptionsError(
+            "OpenCode model must include provider/model, for example 'zai/glm-5.1'"
+        )
 
     return AgentRuntimeOptions(
         requested_agent_id=target.requested_agent_id,
