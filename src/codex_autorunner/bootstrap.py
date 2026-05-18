@@ -11,14 +11,11 @@ from .core.about_car import (
     ensure_tickets_agents_file_for_repo,
 )
 from .core.config_contract import ConfigError
-from .core.config_layering import (
-    CONFIG_FILENAME,
-    DEFAULT_HUB_CONFIG,
-    REPO_OVERRIDE_FILENAME,
-)
-from .core.config_layering import (
+from .core.config_defaults import DEFAULT_HUB_CONFIG
+from .core.config_generated import (
     GENERATED_CONFIG_HEADER as CORE_GENERATED_CONFIG_HEADER,
 )
+from .core.config_sources import CONFIG_FILENAME, REPO_OVERRIDE_FILENAME
 from .core.generated_hub_config import (
     normalize_generated_hub_config,
     save_hub_config_data,

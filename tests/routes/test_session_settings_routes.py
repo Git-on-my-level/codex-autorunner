@@ -140,6 +140,68 @@ def test_session_settings_reject_changes_while_run_is_active(_settings_env) -> N
     assert "Cannot change autorunner settings while a run is active" in response.text
 
 
+def test_session_settings_allows_noop_update_while_run_is_active(
+    _settings_env,
+) -> None:
+    client, _repo_root = _settings_env
+    seeded = client.post(
+        "/api/session/settings",
+        json={
+            "autorunner_model_overrides": {"codex": "gpt-5.5"},
+            "autorunner_effort_override": "high",
+            "autorunner_approval_policy": "never",
+            "autorunner_sandbox_mode": "workspaceWrite",
+            "autorunner_workspace_write_network": True,
+            "ticket_flow_require_commit": False,
+            "runner_stop_after_runs": 5,
+        },
+    )
+    assert seeded.status_code == 200
+
+    with patch.object(RunnerManager, "running", new_callable=PropertyMock) as running:
+        running.return_value = True
+        response = client.post(
+            "/api/session/settings",
+            json={
+                "autorunner_model_overrides": {"CODEX": "gpt-5.5"},
+                "autorunner_effort_override": "high",
+                "autorunner_approval_policy": "never",
+                "autorunner_sandbox_mode": "workspaceWrite",
+                "autorunner_workspace_write_network": True,
+                "ticket_flow_require_commit": False,
+                "runner_stop_after_runs": 5,
+            },
+        )
+
+    assert response.status_code == 200
+    assert response.json() == seeded.json()
+
+
+def test_session_settings_reset_thread_side_effect(
+    _settings_env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    client, _repo_root = _settings_env
+    reset_calls: list[str] = []
+
+    def reset_thread(key: str) -> bool:
+        reset_calls.append(key)
+        return True
+
+    monkeypatch.setattr(
+        client.app.state.app_server_threads, "reset_thread", reset_thread
+    )
+    response = client.post(
+        "/api/session/settings",
+        json={
+            "autorunner_model_overrides": {"opencode": "zai-coding-plan/glm-5.1"},
+            "autorunner_approval_policy": "unlessTrusted",
+        },
+    )
+
+    assert response.status_code == 200
+    assert reset_calls == ["autorunner"]
+
+
 def test_session_settings_rejects_invalid_runtime_preferences(_settings_env) -> None:
     client, _repo_root = _settings_env
 

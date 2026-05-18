@@ -16,7 +16,12 @@ from fastapi.responses import (
 
 from ....core.config import HubConfig
 from ....core.logging_utils import safe_log
-from ....core.state import SessionRecord, now_iso, persist_session_registry
+from ....core.state import (
+    SessionRecord,
+    TerminalSessionStore,
+    now_iso,
+    persist_session_registry,
+)
 from ....core.state_roots import resolve_repo_flows_db_path, resolve_repo_state_root
 from ..pty_session import REPLAY_END, ActiveSession, PTYSession
 from ..schemas import VersionResponse
@@ -111,6 +116,7 @@ def build_base_routes() -> APIRouter:
         session_env = getattr(app.state, "env", None)
         repo_path = str(engine.repo_root)
         state_path = engine.state_path
+        session_store = TerminalSessionStore(state_path)
         agent = (ws.query_params.get("agent") or "codex").strip().lower()
         profile = (ws.query_params.get("profile") or "").strip().lower() or None
         default_profile = getattr(engine.config, "agent_default_profile", None)
@@ -163,9 +169,11 @@ def build_base_routes() -> APIRouter:
             record = session_registry.get(session_id)
             if not record:
                 return
-            record.last_seen_at = now_iso()
+            timestamp = now_iso()
+            record.last_seen_at = timestamp
             if record.status != "active":
                 record.status = "active"
+            session_store.touch(session_id, now=timestamp)
             _mark_dirty()
             _maybe_persist_sessions()
 
@@ -176,6 +184,7 @@ def build_base_routes() -> APIRouter:
                     active_session.close()
                     terminal_sessions.pop(client_session_id, None)
                     session_registry.pop(client_session_id, None)
+                    session_store.close(client_session_id)
                     repo_to_session = terminal_service.remove_session_from_repo_mapping(
                         repo_to_session, session_id=client_session_id
                     )
@@ -199,6 +208,7 @@ def build_base_routes() -> APIRouter:
                             mapped_session.close()
                         terminal_sessions.pop(mapped_session_id, None)
                         session_registry.pop(mapped_session_id, None)
+                        session_store.close(mapped_session_id)
                         repo_to_session.pop(
                             terminal_service.session_key(repo_path, agent, profile),
                             None,
@@ -228,6 +238,7 @@ def build_base_routes() -> APIRouter:
                     finally:
                         terminal_sessions.pop(close_session_id, None)
                         session_registry.pop(close_session_id, None)
+                        session_store.close(close_session_id)
                         repo_to_session = (
                             terminal_service.remove_session_from_repo_mapping(
                                 repo_to_session, session_id=close_session_id
@@ -288,12 +299,19 @@ def build_base_routes() -> APIRouter:
                     )
                     session_agent = agent if not profile else f"{agent}@{profile}"
                     terminal_sessions[session_id] = active_session
+                    timestamp = now_iso()
                     session_registry[session_id] = SessionRecord(
                         repo_path=repo_path,
-                        created_at=now_iso(),
-                        last_seen_at=now_iso(),
+                        created_at=timestamp,
+                        last_seen_at=timestamp,
                         status="active",
                         agent=session_agent,
+                    )
+                    session_store.create_or_touch(
+                        session_id=session_id,
+                        repo_path=repo_path,
+                        agent=session_agent,
+                        now=timestamp,
                     )
                     repo_to_session[
                         terminal_service.session_key(repo_path, agent, profile)
@@ -314,12 +332,19 @@ def build_base_routes() -> APIRouter:
             if active_session:
                 if session_id and session_id not in session_registry:
                     session_agent = agent if not profile else f"{agent}@{profile}"
+                    timestamp = now_iso()
                     session_registry[session_id] = SessionRecord(
                         repo_path=repo_path,
-                        created_at=now_iso(),
-                        last_seen_at=now_iso(),
+                        created_at=timestamp,
+                        last_seen_at=timestamp,
                         status="active",
                         agent=session_agent,
+                    )
+                    session_store.create_or_touch(
+                        session_id=session_id,
+                        repo_path=repo_path,
+                        agent=session_agent,
+                        now=timestamp,
                     )
                     _mark_dirty()
                 if (
@@ -552,6 +577,7 @@ def build_base_routes() -> APIRouter:
                     if session_id:
                         terminal_sessions.pop(session_id, None)
                         session_registry.pop(session_id, None)
+                        session_store.close(session_id)
                         repo_to_session = (
                             terminal_service.remove_session_from_repo_mapping(
                                 repo_to_session, session_id=session_id

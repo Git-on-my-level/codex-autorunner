@@ -19,8 +19,8 @@ from .....agents.opencode.runtime import (
     extract_session_id,
     format_permission_prompt,
     opencode_missing_env,
-    split_model_id,
 )
+from .....agents.runtime_options import resolve_opencode_model_payload
 from .....core.logging_utils import log_event
 from .....core.orchestration.runtime_thread_events import (
     RuntimeThreadRunEventState,
@@ -858,7 +858,7 @@ class GitHubCommands(TelegramCommandSupportMixin):
             try:
                 await setup.supervisor.mark_turn_started(setup.workspace_root)
                 opencode_turn_started = True
-                model_payload = split_model_id(record.model)
+                model_payload = resolve_opencode_model_payload(record.model)
                 missing_env = await opencode_missing_env(
                     setup.client,
                     str(setup.workspace_root),

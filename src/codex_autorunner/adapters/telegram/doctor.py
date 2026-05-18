@@ -8,8 +8,8 @@ from pathlib import Path
 from typing import Any, Dict, Optional, Union
 
 from ...core.config import HubConfig, RepoConfig
+from ...core.diagnostics.types import DoctorCheck
 from ...core.optional_dependencies import missing_optional_dependencies
-from ...core.runtime import DoctorCheck
 from ...voice.config import VoiceConfig
 from ...voice.provider_catalog import (
     local_voice_provider_spec,

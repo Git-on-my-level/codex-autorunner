@@ -5,17 +5,21 @@ from typing import Any, Dict, Mapping, Optional
 import yaml
 
 from .config_contract import CONFIG_VERSION
-from .config_layering import (
+from .config_defaults import PMA_DEFAULT_MAX_TEXT_CHARS
+from .config_generated import (
     GENERATED_CONFIG_HEADER,
     GENERATED_HUB_CONFIG_PRESERVE_KEYS,
-    PMA_DEFAULT_MAX_TEXT_CHARS,
     PMA_LEGACY_GENERATED_MAX_TEXT_CHARS,
+)
+from .config_sources import (
+    _root_explicitly_sets_pma_max_text_chars,
+    resolve_hub_config_data,
+)
+from .config_yaml import (
     _clone_config_value,
     _load_yaml_dict,
     _mapping_has_nested_key,
     _merge_defaults,
-    _root_explicitly_sets_pma_max_text_chars,
-    resolve_hub_config_data,
 )
 from .utils import atomic_write
 

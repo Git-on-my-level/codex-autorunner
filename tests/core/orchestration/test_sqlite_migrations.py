@@ -1,14 +1,19 @@
 from __future__ import annotations
 
+import json
 import sqlite3
 from pathlib import Path
 
 from codex_autorunner.core.orchestration import (
     ORCHESTRATION_SCHEMA_VERSION,
     apply_orchestration_migrations,
+    collect_orchestration_migration_status,
     current_orchestration_schema_version,
 )
 from codex_autorunner.core.orchestration import migrations as migrations_module
+from codex_autorunner.core.orchestration.migrate_legacy_state import (
+    backfill_legacy_transcript_mirrors,
+)
 
 
 def _connect(db_path: Path) -> sqlite3.Connection:
@@ -25,12 +30,15 @@ def test_apply_orchestration_migrations_sets_latest_schema_version(
     with _connect(db_path) as conn:
         version = apply_orchestration_migrations(conn)
         runs = conn.execute("SELECT * FROM orch_migration_runs").fetchall()
+        attempts = conn.execute("SELECT * FROM orch_migration_attempts").fetchall()
 
     assert version == ORCHESTRATION_SCHEMA_VERSION
     assert len(runs) == 1
     assert runs[0]["status"] == "completed"
     assert runs[0]["from_version"] == 0
     assert runs[0]["target_version"] == ORCHESTRATION_SCHEMA_VERSION
+    assert len(attempts) == ORCHESTRATION_SCHEMA_VERSION
+    assert {row["status"] for row in attempts} == {"completed"}
 
 
 def test_apply_orchestration_migrations_adds_chat_index_projection(
@@ -59,6 +67,51 @@ def test_apply_orchestration_migrations_adds_chat_index_projection(
     assert "idx_orch_chat_index_projection_surface" in index_names
     assert "idx_orch_chat_index_projection_group" in index_names
     assert "idx_orch_chat_index_projection_activity" in index_names
+
+
+def test_legacy_transcript_backfill_uses_shared_importer_shape(
+    tmp_path: Path,
+) -> None:
+    hub_root = tmp_path / "hub"
+    legacy_dir = hub_root / ".codex-autorunner" / "pma" / "transcripts"
+    legacy_dir.mkdir(parents=True)
+    (legacy_dir / "legacy.md").write_text("legacy transcript\n", encoding="utf-8")
+    (legacy_dir / "legacy.json").write_text(
+        json.dumps(
+            {
+                "turn_id": "legacy-turn",
+                "created_at": "2026-01-01T00:00:00Z",
+                "content_path": "legacy.md",
+                "managed_thread_id": "thread-1",
+                "repo_id": "repo-1",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    with _connect(hub_root / ".codex-autorunner" / "orchestration.sqlite3") as conn:
+        apply_orchestration_migrations(conn)
+        result = backfill_legacy_transcript_mirrors(hub_root, conn)
+        row = conn.execute(
+            """
+            SELECT target_kind, target_id, text_content, text_preview, metadata_json
+              FROM orch_transcript_mirrors
+             WHERE transcript_mirror_id = 'legacy-turn'
+            """
+        ).fetchone()
+
+    assert result == {
+        "transcripts": 1,
+        "transcripts_skipped": 0,
+        "transcripts_errors": 0,
+    }
+    assert row is not None
+    assert row["target_kind"] == "thread_target"
+    assert row["target_id"] == "thread-1"
+    assert row["text_content"] == "legacy transcript\n"
+    assert row["text_preview"] == "legacy transcript"
+    assert json.loads(row["metadata_json"])["repo_id"] == "repo-1"
 
 
 def test_apply_orchestration_migrations_copies_legacy_backfill_flags_into_operation_flags(
@@ -211,6 +264,45 @@ def test_apply_orchestration_migrations_is_idempotent_at_latest_version(
     assert version == ORCHESTRATION_SCHEMA_VERSION
     assert int(first_run_count["count"] or 0) == 1
     assert int(second_run_count["count"] or 0) == 1
+
+
+def test_failed_migration_attempt_is_observable_without_schema_metadata(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    db_path = tmp_path / "orchestration.sqlite3"
+
+    def _raise(_conn: sqlite3.Connection) -> None:
+        raise RuntimeError("boom")
+
+    failing_step = migrations_module._MigrationStep(  # noqa: SLF001
+        version=1,
+        name="failing_step",
+        apply=_raise,
+    )
+    monkeypatch.setattr(migrations_module, "_MIGRATIONS", (failing_step,))
+    monkeypatch.setattr(migrations_module, "ORCHESTRATION_SCHEMA_VERSION", 1)
+
+    with _connect(db_path) as conn:
+        try:
+            apply_orchestration_migrations(conn)
+        except RuntimeError:
+            pass
+        else:  # pragma: no cover - defensive assertion
+            raise AssertionError("expected migration failure")
+        status = collect_orchestration_migration_status(conn)
+        schema_rows = conn.execute("SELECT * FROM orch_schema_migrations").fetchall()
+        run_rows = conn.execute("SELECT * FROM orch_migration_runs").fetchall()
+
+    assert status.current_version == 0
+    assert status.pending_versions == (1,)
+    assert schema_rows == []
+    assert len(run_rows) == 1
+    assert run_rows[0]["status"] == "failed"
+    assert len(status.attempts) == 1
+    assert status.attempts[0].version == 1
+    assert status.attempts[0].status == "failed"
+    assert status.attempts[0].error_text == "boom"
 
 
 def test_apply_orchestration_migrations_backfills_thread_projection_columns(

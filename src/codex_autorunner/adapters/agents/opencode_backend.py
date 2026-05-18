@@ -21,6 +21,12 @@ from ...agents.opencode.runtime import (
     split_model_id,
 )
 from ...agents.opencode.supervisor import OpenCodeSupervisor
+from ...agents.opencode.turn_runtime import (
+    OpenCodeTurnCommand,
+    cancel_and_wait,
+    observe_turn_runtime,
+    start_command,
+)
 from ...agents.opencode.usage_decoder import extract_usage
 from ...core.logging_utils import log_event
 from ...core.ports.agent_backend import (
@@ -289,14 +295,16 @@ class OpenCodeBackend(AgentBackend):
                 target={},
                 context={"workspace": str(workspace_root)},
             )
+        if not self._session_id:
+            raise RuntimeError("Failed to create OpenCode session: missing session ID")
 
-        _logger.info("Running turn events on session %s", self._session_id)
         active_session_id = self._session_id
+        _logger.info("Running turn events on session %s", active_session_id)
 
         try:
-            self._last_turn_id = build_turn_id(self._session_id)
+            self._last_turn_id = build_turn_id(active_session_id)
 
-            yield Started(timestamp=now_iso(), session_id=self._session_id)
+            yield Started(timestamp=now_iso(), session_id=active_session_id)
 
             yield OutputDelta(
                 timestamp=now_iso(), content=message, delta_type="user_message"
@@ -394,22 +402,35 @@ class OpenCodeBackend(AgentBackend):
                     )
                 )
 
-            prompt_task: Optional[asyncio.Task[Any]] = asyncio.create_task(
-                client.prompt_async(
-                    self._session_id,
+            async def _run_prompt() -> Any:
+                return await client.prompt_async(
+                    active_session_id,
                     message=message,
                     agent=self._agent,
                     model=model_payload,
                     variant=self._reasoning,
+                )
+
+            started_command = start_command(
+                OpenCodeTurnCommand(
+                    kind="prompt",
+                    conversation_id=active_session_id,
+                    executor=_run_prompt,
+                )
+            )
+            prompt_task: Optional[asyncio.Task[Any]] = started_command.task
+            runtime_task = asyncio.create_task(
+                observe_turn_runtime(
+                    collect_task=output_task,
+                    command_task=prompt_task,
+                    raw_events=lambda: [],
                 )
             )
             output_result = None
             try:
                 while True:
                     queue_task = asyncio.create_task(event_queue.get())
-                    tasks = {output_task, queue_task}
-                    if prompt_task is not None:
-                        tasks.add(prompt_task)
+                    tasks = {runtime_task, queue_task}
                     done, pending = await asyncio.wait(
                         tasks, return_when=asyncio.FIRST_COMPLETED
                     )
@@ -421,29 +442,18 @@ class OpenCodeBackend(AgentBackend):
                         with contextlib.suppress(asyncio.CancelledError):
                             await queue_task
 
-                    if prompt_task is not None and prompt_task in done:
-                        try:
-                            prompt_task.result()
-                        except (
-                            httpx.HTTPError,
-                            OpenCodeProtocolError,
-                            RuntimeError,
-                        ) as exc:
-                            output_task.cancel()
-                            with contextlib.suppress(asyncio.CancelledError):
-                                await output_task
-                            yield Failed(timestamp=now_iso(), error_message=str(exc))
-                            return
-                        prompt_task = None
-
-                    if output_task in done:
-                        output_result = await output_task
+                    if runtime_task in done:
+                        runtime_result = await runtime_task
+                        output_result = runtime_result.output
                         break
 
             finally:
-                if prompt_task is not None:
-                    with contextlib.suppress(asyncio.CancelledError):
-                        await prompt_task
+                if not runtime_task.done():
+                    await cancel_and_wait(runtime_task)
+                if prompt_task is not None and not prompt_task.done():
+                    await cancel_and_wait(prompt_task)
+                if not output_task.done():
+                    await cancel_and_wait(output_task)
                 for line in self._event_formatter.flush_all_reasoning():
                     await event_queue.put(
                         OutputDelta(

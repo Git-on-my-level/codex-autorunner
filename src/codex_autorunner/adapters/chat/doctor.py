@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from ...core.runtime import DoctorCheck
+from ...core.diagnostics.types import DoctorCheck
 from .chat_ux_telemetry import get_global_accumulator
 from .parity_checker import ParityCheckResult, run_parity_checks
 from .ux_regression_contract import (

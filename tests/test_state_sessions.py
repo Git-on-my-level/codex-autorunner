@@ -4,6 +4,7 @@ import sqlite3
 from codex_autorunner.core.state import (
     RunnerState,
     SessionRecord,
+    TerminalSessionStore,
     load_state,
     save_state,
 )
@@ -33,6 +34,39 @@ def test_state_session_registry_roundtrip(tmp_path):
     assert loaded.sessions["abc"].repo_path == "/tmp/example"
     assert loaded.sessions["abc"].status == "active"
     assert loaded.repo_to_session["/tmp/example"] == "abc"
+
+
+def test_terminal_session_store_agent_scoped_lookup_and_prune(tmp_path):
+    state_path = tmp_path / "state.sqlite3"
+    store = TerminalSessionStore(state_path)
+
+    store.create_or_touch(
+        session_id="codex-1",
+        repo_path="/tmp/example",
+        agent="codex",
+        now="2026-01-01T00:00:00Z",
+    )
+    store.create_or_touch(
+        session_id="opencode-1",
+        repo_path="/tmp/example",
+        agent="opencode",
+        now="2026-01-01T00:00:01Z",
+    )
+
+    assert store.lookup_for_repo("/tmp/example", agent="codex") == "codex-1"
+    assert store.lookup_for_repo("/tmp/example", agent="opencode") == "opencode-1"
+
+    assert store.close("opencode-1", now="2026-01-01T00:00:02Z") is True
+    assert store.lookup_for_repo("/tmp/example", agent="opencode") is None
+
+    state = load_state(state_path)
+    assert state.sessions["opencode-1"].status == "closed"
+    assert "/tmp/example:opencode" not in state.repo_to_session
+
+    state.repo_to_session["missing"] = "does-not-exist"
+    save_state(state_path, state)
+    assert store.prune() == 1
+    assert "missing" not in load_state(state_path).repo_to_session
 
 
 def test_state_migrates_legacy_singular_model_override(tmp_path):

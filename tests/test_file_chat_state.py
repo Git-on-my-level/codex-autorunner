@@ -6,11 +6,12 @@ from types import SimpleNamespace
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from codex_autorunner.surfaces.web.routes import file_chat as file_chat_routes
 from codex_autorunner.surfaces.web.routes.file_chat import (
     FileChatRoutesState,
     build_file_chat_routes,
 )
+from codex_autorunner.surfaces.web.routes.file_chat_routes.targets import parse_target
+from codex_autorunner.surfaces.web.services import file_chat as file_chat_service
 
 
 def test_file_chat_state_is_app_scoped():
@@ -72,7 +73,7 @@ def test_file_chat_active_and_interrupt_routes_share_app_state(tmp_path) -> None
     app.include_router(build_file_chat_routes())
     app.state.engine = SimpleNamespace(repo_root=tmp_path)
 
-    target = file_chat_routes._parse_target(tmp_path, "contextspace:active_context")
+    target = parse_target(tmp_path, "contextspace:active_context")
     interrupt_event = asyncio.Event()
     current = {
         "client_turn_id": "turn-123",
@@ -118,7 +119,7 @@ def test_ticket_chat_interrupt_wrapper_shares_file_chat_app_state(tmp_path) -> N
     app.include_router(build_file_chat_routes())
     app.state.engine = SimpleNamespace(repo_root=tmp_path)
 
-    target = file_chat_routes._parse_target(tmp_path, "ticket:1")
+    target = parse_target(tmp_path, "ticket:1")
     interrupt_event = asyncio.Event()
 
     state = FileChatRoutesState()
@@ -134,3 +135,78 @@ def test_ticket_chat_interrupt_wrapper_shares_file_chat_app_state(tmp_path) -> N
         "detail": "Ticket chat interrupted",
     }
     assert interrupt_event.is_set() is True
+
+
+def test_file_chat_post_route_uses_service_contract(tmp_path, monkeypatch) -> None:
+    app = FastAPI()
+    app.include_router(build_file_chat_routes())
+    app.state.engine = SimpleNamespace(repo_root=tmp_path)
+
+    async def fake_execute_file_chat_agent_turn(
+        _request,
+        _repo_root,
+        _target,
+        message: str,
+        **kwargs,
+    ):
+        on_meta = kwargs.get("on_meta")
+        assert on_meta is not None
+        await on_meta("codex", "thread-route", "turn-route")
+        return {"status": "ok", "message": f"done {message}"}
+
+    monkeypatch.setattr(
+        file_chat_service,
+        "execute_file_chat_agent_turn",
+        fake_execute_file_chat_agent_turn,
+    )
+
+    client = TestClient(app)
+    res = client.post(
+        "/api/file-chat",
+        json={
+            "target": "contextspace:spec",
+            "message": "edit spec",
+            "client_turn_id": "route-client",
+        },
+    )
+
+    assert res.status_code == 200
+    assert res.json()["client_turn_id"] == "route-client"
+    active = client.get(
+        "/api/file-chat/active",
+        params={"client_turn_id": "route-client"},
+    )
+    assert active.status_code == 200
+    assert active.json()["last_result"]["message"] == "done edit spec"
+
+
+def test_ticket_chat_post_route_preserves_alias_contract(tmp_path, monkeypatch) -> None:
+    app = FastAPI()
+    app.include_router(build_file_chat_routes())
+    app.state.engine = SimpleNamespace(repo_root=tmp_path)
+
+    observed: dict[str, object] = {}
+
+    async def fake_execute_file_chat_agent_turn(
+        _request,
+        _repo_root,
+        target,
+        message: str,
+        **_kwargs,
+    ):
+        observed["target"] = target.target
+        observed["message"] = message
+        return {"status": "ok", "message": "ticket done"}
+
+    monkeypatch.setattr(
+        file_chat_service,
+        "execute_file_chat_agent_turn",
+        fake_execute_file_chat_agent_turn,
+    )
+
+    client = TestClient(app)
+    res = client.post("/api/tickets/7/chat", json={"message": "edit ticket"})
+
+    assert res.status_code == 200
+    assert res.json()["status"] == "ok"
+    assert observed == {"target": "ticket:7", "message": "edit ticket"}

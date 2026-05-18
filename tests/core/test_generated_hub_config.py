@@ -2,10 +2,12 @@ from pathlib import Path
 
 import yaml
 
-from codex_autorunner.core.config_layering import (
+from codex_autorunner.core.config_defaults import PMA_DEFAULT_MAX_TEXT_CHARS
+from codex_autorunner.core.config_generated import (
     GENERATED_CONFIG_HEADER,
-    PMA_DEFAULT_MAX_TEXT_CHARS,
     PMA_LEGACY_GENERATED_MAX_TEXT_CHARS,
+)
+from codex_autorunner.core.config_sources import (
     ROOT_CONFIG_FILENAME,
     ROOT_OVERRIDE_FILENAME,
     resolve_hub_config_data,

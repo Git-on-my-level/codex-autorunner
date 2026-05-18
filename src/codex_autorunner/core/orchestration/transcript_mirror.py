@@ -179,6 +179,7 @@ class TranscriptMirrorStore:
         metadata: Mapping[str, Any],
         text_content: str,
         message_role: str = "transcript",
+        conn: Any | None = None,
     ) -> None:
         sanitized = sanitize_transcript_metadata(metadata)
         sanitized.setdefault("turn_id", turn_id)
@@ -192,54 +193,62 @@ class TranscriptMirrorStore:
         model_id = str(sanitized.get("model") or "").strip() or None
         repo_id = str(sanitized.get("repo_id") or "").strip() or None
         text_preview = build_text_preview(text_content)
-        with open_orchestration_sqlite(self._hub_root) as conn:
-            conn.execute(
-                """
-                INSERT INTO orch_transcript_mirrors (
-                    transcript_mirror_id,
-                    target_kind,
-                    target_id,
-                    execution_id,
-                    message_role,
-                    text_content,
-                    text_preview,
-                    repo_id,
-                    agent_id,
-                    model_id,
-                    created_at,
-                    updated_at,
-                    metadata_json
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(transcript_mirror_id) DO UPDATE SET
-                    target_kind = excluded.target_kind,
-                    target_id = excluded.target_id,
-                    execution_id = excluded.execution_id,
-                    message_role = excluded.message_role,
-                    text_content = excluded.text_content,
-                    text_preview = excluded.text_preview,
-                    repo_id = excluded.repo_id,
-                    agent_id = excluded.agent_id,
-                    model_id = excluded.model_id,
-                    created_at = excluded.created_at,
-                    updated_at = excluded.updated_at,
-                    metadata_json = excluded.metadata_json
-                """,
-                (
-                    turn_id,
-                    target_kind,
-                    target_id,
-                    execution_id or None,
-                    message_role,
-                    text_content,
-                    text_preview,
-                    repo_id,
-                    agent_id,
-                    model_id,
-                    created_at,
-                    created_at,
-                    _json_dumps(sanitized),
-                ),
-            )
+        params = (
+            turn_id,
+            target_kind,
+            target_id,
+            execution_id or None,
+            message_role,
+            text_content,
+            text_preview,
+            repo_id,
+            agent_id,
+            model_id,
+            created_at,
+            created_at,
+            _json_dumps(sanitized),
+        )
+        if conn is not None:
+            self._write_mirror_content_row(conn, params)
+            return
+        with open_orchestration_sqlite(self._hub_root) as owned_conn:
+            self._write_mirror_content_row(owned_conn, params)
+
+    @staticmethod
+    def _write_mirror_content_row(conn: Any, params: tuple[Any, ...]) -> None:
+        conn.execute(
+            """
+            INSERT INTO orch_transcript_mirrors (
+                transcript_mirror_id,
+                target_kind,
+                target_id,
+                execution_id,
+                message_role,
+                text_content,
+                text_preview,
+                repo_id,
+                agent_id,
+                model_id,
+                created_at,
+                updated_at,
+                metadata_json
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(transcript_mirror_id) DO UPDATE SET
+                target_kind = excluded.target_kind,
+                target_id = excluded.target_id,
+                execution_id = excluded.execution_id,
+                message_role = excluded.message_role,
+                text_content = excluded.text_content,
+                text_preview = excluded.text_preview,
+                repo_id = excluded.repo_id,
+                agent_id = excluded.agent_id,
+                model_id = excluded.model_id,
+                created_at = excluded.created_at,
+                updated_at = excluded.updated_at,
+                metadata_json = excluded.metadata_json
+            """,
+            params,
+        )
 
     def read_transcript(self, turn_id: str) -> dict[str, Any] | None:
         try:

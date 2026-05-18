@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
@@ -28,6 +27,12 @@ from ....core.state_roots import resolve_repo_flows_db_path
 from ....manifest import load_manifest
 from ....tickets.outbox import resolve_outbox_paths
 from ..hub_path_option import hub_root_path_option
+from ..ops_cleanup import (
+    HubRunsCleanupPlan,
+    HubRunsCleanupResult,
+    render_hub_runs_cleanup_human,
+    render_hub_runs_cleanup_json,
+)
 from .utils import parse_bool_text, parse_duration
 
 
@@ -367,25 +372,25 @@ def register_hub_runs_commands(
             finally:
                 store.close()
 
-        payload = {
-            "dry_run": dry_run,
-            "stale": stale,
-            "older_than": older_than,
-            "delete_run": parsed_delete_run,
-            "force": force,
-            "results": results,
-            "errors": errors,
-        }
+        cleanup_result = HubRunsCleanupResult(
+            plan=HubRunsCleanupPlan(
+                stale=stale,
+                older_than=older_than,
+                dry_run=dry_run,
+                delete_run=parsed_delete_run,
+                force=force,
+            ),
+            results=tuple(results),
+            errors=tuple(errors),
+        )
 
         if output_json:
-            typer.echo(json.dumps(payload, indent=2 if pretty else None))
+            typer.echo(render_hub_runs_cleanup_json(cleanup_result, pretty=pretty))
             if errors:
                 raise typer.Exit(code=1)
             return
 
-        typer.echo(
-            f"Hub runs cleanup candidates={len(results)} errors={len(errors)} dry_run={dry_run}"
-        )
+        typer.echo(render_hub_runs_cleanup_human(cleanup_result))
         if errors:
             typer.echo("hub runs cleanup encountered errors.", err=True)
             raise typer.Exit(code=1)

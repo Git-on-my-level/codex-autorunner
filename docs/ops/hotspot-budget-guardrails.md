@@ -2,7 +2,8 @@
 
 This repo now carries a narrow architectural budget check for the specific seams
 that were extracted in the refactor pack behind tickets `100/110`, `120/130`,
-`200/210`, and `300/310`.
+`200/210`, and `300/310`, plus the PMA/chat/read-model ownership cuts from CAR
+tickets `001-008`.
 
 It is intentionally not a repo-wide complexity policy.
 
@@ -12,6 +13,13 @@ It is intentionally not a repo-wide complexity policy.
 - The shared Discord command slices plus the still-centralized command monoliths
 - Shared OpenCode progress/token helper ownership
 - Extracted ticket-runner seams plus the remaining `TicketRunner.step()` hotspot
+- PMA automation services, mirror/unified adapters, row persistence, transcript
+  migration/status, and the remaining PMA automation store facade
+- Managed-thread runtime/read-model services plus the now-thin PMA runtime route
+  wrappers
+- Chat detail frontend session, live projection, send controller, optimistic
+  reconciliation helpers, and the remaining `+page.svelte`/read-model loader
+  legacy caps
 
 The budgets live in `tests/test_hotspot_budgets.py`.
 
@@ -22,10 +30,16 @@ The file is split into:
 - `LEGACY_FILE_CAPS`
 - `LEGACY_FUNCTION_CAPS`
 - `HELPER_OWNERSHIP_RULES`
+- `TEXT_HELPER_OWNERSHIP_RULES`
 
 Standard budgets protect seams that are already extracted and should stay small.
 Legacy caps are explicit exceptions for hotspots that still exist but are not
 allowed to grow unchecked.
+
+`TEXT_HELPER_OWNERSHIP_RULES` is intentionally lightweight: it scans TypeScript
+and Svelte source for named helpers that must remain owned by the extracted chat
+detail application/view-model modules. It is not a full parser or a frontend
+complexity policy.
 
 ## How to run
 

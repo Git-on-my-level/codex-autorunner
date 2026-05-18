@@ -10,9 +10,9 @@ from typing import Any, Optional
 
 from ..config_contract import ConfigError
 from ..locks import file_lock
-from ..runtime import summarize_opencode_lifecycle
 from ..text_utils import _parse_iso_timestamp, lock_path_for
 from ..utils import atomic_write
+from .opencode import summarize_opencode_lifecycle
 from .process_snapshot import ProcessOwnership, collect_processes, enrich_with_ownership
 
 logger = logging.getLogger(__name__)

@@ -7,10 +7,12 @@ import pytest
 from codex_autorunner.core.automation import AutomationStore
 from codex_autorunner.core.managed_thread_store import ManagedThreadStore
 from codex_autorunner.core.orchestration import OrchestrationBindingStore
+from codex_autorunner.core.pma_automation_mirror import PmaAutomationMirror
 from codex_autorunner.core.pma_automation_store import (
     PmaAutomationStore,
     PmaAutomationThreadNotFoundError,
 )
+from codex_autorunner.core.pma_automation_unified import PmaUnifiedAutomationAdapter
 from codex_autorunner.core.pma_domain.models import PmaDispatchDecision
 
 
@@ -122,6 +124,65 @@ def test_timer_create_touch_and_cancel_mirror_unified_schedule(tmp_path) -> None
     cancelled = automation_store.get_schedule(f"pma-timer:{timer_id}")
     assert cancelled.state == "cancelled"
     assert cancelled.next_fire_at is None
+
+
+def test_subscription_mirror_returns_structured_success(tmp_path) -> None:
+    store = PmaAutomationStore(tmp_path)
+    subscription, deduped = store.upsert_subscription(
+        event_types=["flow_failed"],
+        repo_id="repo-1",
+        lane_id="pma:default",
+    )
+
+    assert deduped is False
+    result = PmaAutomationMirror(tmp_path).mirror_subscription_rule(subscription)
+
+    assert result.ok is True
+    assert result.operation == "mirror_subscription_rule"
+    assert result.identifier == subscription.subscription_id
+    assert result.owner == "pma_automation"
+    assert result.scope == "unified_automation"
+    assert result.rule_id == f"builtin:pma:subscription:{subscription.subscription_id}"
+    assert AutomationStore(tmp_path).get_rule(result.rule_id) is not None
+
+
+def test_timer_mirror_failure_returns_structured_error_and_logs(
+    tmp_path, monkeypatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    store = PmaAutomationStore(tmp_path)
+    timer, deduped = store.upsert_timer(
+        due_at="2026-01-01T00:00:00Z",
+        thread_id="thread-123",
+    )
+    assert deduped is False
+
+    def _raise_runtime_error(self, *, timer):
+        _ = self, timer
+        raise RuntimeError("unified store unavailable")
+
+    monkeypatch.setattr(
+        PmaUnifiedAutomationAdapter,
+        "mirror_timer_schedule",
+        _raise_runtime_error,
+    )
+
+    with caplog.at_level(
+        logging.ERROR, logger="codex_autorunner.core.pma_automation_mirror"
+    ):
+        result = PmaAutomationMirror(tmp_path).mirror_timer_schedule(timer)
+
+    assert result.ok is False
+    assert result.operation == "mirror_timer_schedule"
+    assert result.identifier == timer.timer_id
+    assert result.owner == "pma_automation"
+    assert result.scope == "unified_automation"
+    assert "unified store unavailable" in result.error
+    assert result.error_code == "RuntimeError"
+    assert any(
+        "Failed to mirror PMA timer into unified automation schedule"
+        in record.getMessage()
+        for record in caplog.records
+    )
 
 
 def test_watchdog_timer_refires_until_touched(tmp_path) -> None:
@@ -727,7 +788,7 @@ def test_compute_dispatch_decision_for_wakeup_passes_lane_id(
         return PmaDispatchDecision(requested_delivery="auto")
 
     monkeypatch.setattr(
-        "codex_autorunner.core.pma_automation_store.build_pma_dispatch_decision",
+        "codex_autorunner.core.pma_automation_services.build_pma_dispatch_decision",
         _fake_build_pma_dispatch_decision,
     )
 
@@ -774,7 +835,7 @@ def test_enqueue_wakeup_tolerates_runtime_error_while_loading_binding_metadata(
         raise RuntimeError("bindings unavailable")
 
     monkeypatch.setattr(
-        "codex_autorunner.core.pma_automation_store.active_chat_binding_metadata_by_thread",
+        "codex_autorunner.core.pma_automation_services.active_chat_binding_metadata_by_thread",
         _raise_runtime_error,
     )
 
@@ -807,7 +868,7 @@ def test_notify_transition_tolerates_runtime_error_while_loading_workspace_prefe
         raise RuntimeError("workspace preference unavailable")
 
     monkeypatch.setattr(
-        "codex_autorunner.core.pma_automation_store.preferred_non_pma_chat_notification_source_for_workspace",
+        "codex_autorunner.core.pma_automation_services.preferred_non_pma_chat_notification_source_for_workspace",
         _raise_runtime_error,
     )
 

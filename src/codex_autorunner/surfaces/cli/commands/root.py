@@ -28,7 +28,14 @@ from ....core.config_parsers import normalize_base_path
 from ....core.config_validation import is_loopback_host
 from ....core.git_utils import GitError, run_git
 from ....core.runtime import RuntimeContext, clear_stale_lock
-from ....core.state import RunnerState, load_state, now_iso, save_state, state_lock
+from ....core.state import (
+    RunnerState,
+    TerminalSessionStore,
+    load_state,
+    now_iso,
+    save_state,
+    state_lock,
+)
 from ....core.state_roots import resolve_repo_runner_state_db_path
 from ....core.usage import (
     UsageError,
@@ -267,10 +274,9 @@ def register_root_commands(app: typer.Typer) -> None:
         engine = _require_repo_config(repo, hub)
         state = load_state(engine.state_path)
         repo_key = str(engine.repo_root)
-        session_id = state.repo_to_session.get(repo_key) or state.repo_to_session.get(
-            f"{repo_key}:codex"
-        )
-        opencode_session_id = state.repo_to_session.get(f"{repo_key}:opencode")
+        session_store = TerminalSessionStore(engine.state_path)
+        session_id = session_store.lookup_for_repo(repo_key, agent="codex")
+        opencode_session_id = session_store.lookup_for_repo(repo_key, agent="opencode")
         session_record = state.sessions.get(session_id) if session_id else None
         opencode_record = (
             state.sessions.get(opencode_session_id) if opencode_session_id else None
@@ -465,27 +471,19 @@ def register_root_commands(app: typer.Typer) -> None:
                 "Failed to stop session via server, falling back to state: %s", exc
             )
 
-        with state_lock(engine.state_path):
-            state = load_state(engine.state_path)
-            target_id = payload.get("session_id")
-            if not target_id:
-                repo_lookup = payload.get("repo_path")
-                if repo_lookup:
-                    target_id = (
-                        state.repo_to_session.get(repo_lookup)
-                        or state.repo_to_session.get(f"{repo_lookup}:codex")
-                        or state.repo_to_session.get(f"{repo_lookup}:opencode")
-                    )
-            if not target_id:
-                _raise_exit("Session not found (server unavailable)")
-            assert target_id is not None
-            state.sessions.pop(target_id, None)
-            state.repo_to_session = {
-                repo_key: sid
-                for repo_key, sid in state.repo_to_session.items()
-                if sid != target_id
-            }
-            save_state(engine.state_path, state)
+        target_id = payload.get("session_id")
+        if not target_id:
+            repo_lookup = payload.get("repo_path")
+            if repo_lookup:
+                session_store = TerminalSessionStore(engine.state_path)
+                target_id = session_store.lookup_for_repo(
+                    repo_lookup, agent="codex"
+                ) or session_store.lookup_for_repo(repo_lookup, agent="opencode")
+        if not target_id:
+            _raise_exit("Session not found (server unavailable)")
+        assert target_id is not None
+        if not TerminalSessionStore(engine.state_path).close(target_id):
+            _raise_exit("Session not found (server unavailable)")
         typer.echo(f"Stopped session {target_id} (state only)")
 
     @app.command()

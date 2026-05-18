@@ -14,6 +14,7 @@ from .loop_attribution import (
     snapshot_loop_attribution,
     track_loop,
 )
+from .opencode import summarize_opencode_lifecycle
 from .process_monitor import (
     DEFAULT_PROCESS_MONITOR_CADENCE_SECONDS,
     DEFAULT_PROCESS_MONITOR_WINDOW_SECONDS,
@@ -28,11 +29,21 @@ from .process_snapshot import (
     collect_processes,
     enrich_with_ownership,
 )
+from .registry import (
+    DoctorProvider,
+    collect_doctor_report,
+    runtime_doctor_providers,
+    runtime_doctor_report,
+)
+from .types import DoctorCheck, DoctorReport
 
 __all__ = [
     "CpuSample",
     "DEFAULT_PROCESS_MONITOR_CADENCE_SECONDS",
     "DEFAULT_PROCESS_MONITOR_WINDOW_SECONDS",
+    "DoctorCheck",
+    "DoctorProvider",
+    "DoctorReport",
     "LoopWakeupCounters",
     "ProcessCategory",
     "ProcessMonitorStore",
@@ -43,13 +54,17 @@ __all__ = [
     "build_process_monitor_summary",
     "capture_process_monitor_sample",
     "collect_cpu_sample",
+    "collect_doctor_report",
     "collect_processes",
     "compute_per_process_aggregates",
     "enrich_with_ownership",
     "evaluate_signoff",
     "get_loop_names",
     "reset_loop_attribution",
+    "runtime_doctor_providers",
+    "runtime_doctor_report",
     "sample_cpu_for_pids",
     "snapshot_loop_attribution",
+    "summarize_opencode_lifecycle",
     "track_loop",
 ]

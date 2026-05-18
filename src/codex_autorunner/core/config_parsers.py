@@ -24,6 +24,11 @@ from .app_server_command import (
     resolve_app_server_command_with_source,
 )
 from .config_contract import APP_SERVER_OUTPUT_POLICIES, ConfigError
+from .config_defaults import (
+    PMA_DEFAULT_MAX_TEXT_CHARS,
+    PMA_DEFAULT_TURN_IDLE_TIMEOUT_SECONDS,
+    _default_update_linux_service_names,
+)
 from .config_field_schema import (
     APP_SERVER_CLIENT_FIELD_SCHEMAS,
     APP_SERVER_FIELD_SCHEMAS,
@@ -39,11 +44,6 @@ from .config_field_schema import (
 )
 from .config_field_schema import (
     SHARED_CONFIG_PARSER_FIELD_PATHS as _SHARED_CONFIG_PARSER_FIELD_PATHS,
-)
-from .config_layering import (
-    PMA_DEFAULT_MAX_TEXT_CHARS,
-    PMA_DEFAULT_TURN_IDLE_TIMEOUT_SECONDS,
-    _default_update_linux_service_names,
 )
 from .config_types import (
     _DEFAULT_FLOW_RETENTION_DAYS,

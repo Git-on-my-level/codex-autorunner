@@ -19,6 +19,46 @@ class _MigrationStep:
     apply: Callable[[sqlite3.Connection], None]
 
 
+@dataclass(frozen=True)
+class OrchestrationMigrationAttempt:
+    run_id: str
+    version: int
+    name: str
+    started_at: str
+    finished_at: str | None
+    status: str
+    error_text: str | None = None
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "run_id": self.run_id,
+            "version": self.version,
+            "name": self.name,
+            "started_at": self.started_at,
+            "finished_at": self.finished_at,
+            "status": self.status,
+            "error_text": self.error_text,
+        }
+
+
+@dataclass(frozen=True)
+class OrchestrationMigrationStatus:
+    current_version: int
+    target_version: int
+    applied_versions: tuple[int, ...]
+    pending_versions: tuple[int, ...]
+    attempts: tuple[OrchestrationMigrationAttempt, ...]
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "current_version": self.current_version,
+            "target_version": self.target_version,
+            "applied_versions": list(self.applied_versions),
+            "pending_versions": list(self.pending_versions),
+            "attempts": [attempt.to_dict() for attempt in self.attempts],
+        }
+
+
 def _ensure_migration_tables(conn: sqlite3.Connection) -> None:
     conn.execute(
         """
@@ -40,6 +80,28 @@ def _ensure_migration_tables(conn: sqlite3.Connection) -> None:
             status TEXT NOT NULL,
             error_text TEXT
         )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS orch_migration_attempts (
+            attempt_id TEXT PRIMARY KEY,
+            run_id TEXT NOT NULL,
+            version INTEGER NOT NULL,
+            name TEXT NOT NULL,
+            started_at TEXT NOT NULL,
+            finished_at TEXT,
+            status TEXT NOT NULL,
+            error_text TEXT,
+            FOREIGN KEY (run_id) REFERENCES orch_migration_runs(run_id)
+                ON DELETE CASCADE
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_orch_migration_attempts_run_version
+            ON orch_migration_attempts(run_id, version)
         """
     )
 
@@ -2210,6 +2272,11 @@ _TABLE_DEFINITIONS = (
         role="ops",
         description="Migration run bookkeeping for cutover and rollback verification.",
     ),
+    OrchestrationTableDefinition(
+        name="orch_migration_attempts",
+        role="ops",
+        description="Per-migration attempt status, including failed migration details.",
+    ),
 )
 
 
@@ -2225,6 +2292,54 @@ def current_orchestration_schema_version(conn: sqlite3.Connection) -> int:
     if row is None:
         return 0
     return int(row["version"] or 0)
+
+
+def collect_orchestration_migration_status(
+    conn: sqlite3.Connection,
+    *,
+    attempt_limit: int = 50,
+) -> OrchestrationMigrationStatus:
+    _ensure_migration_tables(conn)
+    current_version = current_orchestration_schema_version(conn)
+    applied_rows = conn.execute(
+        "SELECT version FROM orch_schema_migrations ORDER BY version"
+    ).fetchall()
+    applied_versions = tuple(int(row["version"] or 0) for row in applied_rows)
+    pending_versions = tuple(
+        step.version for step in _MIGRATIONS if step.version > current_version
+    )
+    attempt_rows = conn.execute(
+        """
+        SELECT run_id, version, name, started_at, finished_at, status, error_text
+          FROM orch_migration_attempts
+         ORDER BY started_at DESC, version DESC
+         LIMIT ?
+        """,
+        (max(0, int(attempt_limit)),),
+    ).fetchall()
+    attempts = tuple(
+        OrchestrationMigrationAttempt(
+            run_id=str(row["run_id"] or ""),
+            version=int(row["version"] or 0),
+            name=str(row["name"] or ""),
+            started_at=str(row["started_at"] or ""),
+            finished_at=(
+                str(row["finished_at"]) if row["finished_at"] is not None else None
+            ),
+            status=str(row["status"] or ""),
+            error_text=(
+                str(row["error_text"]) if row["error_text"] is not None else None
+            ),
+        )
+        for row in attempt_rows
+    )
+    return OrchestrationMigrationStatus(
+        current_version=current_version,
+        target_version=ORCHESTRATION_SCHEMA_VERSION,
+        applied_versions=applied_versions,
+        pending_versions=pending_versions,
+        attempts=attempts,
+    )
 
 
 def apply_orchestration_migrations(conn: sqlite3.Connection) -> int:
@@ -2265,6 +2380,23 @@ def apply_orchestration_migrations(conn: sqlite3.Connection) -> int:
             if step.version <= current_version:
                 continue
             applied_at = now_iso()
+            attempt_id = str(uuid.uuid4())
+            with conn:
+                conn.execute(
+                    """
+                    INSERT INTO orch_migration_attempts (
+                        attempt_id,
+                        run_id,
+                        version,
+                        name,
+                        started_at,
+                        finished_at,
+                        status,
+                        error_text
+                    ) VALUES (?, ?, ?, ?, ?, NULL, 'running', NULL)
+                    """,
+                    (attempt_id, run_id, step.version, step.name, applied_at),
+                )
             with conn:
                 step.apply(conn)
                 conn.execute(
@@ -2276,6 +2408,15 @@ def apply_orchestration_migrations(conn: sqlite3.Connection) -> int:
                     ) VALUES (?, ?, ?)
                     """,
                     (step.version, step.name, applied_at),
+                )
+                conn.execute(
+                    """
+                    UPDATE orch_migration_attempts
+                       SET finished_at = ?,
+                           status = 'completed'
+                     WHERE attempt_id = ?
+                    """,
+                    (now_iso(), attempt_id),
                 )
         with conn:
             conn.execute(
@@ -2291,6 +2432,17 @@ def apply_orchestration_migrations(conn: sqlite3.Connection) -> int:
         Exception
     ) as exc:  # intentional: migration step callables may raise arbitrary errors
         with conn:
+            conn.execute(
+                """
+                UPDATE orch_migration_attempts
+                   SET finished_at = ?,
+                       status = 'failed',
+                       error_text = ?
+                 WHERE run_id = ?
+                   AND status = 'running'
+                """,
+                (now_iso(), str(exc), run_id),
+            )
             conn.execute(
                 """
                 UPDATE orch_migration_runs
@@ -2309,6 +2461,9 @@ def apply_orchestration_migrations(conn: sqlite3.Connection) -> int:
 __all__ = [
     "ORCHESTRATION_SCHEMA_VERSION",
     "apply_orchestration_migrations",
+    "collect_orchestration_migration_status",
     "current_orchestration_schema_version",
     "list_orchestration_table_definitions",
+    "OrchestrationMigrationAttempt",
+    "OrchestrationMigrationStatus",
 ]

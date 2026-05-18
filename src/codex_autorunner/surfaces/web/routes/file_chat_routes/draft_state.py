@@ -6,10 +6,10 @@ from typing import Any, Dict
 from .....core import drafts as draft_utils
 from .....core.state import now_iso
 from .targets import (
+    FileChatTarget,
     _hash_content,
     _load_state,
     _save_state,
-    _Target,
     build_patch,
     read_file,
 )
@@ -23,7 +23,7 @@ def relative_to_repo(repo_root: Path, path: Path) -> str:
 
 def load_draft_snapshot(
     repo_root: Path,
-    target: _Target,
+    target: FileChatTarget,
 ) -> tuple[Dict[str, Any], Dict[str, Any], str, str, str, str, str, Path]:
     state = _load_state(repo_root)
     drafts = state.get("drafts", {}) if isinstance(state.get("drafts"), dict) else {}
@@ -82,7 +82,7 @@ def load_draft_snapshot(
 
 def persist_draft(
     repo_root: Path,
-    target: _Target,
+    target: FileChatTarget,
     *,
     state: Dict[str, Any],
     drafts: Dict[str, Any],

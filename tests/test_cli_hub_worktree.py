@@ -14,6 +14,9 @@ from codex_autorunner.core.force_attestation import (
 )
 from codex_autorunner.core.hub import HubSupervisor, RepoSnapshot
 from codex_autorunner.core.hub_topology import LockStatus, RepoStatus
+from codex_autorunner.surfaces.cli.hub_worktree_read_models import (
+    recommended_lifecycle_actions,
+)
 from tests.conftest import write_test_config
 
 
@@ -239,6 +242,118 @@ def test_cli_hub_worktree_scan_filters_worktrees_json(tmp_path, monkeypatch) -> 
         f"car hub worktree retire base--feature --path {shlex.quote(str(hub_root))}",
         f"car hub destination show base--feature --path {shlex.quote(str(hub_root))}",
     ]
+
+
+def test_cli_hub_worktree_list_text_matches_json_recommended_action(
+    tmp_path, monkeypatch
+) -> None:
+    hub_root = tmp_path / "hub"
+    _seed_minimal_hub(hub_root)
+
+    worktree = _snapshot(
+        tmp_path, "base--feature", kind="worktree", worktree_of="base", branch="feature"
+    )
+
+    def _fake_list(self, *, use_cache: bool = True):
+        return [worktree]
+
+    monkeypatch.setattr(HubSupervisor, "list_repos", _fake_list)
+
+    runner = CliRunner()
+    json_result = runner.invoke(
+        app, ["hub", "worktree", "list", "--path", str(hub_root), "--json"]
+    )
+    text_result = runner.invoke(
+        app, ["hub", "worktree", "list", "--path", str(hub_root)]
+    )
+
+    assert json_result.exit_code == 0
+    assert text_result.exit_code == 0
+    payload = json.loads(json_result.output)
+    recommended_command = payload["worktrees"][0]["recommended_command"]
+    assert recommended_command in text_result.output
+    assert payload["worktrees"][0][
+        "recommended_actions"
+    ] == recommended_lifecycle_actions(
+        "base--feature",
+        repo_kind="worktree",
+        hub_path=hub_root,
+    )
+
+
+def test_cli_hub_worktree_scan_text_matches_json_recommended_action(
+    tmp_path, monkeypatch
+) -> None:
+    hub_root = tmp_path / "hub"
+    _seed_minimal_hub(hub_root)
+
+    worktree = _snapshot(
+        tmp_path, "base--feature", kind="worktree", worktree_of="base", branch="feature"
+    )
+
+    def _fake_scan(self):
+        return [worktree]
+
+    monkeypatch.setattr(HubSupervisor, "scan", _fake_scan)
+
+    runner = CliRunner()
+    json_result = runner.invoke(
+        app, ["hub", "worktree", "scan", "--path", str(hub_root), "--json"]
+    )
+    text_result = runner.invoke(
+        app, ["hub", "worktree", "scan", "--path", str(hub_root)]
+    )
+
+    assert json_result.exit_code == 0
+    assert text_result.exit_code == 0
+    payload = json.loads(json_result.output)
+    recommended_command = payload["worktrees"][0]["recommended_command"]
+    assert recommended_command in text_result.output
+    assert payload["worktrees"][0][
+        "recommended_actions"
+    ] == recommended_lifecycle_actions(
+        "base--feature",
+        repo_kind="worktree",
+        hub_path=hub_root,
+    )
+
+
+def test_cli_hub_scan_uses_shared_recommended_action_builder(
+    tmp_path, monkeypatch
+) -> None:
+    hub_root = tmp_path / "hub"
+    _seed_minimal_hub(hub_root)
+
+    base = _snapshot(tmp_path, "base", kind="base")
+    worktree = _snapshot(
+        tmp_path, "base--feature", kind="worktree", worktree_of="base", branch="feature"
+    )
+
+    def _fake_scan(self):
+        return [base, worktree]
+
+    monkeypatch.setattr(HubSupervisor, "scan", _fake_scan)
+
+    runner = CliRunner()
+    result = runner.invoke(app, ["hub", "scan", "--path", str(hub_root)])
+
+    assert result.exit_code == 0
+    assert (
+        recommended_lifecycle_actions(
+            "base--feature",
+            repo_kind="worktree",
+            hub_path=hub_root,
+        )[0]
+        in result.output
+    )
+    assert (
+        recommended_lifecycle_actions(
+            "base",
+            repo_kind="base",
+            hub_path=hub_root,
+        )[0]
+        in result.output
+    )
 
 
 def test_cli_hub_worktree_create_prints_details(tmp_path, monkeypatch) -> None:

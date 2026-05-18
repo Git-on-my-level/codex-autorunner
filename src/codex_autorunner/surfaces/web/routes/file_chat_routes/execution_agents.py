@@ -14,6 +14,7 @@ from .....agents.registry import (
     resolve_agent_runtime,
     wrap_requested_agent_context,
 )
+from .....agents.runtime_options import resolve_opencode_model_payload
 from .....core.orchestration import FreshConversationRequiredError
 from .....core.usage import persist_opencode_usage_snapshot
 
@@ -384,7 +385,6 @@ async def execute_opencode(
         collect_opencode_output,
         extract_session_id,
         opencode_stream_timeouts,
-        split_model_id,
     )
 
     client = await supervisor.get_client(repo_root)
@@ -410,7 +410,7 @@ async def execute_opencode(
         ):  # intentional: user-provided callback must not crash execution
             logger.debug("file chat opencode meta failed", exc_info=True)
 
-    model_payload = split_model_id(model)
+    model_payload = resolve_opencode_model_payload(model)
     await supervisor.mark_turn_started(repo_root)
 
     usage_parts: list[Dict[str, Any]] = []

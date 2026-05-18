@@ -18,6 +18,7 @@ from ...agents.registry import (
     resolve_agent_runtime,
     wrap_requested_agent_context,
 )
+from ...agents.runtime_options import resolve_agent_runtime_options
 from ...core.flows.models import FlowEventType
 from ...core.managed_thread_store import ManagedThreadStore
 from ...core.orchestration import (
@@ -53,7 +54,6 @@ from ...core.ports.run_event import (
     is_terminal_run_event,
     now_iso,
 )
-from ...core.state import RunnerState
 from ...core.text_utils import _normalize_optional_text
 from ...manifest import ManifestError, load_manifest
 from ...tickets.agent_pool import AgentTurnRequest, AgentTurnResult, EmitEventFn
@@ -214,7 +214,7 @@ class DefaultAgentPool:
             self._worker_lock = asyncio.Lock()
         return self._worker_lock
 
-    def _ticket_flow_runner_state(self) -> RunnerState:
+    def _ticket_flow_runtime_policies(self) -> tuple[str, str]:
         approval_mode = self._config.ticket_flow.approval_mode
 
         if approval_mode == "yolo":
@@ -224,15 +224,7 @@ class DefaultAgentPool:
             approval_policy = "on-request"
             sandbox_mode = "workspaceWrite"
 
-        return RunnerState(
-            last_run_id=None,
-            status="idle",
-            last_exit_code=None,
-            last_run_started_at=None,
-            last_run_finished_at=None,
-            autorunner_approval_policy=approval_policy,
-            autorunner_sandbox_mode=sandbox_mode,
-        )
+        return approval_policy, sandbox_mode
 
     def _get_harness_context(self) -> Any:
         if self._harness_context_override is not None:
@@ -1020,7 +1012,7 @@ class DefaultAgentPool:
             else None
         )
 
-        state = self._ticket_flow_runner_state()
+        approval_policy, sandbox_mode = self._ticket_flow_runtime_policies()
         service = self._get_orchestration_service()
         ticket_flow_run_id = _normalize_optional_text(options.get("ticket_flow_run_id"))
         ticket_id = _normalize_optional_text(options.get("ticket_id"))
@@ -1081,6 +1073,16 @@ class DefaultAgentPool:
             request_metadata["existing_session_runtime_prompt"] = (
                 existing_session_prompt
             )
+        runtime_options = resolve_agent_runtime_options(
+            agent_id,
+            profile=agent_profile,
+            config=self._config,
+            workspace_root=workspace_root,
+            explicit_model=model,
+            explicit_reasoning=reasoning,
+            approval_policy=approval_policy,
+            sandbox_policy=sandbox_mode,
+        )
 
         request = MessageRequest(
             target_id=thread.thread_target_id,
@@ -1088,14 +1090,14 @@ class DefaultAgentPool:
             message_text=prompt,
             busy_policy="queue",
             agent_profile=agent_profile,
-            model=model,
-            reasoning=reasoning,
-            approval_mode=state.autorunner_approval_policy,
+            model=runtime_options.model,
+            reasoning=runtime_options.reasoning,
+            approval_mode=runtime_options.effective_approval_policy,
             metadata=request_metadata,
         )
         execution, harness = await service.send_message_with_started_harness(
             request,
-            sandbox_policy=state.autorunner_sandbox_mode,
+            sandbox_policy=runtime_options.sandbox.mode,
         )
         execution_id = execution.execution_id
         future: asyncio.Future[AgentTurnResult] = (

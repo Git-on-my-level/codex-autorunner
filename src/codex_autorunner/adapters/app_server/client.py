@@ -20,7 +20,6 @@ from typing import (
     Optional,
     Sequence,
     Union,
-    cast,
     no_type_check,
 )
 
@@ -33,6 +32,13 @@ from ...core.managed_processes.registry import (
     write_process_record,
 )
 from ...core.retry import retry_transient
+from .callback_registry import (
+    ApprovalDecision,
+    ApprovalHandler,
+    NotificationHandler,
+    RuntimeCallbackRegistry,
+    UserInputHandler,
+)
 from .errors import (
     CodexAppServerDisconnected,
     CodexAppServerError,
@@ -41,18 +47,14 @@ from .errors import (
 )
 from .ids import extract_thread_id, extract_thread_id_for_turn, extract_turn_id
 from .protocol_helpers import (
-    RawApprovalRequestAdapter,
-    RawNotificationAdapter,
-    RawUserInputRequestAdapter,
     _maybe_await,
     normalize_approval_request,
     normalize_notification_envelope,
-    normalize_response,
-    normalize_response_result,
     normalize_user_input_request,
 )
+from .protocol_io import AppServerProtocolIO
 from .recovery import RecoveryConfig, TurnRecoveryCoordinator
-from .transport import AppServerReadBuffer, build_message
+from .transport import AppServerReadBuffer
 from .turn_state import (
     TurnKey,
     TurnResult,
@@ -61,11 +63,6 @@ from .turn_state import (
     extract_notification_item_id,
 )
 
-ApprovalDecision = Union[str, Dict[str, Any]]
-ApprovalHandler = Callable[[Dict[str, Any]], Awaitable[ApprovalDecision]]
-UserInputResponse = Dict[str, Any]
-UserInputHandler = Callable[[Dict[str, Any]], Awaitable[UserInputResponse]]
-NotificationHandler = Callable[[Dict[str, Any]], Awaitable[None]]
 _TurnState = TurnState
 
 APPROVAL_METHODS = {
@@ -228,36 +225,26 @@ class CodexAppServerClient:
         self._stderr_task: Optional[asyncio.Task] = None
         self._background_tasks: set[asyncio.Task[None]] = set()
         self._start_lock: Optional[asyncio.Lock] = None
-        self._write_lock: Optional[asyncio.Lock] = None
         self._data_lock: Optional[asyncio.Lock] = None
-        self._pending: Dict[str, asyncio.Future[Any]] = {}
-        self._pending_methods: Dict[str, str] = {}
+        self._protocol_io = AppServerProtocolIO(
+            process_getter=lambda: self._process,
+            request_timeout=self._request_timeout,
+            logger=self._logger,
+            summarize_params=_summarize_params,
+        )
         self._turn_state_manager = TurnStateManager(
             logger=self._logger,
             output_policy=self._output_policy,
             completion_settle_seconds=_TURN_COMPLETION_SETTLE_SECONDS,
             max_turn_raw_events=_MAX_TURN_RAW_EVENTS,
         )
-        self._turns: Dict[TurnKey, _TurnState] = self._turn_state_manager.turns
-        self._pending_turns: Dict[str, _TurnState] = (
-            self._turn_state_manager.pending_turns
+        self._callback_registry = RuntimeCallbackRegistry(
+            approval_handler=approval_handler,
+            question_handler=question_handler,
+            notification_handler=notification_handler,
+            default_approval_decision=default_approval_decision,
+            default_user_input_result=self._default_user_input_result,
         )
-        self._approval_adapter = RawApprovalRequestAdapter(
-            approval_handler,
-            default_decision=default_approval_decision,
-        )
-        self._user_input_adapter = RawUserInputRequestAdapter(
-            question_handler,
-            default_result_factory=self._default_user_input_result,
-        )
-        self._notification_adapter = RawNotificationAdapter(notification_handler)
-        self._thread_approval_handlers: dict[str, ApprovalHandler] = {}
-        self._turn_approval_handlers: dict[TurnKey, ApprovalHandler] = {}
-        self._thread_user_input_handlers: dict[str, UserInputHandler] = {}
-        self._turn_user_input_handlers: dict[TurnKey, UserInputHandler] = {}
-        self._thread_notification_handlers: dict[str, NotificationHandler] = {}
-        self._turn_notification_handlers: dict[TurnKey, NotificationHandler] = {}
-        self._next_id: str = str(uuid.uuid4())
         self._initialized = False
         self._initializing = False
         self._closed = False
@@ -330,16 +317,11 @@ class CodexAppServerClient:
             and default_approval_decision.strip()
         ):
             self._default_approval_decision = default_approval_decision.strip()
-        self._approval_adapter = RawApprovalRequestAdapter(
-            self._approval_handler,
-            default_decision=self._default_approval_decision,
-        )
-        self._user_input_adapter = RawUserInputRequestAdapter(
-            self._question_handler,
-            default_result_factory=self._default_user_input_result,
-        )
-        self._notification_adapter = RawNotificationAdapter(
-            self._notification_handler,
+        self._callback_registry.configure(
+            approval_handler=self._approval_handler,
+            question_handler=self._question_handler,
+            notification_handler=self._notification_handler,
+            default_approval_decision=self._default_approval_decision,
         )
 
     def register_runtime_callbacks(
@@ -351,51 +333,36 @@ class CodexAppServerClient:
         question_handler: Optional[UserInputHandler] = None,
         notification_handler: Optional[NotificationHandler] = None,
     ) -> None:
-        if not isinstance(thread_id, str) or not thread_id.strip():
-            return
-        thread_key = thread_id.strip()
-        if approval_handler is not None:
-            self._thread_approval_handlers[thread_key] = approval_handler
-        if question_handler is not None:
-            self._thread_user_input_handlers[thread_key] = question_handler
-        if notification_handler is not None:
-            self._thread_notification_handlers[thread_key] = notification_handler
-        if isinstance(turn_id, str) and turn_id.strip():
-            turn_key = (thread_key, turn_id.strip())
-            if approval_handler is not None:
-                self._turn_approval_handlers[turn_key] = approval_handler
-            if question_handler is not None:
-                self._turn_user_input_handlers[turn_key] = question_handler
-            if notification_handler is not None:
-                self._turn_notification_handlers[turn_key] = notification_handler
+        self._callback_registry.register(
+            thread_id=thread_id,
+            turn_id=turn_id,
+            approval_handler=approval_handler,
+            question_handler=question_handler,
+            notification_handler=notification_handler,
+        )
 
     def unregister_runtime_callbacks(
         self, *, thread_id: Optional[str] = None, turn_id: Optional[str] = None
     ) -> None:
-        if not isinstance(thread_id, str) or not thread_id.strip():
-            return
-        thread_key = thread_id.strip()
-        self._thread_approval_handlers.pop(thread_key, None)
-        self._thread_user_input_handlers.pop(thread_key, None)
-        self._thread_notification_handlers.pop(thread_key, None)
-        if isinstance(turn_id, str) and turn_id.strip():
-            turn_key = (thread_key, turn_id.strip())
-            self._turn_approval_handlers.pop(turn_key, None)
-            self._turn_user_input_handlers.pop(turn_key, None)
-            self._turn_notification_handlers.pop(turn_key, None)
-        else:
-            for handler_map in (
-                self._turn_approval_handlers,
-                self._turn_user_input_handlers,
-                self._turn_notification_handlers,
-            ):
-                for key in tuple(handler_map):
-                    if key[0] == thread_key:
-                        handler_map.pop(key, None)
+        self._callback_registry.unregister(thread_id=thread_id, turn_id=turn_id)
 
     @property
     def active_turn_count(self) -> int:
-        return len(self._turns) + len(self._pending_turns)
+        return len(self._turn_state_manager.turns) + len(
+            self._turn_state_manager.pending_turns
+        )
+
+    @property
+    def _pending(self) -> dict[str, asyncio.Future[Any]]:
+        return self._protocol_io._pending
+
+    @property
+    def _turns(self) -> dict[TurnKey, _TurnState]:
+        return self._turn_state_manager.turns
+
+    @property
+    def _pending_turns(self) -> dict[str, _TurnState]:
+        return self._turn_state_manager.pending_turns
 
     @property
     def runtime_instance_id(self) -> Optional[str]:
@@ -430,20 +397,13 @@ class CodexAppServerClient:
         timeout: Optional[float] = None,
     ) -> Any:
         await self._ensure_process()
-        return await self._request_raw(method, params=params, timeout=timeout)
+        return await self._protocol_io.request(method, params=params, timeout=timeout)
 
     async def notify(
         self, method: str, params: Optional[Dict[str, Any]] = None
     ) -> None:
         await self._ensure_process()
-        log_event(
-            self._logger,
-            logging.INFO,
-            "app_server.notify",
-            method=method,
-            **_summarize_params(method, params),
-        )
-        await self._send_message(self._build_message(method, params=params))
+        await self._protocol_io.notify(method, params=params)
 
     async def thread_start(self, cwd: str, **kwargs: Any) -> Dict[str, Any]:
         params = {"cwd": cwd}
@@ -597,7 +557,7 @@ class CodexAppServerClient:
         if state.future.done():
             immediate_result = state.future.result()
             if key is not None:
-                self._turns.pop(key, None)
+                self._turn_state_manager.turns.pop(key, None)
             return immediate_result
         timeout = timeout if timeout is not None else self._request_timeout
         deadline = self._turn_wait_deadline(timeout)
@@ -608,7 +568,7 @@ class CodexAppServerClient:
             )
             if loop_result is not None:
                 if key is not None:
-                    self._turns.pop(key, None)
+                    self._turn_state_manager.turns.pop(key, None)
                 return loop_result
             await self._maybe_reconcile_turn_completion_gap(
                 state,
@@ -683,12 +643,12 @@ class CodexAppServerClient:
         envelope = normalize_notification_envelope(message)
         if envelope is None:
             return
-        if self._notification_adapter_for(envelope) is None:
+        if self._callback_registry.notification_adapter_for(envelope) is None:
             return
 
         async def _invoke_notification_handler() -> None:
             try:
-                adapter = self._notification_adapter_for(envelope)
+                adapter = self._callback_registry.notification_adapter_for(envelope)
                 if adapter is None:
                     return
                 await adapter.notify(envelope)
@@ -791,7 +751,7 @@ class CodexAppServerClient:
         params = {"clientInfo": client_info}
         self._initializing = True
         try:
-            await self._request_raw("initialize", params=params)
+            await self._protocol_io.request("initialize", params=params)
         except CodexAppServerResponseError as exc:
             if self._include_client_version:
                 self._include_client_version = False
@@ -820,59 +780,8 @@ class CodexAppServerClient:
         self._restart_backoff_seconds = self._restart_backoff_initial_seconds
         log_event(self._logger, logging.INFO, "app_server.initialized")
 
-    async def _request_raw(
-        self,
-        method: str,
-        params: Optional[Dict[str, Any]],
-        *,
-        timeout: Optional[float] = None,
-    ) -> Any:
-        self._ensure_locks()
-        data_lock = self._data_lock
-        if data_lock is None:
-            raise CodexAppServerProtocolError("data lock unavailable")
-        request_id = self._next_request_id()
-        loop = asyncio.get_running_loop()
-        future: asyncio.Future[Any] = loop.create_future()
-        async with data_lock:
-            self._pending[request_id] = future
-            self._pending_methods[request_id] = method
-        log_event(
-            self._logger,
-            logging.INFO,
-            "app_server.request",
-            request_id=request_id,
-            method=method,
-            **_summarize_params(method, params),
-        )
-        await self._send_message(
-            self._build_message(method, params=params, req_id=request_id)
-        )
-        timeout = timeout if timeout is not None else self._request_timeout
-        try:
-            if timeout is None:
-                return await future
-            return await asyncio.wait_for(future, timeout)
-        except asyncio.TimeoutError:
-            if not future.done():
-                future.cancel()
-            raise
-        finally:
-            async with data_lock:
-                self._pending.pop(request_id, None)
-                self._pending_methods.pop(request_id, None)
-
     async def _send_message(self, message: Dict[str, Any]) -> None:
-        if not self._process or not self._process.stdin:
-            raise CodexAppServerDisconnected("App-server process is not running")
-        self._ensure_locks()
-        write_lock = self._write_lock
-        if write_lock is None:
-            raise CodexAppServerProtocolError("write lock unavailable")
-        payload = json.dumps(message, separators=(",", ":"))
-        async with write_lock:
-            self._process.stdin.write((payload + "\n").encode("utf-8"))
-            await self._process.stdin.drain()
+        await self._protocol_io.send_message(message)
 
     def _build_message(
         self,
@@ -883,26 +792,20 @@ class CodexAppServerClient:
         result: Optional[Any] = None,
         error: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
-        return cast(
-            Dict[str, Any],
-            build_message(
-                method,
-                params=params,
-                req_id=req_id,
-                result=result,
-                error=error,
-            ),
+        return self._protocol_io.build_message(
+            method,
+            params=params,
+            req_id=req_id,
+            result=result,
+            error=error,
         )
 
     def _next_request_id(self) -> str:
-        self._next_id = str(uuid.uuid4())
-        return self._next_id
+        return self._protocol_io._next_request_id()
 
     def _ensure_locks(self) -> None:
         if self._start_lock is None:
             self._start_lock = asyncio.Lock()
-        if self._write_lock is None:
-            self._write_lock = asyncio.Lock()
         if self._data_lock is None:
             self._data_lock = asyncio.Lock()
 
@@ -988,7 +891,8 @@ class CodexAppServerClient:
             aborted=aborted,
             drain_limit=drain_limit,
         )
-        if self._notification_handler is None:
+        notification_handler = self._callback_registry.notification_handler
+        if notification_handler is None:
             return
         params: Dict[str, Any] = {
             "byteLimit": self._max_message_bytes,
@@ -1011,7 +915,7 @@ class CodexAppServerClient:
             params["drainLimit"] = drain_limit
         try:
             await _maybe_await(
-                self._notification_handler(
+                notification_handler(
                     {
                         "method": "car/app_server/oversizedMessageDropped",
                         "params": params,
@@ -1074,11 +978,11 @@ class CodexAppServerClient:
             return
 
     async def _handle_message(self, message: Dict[str, Any]) -> None:
-        # Request lifecycle: _request_raw registers one pending future, this
+        # Request lifecycle: the protocol IO collaborator registers one pending future, this
         # branch consumes exactly one transport response, normalizes the result,
         # then resolves or fails the future outside the pending maps.
         if "id" in message and "method" not in message:
-            await self._handle_response(message)
+            await self._protocol_io.handle_response(message)
             return
         if "id" in message and "method" in message:
             await self._handle_server_request(message)
@@ -1087,72 +991,7 @@ class CodexAppServerClient:
             await self._handle_notification(message)
 
     async def _handle_response(self, message: Dict[str, Any]) -> None:
-        normalized = normalize_response(message)
-        if normalized is None:
-            return
-
-        req_id = normalized.request_id
-
-        self._ensure_locks()
-        data_lock = self._data_lock
-        if data_lock is None:
-            raise CodexAppServerProtocolError("data lock unavailable")
-        async with data_lock:
-            future = self._pending.pop(req_id, None)
-            method = self._pending_methods.pop(req_id, None)
-        if future is None:
-            log_event(
-                self._logger,
-                logging.DEBUG,
-                "app_server.response.unmatched",
-                request_id=req_id,
-                request_id_type=type(req_id).__name__,
-                method=method,
-            )
-            return
-        if future.cancelled():
-            return
-        result = normalize_response_result(normalized)
-        if result.is_error:
-            if result.error_code == -32600:
-                log_event(
-                    self._logger,
-                    logging.WARNING,
-                    "app_server.response.invalid_request",
-                    request_id=req_id,
-                    request_id_type=type(req_id).__name__,
-                    method=method,
-                    error_code=result.error_code,
-                    error_message=result.error_message,
-                )
-            log_event(
-                self._logger,
-                logging.WARNING,
-                "app_server.response.error",
-                request_id=req_id,
-                request_id_type=type(req_id).__name__,
-                method=method,
-                error_code=result.error_code,
-                error_message=result.error_message,
-            )
-            future.set_exception(
-                CodexAppServerResponseError(
-                    method=method,
-                    code=result.error_code,
-                    message=result.error_message or "app-server error",
-                    data=result.error_data,
-                )
-            )
-            return
-        log_event(
-            self._logger,
-            logging.INFO,
-            "app_server.response",
-            request_id=req_id,
-            request_id_type=type(req_id).__name__,
-            method=method,
-        )
-        future.set_result(result.result)
+        await self._protocol_io.handle_response(message)
 
     async def _handle_server_request(self, message: Dict[str, Any]) -> None:
         approval = normalize_approval_request(message)
@@ -1176,7 +1015,9 @@ class CodexAppServerClient:
                 turn_id=turn_id or approval.params.get("turnId"),
             )
             try:
-                decision = await self._approval_adapter_for(approval).decide(approval)
+                decision = await self._callback_registry.approval_adapter_for(
+                    approval
+                ).decide(approval)
             except (
                 RuntimeError,
                 ValueError,
@@ -1228,9 +1069,9 @@ class CodexAppServerClient:
                 question_count=len(user_input.request.questions),
             )
             try:
-                result = await self._user_input_adapter_for(user_input).decide(
+                result = await self._callback_registry.user_input_adapter_for(
                     user_input
-                )
+                ).decide(user_input)
             except (
                 RuntimeError,
                 ValueError,
@@ -1343,7 +1184,7 @@ class CodexAppServerClient:
         handler = self._resolve_notification_handler(method)
         if handler is not None:
             handled = await handler(message, params, decoded_notification)
-        adapter = self._notification_adapter_for(envelope)
+        adapter = self._callback_registry.notification_adapter_for(envelope)
         if adapter is not None:
             try:
                 await adapter.notify(envelope)
@@ -1597,77 +1438,16 @@ class CodexAppServerClient:
     def _request_route_ids(
         self, params: dict[str, Any], decoded: Any = None
     ) -> tuple[Optional[str], Optional[str]]:
-        turn_id = (
-            getattr(decoded, "turn_id", None)
-            or extract_turn_id(params)
-            or extract_turn_id(params.get("item"))
-        )
-        thread_id = (
-            getattr(decoded, "thread_id", None)
-            or extract_thread_id_for_turn(params)
-            or params.get("threadId")
-            or params.get("thread_id")
-        )
-        if isinstance(thread_id, str):
-            thread_id = thread_id.strip() or None
-        else:
-            thread_id = None
-        if isinstance(turn_id, str):
-            turn_id = turn_id.strip() or None
-        else:
-            turn_id = None
-        return thread_id, turn_id
+        return self._callback_registry.request_route_ids(params, decoded)
 
-    def _approval_adapter_for(self, envelope: Any) -> RawApprovalRequestAdapter:
-        thread_id, turn_id = self._request_route_ids(
-            envelope.params,
-            getattr(envelope, "request", None),
-        )
-        handler: Optional[ApprovalHandler] = None
-        if thread_id and turn_id:
-            handler = self._turn_approval_handlers.get((thread_id, turn_id))
-        if handler is None and thread_id:
-            handler = self._thread_approval_handlers.get(thread_id)
-        if handler is None:
-            handler = self._approval_handler
-        return RawApprovalRequestAdapter(
-            handler, default_decision=self._default_approval_decision
-        )
+    def _approval_adapter_for(self, envelope: Any) -> Any:
+        return self._callback_registry.approval_adapter_for(envelope)
 
-    def _user_input_adapter_for(self, envelope: Any) -> RawUserInputRequestAdapter:
-        thread_id, turn_id = self._request_route_ids(
-            envelope.params,
-            getattr(envelope, "request", None),
-        )
-        handler: Optional[UserInputHandler] = None
-        if thread_id and turn_id:
-            handler = self._turn_user_input_handlers.get((thread_id, turn_id))
-        if handler is None and thread_id:
-            handler = self._thread_user_input_handlers.get(thread_id)
-        if handler is None:
-            handler = self._question_handler
-        return RawUserInputRequestAdapter(
-            handler,
-            default_result_factory=self._default_user_input_result,
-        )
+    def _user_input_adapter_for(self, envelope: Any) -> Any:
+        return self._callback_registry.user_input_adapter_for(envelope)
 
-    def _notification_adapter_for(
-        self, envelope: Any
-    ) -> Optional[RawNotificationAdapter]:
-        thread_id, turn_id = self._request_route_ids(
-            envelope.params,
-            getattr(envelope, "notification", None),
-        )
-        handler: Optional[NotificationHandler] = None
-        if thread_id and turn_id:
-            handler = self._turn_notification_handlers.get((thread_id, turn_id))
-        if handler is None and thread_id:
-            handler = self._thread_notification_handlers.get(thread_id)
-        if handler is None:
-            handler = self._notification_handler
-        if handler is None:
-            return None
-        return RawNotificationAdapter(handler)
+    def _notification_adapter_for(self, envelope: Any) -> Any:
+        return self._callback_registry.notification_adapter_for(envelope)
 
     async def _handle_disconnect(self) -> None:
         self._initialized = False
@@ -1686,9 +1466,9 @@ class CodexAppServerClient:
             runtime_instance_id=self._runtime_instance_id,
             returncode=returncode,
             pid=pid,
-            pending_requests=len(self._pending),
-            pending_turns=len(self._pending_turns),
-            active_turns=len(self._turns),
+            pending_requests=self._protocol_io.pending_request_count,
+            pending_turns=len(self._turn_state_manager.pending_turns),
+            active_turns=len(self._turn_state_manager.turns),
             initializing=self._initializing,
             initialized=self._initialized,
             closed=self._closed,
@@ -1717,22 +1497,19 @@ class CodexAppServerClient:
         include_pending_turns: bool = True,
     ) -> None:
         if include_requests:
-            for future in list(self._pending.values()):
-                if not future.done():
-                    future.set_exception(error)
-            self._pending.clear()
+            self._protocol_io.fail_pending_requests(error)
         if include_turns:
-            for state in list(self._turns.values()):
+            for state in list(self._turn_state_manager.turns.values()):
                 self._cancel_turn_completion_settle(state)
                 if not state.future.done():
                     state.future.set_exception(error)
-            self._turns.clear()
+            self._turn_state_manager.turns.clear()
         if include_pending_turns:
-            for state in list(self._pending_turns.values()):
+            for state in list(self._turn_state_manager.pending_turns.values()):
                 self._cancel_turn_completion_settle(state)
                 if not state.future.done():
                     state.future.set_exception(error)
-            self._pending_turns.clear()
+            self._turn_state_manager.pending_turns.clear()
 
     def _schedule_restart(self) -> None:
         if self._restart_task is not None and not self._restart_task.done():

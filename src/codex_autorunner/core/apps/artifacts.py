@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import dataclasses
+import logging
 import sqlite3
 import uuid
 from pathlib import Path
 from typing import Iterable, Optional, Sequence
 
+from ..artifact_filebox_storage import ArtifactFileBoxStorage
 from ..config import ConfigError, load_repo_config
 from ..flows.models import FlowArtifact
 from ..flows.store import FlowStore
@@ -32,6 +34,7 @@ _REGISTERED_APP_ARTIFACT_METADATA_KEYS = frozenset(
         "relative_path",
     }
 )
+logger = logging.getLogger(__name__)
 
 
 class AppArtifactError(Exception):
@@ -48,6 +51,23 @@ class AppArtifactCandidate:
     absolute_path: Path
     tool_id: Optional[str] = None
     hook_point: Optional[str] = None
+
+
+@dataclasses.dataclass(frozen=True)
+class AppArtifactRegistrationError:
+    code: str
+    message: str
+    detail: str | None = None
+
+
+@dataclasses.dataclass(frozen=True)
+class AppArtifactRegistrationResult:
+    artifacts: tuple[FlowArtifact, ...]
+    errors: tuple[AppArtifactRegistrationError, ...] = ()
+
+    @property
+    def ok(self) -> bool:
+        return not self.errors
 
 
 def collect_declared_tool_artifact_candidates(
@@ -85,22 +105,66 @@ def register_app_artifact_candidates(
     run_id: str,
     candidates: Sequence[AppArtifactCandidate],
 ) -> tuple[FlowArtifact, ...]:
+    result = register_app_artifact_candidates_result(repo_root, run_id, candidates)
+    if result.errors:
+        logger.warning(
+            "App artifact registration failed for run %s: %s",
+            run_id,
+            "; ".join(error.message for error in result.errors),
+        )
+    return result.artifacts
+
+
+def register_app_artifact_candidates_result(
+    repo_root: Path,
+    run_id: str,
+    candidates: Sequence[AppArtifactCandidate],
+) -> AppArtifactRegistrationResult:
     if not candidates:
-        return ()
+        return AppArtifactRegistrationResult(artifacts=())
     db_path = FlowStore.default_path(repo_root)
     if not db_path.exists():
-        return ()
+        return AppArtifactRegistrationResult(
+            artifacts=(),
+            errors=(
+                AppArtifactRegistrationError(
+                    code="flow_store_missing",
+                    message=f"Flow store not found for app artifact registration: {db_path}",
+                ),
+            ),
+        )
     try:
         durable_writes = bool(load_repo_config(repo_root).durable_writes)
     except (ConfigError, OSError, ValueError, TypeError):
         durable_writes = False
 
+    storage = ArtifactFileBoxStorage(repo_root)
     try:
         with FlowStore(db_path, durable=durable_writes) as store:
             if store.get_flow_run(run_id) is None:
-                return ()
+                return AppArtifactRegistrationResult(
+                    artifacts=(),
+                    errors=(
+                        AppArtifactRegistrationError(
+                            code="flow_run_missing",
+                            message=f"Flow run not found for app artifact registration: {run_id}",
+                        ),
+                    ),
+                )
             created: list[FlowArtifact] = []
             for candidate in candidates:
+                storage_record = storage.app_artifact_record(
+                    candidate.absolute_path,
+                    provenance={
+                        "app_id": candidate.app_id,
+                        "app_version": candidate.app_version,
+                        "tool_id": candidate.tool_id,
+                        "hook_point": candidate.hook_point,
+                        "label": candidate.label,
+                        "kind": candidate.kind,
+                        "relative_path": candidate.relative_path,
+                    },
+                )
                 created.append(
                     store.create_artifact(
                         artifact_id=str(uuid.uuid4()),
@@ -115,12 +179,29 @@ def register_app_artifact_candidates(
                             "label": candidate.label,
                             "kind": candidate.kind,
                             "relative_path": candidate.relative_path,
+                            "filename": storage_record.filename,
+                            "size": storage_record.size,
+                            "mime_type": storage_record.mime_type,
+                            "checksum_sha256": storage_record.checksum_sha256,
+                            "provenance": "app_artifact_registration",
                         },
                     )
                 )
-            return tuple(created)
-    except (RuntimeError, sqlite3.Error, ValueError, TypeError):
-        return ()
+            return AppArtifactRegistrationResult(artifacts=tuple(created))
+    except (RuntimeError, sqlite3.Error, ValueError, TypeError, OSError) as exc:
+        return AppArtifactRegistrationResult(
+            artifacts=(),
+            errors=(
+                AppArtifactRegistrationError(
+                    code="registration_failed",
+                    message=(
+                        f"Failed to register app artifacts for run {run_id}: "
+                        f"{type(exc).__name__}"
+                    ),
+                    detail=str(exc),
+                ),
+            ),
+        )
 
 
 def list_registered_app_artifacts(
@@ -430,12 +511,15 @@ def _guess_artifact_kind(path: Path) -> str:
 __all__ = [
     "AppArtifactCandidate",
     "AppArtifactError",
+    "AppArtifactRegistrationError",
+    "AppArtifactRegistrationResult",
     "collect_before_chat_wrapup_artifacts",
     "collect_declared_tool_artifact_candidates",
     "is_registered_app_artifact",
     "list_app_local_artifact_files",
     "list_registered_app_artifacts",
     "register_app_artifact_candidates",
+    "register_app_artifact_candidates_result",
     "resolve_app_runtime_artifact_path",
     "resolve_registered_app_artifact_path",
 ]

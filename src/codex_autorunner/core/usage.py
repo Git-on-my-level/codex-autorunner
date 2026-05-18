@@ -123,6 +123,61 @@ class SessionUsageLedger:
         }
 
 
+@dataclasses.dataclass(frozen=True)
+class UsageSourceTelemetry:
+    agent: str
+    source: str
+    confidence: str
+    events: int
+    parse_errors: int = 0
+    duplicate_count: int = 0
+
+    def to_dict(self) -> Dict[str, object]:
+        return dataclasses.asdict(self)
+
+
+@dataclasses.dataclass(frozen=True)
+class UsageSessionTotals:
+    session_id: str
+    agent: str
+    turns: int
+    totals: TokenTotals
+    latest_turn_totals: TokenTotals
+    latest_turn_id: Optional[str]
+    latest_timestamp: Optional[str]
+    thread_id: Optional[str] = None
+
+    def to_dict(self) -> Dict[str, object]:
+        return {
+            "session_id": self.session_id,
+            "agent": self.agent,
+            "turns": self.turns,
+            "totals": self.totals.to_dict(),
+            "latest_turn_totals": self.latest_turn_totals.to_dict(),
+            "latest_turn_id": self.latest_turn_id,
+            "latest_timestamp": self.latest_timestamp,
+            "thread_id": self.thread_id,
+        }
+
+
+@dataclasses.dataclass(frozen=True)
+class UsageAggregationReadModel:
+    totals: TokenTotals
+    events: int
+    sources: tuple[UsageSourceTelemetry, ...]
+    sessions: tuple[UsageSessionTotals, ...]
+    agent_totals: dict[str, dict[str, int]]
+
+    def to_dict(self) -> Dict[str, object]:
+        return {
+            "totals": self.totals.to_dict(),
+            "events": self.events,
+            "sources": [source.to_dict() for source in self.sources],
+            "sessions": [session.to_dict() for session in self.sessions],
+            "agent_totals": self.agent_totals,
+        }
+
+
 def _coerce_totals(payload: Optional[Mapping[str, object]]) -> TokenTotals:
     payload = payload or {}
     return TokenTotals(
@@ -242,6 +297,34 @@ def _merge_confidence(*maps: Optional[Mapping[str, object]]) -> dict[str, object
         if isinstance(item, Mapping):
             merged.update(item)
     return merged
+
+
+def _usage_source_telemetry_from_confidence(
+    agent: str,
+    confidence: Mapping[str, object],
+) -> UsageSourceTelemetry:
+    persisted_parse_errors = _coerce_int(confidence.get("persisted_parse_errors"))
+    session_parse_errors = _coerce_int(confidence.get("session_parse_errors"))
+    return UsageSourceTelemetry(
+        agent=agent,
+        source=str(confidence.get("source") or "unknown"),
+        confidence=str(confidence.get("confidence") or "none"),
+        events=_coerce_int(confidence.get("events")),
+        parse_errors=persisted_parse_errors + session_parse_errors,
+        duplicate_count=_coerce_int(confidence.get("persisted_duplicates")),
+    )
+
+
+def _usage_source_telemetry_records(
+    source_confidence: Optional[Mapping[str, object]],
+) -> tuple[UsageSourceTelemetry, ...]:
+    records: list[UsageSourceTelemetry] = []
+    for agent, raw_confidence in sorted((source_confidence or {}).items()):
+        if isinstance(raw_confidence, Mapping):
+            records.append(
+                _usage_source_telemetry_from_confidence(str(agent), raw_confidence)
+            )
+    return tuple(records)
 
 
 _OPENCODE_USAGE_KEYS = {
@@ -1127,8 +1210,11 @@ __all__ = [
     "SessionUsageLedger",
     "TokenEvent",
     "TokenTotals",
+    "UsageAggregationReadModel",
     "UsageError",
     "UsageSeriesCache",
+    "UsageSessionTotals",
+    "UsageSourceTelemetry",
     "UsageSummary",
     "default_codex_home",
     "extract_rate_limit_timestamp",
@@ -1138,6 +1224,7 @@ __all__ = [
     "get_hub_usage_series_cached",
     "get_hub_usage_summary_cached",
     "get_repo_session_usage_ledger",
+    "get_repo_usage_aggregation_read_model",
     "get_repo_usage_series_cached",
     "get_repo_usage_summary_cached",
     "get_usage_series_cache",
@@ -1381,6 +1468,57 @@ def get_repo_session_usage_ledger(
     for ledger in ledgers.values():
         ledger.source_confidence = {"opencode": opencode_confidence}
     return ledgers
+
+
+def get_repo_usage_aggregation_read_model(
+    repo_root: Path,
+    codex_home: Optional[Path] = None,
+    *,
+    since: Optional[datetime] = None,
+    until: Optional[datetime] = None,
+) -> UsageAggregationReadModel:
+    """Return a typed usage operations model for CLI/web/doctor surfaces."""
+
+    summary = summarize_repo_usage(
+        repo_root,
+        codex_home=codex_home,
+        since=since,
+        until=until,
+    )
+    ledgers = get_repo_session_usage_ledger(repo_root, since=since, until=until)
+    sessions = tuple(
+        UsageSessionTotals(
+            session_id=ledger.session_id,
+            agent=ledger.agent,
+            turns=ledger.turns,
+            totals=copy.deepcopy(ledger.session_totals),
+            latest_turn_totals=copy.deepcopy(ledger.latest_turn_totals),
+            latest_turn_id=ledger.latest_turn_id,
+            latest_timestamp=ledger.latest_timestamp,
+        )
+        for ledger in sorted(
+            ledgers.values(), key=lambda item: (item.agent, item.session_id)
+        )
+    )
+    agent_totals: dict[str, TokenTotals] = {}
+    for session in sessions:
+        totals = agent_totals.setdefault(session.agent, TokenTotals())
+        totals.add(session.totals)
+    if CODEX_AGENT_ID not in agent_totals and summary.source_confidence:
+        codex_confidence = summary.source_confidence.get(CODEX_AGENT_ID)
+        if isinstance(codex_confidence, Mapping) and _coerce_int(
+            codex_confidence.get("events")
+        ):
+            agent_totals[CODEX_AGENT_ID] = TokenTotals()
+    return UsageAggregationReadModel(
+        totals=copy.deepcopy(summary.totals),
+        events=summary.events,
+        sources=_usage_source_telemetry_records(summary.source_confidence),
+        sessions=sessions,
+        agent_totals={
+            agent: totals.to_dict() for agent, totals in sorted(agent_totals.items())
+        },
+    )
 
 
 def extract_rate_limits(payload: Any) -> Optional[dict[str, Any]]:

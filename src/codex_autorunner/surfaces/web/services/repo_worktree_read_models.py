@@ -4,7 +4,7 @@ import asyncio
 import json
 import sqlite3
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Literal, Mapping, Optional, cast
+from typing import Any, Literal, Mapping, Optional, Protocol, cast
 
 from fastapi import HTTPException
 
@@ -33,18 +33,41 @@ from ..read_model_contracts import (
     dump_read_model_contract,
     read_model_now,
 )
-from ..routes.flow_routes.history_artifacts import get_dispatch_history
 from . import flow_store as flow_store_service
+from .flow_history_artifacts import get_dispatch_history
 from .ticket_read_models import (
     enrich_current_ticket_payload,
     mark_duplicate_ticket_numbers,
     ticket_payload,
 )
 
-if TYPE_CHECKING:
-    from ..app_state import HubAppContext
-    from ..routes.hub_repo_routes.mount_manager import HubMountManager
-    from ..routes.hub_repo_routes.services import HubRepoEnricher
+
+class _HubSupervisorPort(Protocol):
+    def list_repos(self, *, use_cache: bool) -> list[Any]: ...
+
+
+class _HubConfigPort(Protocol):
+    @property
+    def root(self) -> Path: ...
+
+
+class HubAppContextPort(Protocol):
+    @property
+    def config(self) -> _HubConfigPort: ...
+
+    @property
+    def logger(self) -> Any: ...
+
+    @property
+    def supervisor(self) -> _HubSupervisorPort: ...
+
+
+class HubMountManagerPort(Protocol):
+    async def refresh_mounts(self, snapshots: list[Any]) -> None: ...
+
+
+class HubRepoEnricherPort(Protocol):
+    def enrich_repo(self, snapshot: Any) -> dict[str, Any]: ...
 
 
 def _bounded_limit(limit: int, *, default: int = 50, maximum: int = 200) -> int:
@@ -219,9 +242,9 @@ def _repo_worktree_detail_compatibility_fields(
 class RepoWorktreeReadModelService:
     def __init__(
         self,
-        context: HubAppContext,
-        mount_manager: HubMountManager,
-        enricher: HubRepoEnricher,
+        context: HubAppContextPort,
+        mount_manager: HubMountManagerPort,
+        enricher: HubRepoEnricherPort,
     ) -> None:
         self._context = context
         self._mount_manager = mount_manager

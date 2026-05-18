@@ -17,7 +17,7 @@ from .draft_state import load_draft_snapshot, persist_draft, relative_to_repo
 from .execution_agents import execute_app_server as _execute_app_server_impl
 from .execution_agents import execute_harness_turn as _execute_harness_turn_impl
 from .execution_agents import execute_opencode as _execute_opencode_impl
-from .targets import _Target, build_file_chat_prompt, read_file
+from .targets import FileChatTarget, build_file_chat_prompt, read_file
 
 FILE_CHAT_TIMEOUT_SECONDS = 180
 _FILE_CHAT_REQUIRED_CAPABILITIES = ("durable_threads", "message_turns")
@@ -39,7 +39,7 @@ def _normalize_optional_text(value: object) -> Optional[str]:
 
 def resolve_file_chat_agent_selection(
     request: Request,
-    target: _Target,
+    target: FileChatTarget,
     *,
     agent: object = "codex",
     profile: object = None,
@@ -103,7 +103,7 @@ def _missing_file_chat_capability(
 
 
 async def _update_file_chat_turn_state(
-    request: Request, target: _Target, selection: FileChatAgentSelection
+    request: Request, target: FileChatTarget, selection: FileChatAgentSelection
 ) -> None:
     from .runtime import update_turn_state
 
@@ -194,7 +194,7 @@ async def _execute_selected_agent(
 
 def _build_file_chat_success_result(
     repo_root: Path,
-    target: _Target,
+    target: FileChatTarget,
     *,
     state: dict[str, Any],
     drafts: dict[str, Any],
@@ -260,7 +260,7 @@ def _build_file_chat_success_result(
 async def execute_file_chat(
     request: Request,
     repo_root: Path,
-    target: _Target,
+    target: FileChatTarget,
     message: str,
     *,
     agent: str = "codex",

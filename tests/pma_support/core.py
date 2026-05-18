@@ -26,7 +26,11 @@ from codex_autorunner.core.orchestration import (
     ThreadTarget,
 )
 from codex_autorunner.core.pma_queue import PmaQueue, QueueItemState
-from codex_autorunner.core.pma_transcripts import PmaTranscriptStore
+from codex_autorunner.core.pma_transcripts import (
+    PmaTranscriptLegacyBackfill,
+    PmaTranscriptStore,
+    default_pma_transcripts_dir,
+)
 from codex_autorunner.server import create_hub_app
 from codex_autorunner.surfaces.web.routes import pma as pma_routes
 from codex_autorunner.surfaces.web.routes.pma_routes import (
@@ -741,6 +745,9 @@ def test_pma_chat_persists_transcript_and_history_entry(hub_env) -> None:
     transcript_pointer = last_result.get("transcript") or {}
     transcript_turn_id = str(transcript_pointer.get("turn_id") or "")
     assert transcript_turn_id
+    assert transcript_pointer["transcript_mirror_id"] == transcript_turn_id
+    assert "metadata_path" not in transcript_pointer
+    assert "content_path" not in transcript_pointer
 
     transcript = PmaTranscriptStore(hub_env.hub_root).read_transcript(
         transcript_turn_id
@@ -765,6 +772,53 @@ def test_pma_chat_persists_transcript_and_history_entry(hub_env) -> None:
     assert history_entry.json()["content"].strip() == (
         "User:\npersist transcript\n\nAssistant:\nassistant transcript payload"
     )
+
+
+def test_pma_history_route_reports_legacy_coverage_before_and_after_import(
+    hub_env,
+) -> None:
+    _enable_pma(hub_env.hub_root)
+    app = create_hub_app(hub_env.hub_root)
+    legacy_dir = default_pma_transcripts_dir(hub_env.hub_root)
+
+    with TestClient(app) as client:
+        legacy_dir.mkdir(parents=True)
+        (legacy_dir / "legacy.md").write_text("legacy transcript\n", encoding="utf-8")
+        (legacy_dir / "legacy.json").write_text(
+            json.dumps(
+                {
+                    "turn_id": "legacy-turn",
+                    "created_at": "2026-01-01T00:00:00Z",
+                    "content_path": "legacy.md",
+                    "managed_thread_id": "thread-1",
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        assert client.get("/hub/pma/history").json()["entries"] == []
+        before_status = client.get("/hub/pma/history/status").json()
+        assert before_status["operation"] == "pma_transcript_mirror_coverage"
+        assert before_status["scope"] == "pma"
+        assert before_status["owner"] == "orchestration_transcript_mirrors"
+        assert before_status["canonical_store"] == "orch_transcript_mirrors"
+        assert before_status["legacy_primary_path"] is False
+        assert before_status["mirrored_transcripts"] == 0
+        assert before_status["legacy_metadata_files"] == 1
+        assert before_status["legacy_files_not_mirrored"] == 1
+
+        result = PmaTranscriptLegacyBackfill(hub_env.hub_root).run()
+        assert result.imported_count == 1
+
+        history = client.get("/hub/pma/history").json()
+        after_status = client.get("/hub/pma/history/status").json()
+
+    assert [entry["turn_id"] for entry in history["entries"]] == ["legacy-turn"]
+    assert after_status["mirrored_transcripts"] == 1
+    assert after_status["legacy_metadata_files"] == 1
+    assert after_status["legacy_files_not_mirrored"] == 0
+    assert after_status["last_backfill_status"]["imported_count"] == 1
+    assert after_status["repair_status"]["imported_count"] == 1
 
 
 def test_pma_history_detail_includes_turn_timeline(hub_env) -> None:

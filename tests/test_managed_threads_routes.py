@@ -20,14 +20,12 @@ from codex_autorunner.core.orchestration import (
 )
 from codex_autorunner.core.pma_notification_store import PmaNotificationStore
 from codex_autorunner.server import create_hub_app
-from codex_autorunner.surfaces.web.routes.pma_routes import (
-    managed_thread_route_helpers,
-    managed_threads,
-)
+from codex_autorunner.surfaces.web.routes.pma_routes import managed_threads
 from codex_autorunner.surfaces.web.routes.pma_routes.managed_threads import (
     build_automation_routes,
     build_managed_thread_crud_routes,
 )
+from codex_autorunner.surfaces.web.services.pma import managed_thread_read_models
 from tests.conftest import write_test_config
 
 pytestmark = pytest.mark.slow
@@ -1234,7 +1232,7 @@ def test_create_managed_thread_succeeds_when_binding_metadata_lookup_fails(
 ) -> None:
     app = create_hub_app(hub_env.hub_root)
     monkeypatch.setattr(
-        managed_thread_route_helpers,
+        managed_thread_read_models,
         "active_chat_binding_metadata_by_thread",
         lambda *, hub_root: (_ for _ in ()).throw(
             RuntimeError("binding db unavailable")

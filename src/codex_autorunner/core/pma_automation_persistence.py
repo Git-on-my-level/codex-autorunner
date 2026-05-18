@@ -149,6 +149,7 @@ class PmaAutomationPersistence:
         timers: list[PmaAutomationTimer],
         wakeups: list[PmaAutomationWakeup],
     ) -> None:
+        """Rewrite all automation rows for explicit migration/backfill callers only."""
         subscription_ids = {
             entry.subscription_id
             for entry in subscriptions
@@ -526,6 +527,51 @@ class PmaAutomationPersistence:
             ),
         )
 
+    def _update_subscription_row(
+        self, conn: Any, subscription: PmaLifecycleSubscription
+    ) -> None:
+        conn.execute(
+            """
+            UPDATE orch_automation_subscriptions
+               SET event_types_json = ?,
+                   repo_id = ?,
+                   run_id = ?,
+                   thread_target_id = ?,
+                   lane_id = ?,
+                   from_state = ?,
+                   to_state = ?,
+                   notify_once = ?,
+                   state = ?,
+                   match_count = ?,
+                   metadata_json = ?,
+                   updated_at = ?,
+                   disabled_at = ?,
+                   reason_text = ?,
+                   idempotency_key = ?,
+                   max_matches = ?
+             WHERE subscription_id = ?
+            """,
+            (
+                json.dumps(subscription.event_types),
+                subscription.repo_id,
+                subscription.run_id,
+                subscription.thread_id,
+                subscription.lane_id,
+                subscription.from_state,
+                subscription.to_state,
+                1 if subscription.max_matches == 1 else 0,
+                subscription.state,
+                subscription.match_count,
+                json.dumps(subscription.metadata),
+                subscription.updated_at,
+                (subscription.updated_at if subscription.state != "active" else None),
+                subscription.reason,
+                subscription.idempotency_key,
+                subscription.max_matches,
+                subscription.subscription_id,
+            ),
+        )
+
     def _insert_timer_row(self, conn: Any, timer: PmaAutomationTimer) -> None:
         conn.execute(
             """
@@ -561,6 +607,371 @@ class PmaAutomationPersistence:
                 timer.idle_seconds,
             ),
         )
+
+    def _update_timer_row(self, conn: Any, timer: PmaAutomationTimer) -> None:
+        conn.execute(
+            """
+            UPDATE orch_automation_timers
+               SET subscription_id = ?,
+                   repo_id = ?,
+                   run_id = ?,
+                   thread_target_id = ?,
+                   timer_kind = ?,
+                   schedule_key = ?,
+                   available_at = ?,
+                   payload_json = ?,
+                   state = ?,
+                   updated_at = ?,
+                   fired_at = ?,
+                   reason_text = ?,
+                   idempotency_key = ?,
+                   idle_seconds = ?
+             WHERE timer_id = ?
+            """,
+            (
+                timer.subscription_id,
+                timer.repo_id,
+                timer.run_id,
+                timer.thread_id,
+                timer.timer_type,
+                timer.subscription_id or timer.idempotency_key,
+                timer.due_at,
+                json.dumps(
+                    {
+                        "metadata": timer.metadata,
+                        "from_state": timer.from_state,
+                        "to_state": timer.to_state,
+                    }
+                ),
+                timer.state,
+                timer.updated_at,
+                timer.fired_at,
+                timer.reason,
+                timer.idempotency_key,
+                timer.idle_seconds,
+                timer.timer_id,
+            ),
+        )
+
+    def _insert_wakeup_row(self, conn: Any, wakeup: PmaAutomationWakeup) -> None:
+        conn.execute(
+            """
+            INSERT INTO orch_automation_wakeups (
+                wakeup_id, subscription_id, repo_id, run_id,
+                thread_target_id, lane_id, wakeup_kind, state,
+                available_at, claimed_at, completed_at, reason_text,
+                payload_json, created_at, updated_at, dispatched_at,
+                timestamp, idempotency_key, timer_id, event_id, event_type
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                wakeup.wakeup_id,
+                wakeup.subscription_id,
+                wakeup.repo_id,
+                wakeup.run_id,
+                wakeup.thread_id,
+                wakeup.lane_id,
+                wakeup.source,
+                wakeup.state,
+                wakeup.timestamp,
+                None,
+                None,
+                wakeup.reason,
+                json.dumps(
+                    {
+                        "metadata": wakeup.metadata,
+                        "event_data": wakeup.event_data,
+                        "from_state": wakeup.from_state,
+                        "to_state": wakeup.to_state,
+                    }
+                ),
+                wakeup.created_at,
+                wakeup.updated_at,
+                wakeup.dispatched_at,
+                wakeup.timestamp,
+                wakeup.idempotency_key,
+                wakeup.timer_id,
+                wakeup.event_id,
+                wakeup.event_type,
+            ),
+        )
+
+    def _update_wakeup_row(self, conn: Any, wakeup: PmaAutomationWakeup) -> None:
+        conn.execute(
+            """
+            UPDATE orch_automation_wakeups
+               SET subscription_id = ?,
+                   repo_id = ?,
+                   run_id = ?,
+                   thread_target_id = ?,
+                   lane_id = ?,
+                   wakeup_kind = ?,
+                   state = ?,
+                   available_at = ?,
+                   reason_text = ?,
+                   payload_json = ?,
+                   updated_at = ?,
+                   dispatched_at = ?,
+                   timestamp = ?,
+                   idempotency_key = ?,
+                   timer_id = ?,
+                   event_id = ?,
+                   event_type = ?
+             WHERE wakeup_id = ?
+            """,
+            (
+                wakeup.subscription_id,
+                wakeup.repo_id,
+                wakeup.run_id,
+                wakeup.thread_id,
+                wakeup.lane_id,
+                wakeup.source,
+                wakeup.state,
+                wakeup.timestamp,
+                wakeup.reason,
+                json.dumps(
+                    {
+                        "metadata": wakeup.metadata,
+                        "event_data": wakeup.event_data,
+                        "from_state": wakeup.from_state,
+                        "to_state": wakeup.to_state,
+                    }
+                ),
+                wakeup.updated_at,
+                wakeup.dispatched_at,
+                wakeup.timestamp,
+                wakeup.idempotency_key,
+                wakeup.timer_id,
+                wakeup.event_id,
+                wakeup.event_type,
+                wakeup.wakeup_id,
+            ),
+        )
+
+    def with_write_connection(self) -> Any:
+        return open_orchestration_sqlite(self._hub_root, durable=self._durable)
+
+    def find_active_subscription_by_key(
+        self, conn: Any, key: str
+    ) -> Optional[PmaLifecycleSubscription]:
+        return self._find_active_subscription_by_key(conn, key)
+
+    def find_pending_timer_by_key(
+        self, conn: Any, key: str
+    ) -> Optional[PmaAutomationTimer]:
+        return self._find_pending_timer_by_key(conn, key)
+
+    def subscription_id_exists(self, conn: Any, sub_id: str) -> bool:
+        return self._subscription_id_exists(conn, sub_id)
+
+    def insert_subscription(
+        self, conn: Any, subscription: PmaLifecycleSubscription
+    ) -> None:
+        self._insert_subscription_row(conn, subscription)
+
+    def insert_timer(self, conn: Any, timer: PmaAutomationTimer) -> None:
+        self._insert_timer_row(conn, timer)
+
+    def insert_wakeup(self, conn: Any, wakeup: PmaAutomationWakeup) -> None:
+        self._insert_wakeup_row(conn, wakeup)
+
+    def update_timer(self, conn: Any, timer: PmaAutomationTimer) -> None:
+        self._update_timer_row(conn, timer)
+
+    def update_wakeup(self, conn: Any, wakeup: PmaAutomationWakeup) -> None:
+        self._update_wakeup_row(conn, wakeup)
+
+    def update_subscription(
+        self, conn: Any, subscription: PmaLifecycleSubscription
+    ) -> None:
+        self._update_subscription_row(conn, subscription)
+
+    def find_wakeup_by_idempotency_key(
+        self, conn: Any, key: str
+    ) -> Optional[PmaAutomationWakeup]:
+        row = conn.execute(
+            """
+            SELECT *
+              FROM orch_automation_wakeups
+             WHERE idempotency_key = ?
+             LIMIT 1
+            """,
+            (key,),
+        ).fetchone()
+        return self._row_to_wakeup(row) if row is not None else None
+
+    def cancel_subscription(self, conn: Any, subscription_id: str, stamp: str) -> bool:
+        cursor = conn.execute(
+            """
+            UPDATE orch_automation_subscriptions
+               SET state = 'cancelled',
+                   updated_at = ?,
+                   disabled_at = ?
+             WHERE subscription_id = ?
+               AND state != 'cancelled'
+            """,
+            (stamp, stamp, subscription_id),
+        )
+        if cursor.rowcount <= 0:
+            return False
+        conn.execute(
+            """
+            UPDATE orch_automation_rules
+               SET enabled = 0,
+                   updated_at = ?
+             WHERE rule_id = ?
+            """,
+            (stamp, f"builtin:pma:subscription:{subscription_id}"),
+        )
+        return True
+
+    def purge_subscription(
+        self, conn: Any, subscription_id: str, *, require_inactive: bool
+    ) -> bool:
+        row = conn.execute(
+            "SELECT state FROM orch_automation_subscriptions WHERE subscription_id = ?",
+            (subscription_id,),
+        ).fetchone()
+        if row is None:
+            return False
+        if require_inactive and str(row["state"]) == "active":
+            return False
+        self._delete_subscription_dependents(conn, [subscription_id])
+        conn.execute(
+            "DELETE FROM orch_automation_subscriptions WHERE subscription_id = ?",
+            (subscription_id,),
+        )
+        return True
+
+    def purge_subscriptions(
+        self,
+        conn: Any,
+        *,
+        state_filter: Optional[str],
+        dry_run: bool,
+    ) -> list[PmaLifecycleSubscription]:
+        query = "SELECT * FROM orch_automation_subscriptions"
+        params: tuple[Any, ...] = ()
+        if state_filter is not None:
+            query += " WHERE state = ?"
+            params = (state_filter,)
+        rows = conn.execute(query, params).fetchall()
+        removed = [self._row_to_subscription(row) for row in rows]
+        if removed and not dry_run:
+            removed_ids = [entry.subscription_id for entry in removed]
+            self._delete_subscription_dependents(conn, removed_ids)
+            placeholders = ",".join("?" for _ in removed_ids)
+            conn.execute(
+                f"DELETE FROM orch_automation_subscriptions WHERE subscription_id IN ({placeholders})",
+                tuple(removed_ids),
+            )
+        return removed
+
+    def _delete_subscription_dependents(
+        self, conn: Any, subscription_ids: list[str]
+    ) -> None:
+        total_orphaned_timers = 0
+        total_orphaned_wakeups = 0
+        for sub_id in subscription_ids:
+            total_orphaned_timers += conn.execute(
+                "SELECT COUNT(*) AS c FROM orch_automation_timers WHERE subscription_id = ?",
+                (sub_id,),
+            ).fetchone()["c"]
+            total_orphaned_wakeups += conn.execute(
+                "SELECT COUNT(*) AS c FROM orch_automation_wakeups WHERE subscription_id = ?",
+                (sub_id,),
+            ).fetchone()["c"]
+            conn.execute(
+                "DELETE FROM orch_automation_wakeups WHERE subscription_id = ?",
+                (sub_id,),
+            )
+            conn.execute(
+                "DELETE FROM orch_automation_timers WHERE subscription_id = ?",
+                (sub_id,),
+            )
+        if total_orphaned_timers or total_orphaned_wakeups:
+            logger.warning(
+                "Dropping orphaned automation rows before save (timers=%s, wakeups=%s)",
+                total_orphaned_timers,
+                total_orphaned_wakeups,
+            )
+
+    def cancel_timer(
+        self,
+        conn: Any,
+        timer_id: str,
+        *,
+        cancelled_at: str,
+        reason: Optional[str],
+    ) -> bool:
+        if reason is not None:
+            cursor = conn.execute(
+                """
+                UPDATE orch_automation_timers
+                   SET state = 'cancelled',
+                       updated_at = ?,
+                       reason_text = ?
+                 WHERE timer_id = ?
+                   AND state != 'cancelled'
+                """,
+                (cancelled_at, reason, timer_id),
+            )
+        else:
+            cursor = conn.execute(
+                """
+                UPDATE orch_automation_timers
+                   SET state = 'cancelled',
+                       updated_at = ?
+                 WHERE timer_id = ?
+                   AND state != 'cancelled'
+                """,
+                (cancelled_at, timer_id),
+            )
+        if cursor.rowcount <= 0:
+            return False
+        conn.execute(
+            """
+            UPDATE orch_automation_schedules
+               SET state = 'cancelled',
+                   next_fire_at = NULL,
+                   updated_at = ?
+             WHERE schedule_id = ?
+            """,
+            (cancelled_at, f"pma-timer:{timer_id}"),
+        )
+        return True
+
+    def purge_timer(self, conn: Any, timer_id: str, *, require_inactive: bool) -> bool:
+        row = conn.execute(
+            "SELECT state FROM orch_automation_timers WHERE timer_id = ?",
+            (timer_id,),
+        ).fetchone()
+        if row is None:
+            return False
+        if require_inactive and str(row["state"]) == "pending":
+            return False
+        conn.execute(
+            "DELETE FROM orch_automation_timers WHERE timer_id = ?",
+            (timer_id,),
+        )
+        return True
+
+    def purge_wakeup(
+        self, conn: Any, wakeup_id: str, *, require_inactive: bool
+    ) -> bool:
+        row = conn.execute(
+            "SELECT state FROM orch_automation_wakeups WHERE wakeup_id = ?",
+            (wakeup_id,),
+        ).fetchone()
+        if row is None:
+            return False
+        if require_inactive and str(row["state"]) in {"pending", "queued"}:
+            return False
+        conn.execute(
+            "DELETE FROM orch_automation_wakeups WHERE wakeup_id = ?",
+            (wakeup_id,),
+        )
+        return True
 
     def _find_active_subscription_by_key(
         self, conn: Any, key: str

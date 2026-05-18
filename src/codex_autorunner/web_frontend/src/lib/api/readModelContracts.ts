@@ -23,6 +23,11 @@ export type RepairPolicy = {
   behavior: 'repair_snapshot_required';
 };
 
+export type CursorGapRepair = RepairPolicy & {
+  requestedCursor: number;
+  latestCursor: number;
+};
+
 export type PageWindow = {
   limit: number;
   nextCursor?: string | null;
@@ -116,6 +121,7 @@ export type ChatIndexPatch = {
 export type ChatIndexPatchEvent = {
   envelope: ReadModelEventEnvelope<'chat.index.patch' | 'projection.cursor_gap', 'chat'>;
   patch: ChatIndexPatch;
+  repair?: CursorGapRepair | null;
 };
 
 export type ChatTimelineIdentity = {

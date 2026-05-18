@@ -8,6 +8,7 @@ from codex_autorunner.core.usage import (
     get_hub_usage_series_cached,
     get_hub_usage_summary_cached,
     get_repo_session_usage_ledger,
+    get_repo_usage_aggregation_read_model,
     get_repo_usage_series_cached,
     get_repo_usage_summary_cached,
     get_usage_series_cache,
@@ -742,6 +743,54 @@ def test_opencode_summary_prefers_persisted_turn_usage(tmp_path):
     opencode_meta = (summary.source_confidence or {}).get("opencode") or {}
     assert opencode_meta.get("source") == "persisted_normalized"
     assert opencode_meta.get("persisted_duplicates") == 1
+
+
+def test_usage_aggregation_read_model_reports_confidence_and_session_totals(tmp_path):
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir()
+    usage_path = repo_root / ".codex-autorunner" / "usage"
+    usage_path.mkdir(parents=True)
+    (usage_path / "opencode_turn_usage.jsonl").write_text(
+        "\n".join(
+            [
+                "{not-json",
+                json.dumps({"timestamp": "2025-12-01T00:00:00Z"}),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    assert persist_opencode_usage_snapshot(
+        repo_root,
+        session_id="session-1",
+        turn_id="turn-1",
+        usage={"inputTokens": 7, "outputTokens": 3, "totalTokens": 10},
+    )
+    assert persist_opencode_usage_snapshot(
+        repo_root,
+        session_id="session-1",
+        turn_id="turn-1",
+        usage={"inputTokens": 9, "outputTokens": 3, "totalTokens": 12},
+    )
+
+    read_model = get_repo_usage_aggregation_read_model(repo_root)
+    payload = read_model.to_dict()
+
+    assert payload["totals"]["total_tokens"] == 12
+    assert payload["events"] == 1
+    source_by_agent = {source["agent"]: source for source in payload["sources"]}
+    assert source_by_agent["opencode"] == {
+        "agent": "opencode",
+        "source": "persisted_normalized",
+        "confidence": "high",
+        "events": 1,
+        "parse_errors": 2,
+        "duplicate_count": 1,
+    }
+    assert payload["sessions"][0]["session_id"] == "session-1"
+    assert payload["sessions"][0]["latest_turn_id"] == "turn-1"
+    assert payload["sessions"][0]["totals"]["total_tokens"] == 12
+    assert payload["agent_totals"]["opencode"]["total_tokens"] == 12
 
 
 def test_repo_session_usage_ledger_prefers_persisted_turns(tmp_path):

@@ -1,17 +1,14 @@
 from __future__ import annotations
 
-import json
 import sqlite3
 import uuid
 from pathlib import Path
 from typing import Any, Optional
 
 from ..orchestration.sqlite import open_orchestration_sqlite
-from ..sqlite_utils import table_exists
 from ..text_utils import _json_dumps, _json_loads_object
 from ..time_utils import now_iso
 from .models import (
-    EXECUTOR_PMA_TURN,
     JOB_CANCELLED,
     JOB_CLAIMED,
     JOB_DEAD_LETTERED,
@@ -21,10 +18,6 @@ from .models import (
     JOB_RUNNING,
     JOB_SKIPPED,
     JOB_SUCCEEDED,
-    SCHEDULE_ONE_SHOT,
-    TARGET_POLICY_HUB,
-    TRIGGER_KIND_EVENT,
-    TRIGGER_KIND_SCHEDULE,
     AutomationEvent,
     AutomationJob,
     AutomationJobAttempt,
@@ -33,57 +26,12 @@ from .models import (
     normalize_bool,
     normalize_non_negative_int,
     normalize_timestamp,
-    optional_text,
     validate_job_transition,
 )
 
 
 def _json_object_from_row(row: sqlite3.Row, column: str) -> dict[str, Any]:
     return _json_loads_object(row[column])
-
-
-def _load_json_array(value: Any) -> list[Any]:
-    if not isinstance(value, str) or not value.strip():
-        return []
-    try:
-        parsed = json.loads(value)
-    except json.JSONDecodeError:
-        return []
-    return list(parsed) if isinstance(parsed, list) else []
-
-
-def _legacy_wakeup_payload_from_row(
-    row: sqlite3.Row, payload: dict[str, Any]
-) -> dict[str, Any]:
-    metadata = payload.get("metadata")
-    event_data = payload.get("event_data")
-    wake_up = {
-        "wakeup_id": row["wakeup_id"],
-        "repo_id": row["repo_id"],
-        "run_id": row["run_id"],
-        "thread_id": row["thread_target_id"],
-        "lane_id": row["lane_id"] or "pma:default",
-        "from_state": payload.get("from_state"),
-        "to_state": payload.get("to_state"),
-        "reason": row["reason_text"],
-        "timestamp": row["timestamp"] or row["available_at"],
-        "source": row["wakeup_kind"],
-        "event_type": row["event_type"],
-        "subscription_id": row["subscription_id"],
-        "timer_id": row["timer_id"],
-    }
-    if isinstance(metadata, dict):
-        wake_up["metadata"] = dict(metadata)
-        delivery_target = metadata.get("delivery_target")
-        if isinstance(delivery_target, dict):
-            wake_up["delivery_target"] = dict(delivery_target)
-    if isinstance(event_data, dict):
-        wake_up["event_data"] = dict(event_data)
-    return {
-        key: value
-        for key, value in wake_up.items()
-        if value is not None and value != ""
-    }
 
 
 class AutomationStore:
@@ -856,217 +804,9 @@ class AutomationStore:
         return int(row["c"] if row is not None else 0)
 
     def backfill_legacy_pma_automation(self) -> dict[str, int]:
-        with open_orchestration_sqlite(self._hub_root, durable=self._durable) as conn:
-            if not all(
-                table_exists(conn, table)
-                for table in (
-                    "orch_automation_subscriptions",
-                    "orch_automation_timers",
-                    "orch_automation_wakeups",
-                )
-            ):
-                return {"rules": 0, "events": 0, "jobs": 0, "schedules": 0}
+        from ..pma_automation_unified import PmaUnifiedAutomationAdapter
 
-            subscriptions = conn.execute(
-                "SELECT * FROM orch_automation_subscriptions ORDER BY created_at ASC"
-            ).fetchall()
-            timers = conn.execute(
-                "SELECT * FROM orch_automation_timers ORDER BY created_at ASC"
-            ).fetchall()
-            wakeups = conn.execute(
-                "SELECT * FROM orch_automation_wakeups ORDER BY created_at ASC"
-            ).fetchall()
-
-        counts = {"rules": 0, "events": 0, "jobs": 0, "schedules": 0}
-        subscription_rules: dict[str, str] = {}
-        for row in subscriptions:
-            rule_id = f"legacy-pma-subscription:{row['subscription_id']}"
-            event_types = _load_json_array(row["event_types_json"])
-            rule = AutomationRule.create(
-                rule_id=rule_id,
-                name=f"Legacy PMA subscription {row['subscription_id']}",
-                enabled=str(row["state"] or "active") == "active",
-                system_owned=True,
-                trigger_kind=TRIGGER_KIND_EVENT,
-                trigger={"event_types": event_types},
-                filters={
-                    "repo_id": row["repo_id"],
-                    "run_id": row["run_id"],
-                    "thread_target_id": row["thread_target_id"],
-                    "from_state": row["from_state"],
-                    "to_state": row["to_state"],
-                },
-                target_policy=TARGET_POLICY_HUB,
-                target={
-                    "repo_id": row["repo_id"],
-                    "thread_target_id": row["thread_target_id"],
-                },
-                executor_kind=EXECUTOR_PMA_TURN,
-                executor={"lane_id": row["lane_id"]},
-                policy={
-                    "max_attempts": 3,
-                    "approval_mode": "pause_and_request_user",
-                    "max_concurrent_per_rule": 1,
-                    "max_concurrent_per_target": 1,
-                },
-                metadata={
-                    "legacy_source": "orch_automation_subscriptions",
-                    "legacy_subscription_id": row["subscription_id"],
-                    "legacy_metadata": _json_object_from_row(row, "metadata_json"),
-                },
-                created_at=row["created_at"],
-                updated_at=row["updated_at"],
-            )
-            _, created = self._upsert_legacy_rule(rule)
-            counts["rules"] += int(created)
-            subscription_rules[str(row["subscription_id"])] = rule_id
-
-        for row in timers:
-            subscription_id = optional_text(row["subscription_id"])
-            rule_id = (
-                subscription_rules.get(subscription_id)
-                if subscription_id is not None
-                else None
-            ) or f"legacy-pma-timer:{row['timer_id']}"
-            if self.get_rule(rule_id) is None:
-                rule = AutomationRule.create(
-                    rule_id=rule_id,
-                    name=f"Legacy PMA timer {row['timer_id']}",
-                    enabled=str(row["state"] or "pending") == "pending",
-                    system_owned=True,
-                    trigger_kind=TRIGGER_KIND_SCHEDULE,
-                    trigger={"schedule_kind": SCHEDULE_ONE_SHOT},
-                    target_policy=TARGET_POLICY_HUB,
-                    target={
-                        "repo_id": row["repo_id"],
-                        "thread_target_id": row["thread_target_id"],
-                    },
-                    executor_kind=EXECUTOR_PMA_TURN,
-                    executor={"source": "legacy_timer"},
-                    metadata={
-                        "legacy_source": "orch_automation_timers",
-                        "legacy_timer_id": row["timer_id"],
-                    },
-                    created_at=row["created_at"],
-                    updated_at=row["updated_at"],
-                )
-                _, created = self._upsert_legacy_rule(rule)
-                counts["rules"] += int(created)
-            schedule = AutomationSchedule.create(
-                schedule_id=f"legacy-pma-timer:{row['timer_id']}",
-                rule_id=rule_id,
-                schedule_kind=SCHEDULE_ONE_SHOT,
-                next_fire_at=row["available_at"],
-                last_fire_at=row["fired_at"],
-                schedule={
-                    "legacy_timer_id": row["timer_id"],
-                    "timer_kind": row["timer_kind"],
-                    "payload": _json_object_from_row(row, "payload_json"),
-                },
-                state=row["state"],
-                created_at=row["created_at"],
-                updated_at=row["updated_at"],
-            )
-            if self.get_schedule(schedule.schedule_id) is None:
-                counts["schedules"] += 1
-            self.upsert_schedule(schedule)
-
-        from .builtins import _LIFECYCLE_EVENT_MAP as _legacy_wakeup_lifecycle_map
-
-        for row in wakeups:
-            event_id = f"legacy-pma-wakeup:{row['wakeup_id']}"
-            event_type = "manual.run"
-            payload = _json_object_from_row(row, "payload_json")
-            wake_up_payload = _legacy_wakeup_payload_from_row(row, payload)
-            payload = {**payload, "wake_up": wake_up_payload}
-            legacy_event_type = optional_text(row["event_type"])
-            if legacy_event_type in _legacy_wakeup_lifecycle_map:
-                event_type = _legacy_wakeup_lifecycle_map[legacy_event_type]
-            event = AutomationEvent.create(
-                event_id=event_id,
-                event_type=event_type,
-                source="legacy_pma_wakeup",
-                repo_id=row["repo_id"],
-                target={
-                    "thread_target_id": row["thread_target_id"],
-                    "run_id": row["run_id"],
-                },
-                payload=payload,
-                raw_payload=payload,
-                metadata={
-                    "legacy_source": "orch_automation_wakeups",
-                    "legacy_wakeup_id": row["wakeup_id"],
-                    "legacy_event_id": row["event_id"],
-                },
-                observed_at=row["created_at"],
-            )
-            if self.get_event(event.event_id) is None:
-                counts["events"] += 1
-            self.record_event(event)
-            subscription_id = optional_text(row["subscription_id"])
-            rule_id = (
-                subscription_rules.get(subscription_id)
-                if subscription_id is not None
-                else None
-            ) or f"legacy-pma-wakeup:{row['wakeup_id']}"
-            if self.get_rule(rule_id) is None:
-                rule = AutomationRule.create(
-                    rule_id=rule_id,
-                    name=f"Legacy PMA wakeup {row['wakeup_id']}",
-                    enabled=True,
-                    system_owned=True,
-                    trigger_kind=TRIGGER_KIND_EVENT,
-                    trigger={"event_types": [event.event_type]},
-                    target_policy=TARGET_POLICY_HUB,
-                    target={
-                        "repo_id": row["repo_id"],
-                        "thread_target_id": row["thread_target_id"],
-                    },
-                    executor_kind=EXECUTOR_PMA_TURN,
-                    executor={
-                        "lane_id": row["lane_id"],
-                        "wake_up_kind": "pma_legacy_wakeup",
-                    },
-                    metadata={
-                        "legacy_source": "orch_automation_wakeups",
-                        "legacy_wakeup_id": row["wakeup_id"],
-                    },
-                    created_at=row["created_at"],
-                    updated_at=row["updated_at"],
-                )
-                _, created = self._upsert_legacy_rule(rule)
-                counts["rules"] += int(created)
-            job = AutomationJob.create(
-                job_id=f"legacy-pma-wakeup:{row['wakeup_id']}",
-                rule_id=rule_id,
-                event_id=event.event_id,
-                dedupe_key=f"legacy-pma-wakeup:{row['wakeup_id']}",
-                target={
-                    "repo_id": row["repo_id"],
-                    "thread_target_id": row["thread_target_id"],
-                },
-                executor={
-                    "kind": EXECUTOR_PMA_TURN,
-                    "lane_id": row["lane_id"],
-                    "wake_up_kind": "pma_legacy_wakeup",
-                },
-                policy={
-                    "max_attempts": 3,
-                    "retry_backoff_seconds": 0,
-                    "retry_backoff_max_seconds": 0,
-                    "max_concurrent_per_rule": 1,
-                    "max_concurrent_per_target": 1,
-                },
-                payload=payload,
-                created_at=row["created_at"],
-            )
-            job.state = JOB_SUCCEEDED if row["completed_at"] else JOB_PENDING
-            job.pma_lane_id = row["lane_id"]
-            job.result_summary = row["reason_text"]
-            saved, deduped = self.enqueue_job(job)
-            counts["jobs"] += int(not deduped)
-
-        return counts
+        return PmaUnifiedAutomationAdapter(self).backfill_legacy_rows()
 
     def _transition_job(
         self,

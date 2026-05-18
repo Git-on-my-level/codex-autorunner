@@ -19,14 +19,12 @@ from typing import Any, AsyncIterator, Awaitable, Callable, Optional
 
 import httpx
 
-from ...core.agent_model_defaults import resolve_model_for_agent
 from ...core.logging_utils import log_event
 from ...core.orchestration.interfaces import FreshConversationRequiredError
 from ...core.orchestration.runtime_thread_events import (
     RuntimeEventDriver,
 )
 from ...core.orchestration.turn_event_buffer import TurnEventBuffer
-from ...core.sse import SSEEvent
 from ..base import AgentHarness
 from ..types import (
     AgentId,
@@ -45,9 +43,6 @@ from .progress_synthesis import (
 from .progress_synthesis import (
     progress_event_shape_hint as _progress_event_shape_hint,
 )
-from .progress_synthesis import (
-    synthetic_command_result_events as _synthetic_command_result_events,
-)
 from .protocol_payload import (
     extract_message_info,
     extract_status_type,
@@ -59,21 +54,38 @@ from .runtime import (
     extract_session_id,
     extract_turn_id,
     map_approval_policy_to_permission,
-    opencode_event_is_progress_signal,
     opencode_stream_timeouts,
-    split_model_id,
 )
 from .supervisor_protocol import OpenCodeHarnessSupervisorProtocol
 from .turn_lifecycle import (
     OpenCodeTurnObservation,
     OpenCodeTurnOutputSource,
-    coordinate_turn_lifecycle,
     lifecycle_result_from_observation,
     terminal_signal_from_payloads,
+)
+from .turn_runtime import (
+    OpenCodeTurnCommand,
+    append_synthetic_acceptance_events,
+    cancel_and_wait,
+    observe_turn_runtime,
+    pre_connect_event_stream,
+    start_command,
 )
 
 _logger = logging.getLogger(__name__)
 _GLOB_META_RE = re.compile(r"[*?\[\]{}]")
+
+
+def _resolve_runtime_model_payload(model: Optional[str]) -> Optional[dict[str, str]]:
+    from ..runtime_options import (
+        resolve_agent_runtime_options,
+        resolve_opencode_model_payload,
+    )
+
+    resolved_model = model
+    if resolved_model is None:
+        resolved_model = resolve_agent_runtime_options("opencode").model
+    return resolve_opencode_model_payload(resolved_model)
 
 
 def _first_text_field(entry: dict[str, Any], keys: tuple[str, ...]) -> Optional[str]:
@@ -110,60 +122,6 @@ class _PendingTurnConfig:
     message_progress_task: Optional[asyncio.Task[None]] = None
     message_progress_roles_seen: set[str] = field(default_factory=set)
     message_progress_part_signatures: dict[str, str] = field(default_factory=dict)
-
-
-async def _pre_connect_event_stream(
-    client: Any,
-    workspace_root: Path,
-    conversation_id: str,
-    *,
-    event_seen: Optional[asyncio.Event] = None,
-) -> tuple[asyncio.Queue[Any], asyncio.Task[None]]:
-    """Start SSE event stream before prompt so no events are missed."""
-    event_queue: asyncio.Queue[Any] = asyncio.Queue()
-    ready_event = asyncio.Event()
-
-    async def _stream_to_queue() -> None:
-        try:
-            async for event in client.stream_events(
-                directory=str(workspace_root),
-                session_id=conversation_id,
-                ready_event=ready_event,
-            ):
-                if event_seen is not None and _preconnected_event_counts_as_progress(
-                    event,
-                    conversation_id=conversation_id,
-                ):
-                    event_seen.set()
-                await event_queue.put(event)
-        except (
-            RuntimeError,
-            OSError,
-            ProcessLookupError,
-            BrokenPipeError,
-            httpx.HTTPError,
-        ):  # intentional: background SSE consumer must not crash
-            _logger.debug("Pre-connected SSE stream error", exc_info=True)
-        finally:
-            await event_queue.put(None)
-
-    task = asyncio.create_task(_stream_to_queue())
-    try:
-        await asyncio.wait_for(ready_event.wait(), timeout=2.0)
-    except asyncio.TimeoutError:
-        _logger.debug("SSE pre-connect timed out after 2s, continuing anyway")
-    return event_queue, task
-
-
-def _preconnected_event_counts_as_progress(
-    event: SSEEvent,
-    *,
-    conversation_id: str,
-) -> bool:
-    return opencode_event_is_progress_signal(
-        event,
-        session_id=conversation_id,
-    )
 
 
 def _path_is_within(root: Path, candidate: Path) -> bool:
@@ -220,21 +178,6 @@ def _collect_permission_paths(
                 _append(item)
 
     return candidates
-
-
-def _observe_background_task(task: asyncio.Task[Any]) -> None:
-    def _consume_exception(done: asyncio.Task[Any]) -> None:
-        # intentional: silently consume exceptions from background tasks
-        with contextlib.suppress(
-            asyncio.CancelledError,
-            RuntimeError,
-            OSError,
-            ProcessLookupError,
-            BrokenPipeError,
-        ):
-            done.exception()
-
-    task.add_done_callback(_consume_exception)
 
 
 def _fresh_conversation_error(
@@ -652,15 +595,11 @@ class OpenCodeHarness(AgentHarness):
             )
             await self._release_turn_client(reserved_workspace)
             raise
-        if model is None:
-            model = resolve_model_for_agent("opencode")
-        model_payload = split_model_id(model)
-        pre_connected_event_seen = asyncio.Event()
-        event_queue, stream_task = await _pre_connect_event_stream(
+        model_payload = _resolve_runtime_model_payload(model)
+        preconnected = await pre_connect_event_stream(
             client,
             canonical_workspace,
             conversation_id,
-            event_seen=pre_connected_event_seen,
         )
         turn_id = build_turn_id(conversation_id)
         pending = _PendingTurnConfig(
@@ -674,15 +613,15 @@ class OpenCodeHarness(AgentHarness):
                 if approval_mode is not None or sandbox_policy is not None
                 else "ignore"
             ),
-            pre_connected_event_queue=event_queue,
-            pre_connected_stream_task=stream_task,
-            pre_connected_event_seen=pre_connected_event_seen,
+            pre_connected_event_queue=preconnected.event_queue,
+            pre_connected_stream_task=preconnected.stream_task,
+            pre_connected_event_seen=preconnected.event_seen,
         )
         self._pending_turns[(conversation_id, turn_id)] = pending
 
         async def _run_prompt_async() -> Any:
             try:
-                result = await client.prompt_async(
+                return await client.prompt_async(
                     conversation_id,
                     message=prompt,
                     model=model_payload,
@@ -700,28 +639,35 @@ class OpenCodeHarness(AgentHarness):
                     conversation_id=conversation_id,
                     operation="start_turn",
                 )
+
+        async def _on_acceptance(result: Any) -> None:
             if (
                 pending.progress_events_published == 0
                 and not pending.pre_connected_event_seen.is_set()
             ):
-                for raw_event in _synthetic_command_result_events(
-                    conversation_id, result
-                ):
-                    pending.synthetic_raw_events.append(raw_event)
-                    await pending.event_buffer.append(raw_event)
-            return result
+                await append_synthetic_acceptance_events(
+                    conversation_id=conversation_id,
+                    result=result,
+                    raw_events=pending.synthetic_raw_events,
+                    event_buffer=pending.event_buffer,
+                )
 
-        command_task = asyncio.create_task(_run_prompt_async())
-        _observe_background_task(command_task)
+        started = start_command(
+            OpenCodeTurnCommand(
+                kind="prompt",
+                conversation_id=conversation_id,
+                executor=_run_prompt_async,
+                on_acceptance=_on_acceptance,
+            )
+        )
+        command_task = started.task
         pending.command_task = command_task
         await asyncio.sleep(0)
         if command_task.done():
             exc = command_task.exception()
             if exc is not None:
                 self._pending_turns.pop((conversation_id, turn_id), None)
-                stream_task.cancel()
-                with contextlib.suppress(asyncio.CancelledError):
-                    await stream_task
+                await cancel_and_wait(preconnected.stream_task)
                 await self._release_turn_client(reserved_workspace)
                 raise exc
             result = command_task.result()
@@ -777,19 +723,16 @@ class OpenCodeHarness(AgentHarness):
             )
             await self._release_turn_client(reserved_workspace)
             raise
-        if model is None:
-            model = resolve_model_for_agent("opencode")
+        model_payload = _resolve_runtime_model_payload(model)
         arguments = prompt if prompt else ""
-        pre_connected_event_seen = asyncio.Event()
-        event_queue, stream_task = await _pre_connect_event_stream(
+        preconnected = await pre_connect_event_stream(
             client,
             canonical_workspace,
             conversation_id,
-            event_seen=pre_connected_event_seen,
         )
         turn_id = build_turn_id(conversation_id)
         pending = _PendingTurnConfig(
-            model_payload=split_model_id(model),
+            model_payload=model_payload,
             approval_mode=approval_mode,
             sandbox_policy=sandbox_policy,
             prompt=prompt,
@@ -799,15 +742,15 @@ class OpenCodeHarness(AgentHarness):
                 if approval_mode is not None or sandbox_policy is not None
                 else "ignore"
             ),
-            pre_connected_event_queue=event_queue,
-            pre_connected_stream_task=stream_task,
-            pre_connected_event_seen=pre_connected_event_seen,
+            pre_connected_event_queue=preconnected.event_queue,
+            pre_connected_stream_task=preconnected.stream_task,
+            pre_connected_event_seen=preconnected.event_seen,
         )
         self._pending_turns[(conversation_id, turn_id)] = pending
 
         async def _run_review_command() -> Any:
             try:
-                result = await client.send_command(
+                return await client.send_command(
                     conversation_id,
                     command="review",
                     arguments=arguments,
@@ -825,28 +768,35 @@ class OpenCodeHarness(AgentHarness):
                     conversation_id=conversation_id,
                     operation="start_review",
                 )
+
+        async def _on_acceptance(result: Any) -> None:
             if (
                 pending.progress_events_published == 0
                 and not pending.pre_connected_event_seen.is_set()
             ):
-                for raw_event in _synthetic_command_result_events(
-                    conversation_id, result
-                ):
-                    pending.synthetic_raw_events.append(raw_event)
-                    await pending.event_buffer.append(raw_event)
-            return result
+                await append_synthetic_acceptance_events(
+                    conversation_id=conversation_id,
+                    result=result,
+                    raw_events=pending.synthetic_raw_events,
+                    event_buffer=pending.event_buffer,
+                )
 
-        command_task = asyncio.create_task(_run_review_command())
-        _observe_background_task(command_task)
+        started = start_command(
+            OpenCodeTurnCommand(
+                kind="review",
+                conversation_id=conversation_id,
+                executor=_run_review_command,
+                on_acceptance=_on_acceptance,
+            )
+        )
+        command_task = started.task
         pending.command_task = command_task
         await asyncio.sleep(0)
         if command_task.done():
             exc = command_task.exception()
             if exc is not None:
                 self._pending_turns.pop((conversation_id, turn_id), None)
-                stream_task.cancel()
-                with contextlib.suppress(asyncio.CancelledError):
-                    await stream_task
+                await cancel_and_wait(preconnected.stream_task)
                 await self._release_turn_client(reserved_workspace)
                 raise exc
             result = command_task.result()
@@ -1237,8 +1187,8 @@ class OpenCodeHarness(AgentHarness):
                 stall_timeout_seconds_value,
             )
 
-            async def _collect_observation() -> OpenCodeTurnObservation:
-                output = await collect_opencode_output_from_events(
+            collect_task = asyncio.create_task(
+                collect_opencode_output_from_events(
                     None,
                     session_id=conversation_id,
                     prompt=(pending.prompt if pending is not None else None),
@@ -1264,16 +1214,9 @@ class OpenCodeHarness(AgentHarness):
                     stall_timeout_seconds=stall_timeout,
                     first_event_timeout_seconds=first_event_timeout,
                 )
-                return OpenCodeTurnObservation(
-                    assistant_text=output.text,
-                    error=output.error,
-                    output_source=output.output_source,
-                    terminal_signal=output.terminal_signal,
-                )
-
-            collect_task = asyncio.create_task(_collect_observation())
+            )
             command_task = pending.command_task if pending is not None else None
-            lifecycle_result = await coordinate_turn_lifecycle(
+            runtime_result = await observe_turn_runtime(
                 collect_task=collect_task,
                 command_task=command_task,
                 raw_events=lambda: (
@@ -1282,6 +1225,7 @@ class OpenCodeHarness(AgentHarness):
                     else streamed_raw_events
                 ),
             )
+            lifecycle_result = runtime_result.lifecycle
 
             log_event(
                 _logger,

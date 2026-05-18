@@ -11,6 +11,7 @@ from fastapi import HTTPException
 from codex_autorunner.core import drafts as draft_utils
 from codex_autorunner.core.orchestration import FreshConversationRequiredError
 from codex_autorunner.core.state import now_iso
+from codex_autorunner.surfaces.web.routes.file_chat import FileChatRoutesState
 from codex_autorunner.surfaces.web.routes.file_chat_routes import (
     execution as execution_module,
 )
@@ -29,6 +30,7 @@ from codex_autorunner.surfaces.web.routes.file_chat_routes.targets import (
     build_patch,
     parse_target,
 )
+from codex_autorunner.surfaces.web.services import file_chat as file_chat_service
 
 
 def _make_request_state(
@@ -91,6 +93,197 @@ class _HarnessResultStub:
     assistant_text = "Agent: updated via hermes"
     raw_events: list[object] = []
     errors: list[str] = []
+
+
+@pytest.mark.asyncio
+async def test_file_chat_service_non_stream_and_stream_share_turn_lifecycle(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo_root = tmp_path
+    target_path = repo_root / ".codex-autorunner" / "contextspace" / "spec.md"
+    target_path.parent.mkdir(parents=True, exist_ok=True)
+    target_path.write_text("before\n", encoding="utf-8")
+    request = _make_request(repo_root)
+    calls: list[str] = []
+
+    async def fake_execute_file_chat_agent_turn(
+        _request,
+        _repo_root: Path,
+        _target,
+        message: str,
+        **kwargs,
+    ) -> dict[str, object]:
+        on_meta = kwargs.get("on_meta")
+        assert on_meta is not None
+        await on_meta("codex", f"thread-{message}", f"turn-{message}")
+        calls.append(message)
+        return {
+            "status": "ok",
+            "message": f"done {message}",
+            "agent_message": f"done {message}",
+            "thread_id": f"thread-{message}",
+            "turn_id": f"turn-{message}",
+            "raw_events": [{"type": "delta", "message": message}],
+            "usage_parts": [{"tokens": 1}],
+        }
+
+    monkeypatch.setattr(
+        file_chat_service,
+        "execute_file_chat_agent_turn",
+        fake_execute_file_chat_agent_turn,
+    )
+
+    non_stream = await file_chat_service.run_turn(
+        request,
+        file_chat_service.FileChatTurnRequest(
+            target="contextspace:spec",
+            message="nonstream",
+            client_turn_id="client-nonstream",
+        ),
+    )
+    state = request.app.state.file_chat_routes_state
+    assert non_stream["status"] == "ok"
+    assert non_stream["client_turn_id"] == "client-nonstream"
+    assert state.active_chats == {}
+    assert state.current_by_client == {}
+    assert state.last_by_client["client-nonstream"]["turn_id"] == "turn-nonstream"
+
+    stream_iter = await file_chat_service.open_stream_turn(
+        request,
+        file_chat_service.FileChatTurnRequest(
+            target="contextspace:spec",
+            message="stream",
+            client_turn_id="client-stream",
+        ),
+    )
+    stream_items = [item async for item in stream_iter]
+    assert calls == ["nonstream", "stream"]
+    assert [item.event for item in stream_items] == [
+        "status",
+        "app-server",
+        "token_usage",
+        "update",
+        "done",
+    ]
+    assert stream_items[-2].payload["client_turn_id"] == "client-stream"
+    assert state.active_chats == {}
+    assert state.current_by_client == {}
+    assert state.last_by_client["client-stream"]["turn_id"] == "turn-stream"
+
+
+@pytest.mark.asyncio
+async def test_file_chat_service_rejects_already_running_turn(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo_root = tmp_path
+    target = parse_target(repo_root, "ticket:1")
+    request = _make_request(repo_root)
+    request.app.state.file_chat_routes_state = FileChatRoutesState()
+    request.app.state.file_chat_routes_state.active_chats[target.state_key] = (
+        asyncio.Event()
+    )
+
+    async def fail_execute(*args, **kwargs):
+        raise AssertionError("execution should not start")
+
+    monkeypatch.setattr(
+        file_chat_service,
+        "execute_file_chat_agent_turn",
+        fail_execute,
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        await file_chat_service.run_turn(
+            request,
+            file_chat_service.FileChatTurnRequest(
+                target="ticket:1",
+                message="edit",
+                already_running_detail="Ticket chat already running",
+            ),
+        )
+
+    assert exc_info.value.status_code == 409
+    assert exc_info.value.detail == "Ticket chat already running"
+
+
+@pytest.mark.asyncio
+async def test_file_chat_service_interrupt_cleans_up_active_turn(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo_root = tmp_path
+    request = _make_request(repo_root)
+
+    async def fake_execute_file_chat_agent_turn(
+        _request,
+        _repo_root: Path,
+        target,
+        _message: str,
+        **_kwargs,
+    ) -> dict[str, str]:
+        interrupt = await runtime.get_or_create_interrupt_event(
+            _request, target.state_key
+        )
+        interrupt.set()
+        return {"status": "interrupted", "detail": "File chat interrupted"}
+
+    monkeypatch.setattr(
+        file_chat_service,
+        "execute_file_chat_agent_turn",
+        fake_execute_file_chat_agent_turn,
+    )
+
+    result = await file_chat_service.run_turn(
+        request,
+        file_chat_service.FileChatTurnRequest(
+            target="contextspace:active_context",
+            message="stop",
+            client_turn_id="client-stop",
+        ),
+    )
+
+    state = request.app.state.file_chat_routes_state
+    assert result["status"] == "interrupted"
+    assert state.active_chats == {}
+    assert state.current_by_client == {}
+    assert state.last_by_client["client-stop"]["status"] == "interrupted"
+
+
+@pytest.mark.asyncio
+async def test_file_chat_service_creates_contextspace_target_parent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo_root = tmp_path
+    request = _make_request(repo_root)
+    contextspace_dir = repo_root / ".codex-autorunner" / "contextspace"
+    assert not contextspace_dir.exists()
+
+    async def fake_execute_file_chat_agent_turn(
+        _request,
+        _repo_root: Path,
+        target,
+        _message: str,
+        **_kwargs,
+    ) -> dict[str, str]:
+        assert target.kind == "contextspace"
+        assert target.path.parent.exists()
+        return {"status": "ok", "message": "created"}
+
+    monkeypatch.setattr(
+        file_chat_service,
+        "execute_file_chat_agent_turn",
+        fake_execute_file_chat_agent_turn,
+    )
+
+    result = await file_chat_service.run_turn(
+        request,
+        file_chat_service.FileChatTurnRequest(
+            target="contextspace:active_context",
+            message="create context doc",
+        ),
+    )
+
+    assert result["status"] == "ok"
+    assert contextspace_dir.exists()
 
 
 @pytest.mark.asyncio

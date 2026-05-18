@@ -5,14 +5,9 @@ from typing import Any, Optional
 
 import typer
 
-from ...core.filebox import BOXES, list_filebox
-from ...core.filebox_lifecycle import (
-    LIFECYCLE_BOXES,
-    consume_inbox_file,
-    dismiss_inbox_file,
-    list_consumed_files,
-    unconsume_inbox_file,
-)
+from ...core.artifact_filebox_storage import ArtifactFileBoxStorage
+from ...core.filebox import BOXES
+from ...core.filebox_lifecycle import LIFECYCLE_BOXES
 from .hub_control_plane_client import resolve_hub_path
 from .hub_path_option import hub_root_path_option
 from .output import echo_json, exit_with_error
@@ -26,8 +21,9 @@ def register_file_commands(app: typer.Typer) -> None:
 
 
 def _pma_file_listings(hub_root: Path) -> dict[str, list[Any]]:
-    listing = list_filebox(hub_root)
-    archived = list_consumed_files(hub_root)
+    storage = ArtifactFileBoxStorage(hub_root)
+    listing = storage.list_filebox()
+    archived = storage.list_archived_inbox_files()
     for box in LIFECYCLE_BOXES:
         listing[box] = [entry for entry in archived if entry.box == box]
     return listing
@@ -82,8 +78,9 @@ def pma_file_consume(
 ):
     """Move a PMA inbox file into the recoverable consumed archive."""
     hub_root = resolve_hub_path(path)
+    storage = ArtifactFileBoxStorage(hub_root)
     try:
-        entry = consume_inbox_file(hub_root, filename)
+        entry = storage.consume_inbox_file(filename)
     except ValueError as exc:
         exit_with_error(f"Invalid filename: {exc}", cause=None)
     except FileNotFoundError as exc:
@@ -100,8 +97,9 @@ def pma_file_dismiss(
 ):
     """Move a PMA inbox file into the recoverable dismissed archive."""
     hub_root = resolve_hub_path(path)
+    storage = ArtifactFileBoxStorage(hub_root)
     try:
-        entry = dismiss_inbox_file(hub_root, filename)
+        entry = storage.dismiss_inbox_file(filename)
     except ValueError as exc:
         exit_with_error(f"Invalid filename: {exc}", cause=None)
     except FileNotFoundError as exc:
@@ -118,8 +116,9 @@ def pma_file_restore(
 ):
     """Restore a consumed or dismissed PMA file back to the inbox."""
     hub_root = resolve_hub_path(path)
+    storage = ArtifactFileBoxStorage(hub_root)
     try:
-        entry = unconsume_inbox_file(hub_root, filename)
+        entry = storage.restore_inbox_file(filename)
     except ValueError as exc:
         exit_with_error(f"Invalid filename: {exc}", cause=None)
     except FileNotFoundError as exc:

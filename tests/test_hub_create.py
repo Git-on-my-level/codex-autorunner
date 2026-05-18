@@ -13,6 +13,7 @@ from codex_autorunner.core.config import (
 )
 from codex_autorunner.core.hub_repo_manager import RepoManager
 from codex_autorunner.core.hub_topology import HubTopologyRepository
+from codex_autorunner.manifest import Manifest, ManifestRepo
 from tests.conftest import write_test_config
 from tests.support.git_test_helpers import init_git_repo as _init_git_repo
 
@@ -73,6 +74,48 @@ def test_hub_create_repo_rejects_paths_under_worktrees_root(tmp_path: Path):
     rm = _make_repo_manager(hub_root, repos_root=".", worktrees_root="worktrees")
     with pytest.raises(ValueError, match="must not live under worktrees_root"):
         rm.create_repo("bad", repo_path=Path("worktrees/bad"))
+
+
+def test_hub_topology_repository_rejects_repo_path_collision(tmp_path: Path) -> None:
+    hub_root = tmp_path / "hub"
+    repository = HubTopologyRepository(
+        hub_root=hub_root,
+        manifest_path=hub_root / ".codex-autorunner" / "manifest.yml",
+    )
+    manifest = Manifest(
+        version=3,
+        repos=[
+            ManifestRepo(id="one", path=Path("workspace/shared"), kind="base"),
+            ManifestRepo(id="two", path=Path("workspace/shared"), kind="base"),
+        ],
+    )
+
+    with pytest.raises(ValueError, match="Repo path collision"):
+        repository.save_manifest(manifest)
+
+
+def test_hub_topology_repository_rejects_worktree_missing_parent(
+    tmp_path: Path,
+) -> None:
+    hub_root = tmp_path / "hub"
+    repository = HubTopologyRepository(
+        hub_root=hub_root,
+        manifest_path=hub_root / ".codex-autorunner" / "manifest.yml",
+    )
+    manifest = Manifest(
+        version=3,
+        repos=[
+            ManifestRepo(
+                id="base--feature",
+                path=Path("worktrees/base--feature"),
+                kind="worktree",
+                worktree_of="base",
+            ),
+        ],
+    )
+
+    with pytest.raises(ValueError, match="references missing base repo"):
+        repository.save_manifest(manifest)
 
 
 def test_hub_clone_repo_cli(tmp_path: Path):

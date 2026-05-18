@@ -30,6 +30,7 @@ from codex_autorunner.manifest import load_manifest
 from codex_autorunner.server import create_hub_app
 from codex_autorunner.surfaces.web import app as web_app_module
 from codex_autorunner.surfaces.web import app_state as web_app_state_module
+from codex_autorunner.surfaces.web.services import hub_startup as hub_startup_module
 from tests.conftest import write_test_config
 
 
@@ -104,9 +105,9 @@ def test_hub_lifespan_reaper_uses_config_root(hub_env, monkeypatch) -> None:
 
     def _fake_reap(root: Path):
         called_roots.append(root)
-        return SimpleNamespace(killed=0, removed=0, skipped=0)
+        return SimpleNamespace(killed=0, signaled=0, removed=0, skipped=0)
 
-    monkeypatch.setattr(web_app_module, "reap_managed_processes", _fake_reap)
+    monkeypatch.setattr(hub_startup_module, "reap_managed_processes", _fake_reap)
     _stub_opencode_supervisor(monkeypatch)
     app = create_hub_app(hub_env.hub_root)
     with TestClient(app):
@@ -185,7 +186,9 @@ async def test_hub_lifespan_restores_exception_hooks_on_startup_failure(
     def _boom_record_hub_startup(*args, **kwargs):
         raise RuntimeError("boom")
 
-    monkeypatch.setattr(web_app_module, "record_hub_startup", _boom_record_hub_startup)
+    monkeypatch.setattr(
+        hub_startup_module, "record_hub_startup", _boom_record_hub_startup
+    )
     app = create_hub_app(hub_env.hub_root)
 
     with pytest.raises(RuntimeError, match="boom"):
@@ -200,33 +203,33 @@ async def test_hub_lifespan_restores_exception_hooks_on_startup_failure(
 @pytest.mark.parametrize(
     ("repo_defaults", "expected_interval"),
     [
-        ({}, web_app_module._DEFAULT_HUB_FLOW_SWEEP_INTERVAL_SECONDS),
+        ({}, hub_startup_module._DEFAULT_HUB_FLOW_SWEEP_INTERVAL_SECONDS),
         (
             {"flow_retention": {"sweep_interval_seconds": 300}},
             300.0,
         ),
         (
             {"flow_retention": {"sweep_interval_seconds": "abc"}},
-            web_app_module._DEFAULT_HUB_FLOW_SWEEP_INTERVAL_SECONDS,
+            hub_startup_module._DEFAULT_HUB_FLOW_SWEEP_INTERVAL_SECONDS,
         ),
         (
             {"flow_retention": {"sweep_interval_seconds": 0}},
-            web_app_module._DEFAULT_HUB_FLOW_SWEEP_INTERVAL_SECONDS,
+            hub_startup_module._DEFAULT_HUB_FLOW_SWEEP_INTERVAL_SECONDS,
         ),
         (
             {"flow_retention": {"sweep_interval_seconds": -30}},
-            web_app_module._DEFAULT_HUB_FLOW_SWEEP_INTERVAL_SECONDS,
+            hub_startup_module._DEFAULT_HUB_FLOW_SWEEP_INTERVAL_SECONDS,
         ),
         (
             {"flow_retention": {"sweep_interval_seconds": True}},
-            web_app_module._DEFAULT_HUB_FLOW_SWEEP_INTERVAL_SECONDS,
+            hub_startup_module._DEFAULT_HUB_FLOW_SWEEP_INTERVAL_SECONDS,
         ),
     ],
 )
 def test_resolve_hub_flow_sweep_interval_seconds_sanitizes_repo_defaults(
     repo_defaults, expected_interval
 ) -> None:
-    interval = web_app_module._resolve_hub_flow_sweep_interval_seconds(
+    interval = hub_startup_module.resolve_hub_flow_sweep_interval_seconds(
         repo_defaults,
         logging.getLogger("test.hub.flow_sweep"),
     )
@@ -234,7 +237,7 @@ def test_resolve_hub_flow_sweep_interval_seconds_sanitizes_repo_defaults(
     assert interval == expected_interval
 
 
-def test_hub_lifespan_ignores_invalid_repo_default_flow_sweep_interval(
+def test_hub_lifespan_accepts_repo_default_flow_sweep_interval(
     tmp_path: Path, monkeypatch
 ) -> None:
     hub_root = tmp_path / "hub"
@@ -244,9 +247,7 @@ def test_hub_lifespan_ignores_invalid_repo_default_flow_sweep_interval(
         hub_root / CONFIG_FILENAME,
         {
             "mode": "hub",
-            "repo_defaults": {
-                "flow_retention": {"sweep_interval_seconds": "abc"},
-            },
+            "repo_defaults": {"flow_retention": {"sweep_interval_seconds": 300}},
         },
     )
     _stub_opencode_supervisor(monkeypatch)

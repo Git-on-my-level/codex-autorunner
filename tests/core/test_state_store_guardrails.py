@@ -12,7 +12,7 @@ RAW_STATE_PATH_PATTERN = re.compile(
 RAW_ALTER_ADD_COLUMN_PATTERN = re.compile(r"ALTER TABLE .*ADD COLUMN")
 
 ALLOWED_RAW_STATE_PATH_FILES = {
-    "src/codex_autorunner/core/config_layering.py",
+    "src/codex_autorunner/core/config_defaults.py",
     "src/codex_autorunner/core/flows/pause_dispatch.py",
     "src/codex_autorunner/core/hub_repo_projection.py",
     "src/codex_autorunner/core/pr_binding_runtime.py",

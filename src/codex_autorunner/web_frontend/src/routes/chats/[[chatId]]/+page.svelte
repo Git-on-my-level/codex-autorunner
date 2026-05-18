@@ -30,27 +30,41 @@
     selectReadMarkers
   } from '$lib/data';
   import {
-    executePmaChatCommandPlan,
-    planInterruptExistingChat,
-    planQueueExistingChat,
-    planSendExistingChat,
-    planStartAndSendChat
-  } from '$lib/application/pmaChatCommands';
-  import {
-    buildOptimisticQueuedTurn,
-    buildOptimisticUserTranscriptCard,
-    chatTranscriptHasInFlightOptimisticTurn,
     isOptimisticQueuedTurn,
-    mergePmaProgressUpdate,
-    mergeTranscriptSnapshotWithPendingOptimistic,
     progressWithLiveElapsed,
-    queueContainsCommittedClientTurn,
-    transcriptContainsCommittedUserRow,
-    visibleChatDetailTranscriptCards,
-    withoutOptimisticQueuedTurn
+    visibleChatDetailTranscriptCards
   } from '$lib/application/pmaChatArchitecture';
+  import { createChatSendController } from '$lib/application/chatSendController';
+  import {
+    createChatDetailLiveProjection,
+    type ChatDetailLiveProjectionState
+  } from '$lib/application/chatDetailLiveProjection';
+  import {
+    activateChatDetailFromUrl,
+    activateRequestedChatFromRows,
+    archivedFilterForSelectedChat,
+    chatListVirtualKey as chatListVirtualKeyForPins,
+    chatSummaryForSessionId,
+    clearCommittedDraftPlaceholderIfPersisted,
+    initialChatDetailSessionState,
+    isLocalDraftChatId,
+    loadPinnedChats,
+    markActiveSummaryRead,
+    markChatGroupRead,
+    markSessionChatRead,
+    markVisibleChatsRead,
+    pinAwareChatRowKey as pinAwareChatRowKeyForPins,
+    requestedChatDetailFromUrl,
+    replacementForArchivedActiveChat,
+    savePinnedChats,
+    selectChatDetail,
+    sortEntriesForPinnedChats,
+    startLocalDraftChat,
+    togglePinnedChatId,
+    type ChatDetailSelectionCommand,
+    type ChatDetailSessionState
+  } from '$lib/application/chatDetailSession';
   import { withRuntimeBasePath as href } from '$lib/runtime/basePath';
-  import { openChatTranscriptEventSource, shouldUseChatTranscriptStream, type StreamSubscription } from '$lib/api/streaming';
   import {
     repoContextspaceRoute,
     repoRoute,
@@ -59,7 +73,6 @@
     worktreeRoute,
     worktreeTicketRoute
   } from '$lib/viewModels/routes';
-  import { mapPmaRunProgress } from '$lib/viewModels/domain';
   import type {
     PmaChatSummary,
     PmaRunProgress,
@@ -72,14 +85,10 @@
     buildPmaLiveActivity,
     buildManagedThreadMessagePayload,
     buildPmaStatusBar,
-    chooseActiveChatId,
-    committedDraftChatPlaceholder,
-    composeMessageWithAttachments,
     countTicketRunGroups,
     filterChatEntries,
     formatBytes,
     formatRelativeTime,
-    isLocalChatPlaceholder,
     isPmaChatArchived,
     localPmaChatScopeOption,
     mergeChatFacetSourceChats,
@@ -88,19 +97,16 @@
     CHAT_TICKET_RUNS_FILTER,
     pmaChatKind,
     pmaChatKindLabel,
-    pmaChatBindingKey,
     pmaChatHeaderScopeLine,
     chatMessengerSurface,
     pmaChatScopeTagView,
     chatSurfaceFilterOptions,
     chatSurfaceFilterToken,
     progressPercent,
-    mapChatTranscriptRows,
     visibleLocalChatPlaceholders as selectVisibleLocalChatPlaceholders,
     removePendingAttachment,
     statusLabel,
     summarizeVisibleLocalPlaceholderStatusCounts,
-    type DocumentFileIntentPayload,
     type PendingAttachment,
     type ChatTranscriptCard,
     type ChatFilter,
@@ -111,11 +117,8 @@
     type PmaChatScopeSource
   } from '$lib/viewModels/pmaChat';
   import {
-    isChatUnread,
     loadLastSeenMap,
-    markAllChatsRead,
-    markChatRead,
-    saveLastSeenMap,
+    isChatUnread,
     type ChatLastSeenMap
   } from '$lib/viewModels/unread';
   import { repoAccent, repoInitials } from '$lib/viewModels/repoIdentity';
@@ -146,9 +149,6 @@
 
   const COMPACT_SUMMARY_PROMPT =
     'Summarize the conversation so far into a concise context block I can paste into a new thread. Include goals, constraints, decisions, and current state.';
-  const PINNED_CHATS_STORAGE_KEY = 'car.webHub.pinnedChats.v1';
-  const PMA_TRANSCRIPT_LIMIT = 200;
-
   let readModelState = $state(readModelEntityStore.snapshot());
   let unsubscribeReadModels: (() => void) | null = null;
   let unsubscribeChatIndexSession: (() => void) | null = null;
@@ -197,9 +197,7 @@
   );
 
   function chatSummaryForId(chatId: string | null): PmaChatSummary | null {
-    if (!chatId) return null;
-    if (localDraftChat?.id === chatId) return localDraftChat;
-    return chats.find((c) => c.id === chatId) ?? null;
+    return chatSummaryForSessionId(chatId, chats, localDraftChat);
   }
   const transcriptCards = $derived<ChatTranscriptCard[]>(selectChatTranscript(readModelState, activeChatId));
   const progress = $derived<PmaRunProgress | null>(selectPmaProgress(readModelState, activeChatId));
@@ -227,11 +225,13 @@
   let composeError = $state<ApiError | null>(null);
   let streamState = $state<'idle' | 'connecting' | 'connected' | 'interrupted'>('idle');
   let streamError = $state<string | null>(null);
-  let streamSubscription: StreamSubscription | null = null;
-  // Tracks which managed turn we've already refreshed-on-terminal for, so the
-  // SSE poll's repeated terminal progress payloads don't trigger a refresh per
-  // tick while the stream stays open across turns.
-  let refreshedTerminalTurnId: string | null = null;
+  const liveProjection = createChatDetailLiveProjection({
+    api: webApi.pma,
+    readModelStore: readModelEntityStore,
+    getActiveChatId: () => activeChatId,
+    getChatSummary: (chatId) => chatSummaryForId(chatId),
+    onStateChange: writeLiveProjectionState
+  });
   let fileInput: HTMLInputElement | null = $state(null);
   let imageInput: HTMLInputElement | null = $state(null);
   let messageStack: HTMLDivElement | null = $state(null);
@@ -339,11 +339,7 @@
     slashSuggestions;
     slashSelectedIndex = Math.min(slashSelectedIndex, Math.max(slashSuggestions.length - 1, 0));
   });
-  let pendingRefreshTimer: number | null = null;
-  let pendingQueueRefreshTimer: number | null = null;
   let activeClockInterval: number | null = null;
-  let activeRefreshSeq = 0;
-  let activeQueueRefreshSeq = 0;
   let clockNowMs = $state(Date.now());
   let lastScrolledChatId: string | null = null;
   let lastScrolledCardCount = 0;
@@ -365,7 +361,7 @@
       groupRuns: true
     })
   );
-  const filteredEntries = $derived(sortEntriesForPins(filterChatEntries(chatListEntries, filter, search, lastSeenMap), pinnedChatIds));
+  const filteredEntries = $derived(sortEntriesForPinnedChats(filterChatEntries(chatListEntries, filter, search, lastSeenMap), pinnedChatIds));
   const filterCounts = $derived(chatStatusFilterCounts());
   const surfaceFilterChips = $derived(chatSurfaceFilterOptions(facetChats));
   const ticketRunGroupCount = $derived(countTicketRunGroups(facetChats));
@@ -388,102 +384,28 @@
     expandedRunGroups = { ...expandedRunGroups, [group.key]: !isGroupExpanded(group) };
   }
 
-  function loadPinnedChats(): Record<string, true> {
-    try {
-      const raw = localStorage.getItem(PINNED_CHATS_STORAGE_KEY);
-      const parsed = raw ? JSON.parse(raw) : [];
-      if (!Array.isArray(parsed)) return {};
-      return Object.fromEntries(parsed.filter((id): id is string => typeof id === 'string' && id.trim().length > 0).map((id) => [id, true]));
-    } catch {
-      return {};
-    }
-  }
-
-  function savePinnedChats(next: Record<string, true>): void {
-    try {
-      localStorage.setItem(PINNED_CHATS_STORAGE_KEY, JSON.stringify(Object.keys(next).sort()));
-    } catch {
-      // Private mode / quota.
-    }
-  }
-
   function toggleChatPinned(event: MouseEvent, chatId: string): void {
     event.preventDefault();
     event.stopPropagation();
     pendingPointerChatId = null;
-    const next = { ...pinnedChatIds };
-    if (next[chatId]) delete next[chatId];
-    else next[chatId] = true;
+    const next = togglePinnedChatId(pinnedChatIds, chatId);
     pinnedChatIds = next;
     savePinnedChats(next);
   }
 
   /** VirtualList keys must change when pin state or pin-driven order changes, or keyed {#each} reuses stale row DOM. */
   function chatListVirtualKey(entry: ChatListEntry): string {
-    if (entry.kind === 'group') {
-      const pinOrder = entry.group.chats
-        .map((c) => `${c.id}:${pinnedChatIds[c.id] ? 1 : 0}`)
-        .join('|');
-      return `group:${entry.group.key}:${pinOrder}`;
-    }
-    return `chat:${entry.chat.id}:${pinnedChatIds[entry.chat.id] ? 1 : 0}`;
+    return chatListVirtualKeyForPins(entry, pinnedChatIds);
   }
 
   function pinAwareChatRowKey(chat: PmaChatSummary): string {
-    return `${chat.id}:${pinnedChatIds[chat.id] ? 1 : 0}`;
-  }
-
-  function sortEntriesForPins(entries: ChatListEntry[], pinned: Record<string, true>): ChatListEntry[] {
-    const decorated = entries.map((entry) => {
-      if (entry.kind === 'chat') {
-        return {
-          entry,
-          pinned: pinned[entry.chat.id] === true,
-          placeholder: isLocalChatPlaceholder(entry.chat),
-          sort: entry.chat.updatedAt ?? '',
-          id: entry.chat.id
-        };
-      }
-      const chats = [...entry.group.chats].sort((left, right) => {
-        const pinnedDiff = Number(pinned[right.id] === true) - Number(pinned[left.id] === true);
-        if (pinnedDiff !== 0) return pinnedDiff;
-        return (right.updatedAt ?? '').localeCompare(left.updatedAt ?? '');
-      });
-      return {
-        entry: { kind: 'group' as const, group: { ...entry.group, chats } },
-        pinned: chats.some((chat) => pinned[chat.id] === true),
-        placeholder: false,
-        sort: entry.group.updatedAt ?? '',
-        id: entry.group.key
-      };
-    });
-    decorated.sort((left, right) => {
-      const placeholderDiff = Number(right.placeholder) - Number(left.placeholder);
-      if (placeholderDiff !== 0) return placeholderDiff;
-      const pinnedDiff = Number(right.pinned) - Number(left.pinned);
-      if (pinnedDiff !== 0) return pinnedDiff;
-      const timeDiff = right.sort.localeCompare(left.sort);
-      if (timeDiff !== 0) return timeDiff;
-      return left.id.localeCompare(right.id);
-    });
-    return decorated.map((item) => item.entry);
+    return pinAwareChatRowKeyForPins(chat, pinnedChatIds);
   }
 
   function markGroupRead(group: ChatRunGroup): void {
-    let next = lastSeenMap;
-    const now = new Date().toISOString();
-    for (const chat of group.chats) {
-      if (!chat.updatedAt && !next[chat.id]) {
-        next = markChatRead(next, chat.id, now);
-        continue;
-      }
-      const stamp = chat.updatedAt ?? now;
-      if (next[chat.id] && next[chat.id] >= stamp) continue;
-      next = markChatRead(next, chat.id, stamp);
-    }
+    const next = markChatGroupRead(lastSeenMap, group.chats);
     if (next === lastSeenMap) return;
     readModelEntityStore.optimisticReadMarkers(next, `read-group:${group.key}:${Date.now()}`);
-    saveLastSeenMap(next);
   }
 
   function groupBadgeClass(group: ChatRunGroup): string {
@@ -534,6 +456,44 @@
     const selectedTrim = selectedAgent?.trim();
     if (selectedTrim) return selectedTrim;
     return activeChatKindLabel;
+  });
+  const chatSendController = createChatSendController({
+    api: webApi,
+    readModelStore: readModelEntityStore,
+    getActiveChatId: () => activeChatId,
+    getActiveChat: () => activeChat,
+    getDisplayedProgress: () => displayedProgress,
+    getDraft: () => draft,
+    setDraft: (value) => {
+      draft = value;
+    },
+    getPendingAttachments: () => pendingAttachments,
+    setPendingAttachments: (value) => {
+      pendingAttachments = value;
+    },
+    getComposerEditVersion: () => composerEditVersion,
+    getSelectedScope: () => selectedScope,
+    getSelectedScopeSource: () => selectedScopeSource,
+    getSelectedAgent: () => selectedAgent,
+    getSelectedProfile: () => selectedProfile,
+    getSelectedModel: () => selectedModel,
+    getSelectedReasoning: () => selectedReasoning,
+    getNewChatKind: () => newChatKind,
+    canStartCodingAgentChat: () => canStartCodingAgentChat,
+    newChatDisplayName,
+    readSessionState: readChatDetailSessionState,
+    writeSessionState: writeChatDetailSessionState,
+    getLocalDraftChat: () => localDraftChat,
+    syncDetailUrl: syncCommittedDetailUrl,
+    invalidateChatMutation,
+    refreshActive,
+    setSending: (value) => {
+      sending = value;
+    },
+    setComposeError: (error) => {
+      composeError = error;
+    },
+    confirm: confirmDialog
   });
   const streamingMessageId = $derived.by<string | null>(() => {
     if (displayedProgress?.status !== 'running') return null;
@@ -728,28 +688,17 @@
 
   $effect(() => {
     const requestedDetail = requestedDetailFromUrl();
-    if (!requestedDetail) {
-      if (isLocalDraftChatId(activeChatId)) return;
-      if (pendingCommittedDetailUrlChatId && activeChatId === pendingCommittedDetailUrlChatId) return;
-      if (activeChatId !== null) {
-        closeStream();
-        activeChatId = null;
-        detailMode = 'list';
-      }
-      return;
-    }
-    // `goto('/chats')` after starting a draft is async; until the URL drops the
-    // prior `[chatId]`, this effect would otherwise reconcile back to that chat
-    // and clear the draft on the first click.
-    if (isLocalDraftChatId(activeChatId)) return;
-    void activateDetailFromUrl(requestedDetail);
+    const command = activateChatDetailFromUrl(readChatDetailSessionState(), {
+      detailId: requestedDetail,
+      chats: requestedDetail ? chats : [],
+      hasCachedDetail,
+      activeDetailLoadResult
+    });
+    applyChatDetailSelectionCommand(command);
   });
 
   $effect(() => {
-    if (!committedDraftChat) return;
-    if (persistedChats.some((chat) => chat.id === committedDraftChat?.id)) {
-      committedDraftChat = null;
-    }
+    writeChatDetailSessionState(clearCommittedDraftPlaceholderIfPersisted(readChatDetailSessionState(), persistedChats));
   });
 
   $effect(() => {
@@ -786,14 +735,9 @@
 
   $effect(() => {
     if (!activeChat) return;
-    const stamp = activeChat.updatedAt;
-    if (!stamp) return;
-    const seen = lastSeenMap[activeChat.id];
-    if (seen && seen >= stamp) return;
-    const next = markChatRead(lastSeenMap, activeChat.id, stamp);
+    const next = markActiveSummaryRead(lastSeenMap, activeChat);
     if (next === lastSeenMap) return;
     readModelEntityStore.optimisticReadMarkers(next, `read-active:${activeChat.id}:${Date.now()}`);
-    saveLastSeenMap(next);
   });
 
   onDestroy(() => {
@@ -801,8 +745,6 @@
     unsubscribeReadModels?.();
     unsubscribeChatIndexSession?.();
     chatIndexSession.stop();
-    if (pendingRefreshTimer) window.clearTimeout(pendingRefreshTimer);
-    if (pendingQueueRefreshTimer) window.clearTimeout(pendingQueueRefreshTimer);
     if (chatIndexFilterRefreshTimer) window.clearTimeout(chatIndexFilterRefreshTimer);
     if (activeClockInterval) window.clearInterval(activeClockInterval);
     closeStream();
@@ -826,35 +768,76 @@
     if (followBottom) void scrollMessagesToBottom();
   });
 
+  function readChatDetailSessionState(): ChatDetailSessionState {
+    return {
+      ...initialChatDetailSessionState(),
+      activeChatId,
+      detailMode,
+      localDraftChat,
+      committedDraftChat,
+      pendingCommittedDetailUrlChatId,
+      loadingActive,
+      activeError
+    };
+  }
+
+  function writeChatDetailSessionState(state: ChatDetailSessionState): void {
+    if (
+      activeChatId === state.activeChatId &&
+      detailMode === state.detailMode &&
+      localDraftChat === state.localDraftChat &&
+      committedDraftChat === state.committedDraftChat &&
+      pendingCommittedDetailUrlChatId === state.pendingCommittedDetailUrlChatId &&
+      loadingActive === state.loadingActive &&
+      activeError === state.activeError
+    ) {
+      return;
+    }
+    activeChatId = state.activeChatId;
+    detailMode = state.detailMode;
+    localDraftChat = state.localDraftChat;
+    committedDraftChat = state.committedDraftChat;
+    pendingCommittedDetailUrlChatId = state.pendingCommittedDetailUrlChatId;
+    loadingActive = state.loadingActive;
+    activeError = state.activeError;
+  }
+
+  function applyChatDetailSelectionCommand(command: ChatDetailSelectionCommand): void {
+    writeChatDetailSessionState(command.state);
+    if (command.closeStream) closeStream();
+    if (command.syncSelectors) syncSelectorsToActiveChat();
+    if (command.markRead) markActiveChatRead();
+    if (command.refresh) void refreshActive(command.refresh.chatId, { quiet: command.refresh.quiet });
+  }
+
+  function writeLiveProjectionState(state: ChatDetailLiveProjectionState): void {
+    loadingActive = state.loadingActive;
+    activeError = state.activeError;
+    streamState = state.streamState;
+    streamError = state.streamError;
+  }
+
   function activateRequestedChatFromCurrentRows(): void {
-    if (isLocalDraftChatId(activeChatId)) return;
     const loadedChats = selectPmaChats(readModelEntityStore.snapshot(), currentChatIndexRequest);
     const requestedChat = page.params.chatId ?? page.url.searchParams.get('chat');
-    const selectedChatId = chooseActiveChatId(loadedChats, activeChatId, requestedChat);
-    if (!selectedChatId || activeChatId === selectedChatId) return;
-    activeChatId = selectedChatId;
-    detailMode = 'detail';
-    const selected = loadedChats.find((chat) => chat.id === activeChatId);
-    if (selected && isPmaChatArchived(selected)) filter = 'archived';
-    syncSelectorsToActiveChat();
-    void refreshActive(selectedChatId, { quiet: hasCachedDetail(selectedChatId) });
+    const command = activateRequestedChatFromRows(readChatDetailSessionState(), {
+      loadedChats,
+      requestedChatId: requestedChat,
+      hasCachedDetail
+    });
+    applyChatDetailSelectionCommand(command);
+    if (archivedFilterForSelectedChat(loadedChats, command.state.activeChatId)) filter = 'archived';
   }
 
   function replacementForActiveChat(
     previousState: typeof readModelState,
     nextState: typeof readModelState
   ): string | null {
-    if (!activeChatId) return null;
-    const previousActive = selectPmaChats(previousState, currentChatIndexRequest).find((chat) => chat.id === activeChatId) ?? null;
-    const previousBinding = pmaChatBindingKey(previousActive);
-    if (!previousBinding) return null;
-    const nextChats = selectPmaChats(nextState, currentChatIndexRequest);
-    const nextActive = nextChats.find((chat) => chat.id === activeChatId) ?? null;
-    if (nextActive && !isPmaChatArchived(nextActive)) return null;
-    const replacement = nextChats.find(
-      (chat) => chat.id !== activeChatId && pmaChatBindingKey(chat) === previousBinding && !isPmaChatArchived(chat)
+    return replacementForArchivedActiveChat(
+      selectPmaChats(previousState, currentChatIndexRequest),
+      selectPmaChats(nextState, currentChatIndexRequest),
+      activeChatId
     );
-    return replacement?.id ?? null;
   }
 
   async function loadInitialSupportingData(
@@ -995,17 +978,9 @@
 
   async function selectChat(chatId: string): Promise<void> {
     const cached = hasCachedDetail(chatId);
-    if (!isLocalDraftChatId(chatId)) localDraftChat = null;
-    if (committedDraftChat?.id !== chatId) committedDraftChat = null;
-    pendingCommittedDetailUrlChatId = null;
-    activeChatId = chatId;
-    detailMode = 'detail';
-    loadingActive = !cached;
-    activeError = null;
-    syncSelectorsToActiveChat();
-    markActiveChatRead();
+    const command = selectChatDetail(readChatDetailSessionState(), chatId, { cached, syncUrl: true });
+    applyChatDetailSelectionCommand(command);
     const urlPromise = syncDetailUrl(chatId);
-    void refreshActive(chatId, { quiet: cached });
     await urlPromise;
   }
 
@@ -1037,68 +1012,43 @@
   }
 
   function requestedDetailFromUrl(): string | null {
-    if (page.params.chatId) return page.params.chatId;
-    const detail = page.url.searchParams.get('detail');
-    if (detail?.startsWith('chat:')) return detail.slice('chat:'.length);
-    return page.url.searchParams.get('chat');
+    return requestedChatDetailFromUrl(page.params.chatId, page.url.searchParams);
   }
 
   async function activateDetailFromUrl(detailId: string): Promise<void> {
-    if (detailId === activeChatId) return;
-    if (localDraftChat && detailId === localDraftChat.id) {
-      await selectChatWithoutUrl(detailId);
-      return;
-    }
-    if (!chats.some((chat) => chat.id === detailId)) {
-      closeStream();
-      if (committedDraftChat?.id !== detailId) committedDraftChat = null;
-      pendingCommittedDetailUrlChatId = null;
-      activeChatId = detailId;
-      detailMode = 'detail';
-      loadingActive = true;
-      const loaderResult = activeDetailLoadResult(detailId);
-      activeError = loaderResult?.status === 'error' ? loaderResult.error : null;
-      if (activeError) {
-        loadingActive = false;
-        return;
-      }
-      void refreshActive(detailId);
-      return;
-    }
-    await selectChatWithoutUrl(detailId);
+    applyChatDetailSelectionCommand(
+      activateChatDetailFromUrl(readChatDetailSessionState(), {
+        detailId,
+        chats,
+        hasCachedDetail,
+        activeDetailLoadResult
+      })
+    );
   }
 
   async function selectChatWithoutUrl(chatId: string): Promise<void> {
     const cached = hasCachedDetail(chatId);
     const loaderResult = activeDetailLoadResult(chatId);
-    const loaderOwnsInitialDetail = Boolean(loaderResult && loaderResult.status !== 'cold');
-    if (!isLocalDraftChatId(chatId)) localDraftChat = null;
-    if (committedDraftChat?.id !== chatId) committedDraftChat = null;
-    pendingCommittedDetailUrlChatId = null;
-    activeChatId = chatId;
-    detailMode = 'detail';
-    loadingActive = !(cached || loaderOwnsInitialDetail);
-    activeError = loaderResult?.status === 'error' ? loaderResult.error : null;
-    syncSelectorsToActiveChat();
-    markActiveChatRead();
-    void refreshActive(chatId, { quiet: cached || loaderOwnsInitialDetail });
+    applyChatDetailSelectionCommand(
+      selectChatDetail(readChatDetailSessionState(), chatId, {
+        cached,
+        loaderOwnsInitialDetail: Boolean(loaderResult && loaderResult.status !== 'cold'),
+        activeError: loaderResult?.status === 'error' ? loaderResult.error : null,
+        syncUrl: false
+      })
+    );
   }
 
   function markActiveChatRead(): void {
-    if (!activeChatId) return;
-    const chat = chatSummaryForId(activeChatId);
-    const stamp = chat?.updatedAt ?? new Date().toISOString();
-    const next = markChatRead(lastSeenMap, activeChatId, stamp);
+    const next = markSessionChatRead(lastSeenMap, activeChatId, chats, localDraftChat);
     if (next === lastSeenMap) return;
     readModelEntityStore.optimisticReadMarkers(next, `read-chat:${activeChatId}:${Date.now()}`);
-    saveLastSeenMap(next);
   }
 
   function markAllUnreadChatsRead(): void {
-    const next = markAllChatsRead(lastSeenMap, chats.filter((chat) => !isPmaChatArchived(chat)));
+    const next = markVisibleChatsRead(lastSeenMap, chats);
     if (next === lastSeenMap) return;
     readModelEntityStore.optimisticReadMarkers(next, `read-all:${Date.now()}`);
-    saveLastSeenMap(next);
   }
 
   function invalidateChatMutation(chatId: string): Promise<void> {
@@ -1185,189 +1135,26 @@
     await goto(href(target), { keepFocus: true, noScroll: true });
   }
 
-  async function refreshActive(chatId: string, options: { quiet?: boolean } = {}): Promise<void> {
-    const refreshSeq = ++activeRefreshSeq;
-    if (!options.quiet) {
-      loadingActive = true;
-      activeError = null;
-    }
-    let missingThreadError: ApiError | null = null;
-    const transcriptTask = webApi.pma.getTranscript(chatId, { limit: PMA_TRANSCRIPT_LIMIT }).then((messageResult) => {
-      if (activeChatId !== chatId || refreshSeq !== activeRefreshSeq) return;
-      if (messageResult.ok) {
-        replaceChatTranscriptPreservingPendingOptimistic(chatId, messageResult.data.rows);
-        if (messageResult.data.status) updateProgress(messageResult.data.status);
-      } else if (isMissingManagedThreadError(messageResult.error)) {
-        missingThreadError = messageResult.error;
-        readModelEntityStore.replaceChatTranscript(chatId, []);
-      } else if (!options.quiet) {
-        activeError = messageResult.error;
+  async function syncCommittedDetailUrl(detailId: string): Promise<void> {
+    try {
+      await syncDetailUrl(detailId);
+    } finally {
+      if (pendingCommittedDetailUrlChatId === detailId) {
+        pendingCommittedDetailUrlChatId = null;
       }
-    });
-    const queueTask = webApi.pma.getQueue(chatId).then((queueResult) => {
-      if (activeChatId !== chatId || refreshSeq !== activeRefreshSeq) return;
-      if (queueResult.ok) {
-        readModelEntityStore.setPmaQueue(chatId, queueResult.data.queuedTurns);
-      } else if (isMissingManagedThreadError(queueResult.error)) {
-        missingThreadError = queueResult.error;
-        readModelEntityStore.setPmaQueue(chatId, []);
-      }
-    });
-
-    await Promise.all([transcriptTask, queueTask]);
-    if (activeChatId !== chatId || refreshSeq !== activeRefreshSeq) return;
-    if (missingThreadError) {
-      activeError = missingThreadError;
-      loadingActive = false;
-      closeStream();
-      return;
     }
-    ensureTranscriptStreamAfterSnapshot(chatId);
-    if (!options.quiet || loadingActive) loadingActive = false;
   }
 
-  async function refreshActiveQueue(chatId: string): Promise<void> {
-    const refreshSeq = ++activeQueueRefreshSeq;
-    const queueResult = await webApi.pma.getQueue(chatId);
-    if (activeChatId !== chatId || refreshSeq !== activeQueueRefreshSeq) return;
-    if (queueResult.ok) {
-      readModelEntityStore.setPmaQueue(chatId, queueResult.data.queuedTurns);
-    } else if (isMissingManagedThreadError(queueResult.error)) {
-      readModelEntityStore.setPmaQueue(chatId, []);
-    }
+  async function refreshActive(chatId: string, options: { quiet?: boolean } = {}): Promise<void> {
+    await liveProjection.refresh(chatId, options);
   }
 
   function connectStream(chatId: string): void {
-    closeStream();
-    const seedProgress = currentProgress(chatId);
-    const seedChat = chats.find((chat) => chat.id === chatId) ?? null;
-    if (!shouldUseChatTranscriptStream(seedChat, seedProgress, currentQueueDepth(chatId))) {
-      streamState = 'idle';
-      streamError = null;
-      return;
-    }
-    streamState = 'connecting';
-    streamError = null;
-    refreshedTerminalTurnId = null;
-    streamSubscription = openChatTranscriptEventSource(chatId, {
-      sinceEventId: seedProgress?.lastEventId,
-      sinceManagedTurnId: seedProgress?.id,
-      onStatus: (status) => {
-        if (activeChatId !== chatId) return;
-        if (status === 'connecting' && streamState !== 'connected') streamState = 'connecting';
-        if (status === 'connected') {
-          streamState = 'connected';
-          streamError = null;
-        }
-        if (status === 'interrupted') streamState = 'interrupted';
-      },
-      onEvent: (event) => {
-        if (activeChatId !== chatId) return;
-        streamState = 'connected';
-        if (event.kind === 'transcript_snapshot') {
-          const rows = mapChatTranscriptRows(event.payload.rows);
-          replaceChatTranscriptPreservingPendingOptimistic(chatId, rows);
-          const status = event.payload.status;
-          if (status && typeof status === 'object' && !Array.isArray(status)) {
-            const nextProgress = mapPmaRunProgress(status as JsonRecord);
-            updateProgress(nextProgress);
-            if (
-              nextProgress.terminal &&
-              nextProgress.id &&
-              transcriptHasAssistantMessageForTurn(rows, nextProgress.id)
-            ) {
-              refreshedTerminalTurnId = nextProgress.id;
-              scheduleActiveQueueRefresh(chatId, 700);
-            }
-          }
-          return;
-        }
-        if (event.kind === 'transcript_append') {
-          const rows = mapChatTranscriptRows(event.payload.rows);
-          readModelEntityStore.upsertChatTranscriptCards(chatId, rows);
-          return;
-        }
-        if (event.kind === 'transcript_patch') {
-          const status = event.payload.status;
-          if (!status || typeof status !== 'object' || Array.isArray(status)) return;
-          const nextProgress = mapPmaRunProgress(status as JsonRecord);
-          updateProgress(nextProgress);
-          if (
-            nextProgress.terminal &&
-            nextProgress.id &&
-            refreshedTerminalTurnId !== nextProgress.id
-          ) {
-            refreshedTerminalTurnId = nextProgress.id;
-            scheduleActiveRefresh(chatId, 700);
-          }
-          if (nextProgress.streamShouldClose) {
-            closeStream();
-            return;
-          }
-        }
-      },
-      onError: () => {
-        if (activeChatId !== chatId) return;
-        if (progress?.streamShouldClose) {
-          closeStream();
-          return;
-        }
-        streamState = 'interrupted';
-        streamError = 'Live chat updates were interrupted. Reconnecting and repairing from the latest snapshot.';
-        scheduleActiveRefresh(chatId, 900);
-      }
-    });
-  }
-
-  function ensureTranscriptStreamAfterSnapshot(chatId: string): void {
-    if (activeChatId !== chatId || streamSubscription) return;
-    const seedProgress = currentProgress(chatId);
-    const seedChat = chats.find((chat) => chat.id === chatId) ?? null;
-    if (shouldUseChatTranscriptStream(seedChat, seedProgress, currentQueueDepth(chatId))) connectStream(chatId);
-  }
-
-  function scheduleActiveRefresh(chatId: string, delayMs = 600): void {
-    if (pendingRefreshTimer) window.clearTimeout(pendingRefreshTimer);
-    pendingRefreshTimer = window.setTimeout(() => {
-      pendingRefreshTimer = null;
-      if (activeChatId === chatId) void refreshActive(chatId, { quiet: true });
-    }, delayMs);
-  }
-
-  function scheduleActiveQueueRefresh(chatId: string, delayMs = 600): void {
-    if (pendingQueueRefreshTimer) window.clearTimeout(pendingQueueRefreshTimer);
-    pendingQueueRefreshTimer = window.setTimeout(() => {
-      pendingQueueRefreshTimer = null;
-      if (activeChatId === chatId) void refreshActiveQueue(chatId);
-    }, delayMs);
+    liveProjection.connect(chatId);
   }
 
   function closeStream(): void {
-    streamSubscription?.close();
-    streamSubscription = null;
-    streamState = 'idle';
-  }
-
-  function isMissingManagedThreadError(error: ApiError): boolean {
-    return error.status === 404 && error.message.toLowerCase().includes('managed thread not found');
-  }
-
-  function transcriptHasAssistantMessageForTurn(cards: ChatTranscriptCard[], turnId: string): boolean {
-    return cards.some((card) =>
-      card.kind === 'message' &&
-      card.turnId === turnId &&
-      card.message.role === 'assistant' &&
-      card.message.text.trim().length > 0
-    );
-  }
-
-  function updateProgress(nextProgress: PmaRunProgress): void {
-    const chatId = nextProgress.chatId ?? activeChatId;
-    if (!chatId) return;
-    readModelEntityStore.setPmaProgress(
-      chatId,
-      mergePmaProgressUpdate(currentProgress(chatId), nextProgress, Date.now())
-    );
+    liveProjection.close();
   }
 
   function hasCachedDetail(chatId: string): boolean {
@@ -1378,14 +1165,6 @@
       state.pmaQueues[chatId]?.length ||
       state.timelines[chatId]?.order.length ||
       state.chatDetails[chatId]?.thread
-    );
-  }
-
-  function replaceChatTranscriptPreservingPendingOptimistic(chatId: string, rows: ChatTranscriptCard[]): void {
-    const existing = readModelEntityStore.snapshot().chatTranscripts[chatId];
-    readModelEntityStore.replaceChatTranscript(
-      chatId,
-      mergeTranscriptSnapshotWithPendingOptimistic(existing, rows)
     );
   }
 
@@ -1412,19 +1191,10 @@
     return Boolean(state.chatIndexCursor || state.chatOrder.length > 0);
   }
 
-  function currentProgress(chatId: string): PmaRunProgress | null {
-    return selectPmaProgress(readModelEntityStore.snapshot(), chatId);
-  }
-
-  function currentQueueDepth(chatId: string): number {
-    return selectPmaQueue(readModelEntityStore.snapshot(), chatId).length;
-  }
-
   function retryStream(): void {
     if (!activeChatId) return;
     if (isLocalDraftChatId(activeChatId)) return;
-    connectStream(activeChatId);
-    void refreshActive(activeChatId, { quiet: true });
+    liveProjection.retry(activeChatId);
   }
 
   function syncSelectorsToActiveChat(): void {
@@ -1512,10 +1282,6 @@
         chat_kind: chatKind
       }
     };
-  }
-
-  function isLocalDraftChatId(chatId: string | null): boolean {
-    return Boolean(chatId && chatId.startsWith('draft:pma:'));
   }
 
   function worktreeScopeOption(worktreeId: string): Extract<PmaChatScopeOption, { kind: 'worktree' }> | null {
@@ -1625,335 +1391,30 @@
       selectedScopeSource = 'default_hub';
       newChatKind = 'pma';
     }
-    localDraftChat = newDraftChatSummary();
-    activeChatId = localDraftChat.id;
-    detailMode = 'detail';
+    writeChatDetailSessionState(startLocalDraftChat(readChatDetailSessionState(), newDraftChatSummary()));
     closeStream();
     void goto(href('/chats'), { replaceState: true });
     creating = false;
   }
 
-  function pushOptimisticQueuedTurn(chatId: string, text: string, clientTurnId: string): void {
-    const current = selectPmaQueue(readModelEntityStore.snapshot(), chatId);
-    const turn = buildOptimisticQueuedTurn(text, clientTurnId, current.length + 1, new Date().toISOString());
-    readModelEntityStore.setPmaQueue(chatId, [...current, turn]);
-  }
-
-  /**
-   * True when the authoritative queue contains a turn for this client turn id.
-   * The backend queues a message whenever a turn is already running, even if
-   * the client thought the chat was idle at send time — so we reconcile against
-   * the authoritative queue rather than trusting the optimistic guess.
-   */
-  function turnLandedInQueue(chatId: string, clientTurnId: string): boolean {
-    return queueContainsCommittedClientTurn(selectPmaQueue(readModelEntityStore.snapshot(), chatId), clientTurnId);
-  }
-
-  function removeOptimisticQueuedTurn(chatId: string, clientTurnId: string): void {
-    const current = selectPmaQueue(readModelEntityStore.snapshot(), chatId);
-    const next = withoutOptimisticQueuedTurn(current, clientTurnId);
-    if (next.length === current.length) return;
-    readModelEntityStore.setPmaQueue(chatId, next);
-  }
-
   async function sendMessage(busyPolicy: 'queue' | 'interrupt' | null = null): Promise<void> {
-    if ((!draft.trim() && pendingAttachments.length === 0) || !activeChatId) return;
-    const draftSnapshot = draft;
-    const attachmentsSnapshot = pendingAttachments;
-    const optimisticChatId = activeChatId;
-    // A prior optimistic send still sitting in the transcript means the chat is
-    // effectively busy: even if `displayedProgress` has not caught up yet, a
-    // back-to-back message will queue behind that turn. Treating it as a queue
-    // up front keeps a queued message out of the conversation as a bubble.
-    const hasInFlightOptimisticTurn = (() => {
-      const transcript = readModelEntityStore.snapshot().chatTranscripts[optimisticChatId];
-      return chatTranscriptHasInFlightOptimisticTurn(transcript);
-    })();
-    const willQueueOptimistically =
-      !isLocalDraftChatId(optimisticChatId) &&
-      busyPolicy !== 'interrupt' &&
-      (busyPolicy === 'queue' ||
-        displayedProgress?.status === 'running' ||
-        hasInFlightOptimisticTurn);
-    const optimisticId = `optimistic:user:${Date.now()}:${Math.random().toString(36).slice(2, 8)}`;
-    const optimisticTimestamp = new Date().toISOString();
-    const optimisticPlaceholder = buildOptimisticUserTranscriptCard(
-      optimisticChatId,
-      draftSnapshot,
-      optimisticId,
-      optimisticTimestamp,
-      attachmentsSnapshot
-    );
-    if (willQueueOptimistically) {
-      // A queued message has not entered the conversation yet — show it only in
-      // the queue panel, never as a transcript card. Injecting an optimistic
-      // transcript card here would leave an orphan once the turn actually runs.
-      pushOptimisticQueuedTurn(optimisticChatId, draftSnapshot, optimisticId);
-    } else {
-      readModelEntityStore.optimisticSend(
-        optimisticChatId,
-        {
-          itemId: optimisticId,
-          kind: 'user_message',
-          role: 'user',
-          createdAt: optimisticTimestamp,
-          text: draftSnapshot,
-          artifactIds: [],
-          clientMessageId: optimisticId
-        },
-        optimisticId
-      );
-      readModelEntityStore.upsertChatTranscriptCards(optimisticChatId, [optimisticPlaceholder]);
-    }
-    draft = '';
-    pendingAttachments = [];
-    const composerVersionAtClear = composerEditVersion;
-    sending = true;
-    composeError = null;
-
-    const moveOptimisticToCommittedChat = (committedChatId: string) => {
-      if (committedChatId === optimisticChatId) return;
-      readModelEntityStore.upsertChatTranscriptCards(committedChatId, [
-        {
-          ...optimisticPlaceholder,
-          message: {
-            ...optimisticPlaceholder.message,
-            chatId: committedChatId
-          }
-        }
-      ]);
-      readModelEntityStore.removeOptimisticChatTranscriptCards(optimisticChatId);
-    };
-    const transcriptHasBackendUserRow = (chatId: string) => {
-      return transcriptContainsCommittedUserRow(
-        readModelEntityStore.snapshot().chatTranscripts[chatId],
-        optimisticId
-      );
-    };
-    const removeOptimistic = (chatId = optimisticChatId, options: { requireBackendRow?: boolean } = {}) => {
-      if (options.requireBackendRow && !transcriptHasBackendUserRow(chatId)) return false;
-      readModelEntityStore.removeOptimisticChatTranscriptCards(chatId);
-      return true;
-    };
-    const restoreDraft = () => {
-      if (willQueueOptimistically) {
-        removeOptimisticQueuedTurn(optimisticChatId, optimisticId);
-      } else {
-        removeOptimistic();
-        readModelEntityStore.failOptimisticMutation(optimisticId);
-      }
-      if (composerEditVersion !== composerVersionAtClear) return;
-      draft = draftSnapshot;
-      pendingAttachments = attachmentsSnapshot;
-    };
-
-    const uploaded = await ensureAttachmentsUploaded(attachmentsSnapshot);
-    if (!uploaded) {
-      restoreDraft();
-      sending = false;
-      return;
-    }
-    const attachmentsForMessage = uploaded;
-    const message = composeMessageWithAttachments(draftSnapshot, attachmentsForMessage);
-    const targetChatId = activeChatId;
-    const targetIsDraft = isLocalDraftChatId(targetChatId);
-    const targetIsRunning = displayedProgress?.status === 'running';
-    const profileForSend =
-      activeChat?.agentProfile?.trim() || selectedProfile?.trim() || '';
-    const commandPlan =
-      targetIsDraft
-        ? planStartAndSendChat(
-            selectedScope,
-            selectedAgent,
-            selectedProfile,
-            selectedModel,
-            message,
-            {
-              name: activeChat?.title || newChatDisplayName(),
-              chatKind: newChatKind === 'agent' && canStartCodingAgentChat ? 'coding_agent' : 'pma',
-              attachments: attachmentsForMessage,
-              reasoning: selectedReasoning,
-              clientTurnId: optimisticId,
-              scopeSource: selectedScopeSource
-            }
-          )
-        : busyPolicy === 'interrupt'
-        ? planInterruptExistingChat(targetChatId, message, {
-            model: selectedModel,
-            attachments: attachmentsForMessage,
-            reasoning: selectedReasoning,
-            profile: profileForSend,
-            clientTurnId: optimisticId
-          })
-        : busyPolicy === 'queue' || targetIsRunning
-          ? planQueueExistingChat(targetChatId, message, {
-              model: selectedModel,
-              attachments: attachmentsForMessage,
-              reasoning: selectedReasoning,
-              profile: profileForSend,
-              clientTurnId: optimisticId
-            })
-          : planSendExistingChat(targetChatId, message, {
-              model: selectedModel,
-              attachments: attachmentsForMessage,
-              reasoning: selectedReasoning,
-              profile: profileForSend,
-              clientTurnId: optimisticId
-            });
-    const result = await executePmaChatCommandPlan(webApi, commandPlan);
-    if (result.ok) {
-      const committedChatId = targetIsDraft ? result.data.chatId : targetChatId;
-      if (!committedChatId) {
-        removeOptimistic();
-        composeError = {
-          kind: 'parse',
-          status: null,
-          code: 'missing_chat_id',
-          message: 'Started chat response did not include a managed thread id.'
-        };
-        sending = false;
-        return;
-      }
-      if (targetIsDraft) {
-        const draftChatForPlaceholder =
-          localDraftChat?.id === targetChatId
-            ? localDraftChat
-            : activeChat && activeChat.id === targetChatId
-              ? activeChat
-              : null;
-        if (draftChatForPlaceholder) {
-          committedDraftChat = committedDraftChatPlaceholder(
-            draftChatForPlaceholder,
-            committedChatId,
-            optimisticTimestamp
-          );
-        }
-        localDraftChat = null;
-        activeChatId = committedChatId;
-        detailMode = 'detail';
-        pendingCommittedDetailUrlChatId = committedChatId;
-        moveOptimisticToCommittedChat(committedChatId);
-        try {
-          await syncDetailUrl(committedChatId);
-        } finally {
-          if (pendingCommittedDetailUrlChatId === committedChatId) {
-            pendingCommittedDetailUrlChatId = null;
-          }
-        }
-      }
-      await invalidateChatMutation(committedChatId);
-      await refreshActive(committedChatId, { quiet: true });
-      if (willQueueOptimistically) {
-        // refreshActive already replaced the queue with authoritative data;
-        // this clears the optimistic stand-in if that refresh was skipped.
-        removeOptimisticQueuedTurn(committedChatId, optimisticId);
-      } else if (turnLandedInQueue(committedChatId, optimisticId)) {
-        // The client believed the chat was idle, but the backend queued this
-        // turn behind one that was already running. It now belongs to the
-        // queue panel — drop the optimistic transcript bubble so a queued
-        // message is never shown as if it had entered the conversation.
-        removeOptimistic(committedChatId);
-        readModelEntityStore.failOptimisticMutation(optimisticId);
-      } else {
-        removeOptimistic(committedChatId, { requireBackendRow: true });
-      }
-    } else {
-      restoreDraft();
-      composeError = result.error;
-    }
-    sending = false;
+    await chatSendController.sendMessage(busyPolicy);
   }
 
   async function interruptWithDraft(): Promise<void> {
-    if (!canInterruptWithDraft) return;
-    await sendMessage('interrupt');
+    await chatSendController.interruptWithDraft(canInterruptWithDraft);
   }
 
   async function cancelQueuedTurn(turn: PmaQueuedTurn, options: { confirmed?: boolean } = {}): Promise<void> {
-    if (!activeChatId || !turn.managedTurnId) return;
-    if (isOptimisticQueuedTurn(turn)) return;
-    if (!options.confirmed) {
-      const ok = await confirmDialog({
-        title: 'Cancel queued message',
-        message: `Cancel queued message ${turn.position}?`,
-        confirmText: 'Cancel message',
-        danger: true
-      });
-      if (!ok) return;
-    }
-    composeError = null;
-    const result = await webApi.pma.cancelQueuedTurn(activeChatId, turn.managedTurnId);
-    if (result.ok) {
-      readModelEntityStore.setPmaQueue(
-        activeChatId,
-        queuedTurns.filter((item) => item.managedTurnId !== turn.managedTurnId)
-      );
-      await refreshActive(activeChatId, { quiet: true });
-    } else {
-      composeError = result.error;
-    }
+    await chatSendController.cancelQueuedTurn(turn, options);
   }
 
   async function interruptWithQueuedTurn(turn: PmaQueuedTurn): Promise<void> {
-    if (!activeChatId || !turn.prompt.trim() || isOptimisticQueuedTurn(turn)) return;
-    const chatId = activeChatId;
-    composeError = null;
-    const cancelResult = await webApi.pma.cancelQueuedTurn(chatId, turn.managedTurnId);
-    if (!cancelResult.ok) {
-      composeError = cancelResult.error;
-      return;
-    }
-    readModelEntityStore.setPmaQueue(
-      chatId,
-      queuedTurns.filter((item) => item.managedTurnId !== turn.managedTurnId)
-    );
-    // The queued message now leaves the queue panel and enters the conversation:
-    // show it immediately, tagged with a client turn id so the backend row
-    // reconciles against it instead of rendering a duplicate.
-    const clientTurnId = `optimistic:user:${Date.now()}:${Math.random().toString(36).slice(2, 8)}`;
-    readModelEntityStore.upsertChatTranscriptCards(chatId, [
-      buildOptimisticUserTranscriptCard(chatId, turn.prompt, clientTurnId, new Date().toISOString())
-    ]);
-    const profileForSend =
-      activeChat?.agentProfile?.trim() || selectedProfile?.trim() || '';
-    const result = await executePmaChatCommandPlan(
-      webApi,
-      planInterruptExistingChat(chatId, turn.prompt, {
-        model: turn.model ?? selectedModel,
-        attachments: turn.attachments as DocumentFileIntentPayload[],
-        reasoning: turn.reasoning ?? selectedReasoning,
-        profile: profileForSend,
-        clientTurnId
-      })
-    );
-    if (result.ok) {
-      await invalidateChatMutation(chatId);
-      await refreshActive(chatId, { quiet: true });
-    } else {
-      readModelEntityStore.removeOptimisticChatTranscriptCards(chatId);
-      composeError = result.error;
-    }
+    await chatSendController.interruptWithQueuedTurn(turn);
   }
 
   async function clearQueueFromPanel(): Promise<void> {
-    if (!activeChatId) return;
-    const realTurns = queuedTurns.filter((turn) => !isOptimisticQueuedTurn(turn));
-    if (realTurns.length === 0) return;
-    const ok = await confirmDialog({
-      title: 'Clear queue',
-      message: `Cancel all ${realTurns.length} queued message${realTurns.length === 1 ? '' : 's'}?`,
-      confirmText: 'Clear queue',
-      danger: true
-    });
-    if (!ok) return;
-    composeError = null;
-    const result = await webApi.pma.clearQueue(activeChatId);
-    if (result.ok) {
-      readModelEntityStore.setPmaQueue(activeChatId, []);
-      await refreshActive(activeChatId, { quiet: true });
-    } else {
-      composeError = result.error;
-    }
+    await chatSendController.clearQueue();
   }
 
   async function autoCompactActiveThread(chatId: string): Promise<void> {
@@ -2209,12 +1670,9 @@
       return true;
     }
     if (spec.id === 'clearqueue') {
-      const result = await webApi.pma.clearQueue(activeChatId);
-      if (!result.ok) composeError = result.error;
-      else {
-        readModelEntityStore.setPmaQueue(activeChatId, []);
+      const cleared = await chatSendController.clearQueue({ confirmed: true });
+      if (cleared) {
         showCommandNotice('Queue cleared.');
-        await refreshActive(activeChatId, { quiet: true });
         clearSlashDraft();
       }
       return true;
@@ -2305,32 +1763,6 @@
   function handleComposerInput(): void {
     markComposerEdited();
     autosizeComposer();
-  }
-
-  async function ensureAttachmentsUploaded(attachments: PendingAttachment[]): Promise<PendingAttachment[] | null> {
-    const uploaded: PendingAttachment[] = [];
-    for (const attachment of attachments) {
-      const file = (attachment as PendingAttachment & { file?: File }).file;
-      if (!file || attachment.uploadedName) {
-        uploaded.push(attachment);
-        continue;
-      }
-      const result = await webApi.pma.uploadInboxFile(file);
-      if (!result.ok || !result.data[0]) {
-        composeError = result.ok
-          ? { kind: 'parse', status: null, code: 'upload_missing_file', message: 'Upload did not return a file name.' }
-          : result.error;
-        return null;
-      }
-      const uploadedName = result.data[0];
-      uploaded.push({
-        ...attachment,
-        uploadedName,
-        url: `/hub/pma/files/inbox/${encodeURIComponent(uploadedName)}`,
-        uploadState: 'uploaded'
-      });
-    }
-    return uploaded;
   }
 
 </script>

@@ -51,6 +51,7 @@ curl -s "$BASE/hub/read-models/repo-worktree/runtime?kind=all&limit=50" | jq .
 curl -s "$BASE/hub/read-models/tickets/<ticket_id>?owner_kind=repo&owner_id=<repo_id>" | jq .
 curl -s "$BASE/hub/read-models/chats?filter=all&limit=50" | jq .
 curl -s "$BASE/hub/read-models/chats/<thread_id>?timeline_limit=50" | jq .
+curl -s "$BASE/hub/pma/history/status" | jq .
 ```
 
 Older aliases (`GET /hub/chat/index`, `/hub/chat/threads/{threadId}/detail`) still expose the orchestration-backed shapes; callers that want **`web-read-models.v1`** JSON should prefer `/hub/read-models/chats*` (camelCase payloads from ``dump_read_model_contract``).
@@ -60,12 +61,18 @@ within one source, and reconnect with the last cursor replays no duplicate
 visible state:
 
 ```bash
-curl -N "$BASE/hub/chat/patches?cursor=<last_cursor>&limit=100"
+curl -N "$BASE/hub/read-models/chats/patches?cursor=<last_cursor>&event_limit=100"
+curl -N "$BASE/hub/read-models/chats/<thread_id>/patches?cursor=<last_cursor>&event_limit=100"
 ```
 
 When a stream reports `projection.cursor_gap`, request the snapshot route from
 the event `repair.snapshotRoute` with the last applied cursor. The client should
 replace only the affected window or entity family.
+
+Legacy transcript files, PMA `/timeline` and `/tail`, and older chat aliases are
+diagnostics/compatibility paths only. Primary Web Hub chat data remains the
+`/hub/read-models/chats*` snapshots/streams plus PMA transcript mirror and
+`/hub/pma/history/status` coverage routes.
 
 ## Responsiveness Budget Smoke
 
@@ -92,6 +99,15 @@ for a quick local check:
 Budget failures are grouped by projection lag, backend snapshot latency, stream
 latency, frontend render work, or payload/window size. Fix the named family
 instead of raising a global timeout.
+
+## Docs-Code Sync
+
+Run the migration observability sync check after changing the PMA/chat route
+contracts or this runbook:
+
+```bash
+.venv/bin/python scripts/check_migration_observability_docs.py
+```
 
 ## Migration Guardrails
 

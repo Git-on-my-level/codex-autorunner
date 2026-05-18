@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import json
+import os
+import site
 import subprocess
 import sys
+from pathlib import Path
 
 import pytest
 
@@ -26,6 +29,26 @@ _CHECKS: list[tuple[str, str, str]] = [
         "config_layering",
         "import codex_autorunner.core.config_layering as _m",
         "_m.DEFAULT_HUB_CONFIG['mode']",
+    ),
+    (
+        "config_defaults",
+        "import codex_autorunner.core.config_defaults as _m",
+        "_m.DEFAULT_HUB_CONFIG['mode']",
+    ),
+    (
+        "config_sources",
+        "import codex_autorunner.core.config_sources as _m",
+        "_m.CONFIG_FILENAME",
+    ),
+    (
+        "config_yaml",
+        "import codex_autorunner.core.config_yaml as _m",
+        "_m._merge_defaults({'a': 1}, {'b': 2})['b']",
+    ),
+    (
+        "config_generated",
+        "import codex_autorunner.core.config_generated as _m",
+        "_m.GENERATED_CONFIG_HEADER.startswith('# GENERATED')",
     ),
     (
         "config_types",
@@ -62,12 +85,28 @@ def _build_batch_script() -> str:
     return "\n".join(lines)
 
 
+def _subprocess_env() -> dict[str, str]:
+    env = os.environ.copy()
+    import_paths = [str(Path(__file__).resolve().parents[1] / "src")]
+    user_site = site.getusersitepackages()
+    if isinstance(user_site, str):
+        import_paths.append(user_site)
+    else:
+        import_paths.extend(str(path) for path in user_site)
+    existing = env.get("PYTHONPATH")
+    if existing:
+        import_paths.append(existing)
+    env["PYTHONPATH"] = os.pathsep.join(import_paths)
+    return env
+
+
 @pytest.fixture(scope="module")
 def _batch_results():
     script = _build_batch_script()
     result = subprocess.run(
         [sys.executable, "-c", script],
         capture_output=True,
+        env=_subprocess_env(),
         text=True,
         check=True,
     )
@@ -88,6 +127,10 @@ def test_config_validation_imports_without_circular_dependency(
         ("config_parsers", "/foo/bar"),
         ("config_env", "True"),
         ("config_layering", "hub"),
+        ("config_defaults", "hub"),
+        ("config_sources", ".codex-autorunner/config.yml"),
+        ("config_yaml", "2"),
+        ("config_generated", "True"),
         ("config_types", "RepoConfig"),
         ("agent_config", "AgentConfig"),
         ("config_builders", "build_repo_config"),

@@ -21,16 +21,22 @@ from codex_autorunner.bootstrap import seed_hub_files
 from codex_autorunner.core.agent_config import AgentConfig
 from codex_autorunner.core.config import load_hub_config
 from codex_autorunner.core.destinations import DockerReadiness
-from codex_autorunner.core.managed_processes.registry import ProcessRecord
-from codex_autorunner.core.runtime import (
-    DoctorCheck,
-    doctor,
-    hermes_doctor_checks,
+from codex_autorunner.core.diagnostics.hermes import hermes_doctor_checks
+from codex_autorunner.core.diagnostics.hub import (
     hub_destination_doctor_checks,
     hub_worktree_doctor_checks,
-    pma_doctor_checks,
-    summarize_opencode_lifecycle,
 )
+from codex_autorunner.core.diagnostics.opencode import summarize_opencode_lifecycle
+from codex_autorunner.core.diagnostics.pma import pma_doctor_checks
+from codex_autorunner.core.diagnostics.registry import (
+    DoctorProvider,
+    collect_doctor_report,
+)
+from codex_autorunner.core.diagnostics.repository import doctor
+from codex_autorunner.core.diagnostics.types import (
+    DoctorCheck,
+)
+from codex_autorunner.core.managed_processes.registry import ProcessRecord
 from tests.conftest import write_test_config
 
 
@@ -282,7 +288,7 @@ def test_doctor_reports_missing_local_voice_dependency(
         return []
 
     monkeypatch.setattr(
-        "codex_autorunner.core.runtime.missing_optional_dependencies",
+        "codex_autorunner.core.diagnostics.repository.missing_optional_dependencies",
         _missing_optional,
     )
 
@@ -323,7 +329,7 @@ def test_doctor_reports_missing_mlx_voice_dependency(
         return []
 
     monkeypatch.setattr(
-        "codex_autorunner.core.runtime.missing_optional_dependencies",
+        "codex_autorunner.core.diagnostics.repository.missing_optional_dependencies",
         _missing_optional,
     )
 
@@ -364,11 +370,11 @@ def test_doctor_reports_missing_mlx_voice_runtime_dependency(
         return []
 
     monkeypatch.setattr(
-        "codex_autorunner.core.runtime.missing_optional_dependencies",
+        "codex_autorunner.core.diagnostics.repository.missing_optional_dependencies",
         _missing_optional,
     )
     monkeypatch.setattr(
-        "codex_autorunner.core.runtime.missing_local_voice_runtime_commands",
+        "codex_autorunner.core.diagnostics.repository.missing_local_voice_runtime_commands",
         lambda provider: ["ffmpeg"],
     )
 
@@ -402,7 +408,9 @@ def test_doctor_reports_render_browser_dependency_status(
         "codex_autorunner.core.git_utils.run_git",
         lambda *args, **kwargs: SimpleNamespace(returncode=0),
     )
-    monkeypatch.setattr("codex_autorunner.core.runtime.find_spec", lambda _name: None)
+    monkeypatch.setattr(
+        "codex_autorunner.core.diagnostics.repository.find_spec", lambda _name: None
+    )
 
     report = doctor(hub_root)
     render_checks = [
@@ -429,15 +437,50 @@ def test_doctor_reports_render_markdown_downstream_tool_status(
         "codex_autorunner.core.git_utils.run_git",
         lambda *args, **kwargs: SimpleNamespace(returncode=0),
     )
-    monkeypatch.setattr("codex_autorunner.core.runtime.find_spec", lambda _name: None)
     monkeypatch.setattr(
-        "codex_autorunner.core.runtime.resolve_executable", lambda _name: None
+        "codex_autorunner.core.diagnostics.repository.find_spec", lambda _name: None
+    )
+    monkeypatch.setattr(
+        "codex_autorunner.core.diagnostics.repository.resolve_executable",
+        lambda _name: None,
     )
 
     report = doctor(hub_root)
     messages = [check.message for check in report.checks]
     assert any("Mermaid CLI (mmdc) is not installed" in msg for msg in messages)
     assert any("Pandoc is not installed" in msg for msg in messages)
+
+
+def test_collect_doctor_report_preserves_provider_order() -> None:
+    report = collect_doctor_report(
+        [
+            DoctorProvider(
+                name="first",
+                collect=lambda: [
+                    DoctorCheck(
+                        name="First",
+                        passed=True,
+                        message="first",
+                        check_id="first",
+                    )
+                ],
+            ),
+            DoctorProvider(
+                name="second",
+                collect=lambda: [
+                    DoctorCheck(
+                        name="Second",
+                        passed=False,
+                        message="second",
+                        check_id="second",
+                    )
+                ],
+            ),
+        ]
+    )
+
+    assert [check.check_id for check in report.checks] == ["first", "second"]
+    assert report.to_dict()["errors"] == 1
 
 
 def test_summarize_opencode_lifecycle_dedupes_pid_records_and_reports_handle_modes(
@@ -498,15 +541,15 @@ def test_summarize_opencode_lifecycle_dedupes_pid_records_and_reports_handle_mod
     )
 
     monkeypatch.setattr(
-        "codex_autorunner.core.runtime.list_process_records",
+        "codex_autorunner.core.diagnostics.opencode.list_process_records",
         lambda *_args, **_kwargs: [pid_record, stale_record, workspace_record],
     )
     monkeypatch.setattr(
-        "codex_autorunner.core.runtime._opencode_record_is_running",
+        "codex_autorunner.core.diagnostics.opencode._opencode_record_is_running",
         lambda record: record.pid == 4201,
     )
     monkeypatch.setattr(
-        "codex_autorunner.core.runtime._pid_exists",
+        "codex_autorunner.core.diagnostics.opencode._pid_exists",
         lambda pid: pid == 111,
     )
 
@@ -580,7 +623,7 @@ def test_doctor_reports_opencode_external_mode(
         lambda *args, **kwargs: SimpleNamespace(returncode=0),
     )
     monkeypatch.setattr(
-        "codex_autorunner.core.runtime.load_repo_config",
+        "codex_autorunner.core.diagnostics.repository.load_repo_config",
         lambda _repo_root: SimpleNamespace(
             voice={},
             agents={"opencode": SimpleNamespace(base_url="http://external:7777")},
@@ -588,7 +631,7 @@ def test_doctor_reports_opencode_external_mode(
         ),
     )
     monkeypatch.setattr(
-        "codex_autorunner.core.runtime.list_process_records",
+        "codex_autorunner.core.diagnostics.opencode.list_process_records",
         lambda *_args, **_kwargs: [],
     )
 
@@ -757,7 +800,7 @@ def test_hub_destination_doctor_checks_reports_effective_destination(
 
     hub_config = load_hub_config(hub_root)
     monkeypatch.setattr(
-        "codex_autorunner.core.runtime.probe_docker_readiness",
+        "codex_autorunner.core.diagnostics.hub.probe_docker_readiness",
         lambda: DockerReadiness(
             binary_available=True,
             daemon_reachable=True,
@@ -803,7 +846,7 @@ def test_hub_destination_doctor_checks_reports_daemon_unreachable(
     )
 
     monkeypatch.setattr(
-        "codex_autorunner.core.runtime.probe_docker_readiness",
+        "codex_autorunner.core.diagnostics.hub.probe_docker_readiness",
         lambda: DockerReadiness(
             binary_available=True,
             daemon_reachable=False,

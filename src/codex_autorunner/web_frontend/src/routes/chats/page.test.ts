@@ -14,11 +14,15 @@ describe('/chats page', () => {
     readModelEntityStore.reset();
   });
 
-  it('preserves route-selected agent drafts when creating a scoped local draft', () => {
-    const source = readFileSync(
+  function chatDetailPageSource(): string {
+    return readFileSync(
       fileURLToPath(new URL('./[[chatId]]/+page.svelte', import.meta.url)),
       'utf8'
     );
+  }
+
+  it('preserves route-selected agent drafts when creating a scoped local draft', () => {
+    const source = chatDetailPageSource();
     const createChatBody = source.match(
       /async function createChat[\s\S]*?\n  async function sendMessage/
     )?.[0];
@@ -30,18 +34,59 @@ describe('/chats page', () => {
     expect(createChatBody).not.toMatch(/detailMode = 'detail';\s*newChatKind = 'pma';/);
   });
 
-  it('keeps terminal snapshot queue reconciliation separate from full transcript repair', () => {
-    const source = readFileSync(
-      fileURLToPath(new URL('./[[chatId]]/+page.svelte', import.meta.url)),
+  it('delegates terminal snapshot queue reconciliation to the live projection service', () => {
+    const pageSource = chatDetailPageSource();
+    const serviceSource = readFileSync(
+      fileURLToPath(new URL('../../lib/application/chatDetailLiveProjection.ts', import.meta.url)),
       'utf8'
     );
-    const snapshotBranch = source.match(
-      /if \(event\.kind === 'transcript_snapshot'\)[\s\S]*?return;\n        \}/
-    )?.[0];
+    expect(serviceSource).toContain("if (event.kind === 'transcript_snapshot')");
+    expect(serviceSource).toContain('this.refreshedTerminalTurnId = nextProgress.id');
+    expect(serviceSource).toContain('this.scheduleQueueRefresh(chatId, this.queueRefreshDelayMs)');
+    expect(serviceSource).toContain('async refreshQueue(chatId: string)');
+    expect(pageSource).toContain('createChatDetailLiveProjection');
+    expect(pageSource).not.toContain('webApi.pma.getTranscript');
+    expect(pageSource).not.toContain('webApi.pma.getQueue');
+    expect(pageSource).not.toContain('openChatTranscriptEventSource');
+  });
 
-    expect(snapshotBranch).toContain('refreshedTerminalTurnId = nextProgress.id');
-    expect(snapshotBranch).toContain('scheduleActiveQueueRefresh(chatId, 700)');
-    expect(source).toContain('async function refreshActiveQueue');
+  it('keeps migrated PMA transcript, stream, queue, send, and normalization calls out of the page', () => {
+    const pageSource = chatDetailPageSource();
+    const forbiddenTokens = [
+      ['webApi.pma.getTranscript', 'transcript loading belongs in chatDetailLiveProjection'],
+      ['webApi.pma.getQueue', 'queue refresh belongs in chatDetailLiveProjection'],
+      ['openChatTranscriptEventSource', 'stream wiring belongs in chatDetailLiveProjection'],
+      ['shouldUseChatTranscriptStream', 'stream selection belongs in chatDetailLiveProjection'],
+      ['mapChatTranscriptRows', 'transcript normalization belongs in chatDetailLiveProjection'],
+      ['mergePmaProgressUpdate', 'progress normalization belongs in chatDetailLiveProjection'],
+      [
+        'mergeTranscriptSnapshotWithPendingOptimistic',
+        'snapshot repair belongs in chatDetailLiveProjection'
+      ],
+      ['executePmaChatCommandPlan', 'send execution belongs in chatSendController'],
+      ['buildOptimisticQueuedTurn', 'optimistic queue reconciliation belongs in chatSendController'],
+      [
+        'buildOptimisticUserTranscriptCard',
+        'optimistic transcript reconciliation belongs in chatSendController'
+      ],
+      ['queueContainsCommittedClientTurn', 'queue reconciliation belongs in chatSendController'],
+      [
+        'transcriptContainsCommittedUserRow',
+        'transcript reconciliation belongs in chatSendController'
+      ],
+      ['webApi.pma.cancelQueuedTurn', 'queued turn mutation belongs in chatSendController'],
+      ['webApi.pma.clearQueue', 'queue clearing belongs in chatSendController'],
+      ['webApi.pma.startChatWithMessage', 'draft first-send execution belongs in chatSendController'],
+      ['webApi.pma.createChat', 'chat creation planning belongs in chatSendController'],
+      ['webApi.pma.forkThread', 'chat fork planning belongs in chatSendController'],
+      ['webApi.pma.uploadInboxFile', 'attachment upload during send belongs in chatSendController']
+    ] as const;
+
+    const violations = forbiddenTokens
+      .filter(([token]) => pageSource.includes(token))
+      .map(([token, reason]) => `${token}: ${reason}`);
+
+    expect(violations).toEqual([]);
   });
 
   it('renders filters, chat list shell, and composer affordances without global memory controls', () => {

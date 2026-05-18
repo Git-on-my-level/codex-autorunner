@@ -1,8 +1,12 @@
 <script lang="ts">
   import { goto } from '$app/navigation';
-  import { onMount } from 'svelte';
+  import { onDestroy, onMount } from 'svelte';
   import { page } from '$app/state';
   import { webApi, type ApiError, type JsonRecord } from '$lib/api/client';
+  import {
+    agentModelCatalogStore,
+    type AgentModelCatalogState
+  } from '$lib/application/agentModelCatalogStore';
   import MemoryRail from '$lib/components/MemoryRail.svelte';
   import { withRuntimeBasePath as href } from '$lib/runtime/basePath';
   import SettingsView from '$lib/components/SettingsView.svelte';
@@ -12,7 +16,6 @@
     type SettingsSessionState,
     type SettingsViewModel
   } from '$lib/viewModels/settings';
-  import { agentCanListModels, agentId } from '$lib/viewModels/modelPickers';
 
   let view = $state<SettingsViewModel | null>(null);
   let sessionBaselineEpoch = $state(0);
@@ -21,9 +24,9 @@
   let saveError = $state<ApiError | null>(null);
   let saving = $state(false);
   let memoryOpen = $state(false);
-  let settingsLoadSeq = 0;
   let settingsSessionRaw = $state<JsonRecord | null>(null);
   let settingsVoiceRaw = $state<JsonRecord | null>(null);
+  let unsubscribeCatalog: (() => void) | null = null;
   const hubScope = { kind: 'hub' as const };
   type SetupPromptKind = 'telegram' | 'discord' | 'notifications' | 'github' | 'voice';
 
@@ -42,58 +45,48 @@
 
   onMount(() => {
     memoryOpen = page.url.searchParams.get('memory') === '1';
+    unsubscribeCatalog = agentModelCatalogStore.subscribe((state) => {
+      rebuildSettingsView(state);
+    });
     void loadSettings();
   });
 
+  onDestroy(() => {
+    unsubscribeCatalog?.();
+  });
+
   async function loadSettings(): Promise<void> {
-    const loadSeq = ++settingsLoadSeq;
     loading = true;
     error = null;
     saveError = null;
-    const [session, agents, voice] = await Promise.all([
+    const catalogPromise = agentModelCatalogStore.ensureLoaded();
+    const [session, voice] = await Promise.all([
       webApi.settings.getSession(),
-      webApi.pma.listAgents(),
       webApi.voice.getConfig()
     ]);
 
-    if (!session.ok && !agents.ok && !voice.ok) {
-      error = session.error;
+    const latestCatalog = !session.ok && !voice.ok ? await catalogPromise : agentModelCatalogStore.snapshot();
+
+    settingsSessionRaw = session.ok ? session.data : null;
+    settingsVoiceRaw = voice.ok ? voice.data : null;
+    if (!settingsSessionRaw && latestCatalog.status === 'error' && !settingsVoiceRaw) {
+      error = session.ok ? latestCatalog.error : session.error;
       loading = false;
       return;
     }
-
-    const agentRows = agents.ok ? agents.data.agents : [];
-    settingsSessionRaw = session.ok ? session.data : null;
-    settingsVoiceRaw = voice.ok ? voice.data : null;
-    view = buildSettingsViewModel({
-      session: settingsSessionRaw,
-      agents: agentRows,
-      modelCatalogs: {},
-      voiceConfig: settingsVoiceRaw
-    });
+    rebuildSettingsView(latestCatalog);
     sessionBaselineEpoch += 1;
     loading = false;
-    void loadModelCatalogs(agentRows, loadSeq);
+    void catalogPromise;
   }
 
-  async function loadModelCatalogs(agentRows: JsonRecord[], loadSeq: number): Promise<void> {
-    const catalogEntries = await Promise.all(
-      agentRows.map(async (agent) => {
-        if (!agentCanListModels(agent)) return null;
-        const id = agentId(agent);
-        const result = await webApi.pma.listAgentModels(id);
-        return [id, result.ok ? result.data : null] as const;
-      })
-    );
-    if (loadSeq !== settingsLoadSeq || !view) return;
-    const currentSession = view.session;
-    const modelCatalogs = Object.fromEntries(
-      catalogEntries.filter((entry): entry is readonly [string, JsonRecord[] | null] => entry !== null)
-    );
+  function rebuildSettingsView(catalog: AgentModelCatalogState): void {
+    if (!settingsSessionRaw && !settingsVoiceRaw && !view) return;
+    const currentSession = view ? buildSessionUpdatePayload(view.session) : settingsSessionRaw;
     view = buildSettingsViewModel({
-      session: buildSessionUpdatePayload(currentSession),
-      agents: agentRows,
-      modelCatalogs,
+      session: currentSession,
+      agents: catalog.agents,
+      modelCatalogs: catalog.modelCatalogs,
       voiceConfig: settingsVoiceRaw
     });
   }

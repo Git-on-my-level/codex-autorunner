@@ -2,19 +2,14 @@ from __future__ import annotations
 
 import json
 import logging
-import re
 from dataclasses import dataclass
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
 
-from .orchestration.transcript_mirror import (
-    TranscriptMirrorStore,
-    build_plain_text_transcript,
-)
+from .orchestration.sqlite import open_orchestration_sqlite
+from .orchestration.transcript_mirror import TranscriptMirrorStore
 from .redaction import redact_jsonable, redact_text
 from .time_utils import now_iso
-from .utils import atomic_write
 
 logger = logging.getLogger(__name__)
 
@@ -27,23 +22,10 @@ def default_pma_transcripts_dir(hub_root: Path) -> Path:
     return hub_root / ".codex-autorunner" / "pma" / PMA_TRANSCRIPTS_DIRNAME
 
 
-def _safe_segment(value: str) -> str:
-    cleaned = re.sub(r"[^A-Za-z0-9._-]+", "-", (value or "").strip())
-    cleaned = cleaned.strip("-._")
-    if not cleaned:
-        return "unknown"
-    return cleaned[:120]
-
-
-def _stamp_now() -> str:
-    return datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-
-
 @dataclass(frozen=True)
 class PmaTranscriptPointer:
     turn_id: str
-    metadata_path: str
-    content_path: str
+    transcript_mirror_id: str
     created_at: str
 
 
@@ -51,10 +33,25 @@ class PmaTranscriptPointer:
 class PmaTranscriptBackfillResult:
     imported_count: int
     skipped_count: int
+    error_count: int
+
+
+@dataclass(frozen=True)
+class PmaTranscriptCoverageStatus:
+    operation: str
+    scope: str
+    owner: str
+    canonical_store: str
+    legacy_primary_path: bool
+    mirrored_count: int
+    legacy_metadata_files_count: int
+    legacy_unmirrored_files_count: int
+    last_backfill_status: dict[str, Any] | None
 
 
 class PmaTranscriptStore:
     def __init__(self, hub_root: Path) -> None:
+        self._hub_root = hub_root
         self._dir = default_pma_transcripts_dir(hub_root)
         self._mirror_store = TranscriptMirrorStore(hub_root)
 
@@ -70,18 +67,10 @@ class PmaTranscriptStore:
         user_text: Optional[str] = None,
         assistant_text: str,
     ) -> PmaTranscriptPointer:
-        safe_turn_id = _safe_segment(turn_id)
-        stamp = _stamp_now()
-        base = f"{stamp}_{safe_turn_id}"
-        json_path = self._dir / f"{base}.json"
-        md_path = self._dir / f"{base}.md"
-
         payload = dict(metadata)
         payload.setdefault("version", PMA_TRANSCRIPT_VERSION)
         payload.setdefault("turn_id", turn_id)
         payload.setdefault("created_at", now_iso())
-        payload["metadata_path"] = str(json_path)
-        payload["content_path"] = str(md_path)
         payload["assistant_text_chars"] = len(assistant_text or "")
         resolved_user_text = user_text
         if resolved_user_text is None:
@@ -110,13 +99,6 @@ class PmaTranscriptStore:
         if redactions_applied:
             payload["redactions_applied"] = sorted(redactions_applied)
 
-        self._dir.mkdir(parents=True, exist_ok=True)
-        transcript_content = build_plain_text_transcript(
-            user_text=redacted_user_text or "",
-            assistant_text=redacted_assistant_text,
-        )
-        atomic_write(md_path, transcript_content + "\n")
-        atomic_write(json_path, json.dumps(payload, indent=2) + "\n")
         self._mirror_store.write_mirror(
             turn_id=turn_id,
             metadata=payload,
@@ -126,8 +108,7 @@ class PmaTranscriptStore:
 
         return PmaTranscriptPointer(
             turn_id=turn_id,
-            metadata_path=str(json_path),
-            content_path=str(md_path),
+            transcript_mirror_id=turn_id,
             created_at=payload["created_at"],
         )
 
@@ -136,6 +117,9 @@ class PmaTranscriptStore:
 
     def read_transcript(self, turn_id: str) -> Optional[dict[str, Any]]:
         return self._mirror_store.read_transcript(turn_id)
+
+    def coverage_status(self) -> PmaTranscriptCoverageStatus:
+        return PmaTranscriptLegacyBackfill(self._hub_root).coverage_status()
 
 
 class PmaTranscriptLegacyBackfill:
@@ -146,23 +130,38 @@ class PmaTranscriptLegacyBackfill:
     service once before relying on mirror-only reads.
     """
 
+    _STATUS_KEY = "pma_transcript_legacy_backfill_v1"
+
     def __init__(self, hub_root: Path) -> None:
+        self._hub_root = hub_root
         self._dir = default_pma_transcripts_dir(hub_root)
         self._mirror_store = TranscriptMirrorStore(hub_root)
 
-    def run(self) -> PmaTranscriptBackfillResult:
+    def run(self, *, conn: Any | None = None) -> PmaTranscriptBackfillResult:
         if not self._dir.exists():
-            return PmaTranscriptBackfillResult(imported_count=0, skipped_count=0)
+            result = PmaTranscriptBackfillResult(
+                imported_count=0, skipped_count=0, error_count=0
+            )
+            self._record_status(result, conn=conn)
+            return result
 
         imported_count = 0
         skipped_count = 0
+        error_count = 0
         for metadata_path in sorted(self._dir.glob("*.json")):
             meta = self._read_metadata(metadata_path)
             if meta is None:
-                skipped_count += 1
+                error_count += 1
                 continue
             turn_id = str(meta.get("turn_id") or "").strip()
             if not turn_id:
+                logger.warning(
+                    "Skipping PMA transcript metadata without turn_id at %s",
+                    metadata_path,
+                )
+                error_count += 1
+                continue
+            if turn_id in self._mirrored_ids(conn=conn):
                 skipped_count += 1
                 continue
             content = self._read_content(meta, metadata_path)
@@ -170,12 +169,45 @@ class PmaTranscriptLegacyBackfill:
                 turn_id=turn_id,
                 metadata=meta,
                 text_content=content,
+                conn=conn,
             )
             imported_count += 1
-        return PmaTranscriptBackfillResult(
+        result = PmaTranscriptBackfillResult(
             imported_count=imported_count,
             skipped_count=skipped_count,
+            error_count=error_count,
         )
+        self._record_status(result, conn=conn)
+        return result
+
+    def coverage_status(self) -> PmaTranscriptCoverageStatus:
+        legacy_metadata_paths = list(self._legacy_metadata_paths())
+        mirrored_ids = self._mirrored_ids(conn=None)
+        legacy_unmirrored = 0
+        for metadata_path in legacy_metadata_paths:
+            meta = self._read_metadata(metadata_path, log_errors=False)
+            if meta is None:
+                legacy_unmirrored += 1
+                continue
+            turn_id = str(meta.get("turn_id") or "").strip()
+            if not turn_id or turn_id not in mirrored_ids:
+                legacy_unmirrored += 1
+        return PmaTranscriptCoverageStatus(
+            operation="pma_transcript_mirror_coverage",
+            scope="pma",
+            owner="orchestration_transcript_mirrors",
+            canonical_store="orch_transcript_mirrors",
+            legacy_primary_path=False,
+            mirrored_count=len(mirrored_ids),
+            legacy_metadata_files_count=len(legacy_metadata_paths),
+            legacy_unmirrored_files_count=legacy_unmirrored,
+            last_backfill_status=self._read_last_status(),
+        )
+
+    def _legacy_metadata_paths(self) -> list[Path]:
+        if not self._dir.exists():
+            return []
+        return sorted(self._dir.glob("*.json"))
 
     def _read_content(self, meta: dict[str, Any], metadata_path: Path) -> str:
         content_path_text = str(meta.get("content_path") or "").strip()
@@ -192,16 +224,109 @@ class PmaTranscriptLegacyBackfill:
             )
             return ""
 
-    def _read_metadata(self, path: Path) -> Optional[dict[str, Any]]:
+    def _read_metadata(
+        self, path: Path, *, log_errors: bool = True
+    ) -> Optional[dict[str, Any]]:
         try:
             raw = path.read_text(encoding="utf-8")
             data = json.loads(raw)
         except (OSError, json.JSONDecodeError) as exc:
-            logger.warning(
-                "Failed to read PMA transcript metadata at %s: %s", path, exc
-            )
+            if log_errors:
+                logger.warning(
+                    "Failed to read PMA transcript metadata at %s: %s", path, exc
+                )
             return None
-        return data if isinstance(data, dict) else None
+        if not isinstance(data, dict):
+            if log_errors:
+                logger.warning(
+                    "Skipping PMA transcript metadata with non-object payload at %s",
+                    path,
+                )
+            return None
+        return data
+
+    def _mirrored_ids(self, *, conn: Any | None) -> set[str]:
+        try:
+            if conn is not None:
+                rows = conn.execute(
+                    "SELECT transcript_mirror_id FROM orch_transcript_mirrors"
+                ).fetchall()
+            else:
+                with open_orchestration_sqlite(
+                    self._hub_root, migrate=False
+                ) as owned_conn:
+                    rows = owned_conn.execute(
+                        "SELECT transcript_mirror_id FROM orch_transcript_mirrors"
+                    ).fetchall()
+        except Exception:
+            return set()
+        return {str(row["transcript_mirror_id"]) for row in rows}
+
+    def _record_status(
+        self,
+        result: PmaTranscriptBackfillResult,
+        *,
+        conn: Any | None,
+    ) -> None:
+        completed_at = now_iso()
+        payload = {
+            "imported_count": result.imported_count,
+            "skipped_count": result.skipped_count,
+            "error_count": result.error_count,
+            "completed_at": completed_at,
+        }
+        status_path = self._dir.parent / "transcript_backfill_status.json"
+        try:
+            status_path.parent.mkdir(parents=True, exist_ok=True)
+            status_path.write_text(
+                json.dumps(payload, indent=2) + "\n", encoding="utf-8"
+            )
+        except OSError:
+            logger.warning(
+                "Failed to write PMA transcript backfill status at %s", status_path
+            )
+        try:
+            target_conn = conn
+            if target_conn is None:
+                with open_orchestration_sqlite(self._hub_root) as owned_conn:
+                    self._record_status_flag(owned_conn, completed_at)
+                return
+            self._record_status_flag(target_conn, completed_at)
+        except Exception:
+            logger.warning("Failed to record PMA transcript backfill status flag")
+
+    def _record_status_flag(self, conn: Any, completed_at: str) -> None:
+        conn.execute(
+            """
+            INSERT OR REPLACE INTO orch_operation_flags (flag_key, completed_at)
+            VALUES (?, ?)
+            """,
+            (self._STATUS_KEY, completed_at),
+        )
+
+    def _read_last_status(self) -> dict[str, Any] | None:
+        status_path = self._dir.parent / "transcript_backfill_status.json"
+        try:
+            payload = json.loads(status_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            payload = None
+        if isinstance(payload, dict):
+            return payload
+        try:
+            with open_orchestration_sqlite(self._hub_root, migrate=False) as conn:
+                row = conn.execute(
+                    """
+                    SELECT completed_at
+                      FROM orch_operation_flags
+                     WHERE flag_key = ?
+                    """,
+                    (self._STATUS_KEY,),
+                ).fetchone()
+        except Exception:
+            return None
+        if row is None:
+            return None
+        return {"completed_at": row["completed_at"]}
 
 
 __all__ = [
@@ -209,6 +334,7 @@ __all__ = [
     "PMA_TRANSCRIPT_PREVIEW_CHARS",
     "PMA_TRANSCRIPT_VERSION",
     "PmaTranscriptBackfillResult",
+    "PmaTranscriptCoverageStatus",
     "PmaTranscriptLegacyBackfill",
     "PmaTranscriptPointer",
     "PmaTranscriptStore",

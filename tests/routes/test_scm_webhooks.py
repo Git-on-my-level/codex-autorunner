@@ -19,13 +19,13 @@ from codex_autorunner.core.config import CONFIG_FILENAME, DEFAULT_HUB_CONFIG
 from codex_autorunner.core.orchestration.sqlite import open_orchestration_sqlite
 from codex_autorunner.core.pr_bindings import PrBindingStore
 from codex_autorunner.core.publish_journal import PublishJournalStore
-from codex_autorunner.core.scm_events import list_events
+from codex_autorunner.core.scm_events import ScmEventStore, list_events
 from codex_autorunner.core.scm_reaction_state import ScmReactionStateStore
 from codex_autorunner.server import create_hub_app
-from codex_autorunner.surfaces.web.routes import scm_webhooks as scm_webhooks_module
 from codex_autorunner.surfaces.web.routes.scm_webhooks import (
     build_scm_webhook_routes,
 )
+from codex_autorunner.surfaces.web.services import scm_webhooks as scm_webhooks_service
 
 
 def _hub_config() -> dict:
@@ -111,7 +111,7 @@ def test_scm_inspect_endpoints_list_recent_rows(tmp_path: Path) -> None:
     hub_root.mkdir(parents=True, exist_ok=True)
     cfg = _enable_github_automation(_hub_config())
 
-    event = scm_webhooks_module.ScmEventStore(hub_root).record_event(
+    event = ScmEventStore(hub_root).record_event(
         event_id="github:delivery-123",
         provider="github",
         event_type="pull_request",
@@ -364,7 +364,7 @@ def test_scm_webhook_accepts_persisted_event_when_ingest_audit_fails(
         _ = self, args, kwargs
         raise sqlite3.OperationalError("audit database unavailable")
 
-    monkeypatch.setattr(scm_webhooks_module.ScmAuditRecorder, "record", _fail_record)
+    monkeypatch.setattr(scm_webhooks_service.ScmAuditRecorder, "record", _fail_record)
 
     payload = {
         "action": "opened",
@@ -675,7 +675,7 @@ def test_scm_webhook_inline_drain_delegates_to_scm_automation_service(
             calls.append(("process_now", limit))
             return []
 
-    monkeypatch.setattr(scm_webhooks_module, "ScmAutomationService", _ServiceStub)
+    monkeypatch.setattr(scm_webhooks_service, "ScmAutomationService", _ServiceStub)
 
     payload = {
         "action": "closed",
@@ -762,9 +762,9 @@ def test_scm_webhook_inline_drain_ensures_worker_for_scm_enqueue(
         calls.append(("ensure_worker", managed_thread_id))
         assert app.state.config.root == hub_root
 
-    monkeypatch.setattr(scm_webhooks_module, "ScmAutomationService", _ServiceStub)
+    monkeypatch.setattr(scm_webhooks_service, "ScmAutomationService", _ServiceStub)
     monkeypatch.setattr(
-        scm_webhooks_module,
+        scm_webhooks_service,
         "ensure_managed_thread_queue_worker",
         _ensure_worker,
     )

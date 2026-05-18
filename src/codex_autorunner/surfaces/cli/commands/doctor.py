@@ -16,24 +16,23 @@ from ....adapters.chat.doctor import (
 from ....adapters.discord.doctor import discord_doctor_checks
 from ....adapters.telegram.doctor import telegram_doctor_checks
 from ....core.config import ConfigError, RepoConfig, derive_repo_config, load_hub_config
+from ....core.diagnostics.opencode import summarize_opencode_lifecycle
 from ....core.diagnostics.process_snapshot import (
     collect_processes,
     enrich_with_ownership,
 )
+from ....core.diagnostics.registry import runtime_doctor_report
+from ....core.diagnostics.types import DoctorReport
 from ....core.flows.worker_reaper import (
     inspect_flow_workers,
     reap_stale_flow_workers,
 )
 from ....core.git_utils import GitError, run_git
-from ....core.managed_processes import list_process_records
-from ....core.runtime import (
-    DoctorReport,
-    doctor,
-    hermes_doctor_checks,
-    hub_destination_doctor_checks,
-    hub_worktree_doctor_checks,
-    pma_doctor_checks,
-    summarize_opencode_lifecycle,
+from ....core.managed_processes import (
+    ProcessRecordEntry,
+    ProcessRecordStatus,
+    list_process_records,
+    summarize_process_registry,
 )
 from ....core.utils import (
     RepoNotFoundError,
@@ -54,12 +53,44 @@ def _build_process_registry_payload(
 
     records: list[dict[str, Any]] = []
     try:
-        process_records = list_process_records(repo_root)
+        registry_summary = summarize_process_registry(repo_root)
     except (OSError, json.JSONDecodeError, ValueError) as e:
         logger.debug("Failed to list process records: %s", e)
-        process_records = []
+        return {}, []
+    if not registry_summary.entries:
+        legacy_records = list_process_records(repo_root)
+        registry_summary = type(registry_summary)(
+            tuple(
+                ProcessRecordEntry(
+                    path=(
+                        repo_root
+                        / ".codex-autorunner"
+                        / "processes"
+                        / legacy_record.kind
+                        / f"{legacy_record.record_key()}.json"
+                    ),
+                    kind=legacy_record.kind,
+                    key=legacy_record.record_key(),
+                    status=ProcessRecordStatus.LIVE,
+                    record=legacy_record,
+                )
+                for legacy_record in legacy_records
+            )
+        )
 
-    for record in process_records:
+    for entry in registry_summary.entries:
+        if entry.record is None:
+            records.append(
+                {
+                    "kind": entry.kind,
+                    "record_key": entry.key,
+                    "status": entry.status.value,
+                    "path": str(entry.path),
+                    "error": entry.error,
+                }
+            )
+            continue
+        record = entry.record
         record_key = "unknown"
         try:
             record_key = record.record_key()
@@ -70,6 +101,7 @@ def _build_process_registry_payload(
         records.append(
             {
                 "kind": record.kind,
+                "status": entry.status.value,
                 "handle_id": record.handle_id,
                 "workspace_id": record.workspace_id,
                 "record_key": record_key,
@@ -93,8 +125,8 @@ def _build_process_registry_payload(
         )
 
     counts: dict[str, int] = {}
-    for record in records:  # type: ignore[assignment]
-        kind = record.get("kind")  # type: ignore[attr-defined]
+    for record_payload in records:
+        kind = record_payload.get("kind")
         if isinstance(kind, str):
             counts[kind] = counts.get(kind, 0) + 1
     return counts, records
@@ -306,8 +338,6 @@ def register_doctor_commands(
             return
         try:
             start_path = repo or Path.cwd()
-            report = doctor(start_path)
-
             hub_config = load_hub_config(start_path)
             repo_config: Optional[RepoConfig] = None
             repo_root: Optional[Path] = None
@@ -321,23 +351,21 @@ def register_doctor_commands(
                 repo_config or hub_config, repo_root=repo_root
             )
             discord_checks = discord_doctor_checks(hub_config)
-            pma_checks = pma_doctor_checks(hub_config, repo_root=repo_root)
-            hub_worktree_checks = hub_worktree_doctor_checks(hub_config)
-            hub_destination_checks = hub_destination_doctor_checks(hub_config)
             chat_checks = chat_doctor_checks(repo_root=repo_root) if dev else []
             chat_lab_checks = (
                 chat_surface_lab_doctor_checks(repo_root=repo_root) if dev else []
             )
             timing_checks = chat_ux_timing_diagnostic_checks() if dev else []
 
+            report = runtime_doctor_report(
+                start_path=start_path,
+                hub_config=hub_config,
+                repo_root=repo_root,
+            )
             report = DoctorReport(
                 checks=report.checks
                 + telegram_checks
                 + discord_checks
-                + pma_checks
-                + hub_worktree_checks
-                + hub_destination_checks
-                + hermes_doctor_checks(hub_config)
                 + chat_checks
                 + chat_lab_checks
                 + timing_checks
@@ -650,6 +678,10 @@ def register_doctor_commands(
             ExecutionHistoryThresholds,
             run_execution_history_diagnostics,
         )
+        from ....core.orchestration.execution_history_maintenance import (
+            collect_orchestration_storage_maintenance_read_model,
+            resolve_execution_history_maintenance_policy,
+        )
 
         try:
             start_path = repo or Path.cwd()
@@ -662,12 +694,24 @@ def register_doctor_commands(
             hub_config.root,
             thresholds=thresholds,
         )
+        maintenance = collect_orchestration_storage_maintenance_read_model(
+            hub_config.root,
+            policy=resolve_execution_history_maintenance_policy(hub_config.pma),
+        )
 
         if json_output:
-            typer.echo(json.dumps(report.to_dict(), indent=2))
+            payload = report.to_dict()
+            payload["maintenance"] = maintenance.to_dict()
+            typer.echo(json.dumps(payload, indent=2))
             return
 
         m = report.metrics
+        typer.echo(
+            "schema: "
+            f"{maintenance.schema_version}/{maintenance.target_schema_version} "
+            f"pending={len(maintenance.pending_migration_versions)} "
+            f"db_health={maintenance.database.status}"
+        )
         typer.echo(
             f"executions: total={m.total_executions} terminal={m.terminal_executions}"
         )

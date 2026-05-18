@@ -686,112 +686,14 @@ def backfill_legacy_reactive_state(hub_root: Path, conn: Any) -> dict[str, int]:
 
 
 def backfill_legacy_transcript_mirrors(hub_root: Path, conn: Any) -> dict[str, int]:
-    transcripts_dir = hub_root / LEGACY_PMA_TRANSCRIPTS_DIR
-    if not transcripts_dir.exists():
-        return {"transcripts": 0}
+    from ..pma_transcripts import PmaTranscriptLegacyBackfill
 
-    count = 0
-    for path in sorted(transcripts_dir.glob("*.json")):
-        try:
-            raw = path.read_text(encoding="utf-8")
-            metadata = json.loads(raw)
-        except (OSError, json.JSONDecodeError):
-            continue
-        if not isinstance(metadata, dict):
-            continue
-        transcript_mirror_id = str(
-            metadata.get("turn_id") or metadata.get("managed_turn_id") or ""
-        ).strip()
-        if not transcript_mirror_id:
-            continue
-        content_path = Path(str(metadata.get("content_path") or ""))
-        if not content_path.is_absolute():
-            content_path = (path.parent / content_path).resolve()
-        try:
-            content = content_path.read_text(encoding="utf-8")
-        except OSError:
-            content = ""
-        preview = content.strip()
-        if len(preview) > 400:
-            preview = preview[:400].rstrip() + "..."
-        target_id = str(
-            metadata.get("managed_thread_id")
-            or metadata.get("thread_id")
-            or metadata.get("lane_id")
-            or transcript_mirror_id
-        ).strip()
-        target_kind = "thread_target"
-        if metadata.get("lane_id") and not (
-            metadata.get("managed_thread_id") or metadata.get("thread_id")
-        ):
-            target_kind = "lane"
-        created_at = str(
-            metadata.get("created_at")
-            or metadata.get("finished_at")
-            or metadata.get("event_timestamp")
-            or now_iso()
-        )
-        execution_id = str(
-            metadata.get("managed_turn_id")
-            or metadata.get("turn_id")
-            or transcript_mirror_id
-        ).strip()
-        resource_kind, resource_id = _legacy_resource_owner(metadata.get("repo_id"))
-        conn.execute(
-            """
-            INSERT INTO orch_transcript_mirrors (
-                transcript_mirror_id,
-                target_kind,
-                target_id,
-                execution_id,
-                message_role,
-                text_content,
-                text_preview,
-                repo_id,
-                resource_kind,
-                resource_id,
-                agent_id,
-                model_id,
-                created_at,
-                updated_at,
-                metadata_json
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(transcript_mirror_id) DO UPDATE SET
-                target_kind = excluded.target_kind,
-                target_id = excluded.target_id,
-                execution_id = excluded.execution_id,
-                message_role = excluded.message_role,
-                text_content = excluded.text_content,
-                text_preview = excluded.text_preview,
-                repo_id = excluded.repo_id,
-                resource_kind = excluded.resource_kind,
-                resource_id = excluded.resource_id,
-                agent_id = excluded.agent_id,
-                model_id = excluded.model_id,
-                created_at = excluded.created_at,
-                updated_at = excluded.updated_at,
-                metadata_json = excluded.metadata_json
-            """,
-            (
-                transcript_mirror_id,
-                target_kind,
-                target_id,
-                execution_id or None,
-                "assistant",
-                content,
-                preview,
-                metadata.get("repo_id"),
-                resource_kind,
-                resource_id,
-                metadata.get("agent"),
-                metadata.get("model"),
-                created_at,
-                created_at,
-                _json_dumps(metadata),
-            ),
-        )
-        count += 1
-    return {"transcripts": count}
+    result = PmaTranscriptLegacyBackfill(hub_root).run(conn=conn)
+    return {
+        "transcripts": result.imported_count,
+        "transcripts_skipped": result.skipped_count,
+        "transcripts_errors": result.error_count,
+    }
 
 
 def backfill_legacy_audit_entries(hub_root: Path, conn: Any) -> dict[str, int]:

@@ -36,6 +36,7 @@ from .execution_history_queries import (
     select_execution_rows,
     timeline_row_counts_by_execution,
 )
+from .migrations import collect_orchestration_migration_status
 from .sqlite import open_orchestration_sqlite, resolve_orchestration_sqlite_path
 
 _DEFAULT_COMPACTION_MAX_HOT_ROWS = 16
@@ -190,6 +191,58 @@ class ExecutionHistoryHousekeepingSummary:
             "compaction": self.compaction.to_dict(),
             "retention": self.retention.to_dict(),
             "vacuum": self.vacuum.to_dict() if self.vacuum is not None else None,
+        }
+
+
+@dataclasses.dataclass(frozen=True)
+class ExecutionHistoryColdTraceHealth:
+    finalized_manifests: int
+    archived_manifests: int
+    total_trace_bytes: int
+    missing_manifest_count: int
+    missing_checkpoint_count: int
+    missing_trace_artifact_count: int
+    status: str
+
+    def to_dict(self) -> dict[str, Any]:
+        return dataclasses.asdict(self)
+
+
+@dataclasses.dataclass(frozen=True)
+class ExecutionHistoryCompactionStatus:
+    oversized_execution_count: int
+    max_hot_rows_per_completed_execution: int
+    status: str
+
+    def to_dict(self) -> dict[str, Any]:
+        return dataclasses.asdict(self)
+
+
+@dataclasses.dataclass(frozen=True)
+class OrchestrationStorageMaintenanceReadModel:
+    schema_version: int
+    target_schema_version: int
+    pending_migration_versions: tuple[int, ...]
+    applied_migration_versions: tuple[int, ...]
+    migration_attempts: tuple[dict[str, Any], ...]
+    database: ExecutionHistoryDatabaseHealth
+    retention_policy: ExecutionHistoryMaintenancePolicy
+    compaction: ExecutionHistoryCompactionStatus
+    cold_trace_health: ExecutionHistoryColdTraceHealth
+    last_maintenance_result: Optional[dict[str, Any]] = None
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "schema_version": self.schema_version,
+            "target_schema_version": self.target_schema_version,
+            "pending_migration_versions": list(self.pending_migration_versions),
+            "applied_migration_versions": list(self.applied_migration_versions),
+            "migration_attempts": [dict(item) for item in self.migration_attempts],
+            "database": self.database.to_dict(),
+            "retention_policy": self.retention_policy.to_dict(),
+            "compaction": self.compaction.to_dict(),
+            "cold_trace_health": self.cold_trace_health.to_dict(),
+            "last_maintenance_result": self.last_maintenance_result,
         }
 
 
@@ -865,6 +918,62 @@ def collect_execution_history_database_health(
     )
 
 
+def collect_orchestration_storage_maintenance_read_model(
+    hub_root: Path,
+    *,
+    policy: ExecutionHistoryMaintenancePolicy | None = None,
+    last_maintenance_result: Mapping[str, Any] | None = None,
+    migration_attempt_limit: int = 50,
+) -> OrchestrationStorageMaintenanceReadModel:
+    resolved_policy = policy or ExecutionHistoryMaintenancePolicy()
+    audit = audit_execution_history(hub_root, policy=resolved_policy)
+    database = collect_execution_history_database_health(hub_root)
+    with open_orchestration_sqlite(hub_root) as conn:
+        migration_status = collect_orchestration_migration_status(
+            conn,
+            attempt_limit=migration_attempt_limit,
+        )
+    cold_issue_count = (
+        len(audit.missing_manifest_execution_ids)
+        + len(audit.missing_checkpoint_execution_ids)
+        + len(audit.missing_trace_artifact_ids)
+    )
+    cold_status = "ok" if cold_issue_count == 0 else "warning"
+    compaction_status = "ok" if not audit.oversized_execution_ids else "warning"
+    return OrchestrationStorageMaintenanceReadModel(
+        schema_version=migration_status.current_version,
+        target_schema_version=migration_status.target_version,
+        pending_migration_versions=migration_status.pending_versions,
+        applied_migration_versions=migration_status.applied_versions,
+        migration_attempts=tuple(
+            attempt.to_dict() for attempt in migration_status.attempts
+        ),
+        database=database,
+        retention_policy=resolved_policy,
+        compaction=ExecutionHistoryCompactionStatus(
+            oversized_execution_count=len(audit.oversized_execution_ids),
+            max_hot_rows_per_completed_execution=(
+                resolved_policy.max_hot_rows_per_completed_execution
+            ),
+            status=compaction_status,
+        ),
+        cold_trace_health=ExecutionHistoryColdTraceHealth(
+            finalized_manifests=audit.finalized_manifests,
+            archived_manifests=audit.archived_manifests,
+            total_trace_bytes=audit.total_trace_bytes,
+            missing_manifest_count=len(audit.missing_manifest_execution_ids),
+            missing_checkpoint_count=len(audit.missing_checkpoint_execution_ids),
+            missing_trace_artifact_count=len(audit.missing_trace_artifact_ids),
+            status=cold_status,
+        ),
+        last_maintenance_result=(
+            dict(last_maintenance_result)
+            if isinstance(last_maintenance_result, Mapping)
+            else None
+        ),
+    )
+
+
 def run_execution_history_housekeeping_once(
     hub_root: Path,
     *,
@@ -1474,6 +1583,8 @@ def _iso_cutoff(retention_days: int) -> Optional[str]:
 __all__ = [
     "ExecutionHistoryAuditSummary",
     "ExecutionHistoryCompactionSummary",
+    "ExecutionHistoryCompactionStatus",
+    "ExecutionHistoryColdTraceHealth",
     "ExecutionHistoryDatabaseHealth",
     "ExecutionHistoryExportSummary",
     "ExecutionHistoryHousekeepingSummary",
@@ -1481,9 +1592,11 @@ __all__ = [
     "ExecutionHistoryMigrationSummary",
     "ExecutionHistoryRetentionSummary",
     "ExecutionHistoryVacuumSummary",
+    "OrchestrationStorageMaintenanceReadModel",
     "audit_execution_history",
     "backfill_legacy_execution_history",
     "collect_execution_history_database_health",
+    "collect_orchestration_storage_maintenance_read_model",
     "compact_completed_execution_history",
     "execution_history_database_size_bytes",
     "export_execution_history_bundle",

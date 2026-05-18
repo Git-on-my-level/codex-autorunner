@@ -18,16 +18,8 @@ from ..housekeeping import parse_housekeeping_config
 from ..manifest import ManifestError, load_manifest
 from .agent_config import parse_agents_config
 from .config_contract import CONFIG_VERSION, ConfigError
+from .config_defaults import DEFAULT_HUB_CONFIG, DEFAULT_REPO_CONFIG
 from .config_env import load_dotenv_for_root
-from .config_layering import (
-    CONFIG_FILENAME,
-    DEFAULT_HUB_CONFIG,
-    DEFAULT_REPO_CONFIG,
-    _load_yaml_dict,
-    derive_repo_config_data,
-    find_nearest_hub_config_path,
-    resolve_hub_config_data,
-)
 from .config_parsers import (
     _parse_app_server_config,
     _parse_apps_config,
@@ -47,6 +39,12 @@ from .config_parsers import (
     normalize_base_path,
     parse_flow_retention_config,
 )
+from .config_sources import (
+    CONFIG_FILENAME,
+    derive_repo_config_data,
+    find_nearest_hub_config_path,
+    resolve_hub_config_data,
+)
 from .config_types import (
     DestinationConfigSection,
     HubConfig,
@@ -54,6 +52,7 @@ from .config_types import (
     RepoConfig,
 )
 from .config_validation import _validate_hub_config, _validate_repo_config
+from .config_yaml import _load_yaml_dict
 from .destinations import resolve_effective_repo_destination
 from .generated_hub_config import normalize_generated_hub_config
 from .path_utils import ConfigPathError, resolve_config_path
