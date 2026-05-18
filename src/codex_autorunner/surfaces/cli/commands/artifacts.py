@@ -14,6 +14,7 @@ from ....core.artifact_delivery import (
     artifact_delivery_db_path,
     serialize_delivery,
 )
+from ....core.artifact_filebox_storage import ArtifactFileBoxStorage
 from ....core.artifact_instructions import (
     ARTIFACT_TARGET_CONVERSATION_ENV,
     ARTIFACT_TARGET_SURFACE_ENV,
@@ -194,8 +195,10 @@ def register_artifacts_commands(app: typer.Typer) -> None:
             conversation=conversation,
             workspace_scope=workspace_scope,
         )
-        service = ArtifactDeliveryService(_root(root))
-        intent = service.enqueue_file(
+        repo_root = _root(root)
+        storage = ArtifactFileBoxStorage(repo_root)
+        service = storage.delivery
+        intent = storage.enqueue_delivery_file(
             path,
             target_surface=target_surface,
             target_conversation_key=target_conversation,

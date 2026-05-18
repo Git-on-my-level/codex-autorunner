@@ -13,17 +13,12 @@ from fastapi.responses import StreamingResponse
 from starlette.datastructures import UploadFile
 
 from ....core.artifact_delivery import ArtifactDeliveryService, serialize_delivery
+from ....core.artifact_filebox_storage import ArtifactFileBoxStorage
 from ....core.filebox import (
     BOXES,
     FileBoxEntry,
     ensure_structure,
-    list_filebox,
-    open_file,
     sanitize_filename,
-    save_file,
-)
-from ....core.filebox import (
-    delete_file as delete_filebox_file,
 )
 from ....core.hub import HubSupervisor
 from ....core.utils import find_repo_root
@@ -125,9 +120,10 @@ async def _upload_files_to_box(
         pending.append((effective_filename, data))
 
     saved = []
+    storage = ArtifactFileBoxStorage(repo_root)
     for filename, data in pending:
         try:
-            path = save_file(repo_root, box, filename, data)
+            path = storage.save_filebox_file(box, filename, data)
             saved.append(path.name)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -168,7 +164,7 @@ def build_filebox_routes() -> APIRouter:
     def list_box(request: Request) -> dict[str, Any]:
         repo_root = _resolve_repo_root(request)
         ensure_structure(repo_root)
-        entries = list_filebox(repo_root)
+        entries = ArtifactFileBoxStorage(repo_root).list_filebox()
         return _serialize_listing(entries, request=request)
 
     @router.get("/artifacts/deliveries")
@@ -206,7 +202,7 @@ def build_filebox_routes() -> APIRouter:
             raise HTTPException(status_code=400, detail="Invalid box")
         repo_root = _resolve_repo_root(request)
         ensure_structure(repo_root)
-        entries = list_filebox(repo_root)
+        entries = ArtifactFileBoxStorage(repo_root).list_filebox()
         return {box: _serialize_listing(entries, request=request).get(box, [])}
 
     @router.post("/filebox/{box}")
@@ -221,7 +217,7 @@ def build_filebox_routes() -> APIRouter:
         if box not in BOXES:
             raise HTTPException(status_code=400, detail="Invalid box")
         repo_root = _resolve_repo_root(request)
-        result = open_file(repo_root, box, filename)
+        result = ArtifactFileBoxStorage(repo_root).open_filebox_file(box, filename)
         if result is None:
             raise HTTPException(status_code=404, detail="File not found")
         entry, handle = result
@@ -233,7 +229,9 @@ def build_filebox_routes() -> APIRouter:
             raise HTTPException(status_code=400, detail="Invalid box")
         repo_root = _resolve_repo_root(request)
         try:
-            removed = delete_filebox_file(repo_root, box, filename)
+            removed = ArtifactFileBoxStorage(repo_root).delete_filebox_file(
+                box, filename
+            )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         except OSError as exc:
@@ -295,7 +293,7 @@ def build_hub_filebox_routes() -> APIRouter:
     @router.get("/{repo_id}")
     def list_repo_filebox(repo_id: str, request: Request) -> dict[str, Any]:
         repo_root = _resolve_hub_repo_root(request, repo_id)
-        entries = list_filebox(repo_root)
+        entries = ArtifactFileBoxStorage(repo_root).list_filebox()
         serialized = {
             box: [
                 _serialize_hub_entry(e, request=request, repo_id=repo_id) for e in files
@@ -347,7 +345,7 @@ def build_hub_filebox_routes() -> APIRouter:
         if box not in BOXES:
             raise HTTPException(status_code=400, detail="Invalid box")
         repo_root = _resolve_hub_repo_root(request, repo_id)
-        result = open_file(repo_root, box, filename)
+        result = ArtifactFileBoxStorage(repo_root).open_filebox_file(box, filename)
         if result is None:
             raise HTTPException(status_code=404, detail="File not found")
         entry, handle = result
@@ -361,7 +359,9 @@ def build_hub_filebox_routes() -> APIRouter:
             raise HTTPException(status_code=400, detail="Invalid box")
         repo_root = _resolve_hub_repo_root(request, repo_id)
         try:
-            removed = delete_filebox_file(repo_root, box, filename)
+            removed = ArtifactFileBoxStorage(repo_root).delete_filebox_file(
+                box, filename
+            )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         except OSError as exc:

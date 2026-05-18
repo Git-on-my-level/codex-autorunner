@@ -7,6 +7,7 @@ import pytest
 from starlette.datastructures import UploadFile
 
 from codex_autorunner.core import filebox, filebox_lifecycle
+from codex_autorunner.core.artifact_filebox_storage import ArtifactFileBoxStorage
 from codex_autorunner.surfaces.web.routes.filebox import (
     _read_upload_limited,
     _upload_files_to_box,
@@ -58,6 +59,28 @@ def test_save_resolve_and_delete(tmp_path: Path) -> None:
     removed = filebox.delete_file(repo, "inbox", "note.md")
     assert removed
     assert filebox.resolve_file(repo, "inbox", "note.md") is None
+
+
+def test_artifact_filebox_storage_exposes_typed_filebox_record(
+    tmp_path: Path,
+) -> None:
+    repo = tmp_path
+    storage = ArtifactFileBoxStorage(repo)
+    path = storage.save_filebox_file("inbox", "note.md", b"hello")
+
+    record = storage.durable_file_record(
+        path,
+        box="inbox",
+        provenance="filebox",
+    )
+
+    assert record.name == "note.md"
+    assert record.box == "inbox"
+    assert record.size == 5
+    assert record.mime_type == "text/markdown"
+    assert record.checksum_sha256 is not None
+    assert len(record.checksum_sha256) == 64
+    assert not record.archived
 
 
 def test_resolve_ignores_symlinked_filebox_entries(tmp_path: Path) -> None:

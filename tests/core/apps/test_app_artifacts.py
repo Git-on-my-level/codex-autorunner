@@ -13,6 +13,7 @@ from codex_autorunner.core.apps import (
     compute_bundle_sha,
     get_installed_app,
     register_app_artifact_candidates,
+    register_app_artifact_candidates_result,
     resolve_app_runtime_artifact_path,
 )
 from codex_autorunner.core.flows import FlowStore
@@ -120,6 +121,39 @@ def test_register_app_artifact_candidates_persists_generic_metadata(
     assert created[0].metadata["tool_id"] == "render-card"
     assert created[0].metadata["hook_point"] == "after_flow_terminal"
     assert created[0].metadata["label"] == "Summary"
+    assert created[0].metadata["filename"] == "artifact.md"
+    assert created[0].metadata["size"] == len("# summary\n")
+    assert created[0].metadata["mime_type"] == "text/markdown"
+    assert len(created[0].metadata["checksum_sha256"]) == 64
+    assert created[0].metadata["provenance"] == "app_artifact_registration"
+
+
+def test_register_app_artifact_candidates_result_reports_missing_store(
+    tmp_path: Path,
+) -> None:
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir()
+    artifact_path = repo_root / "artifact.md"
+    artifact_path.write_text("# summary\n", encoding="utf-8")
+
+    result = register_app_artifact_candidates_result(
+        repo_root,
+        "run-123",
+        [
+            AppArtifactCandidate(
+                app_id="local.wrapup",
+                app_version="1.0.0",
+                kind="markdown",
+                label="Summary",
+                relative_path="artifacts/summary.md",
+                absolute_path=artifact_path.resolve(),
+            )
+        ],
+    )
+
+    assert result.artifacts == ()
+    assert not result.ok
+    assert result.errors[0].code == "flow_store_missing"
 
 
 def test_collect_before_chat_wrapup_artifacts_respects_allowed_roots_and_size(
