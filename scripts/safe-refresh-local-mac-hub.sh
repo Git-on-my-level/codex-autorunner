@@ -395,15 +395,15 @@ _normalize_voice_provider() {
 _voice_provider_for_hub_root() {
   local root provider
   root="$1"
-  provider="$(_dotenv_value "${root}" "CODEX_AUTORUNNER_VOICE_PROVIDER" || true)"
-  if [[ -z "${provider}" ]]; then
-    provider="$(_config_python "${root}" "repo_defaults.voice.provider" || true)"
-  fi
+  provider="$(_config_python "${root}" "repo_defaults.voice.provider" || true)"
   if [[ -z "${provider}" ]]; then
     provider="$(_config_python "${root}" "voice.provider" || true)"
     if [[ -n "${provider}" ]]; then
       echo "Hint: Found legacy top-level voice.provider; migrate to repo_defaults.voice.provider in hub config." >&2
     fi
+  fi
+  if [[ -z "${provider}" ]]; then
+    provider="$(_dotenv_value "${root}" "CODEX_AUTORUNNER_VOICE_PROVIDER" || true)"
   fi
   _normalize_voice_provider "${provider}"
 }
