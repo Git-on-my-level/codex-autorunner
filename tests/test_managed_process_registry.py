@@ -123,6 +123,41 @@ def test_read_list_and_delete_round_trip(tmp_path: Path) -> None:
     assert registry.read_process_record(tmp_path, "opencode", "ws-a") is None
 
 
+def test_registry_summary_classifies_corrupt_stale_and_orphaned_records(
+    tmp_path: Path,
+) -> None:
+    registry.write_process_record(
+        tmp_path, _record(workspace_id="ws-live", owner_pid=1)
+    )
+    registry.write_process_record(
+        tmp_path,
+        _record(workspace_id="ws-stale", owner_pid=2),
+    )
+    orphan_path = (
+        tmp_path / ".codex-autorunner" / "processes" / "opencode" / "wrong-key.json"
+    )
+    orphan_path.write_text(
+        json.dumps(_record(workspace_id="actual-key", owner_pid=1).to_dict()),
+        encoding="utf-8",
+    )
+    corrupt_path = (
+        tmp_path / ".codex-autorunner" / "processes" / "opencode" / "broken.json"
+    )
+    corrupt_path.write_text("{not-json", encoding="utf-8")
+
+    summary = registry.summarize_process_registry(
+        tmp_path,
+        owner_is_alive=lambda pid: pid == 1,
+    )
+
+    assert summary.counts["live"] == 1
+    assert summary.counts["stale"] == 1
+    assert summary.counts["orphaned"] == 1
+    assert summary.counts["corrupt"] == 1
+    corrupt = [entry for entry in summary.entries if entry.status.value == "corrupt"]
+    assert corrupt[0].path == corrupt_path
+
+
 def test_schema_validation_and_invalid_json(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="handle_id, workspace_id, or pid"):
         registry.write_process_record(

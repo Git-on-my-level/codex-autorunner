@@ -8,7 +8,7 @@ from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Request
 
-from ....core.state import persist_session_registry
+from ....core.state import TerminalSessionStore, now_iso
 from ..schemas import (
     SessionsResponse,
     SessionStopRequest,
@@ -166,14 +166,15 @@ def build_sessions_routes() -> APIRouter:
                 session.close()
                 await session.wait_closed()
                 terminal_sessions.pop(session_id, None)
-            session_registry.pop(session_id, None)
+            record = session_registry.get(session_id)
+            if record is not None:
+                record.status = "closed"
+                record.last_seen_at = now_iso()
             repo_to_session = {
                 repo: sid for repo, sid in repo_to_session.items() if sid != session_id
             }
             request.app.state.repo_to_session = repo_to_session
-            persist_session_registry(
-                engine.state_path, session_registry, repo_to_session
-            )
+            TerminalSessionStore(engine.state_path).close(session_id)
             request.app.state.session_state_last_write = time.time()
             request.app.state.session_state_dirty = False
 

@@ -70,6 +70,17 @@ def _record(
     )
 
 
+def test_reaper_removes_corrupt_registry_records(tmp_path: Path) -> None:
+    path = tmp_path / ".codex-autorunner" / "processes" / "opencode" / "broken.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("{not-json", encoding="utf-8")
+
+    summary = reap_managed_processes(tmp_path)
+
+    assert summary.removed == 1
+    assert not path.exists()
+
+
 def test_reaper_kills_process_group_and_pid_when_owner_is_dead(
     monkeypatch, tmp_path: Path
 ) -> None:

@@ -12,6 +12,7 @@ from ..manifest import (
     ManifestRepo,
     load_manifest,
     normalize_manifest_destination,
+    save_manifest,
 )
 from .destinations import (
     default_local_destination,
@@ -179,6 +180,47 @@ class HubTopologyRepository:
 
     def load_manifest(self) -> Manifest:
         return load_manifest(self._manifest_path, self._hub_root)
+
+    def save_manifest(self, manifest: Manifest) -> None:
+        self.validate_manifest(manifest)
+        save_manifest(self._manifest_path, manifest, self._hub_root)
+
+    def validate_manifest(self, manifest: Manifest) -> None:
+        seen_ids: set[str] = set()
+        seen_paths: dict[Path, str] = {}
+        for entry in manifest.repos:
+            if entry.id in seen_ids:
+                raise ValueError(f"Duplicate repo id in manifest: {entry.id}")
+            seen_ids.add(entry.id)
+
+            absolute_path = (self._hub_root / entry.path).resolve()
+            try:
+                absolute_path.relative_to(self._hub_root.resolve())
+            except ValueError as exc:
+                raise ValueError(
+                    f"Repo path for {entry.id} must live under hub root"
+                ) from exc
+            path_owner = seen_paths.get(absolute_path)
+            if path_owner is not None:
+                raise ValueError(
+                    f"Repo path collision: {entry.id} and {path_owner} both use {entry.path}"
+                )
+            seen_paths[absolute_path] = entry.id
+
+            if entry.kind == "worktree":
+                if not entry.worktree_of:
+                    raise ValueError(
+                        f"Worktree {entry.id} is missing worktree_of metadata"
+                    )
+                parent = manifest.get(entry.worktree_of)
+                if parent is None or parent.kind != "base":
+                    raise ValueError(
+                        f"Worktree {entry.id} references missing base repo {entry.worktree_of}"
+                    )
+            elif entry.kind != "base":
+                raise ValueError(
+                    f"Invalid repo kind for {entry.id}: {entry.kind} (expected base|worktree)"
+                )
 
     def manifest_records(self) -> tuple[Manifest, Sequence[RepoTopologyRecord]]:
         manifest = self.load_manifest()

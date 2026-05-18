@@ -28,7 +28,12 @@ from ....core.flows.worker_reaper import (
     reap_stale_flow_workers,
 )
 from ....core.git_utils import GitError, run_git
-from ....core.managed_processes import list_process_records
+from ....core.managed_processes import (
+    ProcessRecordEntry,
+    ProcessRecordStatus,
+    list_process_records,
+    summarize_process_registry,
+)
 from ....core.utils import (
     RepoNotFoundError,
     find_repo_root,
@@ -48,12 +53,44 @@ def _build_process_registry_payload(
 
     records: list[dict[str, Any]] = []
     try:
-        process_records = list_process_records(repo_root)
+        registry_summary = summarize_process_registry(repo_root)
     except (OSError, json.JSONDecodeError, ValueError) as e:
         logger.debug("Failed to list process records: %s", e)
-        process_records = []
+        return {}, []
+    if not registry_summary.entries:
+        legacy_records = list_process_records(repo_root)
+        registry_summary = type(registry_summary)(
+            tuple(
+                ProcessRecordEntry(
+                    path=(
+                        repo_root
+                        / ".codex-autorunner"
+                        / "processes"
+                        / legacy_record.kind
+                        / f"{legacy_record.record_key()}.json"
+                    ),
+                    kind=legacy_record.kind,
+                    key=legacy_record.record_key(),
+                    status=ProcessRecordStatus.LIVE,
+                    record=legacy_record,
+                )
+                for legacy_record in legacy_records
+            )
+        )
 
-    for record in process_records:
+    for entry in registry_summary.entries:
+        if entry.record is None:
+            records.append(
+                {
+                    "kind": entry.kind,
+                    "record_key": entry.key,
+                    "status": entry.status.value,
+                    "path": str(entry.path),
+                    "error": entry.error,
+                }
+            )
+            continue
+        record = entry.record
         record_key = "unknown"
         try:
             record_key = record.record_key()
@@ -64,6 +101,7 @@ def _build_process_registry_payload(
         records.append(
             {
                 "kind": record.kind,
+                "status": entry.status.value,
                 "handle_id": record.handle_id,
                 "workspace_id": record.workspace_id,
                 "record_key": record_key,
@@ -87,8 +125,8 @@ def _build_process_registry_payload(
         )
 
     counts: dict[str, int] = {}
-    for record in records:  # type: ignore[assignment]
-        kind = record.get("kind")  # type: ignore[attr-defined]
+    for record_payload in records:
+        kind = record_payload.get("kind")
         if isinstance(kind, str):
             counts[kind] = counts.get(kind, 0) + 1
     return counts, records

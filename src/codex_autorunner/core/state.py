@@ -5,7 +5,7 @@ import json
 import sqlite3
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Iterator, Optional
+from typing import Any, Iterator, Optional, cast
 
 from .locks import file_lock
 from .sqlite_utils import open_sqlite
@@ -96,6 +96,194 @@ class SessionRecord:
             "status": self.status,
             "agent": self.agent,
         }
+
+
+def _normalize_agent(agent: str) -> str:
+    text = (agent or "").strip().lower()
+    return text or "codex"
+
+
+def session_repo_key(repo_path: str, *, agent: str = "codex") -> str:
+    normalized_agent = _normalize_agent(agent)
+    if normalized_agent == "codex":
+        return repo_path
+    return f"{repo_path}:{normalized_agent}"
+
+
+class TerminalSessionStore:
+    """Typed SQLite operations for terminal session registry state."""
+
+    def __init__(self, state_path: Path, *, durable: bool = False) -> None:
+        self._state_path = state_path
+        self._durable = durable
+
+    def create_or_touch(
+        self,
+        *,
+        session_id: str,
+        repo_path: str,
+        agent: str = "codex",
+        status: str = "active",
+        now: Optional[str] = None,
+    ) -> SessionRecord:
+        timestamp = now or now_iso()
+        clean_agent = _normalize_agent(agent)
+        with state_lock(self._state_path):
+            with open_sqlite(self._state_path, durable=self._durable) as conn:
+                _ensure_state_schema(conn)
+                existing = conn.execute(
+                    """
+                    SELECT created_at
+                      FROM sessions
+                     WHERE session_id=?
+                    """,
+                    (session_id,),
+                ).fetchone()
+                created_at = existing["created_at"] if existing else timestamp
+                with conn:
+                    conn.execute(
+                        """
+                        INSERT INTO sessions (
+                            session_id,
+                            repo_path,
+                            created_at,
+                            last_seen_at,
+                            status,
+                            agent
+                        )
+                        VALUES (?, ?, ?, ?, ?, ?)
+                        ON CONFLICT(session_id) DO UPDATE SET
+                            repo_path=excluded.repo_path,
+                            last_seen_at=excluded.last_seen_at,
+                            status=excluded.status,
+                            agent=excluded.agent
+                        """,
+                        (
+                            session_id,
+                            repo_path,
+                            created_at,
+                            timestamp,
+                            status,
+                            clean_agent,
+                        ),
+                    )
+                    conn.execute(
+                        """
+                        INSERT INTO repo_to_session (repo_key, session_id)
+                        VALUES (?, ?)
+                        ON CONFLICT(repo_key) DO UPDATE SET
+                            session_id=excluded.session_id
+                        """,
+                        (session_repo_key(repo_path, agent=clean_agent), session_id),
+                    )
+                    conn.execute(
+                        "UPDATE runner_state SET updated_at=? WHERE id=1",
+                        (timestamp,),
+                    )
+        return SessionRecord(
+            repo_path=repo_path,
+            created_at=created_at,
+            last_seen_at=timestamp,
+            status=status,
+            agent=clean_agent,
+        )
+
+    def touch(self, session_id: str, *, now: Optional[str] = None) -> bool:
+        timestamp = now or now_iso()
+        with state_lock(self._state_path):
+            with open_sqlite(self._state_path, durable=self._durable) as conn:
+                _ensure_state_schema(conn)
+                with conn:
+                    result = conn.execute(
+                        """
+                        UPDATE sessions
+                           SET last_seen_at=?,
+                               status='active'
+                         WHERE session_id=?
+                        """,
+                        (timestamp, session_id),
+                    )
+                    if result.rowcount:
+                        conn.execute(
+                            "UPDATE runner_state SET updated_at=? WHERE id=1",
+                            (timestamp,),
+                        )
+                return bool(result.rowcount)
+
+    def close(self, session_id: str, *, now: Optional[str] = None) -> bool:
+        timestamp = now or now_iso()
+        with state_lock(self._state_path):
+            with open_sqlite(self._state_path, durable=self._durable) as conn:
+                _ensure_state_schema(conn)
+                with conn:
+                    result = conn.execute(
+                        """
+                        UPDATE sessions
+                           SET status='closed',
+                               last_seen_at=?
+                         WHERE session_id=?
+                        """,
+                        (timestamp, session_id),
+                    )
+                    conn.execute(
+                        "DELETE FROM repo_to_session WHERE session_id=?",
+                        (session_id,),
+                    )
+                    if result.rowcount:
+                        conn.execute(
+                            "UPDATE runner_state SET updated_at=? WHERE id=1",
+                            (timestamp,),
+                        )
+                return bool(result.rowcount)
+
+    def lookup_for_repo(
+        self,
+        repo_path: str,
+        *,
+        agent: str = "codex",
+    ) -> Optional[str]:
+        keys = [session_repo_key(repo_path, agent=agent)]
+        if _normalize_agent(agent) == "codex":
+            keys.append(f"{repo_path}:codex")
+        with open_sqlite(self._state_path, durable=self._durable) as conn:
+            _ensure_state_schema(conn)
+            for key in keys:
+                row = conn.execute(
+                    """
+                    SELECT r.session_id
+                      FROM repo_to_session r
+                      JOIN sessions s ON s.session_id = r.session_id
+                     WHERE r.repo_key=?
+                       AND s.status != 'closed'
+                       AND s.agent=?
+                    """,
+                    (key, _normalize_agent(agent)),
+                ).fetchone()
+                if row is not None:
+                    return cast(str, row["session_id"])
+        return None
+
+    def prune(self) -> int:
+        with state_lock(self._state_path):
+            with open_sqlite(self._state_path, durable=self._durable) as conn:
+                _ensure_state_schema(conn)
+                with conn:
+                    result = conn.execute(
+                        """
+                        DELETE FROM repo_to_session
+                         WHERE session_id NOT IN (SELECT session_id FROM sessions)
+                            OR session_id IN (
+                                SELECT session_id
+                                  FROM sessions
+                                 WHERE status = 'closed'
+                            )
+                        """
+                    )
+                    conn.execute(
+                        "UPDATE runner_state SET updated_at=? WHERE id=1",
+                        (now_iso(),),
+                    )
+                return int(result.rowcount or 0)
 
 
 def _ensure_state_schema(conn: sqlite3.Connection) -> None:

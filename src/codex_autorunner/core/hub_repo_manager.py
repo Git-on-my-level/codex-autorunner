@@ -11,7 +11,6 @@ from ..manifest import (
     Manifest,
     ensure_unique_repo_id,
     sanitize_repo_id,
-    save_manifest,
 )
 from .archive import (
     archive_workspace_for_fresh_start,
@@ -226,7 +225,7 @@ class RepoManager:
 
         manifest = self._topology_repository.load_manifest()
         manifest.repos = [r for r in manifest.repos if r.id != repo_id]
-        save_manifest(self._hub_config.manifest_path, manifest, self._hub_config.root)
+        self._topology_repository.save_manifest(manifest)
         if self._on_list_repos is not None:
             self._on_list_repos(use_cache=False)
 
@@ -665,7 +664,7 @@ class RepoManager:
             display_name=display_name,
             kind="base",
         )
-        save_manifest(self._hub_config.manifest_path, manifest, self._hub_config.root)
+        self._topology_repository.save_manifest(manifest)
 
     def _delegate_retire_worktree(
         self,

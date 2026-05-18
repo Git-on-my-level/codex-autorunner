@@ -17,7 +17,12 @@ from ..text_utils import (
 from ..text_utils import (
     _pid_is_running as _shared_pid_is_running,
 )
-from .registry import ProcessRecord, delete_process_record, list_process_records
+from .registry import (
+    ProcessRecord,
+    ProcessRecordStatus,
+    delete_process_record,
+    summarize_process_registry,
+)
 
 logger = logging.getLogger("codex_autorunner.managed_processes.reaper")
 
@@ -148,7 +153,21 @@ def reap_managed_processes(
         action="reap_managed_processes",
     )
     summary = ReapSummary()
-    for record in list_process_records(repo_root):
+    registry_summary = summarize_process_registry(
+        repo_root, owner_is_alive=_pid_is_running
+    )
+    for entry in registry_summary.entries:
+        if entry.status == ProcessRecordStatus.CORRUPT:
+            if not dry_run and entry.path.exists():
+                entry.path.unlink()
+                summary.removed += 1
+            elif dry_run:
+                summary.skipped += 1
+            continue
+        if entry.record is None:
+            summary.skipped += 1
+            continue
+        record = entry.record
         owner_running = _pid_is_running(record.owner_pid)
         owner_mismatch = False
         if owner_running:

@@ -22,7 +22,6 @@ from ..bootstrap import seed_repo_files
 from ..manifest import (
     Manifest,
     match_base_repo_id,
-    save_manifest,
 )
 from .archive import (
     ArchiveProfile,
@@ -235,7 +234,7 @@ class WorktreeManager:
             worktree_of=base_repo_id,
             branch=branch,
         )
-        save_manifest(self._hub_config.manifest_path, manifest, self._hub_config.root)
+        self._topology_repository.save_manifest(manifest)
         self._run_worktree_setup_commands(
             worktree_path, base.worktree_setup_commands, base_repo_id=base_repo_id
         )
@@ -255,7 +254,7 @@ class WorktreeManager:
             )
         normalized = [str(cmd).strip() for cmd in commands if str(cmd).strip()]
         entry.worktree_setup_commands = normalized or None
-        save_manifest(self._hub_config.manifest_path, manifest, self._hub_config.root)
+        self._topology_repository.save_manifest(manifest)
         return self._ctx.snapshot_for_repo(repo_id)
 
     def run_setup_commands_for_workspace(
@@ -900,7 +899,7 @@ print(
 
         manifest = self._topology_repository.load_manifest()
         manifest.repos = [repo for repo in manifest.repos if repo.id != entry.id]
-        save_manifest(self._hub_config.manifest_path, manifest, self._hub_config.root)
+        self._topology_repository.save_manifest(manifest)
         return {"id": entry.id, "branch": branch_name}
 
     def _remove_worktree_git_refs(
@@ -1133,11 +1132,7 @@ print(
         resolved.manifest.repos = [
             r for r in resolved.manifest.repos if r.id != worktree_repo_id
         ]
-        save_manifest(
-            self._hub_config.manifest_path,
-            resolved.manifest,
-            self._hub_config.root,
-        )
+        self._topology_repository.save_manifest(resolved.manifest)
         report.add_step("manifest_remove", "ok")
 
         return {
@@ -1364,9 +1359,7 @@ print(
         manifest = self._topology_repository.load_manifest()
         manifest_changed = self._normalize_manifest_worktree_entries(manifest)
         if manifest_changed and not dry_run:
-            save_manifest(
-                self._hub_config.manifest_path, manifest, self._hub_config.root
-            )
+            self._topology_repository.save_manifest(manifest)
         unbound_threads_by_repo = self._ctx.collect_unbound_repo_threads(
             manifest=manifest
         )
