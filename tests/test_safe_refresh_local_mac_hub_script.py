@@ -1,9 +1,53 @@
 from __future__ import annotations
 
 import os
+import shlex
 import subprocess
 import sys
 from pathlib import Path
+
+
+def test_safe_refresh_local_mac_hub_voice_provider_prefers_config_over_env(
+    tmp_path: Path,
+) -> None:
+    script_path = Path("scripts/safe-refresh-local-mac-hub.sh").resolve()
+    script = script_path.read_text(encoding="utf-8")
+    helper_source = script.split("_resolve_pyenv_python()", 1)[0]
+    helper_path = tmp_path / "safe-refresh-helpers.sh"
+    hub_root = tmp_path / "hub"
+    car_dir = hub_root / ".codex-autorunner"
+    car_dir.mkdir(parents=True)
+    helper_path.write_text(helper_source, encoding="utf-8")
+    (car_dir / ".env").write_text(
+        "CODEX_AUTORUNNER_VOICE_PROVIDER=local_whisper\n",
+        encoding="utf-8",
+    )
+    (car_dir / "config.yml").write_text(
+        "repo_defaults:\n" "  voice:\n" "    provider: mlx_whisper\n",
+        encoding="utf-8",
+    )
+
+    result = subprocess.run(
+        [
+            "bash",
+            "-c",
+            "source "
+            f"{shlex.quote(str(helper_path))}; "
+            f"_voice_provider_for_hub_root {shlex.quote(str(hub_root))}",
+        ],
+        cwd=script_path.parent.parent,
+        env={
+            "HOME": str(tmp_path),
+            "HELPER_PYTHON": sys.executable,
+            "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+        },
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "mlx_whisper"
 
 
 def test_safe_refresh_local_mac_hub_script_runs_past_parse_stage(
