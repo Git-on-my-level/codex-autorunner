@@ -4,6 +4,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from codex_autorunner.surfaces.web.routes import file_chat as file_chat_routes
+from codex_autorunner.surfaces.web.services import file_chat as file_chat_service
 
 
 def test_ticket_chat_route_passes_selected_profile_into_execution(
@@ -44,8 +45,8 @@ def test_ticket_chat_route_passes_selected_profile_into_execution(
         return {"status": "ok", "agent": agent, "profile": profile}
 
     monkeypatch.setattr(
-        file_chat_routes,
-        "extracted_execute_file_chat",
+        file_chat_service,
+        "execute_file_chat_agent_turn",
         fake_execute_file_chat,
     )
 

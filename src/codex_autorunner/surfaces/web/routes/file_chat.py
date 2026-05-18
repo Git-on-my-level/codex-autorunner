@@ -8,70 +8,56 @@ Targets:
 
 from __future__ import annotations
 
-import asyncio
-import logging
-from pathlib import Path
 from typing import Any, AsyncIterator, Dict, Optional
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
 
 from ....core.sse import format_sse
+from ..services import file_chat as file_chat_service
 from .file_chat_routes import FileChatRoutesState
-from .file_chat_routes import targets as extracted_targets
-from .file_chat_routes.drafts import (
-    apply_file_patch as extracted_apply_file_patch,
-)
-from .file_chat_routes.drafts import (
-    discard_file_patch as extracted_discard_file_patch,
-)
-from .file_chat_routes.drafts import (
-    pending_file_patch as extracted_pending_file_patch,
-)
-from .file_chat_routes.execution import (
-    execute_file_chat as extracted_execute_file_chat,
-)
-from .file_chat_routes.execution import (
-    resolve_file_chat_agent_selection as extracted_resolve_file_chat_agent_selection,
-)
-from .file_chat_routes.execution_agents import FileChatError
-from .file_chat_routes.runtime import (
-    active_for_client as _active_for_client,
-)
-from .file_chat_routes.runtime import (
-    begin_turn_state as _begin_turn_state,
-)
-from .file_chat_routes.runtime import (
-    clear_interrupt_event as _clear_interrupt_event,
-)
-from .file_chat_routes.runtime import (
-    finalize_turn_state as _finalize_turn_state,
-)
-from .file_chat_routes.runtime import (
-    get_state as _get_state,
-)
-from .file_chat_routes.runtime import (
-    last_for_client as _last_for_client,
-)
-from .file_chat_routes.runtime import (
-    update_turn_state as _update_turn_state,
-)
-from .file_chat_routes.stream_shaping import (
-    shape_stream_error,
-    shape_stream_events,
-    shape_stream_queued,
-)
 from .shared import SSE_HEADERS
 
 __all__ = ["FileChatRoutesState", "build_file_chat_routes"]
 
-logger = logging.getLogger(__name__)
 
-_Target = extracted_targets._Target
-_build_file_chat_prompt = extracted_targets.build_file_chat_prompt
-_build_patch = extracted_targets.build_patch
-_parse_target = extracted_targets.parse_target
-_resolve_repo_root = extracted_targets.resolve_repo_root
+def _normalize_client_turn_id(value: object) -> Optional[str]:
+    if not isinstance(value, str):
+        return None
+    return value.strip() or None
+
+
+def _turn_request_from_body(
+    body: Dict[str, Any],
+    *,
+    target: str,
+    already_running_detail: str,
+) -> file_chat_service.FileChatTurnRequest:
+    return file_chat_service.FileChatTurnRequest(
+        target=target,
+        message=str(body.get("message") or "").strip(),
+        agent=body.get("agent", "codex"),
+        profile=body.get("profile"),
+        model=body.get("model"),
+        reasoning=body.get("reasoning"),
+        client_turn_id=_normalize_client_turn_id(body.get("client_turn_id")),
+        already_running_detail=already_running_detail,
+    )
+
+
+async def _json_body(request: Request) -> Dict[str, Any]:
+    try:
+        body = await request.json()
+    except ValueError:
+        return {}
+    return dict(body) if isinstance(body, dict) else {}
+
+
+async def _stream_sse(
+    items: AsyncIterator[file_chat_service.FileChatStreamItem],
+) -> AsyncIterator[str]:
+    async for item in items:
+        yield format_sse(item.event, item.payload)
 
 
 def build_file_chat_routes() -> APIRouter:
@@ -81,193 +67,44 @@ def build_file_chat_routes() -> APIRouter:
     async def file_chat_active(
         request: Request, client_turn_id: Optional[str] = None
     ) -> Dict[str, Any]:
-        current = await _active_for_client(request, client_turn_id)
-        last = await _last_for_client(request, client_turn_id)
-        return {"active": bool(current), "current": current, "last_result": last}
+        snapshot = await file_chat_service.get_active_snapshot(
+            request,
+            client_turn_id,
+        )
+        return {
+            "active": snapshot.active,
+            "current": snapshot.current,
+            "last_result": snapshot.last_result,
+        }
 
     @router.post("/file-chat")
     async def chat_file(request: Request):
-        body = await request.json()
-        target_raw = body.get("target")
-        message = (body.get("message") or "").strip()
-        stream = bool(body.get("stream", False))
-        agent = body.get("agent", "codex")
-        profile = body.get("profile")
-        model = body.get("model")
-        reasoning = body.get("reasoning")
-        client_turn_id = (body.get("client_turn_id") or "").strip() or None
-
-        if not message:
-            raise HTTPException(status_code=400, detail="message is required")
-
-        repo_root = _resolve_repo_root(request)
-        target = _parse_target(repo_root, str(target_raw or ""))
-
-        if target.kind == "contextspace":
-            target.path.parent.mkdir(parents=True, exist_ok=True)
-
-        selection = extracted_resolve_file_chat_agent_selection(
-            request,
-            target,
-            agent=agent,
-            profile=profile,
+        body = await _json_body(request)
+        turn = _turn_request_from_body(
+            body,
+            target=str(body.get("target") or ""),
+            already_running_detail="File chat already running",
         )
-
-        s = _get_state(request)
-        async with s.chat_lock:
-            existing = s.active_chats.get(target.state_key)
-            if existing is not None and not existing.is_set():
-                raise HTTPException(status_code=409, detail="File chat already running")
-            s.active_chats[target.state_key] = asyncio.Event()
-
-        await _begin_turn_state(request, target, client_turn_id)
-
-        if stream:
+        if bool(body.get("stream", False)):
+            stream_items = await file_chat_service.open_stream_turn(request, turn)
             return StreamingResponse(
-                _stream_file_chat(
-                    request,
-                    repo_root,
-                    target,
-                    message,
-                    agent=selection.agent_id,
-                    profile=selection.profile,
-                    model=model,
-                    reasoning=reasoning,
-                    client_turn_id=client_turn_id,
-                ),
+                _stream_sse(stream_items),
                 media_type="text/event-stream",
                 headers=SSE_HEADERS,
             )
-
-        try:
-
-            async def _on_meta(agent_id: str, thread_id: str, turn_id: str) -> None:
-                await _update_turn_state(
-                    request,
-                    target,
-                    agent=agent_id,
-                    thread_id=thread_id,
-                    turn_id=turn_id,
-                )
-
-            try:
-                result = await extracted_execute_file_chat(
-                    request,
-                    repo_root,
-                    target,
-                    message,
-                    agent=selection.agent_id,
-                    profile=selection.profile,
-                    model=model,
-                    reasoning=reasoning,
-                    on_meta=_on_meta,
-                )
-            except (
-                RuntimeError,
-                asyncio.CancelledError,
-                OSError,
-                FileChatError,
-            ) as exc:
-                await _finalize_turn_state(
-                    request,
-                    target,
-                    {
-                        "status": "error",
-                        "detail": str(exc),
-                        "client_turn_id": client_turn_id or "",
-                    },
-                )
-                raise
-            result = dict(result or {})
-            result["client_turn_id"] = client_turn_id or ""
-            await _finalize_turn_state(request, target, result)
-            return result
-        finally:
-            await _clear_interrupt_event(request, target.state_key)
-
-    async def _stream_file_chat(
-        request: Request,
-        repo_root: Path,
-        target: _Target,
-        message: str,
-        *,
-        agent: str = "codex",
-        profile: Optional[str] = None,
-        model: Optional[str] = None,
-        reasoning: Optional[str] = None,
-        client_turn_id: Optional[str] = None,
-    ) -> AsyncIterator[str]:
-        yield shape_stream_queued()
-        try:
-
-            async def _on_meta(agent_id: str, thread_id: str, turn_id: str) -> None:
-                await _update_turn_state(
-                    request,
-                    target,
-                    agent=agent_id,
-                    thread_id=thread_id,
-                    turn_id=turn_id,
-                )
-
-            run_task = asyncio.create_task(
-                extracted_execute_file_chat(
-                    request,
-                    repo_root,
-                    target,
-                    message,
-                    agent=agent,
-                    profile=profile,
-                    model=model,
-                    reasoning=reasoning,
-                    on_meta=_on_meta,
-                )
-            )
-
-            async def _finalize() -> None:
-                result: Dict[str, Any] = {
-                    "status": "error",
-                    "detail": "File chat failed",
-                }
-                try:
-                    result = await run_task
-                except Exception as exc:
-                    logger.exception("file chat task failed")
-                    result = {
-                        "status": "error",
-                        "detail": str(exc) or "File chat failed",
-                    }
-                result = dict(result or {})
-                result["client_turn_id"] = client_turn_id or ""
-                await _finalize_turn_state(request, target, result)
-
-            asyncio.create_task(_finalize())
-
-            try:
-                result = await asyncio.shield(run_task)
-            except asyncio.CancelledError:
-                return
-
-            for event in shape_stream_events(result, client_turn_id=client_turn_id):
-                yield event
-        except Exception:
-            logger.exception("file chat stream failed")
-            yield shape_stream_error()
-        finally:
-            await _clear_interrupt_event(request, target.state_key)
+        return await file_chat_service.run_turn(request, turn)
 
     @router.get("/file-chat/pending")
     async def pending_file_patch(request: Request, target: str):
-        return await extracted_pending_file_patch(request, target)
+        return await file_chat_service.pending_patch(request, target)
 
     @router.post("/file-chat/apply")
     async def apply_file_patch(request: Request):
-        body = await request.json()
-        return await extracted_apply_file_patch(request, body)
+        return await file_chat_service.apply_patch(request, await _json_body(request))
 
     @router.post("/file-chat/discard")
     async def discard_file_patch(request: Request):
-        body = await request.json()
-        return await extracted_discard_file_patch(request, body)
+        return await file_chat_service.discard_patch(request, await _json_body(request))
 
     @router.get("/file-chat/turns/{turn_id}/events")
     async def stream_file_chat_turn_events(
@@ -292,7 +129,7 @@ def build_file_chat_routes() -> APIRouter:
             from ....agents.opencode.harness import OpenCodeHarness
 
             harness = OpenCodeHarness(supervisor)
-            repo_root = _resolve_repo_root(request)
+            repo_root = file_chat_service.resolve_repo_root(request)
 
             async def _stream_opencode() -> AsyncIterator[str]:
                 async for raw_event in harness.stream_events(
@@ -314,98 +151,40 @@ def build_file_chat_routes() -> APIRouter:
 
     @router.post("/file-chat/interrupt")
     async def interrupt_file_chat(request: Request):
-        body = await request.json()
-        repo_root = _resolve_repo_root(request)
-        resolved = _parse_target(repo_root, str(body.get("target") or ""))
-        s = _get_state(request)
-        async with s.chat_lock:
-            ev = s.active_chats.get(resolved.state_key)
-            if ev is None:
-                return {"status": "ok", "detail": "No active chat to interrupt"}
-            ev.set()
-            return {"status": "interrupted", "detail": "File chat interrupted"}
+        body = await _json_body(request)
+        result = await file_chat_service.interrupt_turn(
+            request,
+            str(body.get("target") or ""),
+            detail="File chat interrupted",
+        )
+        return {"status": result.status, "detail": result.detail}
 
     @router.post("/tickets/{index}/chat")
     async def chat_ticket(index: int, request: Request):
-        body = await request.json()
-        message = (body.get("message") or "").strip()
-        stream = bool(body.get("stream", False))
-        agent = body.get("agent", "codex")
-        profile = body.get("profile")
-        model = body.get("model")
-        reasoning = body.get("reasoning")
-        client_turn_id = (body.get("client_turn_id") or "").strip() or None
-
-        if not message:
-            raise HTTPException(status_code=400, detail="message is required")
-
-        repo_root = _resolve_repo_root(request)
-        target = _parse_target(repo_root, f"ticket:{int(index)}")
-        selection = extracted_resolve_file_chat_agent_selection(
-            request,
-            target,
-            agent=agent,
-            profile=profile,
+        body = await _json_body(request)
+        turn = _turn_request_from_body(
+            body,
+            target=f"ticket:{int(index)}",
+            already_running_detail="Ticket chat already running",
         )
-
-        s = _get_state(request)
-        async with s.chat_lock:
-            existing = s.active_chats.get(target.state_key)
-            if existing is not None and not existing.is_set():
-                raise HTTPException(
-                    status_code=409, detail="Ticket chat already running"
-                )
-            s.active_chats[target.state_key] = asyncio.Event()
-        await _begin_turn_state(request, target, client_turn_id)
-
-        if stream:
+        if bool(body.get("stream", False)):
+            stream_items = await file_chat_service.open_stream_turn(request, turn)
             return StreamingResponse(
-                _stream_file_chat(
-                    request,
-                    repo_root,
-                    target,
-                    message,
-                    agent=selection.agent_id,
-                    profile=selection.profile,
-                    model=model,
-                    reasoning=reasoning,
-                    client_turn_id=client_turn_id,
-                ),
+                _stream_sse(stream_items),
                 media_type="text/event-stream",
                 headers=SSE_HEADERS,
             )
-
-        try:
-            result = await extracted_execute_file_chat(
-                request,
-                repo_root,
-                target,
-                message,
-                agent=selection.agent_id,
-                profile=selection.profile,
-                model=model,
-                reasoning=reasoning,
-            )
-            result = dict(result or {})
-            result["client_turn_id"] = client_turn_id or ""
-            await _finalize_turn_state(request, target, result)
-            return result
-        finally:
-            await _clear_interrupt_event(request, target.state_key)
+        return await file_chat_service.run_turn(request, turn)
 
     @router.get("/tickets/{index}/chat/pending")
     async def pending_ticket_patch(index: int, request: Request):
-        return await pending_file_patch(request, target=f"ticket:{int(index)}")
+        return await file_chat_service.pending_patch(request, f"ticket:{int(index)}")
 
     @router.post("/tickets/{index}/chat/apply")
     async def apply_ticket_patch(index: int, request: Request):
-        try:
-            body = await request.json()
-        except ValueError:
-            body = {}
-        payload = dict(body) if isinstance(body, dict) else {}
+        payload = await _json_body(request)
         payload["target"] = f"ticket:{int(index)}"
-        result = await extracted_apply_file_patch(request, payload)
+        result = await file_chat_service.apply_patch(request, payload)
         return {
             "status": "ok",
             "index": int(index),
@@ -415,8 +194,9 @@ def build_file_chat_routes() -> APIRouter:
 
     @router.post("/tickets/{index}/chat/discard")
     async def discard_ticket_patch(index: int, request: Request):
-        result = await extracted_discard_file_patch(
-            request, {"target": f"ticket:{int(index)}"}
+        result = await file_chat_service.discard_patch(
+            request,
+            {"target": f"ticket:{int(index)}"},
         )
         return {
             "status": "ok",
@@ -426,55 +206,29 @@ def build_file_chat_routes() -> APIRouter:
 
     @router.post("/tickets/{index}/chat/interrupt")
     async def interrupt_ticket_chat(index: int, request: Request):
-        repo_root = _resolve_repo_root(request)
-        target = _parse_target(repo_root, f"ticket:{int(index)}")
-        s = _get_state(request)
-        async with s.chat_lock:
-            ev = s.active_chats.get(target.state_key)
-            if ev is None:
-                return {"status": "ok", "detail": "No active chat to interrupt"}
-            ev.set()
-            return {"status": "interrupted", "detail": "Ticket chat interrupted"}
+        result = await file_chat_service.interrupt_turn(
+            request,
+            f"ticket:{int(index)}",
+            detail="Ticket chat interrupted",
+        )
+        return {"status": result.status, "detail": result.detail}
 
     @router.post("/tickets/{index}/chat/new-thread")
     async def reset_ticket_chat_thread(index: int, request: Request):
-        repo_root = _resolve_repo_root(request)
-        target = _parse_target(repo_root, f"ticket:{int(index)}")
-        try:
-            body = await request.json()
-        except ValueError:
-            body = {}
-        payload = dict(body) if isinstance(body, dict) else {}
-        selection = extracted_resolve_file_chat_agent_selection(
+        payload = await _json_body(request)
+        result = await file_chat_service.reset_ticket_thread(
             request,
-            target,
+            int(index),
             agent=payload.get("agent", "codex"),
             profile=payload.get("profile"),
         )
-        thread_key = selection.thread_key
-        registry = getattr(request.app.state, "app_server_threads", None)
-        cleared = False
-        if registry is not None:
-            try:
-                cleared = bool(registry.reset_thread(thread_key))
-            except (
-                AttributeError,
-                KeyError,
-                RuntimeError,
-                OSError,
-            ):
-                logger.debug(
-                    "ticket chat thread reset failed for key=%s",
-                    thread_key,
-                    exc_info=True,
-                )
         return {
-            "status": "ok",
-            "index": int(index),
-            "target": target.target,
-            "chat_scope": target.chat_scope,
-            "key": thread_key,
-            "cleared": cleared,
+            "status": result.status,
+            "index": result.index,
+            "target": result.target,
+            "chat_scope": result.chat_scope,
+            "key": result.key,
+            "cleared": result.cleared,
         }
 
     return router

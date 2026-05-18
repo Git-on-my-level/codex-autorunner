@@ -12,7 +12,10 @@ from codex_autorunner.core.config import load_hub_config
 from codex_autorunner.core.state import now_iso
 from codex_autorunner.manifest import load_manifest, save_manifest
 from codex_autorunner.server import create_hub_app
-from codex_autorunner.surfaces.web.routes import file_chat as file_chat_routes
+from codex_autorunner.surfaces.web.routes.file_chat_routes.targets import (
+    build_patch,
+    parse_target,
+)
 
 
 @dataclass(frozen=True)
@@ -49,8 +52,8 @@ def _write_file(path: Path, content: str) -> None:
 
 
 def _seed_draft(repo_root: Path, target_raw: str, before: str, after: str):
-    target = file_chat_routes._parse_target(repo_root, target_raw)
-    patch = file_chat_routes._build_patch(target.rel_path, before, after)
+    target = parse_target(repo_root, target_raw)
+    patch = build_patch(target.rel_path, before, after)
     draft = {
         "content": after,
         "patch": patch,
@@ -218,7 +221,7 @@ def test_ticket_new_thread_resets_instance_scoped_registry_key(_draft_env) -> No
     ticket_path = repo_root / ".codex-autorunner" / "tickets" / "TICKET-001.md"
     _write_file(ticket_path, "---\nagent: codex\ndone: false\n---\n\nbody\n")
 
-    target = file_chat_routes._parse_target(repo_root, "ticket:1")
+    target = parse_target(repo_root, "ticket:1")
     thread_key = f"file_chat.{target.state_key}"
     threads_file = repo_root / ".codex-autorunner" / "app_server_threads.json"
     threads_file.parent.mkdir(parents=True, exist_ok=True)

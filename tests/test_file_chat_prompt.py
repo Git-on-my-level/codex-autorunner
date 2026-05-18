@@ -3,9 +3,13 @@ from __future__ import annotations
 from pathlib import Path
 
 from codex_autorunner.core.utils import atomic_write
-from codex_autorunner.surfaces.web.routes import file_chat as file_chat_routes
 from codex_autorunner.surfaces.web.routes.file_chat_routes import (
     targets as file_targets,
+)
+from codex_autorunner.surfaces.web.routes.file_chat_routes.targets import (
+    FileChatTarget,
+    build_file_chat_prompt,
+    parse_target,
 )
 
 
@@ -17,8 +21,8 @@ def test_file_chat_prompt_has_car_and_file_content(tmp_path: Path) -> None:
     content = "---\nagent: codex\ndone: false\n---\n" "Body\n"
     ticket_path.write_text(content, encoding="utf-8")
 
-    target = file_chat_routes._parse_target(repo_root, "ticket:1")
-    prompt = file_chat_routes._build_file_chat_prompt(
+    target = parse_target(repo_root, "ticket:1")
+    prompt = build_file_chat_prompt(
         target=target, message="update the ticket", before=content
     )
 
@@ -31,7 +35,7 @@ def test_file_chat_prompt_has_car_and_file_content(tmp_path: Path) -> None:
 
 
 def test_generic_file_chat_prompt_skips_car_context_without_trigger() -> None:
-    target = file_chat_routes._Target(
+    target = FileChatTarget(
         target="file:README.md",
         kind="other",
         id="README.md",
@@ -41,7 +45,7 @@ def test_generic_file_chat_prompt_skips_car_context_without_trigger() -> None:
         state_key="file_README.md",
     )
 
-    prompt = file_chat_routes._build_file_chat_prompt(
+    prompt = build_file_chat_prompt(
         target=target,
         message="tighten the prose",
         before="# Title\n",
@@ -66,7 +70,7 @@ def test_ticket_target_chat_scope_changes_with_instance_token(
     monkeypatch.setattr(
         file_targets, "ticket_chat_scope", lambda idx, path: f"ticket:{idx}:v1"
     )
-    first = file_chat_routes._parse_target(repo_root, "ticket:1")
+    first = parse_target(repo_root, "ticket:1")
 
     monkeypatch.setattr(
         file_targets, "ticket_state_key", lambda idx, path: f"ticket_{idx:03d}_v2"
@@ -74,7 +78,7 @@ def test_ticket_target_chat_scope_changes_with_instance_token(
     monkeypatch.setattr(
         file_targets, "ticket_chat_scope", lambda idx, path: f"ticket:{idx}:v2"
     )
-    second = file_chat_routes._parse_target(repo_root, "ticket:1")
+    second = parse_target(repo_root, "ticket:1")
 
     assert first.state_key == "ticket_001_v1"
     assert second.state_key == "ticket_001_v2"
@@ -95,12 +99,12 @@ def test_ticket_target_identity_stable_across_atomic_write_updates(
         encoding="utf-8",
     )
 
-    first = file_chat_routes._parse_target(repo_root, "ticket:1")
+    first = parse_target(repo_root, "ticket:1")
     atomic_write(
         ticket_path,
         f"---\nagent: codex\ndone: true\nticket_id: {ticket_id}\n---\n\ntwo\n",
     )
-    second = file_chat_routes._parse_target(repo_root, "ticket:1")
+    second = parse_target(repo_root, "ticket:1")
 
     assert first.state_key == second.state_key
     assert first.chat_scope == second.chat_scope

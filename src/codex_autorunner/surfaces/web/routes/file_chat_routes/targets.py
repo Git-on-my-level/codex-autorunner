@@ -78,7 +78,7 @@ def _parse_contextspace_kind(raw: str) -> str:
 
 
 @dataclass(frozen=True)
-class _Target:
+class FileChatTarget:
     target: str
     kind: str
     id: str
@@ -88,7 +88,7 @@ class _Target:
     state_key: str
 
 
-def parse_target(repo_root: Path, raw: str) -> _Target:
+def parse_target(repo_root: Path, raw: str) -> FileChatTarget:
     target = (raw or "").strip()
     if not target:
         raise HTTPException(status_code=400, detail="target is required")
@@ -106,7 +106,7 @@ def parse_target(repo_root: Path, raw: str) -> _Target:
             if path.is_relative_to(repo_root)
             else str(path)
         )
-        return _Target(
+        return FileChatTarget(
             target=f"ticket:{idx}",
             kind="ticket",
             id=f"{idx:03d}",
@@ -132,7 +132,7 @@ def parse_target(repo_root: Path, raw: str) -> _Target:
             if path.is_relative_to(repo_root)
             else str(path)
         )
-        return _Target(
+        return FileChatTarget(
             target=f"contextspace:{rel_suffix}",
             kind="contextspace",
             id=rel_suffix,
@@ -147,7 +147,7 @@ def parse_target(repo_root: Path, raw: str) -> _Target:
 
 def build_file_chat_prompt(
     *,
-    target: _Target,
+    target: FileChatTarget,
     message: str,
     before: str,
     editable_rel_path: Optional[str] = None,
