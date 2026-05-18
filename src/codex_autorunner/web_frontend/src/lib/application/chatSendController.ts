@@ -95,7 +95,7 @@ export type ChatSendController = {
   interruptWithDraft: (canInterrupt: boolean) => Promise<void>;
   cancelQueuedTurn: (turn: PmaQueuedTurn, options?: { confirmed?: boolean }) => Promise<void>;
   interruptWithQueuedTurn: (turn: PmaQueuedTurn) => Promise<void>;
-  clearQueue: () => Promise<void>;
+  clearQueue: (options?: { confirmed?: boolean }) => Promise<boolean>;
 };
 
 export function createChatSendController(deps: ChatSendControllerDeps): ChatSendController {
@@ -404,25 +404,29 @@ export function createChatSendController(deps: ChatSendControllerDeps): ChatSend
     }
   }
 
-  async function clearQueue(): Promise<void> {
+  async function clearQueue(options: { confirmed?: boolean } = {}): Promise<boolean> {
     const activeChatId = deps.getActiveChatId();
-    if (!activeChatId) return;
+    if (!activeChatId) return false;
     const realTurns = selectQueue(activeChatId).filter((turn) => !isOptimisticQueuedTurn(turn));
-    if (realTurns.length === 0) return;
-    const ok = await deps.confirm({
-      title: 'Clear queue',
-      message: `Cancel all ${realTurns.length} queued message${realTurns.length === 1 ? '' : 's'}?`,
-      confirmText: 'Clear queue',
-      danger: true
-    });
-    if (!ok) return;
+    if (realTurns.length === 0) return false;
+    if (!options.confirmed) {
+      const ok = await deps.confirm({
+        title: 'Clear queue',
+        message: `Cancel all ${realTurns.length} queued message${realTurns.length === 1 ? '' : 's'}?`,
+        confirmText: 'Clear queue',
+        danger: true
+      });
+      if (!ok) return false;
+    }
     deps.setComposeError(null);
     const result = await deps.api.pma.clearQueue(activeChatId);
     if (result.ok) {
       deps.readModelStore.setPmaQueue(activeChatId, []);
       await deps.refreshActive(activeChatId, { quiet: true });
+      return true;
     } else {
       deps.setComposeError(result.error);
+      return false;
     }
   }
 

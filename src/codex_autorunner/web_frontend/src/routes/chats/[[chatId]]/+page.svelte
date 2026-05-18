@@ -1670,12 +1670,9 @@
       return true;
     }
     if (spec.id === 'clearqueue') {
-      const result = await webApi.pma.clearQueue(activeChatId);
-      if (!result.ok) composeError = result.error;
-      else {
-        readModelEntityStore.setPmaQueue(activeChatId, []);
+      const cleared = await chatSendController.clearQueue({ confirmed: true });
+      if (cleared) {
         showCommandNotice('Queue cleared.');
-        await refreshActive(activeChatId, { quiet: true });
         clearSlashDraft();
       }
       return true;

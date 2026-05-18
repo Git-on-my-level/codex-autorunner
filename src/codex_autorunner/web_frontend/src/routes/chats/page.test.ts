@@ -14,11 +14,15 @@ describe('/chats page', () => {
     readModelEntityStore.reset();
   });
 
-  it('preserves route-selected agent drafts when creating a scoped local draft', () => {
-    const source = readFileSync(
+  function chatDetailPageSource(): string {
+    return readFileSync(
       fileURLToPath(new URL('./[[chatId]]/+page.svelte', import.meta.url)),
       'utf8'
     );
+  }
+
+  it('preserves route-selected agent drafts when creating a scoped local draft', () => {
+    const source = chatDetailPageSource();
     const createChatBody = source.match(
       /async function createChat[\s\S]*?\n  async function sendMessage/
     )?.[0];
@@ -31,10 +35,7 @@ describe('/chats page', () => {
   });
 
   it('delegates terminal snapshot queue reconciliation to the live projection service', () => {
-    const pageSource = readFileSync(
-      fileURLToPath(new URL('./[[chatId]]/+page.svelte', import.meta.url)),
-      'utf8'
-    );
+    const pageSource = chatDetailPageSource();
     const serviceSource = readFileSync(
       fileURLToPath(new URL('../../lib/application/chatDetailLiveProjection.ts', import.meta.url)),
       'utf8'
@@ -47,6 +48,45 @@ describe('/chats page', () => {
     expect(pageSource).not.toContain('webApi.pma.getTranscript');
     expect(pageSource).not.toContain('webApi.pma.getQueue');
     expect(pageSource).not.toContain('openChatTranscriptEventSource');
+  });
+
+  it('keeps migrated PMA transcript, stream, queue, send, and normalization calls out of the page', () => {
+    const pageSource = chatDetailPageSource();
+    const forbiddenTokens = [
+      ['webApi.pma.getTranscript', 'transcript loading belongs in chatDetailLiveProjection'],
+      ['webApi.pma.getQueue', 'queue refresh belongs in chatDetailLiveProjection'],
+      ['openChatTranscriptEventSource', 'stream wiring belongs in chatDetailLiveProjection'],
+      ['shouldUseChatTranscriptStream', 'stream selection belongs in chatDetailLiveProjection'],
+      ['mapChatTranscriptRows', 'transcript normalization belongs in chatDetailLiveProjection'],
+      ['mergePmaProgressUpdate', 'progress normalization belongs in chatDetailLiveProjection'],
+      [
+        'mergeTranscriptSnapshotWithPendingOptimistic',
+        'snapshot repair belongs in chatDetailLiveProjection'
+      ],
+      ['executePmaChatCommandPlan', 'send execution belongs in chatSendController'],
+      ['buildOptimisticQueuedTurn', 'optimistic queue reconciliation belongs in chatSendController'],
+      [
+        'buildOptimisticUserTranscriptCard',
+        'optimistic transcript reconciliation belongs in chatSendController'
+      ],
+      ['queueContainsCommittedClientTurn', 'queue reconciliation belongs in chatSendController'],
+      [
+        'transcriptContainsCommittedUserRow',
+        'transcript reconciliation belongs in chatSendController'
+      ],
+      ['webApi.pma.cancelQueuedTurn', 'queued turn mutation belongs in chatSendController'],
+      ['webApi.pma.clearQueue', 'queue clearing belongs in chatSendController'],
+      ['webApi.pma.startChatWithMessage', 'draft first-send execution belongs in chatSendController'],
+      ['webApi.pma.createChat', 'chat creation planning belongs in chatSendController'],
+      ['webApi.pma.forkThread', 'chat fork planning belongs in chatSendController'],
+      ['webApi.pma.uploadInboxFile', 'attachment upload during send belongs in chatSendController']
+    ] as const;
+
+    const violations = forbiddenTokens
+      .filter(([token]) => pageSource.includes(token))
+      .map(([token, reason]) => `${token}: ${reason}`);
+
+    expect(violations).toEqual([]);
   });
 
   it('renders filters, chat list shell, and composer affordances without global memory controls', () => {

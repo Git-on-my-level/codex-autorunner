@@ -59,6 +59,14 @@ class Violation:
     allowed_direction: str
 
 
+@dataclass(frozen=True)
+class PmaRouteBoundaryException:
+    importer: str
+    imported: str
+    reason: str
+    removal_condition: str
+
+
 LAYER_PREFIXES: dict[Layer, list[str]] = {
     Layer.ENGINE: [
         "codex_autorunner.core.flows",
@@ -77,6 +85,27 @@ LAYER_PREFIXES: dict[Layer, list[str]] = {
     Layer.SURFACES: [
         "codex_autorunner.surfaces",
     ],
+}
+
+PMA_ROUTE_PRIVATE_PREFIX = "codex_autorunner.surfaces.web.routes.pma_routes"
+PMA_ROUTE_BOUNDARY_EXCEPTION_BY_IMPORT: dict[
+    tuple[str, str], PmaRouteBoundaryException
+] = {
+    (
+        "codex_autorunner.surfaces.web.app",
+        "codex_autorunner.surfaces.web.routes.pma_routes",
+    ): PmaRouteBoundaryException(
+        importer="codex_autorunner.surfaces.web.app",
+        imported="codex_autorunner.surfaces.web.routes.pma_routes",
+        reason=(
+            "Hub app wiring creates the PMA container runtime state while binding "
+            "the PMA router."
+        ),
+        removal_condition=(
+            "Remove when PmaRuntimeState is owned by the PMA application "
+            "container/service instead of the route package."
+        ),
+    ),
 }
 
 SHIM_PATTERN = re.compile(r"_shim\.py$|_shim/__init__\.py$")
@@ -244,6 +273,9 @@ ALLOWED_BOUNDARY_IMPORTS: dict[str, set[str]] = {
     "codex_autorunner.core.orchestration.flows": {
         "codex_autorunner.flows.ticket_flow.runtime_helpers",
     },
+    "codex_autorunner.core.automation.ticket_flow_executor": {
+        "codex_autorunner.flows.ticket_flow.runtime_helpers",
+    },
     "codex_autorunner.core.pma_inbox": {
         "codex_autorunner.flows.ticket_flow.runtime_helpers",
     },
@@ -361,6 +393,32 @@ def extract_imports(
                     source_path=source_path,
                 )
             )
+    return imports
+
+
+def extract_imports_with_lines(
+    source: str,
+    *,
+    source_module: str = "",
+    source_path: Path | None = None,
+) -> list[tuple[str, int]]:
+    imports: list[tuple[str, int]] = []
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        return imports
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                imports.append((alias.name, node.lineno))
+        elif isinstance(node, ast.ImportFrom):
+            for imported in _resolve_import_from_module(
+                node,
+                source_module=source_module,
+                source_path=source_path,
+            ):
+                imports.append((imported, node.lineno))
     return imports
 
 
@@ -489,6 +547,93 @@ def test_core_runtime_does_not_import_web_modules(monkeypatch):
         ), f"core.runtime should not import web/surfaces modules, found {leaked}"
     finally:
         sys.modules.update(saved)
+
+
+def _pma_route_boundary_guard_files() -> list[Path]:
+    scoped_roots = [
+        SRC_ROOT / "adapters",
+        SRC_ROOT / "core",
+        SRC_ROOT / "surfaces" / "cli",
+        SRC_ROOT / "surfaces" / "web" / "services",
+    ]
+    files: list[Path] = []
+    for root in scoped_roots:
+        files.extend(collect_python_files(root))
+    files.extend(
+        path
+        for path in [
+            SRC_ROOT / "surfaces" / "web" / "app.py",
+            SRC_ROOT / "surfaces" / "web" / "app_builders.py",
+            SRC_ROOT / "surfaces" / "web" / "app_factory.py",
+            SRC_ROOT / "surfaces" / "web" / "hub_jobs.py",
+            SRC_ROOT / "surfaces" / "web" / "routes" / "scm_webhooks.py",
+        ]
+        if path.exists()
+    )
+    return sorted(set(files))
+
+
+def _is_pma_route_boundary_exception(importer: str, imported: str) -> bool:
+    exception = PMA_ROUTE_BOUNDARY_EXCEPTION_BY_IMPORT.get((importer, imported))
+    return (
+        exception is not None
+        and exception.reason.strip()
+        and exception.removal_condition.strip()
+    )
+
+
+def test_pma_route_private_helpers_do_not_leak_into_services_or_entrypoints() -> None:
+    violations: list[str] = []
+    for path in _pma_route_boundary_guard_files():
+        module_name = module_name_from_path(path)
+        try:
+            source = path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        imports = extract_imports_with_lines(
+            source,
+            source_module=module_name,
+            source_path=path,
+        )
+        for imported, line in imports:
+            if imported != PMA_ROUTE_PRIVATE_PREFIX and not imported.startswith(
+                f"{PMA_ROUTE_PRIVATE_PREFIX}."
+            ):
+                continue
+            if _is_pma_route_boundary_exception(module_name, imported):
+                continue
+            violations.append(
+                f"{path.relative_to(SRC_ROOT.parent.parent)}:{line} imports "
+                f"{imported}; PMA routes may assemble services, but services, "
+                "core, adapters, CLI hub commands, SCM webhooks, and web "
+                "startup must not import route-private runtime/read-model helpers."
+            )
+
+    assert not violations, "\n".join(violations)
+
+
+def test_pma_route_boundary_exceptions_are_documented_and_still_used() -> None:
+    used: set[tuple[str, str]] = set()
+    for path in _pma_route_boundary_guard_files():
+        module_name = module_name_from_path(path)
+        try:
+            source = path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        for imported, _line in extract_imports_with_lines(
+            source,
+            source_module=module_name,
+            source_path=path,
+        ):
+            key = (module_name, imported)
+            if key in PMA_ROUTE_BOUNDARY_EXCEPTION_BY_IMPORT:
+                used.add(key)
+
+    stale = set(PMA_ROUTE_BOUNDARY_EXCEPTION_BY_IMPORT) - used
+    assert not stale, (
+        "PMA route boundary exceptions are no longer used and should be removed:\n"
+        + "\n".join(f"{importer} imports {imported}" for importer, imported in stale)
+    )
 
 
 def test_engine_does_not_import_control_plane():
