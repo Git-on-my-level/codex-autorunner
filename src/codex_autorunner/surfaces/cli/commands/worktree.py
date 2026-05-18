@@ -1,5 +1,3 @@
-import json
-import shlex
 from pathlib import Path
 from typing import Callable, List, Optional
 
@@ -9,51 +7,17 @@ from ....core.config import HubConfig
 from ....core.force_attestation import FORCE_ATTESTATION_REQUIRED_PHRASE
 from ....core.hub import HubSupervisor
 from ..hub_path_option import hub_root_path_option
-
-
-def _worktree_recommended_actions(
-    worktree_repo_id: str, *, hub_path: Optional[Path] = None
-) -> list[str]:
-    hub_suffix = ""
-    if hub_path is not None:
-        hub_suffix = f" --path {shlex.quote(str(hub_path))}"
-    return [
-        f"car hub worktree retire {worktree_repo_id}{hub_suffix}",
-        f"car hub destination show {worktree_repo_id}{hub_suffix}",
-    ]
-
-
-def _worktree_snapshot_payload(snapshot, *, hub_path: Optional[Path] = None) -> dict:
-    recommended_actions = _worktree_recommended_actions(snapshot.id, hub_path=hub_path)
-    return {
-        "id": snapshot.id,
-        "worktree_of": snapshot.worktree_of,
-        "branch": snapshot.branch,
-        "path": str(snapshot.path),
-        "initialized": snapshot.initialized,
-        "exists_on_disk": snapshot.exists_on_disk,
-        "status": snapshot.status.value,
-        "recommended_command": recommended_actions[0],
-        "recommended_actions": recommended_actions,
-    }
+from ..hub_worktree_read_models import (
+    cleanup_status_lines,
+    render_worktree_summary_lines,
+    worktree_snapshot_payload,
+)
+from ..output import echo_json
 
 
 def _emit_cleanup_status(result: object) -> None:
-    typer.echo("ok")
-    if not isinstance(result, dict):
-        return
-    docker_cleanup = result.get("docker_cleanup")
-    if not isinstance(docker_cleanup, dict):
-        return
-    status = str(docker_cleanup.get("status", "unknown")).strip() or "unknown"
-    parts = [f"docker_cleanup={status}"]
-    container_name = docker_cleanup.get("container_name")
-    if isinstance(container_name, str) and container_name.strip():
-        parts.append(f"container={container_name.strip()}")
-    message = docker_cleanup.get("message")
-    if isinstance(message, str) and message.strip():
-        parts.append(f"detail={message.strip()}")
-    typer.echo(" ".join(parts))
+    for line in cleanup_status_lines(result):
+        typer.echo(line)
 
 
 def _build_force_attestation(
@@ -117,24 +81,14 @@ def register_worktree_commands(
             if snapshot.kind == "worktree"
         ]
         payload = [
-            _worktree_snapshot_payload(snapshot, hub_path=config.root)
+            worktree_snapshot_payload(snapshot, hub_path=config.root)
             for snapshot in snapshots
         ]
         if output_json:
-            typer.echo(json.dumps({"worktrees": payload}, indent=2))
+            echo_json({"worktrees": payload})
             return
-        if not payload:
-            typer.echo("No worktrees.")
-            return
-        typer.echo(f"Worktrees ({len(payload)}):")
-        for item in payload:
-            cmd = item.get("recommended_command", "")
-            typer.echo(
-                "  {id} base={worktree_of} branch={branch} status={status}".format(
-                    **item
-                )
-                + (f" cmd={cmd}" if cmd else "")
-            )
+        for line in render_worktree_summary_lines(payload):
+            typer.echo(line)
 
     @worktree_app.command("scan")
     def hub_worktree_scan(
@@ -146,24 +100,14 @@ def register_worktree_commands(
         supervisor = build_supervisor(config)
         snapshots = [snap for snap in supervisor.scan() if snap.kind == "worktree"]
         payload = [
-            _worktree_snapshot_payload(snapshot, hub_path=config.root)
+            worktree_snapshot_payload(snapshot, hub_path=config.root)
             for snapshot in snapshots
         ]
         if output_json:
-            typer.echo(json.dumps({"worktrees": payload}, indent=2))
+            echo_json({"worktrees": payload})
             return
-        if not payload:
-            typer.echo("No worktrees.")
-            return
-        typer.echo(f"Worktrees ({len(payload)}):")
-        for item in payload:
-            cmd = item.get("recommended_command", "")
-            typer.echo(
-                "  {id} base={worktree_of} branch={branch} status={status}".format(
-                    **item
-                )
-                + (f" cmd={cmd}" if cmd else "")
-            )
+        for line in render_worktree_summary_lines(payload):
+            typer.echo(line)
 
     @worktree_app.command("retire")
     def hub_worktree_retire(

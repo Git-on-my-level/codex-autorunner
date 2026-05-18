@@ -1,7 +1,6 @@
 import asyncio
 import json
 import logging
-import shlex
 import sqlite3
 import subprocess
 from pathlib import Path
@@ -44,6 +43,17 @@ from ...web.services.pma.managed_thread_runtime import (
     recover_orphaned_managed_thread_executions,
 )
 from ..hub_path_option import hub_root_path_option
+from ..hub_worktree_read_models import (
+    destination_summary_payload,
+    format_text_table_lines,
+    render_repo_table_lines,
+    repo_listing_payload,
+    scan_row_payload,
+    summarize_snapshot_message,
+    summarize_snapshot_repo,
+    truncate_table_cell,
+)
+from ..output import echo_json
 
 
 def register_hub_commands(
@@ -92,37 +102,6 @@ def register_hub_commands(
             )
         return normalized
 
-    def _truncate_table_cell(value: Any, *, width: int) -> str:
-        if isinstance(value, list):
-            text = ",".join(str(item) for item in value if item is not None) or "-"
-        else:
-            text = str(value).strip() if value is not None else "-"
-            if not text:
-                text = "-"
-        if len(text) <= width:
-            return text
-        if width <= 3:
-            return text[:width]
-        return f"{text[: width - 3]}..."
-
-    def _format_text_table_lines(
-        columns: list[tuple[str, str, int]], rows: list[dict[str, str]]
-    ) -> list[str]:
-        widths: dict[str, int] = {}
-        for header, _key, max_width in columns:
-            cell_lengths = [len(row[header]) for row in rows] if rows else [0]
-            widths[header] = min(max(max(cell_lengths), len(header)), max_width)
-        header_line = "  ".join(
-            header.ljust(widths[header]) for header, _, _ in columns
-        )
-        separator_line = "  ".join("-" * widths[header] for header, _, _ in columns)
-        lines = [header_line, separator_line]
-        for row in rows:
-            lines.append(
-                "  ".join(row[header].ljust(widths[header]) for header, _, _ in columns)
-            )
-        return lines
-
     def _subscription_matches_text(subscription: dict[str, Any]) -> str:
         match_count = subscription.get("match_count")
         max_matches = subscription.get("max_matches")
@@ -144,61 +123,28 @@ def register_hub_commands(
         for subscription in subscriptions:
             rows.append(
                 {
-                    "ID": _truncate_table_cell(
+                    "ID": truncate_table_cell(
                         subscription.get("subscription_id"), width=36
                     ),
-                    "STATE": _truncate_table_cell(subscription.get("state"), width=10),
-                    "EVENTS": _truncate_table_cell(
+                    "STATE": truncate_table_cell(subscription.get("state"), width=10),
+                    "EVENTS": truncate_table_cell(
                         subscription.get("event_types"),
                         width=20,
                     ),
-                    "THREAD": _truncate_table_cell(
+                    "THREAD": truncate_table_cell(
                         subscription.get("thread_id"), width=18
                     ),
-                    "LANE": _truncate_table_cell(subscription.get("lane_id"), width=18),
-                    "MATCHES": _truncate_table_cell(
+                    "LANE": truncate_table_cell(subscription.get("lane_id"), width=18),
+                    "MATCHES": truncate_table_cell(
                         _subscription_matches_text(subscription),
                         width=9,
                     ),
-                    "UPDATED": _truncate_table_cell(
+                    "UPDATED": truncate_table_cell(
                         subscription.get("updated_at"), width=20
                     ),
                 }
             )
-        return _format_text_table_lines(columns, rows)
-
-    def _repo_listing_payload(snapshot: Any) -> dict[str, Any]:
-        raw_status = getattr(snapshot, "status", None)
-        status_text = (
-            str(raw_status.value)
-            if hasattr(raw_status, "value") and raw_status is not None
-            else str(raw_status or "-")
-        )
-        return {
-            "repo_id": str(getattr(snapshot, "id", "") or ""),
-            "branch": str(getattr(snapshot, "branch", "") or "-"),
-            "status": status_text,
-            "enabled": bool(getattr(snapshot, "enabled", False)),
-        }
-
-    def _render_repo_table(repos: list[dict[str, Any]]) -> list[str]:
-        columns = [
-            ("REPO_ID", "repo_id", 32),
-            ("BRANCH", "branch", 24),
-            ("STATUS", "status", 16),
-            ("ENABLED", "enabled", 7),
-        ]
-        rows: list[dict[str, str]] = []
-        for repo in repos:
-            rows.append(
-                {
-                    "REPO_ID": _truncate_table_cell(repo.get("repo_id"), width=32),
-                    "BRANCH": _truncate_table_cell(repo.get("branch"), width=24),
-                    "STATUS": _truncate_table_cell(repo.get("status"), width=16),
-                    "ENABLED": "yes" if bool(repo.get("enabled")) else "no",
-                }
-            )
-        return _format_text_table_lines(columns, rows)
+        return format_text_table_lines(columns, rows)
 
     def _build_local_hub_read_model_service(
         config: HubConfig,
@@ -320,9 +266,6 @@ def register_hub_commands(
         if sep != "=" or not key:
             raise_exit(f"Invalid --env-map value: {value!r}. Expected format KEY=VALUE")
         return key, raw_value
-
-    def _with_hub_path(command: str, hub_root: Path) -> str:
-        return f"{command} --path {shlex.quote(str(hub_root))}"
 
     @subscription_app.command("list", help="List hub PMA lifecycle subscriptions.")
     def hub_subscription_list(
@@ -473,17 +416,14 @@ def register_hub_commands(
             repo_id=repo.id,
             resolution_issues=resolution.issues,
         )
-        payload = {
-            "repo_id": repo.id,
-            "kind": repo.kind,
-            "worktree_of": repo.worktree_of,
-            "configured_destination": repo.destination,
-            "effective_destination": resolution.to_dict(),
-            "source": resolution.source,
-            "issues": issues,
-        }
+        payload = destination_summary_payload(
+            repo=repo,
+            resolution=resolution,
+            issues=issues,
+            include_kind=True,
+        )
         if output_json:
-            typer.echo(json.dumps(payload, indent=2))
+            echo_json(payload)
             return
 
         parts = [f"{repo.id} kind={repo.kind}"]
@@ -569,15 +509,14 @@ def register_hub_commands(
             repo_id=repo.id,
             resolution_issues=resolution.issues,
         )
-        payload = {
-            "repo_id": repo.id,
-            "configured_destination": repo.destination,
-            "effective_destination": resolution.to_dict(),
-            "source": resolution.source,
-            "issues": issues,
-        }
+        payload = destination_summary_payload(
+            repo=repo,
+            resolution=resolution,
+            issues=issues,
+            include_kind=False,
+        )
         if output_json:
-            typer.echo(json.dumps(payload, indent=2))
+            echo_json(payload)
             return
 
         typer.echo(
@@ -1037,11 +976,8 @@ def register_hub_commands(
         snapshots = supervisor.scan()
         typer.echo(f"scanned: {config.root}")
         for snap in snapshots:
-            hint = (
-                _with_hub_path(f"car hub worktree retire {snap.id}", config.root)
-                if snap.kind == "worktree"
-                else _with_hub_path(f"car hub destination show {snap.id}", config.root)
-            )
+            row = scan_row_payload(snap, hub_path=config.root)
+            hint = row.get("recommended_command")
             typer.echo(f"- {snap.id}: {snap.status.value} -> {hint}")
 
     @hub_app.command("repos")
@@ -1057,19 +993,19 @@ def register_hub_commands(
         repos = payload.get("repos", []) if isinstance(payload, dict) else []
         summarized = [
             (
-                _repo_listing_payload(SimpleNamespace(**repo))
+                repo_listing_payload(SimpleNamespace(**repo))
                 if isinstance(repo, dict)
                 else {}
             )
             for repo in repos
         ]
         if output_json:
-            typer.echo(json.dumps({"repos": summarized}, indent=2))
+            echo_json({"repos": summarized})
             return
         if not summarized:
             typer.echo("No repos.")
             return
-        for line in _render_repo_table(summarized):
+        for line in render_repo_table_lines(summarized):
             typer.echo(line)
 
     @hub_app.command("cleanup")
@@ -1299,115 +1235,18 @@ def register_hub_commands(
             else []
         )
 
-        def _summarize_repo(repo: dict) -> dict:
-            if not isinstance(repo, dict):
-                return {}
-            ticket_flow = (
-                repo.get("ticket_flow")
-                if isinstance(repo.get("ticket_flow"), dict)
-                else {}
-            )
-            failure = (
-                ticket_flow.get("failure") if isinstance(ticket_flow, dict) else None
-            )
-            failure_summary = (
-                ticket_flow.get("failure_summary")
-                if isinstance(ticket_flow, dict)
-                else None
-            )
-            pr_url = (
-                ticket_flow.get("pr_url") if isinstance(ticket_flow, dict) else None
-            )
-            final_review_status = (
-                ticket_flow.get("final_review_status")
-                if isinstance(ticket_flow, dict)
-                else None
-            )
-            run_state = repo.get("run_state")
-            if not isinstance(run_state, dict):
-                run_state = {}
-            canonical = repo.get("canonical_state_v1")
-            if not isinstance(canonical, dict):
-                canonical = {}
-            return {
-                "id": repo.get("id"),
-                "display_name": repo.get("display_name"),
-                "status": repo.get("status"),
-                "initialized": repo.get("initialized"),
-                "exists_on_disk": repo.get("exists_on_disk"),
-                "last_run_id": repo.get("last_run_id"),
-                "last_run_started_at": repo.get("last_run_started_at"),
-                "last_run_finished_at": repo.get("last_run_finished_at"),
-                "failure": failure,
-                "failure_summary": failure_summary,
-                "pr_url": pr_url,
-                "final_review_status": final_review_status,
-                "run_state": {
-                    "state": run_state.get("state"),
-                    "blocking_reason": run_state.get("blocking_reason"),
-                    "current_ticket": run_state.get("current_ticket"),
-                    "last_progress_at": run_state.get("last_progress_at"),
-                    "recommended_action": run_state.get("recommended_action"),
-                },
-                "freshness": canonical.get("freshness"),
-            }
-
-        def _summarize_message(msg: dict) -> dict:
-            if not isinstance(msg, dict):
-                return {}
-            dispatch = msg.get("dispatch", {})
-            if not isinstance(dispatch, dict):
-                dispatch = {}
-            body = dispatch.get("body", "")
-            title = dispatch.get("title", "")
-            truncated_body = (body[:200] + "...") if len(body) > 200 else body
-            run_state = msg.get("run_state")
-            if not isinstance(run_state, dict):
-                run_state = {}
-            canonical = msg.get("canonical_state_v1")
-            if not isinstance(canonical, dict):
-                canonical = {}
-            return {
-                "item_type": msg.get("item_type"),
-                "next_action": msg.get("next_action"),
-                "repo_id": msg.get("repo_id"),
-                "repo_display_name": msg.get("repo_display_name"),
-                "run_id": msg.get("run_id"),
-                "run_created_at": msg.get("run_created_at"),
-                "status": msg.get("status"),
-                "seq": msg.get("seq"),
-                "dispatch": {
-                    "mode": dispatch.get("mode"),
-                    "title": title,
-                    "body": truncated_body,
-                    "is_handoff": dispatch.get("is_handoff"),
-                },
-                "files_count": (
-                    len(msg.get("files", []))
-                    if isinstance(msg.get("files"), list)
-                    else 0
-                ),
-                "reason": msg.get("reason"),
-                "run_state": {
-                    "state": run_state.get("state"),
-                    "blocking_reason": run_state.get("blocking_reason"),
-                    "current_ticket": run_state.get("current_ticket"),
-                    "last_progress_at": run_state.get("last_progress_at"),
-                    "recommended_action": run_state.get("recommended_action"),
-                },
-                "freshness": canonical.get("freshness"),
-            }
-
         if requested_sections:
             section_snapshot: dict[str, Any] = {
                 "generated_at": repos_payload.get("generated_at")
                 or messages_payload.get("generated_at")
             }
             if "repos" in requested_sections:
-                section_snapshot["repos"] = [_summarize_repo(repo) for repo in repos]
+                section_snapshot["repos"] = [
+                    summarize_snapshot_repo(repo) for repo in repos
+                ]
             if "inbox" in requested_sections:
                 section_snapshot["inbox_items"] = [
-                    _summarize_message(msg) for msg in messages_items
+                    summarize_snapshot_message(msg) for msg in messages_items
                 ]
             for key in (
                 "managed_threads",
@@ -1460,8 +1299,8 @@ def register_hub_commands(
                     else None
                 ),
             },
-            "repos": [_summarize_repo(repo) for repo in repos],
-            "inbox_items": [_summarize_message(msg) for msg in messages_items],
+            "repos": [summarize_snapshot_repo(repo) for repo in repos],
+            "inbox_items": [summarize_snapshot_message(msg) for msg in messages_items],
         }
         if fetch_errors:
             snapshot["errors"] = fetch_errors
