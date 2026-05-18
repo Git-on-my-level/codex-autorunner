@@ -9,7 +9,6 @@ import signal
 import threading
 import time
 import traceback
-import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -30,15 +29,9 @@ from ....core.flows.models import (
     FlowEventType,
     FlowRunRecord,
     FlowRunStatus,
-    flow_run_duration_seconds,
-    format_flow_duration,
     parse_flow_timestamp,
 )
 from ....core.flows.telemetry_export import export_all_runs
-from ....core.flows.ux_helpers import (
-    build_flow_status_snapshot,
-    format_ticket_flow_app_label,
-)
 from ....core.flows.worker_health_policy import (
     AppServerStatus,
     WorkerHealthAction,
@@ -50,37 +43,36 @@ from ....core.flows.worker_process import (
     write_worker_crash_info,
     write_worker_exit_info,
 )
-from ....core.force_attestation import (
-    FORCE_ATTESTATION_REQUIRED_PHRASE,
-    validate_force_attestation,
-)
 from ....core.managed_processes import reap_managed_processes
 from ....core.orchestration import build_ticket_flow_orchestration_service
-from ....core.orchestration.models import FlowRunTarget
 from ....core.orchestration.ticket_flow_visibility_repair import (
     repair_ticket_flow_chat_visibility,
 )
 from ....core.runtime import RuntimeContext
 from ....core.state import load_state
-from ....core.state_roots import resolve_repo_flows_db_path, resolve_repo_state_root
+from ....core.state_roots import resolve_repo_flows_db_path
 from ....core.ticket_flow_operator import (
     PreflightCheck,
     PreflightReport,
-    resolve_run_reuse_policy,
     select_resumable_run,
 )
 from ....core.ticket_flow_operator import (
     ticket_flow_preflight as shared_ticket_flow_preflight,
 )
 from ....core.utils import resolve_executable  # noqa: F401
-from ....flows.ticket_flow.runtime_helpers import (
-    ensure_ticket_flow_worker,
-    flow_run_record_from_target,
-    seed_bootstrap_ticket_if_needed,
-    stop_ticket_flow_worker,
-)
+from ....flows.ticket_flow.runtime_helpers import flow_run_record_from_target
 from ....tickets import DEFAULT_MAX_TOTAL_TURNS, AgentPool
 from ..hub_path_option import hub_root_path_option
+from .ticket_flow_controller import (
+    TicketFlowCliController,
+    normalize_flow_run_id,
+    resolve_ticket_flow_paths,
+)
+from .ticket_flow_status import (
+    build_ticket_flow_status_payload,
+    render_preflight_report_lines,
+    render_ticket_flow_status_lines,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -100,18 +92,6 @@ class FlowCommandExports:
     ticket_flow_preflight_report: Callable[..., Any]
     ticket_flow_print_preflight_report: Callable[[Any], None]
     ticket_flow_resumable_run: Callable[..., Any]
-
-
-def _build_force_attestation(
-    force_attestation: Optional[str], *, target_scope: str
-) -> Optional[dict[str, str]]:
-    if force_attestation is None:
-        return None
-    return {
-        "phrase": FORCE_ATTESTATION_REQUIRED_PHRASE,
-        "user_request": force_attestation,
-        "target_scope": target_scope,
-    }
 
 
 def _resolve_ticket_flow_repair_hub_root(repo_root: Path, hub: Optional[Path]) -> Path:
@@ -141,30 +121,19 @@ def register_flow_commands(
     """Register flow-oriented subcommands and return command callables for reuse."""
 
     def _normalize_flow_run_id(run_id: Optional[str]) -> Optional[str]:
-        if run_id is None:
-            return None
         try:
-            return str(uuid.UUID(str(run_id)))
+            return normalize_flow_run_id(run_id)
         except ValueError:
             raise_exit("Invalid run_id format; must be a UUID")
         raise AssertionError("Unreachable")  # satisfies mypy return
 
     def _ticket_flow_paths(engine: RuntimeContext) -> tuple[Path, Path, Path]:
-        state_root = resolve_repo_state_root(engine.repo_root)
-        db_path = resolve_repo_flows_db_path(engine.repo_root)
-        artifacts_root = state_root / "flows"
-        ticket_dir = state_root / "tickets"
-        return db_path, artifacts_root, ticket_dir
+        paths = resolve_ticket_flow_paths(engine)
+        return paths.db_path, paths.artifacts_root, paths.ticket_dir
 
     def _print_preflight_report(report: PreflightReport) -> None:
-        for check in report.checks:
-            status = check.status.upper()
-            parts = [f"{status}: {check.message}"]
-            if check.details:
-                parts.append(" ".join(check.details))
-            if check.fix:
-                parts.append(f"fix: {check.fix}")
-            typer.echo(" ".join(parts))
+        for line in render_preflight_report_lines(report):
+            typer.echo(line)
 
     def _ticket_flow_preflight(
         engine: RuntimeContext, ticket_dir: Path
@@ -172,261 +141,14 @@ def register_flow_commands(
         _ = ticket_dir
         return shared_ticket_flow_preflight(engine.repo_root, config=engine.config)
 
-    def _open_flow_store(engine: RuntimeContext) -> FlowStore:
-        db_path, _, _ = _ticket_flow_paths(engine)
-        store = FlowStore(db_path, durable=engine.config.durable_writes)
-        store.initialize()
-        return store
-
     def _ticket_flow_status_payload(
         engine: RuntimeContext, record: FlowRunRecord, store: Optional[FlowStore]
     ) -> dict:
-        snapshot = build_flow_status_snapshot(engine.repo_root, record, store)
-        health = snapshot.get("worker_health")
-        effective_ticket = snapshot.get("effective_current_ticket")
-        state = record.state if isinstance(record.state, dict) else {}
-        raw_ticket_engine = state.get("ticket_engine")
-        ticket_engine: dict[str, Any]
-        if isinstance(raw_ticket_engine, dict):
-            ticket_engine = raw_ticket_engine
-        else:
-            ticket_engine = {}
-        reason_summary = state.get("reason_summary")
-        normalized_reason_summary = (
-            reason_summary.strip()
-            if isinstance(reason_summary, str) and reason_summary.strip()
-            else None
-        )
-        reason = ticket_engine.get("reason")
-        normalized_reason = (
-            reason.strip() if isinstance(reason, str) and reason.strip() else None
-        )
-        reason_code = ticket_engine.get("reason_code")
-        normalized_reason_code = (
-            reason_code.strip()
-            if isinstance(reason_code, str) and reason_code.strip()
-            else None
-        )
-        reason_details = ticket_engine.get("reason_details")
-        normalized_reason_details = (
-            reason_details.strip()
-            if isinstance(reason_details, str) and reason_details.strip()
-            else None
-        )
-        error_message = (
-            record.error_message.strip()
-            if isinstance(record.error_message, str) and record.error_message.strip()
-            else None
-        )
-        run_state = snapshot.get("run_state")
-        run_state_payload = run_state if isinstance(run_state, dict) else {}
-        return {
-            "run_id": record.id,
-            "flow_type": record.flow_type,
-            "status": record.status.value,
-            "current_step": record.current_step,
-            "created_at": record.created_at,
-            "started_at": record.started_at,
-            "finished_at": record.finished_at,
-            "duration_seconds": flow_run_duration_seconds(record),
-            "last_event_seq": snapshot.get("last_event_seq"),
-            "last_event_at": snapshot.get("last_event_at"),
-            "effective_last_activity_at": snapshot.get("effective_last_activity_at"),
-            "agent": (
-                {"status": snapshot.get("agent_status")}
-                if snapshot.get("agent_status")
-                else None
-            ),
-            "active_tool": snapshot.get("active_tool"),
-            "recovery_state": run_state_payload.get("recovery_state"),
-            "worker_status": run_state_payload.get("worker_status"),
-            "last_semantic_progress_at": run_state_payload.get(
-                "last_semantic_progress_at"
-            ),
-            "last_tool_activity_at": run_state_payload.get("last_tool_activity_at"),
-            "current_phase": run_state_payload.get("current_phase"),
-            "stale_reason": run_state_payload.get("stale_reason"),
-            "restart_exhausted": run_state_payload.get("restart_exhausted"),
-            "freshness": snapshot.get("freshness"),
-            "run_state": run_state,
-            "current_ticket": effective_ticket,
-            "app": snapshot.get("app"),
-            "ticket_progress": snapshot.get("ticket_progress"),
-            "reason_summary": normalized_reason_summary,
-            "reason": normalized_reason,
-            "reason_code": normalized_reason_code,
-            "reason_details": normalized_reason_details,
-            "error_message": error_message,
-            "worker": (
-                {
-                    "status": health.status,
-                    "pid": health.pid,
-                    "message": health.message,
-                    "exit_code": getattr(health, "exit_code", None),
-                    "stderr_tail": getattr(health, "stderr_tail", None),
-                    "active_tool": snapshot.get("active_tool"),
-                }
-                if health
-                else None
-            ),
-        }
+        return build_ticket_flow_status_payload(engine, record, store)
 
     def _print_ticket_flow_status(payload: dict) -> None:
-        progress = payload.get("ticket_progress") or {}
-        tickets = ""
-        if isinstance(progress, dict):
-            done = progress.get("done")
-            total = progress.get("total")
-            if isinstance(done, int) and isinstance(total, int):
-                tickets = f" tickets={done}/{total}"
-        typer.echo(
-            f"run_id={payload.get('run_id')} status={payload.get('status')}{tickets}"
-        )
-        step = payload.get("current_step")
-        ticket = payload.get("current_ticket") or "n/a"
-        typer.echo(f"step={step} ticket={ticket}")
-        app_label = format_ticket_flow_app_label(payload.get("app"))
-        if app_label:
-            typer.echo(f"app={app_label}")
-        typer.echo(
-            f"created={payload.get('created_at')} started={payload.get('started_at')} "
-            f"finished={payload.get('finished_at')}"
-        )
-        duration_str = format_flow_duration(payload.get("duration_seconds"))
-        if duration_str:
-            typer.echo(f"duration={duration_str}")
-        typer.echo(
-            f"last_event={payload.get('last_event_at')} seq={payload.get('last_event_seq')}"
-        )
-        effective_last_activity_at = payload.get("effective_last_activity_at")
-        if effective_last_activity_at:
-            typer.echo(f"effective_last_activity={effective_last_activity_at}")
-        active_tool = payload.get("active_tool")
-        if isinstance(active_tool, dict):
-            command = active_tool.get("command")
-            if isinstance(command, str) and command.strip():
-                detail_parts = []
-                elapsed = active_tool.get("elapsed_seconds")
-                if isinstance(elapsed, int):
-                    detail_parts.append(f"running={format_flow_duration(elapsed)}")
-                output_updated_at = active_tool.get("output_updated_at")
-                if isinstance(output_updated_at, str) and output_updated_at.strip():
-                    detail_parts.append(f"output_updated={output_updated_at.strip()}")
-                suffix = f" {' '.join(detail_parts)}" if detail_parts else ""
-                typer.echo(f"active_tool: {command.strip()}{suffix}")
-        run_state = payload.get("run_state")
-        if isinstance(run_state, dict):
-            projection = run_state.get("recovery_projection")
-            printed_projection = False
-            if isinstance(projection, dict):
-                primary = projection.get("primary_state")
-                if isinstance(primary, str) and primary.strip():
-                    typer.echo(f"recovery_primary_state: {primary.strip()}")
-                    printed_projection = True
-                facets = projection.get("facets")
-                if isinstance(facets, dict):
-                    for name, raw_facet in facets.items():
-                        if not isinstance(raw_facet, dict):
-                            continue
-                        status_value = raw_facet.get("status")
-                        if not isinstance(status_value, str) or status_value == "clear":
-                            continue
-                        reason_value = raw_facet.get("reason")
-                        reason_suffix = (
-                            f" reason={reason_value.strip()}"
-                            if isinstance(reason_value, str) and reason_value.strip()
-                            else ""
-                        )
-                        typer.echo(
-                            f"recovery_facet: {name} status={status_value}{reason_suffix}"
-                        )
-                        printed_projection = True
-            if not printed_projection:
-                recovery_state = run_state.get("recovery_state")
-                if isinstance(recovery_state, str) and recovery_state.strip():
-                    typer.echo(f"recovery_state: {recovery_state.strip()}")
-            worker_status = run_state.get("worker_status")
-            if isinstance(worker_status, str) and worker_status.strip():
-                typer.echo(f"worker_status: {worker_status.strip()}")
-            stale_reason = run_state.get("stale_reason")
-            if isinstance(stale_reason, str) and stale_reason.strip():
-                typer.echo(f"stale_reason: {stale_reason.strip()}")
-            last_semantic_progress_at = run_state.get("last_semantic_progress_at")
-            if (
-                isinstance(last_semantic_progress_at, str)
-                and last_semantic_progress_at.strip()
-            ):
-                typer.echo(
-                    f"last_semantic_progress_at: {last_semantic_progress_at.strip()}"
-                )
-            last_tool_activity_at = run_state.get("last_tool_activity_at")
-            if isinstance(last_tool_activity_at, str) and last_tool_activity_at.strip():
-                typer.echo(f"last_tool_activity_at: {last_tool_activity_at.strip()}")
-            current_phase = run_state.get("current_phase")
-            if isinstance(current_phase, str) and current_phase.strip():
-                typer.echo(f"current_phase: {current_phase.strip()}")
-            restart_attempts = run_state.get("restart_attempts")
-            restart_max = run_state.get("restart_max_attempts")
-            if isinstance(restart_attempts, int) and not isinstance(
-                restart_attempts, bool
-            ):
-                if isinstance(restart_max, int) and not isinstance(restart_max, bool):
-                    typer.echo(f"restart_attempts: {restart_attempts}/{restart_max}")
-                else:
-                    typer.echo(f"restart_attempts: {restart_attempts}")
-            if run_state.get("commit_barrier_pending"):
-                typer.echo("commit_barrier: pending preserving completed ticket work")
-            last_recovery_action = run_state.get("last_recovery_action")
-            if isinstance(last_recovery_action, str) and last_recovery_action.strip():
-                typer.echo(f"last_recovery_action: {last_recovery_action.strip()}")
-            crash_reason = run_state.get("crash_reason") or run_state.get("reap_reason")
-            if isinstance(crash_reason, str) and crash_reason.strip():
-                typer.echo(f"crash_reap_reason: {crash_reason.strip()}")
-            recommended = run_state.get("recommended_action")
-            if isinstance(recommended, str) and recommended.strip():
-                typer.echo(f"recommended: {recommended.strip()}")
-        status = payload.get("status") or ""
-        reason_summary = payload.get("reason_summary")
-        if isinstance(reason_summary, str) and reason_summary.strip():
-            typer.echo(f"summary: {reason_summary.strip()}")
-        reason_code = payload.get("reason_code")
-        if isinstance(reason_code, str) and reason_code.strip():
-            typer.echo(f"reason_code: {reason_code.strip()}")
-        reason = payload.get("reason")
-        if (
-            isinstance(reason, str)
-            and reason.strip()
-            and reason.strip() != str(reason_summary or "").strip()
-        ):
-            typer.echo(f"reason: {reason.strip()}")
-        reason_details = payload.get("reason_details")
-        if isinstance(reason_details, str) and reason_details.strip():
-            typer.echo(f"reason_details: {reason_details.strip()}")
-        error_message = payload.get("error_message")
-        if isinstance(error_message, str) and error_message.strip():
-            typer.echo(f"error: {error_message.strip()}")
-        worker = payload.get("worker") or {}
-        if worker:
-            if status not in {"completed", "failed", "stopped"}:
-                typer.echo(
-                    f"worker: {worker.get('status')} pid={worker.get('pid')}".rstrip()
-                )
-            else:
-                worker_status = worker.get("status") or ""
-                worker_msg = worker.get("message") or ""
-                if worker_status == "absent" or "missing" in worker_msg.lower():
-                    typer.echo("worker: exited")
-                else:
-                    typer.echo(
-                        f"worker: {worker.get('status')} pid={worker.get('pid')}".rstrip()
-                    )
-                if status == "failed":
-                    exit_code = worker.get("exit_code")
-                    stderr_tail = worker.get("stderr_tail")
-                    if exit_code is not None:
-                        typer.echo(f"worker_exit={exit_code}")
-                    if isinstance(stderr_tail, str) and stderr_tail.strip():
-                        typer.echo(f"worker_stderr: {stderr_tail.strip()}")
+        for line in render_ticket_flow_status_lines(payload):
+            typer.echo(line)
 
     def _ticket_flow_controller(
         engine: RuntimeContext,
@@ -859,58 +581,16 @@ def register_flow_commands(
         """
         engine = require_repo_config(repo, hub)
         guard_unregistered_hub_repo(engine.repo_root, hub)
-        _, _, ticket_dir = _ticket_flow_paths(engine)
-        ticket_dir.mkdir(parents=True, exist_ok=True)
-
-        service = _ticket_flow_orchestration_service(engine)
-        records = [
-            flow_run_record_from_target(target) for target in service.list_flow_runs()
-        ]
-        reuse = resolve_run_reuse_policy(
-            records, force_new=force_new, ticket_dir=ticket_dir
+        controller = TicketFlowCliController(
+            engine, _ticket_flow_orchestration_service(engine)
+        )
+        action = controller.bootstrap(
+            force_new=force_new, max_total_turns=max_total_turns
         )
 
-        if reuse.action == "reuse_active":
-            assert reuse.run is not None
-            ensure_ticket_flow_worker(engine.repo_root, reuse.run.id, is_terminal=False)
-            typer.echo(
-                f"reused run={reuse.run.id} | car ticket-flow status --run-id {reuse.run.id}"
-            )
-            return
-
-        if reuse.action == "completed_pending" and reuse.pending_ticket_count > 0:
-            assert reuse.run is not None
-            typer.echo(
-                f"run {reuse.run.id} completed with {reuse.pending_ticket_count} pending tickets. "
-                f"use --force-new to reset dispatch history."
-            )
-            raise_exit("Add --force-new to create a new run.")
-
-        if reuse.stale_terminal_runs:
-            stale_id = reuse.stale_terminal_runs[0].id
-            typer.echo(
-                f"warning: {len(reuse.stale_terminal_runs)} stale runs (FAILED/STOPPED). "
-                f"inspect: car ticket-flow status --run-id {stale_id}. "
-                f"retire: car ticket-flow retire --run-id {stale_id} --force. "
-                f"use --force-new to suppress."
-            )
-
-        seeded = seed_bootstrap_ticket_if_needed(ticket_dir)
-
-        run_id = str(uuid.uuid4())
-        input_data: dict[str, object] = {}
-        if max_total_turns is not None:
-            input_data["max_total_turns"] = max_total_turns
-        asyncio.run(
-            service.start_flow_run(
-                "ticket_flow",
-                input_data=input_data,
-                run_id=run_id,
-                metadata={"seeded_ticket": seeded},
-            )
-        )
-
-        typer.echo(f"run={run_id} | car ticket-flow status --run-id {run_id}")
+        typer.echo(action.message)
+        if action.should_exit:
+            raise_exit(action.exit_message)
 
     @ticket_flow_app.command("preflight")
     def ticket_flow_preflight(
@@ -958,66 +638,22 @@ def register_flow_commands(
         """
         engine = require_repo_config(repo, hub)
         guard_unregistered_hub_repo(engine.repo_root, hub)
-        _, _, ticket_dir = _ticket_flow_paths(engine)
-        ticket_dir.mkdir(parents=True, exist_ok=True)
-
-        service = _ticket_flow_orchestration_service(engine)
-        records = [
-            flow_run_record_from_target(target) for target in service.list_flow_runs()
-        ]
-        reuse = resolve_run_reuse_policy(
-            records, force_new=force_new, ticket_dir=ticket_dir
+        controller = TicketFlowCliController(
+            engine, _ticket_flow_orchestration_service(engine)
+        )
+        action = controller.start(
+            force_new=force_new,
+            max_total_turns=max_total_turns,
+            preflight=lambda: _ticket_flow_preflight(
+                engine, controller.paths.ticket_dir
+            ),
         )
 
-        if reuse.action == "reuse_active":
-            assert reuse.run is not None
-            report = _ticket_flow_preflight(engine, ticket_dir)
-            if report.has_errors():
-                typer.echo("Ticket flow preflight failed:", err=True)
-                _print_preflight_report(report)
-                raise_exit("Fix the above errors before starting the ticket flow.")
-            ensure_ticket_flow_worker(engine.repo_root, reuse.run.id, is_terminal=False)
-            typer.echo(
-                f"reused run={reuse.run.id} | car ticket-flow status --run-id {reuse.run.id}"
-            )
-            return
-
-        if reuse.action == "completed_pending" and reuse.pending_ticket_count > 0:
-            assert reuse.run is not None
-            typer.echo(
-                f"run {reuse.run.id} completed with {reuse.pending_ticket_count} pending tickets. "
-                f"use --force-new to reset dispatch history."
-            )
-            raise_exit("Add --force-new to create a new run.")
-
-        if reuse.stale_terminal_runs:
-            stale_id = reuse.stale_terminal_runs[0].id
-            typer.echo(
-                f"warning: {len(reuse.stale_terminal_runs)} stale runs (FAILED/STOPPED). "
-                f"inspect: car ticket-flow status --run-id {stale_id}. "
-                f"retire: car ticket-flow retire --run-id {stale_id} --force. "
-                f"use --force-new to suppress."
-            )
-
-        report = _ticket_flow_preflight(engine, ticket_dir)
-        if report.has_errors():
-            typer.echo("Ticket flow preflight failed:", err=True)
-            _print_preflight_report(report)
-            raise_exit("Fix the above errors before starting the ticket flow.")
-
-        run_id = str(uuid.uuid4())
-        input_data: dict[str, object] = {"workspace_root": str(engine.repo_root)}
-        if max_total_turns is not None:
-            input_data["max_total_turns"] = max_total_turns
-        asyncio.run(
-            service.start_flow_run(
-                "ticket_flow",
-                input_data=input_data,
-                run_id=run_id,
-            )
-        )
-
-        typer.echo(f"run={run_id} | car ticket-flow status --run-id {run_id}")
+        typer.echo(action.message, err=action.preflight_report is not None)
+        if action.preflight_report is not None:
+            _print_preflight_report(action.preflight_report)
+        if action.should_exit:
+            raise_exit(action.exit_message)
 
     @ticket_flow_app.command("status")
     def ticket_flow_status(
@@ -1029,28 +665,23 @@ def register_flow_commands(
         """Show status for a ticket_flow run."""
         engine = require_repo_config(repo, hub)
         normalized_run_id = _normalize_flow_run_id(run_id)
-        service = _ticket_flow_orchestration_service(engine)
-
-        target: Optional[FlowRunTarget] = None
-        if normalized_run_id:
-            target = service.get_flow_run(normalized_run_id)
-        else:
-            runs = service.list_flow_runs()
-            target = runs[0] if runs else None
+        controller = TicketFlowCliController(
+            engine, _ticket_flow_orchestration_service(engine)
+        )
+        target = controller.resolve_target_run(normalized_run_id)
         if not target:
             raise_exit("No ticket_flow runs found.")
         assert target is not None
         normalized_run_id = target.run_id
 
-        _, _, ticket_dir = _ticket_flow_paths(engine)
-        report = _ticket_flow_preflight(engine, ticket_dir)
+        report = _ticket_flow_preflight(engine, controller.paths.ticket_dir)
         if report.has_errors():
             typer.echo("Ticket flow preflight failed:", err=True)
             _print_preflight_report(report)
             raise_exit("Fix the above errors before resuming the ticket flow.")
 
         assert normalized_run_id is not None
-        store = _open_flow_store(engine)
+        store = controller.open_flow_store()
         try:
             record = store.get_flow_run(normalized_run_id)
             if not record:
@@ -1116,19 +747,13 @@ def register_flow_commands(
         """Stop a ticket_flow run."""
         engine = require_repo_config(repo, hub)
         normalized_run_id = _normalize_flow_run_id(run_id)
-        service = _ticket_flow_orchestration_service(engine)
-
-        if normalized_run_id:
-            target = service.get_flow_run(normalized_run_id)
-        else:
-            runs = service.list_flow_runs()
-            target = runs[0] if runs else None
-        if not target:
+        controller = TicketFlowCliController(
+            engine, _ticket_flow_orchestration_service(engine)
+        )
+        updated = controller.stop(normalized_run_id)
+        if not updated:
             raise_exit("No ticket_flow runs found.")
-        normalized_run_id = target.run_id
-
-        stop_ticket_flow_worker(engine.repo_root, normalized_run_id)
-        updated = asyncio.run(service.stop_flow_run(normalized_run_id))
+        assert updated is not None
 
         typer.echo(
             f"Stop requested for run: {updated.run_id} (status={updated.status})"
@@ -1172,36 +797,21 @@ def register_flow_commands(
             raise_exit("--run-id is required")
         parsed_delete_run = parse_bool_text(delete_run, flag="--delete-run")
         run_id_str: str = normalized_run_id  # type: ignore[assignment]
-
-        store = _open_flow_store(engine)
         try:
-            record = store.get_flow_run(run_id_str)
-            if record is None:
-                raise_exit(f"Flow run not found: {normalized_run_id}")
-            assert record is not None
-            try:
-                archive_kwargs = {
-                    "repo_root": engine.repo_root,
-                    "store": store,
-                    "record": record,
-                    "force": force,
-                    "delete_run": parsed_delete_run,
-                    "vacuum": not no_vacuum,
-                    "dry_run": dry_run,
-                }
-                force_attestation_payload: Optional[dict[str, str]] = None
-                if force:
-                    force_attestation_payload = _build_force_attestation(
-                        force_attestation,
-                        target_scope=f"flow.ticket_flow.retire:{run_id_str}",
-                    )
-                    validate_force_attestation(force_attestation_payload)
-                    archive_kwargs["force_attestation"] = force_attestation_payload
-                summary = archive_flow_run_artifacts(**archive_kwargs)
-            except ValueError as exc:
-                raise_exit(str(exc), cause=exc)
-        finally:
-            store.close()
+            controller = TicketFlowCliController(
+                engine, _ticket_flow_orchestration_service(engine)
+            )
+            summary = controller.retire(
+                run_id=run_id_str,
+                force=force,
+                force_attestation=force_attestation,
+                delete_run=parsed_delete_run,
+                vacuum=not no_vacuum,
+                dry_run=dry_run,
+                archive_flow_run_artifacts=archive_flow_run_artifacts,
+            )
+        except ValueError as exc:
+            raise_exit(str(exc), cause=exc)
 
         if output_json:
             typer.echo(json.dumps(summary, indent=2))
