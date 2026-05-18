@@ -52,6 +52,7 @@ def test_hub_automations_create_weekly_ticket_flow_and_run_now(tmp_path):
             "timezone": "UTC",
             "weekday": 0,
             "hour": 10,
+            "ticket_body": "Run the customized weekly maintenance ticket.",
         },
     )
 
@@ -60,6 +61,10 @@ def test_hub_automations_create_weekly_ticket_flow_and_run_now(tmp_path):
     assert automation["executor_kind"] == "ticket_flow"
     assert automation["enabled"] is False
     assert automation["target_policy"] == "new_automation_worktree"
+    assert (
+        automation["executor"]["ticket_pack"]["tickets"][0]["content"]
+        == "Run the customized weekly maintenance ticket."
+    )
     rule_id = automation["id"]
 
     run = client.post(f"/hub/automations/{rule_id}/run")
@@ -69,6 +74,14 @@ def test_hub_automations_create_weekly_ticket_flow_and_run_now(tmp_path):
     jobs = AutomationStore(hub_root).list_jobs(rule_id=rule_id)
     assert len(jobs) == 1
     assert jobs[0].executor["kind"] == "ticket_flow"
+
+    detail = client.get(f"/hub/automations/{rule_id}")
+    assert detail.status_code == 200
+    job_rows = detail.json()["automation"]["jobs"]
+    assert len(job_rows) == 1
+    assert job_rows[0]["job_id"] == jobs[0].job_id
+    assert "executor" not in job_rows[0]
+    assert "payload" not in job_rows[0]
 
 
 def test_hub_automations_pause_and_resume(tmp_path):

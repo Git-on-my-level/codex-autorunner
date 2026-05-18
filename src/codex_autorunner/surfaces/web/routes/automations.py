@@ -32,6 +32,7 @@ class AutomationCreateRequest(BaseModel):
     minute: int = 0
     weekday: int = 0
     prompt: Optional[str] = None
+    ticket_body: Optional[str] = None
     agent: Optional[str] = None
     model: Optional[str] = None
     reasoning: Optional[str] = None
@@ -104,6 +105,7 @@ def build_automation_routes(context: HubAppContext) -> APIRouter:
                     minute=payload.minute,
                     weekday=payload.weekday,
                     prompt=payload.prompt,
+                    ticket_body=payload.ticket_body,
                     agent=payload.agent,
                     model=payload.model,
                     reasoning=payload.reasoning,

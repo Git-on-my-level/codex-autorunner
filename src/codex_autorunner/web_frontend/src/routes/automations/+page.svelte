@@ -3,8 +3,11 @@
   import { onMount } from 'svelte';
   import AgentModelReasoningPicker from '$lib/components/AgentModelReasoningPicker.svelte';
   import PageHero from '$lib/components/PageHero.svelte';
+  import RunHistoryList from '$lib/components/tickets/RunHistoryList.svelte';
+  import TicketPackEditor from '$lib/components/tickets/TicketPackEditor.svelte';
   import { withRuntimeBasePath as href } from '$lib/runtime/basePath';
   import { repoAccent, repoInitials } from '$lib/viewModels/repoIdentity';
+  import { runHistoryFromAutomationJobs } from '$lib/viewModels/runHistory';
   import {
     webApi,
     type ApiError,
@@ -19,6 +22,7 @@
   type PresetId = 'security_scan_pr' | 'weekly_ticket_flow';
   type SelectionKind = 'automation' | 'preset';
   type JsonField = 'trigger' | 'filters' | 'target' | 'executor' | 'policy' | 'metadata';
+  type TicketPackTicket = { path: string; content: string };
 
   type AutomationPreset = {
     id: PresetId;
@@ -278,6 +282,22 @@
     await savePatch({ [field]: parsed } as AutomationUpdateRequest, field);
   }
 
+  async function saveTicketPack(tickets: TicketPackTicket[]): Promise<void> {
+    if (selectedKind !== 'automation') {
+      ticketDraft = tickets[0]?.content ?? '';
+      executorDraft = prettyJson({ ticket_pack: { source: 'inline', tickets } });
+      return;
+    }
+    const automation = selectedAutomation();
+    if (!automation) return;
+    const executor = { ...asRecord(automation.raw.executor) };
+    const ticketPack: JsonRecord = { ...asRecord(executor.ticket_pack), source: stringValue(executor.ticket_pack, 'source') || 'inline' };
+    ticketPack.tickets = tickets.map((ticket) => ({ path: ticket.path, content: ticket.content }));
+    executor.ticket_pack = ticketPack;
+    executorDraft = prettyJson(executor);
+    await savePatch({ executor }, 'ticket pack');
+  }
+
   async function createPresetAutomation(): Promise<void> {
     if (!selectedRepoId || saving) return;
     const preset = selectedPreset();
@@ -292,6 +312,7 @@
       minute: Number(detailMinute),
       weekday: Number(detailWeekday),
       prompt: promptDraft || null,
+      ticket_body: preset.executorKind === 'ticket_flow' ? ticketDraft || null : null,
       agent: preset.executorKind === 'pma_turn' ? selectedAgent || null : null,
       model: preset.executorKind === 'pma_turn' ? selectedModel || null : null,
       reasoning: preset.executorKind === 'pma_turn' ? selectedReasoning || null : null,
@@ -453,6 +474,31 @@
     const ticketPack = asRecord(executor.ticket_pack);
     const tickets = Array.isArray(ticketPack.tickets) ? ticketPack.tickets : [];
     return stringValue(asRecord(tickets[0]), 'content');
+  }
+
+  function selectedTicketPackTickets(): TicketPackTicket[] {
+    const automation = selectedAutomation();
+    if (automation) return ticketPackTickets(automation.raw.executor);
+    if (selectedPreset().executorKind !== 'ticket_flow') return [];
+    return ticketPackTickets({ ticket_pack: { tickets: [{ path: 'TICKET-001.md', content: ticketDraft }] } });
+  }
+
+  function ticketPackTickets(rawExecutor: unknown): TicketPackTicket[] {
+    const executor = asRecord(rawExecutor);
+    const ticketPack = asRecord(executor.ticket_pack);
+    const tickets = Array.isArray(ticketPack.tickets) ? ticketPack.tickets : [];
+    return tickets.map((ticket, index) => {
+      const record = asRecord(ticket);
+      return {
+        path: stringValue(record, 'path') || `TICKET-${String(index + 1).padStart(3, '0')}.md`,
+        content: stringValue(record, 'content')
+      };
+    });
+  }
+
+  function selectedRunHistory() {
+    const automation = selectedAutomation();
+    return automation ? runHistoryFromAutomationJobs(automation.jobs.map((job) => job.raw)) : [];
   }
 
   function agentIdFallback(): string {
@@ -877,12 +923,12 @@
       <!-- Instruction: prompt or ticket body -->
       <div class="detail-section">
         {#if selectedExecutorKind() === 'ticket_flow'}
-          <h3>Ticket body</h3>
-          <textarea
-            class="instruction-editor"
-            bind:value={ticketDraft}
-            oninput={() => saveTextDebounced({ ticket_body: ticketDraft }, 'ticket body')}
-          ></textarea>
+          <h3>Ticket pack</h3>
+          <TicketPackEditor
+            tickets={selectedTicketPackTickets()}
+            onChange={saveTicketPack}
+            allowAddRemove={selectedKind === 'automation'}
+          />
         {:else}
           <h3>Prompt</h3>
           <textarea
@@ -892,6 +938,13 @@
           ></textarea>
         {/if}
       </div>
+
+      {#if selectedAutomation()}
+        <div class="detail-section">
+          <h3>Run history</h3>
+          <RunHistoryList runs={selectedRunHistory()} emptyMessage="This automation has not run yet." />
+        </div>
+      {/if}
 
       <!-- Advanced: raw rule config, normally authored by PMA -->
       <details class="advanced">

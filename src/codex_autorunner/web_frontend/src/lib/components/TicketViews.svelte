@@ -11,7 +11,8 @@
   import EditableMarkdown from '$lib/components/EditableMarkdown.svelte';
   import PageHero from '$lib/components/PageHero.svelte';
   import CurrentTicketChatStream from '$lib/components/CurrentTicketChatStream.svelte';
-  import TicketDiffStats from '$lib/components/TicketDiffStats.svelte';
+  import TicketDiffStats from '$lib/components/tickets/TicketDiffStats.svelte';
+  import StatusPill from '$lib/components/tickets/StatusPill.svelte';
   import AutoDismissNotice from '$lib/components/AutoDismissNotice.svelte';
   import VirtualList from '$lib/components/VirtualList.svelte';
   import FilterRow from '$lib/components/FilterRow.svelte';
@@ -486,10 +487,10 @@
                     {#if row.isCurrent && row.status === 'idle'}<em class="working-badge">Working</em>{/if}
                     {#if row.workspaceKind === 'unscoped'}<em class="working-badge needs-repair" title="Needs owner repair">Needs owner repair</em>{/if}
                     {#if row.status !== 'idle'}
-                      <span class="status-pill {row.status}">{statusLabel(row.status)}</span>
+                      <StatusPill status={row.status} />
                     {/if}
                     {#if row.currentRunState && row.currentRunState !== 'idle' && row.currentRunState !== 'done' && row.currentRunState !== row.status}
-                      <span class="status-pill {row.currentRunState}" title="Run status">{statusLabel(row.currentRunState)}</span>
+                      <StatusPill status={row.currentRunState} title="Run status" />
                     {/if}
                   </div>
                   <div class="ticket-card-meta">
@@ -548,7 +549,7 @@
             onclick={() => (repairOpen = !repairOpen)}
           >{statusLabel('invalid')}</button>
         {:else if detail.status !== 'idle'}
-          <span class="status-pill {detail.status}">{statusLabel(detail.status)}</span>
+          <StatusPill status={detail.status} />
         {/if}
         <AgentModelReasoningPicker
           variant="ticket"
@@ -1456,58 +1457,6 @@
   .ticket-flow-section {
     display: grid;
     gap: var(--space-2);
-  }
-
-  .ticket-flow-timeline {
-    list-style: none;
-    margin: 0;
-    padding: 0;
-    display: grid;
-    gap: var(--space-2);
-  }
-
-  .ticket-flow-row {
-    display: grid;
-    grid-template-columns: auto minmax(0, 1fr) auto;
-    gap: var(--space-3);
-    align-items: center;
-    padding: var(--space-2) var(--space-3);
-    border: 1px solid var(--color-border-subtle);
-    border-radius: 8px;
-    background: var(--color-surface);
-    text-decoration: none;
-    color: inherit;
-    transition: border-color var(--transition-fast), background var(--transition-fast);
-  }
-
-  a.ticket-flow-row:hover {
-    border-color: var(--color-border-strong);
-    background: var(--color-surface-sunken, var(--color-surface));
-  }
-
-  .ticket-flow-body {
-    display: grid;
-    gap: 2px;
-    min-width: 0;
-  }
-
-  .ticket-flow-body strong {
-    font-size: var(--font-size-1);
-    font-weight: 600;
-    letter-spacing: -0.005em;
-  }
-
-  .ticket-flow-summary {
-    font-size: var(--font-size-0);
-    color: var(--color-ink-muted);
-    line-height: 1.45;
-  }
-
-  .ticket-flow-time {
-    font-size: var(--font-size-0);
-    color: var(--color-ink-faint);
-    font-variant-numeric: tabular-nums;
-    white-space: nowrap;
   }
 
   .ticket-worker-output {

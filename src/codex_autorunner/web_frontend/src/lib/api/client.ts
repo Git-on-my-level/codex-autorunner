@@ -139,10 +139,15 @@ export type AutomationScheduleSummary = {
 export type AutomationJobSummary = {
   jobId: string;
   state: string;
+  createdAt: string | null;
+  startedAt: string | null;
+  finishedAt: string | null;
   updatedAt: string | null;
   resultSummary: string | null;
   errorText: string | null;
+  attemptCount: number;
   ticketFlowRunId: string | null;
+  ticketFlowWorktreeId: string | null;
   raw: JsonRecord;
 };
 
@@ -157,6 +162,7 @@ export type AutomationSummary = {
   metadata: JsonRecord;
   schedule: AutomationScheduleSummary | null;
   lastJob: AutomationJobSummary | null;
+  jobs: AutomationJobSummary[];
   jobCount: number;
   createdAt: string | null;
   updatedAt: string | null;
@@ -182,6 +188,7 @@ export type AutomationCreateRequest = {
   minute?: number;
   weekday?: number;
   prompt?: string | null;
+  ticket_body?: string | null;
   agent?: string | null;
   model?: string | null;
   reasoning?: string | null;
@@ -990,6 +997,7 @@ function mapAutomationSummary(raw: JsonRecord): AutomationSummary {
     metadata: asRecord(raw.metadata),
     schedule: Object.keys(schedule).length ? mapAutomationSchedule(schedule) : null,
     lastJob: Object.keys(lastJob).length ? mapAutomationJob(lastJob) : null,
+    jobs: asArray(raw.jobs).map(mapAutomationJob),
     jobCount: numberValue(raw.job_count ?? raw.jobCount, 0),
     createdAt: nullableString(raw.created_at ?? raw.createdAt),
     updatedAt: nullableString(raw.updated_at ?? raw.updatedAt),
@@ -1014,10 +1022,15 @@ function mapAutomationJob(raw: JsonRecord): AutomationJobSummary {
   return {
     jobId: stringValue(raw.job_id ?? raw.jobId, ''),
     state: stringValue(raw.state, ''),
+    createdAt: nullableString(raw.created_at ?? raw.createdAt),
+    startedAt: nullableString(raw.started_at ?? raw.startedAt),
+    finishedAt: nullableString(raw.finished_at ?? raw.finishedAt),
     updatedAt: nullableString(raw.updated_at ?? raw.updatedAt),
     resultSummary: nullableString(raw.result_summary ?? raw.resultSummary),
     errorText: nullableString(raw.error_text ?? raw.errorText),
+    attemptCount: numberValue(raw.attempt_count ?? raw.attemptCount, 0),
     ticketFlowRunId: nullableString(raw.ticket_flow_run_id ?? raw.ticketFlowRunId),
+    ticketFlowWorktreeId: nullableString(raw.ticket_flow_worktree_id ?? raw.ticketFlowWorktreeId),
     raw
   };
 }

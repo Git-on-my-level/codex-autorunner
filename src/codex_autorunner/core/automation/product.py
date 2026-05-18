@@ -19,6 +19,7 @@ from .models import (
     TARGET_POLICY_NEW_AUTOMATION_WORKTREE,
     TRIGGER_KIND_SCHEDULE,
     AutomationEvent,
+    AutomationJob,
     AutomationRule,
     AutomationSchedule,
     normalize_timestamp,
@@ -39,6 +40,7 @@ class AutomationPresetRequest:
     minute: int = 0
     weekday: int = 0
     prompt: Optional[str] = None
+    ticket_body: Optional[str] = None
     agent: Optional[str] = None
     model: Optional[str] = None
     reasoning: Optional[str] = None
@@ -95,6 +97,7 @@ def automation_overview(store: AutomationStore, *, limit: int = 100) -> dict[str
 def automation_row(store: AutomationStore, rule: AutomationRule) -> dict[str, Any]:
     schedules = store.list_schedules(rule_id=rule.rule_id)
     jobs = store.list_jobs(rule_id=rule.rule_id, limit=25)
+    recent_jobs = sorted(jobs, key=lambda item: item.updated_at, reverse=True)
     last_job = max(jobs, key=lambda item: item.updated_at, default=None)
     schedule = schedules[0] if schedules else None
     return {
@@ -113,9 +116,26 @@ def automation_row(store: AutomationStore, rule: AutomationRule) -> dict[str, An
         "metadata": rule.metadata,
         "schedule": schedule.to_dict() if schedule is not None else None,
         "last_job": last_job.to_dict() if last_job is not None else None,
+        "jobs": [_automation_job_row(job) for job in recent_jobs],
         "job_count": len(jobs),
         "created_at": rule.created_at,
         "updated_at": rule.updated_at,
+    }
+
+
+def _automation_job_row(job: AutomationJob) -> dict[str, Any]:
+    return {
+        "job_id": job.job_id,
+        "state": job.state,
+        "created_at": job.created_at,
+        "started_at": job.started_at,
+        "finished_at": job.finished_at,
+        "updated_at": job.updated_at,
+        "result_summary": job.result_summary,
+        "error_text": job.error_text,
+        "attempt_count": job.attempt_count,
+        "ticket_flow_run_id": job.ticket_flow_run_id,
+        "ticket_flow_worktree_id": job.ticket_flow_worktree_id,
     }
 
 
@@ -469,7 +489,7 @@ def _build_weekly_ticket_flow(
         weekday=payload.weekday,
     )
     ticket_id = f"tkt_{uuid.uuid4().hex}"
-    ticket_body = f"""---
+    default_ticket_body = f"""---
 agent: codex
 done: false
 ticket_id: "{ticket_id}"
@@ -485,6 +505,7 @@ You are running a scheduled weekly ticket flow for `{repo_id}`.
 - If changes are made, run relevant verification and open a draft PR with a concise summary.
 - If no changes are needed, record the checks performed and mark this ticket done.
 """
+    ticket_body = _optional_text(payload.ticket_body) or default_ticket_body
     rule = AutomationRule.create(
         rule_id=rule_id,
         name=name,
