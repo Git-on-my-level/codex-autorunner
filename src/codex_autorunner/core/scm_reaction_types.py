@@ -419,7 +419,9 @@ class ScmActionDescriptor:
             return cls.create(
                 reaction_kind=reaction_kind,  # type: ignore[arg-type]
                 operation_kind=operation_kind,  # type: ignore[arg-type]
-                operation_key=_require_text(value.get("operation_key"), "operation_key"),
+                operation_key=_require_text(
+                    value.get("operation_key"), "operation_key"
+                ),
                 payload=payload,
                 message=_legacy_message_descriptor_from_action_payload(
                     reaction_kind=reaction_kind,  # type: ignore[arg-type]
