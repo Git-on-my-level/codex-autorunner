@@ -484,10 +484,11 @@ def _ticket_status_from_raw(
     ticket_done = _bool_or_none(raw.get("ticket_done"))
     if ticket_done is True:
         return "done"
-    if ticket_done is False and fallback_status in {"running", "waiting", "failed"}:
-        return fallback_status
     if fallback_status in {"running", "waiting", "failed"}:
-        return fallback_status
+        return cast(
+            Literal["done", "running", "waiting", "failed", "unknown"],
+            fallback_status,
+        )
     return "unknown"
 
 

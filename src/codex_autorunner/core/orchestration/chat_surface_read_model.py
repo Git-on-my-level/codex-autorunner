@@ -7,7 +7,7 @@ import re
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Iterable, Mapping, Optional
+from typing import Any, Iterable, Mapping, Optional, Sequence
 
 from ..domain.refs import SurfaceRef
 from ..domain.workspace_scope import (
@@ -2327,7 +2327,7 @@ def _ticket_child_status(row: Mapping[str, Any]) -> str:
 
 
 def _ticket_run_id_from_children(
-    group_id: str, children: list[Mapping[str, Any]]
+    group_id: str, children: Sequence[Mapping[str, Any]]
 ) -> str:
     for child in children:
         run_id = _normalize_text(child.get("run_id"))
@@ -2338,11 +2338,11 @@ def _ticket_run_id_from_children(
     return group_id
 
 
-def _ticket_run_scope_kind(children: list[Mapping[str, Any]]) -> str:
+def _ticket_run_scope_kind(children: Sequence[Mapping[str, Any]]) -> str:
     return "worktree" if any(child.get("worktree_id") for child in children) else "repo"
 
 
-def _ticket_run_scope_id(children: list[Mapping[str, Any]]) -> str:
+def _ticket_run_scope_id(children: Sequence[Mapping[str, Any]]) -> str:
     for key in ("worktree_id", "repo_id", "workspace_root"):
         for child in children:
             value = _normalize_text(child.get(key))
