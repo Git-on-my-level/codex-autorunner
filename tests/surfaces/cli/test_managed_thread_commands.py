@@ -91,7 +91,7 @@ def test_pma_cli_thread_group_has_required_commands():
     assert "compact" in output, "PMA thread should have 'compact' command"
     assert "fork" in output, "PMA thread should have 'fork' command"
     assert "resume" in output, "PMA thread should have 'resume' command"
-    assert "archive" in output, "PMA thread should have 'archive' command"
+    assert "retire" in output, "PMA thread should have 'retire' command"
     assert "interrupt" in output, "PMA thread should have 'interrupt' command"
 
 
@@ -201,9 +201,9 @@ def test_pma_cli_thread_fork_help_shows_json_option():
     assert "--name" in output
 
 
-def test_pma_cli_thread_archive_help_shows_bulk_options() -> None:
+def test_pma_cli_thread_retire_help_shows_bulk_options() -> None:
     runner = CliRunner()
-    result = runner.invoke(pma_app, ["thread", "archive", "--help"])
+    result = runner.invoke(pma_app, ["thread", "retire", "--help"])
     assert result.exit_code == 0
     output = result.stdout
     assert "--id" in output
@@ -2421,7 +2421,7 @@ def test_pma_cli_thread_control_commands_use_orchestration_routes(
                     "managed_thread_id": "thread-1",
                 }
             }
-        if url.endswith("/archive"):
+        if url.endswith("/retire"):
             return {
                 "thread": {
                     "managed_thread_id": "thread-1",
@@ -2465,17 +2465,17 @@ def test_pma_cli_thread_control_commands_use_orchestration_routes(
             str(tmp_path),
         ],
     )
-    archive_result = runner.invoke(
+    retire_result = runner.invoke(
         pma_app,
-        ["thread", "archive", "--id", "thread-1", "--path", str(tmp_path)],
+        ["thread", "retire", "--id", "thread-1", "--path", str(tmp_path)],
     )
 
     assert create_result.exit_code == 0
     assert create_result.stdout.strip() == "thread-1"
     assert resume_result.exit_code == 0
     assert "Resumed thread-1" in resume_result.stdout
-    assert archive_result.exit_code == 0
-    assert "Archived thread-1 (CLI thread)" in archive_result.stdout
+    assert retire_result.exit_code == 0
+    assert "Retired thread-1 (CLI thread)" in retire_result.stdout
 
     assert calls == [
         (
@@ -2506,7 +2506,7 @@ def test_pma_cli_thread_control_commands_use_orchestration_routes(
         ),
         (
             "POST",
-            "http://127.0.0.1:4321/hub/pma/threads/thread-1/archive",
+            "http://127.0.0.1:4321/hub/pma/threads/thread-1/retire",
             None,
         ),
     ]
@@ -2607,7 +2607,7 @@ def test_pma_cli_thread_interrupt_reports_running_conflict_cleanly(
     assert "409 Conflict" not in result.output
 
 
-def test_pma_cli_thread_archive_bulk_uses_bulk_route(
+def test_pma_cli_thread_retire_bulk_uses_bulk_route(
     monkeypatch, tmp_path: Path
 ) -> None:
     calls: list[tuple[str, str, dict[str, object] | None]] = []
@@ -2623,7 +2623,7 @@ def test_pma_cli_thread_archive_bulk_uses_bulk_route(
     ):
         _ = token_env, params
         calls.append((method, url, payload))
-        if url.endswith("/hub/pma/threads/archive"):
+        if url.endswith("/hub/pma/threads/retire"):
             return {
                 "threads": [
                     {
@@ -2637,7 +2637,7 @@ def test_pma_cli_thread_archive_bulk_uses_bulk_route(
                         "status": "archived",
                     },
                 ],
-                "archived_count": 2,
+                "retired_count": 2,
                 "requested_count": 2,
                 "errors": [],
                 "error_count": 0,
@@ -2650,7 +2650,7 @@ def test_pma_cli_thread_archive_bulk_uses_bulk_route(
         pma_app,
         [
             "thread",
-            "archive",
+            "retire",
             "--ids",
             "thread-1,thread-2",
             "--path",
@@ -2659,19 +2659,19 @@ def test_pma_cli_thread_archive_bulk_uses_bulk_route(
     )
 
     assert result.exit_code == 0
-    assert "Archived thread-1 (Thread One)" in result.stdout
-    assert "Archived thread-2 (Thread Two)" in result.stdout
-    assert "Archived 2 managed threads." in result.stdout
+    assert "Retired thread-1 (Thread One)" in result.stdout
+    assert "Retired thread-2 (Thread Two)" in result.stdout
+    assert "Retired 2 managed threads." in result.stdout
     assert calls == [
         (
             "POST",
-            "http://127.0.0.1:4321/hub/pma/threads/archive",
+            "http://127.0.0.1:4321/hub/pma/threads/retire",
             {"thread_ids": ["thread-1", "thread-2"]},
         )
     ]
 
 
-def test_pma_cli_thread_archive_id_is_single_value_not_split_on_commas(
+def test_pma_cli_thread_retire_id_is_single_value_not_split_on_commas(
     monkeypatch, tmp_path: Path
 ) -> None:
     calls: list[tuple[str, str, dict[str, object] | None]] = []
@@ -2687,7 +2687,7 @@ def test_pma_cli_thread_archive_id_is_single_value_not_split_on_commas(
     ):
         _ = token_env, params
         calls.append((method, url, payload))
-        if url.endswith("/hub/pma/threads/a,b/archive"):
+        if url.endswith("/hub/pma/threads/a,b/retire"):
             return {
                 "thread": {
                     "managed_thread_id": "a,b",
@@ -2703,7 +2703,7 @@ def test_pma_cli_thread_archive_id_is_single_value_not_split_on_commas(
         pma_app,
         [
             "thread",
-            "archive",
+            "retire",
             "--id",
             "a,b",
             "--path",
@@ -2712,17 +2712,17 @@ def test_pma_cli_thread_archive_id_is_single_value_not_split_on_commas(
     )
 
     assert result.exit_code == 0
-    assert "Archived a,b (comma id)" in result.stdout
+    assert "Retired a,b (comma id)" in result.stdout
     assert calls == [
         (
             "POST",
-            "http://127.0.0.1:4321/hub/pma/threads/a,b/archive",
+            "http://127.0.0.1:4321/hub/pma/threads/a,b/retire",
             None,
         )
     ]
 
 
-def test_pma_cli_thread_archive_reads_ids_from_stdin(
+def test_pma_cli_thread_retire_reads_ids_from_stdin(
     monkeypatch, tmp_path: Path
 ) -> None:
     calls: list[tuple[str, str, dict[str, object] | None]] = []
@@ -2738,13 +2738,13 @@ def test_pma_cli_thread_archive_reads_ids_from_stdin(
     ):
         _ = token_env, params
         calls.append((method, url, payload))
-        if url.endswith("/hub/pma/threads/archive"):
+        if url.endswith("/hub/pma/threads/retire"):
             return {
                 "threads": [
                     {"managed_thread_id": "thread-1", "status": "archived"},
                     {"managed_thread_id": "thread-2", "status": "archived"},
                 ],
-                "archived_count": 2,
+                "retired_count": 2,
                 "requested_count": 2,
                 "errors": [],
                 "error_count": 0,
@@ -2757,7 +2757,7 @@ def test_pma_cli_thread_archive_reads_ids_from_stdin(
         pma_app,
         [
             "thread",
-            "archive",
+            "retire",
             "--ids-stdin",
             "--path",
             str(tmp_path),
@@ -2769,13 +2769,13 @@ def test_pma_cli_thread_archive_reads_ids_from_stdin(
     assert calls == [
         (
             "POST",
-            "http://127.0.0.1:4321/hub/pma/threads/archive",
+            "http://127.0.0.1:4321/hub/pma/threads/retire",
             {"thread_ids": ["thread-1", "thread-2"]},
         )
     ]
 
 
-def test_pma_cli_thread_archive_bulk_json_exits_nonzero_on_errors(
+def test_pma_cli_thread_retire_bulk_json_exits_nonzero_on_errors(
     monkeypatch, tmp_path: Path
 ) -> None:
     _patch_load_hub_config(monkeypatch)
@@ -2788,11 +2788,11 @@ def test_pma_cli_thread_archive_bulk_json_exits_nonzero_on_errors(
         params=None,
     ):
         _ = method, payload, token_env, params
-        if not url.endswith("/hub/pma/threads/archive"):
+        if not url.endswith("/hub/pma/threads/retire"):
             raise AssertionError(f"unexpected url: {url}")
         return {
             "threads": [{"managed_thread_id": "thread-1", "status": "archived"}],
-            "archived_count": 1,
+            "retired_count": 1,
             "requested_count": 2,
             "errors": [
                 {"thread_id": "missing-thread", "detail": "Managed thread not found"}
@@ -2806,7 +2806,7 @@ def test_pma_cli_thread_archive_bulk_json_exits_nonzero_on_errors(
         pma_app,
         [
             "thread",
-            "archive",
+            "retire",
             "--ids",
             "thread-1,missing-thread",
             "--json",
@@ -2817,7 +2817,7 @@ def test_pma_cli_thread_archive_bulk_json_exits_nonzero_on_errors(
 
     assert result.exit_code == 1
     payload = json.loads(result.stdout)
-    assert payload["archived_count"] == 1
+    assert payload["retired_count"] == 1
     assert payload["error_count"] == 1
 
 
@@ -2826,7 +2826,7 @@ def test_pma_cli_thread_create_rejects_backend_id_option() -> None:
     assert "backend_id" not in sig.parameters
 
 
-def test_pma_cli_thread_archive_reports_unreachable_host_port(
+def test_pma_cli_thread_retire_reports_unreachable_host_port(
     monkeypatch, tmp_path: Path
 ) -> None:
     _patch_load_hub_config(monkeypatch)
@@ -2848,19 +2848,19 @@ def test_pma_cli_thread_archive_reports_unreachable_host_port(
     runner = CliRunner()
     result = runner.invoke(
         pma_app,
-        ["thread", "archive", "--id", "thread-1", "--path", str(tmp_path)],
+        ["thread", "retire", "--id", "thread-1", "--path", str(tmp_path)],
     )
 
     assert result.exit_code == 1
-    assert "Failed to archive managed PMA thread thread-1." in result.output
-    assert "Resolved URL: http://127.0.0.1:4321/hub/pma/threads/thread-1/archive" in (
+    assert "Failed to retire managed PMA thread thread-1." in result.output
+    assert "Resolved URL: http://127.0.0.1:4321/hub/pma/threads/thread-1/retire" in (
         result.output
     )
     assert "Failure type: hub host/port unreachable." in result.output
     assert "running in this runtime" in result.output
 
 
-def test_pma_cli_thread_archive_reports_base_path_mismatch(
+def test_pma_cli_thread_retire_reports_base_path_mismatch(
     monkeypatch, tmp_path: Path
 ) -> None:
     _patch_load_hub_config(monkeypatch)
@@ -2882,17 +2882,17 @@ def test_pma_cli_thread_archive_reports_base_path_mismatch(
     runner = CliRunner()
     result = runner.invoke(
         pma_app,
-        ["thread", "archive", "--id", "thread-1", "--path", str(tmp_path)],
+        ["thread", "retire", "--id", "thread-1", "--path", str(tmp_path)],
     )
 
     assert result.exit_code == 1
-    assert "Failed to archive managed PMA thread thread-1." in result.output
+    assert "Failed to retire managed PMA thread thread-1." in result.output
     assert "Failure type: possible base-path mismatch." in result.output
     assert "HTTP status: 404" in result.output
     assert "server.base_path" in result.output
 
 
-def test_pma_cli_thread_archive_preserves_not_found_detail(
+def test_pma_cli_thread_retire_preserves_not_found_detail(
     monkeypatch, tmp_path: Path
 ) -> None:
     _patch_load_hub_config(monkeypatch)
@@ -2918,11 +2918,11 @@ def test_pma_cli_thread_archive_preserves_not_found_detail(
     runner = CliRunner()
     result = runner.invoke(
         pma_app,
-        ["thread", "archive", "--id", "thread-missing", "--path", str(tmp_path)],
+        ["thread", "retire", "--id", "thread-missing", "--path", str(tmp_path)],
     )
 
     assert result.exit_code == 1
-    assert "Failed to archive managed PMA thread thread-missing." in result.output
+    assert "Failed to retire managed PMA thread thread-missing." in result.output
     assert "Failure type: HTTP status 404." in result.output
     assert "Server detail: Managed thread not found" in result.output
     assert "possible base-path mismatch" not in result.output

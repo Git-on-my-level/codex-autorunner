@@ -48,7 +48,7 @@ def test_build_application_commands_structure_is_stable() -> None:
         "review",
         "approvals",
         "mention",
-        "archive",
+        "retire",
         "session",
         "files",
         "automation",

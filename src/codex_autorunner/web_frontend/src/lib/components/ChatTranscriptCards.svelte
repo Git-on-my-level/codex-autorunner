@@ -142,6 +142,8 @@
 
   function modelOnlyCapsuleRefs(card: Extract<ChatTranscriptCard, { kind: 'message' }>): PmaMessageCapsuleRef[] {
     if (card.message.role !== 'user') return [];
+    const structuredRefs = card.message.modelContextRefs ?? [];
+    if (structuredRefs.length > 0) return structuredRefs;
     return (card.message.capsuleRefs ?? []).filter((ref) => ref.visibility === 'model_only');
   }
 
@@ -156,32 +158,39 @@
   {#if card.kind === 'message'}
     {@const isStreaming = card.message.role === 'assistant' && card.id === streamingMessageId}
     {@const modelContextRefs = modelOnlyCapsuleRefs(card)}
-    {#if modelContextRefs.length > 0}
+    {@const visibleText = card.message.visibleText ?? card.message.text}
+    {@const modelContextText = card.message.role === 'user' ? card.message.modelContextText : null}
+    {#if modelContextRefs.length > 0 || modelContextText}
       <details class="injected-prompt-card">
         <summary>
-          <span>Model-only context</span>
+          <span>{modelContextText ? 'Injected prompt' : 'Model-only context'}</span>
         </summary>
         <div class="injected-prompt-body markdown-body">
-          <ul>
-            {#each modelContextRefs as ref (`${ref.capsuleId}:${ref.capsuleVersion}:${ref.sourceDigest}`)}
-              <li>
-                <strong>{capsuleRefLabel(ref)}</strong>
-                {#if ref.reason}
-                  <small>{ref.reason}</small>
-                {/if}
-              </li>
-            {/each}
-          </ul>
+          {#if modelContextText}
+            {@html renderMarkdownToHtml(modelContextText, { openLinksInNewTab: true })}
+          {/if}
+          {#if modelContextRefs.length > 0}
+            <ul>
+              {#each modelContextRefs as ref (`${ref.capsuleId}:${ref.capsuleVersion}:${ref.sourceDigest}`)}
+                <li>
+                  <strong>{capsuleRefLabel(ref)}</strong>
+                  {#if ref.reason}
+                    <small>{ref.reason}</small>
+                  {/if}
+                </li>
+              {/each}
+            </ul>
+          {/if}
         </div>
       </details>
     {/if}
     <article class={`message ${card.message.role === 'user' ? 'user' : 'assistant'}`}>
       <span>{card.message.role === 'user' ? 'You' : assistantLabel}</span>
       {#if isStreaming}
-        <div class="message-markdown streaming">{card.message.text}</div>
+        <div class="message-markdown streaming">{visibleText}</div>
       {:else}
         <div class="message-markdown markdown-body">
-          {@html renderMarkdownToHtml(card.message.text, { openLinksInNewTab: true })}
+          {@html renderMarkdownToHtml(visibleText, { openLinksInNewTab: true })}
         </div>
       {/if}
       {#if card.message.role === 'user' && card.message.artifacts.length > 0}

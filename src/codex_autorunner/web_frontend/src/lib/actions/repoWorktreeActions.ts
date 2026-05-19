@@ -21,7 +21,7 @@ export type RetireWorktreeTarget = {
   cleanupBlockedByChatBinding: boolean;
 };
 
-export type ArchiveStateTarget = {
+export type RetireStateTarget = {
   kind: 'repo' | 'worktree';
   id: string;
   label: string;
@@ -65,8 +65,8 @@ export async function confirmAndRetireWorktree(target: RetireWorktreeTarget): Pr
     worktreeRepoId: target.id,
     force: requiresTypedConfirmation,
     forceAttestation,
-    forceArchive: false,
-    archiveNote: null
+    forceRetire: false,
+    retireNote: null
   });
   if (!result.ok) return { tone: 'danger', message: result.error.message };
   await invalidateReadModelTags([
@@ -76,30 +76,30 @@ export async function confirmAndRetireWorktree(target: RetireWorktreeTarget): Pr
   return { tone: 'success', message: `Retired worktree ${target.label}.` };
 }
 
-export async function confirmAndArchiveState(target: ArchiveStateTarget): Promise<ActionNotice | null> {
+export async function confirmAndRetireState(target: RetireStateTarget): Promise<ActionNotice | null> {
   if (typeof window === 'undefined') return null;
   const subject = target.kind === 'repo' ? 'repo' : 'worktree';
   const stateText = target.hasCarState
-    ? 'archive reviewable CAR runtime artifacts and reset local CAR state'
-    : 'archive stale non-chat-bound managed threads; CAR state is already clean';
+    ? 'retire reviewable CAR runtime artifacts and reset local CAR state'
+    : 'retire stale non-chat-bound managed threads; CAR state is already clean';
   const threadText =
     target.unboundManagedThreadCount > 0
-      ? `\n\nThis will also archive ${target.unboundManagedThreadCount} stale non-chat-bound managed thread${
+      ? `\n\nThis will also retire ${target.unboundManagedThreadCount} stale non-chat-bound managed thread${
           target.unboundManagedThreadCount === 1 ? '' : 's'
         }.`
       : '';
   const ok = await confirmDialog({
-    title: `Archive ${subject} "${target.label}"`,
+    title: `Retire ${subject} "${target.label}"`,
     message: `CAR will ${stateText}. Git files and active chat bindings are not deleted.${threadText}`,
-    confirmText: 'Archive',
+    confirmText: 'Retire',
     danger: true
   });
   if (!ok) return null;
 
-  const result = await webApi.hub.archiveState({
+  const result = await webApi.hub.retireState({
     kind: target.kind,
     id: target.id,
-    archiveNote: null
+    retireNote: null
   });
   if (!result.ok) return { tone: 'danger', message: result.error.message };
   await invalidateReadModelTags([
@@ -109,12 +109,12 @@ export async function confirmAndArchiveState(target: ArchiveStateTarget): Promis
 
   const payload = result.data;
   const snapshotText = stringValue(payload.snapshot_id) ?? 'managed threads only';
-  const threadCount = numberValue(payload.archived_thread_count);
+  const threadCount = numberValue(payload.retired_thread_count);
   const threadTextSuffix =
     threadCount > 0 ? ` and ${threadCount} managed thread${threadCount === 1 ? '' : 's'}` : '';
   return {
     tone: 'success',
-    message: `Archived ${subject} ${target.label} (${snapshotText}${threadTextSuffix}).`
+    message: `Retired ${subject} ${target.label} (${snapshotText}${threadTextSuffix}).`
   };
 }
 

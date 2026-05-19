@@ -78,14 +78,14 @@ def _render_compacted_active_context(
         f"- Compacted at: {timestamp}",
         f"- Previous line count: {previous_line_count}",
         f"- Active context line budget: {max_lines}",
-        "- Archived snapshot appended to context_log.md.",
+        "- Retired snapshot appended to context_log.md.",
         "",
-        "## Archived context summary",
+        "## Retired context summary",
     ]
     remaining = max(max_lines - len(base_lines), 0)
     summary_lines = [f"- {item}" for item in summary_items[:remaining]]
     if not summary_lines and max_lines > len(base_lines):
-        summary_lines = ["- No additional archival summary captured."]
+        summary_lines = ["- No additional retirement summary captured."]
     output_lines = base_lines + summary_lines
     if max_lines > 0:
         output_lines = output_lines[:max_lines]
@@ -235,7 +235,7 @@ def pma_context_compact(
         None, "--max-lines", help="Target max lines for active_context.md"
     ),
     summary_lines: int = typer.Option(
-        12, "--summary-lines", help="Max archived summary lines to keep"
+        12, "--summary-lines", help="Max retired summary lines to keep"
     ),
     dry_run: bool = typer.Option(False, "--dry-run", help="Preview only"),
     path: Optional[Path] = hub_root_path_option(),

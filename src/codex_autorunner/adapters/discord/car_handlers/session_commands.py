@@ -1186,7 +1186,7 @@ async def handle_car_reset(
     )
 
 
-async def handle_car_archive(
+async def handle_car_retire(
     service: Any,
     interaction_id: str,
     interaction_token: str,
@@ -1228,7 +1228,7 @@ async def handle_car_archive(
             worktree_repo_id=target.workspace_repo_id,
             branch=None,
             worktree_of=target.worktree_of,
-            note="Discord /car archive",
+            note="Discord /car retire",
             source_path=target.source_path,
         )
     except ValueError as exc:
@@ -1243,7 +1243,7 @@ async def handle_car_archive(
         log_event(
             service._logger,
             logging.WARNING,
-            "discord.archive_state.failed",
+            "discord.retire_state.failed",
             workspace_root=str(workspace_root),
             exc=exc,
         )
@@ -1251,7 +1251,7 @@ async def handle_car_archive(
             interaction_id=interaction_id,
             interaction_token=interaction_token,
             deferred=deferred,
-            text=format_discord_message("Archive failed; check logs for details."),
+            text=format_discord_message("Retire failed; check logs for details."),
         )
         return
 
@@ -1290,7 +1290,7 @@ async def handle_car_archive(
             log_event(
                 service._logger,
                 logging.WARNING,
-                "discord.archive_state.refresh_binding_failed",
+                "discord.retire_state.refresh_binding_failed",
                 channel_id=channel_id,
                 workspace_root=str(workspace_root),
                 exc=exc,
@@ -1300,7 +1300,7 @@ async def handle_car_archive(
                 interaction_token=interaction_token,
                 deferred=deferred,
                 text=format_discord_message(
-                    "Archive completed, but preparing a fresh managed thread failed."
+                    "Retire completed, but preparing a fresh managed thread failed."
                 ),
             )
             return
@@ -1313,13 +1313,13 @@ async def handle_car_archive(
             "\n".join(
                 [
                     (
-                        f"Archived workspace state to snapshot `{result.snapshot_id}`."
+                        f"Retired workspace state to snapshot `{result.snapshot_id}`."
                         if result.snapshot_id
                         else "Workspace CAR state was already clean."
                     ),
-                    f"Archived paths: {', '.join(result.archived_paths) or 'none'}",
+                    f"Retired paths: {', '.join(result.archived_paths) or 'none'}",
                     (
-                        f"Archived {len(result.archived_thread_ids)} managed thread"
+                        f"Retired {len(result.archived_thread_ids)} managed thread"
                         f"{'' if len(result.archived_thread_ids) == 1 else 's'}."
                     ),
                     "The binding remains active for fresh work.",
@@ -1773,7 +1773,7 @@ async def handle_car_interrupt(
 
 
 __all__ = [
-    "handle_car_archive",
+    "handle_car_retire",
     "handle_car_interrupt",
     "handle_car_new",
     "handle_car_newt",

@@ -102,6 +102,10 @@ from codex_autorunner.core.hub_control_plane import (
 from codex_autorunner.core.orchestration.chat_operation_state import (
     ChatOperationState,
 )
+from codex_autorunner.core.orchestration.turn_context import (
+    ChatTurnEnvelope,
+    ChatTurnSource,
+)
 from codex_autorunner.core.update import UpdateInProgressError
 from codex_autorunner.manifest import (
     MANIFEST_VERSION,
@@ -6040,6 +6044,7 @@ async def test_message_turn_waits_for_ingressed_slash_command_to_finish(
         *,
         workspace_root: Path,
         prompt_text: str,
+        turn_envelope: ChatTurnEnvelope | None = None,
         input_items: list[dict[str, Any]] | None = None,
         source_message_id: str | None = None,
         agent: str,
@@ -6196,6 +6201,7 @@ async def test_run_forever_drains_message_queued_behind_ingressed_slash_command(
         *,
         workspace_root: Path,
         prompt_text: str,
+        turn_envelope: ChatTurnEnvelope | None = None,
         input_items: list[dict[str, Any]] | None = None,
         source_message_id: str | None = None,
         agent: str,
@@ -6208,6 +6214,7 @@ async def test_run_forever_drains_message_queued_behind_ingressed_slash_command(
     ) -> DiscordMessageTurnResult:
         _ = (
             workspace_root,
+            turn_envelope,
             input_items,
             source_message_id,
             agent,
@@ -9194,6 +9201,7 @@ async def test_run_agent_turn_for_message_wraps_typing_indicator(
         *,
         workspace_root: Path,
         prompt_text: str,
+        turn_envelope: ChatTurnEnvelope | None = None,
         input_items: list[dict[str, Any]] | None = None,
         source_message_id: str | None = None,
         agent: str,
@@ -9207,10 +9215,13 @@ async def test_run_agent_turn_for_message_wraps_typing_indicator(
         heartbeat_interval_seconds: float,
         log_event_fn: Any,
         chat_ux_snapshot: Any = None,
+        user_visible_text: str | None = None,
+        title_seed: str | None = None,
     ) -> DiscordMessageTurnResult:
         _ = (
             workspace_root,
             prompt_text,
+            turn_envelope,
             input_items,
             source_message_id,
             agent,
@@ -9224,6 +9235,8 @@ async def test_run_agent_turn_for_message_wraps_typing_indicator(
             heartbeat_interval_seconds,
             log_event_fn,
             chat_ux_snapshot,
+            user_visible_text,
+            title_seed,
         )
         started.set()
         await release.wait()
@@ -9322,9 +9335,83 @@ async def test_run_agent_turn_for_message_forwards_delivery_suppression(
             session_key="session-1",
             orchestrator_channel_key=orchestrator_key,
             suppress_managed_thread_delivery=True,
+            user_visible_text="visible hello",
+            title_seed="visible hello",
         )
         assert result.final_message == "ok"
         assert captured[suppress_kwarg] is True
+        assert captured["user_visible_text"] == "visible hello"
+        assert captured["title_seed"] == "visible hello"
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    "orchestrator_key,monkeypatch_fn",
+    [
+        pytest.param("pma:channel-1", "run_managed_thread_turn_for_message", id="pma"),
+        pytest.param("channel-1", "run_agent_turn_for_message", id="repo"),
+    ],
+)
+async def test_run_agent_turn_for_message_forwards_typed_turn_envelope(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    orchestrator_key: str,
+    monkeypatch_fn: str,
+) -> None:
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    service = DiscordBotService(
+        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
+        logger=logging.getLogger("test"),
+        rest_client=_FakeRest(),
+        gateway_client=_FakeGateway([]),
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+    envelope = ChatTurnEnvelope(
+        source=ChatTurnSource(
+            surface_kind="discord",
+            surface_key="channel-1",
+            message_id="msg-1",
+        ),
+        user_visible_text="visible request",
+        runtime_prompt="runtime prompt",
+        title_seed="visible request",
+        input_items=[{"type": "text", "text": "runtime prompt"}],
+    )
+    captured: dict[str, Any] = {}
+
+    async def _fake_run(
+        _service: Any,
+        **kwargs: Any,
+    ) -> DiscordMessageTurnResult:
+        captured.update(kwargs)
+        return DiscordMessageTurnResult(final_message="ok")
+
+    monkeypatch.setattr(discord_service_module, monkeypatch_fn, _fake_run)
+
+    try:
+        result = await service._run_agent_turn_for_message(
+            workspace_root=tmp_path,
+            prompt_text="legacy prompt",
+            turn_envelope=envelope,
+            agent="codex",
+            model_override=None,
+            reasoning_effort=None,
+            session_key="session-1",
+            orchestrator_channel_key=orchestrator_key,
+            user_visible_text="legacy visible",
+            title_seed="legacy title",
+        )
+
+        assert result.final_message == "ok"
+        assert captured["turn_envelope"] is envelope
+        assert captured["input_items"] is None
+        assert captured["prompt_text"] == "legacy prompt"
+        assert "user_visible_text" not in captured
+        assert "title_seed" not in captured
     finally:
         await store.close()
 

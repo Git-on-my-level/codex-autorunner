@@ -191,7 +191,7 @@ def _classify_dormant_or_reusable(
                 "and is a cleanup candidate"
             ),
             detail_template=(
-                "Review before cleanup: car pma thread archive --id "
+                "Review before cleanup: car pma thread retire --id "
                 "{managed_thread_id} --path <hub_root> if dormant, or reuse it with "
                 'car pma thread send --id {managed_thread_id} --message "..." '
                 "--path <hub_root>"

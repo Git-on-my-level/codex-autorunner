@@ -51,9 +51,15 @@ const chatRow = {
   chatId: 'chat-1',
   surface: 'pma' as const,
   title: 'Ticket chat',
+  displayTitle: 'Ticket chat',
+  technicalTitle: 'chat-1',
   status: 'running' as const,
   unreadCount: 2,
   lastActivityAt: now,
+  lastVisibleMessageAt: now,
+  lastLifecycleUpdateAt: '2026-05-11T11:59:00Z',
+  lastInternalUpdateAt: now,
+  lastSortActivityAt: now,
   repoId: 'repo-1',
   worktreeId: 'wt-1',
   ticketId: 'TICKET-001',
@@ -61,7 +67,11 @@ const chatRow = {
   agent: 'codex',
   agentProfile: 'm4-pma',
   model: 'gpt-5.3-codex',
-  groupId: 'ticket-run:run-1'
+  groupId: 'ticket-run:run-1',
+  debug: {
+    title: { selected: 'Ticket chat', selected_source: 'stored_title' },
+    activity: { selected: now, selected_source: 'last_visible_message_at' }
+  }
 };
 
 function envelope(eventType: string, entityKind: string, entityId: string, operation = 'patch') {
@@ -85,7 +95,21 @@ describe('read model contracts', () => {
       window: window(),
       filter: 'active',
       rows: [chatRow],
-      groups: [],
+      groups: [
+        {
+          groupId: 'run:run-1',
+          kind: 'ticket_run',
+          label: 'run:run-1',
+          childCount: 2,
+          waitingCount: 1,
+          runningCount: 1,
+          unreadCount: 3,
+          lastActivityAt: now,
+          lastSortActivityAt: now,
+          lastLifecycleUpdateAt: now,
+          debug: { activity: { selectedSource: 'lastSortActivityAt' } }
+        }
+      ],
       counters: { total: 1, waiting: 0, running: 1, unread: 2, archived: 0 },
       repair: repair('/hub/read-models/chats')
     });
@@ -101,6 +125,11 @@ describe('read model contracts', () => {
     });
 
     expect(snapshot.rows[0].chatId).toBe('chat-1');
+    expect(snapshot.rows[0].lastActivityAt).toBe(snapshot.rows[0].lastSortActivityAt);
+    expect(snapshot.groups[0].lastActivityAt).toBe(snapshot.groups[0].lastSortActivityAt);
+    expect(snapshot.groups[0].waitingCount).toBe(1);
+    expect(snapshot.groups[0].debug?.activity).toEqual({ selectedSource: 'lastSortActivityAt' });
+    expect(snapshot.rows[0].debug?.activity).toEqual(event.patch.rows[0].debug?.activity);
     expect(event.patch.rows[0].unreadCount).toBe(2);
   });
 

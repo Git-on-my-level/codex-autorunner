@@ -332,7 +332,7 @@ class WorktreeManager:
         head_sha = git_head_sha(worktree_path) or "unknown"
         snapshot_id = build_snapshot_id(branch_name, head_sha)
         logger.info(
-            "Hub archive worktree start id=%s snapshot_id=%s",
+            "Hub retire worktree snapshot start id=%s snapshot_id=%s",
             resolved.entry.id,
             snapshot_id,
         )
@@ -363,7 +363,7 @@ class WorktreeManager:
             Exception
         ) as exc:  # intentional: archive_worktree_snapshot spans file I/O, git, and compression with unpredictable failure modes
             logger.exception(
-                "Hub archive worktree failed id=%s snapshot_id=%s",
+                "Hub retire worktree snapshot failed id=%s snapshot_id=%s",
                 resolved.entry.id,
                 snapshot_id,
             )
@@ -372,7 +372,7 @@ class WorktreeManager:
             return None
         else:
             logger.info(
-                "Hub archive worktree complete id=%s snapshot_id=%s status=%s",
+                "Hub retire worktree snapshot complete id=%s snapshot_id=%s status=%s",
                 resolved.entry.id,
                 result.snapshot_id,
                 result.status,
@@ -1100,14 +1100,14 @@ print(
         )
         report.add_step("git_remove", "ok")
 
-        archived_thread_ids = self._archive_bound_managed_threads(
+        retired_thread_ids = self._archive_bound_managed_threads(
             worktree_repo_id=worktree_repo_id,
             worktree_path=worktree_path,
         )
         report.add_step(
-            "archive_managed_threads",
+            "retire_managed_threads",
             "ok",
-            detail=f"archived={len(archived_thread_ids)}",
+            detail=f"retired={len(retired_thread_ids)}",
         )
 
         orphan_dir_cleanup = self._remove_orphaned_worktree_dir(worktree_path)
@@ -1401,7 +1401,7 @@ print(
         if dry_run:
             if total_thread_count or len(worktree_items) or total_flow_count:
                 message = (
-                    f"Would archive {total_thread_count} threads, "
+                    f"Would retire {total_thread_count} threads, "
                     f"{len(worktree_items)} worktrees, {total_flow_count} flow runs"
                 )
             else:
@@ -1409,7 +1409,7 @@ print(
         else:
             if total_thread_count or len(worktree_items) or total_flow_count:
                 message = (
-                    f"Archived {total_thread_count} threads, "
+                    f"Retired {total_thread_count} threads, "
                     f"{len(worktree_items)} worktrees, {total_flow_count} flow runs"
                 )
             else:
@@ -1419,16 +1419,16 @@ print(
             "status": "ok",
             "dry_run": dry_run,
             "threads": {
-                "archived_count": total_thread_count,
+                "retired_count": total_thread_count,
                 "by_repo": threads_by_repo,
             },
             "worktrees": {
-                "archived_count": len(worktree_items),
+                "retired_count": len(worktree_items),
                 "items": worktree_items,
                 "errors": worktree_errors,
             },
             "flow_runs": {
-                "archived_count": total_flow_count,
+                "retired_count": total_flow_count,
                 "by_repo": flow_by_repo,
             },
             "message": message,

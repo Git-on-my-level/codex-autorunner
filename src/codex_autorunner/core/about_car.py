@@ -114,7 +114,7 @@ def build_about_car_markdown(
         "- Tabs: **Inbox** = paused run dispatches/handoffs.\n"
         "- Tabs: **Contextspace** = edit `active_context.md`, `spec.md`, `decisions.md`.\n"
         "- Tabs: **Terminal** = launches the configured `codex` binary in a PTY.\n"
-        "- Tabs: **Archive** = browse worktree snapshots.\n\n"
+        "- Tabs: **Retirement** = browse worktree snapshots.\n\n"
         f"{render_human_artifact_overview(include_upload_inbox=True)}\n\n"
         "## Critical rules\n"
         "- Do **not** create new copies of contextspace docs elsewhere in the repo.\n"

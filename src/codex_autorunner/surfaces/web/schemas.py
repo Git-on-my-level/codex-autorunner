@@ -173,14 +173,14 @@ class HubRetireWorktreeRequest(Payload):
         default=None,
         validation_alias=AliasChoices("force_attestation", "forceAttestation"),
     )
-    force_archive: bool = Field(
-        default=False, validation_alias=AliasChoices("force_archive", "forceArchive")
+    force_retire: bool = Field(
+        default=False, validation_alias=AliasChoices("force_retire", "forceRetire")
     )
-    archive_note: Optional[str] = Field(
-        default=None, validation_alias=AliasChoices("archive_note", "archiveNote")
+    retire_note: Optional[str] = Field(
+        default=None, validation_alias=AliasChoices("retire_note", "retireNote")
     )
-    archive_profile: Optional[str] = Field(
-        default=None, validation_alias=AliasChoices("archive_profile", "archiveProfile")
+    retire_profile: Optional[str] = Field(
+        default=None, validation_alias=AliasChoices("retire_profile", "retireProfile")
     )
 
 
@@ -199,33 +199,33 @@ class HubDeleteWorktreeRequest(Payload):
     )
 
 
-class HubArchiveWorktreeStateRequest(Payload):
+class HubRetireWorktreeStateRequest(Payload):
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
     worktree_repo_id: str = Field(
         validation_alias=AliasChoices("worktree_repo_id", "worktreeRepoId")
     )
-    archive_note: Optional[str] = Field(
-        default=None, validation_alias=AliasChoices("archive_note", "archiveNote")
+    retire_note: Optional[str] = Field(
+        default=None, validation_alias=AliasChoices("retire_note", "retireNote")
     )
-    archive_profile: Optional[str] = Field(
-        default=None, validation_alias=AliasChoices("archive_profile", "archiveProfile")
+    retire_profile: Optional[str] = Field(
+        default=None, validation_alias=AliasChoices("retire_profile", "retireProfile")
     )
 
 
-class HubArchiveRepoStateRequest(Payload):
+class HubRetireRepoStateRequest(Payload):
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
     repo_id: str = Field(validation_alias=AliasChoices("repo_id", "repoId"))
-    archive_note: Optional[str] = Field(
-        default=None, validation_alias=AliasChoices("archive_note", "archiveNote")
+    retire_note: Optional[str] = Field(
+        default=None, validation_alias=AliasChoices("retire_note", "retireNote")
     )
-    archive_profile: Optional[str] = Field(
-        default=None, validation_alias=AliasChoices("archive_profile", "archiveProfile")
+    retire_profile: Optional[str] = Field(
+        default=None, validation_alias=AliasChoices("retire_profile", "retireProfile")
     )
 
 
-class HubArchiveWorktreeStateResponse(ResponseModel):
+class HubRetireWorktreeStateResponse(ResponseModel):
     snapshot_id: Optional[str]
     snapshot_path: Optional[str]
     meta_path: Optional[str]
@@ -236,11 +236,17 @@ class HubArchiveWorktreeStateResponse(ResponseModel):
     latest_flow_run_id: Optional[str]
     archived_paths: list[str]
     reset_paths: list[str]
-    archived_thread_ids: list[str] = []
-    archived_thread_count: int = 0
+    retired_thread_ids: list[str] = Field(
+        default_factory=list,
+        validation_alias=AliasChoices("retired_thread_ids", "archived_thread_ids"),
+    )
+    retired_thread_count: int = Field(
+        default=0,
+        validation_alias=AliasChoices("retired_thread_count", "archived_thread_count"),
+    )
 
 
-class HubArchiveRepoStateResponse(HubArchiveWorktreeStateResponse):
+class HubRetireRepoStateResponse(HubRetireWorktreeStateResponse):
     pass
 
 
@@ -447,10 +453,10 @@ __all__ = [
     "GithubContextRequest",
     "GithubIssueRequest",
     "GithubPrSyncRequest",
-    "HubArchiveRepoStateRequest",
-    "HubArchiveRepoStateResponse",
-    "HubArchiveWorktreeStateRequest",
-    "HubArchiveWorktreeStateResponse",
+    "HubRetireRepoStateRequest",
+    "HubRetireRepoStateResponse",
+    "HubRetireWorktreeStateRequest",
+    "HubRetireWorktreeStateResponse",
     "HubCreateRepoRequest",
     "HubCreateWorktreeRequest",
     "HubDeleteWorktreeRequest",
@@ -474,7 +480,7 @@ __all__ = [
     "PmaAutomationTimerTouchRequest",
     "PmaChatRequest",
     "PmaHistoryCompactRequest",
-    "ManagedThreadBulkArchiveRequest",
+    "ManagedThreadBulkRetireRequest",
     "ManagedThreadCompactRequest",
     "ManagedThreadCreateRequest",
     "ManagedThreadForkRequest",
@@ -1031,7 +1037,7 @@ class ManagedThreadResumeRequest(Payload):
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
 
-class ManagedThreadBulkArchiveRequest(Payload):
+class ManagedThreadBulkRetireRequest(Payload):
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
     thread_ids: List[str] = Field(

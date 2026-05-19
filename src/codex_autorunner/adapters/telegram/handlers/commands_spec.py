@@ -67,10 +67,10 @@ def build_command_specs(handlers: Any) -> dict[str, CommandSpec]:
             "reset current workspace branch from origin default branch and start a new session",
             lambda message, _args, _runtime: handlers._handle_newt(message),
         ),
-        "archive": _spec(
-            "archive",
-            "archive workspace state for a fresh start",
-            lambda message, _args, _runtime: handlers._handle_archive(message),
+        "retire": _spec(
+            "retire",
+            "retire workspace state for a fresh start",
+            lambda message, _args, _runtime: handlers._handle_retire(message),
         ),
         "reset": _spec(
             "reset",

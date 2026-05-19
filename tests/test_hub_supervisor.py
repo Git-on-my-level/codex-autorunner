@@ -571,7 +571,7 @@ def test_hub_archive_state_endpoint_archives_and_resets_runtime_state(tmp_path: 
     _init_git_repo(base.path)
     worktree = supervisor.create_worktree(
         base_repo_id="base",
-        branch="feature/archive-state",
+        branch="feature/retire-state",
         start_point="HEAD",
     )
     worktree_car = worktree.path / ".codex-autorunner"
@@ -598,7 +598,7 @@ def test_hub_archive_state_endpoint_archives_and_resets_runtime_state(tmp_path: 
     assert worktree_payload["has_car_state"] is True
 
     archive_resp = client.post(
-        "/hub/worktrees/archive-state",
+        "/hub/worktrees/retire-state",
         json={"worktree_repo_id": worktree.id},
     )
     assert archive_resp.status_code == 200
@@ -691,7 +691,7 @@ def test_hub_archive_repo_state_endpoint_archives_and_resets_base_repo_runtime_s
     assert base_payload["has_car_state"] is True
 
     archive_resp = client.post(
-        "/hub/repos/archive-state",
+        "/hub/repos/retire-state",
         json={"repo_id": base.id},
     )
     assert archive_resp.status_code == 200
@@ -701,8 +701,8 @@ def test_hub_archive_repo_state_endpoint_archives_and_resets_base_repo_runtime_s
     assert "filebox" in payload["archived_paths"]
     assert "state.sqlite3" in payload["archived_paths"]
     assert "codex-autorunner.log" in payload["archived_paths"]
-    assert payload["archived_thread_count"] == 1
-    assert payload["archived_thread_ids"] == [created["managed_thread_id"]]
+    assert payload["retired_thread_count"] == 1
+    assert payload["retired_thread_ids"] == [created["managed_thread_id"]]
 
     snapshot_root = Path(payload["snapshot_path"])
     assert (snapshot_root / "tickets" / "TICKET-123-demo.md").exists()
@@ -939,7 +939,7 @@ def test_hub_pin_parent_repo_rejects_unknown_keys(tmp_path: Path) -> None:
     assert any(item["loc"][-1] == "pinnned" for item in detail)
 
 
-def test_hub_api_cleanup_repo_threads_archives_only_unbound_threads(
+def test_hub_api_cleanup_repo_threads_retires_only_unbound_threads(
     tmp_path: Path,
 ):
     hub_root = tmp_path / "hub"
@@ -982,8 +982,8 @@ def test_hub_api_cleanup_repo_threads_archives_only_unbound_threads(
     resp = client.post(f"/hub/repos/{base.id}/cleanup-threads")
     assert resp.status_code == 200
     payload = resp.json()
-    assert payload["archived_count"] == 1
-    assert payload["archived_thread_ids"] == [unbound["managed_thread_id"]]
+    assert payload["retired_count"] == 1
+    assert payload["retired_thread_ids"] == [unbound["managed_thread_id"]]
 
     unbound_thread = store.get_thread(unbound["managed_thread_id"])
     bound_thread = store.get_thread(bound["managed_thread_id"])
@@ -1082,12 +1082,12 @@ def test_hub_api_cleanup_all_repo_threads_archives_unbound_threads_and_reports_d
     resp = client.post("/hub/repos/cleanup-threads")
     assert resp.status_code == 200
     payload = resp.json()
-    assert payload["archived_count"] == 2
+    assert payload["retired_count"] == 2
     assert payload["cleaned_repo_count"] == 2
     assert payload["dirty_repo_ids"] == [base_two.id]
     results = {item["repo_id"]: item for item in payload["results"]}
-    assert results[base_one.id]["archived_count"] == 1
-    assert results[base_two.id]["archived_count"] == 1
+    assert results[base_one.id]["retired_count"] == 1
+    assert results[base_two.id]["retired_count"] == 1
     assert results[base_two.id]["is_dirty"] is True
 
     assert (
@@ -1108,7 +1108,7 @@ def test_hub_api_cleanup_all_repo_threads_archives_unbound_threads_and_reports_d
     )
 
 
-def test_hub_supervisor_cleanup_all_dry_run_does_not_archive_threads(
+def test_hub_supervisor_cleanup_all_dry_run_does_not_retire_threads(
     tmp_path: Path,
 ):
     hub_root = tmp_path / "hub"
@@ -1127,11 +1127,11 @@ def test_hub_supervisor_cleanup_all_dry_run_does_not_archive_threads(
     )
     dry = supervisor.cleanup_all(dry_run=True)
     assert dry["dry_run"] is True
-    assert dry["threads"]["archived_count"] == 1
+    assert dry["threads"]["retired_count"] == 1
     assert store.get_thread(thread["managed_thread_id"])["lifecycle_status"] == "active"
     live = supervisor.cleanup_all(dry_run=False)
     assert live["dry_run"] is False
-    assert live["threads"]["archived_count"] == 1
+    assert live["threads"]["retired_count"] == 1
     assert (
         store.get_thread(thread["managed_thread_id"])["lifecycle_status"] == "archived"
     )
@@ -1167,7 +1167,7 @@ def test_cleanup_all_archives_all_terminal_flow_statuses(tmp_path: Path) -> None
 
     result = supervisor.cleanup_all(dry_run=False)
 
-    assert result["flow_runs"]["archived_count"] == 4
+    assert result["flow_runs"]["retired_count"] == 4
     assert result["flow_runs"]["by_repo"] == [{"repo_id": base.id, "count": 4}]
     with FlowStore(base.path / ".codex-autorunner" / "flows.db") as store:
         store.initialize()
@@ -1222,7 +1222,7 @@ def test_cleanup_all_skips_worktree_when_binding_lookup_raises_runtime_error(
 
     result = supervisor.cleanup_all(dry_run=False)
 
-    assert result["worktrees"]["archived_count"] == 0
+    assert result["worktrees"]["retired_count"] == 0
     assert result["worktrees"]["errors"] == []
     assert result["message"] == "Nothing to clean up"
     assert worktree.path.exists()
@@ -1258,11 +1258,11 @@ def test_cleanup_all_repairs_legacy_worktree_entries_before_cleanup(
     save_manifest(manifest_path, manifest, hub_root)
 
     preview = supervisor.cleanup_all(dry_run=True)
-    assert preview["worktrees"]["archived_count"] == 1
+    assert preview["worktrees"]["retired_count"] == 1
 
     result = supervisor.cleanup_all(dry_run=False)
 
-    assert result["worktrees"]["archived_count"] == 1
+    assert result["worktrees"]["retired_count"] == 1
     assert not worktree.path.exists()
     manifest = load_manifest(manifest_path, hub_root)
     assert manifest.get(worktree.id) is None
@@ -1292,7 +1292,7 @@ def test_cleanup_all_removes_missing_worktree_manifest_entries(tmp_path: Path) -
 
     result = supervisor.cleanup_all(dry_run=False)
 
-    assert result["worktrees"]["archived_count"] == 1
+    assert result["worktrees"]["retired_count"] == 1
     manifest = load_manifest(hub_root / ".codex-autorunner" / "manifest.yml", hub_root)
     assert manifest.get(worktree.id) is None
 
@@ -1317,9 +1317,9 @@ def test_hub_api_cleanup_all_preview_and_job(tmp_path: Path, monkeypatch):
     body = preview.json()
     assert body["status"] == "ok"
     assert body["dry_run"] is True
-    assert body["threads"]["archived_count"] == 0
-    assert body["worktrees"]["archived_count"] == 0
-    assert body["flow_runs"]["archived_count"] == 0
+    assert body["threads"]["retired_count"] == 0
+    assert body["worktrees"]["retired_count"] == 0
+    assert body["flow_runs"]["retired_count"] == 0
     assert body["message"] == "Nothing to clean up"
 
     submissions: list[dict[str, object]] = []

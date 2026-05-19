@@ -6,7 +6,7 @@
   import NewRepoDialog from '$lib/components/NewRepoDialog.svelte';
   import NewWorktreeDialog from '$lib/components/NewWorktreeDialog.svelte';
   import RepoSettingsDialog, { type RepoSettingsTarget } from '$lib/components/RepoSettingsDialog.svelte';
-  import { confirmAndArchiveState, confirmAndRetireWorktree, type ActionNotice } from '$lib/actions/repoWorktreeActions';
+  import { confirmAndRetireState, confirmAndRetireWorktree, type ActionNotice } from '$lib/actions/repoWorktreeActions';
   import { webApi, type ApiError, type PartialPageIssue } from '$lib/api/client';
   import { ensureRepoWorktreeIndexLoaded, invalidateReadModelTags, readModelEntityStore, readModelEntityTags, selectRepoSummaries, selectWorktreeSummaries } from '$lib/data';
   import {
@@ -75,8 +75,8 @@
     if (result.tone === 'success') await loadRepos();
   }
 
-  async function handleArchiveState(target: Parameters<typeof confirmAndArchiveState>[0]): Promise<void> {
-    const result = await confirmAndArchiveState(target);
+  async function handleRetireState(target: Parameters<typeof confirmAndRetireState>[0]): Promise<void> {
+    const result = await confirmAndRetireState(target);
     if (!result) return;
     notice = result;
     if (result.tone === 'success') await loadRepos();
@@ -125,7 +125,7 @@
   {sectionIssues}
   onRetry={loadRepos}
   onRetireWorktree={handleRetireWorktree}
-  onArchiveState={handleArchiveState}
+  onRetireState={handleRetireState}
   onRepoPin={handleRepoPin}
   onCreateRepo={openNewRepo}
   onCreateWorktree={openNewWorktree}

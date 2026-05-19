@@ -9,15 +9,15 @@ from fastapi import APIRouter, HTTPException
 from ....core.force_attestation import FORCE_ATTESTATION_REQUIRED_PHRASE
 from ..app_state import HubAppContext
 from ..schemas import (
-    HubArchiveRepoStateRequest,
-    HubArchiveRepoStateResponse,
-    HubArchiveWorktreeStateRequest,
-    HubArchiveWorktreeStateResponse,
     HubCreateWorktreeRequest,
     HubDeleteWorktreeRequest,
     HubDestinationSetRequest,
     HubJobResponse,
+    HubRetireRepoStateRequest,
+    HubRetireRepoStateResponse,
     HubRetireWorktreeRequest,
+    HubRetireWorktreeStateRequest,
+    HubRetireWorktreeStateResponse,
     RunControlRequest,
 )
 from .hub_repo_routes import (
@@ -125,9 +125,9 @@ def build_hub_repo_routes(
             delete_remote=payload.delete_remote,
             force=payload.force,
             force_attestation=payload.force_attestation,
-            force_archive=payload.force_archive,
-            archive_note=payload.archive_note,
-            archive_profile=payload.archive_profile,
+            force_retire=payload.force_retire,
+            retire_note=payload.retire_note,
+            retire_profile=payload.retire_profile,
         )
 
     @router.post("/hub/jobs/worktrees/retire", response_model=HubJobResponse)
@@ -145,27 +145,27 @@ def build_hub_repo_routes(
         )
 
     @router.post(
-        "/hub/worktrees/archive-state",
-        response_model=HubArchiveWorktreeStateResponse,
+        "/hub/worktrees/retire-state",
+        response_model=HubRetireWorktreeStateResponse,
     )
-    async def archive_worktree_state(payload: HubArchiveWorktreeStateRequest):
-        return await worktree.archive_worktree_state(
+    async def retire_worktree_state(payload: HubRetireWorktreeStateRequest):
+        return await worktree.retire_worktree_state(
             worktree_repo_id=payload.worktree_repo_id,
-            archive_note=payload.archive_note,
-            archive_profile=payload.archive_profile,
+            retire_note=payload.retire_note,
+            retire_profile=payload.retire_profile,
         )
 
     @router.post(
-        "/hub/repos/archive-state",
-        response_model=HubArchiveRepoStateResponse,
+        "/hub/repos/retire-state",
+        response_model=HubRetireRepoStateResponse,
     )
-    async def archive_repo_state(payload: HubArchiveRepoStateRequest):
+    async def retire_repo_state(payload: HubRetireRepoStateRequest):
         try:
             result = await asyncio.to_thread(
                 context.supervisor.archive_repo_state,
                 repo_id=payload.repo_id,
-                archive_note=payload.archive_note,
-                archive_profile=payload.archive_profile,
+                archive_note=payload.retire_note,
+                archive_profile=payload.retire_profile,
             )
             await cache.invalidate_caches()
             return result

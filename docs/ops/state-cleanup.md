@@ -145,12 +145,12 @@ accurately predicts what will happen.
 
 Several cleanup behaviors are intentionally best-effort:
 
-- **Post-archive retention pruning**: must not fail the archive operation
+- **Post-retirement retention pruning**: must not fail the retire operation
   itself. Pruning errors are logged but do not propagate.
-- **Incomplete archive snapshots**: snapshots without `META.json` are
+- **Incomplete retirement snapshots**: snapshots without `META.json` are
   intentionally invisible to retention planning and will not appear in prune
   candidate lists.
-- **Run-archive policy fallback**: when repo config cannot be loaded, run
+- **Run archive retention fallback**: when repo config cannot be loaded, run
   archive retention falls back to built-in defaults.
 - **Stable report preservation**: `prune_report_directory()` always preserves
   stable-prefix outputs (`latest-*`, `final_report.md`) regardless of the
@@ -166,7 +166,7 @@ CAR provides targeted cleanup commands for specific families:
 
 | Command | Description |
 |---------|-------------|
-| `car cleanup archives --scope both` | Prune worktree and run archives |
+| `car cleanup retirements --scope both` | Prune worktree and run retirements |
 | `car cleanup filebox --scope both` | Prune FileBox inbox/outbox |
 | `car cleanup reports` | Prune report history |
 | `car cleanup processes` | Reap stale managed processes |
@@ -199,5 +199,5 @@ pma:
 ## Related Documentation
 
 - [STATE_ROOTS.md](../STATE_ROOTS.md) — Canonical roots and retention taxonomy
-- [worktree-archives.md](worktree-archives.md) — Worktree archive details
+- [worktree-archives.md](worktree-archives.md) — Worktree retirement storage details
 - `.codex-autorunner/contextspace/spec.md` — Full retention contract

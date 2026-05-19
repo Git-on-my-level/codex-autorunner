@@ -171,6 +171,7 @@ from .ticket_flow_chat_ledger_contract import (
     ticket_flow_thread_metadata,
     validate_ticket_flow_thread_metadata,
 )
+from .turn_context import ChatTurnDeliveryTarget, ChatTurnEnvelope, ChatTurnSource
 
 if TYPE_CHECKING:
     from . import runtime_threads as runtime_threads_module
@@ -250,6 +251,9 @@ __all__ = [
     "AgentDefinitionCatalog",
     "BackendBinding",
     "Binding",
+    "ChatTurnDeliveryTarget",
+    "ChatTurnEnvelope",
+    "ChatTurnSource",
     "ChatOperationDuplicateAction",
     "ChatOperationRecoveryAction",
     "ChatOperationRegistration",

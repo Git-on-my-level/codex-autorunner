@@ -119,6 +119,22 @@ class ReadModelEventEnvelope(ReadModelContract):
 
 
 class ChatIndexRow(ReadModelContract):
+    """Chat row contract shared by snapshots and patch payloads.
+
+    Timestamp semantics:
+    - ``last_visible_message_at`` is the newest user-visible conversation input.
+    - ``last_lifecycle_update_at`` is durable thread/binding lifecycle churn.
+    - ``last_internal_update_at`` is runtime/execution/delivery bookkeeping.
+    - ``last_sort_activity_at`` is the backend-owned recency clock for row order.
+    - ``last_activity_at`` is a compatibility alias for ``last_sort_activity_at``.
+
+    Title semantics:
+    - ``title``/``display_title`` are backend-resolved human display strings.
+    - ``technical_title`` preserves the stable thread/surface identifier.
+    - binding display fields describe attached delivery surfaces and do not own
+      managed-thread identity.
+    """
+
     chat_id: str
     surface: Literal["pma", "file_chat", "telegram", "discord", "app_server", "other"]
     title: str
@@ -134,6 +150,10 @@ class ChatIndexRow(ReadModelContract):
     status: Literal["waiting", "running", "idle", "archived", "failed"]
     unread_count: int = Field(ge=0)
     last_activity_at: Optional[datetime] = None
+    last_visible_message_at: Optional[datetime] = None
+    last_lifecycle_update_at: Optional[datetime] = None
+    last_internal_update_at: Optional[datetime] = None
+    last_sort_activity_at: Optional[datetime] = None
     sort_key: Optional[dict[str, Any]] = None
     resource_kind: Optional[str] = None
     resource_id: Optional[str] = None
@@ -153,6 +173,13 @@ class ChatIndexRow(ReadModelContract):
     ticket_status: Optional[
         Literal["done", "running", "waiting", "failed", "unknown"]
     ] = None
+    debug: Optional[dict[str, Any]] = Field(
+        default=None,
+        description=(
+            "Non-authoritative diagnostic hints explaining title and activity "
+            "clock resolution for support/debug UIs."
+        ),
+    )
 
 
 class ChatIndexGroup(ReadModelContract):
@@ -160,6 +187,21 @@ class ChatIndexGroup(ReadModelContract):
     kind: Literal["surface", "repo", "worktree"]
     label: str
     child_count: int = Field(ge=0)
+    waiting_count: int = Field(default=0, ge=0)
+    running_count: int = Field(default=0, ge=0)
+    unread_count: int = Field(default=0, ge=0)
+    last_activity_at: Optional[datetime] = None
+    last_visible_message_at: Optional[datetime] = None
+    last_lifecycle_update_at: Optional[datetime] = None
+    last_internal_update_at: Optional[datetime] = None
+    last_sort_activity_at: Optional[datetime] = None
+    debug: Optional[dict[str, Any]] = Field(
+        default=None,
+        description=(
+            "Non-authoritative diagnostic hints explaining group activity clock "
+            "resolution for support/debug UIs."
+        ),
+    )
     expanded_child_window: Optional[PageWindow] = None
 
 
@@ -177,6 +219,18 @@ class TicketRunGroup(ReadModelContract):
     waiting_count: int = Field(ge=0)
     failed_count: int = Field(ge=0)
     unread_count: int = Field(ge=0)
+    last_activity_at: Optional[datetime] = None
+    last_visible_message_at: Optional[datetime] = None
+    last_lifecycle_update_at: Optional[datetime] = None
+    last_internal_update_at: Optional[datetime] = None
+    last_sort_activity_at: Optional[datetime] = None
+    debug: Optional[dict[str, Any]] = Field(
+        default=None,
+        description=(
+            "Non-authoritative diagnostic hints explaining group activity clock "
+            "resolution for support/debug UIs."
+        ),
+    )
     updated_at: Optional[datetime] = None
     expanded_child_window: Optional[PageWindow] = None
 

@@ -102,7 +102,7 @@ dispatch_app = typer.Typer(
 )
 inbox_app = typer.Typer(add_completion=False, help="Resolve and clear hub inbox items.")
 hub_runs_app = typer.Typer(
-    add_completion=False, help="Archive and prune stale flow runs."
+    add_completion=False, help="Retire and prune stale flow runs."
 )
 telegram_app = typer.Typer(add_completion=False, help="Manage Telegram bot operations.")
 discord_app = typer.Typer(add_completion=False, help="Manage Discord bot operations.")
@@ -127,7 +127,7 @@ cleanup_app = typer.Typer(
 chat_app = typer.Typer(add_completion=False, help="Inspect shared chat metadata.")
 docs_app = typer.Typer(add_completion=False, help="Discover and search CAR docs.")
 worktree_app = typer.Typer(
-    add_completion=False, help="Create, list, archive, and cleanup hub worktrees."
+    add_completion=False, help="Create, list, retire, and cleanup hub worktrees."
 )
 hub_tickets_app = typer.Typer(
     add_completion=False, help="Import and maintain ticket packs in hub repos."

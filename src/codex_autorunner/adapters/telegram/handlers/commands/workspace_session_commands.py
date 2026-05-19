@@ -988,7 +988,7 @@ class WorkspaceSessionCommandsMixin:
             reply_to=message.message_id,
         )
 
-    async def _handle_archive(self, message: TelegramMessage) -> None:
+    async def _handle_retire(self, message: TelegramMessage) -> None:
         from .....core.archive import (
             archive_workspace_for_fresh_start,
             resolve_workspace_archive_target,
@@ -999,7 +999,7 @@ class WorkspaceSessionCommandsMixin:
         if bool(record and record.pma_enabled):
             await self._send_message(
                 message.chat_id,
-                "/archive is not available in PMA mode. Use /new instead.",
+                "/retire is not available in PMA mode. Use /new instead.",
                 thread_id=message.thread_id,
                 reply_to=message.message_id,
             )
@@ -1043,7 +1043,7 @@ class WorkspaceSessionCommandsMixin:
                 worktree_repo_id=target.workspace_repo_id,
                 branch=None,
                 worktree_of=target.worktree_of,
-                note="Telegram /archive",
+                note="Telegram /retire",
                 source_path=target.source_path,
             )
         except ValueError as exc:
@@ -1058,7 +1058,7 @@ class WorkspaceSessionCommandsMixin:
             log_event(
                 self._logger,
                 logging.WARNING,
-                "telegram.archive_state.failed",
+                "telegram.retire_state.failed",
                 chat_id=message.chat_id,
                 thread_id=message.thread_id,
                 workspace_path=record.workspace_path,
@@ -1066,7 +1066,7 @@ class WorkspaceSessionCommandsMixin:
             )
             await self._send_message(
                 message.chat_id,
-                "Archive failed; check logs for details.",
+                "Retire failed; check logs for details.",
                 thread_id=message.thread_id,
                 reply_to=message.message_id,
             )
@@ -1106,7 +1106,7 @@ class WorkspaceSessionCommandsMixin:
                 log_event(
                     self._logger,
                     logging.WARNING,
-                    "telegram.archive.managed_thread_reset_failed",
+                    "telegram.retire.managed_thread_reset_failed",
                     chat_id=message.chat_id,
                     thread_id=message.thread_id,
                     workspace_path=str(workspace_root),
@@ -1114,7 +1114,7 @@ class WorkspaceSessionCommandsMixin:
                 )
                 await self._send_message(
                     message.chat_id,
-                    "Archive completed, but preparing a fresh managed thread failed.",
+                    "Retire completed, but preparing a fresh managed thread failed.",
                     thread_id=message.thread_id,
                     reply_to=message.message_id,
                 )
@@ -1130,13 +1130,13 @@ class WorkspaceSessionCommandsMixin:
             "\n".join(
                 [
                     (
-                        f"Archived workspace state to snapshot `{result.snapshot_id}`."
+                        f"Retired workspace state to snapshot `{result.snapshot_id}`."
                         if result.snapshot_id
                         else "Workspace CAR state was already clean."
                     ),
-                    f"Archived paths: {', '.join(result.archived_paths) or 'none'}",
+                    f"Retired paths: {', '.join(result.archived_paths) or 'none'}",
                     (
-                        f"Archived {len(result.archived_thread_ids)} managed thread"
+                        f"Retired {len(result.archived_thread_ids)} managed thread"
                         f"{'' if len(result.archived_thread_ids) == 1 else 's'}."
                     ),
                     "The binding remains active for fresh work.",

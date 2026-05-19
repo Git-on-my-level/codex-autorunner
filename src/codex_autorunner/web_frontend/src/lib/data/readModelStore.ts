@@ -49,7 +49,7 @@ export type OptimisticMutationStatus = 'pending' | 'reconciled' | 'failed' | 're
 
 export type OptimisticMutation = {
   reconciliationId: string;
-  kind: 'send' | 'archive' | 'queue' | 'read-marker';
+  kind: 'send' | 'retire' | 'queue' | 'read-marker';
   entityKind: EntityKind;
   entityId: string;
   status: OptimisticMutationStatus;
@@ -735,14 +735,14 @@ export class ReadModelEntityStore implements Readable<ReadModelEntityState> {
     this.commit(next);
   }
 
-  optimisticArchiveChat(chatId: string, reconciliationId: string): void {
+  optimisticRetireChat(chatId: string, reconciliationId: string): void {
     const previous = this.state.chats[chatId];
     if (!previous) return;
     const next = cloneState(this.state);
     next.chats[chatId] = { ...previous, status: 'archived' };
     next.optimistic[reconciliationId] = {
       reconciliationId,
-      kind: 'archive',
+      kind: 'retire',
       entityKind: 'chat',
       entityId: chatId,
       status: 'pending',
@@ -757,7 +757,7 @@ export class ReadModelEntityStore implements Readable<ReadModelEntityState> {
     const mutation = this.state.optimistic[reconciliationId];
     if (!mutation) return;
     const next = cloneState(this.state);
-    if (mutation.kind === 'archive' && mutation.entityKind === 'chat' && mutation.previousValue) {
+    if (mutation.kind === 'retire' && mutation.entityKind === 'chat' && mutation.previousValue) {
       next.chats[mutation.entityId] = mutation.previousValue as ChatIndexRow;
       bump(next, 'chat', mutation.entityId);
     }

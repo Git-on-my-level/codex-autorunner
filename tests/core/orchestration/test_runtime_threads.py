@@ -1773,7 +1773,10 @@ async def test_runtime_thread_stall_timeout_allows_short_prompt_return_grace(
             await asyncio.Future()
 
     original_grace = runtime_threads_module._STALL_COMPLETION_GRACE_SECONDS
-    runtime_threads_module._STALL_COMPLETION_GRACE_SECONDS = 0.05
+    # Keep this above the synthetic 30 ms prompt-return delay with enough margin
+    # for xdist aggregate runs on loaded local machines. The behavior under test
+    # is the grace path, not scheduler precision.
+    runtime_threads_module._STALL_COMPLETION_GRACE_SECONDS = 0.2
     try:
         harness = _HarnessWithLatePromptReturn()
         service = _build_service(tmp_path, harness)
