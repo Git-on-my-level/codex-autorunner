@@ -1726,6 +1726,9 @@ def _chat_index_rows_from_surfaces(
                 "cleanup_protected": bool(metadata_map.get("cleanup_protected")),
                 "flow_type": metadata_map.get("flow_type"),
                 "ticket_id": metadata_map.get("ticket_id"),
+                "ticket_path": metadata_map.get("ticket_path"),
+                "ticket_done": metadata_map.get("ticket_done"),
+                "ticket_status": metadata_map.get("ticket_status"),
                 "run_id": metadata_map.get("run_id"),
             }
             by_thread[managed_thread_id] = row
@@ -1769,6 +1772,9 @@ def _chat_index_rows_from_surfaces(
                 "model",
                 "active_turn_id",
                 "ticket_id",
+                "ticket_path",
+                "ticket_done",
+                "ticket_status",
                 "run_id",
             ):
                 if metadata_map.get(key) is not None:
@@ -2255,22 +2261,45 @@ def _ticket_run_groups(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     groups: list[dict[str, Any]] = []
     for group_id, children in grouped.items():
         latest = max(str(child.get("updated_at") or "") for child in children)
+        total_count = len(children)
+        done_count = sum(
+            1 for child in children if _ticket_child_status(child) == "done"
+        )
+        failed_count = sum(
+            1 for child in children if _ticket_child_status(child) == "failed"
+        )
+        running_count = sum(
+            1 for child in children if _ticket_child_status(child) == "running"
+        )
+        waiting_count = sum(
+            1 for child in children if _ticket_child_status(child) == "waiting"
+        )
         groups.append(
             {
                 "row_type": "group",
+                "kind": "ticket_run_group",
                 "row_id": f"group:{group_id}",
                 "group_id": group_id,
+                "run_id": _ticket_run_id_from_children(group_id, children),
+                "scope_kind": _ticket_run_scope_kind(children),
+                "scope_id": _ticket_run_scope_id(children),
                 "title": group_id,
-                "child_count": len(children),
-                "waiting_count": sum(
-                    1 for child in children if int(child.get("queue_depth") or 0) > 0
+                "status": _ticket_run_group_status(
+                    total_count=total_count,
+                    done_count=done_count,
+                    running_count=running_count,
+                    waiting_count=waiting_count,
+                    failed_count=failed_count,
                 ),
-                "running_count": sum(
-                    1
-                    for child in children
-                    if _chat_index_effective_status(child) == "running"
+                "child_count": total_count,
+                "total_count": total_count,
+                "done_count": done_count,
+                "waiting_count": waiting_count,
+                "running_count": running_count,
+                "failed_count": failed_count,
+                "unread_count": sum(
+                    int(child.get("unread_count") or 0) for child in children
                 ),
-                "unread_count": sum(1 for child in children if child.get("unread")),
                 "updated_at": latest,
                 "sample_child_ids": [
                     child.get("row_id") for child in children[:3] if child.get("row_id")
@@ -2281,6 +2310,64 @@ def _ticket_run_groups(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return sorted(
         groups, key=lambda group: str(group.get("updated_at") or ""), reverse=True
     )
+
+
+def _ticket_child_status(row: Mapping[str, Any]) -> str:
+    explicit = _normalize_kind(row.get("ticket_status"))
+    if explicit in {"done", "running", "waiting", "failed", "unknown"}:
+        return explicit
+    if row.get("ticket_done") is True:
+        return "done"
+    effective = _chat_index_effective_status(row)
+    if effective in {"running", "waiting", "failed"}:
+        return effective
+    if int(row.get("queue_depth") or 0) > 0:
+        return "waiting"
+    return "unknown"
+
+
+def _ticket_run_id_from_children(
+    group_id: str, children: list[Mapping[str, Any]]
+) -> str:
+    for child in children:
+        run_id = _normalize_text(child.get("run_id"))
+        if run_id is not None:
+            return run_id
+    if group_id.startswith(("run:", "ticket-run:")):
+        return group_id.split(":", 1)[1]
+    return group_id
+
+
+def _ticket_run_scope_kind(children: list[Mapping[str, Any]]) -> str:
+    return "worktree" if any(child.get("worktree_id") for child in children) else "repo"
+
+
+def _ticket_run_scope_id(children: list[Mapping[str, Any]]) -> str:
+    for key in ("worktree_id", "repo_id", "workspace_root"):
+        for child in children:
+            value = _normalize_text(child.get(key))
+            if value is not None:
+                return value
+    return "unknown"
+
+
+def _ticket_run_group_status(
+    *,
+    total_count: int,
+    done_count: int,
+    running_count: int,
+    waiting_count: int,
+    failed_count: int,
+) -> str:
+    if failed_count > 0:
+        return "failed"
+    if running_count > 0:
+        return "running"
+    if waiting_count > 0:
+        return "waiting"
+    if total_count > 0 and done_count >= total_count:
+        return "done"
+    return "idle"
 
 
 def _filter_chat_index_groups(

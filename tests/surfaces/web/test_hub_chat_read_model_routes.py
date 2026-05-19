@@ -258,8 +258,9 @@ def test_chat_index_group_contract_accepts_legacy_ticket_run_prefix() -> None:
         }
     )
 
-    assert group.kind == "ticket_run"
+    assert group.kind == "ticket_run_group"
     assert group.group_id == "ticket-run:run-1"
+    assert group.run_id == "run-1"
 
 
 def test_chat_index_contract_uses_terminal_thread_status_and_ticket_flow_metadata(
