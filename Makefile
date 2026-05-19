@@ -1,9 +1,16 @@
 VENV ?= .venv
 VENV_PYTHON := $(VENV)/bin/python
 VENV_PIP := $(VENV)/bin/pip
+MIN_PYTHON := (3, 10)
+BOOTSTRAP_PYTHON := $(shell for bin in python python3 python3.13 python3.12 python3.11 python3.10; do \
+	if command -v $$bin >/dev/null 2>&1 && $$bin -c 'import sys; raise SystemExit(0 if sys.version_info >= $(MIN_PYTHON) else 1)' >/dev/null 2>&1; then \
+		echo $$bin; \
+		break; \
+	fi; \
+done)
 
 # Prefer venv python if it exists
-PYTHON := $(shell if [ -x $(VENV_PYTHON) ]; then echo $(VENV_PYTHON); else echo python3; fi)
+PYTHON := $(shell if [ -x $(VENV_PYTHON) ] && $(VENV_PYTHON) -c 'import sys; raise SystemExit(0 if sys.version_info >= $(MIN_PYTHON) else 1)' >/dev/null 2>&1; then echo $(VENV_PYTHON); elif [ -n "$(BOOTSTRAP_PYTHON)" ]; then echo $(BOOTSTRAP_PYTHON); else echo python3; fi)
 PYTHON_ABS := $(abspath $(PYTHON))
 PYTEST_FAST_WORKERS ?= $(shell $(PYTHON) -c "import os;print(os.cpu_count() or 4)")
 
@@ -50,15 +57,27 @@ install:
 dev:
 	$(PYTHON) -m pip install -e .[dev]
 
-venv: $(VENV_PYTHON)
+venv: $(VENV)/.python-ok
 
-$(VENV_PYTHON):
-	$(PYTHON) -m venv $(VENV)
+$(VENV)/.python-ok: pyproject.toml
+	@if [ -x "$(VENV_PYTHON)" ] && "$(VENV_PYTHON)" -c 'import sys; raise SystemExit(0 if sys.version_info >= $(MIN_PYTHON) else 1)' >/dev/null 2>&1; then \
+		"$(VENV_PYTHON)" -c 'import sys; print(f"Using existing venv Python {sys.version.split()[0]}")'; \
+	else \
+		if [ -z "$(BOOTSTRAP_PYTHON)" ]; then \
+			echo "Python >=3.10 is required. Install python3.10+ or put it on PATH." >&2; \
+			exit 1; \
+		fi; \
+		echo "Creating $(VENV) with $$("$(BOOTSTRAP_PYTHON)" --version 2>&1)..."; \
+		rm -rf "$(VENV)"; \
+		"$(BOOTSTRAP_PYTHON)" -m venv "$(VENV)"; \
+		rm -f "$(VENV)/.installed-dev"; \
+	fi
 	$(VENV_PYTHON) -m pip install --upgrade pip
+	@touch "$(VENV)/.python-ok"
 
 venv-dev: $(VENV)/.installed-dev
 
-$(VENV)/.installed-dev: $(VENV_PYTHON) pyproject.toml
+$(VENV)/.installed-dev: $(VENV)/.python-ok pyproject.toml
 	$(VENV_PIP) install -e .[dev]
 	@touch $(VENV)/.installed-dev
 

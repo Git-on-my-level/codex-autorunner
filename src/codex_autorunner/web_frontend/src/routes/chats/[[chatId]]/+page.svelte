@@ -683,9 +683,11 @@
       webApi.readModels.repoWorktreeTopology('all', 50),
       webApi.readModels.repoWorktreeRuntime('all', 50)
     );
-    activeClockInterval = window.setInterval(() => {
-      if (progress?.status === 'running') clockNowMs = Date.now();
-    }, 1000);
+  });
+
+  $effect(() => {
+    if (progress?.status === 'running') startActiveClock();
+    else stopActiveClock();
   });
 
   $effect(() => {
@@ -748,9 +750,23 @@
     unsubscribeChatIndexSession?.();
     chatIndexSession.stop();
     if (chatIndexFilterRefreshTimer) window.clearTimeout(chatIndexFilterRefreshTimer);
-    if (activeClockInterval) window.clearInterval(activeClockInterval);
+    stopActiveClock();
     closeStream();
   });
+
+  function startActiveClock(): void {
+    if (activeClockInterval !== null) return;
+    clockNowMs = Date.now();
+    activeClockInterval = window.setInterval(() => {
+      clockNowMs = Date.now();
+    }, 1000);
+  }
+
+  function stopActiveClock(): void {
+    if (activeClockInterval === null) return;
+    window.clearInterval(activeClockInterval);
+    activeClockInterval = null;
+  }
 
   $effect(() => {
     const cardCount = activeCards.length;

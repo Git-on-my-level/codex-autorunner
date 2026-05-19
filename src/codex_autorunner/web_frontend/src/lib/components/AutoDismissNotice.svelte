@@ -13,10 +13,7 @@
 
   let visibleMessage = $state<string | null>(null);
   let lastSeen = $state<string | null>(null);
-  let progress = $state(0);
   let timer: ReturnType<typeof setTimeout> | null = null;
-  let raf: number | null = null;
-  let startedAt = 0;
   let toastEl: HTMLDivElement | null = $state(null);
   let portalParent: HTMLElement | null = null;
 
@@ -24,10 +21,6 @@
     if (timer) {
       clearTimeout(timer);
       timer = null;
-    }
-    if (raf !== null) {
-      cancelAnimationFrame(raf);
-      raf = null;
     }
   }
 
@@ -39,16 +32,6 @@
   function startCountdown(): void {
     clearTimer();
     if (!visibleMessage || timeoutMs <= 0) return;
-    startedAt = performance.now();
-    progress = 0;
-    const tick = () => {
-      const elapsed = performance.now() - startedAt;
-      progress = Math.min(1, elapsed / timeoutMs);
-      if (progress < 1 && visibleMessage) {
-        raf = requestAnimationFrame(tick);
-      }
-    };
-    raf = requestAnimationFrame(tick);
     timer = setTimeout(() => {
       visibleMessage = null;
       timer = null;
@@ -96,14 +79,18 @@
 </script>
 
 {#if visibleMessage}
-  <div bind:this={toastEl} class={`auto-dismiss-notice ${tone}`} role="status">
+  <div
+    bind:this={toastEl}
+    class={`auto-dismiss-notice ${tone}`}
+    class:no-timeout={timeoutMs <= 0}
+    role="status"
+    style={`--notice-timeout: ${Math.max(0, timeoutMs)}ms;`}
+  >
     <span class="auto-dismiss-notice__msg">{visibleMessage}</span>
     <span class="auto-dismiss-notice__dot" aria-hidden="true"></span>
     <button type="button" aria-label="Dismiss notice" onclick={dismiss}>×</button>
-    <span
-      class="auto-dismiss-notice__bar"
-      aria-hidden="true"
-      style:transform={`scaleX(${1 - progress})`}
-    ></span>
+    {#key visibleMessage}
+      <span class="auto-dismiss-notice__bar" aria-hidden="true"></span>
+    {/key}
   </div>
 {/if}

@@ -1,9 +1,8 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
   import MemoryView from '$lib/components/MemoryView.svelte';
   import { webApi, type ApiError } from '$lib/api/client';
   import { buildMemoryViewModel, type MemoryViewModel } from '$lib/viewModels/memory';
-  import type { ScopeRef } from '$lib/viewModels/scope';
+  import { formatScopeUrn, type ScopeRef } from '$lib/viewModels/scope';
 
   let {
     open = false,
@@ -18,19 +17,22 @@
   let vm = $state<MemoryViewModel | null>(null);
   let loading = $state(true);
   let error = $state<ApiError | null>(null);
-
-  onMount(() => {
-    if (open) void loadMemory();
-  });
+  let loadedScopeUrn: string | null = null;
+  let loadSeq = 0;
 
   $effect(() => {
-    if (open) void loadMemory();
+    const scopeUrn = formatScopeUrn(scope);
+    if (!open) return;
+    if (loadedScopeUrn === scopeUrn && vm) return;
+    void loadMemory(scopeUrn);
   });
 
-  async function loadMemory(): Promise<void> {
+  async function loadMemory(scopeUrn: string): Promise<void> {
+    const seq = ++loadSeq;
     loading = true;
     error = null;
     const docs = await webApi.pma.listDocsWithContent();
+    if (seq !== loadSeq) return;
     if (!docs.ok) {
       error = docs.error;
       vm = null;
@@ -38,6 +40,7 @@
       return;
     }
     vm = buildMemoryViewModel(scope, docs.data);
+    loadedScopeUrn = scopeUrn;
     loading = false;
   }
 
