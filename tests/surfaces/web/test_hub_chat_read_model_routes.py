@@ -255,11 +255,24 @@ def test_chat_index_group_contract_accepts_legacy_ticket_run_prefix() -> None:
             "group_id": "ticket-run:run-1",
             "title": "Legacy ticket run",
             "child_count": 3,
+            "waiting_count": 1,
+            "running_count": 2,
+            "unread_count": 4,
+            "last_sort_activity_at": "2026-05-11T00:01:00Z",
+            "last_lifecycle_update_at": "2026-05-11T00:05:00Z",
+            "debug": {"activity": {"selected_source": "last_sort_activity_at"}},
         }
     )
 
     assert group.kind == "ticket_run"
     assert group.group_id == "ticket-run:run-1"
+    assert group.waiting_count == 1
+    assert group.running_count == 2
+    assert group.unread_count == 4
+    assert group.last_activity_at is not None
+    assert group.last_sort_activity_at is not None
+    assert group.last_sort_activity_at.isoformat() == group.last_activity_at.isoformat()
+    assert group.debug == {"activity": {"selected_source": "last_sort_activity_at"}}
 
 
 def test_chat_index_contract_uses_terminal_thread_status_and_ticket_flow_metadata(

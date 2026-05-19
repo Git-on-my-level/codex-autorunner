@@ -86,7 +86,7 @@ export function legacyChatIndexRecordToChatIndexRow(raw: JsonRecord): ChatIndexR
     title,
     status: legacyChatIndexStatus(lifecycle, lifecycleStatus, runtimeStatus, queueDepth),
     unreadCount: numberValue(raw.unread_count ?? raw.unreadCount) || (raw.unread === true ? 1 : 0),
-    lastActivityAt: lastVisibleMessageAt ?? lastSortActivityAt ?? stringValue(raw.last_activity_at ?? raw.created_at),
+    lastActivityAt: lastSortActivityAt ?? stringValue(raw.last_activity_at) ?? lastVisibleMessageAt ?? stringValue(raw.created_at),
     lastVisibleMessageAt,
     lastLifecycleUpdateAt,
     lastInternalUpdateAt,

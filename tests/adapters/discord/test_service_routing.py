@@ -9410,8 +9410,8 @@ async def test_run_agent_turn_for_message_forwards_typed_turn_envelope(
         assert captured["turn_envelope"] is envelope
         assert captured["input_items"] is None
         assert captured["prompt_text"] == "legacy prompt"
-        assert captured["user_visible_text"] == "legacy visible"
-        assert captured["title_seed"] == "legacy title"
+        assert "user_visible_text" not in captured
+        assert "title_seed" not in captured
     finally:
         await store.close()
 

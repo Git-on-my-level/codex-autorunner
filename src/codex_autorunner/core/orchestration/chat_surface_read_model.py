@@ -2479,7 +2479,36 @@ def _ticket_run_groups(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
             grouped.setdefault(group_id, []).append(row)
     groups: list[dict[str, Any]] = []
     for group_id, children in grouped.items():
-        latest = max(str(child.get("updated_at") or "") for child in children)
+        latest_sort_activity = max(
+            str(
+                child.get("last_sort_activity_at")
+                or child.get("last_activity_at")
+                or child.get("last_visible_message_at")
+                or ""
+            )
+            for child in children
+        )
+        latest_visible_message = max(
+            str(child.get("last_visible_message_at") or "") for child in children
+        )
+        latest_lifecycle_update = max(
+            str(child.get("last_lifecycle_update_at") or child.get("updated_at") or "")
+            for child in children
+        )
+        latest_internal_update = max(
+            str(child.get("last_internal_update_at") or child.get("updated_at") or "")
+            for child in children
+        )
+        latest_legacy_update = max(
+            str(child.get("updated_at") or "") for child in children
+        )
+        waiting_count = sum(
+            1 for child in children if int(child.get("queue_depth") or 0) > 0
+        )
+        running_count = sum(
+            1 for child in children if _chat_index_effective_status(child) == "running"
+        )
+        unread_count = sum(1 for child in children if child.get("unread"))
         groups.append(
             {
                 "row_type": "group",
@@ -2487,16 +2516,24 @@ def _ticket_run_groups(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 "group_id": group_id,
                 "title": group_id,
                 "child_count": len(children),
-                "waiting_count": sum(
-                    1 for child in children if int(child.get("queue_depth") or 0) > 0
-                ),
-                "running_count": sum(
-                    1
-                    for child in children
-                    if _chat_index_effective_status(child) == "running"
-                ),
-                "unread_count": sum(1 for child in children if child.get("unread")),
-                "updated_at": latest,
+                "waiting_count": waiting_count,
+                "running_count": running_count,
+                "unread_count": unread_count,
+                "last_activity_at": latest_sort_activity or None,
+                "last_visible_message_at": latest_visible_message or None,
+                "last_lifecycle_update_at": latest_lifecycle_update or None,
+                "last_internal_update_at": latest_internal_update or None,
+                "last_sort_activity_at": latest_sort_activity or None,
+                "updated_at": latest_sort_activity or latest_legacy_update,
+                "debug": {
+                    "activity": {
+                        "selected": latest_sort_activity or None,
+                        "selected_source": "last_sort_activity_at",
+                        "last_visible_message_at": latest_visible_message or None,
+                        "last_lifecycle_update_at": latest_lifecycle_update or None,
+                        "last_internal_update_at": latest_internal_update or None,
+                    }
+                },
                 "sample_child_ids": [
                     child.get("row_id") for child in children[:3] if child.get("row_id")
                 ],
@@ -2504,7 +2541,11 @@ def _ticket_run_groups(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
             }
         )
     return sorted(
-        groups, key=lambda group: str(group.get("updated_at") or ""), reverse=True
+        groups,
+        key=lambda group: str(
+            group.get("last_sort_activity_at") or group.get("updated_at") or ""
+        ),
+        reverse=True,
     )
 
 

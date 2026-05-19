@@ -94,7 +94,21 @@ describe('read model contracts', () => {
       window: window(),
       filter: 'active',
       rows: [chatRow],
-      groups: [],
+      groups: [
+        {
+          groupId: 'run:run-1',
+          kind: 'ticket_run',
+          label: 'run:run-1',
+          childCount: 2,
+          waitingCount: 1,
+          runningCount: 1,
+          unreadCount: 3,
+          lastActivityAt: now,
+          lastSortActivityAt: now,
+          lastLifecycleUpdateAt: now,
+          debug: { activity: { selectedSource: 'lastSortActivityAt' } }
+        }
+      ],
       counters: { total: 1, waiting: 0, running: 1, unread: 2, archived: 0 },
       repair: repair('/hub/read-models/chats')
     });
@@ -111,6 +125,9 @@ describe('read model contracts', () => {
 
     expect(snapshot.rows[0].chatId).toBe('chat-1');
     expect(snapshot.rows[0].lastActivityAt).toBe(snapshot.rows[0].lastSortActivityAt);
+    expect(snapshot.groups[0].lastActivityAt).toBe(snapshot.groups[0].lastSortActivityAt);
+    expect(snapshot.groups[0].waitingCount).toBe(1);
+    expect(snapshot.groups[0].debug?.activity).toEqual({ selectedSource: 'lastSortActivityAt' });
     expect(snapshot.rows[0].debug?.activity).toEqual(event.patch.rows[0].debug?.activity);
     expect(event.patch.rows[0].unreadCount).toBe(2);
   });

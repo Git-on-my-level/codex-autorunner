@@ -1200,8 +1200,6 @@ async def _execute_discord_thread_message(
             ),
         )
         run_turn_kwargs["turn_envelope"] = turn_envelope
-        run_turn_kwargs["user_visible_text"] = turn_envelope.user_visible_text
-        run_turn_kwargs["title_seed"] = turn_envelope.title_seed
     if existing_session_prompt_text is not None:
         run_turn_kwargs["existing_session_prompt_text"] = existing_session_prompt_text
     run_turn_kwargs["chat_ux_snapshot"] = dispatch.chat_ux_snapshot
@@ -1210,7 +1208,15 @@ async def _execute_discord_thread_message(
             run_turn = dispatch.service._run_agent_turn_for_message
             if not _callable_accepts_keyword(run_turn, "turn_envelope"):
                 run_turn_kwargs.pop("turn_envelope", None)
-            if not _callable_accepts_keyword(run_turn, "user_visible_text"):
+                if turn_envelope is not None:
+                    run_turn_kwargs["user_visible_text"] = (
+                        turn_envelope.user_visible_text
+                    )
+                    run_turn_kwargs["title_seed"] = turn_envelope.title_seed
+                if not _callable_accepts_keyword(run_turn, "user_visible_text"):
+                    run_turn_kwargs.pop("user_visible_text", None)
+                    run_turn_kwargs.pop("title_seed", None)
+            elif not _callable_accepts_keyword(run_turn, "user_visible_text"):
                 run_turn_kwargs.pop("user_visible_text", None)
                 run_turn_kwargs.pop("title_seed", None)
             return cast(

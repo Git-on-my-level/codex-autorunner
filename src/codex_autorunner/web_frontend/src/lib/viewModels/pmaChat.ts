@@ -382,10 +382,12 @@ export function mapChatSurfaceToPmaChatSummary(surface: Record<string, unknown>)
     isTicketFlow: firstRawString(metadata.flow_type) === 'ticket' || firstRawString(metadata.ticket_id) !== null,
     progressPercent: rawNumber(metadata.progress_percent),
     updatedAt: firstRawString(
+      metadata.last_sort_activity_at,
       metadata.last_activity_at,
       metadata.latest_turn_finished_at,
       metadata.latest_turn_started_at,
       metadata.latest_event_at,
+      surface.last_sort_activity_at,
       surface.last_activity_at,
       surface.updated_at,
       surface.created_at

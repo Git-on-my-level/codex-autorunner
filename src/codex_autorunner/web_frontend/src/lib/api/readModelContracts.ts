@@ -101,6 +101,15 @@ export type ChatIndexGroup = {
   kind: 'ticket_run' | 'surface' | 'repo' | 'worktree';
   label: string;
   childCount: number;
+  waitingCount?: number;
+  runningCount?: number;
+  unreadCount?: number;
+  lastActivityAt?: string | null;
+  lastVisibleMessageAt?: string | null;
+  lastLifecycleUpdateAt?: string | null;
+  lastInternalUpdateAt?: string | null;
+  lastSortActivityAt?: string | null;
+  debug?: Record<string, unknown> | null;
   expandedChildWindow?: PageWindow | null;
 };
 

@@ -761,6 +761,44 @@ def test_chat_index_carries_ticket_flow_metadata_for_grouping(
             "run_id": "run-015",
         },
     )
+    _seed_thread(
+        hub_root,
+        thread_id="thread-ticket-flow-stale-lifecycle",
+        repo_id="repo-1",
+        resource_kind="worktree",
+        resource_id="repo-1--ticket-flow",
+        runtime_status="completed",
+        metadata={
+            "flow_type": "ticket_flow",
+            "thread_kind": "ticket_flow",
+            "ticket_id": "TICKET-016",
+            "run_id": "run-015",
+        },
+    )
+    _seed_execution(
+        hub_root,
+        thread_id="thread-ticket-flow",
+        status="completed",
+        prompt_text="Newer visible ticket turn",
+        metadata={"user_visible_text": "Newer visible ticket turn"},
+        created_at="2026-05-11T00:02:00Z",
+    )
+    _seed_execution(
+        hub_root,
+        thread_id="thread-ticket-flow-stale-lifecycle",
+        status="completed",
+        prompt_text="Older visible ticket turn",
+        metadata={"user_visible_text": "Older visible ticket turn"},
+        created_at="2026-05-11T00:01:00Z",
+    )
+    with open_orchestration_sqlite(hub_root, durable=False, migrate=True) as conn:
+        conn.execute(
+            "UPDATE orch_thread_targets SET updated_at = ? WHERE thread_target_id = ?",
+            (
+                "2026-05-11T00:05:00Z",
+                "thread-ticket-flow-stale-lifecycle",
+            ),
+        )
     SQLiteChatSurfaceEventJournal(hub_root, durable=False).append_event(
         idempotency_key="stale-running-progress",
         event_type="execution.progress",
@@ -796,6 +834,14 @@ def test_chat_index_carries_ticket_flow_metadata_for_grouping(
 
     assert grouped["rows"][0]["row_type"] == "group"
     assert grouped["rows"][0]["group_id"] == "run:run-015"
+    assert grouped["rows"][0]["child_count"] == 2
+    assert grouped["rows"][0]["last_sort_activity_at"] == "2026-05-11T00:02:00Z"
+    assert grouped["rows"][0]["last_lifecycle_update_at"] == "2026-05-11T00:05:00Z"
+    assert grouped["rows"][0]["updated_at"] == "2026-05-11T00:02:00Z"
+    assert (
+        grouped["rows"][0]["debug"]["activity"]["selected_source"]
+        == "last_sort_activity_at"
+    )
 
     active = ChatSurfaceReadService(hub_root, durable=False).chat_index_snapshot(
         view="active",

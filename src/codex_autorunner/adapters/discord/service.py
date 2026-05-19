@@ -3744,6 +3744,11 @@ class DiscordBotService(DiscordInteractionResponseMixin):
         title_seed: Optional[str] = None,
     ) -> DiscordMessageTurnResult:
         async def _run_turn() -> DiscordMessageTurnResult:
+            legacy_turn_text_kwargs = (
+                {}
+                if turn_envelope is not None
+                else {"user_visible_text": user_visible_text, "title_seed": title_seed}
+            )
             if orchestrator_channel_key.startswith("pma:"):
                 return await run_managed_thread_turn_for_message(
                     self,
@@ -3762,8 +3767,7 @@ class DiscordBotService(DiscordInteractionResponseMixin):
                     supervision=supervision,
                     existing_session_prompt_text=existing_session_prompt_text,
                     chat_ux_snapshot=chat_ux_snapshot,
-                    user_visible_text=user_visible_text,
-                    title_seed=title_seed,
+                    **legacy_turn_text_kwargs,
                 )
             return await run_agent_turn_for_message(
                 self,
@@ -3783,8 +3787,7 @@ class DiscordBotService(DiscordInteractionResponseMixin):
                 heartbeat_interval_seconds=DISCORD_TURN_PROGRESS_HEARTBEAT_INTERVAL_SECONDS,
                 log_event_fn=log_event,
                 chat_ux_snapshot=chat_ux_snapshot,
-                user_visible_text=user_visible_text,
-                title_seed=title_seed,
+                **legacy_turn_text_kwargs,
             )
 
         turn_result: Optional[DiscordMessageTurnResult] = None
