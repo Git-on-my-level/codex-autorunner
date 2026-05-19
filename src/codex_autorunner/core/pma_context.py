@@ -125,6 +125,12 @@ def format_pma_prompt(
         pma_docs=pma_docs,
         snapshot_text=snapshot_text,
     )
+    sections[PMA_PROMPT_TURN_SECTION] = {
+        "label": "CURRENT_ACTIONABLE_STATE",
+        "tag": "current_actionable_state",
+        "content": actionable_state_text,
+        "digest": _digest_text(actionable_state_text),
+    }
     prompt_sections = cast(Mapping[str, Mapping[str, str]], sections)
     use_delta = False
     delta_reason = "state_key_missing"
@@ -234,6 +240,8 @@ async def build_hub_snapshot(
 from .pma_action_queue import build_pma_action_queue  # noqa: E402
 from .pma_inbox import _gather_inbox  # noqa: E402
 from .pma_prompt_state import (  # noqa: E402, F401
+    PMA_PROMPT_TURN_SECTION,
+    _digest_text,
     _merge_prompt_session_state,
     clear_pma_prompt_state_sessions,
     default_pma_prompt_state_path,

@@ -5,7 +5,10 @@ from pathlib import Path
 
 import pytest
 
-from codex_autorunner.core.pma_context import default_pma_prompt_state_path
+from codex_autorunner.core.pma_context import (
+    format_pma_prompt,
+    list_pma_prompt_state_session_keys,
+)
 from codex_autorunner.core.pma_lifecycle import (
     LifecycleCommand,
     PmaLifecycleRouter,
@@ -16,6 +19,18 @@ from codex_autorunner.core.pma_lifecycle import (
 def temp_hub_root(tmp_path: Path) -> Path:
     """Create a temporary hub root for testing."""
     return tmp_path / "hub"
+
+
+def _seed_pma_prompt_ledger(hub_root: Path, *session_keys: str) -> None:
+    snapshot = {"inbox": [], "repos": [], "pma_files": {"inbox": [], "outbox": []}}
+    for session_key in session_keys:
+        format_pma_prompt(
+            "Base PMA prompt",
+            snapshot,
+            "Seed prompt ledger",
+            hub_root=hub_root,
+            prompt_state_key=session_key,
+        )
 
 
 @pytest.mark.asyncio
@@ -232,22 +247,12 @@ async def test_lifecycle_router_new_clears_scoped_keys(temp_hub_root: Path) -> N
 async def test_lifecycle_router_new_clears_matching_prompt_state_keys(
     temp_hub_root: Path,
 ) -> None:
-    state_path = default_pma_prompt_state_path(temp_hub_root)
-    state_path.parent.mkdir(parents=True, exist_ok=True)
-    state_path.write_text(
-        json.dumps(
-            {
-                "version": 1,
-                "updated_at": "2026-03-20T00:00:00Z",
-                "sessions": {
-                    "pma": {"version": 1},
-                    "pma.-1001.42": {"version": 1},
-                    "pma.opencode": {"version": 1},
-                    "pma.opencode.-1001.42": {"version": 1},
-                },
-            }
-        ),
-        encoding="utf-8",
+    _seed_pma_prompt_ledger(
+        temp_hub_root,
+        "pma",
+        "pma.-1001.42",
+        "pma.opencode",
+        "pma.opencode.-1001.42",
     )
 
     router = PmaLifecycleRouter(temp_hub_root)
@@ -260,8 +265,7 @@ async def test_lifecycle_router_new_clears_matching_prompt_state_keys(
     assert "pma.opencode" not in cleared
     assert "pma.opencode.-1001.42" not in cleared
 
-    payload = json.loads(state_path.read_text(encoding="utf-8"))
-    sessions = payload.get("sessions", {})
+    sessions = set(list_pma_prompt_state_session_keys(temp_hub_root))
     assert "pma" not in sessions
     assert "pma.-1001.42" not in sessions
     assert "pma.opencode" in sessions
@@ -294,22 +298,12 @@ async def test_lifecycle_router_reset_clears_scoped_keys(temp_hub_root: Path) ->
 async def test_lifecycle_router_reset_all_clears_all_prompt_state_keys(
     temp_hub_root: Path,
 ) -> None:
-    state_path = default_pma_prompt_state_path(temp_hub_root)
-    state_path.parent.mkdir(parents=True, exist_ok=True)
-    state_path.write_text(
-        json.dumps(
-            {
-                "version": 1,
-                "updated_at": "2026-03-20T00:00:00Z",
-                "sessions": {
-                    "pma": {"version": 1},
-                    "pma.-1001.1": {"version": 1},
-                    "pma.opencode": {"version": 1},
-                    "pma.opencode.-1001.2": {"version": 1},
-                },
-            }
-        ),
-        encoding="utf-8",
+    _seed_pma_prompt_ledger(
+        temp_hub_root,
+        "pma",
+        "pma.-1001.1",
+        "pma.opencode",
+        "pma.opencode.-1001.2",
     )
 
     router = PmaLifecycleRouter(temp_hub_root)
@@ -322,8 +316,7 @@ async def test_lifecycle_router_reset_all_clears_all_prompt_state_keys(
     assert "pma.opencode" in cleared
     assert "pma.opencode.-1001.2" in cleared
 
-    payload = json.loads(state_path.read_text(encoding="utf-8"))
-    assert payload.get("sessions") == {}
+    assert list_pma_prompt_state_session_keys(temp_hub_root) == []
 
 
 @pytest.mark.asyncio
@@ -401,21 +394,11 @@ async def test_lifecycle_router_codex_reset_preserves_hermes_scoped_state(
     registry.set_thread_id("pma.hermes", "global-hermes-id")
     registry.set_thread_id("pma.hermes.-1001.7", "topic-hermes-7-id")
 
-    state_path = default_pma_prompt_state_path(temp_hub_root)
-    state_path.parent.mkdir(parents=True, exist_ok=True)
-    state_path.write_text(
-        json.dumps(
-            {
-                "version": 1,
-                "updated_at": "2026-03-20T00:00:00Z",
-                "sessions": {
-                    "pma": {"version": 1},
-                    "pma.hermes": {"version": 1},
-                    "pma.hermes.-1001.7": {"version": 1},
-                },
-            }
-        ),
-        encoding="utf-8",
+    _seed_pma_prompt_ledger(
+        temp_hub_root,
+        "pma",
+        "pma.hermes",
+        "pma.hermes.-1001.7",
     )
 
     router = PmaLifecycleRouter(temp_hub_root)
@@ -436,8 +419,7 @@ async def test_lifecycle_router_codex_reset_preserves_hermes_scoped_state(
     assert registry.get_thread_id("pma.hermes") == "global-hermes-id"
     assert registry.get_thread_id("pma.hermes.-1001.7") == "topic-hermes-7-id"
 
-    payload = json.loads(state_path.read_text(encoding="utf-8"))
-    sessions = payload.get("sessions", {})
+    sessions = set(list_pma_prompt_state_session_keys(temp_hub_root))
     assert "pma" not in sessions
     assert "pma.hermes" in sessions
     assert "pma.hermes.-1001.7" in sessions

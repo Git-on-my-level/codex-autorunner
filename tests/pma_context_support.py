@@ -20,6 +20,7 @@ from codex_autorunner.core.hub_inbox_resolution import (
 )
 from codex_autorunner.core.managed_thread_store import ManagedThreadStore
 from codex_autorunner.core.orchestration import OrchestrationBindingStore
+from codex_autorunner.core.orchestration.sqlite import resolve_orchestration_sqlite_path
 from codex_autorunner.core.pma_audit import PmaActionType, PmaAuditLog
 from codex_autorunner.core.pma_context import (
     PMA_ACTIVE_CONTEXT_MAX_LINES,
@@ -2197,7 +2198,8 @@ class TestIssue975DeltaPmaPromptAssembly:
         assert "Ops guide: `.codex-autorunner/pma/docs/ABOUT_CAR.md`." not in result
         assert "<pma_workspace_docs>" not in result
         assert "<pma_fastpath>" not in result
-        assert "- changed=HUB_SNAPSHOT (see <current_actionable_state>)" in result
+        assert "- changed=HUB_SNAPSHOT[pma.hub_snapshot@1:" in result
+        assert "(see <current_actionable_state>)" in result
         assert "\n<hub_snapshot>\n" not in result
         assert "<hub_snapshot_ref " in result
         assert "PMA Action Queue:" in result
@@ -2241,12 +2243,17 @@ class TestIssue975DeltaPmaPromptAssembly:
             prompt_state_key="pma.test-digest-mismatch",
         )
 
-        state_path = tmp_path / ".codex-autorunner" / "pma" / "prompt_state.json"
-        payload = json.loads(state_path.read_text(encoding="utf-8"))
-        payload["sessions"]["pma.test-digest-mismatch"][
-            "bundle_digest"
-        ] = "not-a-digest"
-        state_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+        db_path = resolve_orchestration_sqlite_path(tmp_path)
+        with sqlite3.connect(db_path) as conn:
+            conn.execute(
+                """
+                UPDATE orch_context_capsule_ledger
+                   SET payload_digest = 'not-a-digest'
+                 WHERE surface_kind = 'pma'
+                   AND managed_thread_id = 'pma.test-digest-mismatch'
+                   AND capsule_id = 'pma.base_prompt'
+                """
+            )
 
         result = format_pma_prompt(
             "Base prompt",
@@ -2259,6 +2266,36 @@ class TestIssue975DeltaPmaPromptAssembly:
         assert "<pma_workspace_docs>" in result
         assert "<hub_snapshot>" in result
         assert "reason='digest_mismatch'" in result
+
+    def test_format_pma_prompt_resets_legacy_prompt_state_json(
+        self, tmp_path: Path
+    ) -> None:
+        seed_hub_files(tmp_path, force=True)
+        legacy_path = tmp_path / ".codex-autorunner" / "pma" / "prompt_state.json"
+        legacy_path.parent.mkdir(parents=True, exist_ok=True)
+        legacy_path.write_text(
+            json.dumps(
+                {
+                    "version": 1,
+                    "updated_at": "2026-03-20T00:00:00Z",
+                    "sessions": {"pma.legacy": {"version": 1}},
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        result = format_pma_prompt(
+            "Base prompt",
+            _EMPTY_SNAPSHOT,
+            "Turn after cutover",
+            hub_root=tmp_path,
+            prompt_state_key="pma.legacy",
+        )
+
+        assert "<pma_workspace_docs>" in result
+        assert "reason='first_turn'" in result
+        assert not legacy_path.exists()
+        assert legacy_path.with_name("prompt_state.json.major_version_reset").exists()
 
     def test_format_pma_prompt_without_state_key_always_full_context(
         self, tmp_path: Path
