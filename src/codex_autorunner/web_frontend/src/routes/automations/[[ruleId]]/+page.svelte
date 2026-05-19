@@ -108,8 +108,8 @@
   let syncedSelectionKey = '';
 
   const automations = $derived(overview?.automations ?? []);
-  const userAutomations = $derived(automations.filter((automation) => !automation.systemOwned));
-  const systemAutomations = $derived(automations.filter((automation) => automation.systemOwned));
+  const userAutomations = $derived(automations.filter((automation) => !isManagedAutomation(automation)));
+  const managedAutomations = $derived(automations.filter(isManagedAutomation));
   const routeRuleId = $derived(decodeURIComponent(page.params.ruleId ?? ''));
   const selectedRepo = $derived(repos.find((repo) => repo.id === selectedRepoId) ?? null);
   const scheduleTimeValue = $derived(`${pad(detailHour)}:${pad(detailMinute)}`);
@@ -182,12 +182,12 @@
     if (automation) {
       detailName = automation.name;
       detailEnabled = automation.enabled;
-      timezone = automation.schedule?.timezone ?? timezone;
-      detailHour = numberFromRecord(automation.schedule?.schedule, 'hour', detailHour);
-      detailMinute = numberFromRecord(automation.schedule?.schedule, 'minute', detailMinute);
-      const weekdays = automation.schedule?.schedule.weekdays;
-      detailWeekday = Array.isArray(weekdays) ? Number(weekdays[0] ?? 0) : detailWeekday;
-      promptDraft = stringValue(automation.raw.executor, 'message');
+      const scheduleFields = automation.product.scheduleEditor.fields;
+      timezone = automation.product.scheduleEditor.timezone ?? automation.schedule?.timezone ?? timezone;
+      detailHour = numberFromRecord(scheduleFields, 'hour', detailHour);
+      detailMinute = numberFromRecord(scheduleFields, 'minute', detailMinute);
+      detailWeekday = numberFromRecord(scheduleFields, 'weekday', detailWeekday);
+      promptDraft = automation.product.message.field === 'prompt' ? stringValue(automation.raw.executor, 'message') : automation.product.messagePreview;
       ticketDraft = firstTicketBody(automation.raw.executor);
       if (automation.executorKind === 'pma_turn') {
         selectedAgent = stringValue(automation.raw.executor, 'agent') || defaultAgentId || agentIdFallback();
@@ -285,7 +285,9 @@
   }
 
   function saveTextDebounced(patch: AutomationUpdateRequest, label: string): void {
-    if (selectedKind !== 'automation') return;
+    const automation = selectedAutomation();
+    if (selectedKind !== 'automation' || !automation) return;
+    if ((label === 'name' && !automation.product.editable.canRename) || (label === 'prompt' && !automation.product.editable.canEditMessage)) return;
     if (saveTimer) window.clearTimeout(saveTimer);
     saveTimer = window.setTimeout(() => {
       saveTimer = null;
@@ -294,6 +296,16 @@
   }
 
   async function saveJsonField(field: JsonField, draft: string): Promise<void> {
+    const automation = selectedAutomation();
+    if (automation && !automation.product.editable.canEditRaw && field !== 'metadata') {
+      error = {
+        kind: 'http',
+        status: 400,
+        code: 'AUTOMATION_PRODUCT_UNSUPPORTED_RAW_FIELDS',
+        message: automation.product.editable.rawEditBlockedReason || 'Raw rule edits are available through the control-plane API.'
+      };
+      return;
+    }
     const parsed = parseJsonDraft(draft);
     if (!parsed) return;
     await savePatch({ [field]: parsed } as AutomationUpdateRequest, field);
@@ -307,6 +319,7 @@
     }
     const automation = selectedAutomation();
     if (!automation) return;
+    if (!automation.product.editable.canEditTicketBody) return;
     const executor = { ...asRecord(automation.raw.executor) };
     const ticketPack: JsonRecord = { ...asRecord(executor.ticket_pack), source: stringValue(executor.ticket_pack, 'source') || 'inline' };
     ticketPack.tickets = tickets.map((ticket) => ({ path: ticket.path, content: ticket.content }));
@@ -444,32 +457,21 @@
   }
 
   function scheduleLabel(automation: AutomationSummary): string {
-    const schedule = automation.schedule;
-    if (!schedule) return 'Event-driven';
-    const hour = schedule.schedule.hour;
-    const minute = schedule.schedule.minute;
-    const time = `${pad(Number(hour ?? 0))}:${pad(Number(minute ?? 0))}`;
-    if (schedule.scheduleKind === 'weekly') {
-      const weekdays = Array.isArray(schedule.schedule.weekdays) ? schedule.schedule.weekdays : [0];
-      const day = weekdayLabel(Number(weekdays[0] ?? 0), true);
-      return `${day} ${time} ${schedule.timezone}`;
-    }
-    if (schedule.scheduleKind === 'daily') return `Daily ${time} ${schedule.timezone}`;
-    return `${schedule.scheduleKind} ${schedule.timezone}`;
+    return automation.product.scheduleEditor.summary || (automation.schedule ? automation.schedule.scheduleKind : 'Event driven');
   }
 
   function targetLabel(automation: AutomationSummary | null): string {
     if (!automation) return selectedRepo?.name || selectedRepoId || 'Hub';
-    const repoId = String(automation.target.repo_id ?? automation.target.base_repo_id ?? '');
+    const repoId = String(automation.product.targetSummary.repo_id ?? automation.product.targetSummary.base_repo_id ?? automation.target.repo_id ?? automation.target.base_repo_id ?? '');
     if (repoId) {
       const repo = repos.find((entry) => entry.id === repoId);
       return repo?.name || repoId;
     }
-    return String(automation.target.worktree_id ?? 'Hub');
+    return String(automation.product.targetSummary.label ?? automation.target.worktree_id ?? 'Hub');
   }
 
   function selectedScheduleKind(): string {
-    return selectedAutomation()?.schedule?.scheduleKind ?? selectedPreset().scheduleKind;
+    return selectedAutomation()?.product.scheduleEditor.kind ?? selectedPreset().scheduleKind;
   }
 
   function selectedExecutorKind(): string {
@@ -482,7 +484,7 @@
 
   function detailDescription(): string {
     const automation = selectedAutomation();
-    if (automation) return String(automation.metadata.description ?? kindLabel(automation.kind));
+    if (automation) return String(automation.metadata.description ?? automation.product.managed.reason ?? kindLabel(automation.kind));
     return selectedPreset().description;
   }
 
@@ -579,7 +581,8 @@
   }
 
   function saveAgentModelFields(): void {
-    if (selectedExecutorKind() !== 'pma_turn') return;
+    const automation = selectedAutomation();
+    if (selectedExecutorKind() !== 'pma_turn' || (automation && !automation.product.editable.canEditMessage)) return;
     void savePatch(
       {
         agent: selectedAgent || null,
@@ -596,7 +599,8 @@
     const [h, m] = value.split(':');
     detailHour = Number(h) || 0;
     detailMinute = Number(m) || 0;
-    if (selectedKind === 'automation') void savePatch(schedulePatch(), 'schedule');
+    const automation = selectedAutomation();
+    if (automation?.product.editable.canEditSchedule) void savePatch(schedulePatch(), 'schedule');
   }
 
   function parseJsonDraft(draft: string): JsonRecord | null {
@@ -664,10 +668,19 @@
   }
 
   function hasSchedule(): boolean {
-    return selectedKind === 'preset' || Boolean(selectedAutomation()?.schedule);
+    return selectedKind === 'preset' || selectedScheduleKind() !== 'event_driven';
   }
 
   function runsAsLabel(): string {
+    const automation = selectedAutomation();
+    if (automation) {
+      const summary = automation.product.executorSummary;
+      const label = String(summary.label ?? kindLabel(automation.executorKind));
+      const agent = String(summary.agent ?? '');
+      const model = String(summary.model ?? '');
+      if (model) return `${agent || 'default'} · ${model}`;
+      return agent || label;
+    }
     if (selectedExecutorKind() === 'pma_turn') {
       return selectedModel ? `${selectedAgent || 'default'} · ${selectedModel}` : selectedAgent || 'default agent';
     }
@@ -677,11 +690,67 @@
 
   function scheduleSummary(): string {
     const automation = selectedAutomation();
-    if (automation) return scheduleLabel(automation);
+    if (automation) return automation.product.scheduleEditor.summary || scheduleLabel(automation);
     const preset = selectedPreset();
     const time = `${pad(detailHour)}:${pad(detailMinute)}`;
     if (preset.scheduleKind === 'weekly') return `${weekdayLabel(detailWeekday, true)} ${time} ${timezone}`;
     return `Daily ${time} ${timezone}`;
+  }
+
+  function isManagedAutomation(automation: AutomationSummary): boolean {
+    return automation.product.managed.managed || automation.systemOwned;
+  }
+
+  function canEditName(): boolean {
+    const automation = selectedAutomation();
+    return selectedKind === 'preset' || Boolean(automation?.product.editable.canRename);
+  }
+
+  function canEditSchedule(): boolean {
+    const automation = selectedAutomation();
+    return selectedKind === 'preset' || Boolean(automation?.product.editable.canEditSchedule);
+  }
+
+  function canEditPrompt(): boolean {
+    const automation = selectedAutomation();
+    return selectedKind === 'preset' || Boolean(automation?.product.editable.canEditMessage);
+  }
+
+  function canEditTicketBody(): boolean {
+    const automation = selectedAutomation();
+    return selectedKind === 'preset' || Boolean(automation?.product.editable.canEditTicketBody);
+  }
+
+  function canRunNow(): boolean {
+    const automation = selectedAutomation();
+    return Boolean(automation?.product.editable.canRunNow);
+  }
+
+  function canToggleEnabled(): boolean {
+    const automation = selectedAutomation();
+    return Boolean(automation?.product.editable.canEnable);
+  }
+
+  function selectedMessagePreview(): string {
+    const automation = selectedAutomation();
+    if (automation) return automation.product.messagePreview || automation.product.message.preview || 'No product-visible message source is declared.';
+    return promptDraft || ticketDraft || selectedPreset().prompt;
+  }
+
+  function scheduleFieldDateTime(): string {
+    const automation = selectedAutomation();
+    const dueAt = automation?.product.scheduleEditor.fields.due_at;
+    return typeof dueAt === 'string' ? dueAt : '';
+  }
+
+  function scheduleFieldInterval(): string {
+    const automation = selectedAutomation();
+    const interval = automation?.product.scheduleEditor.fields.interval_seconds;
+    return interval === undefined || interval === null ? '' : String(interval);
+  }
+
+  function rawLinkLabel(key: string): string {
+    return key.replace(/_/g, ' ');
   }
 </script>
 
@@ -816,15 +885,15 @@
             </ul>
           </div>
 
-          {#if systemAutomations.length > 0}
+          {#if managedAutomations.length > 0}
             <details class="list-group system-group">
               <summary>
-                <span class="system-summary-label">System &amp; PMA-managed</span>
-                <span class="system-count">{systemAutomations.length}</span>
+                <span class="system-summary-label">Managed &amp; legacy diagnostics</span>
+                <span class="system-count">{managedAutomations.length}</span>
               </summary>
-              <p class="group-empty system-note">Built-in and PMA-mirrored rules. Managed automatically — view to inspect.</p>
+              <p class="group-empty system-note">Built-in, PMA-mirrored, and legacy-migrated rules. They are diagnostics-first and only typed editable fields can be changed.</p>
               <ul class="card-list">
-                {#each systemAutomations as automation (automation.id)}
+                {#each managedAutomations as automation (automation.id)}
                   {@render automationRow(automation)}
                 {/each}
               </ul>
@@ -854,13 +923,13 @@
             <button
               type="button"
               class="ghost-button"
-              disabled={actionId === selectedAutomation()?.id}
+              disabled={!canRunNow() || actionId === selectedAutomation()?.id}
               onclick={() => selectedAutomation() && runNow(selectedAutomation() as AutomationSummary)}
             >Run now</button>
             <button
               type="button"
               class="ghost-button"
-              disabled={actionId === selectedAutomation()?.id}
+              disabled={!canToggleEnabled() || actionId === selectedAutomation()?.id}
               onclick={() => selectedAutomation() && setEnabled(selectedAutomation() as AutomationSummary, !detailEnabled)}
             >{detailEnabled ? 'Pause' : 'Resume'}</button>
             <button type="button" class="ghost-button" onclick={() => openPmaWithDraft(editWithPmaPrompt())}>Edit with PMA</button>
@@ -878,8 +947,13 @@
 
       {#if selectedKind === 'preset'}
         <p class="detail-banner">This is a template. Adjust the settings below, then create it to start running.</p>
-      {:else if selectedAutomation()?.systemOwned}
-        <p class="detail-banner system">System &amp; PMA-managed rule. It is kept in sync automatically — edits here may be overwritten.</p>
+      {:else if selectedAutomation()?.product.managed.managed}
+        <p class="detail-banner system">
+          {selectedAutomation()?.product.managed.reason || 'Managed automation.'}
+          {#if selectedAutomation()?.product.managed.legacy}
+            Migrated from {selectedAutomation()?.product.managed.legacySource || 'legacy PMA state'}.
+          {/if}
+        </p>
       {/if}
 
       <!-- At a glance: read-only runtime facts -->
@@ -916,7 +990,7 @@
         <div class="field-grid">
           <label class="field">
             <span>Name</span>
-            <input bind:value={detailName} oninput={() => saveTextDebounced({ name: detailName }, 'name')} />
+            <input bind:value={detailName} disabled={!canEditName()} oninput={() => saveTextDebounced({ name: detailName }, 'name')} />
           </label>
 
           {#if selectedKind === 'preset'}
@@ -937,29 +1011,44 @@
             </label>
           {/if}
 
-          {#if hasSchedule()}
+          {#if hasSchedule() && ['daily', 'weekly'].includes(selectedScheduleKind())}
             <label class="field">
               <span>Time</span>
-              <input type="time" value={scheduleTimeValue} onchange={onScheduleTime} />
+              <input type="time" value={scheduleTimeValue} disabled={!canEditSchedule()} onchange={onScheduleTime} />
             </label>
             <label class="field">
               <span>Timezone</span>
-              <input bind:value={timezone} onchange={() => selectedKind === 'automation' && void savePatch(schedulePatch(), 'schedule')} />
+              <input bind:value={timezone} disabled={!canEditSchedule()} onchange={() => selectedAutomation()?.product.editable.canEditSchedule && void savePatch(schedulePatch(), 'schedule')} />
             </label>
             {#if selectedScheduleKind() === 'weekly'}
               <label class="field">
                 <span>Day</span>
-                <select bind:value={detailWeekday} onchange={() => selectedKind === 'automation' && void savePatch(schedulePatch(), 'schedule')}>
+                <select bind:value={detailWeekday} disabled={!canEditSchedule()} onchange={() => selectedAutomation()?.product.editable.canEditSchedule && void savePatch(schedulePatch(), 'schedule')}>
                   {#each [0, 1, 2, 3, 4, 5, 6] as day}
                     <option value={day}>{weekdayLabel(day)}</option>
                   {/each}
                 </select>
               </label>
             {/if}
+          {:else if selectedKind === 'automation' && selectedScheduleKind() === 'one_shot'}
+            <label class="field">
+              <span>Due at</span>
+              <input value={scheduleFieldDateTime()} disabled />
+            </label>
+          {:else if selectedKind === 'automation' && selectedScheduleKind() === 'interval'}
+            <label class="field">
+              <span>Interval seconds</span>
+              <input value={scheduleFieldInterval()} disabled />
+            </label>
+          {:else if selectedKind === 'automation'}
+            <div class="field readonly-field">
+              <span>Schedule</span>
+              <strong>{scheduleSummary()}</strong>
+            </div>
           {/if}
         </div>
 
-        {#if selectedExecutorKind() === 'pma_turn'}
+        {#if selectedExecutorKind() === 'pma_turn' && canEditPrompt()}
           <div class="agent-picker-row">
             <AgentModelReasoningPicker
               {agents}
@@ -991,18 +1080,43 @@
           <TicketPackEditor
             tickets={selectedTicketPackTickets()}
             {agents}
-            onChange={saveTicketPack}
-            allowAddRemove={selectedKind === 'automation'}
+            onChange={canEditTicketBody() ? saveTicketPack : undefined}
+            allowAddRemove={selectedKind === 'automation' && canEditTicketBody()}
           />
         {:else}
-          <h3>Prompt</h3>
-          <textarea
-            class="instruction-editor"
-            bind:value={promptDraft}
-            oninput={() => saveTextDebounced({ prompt: promptDraft }, 'prompt')}
-          ></textarea>
+          <div class="section-head-row">
+            <h3>Message</h3>
+            {#if selectedAutomation()}
+              <span class="source-chip">{selectedAutomation()?.product.messageSource || 'none'}</span>
+            {/if}
+          </div>
+          {#if canEditPrompt()}
+            <textarea
+              class="instruction-editor"
+              bind:value={promptDraft}
+              oninput={() => saveTextDebounced({ prompt: promptDraft }, 'prompt')}
+            ></textarea>
+          {:else}
+            <div class="message-preview">
+              <p>{selectedMessagePreview()}</p>
+            </div>
+          {/if}
         {/if}
       </div>
+
+      {#if selectedAutomation() && selectedAutomation()?.product.diagnostics.length}
+        <div class="detail-section diagnostics-section">
+          <h3>Diagnostics</h3>
+          <ul class="diagnostic-list">
+            {#each selectedAutomation()?.product.diagnostics ?? [] as diagnostic}
+              <li>
+                <strong>{String(diagnostic.code ?? 'AUTOMATION_DIAGNOSTIC')}</strong>
+                <span>{String(diagnostic.message ?? '')}</span>
+              </li>
+            {/each}
+          </ul>
+        </div>
+      {/if}
 
       {#if selectedAutomation()}
         <div class="detail-section">
@@ -1011,32 +1125,41 @@
         </div>
       {/if}
 
-      <!-- Advanced: raw rule config, normally authored by PMA -->
+      <!-- Advanced: raw rule config, diagnostic/admin inspection only. -->
       <details class="advanced">
         <summary>
-          <span>Advanced configuration</span>
-          <span class="advanced-hint">Authored by PMA — edit only if you know the rule schema</span>
+          <span>Diagnostic raw inspection</span>
+          <span class="advanced-hint">{selectedAutomation()?.product.editable.rawEditBlockedReason || 'Raw rule edits use the control-plane API.'}</span>
         </summary>
+        {#if selectedAutomation()}
+          <div class="raw-link-row">
+            {#each Object.entries(selectedAutomation()?.product.rawLinks ?? {}) as [key, value]}
+              {#if typeof value === 'string'}
+                <a href={href(value)}>{rawLinkLabel(key)}</a>
+              {/if}
+            {/each}
+          </div>
+        {/if}
         <div class="json-grid">
           <label class="field">
             <span>Trigger</span>
-            <textarea class="json-editor" bind:value={triggerDraft} onblur={() => void saveJsonField('trigger', triggerDraft)}></textarea>
+            <textarea class="json-editor" bind:value={triggerDraft} readonly></textarea>
           </label>
           <label class="field">
             <span>Filters</span>
-            <textarea class="json-editor" bind:value={filtersDraft} onblur={() => void saveJsonField('filters', filtersDraft)}></textarea>
+            <textarea class="json-editor" bind:value={filtersDraft} readonly></textarea>
           </label>
           <label class="field">
             <span>Target</span>
-            <textarea class="json-editor" bind:value={targetDraft} onblur={() => void saveJsonField('target', targetDraft)}></textarea>
+            <textarea class="json-editor" bind:value={targetDraft} readonly></textarea>
           </label>
           <label class="field">
             <span>Executor</span>
-            <textarea class="json-editor" bind:value={executorDraft} onblur={() => void saveJsonField('executor', executorDraft)}></textarea>
+            <textarea class="json-editor" bind:value={executorDraft} readonly></textarea>
           </label>
           <label class="field">
             <span>Policy</span>
-            <textarea class="json-editor" bind:value={policyDraft} onblur={() => void saveJsonField('policy', policyDraft)}></textarea>
+            <textarea class="json-editor" bind:value={policyDraft} readonly></textarea>
           </label>
           <label class="field">
             <span>Metadata</span>
@@ -1593,10 +1716,96 @@
     box-shadow: var(--shadow-focus);
   }
 
+  input:disabled,
+  select:disabled,
+  textarea:read-only {
+    color: var(--color-ink-muted);
+    background: var(--color-surface-sunken);
+    cursor: default;
+  }
+
+  .readonly-field {
+    min-height: 58px;
+    padding: 6px 10px;
+    border: 1px solid var(--color-border-subtle);
+    border-radius: var(--radius-2);
+    background: var(--color-surface-sunken);
+  }
+
+  .readonly-field strong {
+    font-size: var(--font-size-1);
+    font-weight: 550;
+    color: var(--color-ink);
+  }
+
+  .section-head-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-2);
+    flex-wrap: wrap;
+  }
+
+  .source-chip {
+    max-width: 100%;
+    border: 1px solid var(--color-border-subtle);
+    border-radius: 999px;
+    padding: 2px 8px;
+    background: var(--color-surface-sunken);
+    color: var(--color-ink-muted);
+    font-family: var(--font-mono);
+    font-size: 11px;
+    overflow-wrap: anywhere;
+  }
+
   .instruction-editor {
     min-height: 150px;
     line-height: 1.5;
     resize: vertical;
+  }
+
+  .message-preview {
+    min-height: 86px;
+    border: 1px solid var(--color-border-subtle);
+    border-radius: var(--radius-2);
+    padding: var(--space-3);
+    background: var(--color-surface-sunken);
+    color: var(--color-ink);
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+  }
+
+  .message-preview p {
+    margin: 0;
+    line-height: 1.5;
+  }
+
+  .diagnostic-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: grid;
+    gap: var(--space-2);
+  }
+
+  .diagnostic-list li {
+    display: grid;
+    gap: 3px;
+    border: 1px solid var(--color-border-subtle);
+    border-radius: var(--radius-2);
+    padding: var(--space-2) var(--space-3);
+    background: var(--color-surface-sunken);
+  }
+
+  .diagnostic-list strong {
+    color: var(--color-ink);
+    font-family: var(--font-mono);
+    font-size: 11px;
+  }
+
+  .diagnostic-list span {
+    color: var(--color-ink-muted);
+    font-size: var(--font-size-1);
   }
 
   /* ---- Advanced disclosure ---- */
@@ -1643,6 +1852,24 @@
     grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
     gap: var(--space-3);
     margin-top: var(--space-3);
+  }
+
+  .raw-link-row {
+    display: flex;
+    gap: var(--space-2);
+    flex-wrap: wrap;
+    margin-top: var(--space-3);
+  }
+
+  .raw-link-row a {
+    border: 1px solid var(--color-border-subtle);
+    border-radius: 999px;
+    padding: 3px 9px;
+    color: var(--color-ink-muted);
+    background: var(--color-surface-sunken);
+    font-size: var(--font-size-0);
+    text-decoration: none;
+    text-transform: capitalize;
   }
 
   .json-editor {

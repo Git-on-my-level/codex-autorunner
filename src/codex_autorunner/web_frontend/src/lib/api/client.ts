@@ -153,11 +153,52 @@ export type AutomationJobSummary = {
 
 export type AutomationProductProjection = {
   productApiVersion: number;
-  editable: JsonRecord;
-  managed: JsonRecord;
-  scheduleEditor: JsonRecord;
-  triggerSummary: JsonRecord;
-  message: JsonRecord;
+  editable: {
+    canEnable: boolean;
+    canRename: boolean;
+    canEditSchedule: boolean;
+    canEditMessage: boolean;
+    canEditTicketBody: boolean;
+    canRunNow: boolean;
+    canEditRaw: boolean;
+    rawEditBlockedReason: string;
+    managedReason: string | null;
+    raw: JsonRecord;
+  };
+  managed: {
+    systemOwned: boolean;
+    managed: boolean;
+    reason: string | null;
+    legacy: boolean;
+    legacySource: string | null;
+    raw: JsonRecord;
+  };
+  scheduleEditor: {
+    kind: string;
+    editable: boolean;
+    fields: JsonRecord;
+    timezone: string | null;
+    nextFireAt: string | null;
+    lastFireAt: string | null;
+    state: string;
+    summary: string;
+    raw: JsonRecord;
+  };
+  triggerSummary: {
+    kind: string;
+    label: string;
+    eventTypes: string[];
+    filters: JsonRecord;
+    raw: JsonRecord;
+  };
+  message: {
+    source: string;
+    field: string | null;
+    preview: string;
+    template: boolean;
+    editable: boolean;
+    raw: JsonRecord;
+  };
   messageSource: string;
   messagePreview: string;
   actionPreview: JsonRecord;
@@ -1019,13 +1060,59 @@ function mapAutomationSummary(raw: JsonRecord): AutomationSummary {
 }
 
 function mapAutomationProductProjection(raw: JsonRecord): AutomationProductProjection {
+  const editable = asRecord(raw.editable);
+  const managed = asRecord(raw.managed ?? raw.managed_status ?? raw.managedStatus);
+  const scheduleEditor = asRecord(raw.schedule_editor ?? raw.scheduleEditor);
+  const triggerSummary = asRecord(raw.trigger_summary ?? raw.triggerSummary);
+  const message = asRecord(raw.message);
   return {
     productApiVersion: numberValue(raw.product_api_version ?? raw.productApiVersion, 0),
-    editable: asRecord(raw.editable),
-    managed: asRecord(raw.managed ?? raw.managed_status ?? raw.managedStatus),
-    scheduleEditor: asRecord(raw.schedule_editor ?? raw.scheduleEditor),
-    triggerSummary: asRecord(raw.trigger_summary ?? raw.triggerSummary),
-    message: asRecord(raw.message),
+    editable: {
+      canEnable: Boolean(editable.can_enable ?? editable.canEnable),
+      canRename: Boolean(editable.can_rename ?? editable.canRename),
+      canEditSchedule: Boolean(editable.can_edit_schedule ?? editable.canEditSchedule),
+      canEditMessage: Boolean(editable.can_edit_message ?? editable.canEditMessage),
+      canEditTicketBody: Boolean(editable.can_edit_ticket_body ?? editable.canEditTicketBody),
+      canRunNow: Boolean(editable.can_run_now ?? editable.canRunNow),
+      canEditRaw: Boolean(editable.can_edit_raw ?? editable.canEditRaw),
+      rawEditBlockedReason: stringValue(editable.raw_edit_blocked_reason ?? editable.rawEditBlockedReason, ''),
+      managedReason: nullableString(editable.managed_reason ?? editable.managedReason),
+      raw: editable
+    },
+    managed: {
+      systemOwned: Boolean(managed.system_owned ?? managed.systemOwned),
+      managed: Boolean(managed.managed),
+      reason: nullableString(managed.reason),
+      legacy: Boolean(managed.legacy),
+      legacySource: nullableString(managed.legacy_source ?? managed.legacySource),
+      raw: managed
+    },
+    scheduleEditor: {
+      kind: stringValue(scheduleEditor.kind, ''),
+      editable: Boolean(scheduleEditor.editable),
+      fields: asRecord(scheduleEditor.fields),
+      timezone: nullableString(scheduleEditor.timezone),
+      nextFireAt: nullableString(scheduleEditor.next_fire_at ?? scheduleEditor.nextFireAt),
+      lastFireAt: nullableString(scheduleEditor.last_fire_at ?? scheduleEditor.lastFireAt),
+      state: stringValue(scheduleEditor.state, ''),
+      summary: stringValue(scheduleEditor.summary, ''),
+      raw: scheduleEditor
+    },
+    triggerSummary: {
+      kind: stringValue(triggerSummary.kind, ''),
+      label: stringValue(triggerSummary.label, ''),
+      eventTypes: asArray(triggerSummary.event_types ?? triggerSummary.eventTypes).map((item) => String(item)),
+      filters: asRecord(triggerSummary.filters),
+      raw: triggerSummary
+    },
+    message: {
+      source: stringValue(message.source, ''),
+      field: nullableString(message.field),
+      preview: stringValue(message.preview, ''),
+      template: Boolean(message.template),
+      editable: Boolean(message.editable),
+      raw: message
+    },
     messageSource: stringValue(raw.message_source ?? raw.messageSource, ''),
     messagePreview: stringValue(raw.message_preview ?? raw.messagePreview, ''),
     actionPreview: asRecord(raw.action_preview ?? raw.actionPreview),
