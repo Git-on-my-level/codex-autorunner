@@ -145,6 +145,49 @@
     return (card.message.capsuleRefs ?? []).filter((ref) => ref.visibility === 'model_only');
   }
 
+  type PromptParts = {
+    visibleText: string;
+    injectedContext: string | null;
+  };
+
+  function splitInjectedPromptContext(text: string): PromptParts {
+    const match = text.match(/<injected context>\s*([\s\S]*?)\s*<\/injected context>\s*/i);
+    if (!match) return { visibleText: text, injectedContext: null };
+    const before = text.slice(0, match.index).trim();
+    const after = text.slice((match.index ?? 0) + match[0].length).trim();
+    const visibleText = [before, after].filter(Boolean).join('\n\n');
+    return {
+      visibleText: visibleText || text,
+      injectedContext: match[1]?.trim() || null
+    };
+  }
+
+  function rawRecord(value: unknown): Record<string, unknown> {
+    return value && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
+  }
+
+  function rawText(value: unknown): string | null {
+    return typeof value === 'string' && value.trim() ? value : null;
+  }
+
+  function rawInjectedPromptText(card: Extract<ChatTranscriptCard, { kind: 'message' }>): string | null {
+    const raw = rawRecord(card.message.raw);
+    const payload = rawRecord(raw.payload);
+    return rawText(payload.raw_model_prompt) ?? rawText(payload.runtime_prompt) ?? rawText(raw.raw_model_prompt) ?? rawText(raw.runtime_prompt);
+  }
+
+  function userPromptParts(card: Extract<ChatTranscriptCard, { kind: 'message' }>): PromptParts {
+    const visibleParts = splitInjectedPromptContext(card.message.text);
+    if (visibleParts.injectedContext) return visibleParts;
+    const rawPrompt = rawInjectedPromptText(card);
+    if (!rawPrompt) return visibleParts;
+    const rawParts = splitInjectedPromptContext(rawPrompt);
+    return {
+      visibleText: card.message.text,
+      injectedContext: rawParts.injectedContext
+    };
+  }
+
   function capsuleRefLabel(ref: PmaMessageCapsuleRef): string {
     return `${ref.capsuleId} v${ref.capsuleVersion} · ${ref.scope}`;
   }
@@ -156,32 +199,38 @@
   {#if card.kind === 'message'}
     {@const isStreaming = card.message.role === 'assistant' && card.id === streamingMessageId}
     {@const modelContextRefs = modelOnlyCapsuleRefs(card)}
-    {#if modelContextRefs.length > 0}
+    {@const promptParts = card.message.role === 'user' ? userPromptParts(card) : { visibleText: card.message.text, injectedContext: null }}
+    {#if modelContextRefs.length > 0 || promptParts.injectedContext}
       <details class="injected-prompt-card">
         <summary>
-          <span>Model-only context</span>
+          <span>{promptParts.injectedContext ? 'Injected prompt' : 'Model-only context'}</span>
         </summary>
         <div class="injected-prompt-body markdown-body">
-          <ul>
-            {#each modelContextRefs as ref (`${ref.capsuleId}:${ref.capsuleVersion}:${ref.sourceDigest}`)}
-              <li>
-                <strong>{capsuleRefLabel(ref)}</strong>
-                {#if ref.reason}
-                  <small>{ref.reason}</small>
-                {/if}
-              </li>
-            {/each}
-          </ul>
+          {#if promptParts.injectedContext}
+            {@html renderMarkdownToHtml(promptParts.injectedContext, { openLinksInNewTab: true })}
+          {/if}
+          {#if modelContextRefs.length > 0}
+            <ul>
+              {#each modelContextRefs as ref (`${ref.capsuleId}:${ref.capsuleVersion}:${ref.sourceDigest}`)}
+                <li>
+                  <strong>{capsuleRefLabel(ref)}</strong>
+                  {#if ref.reason}
+                    <small>{ref.reason}</small>
+                  {/if}
+                </li>
+              {/each}
+            </ul>
+          {/if}
         </div>
       </details>
     {/if}
     <article class={`message ${card.message.role === 'user' ? 'user' : 'assistant'}`}>
       <span>{card.message.role === 'user' ? 'You' : assistantLabel}</span>
       {#if isStreaming}
-        <div class="message-markdown streaming">{card.message.text}</div>
+        <div class="message-markdown streaming">{promptParts.visibleText}</div>
       {:else}
         <div class="message-markdown markdown-body">
-          {@html renderMarkdownToHtml(card.message.text, { openLinksInNewTab: true })}
+          {@html renderMarkdownToHtml(promptParts.visibleText, { openLinksInNewTab: true })}
         </div>
       {/if}
       {#if card.message.role === 'user' && card.message.artifacts.length > 0}

@@ -15,6 +15,7 @@ from ..domain.workspace_scope import (
     workspace_scope_index_from_snapshots,
 )
 from ..hub_topology import load_hub_state
+from ..injected_context import strip_legacy_injected_context_transport_blocks
 from ..text_utils import _normalize_optional_text, _parse_iso_timestamp
 from .chat_surface_events import ChatSurfaceEvent, SQLiteChatSurfaceEventJournal
 from .sqlite import open_orchestration_sqlite
@@ -1324,6 +1325,9 @@ class ChatSurfaceReadService:
             )
 
         execution_by_thread = _latest_execution_by_thread(execution_rows)
+        visible_execution_by_thread = _latest_visible_execution_by_thread(
+            execution_rows
+        )
         queue_depth_by_thread = _queue_depth_by_thread(execution_rows)
         delivery_by_surface = _latest_delivery_by_surface(delivery_rows)
         delivery_by_thread = _latest_delivery_by_thread(delivery_rows)
@@ -1357,13 +1361,15 @@ class ChatSurfaceReadService:
             lifecycle_status = _normalize_text(row["lifecycle_status"]) or "active"
             metadata = _json_object(_row_get(row, "metadata_json"))
             chat_kind = _normalize_text(metadata.get("chat_kind"))
-            last_activity_at = _max_iso(
-                _normalize_text(row["updated_at"]),
-                _normalize_text(execution["created_at"]) if execution else None,
+            visible_execution = visible_execution_by_thread.get(thread_id)
+            last_activity_at = (
+                _normalize_text(_row_get(visible_execution, "created_at"))
+                if visible_execution is not None
+                else _normalize_text(row["updated_at"])
             )
             last_message_preview = _visible_turn_chrome_text(
                 _row_get(row, "last_message_preview"),
-                execution,
+                visible_execution,
             )
             projection.merge(
                 lifecycle=lifecycle,
@@ -1377,7 +1383,10 @@ class ChatSurfaceReadService:
                 managed_thread_id=thread_id,
                 display_name=_visible_chrome_text(row["display_name"]) or thread_id,
                 created_at=_normalize_text(row["created_at"]),
-                updated_at=last_activity_at,
+                updated_at=_max_iso(
+                    _normalize_text(row["updated_at"]),
+                    _normalize_text(execution["created_at"]) if execution else None,
+                ),
                 archived_at=(
                     _normalize_text(row["updated_at"])
                     if lifecycle_status == "archived"
@@ -1733,9 +1742,10 @@ def _chat_index_rows_from_surfaces(
         row["lifecycle"] = _choose_lifecycle(
             str(row["lifecycle"] or "bound"), surface.get("lifecycle")
         )
-        row["last_activity_at"] = _max_iso(
-            row.get("last_activity_at"), metadata_map.get("last_activity_at")
-        )
+        if surface_kind == "pma" or row.get("managed_thread_id") is None:
+            row["last_activity_at"] = _max_iso(
+                row.get("last_activity_at"), metadata_map.get("last_activity_at")
+            )
         row["updated_at"] = _max_iso(row.get("updated_at"), surface.get("updated_at"))
         row["latest_event_cursor"] = (
             max(
@@ -1775,6 +1785,8 @@ def _chat_index_rows_from_surfaces(
                     row["agent" if key == "agent_id" else key] = metadata_map.get(key)
             if last_message_preview is not None:
                 row["last_message_preview"] = last_message_preview
+            if metadata_map.get("last_activity_at") is not None:
+                row["last_activity_at"] = metadata_map.get("last_activity_at")
             row["queue_depth"] = max(
                 int(row.get("queue_depth") or 0),
                 int(metadata_map.get("queue_depth") or 0),
@@ -1850,7 +1862,7 @@ def _visible_chrome_text(value: Any) -> Optional[str]:
     if text is None:
         return None
     if _contains_legacy_transport_marker(text):
-        return None
+        return _normalize_text(strip_legacy_injected_context_transport_blocks(text))
     cleaned = text
     for pattern in _COMPACT_SEED_BLOCK_PATTERNS:
         cleaned = pattern.sub(" ", cleaned)
@@ -2764,6 +2776,20 @@ def _latest_execution_by_thread(
         thread_id = _normalize_text(row["thread_target_id"])
         if thread_id is not None:
             result[thread_id] = row
+    return result
+
+
+def _latest_visible_execution_by_thread(
+    rows: Iterable[Mapping[str, Any]],
+) -> dict[str, Mapping[str, Any]]:
+    result: dict[str, Mapping[str, Any]] = {}
+    for row in rows:
+        thread_id = _normalize_text(row["thread_target_id"])
+        if thread_id is None:
+            continue
+        if _visible_turn_chrome_text(None, row) is None:
+            continue
+        result[thread_id] = row
     return result
 
 

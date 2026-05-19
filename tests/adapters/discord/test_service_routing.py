@@ -9322,9 +9322,13 @@ async def test_run_agent_turn_for_message_forwards_delivery_suppression(
             session_key="session-1",
             orchestrator_channel_key=orchestrator_key,
             suppress_managed_thread_delivery=True,
+            user_visible_text="visible hello",
+            title_seed="visible hello",
         )
         assert result.final_message == "ok"
         assert captured[suppress_kwarg] is True
+        assert captured["user_visible_text"] == "visible hello"
+        assert captured["title_seed"] == "visible hello"
     finally:
         await store.close()
 

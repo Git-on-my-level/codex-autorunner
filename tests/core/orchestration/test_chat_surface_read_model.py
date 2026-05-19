@@ -810,10 +810,25 @@ def test_chat_index_sorts_by_conversation_activity_not_metadata_hydration(
     hub_root = tmp_path / "hub"
     _seed_thread(hub_root, thread_id="thread-older")
     _seed_thread(hub_root, thread_id="thread-newer")
+    _seed_execution(
+        hub_root,
+        thread_id="thread-older",
+        status="ok",
+        prompt_text="<injected context>runtime notes</injected context>\n\nOlder visible message",
+        created_at="2026-05-11T00:01:00Z",
+    )
+    _seed_execution(
+        hub_root,
+        thread_id="thread-newer",
+        status="ok",
+        prompt_text="Newer visible message",
+        metadata={"user_visible_text": "Newer visible message"},
+        created_at="2026-05-11T00:02:00Z",
+    )
     with open_orchestration_sqlite(hub_root, durable=False, migrate=True) as conn:
         conn.execute(
             "UPDATE orch_thread_targets SET updated_at = ? WHERE thread_target_id = ?",
-            ("2026-05-11T00:00:10Z", "thread-older"),
+            ("2026-05-11T00:05:00Z", "thread-older"),
         )
         conn.execute(
             "UPDATE orch_thread_targets SET display_name = ? WHERE thread_target_id = ?",
@@ -821,7 +836,7 @@ def test_chat_index_sorts_by_conversation_activity_not_metadata_hydration(
         )
         conn.execute(
             "UPDATE orch_thread_targets SET updated_at = ? WHERE thread_target_id = ?",
-            ("2026-05-11T00:05:00Z", "thread-newer"),
+            ("2026-05-11T00:00:10Z", "thread-newer"),
         )
     OrchestrationBindingStore(hub_root, durable=False).upsert_binding(
         surface_kind="discord",
@@ -850,8 +865,8 @@ def test_chat_index_sorts_by_conversation_activity_not_metadata_hydration(
     older = next(
         row for row in index["rows"] if row["managed_thread_id"] == "thread-older"
     )
-    assert older["title"] == "thread-older"
-    assert older["last_activity_at"] == "2026-05-11T00:00:10Z"
+    assert older["title"] == "Older visible message"
+    assert older["last_activity_at"] == "2026-05-11T00:01:00Z"
 
 
 def test_chat_index_snapshot_reads_rebuilt_sql_projection_without_reprojecting(

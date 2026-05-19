@@ -248,6 +248,41 @@ describe('ChatTranscriptCards', () => {
     expect(body).not.toContain('&lt;injected context&gt;');
   });
 
+  it('hides legacy injected prompt text in a collapsed card and leaves only the user text visible', () => {
+    const cards: ChatTranscriptCard[] = [
+      {
+        kind: 'message',
+        id: 'u1',
+        turnId: 't1',
+        orderKey: '00000001|u1',
+        timestamp: '2026-05-10T12:00:00.000Z',
+        message: {
+          id: 'u1',
+          chatId: 'c1',
+          role: 'user',
+          text: 'Please fix the archive button.',
+          createdAt: '2026-05-10T12:00:00.000Z',
+          status: null,
+          artifacts: [],
+          raw: {
+            payload: {
+              raw_model_prompt: '<injected context>\nCAR managed repo\n</injected context>\n\nPlease fix the archive button.'
+            }
+          }
+        }
+      }
+    ];
+
+    const { body } = render(ChatTranscriptCards, { props: { cards } });
+
+    expect(body).toContain('class="injected-prompt-card"');
+    expect(body).toContain('<span>Injected prompt</span>');
+    expect(body).toContain('CAR managed repo');
+    expect(body).toContain('Please fix the archive button.');
+    expect(body).not.toContain('&lt;injected context&gt;');
+    expect(body.indexOf('CAR managed repo')).toBeLessThan(body.indexOf('class="message user"'));
+  });
+
   it('never renders raw JSON detail as a trace headline', () => {
     const jsonDetail = '{ "event_id": 1, "event_type": "progress", "lines": ["1"] }';
     const cards: ChatTranscriptCard[] = [

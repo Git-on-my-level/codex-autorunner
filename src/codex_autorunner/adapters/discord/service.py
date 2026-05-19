@@ -3738,6 +3738,8 @@ class DiscordBotService(DiscordInteractionResponseMixin):
         supervision: Optional[Any] = None,
         existing_session_prompt_text: Optional[str] = None,
         chat_ux_snapshot: Optional[Any] = None,
+        user_visible_text: Optional[str] = None,
+        title_seed: Optional[str] = None,
     ) -> DiscordMessageTurnResult:
         async def _run_turn() -> DiscordMessageTurnResult:
             if orchestrator_channel_key.startswith("pma:"):
@@ -3757,6 +3759,8 @@ class DiscordBotService(DiscordInteractionResponseMixin):
                     supervision=supervision,
                     existing_session_prompt_text=existing_session_prompt_text,
                     chat_ux_snapshot=chat_ux_snapshot,
+                    user_visible_text=user_visible_text,
+                    title_seed=title_seed,
                 )
             return await run_agent_turn_for_message(
                 self,
@@ -3775,6 +3779,8 @@ class DiscordBotService(DiscordInteractionResponseMixin):
                 heartbeat_interval_seconds=DISCORD_TURN_PROGRESS_HEARTBEAT_INTERVAL_SECONDS,
                 log_event_fn=log_event,
                 chat_ux_snapshot=chat_ux_snapshot,
+                user_visible_text=user_visible_text,
+                title_seed=title_seed,
             )
 
         turn_result: Optional[DiscordMessageTurnResult] = None
