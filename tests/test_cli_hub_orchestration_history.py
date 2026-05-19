@@ -9,6 +9,9 @@ from typer.testing import CliRunner
 
 from codex_autorunner.bootstrap import seed_hub_files
 from codex_autorunner.cli import app
+from codex_autorunner.core.orchestration.legacy_backfill_gate import (
+    LEGACY_ORCHESTRATION_BACKFILL_KEY,
+)
 from codex_autorunner.core.orchestration.sqlite import (
     initialize_orchestration_sqlite,
     open_orchestration_sqlite,
@@ -196,6 +199,33 @@ def test_hub_orchestration_audit_and_compaction_commands(tmp_path: Path) -> None
     assert compact_payload["compacted_executions"] == 1
     assert compact_payload["rows_before"] == 20
     assert compact_payload["rows_after"] <= 16
+
+
+def test_hub_orchestration_status_reports_automation_migration(
+    tmp_path: Path,
+) -> None:
+    hub_root = tmp_path / "hub"
+    hub_root.mkdir()
+    seed_hub_files(hub_root, force=True)
+    initialize_orchestration_sqlite(hub_root, durable=False)
+    with open_orchestration_sqlite(hub_root, durable=False) as conn:
+        conn.execute(
+            """
+            INSERT OR REPLACE INTO orch_operation_flags (flag_key, completed_at)
+            VALUES (?, ?)
+            """,
+            (LEGACY_ORCHESTRATION_BACKFILL_KEY, "2026-01-01T00:00:00Z"),
+        )
+
+    result = runner.invoke(
+        app,
+        ["hub", "orchestration", "status", "--path", str(hub_root), "--json"],
+    )
+
+    assert result.exit_code == 0
+    payload = json.loads(result.output)
+    assert payload["automation_migration"]["status"] == "ok"
+    assert payload["automation_migration"]["mirror_health"]["status"] == "ok"
 
 
 def test_hub_orchestration_canary_command(tmp_path: Path) -> None:

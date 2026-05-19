@@ -11,12 +11,21 @@ from zoneinfo import ZoneInfo
 from ..time_utils import now_iso
 from .engine import AutomationRuleEngine
 from .models import (
+    EXECUTOR_GITHUB_COMMENT,
+    EXECUTOR_GITHUB_REACTION,
+    EXECUTOR_MANAGED_THREAD_TURN,
     EXECUTOR_PMA_TURN,
+    EXECUTOR_PUBLISH_CHAT_NOTIFICATION,
+    EXECUTOR_PUBLISH_OPERATION,
     EXECUTOR_TICKET_FLOW,
     SCHEDULE_DAILY,
+    SCHEDULE_INTERVAL,
+    SCHEDULE_ONE_SHOT,
     SCHEDULE_WEEKLY,
     TARGET_POLICY_HUB,
     TARGET_POLICY_NEW_AUTOMATION_WORKTREE,
+    TRIGGER_KIND_EVENT,
+    TRIGGER_KIND_MANUAL,
     TRIGGER_KIND_SCHEDULE,
     AutomationEvent,
     AutomationJob,
@@ -31,14 +40,138 @@ AUTOMATION_RULE_PREFIX = "user:automation:"
 
 
 @dataclass(frozen=True)
+class AutomationPresetDescriptor:
+    id: str
+    name: str
+    automation_kind: str
+    description: str
+    schedule_kind: str
+    executor_kind: str
+    target_policy: str
+    default_timezone: str
+    default_hour: int
+    default_minute: int
+    default_weekday: Optional[int]
+    target_shape: dict[str, Any]
+    executor_shape: dict[str, Any]
+    policy: dict[str, Any]
+    prompt_template: str
+    ticket_body_template: Optional[str] = None
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "id": self.id,
+            "name": self.name,
+            "kind": self.automation_kind,
+            "description": self.description,
+            "schedule": {
+                "kind": self.schedule_kind,
+                "timezone": self.default_timezone,
+                "hour": self.default_hour,
+                "minute": self.default_minute,
+                "weekday": self.default_weekday,
+            },
+            "target_policy": self.target_policy,
+            "target_shape": self.target_shape,
+            "executor_kind": self.executor_kind,
+            "executor_shape": self.executor_shape,
+            "policy": self.policy,
+            "prompt_template": self.prompt_template,
+            "ticket_body_template": self.ticket_body_template,
+        }
+
+
+SECURITY_SCAN_PROMPT_TEMPLATE = (
+    "Run a security scan for repo {repo_id}. Inspect dependency, secret, and "
+    "static-analysis findings using the repo's existing tooling. If actionable "
+    "issues are discovered, create a focused fix branch, make the smallest safe "
+    "changes, run relevant checks, and open a draft PR with the findings and "
+    "verification. If no issues are found, summarize the clean result."
+)
+
+WEEKLY_TICKET_BODY_TEMPLATE = """---
+agent: codex
+done: false
+ticket_id: "{ticket_id}"
+title: Weekly maintenance automation
+goal: Run the configured weekly maintenance pass and open a PR for useful changes
+---
+
+You are running a scheduled weekly ticket flow for `{repo_id}`.
+
+- Sync context from `.codex-autorunner/contextspace/` and inspect the current repo state.
+- Run dependency, test, lint, and maintenance checks that are already standard for this repo.
+- Fix small, well-bounded issues that are clearly safe.
+- If changes are made, run relevant verification and open a draft PR with a concise summary.
+- If no changes are needed, record the checks performed and mark this ticket done.
+"""
+
+AUTOMATION_PRESET_DESCRIPTORS: dict[str, AutomationPresetDescriptor] = {
+    "security_scan_pr": AutomationPresetDescriptor(
+        id="security_scan_pr",
+        name="Daily Security Scan",
+        automation_kind="security_scan_pr",
+        description=("Daily PMA security scan that opens a PR when issues are found."),
+        schedule_kind=SCHEDULE_DAILY,
+        executor_kind=EXECUTOR_PMA_TURN,
+        target_policy=TARGET_POLICY_HUB,
+        default_timezone="UTC",
+        default_hour=9,
+        default_minute=0,
+        default_weekday=None,
+        target_shape={"repo_id": "{repo_id}"},
+        executor_shape={"lane_id": "pma:default", "message": "{prompt}"},
+        policy={
+            "approval_mode": "never_require_approval",
+            "max_attempts": 3,
+            "max_concurrent_per_rule": 1,
+            "max_concurrent_per_target": 1,
+        },
+        prompt_template=SECURITY_SCAN_PROMPT_TEMPLATE,
+    ),
+    "weekly_ticket_flow": AutomationPresetDescriptor(
+        id="weekly_ticket_flow",
+        name="Weekly Preset Ticket Flow",
+        automation_kind="weekly_ticket_flow",
+        description=("Weekly scheduled ticket flow in a new automation worktree."),
+        schedule_kind=SCHEDULE_WEEKLY,
+        executor_kind=EXECUTOR_TICKET_FLOW,
+        target_policy=TARGET_POLICY_NEW_AUTOMATION_WORKTREE,
+        default_timezone="UTC",
+        default_hour=10,
+        default_minute=0,
+        default_weekday=0,
+        target_shape={"base_repo_id": "{repo_id}", "rule_slug": "{automation_slug}"},
+        executor_shape={
+            "ticket_pack": {
+                "source": "inline",
+                "tickets": [{"path": "TICKET-001.md", "content": "{ticket_body}"}],
+            }
+        },
+        policy={
+            "approval_mode": "never_require_approval",
+            "max_attempts": 2,
+            "max_concurrent_per_rule": 1,
+            "max_concurrent_per_target": 1,
+        },
+        prompt_template=(
+            "Run the configured weekly maintenance ticket flow and open a draft "
+            "PR for useful changes."
+        ),
+        ticket_body_template=WEEKLY_TICKET_BODY_TEMPLATE,
+    ),
+}
+
+
+@dataclass(frozen=True)
 class AutomationPresetRequest:
     preset: str
     name: Optional[str] = None
     repo_id: Optional[str] = None
-    timezone: str = "UTC"
-    hour: int = 9
-    minute: int = 0
-    weekday: int = 0
+    timezone: Optional[str] = None
+    hour: Optional[int] = None
+    minute: Optional[int] = None
+    weekday: Optional[int] = None
     prompt: Optional[str] = None
     ticket_body: Optional[str] = None
     agent: Optional[str] = None
@@ -91,7 +224,13 @@ def automation_overview(store: AutomationStore, *, limit: int = 100) -> dict[str
             if str((row.get("last_job") or {}).get("state")) == "failed"
         ),
     }
-    return {"automations": rows, "summary": summary}
+    return {"automations": rows, "summary": summary, "presets": automation_presets()}
+
+
+def automation_presets() -> list[dict[str, Any]]:
+    return [
+        descriptor.to_dict() for descriptor in AUTOMATION_PRESET_DESCRIPTORS.values()
+    ]
 
 
 def automation_row(store: AutomationStore, rule: AutomationRule) -> dict[str, Any]:
@@ -100,6 +239,7 @@ def automation_row(store: AutomationStore, rule: AutomationRule) -> dict[str, An
     last_job = recent_jobs[0] if recent_jobs else None
     job_count = store.count_jobs(rule_id=rule.rule_id)
     schedule = schedules[0] if schedules else None
+    typed = _typed_product_projection(rule, schedule)
     return {
         "id": rule.rule_id,
         "name": rule.name,
@@ -121,6 +261,7 @@ def automation_row(store: AutomationStore, rule: AutomationRule) -> dict[str, An
         "job_count": job_count,
         "created_at": rule.created_at,
         "updated_at": rule.updated_at,
+        **typed,
     }
 
 
@@ -150,13 +291,13 @@ def automation_detail(store: AutomationStore, rule_id: str) -> dict[str, Any]:
 def create_preset_automation(
     store: AutomationStore, payload: AutomationPresetRequest
 ) -> dict[str, Any]:
-    preset = payload.preset.strip().lower()
-    if preset == "security_scan_pr":
+    preset = _preset_descriptor(payload.preset)
+    if preset.id == "security_scan_pr":
         rule, schedule = _build_security_scan_pr(payload)
-    elif preset == "weekly_ticket_flow":
+    elif preset.id == "weekly_ticket_flow":
         rule, schedule = _build_weekly_ticket_flow(payload)
     else:
-        raise ValueError("preset must be security_scan_pr or weekly_ticket_flow")
+        raise ValueError(f"unsupported automation preset: {preset.id}")
 
     saved_rule = store.upsert_rule(rule)
     schedule_payload = dict(schedule.to_dict())
@@ -355,6 +496,435 @@ def display_kind(rule: AutomationRule) -> str:
     return rule.executor_kind
 
 
+def _typed_product_projection(
+    rule: AutomationRule, schedule: Optional[AutomationSchedule]
+) -> dict[str, Any]:
+    schedule_editor = _schedule_editor_shape(rule, schedule)
+    message = _message_projection(rule)
+    action = _action_projection(rule)
+    managed = _managed_projection(rule)
+    diagnostics = _product_diagnostics(rule, schedule, message)
+    return {
+        "product_api_version": 1,
+        "editable": _editable_projection(rule, schedule, message),
+        "managed": managed,
+        "managed_status": managed,
+        "schedule_editor": schedule_editor,
+        "trigger_summary": _trigger_summary(rule),
+        "message": message,
+        "message_source": message["source"],
+        "message_preview": message["preview"],
+        "action_preview": action,
+        "target_summary": _target_summary(rule),
+        "executor_summary": _executor_summary(rule, message, action),
+        "policy_summary": _policy_summary(rule),
+        "diagnostics": diagnostics,
+        "raw_links": {
+            "control_plane_rule": (
+                f"/hub/api/control-plane/automations/rules/{rule.rule_id}"
+            ),
+            "control_plane_jobs": "/hub/api/control-plane/automations/jobs/query",
+            "control_plane_schedules": (
+                "/hub/api/control-plane/automations/schedules/query"
+            ),
+        },
+    }
+
+
+def _editable_projection(
+    rule: AutomationRule,
+    schedule: Optional[AutomationSchedule],
+    message: dict[str, Any],
+) -> dict[str, Any]:
+    schedule_kind = schedule.schedule_kind if schedule is not None else None
+    system_reason = _system_reason(rule)
+    raw_editable = not rule.system_owned
+    return {
+        "can_enable": True,
+        "can_rename": raw_editable,
+        "can_edit_schedule": raw_editable
+        and schedule_kind in {SCHEDULE_DAILY, SCHEDULE_WEEKLY},
+        "can_edit_message": raw_editable and message["field"] == "prompt",
+        "can_edit_ticket_body": raw_editable and message["field"] == "ticket_body",
+        "can_run_now": True,
+        "can_edit_raw": False,
+        "raw_edit_blocked_reason": (
+            "Raw rule edits are available through the control-plane API."
+        ),
+        "managed_reason": system_reason,
+    }
+
+
+def _managed_projection(rule: AutomationRule) -> dict[str, Any]:
+    reason = _system_reason(rule)
+    legacy_source = _legacy_source(rule)
+    return {
+        "system_owned": rule.system_owned,
+        "managed": rule.system_owned or legacy_source is not None,
+        "reason": reason,
+        "legacy": legacy_source is not None,
+        "legacy_source": legacy_source,
+    }
+
+
+def _system_reason(rule: AutomationRule) -> Optional[str]:
+    if rule.system_owned:
+        purpose = _optional_text(rule.metadata.get("purpose"))
+        if purpose:
+            return f"System-managed automation: {purpose}"
+        return "System-managed automation"
+    return None
+
+
+def _legacy_source(rule: AutomationRule) -> Optional[str]:
+    for key in (
+        "legacy_source_table",
+        "legacy_timer_id",
+        "legacy_subscription_id",
+        "legacy_wakeup_id",
+    ):
+        value = _optional_text(rule.metadata.get(key))
+        if value is not None:
+            return value if key == "legacy_source_table" else key
+    return None
+
+
+def _schedule_editor_shape(
+    rule: AutomationRule, schedule: Optional[AutomationSchedule]
+) -> dict[str, Any]:
+    if schedule is None:
+        kind = "event_driven" if rule.trigger_kind == TRIGGER_KIND_EVENT else "none"
+        return {
+            "kind": kind,
+            "editable": False,
+            "fields": {},
+            "timezone": None,
+            "next_fire_at": None,
+            "summary": "Event driven" if kind == "event_driven" else "No schedule",
+        }
+
+    schedule_payload = dict(schedule.schedule)
+    fields: dict[str, Any] = {}
+    if schedule.schedule_kind in {SCHEDULE_DAILY, SCHEDULE_WEEKLY}:
+        fields = {
+            "timezone": schedule.timezone,
+            "hour": schedule_payload.get("hour"),
+            "minute": schedule_payload.get("minute"),
+        }
+        if schedule.schedule_kind == SCHEDULE_WEEKLY:
+            fields["weekday"] = _first_weekday(schedule_payload.get("weekdays"))
+    elif schedule.schedule_kind == SCHEDULE_ONE_SHOT:
+        fields = {"due_at": schedule.next_fire_at}
+    elif schedule.schedule_kind == SCHEDULE_INTERVAL:
+        fields = {"interval_seconds": schedule_payload.get("interval_seconds")}
+
+    return {
+        "kind": schedule.schedule_kind,
+        "editable": (not rule.system_owned)
+        and schedule.schedule_kind in {SCHEDULE_DAILY, SCHEDULE_WEEKLY},
+        "fields": fields,
+        "timezone": schedule.timezone,
+        "next_fire_at": schedule.next_fire_at,
+        "last_fire_at": schedule.last_fire_at,
+        "state": schedule.state,
+        "summary": _format_schedule(schedule.to_dict()),
+    }
+
+
+def _trigger_summary(rule: AutomationRule) -> dict[str, Any]:
+    event_types = rule.trigger.get("event_types")
+    event_type_list = (
+        [str(item) for item in event_types] if isinstance(event_types, list) else []
+    )
+    schedule_kind = _optional_text(rule.trigger.get("schedule_kind"))
+    if rule.trigger_kind == TRIGGER_KIND_SCHEDULE:
+        label = schedule_kind or "schedule.fire"
+    elif rule.trigger_kind == TRIGGER_KIND_MANUAL:
+        label = "Manual run"
+    elif event_type_list:
+        label = ", ".join(event_type_list[:3])
+        if len(event_type_list) > 3:
+            label += f" +{len(event_type_list) - 3}"
+    else:
+        label = rule.trigger_kind
+    return {
+        "kind": rule.trigger_kind,
+        "label": label,
+        "event_types": event_type_list,
+        "filters": rule.filters,
+    }
+
+
+def _message_projection(rule: AutomationRule) -> dict[str, Any]:
+    executor = rule.executor
+    for key, field in (
+        ("message", "prompt"),
+        ("prompt", "prompt"),
+        ("prompt_template", "prompt_template"),
+    ):
+        value = _optional_text(executor.get(key))
+        if value is not None:
+            return {
+                "source": f"executor.{key}",
+                "field": field,
+                "preview": _preview(value),
+                "template": "{{" in value,
+                "editable": (not rule.system_owned) and field == "prompt",
+            }
+    ticket_body = _first_ticket_body(executor)
+    if ticket_body is not None:
+        return {
+            "source": "executor.ticket_pack.tickets[0].content",
+            "field": "ticket_body",
+            "preview": _preview(ticket_body),
+            "template": "{{" in ticket_body,
+            "editable": not rule.system_owned,
+        }
+    action_message = _action_message_source(executor)
+    if action_message is not None:
+        return {
+            "source": action_message[0],
+            "field": None,
+            "preview": _preview(action_message[1]),
+            "template": "{{" in action_message[1],
+            "editable": False,
+        }
+    if rule.executor_kind == EXECUTOR_PUBLISH_OPERATION:
+        return {
+            "source": "publish_operation.runtime",
+            "field": None,
+            "preview": "Message is generated by the publish operation at runtime.",
+            "template": False,
+            "editable": False,
+        }
+    return {
+        "source": "none",
+        "field": None,
+        "preview": "",
+        "template": False,
+        "editable": False,
+    }
+
+
+def _action_projection(rule: AutomationRule) -> dict[str, Any]:
+    executor = rule.executor
+    actions = executor.get("actions")
+    action_message = _action_message_source(executor)
+    if isinstance(actions, dict):
+        return {
+            "source": actions.get("source") or "executor.actions",
+            "kind": actions.get("kind")
+            or actions.get("operation_kind")
+            or rule.executor_kind,
+            "preview": _preview(
+                actions.get("summary")
+                or (action_message[1] if action_message is not None else None)
+                or actions.get("source")
+                or rule.executor_kind
+            ),
+            "actions": actions,
+        }
+    if isinstance(actions, list):
+        return {
+            "source": "executor.actions",
+            "kind": "action_list",
+            "preview": f"{len(actions)} action(s)",
+            "actions": actions,
+        }
+    operation_kind = _optional_text(executor.get("operation_kind"))
+    if operation_kind is not None:
+        return {
+            "source": "executor.operation_kind",
+            "kind": operation_kind,
+            "preview": operation_kind.replace("_", " "),
+            "actions": None,
+        }
+    return {
+        "source": f"executor.{rule.executor_kind}",
+        "kind": rule.executor_kind,
+        "preview": _executor_label(rule.executor_kind),
+        "actions": None,
+    }
+
+
+def _target_summary(rule: AutomationRule) -> dict[str, Any]:
+    target = dict(rule.target)
+    repo_id = (
+        _optional_text(target.get("repo_id"))
+        or _optional_text(target.get("base_repo_id"))
+        or _optional_text(rule.metadata.get("repo_id"))
+    )
+    thread_id = _optional_text(target.get("thread_id")) or _optional_text(
+        target.get("thread_target_id")
+    )
+    label_parts = [rule.target_policy]
+    if repo_id is not None:
+        label_parts.append(repo_id)
+    if thread_id is not None:
+        label_parts.append(thread_id)
+    return {
+        "policy": rule.target_policy,
+        "repo_id": repo_id,
+        "thread_id": thread_id,
+        "worktree_id": _optional_text(target.get("worktree_id")),
+        "label": " / ".join(label_parts),
+    }
+
+
+def _executor_summary(
+    rule: AutomationRule, message: dict[str, Any], action: dict[str, Any]
+) -> dict[str, Any]:
+    executor = dict(rule.executor)
+    return {
+        "kind": rule.executor_kind,
+        "label": _executor_label(rule.executor_kind),
+        "agent": _optional_text(executor.get("agent")),
+        "model": _optional_text(executor.get("model")),
+        "reasoning": _optional_text(executor.get("reasoning")),
+        "profile": _optional_text(executor.get("profile"))
+        or _optional_text(executor.get("agent_profile")),
+        "lane_id": _optional_text(executor.get("lane_id")),
+        "message_source": message["source"],
+        "action_kind": action["kind"],
+    }
+
+
+def _policy_summary(rule: AutomationRule) -> dict[str, Any]:
+    policy = dict(rule.policy)
+    return {
+        "approval_mode": policy.get("approval_mode"),
+        "max_attempts": policy.get("max_attempts"),
+        "max_concurrent_per_rule": policy.get("max_concurrent_per_rule"),
+        "max_concurrent_per_target": policy.get("max_concurrent_per_target"),
+        "dedupe_key": policy.get("dedupe_key"),
+    }
+
+
+def _product_diagnostics(
+    rule: AutomationRule,
+    schedule: Optional[AutomationSchedule],
+    message: dict[str, Any],
+) -> list[dict[str, str]]:
+    diagnostics: list[dict[str, str]] = []
+    if _legacy_source(rule) is not None:
+        diagnostics.append(
+            {
+                "code": "AUTOMATION_LEGACY_MIGRATED",
+                "severity": "info",
+                "message": "This automation was migrated from legacy PMA state.",
+            }
+        )
+    if message["source"] == "none":
+        diagnostics.append(
+            {
+                "code": "AUTOMATION_MESSAGE_NOT_DECLARED",
+                "severity": "warning",
+                "message": "No product-visible message source is declared.",
+            }
+        )
+    if schedule is not None and schedule.schedule_kind == SCHEDULE_ONE_SHOT:
+        diagnostics.append(
+            {
+                "code": "AUTOMATION_ONE_SHOT_SCHEDULE",
+                "severity": "info",
+                "message": "One-shot schedules use next_fire_at instead of recurring time fields.",
+            }
+        )
+    return diagnostics
+
+
+def _executor_label(executor_kind: str) -> str:
+    return {
+        EXECUTOR_PMA_TURN: "PMA turn",
+        EXECUTOR_TICKET_FLOW: "Ticket flow",
+        EXECUTOR_MANAGED_THREAD_TURN: "Managed thread turn",
+        EXECUTOR_PUBLISH_OPERATION: "Publish operation",
+        EXECUTOR_PUBLISH_CHAT_NOTIFICATION: "Chat notification",
+        EXECUTOR_GITHUB_REACTION: "GitHub reaction",
+        EXECUTOR_GITHUB_COMMENT: "GitHub comment",
+    }.get(executor_kind, executor_kind)
+
+
+def _first_weekday(value: Any) -> Optional[int]:
+    if isinstance(value, list) and value:
+        try:
+            return int(value[0])
+        except (TypeError, ValueError):
+            return None
+    return None
+
+
+def _first_ticket_body(executor: dict[str, Any]) -> Optional[str]:
+    ticket_pack = executor.get("ticket_pack") or executor.get("pack")
+    if not isinstance(ticket_pack, dict):
+        return None
+    tickets = ticket_pack.get("tickets")
+    if not isinstance(tickets, list) or not tickets:
+        return None
+    first = tickets[0]
+    if not isinstance(first, dict):
+        return None
+    return _optional_text(first.get("content") or first.get("body"))
+
+
+def _action_message_source(executor: dict[str, Any]) -> Optional[tuple[str, str]]:
+    actions = executor.get("actions")
+    candidates: list[tuple[str, Any]] = []
+    if isinstance(actions, dict):
+        candidates.extend(
+            [
+                ("executor.actions.message.text", _nested(actions, "message", "text")),
+                (
+                    "executor.actions.message.template",
+                    _nested(actions, "message", "template"),
+                ),
+                ("executor.actions.message", actions.get("message")),
+                ("executor.actions.summary", actions.get("summary")),
+            ]
+        )
+    elif isinstance(actions, list):
+        for index, action in enumerate(actions):
+            if isinstance(action, dict):
+                candidates.extend(
+                    [
+                        (
+                            f"executor.actions[{index}].message.text",
+                            _nested(action, "message", "text"),
+                        ),
+                        (
+                            f"executor.actions[{index}].message.template",
+                            _nested(action, "message", "template"),
+                        ),
+                        (f"executor.actions[{index}].message", action.get("message")),
+                        (f"executor.actions[{index}].summary", action.get("summary")),
+                    ]
+                )
+    for source, value in candidates:
+        text = _optional_text(value)
+        if text is not None:
+            return source, text
+    return None
+
+
+def _nested(value: dict[str, Any], *keys: str) -> Any:
+    current: Any = value
+    for key in keys:
+        if not isinstance(current, dict):
+            return None
+        current = current.get(key)
+    return current
+
+
+def _preview(value: Any, *, limit: int = 180) -> str:
+    text = _optional_text(value)
+    if text is None:
+        return ""
+    collapsed = re.sub(r"\s+", " ", text).strip()
+    if len(collapsed) <= limit:
+        return collapsed
+    return f"{collapsed[: limit - 3].rstrip()}..."
+
+
 def format_automation_list(overview: dict[str, Any], *, limit: int = 10) -> str:
     rows = list(overview.get("automations") or [])[:limit]
     summary = dict(overview.get("summary") or {})
@@ -431,22 +1001,23 @@ def _format_target(row: dict[str, Any]) -> str:
 def _build_security_scan_pr(
     payload: AutomationPresetRequest,
 ) -> tuple[AutomationRule, AutomationSchedule]:
+    descriptor = _preset_descriptor("security_scan_pr")
     repo_id = _required_text(payload.repo_id, "repo_id")
     name = _optional_text(payload.name) or f"Daily security scan for {repo_id}"
-    prompt = _optional_text(payload.prompt) or (
-        f"Run a security scan for repo {repo_id}. Inspect dependency, "
-        "secret, and static-analysis findings using the repo's existing tooling. "
-        "If actionable issues are discovered, create a focused fix branch, make the "
-        "smallest safe changes, run relevant checks, and open a draft PR with the "
-        "findings and verification. If no issues are found, summarize the clean result."
+    prompt = _optional_text(payload.prompt) or _render_preset_template(
+        descriptor.prompt_template, repo_id=repo_id
     )
     rule_id = _rule_id(name)
     schedule = _daily_schedule(
         rule_id=rule_id,
-        timezone_name=payload.timezone,
-        hour=payload.hour,
-        minute=payload.minute,
+        timezone_name=_preset_timezone(payload, descriptor),
+        hour=_preset_int(payload.hour, descriptor.default_hour),
+        minute=_preset_int(payload.minute, descriptor.default_minute),
     )
+    policy = {
+        **descriptor.policy,
+        "dedupe_key": f"{rule_id}:{{{{ schedule.next_fire_at }}}}",
+    }
     rule = AutomationRule.create(
         rule_id=rule_id,
         name=name,
@@ -460,19 +1031,13 @@ def _build_security_scan_pr(
             {"lane_id": "pma:default", "message": prompt}, payload
         ),
         enabled=payload.enabled,
-        policy={
-            "dedupe_key": f"{rule_id}:{{{{ schedule.next_fire_at }}}}",
-            "approval_mode": "never_require_approval",
-            "max_attempts": 3,
-            "max_concurrent_per_rule": 1,
-            "max_concurrent_per_target": 1,
-        },
+        policy=policy,
         metadata={
             "kind": AUTOMATION_METADATA_KIND,
-            "automation_kind": "security_scan_pr",
-            "preset": "security_scan_pr",
+            "automation_kind": descriptor.automation_kind,
+            "preset": descriptor.id,
             "repo_id": repo_id,
-            "description": "Daily PMA security scan that opens a PR when issues are found.",
+            "description": descriptor.description,
         },
     )
     return rule, schedule
@@ -481,34 +1046,28 @@ def _build_security_scan_pr(
 def _build_weekly_ticket_flow(
     payload: AutomationPresetRequest,
 ) -> tuple[AutomationRule, AutomationSchedule]:
+    descriptor = _preset_descriptor("weekly_ticket_flow")
     repo_id = _required_text(payload.repo_id, "repo_id")
     name = _optional_text(payload.name) or f"Weekly ticket flow for {repo_id}"
     rule_id = _rule_id(name)
     schedule = _weekly_schedule(
         rule_id=rule_id,
-        timezone_name=payload.timezone,
-        hour=payload.hour,
-        minute=payload.minute,
-        weekday=payload.weekday,
+        timezone_name=_preset_timezone(payload, descriptor),
+        hour=_preset_int(payload.hour, descriptor.default_hour),
+        minute=_preset_int(payload.minute, descriptor.default_minute),
+        weekday=_preset_int(payload.weekday, descriptor.default_weekday or 0),
     )
     ticket_id = f"tkt_{uuid.uuid4().hex}"
-    default_ticket_body = f"""---
-agent: codex
-done: false
-ticket_id: "{ticket_id}"
-title: Weekly maintenance automation
-goal: Run the configured weekly maintenance pass and open a PR for useful changes
----
-
-You are running a scheduled weekly ticket flow for `{repo_id}`.
-
-- Sync context from `.codex-autorunner/contextspace/` and inspect the current repo state.
-- Run dependency, test, lint, and maintenance checks that are already standard for this repo.
-- Fix small, well-bounded issues that are clearly safe.
-- If changes are made, run relevant verification and open a draft PR with a concise summary.
-- If no changes are needed, record the checks performed and mark this ticket done.
-"""
+    default_ticket_body = _render_preset_template(
+        descriptor.ticket_body_template or "",
+        repo_id=repo_id,
+        ticket_id=ticket_id,
+    )
     ticket_body = _optional_text(payload.ticket_body) or default_ticket_body
+    policy = {
+        **descriptor.policy,
+        "dedupe_key": f"{rule_id}:{{{{ schedule.next_fire_at }}}}",
+    }
     rule = AutomationRule.create(
         rule_id=rule_id,
         name=name,
@@ -530,19 +1089,13 @@ You are running a scheduled weekly ticket flow for `{repo_id}`.
             )
         },
         enabled=payload.enabled,
-        policy={
-            "dedupe_key": f"{rule_id}:{{{{ schedule.next_fire_at }}}}",
-            "approval_mode": "never_require_approval",
-            "max_attempts": 2,
-            "max_concurrent_per_rule": 1,
-            "max_concurrent_per_target": 1,
-        },
+        policy=policy,
         metadata={
             "kind": AUTOMATION_METADATA_KIND,
-            "automation_kind": "weekly_ticket_flow",
-            "preset": "weekly_ticket_flow",
+            "automation_kind": descriptor.automation_kind,
+            "preset": descriptor.id,
             "repo_id": repo_id,
-            "description": "Weekly scheduled ticket flow in a new automation worktree.",
+            "description": descriptor.description,
         },
     )
     return rule, schedule
@@ -649,6 +1202,29 @@ def _required_text(value: Optional[str], field_name: str) -> str:
     return text
 
 
+def _preset_descriptor(preset: str) -> AutomationPresetDescriptor:
+    preset_id = (preset or "").strip().lower()
+    descriptor = AUTOMATION_PRESET_DESCRIPTORS.get(preset_id)
+    if descriptor is None:
+        choices = " or ".join(AUTOMATION_PRESET_DESCRIPTORS)
+        raise ValueError(f"preset must be {choices}")
+    return descriptor
+
+
+def _preset_timezone(
+    payload: AutomationPresetRequest, descriptor: AutomationPresetDescriptor
+) -> str:
+    return _optional_text(payload.timezone) or descriptor.default_timezone
+
+
+def _preset_int(value: Optional[int], fallback: int) -> int:
+    return fallback if value is None else int(value)
+
+
+def _render_preset_template(template: str, **values: str) -> str:
+    return template.format(**values)
+
+
 def _bounded_int(value: int, *, field_name: str, low: int, high: int) -> int:
     if isinstance(value, bool):
         raise ValueError(f"{field_name} must be an integer")
@@ -683,10 +1259,13 @@ def _executor_with_agent_options(
 
 
 __all__ = [
+    "AUTOMATION_PRESET_DESCRIPTORS",
+    "AutomationPresetDescriptor",
     "AutomationPresetRequest",
     "AutomationUpdateRequest",
     "automation_detail",
     "automation_overview",
+    "automation_presets",
     "automation_row",
     "automation_store",
     "create_preset_automation",

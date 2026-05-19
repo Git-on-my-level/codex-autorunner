@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Callable, Optional
 
 from ..config import HubConfig
+from .automation import automation_migration_doctor_checks
 from .hermes import hermes_doctor_checks
 from .hub import hub_destination_doctor_checks, hub_worktree_doctor_checks
 from .pma import pma_doctor_checks
@@ -44,6 +45,13 @@ def runtime_doctor_providers(
         DoctorProvider(
             name="hermes",
             collect=lambda: hermes_doctor_checks(hub_config),
+        ),
+        DoctorProvider(
+            name="automation_migration",
+            collect=lambda: automation_migration_doctor_checks(
+                hub_config,
+                repo_root=repo_root,
+            ),
         ),
     ]
 

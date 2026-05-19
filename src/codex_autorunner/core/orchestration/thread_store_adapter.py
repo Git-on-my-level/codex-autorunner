@@ -21,7 +21,6 @@ def _notify_pma_lifecycle_automation_transition(
     hub_root: Path, payload: dict[str, Any]
 ) -> dict[str, Any]:
     store = AutomationStore(hub_root)
-    store.backfill_legacy_pma_automation()
     event_id_source = (
         _optional_text(payload.get("transition_id"))
         or _optional_text(payload.get("idempotency_key"))

@@ -94,6 +94,34 @@ def test_pma_automation_group_has_required_commands() -> None:
     assert "weekly-ticket-flow" in output
 
 
+def test_pma_automation_weekly_ticket_flow_uses_descriptor_defaults(
+    tmp_path: Path,
+) -> None:
+    seed_hub_files(tmp_path, force=True)
+
+    runner = CliRunner()
+    result = runner.invoke(
+        pma_app,
+        [
+            "automation",
+            "weekly-ticket-flow",
+            "repo-1",
+            "--path",
+            str(tmp_path),
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    automation = payload["automation"]
+    assert automation["schedule"]["schedule_kind"] == "weekly"
+    assert automation["schedule"]["schedule"]["hour"] == 10
+    assert automation["schedule"]["schedule"]["minute"] == 0
+    assert automation["schedule"]["schedule"]["weekdays"] == [0]
+    assert automation["policy"]["max_attempts"] == 2
+
+
 def test_pma_upload_help():
     """Verify PMA upload command has correct signature."""
     runner = CliRunner()

@@ -349,7 +349,6 @@ class HubLifecycleOrchestrator:
         self._list_repos_fn = list_repos_fn
         self._lifecycle_emitter = LifecycleEventEmitter(hub_config.root)
         self._automation_store = AutomationStore(hub_config.root)
-        self._automation_store.backfill_legacy_pma_automation()
         ensure_builtin_pma_reactive_rule(
             self._automation_store, pma_config=hub_config.pma
         )

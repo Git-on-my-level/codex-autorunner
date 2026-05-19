@@ -27,10 +27,10 @@ class AutomationCreateRequest(BaseModel):
     preset: str
     name: Optional[str] = None
     repo_id: Optional[str] = None
-    timezone: str = "UTC"
-    hour: int = 9
-    minute: int = 0
-    weekday: int = 0
+    timezone: Optional[str] = None
+    hour: Optional[int] = None
+    minute: Optional[int] = None
+    weekday: Optional[int] = None
     prompt: Optional[str] = None
     ticket_body: Optional[str] = None
     agent: Optional[str] = None
@@ -47,7 +47,7 @@ class AutomationEnabledRequest(BaseModel):
 
 
 class AutomationUpdatePayload(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="allow")
 
     name: Optional[str] = None
     enabled: Optional[bool] = None
@@ -61,14 +61,6 @@ class AutomationUpdatePayload(BaseModel):
     model: Optional[str] = None
     reasoning: Optional[str] = None
     profile: Optional[str] = None
-    trigger_kind: Optional[str] = None
-    trigger: Optional[dict[str, Any]] = None
-    filters: Optional[dict[str, Any]] = None
-    target_policy: Optional[str] = None
-    target: Optional[dict[str, Any]] = None
-    executor_kind: Optional[str] = None
-    executor: Optional[dict[str, Any]] = None
-    policy: Optional[dict[str, Any]] = None
     metadata: Optional[dict[str, Any]] = None
 
 
@@ -121,6 +113,20 @@ def build_automation_routes(context: HubAppContext) -> APIRouter:
     async def update_automation_route(
         rule_id: str, payload: AutomationUpdatePayload
     ) -> dict[str, Any]:
+        raw_payload = payload.model_extra or {}
+        blocked = sorted(raw_payload)
+        if blocked:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "code": "AUTOMATION_PRODUCT_UNSUPPORTED_RAW_FIELDS",
+                    "message": (
+                        "Product automation updates only accept typed edit fields; "
+                        "use /hub/api/control-plane/automations/rules for raw rule edits."
+                    ),
+                    "fields": blocked,
+                },
+            )
         try:
             updated = update_automation(
                 store(),

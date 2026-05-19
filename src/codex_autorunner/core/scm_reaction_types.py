@@ -17,6 +17,10 @@ ReactionOperationKind = Literal[
     "notify_chat",
     "react_pr_review_comment",
 ]
+ScmMessageSourceKind = Literal[
+    "scm_reaction_message_builder",
+    "static_payload",
+]
 ReactionProfile = Literal["all", "minimal_noise"]
 
 
@@ -255,6 +259,214 @@ class ReactionIntent:
         return asdict(self)
 
 
+@dataclass(frozen=True)
+class ScmMessageDescriptor:
+    source_kind: ScmMessageSourceKind
+    reaction_kind: ReactionKind
+    operation_kind: ReactionOperationKind
+    preview: str
+    builder: Optional[str] = None
+    payload_path: Optional[str] = None
+
+    @classmethod
+    def create(
+        cls,
+        *,
+        reaction_kind: ReactionKind,
+        operation_kind: ReactionOperationKind,
+        preview: str,
+        source_kind: ScmMessageSourceKind = "scm_reaction_message_builder",
+        builder: Optional[str] = "build_reaction_message",
+        payload_path: Optional[str] = None,
+    ) -> "ScmMessageDescriptor":
+        if source_kind == "scm_reaction_message_builder" and not builder:
+            raise ValueError("SCM message descriptor requires builder")
+        if source_kind == "static_payload" and not payload_path:
+            raise ValueError("SCM static message descriptor requires payload_path")
+        if not isinstance(preview, str) or not preview.strip():
+            raise ValueError("SCM message descriptor requires preview")
+        return cls(
+            source_kind=source_kind,
+            reaction_kind=reaction_kind,
+            operation_kind=operation_kind,
+            preview=preview,
+            builder=builder,
+            payload_path=payload_path,
+        )
+
+    @classmethod
+    def from_mapping(cls, value: Mapping[str, Any]) -> "ScmMessageDescriptor":
+        source_kind = _require_literal(
+            value.get("source_kind"),
+            frozenset({"scm_reaction_message_builder", "static_payload"}),
+            "message.source_kind",
+        )
+        reaction_kind = _require_literal(
+            value.get("reaction_kind"),
+            _REACTION_KINDS,
+            "message.reaction_kind",
+        )
+        operation_kind = _require_literal(
+            value.get("operation_kind"),
+            _REACTION_OPERATION_KINDS,
+            "message.operation_kind",
+        )
+        return cls.create(
+            source_kind=source_kind,  # type: ignore[arg-type]
+            reaction_kind=reaction_kind,  # type: ignore[arg-type]
+            operation_kind=operation_kind,  # type: ignore[arg-type]
+            preview=_require_text(value.get("preview"), "message.preview"),
+            builder=_optional_text(value.get("builder")),
+            payload_path=_optional_text(value.get("payload_path")),
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {key: value for key, value in asdict(self).items() if value is not None}
+
+
+def _legacy_message_descriptor_from_action_payload(
+    *,
+    reaction_kind: ReactionKind,
+    operation_kind: ReactionOperationKind,
+    payload: Mapping[str, Any],
+) -> ScmMessageDescriptor:
+    if operation_kind == "enqueue_managed_turn":
+        request = payload.get("request")
+        request_map = request if isinstance(request, Mapping) else {}
+        preview = _optional_text(request_map.get("message_text")) or "SCM managed turn"
+        return ScmMessageDescriptor.create(
+            reaction_kind=reaction_kind,
+            operation_kind=operation_kind,
+            preview=preview,
+            source_kind="static_payload",
+            builder=None,
+            payload_path="payload.request.message_text",
+        )
+    if operation_kind == "notify_chat":
+        preview = _optional_text(payload.get("message")) or "SCM notification"
+        return ScmMessageDescriptor.create(
+            reaction_kind=reaction_kind,
+            operation_kind=operation_kind,
+            preview=preview,
+            source_kind="static_payload",
+            builder=None,
+            payload_path="payload.message",
+        )
+    preview = _optional_text(payload.get("content")) or "SCM reaction"
+    return ScmMessageDescriptor.create(
+        reaction_kind=reaction_kind,
+        operation_kind=operation_kind,
+        preview=preview,
+        source_kind="static_payload",
+        builder=None,
+        payload_path="payload.content",
+    )
+
+
+@dataclass(frozen=True)
+class ScmActionDescriptor:
+    reaction_kind: ReactionKind
+    operation_kind: ReactionOperationKind
+    operation_key: str
+    payload: dict[str, Any]
+    message: ScmMessageDescriptor
+    event_id: Optional[str] = None
+    binding_id: Optional[str] = None
+
+    @classmethod
+    def create(
+        cls,
+        *,
+        reaction_kind: ReactionKind,
+        operation_kind: ReactionOperationKind,
+        operation_key: str,
+        payload: Mapping[str, Any],
+        message: ScmMessageDescriptor,
+        event_id: Optional[str] = None,
+        binding_id: Optional[str] = None,
+    ) -> "ScmActionDescriptor":
+        if message.reaction_kind != reaction_kind:
+            raise ValueError("SCM action message reaction_kind must match action")
+        if message.operation_kind != operation_kind:
+            raise ValueError("SCM action message operation_kind must match action")
+        return cls(
+            reaction_kind=reaction_kind,
+            operation_kind=operation_kind,
+            operation_key=_require_text(operation_key, "operation_key"),
+            payload=dict(payload),
+            message=message,
+            event_id=_optional_text(event_id),
+            binding_id=_optional_text(binding_id),
+        )
+
+    @classmethod
+    def from_mapping(cls, value: Mapping[str, Any]) -> "ScmActionDescriptor":
+        reaction_kind = _require_literal(
+            value.get("reaction_kind"),
+            _REACTION_KINDS,
+            "reaction_kind",
+        )
+        operation_kind = _require_literal(
+            value.get("operation_kind"),
+            _REACTION_OPERATION_KINDS,
+            "operation_kind",
+        )
+        payload = value.get("payload")
+        if not isinstance(payload, Mapping):
+            raise ValueError("SCM action payload must be an object")
+        message = value.get("message")
+        if not isinstance(message, Mapping):
+            return cls.create(
+                reaction_kind=reaction_kind,  # type: ignore[arg-type]
+                operation_kind=operation_kind,  # type: ignore[arg-type]
+                operation_key=_require_text(
+                    value.get("operation_key"), "operation_key"
+                ),
+                payload=payload,
+                message=_legacy_message_descriptor_from_action_payload(
+                    reaction_kind=reaction_kind,  # type: ignore[arg-type]
+                    operation_kind=operation_kind,  # type: ignore[arg-type]
+                    payload=payload,
+                ),
+                event_id=_optional_text(value.get("event_id")),
+                binding_id=_optional_text(value.get("binding_id")),
+            )
+        return cls.create(
+            reaction_kind=reaction_kind,  # type: ignore[arg-type]
+            operation_kind=operation_kind,  # type: ignore[arg-type]
+            operation_key=_require_text(value.get("operation_key"), "operation_key"),
+            payload=payload,
+            message=ScmMessageDescriptor.from_mapping(message),
+            event_id=_optional_text(value.get("event_id")),
+            binding_id=_optional_text(value.get("binding_id")),
+        )
+
+    def to_intent(self) -> ReactionIntent:
+        return ReactionIntent(
+            reaction_kind=self.reaction_kind,
+            operation_kind=self.operation_kind,
+            operation_key=self.operation_key,
+            payload=dict(self.payload),
+            event_id=self.event_id,
+            binding_id=self.binding_id,
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            key: value
+            for key, value in {
+                "reaction_kind": self.reaction_kind,
+                "operation_kind": self.operation_kind,
+                "operation_key": self.operation_key,
+                "payload": dict(self.payload),
+                "message": self.message.to_dict(),
+                "event_id": self.event_id,
+                "binding_id": self.binding_id,
+            }.items()
+            if value is not None
+        }
+
+
 def stable_reaction_operation_key(
     *,
     provider: str,
@@ -288,10 +500,51 @@ def stable_reaction_operation_key(
     return f"scm-reaction:{provider}:{reaction_kind}:{digest}"
 
 
+_REACTION_KINDS = frozenset(
+    {
+        "ci_failed",
+        "changes_requested",
+        "review_comment",
+        "approved_and_green",
+        "merged",
+    }
+)
+_REACTION_OPERATION_KINDS = frozenset(
+    {
+        "enqueue_managed_turn",
+        "notify_chat",
+        "react_pr_review_comment",
+    }
+)
+
+
+def _optional_text(value: Any) -> Optional[str]:
+    if not isinstance(value, str):
+        return None
+    text = value.strip()
+    return text or None
+
+
+def _require_text(value: Any, field_name: str) -> str:
+    text = _optional_text(value)
+    if text is None:
+        raise ValueError(f"SCM action {field_name} is required")
+    return text
+
+
+def _require_literal(value: Any, allowed: frozenset[str], field_name: str) -> str:
+    text = _require_text(value, field_name)
+    if text not in allowed:
+        raise ValueError(f"Unsupported SCM action {field_name}: {text}")
+    return text
+
+
 __all__ = [
     "ReactionIntent",
     "ReactionKind",
     "ReactionOperationKind",
+    "ScmActionDescriptor",
+    "ScmMessageDescriptor",
     "ScmReactionConfig",
     "stable_reaction_operation_key",
 ]

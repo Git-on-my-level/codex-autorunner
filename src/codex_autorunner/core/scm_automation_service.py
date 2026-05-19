@@ -7,11 +7,11 @@ import json
 import logging
 import re
 import threading
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Optional, Protocol, cast
+from typing import Any, Optional, Protocol
 
 from .automation import (
     AutomationEvent,
@@ -71,7 +71,8 @@ from .scm_reaction_state import (
 from .scm_reaction_types import (
     ReactionIntent,
     ReactionKind,
-    ReactionOperationKind,
+    ScmActionDescriptor,
+    ScmMessageDescriptor,
     ScmReactionConfig,
     stable_reaction_operation_key,
 )
@@ -116,7 +117,7 @@ class ScmActionRouter(Protocol):
         *,
         binding: Optional[PrBinding] = None,
         config: ScmReactionConfig | Mapping[str, Any] | None = None,
-    ) -> list[dict[str, Any]]: ...
+    ) -> list[ScmActionDescriptor | Mapping[str, Any]]: ...
 
 
 class ScmAutomationRuleEvaluator(Protocol):
@@ -172,7 +173,8 @@ class ScmCompatibilityPublishBridgeExecutor:
         service: Optional["ScmAutomationService"] = None,
         event_context: Optional[
             Mapping[
-                str, tuple[ScmEvent, Optional[PrBinding], tuple[dict[str, Any], ...]]
+                str,
+                tuple[ScmEvent, Optional[PrBinding], tuple[ScmActionDescriptor, ...]],
             ]
         ] = None,
     ) -> None:
@@ -215,7 +217,7 @@ class ScmCompatibilityPublishBridgeExecutor:
         *,
         event: ScmEvent,
         binding: Optional[PrBinding],
-        actions: tuple[dict[str, Any], ...],
+        actions: tuple[ScmActionDescriptor, ...],
     ) -> tuple[PublishOperation, ...]:
         if self._service is None:
             raise RuntimeError(
@@ -226,11 +228,11 @@ class ScmCompatibilityPublishBridgeExecutor:
         publish_operations: list[PublishOperation] = []
         seen_operation_keys: set[str] = set()
         for action in actions:
-            legacy_intent = _legacy_intent_from_action(action)
-            action_binding_id = _normalize_text(action.get("binding_id"))
-            action_event_id = _normalize_text(action.get("event_id")) or event.event_id
-            action_reaction_kind = _require_action_text(action, "reaction_kind")
-            action_operation_kind = _require_action_text(action, "operation_kind")
+            legacy_intent = action.to_intent()
+            action_binding_id = action.binding_id
+            action_event_id = action.event_id or event.event_id
+            action_reaction_kind = action.reaction_kind
+            action_operation_kind = action.operation_kind
             service._audit_recorder.record(
                 action_type=SCM_AUDIT_ROUTED_INTENT,
                 correlation_id=correlation_id,
@@ -333,7 +335,7 @@ class ScmCompatibilityPublishBridgeExecutor:
                             metadata=tracking,
                         )
                     continue
-            operation_key = _require_action_text(action, "operation_key")
+            operation_key = action.operation_key
             next_attempt_at: Optional[str] = None
             if (
                 binding is not None
@@ -355,7 +357,7 @@ class ScmCompatibilityPublishBridgeExecutor:
                 intent=legacy_intent,
                 binding=binding,
                 payload=with_correlation_id(
-                    copy.deepcopy(_mapping_or_empty(action.get("payload"))),
+                    copy.deepcopy(action.payload),
                     correlation_id=correlation_id,
                 ),
                 tracking=tracking,
@@ -646,16 +648,23 @@ def _compact_mapping(payload: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
-def _action_priority(action: Mapping[str, Any]) -> tuple[int, str]:
+def _action_priority(
+    action: ScmActionDescriptor | Mapping[str, Any],
+) -> tuple[int, str]:
     priorities = {
         "react_pr_review_comment": 0,
         "enqueue_managed_turn": 1,
         "notify_chat": 2,
     }
-    operation_kind = _normalize_text(action.get("operation_kind")) or ""
+    if isinstance(action, ScmActionDescriptor):
+        operation_kind: str = action.operation_kind
+        operation_key: str = action.operation_key
+    else:
+        operation_kind = _normalize_text(action.get("operation_kind")) or ""
+        operation_key = _normalize_text(action.get("operation_key")) or ""
     return (
         priorities.get(operation_kind, 50),
-        _normalize_text(action.get("operation_key")) or "",
+        operation_key,
     )
 
 
@@ -771,7 +780,12 @@ def _builtin_scm_reaction_rule(
         executor={
             "operation_kind": "scm_action_specs",
             "reaction_kind": reaction_kind,
-            "action_source": "event.payload.actions",
+            "actions": {
+                "kind": "scm_action_descriptors",
+                "source": "automation_event.payload.actions",
+                "schema_version": 1,
+            },
+            "message_descriptor": _builtin_scm_message_descriptor(reaction_kind),
         },
         policy={
             "dedupe_key": (
@@ -814,6 +828,23 @@ def _scm_batch_window_seconds(
     return 0
 
 
+def _builtin_scm_message_descriptor(reaction_kind: ReactionKind) -> dict[str, Any]:
+    previews = {
+        "ci_failed": "CI failed for the pull request. Inspect the failing check and push a fix.",
+        "changes_requested": "Changes requested on the pull request. Address the feedback and reply after updating the PR.",
+        "review_comment": "New PR review feedback arrived. Inspect the latest comments, address the feedback, and reply after updating the PR.",
+        "approved_and_green": "The pull request is approved and ready to land.",
+        "merged": "The pull request was merged.",
+    }
+    return {
+        "source_kind": "scm_reaction_message_builder",
+        "builder": "build_reaction_message",
+        "reaction_kind": reaction_kind,
+        "preview": previews[reaction_kind],
+        "operation_resolution": "binding_aware",
+    }
+
+
 def _matching_publish_operation_for_job(
     job: AutomationJob,
     publish_operations: tuple[PublishOperation, ...],
@@ -841,25 +872,37 @@ def _matching_publish_operation_for_job(
     return publish_operations[0]
 
 
+def _normalize_action_descriptors(
+    actions: Iterable[ScmActionDescriptor | Mapping[str, Any]],
+) -> tuple[ScmActionDescriptor, ...]:
+    normalized: list[ScmActionDescriptor] = []
+    for action in actions:
+        if isinstance(action, ScmActionDescriptor):
+            normalized.append(action)
+            continue
+        if not isinstance(action, Mapping):
+            raise ValueError("SCM action descriptor must be an object")
+        normalized.append(ScmActionDescriptor.from_mapping(action))
+    return tuple(sorted(normalized, key=_action_priority))
+
+
 def _actions_for_scm_job(
     job: AutomationJob,
     automation_event: AutomationEvent,
-) -> tuple[dict[str, Any], ...]:
+) -> tuple[ScmActionDescriptor, ...]:
     payload = _mapping_or_empty(automation_event.payload)
     actions = payload.get("actions")
     if not isinstance(actions, list):
         return ()
     reaction_kind = _job_reaction_kind(job)
-    normalized: list[dict[str, Any]] = []
+    normalized: list[ScmActionDescriptor] = []
     for action in actions:
         if not isinstance(action, Mapping):
+            raise ValueError("SCM automation event action must be an object")
+        descriptor = ScmActionDescriptor.from_mapping(action)
+        if reaction_kind is not None and descriptor.reaction_kind != reaction_kind:
             continue
-        if (
-            reaction_kind is not None
-            and _normalize_text(action.get("reaction_kind")) != reaction_kind
-        ):
-            continue
-        normalized.append(dict(action))
+        normalized.append(descriptor)
     return tuple(sorted(normalized, key=_action_priority))
 
 
@@ -983,36 +1026,22 @@ def _operation_result_summary(operation: Optional[PublishOperation]) -> str:
     return "SCM reaction bridged through publish operation"
 
 
-def _action_from_legacy_intent(intent: ReactionIntent) -> dict[str, Any]:
-    return _compact_mapping(
-        {
-            "reaction_kind": intent.reaction_kind,
-            "operation_kind": intent.operation_kind,
-            "operation_key": intent.operation_key,
-            "event_id": intent.event_id,
-            "binding_id": intent.binding_id,
-            "payload": copy.deepcopy(intent.payload),
-        }
-    )
-
-
-def _legacy_intent_from_action(action: Mapping[str, Any]) -> ReactionIntent:
-    return ReactionIntent(
-        reaction_kind=cast(ReactionKind, _require_action_text(action, "reaction_kind")),
-        operation_kind=cast(
-            ReactionOperationKind, _require_action_text(action, "operation_kind")
-        ),
-        operation_key=_require_action_text(action, "operation_key"),
-        payload=copy.deepcopy(_mapping_or_empty(action.get("payload"))),
-        event_id=_normalize_text(action.get("event_id")),
-        binding_id=_normalize_text(action.get("binding_id")),
+def _action_from_legacy_intent(intent: ReactionIntent) -> ScmActionDescriptor:
+    return ScmActionDescriptor.create(
+        reaction_kind=intent.reaction_kind,
+        operation_kind=intent.operation_kind,
+        operation_key=intent.operation_key,
+        payload=copy.deepcopy(intent.payload),
+        message=_message_descriptor_from_payload(intent),
+        event_id=intent.event_id,
+        binding_id=intent.binding_id,
     )
 
 
 def _legacy_intents_from_actions(
-    actions: tuple[dict[str, Any], ...],
+    actions: tuple[ScmActionDescriptor, ...],
 ) -> tuple[ReactionIntent, ...]:
-    return tuple(_legacy_intent_from_action(action) for action in actions)
+    return tuple(action.to_intent() for action in actions)
 
 
 def _actions_from_legacy_router(
@@ -1023,7 +1052,7 @@ def _actions_from_legacy_router(
         *,
         binding: Optional[PrBinding] = None,
         config: ScmReactionConfig | Mapping[str, Any] | None = None,
-    ) -> list[dict[str, Any]]:
+    ) -> list[ScmActionDescriptor | Mapping[str, Any]]:
         return [
             _action_from_legacy_intent(intent)
             for intent in router(event, binding=binding, config=config)
@@ -1032,11 +1061,37 @@ def _actions_from_legacy_router(
     return route
 
 
-def _require_action_text(action: Mapping[str, Any], key: str) -> str:
-    text = _normalize_text(action.get(key))
-    if text is None:
-        raise ValueError(f"SCM action is missing {key}")
-    return text
+def _message_descriptor_from_payload(intent: ReactionIntent) -> ScmMessageDescriptor:
+    if intent.operation_kind == "enqueue_managed_turn":
+        request = _mapping_or_empty(intent.payload.get("request"))
+        preview = _normalize_text(request.get("message_text")) or "SCM managed turn"
+        return ScmMessageDescriptor.create(
+            reaction_kind=intent.reaction_kind,
+            operation_kind=intent.operation_kind,
+            preview=preview,
+            source_kind="static_payload",
+            builder=None,
+            payload_path="payload.request.message_text",
+        )
+    if intent.operation_kind == "notify_chat":
+        preview = _normalize_text(intent.payload.get("message")) or "SCM notification"
+        return ScmMessageDescriptor.create(
+            reaction_kind=intent.reaction_kind,
+            operation_kind=intent.operation_kind,
+            preview=preview,
+            source_kind="static_payload",
+            builder=None,
+            payload_path="payload.message",
+        )
+    preview = _normalize_text(intent.payload.get("content")) or "SCM reaction"
+    return ScmMessageDescriptor.create(
+        reaction_kind=intent.reaction_kind,
+        operation_kind=intent.operation_kind,
+        preview=preview,
+        source_kind="static_payload",
+        builder=None,
+        payload_path="payload.content",
+    )
 
 
 def _mapping_or_empty(value: Any) -> dict[str, Any]:
@@ -1664,14 +1719,11 @@ class ScmAutomationService:
             binding=binding,
             payload={"binding_found": binding is not None},
         )
-        scm_actions = tuple(
-            sorted(
-                self._action_router(
-                    event,
-                    binding=binding,
-                    config=self._reaction_config,
-                ),
-                key=_action_priority,
+        scm_actions = _normalize_action_descriptors(
+            self._action_router(
+                event,
+                binding=binding,
+                config=self._reaction_config,
             )
         )
         reaction_intents = _legacy_intents_from_actions(scm_actions)
@@ -1722,7 +1774,8 @@ class ScmAutomationService:
         event_id: Optional[str] = None,
         event_context: Optional[
             Mapping[
-                str, tuple[ScmEvent, Optional[PrBinding], tuple[dict[str, Any], ...]]
+                str,
+                tuple[ScmEvent, Optional[PrBinding], tuple[ScmActionDescriptor, ...]],
             ]
         ] = None,
         limit: int = 100,
@@ -1813,14 +1866,12 @@ class ScmAutomationService:
         *,
         event: ScmEvent,
         binding: Optional[PrBinding],
-        actions: tuple[dict[str, Any], ...],
+        actions: tuple[ScmActionDescriptor, ...],
     ) -> Optional[AutomationEvent]:
         event_type = _automation_event_type_for_scm_event(event)
         if event_type is None:
             return None
-        reaction_kind = (
-            _normalize_text(actions[0].get("reaction_kind")) if actions else None
-        )
+        reaction_kind = actions[0].reaction_kind if actions else None
         return AutomationEvent.create(
             event_id=f"scm:{event.event_id}",
             event_type=event_type,
@@ -1881,8 +1932,8 @@ class ScmAutomationService:
                         else None
                     ),
                     "reaction_kind": reaction_kind,
-                    "actions": actions,
-                    "operation_kinds": [action["operation_kind"] for action in actions],
+                    "actions": [action.to_dict() for action in actions],
+                    "operation_kinds": [action.operation_kind for action in actions],
                     "scm_payload": copy.deepcopy(event.payload),
                 }
             ),

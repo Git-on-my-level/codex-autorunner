@@ -2,7 +2,10 @@ from __future__ import annotations
 
 from codex_autorunner.core.pr_bindings import PrBinding
 from codex_autorunner.core.scm_events import ScmEvent
-from codex_autorunner.core.scm_reaction_router import route_scm_reactions
+from codex_autorunner.core.scm_reaction_router import (
+    route_scm_action_specs,
+    route_scm_reactions,
+)
 from codex_autorunner.core.scm_reaction_types import ScmReactionConfig
 
 
@@ -155,6 +158,32 @@ def test_route_scm_reactions_returns_notify_intent_for_changes_requested_without
             }
         },
         "repo_id": "repo-1",
+    }
+
+
+def test_route_scm_action_specs_include_canonical_message_descriptor() -> None:
+    event = _event(
+        "pull_request_review",
+        payload={
+            "action": "submitted",
+            "review_state": "changes_requested",
+            "author_login": "reviewer",
+            "body": "Please add coverage for the webhook branch handling.",
+        },
+    )
+
+    actions = route_scm_action_specs(event, binding=_binding())
+
+    assert len(actions) == 1
+    assert actions[0]["message"] == {
+        "source_kind": "scm_reaction_message_builder",
+        "reaction_kind": "changes_requested",
+        "operation_kind": "notify_chat",
+        "preview": (
+            "Changes requested on acme/widgets#42 by reviewer: "
+            "Please add coverage for the webhook branch handling."
+        ),
+        "builder": "build_reaction_message",
     }
 
 

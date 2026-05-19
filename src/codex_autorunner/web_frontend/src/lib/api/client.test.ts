@@ -1,6 +1,41 @@
 import { describe, expect, it, vi } from 'vitest';
 import { WebApiClient, dataOr, normalizeApiError, partialPageIssue } from './client';
 
+function automationFixture(id: string, overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    id,
+    name: id,
+    enabled: true,
+    system_owned: false,
+    kind: 'security_scan_pr',
+    executor_kind: 'pma_turn',
+    target_policy: 'hub',
+    target: { repo_id: 'repo-1' },
+    product_api_version: 1,
+    editable: {
+      can_enable: true,
+      can_rename: true,
+      can_edit_schedule: true,
+      can_edit_message: true,
+      can_edit_ticket_body: false,
+      can_run_now: true,
+      can_edit_raw: false
+    },
+    managed: { managed: false, system_owned: false, legacy: false },
+    schedule_editor: { kind: 'daily', editable: true, fields: { timezone: 'UTC', hour: 9, minute: 0 }, summary: 'Daily 09:00 UTC' },
+    trigger_summary: { kind: 'schedule', label: 'schedule.fire', event_types: [] },
+    message_source: 'executor.message',
+    message_preview: 'Run automation.',
+    action_preview: { kind: 'pma_turn' },
+    target_summary: { repo_id: 'repo-1', label: 'hub / repo-1' },
+    executor_summary: { kind: 'pma_turn', label: 'PMA turn' },
+    policy_summary: { approval_mode: 'never_require_approval' },
+    raw_links: { control_plane_rule: `/hub/api/control-plane/automations/rules/${id}` },
+    diagnostics: [],
+    ...overrides
+  };
+}
+
 describe('API client error handling', () => {
   it('normalizes HTTP JSON errors into displayable errors', async () => {
     const fetcher = vi.fn(async () =>
@@ -100,6 +135,17 @@ describe('API client error handling', () => {
             executor_kind: 'pma_turn',
             target_policy: 'hub',
             target: { repo_id: 'repo-1' },
+            product_api_version: 1,
+            editable: { can_edit_schedule: true },
+            schedule_editor: { kind: 'daily', fields: { hour: 9, minute: 0 } },
+            trigger_summary: { kind: 'schedule', label: 'schedule.fire' },
+            message_source: 'executor.message',
+            message_preview: 'Run a security scan',
+            action_preview: { kind: 'pma_turn' },
+            target_summary: { repo_id: 'repo-1', label: 'hub / repo-1' },
+            executor_summary: { kind: 'pma_turn' },
+            policy_summary: { approval_mode: 'never_require_approval' },
+            raw_links: { control_plane_rule: '/hub/api/control-plane/automations/rules/rule-1' },
             schedule: {
               schedule_id: 'schedule-1',
               schedule_kind: 'daily',
@@ -127,8 +173,91 @@ describe('API client error handling', () => {
         kind: 'security_scan_pr',
         executorKind: 'pma_turn',
         target: { repo_id: 'repo-1' },
+        product: {
+          productApiVersion: 1,
+          messageSource: 'executor.message',
+          messagePreview: 'Run a security scan',
+          scheduleEditor: { kind: 'daily', fields: { hour: 9, minute: 0 } }
+        },
         schedule: { scheduleKind: 'daily', nextFireAt: '2026-01-01T09:00:00Z' },
         lastJob: { jobId: 'job-1', state: 'succeeded' }
+      });
+    }
+  });
+
+  it('maps typed automation projections for schedule, message, managed, and diagnostic UI states', async () => {
+    const fetcher = vi.fn(async () =>
+      Response.json({
+        automations: [
+          automationFixture('pma-timer', {
+            system_owned: true,
+            kind: 'pma_prompt',
+            executor_kind: 'pma_turn',
+            editable: { can_edit_schedule: false, can_edit_message: false, can_edit_ticket_body: false, can_run_now: true, can_enable: true },
+            managed: { managed: true, system_owned: true, legacy: true, legacy_source: 'legacy_timer_id', reason: 'System-managed automation: pma_timer' },
+            schedule_editor: { kind: 'one_shot', fields: { due_at: '2026-01-02T00:00:00Z' }, summary: 'Once at 2026-01-02T00:00:00Z' },
+            message_source: 'executor.message',
+            message_preview: 'Automation wake-up received.',
+            diagnostics: [{ code: 'AUTOMATION_LEGACY_MIGRATED', message: 'This automation was migrated from legacy PMA state.' }]
+          }),
+          automationFixture('github-scm', {
+            system_owned: true,
+            kind: 'publish_operation',
+            executor_kind: 'publish_operation',
+            editable: { can_edit_schedule: false, can_edit_message: false, can_edit_ticket_body: false, can_run_now: true, can_enable: true },
+            managed: { managed: true, system_owned: true, legacy: false, reason: 'System-managed automation: github_scm_reaction' },
+            schedule_editor: { kind: 'event_driven', fields: {}, summary: 'Event driven' },
+            message_source: 'executor.actions.message.template',
+            message_preview: 'SCM review requires follow-up for PR {{ event.payload.pr_number }}.',
+            action_preview: { kind: 'scm_reaction', source: 'automation_event.payload.actions' }
+          }),
+          automationFixture('daily-user', {
+            kind: 'security_scan_pr',
+            executor_kind: 'pma_turn',
+            editable: { can_edit_schedule: true, can_edit_message: true, can_edit_ticket_body: false, can_run_now: true, can_enable: true },
+            managed: { managed: false, system_owned: false, legacy: false },
+            schedule_editor: { kind: 'daily', editable: true, fields: { timezone: 'UTC', hour: 9, minute: 0 }, summary: 'Daily 09:00 UTC' },
+            message_source: 'executor.message',
+            message_preview: 'Run a security scan.'
+          }),
+          automationFixture('weekly-ticket-flow', {
+            kind: 'weekly_ticket_flow',
+            executor_kind: 'ticket_flow',
+            editable: { can_edit_schedule: true, can_edit_message: false, can_edit_ticket_body: true, can_run_now: true, can_enable: true },
+            managed: { managed: false, system_owned: false, legacy: false },
+            schedule_editor: { kind: 'weekly', editable: true, fields: { timezone: 'UTC', weekday: 0, hour: 10, minute: 0 }, summary: 'Mon 10:00 UTC' },
+            message_source: 'executor.ticket_pack.tickets[0].content',
+            message_preview: 'Run the configured weekly maintenance ticket.'
+          })
+        ],
+        summary: { total: 4, active: 3, paused: 1, failed_jobs: 0 }
+      })
+    ) as unknown as typeof fetch;
+    const client = new WebApiClient(fetcher);
+
+    const result = await client.hub.listAutomations();
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      const byId = Object.fromEntries(result.data.automations.map((automation) => [automation.id, automation]));
+      expect(byId['pma-timer'].product).toMatchObject({
+        managed: { managed: true, legacy: true, legacySource: 'legacy_timer_id' },
+        scheduleEditor: { kind: 'one_shot', fields: { due_at: '2026-01-02T00:00:00Z' } },
+        diagnostics: [{ code: 'AUTOMATION_LEGACY_MIGRATED' }]
+      });
+      expect(byId['github-scm'].product).toMatchObject({
+        scheduleEditor: { kind: 'event_driven' },
+        messageSource: 'executor.actions.message.template',
+        messagePreview: expect.stringContaining('SCM review requires follow-up'),
+        actionPreview: { kind: 'scm_reaction' }
+      });
+      expect(byId['daily-user'].product).toMatchObject({
+        editable: { canEditSchedule: true, canEditMessage: true },
+        scheduleEditor: { kind: 'daily', fields: { hour: 9, minute: 0 } }
+      });
+      expect(byId['weekly-ticket-flow'].product).toMatchObject({
+        editable: { canEditSchedule: true, canEditTicketBody: true },
+        scheduleEditor: { kind: 'weekly', fields: { weekday: 0, hour: 10 } }
       });
     }
   });

@@ -4,6 +4,11 @@ import json
 import sqlite3
 from pathlib import Path
 
+from codex_autorunner.core.automation.migration_diagnostics import (
+    AUTOMATION_MIGRATION_MIRROR_INCOMPLETE,
+    collect_automation_migration_read_model,
+)
+from codex_autorunner.core.automation.store import AutomationStore
 from codex_autorunner.core.orchestration import (
     ORCHESTRATION_SCHEMA_VERSION,
     apply_orchestration_migrations,
@@ -11,6 +16,9 @@ from codex_autorunner.core.orchestration import (
     current_orchestration_schema_version,
 )
 from codex_autorunner.core.orchestration import migrations as migrations_module
+from codex_autorunner.core.orchestration.legacy_backfill_gate import (
+    LEGACY_ORCHESTRATION_BACKFILL_KEY,
+)
 from codex_autorunner.core.orchestration.migrate_legacy_state import (
     backfill_legacy_transcript_mirrors,
 )
@@ -20,6 +28,113 @@ def _connect(db_path: Path) -> sqlite3.Connection:
     conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
     return conn
+
+
+def _mark_legacy_backfill_complete(conn: sqlite3.Connection) -> None:
+    conn.execute(
+        """
+        INSERT OR REPLACE INTO orch_operation_flags (flag_key, completed_at)
+        VALUES (?, ?)
+        """,
+        (LEGACY_ORCHESTRATION_BACKFILL_KEY, "2026-01-01T00:00:00Z"),
+    )
+
+
+def _insert_legacy_automation_rows(hub_root: Path) -> None:
+    db_path = hub_root / ".codex-autorunner" / "orchestration.sqlite3"
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    with _connect(db_path) as conn:
+        apply_orchestration_migrations(conn)
+        _mark_legacy_backfill_complete(conn)
+        conn.execute(
+            """
+            INSERT INTO orch_automation_subscriptions (
+                subscription_id, event_types_json, repo_id, run_id,
+                thread_target_id, lane_id, from_state, to_state, notify_once,
+                state, match_count, metadata_json, created_at, updated_at,
+                reason_text, idempotency_key, max_matches
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "sub-legacy",
+                json.dumps(["flow_failed"]),
+                "repo-legacy",
+                "run-legacy",
+                "thread-legacy",
+                "pma:default",
+                "running",
+                "failed",
+                0,
+                "active",
+                0,
+                "{}",
+                "2026-01-01T00:00:00Z",
+                "2026-01-01T00:00:00Z",
+                "watch failures",
+                "sub-key",
+                None,
+            ),
+        )
+        conn.execute(
+            """
+            INSERT INTO orch_automation_timers (
+                timer_id, subscription_id, repo_id, run_id, thread_target_id,
+                timer_kind, schedule_key, available_at, payload_json, state,
+                created_at, updated_at, fired_at, reason_text, idempotency_key,
+                idle_seconds
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "timer-legacy",
+                "sub-legacy",
+                "repo-legacy",
+                "run-legacy",
+                "thread-legacy",
+                "one_shot",
+                "sub-legacy",
+                "2026-01-02T00:00:00Z",
+                "{}",
+                "pending",
+                "2026-01-01T00:00:00Z",
+                "2026-01-01T00:00:00Z",
+                None,
+                "timer",
+                "timer-key",
+                None,
+            ),
+        )
+        conn.execute(
+            """
+            INSERT INTO orch_automation_wakeups (
+                wakeup_id, subscription_id, repo_id, run_id, thread_target_id,
+                lane_id, wakeup_kind, state, available_at, claimed_at,
+                completed_at, reason_text, payload_json, created_at, updated_at,
+                timestamp, idempotency_key, timer_id, event_id, event_type
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "wakeup-legacy",
+                "sub-legacy",
+                "repo-legacy",
+                "run-legacy",
+                "thread-legacy",
+                "pma:default",
+                "lifecycle_subscription",
+                "completed",
+                "2026-01-01T00:00:00Z",
+                "2026-01-01T00:00:01Z",
+                "2026-01-01T00:00:02Z",
+                "legacy wakeup",
+                "{}",
+                "2026-01-01T00:00:00Z",
+                "2026-01-01T00:00:02Z",
+                "2026-01-01T00:00:00Z",
+                "wakeup-key",
+                None,
+                "event-legacy",
+                "flow_failed",
+            ),
+        )
 
 
 def test_apply_orchestration_migrations_sets_latest_schema_version(
@@ -39,6 +154,67 @@ def test_apply_orchestration_migrations_sets_latest_schema_version(
     assert runs[0]["target_version"] == ORCHESTRATION_SCHEMA_VERSION
     assert len(attempts) == ORCHESTRATION_SCHEMA_VERSION
     assert {row["status"] for row in attempts} == {"completed"}
+
+
+def test_automation_migration_diagnostics_report_blocked_mirror(
+    tmp_path: Path,
+) -> None:
+    hub_root = tmp_path / "hub"
+    _insert_legacy_automation_rows(hub_root)
+
+    payload = collect_automation_migration_read_model(hub_root).to_dict()
+
+    assert payload["status"] == "blocked"
+    assert payload["legacy_residue"]["orch_automation_subscriptions"] == 1
+    assert payload["mirror_health"]["status"] == "blocked"
+    assert payload["mirror_health"]["missing"]["subscriptions"] == ["sub-legacy"]
+    assert any(
+        item["code"] == AUTOMATION_MIGRATION_MIRROR_INCOMPLETE
+        for item in payload["diagnostics"]
+    )
+
+
+def test_automation_migration_diagnostics_report_clean_mirror(
+    tmp_path: Path,
+) -> None:
+    hub_root = tmp_path / "hub"
+    _insert_legacy_automation_rows(hub_root)
+    AutomationStore(hub_root).migrate_legacy_pma_automation()
+
+    payload = collect_automation_migration_read_model(hub_root).to_dict()
+
+    assert payload["status"] == "ok"
+    assert payload["mirror_health"]["status"] == "ok"
+    assert payload["mirror_health"]["missing"] == {
+        "subscriptions": [],
+        "timers": [],
+        "wakeups": [],
+    }
+
+
+def test_automation_migration_diagnostics_report_malformed_rows(
+    tmp_path: Path,
+) -> None:
+    hub_root = tmp_path / "hub"
+    _insert_legacy_automation_rows(hub_root)
+    with _connect(hub_root / ".codex-autorunner" / "orchestration.sqlite3") as conn:
+        conn.execute(
+            """
+            UPDATE orch_automation_subscriptions
+               SET event_types_json = ?
+             WHERE subscription_id = ?
+            """,
+            ("not-json", "sub-legacy"),
+        )
+
+    payload = collect_automation_migration_read_model(hub_root).to_dict()
+
+    assert payload["status"] == "blocked"
+    assert any(
+        item["code"] == "PMA_LEGACY_AUTOMATION_MALFORMED_JSON"
+        and item["table"] == "orch_automation_subscriptions"
+        for item in payload["diagnostics"]
+    )
 
 
 def test_apply_orchestration_migrations_adds_chat_index_projection(

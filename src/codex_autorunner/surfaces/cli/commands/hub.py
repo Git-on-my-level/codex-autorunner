@@ -12,6 +12,9 @@ import httpx
 import typer
 import uvicorn
 
+from ....core.automation.migration_diagnostics import (
+    collect_automation_migration_read_model,
+)
 from ....core.config import HubConfig
 from ....core.destinations import (
     resolve_effective_repo_destination,
@@ -561,15 +564,47 @@ def register_hub_commands(
                     table_counts[table_name] = int(cnt["cnt"]) if cnt else 0
         except (sqlite3.Error, OSError) as exc:  # intentional: top-level error handler
             raise_exit(f"Failed to read orchestration state: {exc}", cause=exc)
+        automation_migration = collect_automation_migration_read_model(
+            config.root
+        ).to_dict()
         payload = {
             "schema_version": current_version,
             "target_version": ORCHESTRATION_SCHEMA_VERSION,
             "tables": table_counts,
+            "automation_migration": automation_migration,
         }
         if output_json:
             typer.echo(json.dumps(payload, indent=2))
             return
         typer.echo(f"schema: {current_version}/{ORCHESTRATION_SCHEMA_VERSION}")
+        mirror_health = automation_migration.get("mirror_health")
+        mirror_status = (
+            mirror_health.get("status")
+            if isinstance(mirror_health, dict)
+            else "unknown"
+        )
+        pending_migration_versions = automation_migration.get(
+            "pending_migration_versions"
+        )
+        pending_migration_count = (
+            len(pending_migration_versions)
+            if isinstance(pending_migration_versions, list)
+            else 0
+        )
+        typer.echo(
+            "automation_migration: "
+            f"status={automation_migration['status']} "
+            f"pending_migrations={pending_migration_count} "
+            f"mirror={mirror_status}"
+        )
+        for diagnostic in automation_migration.get("diagnostics") or []:
+            typer.echo(
+                "  {severity}: {code} - {message}".format(
+                    severity=diagnostic.get("severity", "error"),
+                    code=diagnostic.get("code"),
+                    message=diagnostic.get("message"),
+                )
+            )
         for table, count in sorted(table_counts.items()):
             typer.echo(f"  {table}: {count}")
 

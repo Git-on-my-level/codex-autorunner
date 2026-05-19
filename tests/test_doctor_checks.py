@@ -21,6 +21,9 @@ from codex_autorunner.bootstrap import seed_hub_files
 from codex_autorunner.core.agent_config import AgentConfig
 from codex_autorunner.core.config import load_hub_config
 from codex_autorunner.core.destinations import DockerReadiness
+from codex_autorunner.core.diagnostics.automation import (
+    automation_migration_doctor_checks,
+)
 from codex_autorunner.core.diagnostics.hermes import hermes_doctor_checks
 from codex_autorunner.core.diagnostics.hub import (
     hub_destination_doctor_checks,
@@ -37,6 +40,10 @@ from codex_autorunner.core.diagnostics.types import (
     DoctorCheck,
 )
 from codex_autorunner.core.managed_processes.registry import ProcessRecord
+from codex_autorunner.core.orchestration.legacy_backfill_gate import (
+    LEGACY_ORCHESTRATION_BACKFILL_KEY,
+)
+from codex_autorunner.core.orchestration.sqlite import open_orchestration_sqlite
 from tests.conftest import write_test_config
 
 
@@ -481,6 +488,57 @@ def test_collect_doctor_report_preserves_provider_order() -> None:
 
     assert [check.check_id for check in report.checks] == ["first", "second"]
     assert report.to_dict()["errors"] == 1
+
+
+def test_automation_migration_doctor_reports_blockers(tmp_path: Path) -> None:
+    hub_root = tmp_path / "hub"
+    seed_hub_files(hub_root, force=True)
+    hub_config = load_hub_config(hub_root)
+    with open_orchestration_sqlite(hub_root, durable=False) as conn:
+        conn.execute(
+            """
+            INSERT OR REPLACE INTO orch_operation_flags (flag_key, completed_at)
+            VALUES (?, ?)
+            """,
+            (LEGACY_ORCHESTRATION_BACKFILL_KEY, "2026-01-01T00:00:00Z"),
+        )
+        conn.execute(
+            """
+            INSERT INTO orch_automation_subscriptions (
+                subscription_id, event_types_json, repo_id, run_id,
+                thread_target_id, lane_id, from_state, to_state, notify_once,
+                state, match_count, metadata_json, created_at, updated_at,
+                reason_text, idempotency_key, max_matches
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "sub-doctor",
+                "not-json",
+                "repo",
+                None,
+                "thread",
+                "pma:default",
+                None,
+                None,
+                0,
+                "active",
+                0,
+                "{}",
+                "2026-01-01T00:00:00Z",
+                "2026-01-01T00:00:00Z",
+                None,
+                None,
+                None,
+            ),
+        )
+
+    checks = automation_migration_doctor_checks(hub_config)
+
+    by_id = {check.check_id: check for check in checks}
+    assert by_id["automation.migration"].passed is False
+    assert (
+        "PMA_LEGACY_AUTOMATION_MALFORMED_JSON" in by_id["automation.migration"].message
+    )
 
 
 def test_summarize_opencode_lifecycle_dedupes_pid_records_and_reports_handle_modes(

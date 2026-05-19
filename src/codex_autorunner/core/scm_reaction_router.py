@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Mapping
-from typing import Any, Optional, cast
+from typing import Any, Optional
 
 from .pr_bindings import PrBinding
 from .scm_events import ScmEvent
@@ -12,6 +12,8 @@ from .scm_reaction_types import (
     ReactionIntent,
     ReactionKind,
     ReactionOperationKind,
+    ScmActionDescriptor,
+    ScmMessageDescriptor,
     ScmReactionConfig,
     stable_reaction_operation_key,
 )
@@ -132,6 +134,38 @@ def _build_publish_payload(
     if repo_id is not None:
         payload["repo_id"] = repo_id
     return payload
+
+
+def _build_message_descriptor(
+    *,
+    reaction_kind: ReactionKind,
+    operation_kind: ReactionOperationKind,
+    event: ScmEvent,
+    binding: Optional[PrBinding],
+    payload: Mapping[str, Any],
+) -> ScmMessageDescriptor:
+    preview = build_reaction_message(
+        reaction_kind=reaction_kind,
+        event=event,
+        binding=binding,
+        operation_kind=operation_kind,
+    )
+    if operation_kind == "react_pr_review_comment":
+        return ScmMessageDescriptor.create(
+            source_kind="static_payload",
+            reaction_kind=reaction_kind,
+            operation_kind=operation_kind,
+            preview=str(payload.get("content") or "eyes"),
+            builder=None,
+            payload_path="payload.content",
+        )
+    return ScmMessageDescriptor.create(
+        source_kind="scm_reaction_message_builder",
+        reaction_kind=reaction_kind,
+        operation_kind=operation_kind,
+        preview=preview,
+        builder="build_reaction_message",
+    )
 
 
 def _build_review_comment_reaction_payload(
@@ -278,8 +312,8 @@ def route_scm_reactions(
     config: ScmReactionConfig | Mapping[str, Any] | None = None,
 ) -> list[ReactionIntent]:
     return [
-        _intent_from_action_spec(action)
-        for action in route_scm_action_specs(
+        action.to_intent()
+        for action in route_scm_action_descriptors(
             event,
             binding=binding,
             config=config,
@@ -293,6 +327,22 @@ def route_scm_action_specs(
     binding: Optional[PrBinding] = None,
     config: ScmReactionConfig | Mapping[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
+    return [
+        action.to_dict()
+        for action in route_scm_action_descriptors(
+            event,
+            binding=binding,
+            config=config,
+        )
+    ]
+
+
+def route_scm_action_descriptors(
+    event: ScmEvent,
+    *,
+    binding: Optional[PrBinding] = None,
+    config: ScmReactionConfig | Mapping[str, Any] | None = None,
+) -> list[ScmActionDescriptor]:
     resolved_config = ScmReactionConfig.from_mapping(config)
     reaction_kind = _match_reaction_kind(
         event,
@@ -308,7 +358,7 @@ def route_scm_action_specs(
     ):
         return []
 
-    actions: list[dict[str, Any]] = []
+    actions: list[ScmActionDescriptor] = []
     operation_kind = _resolve_operation_kind(
         reaction_kind=reaction_kind,
         event=event,
@@ -330,16 +380,24 @@ def route_scm_action_specs(
                 else None
             ),
         )
+        payload = _build_publish_payload(
+            reaction_kind=reaction_kind,
+            operation_kind=operation_kind,
+            event=event,
+            binding=binding,
+        )
         actions.append(
-            _compact_action_spec(
+            _action_descriptor(
                 reaction_kind=reaction_kind,
                 operation_kind=operation_kind,
                 operation_key=operation_key,
-                payload=_build_publish_payload(
+                payload=payload,
+                message=_build_message_descriptor(
                     reaction_kind=reaction_kind,
                     operation_kind=operation_kind,
                     event=event,
                     binding=binding,
+                    payload=payload,
                 ),
                 event_id=event.event_id,
                 binding_id=binding.binding_id if binding is not None else None,
@@ -352,7 +410,7 @@ def route_scm_action_specs(
         )
         if reaction_payload is not None:
             actions.append(
-                _compact_action_spec(
+                _action_descriptor(
                     reaction_kind=reaction_kind,
                     operation_kind="react_pr_review_comment",
                     operation_key=stable_reaction_operation_key(
@@ -372,6 +430,13 @@ def route_scm_action_specs(
                         ),
                     ),
                     payload=reaction_payload,
+                    message=_build_message_descriptor(
+                        reaction_kind=reaction_kind,
+                        operation_kind="react_pr_review_comment",
+                        event=event,
+                        binding=binding,
+                        payload=reaction_payload,
+                    ),
                     event_id=event.event_id,
                     binding_id=(binding.binding_id if binding is not None else None),
                 )
@@ -379,39 +444,29 @@ def route_scm_action_specs(
     return actions
 
 
-def _compact_action_spec(
+def _action_descriptor(
     *,
     reaction_kind: ReactionKind,
     operation_kind: ReactionOperationKind,
     operation_key: str,
     payload: dict[str, Any],
+    message: ScmMessageDescriptor,
     event_id: Optional[str] = None,
     binding_id: Optional[str] = None,
-) -> dict[str, Any]:
-    return {
-        key: value
-        for key, value in {
-            "reaction_kind": reaction_kind,
-            "operation_kind": operation_kind,
-            "operation_key": operation_key,
-            "payload": payload,
-            "event_id": event_id,
-            "binding_id": binding_id,
-        }.items()
-        if value is not None
-    }
-
-
-def _intent_from_action_spec(action: Mapping[str, Any]) -> ReactionIntent:
-    payload = action.get("payload")
-    return ReactionIntent(
-        reaction_kind=cast(ReactionKind, str(action["reaction_kind"])),
-        operation_kind=cast(ReactionOperationKind, str(action["operation_kind"])),
-        operation_key=str(action["operation_key"]),
-        payload=dict(payload) if isinstance(payload, Mapping) else {},
-        event_id=_normalize_text(action.get("event_id")),
-        binding_id=_normalize_text(action.get("binding_id")),
+) -> ScmActionDescriptor:
+    return ScmActionDescriptor.create(
+        reaction_kind=reaction_kind,
+        operation_kind=operation_kind,
+        operation_key=operation_key,
+        payload=payload,
+        message=message,
+        event_id=event_id,
+        binding_id=binding_id,
     )
 
 
-__all__ = ["route_scm_action_specs", "route_scm_reactions"]
+__all__ = [
+    "route_scm_action_descriptors",
+    "route_scm_action_specs",
+    "route_scm_reactions",
+]

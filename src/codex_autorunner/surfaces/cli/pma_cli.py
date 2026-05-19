@@ -10,7 +10,11 @@ import httpx
 import typer
 
 from ...adapters.chat.automation_surface import _resolve_rule
+from ...core.automation.migration_diagnostics import (
+    collect_automation_migration_read_model,
+)
 from ...core.automation.product import (
+    AUTOMATION_PRESET_DESCRIPTORS,
     AutomationPresetRequest,
     automation_overview,
     automation_row,
@@ -54,6 +58,9 @@ from .pma_status_contracts import (
 )
 
 logger = logging.getLogger(__name__)
+
+SECURITY_SCAN_PRESET = AUTOMATION_PRESET_DESCRIPTORS["security_scan_pr"]
+WEEKLY_TICKET_FLOW_PRESET = AUTOMATION_PRESET_DESCRIPTORS["weekly_ticket_flow"]
 
 pma_app = typer.Typer(
     add_completion=False,
@@ -177,6 +184,36 @@ def pma_automation_status(
     typer.echo(format_automation_status(row))
 
 
+@automation_app.command("migration-status")
+def pma_automation_migration_status(
+    output_json: bool = typer.Option(False, "--json", help="Emit JSON output"),
+    path: Optional[Path] = hub_root_path_option(),
+):
+    """Report PMA automation migration blockers and mirror health."""
+    hub_root = resolve_hub_path(path)
+    report = collect_automation_migration_read_model(hub_root)
+    payload = report.to_dict()
+    if output_json:
+        echo_json(payload)
+        return
+    typer.echo(
+        "automation migration: "
+        f"status={payload['status']} "
+        f"schema={payload['schema_version']}/{payload['target_schema_version']} "
+        f"mirror={payload['mirror_health']['status']}"
+    )
+    for diagnostic in payload.get("diagnostics") or []:
+        typer.echo(
+            "  {severity}: {code} - {message}".format(
+                severity=diagnostic.get("severity", "error"),
+                code=diagnostic.get("code"),
+                message=diagnostic.get("message"),
+            )
+        )
+    for step in payload.get("next_steps") or []:
+        typer.echo(f"  next: {step}")
+
+
 @automation_app.command("run")
 def pma_automation_run(
     automation_id: str = typer.Argument(..., help="Automation id or unique fragment"),
@@ -235,10 +272,24 @@ def pma_automation_resume(
 def pma_automation_security_scan(
     repo: str = typer.Argument(..., help="Hub repo id to scan"),
     hour: int = typer.Option(
-        9, "--hour", min=0, max=23, help="Scheduled UTC/local hour"
+        SECURITY_SCAN_PRESET.default_hour,
+        "--hour",
+        min=0,
+        max=23,
+        help="Scheduled UTC/local hour",
     ),
-    minute: int = typer.Option(0, "--minute", min=0, max=59, help="Scheduled minute"),
-    timezone: str = typer.Option("UTC", "--timezone", help="IANA timezone name"),
+    minute: int = typer.Option(
+        SECURITY_SCAN_PRESET.default_minute,
+        "--minute",
+        min=0,
+        max=59,
+        help="Scheduled minute",
+    ),
+    timezone: str = typer.Option(
+        SECURITY_SCAN_PRESET.default_timezone,
+        "--timezone",
+        help="IANA timezone name",
+    ),
     name: Optional[str] = typer.Option(None, "--name", help="Automation display name"),
     enabled: bool = typer.Option(
         False, "--enabled", help="Enable immediately after saving"
@@ -266,13 +317,31 @@ def pma_automation_security_scan(
 def pma_automation_weekly_ticket_flow(
     repo: str = typer.Argument(..., help="Hub repo id to run in a fresh worktree"),
     weekday: int = typer.Option(
-        0, "--weekday", min=0, max=6, help="Scheduled weekday, Monday=0"
+        WEEKLY_TICKET_FLOW_PRESET.default_weekday or 0,
+        "--weekday",
+        min=0,
+        max=6,
+        help="Scheduled weekday, Monday=0",
     ),
     hour: int = typer.Option(
-        9, "--hour", min=0, max=23, help="Scheduled UTC/local hour"
+        WEEKLY_TICKET_FLOW_PRESET.default_hour,
+        "--hour",
+        min=0,
+        max=23,
+        help="Scheduled UTC/local hour",
     ),
-    minute: int = typer.Option(0, "--minute", min=0, max=59, help="Scheduled minute"),
-    timezone: str = typer.Option("UTC", "--timezone", help="IANA timezone name"),
+    minute: int = typer.Option(
+        WEEKLY_TICKET_FLOW_PRESET.default_minute,
+        "--minute",
+        min=0,
+        max=59,
+        help="Scheduled minute",
+    ),
+    timezone: str = typer.Option(
+        WEEKLY_TICKET_FLOW_PRESET.default_timezone,
+        "--timezone",
+        help="IANA timezone name",
+    ),
     name: Optional[str] = typer.Option(None, "--name", help="Automation display name"),
     enabled: bool = typer.Option(
         False, "--enabled", help="Enable immediately after saving"

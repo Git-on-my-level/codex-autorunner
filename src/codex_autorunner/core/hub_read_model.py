@@ -283,7 +283,6 @@ def _collect_unified_automation_snapshot(
 ) -> dict[str, Any]:
     try:
         store = AutomationStore(hub_root)
-        store.backfill_legacy_pma_automation()
         rules = store.list_rules()[:limit]
         schedules = store.list_schedules()[:limit]
         jobs = store.list_jobs(limit=limit)

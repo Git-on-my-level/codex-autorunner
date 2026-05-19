@@ -34,13 +34,18 @@ from .models import (
     SCHEDULE_KINDS,
     TARGET_POLICIES,
     TRIGGER_KINDS,
+    AutomationContractError,
     AutomationEvent,
     AutomationJob,
     AutomationJobAttempt,
     AutomationRule,
     AutomationSchedule,
+    validate_executor_contract,
     validate_job_transition,
     validate_policy,
+    validate_schedule_contract,
+    validate_target_contract,
+    validate_trigger_contract,
 )
 from .scheduler import (
     AutomationScheduler,
@@ -58,6 +63,7 @@ from .worker import (
 
 __all__ = [
     "AUTOMATION_EVENT_TYPES",
+    "AutomationContractError",
     "BUILTIN_PMA_REACTIVE_RULE_ID",
     "PMA_SUBSCRIPTION_RULE_PREFIX",
     "PMA_TIMER_RULE_PREFIX",
@@ -106,4 +112,8 @@ __all__ = [
     "render_template",
     "validate_job_transition",
     "validate_policy",
+    "validate_schedule_contract",
+    "validate_executor_contract",
+    "validate_target_contract",
+    "validate_trigger_contract",
 ]

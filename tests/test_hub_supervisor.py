@@ -28,6 +28,7 @@ from codex_autorunner.adapters.agents.wiring import (
     build_app_server_supervisor_factory,
 )
 from codex_autorunner.bootstrap import seed_repo_files
+from codex_autorunner.core.automation import AutomationStore
 from codex_autorunner.core.config import (
     CONFIG_FILENAME,
     DEFAULT_HUB_CONFIG,
@@ -47,6 +48,8 @@ from codex_autorunner.core.hub_topology import (
 from codex_autorunner.core.hub_worktree_manager import WorktreeManager
 from codex_autorunner.core.managed_thread_store import ManagedThreadStore
 from codex_autorunner.core.orchestration.bindings import OrchestrationBindingStore
+from codex_autorunner.core.pma_automation_records import PmaAutomationTimer
+from codex_autorunner.core.pma_automation_unified import PmaUnifiedAutomationAdapter
 from codex_autorunner.core.runner_controller import ProcessRunnerController
 from codex_autorunner.core.state import RunnerState, save_state
 from codex_autorunner.manifest import load_manifest, sanitize_repo_id, save_manifest
@@ -3326,16 +3329,15 @@ def test_ensure_pma_automation_store_creates_store(tmp_path: Path) -> None:
         supervisor.shutdown()
 
 
-def test_automation_store_aliases(tmp_path: Path) -> None:
+def test_pma_automation_store_accessor_is_explicit(tmp_path: Path) -> None:
     hub_root = tmp_path / "hub"
     supervisor = _make_basic_supervisor(hub_root)
     try:
         primary = supervisor.ensure_pma_automation_store()
-        assert supervisor.ensure_automation_store() is primary
         assert supervisor.get_pma_automation_store() is primary
-        assert supervisor.get_automation_store() is primary
         assert supervisor.pma_automation_store is primary
-        assert supervisor.automation_store is primary
+        assert not hasattr(supervisor, "get_automation_store")
+        assert not hasattr(supervisor, "automation_store")
     finally:
         supervisor.shutdown()
 
@@ -3424,11 +3426,14 @@ def test_process_pma_automation_timers_does_not_call_legacy_dequeue(
     supervisor = _make_basic_supervisor(hub_root)
     try:
         store = supervisor.ensure_pma_automation_store()
-        store.upsert_timer(
+        timer = PmaAutomationTimer.create(
             due_at="2000-01-01T00:00:00+00:00",
             repo_id="demo",
             lane_id="pma:default",
             idempotency_key="unified-scheduler-no-legacy-dequeue",
+        )
+        PmaUnifiedAutomationAdapter(AutomationStore(hub_root)).mirror_timer_schedule(
+            timer=timer
         )
         monkeypatch.setattr(
             store,
@@ -3451,131 +3456,18 @@ def test_process_pma_automation_timers_processes_due_unified_schedules(
     started_lanes = []
     supervisor.set_pma_lane_worker_starter(started_lanes.append)
     try:
-        store = supervisor.ensure_pma_automation_store()
-        store.upsert_timer(
+        timer = PmaAutomationTimer.create(
             due_at="2000-01-01T00:00:00+00:00",
             repo_id="demo",
             lane_id="pma:default",
             idempotency_key="unified-scheduler-due-timer",
         )
+        PmaUnifiedAutomationAdapter(AutomationStore(hub_root)).mirror_timer_schedule(
+            timer=timer
+        )
         created = supervisor.process_pma_automation_timers()
         assert created == 1
         assert started_lanes == ["pma:default"]
-    finally:
-        supervisor.shutdown()
-
-
-def test_drain_pma_automation_wakeups_returns_zero_for_bad_limit(
-    tmp_path: Path,
-) -> None:
-    hub_root = tmp_path / "hub"
-    supervisor = _make_basic_supervisor(hub_root)
-    try:
-        assert supervisor.drain_pma_automation_wakeups(limit=0) == 0
-    finally:
-        supervisor.shutdown()
-
-
-def test_drain_pma_automation_wakeups_returns_zero_when_pma_disabled(
-    tmp_path: Path,
-) -> None:
-    hub_root = tmp_path / "hub"
-    cfg = _default_hub_config()
-    cfg["pma"]["enabled"] = False
-    write_test_config(hub_root / CONFIG_FILENAME, cfg)
-    supervisor = HubSupervisor(load_hub_config(hub_root))
-    try:
-        assert supervisor.drain_pma_automation_wakeups() == 0
-    finally:
-        supervisor.shutdown()
-
-
-def test_drain_pma_automation_wakeups_processes_pending(tmp_path: Path) -> None:
-    hub_root = tmp_path / "hub"
-    supervisor = _make_basic_supervisor(hub_root)
-    started_lanes = []
-    supervisor.set_pma_lane_worker_starter(
-        lambda lane_id: started_lanes.append(lane_id)
-    )
-    try:
-        store = supervisor.ensure_pma_automation_store()
-        created, deduped = store.enqueue_wakeup(
-            source="timer",
-            repo_id="demo",
-            run_id="r1",
-            lane_id="pma:default",
-            reason="timer_due",
-            timestamp="2025-01-01T00:00:00Z",
-            idempotency_key="timer:t1:2025-01-01T00:00:00Z",
-            timer_id="t1",
-        )
-        assert deduped is False
-        drained = supervisor.drain_pma_automation_wakeups()
-        assert drained == 1
-        assert started_lanes == ["pma:default"]
-        worker_started = store.list_wakeups(state_filter="worker_started")
-        assert [entry["wakeup_id"] for entry in worker_started] == [created.wakeup_id]
-    finally:
-        supervisor.shutdown()
-
-
-def test_drain_pma_automation_wakeups_retries_transient_queue_enqueue_failure(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    hub_root = tmp_path / "hub"
-    supervisor = _make_basic_supervisor(hub_root)
-    started_lanes = []
-    attempts = 0
-    sleeps: list[float] = []
-    original_ensure = hub_module.PmaQueue.ensure_active_item_sync
-
-    def flaky_ensure(self, lane_id, idempotency_key, payload):
-        nonlocal attempts
-        attempts += 1
-        if attempts == 1:
-            raise RuntimeError("stale terminal bridge connection")
-        return original_ensure(self, lane_id, idempotency_key, payload)
-
-    monkeypatch.setattr(hub_module.PmaQueue, "ensure_active_item_sync", flaky_ensure)
-    monkeypatch.setattr(hub_module.time, "sleep", sleeps.append)
-    supervisor.set_pma_lane_worker_starter(
-        lambda lane_id: started_lanes.append(lane_id)
-    )
-    try:
-        store = supervisor.ensure_pma_automation_store()
-        subscription = store.create_subscription(
-            {
-                "event_types": ["managed_thread_completed"],
-                "repo_id": "demo",
-                "idempotency_key": "sub-retry-queue-enqueue",
-            }
-        )
-        subscription_id = subscription["subscription"]["subscription_id"]
-        created, deduped = store.enqueue_wakeup(
-            source="lifecycle_subscription",
-            repo_id="demo",
-            run_id="r1",
-            thread_id="thread-1",
-            lane_id="pma:default",
-            from_state="running",
-            to_state="completed",
-            reason="managed_turn_completed",
-            timestamp="2026-01-01T00:00:00Z",
-            idempotency_key="managed-turn:exec-1:completed",
-            subscription_id=subscription_id,
-            event_type="managed_thread_completed",
-        )
-        assert deduped is False
-
-        drained = supervisor.drain_pma_automation_wakeups()
-
-        assert drained == 1
-        assert attempts == 2
-        assert sleeps == [0.25]
-        assert started_lanes == ["pma:default"]
-        assert store.list_pending_wakeups() == []
-        worker_started = store.list_wakeups(state_filter="worker_started")
-        assert [entry["wakeup_id"] for entry in worker_started] == [created.wakeup_id]
     finally:
         supervisor.shutdown()
 
@@ -3598,20 +3490,13 @@ def test_process_pma_automation_now_advances_unified_automation_only(
     hub_root = tmp_path / "hub"
     supervisor = _make_basic_supervisor(hub_root)
     try:
-        drained = []
         monkeypatch.setattr(supervisor, "process_pma_automation_timers", lambda **kw: 3)
-        monkeypatch.setattr(
-            supervisor,
-            "drain_pma_automation_wakeups",
-            lambda **kw: drained.append(1) or 5,
-        )
         result = supervisor.process_pma_automation_now()
         assert result == {
             "timers_processed": 3,
             "automation_processed": 0,
             "wakeups_dispatched": 0,
         }
-        assert drained == []
     finally:
         supervisor.shutdown()
 
@@ -3622,19 +3507,12 @@ def test_process_pma_automation_now_skips_timers_when_disabled(
     hub_root = tmp_path / "hub"
     supervisor = _make_basic_supervisor(hub_root)
     try:
-        drained = []
-        monkeypatch.setattr(
-            supervisor,
-            "drain_pma_automation_wakeups",
-            lambda **kw: drained.append(1) or 2,
-        )
         result = supervisor.process_pma_automation_now(include_timers=False)
         assert result == {
             "timers_processed": 0,
             "automation_processed": 0,
             "wakeups_dispatched": 0,
         }
-        assert drained == []
     finally:
         supervisor.shutdown()
 
@@ -3669,19 +3547,12 @@ def test_process_lifecycle_events_does_not_drain_legacy_wakeups(
     hub_root = tmp_path / "hub"
     supervisor = _make_basic_supervisor(hub_root)
     try:
-        drained = []
         monkeypatch.setattr(
             supervisor._lifecycle_orchestrator._lifecycle_event_processor,
             "process_events",
             lambda limit=100: None,
         )
-        monkeypatch.setattr(
-            supervisor,
-            "drain_pma_automation_wakeups",
-            lambda **kw: drained.append(1) or 0,
-        )
         supervisor.process_lifecycle_events()
-        assert drained == []
     finally:
         supervisor.shutdown()
 
@@ -3696,11 +3567,6 @@ def test_process_lifecycle_events_ignores_legacy_drain_path(
             supervisor._lifecycle_orchestrator._lifecycle_event_processor,
             "process_events",
             lambda limit=100: None,
-        )
-        monkeypatch.setattr(
-            supervisor,
-            "drain_pma_automation_wakeups",
-            lambda **kw: (_ for _ in ()).throw(RuntimeError("drain failed")),
         )
         supervisor.process_lifecycle_events()
     finally:
@@ -3746,32 +3612,6 @@ def test_process_scm_automation_polls_handles_exception(
         result = supervisor.process_scm_automation_polls()
         assert result["errors"] == 1
         assert result["discovery_errors"] == 1
-    finally:
-        supervisor.shutdown()
-
-
-def test_build_pma_wakeup_message_timer_source(tmp_path: Path) -> None:
-    hub_root = tmp_path / "hub"
-    supervisor = _make_basic_supervisor(hub_root)
-    try:
-        msg = supervisor._build_pma_wakeup_message(
-            {"source": "timer", "timer_id": "t1", "repo_id": "demo"}
-        )
-        assert "timer" in msg
-        assert "timer_id: t1" in msg
-        assert "repo_id: demo" in msg
-        assert "verify progress" in msg
-    finally:
-        supervisor.shutdown()
-
-
-def test_build_pma_wakeup_message_non_timer(tmp_path: Path) -> None:
-    hub_root = tmp_path / "hub"
-    supervisor = _make_basic_supervisor(hub_root)
-    try:
-        msg = supervisor._build_pma_wakeup_message({"source": "lifecycle"})
-        assert "suggested_next_action" in msg
-        assert "inspect the transition" in msg
     finally:
         supervisor.shutdown()
 

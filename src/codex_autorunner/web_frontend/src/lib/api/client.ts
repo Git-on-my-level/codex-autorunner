@@ -151,6 +151,87 @@ export type AutomationJobSummary = {
   raw: JsonRecord;
 };
 
+export type AutomationProductProjection = {
+  productApiVersion: number;
+  editable: {
+    canEnable: boolean;
+    canRename: boolean;
+    canEditSchedule: boolean;
+    canEditMessage: boolean;
+    canEditTicketBody: boolean;
+    canRunNow: boolean;
+    canEditRaw: boolean;
+    rawEditBlockedReason: string;
+    managedReason: string | null;
+    raw: JsonRecord;
+  };
+  managed: {
+    systemOwned: boolean;
+    managed: boolean;
+    reason: string | null;
+    legacy: boolean;
+    legacySource: string | null;
+    raw: JsonRecord;
+  };
+  scheduleEditor: {
+    kind: string;
+    editable: boolean;
+    fields: JsonRecord;
+    timezone: string | null;
+    nextFireAt: string | null;
+    lastFireAt: string | null;
+    state: string;
+    summary: string;
+    raw: JsonRecord;
+  };
+  triggerSummary: {
+    kind: string;
+    label: string;
+    eventTypes: string[];
+    filters: JsonRecord;
+    raw: JsonRecord;
+  };
+  message: {
+    source: string;
+    field: string | null;
+    preview: string;
+    template: boolean;
+    editable: boolean;
+    raw: JsonRecord;
+  };
+  messageSource: string;
+  messagePreview: string;
+  actionPreview: JsonRecord;
+  targetSummary: JsonRecord;
+  executorSummary: JsonRecord;
+  policySummary: JsonRecord;
+  diagnostics: JsonRecord[];
+  rawLinks: JsonRecord;
+};
+
+export type AutomationPresetDescriptor = {
+  id: 'security_scan_pr' | 'weekly_ticket_flow';
+  name: string;
+  kind: string;
+  description: string;
+  schedule: {
+    kind: 'daily' | 'weekly';
+    timezone: string;
+    hour: number;
+    minute: number;
+    weekday: number | null;
+    raw: JsonRecord;
+  };
+  targetPolicy: string;
+  targetShape: JsonRecord;
+  executorKind: string;
+  executorShape: JsonRecord;
+  policy: JsonRecord;
+  promptTemplate: string;
+  ticketBodyTemplate: string | null;
+  raw: JsonRecord;
+};
+
 export type AutomationSummary = {
   id: string;
   name: string;
@@ -167,11 +248,13 @@ export type AutomationSummary = {
   jobCount: number;
   createdAt: string | null;
   updatedAt: string | null;
+  product: AutomationProductProjection;
   raw: JsonRecord;
 };
 
 export type AutomationOverview = {
   automations: AutomationSummary[];
+  presets: AutomationPresetDescriptor[];
   summary: {
     total: number;
     active: number;
@@ -210,14 +293,6 @@ export type AutomationUpdateRequest = {
   model?: string | null;
   reasoning?: string | null;
   profile?: string | null;
-  trigger_kind?: string | null;
-  trigger?: JsonRecord;
-  filters?: JsonRecord;
-  target_policy?: string | null;
-  target?: JsonRecord;
-  executor_kind?: string | null;
-  executor?: JsonRecord;
-  policy?: JsonRecord;
   metadata?: JsonRecord;
 };
 
@@ -975,12 +1050,43 @@ function mapAutomationOverview(raw: JsonRecord): AutomationOverview {
   const summary = asRecord(raw.summary);
   return {
     automations: asArray(raw.automations).map(mapAutomationSummary),
+    presets: asArray(raw.presets).map(mapAutomationPresetDescriptor),
     summary: {
       total: numberValue(summary.total, 0),
       active: numberValue(summary.active, 0),
       paused: numberValue(summary.paused, 0),
       failedJobs: numberValue(summary.failed_jobs ?? summary.failedJobs, 0)
     }
+  };
+}
+
+function mapAutomationPresetDescriptor(raw: JsonRecord): AutomationPresetDescriptor {
+  const schedule = asRecord(raw.schedule);
+  const rawId = stringValue(raw.id, 'security_scan_pr');
+  const id = rawId === 'weekly_ticket_flow' ? 'weekly_ticket_flow' : 'security_scan_pr';
+  const rawKind = stringValue(schedule.kind, 'daily');
+  const scheduleKind = rawKind === 'weekly' ? 'weekly' : 'daily';
+  return {
+    id,
+    name: stringValue(raw.name, id),
+    kind: stringValue(raw.kind, id),
+    description: stringValue(raw.description, ''),
+    schedule: {
+      kind: scheduleKind,
+      timezone: stringValue(schedule.timezone, 'UTC'),
+      hour: numberValue(schedule.hour, 9),
+      minute: numberValue(schedule.minute, 0),
+      weekday: schedule.weekday === null || schedule.weekday === undefined ? null : numberValue(schedule.weekday, 0),
+      raw: schedule
+    },
+    targetPolicy: stringValue(raw.target_policy ?? raw.targetPolicy, ''),
+    targetShape: asRecord(raw.target_shape ?? raw.targetShape),
+    executorKind: stringValue(raw.executor_kind ?? raw.executorKind, ''),
+    executorShape: asRecord(raw.executor_shape ?? raw.executorShape),
+    policy: asRecord(raw.policy),
+    promptTemplate: stringValue(raw.prompt_template ?? raw.promptTemplate, ''),
+    ticketBodyTemplate: nullableString(raw.ticket_body_template ?? raw.ticketBodyTemplate),
+    raw
   };
 }
 
@@ -1003,7 +1109,73 @@ function mapAutomationSummary(raw: JsonRecord): AutomationSummary {
     jobCount: numberValue(raw.job_count ?? raw.jobCount, 0),
     createdAt: nullableString(raw.created_at ?? raw.createdAt),
     updatedAt: nullableString(raw.updated_at ?? raw.updatedAt),
+    product: mapAutomationProductProjection(raw),
     raw
+  };
+}
+
+function mapAutomationProductProjection(raw: JsonRecord): AutomationProductProjection {
+  const editable = asRecord(raw.editable);
+  const managed = asRecord(raw.managed ?? raw.managed_status ?? raw.managedStatus);
+  const scheduleEditor = asRecord(raw.schedule_editor ?? raw.scheduleEditor);
+  const triggerSummary = asRecord(raw.trigger_summary ?? raw.triggerSummary);
+  const message = asRecord(raw.message);
+  return {
+    productApiVersion: numberValue(raw.product_api_version ?? raw.productApiVersion, 0),
+    editable: {
+      canEnable: Boolean(editable.can_enable ?? editable.canEnable),
+      canRename: Boolean(editable.can_rename ?? editable.canRename),
+      canEditSchedule: Boolean(editable.can_edit_schedule ?? editable.canEditSchedule),
+      canEditMessage: Boolean(editable.can_edit_message ?? editable.canEditMessage),
+      canEditTicketBody: Boolean(editable.can_edit_ticket_body ?? editable.canEditTicketBody),
+      canRunNow: Boolean(editable.can_run_now ?? editable.canRunNow),
+      canEditRaw: Boolean(editable.can_edit_raw ?? editable.canEditRaw),
+      rawEditBlockedReason: stringValue(editable.raw_edit_blocked_reason ?? editable.rawEditBlockedReason, ''),
+      managedReason: nullableString(editable.managed_reason ?? editable.managedReason),
+      raw: editable
+    },
+    managed: {
+      systemOwned: Boolean(managed.system_owned ?? managed.systemOwned),
+      managed: Boolean(managed.managed),
+      reason: nullableString(managed.reason),
+      legacy: Boolean(managed.legacy),
+      legacySource: nullableString(managed.legacy_source ?? managed.legacySource),
+      raw: managed
+    },
+    scheduleEditor: {
+      kind: stringValue(scheduleEditor.kind, ''),
+      editable: Boolean(scheduleEditor.editable),
+      fields: asRecord(scheduleEditor.fields),
+      timezone: nullableString(scheduleEditor.timezone),
+      nextFireAt: nullableString(scheduleEditor.next_fire_at ?? scheduleEditor.nextFireAt),
+      lastFireAt: nullableString(scheduleEditor.last_fire_at ?? scheduleEditor.lastFireAt),
+      state: stringValue(scheduleEditor.state, ''),
+      summary: stringValue(scheduleEditor.summary, ''),
+      raw: scheduleEditor
+    },
+    triggerSummary: {
+      kind: stringValue(triggerSummary.kind, ''),
+      label: stringValue(triggerSummary.label, ''),
+      eventTypes: asArray(triggerSummary.event_types ?? triggerSummary.eventTypes).map((item) => String(item)),
+      filters: asRecord(triggerSummary.filters),
+      raw: triggerSummary
+    },
+    message: {
+      source: stringValue(message.source, ''),
+      field: nullableString(message.field),
+      preview: stringValue(message.preview, ''),
+      template: Boolean(message.template),
+      editable: Boolean(message.editable),
+      raw: message
+    },
+    messageSource: stringValue(raw.message_source ?? raw.messageSource, ''),
+    messagePreview: stringValue(raw.message_preview ?? raw.messagePreview, ''),
+    actionPreview: asRecord(raw.action_preview ?? raw.actionPreview),
+    targetSummary: asRecord(raw.target_summary ?? raw.targetSummary),
+    executorSummary: asRecord(raw.executor_summary ?? raw.executorSummary),
+    policySummary: asRecord(raw.policy_summary ?? raw.policySummary),
+    diagnostics: asArray(raw.diagnostics).map(asRecord),
+    rawLinks: asRecord(raw.raw_links ?? raw.rawLinks)
   };
 }
 

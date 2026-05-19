@@ -71,7 +71,7 @@ from ...services.pma.automation import (
     call_store_action_with_id,
     call_store_create_with_payload,
     call_store_list,
-    get_automation_store,
+    get_pma_automation_store,
     normalize_optional_text,
 )
 from ...services.pma.managed_thread_followup import (
@@ -246,8 +246,6 @@ def _create_unified_pma_subscription(
     store = AutomationStore(hub_root)
     idempotency_key = normalize_optional_text(payload.get("idempotency_key"))
     normalized_thread_id = normalize_optional_text(payload.get("thread_id"))
-    if normalized_thread_id is not None:
-        return PmaAutomationStore(hub_root).create_subscription(payload)
     if idempotency_key is not None:
         existing = _find_pma_rule_by_idempotency(
             store,
@@ -731,7 +729,6 @@ def _unified_subscription_rows(
     lane_id_norm = normalize_optional_text(lane_id)
     store = AutomationStore(context.hub_root)
     try:
-        store.backfill_legacy_pma_automation()
         rules = [
             rule
             for rule in store.list_rules(enabled=True)
@@ -819,7 +816,6 @@ def _unified_timer_rows(
     lane_id_norm = normalize_optional_text(lane_id)
     store = AutomationStore(context.hub_root)
     try:
-        store.backfill_legacy_pma_automation()
         rules = {
             rule.rule_id: rule
             for rule in store.list_rules(enabled=True)
@@ -985,7 +981,7 @@ def build_automation_routes(
         request: Request, payload: PmaAutomationSubscriptionCreateRequest
     ) -> dict[str, Any]:
         runtime_state = get_runtime_state()
-        store = await get_automation_store(request, runtime_state)
+        store = await get_pma_automation_store(request, runtime_state)
         try:
             normalized_payload = payload.normalized_payload()
             if not _subscription_request_has_explicit_routing(normalized_payload):
@@ -1024,7 +1020,7 @@ def build_automation_routes(
     ) -> dict[str, Any]:
         if limit <= 0:
             raise HTTPException(status_code=400, detail="limit must be greater than 0")
-        store = await get_automation_store(request, get_runtime_state())
+        store = await get_pma_automation_store(request, get_runtime_state())
         unified = _unified_pma_automation_read_model(
             request,
             purpose="pma_lifecycle_subscription",
@@ -1069,7 +1065,7 @@ def build_automation_routes(
         normalized_id = (subscription_id or "").strip()
         if not normalized_id:
             raise HTTPException(status_code=400, detail="subscription_id is required")
-        store = await get_automation_store(request, get_runtime_state())
+        store = await get_pma_automation_store(request, get_runtime_state())
         if _is_builtin_pma_store(store):
             unified_deleted = _cancel_unified_pma_subscription(request, normalized_id)
             return {
@@ -1102,7 +1098,7 @@ def build_automation_routes(
     async def create_automation_timer(
         request: Request, payload: PmaAutomationTimerCreateRequest
     ) -> dict[str, Any]:
-        store = await get_automation_store(request, get_runtime_state())
+        store = await get_pma_automation_store(request, get_runtime_state())
         try:
             normalized_payload = payload.normalized_payload()
             if _is_builtin_pma_store(store):
@@ -1133,7 +1129,7 @@ def build_automation_routes(
     ) -> dict[str, Any]:
         if limit <= 0:
             raise HTTPException(status_code=400, detail="limit must be greater than 0")
-        store = await get_automation_store(request, get_runtime_state())
+        store = await get_pma_automation_store(request, get_runtime_state())
         unified = _unified_pma_automation_read_model(
             request,
             purpose="pma_timer",
@@ -1184,7 +1180,7 @@ def build_automation_routes(
         normalized_id = (timer_id or "").strip()
         if not normalized_id:
             raise HTTPException(status_code=400, detail="timer_id is required")
-        store = await get_automation_store(request, get_runtime_state())
+        store = await get_pma_automation_store(request, get_runtime_state())
         try:
             normalized_payload = payload.normalized_payload() if payload else {}
             if _is_builtin_pma_store(store):
@@ -1220,7 +1216,7 @@ def build_automation_routes(
         normalized_id = (timer_id or "").strip()
         if not normalized_id:
             raise HTTPException(status_code=400, detail="timer_id is required")
-        store = await get_automation_store(request, get_runtime_state())
+        store = await get_pma_automation_store(request, get_runtime_state())
         try:
             if _is_builtin_pma_store(store):
                 unified_deleted = _cancel_unified_pma_timer(request, normalized_id)
