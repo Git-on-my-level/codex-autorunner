@@ -289,6 +289,10 @@ async def await_runtime_thread_outcome(
                 wait_tasks,
                 return_when=asyncio.FIRST_COMPLETED,
             )
+            if collector_task in done:
+                result = await collector_task
+                state.note_transport_result(result)
+                return state.build_outcome(execution_error_message)
             if (
                 timeout_task is not None
                 and timeout_deadline is not None
@@ -300,10 +304,6 @@ async def await_runtime_thread_outcome(
                     backend_turn_id,
                 )
                 return state.build_timeout_outcome(RUNTIME_THREAD_TIMEOUT_ERROR)
-            if collector_task in done:
-                result = await collector_task
-                state.note_transport_result(result)
-                return state.build_outcome(execution_error_message)
             if terminal_wait_task in done:
                 return state.build_outcome(execution_error_message)
             if interrupt_task is not None and interrupt_task in done:
