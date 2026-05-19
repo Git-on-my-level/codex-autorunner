@@ -84,9 +84,9 @@ export type PmaThreadQueue = {
   queuedTurns: PmaQueuedTurn[];
 };
 
-export type PmaBulkArchiveResult = {
+export type PmaBulkRetireResult = {
   threads: PmaChatSummary[];
-  archivedCount: number;
+  retiredCount: number;
   requestedCount: number;
   errorCount: number;
   errors: JsonRecord[];
@@ -96,14 +96,14 @@ export type WorktreeRetireRequest = {
   worktreeRepoId: string;
   force?: boolean;
   forceAttestation?: string | null;
-  forceArchive?: boolean;
-  archiveNote?: string | null;
+  forceRetire?: boolean;
+  retireNote?: string | null;
 };
 
-export type RepoStateArchiveRequest = {
+export type RepoStateRetireRequest = {
   kind: 'repo' | 'worktree';
   id: string;
-  archiveNote?: string | null;
+  retireNote?: string | null;
 };
 
 export type CreateRepoRequest = {
@@ -529,35 +529,35 @@ export class WebApiClient {
         }),
         (payload) => mapPmaChatSummary(asRecord(payload.thread))
       ),
-    archiveThread: async (chatId: string): Promise<ApiResult<PmaChatSummary>> =>
+    retireThread: async (chatId: string): Promise<ApiResult<PmaChatSummary>> =>
       mapResult(
-        await this.requestJson<JsonRecord>(`/hub/pma/threads/${encodeURIComponent(chatId)}/archive`, {
+        await this.requestJson<JsonRecord>(`/hub/pma/threads/${encodeURIComponent(chatId)}/retire`, {
           method: 'POST'
         }),
         (payload) => mapPmaChatSummary(asRecord(payload.thread))
       ),
-    archiveThreads: async (chatIds: string[]): Promise<ApiResult<PmaBulkArchiveResult>> =>
+    retireThreads: async (chatIds: string[]): Promise<ApiResult<PmaBulkRetireResult>> =>
       mapResult(
-        await this.requestJson<JsonRecord>('/hub/pma/threads/archive', {
+        await this.requestJson<JsonRecord>('/hub/pma/threads/retire', {
           method: 'POST',
           body: { thread_ids: chatIds }
         }),
         (payload) => ({
           threads: asArray(payload.threads).map(mapPmaChatSummary),
-          archivedCount: numberValue(payload.archived_count ?? payload.archivedCount, 0),
+          retiredCount: numberValue(payload.retired_count ?? payload.retiredCount, 0),
           requestedCount: numberValue(payload.requested_count ?? payload.requestedCount, chatIds.length),
           errorCount: numberValue(payload.error_count ?? payload.errorCount, 0),
           errors: asArray(payload.errors)
         })
       ),
-    archiveActiveThreads: async (): Promise<ApiResult<PmaBulkArchiveResult>> =>
+    retireActiveThreads: async (): Promise<ApiResult<PmaBulkRetireResult>> =>
       mapResult(
-        await this.requestJson<JsonRecord>('/hub/pma/threads/archive-active', {
+        await this.requestJson<JsonRecord>('/hub/pma/threads/retire-active', {
           method: 'POST'
         }),
         (payload) => ({
           threads: asArray(payload.threads).map(mapPmaChatSummary),
-          archivedCount: numberValue(payload.archived_count ?? payload.archivedCount, 0),
+          retiredCount: numberValue(payload.retired_count ?? payload.retiredCount, 0),
           requestedCount: numberValue(payload.requested_count ?? payload.requestedCount, 0),
           errorCount: numberValue(payload.error_count ?? payload.errorCount, 0),
           errors: asArray(payload.errors)
@@ -725,18 +725,18 @@ export class WebApiClient {
           worktreeRepoId: request.worktreeRepoId,
           force: request.force ?? false,
           forceAttestation: request.forceAttestation ?? null,
-          forceArchive: request.forceArchive ?? false,
-          archiveNote: request.archiveNote ?? null
+          forceRetire: request.forceRetire ?? false,
+          retireNote: request.retireNote ?? null
         }
       }),
-    archiveState: async (request: RepoStateArchiveRequest): Promise<ApiResult<JsonRecord>> => {
-      const path = request.kind === 'repo' ? '/hub/repos/archive-state' : '/hub/worktrees/archive-state';
+    retireState: async (request: RepoStateRetireRequest): Promise<ApiResult<JsonRecord>> => {
+      const path = request.kind === 'repo' ? '/hub/repos/retire-state' : '/hub/worktrees/retire-state';
       const idKey = request.kind === 'repo' ? 'repoId' : 'worktreeRepoId';
       return this.requestJson<JsonRecord>(path, {
         method: 'POST',
         body: {
           [idKey]: request.id,
-          archiveNote: request.archiveNote ?? null
+          retireNote: request.retireNote ?? null
         }
       });
     },

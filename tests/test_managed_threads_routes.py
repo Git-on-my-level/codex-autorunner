@@ -1844,8 +1844,8 @@ def test_resume_managed_thread_starts_fresh_backend_on_next_send(hub_env) -> Non
         assert create_resp.status_code == 200
         managed_thread_id = create_resp.json()["thread"]["managed_thread_id"]
 
-        archive_resp = client.post(f"/hub/pma/threads/{managed_thread_id}/archive")
-        assert archive_resp.status_code == 200
+        retire_resp = client.post(f"/hub/pma/threads/{managed_thread_id}/retire")
+        assert retire_resp.status_code == 200
 
         resume_resp = client.post(
             f"/hub/pma/threads/{managed_thread_id}/resume", json={}
@@ -1894,8 +1894,8 @@ def test_resume_managed_thread_without_backend_binding_reactivates_thread(
         assert create_resp.status_code == 200
         managed_thread_id = create_resp.json()["thread"]["managed_thread_id"]
 
-        archive_resp = client.post(f"/hub/pma/threads/{managed_thread_id}/archive")
-        assert archive_resp.status_code == 200
+        retire_resp = client.post(f"/hub/pma/threads/{managed_thread_id}/retire")
+        assert retire_resp.status_code == 200
 
         resume_resp = client.post(
             f"/hub/pma/threads/{managed_thread_id}/resume",
@@ -1909,7 +1909,7 @@ def test_resume_managed_thread_without_backend_binding_reactivates_thread(
     assert resumed_thread["backend_thread_id"] is None
 
 
-def test_archive_managed_threads_bulk_route_archives_multiple_threads(
+def test_retire_managed_threads_bulk_route_retires_multiple_threads(
     hub_env,
 ) -> None:
     app = create_hub_app(hub_env.hub_root)
@@ -1937,17 +1937,17 @@ def test_archive_managed_threads_bulk_route_archives_multiple_threads(
         first_id = first_resp.json()["thread"]["managed_thread_id"]
         second_id = second_resp.json()["thread"]["managed_thread_id"]
 
-        archive_resp = client.post(
-            "/hub/pma/threads/archive",
+        retire_resp = client.post(
+            "/hub/pma/threads/retire",
             json={
                 "thread_ids": [first_id, second_id, "missing-thread", first_id],
             },
         )
 
-    assert archive_resp.status_code == 200
-    payload = archive_resp.json()
+    assert retire_resp.status_code == 200
+    payload = retire_resp.json()
     assert payload["requested_count"] == 3
-    assert payload["archived_count"] == 2
+    assert payload["retired_count"] == 2
     assert payload["error_count"] == 1
     assert [thread["managed_thread_id"] for thread in payload["threads"]] == [
         first_id,
@@ -1962,7 +1962,7 @@ def test_archive_managed_threads_bulk_route_archives_multiple_threads(
     assert store.get_thread(second_id)["lifecycle_status"] == "archived"
 
 
-def test_archive_active_managed_threads_route_archives_beyond_list_window(
+def test_retire_active_managed_threads_route_retires_beyond_list_window(
     hub_env,
 ) -> None:
     app = create_hub_app(hub_env.hub_root)
@@ -1985,12 +1985,12 @@ def test_archive_active_managed_threads_route_archives_beyond_list_window(
     store.archive_thread(archived)
 
     with TestClient(app) as client:
-        archive_resp = client.post("/hub/pma/threads/archive-active")
+        retire_resp = client.post("/hub/pma/threads/retire-active")
 
-    assert archive_resp.status_code == 200
-    payload = archive_resp.json()
+    assert retire_resp.status_code == 200
+    payload = retire_resp.json()
     assert payload["requested_count"] == 205
-    assert payload["archived_count"] == 205
+    assert payload["retired_count"] == 205
     assert payload["error_count"] == 0
 
     refreshed = ManagedThreadStore(hub_env.hub_root)
@@ -2001,7 +2001,7 @@ def test_archive_active_managed_threads_route_archives_beyond_list_window(
     assert refreshed.get_thread(archived)["lifecycle_status"] == "archived"
 
 
-def test_archive_active_managed_threads_route_archives_notification_chat_rows(
+def test_retire_active_managed_threads_route_retires_notification_chat_rows(
     hub_env,
 ) -> None:
     notification_store = PmaNotificationStore(hub_env.hub_root)
@@ -2023,15 +2023,15 @@ def test_archive_active_managed_threads_route_archives_notification_chat_rows(
 
     app = create_hub_app(hub_env.hub_root)
     with TestClient(app) as client:
-        archive_resp = client.post("/hub/pma/threads/archive-active")
+        retire_resp = client.post("/hub/pma/threads/retire-active")
 
-    assert archive_resp.status_code == 200
-    payload = archive_resp.json()
+    assert retire_resp.status_code == 200
+    payload = retire_resp.json()
     assert payload["requested_count"] == 3
-    assert payload["archived_count"] == 3
+    assert payload["retired_count"] == 3
     assert payload["error_count"] == 0
     assert payload["threads"] == []
-    assert [surface["surface_key"] for surface in payload["archived_surfaces"]] == [
+    assert [surface["surface_key"] for surface in payload["retired_surfaces"]] == [
         "notification:notif-0",
         "notification:notif-1",
         "notification:notif-2",
@@ -2334,7 +2334,7 @@ def test_managed_thread_crud_routes_use_orchestration_service(
             return self.thread
 
         def archive_thread_target(self, thread_target_id):
-            self.calls.append(("archive", {"thread_target_id": thread_target_id}))
+            self.calls.append(("retire", {"thread_target_id": thread_target_id}))
             payload = self.thread.to_dict()
             payload.update(
                 {
@@ -2375,14 +2375,14 @@ def test_managed_thread_crud_routes_use_orchestration_service(
         )
         get_resp = client.get("/hub/pma/threads/thread-orch-1")
         resume_resp = client.post("/hub/pma/threads/thread-orch-1/resume", json={})
-        archive_resp = client.post("/hub/pma/threads/thread-orch-1/archive")
+        retire_resp = client.post("/hub/pma/threads/thread-orch-1/retire")
 
     assert create_resp.status_code == 200
     assert "notification" not in create_resp.json()
     assert list_resp.status_code == 200
     assert get_resp.status_code == 200
     assert resume_resp.status_code == 200
-    assert archive_resp.status_code == 200
+    assert retire_resp.status_code == 200
 
     created = create_resp.json()["thread"]
     assert created["managed_thread_id"] == "thread-orch-1"
@@ -2390,12 +2390,12 @@ def test_managed_thread_crud_routes_use_orchestration_service(
     assert list_resp.json()["threads"][0]["managed_thread_id"] == "thread-orch-1"
     assert get_resp.json()["thread"]["managed_thread_id"] == "thread-orch-1"
     assert resume_resp.json()["thread"]["backend_thread_id"] is None
-    assert archive_resp.json()["thread"]["lifecycle_status"] == "archived"
-    assert archive_resp.json()["thread"]["status"] == "archived"
+    assert retire_resp.json()["thread"]["lifecycle_status"] == "archived"
+    assert retire_resp.json()["thread"]["status"] == "archived"
     assert created["operator_status"] == "idle"
     assert created["is_reusable"] is True
-    assert archive_resp.json()["thread"]["operator_status"] == "archived"
-    assert archive_resp.json()["thread"]["is_reusable"] is False
+    assert retire_resp.json()["thread"]["operator_status"] == "archived"
+    assert retire_resp.json()["thread"]["is_reusable"] is False
 
     assert fake_service.calls == [
         (
@@ -2458,7 +2458,7 @@ def test_managed_thread_crud_routes_use_orchestration_service(
         ("get", {"thread_target_id": "thread-orch-1"}),
         ("resume", {"thread_target_id": "thread-orch-1"}),
         ("get", {"thread_target_id": "thread-orch-1"}),
-        ("archive", {"thread_target_id": "thread-orch-1"}),
+        ("retire", {"thread_target_id": "thread-orch-1"}),
     ]
 
 

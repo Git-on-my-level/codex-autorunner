@@ -843,7 +843,7 @@ a.scope-chip-label:hover {
   color: var(--color-accent-hover);
 }
 
-.chat-filter-bar .archive-all-button {
+.chat-filter-bar .retire-all-button {
   border-color: var(--color-border);
   background: var(--color-surface);
   color: var(--color-ink-muted);
@@ -1428,8 +1428,8 @@ a.scope-chip-label:hover {
 }
 
 /* Wide viewports: two-column grid; title/scope/subtitle in column 1. Tools stay
-   in a single grid cell so Archive + stream status stack with a stable right
-   edge (separate grid items + display:contents could shrink the Archive row
+   in a single grid cell so Retire + stream status stack with a stable right
+   edge (separate grid items + display:contents could shrink the Retire row
    when “Connecting…” appears). */
 @media (min-width: 761px) {
   .chat-header {
@@ -6772,7 +6772,7 @@ textarea:disabled {
   background: color-mix(in srgb, var(--color-warning) 12%, var(--color-surface-muted));
 }
 
-.chat-scope-kind-tag.archived {
+.chat-scope-kind-tag.retired {
   color: var(--color-ink-faint);
   border-color: color-mix(in srgb, var(--color-ink-faint) 34%, var(--color-border));
   background: color-mix(in srgb, var(--color-ink-faint) 10%, transparent);

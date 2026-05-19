@@ -578,5 +578,5 @@ def test_pma_context_compact_snapshots_and_rewrites_active_context(tmp_path: Pat
     assert "## Current priorities" in compacted
     assert "## Next steps" in compacted
     assert "## Open questions" in compacted
-    assert "## Archived context summary" in compacted
+    assert "## Retired context summary" in compacted
     assert len(compacted.splitlines()) <= 24

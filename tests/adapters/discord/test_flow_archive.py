@@ -648,9 +648,9 @@ async def test_car_archive_uses_shared_fresh_start_helper(
     )
 
     try:
-        await service._handle_car_archive(
-            "interaction-archive-1",
-            "token-archive-1",
+        await service._handle_car_retire(
+            "interaction-retire-1",
+            "token-retire-1",
             channel_id="channel-1",
         )
     finally:
@@ -665,7 +665,7 @@ async def test_car_archive_uses_shared_fresh_start_helper(
     assert len(rest.followup_messages) == 1
     content = rest.followup_messages[0]["payload"]["content"]
     assert "workspace car state was already clean" in content.lower()
-    assert "archived 2 managed threads" in content.lower()
+    assert "retired 2 managed threads" in content.lower()
 
 
 @pytest.mark.anyio

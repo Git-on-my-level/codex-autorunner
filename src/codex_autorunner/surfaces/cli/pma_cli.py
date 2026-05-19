@@ -740,11 +740,11 @@ def pma_hygiene(
     apply_result: Optional[dict[str, Any]] = None
     supervisor = None
 
-    def _retire_worktree(worktree_repo_id: str, archive: bool) -> dict[str, Any]:
+    def _retire_worktree(worktree_repo_id: str, retire: bool) -> dict[str, Any]:
         nonlocal supervisor
         if supervisor is None:
             supervisor = build_hub_supervisor(load_hub_config(hub_root))
-        if archive:
+        if retire:
             return supervisor.retire_worktree(
                 worktree_repo_id=worktree_repo_id,
             )
@@ -755,7 +755,7 @@ def pma_hygiene(
                 "phrase": FORCE_ATTESTATION_REQUIRED_PHRASE,
                 "user_request": (
                     "Apply PMA hygiene automated purge for a candidate that selected "
-                    "no retire snapshot (archive_requested=false)."
+                    "no retire snapshot (retire_requested=false)."
                 ),
                 "target_scope": f"hub.pma.hygiene.purge_worktree:{worktree_repo_id}",
             },

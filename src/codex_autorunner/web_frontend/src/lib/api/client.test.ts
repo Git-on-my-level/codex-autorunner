@@ -337,16 +337,16 @@ describe('API client error handling', () => {
   it('calls managed-thread slash command action endpoints', async () => {
     const fetcher = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
-      if (url.endsWith('/archive-active')) {
+      if (url.endsWith('/retire-active')) {
         return Response.json({
           threads: [{ thread_target_id: 'thread-1', display_name: 'PMA room' }],
-          archived_count: 1,
+          retired_count: 1,
           requested_count: 1,
           error_count: 0,
           errors: []
         });
       }
-      if (url.endsWith('/resume') || url.endsWith('/compact') || url.endsWith('/archive')) {
+      if (url.endsWith('/resume') || url.endsWith('/compact') || url.endsWith('/retire')) {
         return Response.json({ thread: { thread_target_id: 'thread-1', display_name: 'PMA room' } });
       }
       return Response.json({ status: 'ok' });
@@ -356,13 +356,13 @@ describe('API client error handling', () => {
     await client.pma.interruptThread('thread-1');
     await client.pma.resumeThread('thread-1');
     await client.pma.compactThread('thread-1', 'summary');
-    await client.pma.archiveThread('thread-1');
-    const archiveAll = await client.pma.archiveActiveThreads();
+    await client.pma.retireThread('thread-1');
+    const retireAll = await client.pma.retireActiveThreads();
     await client.pma.clearQueue('thread-1');
 
-    expect(archiveAll.ok && archiveAll.data.archivedCount).toBe(1);
+    expect(retireAll.ok && retireAll.data.retiredCount).toBe(1);
     expect(fetcher).toHaveBeenCalledWith('/hub/pma/threads/thread-1/interrupt', expect.objectContaining({ method: 'POST' }));
-    expect(fetcher).toHaveBeenCalledWith('/hub/pma/threads/archive-active', expect.objectContaining({ method: 'POST' }));
+    expect(fetcher).toHaveBeenCalledWith('/hub/pma/threads/retire-active', expect.objectContaining({ method: 'POST' }));
     expect(fetcher).toHaveBeenCalledWith(
       '/hub/pma/threads/thread-1/compact',
       expect.objectContaining({ body: JSON.stringify({ summary: 'summary', reset_backend: true }) })

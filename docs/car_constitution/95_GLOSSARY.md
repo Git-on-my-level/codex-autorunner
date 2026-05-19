@@ -14,6 +14,16 @@
 - **Workspace**: legacy term for isolated filesystem scope; the `.codex-autorunner/workspace/` directory was replaced by contextspace (see migration doc). Use "contextspace" for new work.
 - **YOLO mode**: default permissive execution posture; safety is opt-in.
 
+## Lifecycle Terms
+
+- **Retire**: operator-facing lifecycle action that closes out live CAR state after preserving reviewable evidence. Use this word in commands, UI labels, runbooks, and help text when the user is intentionally finishing a thread, flow run, worktree, or local CAR state.
+- **Retirement snapshot**: retained evidence produced by a retire action. These snapshots are stored under `.codex-autorunner/archive/`; the storage path remains named `archive` even when the user-facing action is retire.
+- **Archive**: storage/retention mechanism, not the operator action. Use this word for literal archive directories, archive readers, artifact retention internals, dispatch/reply history, app-server protocol methods that are externally named `thread/archive`, and config keys that describe archive retention.
+- **Delete**: remove without preserving reviewable CAR artifacts. Delete commands must make the loss of preserved evidence explicit.
+- **Purge**: cleanup engine wording for reclaiming stale state selected by policy. Prefer retire/delete in user-facing command names unless the operation is specifically policy-driven pruning.
+- **Cleanup**: umbrella maintenance operation that may retire, delete, prune, or reap different state families. Cleanup docs and output should name the concrete action when possible.
+- **Reset**: clear volatile or local state so work can start fresh. Reset is not a synonym for retire; use retire when preservation and closeout are part of the operation.
+
 ## Agent-Human Communication
 
 - **Dispatch**: Agent-to-human communication written to the outbox. Contains mode, title, body, and optional attachments. The umbrella term for all agent→human messages.

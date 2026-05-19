@@ -63,7 +63,7 @@ First-turn routine:
       - `car pma thread send --id <managed_thread_id> --message "..." --watch --path <hub_root>` only when you intentionally want synchronous foreground babysitting
       - `car pma thread status --id <managed_thread_id> --path <hub_root>`
       - `car pma thread compact --id <id> --summary "..." --path <hub_root>`
-      - `car pma thread archive --id <id> --path <hub_root>`
+      - `car pma thread retire --id <id> --path <hub_root>`
     - Do not write ticket files as scaffolding for managed-thread work. If the task fits in one clear prompt, stay in a managed thread.
     - Use tickets/ticket_flow when the work needs ordered multi-step structure: cross-repo changes, 3+ planned tickets, explicit acceptance-criteria tracking, or pause/resume/review handoffs.
 4) BRANCH C - PMA File Inbox (fresh uploads vs stale leftovers):
@@ -106,7 +106,7 @@ First-turn routine:
 
 Web UI map (user perspective):
 - Hub root: `/` (repos list + global notifications).
-- Repo view: `/repos/<repo_id>/` tabs: Tickets | Inbox | Contextspace | Terminal | Analytics | Archive.
+- Repo view: `/repos/<repo_id>/` tabs: Tickets | Inbox | Contextspace | Terminal | Analytics | Retirement.
   - Tickets: edit queue; Inbox: paused run dispatches; Contextspace: active_context/spec/decisions.
 
 Ticket planning constraints (state machine):

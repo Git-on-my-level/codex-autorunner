@@ -1,8 +1,8 @@
 import type { ApiError, JsonRecord } from '$lib/api/client';
 import type { RepoWorktreeDetailSnapshot } from '$lib/api/readModelContracts';
 import type {
-  ArchiveStateTarget,
   ActionNotice,
+  RetireStateTarget,
   RetireWorktreeTarget
 } from '$lib/actions/repoWorktreeActions';
 import {
@@ -52,7 +52,7 @@ export type RepoWorktreeDetailSessionDependencies = {
   syncRepoMain: (repoId: string) => Promise<{ ok: true } | { ok: false; error: ApiError }>;
   invalidateTags?: typeof invalidateReadModelTags;
   retireWorktree: (target: RetireWorktreeTarget) => Promise<ActionNotice | null>;
-  archiveState: (target: ArchiveStateTarget) => Promise<ActionNotice | null>;
+  retireState: (target: RetireStateTarget) => Promise<ActionNotice | null>;
   currentPath?: () => string;
   redirect?: (path: string) => Promise<void> | void;
 };
@@ -157,8 +157,8 @@ export class RepoWorktreeDetailSession {
     if (result.tone === 'success') await this.load();
   }
 
-  async archiveState(target: ArchiveStateTarget): Promise<void> {
-    const result = await this.dependencies.archiveState(target);
+  async retireState(target: RetireStateTarget): Promise<void> {
+    const result = await this.dependencies.retireState(target);
     if (!result) return;
     this.state = { ...this.state, notice: result };
     if (result.tone === 'success') await this.load();

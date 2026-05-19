@@ -338,7 +338,7 @@ def _build_thread_candidates(
         path = Path(str(state["path"]))
         group = "safe"
         reason = "Dormant worktree has only stale managed threads and is safe to purge."
-        archive_requested = False
+        retire_requested = False
         if worktree_repo_id in worktree_non_stale_active:
             group = "protected"
             reason = (
@@ -360,7 +360,7 @@ def _build_thread_candidates(
             group = "protected"
             reason = "Managed thread still has an active binding or work in flight."
         elif path.exists() and git_available(path):
-            archive_requested = cleanup_require_archive
+            retire_requested = cleanup_require_archive
             try:
                 if not git_is_clean(path):
                     group = "needs-confirmation"
@@ -395,11 +395,11 @@ def _build_thread_candidates(
                     "has_active_thread_binding": state.get("has_active_thread_binding"),
                     "has_busy_work": state.get("has_busy_work"),
                     "chat_bound": state.get("chat_bound"),
-                    "archive_requested": archive_requested,
+                    "retire_requested": retire_requested,
                 },
                 target={
                     "worktree_repo_id": worktree_repo_id,
-                    "archive_requested": archive_requested,
+                    "retire_requested": retire_requested,
                 },
             )
         )
@@ -818,7 +818,7 @@ def apply_pma_hygiene_report(
                     raise RuntimeError("Worktree retire callback not configured")
                 cleanup_result = retire_worktree(
                     str(target.get("worktree_repo_id") or ""),
-                    bool(target.get("archive_requested")),
+                    bool(target.get("retire_requested")),
                 )
                 if isinstance(cleanup_result, dict):
                     status = str(cleanup_result.get("status") or "").strip().lower()

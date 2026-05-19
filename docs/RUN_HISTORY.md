@@ -19,14 +19,14 @@ Web Hub chat visibility is sourced from hub orchestration records:
 and chat-surface events. A ticket-flow turn is visible only when orchestration
 contains a repairable `flow_run_id + ticket_id -> managed_thread_id` link.
 
-### Archived Run Artifacts Are Not Live History
+### Retired Run Artifacts Are Not Live History
 
-Archived run artifacts under `.codex-autorunner/archive/runs/**` are
+Retirement snapshots under `.codex-autorunner/archive/runs/**` are
 **reviewable retained output**, not live source of truth. They exist for
-operator review and audit after a run completes. Do not query archive
+operator review and audit after a run completes. Do not query archive storage
 directories to discover which runs exist; always use FlowStore.
 
-Run archives are pruned by age/count/byte retention policies (see
+Run retirement snapshots are pruned by age/count/byte retention policies (see
 [STATE_ROOTS.md](STATE_ROOTS.md) and [state-cleanup.md](ops/state-cleanup.md)).
 
 ## What Runs Exist

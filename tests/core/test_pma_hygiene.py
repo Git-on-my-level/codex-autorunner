@@ -577,7 +577,7 @@ def test_build_pma_hygiene_report_marks_clean_stale_worktree_safe(
         f"threads:worktree:{worktree.id}"
     }
     assert safe_items[0]["action"] == "purge_worktree"
-    assert safe_items[0]["target"]["archive_requested"] is True
+    assert safe_items[0]["target"]["retire_requested"] is True
 
 
 def test_build_pma_hygiene_report_respects_cleanup_require_archive_false(
@@ -598,7 +598,7 @@ def test_build_pma_hygiene_report_respects_cleanup_require_archive_false(
     _init_git_repo(base.path)
     worktree = supervisor.create_worktree(
         base_repo_id="base",
-        branch="feature/no-archive-policy",
+        branch="feature/no-retire-policy",
         start_point="HEAD",
     )
     ManagedThreadStore(hub_root).create_thread(
@@ -619,7 +619,7 @@ def test_build_pma_hygiene_report_respects_cleanup_require_archive_false(
     assert {item["candidate_id"] for item in safe_items} == {
         f"threads:worktree:{worktree.id}"
     }
-    assert safe_items[0]["target"]["archive_requested"] is False
+    assert safe_items[0]["target"]["retire_requested"] is False
 
 
 def test_build_pma_hygiene_report_includes_chat_bound_stale_worktree_as_protected(
@@ -680,7 +680,7 @@ def test_apply_pma_hygiene_report_purge_worktree_fails_on_error_status_payload(
                     "reason": "test",
                     "target": {
                         "worktree_repo_id": "wt-1",
-                        "archive_requested": False,
+                        "retire_requested": False,
                     },
                 }
             ],

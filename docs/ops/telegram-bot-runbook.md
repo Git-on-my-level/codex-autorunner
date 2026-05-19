@@ -39,7 +39,7 @@ through CAR's orchestration-managed chat runtime.
 - Send `/ids` and confirm the chat/user/thread ids plus the generated collaboration snippet match the intended topic.
 - Send a normal message and verify a single agent response.
 - Confirm the turn is attached to the same durable thread on repeated messages
-  unless `/new`, `/resume`, reset, or archive actions intentionally replace it.
+  unless `/new`, `/resume`, reset, or retire actions intentionally replace it.
 - Send an image with an optional caption and confirm a response (image is stored under the bound workspace).
 - Send a voice note and confirm it transcribes (requires Whisper/voice config).
 
