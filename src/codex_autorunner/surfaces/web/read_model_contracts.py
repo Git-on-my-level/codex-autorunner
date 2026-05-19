@@ -22,6 +22,7 @@ __all__ = [
     "ChatDetailSnapshot",
     "ChatIndexCounters",
     "ChatIndexGroup",
+    "ChatIndexGroupEntry",
     "ChatIndexPatch",
     "ChatIndexPatchEvent",
     "ChatIndexRow",
@@ -49,6 +50,7 @@ __all__ = [
     "TicketDetailPatch",
     "TicketDetailPatchEvent",
     "TicketDetailSnapshot",
+    "TicketRunGroup",
     "TicketProjection",
     "TicketQueueSibling",
     "WorktreeTopology",
@@ -165,6 +167,12 @@ class ChatIndexRow(ReadModelContract):
     chat_kind: Optional[Literal["pma", "coding_agent"]] = None
     model: Optional[str] = None
     group_id: Optional[str] = None
+    flow_type: Optional[Literal["ticket_flow"]] = None
+    ticket_path: Optional[str] = None
+    ticket_done: Optional[bool] = None
+    ticket_status: Optional[
+        Literal["done", "running", "waiting", "failed", "unknown"]
+    ] = None
     debug: Optional[dict[str, Any]] = Field(
         default=None,
         description=(
@@ -176,7 +184,7 @@ class ChatIndexRow(ReadModelContract):
 
 class ChatIndexGroup(ReadModelContract):
     group_id: str
-    kind: Literal["ticket_run", "surface", "repo", "worktree"]
+    kind: Literal["surface", "repo", "worktree"]
     label: str
     child_count: int = Field(ge=0)
     waiting_count: int = Field(default=0, ge=0)
@@ -197,6 +205,39 @@ class ChatIndexGroup(ReadModelContract):
     expanded_child_window: Optional[PageWindow] = None
 
 
+class TicketRunGroup(ReadModelContract):
+    kind: Literal["ticket_run_group"] = "ticket_run_group"
+    group_id: str
+    run_id: str
+    scope_kind: Literal["repo", "worktree"]
+    scope_id: str
+    label: str
+    status: Literal["running", "waiting", "failed", "done", "idle"]
+    total_count: int = Field(ge=0)
+    done_count: int = Field(ge=0)
+    running_count: int = Field(ge=0)
+    waiting_count: int = Field(ge=0)
+    failed_count: int = Field(ge=0)
+    unread_count: int = Field(ge=0)
+    last_activity_at: Optional[datetime] = None
+    last_visible_message_at: Optional[datetime] = None
+    last_lifecycle_update_at: Optional[datetime] = None
+    last_internal_update_at: Optional[datetime] = None
+    last_sort_activity_at: Optional[datetime] = None
+    debug: Optional[dict[str, Any]] = Field(
+        default=None,
+        description=(
+            "Non-authoritative diagnostic hints explaining group activity clock "
+            "resolution for support/debug UIs."
+        ),
+    )
+    updated_at: Optional[datetime] = None
+    expanded_child_window: Optional[PageWindow] = None
+
+
+ChatIndexGroupEntry = ChatIndexGroup | TicketRunGroup
+
+
 class ChatIndexCounters(ReadModelContract):
     total: int = Field(ge=0)
     waiting: int = Field(ge=0)
@@ -215,14 +256,14 @@ class ChatIndexSnapshot(ReadModelContract):
     ]
     query: Optional[str] = None
     rows: list[ChatIndexRow]
-    groups: list[ChatIndexGroup] = Field(default_factory=list)
+    groups: list[ChatIndexGroupEntry] = Field(default_factory=list)
     counters: ChatIndexCounters
     repair: RepairPolicy
 
 
 class ChatIndexPatch(ReadModelContract):
     rows: list[ChatIndexRow] = Field(default_factory=list)
-    groups: list[ChatIndexGroup] = Field(default_factory=list)
+    groups: list[ChatIndexGroupEntry] = Field(default_factory=list)
     removed_row_ids: list[str] = Field(default_factory=list)
     removed_group_ids: list[str] = Field(default_factory=list)
     order: Optional[list[str]] = None

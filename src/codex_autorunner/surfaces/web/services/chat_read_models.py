@@ -18,6 +18,7 @@ from ..read_model_contracts import (
     ChatDetailSnapshot,
     ChatIndexCounters,
     ChatIndexGroup,
+    ChatIndexGroupEntry,
     ChatIndexPatch,
     ChatIndexPatchEvent,
     ChatIndexRow,
@@ -32,6 +33,7 @@ from ..read_model_contracts import (
     ProjectionCursor,
     ReadModelEventEnvelope,
     RepairPolicy,
+    TicketRunGroup,
     dump_read_model_contract,
     read_model_now,
 )
@@ -83,7 +85,7 @@ class ChatReadModelService:
         )
 
         rows: list[ChatIndexRow] = []
-        groups_contract: list[ChatIndexGroup] = []
+        groups_contract: list[ChatIndexGroupEntry] = []
         for raw in hub_rows:
             if not isinstance(raw, dict):
                 continue
@@ -430,6 +432,18 @@ def _int_fallback(value: Any, fallback: int) -> int:
     return fallback
 
 
+def _bool_or_none(value: Any) -> Optional[bool]:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"true", "1", "yes"}:
+            return True
+        if normalized in {"false", "0", "no"}:
+            return False
+    return None
+
+
 def _chat_index_counters_from_raw(
     raw: Any, rows: list[ChatIndexRow]
 ) -> Optional[ChatIndexCounters]:
@@ -457,6 +471,25 @@ def parse_iso_optional(raw: str) -> Optional[datetime]:
 
 def _normalize_kind_text(kind: Optional[str]) -> str:
     return kind.strip().lower() if isinstance(kind, str) else ""
+
+
+def _ticket_status_from_raw(
+    raw: Mapping[str, Any], fallback_status: ChatSurfaceStatus
+) -> Literal["done", "running", "waiting", "failed", "unknown"]:
+    raw_status = _normalize_kind_text(_str_or_none(raw.get("ticket_status")))
+    if raw_status in {"done", "running", "waiting", "failed", "unknown"}:
+        return cast(
+            Literal["done", "running", "waiting", "failed", "unknown"], raw_status
+        )
+    ticket_done = _bool_or_none(raw.get("ticket_done"))
+    if ticket_done is True:
+        return "done"
+    if fallback_status in {"running", "waiting", "failed"}:
+        return cast(
+            Literal["done", "running", "waiting", "failed", "unknown"],
+            fallback_status,
+        )
+    return "unknown"
 
 
 def surface_from_hub_row(row: Mapping[str, Any]) -> SurfaceLiteral:
@@ -537,6 +570,9 @@ def hub_chat_row_to_chat_index_row(raw: Mapping[str, Any]) -> ChatIndexRow:
         run_id = resource_id
     else:
         run_id = _str_or_none(raw.get("run_id"))
+
+    flow_type = _normalize_kind_text(_str_or_none(raw.get("flow_type")))
+    is_ticket_flow = flow_type == "ticket_flow"
 
     unread_count = _int_fallback(raw.get("unread_count"), 0)
     if raw.get("unread") is True and unread_count == 0:
@@ -638,6 +674,12 @@ def hub_chat_row_to_chat_index_row(raw: Mapping[str, Any]) -> ChatIndexRow:
         chat_kind=ck_type,
         model=_str_or_none(raw.get("model")),
         group_id=_str_or_none(raw.get("group_id")),
+        flow_type="ticket_flow" if is_ticket_flow else None,
+        ticket_path=_str_or_none(raw.get("ticket_path")) if is_ticket_flow else None,
+        ticket_done=_bool_or_none(raw.get("ticket_done")) if is_ticket_flow else None,
+        ticket_status=(
+            _ticket_status_from_raw(raw, normalized_status) if is_ticket_flow else None
+        ),
         debug=(
             dict(cast(Mapping[str, Any], raw.get("debug")))
             if isinstance(raw.get("debug"), Mapping)
@@ -646,13 +688,9 @@ def hub_chat_row_to_chat_index_row(raw: Mapping[str, Any]) -> ChatIndexRow:
     )
 
 
-def hub_group_dict_to_contract(raw: Mapping[str, Any]) -> ChatIndexGroup:
+def hub_group_dict_to_contract(raw: Mapping[str, Any]) -> ChatIndexGroupEntry:
     group_id = str(raw.get("group_id") or raw.get("row_id") or "").strip()
-    kind: Literal["ticket_run", "surface", "repo", "worktree"] = (
-        "ticket_run"
-        if group_id.startswith(("ticket:", "run:", "ticket-run:"))
-        else "surface"
-    )
+    raw_kind = _normalize_kind_text(_str_or_none(raw.get("kind")))
     label = str(raw.get("title") or group_id)
     child_count = max(0, _int_fallback(raw.get("child_count"), 0))
     last_visible_iso = _str_or_none(raw.get("last_visible_message_at"))
@@ -664,10 +702,51 @@ def hub_group_dict_to_contract(raw: Mapping[str, Any]) -> ChatIndexGroup:
     last_activity_iso = (
         last_sort_iso or _str_or_none(raw.get("last_activity_at")) or last_visible_iso
     )
+    if raw_kind == "ticket_run_group" or group_id.startswith(
+        ("ticket:", "run:", "ticket-run:")
+    ):
+        updated_at_raw = _str_or_none(raw.get("updated_at"))
+        updated_at = parse_iso_optional(updated_at_raw) if updated_at_raw else None
+        return TicketRunGroup(
+            group_id=group_id,
+            run_id=_str_or_none(raw.get("run_id")) or _run_id_from_group_id(group_id),
+            scope_kind=_scope_kind_from_group(raw),
+            scope_id=_scope_id_from_group(raw),
+            label=label,
+            status=_ticket_run_group_status(raw),
+            total_count=max(0, _int_fallback(raw.get("total_count"), child_count)),
+            done_count=max(0, _int_fallback(raw.get("done_count"), 0)),
+            running_count=max(0, _int_fallback(raw.get("running_count"), 0)),
+            waiting_count=max(0, _int_fallback(raw.get("waiting_count"), 0)),
+            failed_count=max(0, _int_fallback(raw.get("failed_count"), 0)),
+            unread_count=max(0, _int_fallback(raw.get("unread_count"), 0)),
+            last_activity_at=(
+                parse_iso_optional(last_activity_iso) if last_activity_iso else None
+            ),
+            last_visible_message_at=(
+                parse_iso_optional(last_visible_iso) if last_visible_iso else None
+            ),
+            last_lifecycle_update_at=(
+                parse_iso_optional(last_lifecycle_iso) if last_lifecycle_iso else None
+            ),
+            last_internal_update_at=(
+                parse_iso_optional(last_internal_iso) if last_internal_iso else None
+            ),
+            last_sort_activity_at=(
+                parse_iso_optional(last_sort_iso) if last_sort_iso else None
+            ),
+            debug=(
+                dict(cast(Mapping[str, Any], raw.get("debug")))
+                if isinstance(raw.get("debug"), Mapping)
+                else None
+            ),
+            updated_at=updated_at,
+            expanded_child_window=None,
+        )
 
     return ChatIndexGroup(
         group_id=group_id,
-        kind=kind,
+        kind=_generic_group_kind(raw_kind),
         label=label,
         child_count=child_count,
         waiting_count=max(0, _int_fallback(raw.get("waiting_count"), 0)),
@@ -695,6 +774,54 @@ def hub_group_dict_to_contract(raw: Mapping[str, Any]) -> ChatIndexGroup:
         ),
         expanded_child_window=None,
     )
+
+
+def _run_id_from_group_id(group_id: str) -> str:
+    if group_id.startswith("run:"):
+        return group_id.split(":", 1)[1]
+    if group_id.startswith("ticket-run:"):
+        return group_id.split(":", 1)[1]
+    return group_id
+
+
+def _scope_kind_from_group(raw: Mapping[str, Any]) -> Literal["repo", "worktree"]:
+    raw_scope = _normalize_kind_text(_str_or_none(raw.get("scope_kind")))
+    return "repo" if raw_scope == "repo" else "worktree"
+
+
+def _scope_id_from_group(raw: Mapping[str, Any]) -> str:
+    return (
+        _str_or_none(raw.get("scope_id"))
+        or _str_or_none(raw.get("worktree_id"))
+        or _str_or_none(raw.get("repo_id"))
+        or "unknown"
+    )
+
+
+def _ticket_run_group_status(
+    raw: Mapping[str, Any],
+) -> Literal["running", "waiting", "failed", "done", "idle"]:
+    raw_status = _normalize_kind_text(_str_or_none(raw.get("status")))
+    if raw_status in {"running", "waiting", "failed", "done", "idle"}:
+        return cast(Literal["running", "waiting", "failed", "done", "idle"], raw_status)
+    if _int_fallback(raw.get("waiting_count"), 0) > 0:
+        return "waiting"
+    if _int_fallback(raw.get("running_count"), 0) > 0:
+        return "running"
+    if _int_fallback(raw.get("failed_count"), 0) > 0:
+        return "failed"
+    total = _int_fallback(
+        raw.get("total_count"), _int_fallback(raw.get("child_count"), 0)
+    )
+    if total > 0 and _int_fallback(raw.get("done_count"), 0) >= total:
+        return "done"
+    return "idle"
+
+
+def _generic_group_kind(raw_kind: str) -> Literal["surface", "repo", "worktree"]:
+    if raw_kind in {"repo", "worktree"}:
+        return cast(Literal["surface", "repo", "worktree"], raw_kind)
+    return "surface"
 
 
 def counters_from_contract_rows(

@@ -78,7 +78,9 @@ describe('/chats route load', () => {
     const firstTitles = firstOrder.map((id) => store.snapshot().chats[id]?.title);
     await loadChatRoute({ loaderOptions: { store, client, blocking: true } });
 
-    expect(client.chatIndex).toHaveBeenCalledTimes(2);
+    expect(client.chatIndex).toHaveBeenCalledTimes(4);
+    expect(client.chatIndex).toHaveBeenNthCalledWith(1, { limit: 50 });
+    expect(client.chatIndex).toHaveBeenNthCalledWith(2, { filter: 'ticket_runs', groupBy: 'ticket_run', limit: 50 });
     expect(store.snapshot().chatOrder).toEqual(firstOrder);
     expect(store.snapshot().chatOrder).toEqual(['chat-b', 'chat-a']);
     expect(store.snapshot().chatOrder.map((id) => store.snapshot().chats[id]?.title)).toEqual(firstTitles);

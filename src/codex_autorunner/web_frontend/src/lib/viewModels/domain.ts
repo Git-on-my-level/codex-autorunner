@@ -20,6 +20,7 @@ export type PmaChatSummary = {
   ticketId: string | null;
   ticketDone?: boolean | null;
   ticketPath?: string | null;
+  ticketStatus?: 'done' | 'running' | 'waiting' | 'failed' | 'unknown' | null;
   runId?: string | null;
   unreadCount?: number | null;
   flowType?: string | null;

@@ -34,6 +34,7 @@ from codex_autorunner.surfaces.web.read_model_contracts import (
     TicketDetailSnapshot,
     TicketProjection,
     TicketQueueSibling,
+    TicketRunGroup,
     WorktreeTopology,
     dump_read_model_contract,
     load_read_model_contract,
@@ -137,6 +138,99 @@ def test_chat_index_snapshot_and_patch_round_trip_with_camel_case_payloads() -> 
     assert event_payload["envelope"]["eventType"] == "chat.index.patch"
     assert event_payload["patch"]["rows"][0]["unreadCount"] == 2
     assert load_read_model_contract(ChatIndexPatchEvent, event_payload) == event
+
+
+def test_chat_index_ticket_run_group_contract_round_trip_with_ticket_flow_fields() -> (
+    None
+):
+    rows = [
+        chat_row().model_copy(
+            update={
+                "chat_id": f"chat-{index}",
+                "runtime_status": runtime_status,
+                "status": status,
+                "ticket_id": f"TICKET-00{index}",
+                "run_id": "run-1",
+                "group_id": "run:run-1",
+                "flow_type": "ticket_flow",
+                "ticket_done": ticket_done,
+                "ticket_status": ticket_status,
+            }
+        )
+        for index, runtime_status, status, ticket_done, ticket_status in [
+            (1, "completed", "idle", True, "done"),
+            (2, "success", "idle", True, "done"),
+            (3, "delivered", "idle", True, "done"),
+            (4, "running", "running", False, "running"),
+            (5, "running", "running", False, "running"),
+        ]
+    ]
+    snapshot = ChatIndexSnapshot(
+        cursor=cursor(),
+        window=window(),
+        filter="ticket_runs",
+        rows=rows,
+        groups=[
+            TicketRunGroup(
+                group_id="run:run-1",
+                run_id="run-1",
+                scope_kind="worktree",
+                scope_id="wt-1",
+                label="run:run-1",
+                status="running",
+                total_count=5,
+                done_count=3,
+                running_count=2,
+                waiting_count=0,
+                failed_count=0,
+                unread_count=0,
+                updated_at=NOW,
+            )
+        ],
+        counters=ChatIndexCounters(total=5, waiting=0, running=2, unread=0, archived=0),
+        repair=repair("/hub/read-models/chats"),
+    )
+
+    payload = dump_read_model_contract(snapshot)
+
+    assert payload["rows"][0]["flowType"] == "ticket_flow"
+    assert payload["rows"][0]["ticketDone"] is True
+    assert payload["rows"][0]["ticketStatus"] == "done"
+    assert payload["groups"][0]["kind"] == "ticket_run_group"
+    assert payload["groups"][0]["doneCount"] == 3
+    assert load_read_model_contract(ChatIndexSnapshot, payload) == snapshot
+
+
+def test_generic_completed_chat_contract_does_not_gain_ticket_flow_fields() -> None:
+    row = chat_row().model_copy(
+        update={
+            "chat_id": "generic-complete",
+            "runtime_status": "completed",
+            "status": "idle",
+            "ticket_id": None,
+            "run_id": None,
+            "group_id": None,
+            "flow_type": None,
+            "ticket_done": None,
+            "ticket_status": None,
+        }
+    )
+    payload = dump_read_model_contract(
+        ChatIndexSnapshot(
+            cursor=cursor(),
+            window=window(),
+            filter="all",
+            rows=[row],
+            counters=ChatIndexCounters(
+                total=1, waiting=0, running=0, unread=0, archived=0
+            ),
+            repair=repair("/hub/read-models/chats"),
+        )
+    )
+
+    assert payload["rows"][0]["runtimeStatus"] == "completed"
+    assert "ticketDone" not in payload["rows"][0]
+    assert payload["groups"] == []
 
 
 def test_chat_detail_snapshot_and_patch_round_trip_without_legacy_thread_payloads() -> (

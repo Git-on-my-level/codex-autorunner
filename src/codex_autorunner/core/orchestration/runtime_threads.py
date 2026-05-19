@@ -75,13 +75,10 @@ async def _wait_for_late_collector_result(
     timeout_seconds = max(float(grace_seconds), 0.0)
     if timeout_seconds <= 0.0:
         return None
-    try:
-        return await asyncio.wait_for(
-            asyncio.shield(collector_task),
-            timeout=timeout_seconds,
-        )
-    except asyncio.TimeoutError:
-        return None
+    done, _ = await asyncio.wait({collector_task}, timeout=timeout_seconds)
+    if collector_task in done or collector_task.done():
+        return await collector_task
+    return None
 
 
 @dataclass(frozen=True)
@@ -243,6 +240,11 @@ async def await_runtime_thread_outcome(
         or not stall_timeout_replaces_wall_clock_timeout
     ):
         timeout_task = asyncio.create_task(asyncio.sleep(resolved_timeout_seconds))
+    timeout_deadline = (
+        time.monotonic() + resolved_timeout_seconds
+        if timeout_task is not None and resolved_timeout_seconds is not None
+        else None
+    )
     interrupt_task = (
         asyncio.create_task(_wait_for_interrupt(interrupt_event))
         if interrupt_event is not None
@@ -293,6 +295,17 @@ async def await_runtime_thread_outcome(
                 return state.build_outcome(execution_error_message)
             if terminal_wait_task in done:
                 return state.build_outcome(execution_error_message)
+            if (
+                timeout_task is not None
+                and timeout_deadline is not None
+                and time.monotonic() >= timeout_deadline
+            ):
+                await execution.harness.interrupt(
+                    execution.workspace_root,
+                    backend_thread_id,
+                    backend_turn_id,
+                )
+                return state.build_timeout_outcome(RUNTIME_THREAD_TIMEOUT_ERROR)
             if interrupt_task is not None and interrupt_task in done:
                 await execution.harness.interrupt(
                     execution.workspace_root,

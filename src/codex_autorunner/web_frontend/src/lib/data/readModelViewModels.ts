@@ -1,4 +1,4 @@
-import type { ChatIndexCounters, ChatIndexRow, ProjectionCursor, RuntimeProjection } from '$lib/api/readModelContracts';
+import type { ChatIndexCounters, ChatIndexGroup, ChatIndexRow, ProjectionCursor, RuntimeProjection, TicketRunGroup } from '$lib/api/readModelContracts';
 import {
   buildTicketListViewModel,
   type SurfaceActionManifest,
@@ -59,6 +59,10 @@ export function pmaChatSummaryToChatIndexRow(chat: PmaChatSummary): ChatIndexRow
       normalizeManagedThreadChatKind(chat.raw.chat_kind ?? chat.raw.thread_kind),
     model: chat.model,
     groupId: chat.ticketId ? `ticket:${chat.ticketId}` : chat.runId ? `run:${chat.runId}` : null,
+    flowType: chat.flowType === 'ticket_flow' ? 'ticket_flow' : null,
+    ticketPath: stringValue(chat.raw.ticket_path ?? chat.raw.ticketPath),
+    ticketDone: chat.ticketDone ?? booleanOrNull(chat.raw.ticket_done ?? chat.raw.ticketDone),
+    ticketStatus: ticketStatusValue(chat.raw.ticket_status ?? chat.raw.ticketStatus),
     debug: recordValue(chat.raw.debug)
   };
 }
@@ -100,6 +104,10 @@ export function legacyChatIndexRecordToChatIndexRow(raw: JsonRecord): ChatIndexR
     chatKind: normalizeManagedThreadChatKind(raw.chat_kind ?? raw.chatKind ?? raw.thread_kind),
     model: stringValue(raw.model),
     groupId: stringValue(raw.group_id),
+    flowType: stringValue(raw.flow_type ?? raw.flowType) === 'ticket_flow' ? 'ticket_flow' : null,
+    ticketPath: stringValue(raw.ticket_path ?? raw.ticketPath),
+    ticketDone: booleanOrNull(raw.ticket_done ?? raw.ticketDone),
+    ticketStatus: ticketStatusValue(raw.ticket_status ?? raw.ticketStatus),
     debug: recordValue(raw.debug)
   };
 }
@@ -130,7 +138,11 @@ export function chatIndexRowToPmaChatSummary(row: ChatIndexRow): PmaChatSummary 
     worktree_id: row.worktreeId,
     current_ticket_id: row.ticketId,
     ticket_id: row.ticketId,
+    ticket_path: row.ticketPath,
+    ticket_done: row.ticketDone,
+    ticket_status: row.ticketStatus,
     run_id: row.runId,
+    flow_type: row.flowType,
     unread_count: row.unreadCount,
     agent_id: row.agent,
     agent_profile: row.agentProfile,
@@ -158,19 +170,34 @@ export function chatIndexRowToPmaChatSummary(row: ChatIndexRow): PmaChatSummary 
     repoId: row.repoId ?? null,
     worktreeId: row.worktreeId ?? null,
     ticketId: row.ticketId ?? null,
+    ticketPath: row.ticketPath ?? null,
     runId: row.runId ?? null,
     unreadCount: row.unreadCount,
-    flowType: null,
+    flowType: row.flowType ?? null,
     isTicketFlow: Boolean(
+      row.flowType === 'ticket_flow' ||
       row.ticketId ||
         row.runId ||
         row.groupId?.startsWith('ticket') ||
         row.groupId?.startsWith('run')
     ),
+    ticketDone: row.ticketDone ?? null,
+    ticketStatus: row.ticketStatus ?? null,
     progressPercent: null,
     updatedAt: row.lastActivityAt ?? null,
     raw
   };
+}
+
+export function selectTicketRunGroups(state: ReadModelEntityState, request?: ChatIndexWindowRequest): TicketRunGroup[] {
+  const groups = request
+    ? selectChatIndexWindowView(state, request).groups
+    : state.chatGroupOrder.map((id) => state.chatGroups[id]).filter(Boolean);
+  return groups.filter(isTicketRunGroup);
+}
+
+function isTicketRunGroup(group: ChatIndexGroup): group is TicketRunGroup {
+  return group.kind === 'ticket_run_group';
 }
 
 export function selectPmaChats(state: ReadModelEntityState, request?: ChatIndexWindowRequest): PmaChatSummary[] {
@@ -360,6 +387,24 @@ function normalizeRuntimeStatus(status: string | null | undefined): WorkStatus |
 
 function stringValue(value: unknown, fallback: string | null = null): string | null {
   return typeof value === 'string' && value.trim() ? value.trim() : fallback;
+}
+
+function booleanOrNull(value: unknown): boolean | null {
+  if (typeof value === 'boolean') return value;
+  if (typeof value !== 'string') return null;
+  const normalized = value.trim().toLowerCase();
+  if (['true', '1', 'yes'].includes(normalized)) return true;
+  if (['false', '0', 'no'].includes(normalized)) return false;
+  return null;
+}
+
+function ticketStatusValue(value: unknown): ChatIndexRow['ticketStatus'] {
+  if (typeof value !== 'string') return null;
+  const normalized = value.trim().toLowerCase();
+  if (['done', 'running', 'waiting', 'failed', 'unknown'].includes(normalized)) {
+    return normalized as ChatIndexRow['ticketStatus'];
+  }
+  return null;
 }
 
 function numberValue(value: unknown): number {

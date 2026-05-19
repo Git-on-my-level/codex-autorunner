@@ -93,12 +93,16 @@ export type ChatIndexRow = {
   chatKind?: 'pma' | 'coding_agent' | null;
   model?: string | null;
   groupId?: string | null;
+  flowType?: 'ticket_flow' | null;
+  ticketPath?: string | null;
+  ticketDone?: boolean | null;
+  ticketStatus?: 'done' | 'running' | 'waiting' | 'failed' | 'unknown' | null;
   debug?: Record<string, unknown> | null;
 };
 
-export type ChatIndexGroup = {
+export type GenericChatIndexGroup = {
   groupId: string;
-  kind: 'ticket_run' | 'surface' | 'repo' | 'worktree';
+  kind: 'surface' | 'repo' | 'worktree';
   label: string;
   childCount: number;
   waitingCount?: number;
@@ -112,6 +116,32 @@ export type ChatIndexGroup = {
   debug?: Record<string, unknown> | null;
   expandedChildWindow?: PageWindow | null;
 };
+
+export type TicketRunGroup = {
+  kind: 'ticket_run_group';
+  groupId: string;
+  runId: string;
+  scopeKind: 'repo' | 'worktree';
+  scopeId: string;
+  label: string;
+  status: 'running' | 'waiting' | 'failed' | 'done' | 'idle';
+  totalCount: number;
+  doneCount: number;
+  runningCount: number;
+  waitingCount: number;
+  failedCount: number;
+  unreadCount: number;
+  lastActivityAt?: string | null;
+  lastVisibleMessageAt?: string | null;
+  lastLifecycleUpdateAt?: string | null;
+  lastInternalUpdateAt?: string | null;
+  lastSortActivityAt?: string | null;
+  debug?: Record<string, unknown> | null;
+  updatedAt?: string | null;
+  expandedChildWindow?: PageWindow | null;
+};
+
+export type ChatIndexGroup = GenericChatIndexGroup | TicketRunGroup;
 
 export type ChatIndexCounters = {
   total: number;
@@ -410,7 +440,7 @@ export type ReadModelPatchEvent =
   | TicketDetailPatchEvent;
 
 export function mapReadModelContract<T extends ReadModelSnapshot | ReadModelPatchEvent>(payload: unknown): T {
-  const record = asRecord(payload);
+  const record = camelizeContractKeys(asRecord(payload));
   const version = record.contractVersion ?? asRecord(record.envelope).contractVersion;
   if (version !== READ_MODEL_CONTRACT_VERSION) {
     throw new Error(`Unsupported read model contract version: ${String(version)}`);
@@ -428,4 +458,51 @@ function asRecord(value: unknown): Record<string, unknown> {
     throw new Error('Expected read model contract object.');
   }
   return value as Record<string, unknown>;
+}
+
+function camelizeContractKeys(value: unknown): Record<string, unknown> {
+  const mapped = mapKeys(value);
+  return asRecord(mapped);
+}
+
+function mapKeys(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map((item) => mapKeys(item));
+  }
+  if (!value || typeof value !== 'object') {
+    return value;
+  }
+  return Object.fromEntries(
+    Object.entries(value as Record<string, unknown>).map(([key, entry]) => {
+      const mappedKey = snakeToCamel(key);
+      const opaqueValue = opaqueContractRecordKeys.has(mappedKey) || (opaqueContractObjectKeys.has(mappedKey) && isPlainObject(entry));
+      return [mappedKey, opaqueValue ? entry : mapKeys(entry)];
+    })
+  );
+}
+
+function snakeToCamel(value: string): string {
+  return value.replace(/_([a-z])/g, (_match, letter: string) => letter.toUpperCase());
+}
+
+const opaqueContractRecordKeys = new Set([
+  'primarySurface',
+  'surfaceBindings',
+  'sortKey',
+  'identity',
+  'parentLinks',
+  'topology',
+  'ticketDetail',
+  'ticketQueue',
+  'runQueue',
+  'chatQueue',
+  'contextspaceSummary',
+  'currentArtifacts',
+  'dispatches'
+]);
+
+const opaqueContractObjectKeys = new Set(['runtime']);
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 }

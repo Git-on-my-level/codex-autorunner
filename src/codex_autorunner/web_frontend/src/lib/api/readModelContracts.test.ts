@@ -11,6 +11,7 @@ import {
   type ProjectionCursor,
   type RepairPolicy,
   type RepoWorktreePatchEvent,
+  type RepoWorktreeDetailSnapshot,
   type RepoWorktreeRuntimeSnapshot,
   type RepoWorktreeTopologySnapshot,
   type TicketDetailPatchEvent,
@@ -130,6 +131,93 @@ describe('read model contracts', () => {
     expect(snapshot.groups[0].debug?.activity).toEqual({ selectedSource: 'lastSortActivityAt' });
     expect(snapshot.rows[0].debug?.activity).toEqual(event.patch.rows[0].debug?.activity);
     expect(event.patch.rows[0].unreadCount).toBe(2);
+  });
+
+  it('maps snake_case ticket-flow group and child contracts', () => {
+    const snapshot = mapReadModelContract<ChatIndexSnapshot>({
+      contract_version: READ_MODEL_CONTRACT_VERSION,
+      kind: 'chat.index.snapshot',
+      cursor: {
+        value: 'projection:ui:1',
+        sequence: 1,
+        source: 'ui_projection_journal',
+        issued_at: now
+      },
+      window: {
+        limit: 50,
+        total_estimate: 5,
+        total_is_exact: true
+      },
+      filter: 'ticket_runs',
+      rows: [
+        {
+          chat_id: 'ticket-flow-1',
+          surface: 'pma',
+          title: 'TICKET-001',
+          status: 'idle',
+          runtime_status: 'completed',
+          unread_count: 0,
+          flow_type: 'ticket_flow',
+          run_id: 'run-1',
+          ticket_id: 'TICKET-001',
+          ticket_path: '.codex-autorunner/tickets/TICKET-001.md',
+          ticket_done: true,
+          ticket_status: 'done',
+          group_id: 'run:run-1'
+        }
+      ],
+      groups: [
+        {
+          kind: 'ticket_run_group',
+          group_id: 'run:run-1',
+          run_id: 'run-1',
+          scope_kind: 'worktree',
+          scope_id: 'wt-1',
+          label: 'run:run-1',
+          status: 'running',
+          total_count: 5,
+          done_count: 3,
+          running_count: 2,
+          waiting_count: 0,
+          failed_count: 0,
+          unread_count: 0,
+          updated_at: now
+        }
+      ],
+      counters: { total: 5, waiting: 0, running: 2, unread: 0, archived: 0 },
+      repair: {
+        snapshot_route: '/hub/read-models/chats',
+        cursor_query_param: 'after',
+        gap_event_type: 'projection.cursor_gap',
+        behavior: 'repair_snapshot_required'
+      }
+    });
+
+    expect(snapshot.rows[0].ticketDone).toBe(true);
+    expect(snapshot.rows[0].ticketStatus).toBe('done');
+    expect(snapshot.groups[0].kind).toBe('ticket_run_group');
+    if (snapshot.groups[0].kind === 'ticket_run_group') {
+      expect(snapshot.groups[0].doneCount).toBe(3);
+      expect(snapshot.groups[0].runningCount).toBe(2);
+    }
+  });
+
+  it('does not treat a generic completed chat as ticket-flow progress', () => {
+    const snapshot = mapReadModelContract<ChatIndexSnapshot>({
+      contractVersion: READ_MODEL_CONTRACT_VERSION,
+      kind: 'chat.index.snapshot',
+      cursor: cursor(),
+      window: window(),
+      filter: 'all',
+      rows: [{ ...chatRow, chatId: 'generic-complete', runtimeStatus: 'completed', status: 'idle', ticketId: null, runId: null, groupId: null }],
+      groups: [],
+      counters: { total: 1, waiting: 0, running: 0, unread: 0, archived: 0 },
+      repair: repair('/hub/read-models/chats')
+    });
+
+    expect(snapshot.rows[0].runtimeStatus).toBe('completed');
+    expect(snapshot.rows[0].flowType).toBeUndefined();
+    expect(snapshot.rows[0].ticketDone).toBeUndefined();
   });
 
   it('maps chat detail snapshot and append events', () => {
@@ -262,6 +350,45 @@ describe('read model contracts', () => {
 
     expect(snapshot.ticket.ownerKind).toBe('worktree');
     expect(event.patch.linkedChats[0].ticketId).toBe('TICKET-001');
+  });
+
+  it('keeps raw nested detail records snake_case while mapping typed runtime arrays', () => {
+    const detail = mapReadModelContract<RepoWorktreeDetailSnapshot>({
+      contract_version: READ_MODEL_CONTRACT_VERSION,
+      kind: 'repo_worktree.detail.snapshot',
+      cursor: cursor(),
+      owner_kind: 'worktree',
+      owner_id: 'wt-1',
+      identity: { repo_id: 'repo-1', worktree_id: 'wt-1' },
+      parent_links: { parent_repo_id: 'repo-1' },
+      topology: { branch_name: 'feature/test' },
+      runtime: { active_run_id: 'run-1', active_run_status: 'running' },
+      ticket_queue: [{ ticket_id: 'TICKET-001', raw_status: 'done' }],
+      run_queue: [{ run_id: 'run-1', flow_status: 'running' }],
+      chat_queue: [{ chat_id: 'chat-1', ticket_id: 'TICKET-001' }],
+      contextspace_summary: [{ active_context_path: '.codex-autorunner/contextspace/active_context.md' }],
+      current_artifacts: [{ artifact_path: '.codex-autorunner/filebox/outbox/report.md' }],
+      ticket_window: window(),
+      run_window: window(),
+      chat_window: window(),
+      artifact_window: window(),
+      repair: repair('/hub/read-models/worktrees/wt-1/detail')
+    });
+    const runtime = mapReadModelContract<RepoWorktreeRuntimeSnapshot>({
+      contract_version: READ_MODEL_CONTRACT_VERSION,
+      kind: 'repo_worktree.runtime.snapshot',
+      cursor: cursor(),
+      window: window(),
+      runtime: [{ entity_kind: 'worktree', entity_id: 'wt-1', active_run_id: 'run-1', active_run_status: 'running' }],
+      repair: repair('/hub/read-models/repo-worktree/runtime')
+    });
+
+    expect(detail.ownerKind).toBe('worktree');
+    expect(detail.identity.repo_id).toBe('repo-1');
+    expect(detail.runtime.active_run_id).toBe('run-1');
+    expect(detail.ticketQueue[0].ticket_id).toBe('TICKET-001');
+    expect(runtime.runtime[0].entityKind).toBe('worktree');
+    expect(runtime.runtime[0].activeRunId).toBe('run-1');
   });
 
   it('flags reset events as repair-required', () => {

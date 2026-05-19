@@ -159,6 +159,8 @@ export type RepoWorktreeChatRow = {
   href: string;
   /** Ticket id when this chat was spawned by ticket flow; null for ad-hoc chats. */
   ticketId: string | null;
+  ticketDone: boolean | null;
+  ticketStatus: PmaChatSummary['ticketStatus'];
 };
 
 export type RepoWorktreeArtifactRow = {
@@ -989,7 +991,7 @@ function finalizeScopedChatRunGroup(group: RepoWorktreeChatRunGroup): void {
     if (chat.status === 'running') group.activeCount += 1;
     else if (chat.status === 'waiting' || chat.status === 'blocked') group.waitingCount += 1;
     else if (chat.status === 'failed' || chat.status === 'invalid') group.failedCount += 1;
-    else if (chat.status === 'done') group.doneCount += 1;
+    else if (chat.ticketDone === true || chat.ticketStatus === 'done') group.doneCount += 1;
     if (chat.updatedAt && (!group.updatedAt || chat.updatedAt > group.updatedAt)) group.updatedAt = chat.updatedAt;
   }
   group.agents = [...agents].sort();
@@ -1027,7 +1029,9 @@ function chatToRow(chat: PmaChatSummary): RepoWorktreeChatRow {
     model: chat.model,
     updatedAt: chat.updatedAt,
     href: `/chats?chat=${encodeURIComponent(chat.id)}`,
-    ticketId: chat.ticketId
+    ticketId: chat.ticketId,
+    ticketDone: chat.ticketDone ?? null,
+    ticketStatus: chat.ticketStatus ?? null
   };
 }
 

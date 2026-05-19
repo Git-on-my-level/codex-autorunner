@@ -4,10 +4,11 @@ import hashlib
 import json
 import logging
 import re
+import sqlite3
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Iterable, Mapping, Optional
+from typing import Any, Iterable, Mapping, Optional, Sequence
 
 from ..domain.refs import SurfaceRef
 from ..domain.workspace_scope import (
@@ -16,6 +17,7 @@ from ..domain.workspace_scope import (
 )
 from ..hub_topology import load_hub_state
 from ..injected_context import strip_legacy_injected_context_transport_blocks
+from ..state_roots import resolve_repo_flows_db_path
 from ..text_utils import _normalize_optional_text, _parse_iso_timestamp
 from .chat_surface_events import ChatSurfaceEvent, SQLiteChatSurfaceEventJournal
 from .sqlite import open_orchestration_sqlite
@@ -1062,6 +1064,7 @@ class ChatSurfaceReadService:
                 }
             else:
                 facts["ticket_flow_thread_links"] = None
+            facts["ticket_flow_ticket_files"] = _ticket_flow_ticket_file_signature(conn)
             if _table_exists(conn, "orch_flow_run_projections"):
                 row = conn.execute(
                     """
@@ -1338,6 +1341,21 @@ class ChatSurfaceReadService:
                 if _table_exists(conn, "orch_notification_conversations")
                 else []
             )
+            flow_projection_rows = (
+                conn.execute(
+                    """
+                    SELECT flow_run_id,
+                           repo_id,
+                           status,
+                           summary_json,
+                           updated_at
+                      FROM orch_flow_run_projections
+                     WHERE flow_type = 'ticket_flow'
+                    """
+                ).fetchall()
+                if _table_exists(conn, "orch_flow_run_projections")
+                else []
+            )
 
         execution_by_thread = _latest_execution_by_thread(execution_rows)
         visible_execution_by_thread = _latest_visible_execution_by_thread(
@@ -1348,6 +1366,9 @@ class ChatSurfaceReadService:
         delivery_by_thread = _latest_delivery_by_thread(delivery_rows)
         thread_owner: dict[str, Mapping[str, Any]] = {}
         binding_summary_by_thread = _binding_summary_by_thread(binding_rows)
+        ticket_flow_projections_by_run = _ticket_flow_projection_by_run_id(
+            flow_projection_rows
+        )
 
         for row in thread_rows:
             thread_id = str(row["thread_target_id"])
@@ -1376,6 +1397,7 @@ class ChatSurfaceReadService:
             lifecycle_status = _normalize_text(row["lifecycle_status"]) or "active"
             metadata = _json_object(_row_get(row, "metadata_json"))
             chat_kind = _normalize_text(metadata.get("chat_kind"))
+            run_id = _normalize_text(metadata.get("run_id"))
             visible_execution = visible_execution_by_thread.get(thread_id)
             last_visible_message_at = (
                 _normalize_text(_row_get(visible_execution, "created_at"))
@@ -1420,8 +1442,18 @@ class ChatSurfaceReadService:
                     "agent_profile": _normalize_text(metadata.get("agent_profile")),
                     "chat_kind": chat_kind,
                     "flow_type": _normalize_text(metadata.get("flow_type")),
-                    "run_id": _normalize_text(metadata.get("run_id")),
+                    "run_id": run_id,
                     "ticket_id": _normalize_text(metadata.get("ticket_id")),
+                    "ticket_path": _normalize_text(metadata.get("ticket_path")),
+                    "ticket_done": _bool_or_none(metadata.get("ticket_done")),
+                    "ticket_status": _normalize_text(metadata.get("ticket_status")),
+                    "ticket_flow_projection": _ticket_flow_projection_for_row(
+                        ticket_flow_projections_by_run,
+                        run_id=run_id,
+                        repo_id=_normalize_text(row["repo_id"]),
+                        workspace_root=_normalize_text(metadata.get("workspace_root")),
+                    ),
+                    "workspace_root": _normalize_text(metadata.get("workspace_root")),
                     "backend_thread_id": _normalize_text(
                         _row_get(row, "backend_thread_id")
                     ),
@@ -1669,6 +1701,239 @@ def _stable_revision(payload: Mapping[str, Any]) -> str:
     return hashlib.sha256(basis.encode("utf-8")).hexdigest()
 
 
+def _ticket_flow_ticket_file_signature(conn: Any) -> list[dict[str, Any]]:
+    if not _table_exists(conn, "orch_thread_targets"):
+        return []
+    rows = conn.execute(
+        """
+        SELECT json_extract(metadata_json, '$.workspace_root') AS workspace_root,
+               json_extract(metadata_json, '$.ticket_path') AS ticket_path
+          FROM orch_thread_targets
+         WHERE json_extract(metadata_json, '$.flow_type') = 'ticket_flow'
+           AND json_extract(metadata_json, '$.ticket_path') IS NOT NULL
+        """
+    ).fetchall()
+    facts: list[dict[str, Any]] = []
+    seen: set[tuple[str, str]] = set()
+    for row in rows:
+        workspace_root = _normalize_text(row["workspace_root"])
+        ticket_path = _normalize_text(row["ticket_path"])
+        if workspace_root is None or ticket_path is None:
+            continue
+        key = (workspace_root, ticket_path)
+        if key in seen:
+            continue
+        seen.add(key)
+        path = Path(ticket_path)
+        if not path.is_absolute():
+            path = Path(workspace_root) / path
+        fact: dict[str, Any] = {
+            "workspace_root": workspace_root,
+            "ticket_path": ticket_path,
+        }
+        try:
+            resolved_path = path.resolve()
+            resolved_root = Path(workspace_root).resolve()
+            resolved_path.relative_to(resolved_root)
+            stat = resolved_path.stat()
+            fact.update({"mtime_ns": stat.st_mtime_ns, "size": stat.st_size})
+        except (OSError, ValueError):
+            fact["missing"] = True
+        facts.append(fact)
+    return sorted(
+        facts,
+        key=lambda item: (
+            str(item.get("workspace_root") or ""),
+            str(item.get("ticket_path") or ""),
+        ),
+    )
+
+
+def _ticket_flow_projection_by_run_id(
+    rows: Iterable[Mapping[str, Any]],
+) -> dict[str, list[dict[str, Any]]]:
+    projections: dict[str, list[dict[str, Any]]] = {}
+    for row in rows:
+        run_id = _normalize_text(row["flow_run_id"])
+        if run_id is None:
+            continue
+        summary = _json_object(row["summary_json"])
+        projection = _ticket_flow_projection_from_summary(
+            run_id=run_id,
+            status=_normalize_text(row["status"]),
+            summary=summary,
+            updated_at=_normalize_text(row["updated_at"]),
+            repo_id=_normalize_text(row["repo_id"]),
+        )
+        projections.setdefault(run_id, []).append(projection)
+    return projections
+
+
+def _ticket_flow_projection_for_row(
+    projections_by_run: Mapping[str, Sequence[Mapping[str, Any]]],
+    *,
+    run_id: Optional[str],
+    repo_id: Optional[str],
+    workspace_root: Optional[str],
+) -> Optional[dict[str, Any]]:
+    if run_id is None:
+        return None
+    candidates = list(projections_by_run.get(run_id, ()))
+    local_projection = _ticket_flow_projection_from_local_store(
+        run_id=run_id,
+        workspace_root=workspace_root,
+    )
+    if local_projection is not None:
+        return local_projection
+    for candidate in candidates:
+        if _ticket_flow_projection_matches_row(
+            candidate,
+            repo_id=repo_id,
+            workspace_root=workspace_root,
+        ):
+            return dict(candidate)
+    if len(candidates) == 1 and _ticket_flow_projection_matches_row(
+        candidates[0],
+        repo_id=repo_id,
+        workspace_root=workspace_root,
+    ):
+        return dict(candidates[0])
+    return None
+
+
+def _ticket_flow_projection_matches_row(
+    projection: Mapping[str, Any],
+    *,
+    repo_id: Optional[str],
+    workspace_root: Optional[str],
+) -> bool:
+    projection_repo_id = _normalize_text(projection.get("repo_id"))
+    if repo_id is not None and projection_repo_id is None:
+        return False
+    if (
+        repo_id is not None
+        and projection_repo_id is not None
+        and repo_id != projection_repo_id
+    ):
+        return False
+    projection_workspace = _normalize_text(projection.get("workspace_root"))
+    if workspace_root is not None and projection_workspace is None:
+        return False
+    if (
+        workspace_root is not None
+        and projection_workspace is not None
+        and Path(workspace_root).resolve() != Path(projection_workspace).resolve()
+    ):
+        return False
+    return True
+
+
+def _ticket_flow_projection_from_local_store(
+    *,
+    run_id: str,
+    workspace_root: Optional[str],
+) -> Optional[dict[str, Any]]:
+    if workspace_root is None:
+        return None
+    try:
+        db_path = resolve_repo_flows_db_path(Path(workspace_root).resolve())
+        if not db_path.exists():
+            return None
+        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+        conn.row_factory = sqlite3.Row
+        try:
+            record = conn.execute(
+                """
+                SELECT id,
+                       flow_type,
+                       status,
+                       state,
+                       created_at,
+                       started_at,
+                       finished_at,
+                       metadata
+                  FROM flow_runs
+                 WHERE id = ?
+                """,
+                (run_id,),
+            ).fetchone()
+        finally:
+            conn.close()
+    except (OSError, RuntimeError, ValueError, sqlite3.Error):
+        logger.debug(
+            "Could not read local ticket-flow store for chat projection",
+            exc_info=True,
+        )
+        return None
+    if record is None or record["flow_type"] != "ticket_flow":
+        return None
+    return _ticket_flow_projection_from_flow_row(
+        record,
+        workspace_root=workspace_root,
+    )
+
+
+def _ticket_flow_projection_from_flow_row(
+    record: Mapping[str, Any],
+    *,
+    workspace_root: Optional[str],
+) -> dict[str, Any]:
+    state = _json_object(record["state"])
+    ticket_engine = state.get("ticket_engine")
+    ticket_engine = ticket_engine if isinstance(ticket_engine, Mapping) else {}
+    metadata = _json_object(record["metadata"])
+    summary = {
+        "workspace_root": workspace_root,
+        "current_ticket": ticket_engine.get("current_ticket")
+        or state.get("current_ticket"),
+        "ticket_engine": ticket_engine,
+    }
+    return _ticket_flow_projection_from_summary(
+        run_id=str(record["id"]),
+        status=_normalize_text(record["status"]),
+        summary=summary,
+        updated_at=(
+            _normalize_text(record["finished_at"])
+            or _normalize_text(record["started_at"])
+            or _normalize_text(record["created_at"])
+        ),
+        repo_id=_normalize_text(metadata.get("repo_id")),
+    )
+
+
+def _ticket_flow_projection_from_summary(
+    *,
+    run_id: str,
+    status: Optional[str],
+    summary: Mapping[str, Any],
+    updated_at: Optional[str],
+    repo_id: Optional[str],
+) -> dict[str, Any]:
+    ticket_engine = summary.get("ticket_engine")
+    ticket_engine = ticket_engine if isinstance(ticket_engine, Mapping) else {}
+    ticket_engine_commit = ticket_engine.get("commit")
+    ticket_engine_commit = (
+        ticket_engine_commit if isinstance(ticket_engine_commit, Mapping) else {}
+    )
+    raw_current_ticket_done = ticket_engine.get("current_ticket_done")
+    if raw_current_ticket_done is None:
+        raw_current_ticket_done = ticket_engine_commit.get("current_ticket_done")
+    if raw_current_ticket_done is None:
+        raw_current_ticket_done = summary.get("current_ticket_done")
+    return {
+        "run_id": run_id,
+        "repo_id": repo_id,
+        "workspace_root": _normalize_text(summary.get("workspace_root")),
+        "status": status,
+        "updated_at": updated_at,
+        "current_ticket": _normalize_text(
+            ticket_engine.get("current_ticket") or summary.get("current_ticket")
+        ),
+        "current_ticket_done": _bool_or_none(raw_current_ticket_done),
+        "ticket_engine_status": _normalize_text(ticket_engine.get("status")),
+    }
+
+
 def _chat_index_rows_from_surfaces(
     surfaces: Iterable[Mapping[str, Any]],
 ) -> list[dict[str, Any]]:
@@ -1804,6 +2069,10 @@ def _chat_index_rows_from_surfaces(
                 "cleanup_protected": bool(metadata_map.get("cleanup_protected")),
                 "flow_type": metadata_map.get("flow_type"),
                 "ticket_id": metadata_map.get("ticket_id"),
+                "ticket_path": metadata_map.get("ticket_path"),
+                "ticket_done": metadata_map.get("ticket_done"),
+                "ticket_status": metadata_map.get("ticket_status"),
+                "ticket_flow_projection": metadata_map.get("ticket_flow_projection"),
                 "run_id": metadata_map.get("run_id"),
                 "provider_conversation_title": metadata_map.get(
                     "provider_conversation_title"
@@ -1871,7 +2140,12 @@ def _chat_index_rows_from_surfaces(
                 "flow_type",
                 "model",
                 "active_turn_id",
+                "workspace_root",
                 "ticket_id",
+                "ticket_path",
+                "ticket_done",
+                "ticket_status",
+                "ticket_flow_projection",
                 "run_id",
                 "provider_conversation_title",
             ):
@@ -1914,6 +2188,7 @@ def _chat_index_rows_from_surfaces(
         row["display_title"] = _normalize_text(row.get("chat_display_name")) or str(
             row.get("title") or row.get("chat_id") or row.get("row_id") or ""
         )
+        _apply_ticket_flow_child_state(row)
         row["technical_title"] = _normalize_text(row.get("technical_title")) or str(
             row.get("managed_thread_id") or row.get("row_id") or ""
         )
@@ -2471,6 +2746,191 @@ def _chat_ticket_group_id(row: Mapping[str, Any]) -> Optional[str]:
     return None
 
 
+def _apply_ticket_flow_child_state(row: dict[str, Any]) -> None:
+    """Populate ticket-flow progress fields without changing chat lifecycle."""
+
+    if _normalize_kind(row.get("flow_type")) != "ticket_flow":
+        return
+
+    ticket_file_done = _ticket_done_from_row_path(row)
+    if ticket_file_done is not None:
+        row["ticket_done"] = ticket_file_done
+        row["ticket_status"] = (
+            "done"
+            if ticket_file_done
+            else _ticket_status_fallback(row, allow_done=False)
+        )
+        row["ticket_progress_source"] = "ticket_file"
+        return
+
+    flow_store_state = _ticket_flow_store_child_state(row)
+    if flow_store_state is not None:
+        row["ticket_done"] = flow_store_state["ticket_done"]
+        row["ticket_status"] = flow_store_state["ticket_status"]
+        row["ticket_progress_source"] = "flow_store"
+        return
+
+    explicit_done = _bool_or_none(row.get("ticket_done"))
+    if explicit_done is True:
+        row["ticket_done"] = True
+        row["ticket_status"] = "done"
+        row["ticket_progress_source"] = "managed_thread"
+        return
+    if explicit_done is False:
+        row["ticket_done"] = False
+
+    explicit_status = _normalize_kind(row.get("ticket_status"))
+    if explicit_status in {"done", "running", "waiting", "failed", "unknown"}:
+        row["ticket_status"] = explicit_status
+        if explicit_status == "done":
+            row["ticket_done"] = True
+        row["ticket_progress_source"] = "managed_thread"
+        return
+
+    row["ticket_status"] = _ticket_status_fallback(row)
+    if row["ticket_status"] == "done":
+        row["ticket_done"] = True
+    elif _bool_or_none(row.get("ticket_done")) is None:
+        row["ticket_done"] = None
+    row["ticket_progress_source"] = "managed_thread_runtime"
+
+
+def _ticket_status_fallback(row: Mapping[str, Any], *, allow_done: bool = True) -> str:
+    if int(row.get("queue_depth") or 0) > 0:
+        return "waiting"
+    runtime_raw = _normalize_kind(
+        row.get("runtime_status") or row.get("target_runtime_status")
+    )
+    runtime = _status_to_lifecycle(runtime_raw)
+    if allow_done and runtime == "idle" and runtime_raw in _TERMINAL_SUCCESS_STATUSES:
+        return "done"
+    if runtime in {"running", "failed"}:
+        return runtime
+    if _normalize_kind(row.get("lifecycle")) == "running":
+        return "running"
+    return "unknown"
+
+
+def _ticket_flow_store_child_state(
+    row: Mapping[str, Any],
+) -> Optional[dict[str, Any]]:
+    projection = row.get("ticket_flow_projection")
+    if not isinstance(projection, Mapping):
+        return None
+    current_ticket = _normalize_text(projection.get("current_ticket"))
+    if current_ticket is None or not _row_matches_flow_store_ticket(
+        row, current_ticket
+    ):
+        return None
+
+    current_ticket_done = _bool_or_none(projection.get("current_ticket_done"))
+    if current_ticket_done is True:
+        return {"ticket_done": True, "ticket_status": "done"}
+
+    status = _normalize_kind(
+        projection.get("ticket_engine_status") or projection.get("status")
+    )
+    ticket_status = _flow_store_status_to_ticket_status(status)
+    if current_ticket_done is False:
+        if ticket_status is None or ticket_status == "done":
+            ticket_status = "running"
+        return {"ticket_done": False, "ticket_status": ticket_status}
+    if ticket_status is None:
+        return None
+    return {"ticket_done": ticket_status == "done", "ticket_status": ticket_status}
+
+
+def _row_matches_flow_store_ticket(row: Mapping[str, Any], current_ticket: str) -> bool:
+    ticket_path = _normalize_text(row.get("ticket_path"))
+    if ticket_path is not None and _ticket_ref_matches(ticket_path, current_ticket):
+        return True
+    ticket_id = _normalize_text(row.get("ticket_id"))
+    if ticket_id is None:
+        return False
+    return _ticket_ref_matches(ticket_id, current_ticket)
+
+
+def _ticket_ref_matches(left: str, right: str) -> bool:
+    left_text = left.strip()
+    right_text = right.strip()
+    if left_text == right_text:
+        return True
+    left_name = Path(left_text).name
+    right_name = Path(right_text).name
+    if left_name == right_name:
+        return True
+    left_stem = Path(left_name).stem
+    right_stem = Path(right_name).stem
+    return bool(left_stem and right_stem and left_stem == right_stem)
+
+
+def _flow_store_status_to_ticket_status(status: Optional[str]) -> Optional[str]:
+    if status is None:
+        return None
+    if status in {"completed", "complete", "done", "succeeded", "success"}:
+        return "done"
+    if status in {"failed", "error", "cancelled", "canceled", "timeout", "stopped"}:
+        return "failed"
+    if status in {"paused", "pending", "queued", "waiting"}:
+        return "waiting"
+    if status in {"running", "in_progress", "started", "claimed"}:
+        return "running"
+    return None
+
+
+def _ticket_done_from_row_path(row: Mapping[str, Any]) -> Optional[bool]:
+    ticket_path = _normalize_text(row.get("ticket_path"))
+    workspace_root = _normalize_text(row.get("workspace_root"))
+    if ticket_path is None or workspace_root is None:
+        return None
+    path = Path(ticket_path)
+    if not path.is_absolute():
+        path = Path(workspace_root) / path
+    try:
+        resolved_path = path.resolve()
+        resolved_root = Path(workspace_root).resolve()
+        resolved_path.relative_to(resolved_root)
+    except (OSError, ValueError):
+        return None
+    frontmatter = _read_markdown_frontmatter_mapping(resolved_path)
+    ticket_done = _bool_or_none(frontmatter.get("done"))
+    if ticket_done is None:
+        return None
+    return ticket_done
+
+
+def _read_markdown_frontmatter_mapping(path: Path) -> dict[str, str]:
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return {}
+    if not lines or lines[0].strip() != "---":
+        return {}
+    data: dict[str, str] = {}
+    for line in lines[1:]:
+        if line.strip() == "---":
+            return data
+        key, separator, value = line.partition(":")
+        if not separator:
+            continue
+        key = key.strip()
+        if key:
+            data[key] = value.strip().strip("\"'")
+    return {}
+
+
+def _bool_or_none(value: Any) -> Optional[bool]:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"true", "1", "yes"}:
+            return True
+        if normalized in {"false", "0", "no"}:
+            return False
+    return None
+
+
 def _ticket_run_groups(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     grouped: dict[str, list[dict[str, Any]]] = {}
     for row in rows:
@@ -2502,22 +2962,43 @@ def _ticket_run_groups(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
         latest_legacy_update = max(
             str(child.get("updated_at") or "") for child in children
         )
-        waiting_count = sum(
-            1 for child in children if int(child.get("queue_depth") or 0) > 0
+        total_count = len(children)
+        done_count = sum(
+            1 for child in children if _ticket_child_status(child) == "done"
+        )
+        failed_count = sum(
+            1 for child in children if _ticket_child_status(child) == "failed"
         )
         running_count = sum(
-            1 for child in children if _chat_index_effective_status(child) == "running"
+            1 for child in children if _ticket_child_status(child) == "running"
         )
-        unread_count = sum(1 for child in children if child.get("unread"))
+        waiting_count = sum(
+            1 for child in children if _ticket_child_status(child) == "waiting"
+        )
+        unread_count = sum(int(child.get("unread_count") or 0) for child in children)
         groups.append(
             {
                 "row_type": "group",
+                "kind": "ticket_run_group",
                 "row_id": f"group:{group_id}",
                 "group_id": group_id,
+                "run_id": _ticket_run_id_from_children(group_id, children),
+                "scope_kind": _ticket_run_scope_kind(children),
+                "scope_id": _ticket_run_scope_id(children),
                 "title": group_id,
-                "child_count": len(children),
+                "status": _ticket_run_group_status(
+                    total_count=total_count,
+                    done_count=done_count,
+                    running_count=running_count,
+                    waiting_count=waiting_count,
+                    failed_count=failed_count,
+                ),
+                "child_count": total_count,
+                "total_count": total_count,
+                "done_count": done_count,
                 "waiting_count": waiting_count,
                 "running_count": running_count,
+                "failed_count": failed_count,
                 "unread_count": unread_count,
                 "last_activity_at": latest_sort_activity or None,
                 "last_visible_message_at": latest_visible_message or None,
@@ -2547,6 +3028,64 @@ def _ticket_run_groups(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
         ),
         reverse=True,
     )
+
+
+def _ticket_child_status(row: Mapping[str, Any]) -> str:
+    explicit = _normalize_kind(row.get("ticket_status"))
+    if explicit in {"done", "running", "waiting", "failed", "unknown"}:
+        return explicit
+    if row.get("ticket_done") is True:
+        return "done"
+    effective = _chat_index_effective_status(row)
+    if effective in {"running", "waiting", "failed"}:
+        return effective
+    if int(row.get("queue_depth") or 0) > 0:
+        return "waiting"
+    return "unknown"
+
+
+def _ticket_run_id_from_children(
+    group_id: str, children: Sequence[Mapping[str, Any]]
+) -> str:
+    for child in children:
+        run_id = _normalize_text(child.get("run_id"))
+        if run_id is not None:
+            return run_id
+    if group_id.startswith(("run:", "ticket-run:")):
+        return group_id.split(":", 1)[1]
+    return group_id
+
+
+def _ticket_run_scope_kind(children: Sequence[Mapping[str, Any]]) -> str:
+    return "worktree" if any(child.get("worktree_id") for child in children) else "repo"
+
+
+def _ticket_run_scope_id(children: Sequence[Mapping[str, Any]]) -> str:
+    for key in ("worktree_id", "repo_id", "workspace_root"):
+        for child in children:
+            value = _normalize_text(child.get(key))
+            if value is not None:
+                return value
+    return "unknown"
+
+
+def _ticket_run_group_status(
+    *,
+    total_count: int,
+    done_count: int,
+    running_count: int,
+    waiting_count: int,
+    failed_count: int,
+) -> str:
+    if waiting_count > 0:
+        return "waiting"
+    if running_count > 0:
+        return "running"
+    if failed_count > 0:
+        return "failed"
+    if total_count > 0 and done_count >= total_count:
+        return "done"
+    return "idle"
 
 
 def _filter_chat_index_groups(

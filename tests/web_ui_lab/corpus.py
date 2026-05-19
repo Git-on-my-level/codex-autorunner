@@ -252,6 +252,33 @@ WEB_UI_SCENARIOS: tuple[WebUiScenario, ...] = (
         ),
     ),
     _scenario(
+        scenario_id="chat_ticket_run_grouping_regression",
+        title="Chat ticket-run grouping regression",
+        route_name="chat",
+        seed_fixture=SeedFixtureKind.CHAT_TICKET_RUN_GROUPING,
+        visible_landmarks=(
+            "Chats",
+            "Search chats, repos, tickets",
+            "2 active - 3/5 done",
+        ),
+        read_model_routes=(
+            "/hub/read-models/chats?filter=active&group_by=ticket_run&limit=25",
+            "/hub/read-models/chats?filter=ticket_runs&group_by=ticket_run&limit=50",
+            "/hub/read-models/chats/patches",
+        ),
+        frontend_mappers=(
+            "pmaChat.ts",
+            "readModelViewModels.ts",
+            "readModelClients.ts",
+        ),
+        tags=(ScenarioTag.FAST, ScenarioTag.BROWSER, ScenarioTag.CRITICAL),
+        notes=(
+            "Regression: a ticket-flow run with three done children and two running "
+            "children must render 3/5 done, while generic completed lookalikes stay "
+            "out of ticket-run grouping."
+        ),
+    ),
+    _scenario(
         scenario_id="pma_new_chat_creation",
         title="PMA new chat creation",
         route_name="chat",

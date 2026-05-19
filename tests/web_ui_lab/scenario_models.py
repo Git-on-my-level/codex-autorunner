@@ -24,6 +24,7 @@ class SeedFixtureKind(str, Enum):
     PMA_DISCORD_WEB_HANDOFF = "pma_discord_web_handoff"
     PMA_GROUPED_TOOLS = "pma_grouped_tools"
     CHAT_INDEX_HIGH_HISTORY = "chat_index_high_history"
+    CHAT_TICKET_RUN_GROUPING = "chat_ticket_run_grouping"
 
 
 class ViewportName(str, Enum):

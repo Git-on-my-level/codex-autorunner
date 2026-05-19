@@ -22,6 +22,7 @@ export type ChatIndexSession = {
   start: () => void;
   stop: () => void;
   refresh: (request?: ChatIndexRequest) => Promise<void>;
+  setCompanionRequests: (requests: ChatIndexRequest[]) => void;
   isStarted: () => boolean;
 };
 
@@ -42,7 +43,9 @@ export function createChatIndexSession(deps: ChatIndexSessionDeps = {}): ChatInd
   let started = false;
   let stream: ReadModelStreamManager<ChatIndexPatchEvent> | null = null;
   let currentRequest: ChatIndexRequest = { filter: 'all', limit: 50 };
+  let companionRequests: ChatIndexRequest[] = [];
   let inFlightRequest: ChatIndexRequest | null = null;
+  let inFlightCompanionRequests: ChatIndexRequest[] = [];
   let refreshAgain = false;
 
   function start(): void {
@@ -63,10 +66,21 @@ export function createChatIndexSession(deps: ChatIndexSessionDeps = {}): ChatInd
     state.set({ status: 'closed', error: null });
   }
 
+  function setCompanionRequests(requests: ChatIndexRequest[]): void {
+    const next = uniqueChatIndexRequests(requests);
+    if (sameChatIndexRequestList(companionRequests, next)) return;
+    companionRequests = next;
+    if (refreshPromise) {
+      refreshAgain = true;
+      return;
+    }
+    if (started) void refresh(currentRequest);
+  }
+
   async function refresh(request: ChatIndexRequest = currentRequest): Promise<void> {
     currentRequest = { ...currentRequest, ...request };
     if (refreshPromise) {
-      if (!sameChatIndexRequest(inFlightRequest, currentRequest)) refreshAgain = true;
+      if (!sameChatIndexRequest(inFlightRequest, currentRequest) || !sameChatIndexRequestList(inFlightCompanionRequests, companionRequests)) refreshAgain = true;
       return refreshPromise;
     }
     state.set({ status: 'loading', error: null });
@@ -80,6 +94,7 @@ export function createChatIndexSession(deps: ChatIndexSessionDeps = {}): ChatInd
       })
       .finally(() => {
         inFlightRequest = null;
+        inFlightCompanionRequests = [];
         refreshAgain = false;
         refreshPromise = null;
       });
@@ -90,17 +105,24 @@ export function createChatIndexSession(deps: ChatIndexSessionDeps = {}): ChatInd
     do {
       refreshAgain = false;
       inFlightRequest = { ...currentRequest };
-      const result = await client.chatIndex(inFlightRequest);
-      if (!result.ok) throw result.error;
-      store.applyChatIndexSnapshot(result.data, inFlightRequest);
-    } while (refreshAgain || !sameChatIndexRequest(inFlightRequest, currentRequest));
+      inFlightCompanionRequests = companionRequests.map((request) => ({ ...request }));
+      for (const request of requestsForRefresh(inFlightRequest, inFlightCompanionRequests)) {
+        const result = await client.chatIndex(request);
+        if (!result.ok) throw result.error;
+        store.applyChatIndexSnapshot(result.data, request);
+      }
+    } while (
+      refreshAgain ||
+      !sameChatIndexRequest(inFlightRequest, currentRequest) ||
+      !sameChatIndexRequestList(inFlightCompanionRequests, companionRequests)
+    );
   }
 
   function openStream(): void {
     if (stream) return;
     stream = streamFactory({
       key: 'chat.index.entity',
-      path: '/hub/read-models/chats/patches',
+      path: chatIndexPatchPath(currentRequest),
       eventTypes: ['chat.index.patch', 'projection.cursor_gap'],
       cursorStorage: seededCursorStorage(
         store.snapshot().chatIndexCursor?.sequence
@@ -116,9 +138,10 @@ export function createChatIndexSession(deps: ChatIndexSessionDeps = {}): ChatInd
           return;
         }
         if (result === 'applied') {
-          const key = canonicalChatIndexWindowKey(currentRequest);
-          const window = store.snapshot().chatWindows[key];
-          if (window?.status === 'interrupted') void refresh(currentRequest);
+          const state = store.snapshot();
+          const interrupted = requestsForRefresh(currentRequest, companionRequests)
+            .some((request) => state.chatWindows[canonicalChatIndexWindowKey(request)]?.status === 'interrupted');
+          if (interrupted) void refresh(currentRequest);
         }
       },
       onStatus: (status) => {
@@ -134,11 +157,23 @@ export function createChatIndexSession(deps: ChatIndexSessionDeps = {}): ChatInd
     start,
     stop,
     refresh,
+    setCompanionRequests,
     isStarted: () => started
   };
 }
 
 export const chatIndexSession = createChatIndexSession();
+
+function chatIndexPatchPath(request: ChatIndexRequest): string {
+  const params = new URLSearchParams({
+    filter: request.filter ?? 'all'
+  });
+  if (request.query) params.set('search', request.query);
+  if (request.surfaceKind) params.set('surface_kind', request.surfaceKind);
+  if (request.groupBy) params.set('group_by', request.groupBy);
+  if (request.parentGroupId) params.set('parent_group_id', request.parentGroupId);
+  return `/hub/read-models/chats/patches?${params.toString()}`;
+}
 
 const fallbackCursorMemory = new Map<string, string>();
 const fallbackCursorStorage: CursorStorage = {
@@ -184,6 +219,26 @@ function sameChatIndexRequest(left: ChatIndexRequest | null, right: ChatIndexReq
     (left.filter ?? 'all') === (right.filter ?? 'all') &&
     (left.limit ?? 50) === (right.limit ?? 50) &&
     (left.query ?? '') === (right.query ?? '') &&
-    (left.surfaceKind ?? '') === (right.surfaceKind ?? '')
+    (left.surfaceKind ?? '') === (right.surfaceKind ?? '') &&
+    (left.groupBy ?? '') === (right.groupBy ?? '') &&
+    (left.parentGroupId ?? '') === (right.parentGroupId ?? '')
   );
+}
+
+function sameChatIndexRequestList(left: ChatIndexRequest[], right: ChatIndexRequest[]): boolean {
+  if (left.length !== right.length) return false;
+  return left.every((request, index) => sameChatIndexRequest(request, right[index] ?? null));
+}
+
+function uniqueChatIndexRequests(requests: ChatIndexRequest[]): ChatIndexRequest[] {
+  const unique: ChatIndexRequest[] = [];
+  for (const request of requests) {
+    if (unique.some((existing) => sameChatIndexRequest(existing, request))) continue;
+    unique.push({ ...request });
+  }
+  return unique;
+}
+
+function requestsForRefresh(primary: ChatIndexRequest, companions: ChatIndexRequest[]): ChatIndexRequest[] {
+  return uniqueChatIndexRequests([primary, ...companions]);
 }

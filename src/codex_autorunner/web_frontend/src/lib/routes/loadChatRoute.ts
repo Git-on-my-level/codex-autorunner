@@ -26,13 +26,23 @@ export async function loadChatRoute(
       refresh: true
     }
   );
-  if (!chatId) return { chatId: null, chatIndex: await chatIndexPromise, activeDetail: null };
+  const ticketRunGroupsPromise = ensureChatIndexLoaded(
+    { filter: 'ticket_runs', groupBy: 'ticket_run', limit: CHAT_INDEX_WINDOW_LIMIT },
+    {
+      ...readModelLoaderOptions(options),
+      refresh: true
+    }
+  );
+  if (!chatId) {
+    const [chatIndex] = await Promise.all([chatIndexPromise, ticketRunGroupsPromise]);
+    return { chatId: null, chatIndex, activeDetail: null };
+  }
 
   const activeDetailPromise = ensureChatDetailLoaded(chatId, {
     ...readModelLoaderOptions(options),
     timelineLimit: CHAT_DETAIL_TIMELINE_LIMIT
   });
-  const [chatIndex, activeDetail] = await Promise.all([chatIndexPromise, activeDetailPromise]);
+  const [chatIndex, activeDetail] = await Promise.all([chatIndexPromise, activeDetailPromise, ticketRunGroupsPromise]);
 
   return {
     chatId,
