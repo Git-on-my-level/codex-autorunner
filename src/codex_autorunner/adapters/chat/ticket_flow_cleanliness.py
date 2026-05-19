@@ -65,11 +65,6 @@ def get_ticket_flow_cleanliness(workspace_root: Optional[Any]) -> TicketFlowClea
     )
 
 
-def format_ticket_flow_cleanliness_line(workspace_root: Optional[Any]) -> str:
-    """Render the compact live ticket-flow state line for chat surfaces."""
-    return get_ticket_flow_cleanliness(workspace_root).line
-
-
 def _has_previous_run_state(workspace_root: Path) -> bool:
     car_root = workspace_root / ".codex-autorunner"
     for key in ("runs", "flows"):
@@ -98,6 +93,5 @@ def _has_previous_run_state(workspace_root: Path) -> bool:
 __all__ = [
     "TicketFlowCleanliness",
     "TicketFlowCleanlinessState",
-    "format_ticket_flow_cleanliness_line",
     "get_ticket_flow_cleanliness",
 ]
