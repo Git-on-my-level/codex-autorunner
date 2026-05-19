@@ -730,12 +730,12 @@ def _ticket_run_group_status(
     raw_status = _normalize_kind_text(_str_or_none(raw.get("status")))
     if raw_status in {"running", "waiting", "failed", "done", "idle"}:
         return cast(Literal["running", "waiting", "failed", "done", "idle"], raw_status)
-    if _int_fallback(raw.get("failed_count"), 0) > 0:
-        return "failed"
-    if _int_fallback(raw.get("running_count"), 0) > 0:
-        return "running"
     if _int_fallback(raw.get("waiting_count"), 0) > 0:
         return "waiting"
+    if _int_fallback(raw.get("running_count"), 0) > 0:
+        return "running"
+    if _int_fallback(raw.get("failed_count"), 0) > 0:
+        return "failed"
     total = _int_fallback(
         raw.get("total_count"), _int_fallback(raw.get("child_count"), 0)
     )

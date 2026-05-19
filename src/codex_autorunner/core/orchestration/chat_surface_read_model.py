@@ -1046,6 +1046,7 @@ class ChatSurfaceReadService:
                 }
             else:
                 facts["ticket_flow_thread_links"] = None
+            facts["ticket_flow_ticket_files"] = _ticket_flow_ticket_file_signature(conn)
             if _table_exists(conn, "orch_flow_run_projections"):
                 row = conn.execute(
                     """
@@ -1391,6 +1392,10 @@ class ChatSurfaceReadService:
                     "flow_type": _normalize_text(metadata.get("flow_type")),
                     "run_id": _normalize_text(metadata.get("run_id")),
                     "ticket_id": _normalize_text(metadata.get("ticket_id")),
+                    "ticket_path": _normalize_text(metadata.get("ticket_path")),
+                    "ticket_done": _bool_or_none(metadata.get("ticket_done")),
+                    "ticket_status": _normalize_text(metadata.get("ticket_status")),
+                    "workspace_root": _normalize_text(metadata.get("workspace_root")),
                     "backend_thread_id": _normalize_text(
                         _row_get(row, "backend_thread_id")
                     ),
@@ -1614,6 +1619,54 @@ def _stable_revision(payload: Mapping[str, Any]) -> str:
     return hashlib.sha256(basis.encode("utf-8")).hexdigest()
 
 
+def _ticket_flow_ticket_file_signature(conn: Any) -> list[dict[str, Any]]:
+    if not _table_exists(conn, "orch_thread_targets"):
+        return []
+    rows = conn.execute(
+        """
+        SELECT json_extract(metadata_json, '$.workspace_root') AS workspace_root,
+               json_extract(metadata_json, '$.ticket_path') AS ticket_path
+          FROM orch_thread_targets
+         WHERE json_extract(metadata_json, '$.flow_type') = 'ticket_flow'
+           AND json_extract(metadata_json, '$.ticket_path') IS NOT NULL
+        """
+    ).fetchall()
+    facts: list[dict[str, Any]] = []
+    seen: set[tuple[str, str]] = set()
+    for row in rows:
+        workspace_root = _normalize_text(row["workspace_root"])
+        ticket_path = _normalize_text(row["ticket_path"])
+        if workspace_root is None or ticket_path is None:
+            continue
+        key = (workspace_root, ticket_path)
+        if key in seen:
+            continue
+        seen.add(key)
+        path = Path(ticket_path)
+        if not path.is_absolute():
+            path = Path(workspace_root) / path
+        fact: dict[str, Any] = {
+            "workspace_root": workspace_root,
+            "ticket_path": ticket_path,
+        }
+        try:
+            resolved_path = path.resolve()
+            resolved_root = Path(workspace_root).resolve()
+            resolved_path.relative_to(resolved_root)
+            stat = resolved_path.stat()
+            fact.update({"mtime_ns": stat.st_mtime_ns, "size": stat.st_size})
+        except (OSError, ValueError):
+            fact["missing"] = True
+        facts.append(fact)
+    return sorted(
+        facts,
+        key=lambda item: (
+            str(item.get("workspace_root") or ""),
+            str(item.get("ticket_path") or ""),
+        ),
+    )
+
+
 def _chat_index_rows_from_surfaces(
     surfaces: Iterable[Mapping[str, Any]],
 ) -> list[dict[str, Any]]:
@@ -1771,6 +1824,7 @@ def _chat_index_rows_from_surfaces(
                 "flow_type",
                 "model",
                 "active_turn_id",
+                "workspace_root",
                 "ticket_id",
                 "ticket_path",
                 "ticket_done",
@@ -1806,6 +1860,7 @@ def _chat_index_rows_from_surfaces(
         row["display_title"] = _normalize_text(row.get("chat_display_name")) or str(
             row.get("title") or row.get("chat_id") or row.get("row_id") or ""
         )
+        _apply_ticket_flow_child_state(row)
         row["technical_title"] = _normalize_text(row.get("technical_title")) or str(
             row.get("managed_thread_id") or row.get("row_id") or ""
         )
@@ -2252,6 +2307,109 @@ def _chat_ticket_group_id(row: Mapping[str, Any]) -> Optional[str]:
     return None
 
 
+def _apply_ticket_flow_child_state(row: dict[str, Any]) -> None:
+    """Populate ticket-flow progress fields without changing chat lifecycle."""
+
+    if _normalize_kind(row.get("flow_type")) != "ticket_flow":
+        return
+
+    ticket_file_done = _ticket_done_from_row_path(row)
+    if ticket_file_done is not None:
+        row["ticket_done"] = ticket_file_done
+        row["ticket_status"] = (
+            "done"
+            if ticket_file_done
+            else _ticket_status_fallback(row, allow_done=False)
+        )
+        return
+
+    explicit_done = _bool_or_none(row.get("ticket_done"))
+    if explicit_done is True:
+        row["ticket_done"] = True
+        row["ticket_status"] = "done"
+        return
+    if explicit_done is False:
+        row["ticket_done"] = False
+
+    explicit_status = _normalize_kind(row.get("ticket_status"))
+    if explicit_status in {"done", "running", "waiting", "failed", "unknown"}:
+        row["ticket_status"] = explicit_status
+        if explicit_status == "done":
+            row["ticket_done"] = True
+        return
+
+    row["ticket_status"] = _ticket_status_fallback(row)
+
+
+def _ticket_status_fallback(row: Mapping[str, Any], *, allow_done: bool = True) -> str:
+    if int(row.get("queue_depth") or 0) > 0:
+        return "waiting"
+    runtime_raw = _normalize_kind(
+        row.get("runtime_status") or row.get("target_runtime_status")
+    )
+    runtime = _status_to_lifecycle(runtime_raw)
+    if allow_done and runtime == "idle" and runtime_raw in _TERMINAL_SUCCESS_STATUSES:
+        return "done"
+    if runtime in {"running", "failed"}:
+        return runtime
+    if _normalize_kind(row.get("lifecycle")) == "running":
+        return "running"
+    return "unknown"
+
+
+def _ticket_done_from_row_path(row: Mapping[str, Any]) -> Optional[bool]:
+    ticket_path = _normalize_text(row.get("ticket_path"))
+    workspace_root = _normalize_text(row.get("workspace_root"))
+    if ticket_path is None or workspace_root is None:
+        return None
+    path = Path(ticket_path)
+    if not path.is_absolute():
+        path = Path(workspace_root) / path
+    try:
+        resolved_path = path.resolve()
+        resolved_root = Path(workspace_root).resolve()
+        resolved_path.relative_to(resolved_root)
+    except (OSError, ValueError):
+        return None
+    frontmatter = _read_markdown_frontmatter_mapping(resolved_path)
+    ticket_done = _bool_or_none(frontmatter.get("done"))
+    if ticket_done is None:
+        return None
+    return ticket_done
+
+
+def _read_markdown_frontmatter_mapping(path: Path) -> dict[str, str]:
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return {}
+    if not lines or lines[0].strip() != "---":
+        return {}
+    data: dict[str, str] = {}
+    for line in lines[1:]:
+        if line.strip() == "---":
+            return data
+        key, separator, value = line.partition(":")
+        if not separator:
+            continue
+        key = key.strip()
+        if key:
+            data[key] = value.strip().strip("\"'")
+    return {}
+
+
+def _bool_or_none(value: Any) -> Optional[bool]:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"true", "1", "yes"}:
+            return True
+        if normalized in {"false", "0", "no"}:
+            return False
+    return None
+
+
 def _ticket_run_groups(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     grouped: dict[str, list[dict[str, Any]]] = {}
     for row in rows:
@@ -2359,12 +2517,12 @@ def _ticket_run_group_status(
     waiting_count: int,
     failed_count: int,
 ) -> str:
-    if failed_count > 0:
-        return "failed"
-    if running_count > 0:
-        return "running"
     if waiting_count > 0:
         return "waiting"
+    if running_count > 0:
+        return "running"
+    if failed_count > 0:
+        return "failed"
     if total_count > 0 and done_count >= total_count:
         return "done"
     return "idle"

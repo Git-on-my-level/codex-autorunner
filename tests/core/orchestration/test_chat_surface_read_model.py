@@ -11,6 +11,7 @@ from codex_autorunner.core.orchestration import (
     ChatSurfaceReadService,
     OrchestrationBindingStore,
     SQLiteChatSurfaceEventJournal,
+    ticket_flow_thread_metadata,
 )
 from codex_autorunner.core.orchestration.chat_surface_read_model import (
     _chat_index_sort_key_parts,
@@ -134,6 +135,27 @@ def _seed_execution(
                 created_at,
             ),
         )
+
+
+def _write_ticket(path: Path, *, done: bool) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        "\n".join(
+            [
+                "---",
+                f'title: "{path.stem}"',
+                'agent: "codex"',
+                f"done: {'true' if done else 'false'}",
+                f'ticket_id: "tkt_{path.stem}"',
+                "---",
+                "",
+                "## Goal",
+                "- Test ticket.",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
 
 
 def _mark_projected_thread_archived(hub_root: Path, thread_id: str) -> None:
@@ -802,6 +824,116 @@ def test_chat_index_carries_ticket_flow_metadata_for_grouping(
         limit=20,
     )
     assert active["rows"] == []
+
+
+def test_chat_index_ticket_run_group_counts_ticket_flow_child_progress(
+    tmp_path: Path,
+) -> None:
+    hub_root = tmp_path / "hub"
+    repo_root = tmp_path / "repo"
+    for index in range(1, 6):
+        status = "completed" if index <= 3 else "running"
+        _seed_thread(
+            hub_root,
+            thread_id=f"thread-ticket-flow-{index}",
+            repo_id="repo-1",
+            resource_kind="worktree",
+            resource_id="repo-1--ticket-flow",
+            runtime_status=status,
+            metadata=ticket_flow_thread_metadata(
+                flow_run_id="run-100",
+                ticket_id=f"TICKET-{index:03d}",
+                workspace_root=str(repo_root),
+                ticket_path=f".codex-autorunner/tickets/TICKET-{index:03d}.md",
+            ),
+        )
+
+    grouped = ChatSurfaceReadService(hub_root, durable=False).chat_index_snapshot(
+        view="ticket_run",
+        group_by="ticket_run",
+        limit=20,
+    )
+
+    assert grouped["rows"] == [
+        {
+            **grouped["rows"][0],
+            "row_type": "group",
+            "kind": "ticket_run_group",
+            "group_id": "run:run-100",
+            "run_id": "run-100",
+            "child_count": 5,
+            "total_count": 5,
+            "done_count": 3,
+            "running_count": 2,
+            "waiting_count": 0,
+            "failed_count": 0,
+            "status": "running",
+        }
+    ]
+
+
+def test_chat_index_ticket_run_group_ignores_generic_completed_ticket_chat(
+    tmp_path: Path,
+) -> None:
+    hub_root = tmp_path / "hub"
+    _seed_thread(
+        hub_root,
+        thread_id="thread-generic-ticket",
+        repo_id="repo-1",
+        resource_kind="ticket",
+        resource_id="TICKET-999",
+        runtime_status="completed",
+    )
+
+    grouped = ChatSurfaceReadService(hub_root, durable=False).chat_index_snapshot(
+        view="ticket_run",
+        group_by="ticket_run",
+        limit=20,
+    )
+
+    assert grouped["rows"][0]["group_id"] == "ticket:TICKET-999"
+    assert grouped["rows"][0]["done_count"] == 0
+    assert grouped["rows"][0]["status"] == "idle"
+
+
+def test_chat_index_ticket_file_frontmatter_wins_over_thread_state(
+    tmp_path: Path,
+) -> None:
+    hub_root = tmp_path / "hub"
+    repo_root = tmp_path / "repo"
+    ticket_path = repo_root / ".codex-autorunner" / "tickets" / "TICKET-010.md"
+    _write_ticket(ticket_path, done=False)
+    _seed_thread(
+        hub_root,
+        thread_id="thread-ticket-flow-conflict",
+        repo_id="repo-1",
+        resource_kind="worktree",
+        resource_id="repo-1--ticket-flow",
+        runtime_status="completed",
+        metadata=ticket_flow_thread_metadata(
+            flow_run_id="run-101",
+            ticket_id="TICKET-010",
+            workspace_root=str(repo_root),
+            ticket_path=".codex-autorunner/tickets/TICKET-010.md",
+            extra={"ticket_done": True, "ticket_status": "done"},
+        ),
+    )
+
+    grouped = ChatSurfaceReadService(hub_root, durable=False).chat_index_snapshot(
+        view="ticket_run",
+        group_by="ticket_run",
+        limit=20,
+    )
+    child = ChatSurfaceReadService(hub_root, durable=False).chat_index_snapshot(
+        view="ticket_run",
+        group_by="ticket_run",
+        parent_group_id="run:run-101",
+        limit=20,
+    )["rows"][0]
+
+    assert child["ticket_done"] is False
+    assert child["ticket_status"] == "unknown"
+    assert grouped["rows"][0]["done_count"] == 0
 
 
 def test_chat_index_sorts_by_conversation_activity_not_metadata_hydration(
