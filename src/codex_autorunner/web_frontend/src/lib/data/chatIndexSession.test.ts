@@ -102,7 +102,7 @@ describe('chat index session', () => {
     expect(client.chatIndex).toHaveBeenNthCalledWith(1, { filter: 'all', limit: 50 });
     expect(streamFactory).toHaveBeenCalledWith(expect.objectContaining({
       key: 'chat.index.entity',
-      path: '/hub/read-models/chats/patches',
+      path: '/hub/read-models/chats/patches?filter=all',
       eventTypes: ['chat.index.patch', 'projection.cursor_gap']
     }));
     const streamOptions = streamFactory.mock.calls[0]?.[0] as ReadModelStreamOptions<ChatIndexPatchEvent>;
@@ -188,7 +188,7 @@ describe('chat index session', () => {
     expect(streamFactory).toHaveBeenCalledTimes(1);
     expect(streamFactory).toHaveBeenNthCalledWith(1, expect.objectContaining({
       key: 'chat.index.entity',
-      path: '/hub/read-models/chats/patches'
+      path: '/hub/read-models/chats/patches?filter=all'
     }));
   });
 

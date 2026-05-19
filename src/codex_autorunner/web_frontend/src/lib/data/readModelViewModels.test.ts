@@ -7,6 +7,7 @@ import {
   pmaChatSummaryToChatIndexRow,
   selectPmaChats,
   selectRepoSummaries,
+  selectTicketRunGroups,
   selectWorktreeSummaries
 } from './readModelViewModels';
 import { chatSurfaceFilterToken, filterPmaChats } from '$lib/viewModels/pmaChat';
@@ -219,5 +220,59 @@ describe('read model view-model selectors', () => {
     expect(selectRepoSummaries(store.snapshot())[0].raw.worktree_setup_commands).toEqual(['make setup']);
     expect(selectRepoSummaries(store.snapshot())[0].raw.is_pinned).toBe(true);
     expect(selectWorktreeSummaries(store.snapshot())[0].repoId).toBe('repo-1');
+  });
+
+  it('preserves backend ticket-flow fields and ticket-run groups', () => {
+    const store = new ReadModelEntityStore();
+    const request = { filter: 'ticket_runs' as const, groupBy: 'ticket_run' as const, limit: 50 };
+    store.applyChatIndexSnapshot({
+      cursor,
+      rows: [
+        {
+          chatId: 'ticket-chat-1',
+          surface: 'pma',
+          title: 'Ticket chat',
+          status: 'idle',
+          runtimeStatus: 'completed',
+          unreadCount: 0,
+          lastActivityAt: now,
+          repoId: 'repo-1',
+          worktreeId: 'wt-1',
+          ticketId: 'TICKET-001',
+          ticketPath: '.codex-autorunner/tickets/TICKET-001.md',
+          ticketDone: true,
+          ticketStatus: 'done',
+          runId: 'run-1',
+          groupId: 'run:run-1',
+          flowType: 'ticket_flow'
+        }
+      ],
+      groups: [
+        {
+          kind: 'ticket_run_group',
+          groupId: 'run:run-1',
+          runId: 'run-1',
+          scopeKind: 'worktree',
+          scopeId: 'wt-1',
+          label: 'run:run-1',
+          status: 'running',
+          totalCount: 5,
+          doneCount: 3,
+          runningCount: 2,
+          waitingCount: 0,
+          failedCount: 0,
+          unreadCount: 0,
+          updatedAt: now
+        }
+      ],
+      counters: { total: 5, waiting: 0, running: 2, unread: 0, archived: 0 },
+      filter: 'ticket_runs',
+      window: { limit: 50, totalIsExact: true }
+    }, request);
+
+    const summary = selectPmaChats(store.snapshot(), request)[0];
+    expect(summary.ticketDone).toBe(true);
+    expect(summary.ticketStatus).toBe('done');
+    expect(selectTicketRunGroups(store.snapshot(), request)[0].doneCount).toBe(3);
   });
 });

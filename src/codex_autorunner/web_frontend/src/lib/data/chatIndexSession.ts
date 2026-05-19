@@ -100,7 +100,7 @@ export function createChatIndexSession(deps: ChatIndexSessionDeps = {}): ChatInd
     if (stream) return;
     stream = streamFactory({
       key: 'chat.index.entity',
-      path: '/hub/read-models/chats/patches',
+      path: chatIndexPatchPath(currentRequest),
       eventTypes: ['chat.index.patch', 'projection.cursor_gap'],
       cursorStorage: seededCursorStorage(
         store.snapshot().chatIndexCursor?.sequence
@@ -139,6 +139,17 @@ export function createChatIndexSession(deps: ChatIndexSessionDeps = {}): ChatInd
 }
 
 export const chatIndexSession = createChatIndexSession();
+
+function chatIndexPatchPath(request: ChatIndexRequest): string {
+  const params = new URLSearchParams({
+    filter: request.filter ?? 'all'
+  });
+  if (request.query) params.set('search', request.query);
+  if (request.surfaceKind) params.set('surface_kind', request.surfaceKind);
+  if (request.groupBy) params.set('group_by', request.groupBy);
+  if (request.parentGroupId) params.set('parent_group_id', request.parentGroupId);
+  return `/hub/read-models/chats/patches?${params.toString()}`;
+}
 
 const fallbackCursorMemory = new Map<string, string>();
 const fallbackCursorStorage: CursorStorage = {
@@ -184,6 +195,8 @@ function sameChatIndexRequest(left: ChatIndexRequest | null, right: ChatIndexReq
     (left.filter ?? 'all') === (right.filter ?? 'all') &&
     (left.limit ?? 50) === (right.limit ?? 50) &&
     (left.query ?? '') === (right.query ?? '') &&
-    (left.surfaceKind ?? '') === (right.surfaceKind ?? '')
+    (left.surfaceKind ?? '') === (right.surfaceKind ?? '') &&
+    (left.groupBy ?? '') === (right.groupBy ?? '') &&
+    (left.parentGroupId ?? '') === (right.parentGroupId ?? '')
   );
 }

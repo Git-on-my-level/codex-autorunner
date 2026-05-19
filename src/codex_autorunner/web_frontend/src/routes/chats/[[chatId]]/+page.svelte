@@ -26,6 +26,7 @@
     selectPmaProgress,
     selectPmaQueue,
     selectChatTranscript,
+    selectTicketRunGroups,
     selectWorktreeSummaries,
     selectReadMarkers
   } from '$lib/data';
@@ -80,12 +81,12 @@
   } from '$lib/viewModels/domain';
   import {
     adjustedUnreadFilterCount,
-    buildChatListEntries,
+    buildSemanticChatListEntries,
     buildPmaChatScopeOptions,
     buildPmaLiveActivity,
     buildManagedThreadMessagePayload,
     buildPmaStatusBar,
-    countTicketRunGroups,
+    countSemanticTicketRunGroups,
     filterChatEntries,
     formatBytes,
     formatRelativeTime,
@@ -178,8 +179,14 @@
   let detailMode = $state<'list' | 'detail'>('list');
   let search = $state('');
   const currentChatIndexRequest = $derived<ChatIndexWindowRequest>(chatIndexRequestForCurrentFilters());
+  const ticketRunGroupRequest = $derived<ChatIndexWindowRequest>({
+    filter: 'ticket_runs',
+    groupBy: 'ticket_run',
+    limit: 50
+  });
   const persistedChats = $derived<PmaChatSummary[]>(selectPmaChats(readModelState, currentChatIndexRequest));
   const facetPersistedChats = $derived<PmaChatSummary[]>(selectPmaChats(readModelState, { filter: 'all', limit: 50 }));
+  const backendTicketRunGroups = $derived(selectTicketRunGroups(readModelState, ticketRunGroupRequest));
   const committedChatPlaceholders = $derived<PmaChatSummary[]>(
     [committedDraftChat].filter((chat): chat is PmaChatSummary => Boolean(chat))
   );
@@ -194,6 +201,9 @@
   );
   const facetChats = $derived<PmaChatSummary[]>(
     mergeChatFacetSourceChats(facetPersistedChats, persistedChats, committedChatPlaceholders)
+  );
+  const chatListSourceChats = $derived<PmaChatSummary[]>(
+    filter === CHAT_TICKET_RUNS_FILTER ? facetChats : chats
   );
 
   function chatSummaryForId(chatId: string | null): PmaChatSummary | null {
@@ -354,7 +364,7 @@
   let expandedRunGroups = $state<Record<string, boolean>>({});
   let pinnedChatIds = $state<Record<string, true>>({});
   const chatListEntries = $derived(
-    buildChatListEntries(chats, {
+    buildSemanticChatListEntries(chatListSourceChats, backendTicketRunGroups, {
       lastSeen: lastSeenMap,
       repoLabel: repoLabelForRepoId,
       worktreeLabel: (wid) => worktreeScopeOption(wid)?.label ?? null,
@@ -364,7 +374,7 @@
   const filteredEntries = $derived(sortEntriesForPinnedChats(filterChatEntries(chatListEntries, filter, search, lastSeenMap), pinnedChatIds));
   const filterCounts = $derived(chatStatusFilterCounts());
   const surfaceFilterChips = $derived(chatSurfaceFilterOptions(facetChats));
-  const ticketRunGroupCount = $derived(countTicketRunGroups(facetChats));
+  const ticketRunGroupCount = $derived(countSemanticTicketRunGroups(backendTicketRunGroups, facetChats));
   const localChatPlaceholderCount = $derived(visibleLocalChatPlaceholders.filter((chat) => !isPmaChatArchived(chat)).length);
   const activeChatCount = $derived(readModelState.chatCounters.total + localChatPlaceholderCount);
   const hasUsableChatIndex = $derived(Boolean(readModelState.chatIndexCursor || readModelState.chatOrder.length > 0));
@@ -615,6 +625,7 @@
       filter: readModelChatIndexFilter(filter),
       query: search.trim() || null,
       surfaceKind: filter.startsWith('surface:') ? filter.slice('surface:'.length) : null,
+      groupBy: filter === CHAT_TICKET_RUNS_FILTER ? 'ticket_run' : null,
       limit: 50
     };
   }

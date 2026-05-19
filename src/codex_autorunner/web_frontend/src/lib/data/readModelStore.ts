@@ -80,6 +80,8 @@ export type ChatIndexWindowRequest = {
   filter?: ChatIndexSnapshot['filter'];
   query?: string | null;
   surfaceKind?: string | null;
+  groupBy?: 'ticket_run' | null;
+  parentGroupId?: string | null;
   limit?: number;
 };
 
@@ -90,6 +92,8 @@ export type ChatIndexWindow = {
   request: Required<Pick<ChatIndexWindowRequest, 'filter'>> & {
     query: string | null;
     surfaceKind: string | null;
+    groupBy: 'ticket_run' | null;
+    parentGroupId: string | null;
     limit: number;
   };
   rowIds: string[];
@@ -245,6 +249,8 @@ export class ReadModelEntityStore implements Readable<ReadModelEntityState> {
       filter: request.filter ?? snapshot.filter,
       query: request.query ?? snapshot.query,
       surfaceKind: request.surfaceKind,
+      groupBy: request.groupBy,
+      parentGroupId: request.parentGroupId,
       limit: request.limit ?? snapshot.window?.limit
     });
     const windowKey = canonicalChatIndexWindowKey(windowRequest);
@@ -1086,6 +1092,7 @@ function retainedChatIndexRowIds(state: ReadModelEntityState): Set<string> {
 }
 
 function chatIndexRowMatchesWindow(row: ChatIndexRow, request: ChatIndexWindow['request']): boolean {
+  if (request.parentGroupId && row.groupId !== request.parentGroupId) return false;
   if (request.surfaceKind && row.surface !== request.surfaceKind) return false;
   if (!chatIndexRowMatchesFilter(row, request.filter)) return false;
   if (!request.query) return true;
@@ -1110,6 +1117,8 @@ export function canonicalChatIndexWindowKey(request: ChatIndexWindowRequest = {}
     filter: normalized.filter,
     query: normalized.query,
     surfaceKind: normalized.surfaceKind,
+    groupBy: normalized.groupBy,
+    parentGroupId: normalized.parentGroupId,
     limit: normalized.limit
   });
 }
@@ -1117,20 +1126,25 @@ export function canonicalChatIndexWindowKey(request: ChatIndexWindowRequest = {}
 function normalizeChatIndexWindowRequest(request: ChatIndexWindowRequest = {}): Required<Pick<ChatIndexWindowRequest, 'filter'>> & {
   query: string | null;
   surfaceKind: string | null;
+  groupBy: 'ticket_run' | null;
+  parentGroupId: string | null;
   limit: number;
 } {
   const query = request.query?.trim() || null;
   const surfaceKind = request.surfaceKind?.trim() || null;
+  const parentGroupId = request.parentGroupId?.trim() || null;
   return {
     filter: request.filter ?? 'all',
     query,
     surfaceKind,
+    groupBy: request.groupBy === 'ticket_run' ? 'ticket_run' : null,
+    parentGroupId,
     limit: request.limit ?? 50
   };
 }
 
 function isDefaultChatIndexWindow(request: ReturnType<typeof normalizeChatIndexWindowRequest>): boolean {
-  return request.filter === 'all' && request.query === null && request.surfaceKind === null;
+  return request.filter === 'all' && request.query === null && request.surfaceKind === null && request.groupBy === null && request.parentGroupId === null;
 }
 
 function keyed<T>(items: T[], key: (item: T) => string): Record<string, T> {

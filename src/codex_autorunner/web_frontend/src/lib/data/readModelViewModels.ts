@@ -1,4 +1,4 @@
-import type { ChatIndexCounters, ChatIndexRow, ProjectionCursor, RuntimeProjection } from '$lib/api/readModelContracts';
+import type { ChatIndexCounters, ChatIndexGroup, ChatIndexRow, ProjectionCursor, RuntimeProjection, TicketRunGroup } from '$lib/api/readModelContracts';
 import {
   buildTicketListViewModel,
   type SurfaceActionManifest,
@@ -167,10 +167,22 @@ export function chatIndexRowToPmaChatSummary(row: ChatIndexRow): PmaChatSummary 
         row.groupId?.startsWith('run')
     ),
     ticketDone: row.ticketDone ?? null,
+    ticketStatus: row.ticketStatus ?? null,
     progressPercent: null,
     updatedAt: row.lastActivityAt ?? null,
     raw
   };
+}
+
+export function selectTicketRunGroups(state: ReadModelEntityState, request?: ChatIndexWindowRequest): TicketRunGroup[] {
+  const groups = request
+    ? selectChatIndexWindowView(state, request).groups
+    : state.chatGroupOrder.map((id) => state.chatGroups[id]).filter(Boolean);
+  return groups.filter(isTicketRunGroup);
+}
+
+function isTicketRunGroup(group: ChatIndexGroup): group is TicketRunGroup {
+  return group.kind === 'ticket_run_group';
 }
 
 export function selectPmaChats(state: ReadModelEntityState, request?: ChatIndexWindowRequest): PmaChatSummary[] {

@@ -1,3 +1,4 @@
+import type { TicketRunGroup } from '$lib/api/readModelContracts';
 import type {
   PmaChatMessage,
   PmaMessageCapsuleRef,
@@ -772,6 +773,7 @@ export type ChatRunGroup = {
   agents: string[];
   status: WorkStatus;
   updatedAt: string | null;
+  aggregateSource?: 'backend' | 'legacy';
 };
 
 export type ChatListEntry =
@@ -795,6 +797,11 @@ export function countTicketRunGroups(chats: PmaChatSummary[]): number {
     if (key) keys.add(key);
   }
   return keys.size;
+}
+
+export function countSemanticTicketRunGroups(groups: TicketRunGroup[], chats: PmaChatSummary[] = []): number {
+  if (groups.length > 0) return groups.length;
+  return countTicketRunGroups(chats);
 }
 
 function isUnread(chat: PmaChatSummary, lastSeen: Record<string, string>): boolean {
@@ -916,6 +923,107 @@ export function buildChatListEntries(
   return sortables.map((item) => item.entry);
 }
 
+export function buildSemanticChatListEntries(
+  chats: PmaChatSummary[],
+  groups: TicketRunGroup[],
+  options: {
+    lastSeen?: Record<string, string>;
+    repoLabel?: (repoId: string) => string | null;
+    worktreeLabel?: (worktreeId: string) => string | null;
+    groupRuns?: boolean;
+  } = {}
+): ChatListEntry[] {
+  if (options.groupRuns === false || groups.length === 0) return buildChatListEntries(chats, options);
+
+  const lastSeen = options.lastSeen ?? {};
+  const chatsByGroup = new Map<string, PmaChatSummary[]>();
+  const groupedIds = new Set<string>();
+  for (const chat of chats) {
+    const groupId = backendGroupIdForChat(chat);
+    if (!groupId && !chatRunGroupKey(chat)) continue;
+    const key = groupId || chatRunGroupKey(chat);
+    if (!key) continue;
+    const bucket = chatsByGroup.get(key) ?? [];
+    bucket.push(chat);
+    chatsByGroup.set(key, bucket);
+  }
+
+  const entries: ChatListEntry[] = [];
+  const seenGroups = new Set(groups.map((group) => group.groupId));
+  for (const group of groups) {
+    const children = sortChatsUnreadFirst(chatsByGroup.get(group.groupId) ?? [], lastSeen);
+    for (const child of children) groupedIds.add(child.id);
+    const labelLookup = group.scopeKind === 'worktree' ? options.worktreeLabel : options.repoLabel;
+    const agents = [...new Set(children.map((chat) => chat.agentId).filter((agent): agent is string => Boolean(agent)))].sort();
+    entries.push({
+      kind: 'group',
+      group: {
+        key: group.groupId,
+        scopeKind: group.scopeKind,
+        scopeId: group.scopeId,
+        scopeLabel: labelLookup?.(group.scopeId) ?? group.scopeId,
+        chats: children,
+        totalCount: group.totalCount,
+        unreadCount: group.unreadCount,
+        activeCount: group.runningCount,
+        waitingCount: group.waitingCount,
+        doneCount: group.doneCount,
+        failedCount: group.failedCount,
+        agents,
+        status: group.status,
+        updatedAt: group.updatedAt ?? null,
+        aggregateSource: 'backend'
+      }
+    });
+  }
+
+  for (const chat of chats) {
+    if (groupedIds.has(chat.id)) continue;
+    const key = chatRunGroupKey(chat);
+    if (key && seenGroups.has(key)) continue;
+    entries.push({ kind: 'chat', chat });
+  }
+  return sortChatListEntries(entries, lastSeen);
+}
+
+function backendGroupIdForChat(chat: PmaChatSummary): string | null {
+  const row = chat.raw.row;
+  if (row && typeof row === 'object' && !Array.isArray(row)) {
+    const value = (row as Record<string, unknown>).groupId;
+    if (typeof value === 'string' && value.trim()) return value.trim();
+  }
+  for (const value of [chat.raw.group_id, chat.raw.groupId]) {
+    if (typeof value === 'string' && value.trim()) return value.trim();
+  }
+  return null;
+}
+
+function sortChatListEntries(entries: ChatListEntry[], lastSeen: Record<string, string>): ChatListEntry[] {
+  return [...entries].sort((left, right) => {
+    const leftChat = left.kind === 'chat' ? left.chat : null;
+    const rightChat = right.kind === 'chat' ? right.chat : null;
+    const placeholderDiff = Number(rightChat ? isLocalChatPlaceholder(rightChat) : false) - Number(leftChat ? isLocalChatPlaceholder(leftChat) : false);
+    if (placeholderDiff !== 0) return placeholderDiff;
+    const leftUnread = left.kind === 'group' ? left.group.unreadCount > 0 : isUnread(left.chat, lastSeen);
+    const rightUnread = right.kind === 'group' ? right.group.unreadCount > 0 : isUnread(right.chat, lastSeen);
+    const unreadDiff = Number(rightUnread) - Number(leftUnread);
+    if (unreadDiff !== 0) return unreadDiff;
+    const leftSort = left.kind === 'group' ? left.group.updatedAt ?? '' : left.chat.updatedAt ?? '';
+    const rightSort = right.kind === 'group' ? right.group.updatedAt ?? '' : right.chat.updatedAt ?? '';
+    const timeDiff = rightSort.localeCompare(leftSort);
+    if (timeDiff !== 0) return timeDiff;
+    const rank = (entry: ChatListEntry) => {
+      const status = entry.kind === 'group' ? entry.group.status : entry.chat.status;
+      return status === 'waiting' || status === 'blocked' ? 0 : status === 'running' ? 1 : 2;
+    };
+    const statusDiff = rank(left) - rank(right);
+    if (statusDiff !== 0) return statusDiff;
+    const leftId = left.kind === 'group' ? left.group.key : left.chat.id;
+    const rightId = right.kind === 'group' ? right.group.key : right.chat.id;
+    return leftId.localeCompare(rightId);
+  });
+}
+
 /** Filter entries against a single PMA chat filter while preserving group structure. */
 export function filterChatEntries(
   entries: ChatListEntry[],
@@ -931,9 +1039,20 @@ export function filterChatEntries(
       continue;
     }
     const matchedChats = filterPmaChats(entry.group.chats, filter, search, lastSeen);
+    if (entry.group.aggregateSource === 'backend' && filter === 'ticket_runs' && matchedChats.length === 0) {
+      const needle = search.trim().toLowerCase();
+      if (!needle || [entry.group.key, entry.group.scopeId, entry.group.scopeLabel].some((value) => value.toLowerCase().includes(needle))) {
+        out.push(entry);
+      }
+      continue;
+    }
     if (!matchedChats.length) continue;
     if (matchedChats.length === entry.group.chats.length) {
       out.push(entry);
+      continue;
+    }
+    if (entry.group.aggregateSource === 'backend') {
+      out.push({ kind: 'group', group: { ...entry.group, chats: matchedChats } });
       continue;
     }
     // Rebuild a slimmer group containing only matched chats so counts stay honest.

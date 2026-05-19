@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import type { TicketRunGroup } from '$lib/api/readModelContracts';
 import type { PmaChatSummary, PmaRunProgress, PmaTimelineItem, SurfaceArtifact } from './domain';
 import { pmaTimelineContractFields } from './domain';
 import {
@@ -19,6 +20,7 @@ import {
   compactChatTranscriptCards,
   composeMessageWithAttachments,
   countTicketRunGroups,
+  countSemanticTicketRunGroups,
   filterPmaChats,
   filterChatEntries,
   filterArtifactsForActiveChat,
@@ -52,7 +54,8 @@ import {
   sortChatsWaitingFirst,
   summarizeFilterCounts,
   summarizeVisibleLocalPlaceholderStatusCounts,
-  buildChatListEntries
+  buildChatListEntries,
+  buildSemanticChatListEntries
 } from './pmaChat';
 import { resolvePmaChatSelectorsForActiveChat } from './modelPickers';
 
@@ -197,6 +200,53 @@ describe('PMA chat view helpers', () => {
     const filtered = filterChatEntries(entries, 'ticket_runs', '', {});
     expect(filtered).toHaveLength(2);
     expect(filtered.every((e) => e.kind === 'group')).toBe(true);
+  });
+
+  it('uses backend ticket-run aggregates instead of generic chat statuses', () => {
+    const groups: TicketRunGroup[] = [
+      {
+        kind: 'ticket_run_group',
+        groupId: 'run:run-1',
+        runId: 'run-1',
+        scopeKind: 'worktree',
+        scopeId: 'wt-1',
+        label: 'run:run-1',
+        status: 'running',
+        totalCount: 5,
+        doneCount: 3,
+        runningCount: 2,
+        waitingCount: 0,
+        failedCount: 0,
+        unreadCount: 0,
+        updatedAt: '2026-05-04T05:00:00Z'
+      }
+    ];
+    const chats: PmaChatSummary[] = [
+      { ...baseChat, id: 'done-1', status: 'idle', runId: 'run-1', ticketId: 'TICKET-001', ticketDone: null, raw: { group_id: 'run:run-1' } },
+      { ...baseChat, id: 'done-2', status: 'idle', runId: 'run-1', ticketId: 'TICKET-002', ticketDone: null, raw: { group_id: 'run:run-1' } },
+      { ...baseChat, id: 'done-3', status: 'idle', runId: 'run-1', ticketId: 'TICKET-003', ticketDone: null, raw: { group_id: 'run:run-1' } },
+      { ...baseChat, id: 'running-1', status: 'running', runId: 'run-1', ticketId: 'TICKET-004', ticketDone: false, raw: { group_id: 'run:run-1' } },
+      { ...baseChat, id: 'running-2', status: 'running', runId: 'run-1', ticketId: 'TICKET-005', ticketDone: false, raw: { group_id: 'run:run-1' } },
+      { ...baseChat, id: 'generic-complete', status: 'done', runId: null, ticketId: null, isTicketFlow: false, worktreeId: null, unreadCount: 0, raw: {} }
+    ];
+
+    const entries = buildSemanticChatListEntries(chats, groups, { groupRuns: true });
+
+    expect(countSemanticTicketRunGroups(groups, chats)).toBe(1);
+    expect(entries[0].kind).toBe('group');
+    if (entries[0].kind === 'group') {
+      expect(entries[0].group.doneCount).toBe(3);
+      expect(entries[0].group.activeCount).toBe(2);
+      expect(entries[0].group.totalCount).toBe(5);
+      expect(entries[0].group.chats.map((chat) => chat.id).sort()).toEqual([
+        'done-1',
+        'done-2',
+        'done-3',
+        'running-1',
+        'running-2'
+      ]);
+    }
+    expect(entries.some((entry) => entry.kind === 'chat' && entry.chat.id === 'generic-complete')).toBe(true);
   });
 
   it('keeps separate ticket-flow runs under the same scope when run ids differ', () => {
