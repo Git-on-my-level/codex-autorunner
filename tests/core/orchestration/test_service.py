@@ -1382,7 +1382,9 @@ async def test_claim_next_queued_execution_context_preserves_typed_request_paylo
         claimed.request.metadata["existing_session_runtime_prompt"]
         == "Use the cached context."
     )
-    assert claimed.request.metadata["raw_model_prompt"] == "Use the saved context first."
+    assert (
+        claimed.request.metadata["raw_model_prompt"] == "Use the saved context first."
+    )
     assert claimed.request.metadata["user_visible_text"] == "second"
     assert claimed.request.metadata["title_seed"] == "second"
     assert claimed.request.metadata["capsule_refs"] == []

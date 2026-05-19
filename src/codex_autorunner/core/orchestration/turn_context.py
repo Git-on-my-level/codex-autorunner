@@ -76,7 +76,9 @@ def render_context_capsule_for_prompt(capsule: ContextCapsule) -> str:
     return wrap_injected_context(text)
 
 
-def capsule_refs_from_values(values: Iterable[Any]) -> tuple[ManagedThreadCapsuleRef, ...]:
+def capsule_refs_from_values(
+    values: Iterable[Any],
+) -> tuple[ManagedThreadCapsuleRef, ...]:
     refs: list[ManagedThreadCapsuleRef] = []
     for value in values:
         if isinstance(value, ManagedThreadCapsuleRef):
@@ -94,7 +96,11 @@ def capsule_refs_from_values(values: Iterable[Any]) -> tuple[ManagedThreadCapsul
             scope = _optional_text(value.get("scope"))
             source_digest = _optional_text(value.get("source_digest"))
             if not (
-                capsule_id and capsule_version and visibility and scope and source_digest
+                capsule_id
+                and capsule_version
+                and visibility
+                and scope
+                and source_digest
             ):
                 continue
             refs.append(

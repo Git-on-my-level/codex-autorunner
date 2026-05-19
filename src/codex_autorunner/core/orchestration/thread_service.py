@@ -728,7 +728,9 @@ class HarnessBackedOrchestrationService(OrchestrationThreadService):
             self.thread_store,
             thread.thread_target_id,
             execution_id=execution.execution_id,
-            message_preview=_truncate_text(turn_assembly.title_seed, MessagePreviewLimit),
+            message_preview=_truncate_text(
+                turn_assembly.title_seed, MessagePreviewLimit
+            ),
         )
         resolved_harness = harness if execution.status == "running" else None
         if resolved_harness is None and execution.status == "running":
