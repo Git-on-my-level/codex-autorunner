@@ -100,6 +100,17 @@ describe('API client error handling', () => {
             executor_kind: 'pma_turn',
             target_policy: 'hub',
             target: { repo_id: 'repo-1' },
+            product_api_version: 1,
+            editable: { can_edit_schedule: true },
+            schedule_editor: { kind: 'daily', fields: { hour: 9, minute: 0 } },
+            trigger_summary: { kind: 'schedule', label: 'schedule.fire' },
+            message_source: 'executor.message',
+            message_preview: 'Run a security scan',
+            action_preview: { kind: 'pma_turn' },
+            target_summary: { repo_id: 'repo-1', label: 'hub / repo-1' },
+            executor_summary: { kind: 'pma_turn' },
+            policy_summary: { approval_mode: 'never_require_approval' },
+            raw_links: { control_plane_rule: '/hub/api/control-plane/automations/rules/rule-1' },
             schedule: {
               schedule_id: 'schedule-1',
               schedule_kind: 'daily',
@@ -127,6 +138,12 @@ describe('API client error handling', () => {
         kind: 'security_scan_pr',
         executorKind: 'pma_turn',
         target: { repo_id: 'repo-1' },
+        product: {
+          productApiVersion: 1,
+          messageSource: 'executor.message',
+          messagePreview: 'Run a security scan',
+          scheduleEditor: { kind: 'daily', fields: { hour: 9, minute: 0 } }
+        },
         schedule: { scheduleKind: 'daily', nextFireAt: '2026-01-01T09:00:00Z' },
         lastJob: { jobId: 'job-1', state: 'succeeded' }
       });

@@ -312,7 +312,7 @@
     ticketPack.tickets = tickets.map((ticket) => ({ path: ticket.path, content: ticket.content }));
     executor.ticket_pack = ticketPack;
     executorDraft = prettyJson(executor);
-    await savePatch({ executor }, 'ticket pack');
+    await savePatch({ ticket_body: tickets[0]?.content ?? '' }, 'ticket pack');
   }
 
   async function createPresetAutomation(): Promise<void> {

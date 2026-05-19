@@ -11,12 +11,21 @@ from zoneinfo import ZoneInfo
 from ..time_utils import now_iso
 from .engine import AutomationRuleEngine
 from .models import (
+    EXECUTOR_GITHUB_COMMENT,
+    EXECUTOR_GITHUB_REACTION,
+    EXECUTOR_MANAGED_THREAD_TURN,
     EXECUTOR_PMA_TURN,
+    EXECUTOR_PUBLISH_CHAT_NOTIFICATION,
+    EXECUTOR_PUBLISH_OPERATION,
     EXECUTOR_TICKET_FLOW,
     SCHEDULE_DAILY,
+    SCHEDULE_INTERVAL,
+    SCHEDULE_ONE_SHOT,
     SCHEDULE_WEEKLY,
     TARGET_POLICY_HUB,
     TARGET_POLICY_NEW_AUTOMATION_WORKTREE,
+    TRIGGER_KIND_EVENT,
+    TRIGGER_KIND_MANUAL,
     TRIGGER_KIND_SCHEDULE,
     AutomationEvent,
     AutomationJob,
@@ -100,6 +109,7 @@ def automation_row(store: AutomationStore, rule: AutomationRule) -> dict[str, An
     last_job = recent_jobs[0] if recent_jobs else None
     job_count = store.count_jobs(rule_id=rule.rule_id)
     schedule = schedules[0] if schedules else None
+    typed = _typed_product_projection(rule, schedule)
     return {
         "id": rule.rule_id,
         "name": rule.name,
@@ -121,6 +131,7 @@ def automation_row(store: AutomationStore, rule: AutomationRule) -> dict[str, An
         "job_count": job_count,
         "created_at": rule.created_at,
         "updated_at": rule.updated_at,
+        **typed,
     }
 
 
@@ -353,6 +364,435 @@ def display_kind(rule: AutomationRule) -> str:
     if rule.executor_kind == EXECUTOR_PMA_TURN:
         return "pma_prompt"
     return rule.executor_kind
+
+
+def _typed_product_projection(
+    rule: AutomationRule, schedule: Optional[AutomationSchedule]
+) -> dict[str, Any]:
+    schedule_editor = _schedule_editor_shape(rule, schedule)
+    message = _message_projection(rule)
+    action = _action_projection(rule)
+    managed = _managed_projection(rule)
+    diagnostics = _product_diagnostics(rule, schedule, message)
+    return {
+        "product_api_version": 1,
+        "editable": _editable_projection(rule, schedule, message),
+        "managed": managed,
+        "managed_status": managed,
+        "schedule_editor": schedule_editor,
+        "trigger_summary": _trigger_summary(rule),
+        "message": message,
+        "message_source": message["source"],
+        "message_preview": message["preview"],
+        "action_preview": action,
+        "target_summary": _target_summary(rule),
+        "executor_summary": _executor_summary(rule, message, action),
+        "policy_summary": _policy_summary(rule),
+        "diagnostics": diagnostics,
+        "raw_links": {
+            "control_plane_rule": (
+                f"/hub/api/control-plane/automations/rules/{rule.rule_id}"
+            ),
+            "control_plane_jobs": "/hub/api/control-plane/automations/jobs/query",
+            "control_plane_schedules": (
+                "/hub/api/control-plane/automations/schedules/query"
+            ),
+        },
+    }
+
+
+def _editable_projection(
+    rule: AutomationRule,
+    schedule: Optional[AutomationSchedule],
+    message: dict[str, Any],
+) -> dict[str, Any]:
+    schedule_kind = schedule.schedule_kind if schedule is not None else None
+    system_reason = _system_reason(rule)
+    raw_editable = not rule.system_owned
+    return {
+        "can_enable": True,
+        "can_rename": raw_editable,
+        "can_edit_schedule": raw_editable
+        and schedule_kind in {SCHEDULE_DAILY, SCHEDULE_WEEKLY},
+        "can_edit_message": raw_editable and message["field"] == "prompt",
+        "can_edit_ticket_body": raw_editable and message["field"] == "ticket_body",
+        "can_run_now": True,
+        "can_edit_raw": False,
+        "raw_edit_blocked_reason": (
+            "Raw rule edits are available through the control-plane API."
+        ),
+        "managed_reason": system_reason,
+    }
+
+
+def _managed_projection(rule: AutomationRule) -> dict[str, Any]:
+    reason = _system_reason(rule)
+    legacy_source = _legacy_source(rule)
+    return {
+        "system_owned": rule.system_owned,
+        "managed": rule.system_owned or legacy_source is not None,
+        "reason": reason,
+        "legacy": legacy_source is not None,
+        "legacy_source": legacy_source,
+    }
+
+
+def _system_reason(rule: AutomationRule) -> Optional[str]:
+    if rule.system_owned:
+        purpose = _optional_text(rule.metadata.get("purpose"))
+        if purpose:
+            return f"System-managed automation: {purpose}"
+        return "System-managed automation"
+    return None
+
+
+def _legacy_source(rule: AutomationRule) -> Optional[str]:
+    for key in (
+        "legacy_source_table",
+        "legacy_timer_id",
+        "legacy_subscription_id",
+        "legacy_wakeup_id",
+    ):
+        value = _optional_text(rule.metadata.get(key))
+        if value is not None:
+            return value if key == "legacy_source_table" else key
+    return None
+
+
+def _schedule_editor_shape(
+    rule: AutomationRule, schedule: Optional[AutomationSchedule]
+) -> dict[str, Any]:
+    if schedule is None:
+        kind = "event_driven" if rule.trigger_kind == TRIGGER_KIND_EVENT else "none"
+        return {
+            "kind": kind,
+            "editable": False,
+            "fields": {},
+            "timezone": None,
+            "next_fire_at": None,
+            "summary": "Event driven" if kind == "event_driven" else "No schedule",
+        }
+
+    schedule_payload = dict(schedule.schedule)
+    fields: dict[str, Any] = {}
+    if schedule.schedule_kind in {SCHEDULE_DAILY, SCHEDULE_WEEKLY}:
+        fields = {
+            "timezone": schedule.timezone,
+            "hour": schedule_payload.get("hour"),
+            "minute": schedule_payload.get("minute"),
+        }
+        if schedule.schedule_kind == SCHEDULE_WEEKLY:
+            fields["weekday"] = _first_weekday(schedule_payload.get("weekdays"))
+    elif schedule.schedule_kind == SCHEDULE_ONE_SHOT:
+        fields = {"due_at": schedule.next_fire_at}
+    elif schedule.schedule_kind == SCHEDULE_INTERVAL:
+        fields = {"interval_seconds": schedule_payload.get("interval_seconds")}
+
+    return {
+        "kind": schedule.schedule_kind,
+        "editable": (not rule.system_owned)
+        and schedule.schedule_kind in {SCHEDULE_DAILY, SCHEDULE_WEEKLY},
+        "fields": fields,
+        "timezone": schedule.timezone,
+        "next_fire_at": schedule.next_fire_at,
+        "last_fire_at": schedule.last_fire_at,
+        "state": schedule.state,
+        "summary": _format_schedule(schedule.to_dict()),
+    }
+
+
+def _trigger_summary(rule: AutomationRule) -> dict[str, Any]:
+    event_types = rule.trigger.get("event_types")
+    event_type_list = (
+        [str(item) for item in event_types] if isinstance(event_types, list) else []
+    )
+    schedule_kind = _optional_text(rule.trigger.get("schedule_kind"))
+    if rule.trigger_kind == TRIGGER_KIND_SCHEDULE:
+        label = schedule_kind or "schedule.fire"
+    elif rule.trigger_kind == TRIGGER_KIND_MANUAL:
+        label = "Manual run"
+    elif event_type_list:
+        label = ", ".join(event_type_list[:3])
+        if len(event_type_list) > 3:
+            label += f" +{len(event_type_list) - 3}"
+    else:
+        label = rule.trigger_kind
+    return {
+        "kind": rule.trigger_kind,
+        "label": label,
+        "event_types": event_type_list,
+        "filters": rule.filters,
+    }
+
+
+def _message_projection(rule: AutomationRule) -> dict[str, Any]:
+    executor = rule.executor
+    for key, field in (
+        ("message", "prompt"),
+        ("prompt", "prompt"),
+        ("prompt_template", "prompt_template"),
+    ):
+        value = _optional_text(executor.get(key))
+        if value is not None:
+            return {
+                "source": f"executor.{key}",
+                "field": field,
+                "preview": _preview(value),
+                "template": "{{" in value,
+                "editable": (not rule.system_owned) and field == "prompt",
+            }
+    ticket_body = _first_ticket_body(executor)
+    if ticket_body is not None:
+        return {
+            "source": "executor.ticket_pack.tickets[0].content",
+            "field": "ticket_body",
+            "preview": _preview(ticket_body),
+            "template": "{{" in ticket_body,
+            "editable": not rule.system_owned,
+        }
+    action_message = _action_message_source(executor)
+    if action_message is not None:
+        return {
+            "source": action_message[0],
+            "field": None,
+            "preview": _preview(action_message[1]),
+            "template": "{{" in action_message[1],
+            "editable": False,
+        }
+    if rule.executor_kind == EXECUTOR_PUBLISH_OPERATION:
+        return {
+            "source": "publish_operation.runtime",
+            "field": None,
+            "preview": "Message is generated by the publish operation at runtime.",
+            "template": False,
+            "editable": False,
+        }
+    return {
+        "source": "none",
+        "field": None,
+        "preview": "",
+        "template": False,
+        "editable": False,
+    }
+
+
+def _action_projection(rule: AutomationRule) -> dict[str, Any]:
+    executor = rule.executor
+    actions = executor.get("actions")
+    action_message = _action_message_source(executor)
+    if isinstance(actions, dict):
+        return {
+            "source": actions.get("source") or "executor.actions",
+            "kind": actions.get("kind")
+            or actions.get("operation_kind")
+            or rule.executor_kind,
+            "preview": _preview(
+                actions.get("summary")
+                or (action_message[1] if action_message is not None else None)
+                or actions.get("source")
+                or rule.executor_kind
+            ),
+            "actions": actions,
+        }
+    if isinstance(actions, list):
+        return {
+            "source": "executor.actions",
+            "kind": "action_list",
+            "preview": f"{len(actions)} action(s)",
+            "actions": actions,
+        }
+    operation_kind = _optional_text(executor.get("operation_kind"))
+    if operation_kind is not None:
+        return {
+            "source": "executor.operation_kind",
+            "kind": operation_kind,
+            "preview": operation_kind.replace("_", " "),
+            "actions": None,
+        }
+    return {
+        "source": f"executor.{rule.executor_kind}",
+        "kind": rule.executor_kind,
+        "preview": _executor_label(rule.executor_kind),
+        "actions": None,
+    }
+
+
+def _target_summary(rule: AutomationRule) -> dict[str, Any]:
+    target = dict(rule.target)
+    repo_id = (
+        _optional_text(target.get("repo_id"))
+        or _optional_text(target.get("base_repo_id"))
+        or _optional_text(rule.metadata.get("repo_id"))
+    )
+    thread_id = _optional_text(target.get("thread_id")) or _optional_text(
+        target.get("thread_target_id")
+    )
+    label_parts = [rule.target_policy]
+    if repo_id is not None:
+        label_parts.append(repo_id)
+    if thread_id is not None:
+        label_parts.append(thread_id)
+    return {
+        "policy": rule.target_policy,
+        "repo_id": repo_id,
+        "thread_id": thread_id,
+        "worktree_id": _optional_text(target.get("worktree_id")),
+        "label": " / ".join(label_parts),
+    }
+
+
+def _executor_summary(
+    rule: AutomationRule, message: dict[str, Any], action: dict[str, Any]
+) -> dict[str, Any]:
+    executor = dict(rule.executor)
+    return {
+        "kind": rule.executor_kind,
+        "label": _executor_label(rule.executor_kind),
+        "agent": _optional_text(executor.get("agent")),
+        "model": _optional_text(executor.get("model")),
+        "reasoning": _optional_text(executor.get("reasoning")),
+        "profile": _optional_text(executor.get("profile"))
+        or _optional_text(executor.get("agent_profile")),
+        "lane_id": _optional_text(executor.get("lane_id")),
+        "message_source": message["source"],
+        "action_kind": action["kind"],
+    }
+
+
+def _policy_summary(rule: AutomationRule) -> dict[str, Any]:
+    policy = dict(rule.policy)
+    return {
+        "approval_mode": policy.get("approval_mode"),
+        "max_attempts": policy.get("max_attempts"),
+        "max_concurrent_per_rule": policy.get("max_concurrent_per_rule"),
+        "max_concurrent_per_target": policy.get("max_concurrent_per_target"),
+        "dedupe_key": policy.get("dedupe_key"),
+    }
+
+
+def _product_diagnostics(
+    rule: AutomationRule,
+    schedule: Optional[AutomationSchedule],
+    message: dict[str, Any],
+) -> list[dict[str, str]]:
+    diagnostics: list[dict[str, str]] = []
+    if _legacy_source(rule) is not None:
+        diagnostics.append(
+            {
+                "code": "AUTOMATION_LEGACY_MIGRATED",
+                "severity": "info",
+                "message": "This automation was migrated from legacy PMA state.",
+            }
+        )
+    if message["source"] == "none":
+        diagnostics.append(
+            {
+                "code": "AUTOMATION_MESSAGE_NOT_DECLARED",
+                "severity": "warning",
+                "message": "No product-visible message source is declared.",
+            }
+        )
+    if schedule is not None and schedule.schedule_kind == SCHEDULE_ONE_SHOT:
+        diagnostics.append(
+            {
+                "code": "AUTOMATION_ONE_SHOT_SCHEDULE",
+                "severity": "info",
+                "message": "One-shot schedules use next_fire_at instead of recurring time fields.",
+            }
+        )
+    return diagnostics
+
+
+def _executor_label(executor_kind: str) -> str:
+    return {
+        EXECUTOR_PMA_TURN: "PMA turn",
+        EXECUTOR_TICKET_FLOW: "Ticket flow",
+        EXECUTOR_MANAGED_THREAD_TURN: "Managed thread turn",
+        EXECUTOR_PUBLISH_OPERATION: "Publish operation",
+        EXECUTOR_PUBLISH_CHAT_NOTIFICATION: "Chat notification",
+        EXECUTOR_GITHUB_REACTION: "GitHub reaction",
+        EXECUTOR_GITHUB_COMMENT: "GitHub comment",
+    }.get(executor_kind, executor_kind)
+
+
+def _first_weekday(value: Any) -> Optional[int]:
+    if isinstance(value, list) and value:
+        try:
+            return int(value[0])
+        except (TypeError, ValueError):
+            return None
+    return None
+
+
+def _first_ticket_body(executor: dict[str, Any]) -> Optional[str]:
+    ticket_pack = executor.get("ticket_pack") or executor.get("pack")
+    if not isinstance(ticket_pack, dict):
+        return None
+    tickets = ticket_pack.get("tickets")
+    if not isinstance(tickets, list) or not tickets:
+        return None
+    first = tickets[0]
+    if not isinstance(first, dict):
+        return None
+    return _optional_text(first.get("content") or first.get("body"))
+
+
+def _action_message_source(executor: dict[str, Any]) -> Optional[tuple[str, str]]:
+    actions = executor.get("actions")
+    candidates: list[tuple[str, Any]] = []
+    if isinstance(actions, dict):
+        candidates.extend(
+            [
+                ("executor.actions.message.text", _nested(actions, "message", "text")),
+                (
+                    "executor.actions.message.template",
+                    _nested(actions, "message", "template"),
+                ),
+                ("executor.actions.message", actions.get("message")),
+                ("executor.actions.summary", actions.get("summary")),
+            ]
+        )
+    elif isinstance(actions, list):
+        for index, action in enumerate(actions):
+            if isinstance(action, dict):
+                candidates.extend(
+                    [
+                        (
+                            f"executor.actions[{index}].message.text",
+                            _nested(action, "message", "text"),
+                        ),
+                        (
+                            f"executor.actions[{index}].message.template",
+                            _nested(action, "message", "template"),
+                        ),
+                        (f"executor.actions[{index}].message", action.get("message")),
+                        (f"executor.actions[{index}].summary", action.get("summary")),
+                    ]
+                )
+    for source, value in candidates:
+        text = _optional_text(value)
+        if text is not None:
+            return source, text
+    return None
+
+
+def _nested(value: dict[str, Any], *keys: str) -> Any:
+    current: Any = value
+    for key in keys:
+        if not isinstance(current, dict):
+            return None
+        current = current.get(key)
+    return current
+
+
+def _preview(value: Any, *, limit: int = 180) -> str:
+    text = _optional_text(value)
+    if text is None:
+        return ""
+    collapsed = re.sub(r"\s+", " ", text).strip()
+    if len(collapsed) <= limit:
+        return collapsed
+    return f"{collapsed[: limit - 3].rstrip()}..."
 
 
 def format_automation_list(overview: dict[str, Any], *, limit: int = 10) -> str:

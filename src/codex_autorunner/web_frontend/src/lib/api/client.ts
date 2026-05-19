@@ -151,6 +151,23 @@ export type AutomationJobSummary = {
   raw: JsonRecord;
 };
 
+export type AutomationProductProjection = {
+  productApiVersion: number;
+  editable: JsonRecord;
+  managed: JsonRecord;
+  scheduleEditor: JsonRecord;
+  triggerSummary: JsonRecord;
+  message: JsonRecord;
+  messageSource: string;
+  messagePreview: string;
+  actionPreview: JsonRecord;
+  targetSummary: JsonRecord;
+  executorSummary: JsonRecord;
+  policySummary: JsonRecord;
+  diagnostics: JsonRecord[];
+  rawLinks: JsonRecord;
+};
+
 export type AutomationSummary = {
   id: string;
   name: string;
@@ -167,6 +184,7 @@ export type AutomationSummary = {
   jobCount: number;
   createdAt: string | null;
   updatedAt: string | null;
+  product: AutomationProductProjection;
   raw: JsonRecord;
 };
 
@@ -210,14 +228,6 @@ export type AutomationUpdateRequest = {
   model?: string | null;
   reasoning?: string | null;
   profile?: string | null;
-  trigger_kind?: string | null;
-  trigger?: JsonRecord;
-  filters?: JsonRecord;
-  target_policy?: string | null;
-  target?: JsonRecord;
-  executor_kind?: string | null;
-  executor?: JsonRecord;
-  policy?: JsonRecord;
   metadata?: JsonRecord;
 };
 
@@ -1003,7 +1013,27 @@ function mapAutomationSummary(raw: JsonRecord): AutomationSummary {
     jobCount: numberValue(raw.job_count ?? raw.jobCount, 0),
     createdAt: nullableString(raw.created_at ?? raw.createdAt),
     updatedAt: nullableString(raw.updated_at ?? raw.updatedAt),
+    product: mapAutomationProductProjection(raw),
     raw
+  };
+}
+
+function mapAutomationProductProjection(raw: JsonRecord): AutomationProductProjection {
+  return {
+    productApiVersion: numberValue(raw.product_api_version ?? raw.productApiVersion, 0),
+    editable: asRecord(raw.editable),
+    managed: asRecord(raw.managed ?? raw.managed_status ?? raw.managedStatus),
+    scheduleEditor: asRecord(raw.schedule_editor ?? raw.scheduleEditor),
+    triggerSummary: asRecord(raw.trigger_summary ?? raw.triggerSummary),
+    message: asRecord(raw.message),
+    messageSource: stringValue(raw.message_source ?? raw.messageSource, ''),
+    messagePreview: stringValue(raw.message_preview ?? raw.messagePreview, ''),
+    actionPreview: asRecord(raw.action_preview ?? raw.actionPreview),
+    targetSummary: asRecord(raw.target_summary ?? raw.targetSummary),
+    executorSummary: asRecord(raw.executor_summary ?? raw.executorSummary),
+    policySummary: asRecord(raw.policy_summary ?? raw.policySummary),
+    diagnostics: asArray(raw.diagnostics).map(asRecord),
+    rawLinks: asRecord(raw.raw_links ?? raw.rawLinks)
   };
 }
 
