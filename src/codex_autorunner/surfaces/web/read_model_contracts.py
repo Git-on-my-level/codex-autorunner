@@ -132,6 +132,10 @@ class ChatIndexRow(ReadModelContract):
     status: Literal["waiting", "running", "idle", "archived", "failed"]
     unread_count: int = Field(ge=0)
     last_activity_at: Optional[datetime] = None
+    last_visible_message_at: Optional[datetime] = None
+    last_lifecycle_update_at: Optional[datetime] = None
+    last_internal_update_at: Optional[datetime] = None
+    last_sort_activity_at: Optional[datetime] = None
     sort_key: Optional[dict[str, Any]] = None
     resource_kind: Optional[str] = None
     resource_id: Optional[str] = None

@@ -65,6 +65,10 @@ export type ChatIndexRow = {
   status: 'waiting' | 'running' | 'idle' | 'archived' | 'failed';
   unreadCount: number;
   lastActivityAt?: string | null;
+  lastVisibleMessageAt?: string | null;
+  lastLifecycleUpdateAt?: string | null;
+  lastInternalUpdateAt?: string | null;
+  lastSortActivityAt?: string | null;
   sortKey?: Record<string, unknown> | null;
   resourceKind?: string | null;
   resourceId?: string | null;

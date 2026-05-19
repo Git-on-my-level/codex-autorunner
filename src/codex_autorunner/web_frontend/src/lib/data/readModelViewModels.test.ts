@@ -148,6 +148,28 @@ describe('read model view-model selectors', () => {
     expect(summary.worktreeId).toBe('repo-1--discord-1');
   });
 
+  it('uses explicit visible-message clocks for chat row recency before lifecycle updates', () => {
+    const row = legacyChatIndexRecordToChatIndexRow({
+      row_id: 'thread:chat-clock',
+      managed_thread_id: 'chat-clock',
+      surface: 'pma',
+      title: 'Visible message',
+      lifecycle: 'bound',
+      runtime_status: 'idle',
+      last_visible_message_at: '2026-05-11T00:01:00Z',
+      last_sort_activity_at: '2026-05-11T00:01:00Z',
+      last_lifecycle_update_at: '2026-05-11T00:05:00Z',
+      last_internal_update_at: '2026-05-11T00:05:00Z',
+      updated_at: '2026-05-11T00:05:00Z',
+      created_at: '2026-05-11T00:00:00Z'
+    });
+
+    expect(row.lastActivityAt).toBe('2026-05-11T00:01:00Z');
+    expect(row.lastVisibleMessageAt).toBe('2026-05-11T00:01:00Z');
+    expect(row.lastLifecycleUpdateAt).toBe('2026-05-11T00:05:00Z');
+    expect(chatIndexRowToPmaChatSummary(row).updatedAt).toBe('2026-05-11T00:01:00Z');
+  });
+
   it('selects chat and repo/worktree summaries from normalized state', () => {
     const store = new ReadModelEntityStore();
     store.applyChatIndexSnapshot({

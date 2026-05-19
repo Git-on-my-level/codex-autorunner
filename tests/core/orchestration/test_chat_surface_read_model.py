@@ -867,6 +867,85 @@ def test_chat_index_sorts_by_conversation_activity_not_metadata_hydration(
     )
     assert older["title"] == "Older visible message"
     assert older["last_activity_at"] == "2026-05-11T00:01:00Z"
+    assert older["last_visible_message_at"] == "2026-05-11T00:01:00Z"
+    assert older["last_lifecycle_update_at"] == "2026-05-11T00:05:00Z"
+    assert older["last_internal_update_at"] > older["last_lifecycle_update_at"]
+    assert older["last_sort_activity_at"] == "2026-05-11T00:01:00Z"
+
+
+def test_chat_index_persists_explicit_activity_clocks_in_sql_projection(
+    tmp_path: Path,
+) -> None:
+    hub_root = tmp_path / "hub"
+    _seed_thread(hub_root, thread_id="thread-clock")
+    _seed_execution(
+        hub_root,
+        thread_id="thread-clock",
+        status="completed",
+        prompt_text="Visible clock source",
+        created_at="2026-05-11T00:01:00Z",
+    )
+    with open_orchestration_sqlite(hub_root, durable=False, migrate=True) as conn:
+        conn.execute(
+            "UPDATE orch_thread_targets SET updated_at = ? WHERE thread_target_id = ?",
+            ("2026-05-11T00:05:00Z", "thread-clock"),
+        )
+
+    service = ChatSurfaceReadService(hub_root, durable=False)
+    service.rebuild_chat_index_projection()
+
+    with open_orchestration_sqlite(hub_root, durable=False, migrate=True) as conn:
+        row = conn.execute(
+            """
+            SELECT last_visible_message_at,
+                   last_lifecycle_update_at,
+                   last_internal_update_at,
+                   last_sort_activity_at,
+                   last_activity_at,
+                   updated_at
+              FROM orch_chat_index_projection
+             WHERE managed_thread_id = ?
+            """,
+            ("thread-clock",),
+        ).fetchone()
+
+    assert dict(row) == {
+        "last_visible_message_at": "2026-05-11T00:01:00Z",
+        "last_lifecycle_update_at": "2026-05-11T00:05:00Z",
+        "last_internal_update_at": "2026-05-11T00:05:00Z",
+        "last_sort_activity_at": "2026-05-11T00:01:00Z",
+        "last_activity_at": "2026-05-11T00:01:00Z",
+        "updated_at": "2026-05-11T00:05:00Z",
+    }
+
+
+def test_chat_index_queued_visible_turn_sets_sort_clock_without_thread_churn(
+    tmp_path: Path,
+) -> None:
+    hub_root = tmp_path / "hub"
+    _seed_thread(hub_root, thread_id="thread-queued")
+    _seed_execution(
+        hub_root,
+        thread_id="thread-queued",
+        status="queued",
+        prompt_text="Queued visible message",
+        metadata={"user_visible_text": "Queued visible message"},
+        created_at="2026-05-11T00:02:00Z",
+    )
+    with open_orchestration_sqlite(hub_root, durable=False, migrate=True) as conn:
+        conn.execute(
+            "UPDATE orch_thread_targets SET updated_at = ? WHERE thread_target_id = ?",
+            ("2026-05-11T00:00:10Z", "thread-queued"),
+        )
+
+    row = ChatSurfaceReadService(hub_root, durable=False).chat_index_snapshot(limit=20)[
+        "rows"
+    ][0]
+
+    assert row["last_visible_message_at"] == "2026-05-11T00:02:00Z"
+    assert row["last_sort_activity_at"] == "2026-05-11T00:02:00Z"
+    assert row["last_activity_at"] == "2026-05-11T00:02:00Z"
+    assert row["queue_depth"] == 1
 
 
 def test_chat_index_snapshot_reads_rebuilt_sql_projection_without_reprojecting(

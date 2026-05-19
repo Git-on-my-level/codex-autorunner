@@ -542,9 +542,14 @@ def hub_chat_row_to_chat_index_row(raw: Mapping[str, Any]) -> ChatIndexRow:
     if raw.get("unread") is True and unread_count == 0:
         unread_count = 1
 
+    last_visible_iso = _str_or_none(raw.get("last_visible_message_at"))
+    last_lifecycle_iso = _str_or_none(raw.get("last_lifecycle_update_at"))
+    last_internal_iso = _str_or_none(raw.get("last_internal_update_at"))
+    last_sort_iso = _str_or_none(raw.get("last_sort_activity_at"))
     last_iso = (
-        _str_or_none(raw.get("last_activity_at"))
-        or _str_or_none(raw.get("updated_at"))
+        last_visible_iso
+        or last_sort_iso
+        or _str_or_none(raw.get("last_activity_at"))
         or _str_or_none(raw.get("created_at"))
     )
     last_activity: Optional[datetime] = None
@@ -604,6 +609,18 @@ def hub_chat_row_to_chat_index_row(raw: Mapping[str, Any]) -> ChatIndexRow:
         status=normalized_status,
         unread_count=unread_count,
         last_activity_at=last_activity,
+        last_visible_message_at=(
+            parse_iso_optional(last_visible_iso) if last_visible_iso else None
+        ),
+        last_lifecycle_update_at=(
+            parse_iso_optional(last_lifecycle_iso) if last_lifecycle_iso else None
+        ),
+        last_internal_update_at=(
+            parse_iso_optional(last_internal_iso) if last_internal_iso else None
+        ),
+        last_sort_activity_at=(
+            parse_iso_optional(last_sort_iso) if last_sort_iso else None
+        ),
         sort_key=(
             dict(cast(Mapping[str, Any], raw.get("sort_key")))
             if isinstance(raw.get("sort_key"), Mapping)
