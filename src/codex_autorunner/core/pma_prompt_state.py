@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import logging
 from pathlib import Path
 from typing import Any, Mapping, Optional, Sequence
@@ -51,18 +50,6 @@ def default_pma_prompt_state_path(hub_root: Path) -> Path:
     return hub_root / ".codex-autorunner" / "pma" / PMA_PROMPT_STATE_FILENAME
 
 
-def _default_pma_prompt_state() -> dict[str, Any]:
-    return {
-        "version": PMA_PROMPT_STATE_VERSION,
-        "sessions": {},
-        "updated_at": now_iso(),
-    }
-
-
-def _prompt_state_lock_path(path: Path) -> Path:
-    return path.with_suffix(path.suffix + ".lock")
-
-
 def _digest_text(value: Any) -> str:
     raw = value if isinstance(value, str) else str(value or "")
     return stable_json_digest(raw)
@@ -78,15 +65,6 @@ def _is_digest(value: Any) -> bool:
     if not isinstance(value, str) or len(value) != 64:
         return False
     return all(ch in "0123456789abcdef" for ch in value)
-
-
-def _build_prompt_bundle_digest(sections: Mapping[str, Mapping[str, Any]]) -> str:
-    payload = {
-        name: str((sections.get(name) or {}).get("digest") or "")
-        for name in PMA_PROMPT_SECTION_ORDER
-    }
-    raw = json.dumps(payload, sort_keys=True, ensure_ascii=True)
-    return _digest_text(raw)
 
 
 def _legacy_prompt_state_reset_path(path: Path) -> Path:
