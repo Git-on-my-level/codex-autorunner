@@ -3413,10 +3413,10 @@ class ExecutionCommands(TelegramCommandSupportMixin):
             text_override if text_override is not None else (message.text or "")
         )
         prompt_text = format_forwarded_telegram_message_text(message, prompt_text)
+        user_visible_seed = prompt_text
         prompt_text = self._prepare_turn_prompt(
             prompt_text, transcript_text=transcript_text
         )
-        user_visible_seed = prompt_text
         existing_session_prompt_text: Optional[str] = None
         if pma_enabled:
             user_message_prompt = prompt_text
