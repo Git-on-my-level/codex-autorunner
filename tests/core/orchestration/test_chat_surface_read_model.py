@@ -11,6 +11,7 @@ from codex_autorunner.core.orchestration import (
     ChatSurfaceReadService,
     OrchestrationBindingStore,
     SQLiteChatSurfaceEventJournal,
+    ticket_flow_thread_metadata,
 )
 from codex_autorunner.core.orchestration.chat_surface_read_model import (
     _chat_index_sort_key_parts,
@@ -760,6 +761,44 @@ def test_chat_index_carries_ticket_flow_metadata_for_grouping(
             "run_id": "run-015",
         },
     )
+    _seed_thread(
+        hub_root,
+        thread_id="thread-ticket-flow-stale-lifecycle",
+        repo_id="repo-1",
+        resource_kind="worktree",
+        resource_id="repo-1--ticket-flow",
+        runtime_status="completed",
+        metadata={
+            "flow_type": "ticket_flow",
+            "thread_kind": "ticket_flow",
+            "ticket_id": "TICKET-016",
+            "run_id": "run-015",
+        },
+    )
+    _seed_execution(
+        hub_root,
+        thread_id="thread-ticket-flow",
+        status="completed",
+        prompt_text="Newer visible ticket turn",
+        metadata={"user_visible_text": "Newer visible ticket turn"},
+        created_at="2026-05-11T00:02:00Z",
+    )
+    _seed_execution(
+        hub_root,
+        thread_id="thread-ticket-flow-stale-lifecycle",
+        status="completed",
+        prompt_text="Older visible ticket turn",
+        metadata={"user_visible_text": "Older visible ticket turn"},
+        created_at="2026-05-11T00:01:00Z",
+    )
+    with open_orchestration_sqlite(hub_root, durable=False, migrate=True) as conn:
+        conn.execute(
+            "UPDATE orch_thread_targets SET updated_at = ? WHERE thread_target_id = ?",
+            (
+                "2026-05-11T00:05:00Z",
+                "thread-ticket-flow-stale-lifecycle",
+            ),
+        )
     SQLiteChatSurfaceEventJournal(hub_root, durable=False).append_event(
         idempotency_key="stale-running-progress",
         event_type="execution.progress",
@@ -795,6 +834,14 @@ def test_chat_index_carries_ticket_flow_metadata_for_grouping(
 
     assert grouped["rows"][0]["row_type"] == "group"
     assert grouped["rows"][0]["group_id"] == "run:run-015"
+    assert grouped["rows"][0]["child_count"] == 2
+    assert grouped["rows"][0]["last_sort_activity_at"] == "2026-05-11T00:02:00Z"
+    assert grouped["rows"][0]["last_lifecycle_update_at"] == "2026-05-11T00:05:00Z"
+    assert grouped["rows"][0]["updated_at"] == "2026-05-11T00:02:00Z"
+    assert (
+        grouped["rows"][0]["debug"]["activity"]["selected_source"]
+        == "last_sort_activity_at"
+    )
 
     active = ChatSurfaceReadService(hub_root, durable=False).chat_index_snapshot(
         view="active",
@@ -810,10 +857,25 @@ def test_chat_index_sorts_by_conversation_activity_not_metadata_hydration(
     hub_root = tmp_path / "hub"
     _seed_thread(hub_root, thread_id="thread-older")
     _seed_thread(hub_root, thread_id="thread-newer")
+    _seed_execution(
+        hub_root,
+        thread_id="thread-older",
+        status="ok",
+        prompt_text="<injected context>runtime notes</injected context>\n\nOlder visible message",
+        created_at="2026-05-11T00:01:00Z",
+    )
+    _seed_execution(
+        hub_root,
+        thread_id="thread-newer",
+        status="ok",
+        prompt_text="Newer visible message",
+        metadata={"user_visible_text": "Newer visible message"},
+        created_at="2026-05-11T00:02:00Z",
+    )
     with open_orchestration_sqlite(hub_root, durable=False, migrate=True) as conn:
         conn.execute(
             "UPDATE orch_thread_targets SET updated_at = ? WHERE thread_target_id = ?",
-            ("2026-05-11T00:00:10Z", "thread-older"),
+            ("2026-05-11T00:05:00Z", "thread-older"),
         )
         conn.execute(
             "UPDATE orch_thread_targets SET display_name = ? WHERE thread_target_id = ?",
@@ -821,7 +883,7 @@ def test_chat_index_sorts_by_conversation_activity_not_metadata_hydration(
         )
         conn.execute(
             "UPDATE orch_thread_targets SET updated_at = ? WHERE thread_target_id = ?",
-            ("2026-05-11T00:05:00Z", "thread-newer"),
+            ("2026-05-11T00:00:10Z", "thread-newer"),
         )
     OrchestrationBindingStore(hub_root, durable=False).upsert_binding(
         surface_kind="discord",
@@ -850,8 +912,87 @@ def test_chat_index_sorts_by_conversation_activity_not_metadata_hydration(
     older = next(
         row for row in index["rows"] if row["managed_thread_id"] == "thread-older"
     )
-    assert older["title"] == "thread-older"
-    assert older["last_activity_at"] == "2026-05-11T00:00:10Z"
+    assert older["title"] == "Older visible message"
+    assert older["last_activity_at"] == "2026-05-11T00:01:00Z"
+    assert older["last_visible_message_at"] == "2026-05-11T00:01:00Z"
+    assert older["last_lifecycle_update_at"] == "2026-05-11T00:05:00Z"
+    assert older["last_internal_update_at"] > older["last_lifecycle_update_at"]
+    assert older["last_sort_activity_at"] == "2026-05-11T00:01:00Z"
+
+
+def test_chat_index_persists_explicit_activity_clocks_in_sql_projection(
+    tmp_path: Path,
+) -> None:
+    hub_root = tmp_path / "hub"
+    _seed_thread(hub_root, thread_id="thread-clock")
+    _seed_execution(
+        hub_root,
+        thread_id="thread-clock",
+        status="completed",
+        prompt_text="Visible clock source",
+        created_at="2026-05-11T00:01:00Z",
+    )
+    with open_orchestration_sqlite(hub_root, durable=False, migrate=True) as conn:
+        conn.execute(
+            "UPDATE orch_thread_targets SET updated_at = ? WHERE thread_target_id = ?",
+            ("2026-05-11T00:05:00Z", "thread-clock"),
+        )
+
+    service = ChatSurfaceReadService(hub_root, durable=False)
+    service.rebuild_chat_index_projection()
+
+    with open_orchestration_sqlite(hub_root, durable=False, migrate=True) as conn:
+        row = conn.execute(
+            """
+            SELECT last_visible_message_at,
+                   last_lifecycle_update_at,
+                   last_internal_update_at,
+                   last_sort_activity_at,
+                   last_activity_at,
+                   updated_at
+              FROM orch_chat_index_projection
+             WHERE managed_thread_id = ?
+            """,
+            ("thread-clock",),
+        ).fetchone()
+
+    assert dict(row) == {
+        "last_visible_message_at": "2026-05-11T00:01:00Z",
+        "last_lifecycle_update_at": "2026-05-11T00:05:00Z",
+        "last_internal_update_at": "2026-05-11T00:05:00Z",
+        "last_sort_activity_at": "2026-05-11T00:01:00Z",
+        "last_activity_at": "2026-05-11T00:01:00Z",
+        "updated_at": "2026-05-11T00:05:00Z",
+    }
+
+
+def test_chat_index_queued_visible_turn_sets_sort_clock_without_thread_churn(
+    tmp_path: Path,
+) -> None:
+    hub_root = tmp_path / "hub"
+    _seed_thread(hub_root, thread_id="thread-queued")
+    _seed_execution(
+        hub_root,
+        thread_id="thread-queued",
+        status="queued",
+        prompt_text="Queued visible message",
+        metadata={"user_visible_text": "Queued visible message"},
+        created_at="2026-05-11T00:02:00Z",
+    )
+    with open_orchestration_sqlite(hub_root, durable=False, migrate=True) as conn:
+        conn.execute(
+            "UPDATE orch_thread_targets SET updated_at = ? WHERE thread_target_id = ?",
+            ("2026-05-11T00:00:10Z", "thread-queued"),
+        )
+
+    row = ChatSurfaceReadService(hub_root, durable=False).chat_index_snapshot(limit=20)[
+        "rows"
+    ][0]
+
+    assert row["last_visible_message_at"] == "2026-05-11T00:02:00Z"
+    assert row["last_sort_activity_at"] == "2026-05-11T00:02:00Z"
+    assert row["last_activity_at"] == "2026-05-11T00:02:00Z"
+    assert row["queue_depth"] == 1
 
 
 def test_chat_index_snapshot_reads_rebuilt_sql_projection_without_reprojecting(
@@ -1090,14 +1231,14 @@ def test_chat_index_and_detail_keep_bound_chat_display_secondary(
         for item in index["rows"]
         if item["managed_thread_id"] == "thread-discord-friendly"
     )
-    assert row["title"] == "thread-discord-friendly"
-    assert row["display_title"] == "thread-discord-friendly"
-    assert row["chat_display_name"] == "thread-discord-friendly"
+    assert row["title"] == "Agent Nexus / #codex"
+    assert row["display_title"] == "Agent Nexus / #codex"
+    assert row["chat_display_name"] == "Agent Nexus / #codex"
     assert row["binding_display_name"] == "Agent Nexus / #codex"
 
     detail = service.chat_detail_snapshot("thread-discord-friendly")
-    assert detail["thread"]["title"] == "thread-discord-friendly"
-    assert detail["thread"]["chat_display_name"] == "thread-discord-friendly"
+    assert detail["thread"]["title"] == "Agent Nexus / #codex"
+    assert detail["thread"]["chat_display_name"] == "Agent Nexus / #codex"
 
     custom_detail = service.chat_detail_snapshot("thread-discord-custom")
     assert custom_detail["thread"]["title"] == "Customer escalation"
@@ -1207,6 +1348,48 @@ def test_chat_index_uses_message_preview_before_thread_id_fallback(
     assert row["title"] == "Investigate failed deploy"
     assert row["display_title"] == "Investigate failed deploy"
     assert row["binding_display_name"] == "Agent Nexus / #deploys"
+
+
+def test_chat_index_uses_provider_title_before_visible_seed(tmp_path: Path) -> None:
+    hub_root = tmp_path / "hub"
+    _seed_thread(
+        hub_root,
+        thread_id="thread-provider-title",
+        display_name="New PMA chat",
+        last_message_preview="First visible request",
+        metadata={"provider_conversation_title": "Native runtime title"},
+    )
+
+    row = ChatSurfaceReadService(hub_root, durable=False).chat_index_snapshot(limit=20)[
+        "rows"
+    ][0]
+
+    assert row["title"] == "Native runtime title"
+    assert row["display_title"] == "Native runtime title"
+
+
+def test_chat_index_deprioritizes_uuid_and_ticket_flow_control_prompt_titles(
+    tmp_path: Path,
+) -> None:
+    hub_root = tmp_path / "hub"
+    _seed_thread(
+        hub_root,
+        thread_id="12345678-1234-5678-1234-567812345678",
+        display_name="12345678-1234-5678-1234-567812345678",
+        last_message_preview=(
+            "<CAR_TICKET_FLOW_PROMPT><CAR_CURRENT_TICKET_FILE>"
+            "PATH: .codex-autorunner/tickets/TICKET-002.md"
+            "</CAR_CURRENT_TICKET_FILE></CAR_TICKET_FLOW_PROMPT>"
+        ),
+        metadata={"ticket_id": "TICKET-002"},
+    )
+
+    row = ChatSurfaceReadService(hub_root, durable=False).chat_index_snapshot(limit=20)[
+        "rows"
+    ][0]
+
+    assert row["title"] == "Ticket flow · TICKET-002"
+    assert row["technical_title"] == "12345678-1234-5678-1234-567812345678"
 
 
 def test_chat_surface_read_model_allows_lifecycle_recovery_events(
@@ -1319,7 +1502,9 @@ def test_chat_surface_read_model_builds_pma_compat_snapshot(tmp_path: Path) -> N
             "resource_kind": "repo",
             "resource_id": "repo-1",
             "workspace_root": None,
-            "name": "Thread thread-pma",
+            "name": "Discord channel",
+            "display_title": "Discord channel",
+            "technical_title": "thread-pma",
             "model": None,
             "backend_thread_id": None,
             "lifecycle_status": "active",
@@ -1353,3 +1538,117 @@ def test_chat_surface_read_model_builds_pma_compat_snapshot(tmp_path: Path) -> N
             "cleanup_protected": False,
         }
     ]
+
+
+def test_chat_read_model_contract_matrix_documents_shared_semantics(
+    tmp_path: Path,
+) -> None:
+    hub_root = tmp_path / "hub"
+    _seed_thread(
+        hub_root,
+        thread_id="thread-pma",
+        display_name="Web PMA chat",
+        last_message_preview="Web visible request",
+    )
+    _seed_execution(
+        hub_root,
+        thread_id="thread-pma",
+        status="ok",
+        metadata={"user_visible_text": "Web visible request"},
+        created_at="2026-05-11T00:01:00Z",
+    )
+    _seed_thread(
+        hub_root,
+        thread_id="thread-discord",
+        display_name="Thread thread-discord",
+        metadata={"provider_conversation_title": "Discord deploy triage"},
+    )
+    OrchestrationBindingStore(hub_root, durable=False).upsert_binding(
+        surface_kind="discord",
+        surface_key="guild:deploy",
+        thread_target_id="thread-discord",
+        repo_id="repo-1",
+        resource_kind="repo",
+        resource_id="repo-1",
+        metadata={"display_name": "Agent Nexus / #deploy"},
+    )
+    _seed_thread(
+        hub_root,
+        thread_id="thread-ticket",
+        display_name="ticket-flow:codex",
+        resource_kind="ticket",
+        resource_id="TICKET-005",
+        metadata=ticket_flow_thread_metadata(
+            flow_run_id="run-005",
+            ticket_id="TICKET-005",
+            workspace_root=str(hub_root),
+        ),
+    )
+    _seed_thread(hub_root, thread_id="thread-queued", display_name="Queued work")
+    _seed_execution(
+        hub_root,
+        thread_id="thread-queued",
+        status="queued",
+        metadata={"user_visible_text": "Queued visible request"},
+        created_at="2026-05-11T00:02:00Z",
+    )
+    _seed_thread(
+        hub_root,
+        thread_id="thread-archived",
+        display_name="Archived chat",
+        lifecycle_status="archived",
+        runtime_status="completed",
+    )
+    ChannelDirectoryStore(hub_root).record_seen(
+        "discord",
+        "guild-external",
+        None,
+        "External diagnostics channel",
+    )
+
+    service = ChatSurfaceReadService(hub_root, durable=False)
+    active_rows = {
+        row["managed_thread_id"]: row
+        for row in service.chat_index_snapshot(view="all", limit=20)["rows"]
+    }
+    archived_rows = {
+        row["managed_thread_id"]: row
+        for row in service.chat_index_snapshot(view="archived", limit=20)["rows"]
+    }
+    external_rows = {
+        row["chat_id"]: row
+        for row in service.chat_index_snapshot(view="external", limit=20)["rows"]
+    }
+    matrix = {
+        "web_pma": active_rows["thread-pma"],
+        "discord_bound": active_rows["thread-discord"],
+        "ticket_flow": active_rows["thread-ticket"],
+        "queued_only": active_rows["thread-queued"],
+        "archived": archived_rows["thread-archived"],
+        "external_unbound": external_rows["surface:discord:guild-external"],
+    }
+
+    assert matrix["web_pma"]["title"] == "Web PMA chat"
+    assert matrix["web_pma"]["last_visible_message_at"] == "2026-05-11T00:01:00Z"
+    assert matrix["web_pma"]["last_sort_activity_at"] == "2026-05-11T00:01:00Z"
+    assert matrix["discord_bound"]["title"] == "Discord deploy triage"
+    assert matrix["discord_bound"]["binding_display_name"] == "Agent Nexus / #deploy"
+    assert matrix["ticket_flow"]["group_id"] == "run:run-005"
+    assert matrix["queued_only"]["queue_depth"] == 1
+    assert matrix["queued_only"]["last_sort_activity_at"] == "2026-05-11T00:02:00Z"
+    assert matrix["archived"]["archive_state"] == "archived"
+    assert matrix["external_unbound"]["managed_thread_id"] is None
+    assert matrix["external_unbound"]["title"] == "External diagnostics channel"
+
+    for row in matrix.values():
+        assert row["last_activity_at"] == row["last_sort_activity_at"]
+        assert row["debug"]["title"]["selected"] == row["display_title"]
+        assert row["debug"]["activity"]["selected"] == row["last_sort_activity_at"]
+
+    pma_thread = next(
+        thread
+        for thread in service.pma_compat_snapshot()["threads"]
+        if thread["managed_thread_id"] == "thread-pma"
+    )
+    assert pma_thread["updated_at"] == "2026-05-11T00:01:00Z"
+    assert matrix["web_pma"]["last_lifecycle_update_at"] == "2026-05-11T00:00:10Z"

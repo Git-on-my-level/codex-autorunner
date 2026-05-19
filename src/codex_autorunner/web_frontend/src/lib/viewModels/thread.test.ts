@@ -114,6 +114,7 @@ describe('mapThreadSummary', () => {
   it('builds readable title from first message excerpt', () => {
     const vm = mapThreadSummary({
       managed_thread_id: 'thread-excerpt',
+      display_title: 'Please fix the login bug',
       name: 'New PMA chat',
       first_message_excerpt: 'Please fix the login bug',
       agent: 'codex',
@@ -134,9 +135,10 @@ describe('mapThreadSummary', () => {
     expect(vm.title).toBe('Fix login');
   });
 
-  it('uses backend user-visible title seed before raw prompt fallbacks', () => {
+  it('uses backend display title before raw prompt fallbacks', () => {
     const vm = mapThreadSummary({
       managed_thread_id: 'thread-visible-seed',
+      display_title: 'Fix login',
       name: 'New chat',
       title_seed: 'Fix login',
       last_message_preview:
@@ -151,6 +153,7 @@ describe('mapThreadSummary', () => {
   it('builds title from scope for generic chat name', () => {
     const vm = mapThreadSummary({
       managed_thread_id: 'thread-generic',
+      display_title: 'Chat · my-repo',
       name: 'New PMA chat',
       repo_id: 'my-repo',
       agent: 'codex',

@@ -58,7 +58,8 @@ export function pmaChatSummaryToChatIndexRow(chat: PmaChatSummary): ChatIndexRow
       chat.chatKind ??
       normalizeManagedThreadChatKind(chat.raw.chat_kind ?? chat.raw.thread_kind),
     model: chat.model,
-    groupId: chat.ticketId ? `ticket:${chat.ticketId}` : chat.runId ? `run:${chat.runId}` : null
+    groupId: chat.ticketId ? `ticket:${chat.ticketId}` : chat.runId ? `run:${chat.runId}` : null,
+    debug: recordValue(chat.raw.debug)
   };
 }
 
@@ -75,13 +76,21 @@ export function legacyChatIndexRecordToChatIndexRow(raw: JsonRecord): ChatIndexR
   const runtimeStatus = stringValue(raw.runtime_status ?? raw.target_runtime_status)?.toLowerCase() ?? '';
   const rawTitle = stringValue(raw.title ?? raw.display_name, chatId) ?? chatId;
   const title = rawTitle.trim() || chatId;
+  const lastVisibleMessageAt = stringValue(raw.last_visible_message_at);
+  const lastLifecycleUpdateAt = stringValue(raw.last_lifecycle_update_at);
+  const lastInternalUpdateAt = stringValue(raw.last_internal_update_at);
+  const lastSortActivityAt = stringValue(raw.last_sort_activity_at);
   return {
     chatId,
     surface: surfaceFromKinds(raw.surface_kinds, raw.surface),
     title,
     status: legacyChatIndexStatus(lifecycle, lifecycleStatus, runtimeStatus, queueDepth),
     unreadCount: numberValue(raw.unread_count ?? raw.unreadCount) || (raw.unread === true ? 1 : 0),
-    lastActivityAt: stringValue(raw.last_activity_at ?? raw.updated_at ?? raw.created_at),
+    lastActivityAt: lastSortActivityAt ?? stringValue(raw.last_activity_at) ?? lastVisibleMessageAt ?? stringValue(raw.created_at),
+    lastVisibleMessageAt,
+    lastLifecycleUpdateAt,
+    lastInternalUpdateAt,
+    lastSortActivityAt,
     repoId: stringValue(raw.repo_id),
     worktreeId,
     ticketId: resourceKind === 'ticket' ? resourceId : stringValue(raw.ticket_id ?? raw.current_ticket_id),
@@ -90,7 +99,8 @@ export function legacyChatIndexRecordToChatIndexRow(raw: JsonRecord): ChatIndexR
     agentProfile: stringValue(raw.agent_profile ?? raw.agentProfile),
     chatKind: normalizeManagedThreadChatKind(raw.chat_kind ?? raw.chatKind ?? raw.thread_kind),
     model: stringValue(raw.model),
-    groupId: stringValue(raw.group_id)
+    groupId: stringValue(raw.group_id),
+    debug: recordValue(raw.debug)
   };
 }
 
@@ -128,8 +138,13 @@ export function chatIndexRowToPmaChatSummary(row: ChatIndexRow): PmaChatSummary 
     model: row.model,
     unreadCount: row.unreadCount,
     last_activity_at: row.lastActivityAt,
+    last_visible_message_at: row.lastVisibleMessageAt,
+    last_lifecycle_update_at: row.lastLifecycleUpdateAt,
+    last_internal_update_at: row.lastInternalUpdateAt,
+    last_sort_activity_at: row.lastSortActivityAt,
     surface_kind: row.surface,
-    sort_key: row.sortKey
+    sort_key: row.sortKey,
+    debug: row.debug
   };
   return {
     id: row.chatId,
@@ -350,6 +365,13 @@ function stringValue(value: unknown, fallback: string | null = null): string | n
 function numberValue(value: unknown): number {
   const parsed = typeof value === 'number' ? value : Number.parseInt(String(value ?? ''), 10);
   return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function recordValue(value: unknown): Record<string, unknown> | null {
+  if (value && typeof value === 'object' && !Array.isArray(value)) {
+    return value as Record<string, unknown>;
+  }
+  return null;
 }
 
 function unreadCountFromRaw(raw: JsonRecord): number {

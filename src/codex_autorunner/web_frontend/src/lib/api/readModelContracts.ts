@@ -50,6 +50,17 @@ export type ReadModelEventEnvelope<TEvent extends string = string, TEntityKind e
 };
 
 export type ChatIndexRow = {
+  /**
+   * Timestamp semantics: lastVisibleMessageAt is the newest user-visible
+   * conversation input, lastLifecycleUpdateAt is thread/binding lifecycle
+   * churn, lastInternalUpdateAt is runtime/delivery bookkeeping,
+   * lastSortActivityAt is the backend-owned row-order clock, and
+   * lastActivityAt is a compatibility alias for lastSortActivityAt.
+   *
+   * Title semantics: title/displayTitle are backend-resolved human display
+   * strings, technicalTitle preserves the stable identifier, and binding
+   * display names describe attached delivery surfaces.
+   */
   chatId: string;
   surface: 'pma' | 'file_chat' | 'telegram' | 'discord' | 'app_server' | 'other';
   title: string;
@@ -65,6 +76,10 @@ export type ChatIndexRow = {
   status: 'waiting' | 'running' | 'idle' | 'archived' | 'failed';
   unreadCount: number;
   lastActivityAt?: string | null;
+  lastVisibleMessageAt?: string | null;
+  lastLifecycleUpdateAt?: string | null;
+  lastInternalUpdateAt?: string | null;
+  lastSortActivityAt?: string | null;
   sortKey?: Record<string, unknown> | null;
   resourceKind?: string | null;
   resourceId?: string | null;
@@ -78,6 +93,7 @@ export type ChatIndexRow = {
   chatKind?: 'pma' | 'coding_agent' | null;
   model?: string | null;
   groupId?: string | null;
+  debug?: Record<string, unknown> | null;
 };
 
 export type ChatIndexGroup = {
@@ -85,6 +101,15 @@ export type ChatIndexGroup = {
   kind: 'ticket_run' | 'surface' | 'repo' | 'worktree';
   label: string;
   childCount: number;
+  waitingCount?: number;
+  runningCount?: number;
+  unreadCount?: number;
+  lastActivityAt?: string | null;
+  lastVisibleMessageAt?: string | null;
+  lastLifecycleUpdateAt?: string | null;
+  lastInternalUpdateAt?: string | null;
+  lastSortActivityAt?: string | null;
+  debug?: Record<string, unknown> | null;
   expandedChildWindow?: PageWindow | null;
 };
 

@@ -15,9 +15,14 @@ from ..domain.workspace_scope import (
     workspace_scope_index_from_snapshots,
 )
 from ..hub_topology import load_hub_state
+from ..injected_context import strip_legacy_injected_context_transport_blocks
 from ..text_utils import _normalize_optional_text, _parse_iso_timestamp
 from .chat_surface_events import ChatSurfaceEvent, SQLiteChatSurfaceEventJournal
 from .sqlite import open_orchestration_sqlite
+from .thread_titles import (
+    ManagedThreadTitleInputs,
+    resolve_managed_thread_display_title,
+)
 
 CHAT_SURFACE_READ_CONTRACT_VERSION = "chat_surface_read.v1"
 PMA_CHAT_EVENTS_CONTRACT_VERSION = "pma_chat_events.v1"
@@ -234,7 +239,14 @@ class ChatSurfaceReadService:
     def pma_compat_snapshot(
         self, *, limit: int = DEFAULT_CHAT_SURFACE_SNAPSHOT_LIMIT
     ) -> dict[str, Any]:
-        """Return the legacy PMA chat snapshot shape from the generic projection."""
+        """Return the legacy PMA chat snapshot shape from the generic projection.
+
+        PMA compatibility keeps legacy field names: ``updated_at`` means the
+        PMA thread/runtime lifecycle changed, while chat-index recency is exposed
+        as ``last_visible_message_at`` and ``last_sort_activity_at`` on
+        chat-index rows. Consumers that sort chat rows should use the chat-index
+        contract instead of PMA ``updated_at``.
+        """
 
         snapshot = self.snapshot(limit=limit)
         threads = [
@@ -926,6 +938,10 @@ class ChatSurfaceReadService:
                         queue_depth,
                         unread_count,
                         unread,
+                        last_visible_message_at,
+                        last_lifecycle_update_at,
+                        last_internal_update_at,
+                        last_sort_activity_at,
                         last_activity_at,
                         updated_at,
                         created_at,
@@ -942,7 +958,7 @@ class ChatSurfaceReadService:
                         row_json,
                         source_signature,
                         rebuilt_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     [
                         _chat_index_projection_params(
@@ -1324,6 +1340,9 @@ class ChatSurfaceReadService:
             )
 
         execution_by_thread = _latest_execution_by_thread(execution_rows)
+        visible_execution_by_thread = _latest_visible_execution_by_thread(
+            execution_rows
+        )
         queue_depth_by_thread = _queue_depth_by_thread(execution_rows)
         delivery_by_surface = _latest_delivery_by_surface(delivery_rows)
         delivery_by_thread = _latest_delivery_by_thread(delivery_rows)
@@ -1357,13 +1376,25 @@ class ChatSurfaceReadService:
             lifecycle_status = _normalize_text(row["lifecycle_status"]) or "active"
             metadata = _json_object(_row_get(row, "metadata_json"))
             chat_kind = _normalize_text(metadata.get("chat_kind"))
-            last_activity_at = _max_iso(
-                _normalize_text(row["updated_at"]),
+            visible_execution = visible_execution_by_thread.get(thread_id)
+            last_visible_message_at = (
+                _normalize_text(_row_get(visible_execution, "created_at"))
+                if visible_execution is not None
+                else None
+            )
+            last_lifecycle_update_at = _normalize_text(row["updated_at"])
+            last_internal_update_at = _max_iso(
+                last_lifecycle_update_at,
                 _normalize_text(execution["created_at"]) if execution else None,
+            )
+            last_sort_activity_at = _chat_clock_sort_fallback(
+                last_visible_message_at,
+                created_at=_normalize_text(row["created_at"]),
+                updated_at=last_lifecycle_update_at,
             )
             last_message_preview = _visible_turn_chrome_text(
                 _row_get(row, "last_message_preview"),
-                execution,
+                visible_execution,
             )
             projection.merge(
                 lifecycle=lifecycle,
@@ -1377,7 +1408,7 @@ class ChatSurfaceReadService:
                 managed_thread_id=thread_id,
                 display_name=_visible_chrome_text(row["display_name"]) or thread_id,
                 created_at=_normalize_text(row["created_at"]),
-                updated_at=last_activity_at,
+                updated_at=last_internal_update_at,
                 archived_at=(
                     _normalize_text(row["updated_at"])
                     if lifecycle_status == "archived"
@@ -1396,7 +1427,14 @@ class ChatSurfaceReadService:
                     ),
                     "model": _normalize_text(metadata.get("model")),
                     "thread_kind": _normalize_text(metadata.get("thread_kind")),
-                    "last_activity_at": last_activity_at,
+                    "provider_conversation_title": _normalize_text(
+                        metadata.get("provider_conversation_title")
+                    ),
+                    "last_visible_message_at": last_visible_message_at,
+                    "last_lifecycle_update_at": last_lifecycle_update_at,
+                    "last_internal_update_at": last_internal_update_at,
+                    "last_sort_activity_at": last_sort_activity_at,
+                    "last_activity_at": last_sort_activity_at,
                     "runtime_status": _normalize_text(row["runtime_status"]),
                     "target_runtime_status": _normalize_text(row["runtime_status"]),
                     "queue_depth": queue_depth_by_thread.get(thread_id, 0),
@@ -1454,9 +1492,22 @@ class ChatSurfaceReadService:
                 lifecycle = _choose_lifecycle(
                     lifecycle, _status_to_lifecycle(delivery["state"])
                 )
-            binding_last_activity_at = _max_iso(
-                _normalize_text(_row_get(owner, "updated_at")),
+            visible_execution = visible_execution_by_thread.get(binding_thread_id or "")
+            binding_visible_message_at = (
+                _normalize_text(_row_get(visible_execution, "created_at"))
+                if visible_execution is not None
+                else None
+            )
+            binding_lifecycle_update_at = _normalize_text(_row_get(owner, "updated_at"))
+            binding_internal_update_at = _max_iso(
+                binding_lifecycle_update_at,
                 _normalize_text(execution["created_at"]) if execution else None,
+            )
+            binding_sort_activity_at = _chat_clock_sort_fallback(
+                binding_visible_message_at,
+                created_at=_normalize_text(_row_get(owner, "created_at"))
+                or _normalize_text(row["created_at"]),
+                updated_at=binding_lifecycle_update_at,
             )
             projection = _projection(projections, surface_kind, surface_key)
             projection.merge(
@@ -1481,7 +1532,11 @@ class ChatSurfaceReadService:
                 metadata={
                     "mode": _normalize_text(row["mode"]),
                     "agent_id": _normalize_text(row["agent_id"]),
-                    "last_activity_at": binding_last_activity_at,
+                    "last_visible_message_at": binding_visible_message_at,
+                    "last_lifecycle_update_at": binding_lifecycle_update_at,
+                    "last_internal_update_at": binding_internal_update_at,
+                    "last_sort_activity_at": binding_sort_activity_at,
+                    "last_activity_at": binding_sort_activity_at,
                     "queue_depth": queue_depth_by_thread.get(
                         binding_thread_id or "", 0
                     ),
@@ -1676,6 +1731,20 @@ def _chat_index_rows_from_surfaces(
                     "lifecycle_status": surface.get("lifecycle_status"),
                     "runtime_status": metadata_map.get("runtime_status"),
                     "latest_event_cursor": surface.get("latest_event_cursor"),
+                    "last_visible_message_at": metadata_map.get(
+                        "last_visible_message_at"
+                    ),
+                    "last_lifecycle_update_at": metadata_map.get(
+                        "last_lifecycle_update_at"
+                    )
+                    or surface.get("updated_at"),
+                    "last_internal_update_at": metadata_map.get(
+                        "last_internal_update_at"
+                    )
+                    or surface.get("updated_at"),
+                    "last_sort_activity_at": metadata_map.get("last_sort_activity_at")
+                    or metadata_map.get("last_activity_at")
+                    or surface.get("created_at"),
                     "last_activity_at": metadata_map.get("last_activity_at"),
                     "updated_at": surface.get("updated_at"),
                     "created_at": surface.get("created_at"),
@@ -1711,8 +1780,17 @@ def _chat_index_rows_from_surfaces(
                 "runtime_status": metadata_map.get("runtime_status"),
                 "target_runtime_status": metadata_map.get("target_runtime_status"),
                 "latest_event_cursor": surface.get("latest_event_cursor"),
-                "last_activity_at": metadata_map.get("last_activity_at")
+                "last_visible_message_at": metadata_map.get("last_visible_message_at"),
+                "last_lifecycle_update_at": metadata_map.get("last_lifecycle_update_at")
                 or surface.get("updated_at"),
+                "last_internal_update_at": metadata_map.get("last_internal_update_at")
+                or surface.get("updated_at"),
+                "last_sort_activity_at": metadata_map.get("last_sort_activity_at")
+                or metadata_map.get("last_activity_at")
+                or surface.get("created_at"),
+                "last_activity_at": metadata_map.get("last_activity_at")
+                or metadata_map.get("last_sort_activity_at")
+                or surface.get("created_at"),
                 "updated_at": surface.get("updated_at"),
                 "created_at": surface.get("created_at"),
                 "last_message_preview": last_message_preview,
@@ -1727,15 +1805,40 @@ def _chat_index_rows_from_surfaces(
                 "flow_type": metadata_map.get("flow_type"),
                 "ticket_id": metadata_map.get("ticket_id"),
                 "run_id": metadata_map.get("run_id"),
+                "provider_conversation_title": metadata_map.get(
+                    "provider_conversation_title"
+                ),
             }
             by_thread[managed_thread_id] = row
         row["surfaces"].append(base_surface)
         row["lifecycle"] = _choose_lifecycle(
             str(row["lifecycle"] or "bound"), surface.get("lifecycle")
         )
-        row["last_activity_at"] = _max_iso(
-            row.get("last_activity_at"), metadata_map.get("last_activity_at")
-        )
+        if surface_kind == "pma" or row.get("managed_thread_id") is None:
+            row["last_visible_message_at"] = _max_iso(
+                row.get("last_visible_message_at"),
+                metadata_map.get("last_visible_message_at"),
+            )
+            row["last_lifecycle_update_at"] = _max_iso(
+                row.get("last_lifecycle_update_at"),
+                metadata_map.get("last_lifecycle_update_at")
+                or surface.get("updated_at"),
+            )
+            row["last_internal_update_at"] = _max_iso(
+                row.get("last_internal_update_at"),
+                metadata_map.get("last_internal_update_at")
+                or surface.get("updated_at"),
+            )
+            row["last_sort_activity_at"] = _max_iso(
+                row.get("last_sort_activity_at"),
+                metadata_map.get("last_sort_activity_at")
+                or metadata_map.get("last_activity_at"),
+            )
+            row["last_activity_at"] = _max_iso(
+                row.get("last_activity_at"),
+                metadata_map.get("last_activity_at")
+                or metadata_map.get("last_sort_activity_at"),
+            )
         row["updated_at"] = _max_iso(row.get("updated_at"), surface.get("updated_at"))
         row["latest_event_cursor"] = (
             max(
@@ -1770,11 +1873,21 @@ def _chat_index_rows_from_surfaces(
                 "active_turn_id",
                 "ticket_id",
                 "run_id",
+                "provider_conversation_title",
             ):
                 if metadata_map.get(key) is not None:
                     row["agent" if key == "agent_id" else key] = metadata_map.get(key)
             if last_message_preview is not None:
                 row["last_message_preview"] = last_message_preview
+            for clock_key in (
+                "last_visible_message_at",
+                "last_lifecycle_update_at",
+                "last_internal_update_at",
+                "last_sort_activity_at",
+                "last_activity_at",
+            ):
+                if metadata_map.get(clock_key) is not None:
+                    row[clock_key] = metadata_map.get(clock_key)
             row["queue_depth"] = max(
                 int(row.get("queue_depth") or 0),
                 int(metadata_map.get("queue_depth") or 0),
@@ -1784,6 +1897,7 @@ def _chat_index_rows_from_surfaces(
         row["last_message_preview"] = _visible_chrome_text(
             row.get("last_message_preview")
         )
+        _normalize_chat_index_clocks(row)
         if row.get("managed_thread_id") is None:
             friendly_title = _friendly_chat_title(row)
             if friendly_title is not None:
@@ -1834,6 +1948,7 @@ def _chat_index_rows_from_surfaces(
             }
         )
         row["search_text"] = _chat_row_search_text(row)
+        row["debug"] = _chat_row_debug_info(row)
     return rows
 
 
@@ -1850,7 +1965,7 @@ def _visible_chrome_text(value: Any) -> Optional[str]:
     if text is None:
         return None
     if _contains_legacy_transport_marker(text):
-        return None
+        return _normalize_text(strip_legacy_injected_context_transport_blocks(text))
     cleaned = text
     for pattern in _COMPACT_SEED_BLOCK_PATTERNS:
         cleaned = pattern.sub(" ", cleaned)
@@ -1879,13 +1994,88 @@ def _managed_thread_identity_title(row: Mapping[str, Any]) -> str:
     """Return the primary PMA-owned title for a managed-thread chat row."""
 
     managed_thread_id = _normalize_text(row.get("managed_thread_id"))
-    title = _visible_chrome_text(row.get("title"))
-    if title is not None and not _is_fallback_chat_title(title, row):
-        return title
-    preview = _visible_chrome_text(row.get("last_message_preview"))
-    if preview is not None:
-        return preview
-    return managed_thread_id or _normalize_text(row.get("chat_id")) or title or ""
+    return (
+        resolve_managed_thread_display_title(
+            ManagedThreadTitleInputs(
+                stored_title=_visible_chrome_text(row.get("title")),
+                provider_title=_visible_chrome_text(
+                    row.get("provider_conversation_title")
+                ),
+                user_visible_title_seed=_visible_chrome_text(
+                    row.get("last_message_preview")
+                ),
+                chat_display_name=_friendly_chat_title(row),
+                ticket_id=row.get("ticket_id"),
+                run_id=row.get("run_id"),
+                fallback_id=managed_thread_id or _normalize_text(row.get("chat_id")),
+            )
+        )
+        or ""
+    )
+
+
+def _chat_row_debug_info(row: Mapping[str, Any]) -> dict[str, Any]:
+    """Return diagnostic-only row resolution hints for support tooling."""
+
+    selected_title = _normalize_text(row.get("display_title") or row.get("title"))
+    title_candidates = {
+        "stored_title": _visible_chrome_text(row.get("title")),
+        "provider_title": _visible_chrome_text(row.get("provider_conversation_title")),
+        "visible_message_seed": _visible_chrome_text(row.get("last_message_preview")),
+        "binding_display_name": _normalize_text(row.get("binding_display_name")),
+        "technical_title": _normalize_text(row.get("technical_title")),
+    }
+    selected_title_source = "fallback"
+    for source in (
+        "provider_title",
+        "visible_message_seed",
+        "binding_display_name",
+        "technical_title",
+        "stored_title",
+    ):
+        value = title_candidates.get(source)
+        if value is not None and selected_title == value:
+            selected_title_source = source
+            break
+    if (
+        selected_title_source == "fallback"
+        and _normalize_text(row.get("ticket_id")) is not None
+        and selected_title == f"Ticket flow · {_normalize_text(row.get('ticket_id'))}"
+    ):
+        selected_title_source = "ticket_id"
+
+    activity_clock = {
+        "selected": _normalize_text(row.get("last_sort_activity_at")),
+        "selected_source": "last_sort_activity_at",
+        "last_visible_message_at": _normalize_text(row.get("last_visible_message_at")),
+        "last_lifecycle_update_at": _normalize_text(
+            row.get("last_lifecycle_update_at")
+        ),
+        "last_internal_update_at": _normalize_text(row.get("last_internal_update_at")),
+        "last_activity_at": _normalize_text(row.get("last_activity_at")),
+    }
+    if activity_clock["selected"] == activity_clock["last_visible_message_at"]:
+        activity_clock["selected_source"] = "last_visible_message_at"
+    elif activity_clock["selected"] is None:
+        activity_clock["selected_source"] = "none"
+
+    return {
+        "title": {
+            "selected": selected_title,
+            "selected_source": selected_title_source,
+            "candidates": {
+                key: value for key, value in title_candidates.items() if value
+            },
+        },
+        "activity": activity_clock,
+        "status": {
+            "effective_status": _chat_index_effective_status(row),
+            "lifecycle": _normalize_text(row.get("lifecycle")),
+            "lifecycle_status": _normalize_text(row.get("lifecycle_status")),
+            "runtime_status": _normalize_text(row.get("runtime_status")),
+            "queue_depth": int(row.get("queue_depth") or 0),
+        },
+    }
 
 
 def _surface_binding_display_name(surface: Mapping[str, Any]) -> Optional[str]:
@@ -1926,6 +2116,42 @@ def _primary_surface(row: Mapping[str, Any]) -> Optional[Mapping[str, Any]]:
 
 def _archive_state(lifecycle_status: Any) -> str:
     return "archived" if _normalize_kind(lifecycle_status) == "archived" else "active"
+
+
+def _normalize_chat_index_clocks(row: dict[str, Any]) -> None:
+    visible_at = _normalize_text(row.get("last_visible_message_at"))
+    lifecycle_at = _normalize_text(
+        row.get("last_lifecycle_update_at")
+    ) or _normalize_text(row.get("updated_at"))
+    internal_at = _max_iso(
+        _max_iso(_normalize_text(row.get("last_internal_update_at")), lifecycle_at),
+        _normalize_text(row.get("updated_at")),
+    )
+    sort_at = _normalize_text(
+        row.get("last_sort_activity_at")
+    ) or _chat_clock_sort_fallback(
+        visible_at,
+        created_at=_normalize_text(row.get("created_at")),
+        updated_at=lifecycle_at,
+    )
+    row["last_visible_message_at"] = visible_at
+    row["last_lifecycle_update_at"] = lifecycle_at
+    row["last_internal_update_at"] = internal_at
+    row["last_sort_activity_at"] = sort_at
+    row["last_activity_at"] = sort_at
+
+
+def _chat_clock_sort_fallback(
+    visible_at: Any,
+    *,
+    created_at: Any,
+    updated_at: Any,
+) -> Optional[str]:
+    return (
+        _normalize_text(visible_at)
+        or _normalize_text(created_at)
+        or _normalize_text(updated_at)
+    )
 
 
 def _managed_thread_row_lifecycle(row: Mapping[str, Any]) -> str:
@@ -2071,12 +2297,7 @@ def _chat_row_search_text(row: Mapping[str, Any]) -> str:
 
 def _chat_index_sort_key(row: Mapping[str, Any]) -> tuple[int, float, str]:
     priority = 1 if row.get("unread") else 0
-    raw = str(
-        row.get("last_activity_at")
-        or row.get("updated_at")
-        or row.get("created_at")
-        or ""
-    )
+    raw = str(row.get("last_sort_activity_at") or row.get("last_activity_at") or "")
     parsed = _parse_iso_timestamp(raw)
     updated_key = float("inf") if parsed is None else -parsed.timestamp()
     return (
@@ -2135,6 +2356,10 @@ def _chat_index_projection_params(
         int(row.get("queue_depth") or 0),
         int(row.get("unread_count") or 0),
         1 if row.get("unread") else 0,
+        _normalize_text(row.get("last_visible_message_at")),
+        _normalize_text(row.get("last_lifecycle_update_at")),
+        _normalize_text(row.get("last_internal_update_at")),
+        _normalize_text(row.get("last_sort_activity_at")),
         _normalize_text(row.get("last_activity_at")),
         _normalize_text(row.get("updated_at")),
         _normalize_text(row.get("created_at")),
@@ -2254,7 +2479,36 @@ def _ticket_run_groups(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
             grouped.setdefault(group_id, []).append(row)
     groups: list[dict[str, Any]] = []
     for group_id, children in grouped.items():
-        latest = max(str(child.get("updated_at") or "") for child in children)
+        latest_sort_activity = max(
+            str(
+                child.get("last_sort_activity_at")
+                or child.get("last_activity_at")
+                or child.get("last_visible_message_at")
+                or ""
+            )
+            for child in children
+        )
+        latest_visible_message = max(
+            str(child.get("last_visible_message_at") or "") for child in children
+        )
+        latest_lifecycle_update = max(
+            str(child.get("last_lifecycle_update_at") or child.get("updated_at") or "")
+            for child in children
+        )
+        latest_internal_update = max(
+            str(child.get("last_internal_update_at") or child.get("updated_at") or "")
+            for child in children
+        )
+        latest_legacy_update = max(
+            str(child.get("updated_at") or "") for child in children
+        )
+        waiting_count = sum(
+            1 for child in children if int(child.get("queue_depth") or 0) > 0
+        )
+        running_count = sum(
+            1 for child in children if _chat_index_effective_status(child) == "running"
+        )
+        unread_count = sum(1 for child in children if child.get("unread"))
         groups.append(
             {
                 "row_type": "group",
@@ -2262,16 +2516,24 @@ def _ticket_run_groups(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 "group_id": group_id,
                 "title": group_id,
                 "child_count": len(children),
-                "waiting_count": sum(
-                    1 for child in children if int(child.get("queue_depth") or 0) > 0
-                ),
-                "running_count": sum(
-                    1
-                    for child in children
-                    if _chat_index_effective_status(child) == "running"
-                ),
-                "unread_count": sum(1 for child in children if child.get("unread")),
-                "updated_at": latest,
+                "waiting_count": waiting_count,
+                "running_count": running_count,
+                "unread_count": unread_count,
+                "last_activity_at": latest_sort_activity or None,
+                "last_visible_message_at": latest_visible_message or None,
+                "last_lifecycle_update_at": latest_lifecycle_update or None,
+                "last_internal_update_at": latest_internal_update or None,
+                "last_sort_activity_at": latest_sort_activity or None,
+                "updated_at": latest_sort_activity or latest_legacy_update,
+                "debug": {
+                    "activity": {
+                        "selected": latest_sort_activity or None,
+                        "selected_source": "last_sort_activity_at",
+                        "last_visible_message_at": latest_visible_message or None,
+                        "last_lifecycle_update_at": latest_lifecycle_update or None,
+                        "last_internal_update_at": latest_internal_update or None,
+                    }
+                },
                 "sample_child_ids": [
                     child.get("row_id") for child in children[:3] if child.get("row_id")
                 ],
@@ -2279,7 +2541,11 @@ def _ticket_run_groups(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
             }
         )
     return sorted(
-        groups, key=lambda group: str(group.get("updated_at") or ""), reverse=True
+        groups,
+        key=lambda group: str(
+            group.get("last_sort_activity_at") or group.get("updated_at") or ""
+        ),
+        reverse=True,
     )
 
 
@@ -2322,11 +2588,17 @@ def _chat_detail_thread_metadata(
         ),
         None,
     )
-    title = stored_title
-    if chat_display_name and _is_fallback_chat_title(
-        stored_title, {"managed_thread_id": managed_thread_id}
-    ):
-        title = chat_display_name
+    title = resolve_managed_thread_display_title(
+        ManagedThreadTitleInputs(
+            stored_title=stored_title,
+            provider_title=metadata_map.get("provider_conversation_title"),
+            user_visible_title_seed=thread.get("last_message_preview"),
+            chat_display_name=chat_display_name,
+            ticket_id=metadata_map.get("ticket_id"),
+            run_id=metadata_map.get("run_id"),
+            fallback_id=managed_thread_id,
+        )
+    )
     return {
         "managed_thread_id": managed_thread_id,
         "title": title,
@@ -2767,6 +3039,20 @@ def _latest_execution_by_thread(
     return result
 
 
+def _latest_visible_execution_by_thread(
+    rows: Iterable[Mapping[str, Any]],
+) -> dict[str, Mapping[str, Any]]:
+    result: dict[str, Mapping[str, Any]] = {}
+    for row in rows:
+        thread_id = _normalize_text(row["thread_target_id"])
+        if thread_id is None:
+            continue
+        if _visible_turn_chrome_text(None, row) is None:
+            continue
+        result[thread_id] = row
+    return result
+
+
 def _queue_depth_by_thread(rows: Iterable[Mapping[str, Any]]) -> dict[str, int]:
     result: dict[str, int] = {}
     for row in rows:
@@ -2903,6 +3189,17 @@ def _pma_thread_from_surface(surface: Mapping[str, Any]) -> dict[str, Any]:
     )
     managed_thread_id = _normalize_text(surface.get("managed_thread_id"))
     chat_display_name = _visible_chrome_text(metadata.get("chat_display_name"))
+    display_title = resolve_managed_thread_display_title(
+        ManagedThreadTitleInputs(
+            stored_title=_visible_chrome_text(display.get("display_name")),
+            provider_title=metadata.get("provider_conversation_title"),
+            user_visible_title_seed=metadata.get("last_message_preview"),
+            chat_display_name=chat_display_name,
+            ticket_id=metadata.get("ticket_id"),
+            run_id=metadata.get("run_id"),
+            fallback_id=managed_thread_id,
+        )
+    )
     payload: dict[str, Any] = {
         "managed_thread_id": managed_thread_id,
         "agent": _normalize_text(metadata.get("agent_id")) or "unknown",
@@ -2911,7 +3208,9 @@ def _pma_thread_from_surface(surface: Mapping[str, Any]) -> dict[str, Any]:
         "resource_kind": _normalize_text(owner.get("resource_kind")),
         "resource_id": _normalize_text(owner.get("resource_id")),
         "workspace_root": _normalize_text(owner.get("workspace_root")),
-        "name": _visible_chrome_text(display.get("display_name")) or managed_thread_id,
+        "name": display_title or managed_thread_id,
+        "display_title": display_title,
+        "technical_title": managed_thread_id,
         "chat_display_name": chat_display_name,
         "model": _normalize_text(metadata.get("model")),
         "backend_thread_id": _normalize_text(metadata.get("backend_thread_id")),

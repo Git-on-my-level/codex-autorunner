@@ -70,6 +70,7 @@ from .orchestration.runtime_bindings import (
 )
 from .orchestration.thread_titles import (
     choose_owned_thread_title,
+    is_deprioritized_thread_title,
     is_generic_thread_title,
     normalize_thread_title,
 )
@@ -898,6 +899,7 @@ class ManagedThreadStore:
                 and (
                     not only_if_generic
                     or is_generic_thread_title(current_title)
+                    or is_deprioritized_thread_title(current_title)
                     or may_replace_preview_title
                 )
             )

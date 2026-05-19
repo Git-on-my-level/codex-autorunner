@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from typing import Any, Iterable, Mapping, Optional
 
+from ..injected_context import split_legacy_injected_context_transport
 from .managed_thread_timeline import (
     MAX_MANAGED_THREAD_TIMELINE_LIMIT,
     build_managed_thread_timeline,
@@ -135,6 +136,16 @@ def _timeline_item_to_transcript_rows(item: Mapping[str, Any]) -> list[dict[str,
             _optional_text(payload.get("user_visible_text")) if role == "user" else None
         )
         capsule_refs = _capsule_ref_list(payload.get("capsule_refs"))
+        raw_model_prompt = _optional_text(payload.get("raw_model_prompt"))
+        visible_text, model_context_text = _message_context_fields(
+            role=role,
+            text=text,
+            user_visible_text=user_visible_text,
+            raw_model_prompt=raw_model_prompt,
+        )
+        model_context_refs = [
+            ref for ref in capsule_refs if ref.get("visibility") == "model_only"
+        ]
         return [
             {
                 "kind": "message",
@@ -143,6 +154,10 @@ def _timeline_item_to_transcript_rows(item: Mapping[str, Any]) -> list[dict[str,
                 "client_turn_id": client_turn_id,
                 "correlation_id": correlation_id,
                 "visibility": visibility,
+                "visible_text": visible_text,
+                "model_context_text": model_context_text,
+                "model_context_refs": model_context_refs,
+                "raw_model_prompt": raw_model_prompt,
                 "user_visible_text": user_visible_text,
                 "capsule_refs": capsule_refs,
                 "identity": dict(identity),
@@ -154,6 +169,10 @@ def _timeline_item_to_transcript_rows(item: Mapping[str, Any]) -> list[dict[str,
                     "role": role,
                     "text": text,
                     "visibility": visibility,
+                    "visible_text": visible_text,
+                    "model_context_text": model_context_text,
+                    "model_context_refs": model_context_refs,
+                    "raw_model_prompt": raw_model_prompt,
                     "user_visible_text": user_visible_text,
                     "capsule_refs": capsule_refs,
                     "created_at": timestamp,
@@ -241,6 +260,25 @@ def _timeline_item_to_transcript_rows(item: Mapping[str, Any]) -> list[dict[str,
     if kind == "artifact":
         return [{"kind": "artifact", "id": item_id, "artifact": dict(payload)}]
     return []
+
+
+def _message_context_fields(
+    *,
+    role: str,
+    text: str,
+    user_visible_text: Optional[str],
+    raw_model_prompt: Optional[str],
+) -> tuple[str, Optional[str]]:
+    if role != "user":
+        return text, None
+    visible_text = user_visible_text or text
+    normalized_visible, visible_context = split_legacy_injected_context_transport(
+        visible_text
+    )
+    _, raw_context = split_legacy_injected_context_transport(raw_model_prompt)
+    if visible_context:
+        return normalized_visible or visible_text, visible_context
+    return normalized_visible or visible_text, raw_context
 
 
 def _tool_card_from_item(

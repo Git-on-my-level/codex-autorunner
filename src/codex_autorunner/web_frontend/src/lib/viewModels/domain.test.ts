@@ -123,9 +123,10 @@ describe('view model mappers', () => {
     expect(vm.title).toBe('The web UI gets frozen after a while');
   });
 
-  it('falls back to first message excerpt when display title is generic', () => {
+  it('uses backend-projected display title instead of rebuilding from message excerpts', () => {
     const vm = mapPmaChatSummary({
       thread_target_id: 'thread-inj-only',
+      display_title: 'User-visible first line',
       display_name: 'New chat',
       first_message_excerpt: 'User-visible first line',
       agent_id: 'codex',
@@ -137,7 +138,7 @@ describe('view model mappers', () => {
     expect(vm.title).toBe('User-visible first line');
   });
 
-  it('uses backend-projected user-visible excerpts when name is generic', () => {
+  it('does not derive summary titles from backend-visible excerpt fields', () => {
     const vm = mapPmaChatSummary({
       thread_target_id: 'thread-ex-inj',
       name: 'New chat',
@@ -148,12 +149,13 @@ describe('view model mappers', () => {
       normalized_status: 'idle'
     });
 
-    expect(vm.title).toBe('Real question here');
+    expect(vm.title).toBe('New chat');
   });
 
-  it('uses backend user-visible title seed before raw prompt fallbacks', () => {
+  it('trusts backend display title before raw prompt fallbacks', () => {
     const vm = mapPmaChatSummary({
       thread_target_id: 'thread-visible-seed',
+      display_title: 'Real visible request',
       name: 'New chat',
       user_visible_text: 'Real visible request',
       last_message_preview:
@@ -170,6 +172,7 @@ describe('view model mappers', () => {
   it('uses chat channel display names instead of surface id fallback titles', () => {
     const vm = mapPmaChatSummary({
       thread_target_id: 'thread-1',
+      display_title: 'CAR Workspace / #hermes',
       display_name: 'discord:1488827014600331415',
       chat_bound: true,
       binding_kind: 'discord',
@@ -244,6 +247,7 @@ describe('view model mappers', () => {
   it('derives readable ticket-flow chat summaries from managed thread payload fields', () => {
     const vm = mapPmaChatSummary({
       managed_thread_id: 'thread-ticket-flow',
+      display_title: 'Ticket flow · TICKET-330-pma-chat-managed-thread-readability',
       name: 'ticket-flow:codex',
       agent: 'codex',
       status: 'running',
@@ -259,7 +263,7 @@ describe('view model mappers', () => {
 
     expect(vm).toMatchObject({
       id: 'thread-ticket-flow',
-      title: 'Ticket flow · TICKET-330-pma-chat-managed-thread-readability · worktree codex-autorunner--discord-5',
+      title: 'Ticket flow · TICKET-330-pma-chat-managed-thread-readability',
       ticketId: 'TICKET-330-pma-chat-managed-thread-readability',
       repoId: 'codex-autorunner',
       worktreeId: 'codex-autorunner--discord-5',

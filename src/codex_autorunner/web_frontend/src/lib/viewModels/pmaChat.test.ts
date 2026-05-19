@@ -1131,6 +1131,8 @@ describe('PMA chat view helpers', () => {
             turn_id: '1',
             order_key: '001',
             visibility: 'user_visible',
+            visible_text: 'Fix this',
+            model_context_text: 'repo guidance',
             user_visible_text: 'Fix this',
             capsule_refs: [
               {
@@ -1142,11 +1144,24 @@ describe('PMA chat view helpers', () => {
                 reason: 'repo_context'
               }
             ],
+            model_context_refs: [
+              {
+                capsule_id: 'car.repo_basics',
+                capsule_version: '1',
+                visibility: 'model_only',
+                scope: 'repo',
+                source_digest: 'sha256:repo',
+                reason: 'repo_context'
+              }
+            ],
+            raw_model_prompt: '<injected context>\nrepo guidance\n</injected context>\n\nFix this',
             message: {
               id: 'turn:1:user',
               chat_id: 'chat-1',
               role: 'user',
               text: 'Fix this',
+              visible_text: 'Fix this',
+              model_context_text: 'repo guidance',
               user_visible_text: 'Fix this',
               artifacts: []
             }
@@ -1161,7 +1176,20 @@ describe('PMA chat view helpers', () => {
       message: {
         text: 'Fix this',
         visibility: 'user_visible',
+        visibleText: 'Fix this',
+        modelContextText: 'repo guidance',
+        rawModelPrompt: '<injected context>\nrepo guidance\n</injected context>\n\nFix this',
         userVisibleText: 'Fix this',
+        modelContextRefs: [
+          {
+            capsuleId: 'car.repo_basics',
+            capsuleVersion: '1',
+            visibility: 'model_only',
+            scope: 'repo',
+            sourceDigest: 'sha256:repo',
+            reason: 'repo_context'
+          }
+        ],
         capsuleRefs: [
           {
             capsuleId: 'car.repo_basics',
