@@ -40,14 +40,138 @@ AUTOMATION_RULE_PREFIX = "user:automation:"
 
 
 @dataclass(frozen=True)
+class AutomationPresetDescriptor:
+    id: str
+    name: str
+    automation_kind: str
+    description: str
+    schedule_kind: str
+    executor_kind: str
+    target_policy: str
+    default_timezone: str
+    default_hour: int
+    default_minute: int
+    default_weekday: Optional[int]
+    target_shape: dict[str, Any]
+    executor_shape: dict[str, Any]
+    policy: dict[str, Any]
+    prompt_template: str
+    ticket_body_template: Optional[str] = None
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "id": self.id,
+            "name": self.name,
+            "kind": self.automation_kind,
+            "description": self.description,
+            "schedule": {
+                "kind": self.schedule_kind,
+                "timezone": self.default_timezone,
+                "hour": self.default_hour,
+                "minute": self.default_minute,
+                "weekday": self.default_weekday,
+            },
+            "target_policy": self.target_policy,
+            "target_shape": self.target_shape,
+            "executor_kind": self.executor_kind,
+            "executor_shape": self.executor_shape,
+            "policy": self.policy,
+            "prompt_template": self.prompt_template,
+            "ticket_body_template": self.ticket_body_template,
+        }
+
+
+SECURITY_SCAN_PROMPT_TEMPLATE = (
+    "Run a security scan for repo {repo_id}. Inspect dependency, secret, and "
+    "static-analysis findings using the repo's existing tooling. If actionable "
+    "issues are discovered, create a focused fix branch, make the smallest safe "
+    "changes, run relevant checks, and open a draft PR with the findings and "
+    "verification. If no issues are found, summarize the clean result."
+)
+
+WEEKLY_TICKET_BODY_TEMPLATE = """---
+agent: codex
+done: false
+ticket_id: "{ticket_id}"
+title: Weekly maintenance automation
+goal: Run the configured weekly maintenance pass and open a PR for useful changes
+---
+
+You are running a scheduled weekly ticket flow for `{repo_id}`.
+
+- Sync context from `.codex-autorunner/contextspace/` and inspect the current repo state.
+- Run dependency, test, lint, and maintenance checks that are already standard for this repo.
+- Fix small, well-bounded issues that are clearly safe.
+- If changes are made, run relevant verification and open a draft PR with a concise summary.
+- If no changes are needed, record the checks performed and mark this ticket done.
+"""
+
+AUTOMATION_PRESET_DESCRIPTORS: dict[str, AutomationPresetDescriptor] = {
+    "security_scan_pr": AutomationPresetDescriptor(
+        id="security_scan_pr",
+        name="Daily Security Scan",
+        automation_kind="security_scan_pr",
+        description=("Daily PMA security scan that opens a PR when issues are found."),
+        schedule_kind=SCHEDULE_DAILY,
+        executor_kind=EXECUTOR_PMA_TURN,
+        target_policy=TARGET_POLICY_HUB,
+        default_timezone="UTC",
+        default_hour=9,
+        default_minute=0,
+        default_weekday=None,
+        target_shape={"repo_id": "{repo_id}"},
+        executor_shape={"lane_id": "pma:default", "message": "{prompt}"},
+        policy={
+            "approval_mode": "never_require_approval",
+            "max_attempts": 3,
+            "max_concurrent_per_rule": 1,
+            "max_concurrent_per_target": 1,
+        },
+        prompt_template=SECURITY_SCAN_PROMPT_TEMPLATE,
+    ),
+    "weekly_ticket_flow": AutomationPresetDescriptor(
+        id="weekly_ticket_flow",
+        name="Weekly Preset Ticket Flow",
+        automation_kind="weekly_ticket_flow",
+        description=("Weekly scheduled ticket flow in a new automation worktree."),
+        schedule_kind=SCHEDULE_WEEKLY,
+        executor_kind=EXECUTOR_TICKET_FLOW,
+        target_policy=TARGET_POLICY_NEW_AUTOMATION_WORKTREE,
+        default_timezone="UTC",
+        default_hour=10,
+        default_minute=0,
+        default_weekday=0,
+        target_shape={"base_repo_id": "{repo_id}", "rule_slug": "{automation_slug}"},
+        executor_shape={
+            "ticket_pack": {
+                "source": "inline",
+                "tickets": [{"path": "TICKET-001.md", "content": "{ticket_body}"}],
+            }
+        },
+        policy={
+            "approval_mode": "never_require_approval",
+            "max_attempts": 2,
+            "max_concurrent_per_rule": 1,
+            "max_concurrent_per_target": 1,
+        },
+        prompt_template=(
+            "Run the configured weekly maintenance ticket flow and open a draft "
+            "PR for useful changes."
+        ),
+        ticket_body_template=WEEKLY_TICKET_BODY_TEMPLATE,
+    ),
+}
+
+
+@dataclass(frozen=True)
 class AutomationPresetRequest:
     preset: str
     name: Optional[str] = None
     repo_id: Optional[str] = None
-    timezone: str = "UTC"
-    hour: int = 9
-    minute: int = 0
-    weekday: int = 0
+    timezone: Optional[str] = None
+    hour: Optional[int] = None
+    minute: Optional[int] = None
+    weekday: Optional[int] = None
     prompt: Optional[str] = None
     ticket_body: Optional[str] = None
     agent: Optional[str] = None
@@ -100,7 +224,13 @@ def automation_overview(store: AutomationStore, *, limit: int = 100) -> dict[str
             if str((row.get("last_job") or {}).get("state")) == "failed"
         ),
     }
-    return {"automations": rows, "summary": summary}
+    return {"automations": rows, "summary": summary, "presets": automation_presets()}
+
+
+def automation_presets() -> list[dict[str, Any]]:
+    return [
+        descriptor.to_dict() for descriptor in AUTOMATION_PRESET_DESCRIPTORS.values()
+    ]
 
 
 def automation_row(store: AutomationStore, rule: AutomationRule) -> dict[str, Any]:
@@ -161,13 +291,13 @@ def automation_detail(store: AutomationStore, rule_id: str) -> dict[str, Any]:
 def create_preset_automation(
     store: AutomationStore, payload: AutomationPresetRequest
 ) -> dict[str, Any]:
-    preset = payload.preset.strip().lower()
-    if preset == "security_scan_pr":
+    preset = _preset_descriptor(payload.preset)
+    if preset.id == "security_scan_pr":
         rule, schedule = _build_security_scan_pr(payload)
-    elif preset == "weekly_ticket_flow":
+    elif preset.id == "weekly_ticket_flow":
         rule, schedule = _build_weekly_ticket_flow(payload)
     else:
-        raise ValueError("preset must be security_scan_pr or weekly_ticket_flow")
+        raise ValueError(f"unsupported automation preset: {preset.id}")
 
     saved_rule = store.upsert_rule(rule)
     schedule_payload = dict(schedule.to_dict())
@@ -871,22 +1001,23 @@ def _format_target(row: dict[str, Any]) -> str:
 def _build_security_scan_pr(
     payload: AutomationPresetRequest,
 ) -> tuple[AutomationRule, AutomationSchedule]:
+    descriptor = _preset_descriptor("security_scan_pr")
     repo_id = _required_text(payload.repo_id, "repo_id")
     name = _optional_text(payload.name) or f"Daily security scan for {repo_id}"
-    prompt = _optional_text(payload.prompt) or (
-        f"Run a security scan for repo {repo_id}. Inspect dependency, "
-        "secret, and static-analysis findings using the repo's existing tooling. "
-        "If actionable issues are discovered, create a focused fix branch, make the "
-        "smallest safe changes, run relevant checks, and open a draft PR with the "
-        "findings and verification. If no issues are found, summarize the clean result."
+    prompt = _optional_text(payload.prompt) or _render_preset_template(
+        descriptor.prompt_template, repo_id=repo_id
     )
     rule_id = _rule_id(name)
     schedule = _daily_schedule(
         rule_id=rule_id,
-        timezone_name=payload.timezone,
-        hour=payload.hour,
-        minute=payload.minute,
+        timezone_name=_preset_timezone(payload, descriptor),
+        hour=_preset_int(payload.hour, descriptor.default_hour),
+        minute=_preset_int(payload.minute, descriptor.default_minute),
     )
+    policy = {
+        **descriptor.policy,
+        "dedupe_key": f"{rule_id}:{{{{ schedule.next_fire_at }}}}",
+    }
     rule = AutomationRule.create(
         rule_id=rule_id,
         name=name,
@@ -900,19 +1031,13 @@ def _build_security_scan_pr(
             {"lane_id": "pma:default", "message": prompt}, payload
         ),
         enabled=payload.enabled,
-        policy={
-            "dedupe_key": f"{rule_id}:{{{{ schedule.next_fire_at }}}}",
-            "approval_mode": "never_require_approval",
-            "max_attempts": 3,
-            "max_concurrent_per_rule": 1,
-            "max_concurrent_per_target": 1,
-        },
+        policy=policy,
         metadata={
             "kind": AUTOMATION_METADATA_KIND,
-            "automation_kind": "security_scan_pr",
-            "preset": "security_scan_pr",
+            "automation_kind": descriptor.automation_kind,
+            "preset": descriptor.id,
             "repo_id": repo_id,
-            "description": "Daily PMA security scan that opens a PR when issues are found.",
+            "description": descriptor.description,
         },
     )
     return rule, schedule
@@ -921,34 +1046,28 @@ def _build_security_scan_pr(
 def _build_weekly_ticket_flow(
     payload: AutomationPresetRequest,
 ) -> tuple[AutomationRule, AutomationSchedule]:
+    descriptor = _preset_descriptor("weekly_ticket_flow")
     repo_id = _required_text(payload.repo_id, "repo_id")
     name = _optional_text(payload.name) or f"Weekly ticket flow for {repo_id}"
     rule_id = _rule_id(name)
     schedule = _weekly_schedule(
         rule_id=rule_id,
-        timezone_name=payload.timezone,
-        hour=payload.hour,
-        minute=payload.minute,
-        weekday=payload.weekday,
+        timezone_name=_preset_timezone(payload, descriptor),
+        hour=_preset_int(payload.hour, descriptor.default_hour),
+        minute=_preset_int(payload.minute, descriptor.default_minute),
+        weekday=_preset_int(payload.weekday, descriptor.default_weekday or 0),
     )
     ticket_id = f"tkt_{uuid.uuid4().hex}"
-    default_ticket_body = f"""---
-agent: codex
-done: false
-ticket_id: "{ticket_id}"
-title: Weekly maintenance automation
-goal: Run the configured weekly maintenance pass and open a PR for useful changes
----
-
-You are running a scheduled weekly ticket flow for `{repo_id}`.
-
-- Sync context from `.codex-autorunner/contextspace/` and inspect the current repo state.
-- Run dependency, test, lint, and maintenance checks that are already standard for this repo.
-- Fix small, well-bounded issues that are clearly safe.
-- If changes are made, run relevant verification and open a draft PR with a concise summary.
-- If no changes are needed, record the checks performed and mark this ticket done.
-"""
+    default_ticket_body = _render_preset_template(
+        descriptor.ticket_body_template or "",
+        repo_id=repo_id,
+        ticket_id=ticket_id,
+    )
     ticket_body = _optional_text(payload.ticket_body) or default_ticket_body
+    policy = {
+        **descriptor.policy,
+        "dedupe_key": f"{rule_id}:{{{{ schedule.next_fire_at }}}}",
+    }
     rule = AutomationRule.create(
         rule_id=rule_id,
         name=name,
@@ -970,19 +1089,13 @@ You are running a scheduled weekly ticket flow for `{repo_id}`.
             )
         },
         enabled=payload.enabled,
-        policy={
-            "dedupe_key": f"{rule_id}:{{{{ schedule.next_fire_at }}}}",
-            "approval_mode": "never_require_approval",
-            "max_attempts": 2,
-            "max_concurrent_per_rule": 1,
-            "max_concurrent_per_target": 1,
-        },
+        policy=policy,
         metadata={
             "kind": AUTOMATION_METADATA_KIND,
-            "automation_kind": "weekly_ticket_flow",
-            "preset": "weekly_ticket_flow",
+            "automation_kind": descriptor.automation_kind,
+            "preset": descriptor.id,
             "repo_id": repo_id,
-            "description": "Weekly scheduled ticket flow in a new automation worktree.",
+            "description": descriptor.description,
         },
     )
     return rule, schedule
@@ -1089,6 +1202,29 @@ def _required_text(value: Optional[str], field_name: str) -> str:
     return text
 
 
+def _preset_descriptor(preset: str) -> AutomationPresetDescriptor:
+    preset_id = (preset or "").strip().lower()
+    descriptor = AUTOMATION_PRESET_DESCRIPTORS.get(preset_id)
+    if descriptor is None:
+        choices = " or ".join(AUTOMATION_PRESET_DESCRIPTORS)
+        raise ValueError(f"preset must be {choices}")
+    return descriptor
+
+
+def _preset_timezone(
+    payload: AutomationPresetRequest, descriptor: AutomationPresetDescriptor
+) -> str:
+    return _optional_text(payload.timezone) or descriptor.default_timezone
+
+
+def _preset_int(value: Optional[int], fallback: int) -> int:
+    return fallback if value is None else int(value)
+
+
+def _render_preset_template(template: str, **values: str) -> str:
+    return template.format(**values)
+
+
 def _bounded_int(value: int, *, field_name: str, low: int, high: int) -> int:
     if isinstance(value, bool):
         raise ValueError(f"{field_name} must be an integer")
@@ -1123,10 +1259,13 @@ def _executor_with_agent_options(
 
 
 __all__ = [
+    "AUTOMATION_PRESET_DESCRIPTORS",
+    "AutomationPresetDescriptor",
     "AutomationPresetRequest",
     "AutomationUpdateRequest",
     "automation_detail",
     "automation_overview",
+    "automation_presets",
     "automation_row",
     "automation_store",
     "create_preset_automation",

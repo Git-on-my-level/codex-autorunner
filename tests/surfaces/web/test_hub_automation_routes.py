@@ -65,6 +65,13 @@ def test_hub_automations_create_security_scan_saved_disabled(tmp_path):
     listing = client.get("/hub/automations")
     assert listing.status_code == 200
     assert listing.json()["summary"]["paused"] >= 1
+    presets = {preset["id"]: preset for preset in listing.json()["presets"]}
+    security_preset = presets["security_scan_pr"]
+    assert security_preset["schedule"]["kind"] == "daily"
+    assert security_preset["executor_kind"] == "pma_turn"
+    assert security_preset["target_policy"] == "hub"
+    assert security_preset["policy"]["max_attempts"] == 3
+    assert "{repo_id}" in security_preset["prompt_template"]
 
 
 def test_hub_automations_create_weekly_ticket_flow_and_run_now(tmp_path):
@@ -120,6 +127,20 @@ def test_hub_automations_create_weekly_ticket_flow_and_run_now(tmp_path):
     assert detail.json()["automation"]["last_job"]["job_id"] == job_rows[0]["job_id"]
     assert "executor" not in job_rows[0]
     assert "payload" not in job_rows[0]
+
+    listing = client.get("/hub/automations")
+    presets = {preset["id"]: preset for preset in listing.json()["presets"]}
+    weekly_preset = presets["weekly_ticket_flow"]
+    assert weekly_preset["schedule"] == {
+        "kind": "weekly",
+        "timezone": "UTC",
+        "hour": 10,
+        "minute": 0,
+        "weekday": 0,
+    }
+    assert weekly_preset["executor_kind"] == "ticket_flow"
+    assert weekly_preset["target_policy"] == "new_automation_worktree"
+    assert "{ticket_id}" in weekly_preset["ticket_body_template"]
 
 
 def test_hub_automations_pause_and_resume(tmp_path):

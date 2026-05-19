@@ -27,10 +27,10 @@ class AutomationCreateRequest(BaseModel):
     preset: str
     name: Optional[str] = None
     repo_id: Optional[str] = None
-    timezone: str = "UTC"
-    hour: int = 9
-    minute: int = 0
-    weekday: int = 0
+    timezone: Optional[str] = None
+    hour: Optional[int] = None
+    minute: Optional[int] = None
+    weekday: Optional[int] = None
     prompt: Optional[str] = None
     ticket_body: Optional[str] = None
     agent: Optional[str] = None

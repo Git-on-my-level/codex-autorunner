@@ -209,6 +209,29 @@ export type AutomationProductProjection = {
   rawLinks: JsonRecord;
 };
 
+export type AutomationPresetDescriptor = {
+  id: 'security_scan_pr' | 'weekly_ticket_flow';
+  name: string;
+  kind: string;
+  description: string;
+  schedule: {
+    kind: 'daily' | 'weekly';
+    timezone: string;
+    hour: number;
+    minute: number;
+    weekday: number | null;
+    raw: JsonRecord;
+  };
+  targetPolicy: string;
+  targetShape: JsonRecord;
+  executorKind: string;
+  executorShape: JsonRecord;
+  policy: JsonRecord;
+  promptTemplate: string;
+  ticketBodyTemplate: string | null;
+  raw: JsonRecord;
+};
+
 export type AutomationSummary = {
   id: string;
   name: string;
@@ -231,6 +254,7 @@ export type AutomationSummary = {
 
 export type AutomationOverview = {
   automations: AutomationSummary[];
+  presets: AutomationPresetDescriptor[];
   summary: {
     total: number;
     active: number;
@@ -1026,12 +1050,43 @@ function mapAutomationOverview(raw: JsonRecord): AutomationOverview {
   const summary = asRecord(raw.summary);
   return {
     automations: asArray(raw.automations).map(mapAutomationSummary),
+    presets: asArray(raw.presets).map(mapAutomationPresetDescriptor),
     summary: {
       total: numberValue(summary.total, 0),
       active: numberValue(summary.active, 0),
       paused: numberValue(summary.paused, 0),
       failedJobs: numberValue(summary.failed_jobs ?? summary.failedJobs, 0)
     }
+  };
+}
+
+function mapAutomationPresetDescriptor(raw: JsonRecord): AutomationPresetDescriptor {
+  const schedule = asRecord(raw.schedule);
+  const rawId = stringValue(raw.id, 'security_scan_pr');
+  const id = rawId === 'weekly_ticket_flow' ? 'weekly_ticket_flow' : 'security_scan_pr';
+  const rawKind = stringValue(schedule.kind, 'daily');
+  const scheduleKind = rawKind === 'weekly' ? 'weekly' : 'daily';
+  return {
+    id,
+    name: stringValue(raw.name, id),
+    kind: stringValue(raw.kind, id),
+    description: stringValue(raw.description, ''),
+    schedule: {
+      kind: scheduleKind,
+      timezone: stringValue(schedule.timezone, 'UTC'),
+      hour: numberValue(schedule.hour, 9),
+      minute: numberValue(schedule.minute, 0),
+      weekday: schedule.weekday === null || schedule.weekday === undefined ? null : numberValue(schedule.weekday, 0),
+      raw: schedule
+    },
+    targetPolicy: stringValue(raw.target_policy ?? raw.targetPolicy, ''),
+    targetShape: asRecord(raw.target_shape ?? raw.targetShape),
+    executorKind: stringValue(raw.executor_kind ?? raw.executorKind, ''),
+    executorShape: asRecord(raw.executor_shape ?? raw.executorShape),
+    policy: asRecord(raw.policy),
+    promptTemplate: stringValue(raw.prompt_template ?? raw.promptTemplate, ''),
+    ticketBodyTemplate: nullableString(raw.ticket_body_template ?? raw.ticketBodyTemplate),
+    raw
   };
 }
 

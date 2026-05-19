@@ -13,6 +13,7 @@
     webApi,
     type ApiError,
     type AutomationOverview,
+    type AutomationPresetDescriptor,
     type AutomationSummary,
     type AutomationUpdateRequest,
     type JsonRecord
@@ -25,49 +26,6 @@
   type JsonField = 'trigger' | 'filters' | 'target' | 'executor' | 'policy' | 'metadata';
   type TicketPackTicket = { path: string; content: string };
 
-  type AutomationPreset = {
-    id: PresetId;
-    name: string;
-    kind: string;
-    description: string;
-    scheduleKind: 'daily' | 'weekly';
-    executorKind: string;
-    targetPolicy: string;
-    defaultHour: number;
-    defaultWeekday?: number;
-    prompt: string;
-    ticketBody?: string;
-  };
-
-  const PRESETS: AutomationPreset[] = [
-    {
-      id: 'security_scan_pr',
-      name: 'Daily Security Scan',
-      kind: 'security_scan_pr',
-      description: 'PMA scans a repo with existing security tooling and opens a focused draft PR when it finds actionable issues.',
-      scheduleKind: 'daily',
-      executorKind: 'pma_turn',
-      targetPolicy: 'hub',
-      defaultHour: 9,
-      prompt:
-        "Run a security scan for the selected repo. Inspect dependency, secret, and static-analysis findings using the repo's existing tooling. If actionable issues are discovered, create a focused fix branch, make the smallest safe changes, run relevant checks, and open a draft PR with findings and verification. If no issues are found, summarize the clean result."
-    },
-    {
-      id: 'weekly_ticket_flow',
-      name: 'Weekly Preset Ticket Flow',
-      kind: 'weekly_ticket_flow',
-      description: "A scheduled ticket flow runs in a fresh automation worktree from the selected repo's remote default branch.",
-      scheduleKind: 'weekly',
-      executorKind: 'ticket_flow',
-      targetPolicy: 'new_automation_worktree',
-      defaultHour: 10,
-      defaultWeekday: 0,
-      prompt: 'Run the configured weekly maintenance ticket flow and open a draft PR for useful changes.',
-      ticketBody:
-        'You are running a scheduled weekly ticket flow.\n\n- Sync context from `.codex-autorunner/contextspace/` and inspect the current repo state.\n- Run dependency, test, lint, and maintenance checks that are already standard for this repo.\n- Fix small, well-bounded issues that are clearly safe.\n- If changes are made, run relevant verification and open a draft PR with a concise summary.\n- If no changes are needed, record the checks performed and mark this ticket done.\n'
-    }
-  ];
-
   let overview = $state<AutomationOverview | null>(null);
   let repos = $state<RepoSummary[]>([]);
   let agents = $state<JsonRecord[]>([]);
@@ -79,7 +37,7 @@
   let error = $state<ApiError | null>(null);
   let notice = $state<string | null>(null);
   let selectedKind = $state<SelectionKind>('preset');
-  let selectedId = $state<string>(PRESETS[0].id);
+  let selectedId = $state<string>('security_scan_pr');
   let detailMode = $state<'list' | 'detail'>('list');
   let saveTimer: number | null = null;
 
@@ -108,6 +66,7 @@
   let syncedSelectionKey = '';
 
   const automations = $derived(overview?.automations ?? []);
+  const presets = $derived(overview?.presets ?? []);
   const userAutomations = $derived(automations.filter((automation) => !isManagedAutomation(automation)));
   const managedAutomations = $derived(automations.filter(isManagedAutomation));
   const routeRuleId = $derived(decodeURIComponent(page.params.ruleId ?? ''));
@@ -166,8 +125,25 @@
     return selectedKind === 'automation' ? automations.find((automation) => automation.id === selectedId) ?? null : null;
   }
 
-  function selectedPreset(): AutomationPreset {
-    return PRESETS.find((preset) => preset.id === selectedId) ?? PRESETS[0];
+  function selectedPreset(): AutomationPresetDescriptor | null {
+    return presets.find((preset) => preset.id === selectedId) ?? presets[0] ?? null;
+  }
+
+  function renderPresetTemplate(template: string, repoId: string, values: JsonRecord = {}): string {
+    return template
+      .replaceAll('{repo_id}', repoId || 'selected repo')
+      .replaceAll('{ticket_id}', 'tkt_<assigned on save>')
+      .replaceAll('{automation_slug}', '<assigned on save>')
+      .replaceAll('{prompt}', String(values.prompt ?? '<message>'))
+      .replaceAll('{ticket_body}', String(values.ticket_body ?? '<ticket body>'));
+  }
+
+  function renderPresetValue(value: unknown, repoId: string, values: JsonRecord = {}): unknown {
+    if (typeof value === 'string') return renderPresetTemplate(value, repoId, values);
+    if (Array.isArray(value)) return value.map((item) => renderPresetValue(item, repoId, values));
+    const record = asRecord(value);
+    if (!Object.keys(record).length) return value;
+    return Object.fromEntries(Object.entries(record).map(([key, item]) => [key, renderPresetValue(item, repoId, values)]));
   }
 
   function selectionKey(): string {
@@ -207,11 +183,13 @@
       return;
     }
     const preset = selectedPreset();
+    if (!preset) return;
     detailName = preset.name;
     detailEnabled = false;
-    detailHour = preset.defaultHour;
-    detailMinute = 0;
-    detailWeekday = preset.defaultWeekday ?? 0;
+    detailHour = preset.schedule.hour;
+    detailMinute = preset.schedule.minute;
+    detailWeekday = preset.schedule.weekday ?? 0;
+    timezone = preset.schedule.timezone || timezone;
     if (preset.executorKind === 'pma_turn') {
       selectedAgent = defaultAgentId || agentIdFallback();
       selectedProfile = selectedAgent === 'hermes' ? defaultProfile : '';
@@ -221,13 +199,13 @@
     } else {
       clearAgentModelSelection();
     }
-    promptDraft = preset.prompt;
-    ticketDraft = preset.ticketBody ?? '';
+    promptDraft = renderPresetTemplate(preset.promptTemplate, selectedRepoId);
+    ticketDraft = preset.ticketBodyTemplate ? renderPresetTemplate(preset.ticketBodyTemplate, selectedRepoId) : '';
     triggerDraft = prettyJson({ event_types: ['schedule.fire'] });
     filtersDraft = prettyJson({ schedule: { rule_id: '<assigned on save>' } });
-    targetDraft = prettyJson(preset.id === 'weekly_ticket_flow' ? { base_repo_id: selectedRepoId } : { repo_id: selectedRepoId });
-    executorDraft = prettyJson(preset.id === 'weekly_ticket_flow' ? { ticket_pack: { source: 'inline', tickets: [{ path: 'TICKET-001.md', content: ticketDraft }] } } : { lane_id: 'pma:default', message: promptDraft });
-    policyDraft = prettyJson({ approval_mode: 'never_require_approval', max_attempts: preset.id === 'weekly_ticket_flow' ? 2 : 3 });
+    targetDraft = prettyJson(renderPresetValue(preset.targetShape, selectedRepoId));
+    executorDraft = prettyJson(renderPresetValue(preset.executorShape, selectedRepoId, { prompt: promptDraft, ticket_body: ticketDraft }));
+    policyDraft = prettyJson(preset.policy);
     metadataDraft = prettyJson({ preset: preset.id, automation_kind: preset.kind, repo_id: selectedRepoId });
   }
 
@@ -237,7 +215,7 @@
     if (routeRuleId !== automation.id) void goto(automationRoute(automation.id));
   }
 
-  function selectPreset(preset: AutomationPreset): void {
+  function selectPreset(preset: AutomationPresetDescriptor): void {
     selectedKind = 'preset';
     selectedId = preset.id;
     detailMode = 'detail';
@@ -331,6 +309,7 @@
   async function createPresetAutomation(): Promise<void> {
     if (!selectedRepoId || saving) return;
     const preset = selectedPreset();
+    if (!preset) return;
     saving = true;
     error = null;
     const result = await webApi.hub.createAutomation({
@@ -356,7 +335,7 @@
     }
     overview = overview
       ? { ...overview, automations: [...overview.automations, result.data] }
-      : { automations: [result.data], summary: { total: 1, active: result.data.enabled ? 1 : 0, paused: result.data.enabled ? 0 : 1, failedJobs: 0 } };
+      : { automations: [result.data], presets, summary: { total: 1, active: result.data.enabled ? 1 : 0, paused: result.data.enabled ? 0 : 1, failedJobs: 0 } };
     notice = `Created ${result.data.name}${result.data.enabled ? '' : ' — paused'}`;
     detailMode = 'detail';
     await goto(automationRoute(result.data.id));
@@ -426,6 +405,7 @@
       ].join('\n');
     }
     const preset = selectedPreset();
+    if (!preset) return createNewAutomationPrompt();
     const agentLines =
       preset.executorKind === 'pma_turn'
         ? [
@@ -439,7 +419,7 @@
       '',
       `Repo: ${(selectedRepo?.name ?? selectedRepoId) || '(choose repo)'}`,
       ...agentLines,
-      `Schedule: ${preset.scheduleKind} at ${pad(detailHour)}:${pad(detailMinute)} ${timezone}`,
+      `Schedule: ${preset.schedule.kind} at ${pad(detailHour)}:${pad(detailMinute)} ${timezone}`,
       '',
       'Help me adapt this into the right automation rule.'
     ].join('\n');
@@ -471,21 +451,21 @@
   }
 
   function selectedScheduleKind(): string {
-    return selectedAutomation()?.product.scheduleEditor.kind ?? selectedPreset().scheduleKind;
+    return selectedAutomation()?.product.scheduleEditor.kind ?? selectedPreset()?.schedule.kind ?? 'daily';
   }
 
   function selectedExecutorKind(): string {
-    return selectedAutomation()?.executorKind ?? selectedPreset().executorKind;
+    return selectedAutomation()?.executorKind ?? selectedPreset()?.executorKind ?? '';
   }
 
   function selectedTargetPolicy(): string {
-    return selectedAutomation()?.targetPolicy ?? selectedPreset().targetPolicy;
+    return selectedAutomation()?.targetPolicy ?? selectedPreset()?.targetPolicy ?? '';
   }
 
   function detailDescription(): string {
     const automation = selectedAutomation();
     if (automation) return String(automation.metadata.description ?? automation.product.managed.reason ?? kindLabel(automation.kind));
-    return selectedPreset().description;
+    return selectedPreset()?.description ?? '';
   }
 
   function firstTicketBody(rawExecutor: unknown): string {
@@ -498,7 +478,7 @@
   function selectedTicketPackTickets(): TicketPackTicket[] {
     const automation = selectedAutomation();
     if (automation) return ticketPackTickets(automation.raw.executor);
-    if (selectedPreset().executorKind !== 'ticket_flow') return [];
+    if (selectedPreset()?.executorKind !== 'ticket_flow') return [];
     return ticketPackTickets({ ticket_pack: { tickets: [{ path: 'TICKET-001.md', content: ticketDraft }] } });
   }
 
@@ -692,8 +672,9 @@
     const automation = selectedAutomation();
     if (automation) return automation.product.scheduleEditor.summary || scheduleLabel(automation);
     const preset = selectedPreset();
+    if (!preset) return '';
     const time = `${pad(detailHour)}:${pad(detailMinute)}`;
-    if (preset.scheduleKind === 'weekly') return `${weekdayLabel(detailWeekday, true)} ${time} ${timezone}`;
+    if (preset.schedule.kind === 'weekly') return `${weekdayLabel(detailWeekday, true)} ${time} ${timezone}`;
     return `Daily ${time} ${timezone}`;
   }
 
@@ -734,7 +715,7 @@
   function selectedMessagePreview(): string {
     const automation = selectedAutomation();
     if (automation) return automation.product.messagePreview || automation.product.message.preview || 'No product-visible message source is declared.';
-    return promptDraft || ticketDraft || selectedPreset().prompt;
+    return promptDraft || ticketDraft || selectedPreset()?.promptTemplate || '';
   }
 
   function scheduleFieldDateTime(): string {
@@ -861,7 +842,7 @@
               <h2>Start from a preset</h2>
             </div>
             <ul class="card-list">
-              {#each PRESETS as preset}
+              {#each presets as preset}
                 <li>
                   <button
                     type="button"
@@ -873,7 +854,7 @@
                     <span class="automation-card-body">
                       <span class="automation-card-title">{preset.name}</span>
                       <span class="automation-card-meta">
-                        <span>{preset.scheduleKind}</span>
+                        <span>{preset.schedule.kind}</span>
                         <span class="meta-dot">·</span>
                         <span class="kind-chip">{kindLabel(preset.executorKind)}</span>
                       </span>

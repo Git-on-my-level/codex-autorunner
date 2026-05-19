@@ -11,6 +11,7 @@ import typer
 
 from ...adapters.chat.automation_surface import _resolve_rule
 from ...core.automation.product import (
+    AUTOMATION_PRESET_DESCRIPTORS,
     AutomationPresetRequest,
     automation_overview,
     automation_row,
@@ -54,6 +55,9 @@ from .pma_status_contracts import (
 )
 
 logger = logging.getLogger(__name__)
+
+SECURITY_SCAN_PRESET = AUTOMATION_PRESET_DESCRIPTORS["security_scan_pr"]
+WEEKLY_TICKET_FLOW_PRESET = AUTOMATION_PRESET_DESCRIPTORS["weekly_ticket_flow"]
 
 pma_app = typer.Typer(
     add_completion=False,
@@ -235,10 +239,24 @@ def pma_automation_resume(
 def pma_automation_security_scan(
     repo: str = typer.Argument(..., help="Hub repo id to scan"),
     hour: int = typer.Option(
-        9, "--hour", min=0, max=23, help="Scheduled UTC/local hour"
+        SECURITY_SCAN_PRESET.default_hour,
+        "--hour",
+        min=0,
+        max=23,
+        help="Scheduled UTC/local hour",
     ),
-    minute: int = typer.Option(0, "--minute", min=0, max=59, help="Scheduled minute"),
-    timezone: str = typer.Option("UTC", "--timezone", help="IANA timezone name"),
+    minute: int = typer.Option(
+        SECURITY_SCAN_PRESET.default_minute,
+        "--minute",
+        min=0,
+        max=59,
+        help="Scheduled minute",
+    ),
+    timezone: str = typer.Option(
+        SECURITY_SCAN_PRESET.default_timezone,
+        "--timezone",
+        help="IANA timezone name",
+    ),
     name: Optional[str] = typer.Option(None, "--name", help="Automation display name"),
     enabled: bool = typer.Option(
         False, "--enabled", help="Enable immediately after saving"
@@ -266,13 +284,31 @@ def pma_automation_security_scan(
 def pma_automation_weekly_ticket_flow(
     repo: str = typer.Argument(..., help="Hub repo id to run in a fresh worktree"),
     weekday: int = typer.Option(
-        0, "--weekday", min=0, max=6, help="Scheduled weekday, Monday=0"
+        WEEKLY_TICKET_FLOW_PRESET.default_weekday or 0,
+        "--weekday",
+        min=0,
+        max=6,
+        help="Scheduled weekday, Monday=0",
     ),
     hour: int = typer.Option(
-        9, "--hour", min=0, max=23, help="Scheduled UTC/local hour"
+        WEEKLY_TICKET_FLOW_PRESET.default_hour,
+        "--hour",
+        min=0,
+        max=23,
+        help="Scheduled UTC/local hour",
     ),
-    minute: int = typer.Option(0, "--minute", min=0, max=59, help="Scheduled minute"),
-    timezone: str = typer.Option("UTC", "--timezone", help="IANA timezone name"),
+    minute: int = typer.Option(
+        WEEKLY_TICKET_FLOW_PRESET.default_minute,
+        "--minute",
+        min=0,
+        max=59,
+        help="Scheduled minute",
+    ),
+    timezone: str = typer.Option(
+        WEEKLY_TICKET_FLOW_PRESET.default_timezone,
+        "--timezone",
+        help="IANA timezone name",
+    ),
     name: Optional[str] = typer.Option(None, "--name", help="Automation display name"),
     enabled: bool = typer.Option(
         False, "--enabled", help="Enable immediately after saving"

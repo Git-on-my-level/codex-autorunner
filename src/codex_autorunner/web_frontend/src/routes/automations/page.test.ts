@@ -34,4 +34,14 @@ describe('/automations page', () => {
     expect(source).not.toContain("onblur={() => void saveJsonField('executor'");
     expect(source).not.toContain("onblur={() => void saveJsonField('policy'");
   });
+
+  it('derives preset cards and drafts from the backend overview descriptors', () => {
+    const source = pageSource();
+
+    expect(source).toContain('const presets = $derived(overview?.presets ?? [])');
+    expect(source).toContain('{#each presets as preset}');
+    expect(source).toContain('renderPresetTemplate(preset.promptTemplate, selectedRepoId)');
+    expect(source).toContain('preset.ticketBodyTemplate ? renderPresetTemplate(preset.ticketBodyTemplate, selectedRepoId) :');
+    expect(source).not.toContain('const PRESETS');
+  });
 });
