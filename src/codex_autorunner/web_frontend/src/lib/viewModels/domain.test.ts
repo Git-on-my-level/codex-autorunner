@@ -153,6 +153,22 @@ describe('view model mappers', () => {
     expect(vm.title).toBe('Real question here');
   });
 
+  it('uses backend user-visible title seed before raw prompt fallbacks', () => {
+    const vm = mapPmaChatSummary({
+      thread_target_id: 'thread-visible-seed',
+      name: 'New chat',
+      user_visible_text: 'Real visible request',
+      last_message_preview:
+        '<injected context>\nCAR\n</injected context>\n\nReal visible request',
+      repo_id: 'my-repo',
+      agent_id: 'codex',
+      lifecycle_status: 'active',
+      normalized_status: 'idle'
+    });
+
+    expect(vm.title).toBe('Real visible request');
+  });
+
   it('uses chat channel display names instead of surface id fallback titles', () => {
     const vm = mapPmaChatSummary({
       thread_target_id: 'thread-1',

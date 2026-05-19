@@ -35,7 +35,7 @@ def _by_kind(items: list[dict[str, Any]], kind: str) -> list[dict[str, Any]]:
 
 
 def _assert_identity(item: dict[str, Any]) -> None:
-    assert item["contract_version"] == "managed_thread_timeline.v2"
+    assert item["contract_version"] == "managed_thread_timeline.v3"
     assert item["identity"]["timeline_item_id"] == item["item_id"]
     assert "progress_item_ids" in item["identity"]
     assert "source_event_ids" in item["provenance"]
@@ -94,7 +94,7 @@ def test_managed_thread_timeline_v2_authors_identity_and_provenance_for_core_ite
         thread_store=store,
         managed_thread_id=thread_id,
     )
-    assert timeline["contract_version"] == "managed_thread_timeline.v2"
+    assert timeline["contract_version"] == "managed_thread_timeline.v3"
     for item in timeline["items"]:
         _assert_identity(item)
 
@@ -162,7 +162,7 @@ def test_live_timeline_frame_keeps_sse_cursor_out_of_timeline_identity() -> None
     )
 
     assert item is not None
-    assert item["contract_version"] == "managed_thread_timeline.v2"
+    assert item["contract_version"] == "managed_thread_timeline.v3"
     assert item["item_id"] == "turn:turn-1:intermediate:0002"
     assert item["identity"]["timeline_item_id"] == item["item_id"]
     assert item["identity"]["timeline_item_id"] != "99"

@@ -50,7 +50,6 @@ import {
   removePendingAttachment,
   sortChatsUnreadFirst,
   sortChatsWaitingFirst,
-  splitInjectedPromptContext,
   summarizeFilterCounts,
   summarizeVisibleLocalPlaceholderStatusCounts,
   buildChatListEntries
@@ -148,17 +147,6 @@ function baseArtifactCardTrace(id: string, text: string, eventIds: string[]) {
 }
 
 describe('PMA chat view helpers', () => {
-  it('splits injected prompt context out of user-visible message text', () => {
-    expect(
-      splitInjectedPromptContext(
-        '<injected context>\nSystem setup\n</injected context>\n\nFix this\n\n<injected context>\nArtifact delivery\n</injected context>'
-      )
-    ).toEqual({
-      userText: 'Fix this',
-      systemContext: 'System setup\n\n---\n\nArtifact delivery'
-    });
-  });
-
   it('collapses ticket-flow chats sharing a worktree into one run group, even without ticket ids', () => {
     const chats: PmaChatSummary[] = [
       { ...baseChat, id: 'tf-1', ticketId: null, isTicketFlow: true, worktreeId: 'wt-A', repoId: 'repo-1' },
@@ -1131,6 +1119,61 @@ describe('PMA chat view helpers', () => {
       message: { role: 'user', text: 'hello transcript' }
     });
     expect(snapshot.status).toMatchObject({ id: 'run-1', phase: 'testing' });
+  });
+
+  it('maps capsule-aware transcript user rows from backend metadata', () => {
+    const rows = mapChatTranscriptSnapshot(
+      {
+        rows: [
+          {
+            kind: 'message',
+            id: 'turn:1:user',
+            turn_id: '1',
+            order_key: '001',
+            visibility: 'user_visible',
+            user_visible_text: 'Fix this',
+            capsule_refs: [
+              {
+                capsule_id: 'car.repo_basics',
+                capsule_version: '1',
+                visibility: 'model_only',
+                scope: 'repo',
+                source_digest: 'sha256:repo',
+                reason: 'repo_context'
+              }
+            ],
+            message: {
+              id: 'turn:1:user',
+              chat_id: 'chat-1',
+              role: 'user',
+              text: 'Fix this',
+              user_visible_text: 'Fix this',
+              artifacts: []
+            }
+          }
+        ]
+      },
+      (raw) => ({ ...baseProgress, id: String(raw.managed_turn_id), phase: String(raw.phase) })
+    ).rows;
+
+    expect(rows[0]).toMatchObject({
+      kind: 'message',
+      message: {
+        text: 'Fix this',
+        visibility: 'user_visible',
+        userVisibleText: 'Fix this',
+        capsuleRefs: [
+          {
+            capsuleId: 'car.repo_basics',
+            capsuleVersion: '1',
+            visibility: 'model_only',
+            scope: 'repo',
+            sourceDigest: 'sha256:repo',
+            reason: 'repo_context'
+          }
+        ]
+      }
+    });
   });
 
   it('summarizes live progress separately from transcript cards', () => {

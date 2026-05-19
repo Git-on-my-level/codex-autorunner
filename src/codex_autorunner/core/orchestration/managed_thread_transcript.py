@@ -128,9 +128,8 @@ def _timeline_item_to_transcript_rows(item: Mapping[str, Any]) -> list[dict[str,
         if not text.strip():
             return []
         role = "user" if kind == "user_message" else "assistant"
-        visibility = (
-            _optional_text(payload.get("visibility"))
-            or ("user_visible" if role == "user" else "assistant_visible")
+        visibility = _optional_text(payload.get("visibility")) or (
+            "user_visible" if role == "user" else "assistant_visible"
         )
         user_visible_text = (
             _optional_text(payload.get("user_visible_text")) if role == "user" else None
@@ -398,11 +397,15 @@ def _capsule_ref_list(value: Any) -> list[dict[str, Any]]:
         if not isinstance(item, Mapping):
             continue
         capsule_id = _optional_text(item.get("capsule_id"))
-        capsule_version = _optional_text(item.get("capsule_version") or item.get("version"))
+        capsule_version = _optional_text(
+            item.get("capsule_version") or item.get("version")
+        )
         visibility = _optional_text(item.get("visibility"))
         scope = _optional_text(item.get("scope"))
         source_digest = _optional_text(item.get("source_digest"))
-        if not (capsule_id and capsule_version and visibility and scope and source_digest):
+        if not (
+            capsule_id and capsule_version and visibility and scope and source_digest
+        ):
             continue
         ref: dict[str, Any] = {
             "capsule_id": capsule_id,

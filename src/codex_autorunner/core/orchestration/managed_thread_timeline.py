@@ -487,7 +487,9 @@ def _capsule_refs_from_metadata(metadata: dict[str, Any]) -> list[dict[str, Any]
         visibility = _normalize_optional_text(raw_ref.get("visibility"))
         scope = _normalize_optional_text(raw_ref.get("scope"))
         source_digest = _normalize_optional_text(raw_ref.get("source_digest"))
-        if not (capsule_id and capsule_version and visibility and scope and source_digest):
+        if not (
+            capsule_id and capsule_version and visibility and scope and source_digest
+        ):
             continue
         ref: dict[str, Any] = {
             "capsule_id": capsule_id,

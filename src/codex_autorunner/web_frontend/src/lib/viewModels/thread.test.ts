@@ -135,6 +135,20 @@ describe('mapThreadSummary', () => {
     expect(vm.title).toBe('Fix login');
   });
 
+  it('uses backend user-visible title seed before raw prompt fallbacks', () => {
+    const vm = mapThreadSummary({
+      managed_thread_id: 'thread-visible-seed',
+      name: 'New chat',
+      title_seed: 'Fix login',
+      last_message_preview:
+        '<injected context>\nCAR managed repo\n</injected context>\n\nFix login',
+      agent: 'codex',
+      status: 'idle'
+    });
+
+    expect(vm.title).toBe('Fix login');
+  });
+
   it('builds title from scope for generic chat name', () => {
     const vm = mapThreadSummary({
       managed_thread_id: 'thread-generic',

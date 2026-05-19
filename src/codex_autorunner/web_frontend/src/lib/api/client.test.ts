@@ -576,10 +576,10 @@ describe('API client error handling', () => {
   it('maps PMA canonical diagnostic timeline payloads with stable item IDs', async () => {
     const fetcher = vi.fn(async () =>
       Response.json({
-        contract_version: 'managed_thread_timeline.v2',
+        contract_version: 'managed_thread_timeline.v3',
         items: [
           {
-            contract_version: 'managed_thread_timeline.v2',
+            contract_version: 'managed_thread_timeline.v3',
             item_id: 'turn:turn-1:user',
             kind: 'user_message',
             order_key: '001',
@@ -620,10 +620,10 @@ describe('API client error handling', () => {
   it('maps v2 diagnostic timeline items with canonical identity and provenance', async () => {
     const fetcher = vi.fn(async () =>
       Response.json({
-        contract_version: 'managed_thread_timeline.v2',
+        contract_version: 'managed_thread_timeline.v3',
         items: [
           {
-            contract_version: 'managed_thread_timeline.v2',
+            contract_version: 'managed_thread_timeline.v3',
             item_id: 'turn:one:user',
             kind: 'user_message',
             order_key: '001',
@@ -644,7 +644,7 @@ describe('API client error handling', () => {
             payload: { text: 'Fix the deploy script' }
           },
           {
-            contract_version: 'managed_thread_timeline.v2',
+            contract_version: 'managed_thread_timeline.v3',
             item_id: 'turn:one:tool:1:rg',
             kind: 'tool_group',
             order_key: '002',
@@ -668,7 +668,7 @@ describe('API client error handling', () => {
             }
           },
           {
-            contract_version: 'managed_thread_timeline.v2',
+            contract_version: 'managed_thread_timeline.v3',
             item_id: 'turn:one:assistant',
             kind: 'assistant_message',
             order_key: '003',
@@ -719,7 +719,7 @@ describe('API client error handling', () => {
   it('requests PMA diagnostic timelines with an explicit bounded limit', async () => {
     const fetcher = vi.fn(async () =>
       Response.json({
-        contract_version: 'managed_thread_timeline.v2',
+        contract_version: 'managed_thread_timeline.v3',
         items: []
       })
     ) as unknown as typeof fetch;
@@ -733,7 +733,7 @@ describe('API client error handling', () => {
   it('requests PMA transcript projections with backend-owned rows', async () => {
     const fetcher = vi.fn(async () =>
       Response.json({
-        contract_version: 'managed_thread_transcript.v1',
+        contract_version: 'managed_thread_transcript.v2',
         rows: [
           {
             kind: 'message',
