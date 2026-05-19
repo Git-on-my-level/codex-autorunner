@@ -335,6 +335,9 @@ def test_managed_thread_transcript_endpoint_exposes_capsule_visibility_contract(
     assert payload["contract_version"] == "managed_thread_transcript.v2"
     user_row = payload["rows"][0]
     assert user_row["message"]["text"] == "Fix login"
+    assert user_row["visible_text"] == "Fix login"
+    assert user_row["model_context_text"] == "repo guidance"
+    assert user_row["raw_model_prompt"].startswith("<injected context>")
     assert user_row["visibility"] == "user_visible"
     assert user_row["user_visible_text"] == "Fix login"
     assert user_row["capsule_refs"] == [
@@ -346,6 +349,10 @@ def test_managed_thread_transcript_endpoint_exposes_capsule_visibility_contract(
             "source_digest": "sha256:repo",
         }
     ]
+    assert user_row["model_context_refs"] == user_row["capsule_refs"]
+    assert user_row["message"]["visible_text"] == "Fix login"
+    assert user_row["message"]["model_context_text"] == "repo guidance"
+    assert user_row["message"]["model_context_refs"] == user_row["capsule_refs"]
     assert user_row["message"]["capsule_refs"] == user_row["capsule_refs"]
 
 

@@ -142,50 +142,9 @@
 
   function modelOnlyCapsuleRefs(card: Extract<ChatTranscriptCard, { kind: 'message' }>): PmaMessageCapsuleRef[] {
     if (card.message.role !== 'user') return [];
+    const structuredRefs = card.message.modelContextRefs ?? [];
+    if (structuredRefs.length > 0) return structuredRefs;
     return (card.message.capsuleRefs ?? []).filter((ref) => ref.visibility === 'model_only');
-  }
-
-  type PromptParts = {
-    visibleText: string;
-    injectedContext: string | null;
-  };
-
-  function splitInjectedPromptContext(text: string): PromptParts {
-    const match = text.match(/<injected context>\s*([\s\S]*?)\s*<\/injected context>\s*/i);
-    if (!match) return { visibleText: text, injectedContext: null };
-    const before = text.slice(0, match.index).trim();
-    const after = text.slice((match.index ?? 0) + match[0].length).trim();
-    const visibleText = [before, after].filter(Boolean).join('\n\n');
-    return {
-      visibleText: visibleText || text,
-      injectedContext: match[1]?.trim() || null
-    };
-  }
-
-  function rawRecord(value: unknown): Record<string, unknown> {
-    return value && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
-  }
-
-  function rawText(value: unknown): string | null {
-    return typeof value === 'string' && value.trim() ? value : null;
-  }
-
-  function rawInjectedPromptText(card: Extract<ChatTranscriptCard, { kind: 'message' }>): string | null {
-    const raw = rawRecord(card.message.raw);
-    const payload = rawRecord(raw.payload);
-    return rawText(payload.raw_model_prompt) ?? rawText(payload.runtime_prompt) ?? rawText(raw.raw_model_prompt) ?? rawText(raw.runtime_prompt);
-  }
-
-  function userPromptParts(card: Extract<ChatTranscriptCard, { kind: 'message' }>): PromptParts {
-    const visibleParts = splitInjectedPromptContext(card.message.text);
-    if (visibleParts.injectedContext) return visibleParts;
-    const rawPrompt = rawInjectedPromptText(card);
-    if (!rawPrompt) return visibleParts;
-    const rawParts = splitInjectedPromptContext(rawPrompt);
-    return {
-      visibleText: card.message.text,
-      injectedContext: rawParts.injectedContext
-    };
   }
 
   function capsuleRefLabel(ref: PmaMessageCapsuleRef): string {
@@ -199,15 +158,16 @@
   {#if card.kind === 'message'}
     {@const isStreaming = card.message.role === 'assistant' && card.id === streamingMessageId}
     {@const modelContextRefs = modelOnlyCapsuleRefs(card)}
-    {@const promptParts = card.message.role === 'user' ? userPromptParts(card) : { visibleText: card.message.text, injectedContext: null }}
-    {#if modelContextRefs.length > 0 || promptParts.injectedContext}
+    {@const visibleText = card.message.visibleText ?? card.message.text}
+    {@const modelContextText = card.message.role === 'user' ? card.message.modelContextText : null}
+    {#if modelContextRefs.length > 0 || modelContextText}
       <details class="injected-prompt-card">
         <summary>
-          <span>{promptParts.injectedContext ? 'Injected prompt' : 'Model-only context'}</span>
+          <span>{modelContextText ? 'Injected prompt' : 'Model-only context'}</span>
         </summary>
         <div class="injected-prompt-body markdown-body">
-          {#if promptParts.injectedContext}
-            {@html renderMarkdownToHtml(promptParts.injectedContext, { openLinksInNewTab: true })}
+          {#if modelContextText}
+            {@html renderMarkdownToHtml(modelContextText, { openLinksInNewTab: true })}
           {/if}
           {#if modelContextRefs.length > 0}
             <ul>
@@ -227,10 +187,10 @@
     <article class={`message ${card.message.role === 'user' ? 'user' : 'assistant'}`}>
       <span>{card.message.role === 'user' ? 'You' : assistantLabel}</span>
       {#if isStreaming}
-        <div class="message-markdown streaming">{promptParts.visibleText}</div>
+        <div class="message-markdown streaming">{visibleText}</div>
       {:else}
         <div class="message-markdown markdown-body">
-          {@html renderMarkdownToHtml(promptParts.visibleText, { openLinksInNewTab: true })}
+          {@html renderMarkdownToHtml(visibleText, { openLinksInNewTab: true })}
         </div>
       {/if}
       {#if card.message.role === 'user' && card.message.artifacts.length > 0}

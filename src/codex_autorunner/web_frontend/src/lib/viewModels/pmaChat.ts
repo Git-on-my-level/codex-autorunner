@@ -1330,6 +1330,12 @@ function mapChatTranscriptRow(raw: Record<string, unknown>): ChatTranscriptCard 
     const capsuleRefs = asRecordArray(raw.capsule_refs ?? message.capsule_refs)
       .map(mapPmaMessageCapsuleRef)
       .filter((item): item is PmaMessageCapsuleRef => item !== null);
+    const visibleText = nullableString(raw.visible_text ?? message.visible_text);
+    const modelContextText = nullableString(raw.model_context_text ?? message.model_context_text);
+    const modelContextRefs = asRecordArray(raw.model_context_refs ?? message.model_context_refs)
+      .map(mapPmaMessageCapsuleRef)
+      .filter((item): item is PmaMessageCapsuleRef => item !== null);
+    const rawModelPrompt = nullableString(raw.raw_model_prompt ?? message.raw_model_prompt);
     return {
       kind: 'message',
       id,
@@ -1340,8 +1346,12 @@ function mapChatTranscriptRow(raw: Record<string, unknown>): ChatTranscriptCard 
         id: stringValue(message.id) || id,
         chatId: stringValue(message.chat_id),
         role,
-        text: role === 'user' ? userVisibleText ?? stringValue(message.text) : stringValue(message.text),
+        text: role === 'user' ? visibleText ?? userVisibleText ?? stringValue(message.text) : stringValue(message.text),
         visibility: nullableString(raw.visibility ?? message.visibility),
+        visibleText,
+        modelContextText,
+        modelContextRefs,
+        rawModelPrompt,
         userVisibleText,
         capsuleRefs,
         createdAt: nullableString(message.created_at),

@@ -261,14 +261,13 @@ describe('ChatTranscriptCards', () => {
           chatId: 'c1',
           role: 'user',
           text: 'Please fix the archive button.',
+          visibleText: 'Please fix the archive button.',
+          modelContextText: 'CAR managed repo',
+          rawModelPrompt: '<injected context>\nCAR managed repo\n</injected context>\n\nPlease fix the archive button.',
           createdAt: '2026-05-10T12:00:00.000Z',
           status: null,
           artifacts: [],
-          raw: {
-            payload: {
-              raw_model_prompt: '<injected context>\nCAR managed repo\n</injected context>\n\nPlease fix the archive button.'
-            }
-          }
+          raw: {}
         }
       }
     ];

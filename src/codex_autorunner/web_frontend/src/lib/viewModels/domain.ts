@@ -64,6 +64,10 @@ export type PmaChatMessage = {
   role: 'user' | 'assistant' | 'system' | 'tool';
   text: string;
   visibility?: string | null;
+  visibleText?: string | null;
+  modelContextText?: string | null;
+  modelContextRefs?: PmaMessageCapsuleRef[];
+  rawModelPrompt?: string | null;
   userVisibleText?: string | null;
   capsuleRefs?: PmaMessageCapsuleRef[];
   createdAt: string | null;
@@ -372,6 +376,12 @@ export function mapPmaChatMessage(raw: JsonRecord): PmaChatMessage {
     role,
     text,
     visibility: nullableString(raw.visibility),
+    visibleText: nullableString(raw.visible_text ?? raw.visibleText),
+    modelContextText: nullableString(raw.model_context_text ?? raw.modelContextText),
+    modelContextRefs: asArray(raw.model_context_refs ?? raw.modelContextRefs)
+      .map((item) => mapPmaMessageCapsuleRef(asRecord(item)))
+      .filter((item): item is PmaMessageCapsuleRef => item !== null),
+    rawModelPrompt: nullableString(raw.raw_model_prompt ?? raw.rawModelPrompt),
     userVisibleText: nullableString(raw.user_visible_text ?? raw.userVisibleText),
     capsuleRefs: asArray(raw.capsule_refs ?? raw.capsuleRefs)
       .map((item) => mapPmaMessageCapsuleRef(asRecord(item)))
