@@ -91,8 +91,7 @@ class PmaLegacyAutomationMigrationError(RuntimeError):
     ) -> None:
         self.diagnostics = tuple(diagnostics)
         summary = "; ".join(
-            f"{item.code}({item.table}:{item.legacy_id})"
-            for item in diagnostics[:5]
+            f"{item.code}({item.table}:{item.legacy_id})" for item in diagnostics[:5]
         )
         if len(diagnostics) > 5:
             summary += f"; +{len(diagnostics) - 5} more"
@@ -112,6 +111,19 @@ class PmaUnifiedAutomationAdapter:
         rule = self._store.upsert_rule(self.timer_rule(timer))
         schedule = self._store.upsert_schedule(self.timer_schedule(timer))
         return rule, schedule
+
+    def mirror_wakeup_job(
+        self, *, wakeup: Any
+    ) -> tuple[AutomationEvent, AutomationRule, AutomationJob]:
+        event = self._store.record_event(self.wakeup_event(wakeup))
+        rule_id = self._wakeup_rule_id(wakeup)
+        if self._store.get_rule(rule_id) is None:
+            self._store.upsert_rule(self.wakeup_rule(wakeup, rule_id, event))
+        rule = self._store.get_rule(rule_id)
+        if rule is None:
+            raise RuntimeError("failed to persist PMA wakeup automation rule")
+        job, _ = self._store.enqueue_job(self.wakeup_job(wakeup, rule_id, event))
+        return event, rule, job
 
     def subscription_rule(self, subscription: Any) -> AutomationRule:
         subscription_id = str(
@@ -275,6 +287,103 @@ class PmaUnifiedAutomationAdapter:
             updated_at=getattr(timer, "updated_at", None),
         )
 
+    def wakeup_event(self, wakeup: Any) -> AutomationEvent:
+        wakeup_id = _required_attr_text(wakeup, "wakeup_id")
+        event_type = "manual.run"
+        legacy_event_type = _optional_text(getattr(wakeup, "event_type", None))
+        if legacy_event_type in _LIFECYCLE_EVENT_MAP:
+            event_type = _LIFECYCLE_EVENT_MAP[legacy_event_type]
+        payload = _wakeup_payload(wakeup)
+        return AutomationEvent.create(
+            event_id=f"legacy-pma-wakeup:{wakeup_id}",
+            event_type=event_type,
+            source="pma_wakeup",
+            repo_id=getattr(wakeup, "repo_id", None),
+            target={
+                "thread_id": getattr(wakeup, "thread_id", None),
+                "run_id": getattr(wakeup, "run_id", None),
+            },
+            payload=payload,
+            raw_payload=payload,
+            metadata={
+                "migration": "pma_legacy_automation_v1",
+                "source": "pma_wakeup_mirror",
+                "legacy_wakeup_id": wakeup_id,
+                "legacy_event_id": getattr(wakeup, "event_id", None),
+            },
+            observed_at=getattr(wakeup, "created_at", None),
+        )
+
+    def wakeup_rule(
+        self, wakeup: Any, rule_id: str, event: AutomationEvent
+    ) -> AutomationRule:
+        wakeup_id = _required_attr_text(wakeup, "wakeup_id")
+        return AutomationRule.create(
+            rule_id=rule_id,
+            name=f"PMA wakeup {wakeup_id}",
+            enabled=True,
+            system_owned=True,
+            trigger_kind=TRIGGER_KIND_EVENT,
+            trigger={"event_types": [event.event_type]},
+            target_policy=TARGET_POLICY_HUB,
+            target={
+                "repo_id": getattr(wakeup, "repo_id", None),
+                "thread_id": getattr(wakeup, "thread_id", None),
+            },
+            executor_kind=EXECUTOR_PMA_TURN,
+            executor={
+                "lane_id": getattr(wakeup, "lane_id", None) or "pma:default",
+                "wake_up_kind": "pma_wakeup",
+            },
+            metadata={
+                "migration": "pma_legacy_automation_v1",
+                "source": "pma_wakeup_mirror",
+                "legacy_wakeup_id": wakeup_id,
+            },
+            created_at=getattr(wakeup, "created_at", None),
+            updated_at=getattr(wakeup, "updated_at", None),
+        )
+
+    def wakeup_job(
+        self, wakeup: Any, rule_id: str, event: AutomationEvent
+    ) -> AutomationJob:
+        wakeup_id = _required_attr_text(wakeup, "wakeup_id")
+        job = AutomationJob.create(
+            job_id=f"legacy-pma-wakeup:{wakeup_id}",
+            rule_id=rule_id,
+            event_id=event.event_id,
+            dedupe_key=f"legacy-pma-wakeup:{wakeup_id}",
+            target={
+                "repo_id": getattr(wakeup, "repo_id", None),
+                "thread_id": getattr(wakeup, "thread_id", None),
+            },
+            executor={
+                "kind": EXECUTOR_PMA_TURN,
+                "lane_id": getattr(wakeup, "lane_id", None) or "pma:default",
+                "wake_up_kind": "pma_wakeup",
+            },
+            policy={
+                "max_attempts": 3,
+                "retry_backoff_seconds": 0,
+                "retry_backoff_max_seconds": 0,
+                "max_concurrent_per_rule": 1,
+                "max_concurrent_per_target": 1,
+            },
+            payload=dict(event.payload),
+            created_at=getattr(wakeup, "created_at", None),
+        )
+        job.pma_lane_id = getattr(wakeup, "lane_id", None) or "pma:default"
+        job.result_summary = getattr(wakeup, "reason", None)
+        return job
+
+    def _wakeup_rule_id(self, wakeup: Any) -> str:
+        subscription_id = _optional_text(getattr(wakeup, "subscription_id", None))
+        if subscription_id is not None:
+            subscription_rule_id = f"{PMA_SUBSCRIPTION_RULE_PREFIX}{subscription_id}"
+            if self._store.get_rule(subscription_rule_id) is not None:
+                return subscription_rule_id
+        return f"pma-wakeup:{_required_attr_text(wakeup, 'wakeup_id')}"
+
     def migrate_legacy_rows(self) -> PmaLegacyAutomationMigrationResult:
         return PmaLegacyAutomationMigration(self._store).run()
 
@@ -356,7 +465,13 @@ class PmaLegacyAutomationMigration:
                     counts["attempts"] += 1
                 self._store.record_attempt(attempt)
 
-        return PmaLegacyAutomationMigrationResult(**counts)
+        return PmaLegacyAutomationMigrationResult(
+            rules=counts["rules"],
+            events=counts["events"],
+            jobs=counts["jobs"],
+            schedules=counts["schedules"],
+            attempts=counts["attempts"],
+        )
 
     def subscription_migration_rule(self, row: sqlite3.Row) -> AutomationRule:
         return AutomationRule.create(
@@ -666,7 +781,13 @@ class PmaLegacyAutomationMigration:
                 row,
                 table="orch_automation_wakeups",
                 id_column="wakeup_id",
-                required=("wakeup_id", "wakeup_kind", "state", "created_at", "updated_at"),
+                required=(
+                    "wakeup_id",
+                    "wakeup_kind",
+                    "state",
+                    "created_at",
+                    "updated_at",
+                ),
             )
             self._validate_json_object(
                 diagnostics,
@@ -854,6 +975,13 @@ def _optional_text(value: Any) -> Optional[str]:
     return text or None
 
 
+def _required_attr_text(value: Any, attr: str) -> str:
+    text = _optional_text(getattr(value, attr, None))
+    if text is None:
+        raise ValueError(f"{attr} is required")
+    return text
+
+
 def _optional_filter(key: str, value: Any) -> dict[str, Any]:
     return {key: value} if value is not None else {}
 
@@ -873,6 +1001,40 @@ def _timer_payload(timer: Any) -> dict[str, Any]:
         "subscription_id": getattr(timer, "subscription_id", None),
         "timer_type": getattr(timer, "timer_type", None),
         "metadata": dict(getattr(timer, "metadata", None) or {}),
+    }
+
+
+def _wakeup_payload(wakeup: Any) -> dict[str, Any]:
+    event_data = getattr(wakeup, "event_data", None)
+    metadata = getattr(wakeup, "metadata", None)
+    wake_up = {
+        "wakeup_id": getattr(wakeup, "wakeup_id", None),
+        "repo_id": getattr(wakeup, "repo_id", None),
+        "run_id": getattr(wakeup, "run_id", None),
+        "thread_id": getattr(wakeup, "thread_id", None),
+        "lane_id": getattr(wakeup, "lane_id", None) or "pma:default",
+        "from_state": getattr(wakeup, "from_state", None),
+        "to_state": getattr(wakeup, "to_state", None),
+        "reason": getattr(wakeup, "reason", None),
+        "timestamp": getattr(wakeup, "timestamp", None),
+        "source": getattr(wakeup, "source", None),
+        "event_type": getattr(wakeup, "event_type", None),
+        "subscription_id": getattr(wakeup, "subscription_id", None),
+        "timer_id": getattr(wakeup, "timer_id", None),
+    }
+    if isinstance(metadata, dict):
+        wake_up["metadata"] = dict(metadata)
+        delivery_target = metadata.get("delivery_target")
+        if isinstance(delivery_target, dict):
+            wake_up["delivery_target"] = dict(delivery_target)
+    if isinstance(event_data, dict):
+        wake_up["event_data"] = dict(event_data)
+    return {
+        "wake_up": {
+            key: value
+            for key, value in wake_up.items()
+            if value is not None and value != ""
+        }
     }
 
 

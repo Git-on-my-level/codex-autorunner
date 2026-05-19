@@ -5,7 +5,11 @@ import sqlite3
 from pathlib import Path
 
 from .automation import AutomationStore
-from .pma_automation_records import PmaAutomationTimer, PmaLifecycleSubscription
+from .pma_automation_records import (
+    PmaAutomationTimer,
+    PmaAutomationWakeup,
+    PmaLifecycleSubscription,
+)
 from .pma_automation_unified import (
     PmaUnifiedAutomationAdapter,
     PmaUnifiedMirrorResult,
@@ -69,6 +73,32 @@ class PmaAutomationMirror:
             return PmaUnifiedMirrorResult(
                 operation="mirror_timer_schedule",
                 identifier=str(timer_id or ""),
+                ok=False,
+                error=str(exc),
+                error_code=type(exc).__name__,
+            )
+
+    def mirror_wakeup_job(self, wakeup: PmaAutomationWakeup) -> PmaUnifiedMirrorResult:
+        wakeup_id = getattr(wakeup, "wakeup_id", None)
+        try:
+            event, rule, job = PmaUnifiedAutomationAdapter(
+                AutomationStore(self._hub_root, durable=self._durable)
+            ).mirror_wakeup_job(wakeup=wakeup)
+            _ = event, job
+            return PmaUnifiedMirrorResult(
+                operation="mirror_wakeup_job",
+                identifier=str(wakeup_id or ""),
+                ok=True,
+                rule_id=rule.rule_id,
+            )
+        except (sqlite3.Error, OSError, ValueError, TypeError, RuntimeError) as exc:
+            logger.exception(
+                "Failed to mirror PMA wakeup into unified automation job: %s",
+                wakeup_id,
+            )
+            return PmaUnifiedMirrorResult(
+                operation="mirror_wakeup_job",
+                identifier=str(wakeup_id or ""),
                 ok=False,
                 error=str(exc),
                 error_code=type(exc).__name__,

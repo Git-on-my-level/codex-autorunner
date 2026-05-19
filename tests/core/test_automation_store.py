@@ -449,7 +449,9 @@ def _insert_legacy_pma_rows(tmp_path) -> None:
                     "one_shot",
                     "sub-legacy",
                     "2026-01-02T00:00:00Z",
-                    json.dumps({"lane_id": "pma:default", "metadata": {"source": "test"}}),
+                    json.dumps(
+                        {"lane_id": "pma:default", "metadata": {"source": "test"}}
+                    ),
                     "pending",
                     "2026-01-01T00:00:00Z",
                     "2026-01-01T00:00:00Z",
@@ -511,7 +513,9 @@ def test_explicit_legacy_pma_migration_creates_unified_rows(tmp_path) -> None:
     )
     assert store.list_events()[0].event_type == "lifecycle.flow_failed"
     assert store.list_jobs()[0].pma_lane_id == "pma:default"
-    assert store.list_attempts("legacy-pma-wakeup:wakeup-legacy")[0].status == "succeeded"
+    assert (
+        store.list_attempts("legacy-pma-wakeup:wakeup-legacy")[0].status == "succeeded"
+    )
     assert store.list_schedules()[0].schedule_kind == "one_shot"
 
     assert store.migrate_legacy_pma_automation() == {
@@ -544,9 +548,7 @@ def test_legacy_pma_migration_reports_malformed_rows(tmp_path) -> None:
         AutomationStore(tmp_path).migrate_legacy_pma_automation()
 
     diagnostics = [item.to_dict() for item in excinfo.value.diagnostics]
-    assert {
-        item["code"] for item in diagnostics
-    } >= {
+    assert {item["code"] for item in diagnostics} >= {
         "PMA_LEGACY_AUTOMATION_MALFORMED_JSON",
         "PMA_LEGACY_AUTOMATION_ORPHANED_ROW",
     }

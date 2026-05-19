@@ -206,6 +206,7 @@ class PmaAutomationStore:
             )
         created: PmaLifecycleSubscription
         deduped = False
+        wakeups_to_mirror: list[PmaAutomationWakeup] = []
         with file_lock(self._lock_path()):
             with self._persistence.with_write_connection() as conn:
                 with conn:
@@ -769,6 +770,7 @@ class PmaAutomationStore:
                     )
                     self._compute_dispatch_decision_for_wakeup(created)
                     self._persistence.insert_wakeup(conn, created)
+        self._mirror_wakeup_job(created)
         return created, False
 
     def list_wakeups(
@@ -839,6 +841,7 @@ class PmaAutomationStore:
                 "timestamp",
             }
         }
+        wakeups_to_mirror: list[PmaAutomationWakeup] = []
         with file_lock(self._lock_path()):
             _, subscriptions, _, wakeups = self._load_structured_unlocked()
 
@@ -886,6 +889,9 @@ class PmaAutomationStore:
                         for wakeup in wakeups:
                             if wakeup.wakeup_id not in existing_wakeup_ids:
                                 self._persistence.insert_wakeup(conn, wakeup)
+                                wakeups_to_mirror.append(wakeup)
+        for wakeup in wakeups_to_mirror:
+            self._mirror_wakeup_job(wakeup)
         return {
             "status": "ok",
             "matched": result.matched,
@@ -923,6 +929,9 @@ class PmaAutomationStore:
                     with conn:
                         self._persistence.update_wakeup(conn, entry)
             return changed
+
+    def _mirror_wakeup_job(self, wakeup: PmaAutomationWakeup) -> PmaUnifiedMirrorResult:
+        return self._mirror.mirror_wakeup_job(wakeup)
 
     def notify_timer_fired(
         self, timer: dict[str, Any]
