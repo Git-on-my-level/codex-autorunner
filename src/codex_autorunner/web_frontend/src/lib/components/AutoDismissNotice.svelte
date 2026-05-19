@@ -89,6 +89,8 @@
     <span class="auto-dismiss-notice__msg">{visibleMessage}</span>
     <span class="auto-dismiss-notice__dot" aria-hidden="true"></span>
     <button type="button" aria-label="Dismiss notice" onclick={dismiss}>×</button>
-    <span class="auto-dismiss-notice__bar" aria-hidden="true"></span>
+    {#key visibleMessage}
+      <span class="auto-dismiss-notice__bar" aria-hidden="true"></span>
+    {/key}
   </div>
 {/if}
