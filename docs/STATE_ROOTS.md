@@ -266,16 +266,17 @@ All canonical PMA state lives in `orchestration.sqlite3` tables:
 | `orch_automation_jobs` | `AutomationStore` | Durable automation job ledger and execution refs |
 | `orch_automation_job_attempts` | `AutomationStore` | Per-attempt execution results and errors |
 | `orch_automation_schedules` | `AutomationStore` | Derived schedule state for scheduled rules |
-| `orch_automation_subscriptions` | `PmaAutomationStore` adapter | PMA compatibility subscription rows mirrored into automation rules |
-| `orch_automation_timers` | `PmaAutomationStore` adapter | PMA compatibility timer rows mirrored into automation schedules |
-| `orch_automation_wakeups` | `PmaAutomationStore` adapter | Legacy wakeup rows backfilled into automation events/jobs before execution |
+| `orch_automation_subscriptions` | `PmaAutomationStore` adapter | Explicit PMA compatibility rows used only by legacy adapter/diagnostic paths |
+| `orch_automation_timers` | `PmaAutomationStore` adapter | Explicit PMA compatibility rows used only by legacy adapter/diagnostic paths |
+| `orch_automation_wakeups` | `PmaAutomationStore` adapter | Unsupported legacy wakeup residue reported by migration diagnostics |
 | `orch_reactive_debounce_state` | `PmaReactiveStore` | Reactive debounce timestamps |
 
-Migration blockers for these compatibility rows are surfaced by
+Migration blockers for remaining compatibility rows are surfaced by
 `car doctor --json`, `car hub orchestration status --json`, and
 `car pma automation migration-status --json`. The JSON diagnostics report pending
 schema versions, legacy residue counts, malformed row codes, mirror health, and
-operator next steps before a major-version release removes compatibility paths.
+operator next steps. Normal runtime no longer auto-materializes legacy PMA
+subscription, timer, or wakeup rows into unified automation rules.
 
 Compatibility mirrors are rewritten after each canonical mutation for
 audit visibility and ad-hoc tooling, but they are **not** the source of truth:
@@ -283,7 +284,7 @@ audit visibility and ad-hoc tooling, but they are **not** the source of truth:
 | Mirror path | Owner | Notes |
 | --- | --- | --- |
 | `.codex-autorunner/pma/queue/*.jsonl` | `PmaQueue` | Rewritten after every queue mutation; `replay_pending` reads from SQLite |
-| `.codex-autorunner/pma/automation_store.json` | `PmaAutomationStore` | Rewritten after every automation mutation |
+| `.codex-autorunner/pma/automation_store.json` | `PmaAutomationStore` | Compatibility mirror for explicit legacy adapter/diagnostic paths |
 | `.codex-autorunner/pma/reactive_state.json` | `PmaReactiveStore` | Rewritten after every debounce update |
 | `.codex-autorunner/pma/threads.sqlite3` | `PmaThreadStore` | Legacy thread mirror, gated by `CAR_LEGACY_MIRROR_ENABLED` |
 

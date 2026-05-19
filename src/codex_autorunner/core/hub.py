@@ -20,11 +20,10 @@ from .automation import (
     AutomationExecutorRegistry,
     AutomationExecutorResult,
     AutomationJob,
-    AutomationStore,
     ManagedThreadTurnAutomationExecutor,
     PublishOperationAutomationExecutor,
 )
-from .automation.models import JOB_SKIPPED, JOB_SUCCEEDED
+from .automation.models import JOB_SKIPPED
 from .automation.ticket_flow_executor import TicketFlowAutomationExecutor
 from .config import (
     HubConfig,
@@ -1011,22 +1010,12 @@ class HubSupervisor:
         self._pma_automation_store = PmaAutomationStore(self.hub_config.root)
         return self._pma_automation_store
 
-    def ensure_automation_store(self) -> PmaAutomationStore:
-        return self.ensure_pma_automation_store()
-
     def get_pma_automation_store(self) -> PmaAutomationStore:
         return self.ensure_pma_automation_store()
-
-    def get_automation_store(self) -> PmaAutomationStore:
-        return self.ensure_automation_store()
 
     @property
     def pma_automation_store(self) -> PmaAutomationStore:
         return self.ensure_pma_automation_store()
-
-    @property
-    def automation_store(self) -> PmaAutomationStore:
-        return self.ensure_automation_store()
 
     def set_pma_lane_worker_starter(
         self, starter: Optional[Callable[[str], None]]
@@ -1166,90 +1155,6 @@ class HubSupervisor:
         scheduler.process_due(limit=take)
         worker_result = worker.process_once(limit=take)
         return worker_result.succeeded + worker_result.skipped
-
-    def _build_pma_wakeup_message(self, wake_up: dict[str, Any]) -> str:
-        lines = ["Automation wake-up received."]
-        source = wake_up.get("source")
-        event_type = wake_up.get("event_type")
-        subscription_id = wake_up.get("subscription_id")
-        timer_id = wake_up.get("timer_id")
-        repo_id = wake_up.get("repo_id")
-        run_id = wake_up.get("run_id")
-        thread_id = wake_up.get("thread_id")
-        lane_id = wake_up.get("lane_id")
-        if source:
-            lines.append(f"source: {source}")
-        if event_type:
-            lines.append(f"event_type: {event_type}")
-        if subscription_id:
-            lines.append(f"subscription_id: {subscription_id}")
-        if timer_id:
-            lines.append(f"timer_id: {timer_id}")
-        if repo_id:
-            lines.append(f"repo_id: {repo_id}")
-        if run_id:
-            lines.append(f"run_id: {run_id}")
-        if thread_id:
-            lines.append(f"thread_id: {thread_id}")
-        if lane_id:
-            lines.append(f"lane_id: {lane_id}")
-        if wake_up.get("from_state"):
-            lines.append(f"from_state: {wake_up['from_state']}")
-        if wake_up.get("to_state"):
-            lines.append(f"to_state: {wake_up['to_state']}")
-        if wake_up.get("reason"):
-            lines.append(f"reason: {wake_up['reason']}")
-        if wake_up.get("timestamp"):
-            lines.append(f"timestamp: {wake_up['timestamp']}")
-        if source == "timer":
-            lines.append(
-                "suggested_next_action: verify progress, then use /hub/pma/timers/{timer_id}/touch or /hub/pma/timers/{timer_id}/cancel."
-            )
-        else:
-            lines.append(
-                "suggested_next_action: inspect the transition and adjust /hub/pma/subscriptions or /hub/pma/timers as needed."
-            )
-        return "\n".join(lines)
-
-    def drain_pma_automation_wakeups(self, *, limit: int = 100) -> int:
-        take = max(0, int(limit))
-        if take <= 0:
-            return 0
-        if not self.hub_config.pma.enabled:
-            return 0
-
-        automation_store = AutomationStore(self.hub_config.root)
-        store = self.ensure_pma_automation_store()
-        list_pending_wakeups = getattr(store, "list_pending_wakeups", None)
-        mark_wakeup_queued = getattr(store, "mark_wakeup_queued", None)
-        mark_wakeup_dispatched = getattr(store, "mark_wakeup_dispatched", None)
-        if (
-            not callable(list_pending_wakeups)
-            or not callable(mark_wakeup_queued)
-            or not callable(mark_wakeup_dispatched)
-        ):
-            return 0
-        wakeups = list_pending_wakeups(limit=take, require_dispatch_decision=True)
-        if not wakeups:
-            return 0
-
-        worker = self._lifecycle_orchestrator._automation_job_worker
-        worker.process_once(limit=len(wakeups))
-        drained = 0
-        for wakeup in wakeups:
-            wakeup_id = str(wakeup.get("wakeup_id") or "").strip()
-            if not wakeup_id:
-                continue
-            job = automation_store.get_job(f"legacy-pma-wakeup:{wakeup_id}")
-            if job is None:
-                continue
-            if job.state != JOB_SUCCEEDED:
-                if job.attempt_count > 0:
-                    mark_wakeup_queued(wakeup_id)
-                continue
-            if mark_wakeup_dispatched(wakeup_id):
-                drained += 1
-        return drained
 
     def ensure_pma_safety_checker(self) -> PmaSafetyChecker:
         if self._pma_safety_checker is not None:

@@ -14,7 +14,7 @@ from .....core.pma_origin import (
 from ...schemas import ManagedThreadCreateRequest, ManagedThreadMessageRequest
 from ...services.pma.automation import (
     call_store_create_with_payload,
-    get_automation_store,
+    get_pma_automation_store,
 )
 from ...services.pma.common import normalize_optional_text
 
@@ -128,7 +128,7 @@ class ManagedThreadAutomationClient:
         if not required and origin is None:
             return None
         try:
-            store = await get_automation_store(
+            store = await get_pma_automation_store(
                 self._request,
                 runtime_state,
                 required=required,

@@ -8,7 +8,6 @@ from typing import Any, Optional
 
 from .locks import file_lock
 from .pma_automation_domain_translation import PmaAutomationDomainTranslator
-from .pma_automation_mirror import PmaAutomationMirror, PmaUnifiedMirrorResult
 from .pma_automation_persistence import PmaAutomationPersistence
 from .pma_automation_records import (
     PmaAutomationTimer,
@@ -62,7 +61,6 @@ class PmaAutomationStore:
         self._hub_root = hub_root
         self._durable = durable
         self._persistence = PmaAutomationPersistence(hub_root, durable=durable)
-        self._mirror = PmaAutomationMirror(hub_root, durable=durable)
         self._subscriptions = PmaSubscriptionCommandService(hub_root, self._persistence)
         self._dispatch_decisions = PmaWakeupDispatchDecisionService(hub_root)
 
@@ -235,7 +233,6 @@ class PmaAutomationStore:
                             metadata=resolved_metadata,
                         )
                         self._persistence.insert_subscription(conn, created)
-        self._mirror_subscription_rule(created)
         return created, deduped
 
     def create_subscription(
@@ -344,11 +341,6 @@ class PmaAutomationStore:
                         conn, target_id, stamp
                     )
             return changed
-
-    def _mirror_subscription_rule(
-        self, subscription: PmaLifecycleSubscription
-    ) -> PmaUnifiedMirrorResult:
-        return self._mirror.mirror_subscription_rule(subscription)
 
     def purge_subscription(
         self, subscription_id: str, *, require_inactive: bool = True
@@ -514,7 +506,6 @@ class PmaAutomationStore:
                             metadata=metadata,
                         )
                         self._persistence.insert_timer(conn, created)
-        self._mirror_timer_schedule(created)
         return created, deduped
 
     def create_timer(
@@ -682,14 +673,8 @@ class PmaAutomationStore:
                     with self._persistence.with_write_connection() as conn:
                         with conn:
                             self._persistence.update_timer(conn, entry)
-                    self._mirror_timer_schedule(entry)
                     return {"status": "ok", "timer": entry.to_dict(), "touched": True}
         return {"status": "ok", "timer_id": target_id, "touched": False}
-
-    def _mirror_timer_schedule(
-        self, timer: PmaAutomationTimer
-    ) -> PmaUnifiedMirrorResult:
-        return self._mirror.mirror_timer_schedule(timer)
 
     def dequeue_due_timers(
         self,
@@ -769,7 +754,6 @@ class PmaAutomationStore:
                     )
                     self._compute_dispatch_decision_for_wakeup(created)
                     self._persistence.insert_wakeup(conn, created)
-        self._mirror_wakeup_job(created)
         return created, False
 
     def list_wakeups(
@@ -840,7 +824,6 @@ class PmaAutomationStore:
                 "timestamp",
             }
         }
-        wakeups_to_mirror: list[PmaAutomationWakeup] = []
         with file_lock(self._lock_path()):
             _, subscriptions, _, wakeups = self._load_structured_unlocked()
 
@@ -888,9 +871,6 @@ class PmaAutomationStore:
                         for wakeup in wakeups:
                             if wakeup.wakeup_id not in existing_wakeup_ids:
                                 self._persistence.insert_wakeup(conn, wakeup)
-                                wakeups_to_mirror.append(wakeup)
-        for wakeup in wakeups_to_mirror:
-            self._mirror_wakeup_job(wakeup)
         return {
             "status": "ok",
             "matched": result.matched,
@@ -928,9 +908,6 @@ class PmaAutomationStore:
                     with conn:
                         self._persistence.update_wakeup(conn, entry)
             return changed
-
-    def _mirror_wakeup_job(self, wakeup: PmaAutomationWakeup) -> PmaUnifiedMirrorResult:
-        return self._mirror.mirror_wakeup_job(wakeup)
 
     def notify_timer_fired(
         self, timer: dict[str, Any]

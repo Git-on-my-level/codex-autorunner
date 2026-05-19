@@ -478,9 +478,14 @@ async def test_ticket_flow_orchestration_wrapper_preserves_pause_resume_lifecycl
     worker_calls: list[tuple[str, bool]] = []
 
     def record_worker_call(
-        repo_root_arg: Path, run_id: str, *, is_terminal: bool
+        repo_root_arg: Path,
+        run_id: str,
+        *,
+        is_terminal: bool,
+        replace_stale_worker: bool = False,
     ) -> dict:
         assert repo_root_arg == repo_root
+        _ = replace_stale_worker
         worker_calls.append((run_id, is_terminal))
         return {"status": "spawned", "stdout": None, "stderr": None}
 

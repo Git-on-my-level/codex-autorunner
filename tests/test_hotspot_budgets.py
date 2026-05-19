@@ -122,11 +122,6 @@ STANDARD_FILE_BUDGETS = (
         reason="Ticket 001 moved PMA automation command/dispatch decisions into bounded services.",
     ),
     FileBudget(
-        path="src/codex_autorunner/core/pma_automation_mirror.py",
-        max_lines=115,
-        reason="Ticket 002 owns PMA automation rule/schedule/wakeup mirror writes in a small adapter, not the store facade.",
-    ),
-    FileBudget(
         path="src/codex_autorunner/core/pma_automation_persistence.py",
         max_lines=1030,
         reason="Ticket 001 made PMA automation row persistence explicit; growth should move to focused helpers.",

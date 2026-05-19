@@ -1,14 +1,19 @@
 from __future__ import annotations
 
 import json
-import threading
 from pathlib import Path
 
+from codex_autorunner.core.automation import AutomationStore
 from codex_autorunner.core.config import load_hub_config
 from codex_autorunner.core.flows.models import FlowRunStatus
 from codex_autorunner.core.flows.store import FlowStore
 from codex_autorunner.core.hub import HubSupervisor
 from codex_autorunner.core.lifecycle_events import LifecycleEventStore
+from codex_autorunner.core.pma_automation_records import (
+    PmaAutomationTimer,
+    PmaLifecycleSubscription,
+)
+from codex_autorunner.core.pma_automation_unified import PmaUnifiedAutomationAdapter
 from codex_autorunner.manifest import load_manifest, save_manifest
 
 
@@ -374,8 +379,7 @@ def test_lifecycle_subscription_enqueues_wakeup_payload(tmp_path: Path) -> None:
     supervisor = HubSupervisor(load_hub_config(hub_root), start_lifecycle_worker=False)
 
     try:
-        store = supervisor.get_pma_automation_store()
-        _, deduped = store.upsert_subscription(
+        subscription = PmaLifecycleSubscription.create(
             event_types=["flow_failed"],
             repo_id="repo-1",
             run_id="run-1",
@@ -383,7 +387,9 @@ def test_lifecycle_subscription_enqueues_wakeup_payload(tmp_path: Path) -> None:
             to_state="failed",
             idempotency_key="sub-flow-failed-1",
         )
-        assert deduped is False
+        PmaUnifiedAutomationAdapter(AutomationStore(hub_root)).mirror_subscription_rule(
+            subscription=subscription
+        )
 
         supervisor.lifecycle_emitter.emit_flow_failed(
             "repo-1",
@@ -422,8 +428,7 @@ def test_automation_timer_due_drains_to_pma_queue(tmp_path: Path) -> None:
     supervisor = HubSupervisor(load_hub_config(hub_root), start_lifecycle_worker=False)
 
     try:
-        store = supervisor.get_pma_automation_store()
-        _, deduped = store.upsert_timer(
+        timer = PmaAutomationTimer.create(
             due_at="2000-01-01T00:00:00+00:00",
             thread_id="thread-123",
             from_state="idle",
@@ -431,15 +436,14 @@ def test_automation_timer_due_drains_to_pma_queue(tmp_path: Path) -> None:
             reason="timer_due",
             idempotency_key="timer-thread-123",
         )
-        assert deduped is False
+        PmaUnifiedAutomationAdapter(AutomationStore(hub_root)).mirror_timer_schedule(
+            timer=timer
+        )
 
         created = supervisor.process_pma_automation_timers()
         assert created == 1
-        drained = supervisor.drain_pma_automation_wakeups()
-        assert drained == 0
 
         assert supervisor.process_pma_automation_timers() == 0
-        supervisor.drain_pma_automation_wakeups()
 
         items = _read_queue_items(hub_root)
         assert len(items) == 1
@@ -453,7 +457,7 @@ def test_automation_timer_due_drains_to_pma_queue(tmp_path: Path) -> None:
         assert wake_up.get("reason") == "timer_due"
         assert isinstance(wake_up.get("timestamp"), str)
         assert wake_up.get("source") == "timer"
-        assert wake_up.get("timer_id")
+        assert wake_up.get("timer_id") == timer.timer_id
         message = str(payload.get("message") or "")
         assert "source: timer" in message
         assert "timer_id:" in message
@@ -472,19 +476,18 @@ def test_flow_completion_subscription_can_trigger_next_lane(tmp_path: Path) -> N
     supervisor = HubSupervisor(load_hub_config(hub_root), start_lifecycle_worker=False)
 
     try:
-        store = supervisor.get_pma_automation_store()
-        created = store.create_subscription(
-            {
-                "event_types": ["flow_completed"],
-                "repo_id": "repo-1",
-                "run_id": "run-1",
-                "from_state": "running",
-                "to_state": "completed",
-                "lane_id": "pma:lane-next",
-                "idempotency_key": "sub-next-lane",
-            }
+        subscription = PmaLifecycleSubscription.create(
+            event_types=["flow_completed"],
+            repo_id="repo-1",
+            run_id="run-1",
+            from_state="running",
+            to_state="completed",
+            lane_id="pma:lane-next",
+            idempotency_key="sub-next-lane",
         )
-        assert created.get("deduped") is False
+        PmaUnifiedAutomationAdapter(AutomationStore(hub_root)).mirror_subscription_rule(
+            subscription=subscription
+        )
 
         supervisor.lifecycle_emitter.emit_flow_completed(
             "repo-1",
@@ -516,22 +519,21 @@ def test_drain_automation_wakeup_copies_delivery_target_from_subscription(
     supervisor = HubSupervisor(load_hub_config(hub_root), start_lifecycle_worker=False)
 
     try:
-        store = supervisor.get_pma_automation_store()
-        created = store.create_subscription(
-            {
-                "event_types": ["flow_completed"],
-                "repo_id": "repo-1",
-                "run_id": "run-1",
-                "metadata": {
-                    "delivery_target": {
-                        "surface_kind": "discord",
-                        "surface_key": "discord:channel-1",
-                    }
-                },
-                "idempotency_key": "sub-delivery-target",
-            }
+        subscription = PmaLifecycleSubscription.create(
+            event_types=["flow_completed"],
+            repo_id="repo-1",
+            run_id="run-1",
+            metadata={
+                "delivery_target": {
+                    "surface_kind": "discord",
+                    "surface_key": "discord:channel-1",
+                }
+            },
+            idempotency_key="sub-delivery-target",
         )
-        assert created.get("deduped") is False
+        PmaUnifiedAutomationAdapter(AutomationStore(hub_root)).mirror_subscription_rule(
+            subscription=subscription
+        )
 
         supervisor.lifecycle_emitter.emit_flow_completed("repo-1", "run-1")
         supervisor.process_lifecycle_events()
@@ -543,143 +545,5 @@ def test_drain_automation_wakeup_copies_delivery_target_from_subscription(
             "surface_kind": "discord",
             "surface_key": "discord:channel-1",
         }
-    finally:
-        supervisor.shutdown()
-
-
-def test_drain_automation_wakeups_requests_lane_worker_start(tmp_path: Path) -> None:
-    hub_root = tmp_path / "hub"
-    _write_hub_config(
-        hub_root,
-        dispatch_interception=False,
-        extra_lines=["  reactive_enabled: false"],
-    )
-    supervisor = HubSupervisor(load_hub_config(hub_root), start_lifecycle_worker=False)
-
-    try:
-        started_lanes: list[str] = []
-        supervisor.set_pma_lane_worker_starter(started_lanes.append)
-        store = supervisor.get_pma_automation_store()
-        _, deduped = store.enqueue_wakeup(
-            source="lifecycle_subscription",
-            lane_id="pma:lane-next",
-            repo_id="repo-1",
-            run_id="run-1",
-            from_state="running",
-            to_state="completed",
-            reason="flow_completed",
-            timestamp="2026-01-01T00:00:00Z",
-            idempotency_key="wakeup-next-lane",
-        )
-        assert deduped is False
-
-        drained = supervisor.drain_pma_automation_wakeups()
-        assert drained == 1
-        assert started_lanes == ["pma:lane-next"]
-    finally:
-        supervisor.shutdown()
-
-
-def test_drain_automation_wakeups_retries_when_lane_worker_start_fails(
-    tmp_path: Path,
-) -> None:
-    hub_root = tmp_path / "hub"
-    _write_hub_config(
-        hub_root,
-        dispatch_interception=False,
-        extra_lines=["  reactive_enabled: false"],
-    )
-    supervisor = HubSupervisor(load_hub_config(hub_root), start_lifecycle_worker=False)
-
-    try:
-        started_lanes: list[str] = []
-
-        def _failing_starter(lane_id: str) -> None:
-            started_lanes.append(lane_id)
-            raise RuntimeError("terminal bridge unavailable")
-
-        supervisor.set_pma_lane_worker_starter(_failing_starter)
-        store = supervisor.get_pma_automation_store()
-        created, deduped = store.enqueue_wakeup(
-            source="lifecycle_subscription",
-            lane_id="pma:default",
-            repo_id="repo-1",
-            run_id="run-1",
-            from_state="running",
-            to_state="completed",
-            reason="flow_completed",
-            timestamp="2026-01-01T00:00:00Z",
-            idempotency_key="wakeup-retry-startup",
-        )
-        assert deduped is False
-
-        assert supervisor.drain_pma_automation_wakeups() == 0
-        assert started_lanes == ["pma:default"]
-        assert len(_read_queue_items(hub_root)) == 1
-        pending = store.list_pending_wakeups()
-        assert [entry["wakeup_id"] for entry in pending] == [created.wakeup_id]
-        assert pending[0]["state"] == "queued"
-
-        supervisor.set_pma_lane_worker_starter(started_lanes.append)
-
-        assert supervisor.drain_pma_automation_wakeups() == 1
-        assert started_lanes == ["pma:default", "pma:default"]
-        assert len(_read_queue_items(hub_root)) == 1
-        assert store.list_pending_wakeups() == []
-        worker_started = store.list_wakeups(state_filter="worker_started")
-        assert [entry["wakeup_id"] for entry in worker_started] == [created.wakeup_id]
-    finally:
-        supervisor.shutdown()
-
-
-def test_drain_automation_wakeups_from_thread_without_event_loop(
-    tmp_path: Path,
-) -> None:
-    hub_root = tmp_path / "hub"
-    _write_hub_config(
-        hub_root,
-        dispatch_interception=False,
-        extra_lines=["  reactive_enabled: false"],
-    )
-    supervisor = HubSupervisor(load_hub_config(hub_root), start_lifecycle_worker=False)
-
-    try:
-        store = supervisor.get_pma_automation_store()
-        _, deduped = store.enqueue_wakeup(
-            source="lifecycle_subscription",
-            lane_id="pma:default",
-            repo_id="repo-1",
-            run_id="run-1",
-            from_state="running",
-            to_state="failed",
-            reason="flow_failed",
-            timestamp="2026-01-01T00:00:00Z",
-            idempotency_key="wakeup-threaded-drain",
-        )
-        assert deduped is False
-
-        drained: list[int] = []
-        errors: list[BaseException] = []
-
-        def _drain() -> None:
-            try:
-                drained.append(supervisor.drain_pma_automation_wakeups())
-            except BaseException as exc:  # pragma: no cover - characterization only
-                errors.append(exc)
-
-        thread = threading.Thread(target=_drain, name="lifecycle-event-processor")
-        thread.start()
-        thread.join(timeout=1.0)
-
-        assert thread.is_alive() is False
-        assert errors == []
-        assert drained == [1]
-
-        items = _read_queue_items(hub_root)
-        assert len(items) == 1
-        wake_up = (items[0].get("payload") or {}).get("wake_up") or {}
-        assert wake_up.get("repo_id") == "repo-1"
-        assert wake_up.get("run_id") == "run-1"
-        assert wake_up.get("source") == "lifecycle_subscription"
     finally:
         supervisor.shutdown()

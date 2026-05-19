@@ -214,7 +214,7 @@ async def test_managed_thread_automation_client_preserves_required_store_http_er
         raise HTTPException(status_code=409, detail="lane already subscribed")
 
     monkeypatch.setattr(
-        "codex_autorunner.surfaces.web.services.pma.managed_thread_followup.get_automation_store",
+        "codex_autorunner.surfaces.web.services.pma.managed_thread_followup.get_pma_automation_store",
         _fake_get_store,
     )
     monkeypatch.setattr(
@@ -247,7 +247,7 @@ async def test_managed_thread_automation_client_normalizes_required_unavailable_
         raise HTTPException(status_code=503, detail="Automation action unavailable")
 
     monkeypatch.setattr(
-        "codex_autorunner.surfaces.web.services.pma.managed_thread_followup.get_automation_store",
+        "codex_autorunner.surfaces.web.services.pma.managed_thread_followup.get_pma_automation_store",
         _fake_get_store,
     )
 
@@ -276,7 +276,7 @@ async def test_managed_thread_automation_client_downgrades_optional_missing_thre
         raise PmaAutomationThreadNotFoundError("thread-1")
 
     monkeypatch.setattr(
-        "codex_autorunner.surfaces.web.services.pma.managed_thread_followup.get_automation_store",
+        "codex_autorunner.surfaces.web.services.pma.managed_thread_followup.get_pma_automation_store",
         _fake_get_store,
     )
     monkeypatch.setattr(
@@ -306,7 +306,7 @@ async def test_managed_thread_automation_client_skips_optional_without_pma_origi
         raise AssertionError("optional terminal follow-up without PMA origin is inert")
 
     monkeypatch.setattr(
-        "codex_autorunner.surfaces.web.services.pma.managed_thread_followup.get_automation_store",
+        "codex_autorunner.surfaces.web.services.pma.managed_thread_followup.get_pma_automation_store",
         _unexpected_get_store,
     )
 
@@ -349,7 +349,7 @@ async def test_managed_thread_automation_client_forwards_origin_thread_context(
         return {"subscription": {"subscription_id": "sub-1"}}
 
     monkeypatch.setattr(
-        "codex_autorunner.surfaces.web.services.pma.managed_thread_followup.get_automation_store",
+        "codex_autorunner.surfaces.web.services.pma.managed_thread_followup.get_pma_automation_store",
         _fake_get_store,
     )
     monkeypatch.setattr(
@@ -401,7 +401,7 @@ async def test_managed_thread_automation_client_ignores_stale_last_result_origin
         raise AssertionError("stale last-result origin must not create follow-up")
 
     monkeypatch.setattr(
-        "codex_autorunner.surfaces.web.services.pma.managed_thread_followup.get_automation_store",
+        "codex_autorunner.surfaces.web.services.pma.managed_thread_followup.get_pma_automation_store",
         _unexpected_get_store,
     )
 

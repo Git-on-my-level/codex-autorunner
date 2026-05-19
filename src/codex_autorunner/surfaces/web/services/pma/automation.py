@@ -1,13 +1,13 @@
 from __future__ import annotations
 
 import asyncio
-import importlib
 import logging
 from typing import Any, Optional
 
 from fastapi import HTTPException, Request
 
 from .....core.lifecycle_events import LifecycleEvent, LifecycleEventType
+from .....core.pma_automation_store import PmaAutomationStore
 from .....core.time_utils import now_iso
 from ...services.pma import get_pma_request_context
 from ...services.pma.common import normalize_optional_text
@@ -57,25 +57,6 @@ def first_callable(target: Any, names: tuple[str, ...]) -> Optional[Any]:
         candidate = getattr(target, name, None)
         if callable(candidate):
             return candidate
-    return None
-
-
-def discover_automation_store_class() -> Optional[type[Any]]:
-    candidates: tuple[tuple[str, str], ...] = (
-        ("codex_autorunner.core.pma_automation_store", "PmaAutomationStore"),
-        ("codex_autorunner.core.pma_automation", "PmaAutomationStore"),
-        ("codex_autorunner.core.automation_store", "AutomationStore"),
-        ("codex_autorunner.core.automation", "AutomationStore"),
-        ("codex_autorunner.core.hub_automation", "HubAutomationStore"),
-    )
-    for module_name, class_name in candidates:
-        try:
-            module = importlib.import_module(module_name)
-        except ImportError:
-            continue
-        klass = getattr(module, class_name, None)
-        if isinstance(klass, type):
-            return klass
     return None
 
 
@@ -141,7 +122,7 @@ async def call_store_action_with_id(
     )
 
 
-async def get_automation_store(
+async def get_pma_automation_store(
     request: Request,
     runtime_state: Any,
     *,
@@ -162,46 +143,36 @@ async def get_automation_store(
     hub_root = context.hub_root
     supervisor = context.hub_supervisor
     if supervisor is not None:
-        for name in ("get_pma_automation_store", "get_automation_store"):
-            accessor = getattr(supervisor, name, None)
-            if not callable(accessor):
-                continue
-            for args in ((), (hub_root,)):
-                try:
-                    store = await await_if_needed(accessor(*args))
-                except TypeError:
-                    continue
-                except (RuntimeError, OSError, ValueError):
-                    logger.exception("Failed to resolve automation store from %s", name)
-                    break
+        accessor = getattr(supervisor, "get_pma_automation_store", None)
+        if callable(accessor):
+            try:
+                store = await await_if_needed(accessor())
+            except (RuntimeError, OSError, ValueError):
+                logger.exception("Failed to resolve PMA automation store")
+            else:
                 if store is not None:
                     return store
-                break
-        for name in ("pma_automation_store", "automation_store"):
-            store = getattr(supervisor, name, None)
-            if store is not None:
-                return store
+        store = getattr(supervisor, "pma_automation_store", None)
+        if store is not None:
+            return store
 
     if pma_automation_store is not None and pma_automation_root == hub_root:
         return pma_automation_store
 
-    klass = discover_automation_store_class()
-    if klass is not None:
-        for args in ((hub_root,), ()):
-            try:
-                store = klass(*args)
-            except TypeError:
-                continue
-            except (RuntimeError, OSError, ValueError):
-                logger.exception("Failed to initialize automation store")
-                break
-            if runtime_state is not None:
-                runtime_state.pma_automation_store = store
-                runtime_state.pma_automation_root = hub_root
-            return store
+    try:
+        store = PmaAutomationStore(hub_root)
+    except (RuntimeError, OSError, ValueError):
+        logger.exception("Failed to initialize PMA automation store")
+    else:
+        if runtime_state is not None:
+            runtime_state.pma_automation_store = store
+            runtime_state.pma_automation_root = hub_root
+        return store
 
     if required:
-        raise HTTPException(status_code=503, detail="Hub automation store unavailable")
+        raise HTTPException(
+            status_code=503, detail="Hub PMA automation adapter unavailable"
+        )
     return None
 
 
@@ -244,7 +215,7 @@ async def notify_hub_automation_transition(
     if isinstance(extra, dict):
         payload.update(extra)
 
-    store = await get_automation_store(request, runtime_state, required=False)
+    store = await get_pma_automation_store(request, runtime_state, required=False)
     notify_transition = getattr(store, "notify_transition", None)
     if callable(notify_transition):
         try:
@@ -292,14 +263,6 @@ async def notify_hub_automation_transition(
             logger.exception("Failed immediate PMA automation processing")
     except (RuntimeError, OSError, ValueError):
         logger.exception("Failed immediate PMA automation processing")
-
-    drain_wakeups = getattr(supervisor, "drain_pma_automation_wakeups", None)
-    if not callable(drain_wakeups):
-        return
-    try:
-        await await_if_needed(drain_wakeups())
-    except (RuntimeError, OSError, TypeError, ValueError):
-        logger.exception("Failed immediate PMA wakeup drain")
 
 
 def _lifecycle_event_from_transition_payload(payload: dict[str, Any]) -> LifecycleEvent:
