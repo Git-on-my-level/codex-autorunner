@@ -202,7 +202,7 @@ describe('ChatTranscriptCards', () => {
     expect(body).toContain('datetime="2026-05-10T12:05:00.000Z"');
   });
 
-  it('renders injected prompt context as a separate collapsed card above the user message', () => {
+  it('renders model-only capsule metadata as a separate collapsed card above the user message', () => {
     const cards: ChatTranscriptCard[] = [
       {
         kind: 'message',
@@ -214,7 +214,21 @@ describe('ChatTranscriptCards', () => {
           id: 'u1',
           chatId: 'c1',
           role: 'user',
-          text: '<injected context>\nCAR setup details\n</injected context>\n\nPlease fix the archive button.',
+          text: 'Please fix the archive button.',
+          visibility: 'user_visible',
+          userVisibleText: 'Please fix the archive button.',
+          capsuleRefs: [
+            {
+              capsuleId: 'car.repo_basics',
+              capsuleVersion: '1',
+              visibility: 'model_only',
+              scope: 'repo',
+              sourceDigest: 'sha256:repo',
+              payloadDigest: null,
+              renderDecision: 'rendered',
+              reason: 'repo_context'
+            }
+          ],
           createdAt: '2026-05-10T12:00:00.000Z',
           status: null,
           artifacts: [],
@@ -226,8 +240,9 @@ describe('ChatTranscriptCards', () => {
     const { body } = render(ChatTranscriptCards, { props: { cards } });
 
     expect(body).toContain('class="injected-prompt-card"');
-    expect(body).toContain('<span>CAR system prompt</span>');
-    expect(body).toContain('CAR setup details');
+    expect(body).toContain('<span>Model-only context</span>');
+    expect(body).toContain('car.repo_basics v1 · repo');
+    expect(body).toContain('repo_context');
     expect(body).toContain('Please fix the archive button.');
     expect(body.indexOf('class="injected-prompt-card"')).toBeLessThan(body.indexOf('class="message user"'));
     expect(body).not.toContain('&lt;injected context&gt;');

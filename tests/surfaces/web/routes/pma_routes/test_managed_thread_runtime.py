@@ -1831,6 +1831,16 @@ def test_managed_thread_message_route_honors_explicit_core_context_profile(
         )
     )
     assert "<injected context>" in captured["request"].metadata["runtime_prompt"]
+    assert (
+        captured["request"].metadata["raw_model_prompt"]
+        == captured["request"].metadata["runtime_prompt"]
+    )
+    assert captured["request"].metadata["user_visible_text"] == "hello from route"
+    assert captured["request"].metadata["title_seed"] == "hello from route"
+    assert captured["request"].metadata["capsule_refs"][0]["capsule_id"] == (
+        "car.repo_awareness"
+    )
+    assert captured["request"].metadata["capsule_refs"][0]["visibility"] == "model_only"
 
 
 def test_managed_thread_message_route_self_claims_existing_pr_binding(

@@ -1,5 +1,6 @@
 import type {
   PmaChatMessage,
+  PmaMessageCapsuleRef,
   PmaChatSummary,
   PmaRunProgress,
   PmaTimelineItem,
@@ -8,7 +9,7 @@ import type {
   WorktreeSummary,
   WorkStatus
 } from './domain';
-import { normalizeOptionalWorkStatus, pmaChatArchivedFromRawSignals, pmaLifecycleTokenIsActive, pmaLifecycleTokenIsArchived, pmaTimelineContractFields } from './domain';
+import { mapPmaMessageCapsuleRef, normalizeOptionalWorkStatus, pmaChatArchivedFromRawSignals, pmaLifecycleTokenIsActive, pmaLifecycleTokenIsArchived, pmaTimelineContractFields } from './domain';
 import { surfaceRefFromThreadRaw } from './thread';
 import { isChatUnread } from './unread';
 
@@ -1084,30 +1085,6 @@ export function compactChatTranscriptCards(cards: ChatTranscriptCard[]): ChatTra
   return summarizeTurnActivity(mergeIntermediateDeltas(foldAdjacentToolGroups(cards)));
 }
 
-export type UserMessagePromptParts = {
-  userText: string;
-  systemContext: string | null;
-};
-
-const INJECTED_CONTEXT_PATTERN = /<injected context>\s*([\s\S]*?)\s*<\/injected context>/gi;
-
-export function splitInjectedPromptContext(text: string): UserMessagePromptParts {
-  const contexts: string[] = [];
-  const userText = text
-    .replace(INJECTED_CONTEXT_PATTERN, (_match, context: string) => {
-      const trimmed = String(context ?? '').trim();
-      if (trimmed) contexts.push(trimmed);
-      return '\n\n';
-    })
-    .replace(/\n{3,}/g, '\n\n')
-    .trim();
-
-  return {
-    userText,
-    systemContext: contexts.length ? contexts.join('\n\n---\n\n') : null
-  };
-}
-
 function foldAdjacentToolGroups(cards: ChatTranscriptCard[]): ChatTranscriptCard[] {
   const out: ChatTranscriptCard[] = [];
   for (const card of cards) {
@@ -1349,6 +1326,10 @@ function mapChatTranscriptRow(raw: Record<string, unknown>): ChatTranscriptCard 
     const clientTurnId = nullableString(raw.client_turn_id ?? message.client_turn_id);
     const correlationId = nullableString(raw.correlation_id ?? message.correlation_id);
     const identity = asRecord(raw.identity ?? message.identity);
+    const userVisibleText = nullableString(raw.user_visible_text ?? message.user_visible_text);
+    const capsuleRefs = asRecordArray(raw.capsule_refs ?? message.capsule_refs)
+      .map(mapPmaMessageCapsuleRef)
+      .filter((item): item is PmaMessageCapsuleRef => item !== null);
     return {
       kind: 'message',
       id,
@@ -1359,7 +1340,10 @@ function mapChatTranscriptRow(raw: Record<string, unknown>): ChatTranscriptCard 
         id: stringValue(message.id) || id,
         chatId: stringValue(message.chat_id),
         role,
-        text: stringValue(message.text),
+        text: role === 'user' ? userVisibleText ?? stringValue(message.text) : stringValue(message.text),
+        visibility: nullableString(raw.visibility ?? message.visibility),
+        userVisibleText,
+        capsuleRefs,
         createdAt: nullableString(message.created_at),
         status: normalizeOptionalWorkStatus(message.status),
         artifacts: asRecordArray(message.artifacts).map(mapTranscriptArtifact),

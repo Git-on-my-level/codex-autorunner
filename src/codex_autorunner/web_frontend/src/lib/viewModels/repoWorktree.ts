@@ -11,7 +11,6 @@ import type {
   WorktreeSummary,
   ContextspaceDocument
 } from './domain';
-import { stripInjectedContextBlocks } from './injectedContext';
 import { formatRelativeTime, pmaChatKind, pmaChatKindLabel, progressPercent, sortChatsUnreadFirst, statusLabel } from './pmaChat';
 import type { PmaChatKind } from './pmaChat';
 import { repoContextspaceRoute, repoRoute, repoTicketRoute, worktreeContextspaceRoute, worktreeRoute, worktreeTicketRoute } from './routes';
@@ -861,7 +860,7 @@ function runToCard(
     chat?.ticketId ??
     null;
   const rawTitle = chat?.title ?? stringFromRaw(run.raw, ['title', 'current_ticket_title', 'name']) ?? ticketId ?? run.id;
-  const cleanedTitle = stripInjectedContextBlocks(rawTitle).trim();
+  const cleanedTitle = rawTitle.trim();
   const title = cleanedTitle || (ticketId ?? run.id);
   return {
     id: run.id,

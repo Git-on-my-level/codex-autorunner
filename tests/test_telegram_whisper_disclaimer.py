@@ -6,7 +6,9 @@ from codex_autorunner.adapters.telegram.constants import (
     WHISPER_TRANSCRIPT_DISCLAIMER,
 )
 from codex_autorunner.adapters.telegram.service import TelegramBotService
-from codex_autorunner.core.injected_context import wrap_injected_context
+from codex_autorunner.core.injected_context import (
+    render_legacy_injected_context_transport,
+)
 from codex_autorunner.voice import VoiceConfig
 
 
@@ -54,7 +56,8 @@ def test_whisper_disclaimer_appended_for_transcripts(tmp_path: Path) -> None:
     )
 
     assert (
-        updated == f"{prompt}\n\n{wrap_injected_context(WHISPER_TRANSCRIPT_DISCLAIMER)}"
+        updated
+        == f"{prompt}\n\n{render_legacy_injected_context_transport(WHISPER_TRANSCRIPT_DISCLAIMER)}"
     )
 
 
@@ -79,7 +82,7 @@ def test_whisper_disclaimer_not_duplicated(tmp_path: Path) -> None:
     )
     service = _build_service_in_closed_loop(tmp_path, config, voice_config)
 
-    prompt = f"hello\n\n{wrap_injected_context(WHISPER_TRANSCRIPT_DISCLAIMER)}"
+    prompt = f"hello\n\n{render_legacy_injected_context_transport(WHISPER_TRANSCRIPT_DISCLAIMER)}"
     updated = service._maybe_append_whisper_disclaimer(
         prompt, transcript_text="voice text"
     )

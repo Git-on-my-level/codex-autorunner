@@ -9,11 +9,16 @@ from .car_context import (
     DEFAULT_REPO_THREAD_CONTEXT_PROFILE,
     CarContextProfile,
     build_car_context_bundle,
-    render_injected_car_context,
+    build_car_context_capsule,
+    render_car_context_transport,
 )
-from .injected_context import wrap_injected_context
+from .orchestration.turn_context import render_context_capsule_for_prompt
+from .surface_context_capsules import (
+    append_capsules_to_prompt,
+    build_prompt_writing_capsule,
+)
 
-CAR_AWARENESS_BLOCK = render_injected_car_context(
+CAR_AWARENESS_BLOCK = render_car_context_transport(
     build_car_context_bundle(DEFAULT_PMA_CONTEXT_PROFILE)
 )
 
@@ -48,7 +53,8 @@ def maybe_inject_car_awareness(
         target_path=target_path,
         initiated_by_ticket_flow=initiated_by_ticket_flow,
     )
-    injection = render_injected_car_context(bundle)
+    capsule = build_car_context_capsule(bundle)
+    injection = render_context_capsule_for_prompt(capsule) if capsule else ""
     if not injection:
         return prompt_text, False
     if injection in prompt_text:
@@ -71,9 +77,8 @@ def maybe_inject_prompt_writing_hint(
     trigger_text = trigger_text if isinstance(trigger_text, str) else prompt_text
     if not _PROMPT_CONTEXT_RE.search(trigger_text):
         return prompt_text, False
-    return _append_injected_context(
-        prompt_text,
-        wrap_injected_context(PROMPT_WRITING_HINT),
+    return append_capsules_to_prompt(
+        prompt_text, (build_prompt_writing_capsule(PROMPT_WRITING_HINT),)
     )
 
 
@@ -132,14 +137,18 @@ def maybe_inject_filebox_hint(
         user_input_texts=user_input_texts,
     ):
         return prompt_text, False
-    return _append_injected_context(prompt_text, hint_text)
+    from .surface_context_capsules import build_model_only_text_capsule
 
-
-def _append_injected_context(prompt_text: str, injection: str) -> tuple[str, bool]:
-    if prompt_text.strip():
-        separator = "\n" if prompt_text.endswith("\n") else "\n\n"
-        return f"{prompt_text}{separator}{injection}", True
-    return injection, True
+    return append_capsules_to_prompt(
+        prompt_text,
+        (
+            build_model_only_text_capsule(
+                capsule_id="filebox.uploads",
+                text=hint_text,
+                reason="file_context_or_filebox_request",
+            ),
+        ),
+    )
 
 
 def format_file_role_addendum(

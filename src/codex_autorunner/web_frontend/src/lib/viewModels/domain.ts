@@ -1,4 +1,3 @@
-import { stripInjectedContextBlocks } from './injectedContext';
 import { normalizeManagedThreadChatKind } from './managedThreadChatKind';
 
 type JsonRecord = Record<string, unknown>;
@@ -64,10 +63,24 @@ export type PmaChatMessage = {
   chatId: string | null;
   role: 'user' | 'assistant' | 'system' | 'tool';
   text: string;
+  visibility?: string | null;
+  userVisibleText?: string | null;
+  capsuleRefs?: PmaMessageCapsuleRef[];
   createdAt: string | null;
   status: WorkStatus | null;
   artifacts: SurfaceArtifact[];
   raw: JsonRecord;
+};
+
+export type PmaMessageCapsuleRef = {
+  capsuleId: string;
+  capsuleVersion: string;
+  visibility: string;
+  scope: string;
+  sourceDigest: string;
+  payloadDigest: string | null;
+  renderDecision: string | null;
+  reason: string | null;
 };
 
 export type PmaTimelineItemKind =
@@ -358,10 +371,34 @@ export function mapPmaChatMessage(raw: JsonRecord): PmaChatMessage {
     chatId: nullableString(raw.managed_thread_id ?? raw.thread_id ?? raw.chat_id),
     role,
     text,
+    visibility: nullableString(raw.visibility),
+    userVisibleText: nullableString(raw.user_visible_text ?? raw.userVisibleText),
+    capsuleRefs: asArray(raw.capsule_refs ?? raw.capsuleRefs)
+      .map((item) => mapPmaMessageCapsuleRef(asRecord(item)))
+      .filter((item): item is PmaMessageCapsuleRef => item !== null),
     createdAt: dateString(raw.created_at ?? raw.started_at ?? raw.timestamp),
     status: normalizeOptionalWorkStatus(raw.status),
     artifacts: asArray(raw.artifacts ?? raw.attachments).map(mapSurfaceArtifact),
     raw
+  };
+}
+
+export function mapPmaMessageCapsuleRef(raw: JsonRecord): PmaMessageCapsuleRef | null {
+  const capsuleId = nullableString(raw.capsule_id ?? raw.capsuleId);
+  const capsuleVersion = nullableString(raw.capsule_version ?? raw.capsuleVersion ?? raw.version);
+  const visibility = nullableString(raw.visibility);
+  const scope = nullableString(raw.scope);
+  const sourceDigest = nullableString(raw.source_digest ?? raw.sourceDigest);
+  if (!capsuleId || !capsuleVersion || !visibility || !scope || !sourceDigest) return null;
+  return {
+    capsuleId,
+    capsuleVersion,
+    visibility,
+    scope,
+    sourceDigest,
+    payloadDigest: nullableString(raw.payload_digest ?? raw.payloadDigest),
+    renderDecision: nullableString(raw.render_decision ?? raw.renderDecision),
+    reason: nullableString(raw.reason)
   };
 }
 
@@ -711,7 +748,17 @@ function normalizeTimelineKind(value: unknown): PmaTimelineItemKind {
 
 function normalizeMessageText(raw: JsonRecord, role: PmaChatMessage['role']): string {
   if (role === 'user') {
-    const text = firstText(raw.text, raw.content, raw.message, raw.delivered_message, raw.prompt, raw.prompt_text, raw.prompt_preview);
+    const text = firstText(
+      raw.user_visible_text,
+      raw.userVisibleText,
+      raw.text,
+      raw.content,
+      raw.message,
+      raw.delivered_message,
+      raw.prompt,
+      raw.prompt_text,
+      raw.prompt_preview
+    );
     return isCarTicketFlowControlPrompt(text) ? '' : text;
   }
   if (role === 'assistant') {
@@ -736,7 +783,7 @@ function normalizeMessageText(raw: JsonRecord, role: PmaChatMessage['role']): st
 
 function readableThreadTitle(raw: JsonRecord, fallback: string, ticketId: string | null): string {
   const explicitRaw = stringValue(raw.display_name ?? raw.name ?? raw.title, fallback);
-  let explicit = stripInjectedContextBlocks(explicitRaw).trim();
+  let explicit = explicitRaw.trim();
   if (!explicit) {
     explicit = explicitRaw === fallback ? fallback : '';
   }
@@ -786,14 +833,14 @@ function isChatSurfaceIdTitle(value: string, raw: JsonRecord): boolean {
 }
 
 function firstUserMessageExcerpt(raw: JsonRecord): string | null {
-  const candidate = stripInjectedContextBlocks(
-    firstText(
-      raw.first_message_excerpt,
-      raw.first_user_message,
-      raw.last_user_message,
-      raw.last_message_preview,
-      raw.prompt_preview
-    )
+  const candidate = firstText(
+    raw.first_user_visible_text,
+    raw.user_visible_text,
+    raw.title_seed,
+    raw.first_message_excerpt,
+    raw.first_user_message,
+    raw.last_user_message,
+    raw.prompt_preview
   );
   if (!candidate) return null;
   const trimmed = candidate.trim();

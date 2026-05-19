@@ -1614,6 +1614,25 @@ def test_model_picker_items_are_deduplicated_and_labeled() -> None:
             id="strips-injected-context-from-preview",
         ),
         pytest.param(
+            "019cc77b-ec10-7981-8e8b-ec5db4619efc",
+            {
+                "id": "019cc77b-ec10-7981-8e8b-ec5db4619efc",
+                "last_user_message": (
+                    "Context from previous conversation:\n\n"
+                    "private compaction notes\n\n"
+                    "Continue from this context. Ask for missing info if needed.\n\n"
+                    "Continue user-visible work"
+                ),
+            },
+            False,
+            lambda label: (
+                assert_not_in("Context from previous conversation", label),
+                assert_not_in("private compaction notes", label),
+                assert_in("Continue user-visible work", label),
+            ),
+            id="strips-compact-seed-from-preview",
+        ),
+        pytest.param(
             "019cc77b-ec10-7981-8e8b-ec5db4619efb",
             {
                 "id": "019cc77b-ec10-7981-8e8b-ec5db4619efb",

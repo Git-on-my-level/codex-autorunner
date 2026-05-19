@@ -321,6 +321,19 @@ def _render_prompt_delta_header(
         section = sections.get(name) or {}
         return str(section.get("label") or name)
 
+    def _capsule_ref(name: str) -> str:
+        prior = prior_sections.get(name) if isinstance(prior_sections, Mapping) else {}
+        prior_map = prior if isinstance(prior, Mapping) else {}
+        capsule_id = str(prior_map.get("capsule_id") or "")
+        capsule_version = str(prior_map.get("capsule_version") or "")
+        payload_digest = str(prior_map.get("payload_digest") or "")
+        if not capsule_id:
+            return _section_label(name)
+        ref = f"{_section_label(name)}[{capsule_id}@{capsule_version}"
+        if payload_digest:
+            ref += f":{_digest_preview(payload_digest)}"
+        return f"{ref}]"
+
     def _format_section_list(labels: Sequence[str]) -> str:
         filtered = [
             label for label in labels if isinstance(label, str) and label.strip()
@@ -331,6 +344,7 @@ def _render_prompt_delta_header(
         f"mode='{current_mode}'",
         f"reason='{reason}'",
         f"state_key='{prompt_state_key}'",
+        "authority='context_capsule_ledger'",
     ]
     if prior_updated_at:
         attrs.append(f"prior_updated_at='{prior_updated_at}'")
@@ -345,10 +359,19 @@ def _render_prompt_delta_header(
         previous_digest = (
             str(previous.get("digest") or "") if isinstance(previous, Mapping) else ""
         )
-        if current_mode == "full" and not previous_digest:
+        decision = (
+            str(previous.get("decision") or "") if isinstance(previous, Mapping) else ""
+        )
+        if current_mode == "full" and decision == "force_refreshed":
+            status = "full_refresh"
+        elif current_mode == "full" and not previous_digest:
             status = "first_turn"
         elif current_mode == "full":
             status = "full_refresh"
+        elif decision == "skip_duplicate":
+            status = "unchanged"
+        elif decision in {"changed", "expired", "force_refreshed"}:
+            status = "changed"
         elif previous_digest and previous_digest == current_digest:
             status = "unchanged"
         elif previous_digest:
@@ -359,24 +382,24 @@ def _render_prompt_delta_header(
 
     if current_mode == "delta":
         unchanged_labels = [
-            _section_label(name)
+            _capsule_ref(name)
             for name in PMA_PROMPT_SECTION_ORDER
             if statuses_by_name.get(name) == "unchanged"
         ]
         changed_labels = [
-            _section_label(name)
+            _capsule_ref(name)
             for name in PMA_PROMPT_SECTION_ORDER
             if statuses_by_name.get(name) in {"changed", "new"}
         ]
         lines.append(f"- cached={_format_section_list(unchanged_labels)}")
         changed_line = f"- changed={_format_section_list(changed_labels)}"
-        if changed_labels == [_section_label("hub_snapshot")]:
+        if [statuses_by_name.get(name) for name in PMA_PROMPT_SECTION_ORDER].count(
+            "changed"
+        ) == 1 and statuses_by_name.get("hub_snapshot") == "changed":
             changed_line += " (see <current_actionable_state>)"
         lines.append(changed_line)
     else:
-        full_context_labels = [
-            _section_label(name) for name in PMA_PROMPT_SECTION_ORDER
-        ]
+        full_context_labels = [_capsule_ref(name) for name in PMA_PROMPT_SECTION_ORDER]
         lines.append(f"- full_context={_format_section_list(full_context_labels)}")
 
     for name in PMA_PROMPT_SECTION_ORDER:

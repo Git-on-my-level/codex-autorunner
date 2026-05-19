@@ -17,7 +17,7 @@ from ...adapters.chat.thread_summaries import (
     _tail_text_lines,
 )
 from ...adapters.github.service import find_github_links, parse_github_url
-from ...core.injected_context import strip_injected_context_blocks
+from ...core.injected_context import strip_legacy_injected_context_transport_blocks
 from .constants import (
     RESUME_PREVIEW_ASSISTANT_LIMIT,
     RESUME_PREVIEW_SCAN_LINES,
@@ -68,6 +68,10 @@ DISPATCH_BEGIN_STRIP_RE = re.compile(
     re.IGNORECASE,
 )
 LEADING_HTML_COMMENT_RE = re.compile(r"(?s)^\s*(?:<!--.*?-->\s*)+")
+COMPACT_SEED_BLOCK_RE = re.compile(
+    rf"(?is){re.escape(COMPACT_SEED_PREFIX)}\s*.*?"
+    rf"(?:{re.escape(COMPACT_SEED_SUFFIX)}|$)"
+)
 
 
 def _is_ignored_first_user_preview(text: Optional[str]) -> bool:
@@ -93,10 +97,12 @@ def _sanitize_user_preview(text: Optional[str]) -> Optional[str]:
         return text
     stripped = _strip_dispatch_begin(text)
     stripped = LEADING_HTML_COMMENT_RE.sub("", stripped)
-    stripped = strip_injected_context_blocks(stripped)
+    stripped = strip_legacy_injected_context_transport_blocks(stripped)
+    stripped = COMPACT_SEED_BLOCK_RE.sub(" ", stripped)
     if _is_ignored_first_user_preview(stripped):
         return None
-    return stripped
+    stripped = _normalize_preview_text(stripped)
+    return stripped or None
 
 
 def _github_preview_matcher(text: Optional[str]) -> Optional[str]:
@@ -115,66 +121,7 @@ def _github_preview_matcher(text: Optional[str]) -> Optional[str]:
     return None
 
 
-def _strip_list_marker(text: str) -> str:
-    if text.startswith("- "):
-        return text[2:].strip()
-    if text.startswith("* "):
-        return text[2:].strip()
-    return text
-
-
-def _compact_seed_summary(text: Optional[str]) -> Optional[str]:
-    if not isinstance(text, str):
-        return None
-    prefix = None
-    for candidate in (COMPACT_SEED_PREFIX, "Context from previous thread:"):
-        if candidate in text:
-            prefix = candidate
-            break
-    if prefix is None:
-        return None
-    prefix_idx = text.find(prefix)
-    content = text[prefix_idx + len(prefix) :].lstrip()
-    suffix_idx = content.find(COMPACT_SEED_SUFFIX)
-    if suffix_idx >= 0:
-        content = content[:suffix_idx]
-    return content.strip() or None
-
-
-def _extract_compact_goal(summary: str) -> Optional[str]:
-    lines = summary.splitlines()
-    expecting_goal_line = False
-    for line in lines:
-        stripped = line.strip()
-        if not stripped:
-            continue
-        lowered = stripped.lower()
-        if expecting_goal_line:
-            return _strip_list_marker(stripped)
-        if lowered.startswith("goals:") or lowered.startswith("goal:"):
-            after = stripped.split(":", 1)[1].strip()
-            if after:
-                return after
-            expecting_goal_line = True
-    return None
-
-
-def _compact_seed_preview_matcher(text: Optional[str]) -> Optional[str]:
-    summary = _compact_seed_summary(text)
-    if not summary:
-        return None
-    goal = _extract_compact_goal(summary)
-    if goal:
-        return f"Compacted: {goal}"
-    for line in summary.splitlines():
-        stripped = line.strip()
-        if stripped:
-            return f"Compacted: {_strip_list_marker(stripped)}"
-    return "Compacted"
-
-
 SPECIAL_PREVIEW_MATCHERS: tuple[Callable[[Optional[str]], Optional[str]], ...] = (
-    _compact_seed_preview_matcher,
     _github_preview_matcher,
 )
 

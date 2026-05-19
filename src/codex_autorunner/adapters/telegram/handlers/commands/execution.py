@@ -97,7 +97,6 @@ from .....agents.registry import (
 from .....agents.runtime_options import resolve_opencode_model_payload
 from .....core.artifact_instructions import (
     ArtifactDeliveryContext,
-    render_agent_artifact_instructions,
 )
 from .....core.config import load_hub_config
 from .....core.config_contract import ConfigError
@@ -111,7 +110,6 @@ from .....core.hub_control_plane import (
     RemoteSurfaceBindingStore,
     RemoteThreadExecutionStore,
 )
-from .....core.injected_context import wrap_injected_context
 from .....core.logging_utils import log_event
 from .....core.managed_thread_identity import (
     AppServerThreadRegistry,
@@ -137,6 +135,11 @@ from .....core.pma_context import (
     load_pma_prompt,
 )
 from .....core.state import now_iso
+from .....core.surface_context_capsules import (
+    append_capsules_to_prompt,
+    build_artifact_delivery_capsule,
+    build_whisper_disclaimer_capsule,
+)
 from .....core.utils import canonicalize_path
 from ....app_server.client import (
     CodexAppServerClient,
@@ -1141,6 +1144,8 @@ async def _run_telegram_managed_thread_turn(
     sandbox_policy: Optional[Any] = None,
     existing_session_prompt_text: Optional[str] = None,
     chat_ux_snapshot: Optional[ChatUxTimingSnapshot] = None,
+    user_visible_text: Optional[str] = None,
+    title_seed: Optional[str] = None,
 ) -> _TurnRunResult | _TurnRunFailure:
     if chat_ux_snapshot is not None:
         chat_ux_snapshot.record(ChatUxMilestone.ACK_FINISHED)
@@ -1647,6 +1652,9 @@ async def _run_telegram_managed_thread_turn(
         "runtime_prompt": execution_prompt,
         "execution_error_message": public_execution_error,
     }
+    if isinstance(user_visible_text, str) and user_visible_text.strip():
+        metadata["user_visible_text"] = user_visible_text
+        metadata["title_seed"] = title_seed or user_visible_text
     if (
         isinstance(existing_session_prompt_text, str)
         and existing_session_prompt_text.strip()
@@ -1712,12 +1720,14 @@ class ExecutionCommands(TelegramCommandSupportMixin):
         if self._voice_config is not None:
             provider = self._voice_config.provider
         provider = provider or "openai_whisper"
-        if provider != "openai_whisper":
+        capsule = build_whisper_disclaimer_capsule(
+            surface="telegram",
+            disclaimer=WHISPER_TRANSCRIPT_DISCLAIMER,
+            provider=provider,
+        )
+        if capsule is None:
             return prompt_text
-        disclaimer = wrap_injected_context(WHISPER_TRANSCRIPT_DISCLAIMER)
-        if prompt_text.strip():
-            return f"{prompt_text}\n\n{disclaimer}"
-        return disclaimer
+        return append_capsules_to_prompt(prompt_text, (capsule,))[0]
 
     async def _maybe_inject_github_context(
         self,
@@ -1766,26 +1776,25 @@ class ExecutionCommands(TelegramCommandSupportMixin):
     ) -> tuple[str, bool]:
         inbox_dir = self._files_inbox_dir(record.workspace_path, topic_key)
         topic_dir = self._files_topic_dir(record.workspace_path, topic_key)
+        capsule = build_artifact_delivery_capsule(
+            ArtifactDeliveryContext(
+                surface="telegram",
+                conversation_key=_artifact_conversation_key_from_topic(topic_key),
+                workspace_scope=f"repo:{record.workspace_path}",
+                scope_label="repo/worktree artifact target for this Telegram topic",
+                user_upload_inbox=inbox_dir,
+                extra_agent_lines=(
+                    f"Topic key: {topic_key}",
+                    f"Topic dir: {topic_dir}",
+                    f"Max file size: {self._config.media.max_file_bytes} bytes.",
+                ),
+            ),
+            capsule_id="filebox.uploads",
+            reason="telegram_filebox_context",
+        )
         return maybe_inject_filebox_hint(
             prompt_text,
-            hint_text=wrap_injected_context(
-                render_agent_artifact_instructions(
-                    ArtifactDeliveryContext(
-                        surface="telegram",
-                        conversation_key=_artifact_conversation_key_from_topic(
-                            topic_key
-                        ),
-                        workspace_scope=f"repo:{record.workspace_path}",
-                        scope_label="repo/worktree artifact target for this Telegram topic",
-                        user_upload_inbox=inbox_dir,
-                        extra_agent_lines=(
-                            f"Topic key: {topic_key}",
-                            f"Topic dir: {topic_dir}",
-                            f"Max file size: {self._config.media.max_file_bytes} bytes.",
-                        ),
-                    )
-                )
-            ),
+            hint_text=str(capsule.payload["text"]),
             has_file_context=has_file_context,
             user_input_texts=[user_input_text],
         )
@@ -3404,6 +3413,7 @@ class ExecutionCommands(TelegramCommandSupportMixin):
             text_override if text_override is not None else (message.text or "")
         )
         prompt_text = format_forwarded_telegram_message_text(message, prompt_text)
+        user_visible_seed = prompt_text
         prompt_text = self._prepare_turn_prompt(
             prompt_text, transcript_text=transcript_text
         )
@@ -3483,6 +3493,8 @@ class ExecutionCommands(TelegramCommandSupportMixin):
                 sandbox_policy=sandbox_policy,
                 existing_session_prompt_text=existing_session_prompt_text,
                 chat_ux_snapshot=_chat_ux_snapshot,
+                user_visible_text=user_visible_seed,
+                title_seed=user_visible_seed,
             )
 
         if uses_managed_thread_runtime:
@@ -3511,6 +3523,8 @@ class ExecutionCommands(TelegramCommandSupportMixin):
                 approval_policy=approval_policy,
                 sandbox_policy=sandbox_policy,
                 chat_ux_snapshot=_chat_ux_snapshot,
+                user_visible_text=user_visible_seed,
+                title_seed=user_visible_seed,
             )
 
         turn_semaphore = self._ensure_turn_semaphore()

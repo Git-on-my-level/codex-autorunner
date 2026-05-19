@@ -82,6 +82,7 @@ from .chat_surface_read_model import (
     serialize_chat_surface_event,
 )
 from .cold_trace_store import ColdTraceStore
+from .context_capsule_ledger import SQLiteContextCapsuleLedger
 from .execution_history_maintenance import (
     audit_execution_history,
     backfill_legacy_execution_history,
@@ -307,6 +308,7 @@ __all__ = [
     "RuntimeThreadHarness",
     "SQLiteChatOperationLedger",
     "SQLiteChatSurfaceEventJournal",
+    "SQLiteContextCapsuleLedger",
     "SQLiteManagedThreadDeliveryEngine",
     "SQLiteManagedThreadDeliveryLedger",
     "SQLiteManagedThreadSideEffectEngine",

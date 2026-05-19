@@ -4,11 +4,15 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from ..car_context import render_injected_car_context
+from ..car_context import build_car_context_capsule
 from ..managed_thread_kinds import (
     MANAGED_THREAD_CHAT_KIND_PMA,
     ManagedThreadChatKind,
     normalize_managed_thread_chat_kind,
+)
+from ..orchestration.turn_context import (
+    ManagedThreadCapsuleRef,
+    render_context_capsule_for_prompt,
 )
 from ..pma_context import format_pma_discoverability_preamble
 
@@ -25,6 +29,12 @@ class ManagedThreadPromptRequest:
     chat_kind: ManagedThreadChatKind = MANAGED_THREAD_CHAT_KIND_PMA
 
 
+@dataclass(frozen=True)
+class ManagedThreadPromptAssembly:
+    prompt: str
+    capsule_refs: tuple[ManagedThreadCapsuleRef, ...]
+
+
 def compose_compacted_prompt(compact_seed: str, message: str) -> str:
     return (
         "Context summary (from compaction):\n"
@@ -34,9 +44,9 @@ def compose_compacted_prompt(compact_seed: str, message: str) -> str:
     )
 
 
-def compose_managed_thread_execution_prompt(
+def compose_managed_thread_execution_prompt_with_capsules(
     request: ManagedThreadPromptRequest,
-) -> str:
+) -> ManagedThreadPromptAssembly:
     execution_message = request.message
     if not request.stored_backend_id and request.compact_seed:
         execution_message = compose_compacted_prompt(
@@ -60,14 +70,32 @@ def compose_managed_thread_execution_prompt(
             f"Hub root: `{request.hub_root.expanduser().resolve()}`.\n{runtime_text}\n"
         )
     user_message = f"<user_message>\n{execution_message}\n</user_message>\n"
-    car_context = render_injected_car_context(request.context_bundle)
+    capsule = build_car_context_capsule(request.context_bundle)
+    car_context = render_context_capsule_for_prompt(capsule) if capsule else ""
+    capsule_refs = (
+        (ManagedThreadCapsuleRef.from_capsule(capsule),) if capsule is not None else ()
+    )
     if not car_context:
-        return f"{preamble}{user_message}"
-    return f"{preamble}{car_context}\n\n{user_message}"
+        return ManagedThreadPromptAssembly(
+            prompt=f"{preamble}{user_message}",
+            capsule_refs=capsule_refs,
+        )
+    return ManagedThreadPromptAssembly(
+        prompt=f"{preamble}{car_context}\n\n{user_message}",
+        capsule_refs=capsule_refs,
+    )
+
+
+def compose_managed_thread_execution_prompt(
+    request: ManagedThreadPromptRequest,
+) -> str:
+    return compose_managed_thread_execution_prompt_with_capsules(request).prompt
 
 
 __all__ = [
+    "ManagedThreadPromptAssembly",
     "ManagedThreadPromptRequest",
     "compose_compacted_prompt",
     "compose_managed_thread_execution_prompt",
+    "compose_managed_thread_execution_prompt_with_capsules",
 ]

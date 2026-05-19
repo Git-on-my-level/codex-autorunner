@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import inspect
 import logging
 import time
 import uuid
@@ -58,7 +59,6 @@ from ...core.context_awareness import (
     maybe_inject_prompt_writing_hint,
 )
 from ...core.filebox import inbox_dir
-from ...core.injected_context import wrap_injected_context
 from ...core.logging_utils import log_event
 from ...core.orchestration import (
     FlowTarget,
@@ -369,15 +369,13 @@ def _maybe_inject_discord_filebox_hint(
     workspace_root: Path,
     channel_id: str,
 ) -> tuple[str, bool]:
-    hint_text = wrap_injected_context(
-        render_agent_artifact_instructions(
-            ArtifactDeliveryContext(
-                surface="discord",
-                conversation_key=f"channel:{channel_id}",
-                workspace_scope=f"repo:{workspace_root}",
-                scope_label="repo/worktree artifact target for this Discord channel",
-                user_upload_inbox=inbox_dir(workspace_root),
-            )
+    hint_text = render_agent_artifact_instructions(
+        ArtifactDeliveryContext(
+            surface="discord",
+            conversation_key=f"channel:{channel_id}",
+            workspace_scope=f"repo:{workspace_root}",
+            scope_label="repo/worktree artifact target for this Discord channel",
+            user_upload_inbox=inbox_dir(workspace_root),
         )
     )
     return maybe_inject_filebox_hint(
@@ -530,6 +528,19 @@ async def _resolve_discord_paused_flow(
         ),
         workspace_root=dispatch.workspace_root,
     )
+
+
+def _callable_accepts_keyword(callable_obj: Any, keyword: str) -> bool:
+    try:
+        signature = inspect.signature(callable_obj)
+    except (TypeError, ValueError):
+        return True
+    for parameter in signature.parameters.values():
+        if parameter.kind is inspect.Parameter.VAR_KEYWORD:
+            return True
+        if parameter.name == keyword:
+            return True
+    return False
 
 
 async def _submit_discord_flow_reply(
@@ -1158,14 +1169,24 @@ async def _execute_discord_thread_message(
         run_turn_kwargs["supervision"] = supervision
     if turn_input_items:
         run_turn_kwargs["input_items"] = turn_input_items
+    visible_seed = dispatch.turn_text.strip()
+    if not visible_seed and transcript_message:
+        visible_seed = transcript_message
+    if visible_seed:
+        run_turn_kwargs["user_visible_text"] = visible_seed
+        run_turn_kwargs["title_seed"] = visible_seed
     if existing_session_prompt_text is not None:
         run_turn_kwargs["existing_session_prompt_text"] = existing_session_prompt_text
     run_turn_kwargs["chat_ux_snapshot"] = dispatch.chat_ux_snapshot
     try:
         try:
+            run_turn = dispatch.service._run_agent_turn_for_message
+            if not _callable_accepts_keyword(run_turn, "user_visible_text"):
+                run_turn_kwargs.pop("user_visible_text", None)
+                run_turn_kwargs.pop("title_seed", None)
             return cast(
                 DiscordMessageTurnResult,
-                await dispatch.service._run_agent_turn_for_message(**run_turn_kwargs),
+                await run_turn(**run_turn_kwargs),
             )
         except TypeError as exc:
             error_text = str(exc)
@@ -1776,6 +1797,8 @@ async def run_agent_turn_for_message(
     heartbeat_interval_seconds: float,
     log_event_fn: Any,
     chat_ux_snapshot: Optional[ChatUxTimingSnapshot] = None,
+    user_visible_text: Optional[str] = None,
+    title_seed: Optional[str] = None,
 ) -> DiscordMessageTurnResult:
     _ = (
         max_actions,
@@ -1814,6 +1837,8 @@ async def run_agent_turn_for_message(
         min_edit_interval_seconds=min_edit_interval_seconds,
         heartbeat_interval_seconds=heartbeat_interval_seconds,
         chat_ux_snapshot=chat_ux_snapshot,
+        user_visible_text=user_visible_text,
+        title_seed=title_seed,
     )
 
 
@@ -1845,6 +1870,8 @@ async def _run_discord_orchestrated_turn_for_message(
     supervision: Optional[_DiscordTurnExecutionSupervision] = None,
     existing_session_prompt_text: Optional[str] = None,
     chat_ux_snapshot: Optional[ChatUxTimingSnapshot] = None,
+    user_visible_text: Optional[str] = None,
+    title_seed: Optional[str] = None,
 ) -> DiscordMessageTurnResult:
     _ = session_key
     channel_id = (
@@ -2512,6 +2539,9 @@ async def _run_discord_orchestrated_turn_for_message(
         "runtime_prompt": execution_prompt,
         "execution_error_message": public_execution_error,
     }
+    if isinstance(user_visible_text, str) and user_visible_text.strip():
+        metadata["user_visible_text"] = user_visible_text
+        metadata["title_seed"] = title_seed or user_visible_text
     if (
         isinstance(existing_session_prompt_text, str)
         and existing_session_prompt_text.strip()
@@ -2636,6 +2666,8 @@ async def run_managed_thread_turn_for_message(
     supervision: Optional[_DiscordTurnExecutionSupervision] = None,
     existing_session_prompt_text: Optional[str] = None,
     chat_ux_snapshot: Optional[ChatUxTimingSnapshot] = None,
+    user_visible_text: Optional[str] = None,
+    title_seed: Optional[str] = None,
 ) -> DiscordMessageTurnResult:
 
     execution_prompt = (
@@ -2667,6 +2699,8 @@ async def run_managed_thread_turn_for_message(
         pma_enabled=True,
         execution_prompt=execution_prompt,
         existing_session_prompt_text=existing_session_prompt_text,
+        user_visible_text=user_visible_text,
+        title_seed=title_seed,
         public_execution_error=DISCORD_PMA_PUBLIC_EXECUTION_ERROR,
         timeout_error="Discord PMA turn timed out",
         interrupted_error="Discord PMA turn interrupted",

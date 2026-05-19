@@ -39,6 +39,7 @@ from .recovery_lifecycle import (
     _ThreadRecoveryHelper,
 )
 from .runtime_bindings import RuntimeThreadBinding
+from .turn_context import turn_assembly_from_request_metadata
 
 MessagePreviewLimit = 120
 logger = logging.getLogger("codex_autorunner.core.orchestration.service")
@@ -662,6 +663,17 @@ class HarnessBackedOrchestrationService(OrchestrationThreadService):
             raise KeyError(f"Unknown agent definition '{thread.agent_id}'")
 
         workspace_root = Path(thread.workspace_root)
+        turn_assembly = turn_assembly_from_request_metadata(
+            message_text=request.message_text,
+            metadata=request.metadata,
+        )
+        request_metadata = {
+            **request.metadata,
+            **turn_assembly.metadata_patch(),
+            "runtime_prompt": turn_assembly.raw_model_prompt,
+        }
+        request.metadata.clear()
+        request.metadata.update(request_metadata)
         queue_payload = self._queue_adapter.payload_for_request(
             request,
             client_request_id=client_request_id,
@@ -703,20 +715,22 @@ class HarnessBackedOrchestrationService(OrchestrationThreadService):
 
         execution = self.thread_store.create_execution(
             thread.thread_target_id,
-            prompt=request.message_text,
+            prompt=turn_assembly.user_visible_text,
             request_kind=request.kind,
             busy_policy=request.busy_policy,
             model=request.model,
             reasoning=request.reasoning,
             client_request_id=client_request_id,
-            metadata=request.metadata,
+            metadata=request_metadata,
             queue_payload=queue_payload,
         )
         _record_thread_activity_best_effort(
             self.thread_store,
             thread.thread_target_id,
             execution_id=execution.execution_id,
-            message_preview=_truncate_text(request.message_text, MessagePreviewLimit),
+            message_preview=_truncate_text(
+                turn_assembly.title_seed, MessagePreviewLimit
+            ),
         )
         resolved_harness = harness if execution.status == "running" else None
         if resolved_harness is None and execution.status == "running":

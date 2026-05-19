@@ -6,7 +6,9 @@ from pathlib import Path
 import pytest
 
 import codex_autorunner.adapters.github.context_injection as context_module
-from codex_autorunner.core.injected_context import wrap_injected_context
+from codex_autorunner.core.injected_context import (
+    render_legacy_injected_context_transport,
+)
 from codex_autorunner.core.utils import RepoNotFoundError
 
 
@@ -28,7 +30,7 @@ class _GitHubServiceStub:
         self.calls.append((url, allow_cross_repo))
         return {
             "path": ".codex-autorunner/github_context/issue-123.md",
-            "hint": wrap_injected_context("Context: injected"),
+            "hint": render_legacy_injected_context_transport("Context: injected"),
         }
 
 

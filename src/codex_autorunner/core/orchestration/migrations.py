@@ -9,7 +9,7 @@ from ..sqlite_utils import table_columns, table_exists
 from ..time_utils import now_iso
 from .models import OrchestrationTableDefinition
 
-ORCHESTRATION_SCHEMA_VERSION = 34
+ORCHESTRATION_SCHEMA_VERSION = 35
 
 
 @dataclass(frozen=True)
@@ -2006,6 +2006,64 @@ def _apply_v34(conn: sqlite3.Connection) -> None:
     )
 
 
+def _apply_v35(conn: sqlite3.Connection) -> None:
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS orch_context_capsule_ledger (
+            observation_id TEXT PRIMARY KEY,
+            surface_kind TEXT NOT NULL,
+            surface_key TEXT NOT NULL,
+            managed_thread_id TEXT NOT NULL,
+            backend_thread_id TEXT NOT NULL DEFAULT '',
+            scope_kind TEXT NOT NULL,
+            scope_id TEXT NOT NULL,
+            capsule_id TEXT NOT NULL,
+            capsule_version TEXT NOT NULL,
+            visibility TEXT NOT NULL,
+            expiry TEXT NOT NULL,
+            source_digest TEXT NOT NULL,
+            payload_digest TEXT NOT NULL,
+            render_reason TEXT NOT NULL,
+            payload_json TEXT NOT NULL,
+            first_observed_at TEXT NOT NULL,
+            last_observed_at TEXT NOT NULL,
+            render_count INTEGER NOT NULL DEFAULT 1
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_orch_context_capsule_key
+            ON orch_context_capsule_ledger(
+                surface_kind,
+                surface_key,
+                managed_thread_id,
+                backend_thread_id,
+                scope_kind,
+                scope_id,
+                capsule_id,
+                capsule_version
+            )
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_orch_context_capsule_thread
+            ON orch_context_capsule_ledger(
+                managed_thread_id,
+                backend_thread_id,
+                capsule_id
+            )
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_orch_context_capsule_surface
+            ON orch_context_capsule_ledger(surface_kind, surface_key, capsule_id)
+        """
+    )
+
+
 _MIGRATIONS = (
     _MigrationStep(1, "create_core_orchestration_schema", _apply_v1),
     _MigrationStep(2, "add_binding_and_flow_projection_scaffolding", _apply_v2),
@@ -2072,6 +2130,11 @@ _MIGRATIONS = (
         34,
         "add_unified_automation_domain_store",
         _apply_v34,
+    ),
+    _MigrationStep(
+        35,
+        "add_context_capsule_ledger",
+        _apply_v35,
     ),
 )
 
@@ -2221,6 +2284,11 @@ _TABLE_DEFINITIONS = (
         name="orch_automation_schedules",
         role="authoritative",
         description="Derived schedule state for schedule-triggered automation rules.",
+    ),
+    OrchestrationTableDefinition(
+        name="orch_context_capsule_ledger",
+        role="authoritative",
+        description="Per surface/thread/backend-session context capsule observations keyed by canonical capsule identity and canonical payload digests.",
     ),
     OrchestrationTableDefinition(
         name="orch_thread_identity_bindings",

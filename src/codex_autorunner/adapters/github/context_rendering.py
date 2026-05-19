@@ -11,7 +11,6 @@ import re
 from pathlib import Path
 from typing import Any, Optional
 
-from ...core.injected_context import wrap_injected_context
 from ...core.utils import atomic_write
 
 
@@ -244,7 +243,7 @@ def build_context_file_from_url(
     abs_path = service.repo_root / rel_path
     atomic_write(abs_path, "\n".join(lines).rstrip() + "\n")
 
-    hint = wrap_injected_context(
+    hint = (
         "Context: see "
         f"{rel_path.as_posix()} "
         "(gh available: true; use gh CLI for updates if asked)."

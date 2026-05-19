@@ -13,6 +13,15 @@ HINT_CONSTANTS = {
     "FILES_HINT_TEMPLATE",
 }
 
+CAPSULE_OR_TRANSPORT_RENDERERS = {
+    "build_attachment_manifest_capsule",
+    "build_artifact_delivery_capsule",
+    "build_model_only_text_capsule",
+    "build_prompt_writing_capsule",
+    "build_whisper_disclaimer_capsule",
+    "render_legacy_injected_context_transport",
+}
+
 
 def _collect_parents(node: ast.AST) -> dict[ast.AST, ast.AST]:
     parents: dict[ast.AST, ast.AST] = {}
@@ -32,15 +41,20 @@ def _is_assign_target(node: ast.AST, parents: dict[ast.AST, ast.AST]) -> bool:
     return False
 
 
-def _has_wrap_ancestor(node: ast.AST, parents: dict[ast.AST, ast.AST]) -> bool:
+def _has_capsule_or_transport_ancestor(
+    node: ast.AST, parents: dict[ast.AST, ast.AST]
+) -> bool:
     current = node
     while current in parents:
         current = parents[current]
         if isinstance(current, ast.Call):
             func = current.func
-            if isinstance(func, ast.Name) and func.id == "wrap_injected_context":
+            if isinstance(func, ast.Name) and func.id in CAPSULE_OR_TRANSPORT_RENDERERS:
                 return True
-            if isinstance(func, ast.Attribute) and func.attr == "wrap_injected_context":
+            if (
+                isinstance(func, ast.Attribute)
+                and func.attr in CAPSULE_OR_TRANSPORT_RENDERERS
+            ):
                 return True
     return False
 
@@ -66,13 +80,13 @@ def _check_file(path: Path) -> list[str]:
             continue
         if _is_assign_target(node, parents):
             continue
-        if _has_wrap_ancestor(node, parents):
+        if _has_capsule_or_transport_ancestor(node, parents):
             continue
         if _is_in_comparison(node, parents):
             continue
         errors.append(
             f"{path}:{node.lineno}:{node.col_offset + 1} "
-            f"{node.id} must be wrapped with wrap_injected_context()."
+            f"{node.id} must be passed through a capsule or transport renderer."
         )
     return errors
 

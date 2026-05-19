@@ -96,7 +96,15 @@ def _resolve_user_text(
 ) -> str:
     if explicit_user_text is not None:
         return explicit_user_text
-    for key in ("user_prompt", "user_text", "prompt_text", "message_text", "prompt"):
+    for key in (
+        "user_visible_text",
+        "title_seed",
+        "user_prompt",
+        "user_text",
+        "prompt_text",
+        "message_text",
+        "prompt",
+    ):
         value = metadata.get(key)
         if isinstance(value, str) and value.strip():
             return value

@@ -478,6 +478,61 @@ async def test_send_message_creates_conversation_and_execution(tmp_path: Path) -
     assert refreshed_thread.last_message_preview == "Ship it"
 
 
+async def test_send_message_persists_turn_context_metadata_without_preview_leak(
+    tmp_path: Path,
+) -> None:
+    harness = _FakeHarness()
+    service = _build_service(tmp_path, harness)
+    workspace_root = tmp_path / "workspace"
+    workspace_root.mkdir()
+    thread = service.create_thread_target("codex", workspace_root)
+    runtime_prompt = (
+        "<injected context>\n"
+        "You are operating inside Codex Autorunner.\n"
+        "</injected context>\n\n"
+        "<user_message>\nInvestigate queue state\n</user_message>\n"
+    )
+
+    execution = await service.send_message(
+        MessageRequest(
+            target_id=thread.thread_target_id,
+            target_kind="thread",
+            message_text="Investigate queue state",
+            metadata={
+                "runtime_prompt": runtime_prompt,
+                "user_visible_text": "Investigate queue state",
+                "title_seed": "Investigate queue state",
+                "capsule_refs": [
+                    {
+                        "capsule_id": "car.repo_awareness",
+                        "capsule_version": "1",
+                        "visibility": "model_only",
+                        "scope": "thread",
+                        "source_digest": "digest-1",
+                    }
+                ],
+            },
+        )
+    )
+
+    refreshed_thread = service.get_thread_target(thread.thread_target_id)
+    stored_execution = service.get_execution(
+        thread.thread_target_id, execution.execution_id
+    )
+
+    assert harness.start_turn_calls[0]["prompt"] == runtime_prompt
+    assert refreshed_thread is not None
+    assert refreshed_thread.last_message_preview == "Investigate queue state"
+    assert "<injected context>" not in refreshed_thread.last_message_preview
+    assert stored_execution is not None
+    assert stored_execution.metadata["raw_model_prompt"] == runtime_prompt
+    assert stored_execution.metadata["user_visible_text"] == "Investigate queue state"
+    assert stored_execution.metadata["title_seed"] == "Investigate queue state"
+    assert stored_execution.metadata["capsule_refs"][0]["capsule_id"] == (
+        "car.repo_awareness"
+    )
+
+
 async def test_send_message_promotes_first_message_to_car_owned_title(
     tmp_path: Path,
 ) -> None:
@@ -1322,10 +1377,17 @@ async def test_claim_next_queued_execution_context_preserves_typed_request_paylo
         {"type": "image", "image_url": "https://example.com/diagram.png"},
     ]
     assert claimed.request.context_profile == "car_core"
-    assert claimed.request.metadata == {
-        "runtime_prompt": "Use the saved context first.",
-        "existing_session_runtime_prompt": "Use the cached context.",
-    }
+    assert claimed.request.metadata["runtime_prompt"] == "Use the saved context first."
+    assert (
+        claimed.request.metadata["existing_session_runtime_prompt"]
+        == "Use the cached context."
+    )
+    assert (
+        claimed.request.metadata["raw_model_prompt"] == "Use the saved context first."
+    )
+    assert claimed.request.metadata["user_visible_text"] == "second"
+    assert claimed.request.metadata["title_seed"] == "second"
+    assert claimed.request.metadata["capsule_refs"] == []
     assert claimed.client_request_id == "client-2"
     assert claimed.sandbox_policy == {"mode": "workspace-write"}
 

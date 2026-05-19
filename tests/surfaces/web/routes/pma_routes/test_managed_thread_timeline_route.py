@@ -225,7 +225,7 @@ def test_managed_thread_timeline_endpoint_returns_canonical_items(hub_env) -> No
 
     assert timeline_resp.status_code == 200
     payload = timeline_resp.json()
-    assert payload["contract_version"] == "managed_thread_timeline.v2"
+    assert payload["contract_version"] == "managed_thread_timeline.v3"
     assert payload["projection"]["kind"] == "transcript"
     assert payload["projection"]["raw_trace_available"] is True
     assert [item["kind"] for item in payload["items"]] == [
@@ -236,7 +236,7 @@ def test_managed_thread_timeline_endpoint_returns_canonical_items(hub_env) -> No
     assert payload["items"][0]["payload"]["text"] == "hello timeline"
     assert payload["items"][1]["payload"]["text"] == "hello from assistant"
     for item in payload["items"]:
-        assert item["contract_version"] == "managed_thread_timeline.v2"
+        assert item["contract_version"] == "managed_thread_timeline.v3"
         assert item["identity"]["timeline_item_id"] == item["item_id"]
         assert isinstance(item["identity"]["progress_item_ids"], list)
         assert isinstance(item["provenance"]["source_event_ids"], list)
@@ -271,7 +271,7 @@ def test_managed_thread_transcript_endpoint_returns_backend_owned_rows(hub_env) 
 
     assert transcript_resp.status_code == 200
     payload = transcript_resp.json()
-    assert payload["contract_version"] == "managed_thread_transcript.v1"
+    assert payload["contract_version"] == "managed_thread_transcript.v2"
     assert payload["projection"]["kind"] == "transcript"
     assert payload["projection"]["backend_owned_rows"] is True
     rows = payload["rows"]
@@ -281,6 +281,72 @@ def test_managed_thread_transcript_endpoint_returns_backend_owned_rows(hub_env) 
     assert rows[0]["message"]["text"] == "hello transcript"
     assert rows[1]["message"]["role"] == "assistant"
     assert rows[1]["message"]["text"] == "hello from transcript"
+
+
+def test_managed_thread_transcript_endpoint_exposes_capsule_visibility_contract(
+    hub_env,
+) -> None:
+    _enable_pma(
+        hub_env.hub_root,
+        managed_thread_terminal_followup_default=False,
+    )
+    app = create_hub_app(hub_env.hub_root)
+
+    with TestClient(app) as client:
+        create_resp = client.post(
+            "/hub/pma/threads",
+            json={"agent": "codex", **_repo_owner(hub_env)},
+        )
+        assert create_resp.status_code == 200
+        managed_thread_id = create_resp.json()["thread"]["managed_thread_id"]
+
+        store = ManagedThreadStore(hub_env.hub_root)
+        turn = store.create_turn(
+            managed_thread_id,
+            prompt="<injected context>\nrepo guidance\n</injected context>\n\nFix login",
+            metadata={
+                "raw_model_prompt": (
+                    "<injected context>\nrepo guidance\n</injected context>\n\nFix login"
+                ),
+                "user_visible_text": "Fix login",
+                "title_seed": "Fix login",
+                "capsule_refs": [
+                    {
+                        "capsule_id": "car.repo_basics",
+                        "capsule_version": "1",
+                        "visibility": "model_only",
+                        "scope": "repo",
+                        "source_digest": "sha256:repo",
+                    }
+                ],
+            },
+        )
+        turn_id = str(turn["managed_turn_id"])
+        assert store.mark_turn_finished(
+            turn_id,
+            status="ok",
+            assistant_text="done",
+        )
+
+        transcript_resp = client.get(f"/hub/pma/threads/{managed_thread_id}/transcript")
+
+    assert transcript_resp.status_code == 200
+    payload = transcript_resp.json()
+    assert payload["contract_version"] == "managed_thread_transcript.v2"
+    user_row = payload["rows"][0]
+    assert user_row["message"]["text"] == "Fix login"
+    assert user_row["visibility"] == "user_visible"
+    assert user_row["user_visible_text"] == "Fix login"
+    assert user_row["capsule_refs"] == [
+        {
+            "capsule_id": "car.repo_basics",
+            "capsule_version": "1",
+            "visibility": "model_only",
+            "scope": "repo",
+            "source_digest": "sha256:repo",
+        }
+    ]
+    assert user_row["message"]["capsule_refs"] == user_row["capsule_refs"]
 
 
 def test_managed_thread_transcript_includes_client_turn_correlation_fields(
@@ -439,7 +505,7 @@ def test_managed_thread_transcript_events_endpoint_returns_snapshot(hub_env) -> 
     body = events_resp.text
     assert "event: transcript.snapshot" in body
     assert "\nid: " in body
-    assert '"contract_version": "managed_thread_transcript.v1"' in body
+    assert '"contract_version": "managed_thread_transcript.v2"' in body
     assert '"backend_owned_rows": true' in body
 
 

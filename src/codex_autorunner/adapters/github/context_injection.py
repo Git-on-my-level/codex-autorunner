@@ -7,8 +7,12 @@ from pathlib import Path
 from typing import Optional
 
 from ...core.config import load_repo_config
-from ...core.injected_context import wrap_injected_context
 from ...core.logging_utils import log_event
+from ...core.surface_context_capsules import (
+    append_capsules_to_prompt,
+    build_github_context_capsule,
+    build_model_only_text_capsule,
+)
 from ...core.utils import RepoNotFoundError, find_repo_root
 from .service import GitHubService, find_github_links, parse_github_url
 
@@ -44,16 +48,25 @@ def issue_only_link(prompt_text: str, links: list[str]) -> Optional[str]:
 
 
 def issue_only_workflow_hint(issue_number: int) -> str:
-    return wrap_injected_context(
-        "Issue-only GitHub message detected (no extra context).\n"
-        f"Treat this as a request to implement issue #{issue_number}.\n"
-        "Create a new branch from the latest head branch, "
-        "sync with the current origin default branch first,\n"
-        "implement the fix, and open a PR.\n"
-        f"{READY_FOR_REVIEW_PR_DEFAULT_HINT}\n"
-        f"Ensure the PR description includes `Closes #{issue_number}` "
-        "so GitHub auto-closes the issue when merged."
+    capsule = build_model_only_text_capsule(
+        capsule_id="github.issue_only_workflow",
+        text=(
+            "Issue-only GitHub message detected (no extra context).\n"
+            f"Treat this as a request to implement issue #{issue_number}.\n"
+            "Create a new branch from the latest head branch, "
+            "sync with the current origin default branch first,\n"
+            "implement the fix, and open a PR.\n"
+            f"{READY_FOR_REVIEW_PR_DEFAULT_HINT}\n"
+            f"Ensure the PR description includes `Closes #{issue_number}` "
+            "so GitHub auto-closes the issue when merged."
+        ),
+        reason="github_issue_only_link",
+        source={"issue_number": issue_number},
     )
+    if capsule is None:
+        return ""
+    injected, _ = append_capsules_to_prompt("", (capsule,))
+    return injected
 
 
 async def maybe_inject_github_context(
@@ -136,11 +149,16 @@ async def maybe_inject_github_context(
         ):  # intentional: GitHub API/network errors are non-fatal, best-effort injection
             result = None
         if result and result.get("hint"):
-            separator = "\n" if prompt_text.endswith("\n") else "\n\n"
             hint = str(result["hint"])
             parsed = parse_github_url(link)
             if issue_only and link == issue_only and parsed and parsed[1] == "issue":
                 hint = f"{hint}\n\n{issue_only_workflow_hint(parsed[2])}"
+            capsule = build_github_context_capsule(
+                hint_text=hint,
+                url=link,
+                path=str(result.get("path") or ""),
+                kind=str(result.get("kind") or (parsed[1] if parsed else "")),
+            )
             log_event(
                 logger,
                 logging.INFO,
@@ -149,7 +167,7 @@ async def maybe_inject_github_context(
                 path=result.get("path"),
                 source="user_message",
             )
-            return f"{prompt_text}{separator}{hint}", True
+            return append_capsules_to_prompt(prompt_text, (capsule,))
 
     log_event(
         logger,

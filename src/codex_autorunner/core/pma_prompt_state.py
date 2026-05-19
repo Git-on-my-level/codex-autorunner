@@ -1,14 +1,20 @@
 from __future__ import annotations
 
-import hashlib
-import json
 import logging
 from pathlib import Path
-from typing import Any, Mapping, Optional, Sequence, cast
+from typing import Any, Mapping, Optional, Sequence
 
-from .locks import file_lock
+from .context_capsules import (
+    ContextCapsule,
+    ContextCapsuleExpiry,
+    ContextCapsuleRenderDecision,
+    ContextCapsuleScope,
+    ContextCapsuleVisibility,
+    stable_json_digest,
+)
+from .orchestration.context_capsule_ledger import SQLiteContextCapsuleLedger
+from .orchestration.sqlite import open_orchestration_sqlite
 from .time_utils import now_iso
-from .utils import atomic_write
 
 _logger = logging.getLogger(__name__)
 
@@ -26,27 +32,27 @@ PMA_PROMPT_SECTION_ORDER = (
     "context_log_tail",
     "hub_snapshot",
 )
+PMA_PROMPT_TURN_SECTION = "current_actionable_state"
+PMA_PROMPT_SECTION_CAPSULE_IDS = {
+    "prompt": "pma.base_prompt",
+    "discoverability": "pma.discoverability",
+    "fastpath": "pma.fastpath",
+    "agents": "pma.docs.agents",
+    "active_context": "pma.docs.active_context",
+    "context_log_tail": "pma.docs.context_log_tail",
+    "hub_snapshot": "pma.hub_snapshot",
+    PMA_PROMPT_TURN_SECTION: "pma.current_actionable_state",
+}
+PMA_PROMPT_LEDGER_SURFACE_KIND = "pma"
 
 
 def default_pma_prompt_state_path(hub_root: Path) -> Path:
     return hub_root / ".codex-autorunner" / "pma" / PMA_PROMPT_STATE_FILENAME
 
 
-def _default_pma_prompt_state() -> dict[str, Any]:
-    return {
-        "version": PMA_PROMPT_STATE_VERSION,
-        "sessions": {},
-        "updated_at": now_iso(),
-    }
-
-
-def _prompt_state_lock_path(path: Path) -> Path:
-    return path.with_suffix(path.suffix + ".lock")
-
-
 def _digest_text(value: Any) -> str:
     raw = value if isinstance(value, str) else str(value or "")
-    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+    return stable_json_digest(raw)
 
 
 def _digest_preview(digest: Any) -> str:
@@ -61,69 +67,71 @@ def _is_digest(value: Any) -> bool:
     return all(ch in "0123456789abcdef" for ch in value)
 
 
-def _build_prompt_bundle_digest(sections: Mapping[str, Mapping[str, Any]]) -> str:
-    payload = {
-        name: str((sections.get(name) or {}).get("digest") or "")
-        for name in PMA_PROMPT_SECTION_ORDER
-    }
-    raw = json.dumps(payload, sort_keys=True, ensure_ascii=True)
-    return _digest_text(raw)
+def _legacy_prompt_state_reset_path(path: Path) -> Path:
+    return path.with_name(f"{path.name}.major_version_reset")
 
 
-def _read_pma_prompt_state_unlocked(path: Path) -> dict[str, Any]:
+def _reset_legacy_prompt_state_if_present(hub_root: Path) -> None:
+    path = default_pma_prompt_state_path(hub_root)
     if not path.exists():
-        return _default_pma_prompt_state()
+        return
+    reset_path = _legacy_prompt_state_reset_path(path)
     try:
-        raw = path.read_text(encoding="utf-8")
-        data = json.loads(raw)
-    except (OSError, ValueError) as exc:
-        _logger.warning("Could not read PMA prompt state: %s", exc)
-        return _default_pma_prompt_state()
-    return data if isinstance(data, dict) else _default_pma_prompt_state()
-
-
-def _write_pma_prompt_state_unlocked(path: Path, state: Mapping[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    atomic_write(path, json.dumps(state, indent=2, sort_keys=True) + "\n")
-
-
-def _validate_prompt_session_record(record: Any) -> bool:
-    if not isinstance(record, Mapping):
-        return False
-    sections = record.get("sections")
-    if not isinstance(sections, Mapping):
-        return False
-    for name in PMA_PROMPT_SECTION_ORDER:
-        section = sections.get(name)
-        if not isinstance(section, Mapping):
-            return False
-        if not _is_digest(section.get("digest")):
-            return False
-    bundle_digest = record.get("bundle_digest")
-    if not _is_digest(bundle_digest):
-        return False
-    return bundle_digest == _build_prompt_bundle_digest(
-        cast(Mapping[str, Mapping[str, Any]], sections)
+        reset_path.unlink(missing_ok=True)
+        path.replace(reset_path)
+    except OSError as exc:
+        _logger.warning(
+            "Could not reset legacy PMA prompt_state.json during capsule-ledger cutover: %s",
+            exc,
+        )
+        return
+    _logger.warning(
+        "Reset legacy PMA prompt_state.json during capsule-ledger cutover; archived at %s",
+        reset_path,
     )
 
 
-def _trim_prompt_sessions(sessions: Mapping[str, Any]) -> dict[str, Any]:
-    items: list[tuple[str, Mapping[str, Any]]] = []
-    for key, value in sessions.items():
-        if not isinstance(key, str) or not key:
-            continue
-        if not isinstance(value, Mapping):
-            continue
-        items.append((key, value))
-    if len(items) <= PMA_PROMPT_STATE_MAX_SESSIONS:
-        return {key: dict(value) for key, value in items}
+def _pma_capsule_for_section(
+    name: str,
+    section: Mapping[str, Any],
+) -> ContextCapsule:
+    capsule_id = PMA_PROMPT_SECTION_CAPSULE_IDS[name]
+    content = str(section.get("content") or "")
+    source_digest = str(section.get("digest") or "") or _digest_text(content)
+    is_turn = name == PMA_PROMPT_TURN_SECTION
+    return ContextCapsule(
+        capsule_id=capsule_id,
+        version=PMA_PROMPT_STATE_VERSION,
+        scope=(
+            ContextCapsuleScope.TURN if is_turn else ContextCapsuleScope.BACKEND_SESSION
+        ),
+        visibility=ContextCapsuleVisibility.MODEL_ONLY,
+        source_digest=source_digest,
+        expiry=(
+            ContextCapsuleExpiry.EVERY_TURN
+            if is_turn
+            else ContextCapsuleExpiry.WHEN_SOURCE_CHANGES
+        ),
+        reason="pma_prompt_section",
+        payload={
+            "section": name,
+            "label": str(section.get("label") or name),
+            "tag": str(section.get("tag") or name),
+            "content": content,
+        },
+    )
 
-    def _sort_key(item: tuple[str, Mapping[str, Any]]) -> tuple[str, str]:
-        updated_at = str(item[1].get("updated_at") or "")
-        return (updated_at, item[0])
 
-    trimmed = sorted(items, key=_sort_key)[-PMA_PROMPT_STATE_MAX_SESSIONS:]
-    return {key: dict(value) for key, value in trimmed}
+def _section_from_observation(observation: Any) -> dict[str, Any]:
+    if observation is None:
+        return {}
+    return {
+        "digest": str(observation.source_digest or ""),
+        "capsule_id": observation.key.capsule_id,
+        "capsule_version": observation.key.capsule_version,
+        "payload_digest": str(observation.payload_digest or ""),
+        "decision": ContextCapsuleRenderDecision.SKIP_DUPLICATE.value,
+    }
 
 
 def clear_pma_prompt_state_sessions(
@@ -149,8 +157,6 @@ def clear_pma_prompt_state_sessions(
     if not normalized_keys and not normalized_prefixes:
         return []
 
-    path = default_pma_prompt_state_path(hub_root)
-    lock_path = _prompt_state_lock_path(path)
     cleared_keys: list[str] = []
 
     def _is_excluded(session_key: str) -> bool:
@@ -159,47 +165,57 @@ def clear_pma_prompt_state_sessions(
             for excluded in normalized_excludes
         )
 
-    with file_lock(lock_path):
-        state = _read_pma_prompt_state_unlocked(path)
-        sessions = state.get("sessions")
-        if not isinstance(sessions, Mapping):
-            return []
-
-        updated_sessions = dict(sessions)
-        for session_key in tuple(updated_sessions.keys()):
-            if not isinstance(session_key, str) or not session_key:
+    _reset_legacy_prompt_state_if_present(hub_root)
+    with open_orchestration_sqlite(hub_root) as conn:
+        rows = conn.execute(
+            """
+            SELECT DISTINCT managed_thread_id
+              FROM orch_context_capsule_ledger
+             WHERE surface_kind = ?
+               AND capsule_id LIKE 'pma.%'
+            """,
+            (PMA_PROMPT_LEDGER_SURFACE_KIND,),
+        ).fetchall()
+        for row in rows:
+            session_key = str(row["managed_thread_id"] or "")
+            if not session_key:
                 continue
             key_match = session_key in normalized_keys
             prefix_match = bool(normalized_prefixes) and any(
                 session_key.startswith(prefix) for prefix in normalized_prefixes
             )
-            if not key_match and not prefix_match:
-                continue
-            if _is_excluded(session_key):
-                continue
-            updated_sessions.pop(session_key, None)
-            cleared_keys.append(session_key)
-
+            if (key_match or prefix_match) and not _is_excluded(session_key):
+                cleared_keys.append(session_key)
         if cleared_keys:
-            state["version"] = PMA_PROMPT_STATE_VERSION
-            state["updated_at"] = now_iso()
-            state["sessions"] = _trim_prompt_sessions(updated_sessions)
-            _write_pma_prompt_state_unlocked(path, state)
+            conn.execute(
+                """
+                DELETE FROM orch_context_capsule_ledger
+                 WHERE surface_kind = ?
+                   AND capsule_id LIKE 'pma.%'
+                   AND managed_thread_id IN ({})
+                """.format(
+                    ",".join("?" for _ in cleared_keys)
+                ),
+                (PMA_PROMPT_LEDGER_SURFACE_KIND, *cleared_keys),
+            )
 
     return sorted(cleared_keys)
 
 
 def list_pma_prompt_state_session_keys(hub_root: Path) -> list[str]:
-    path = default_pma_prompt_state_path(hub_root)
-    lock_path = _prompt_state_lock_path(path)
-    with file_lock(lock_path):
-        state = _read_pma_prompt_state_unlocked(path)
-        sessions = state.get("sessions")
-        if not isinstance(sessions, Mapping):
-            return []
-        return sorted(
-            key for key in sessions.keys() if isinstance(key, str) and key.strip()
-        )
+    _reset_legacy_prompt_state_if_present(hub_root)
+    with open_orchestration_sqlite(hub_root) as conn:
+        rows = conn.execute(
+            """
+            SELECT DISTINCT managed_thread_id
+              FROM orch_context_capsule_ledger
+             WHERE surface_kind = ?
+               AND capsule_id LIKE 'pma.%'
+             ORDER BY managed_thread_id
+            """,
+            (PMA_PROMPT_LEDGER_SURFACE_KIND,),
+        ).fetchall()
+    return [str(row["managed_thread_id"]) for row in rows if row["managed_thread_id"]]
 
 
 def _merge_prompt_session_state(
@@ -209,48 +225,60 @@ def _merge_prompt_session_state(
     sections: Mapping[str, Mapping[str, str]],
     force_full_context: bool,
 ) -> tuple[bool, str, Optional[Mapping[str, Any]], Optional[str]]:
-    path = default_pma_prompt_state_path(hub_root)
-    lock_path = _prompt_state_lock_path(path)
+    _reset_legacy_prompt_state_if_present(hub_root)
     use_delta = False
     delta_reason = "first_turn"
-    prior_sections: Optional[Mapping[str, Any]] = None
+    prior_sections: dict[str, Any] = {}
     prior_updated_at: Optional[str] = None
+    saw_prior = False
+    saw_digest_mismatch = False
+    timestamp = now_iso()
 
-    with file_lock(lock_path):
-        state = _read_pma_prompt_state_unlocked(path)
-        sessions = state.get("sessions")
-        if isinstance(sessions, Mapping):
-            prior_record = sessions.get(prompt_state_key)
-            if _validate_prompt_session_record(prior_record):
-                validated_record = cast(Mapping[str, Any], prior_record)
-                prior_sections = cast(
-                    Optional[Mapping[str, Any]], validated_record.get("sections")
-                )
-                prior_updated_at = cast(
-                    Optional[str], validated_record.get("updated_at")
-                )
-                if force_full_context:
-                    delta_reason = "explicit_refresh"
-                else:
-                    use_delta = True
-                    delta_reason = "cached_context"
-            elif prior_record is not None:
-                delta_reason = "digest_mismatch"
+    with open_orchestration_sqlite(hub_root) as conn:
+        ledger = SQLiteContextCapsuleLedger(conn)
+        planned_section_order = (
+            *PMA_PROMPT_SECTION_ORDER,
+            *(
+                (PMA_PROMPT_TURN_SECTION,)
+                if PMA_PROMPT_TURN_SECTION in sections
+                else ()
+            ),
+        )
+        for name in planned_section_order:
+            section = sections.get(name) or {}
+            capsule = _pma_capsule_for_section(name, section)
+            plan = ledger.plan_render(
+                capsule,
+                surface_kind=PMA_PROMPT_LEDGER_SURFACE_KIND,
+                surface_key=prompt_state_key,
+                managed_thread_id=prompt_state_key,
+                backend_thread_id=prompt_state_key,
+                scope_id=prompt_state_key,
+                force_refresh=force_full_context,
+            )
+            prior = ledger.get_observation(plan.key)
+            if prior is not None:
+                saw_prior = True
+                if not _is_digest(prior.payload_digest) or not _is_digest(
+                    prior.source_digest
+                ):
+                    saw_digest_mismatch = True
+                prior_sections[name] = _section_from_observation(prior)
+                prior_updated_at = timestamp
+            prior_sections.setdefault(name, {})["decision"] = plan.decision.value
+            prior_sections[name]["capsule_id"] = capsule.capsule_id
+            prior_sections[name]["capsule_version"] = capsule.capsule_version
+            prior_sections[name]["payload_digest"] = plan.payload_digest
+            if plan.should_render:
+                ledger.record_render(plan)
 
-        updated_sessions = dict(sessions) if isinstance(sessions, Mapping) else {}
-        timestamp = now_iso()
-        updated_sessions[prompt_state_key] = {
-            "version": PMA_PROMPT_STATE_VERSION,
-            "updated_at": timestamp,
-            "bundle_digest": _build_prompt_bundle_digest(sections),
-            "sections": {
-                name: {"digest": str(payload.get("digest") or "")}
-                for name, payload in sections.items()
-            },
-        }
-        state["version"] = PMA_PROMPT_STATE_VERSION
-        state["updated_at"] = timestamp
-        state["sessions"] = _trim_prompt_sessions(updated_sessions)
-        _write_pma_prompt_state_unlocked(path, state)
+    if saw_digest_mismatch:
+        delta_reason = "digest_mismatch"
+    elif saw_prior:
+        if force_full_context:
+            delta_reason = "explicit_refresh"
+        else:
+            use_delta = True
+            delta_reason = "cached_context"
 
     return use_delta, delta_reason, prior_sections, prior_updated_at

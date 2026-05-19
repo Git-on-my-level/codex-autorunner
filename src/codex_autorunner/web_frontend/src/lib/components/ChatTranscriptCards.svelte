@@ -5,10 +5,10 @@
   import {
     compactChatTranscriptCards,
     formatCompactMessageDateTime,
-    splitInjectedPromptContext,
     type ChatTranscriptCard,
     type ChatToolCallCard
   } from '$lib/viewModels/pmaChat';
+  import type { PmaMessageCapsuleRef } from '$lib/viewModels/domain';
   import type { SurfaceArtifact } from '$lib/viewModels/domain';
 
   let {
@@ -140,31 +140,48 @@
     return Math.max(0, card.cards.length - MAX_RENDERED_TURN_SUMMARY_CARDS);
   }
 
+  function modelOnlyCapsuleRefs(card: Extract<ChatTranscriptCard, { kind: 'message' }>): PmaMessageCapsuleRef[] {
+    if (card.message.role !== 'user') return [];
+    return (card.message.capsuleRefs ?? []).filter((ref) => ref.visibility === 'model_only');
+  }
+
+  function capsuleRefLabel(ref: PmaMessageCapsuleRef): string {
+    return `${ref.capsuleId} v${ref.capsuleVersion} · ${ref.scope}`;
+  }
+
   const displayCards = $derived(compactChatTranscriptCards(cards));
 </script>
 
 {#each displayCards as card (card.id)}
   {#if card.kind === 'message'}
     {@const isStreaming = card.message.role === 'assistant' && card.id === streamingMessageId}
-    {@const promptParts = card.message.role === 'user' ? splitInjectedPromptContext(card.message.text) : null}
-    {@const visibleMessageText = promptParts?.userText ?? card.message.text}
-    {#if promptParts?.systemContext}
+    {@const modelContextRefs = modelOnlyCapsuleRefs(card)}
+    {#if modelContextRefs.length > 0}
       <details class="injected-prompt-card">
         <summary>
-          <span>CAR system prompt</span>
+          <span>Model-only context</span>
         </summary>
         <div class="injected-prompt-body markdown-body">
-          {@html renderMarkdownToHtml(promptParts.systemContext, { openLinksInNewTab: true })}
+          <ul>
+            {#each modelContextRefs as ref (`${ref.capsuleId}:${ref.capsuleVersion}:${ref.sourceDigest}`)}
+              <li>
+                <strong>{capsuleRefLabel(ref)}</strong>
+                {#if ref.reason}
+                  <small>{ref.reason}</small>
+                {/if}
+              </li>
+            {/each}
+          </ul>
         </div>
       </details>
     {/if}
     <article class={`message ${card.message.role === 'user' ? 'user' : 'assistant'}`}>
       <span>{card.message.role === 'user' ? 'You' : assistantLabel}</span>
       {#if isStreaming}
-        <div class="message-markdown streaming">{visibleMessageText}</div>
+        <div class="message-markdown streaming">{card.message.text}</div>
       {:else}
         <div class="message-markdown markdown-body">
-          {@html renderMarkdownToHtml(visibleMessageText, { openLinksInNewTab: true })}
+          {@html renderMarkdownToHtml(card.message.text, { openLinksInNewTab: true })}
         </div>
       {/if}
       {#if card.message.role === 'user' && card.message.artifacts.length > 0}

@@ -600,7 +600,7 @@ def _timeline_item(
 ) -> JsonDict:
     turn_id = item_id.split(":")[1] if ":" in item_id else None
     return {
-        "contract_version": "managed_thread_timeline.v2",
+        "contract_version": "managed_thread_timeline.v3",
         "item_id": item_id,
         "kind": kind,
         "order_key": order,

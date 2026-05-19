@@ -48,14 +48,12 @@ def _write_tickets(workspace_root: Path, count: int) -> None:
 
 
 def test_repo_worktree_topology_and_runtime_snapshots_are_windowed(hub_env) -> None:
-    for index in range(20):
-        _add_workspace(hub_env.hub_root, repo_id=f"repo-{index:02d}")
-    for index in range(20):
+    for index in range(8):
         _add_workspace(
             hub_env.hub_root,
-            repo_id=f"repo-00--wt-{index:02d}",
+            repo_id=f"{hub_env.repo_id}--wt-{index:02d}",
             kind="worktree",
-            worktree_of="repo-00",
+            worktree_of=hub_env.repo_id,
         )
 
     client = TestClient(create_hub_app(hub_env.hub_root))

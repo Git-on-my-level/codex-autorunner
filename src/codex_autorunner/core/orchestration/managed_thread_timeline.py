@@ -25,7 +25,7 @@ from .progress_projection import (
 )
 from .turn_timeline import list_turn_timeline, list_turn_timelines
 
-TIMELINE_CONTRACT_VERSION = "managed_thread_timeline.v2"
+TIMELINE_CONTRACT_VERSION = "managed_thread_timeline.v3"
 MAX_MANAGED_THREAD_TIMELINE_LIMIT = 200
 DEFAULT_SUPPRESSED_OUTPUT_DELTA_TYPES = frozenset(
     {
@@ -431,6 +431,16 @@ def _append_user_message(
     attachments = metadata.get("attachments")
     if not isinstance(attachments, list):
         attachments = []
+    raw_prompt = str(turn.get("prompt") or "")
+    user_visible_text = _normalize_optional_text(metadata.get("user_visible_text"))
+    if user_visible_text is None:
+        user_visible_text = raw_prompt
+    raw_model_prompt = _normalize_optional_text(metadata.get("raw_model_prompt"))
+    if raw_model_prompt is None:
+        raw_model_prompt = _normalize_optional_text(metadata.get("runtime_prompt"))
+    if raw_model_prompt is None:
+        raw_model_prompt = raw_prompt
+    capsule_refs = _capsule_refs_from_metadata(metadata)
     item_id = f"turn:{managed_turn_id}:user"
     items.append(
         ManagedThreadTimelineItem(
@@ -447,8 +457,12 @@ def _append_user_message(
             ),
             provenance=_timeline_provenance(),
             payload={
-                "text": str(turn.get("prompt") or ""),
-                "text_preview": _truncate_text(str(turn.get("prompt") or ""), 240),
+                "text": user_visible_text,
+                "text_preview": _truncate_text(user_visible_text, 240),
+                "visibility": "user_visible",
+                "user_visible_text": user_visible_text,
+                "raw_model_prompt": raw_model_prompt,
+                "capsule_refs": capsule_refs,
                 "client_turn_id": turn.get("client_turn_id"),
                 "request_kind": turn.get("request_kind"),
                 "attachments": [a for a in attachments if isinstance(a, dict)],
@@ -456,6 +470,40 @@ def _append_user_message(
         )
     )
     return sequence + 1
+
+
+def _capsule_refs_from_metadata(metadata: dict[str, Any]) -> list[dict[str, Any]]:
+    raw_refs = metadata.get("capsule_refs")
+    if not isinstance(raw_refs, list):
+        return []
+    refs: list[dict[str, Any]] = []
+    for raw_ref in raw_refs:
+        if not isinstance(raw_ref, dict):
+            continue
+        capsule_id = _normalize_optional_text(raw_ref.get("capsule_id"))
+        capsule_version = _normalize_optional_text(
+            raw_ref.get("capsule_version") or raw_ref.get("version")
+        )
+        visibility = _normalize_optional_text(raw_ref.get("visibility"))
+        scope = _normalize_optional_text(raw_ref.get("scope"))
+        source_digest = _normalize_optional_text(raw_ref.get("source_digest"))
+        if not (
+            capsule_id and capsule_version and visibility and scope and source_digest
+        ):
+            continue
+        ref: dict[str, Any] = {
+            "capsule_id": capsule_id,
+            "capsule_version": capsule_version,
+            "visibility": visibility,
+            "scope": scope,
+            "source_digest": source_digest,
+        }
+        for key in ("payload_digest", "render_decision", "reason"):
+            value = _normalize_optional_text(raw_ref.get(key))
+            if value is not None:
+                ref[key] = value
+        refs.append(ref)
+    return refs
 
 
 def _append_status(
