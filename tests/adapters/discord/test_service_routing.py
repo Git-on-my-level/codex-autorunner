@@ -5799,6 +5799,7 @@ async def test_car_new_resets_repo_session_key(tmp_path: Path) -> None:
         assert "agent: codex" in normalized
         assert "Model: default" in content
         assert "Effort: default" in content
+        assert "Ticket flow: Clean" in content
     finally:
         await store.close()
 
@@ -5885,6 +5886,7 @@ async def test_car_newt_resets_current_workspace_branch_and_session(
         assert "agent: codex" in normalized
         assert "Model: default" in content
         assert "Effort: default" in content
+        assert "Ticket flow: Clean" in content
     finally:
         await store.close()
 

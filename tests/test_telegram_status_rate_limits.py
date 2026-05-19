@@ -125,6 +125,7 @@ async def test_status_opencode_skips_rate_limits() -> None:
     assert handler._client_calls == 0
     text = handler._sent_messages[-1]
     assert "Workspace ID: unknown" in text
+    assert "Ticket flow: Clean" in text
     assert "Active thread: none" in text
     assert "Agent: opencode" in text
     assert "Resume: supported" in text

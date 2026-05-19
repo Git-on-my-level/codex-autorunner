@@ -6,6 +6,10 @@ from codex_autorunner.adapters.chat.command_diagnostics import (
     build_ids_text,
     build_status_text,
 )
+from codex_autorunner.adapters.chat.ticket_flow_cleanliness import (
+    TicketFlowCleanliness,
+    get_ticket_flow_cleanliness,
+)
 
 
 class TestBuildStatusText:
@@ -87,6 +91,26 @@ class TestBuildStatusText:
         lines_str = "\n".join(lines)
 
         assert "Active flow: run-123 (running)" in lines_str
+
+    def test_includes_ticket_flow_line(self):
+        binding = {
+            "workspace_path": "/path/to/workspace",
+            "repo_id": "my-repo",
+            "guild_id": "guild-1",
+            "pma_enabled": False,
+            "pma_prev_workspace_path": None,
+            "updated_at": "2024-01-01",
+        }
+
+        lines = build_status_text(
+            binding,
+            None,
+            None,
+            "channel-123",
+            ticket_flow_line="Ticket flow: Clean",
+        )
+
+        assert "Ticket flow: Clean" in lines
 
     def test_includes_collaboration_summary(self):
         binding = {
@@ -251,6 +275,35 @@ class TestBuildDebugText:
 
         assert "Policy mode: command_only" in lines_str
         assert "Policy plain-text: disabled" in lines_str
+
+
+class TestFormatTicketFlowCleanlinessLine:
+    def test_clean_when_no_live_ticket_flow_material(self, tmp_path: Path):
+        cleanliness = get_ticket_flow_cleanliness(tmp_path)
+
+        assert cleanliness == TicketFlowCleanliness("clean")
+        assert cleanliness.is_clean is True
+        assert cleanliness.line == "Ticket flow: Clean"
+
+    def test_dirty_summarizes_ticket_context_and_previous_runs(self, tmp_path: Path):
+        car_root = tmp_path / ".codex-autorunner"
+        tickets = car_root / "tickets"
+        contextspace = car_root / "contextspace"
+        tickets.mkdir(parents=True)
+        contextspace.mkdir()
+        (tickets / "TICKET-001.md").write_text("goal: test\n", encoding="utf-8")
+        (contextspace / "active_context.md").write_text("active\n", encoding="utf-8")
+        (car_root / "flows.db").write_text("placeholder\n", encoding="utf-8")
+
+        cleanliness = get_ticket_flow_cleanliness(tmp_path)
+
+        assert cleanliness.state == "dirty"
+        assert cleanliness.labels == ("tickets", "contextspace", "previous runs")
+        assert cleanliness.dirty_keys == ("contextspace", "flows.db", "tickets")
+        assert (
+            cleanliness.line
+            == "Ticket flow: Dirty (tickets, contextspace, previous runs)"
+        )
 
 
 class TestBuildIdsText:

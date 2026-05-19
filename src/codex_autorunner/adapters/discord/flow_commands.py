@@ -31,6 +31,7 @@ from ...core.flows.ux_helpers import (
 from ...core.logging_utils import log_event
 from ...core.utils import atomic_write
 from ...tickets.outbox import resolve_outbox_paths
+from ..chat.ticket_flow_cleanliness import get_ticket_flow_cleanliness
 from .components import (
     DISCORD_SELECT_OPTION_MAX_OPTIONS,
     build_action_row,
@@ -471,10 +472,17 @@ def build_flow_status_components(
 def format_flow_status_response_text(
     record: FlowRunRecord,
     snapshot: dict[str, Any],
+    *,
+    workspace_root: Path,
 ) -> str:
     from ...core.flows.ux_helpers import format_ticket_flow_status_lines
 
-    return "\n".join(format_ticket_flow_status_lines(record, snapshot))
+    return "\n".join(
+        [
+            get_ticket_flow_cleanliness(workspace_root).line,
+            *format_ticket_flow_status_lines(record, snapshot),
+        ]
+    )
 
 
 def build_flow_status_message(
@@ -482,9 +490,14 @@ def build_flow_status_message(
     record: FlowRunRecord,
     runs: list[FlowRunRecord],
     snapshot: dict[str, Any],
+    workspace_root: Path,
     prefix: Optional[str] = None,
 ) -> tuple[str, list[dict[str, Any]]]:
-    response_text = format_flow_status_response_text(record, snapshot)
+    response_text = format_flow_status_response_text(
+        record,
+        snapshot,
+        workspace_root=workspace_root,
+    )
     if isinstance(prefix, str) and prefix.strip():
         response_text = f"{prefix.strip()}\n\n{response_text}"
     return response_text, build_flow_status_components(record, runs)
@@ -761,6 +774,7 @@ async def handle_flow_status(
             if runs and not explicit_run_requested:
                 content = (
                     "No ticket_flow run found.\n\n"
+                    f"{get_ticket_flow_cleanliness(workspace_root).line}\n\n"
                     "Use the picker below to inspect historical runs."
                 )
                 components = build_historical_runs_picker(runs)
@@ -784,7 +798,12 @@ async def handle_flow_status(
             message = (
                 f"Ticket_flow run {run_id_opt.strip()} not found."
                 if explicit_run_requested
-                else "No ticket_flow runs found."
+                else "\n".join(
+                    [
+                        "No ticket_flow runs found.",
+                        get_ticket_flow_cleanliness(workspace_root).line,
+                    ]
+                )
             )
             await service.send_or_respond_ephemeral(
                 interaction_id=interaction_id,
@@ -836,6 +855,7 @@ async def handle_flow_status(
         record=record,
         runs=runs,
         snapshot=snapshot,
+        workspace_root=workspace_root,
         prefix=prefix,
     )
     run_mirror = service._flow_run_mirror(workspace_root)
@@ -1183,6 +1203,7 @@ async def handle_flow_start(
                 record=record,
                 runs=runs,
                 snapshot=snapshot,
+                workspace_root=workspace_root,
                 prefix=(
                     f"Reusing ticket_flow run {record.id} ({record.status.value})."
                 ),
@@ -1293,6 +1314,7 @@ async def handle_flow_start(
         record=record,
         runs=runs,
         snapshot=snapshot,
+        workspace_root=workspace_root,
         prefix=f"{prefix} ticket_flow run {record.id}.",
     )
     await _send_flow_public_response(

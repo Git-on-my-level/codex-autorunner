@@ -113,6 +113,7 @@ async def test_status_bound_channel_includes_shared_and_discord_specific_details
     assert "Guild ID: guild-456" in content
     assert "Channel ID: channel-789" in content
     assert "Active flow: flow-123 (running)" in content
+    assert "Ticket flow: Clean" in content
     assert "Agent: codex" in content
     assert "Resume: supported" in content
     assert "Model: gpt-5.4" in content

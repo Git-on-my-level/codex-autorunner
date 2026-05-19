@@ -18,6 +18,7 @@ def build_status_text(
     channel_id: str,
     *,
     include_flow_hint: bool = True,
+    ticket_flow_line: Optional[str] = None,
 ) -> list[str]:
     if binding is None:
         lines = [
@@ -58,6 +59,8 @@ def build_status_text(
 
     if active_flow:
         lines.append(f"Active flow: {active_flow.flow_id} ({active_flow.status})")
+    if ticket_flow_line:
+        lines.append(ticket_flow_line)
 
     if collaboration_summary_lines:
         lines.extend(collaboration_summary_lines)

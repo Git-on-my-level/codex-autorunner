@@ -53,6 +53,7 @@ from .....manifest import load_manifest
 from .....tickets.files import list_ticket_paths
 from .....tickets.frontmatter import generate_ticket_id
 from ....chat.run_mirror import ChatRunMirror
+from ....chat.ticket_flow_cleanliness import get_ticket_flow_cleanliness
 from ....github.service import GitHubError, GitHubService
 from ...adapter import (
     FlowCallback,
@@ -651,7 +652,10 @@ class FlowCommands(TelegramCommandSupportMixin):
                     summary_text = self._build_flow_status_summary_fallback(repo_root)
                     if summary_text:
                         return summary_text, {"inline_keyboard": []}
-                return error, {"inline_keyboard": []}
+                return (
+                    "\n".join([error, get_ticket_flow_cleanliness(repo_root).line]),
+                    {"inline_keyboard": []},
+                )
             if record is not None:
                 record, _updated, locked = reconcile_flow_run(repo_root, record, store)
                 if locked:
@@ -937,7 +941,7 @@ class FlowCommands(TelegramCommandSupportMixin):
         lines = format_ticket_flow_summary_lines(summary)
         if not lines:
             return None
-        return "\n".join(lines)
+        return "\n".join([get_ticket_flow_cleanliness(repo_root).line, *lines])
 
     def _format_flow_status_lines(
         self,
@@ -949,13 +953,16 @@ class FlowCommands(TelegramCommandSupportMixin):
         snapshot: Optional[dict] = None,
     ) -> list[str]:
         if record is None:
-            return ["Run: none"]
+            return [get_ticket_flow_cleanliness(repo_root).line, "Run: none"]
         if snapshot is None:
             snapshot = build_flow_status_snapshot(repo_root, record, store)
         run = record
         status = getattr(run, "status", None)
         status_value = status.value if status else "unknown"
-        lines = format_ticket_flow_status_lines(run, snapshot)
+        lines = [
+            get_ticket_flow_cleanliness(repo_root).line,
+            *format_ticket_flow_status_lines(run, snapshot),
+        ]
         created_at = getattr(run, "created_at", None)
         if created_at:
             lines.append(f"Created: {created_at}")
@@ -1297,7 +1304,7 @@ class FlowCommands(TelegramCommandSupportMixin):
                         return
                 await self._send_message(
                     message.chat_id,
-                    error,
+                    "\n".join([error, get_ticket_flow_cleanliness(repo_root).line]),
                     thread_id=message.thread_id,
                     reply_to=message.message_id,
                 )
