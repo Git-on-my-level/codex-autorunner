@@ -30,6 +30,7 @@ from ...chat.session_messages import (
     build_fresh_session_started_lines,
     build_thread_detail_lines,
 )
+from ...chat.ticket_flow_cleanliness import get_ticket_flow_cleanliness
 from ..components import (
     DISCORD_BUTTON_STYLE_DANGER,
     DISCORD_SELECT_OPTION_MAX_OPTIONS,
@@ -275,6 +276,7 @@ async def _finalize_car_newt(
                     actor_label=actor_label,
                     model=service._status_model_label(binding),
                     effort=service._status_effort_label(binding, agent),
+                    extra_lines=(get_ticket_flow_cleanliness(workspace_root).line,),
                 ),
             ]
         )
@@ -410,6 +412,7 @@ async def handle_car_new(
                     actor_label=actor_label,
                     model=service._status_model_label(binding),
                     effort=service._status_effort_label(binding, agent),
+                    extra_lines=(get_ticket_flow_cleanliness(workspace_root).line,),
                 ),
             ]
         )

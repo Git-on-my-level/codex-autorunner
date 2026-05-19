@@ -13,6 +13,7 @@ from ....chat.status_diagnostics import (
     build_process_monitor_lines_for_root,
     build_status_block_lines,
 )
+from ....chat.ticket_flow_cleanliness import get_ticket_flow_cleanliness
 from ...adapter import TelegramMessage
 from ...collaboration_helpers import (
     collaboration_summary_lines,
@@ -49,6 +50,11 @@ def _telegram_status_base_lines(
     lines.extend(
         [
             f"Workspace: {workspace_label}",
+            *(
+                [get_ticket_flow_cleanliness(record.workspace_path).line]
+                if record.workspace_path
+                else []
+            ),
             f"Workspace ID: {record.workspace_id or 'unknown'}",
             f"Active thread: {record.active_thread_id or 'none'}",
             f"Active turn: {runtime.current_turn_id or 'none'}",

@@ -417,6 +417,7 @@ async def test_flow_status_and_runs_render_expected_output(tmp_path: Path) -> No
         runs_payload = rest.followup_messages[-1]["payload"]["content"]
 
         assert f"Run: {paused_run_id}" in status_payload
+        assert "Ticket flow: Dirty" in status_payload
         assert "Status: paused" in status_payload
         assert "Freshness:" in status_payload
         assert "Worker:" in status_payload
@@ -493,6 +494,7 @@ async def test_flow_status_without_run_id_uses_authoritative_run_and_includes_pi
         components = payload["components"]
 
         assert f"Run: {paused_run_id}" in content
+        assert "Ticket flow: Dirty" in content
         assert "Status: paused" in content
         picker_rows = [
             row
@@ -550,6 +552,7 @@ async def test_flow_status_without_run_id_shows_no_current_run_for_history_only(
         components = payload["components"]
 
         assert f"Run: {newest_completed_run_id}" in content
+        assert "Ticket flow: Dirty" in content
         assert "Status: completed" in content
         assert "Retire: ready" in content
         picker_rows = [
@@ -602,7 +605,41 @@ async def test_flow_status_without_run_reports_no_runs_when_no_flow_exists(
         assert len(rest.interaction_responses) == 1
         assert rest.interaction_responses[0]["payload"]["type"] == 5
         content = rest.followup_messages[0]["payload"]["content"]
-        assert content == "No ticket_flow runs found."
+        assert content == "No ticket_flow runs found.\nTicket flow: Dirty (tickets)"
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_flow_status_without_run_reports_clean_when_no_live_material(
+    tmp_path: Path,
+) -> None:
+    workspace = _workspace(tmp_path)
+
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    await store.upsert_binding(
+        channel_id="channel-1",
+        guild_id="guild-1",
+        workspace_path=str(workspace),
+        repo_id=None,
+    )
+
+    rest = _FakeRest()
+    gateway = _FakeGateway([_flow_interaction(name="status", options=[])])
+    service = DiscordBotService(
+        _config(tmp_path),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=gateway,
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+
+    try:
+        await _invoke_flow_status(service, workspace_root=workspace)
+        content = rest.followup_messages[0]["payload"]["content"]
+        assert content == "No ticket_flow runs found.\nTicket flow: Clean"
     finally:
         await store.close()
 

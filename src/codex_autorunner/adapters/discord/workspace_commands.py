@@ -15,6 +15,9 @@ from ...adapters.chat.picker_filter import filter_picker_items, resolve_picker_q
 from ...adapters.chat.status_diagnostics import (
     build_process_monitor_lines_for_root,
 )
+from ...adapters.chat.ticket_flow_cleanliness import (
+    get_ticket_flow_cleanliness,
+)
 from ...core.chat_bindings import emit_adapter_binding_chat_surface_event
 from ...core.flows import FlowRunStatus
 from ...core.logging_utils import log_event
@@ -709,6 +712,9 @@ async def handle_status(
         active_flow,
         channel_id,
         include_flow_hint=False,
+        ticket_flow_line=(
+            get_ticket_flow_cleanliness(workspace_path).line if workspace_path else None
+        ),
     )
     if binding is None:
         await send_runtime_ephemeral(

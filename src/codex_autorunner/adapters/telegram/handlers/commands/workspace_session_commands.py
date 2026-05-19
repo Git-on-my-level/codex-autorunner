@@ -30,6 +30,7 @@ from ....chat.session_messages import (
     build_reset_state_lines,
     build_thread_detail_lines,
 )
+from ....chat.ticket_flow_cleanliness import get_ticket_flow_cleanliness
 from ...adapter import TelegramMessage
 from ...config import AppServerUnavailableError
 from ...constants import MAX_TOPIC_THREAD_HISTORY
@@ -652,6 +653,9 @@ class WorkspaceSessionCommandsMixin:
                         model=record.model
                         or DEFAULT_CHAT_AGENT_MODELS.get(agent, "default"),
                         effort=effort_label,
+                        extra_lines=(
+                            get_ticket_flow_cleanliness(record.workspace_path).line,
+                        ),
                     ),
                 ]
             ),
@@ -974,6 +978,7 @@ class WorkspaceSessionCommandsMixin:
                 actor_label=self._effective_agent_label(record),
                 model=record.model or DEFAULT_CHAT_AGENT_MODELS.get(agent, "default"),
                 effort=effort_label,
+                extra_lines=(get_ticket_flow_cleanliness(workspace_root).line,),
             ),
         ]
         await self._send_message(

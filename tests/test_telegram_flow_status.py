@@ -113,6 +113,7 @@ def test_flow_status_includes_effective_current_ticket(
     handler = FlowCommands()
     lines = handler._format_flow_status_lines(tmp_path, record, store)
 
+    assert lines[0] == "Ticket flow: Dirty (previous runs)"
     assert any(line == "Current ticket: TICKET-002" for line in lines)
     store.close()
 
@@ -131,6 +132,7 @@ def test_flow_status_includes_reason_summary_and_error(tmp_path: Path) -> None:
         tmp_path, record, store=None, health=_health(tmp_path)
     )
 
+    assert lines[0] == "Ticket flow: Dirty (previous runs)"
     assert any(line == "Summary: agent error" for line in lines)
     assert any(line == "Reason: failed to parse" for line in lines)
     assert any(line == "Error: Traceback" for line in lines)
@@ -1003,7 +1005,34 @@ async def test_flow_status_action_without_run_uses_ticket_summary_fallback(
 
     await handler._handle_flow_status_action(message, tmp_path, argv=[])
 
-    assert handler.sent == ["Status: Done\nTickets: 2/2"]
+    assert handler.sent == ["Ticket flow: Dirty (tickets)\nStatus: Done\nTickets: 2/2"]
+    assert handler.markups == [None]
+
+
+@pytest.mark.anyio
+async def test_flow_status_action_without_run_reports_clean_when_no_live_material(
+    tmp_path: Path,
+) -> None:
+    seed_repo_files(tmp_path, git_required=False)
+
+    handler = _FlowStatusHandler()
+    message = TelegramMessage(
+        update_id=1,
+        message_id=2,
+        chat_id=3,
+        thread_id=4,
+        from_user_id=5,
+        text="/flow status",
+        date=None,
+        is_topic_message=True,
+    )
+
+    await handler._handle_flow_status_action(message, tmp_path, argv=[])
+
+    assert handler.sent == [
+        "No ticket flow run found. Use /pma to start a new flow via web app.\n"
+        "Ticket flow: Clean"
+    ]
     assert handler.markups == [None]
 
 
@@ -1028,7 +1057,12 @@ async def test_flow_status_callback_without_run_uses_ticket_summary_fallback(
 
     await handler._render_flow_status_callback(callback, tmp_path, None)
 
-    assert handler.edits == [("Status: Done\nTickets: 2/2", {"inline_keyboard": []})]
+    assert handler.edits == [
+        (
+            "Ticket flow: Dirty (tickets)\nStatus: Done\nTickets: 2/2",
+            {"inline_keyboard": []},
+        )
+    ]
 
 
 @pytest.mark.anyio
