@@ -2,7 +2,7 @@ VENV ?= .venv
 VENV_PYTHON := $(VENV)/bin/python
 VENV_PIP := $(VENV)/bin/pip
 MIN_PYTHON := (3, 10)
-BOOTSTRAP_PYTHON := $(shell for bin in python3.13 python3.12 python3.11 python3.10 python3; do \
+BOOTSTRAP_PYTHON := $(shell for bin in python python3 python3.13 python3.12 python3.11 python3.10; do \
 	if command -v $$bin >/dev/null 2>&1 && $$bin -c 'import sys; raise SystemExit(0 if sys.version_info >= $(MIN_PYTHON) else 1)' >/dev/null 2>&1; then \
 		echo $$bin; \
 		break; \
