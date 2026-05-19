@@ -10,6 +10,9 @@ import httpx
 import typer
 
 from ...adapters.chat.automation_surface import _resolve_rule
+from ...core.automation.migration_diagnostics import (
+    collect_automation_migration_read_model,
+)
 from ...core.automation.product import (
     AUTOMATION_PRESET_DESCRIPTORS,
     AutomationPresetRequest,
@@ -179,6 +182,36 @@ def pma_automation_status(
         echo_json(row)
         return
     typer.echo(format_automation_status(row))
+
+
+@automation_app.command("migration-status")
+def pma_automation_migration_status(
+    output_json: bool = typer.Option(False, "--json", help="Emit JSON output"),
+    path: Optional[Path] = hub_root_path_option(),
+):
+    """Report PMA automation migration blockers and mirror health."""
+    hub_root = resolve_hub_path(path)
+    report = collect_automation_migration_read_model(hub_root)
+    payload = report.to_dict()
+    if output_json:
+        echo_json(payload)
+        return
+    typer.echo(
+        "automation migration: "
+        f"status={payload['status']} "
+        f"schema={payload['schema_version']}/{payload['target_schema_version']} "
+        f"mirror={payload['mirror_health']['status']}"
+    )
+    for diagnostic in payload.get("diagnostics") or []:
+        typer.echo(
+            "  {severity}: {code} - {message}".format(
+                severity=diagnostic.get("severity", "error"),
+                code=diagnostic.get("code"),
+                message=diagnostic.get("message"),
+            )
+        )
+    for step in payload.get("next_steps") or []:
+        typer.echo(f"  next: {step}")
 
 
 @automation_app.command("run")

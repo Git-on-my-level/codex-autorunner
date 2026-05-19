@@ -8,8 +8,26 @@ This repo uses tag-driven releases that publish to PyPI and create a GitHub Rele
 
 ## Release steps
 1) Update `pyproject.toml` to the new version.
-2) Commit the change and push to `main`.
-3) Tag the commit with `vX.Y.Z` and push the tag.
+2) Run the local release gates.
+3) Commit the change and push to `main`.
+4) Tag the commit with `vX.Y.Z` and push the tag.
+
+## Local release gates
+
+### Automation migration gate
+
+Run the automation migration observability checks before tagging:
+
+```bash
+.venv/bin/python -m pytest -q tests/test_doctor_checks.py tests/core/orchestration/test_sqlite_migrations.py tests/test_migration_observability_docs.py
+.venv/bin/python scripts/check_migration_observability_docs.py
+tmp_root="$(mktemp -d)"; .venv/bin/python -m codex_autorunner.cli hub orchestration canary --path "$tmp_root" --json
+```
+
+The gate must show that `car doctor --json`, `car hub orchestration status --json`,
+and `car pma automation migration-status --json` continue to expose pending
+schema migrations, legacy PMA automation residue, malformed rows, mirror health,
+and next steps as stable JSON.
 
 Example:
 ```bash

@@ -82,6 +82,31 @@ DOC_LITERALS = (
         "projection.cursor_gap",
         "documented read-model repair diagnostic event",
     ),
+    RequiredLiteral(
+        "docs/ops/unified-automation-migration.md",
+        "car doctor --json",
+        "automation migration doctor gate command",
+    ),
+    RequiredLiteral(
+        "docs/ops/unified-automation-migration.md",
+        "car hub orchestration status --json",
+        "hub automation migration diagnostic command",
+    ),
+    RequiredLiteral(
+        "docs/ops/unified-automation-migration.md",
+        "car pma automation migration-status --json",
+        "PMA automation migration diagnostic command",
+    ),
+    RequiredLiteral(
+        "docs/ops/release.md",
+        "Automation migration gate",
+        "release process includes automation migration gate",
+    ),
+    RequiredLiteral(
+        "docs/ops/release.md",
+        ".venv/bin/python scripts/check_migration_observability_docs.py",
+        "release process includes migration observability docs-code sync",
+    ),
 )
 
 SOURCE_ROUTES = (

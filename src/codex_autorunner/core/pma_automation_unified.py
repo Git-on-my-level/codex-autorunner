@@ -389,33 +389,18 @@ class PmaUnifiedAutomationAdapter:
 
 
 class PmaLegacyAutomationMigration:
-    def __init__(self, store: "AutomationStore") -> None:
+    def __init__(self, store: "AutomationStore", *, migrate: bool = True) -> None:
         self._store = store
+        self._migrate = migrate
+
+    def collect_diagnostics(
+        self,
+    ) -> tuple[PmaLegacyAutomationMigrationDiagnostic, ...]:
+        subscriptions, timers, wakeups = self._load_legacy_rows()
+        return tuple(self._validate_rows(subscriptions, timers, wakeups))
 
     def run(self) -> PmaLegacyAutomationMigrationResult:
-        with open_orchestration_sqlite(
-            self._store._hub_root, durable=self._store._durable
-        ) as conn:
-            if not all(
-                table_exists(conn, table)
-                for table in (
-                    "orch_automation_subscriptions",
-                    "orch_automation_timers",
-                    "orch_automation_wakeups",
-                )
-            ):
-                return PmaLegacyAutomationMigrationResult()
-
-            subscriptions = conn.execute(
-                "SELECT * FROM orch_automation_subscriptions ORDER BY created_at ASC"
-            ).fetchall()
-            timers = conn.execute(
-                "SELECT * FROM orch_automation_timers ORDER BY created_at ASC"
-            ).fetchall()
-            wakeups = conn.execute(
-                "SELECT * FROM orch_automation_wakeups ORDER BY created_at ASC"
-            ).fetchall()
-
+        subscriptions, timers, wakeups = self._load_legacy_rows()
         diagnostics = self._validate_rows(subscriptions, timers, wakeups)
         if diagnostics:
             raise PmaLegacyAutomationMigrationError(diagnostics)
@@ -472,6 +457,35 @@ class PmaLegacyAutomationMigration:
             schedules=counts["schedules"],
             attempts=counts["attempts"],
         )
+
+    def _load_legacy_rows(
+        self,
+    ) -> tuple[list[sqlite3.Row], list[sqlite3.Row], list[sqlite3.Row]]:
+        with open_orchestration_sqlite(
+            self._store._hub_root,
+            durable=self._store._durable,
+            migrate=self._migrate,
+        ) as conn:
+            if not all(
+                table_exists(conn, table)
+                for table in (
+                    "orch_automation_subscriptions",
+                    "orch_automation_timers",
+                    "orch_automation_wakeups",
+                )
+            ):
+                return [], [], []
+
+            subscriptions = conn.execute(
+                "SELECT * FROM orch_automation_subscriptions ORDER BY created_at ASC"
+            ).fetchall()
+            timers = conn.execute(
+                "SELECT * FROM orch_automation_timers ORDER BY created_at ASC"
+            ).fetchall()
+            wakeups = conn.execute(
+                "SELECT * FROM orch_automation_wakeups ORDER BY created_at ASC"
+            ).fetchall()
+        return list(subscriptions), list(timers), list(wakeups)
 
     def subscription_migration_rule(self, row: sqlite3.Row) -> AutomationRule:
         return AutomationRule.create(

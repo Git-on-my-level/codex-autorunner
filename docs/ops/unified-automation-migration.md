@@ -19,6 +19,33 @@ Operators should inspect canonical state in hub `orchestration.sqlite3`
 automation tables. `.codex-autorunner/pma/automation_store.json` is a mirror for
 legacy tooling and ad-hoc visibility.
 
+## Diagnostics And Release Gate
+
+Automation migration blockers are exposed through stable JSON diagnostics:
+
+```bash
+car doctor --json
+car hub orchestration status --json
+car pma automation migration-status --json
+```
+
+The machine-readable payload reports pending orchestration schema versions,
+legacy PMA automation residue, malformed compatibility rows, mirror health, and
+operator next steps. Blockers use stable codes such as
+`AUTOMATION_MIGRATION_SCHEMA_PENDING`,
+`AUTOMATION_MIGRATION_LEGACY_BACKFILL_PENDING`,
+`AUTOMATION_MIGRATION_MIRROR_INCOMPLETE`, and the row-level
+`PMA_LEGACY_AUTOMATION_*` diagnostics raised by the explicit PMA migration.
+
+The release gate must run:
+
+```bash
+.venv/bin/python scripts/check_migration_observability_docs.py
+```
+
+The check keeps these commands documented alongside the code paths that emit the
+diagnostics.
+
 ## GitHub Reactions
 
 `github.automation.reactions` seeds or updates built-in SCM automation rules.

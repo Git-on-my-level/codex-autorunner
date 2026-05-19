@@ -271,6 +271,12 @@ All canonical PMA state lives in `orchestration.sqlite3` tables:
 | `orch_automation_wakeups` | `PmaAutomationStore` adapter | Legacy wakeup rows backfilled into automation events/jobs before execution |
 | `orch_reactive_debounce_state` | `PmaReactiveStore` | Reactive debounce timestamps |
 
+Migration blockers for these compatibility rows are surfaced by
+`car doctor --json`, `car hub orchestration status --json`, and
+`car pma automation migration-status --json`. The JSON diagnostics report pending
+schema versions, legacy residue counts, malformed row codes, mirror health, and
+operator next steps before a major-version release removes compatibility paths.
+
 Compatibility mirrors are rewritten after each canonical mutation for
 audit visibility and ad-hoc tooling, but they are **not** the source of truth:
 
