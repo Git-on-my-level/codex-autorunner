@@ -333,7 +333,7 @@ class PmaUnifiedAutomationAdapter:
             executor_kind=EXECUTOR_PMA_TURN,
             executor={
                 "lane_id": getattr(wakeup, "lane_id", None) or "pma:default",
-                "wake_up_kind": "pma_wakeup",
+                "wake_up_kind": "pma_legacy_wakeup",
             },
             metadata={
                 "migration": "pma_legacy_automation_v1",
@@ -360,7 +360,7 @@ class PmaUnifiedAutomationAdapter:
             executor={
                 "kind": EXECUTOR_PMA_TURN,
                 "lane_id": getattr(wakeup, "lane_id", None) or "pma:default",
-                "wake_up_kind": "pma_wakeup",
+                "wake_up_kind": "pma_legacy_wakeup",
             },
             policy={
                 "max_attempts": 3,

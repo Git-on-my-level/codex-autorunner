@@ -206,7 +206,6 @@ class PmaAutomationStore:
             )
         created: PmaLifecycleSubscription
         deduped = False
-        wakeups_to_mirror: list[PmaAutomationWakeup] = []
         with file_lock(self._lock_path()):
             with self._persistence.with_write_connection() as conn:
                 with conn:

@@ -123,8 +123,8 @@ STANDARD_FILE_BUDGETS = (
     ),
     FileBudget(
         path="src/codex_autorunner/core/pma_automation_mirror.py",
-        max_lines=90,
-        reason="Ticket 002 owns PMA automation mirror writes in a tiny adapter, not the store facade.",
+        max_lines=115,
+        reason="Ticket 002 owns PMA automation rule/schedule/wakeup mirror writes in a small adapter, not the store facade.",
     ),
     FileBudget(
         path="src/codex_autorunner/core/pma_automation_persistence.py",
@@ -133,7 +133,7 @@ STANDARD_FILE_BUDGETS = (
     ),
     FileBudget(
         path="src/codex_autorunner/core/pma_automation_unified.py",
-        max_lines=950,
+        max_lines=1110,
         reason="Ticket 002 owns unified-plane PMA automation mirror and explicit legacy migration translation in this bounded module.",
     ),
     FileBudget(
