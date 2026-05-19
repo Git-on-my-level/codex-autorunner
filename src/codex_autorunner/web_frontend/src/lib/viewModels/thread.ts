@@ -1,5 +1,4 @@
 import type { WorkStatus } from './domain';
-import { stripInjectedContextBlocks } from './injectedContext';
 import type { ScopeRef, SurfaceRef } from './scope';
 import { scopeFromApiPayload } from './scope';
 
@@ -92,7 +91,7 @@ function buildThreadTitle(
   scope: ScopeRef
 ): string {
   const explicitRaw = stringValue(raw.display_name ?? raw.name ?? raw.title, fallback);
-  let explicit = stripInjectedContextBlocks(explicitRaw).trim();
+  let explicit = explicitRaw.trim();
   if (!explicit) {
     explicit = explicitRaw === fallback ? fallback : '';
   }
@@ -162,17 +161,15 @@ function isCarTicketFlowControlPrompt(value: string): boolean {
 }
 
 function firstUserMessageExcerpt(raw: Record<string, unknown>): string | null {
-  const candidate = stripInjectedContextBlocks(
-    firstText(
-      raw.first_user_visible_text,
-      raw.user_visible_text,
-      raw.title_seed,
-      raw.first_message_excerpt,
-      raw.first_user_message,
-      raw.last_user_message,
-      raw.last_message_preview,
-      raw.prompt_preview
-    )
+  const candidate = firstText(
+    raw.first_user_visible_text,
+    raw.user_visible_text,
+    raw.title_seed,
+    raw.first_message_excerpt,
+    raw.first_user_message,
+    raw.last_user_message,
+    raw.last_message_preview,
+    raw.prompt_preview
   );
   if (!candidate) return null;
   const trimmed = candidate.trim();

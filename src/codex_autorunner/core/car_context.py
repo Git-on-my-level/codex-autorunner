@@ -11,7 +11,7 @@ from .context_capsules import (
     ContextCapsuleVisibility,
     stable_json_digest,
 )
-from .injected_context import wrap_injected_context
+from .injected_context import render_legacy_injected_context_transport
 
 CarContextProfile = Literal["car_core", "car_ambient", "none"]
 
@@ -203,11 +203,11 @@ def build_car_context_capsule(bundle: CarContextBundle) -> ContextCapsule | None
     )
 
 
-def render_injected_car_context(bundle: CarContextBundle) -> str:
+def render_car_context_transport(bundle: CarContextBundle) -> str:
     text = render_car_context_text(bundle)
     if not text:
         return ""
-    return wrap_injected_context(text)
+    return render_legacy_injected_context_transport(text)
 
 
 __all__ = [
@@ -224,7 +224,7 @@ __all__ = [
     "normalize_car_context_profile",
     "prompt_requests_car_context",
     "render_car_context_text",
-    "render_injected_car_context",
+    "render_car_context_transport",
     "resolve_effective_car_context_profile",
     "should_escalate_ambient_car_context",
 ]

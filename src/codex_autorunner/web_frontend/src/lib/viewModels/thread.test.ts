@@ -123,11 +123,10 @@ describe('mapThreadSummary', () => {
     expect(vm.title).toBe('Please fix the login bug');
   });
 
-  it('strips injected context from display title', () => {
+  it('trusts backend-projected display titles without client delimiter cleanup', () => {
     const vm = mapThreadSummary({
       managed_thread_id: 'thread-inj',
-      display_name:
-        '<injected context>\nCAR managed repo\n</injected context>\n\nFix login',
+      display_name: 'Fix login',
       agent: 'codex',
       status: 'idle'
     });

@@ -15,7 +15,6 @@ from ..domain.workspace_scope import (
     workspace_scope_index_from_snapshots,
 )
 from ..hub_topology import load_hub_state
-from ..injected_context import strip_injected_context_blocks
 from ..text_utils import _normalize_optional_text, _parse_iso_timestamp
 from .chat_surface_events import ChatSurfaceEvent, SQLiteChatSurfaceEventJournal
 from .sqlite import open_orchestration_sqlite
@@ -1277,6 +1276,7 @@ class ChatSurfaceReadService:
                        execution_id,
                        status,
                        prompt_text,
+                       metadata_json,
                        created_at,
                        started_at,
                        finished_at,
@@ -1361,9 +1361,10 @@ class ChatSurfaceReadService:
                 _normalize_text(row["updated_at"]),
                 _normalize_text(execution["created_at"]) if execution else None,
             )
-            last_message_preview = _visible_chrome_text(
-                _row_get(row, "last_message_preview")
-            ) or _visible_chrome_text(_row_get(execution, "prompt_text"))
+            last_message_preview = _visible_turn_chrome_text(
+                _row_get(row, "last_message_preview"),
+                execution,
+            )
             projection.merge(
                 lifecycle=lifecycle,
                 lifecycle_status=lifecycle_status,
@@ -1374,7 +1375,7 @@ class ChatSurfaceReadService:
                 scope_urn=owner_fields.get("scope_urn"),
                 worktree_id=owner_fields.get("worktree_id"),
                 managed_thread_id=thread_id,
-                display_name=_normalize_text(row["display_name"]) or thread_id,
+                display_name=_visible_chrome_text(row["display_name"]) or thread_id,
                 created_at=_normalize_text(row["created_at"]),
                 updated_at=last_activity_at,
                 archived_at=(
@@ -1549,8 +1550,8 @@ class ChatSurfaceReadService:
                 managed_thread_id=event.managed_thread_id,
                 external_conversation_id=event.external_conversation_id,
                 external_provider=event.surface_kind,
-                display_name=_normalize_text(display.get("display_name")),
-                title=_normalize_text(display.get("title")),
+                display_name=_visible_chrome_text(display.get("display_name")),
+                title=_visible_chrome_text(display.get("title")),
                 created_at=event.occurred_at,
                 updated_at=event.occurred_at,
                 latest_event_cursor=event.cursor,
@@ -1645,8 +1646,8 @@ def _chat_index_rows_from_surfaces(
             "surface_key": surface_key,
             "surface_urn": surface.get("surface_urn"),
             "lifecycle": surface.get("lifecycle"),
-            "display_name": display_map.get("display_name"),
-            "title": display_map.get("title"),
+            "display_name": _visible_chrome_text(display_map.get("display_name")),
+            "title": _visible_chrome_text(display_map.get("title")),
             "binding_display_name": _surface_binding_display_name(surface),
         }
         if managed_thread_id is None:
@@ -1848,12 +1849,30 @@ def _visible_chrome_text(value: Any) -> Optional[str]:
     text = _normalize_text(value)
     if text is None:
         return None
-    cleaned = strip_injected_context_blocks(text)
-    if not isinstance(cleaned, str):
+    if _contains_legacy_transport_marker(text):
         return None
+    cleaned = text
     for pattern in _COMPACT_SEED_BLOCK_PATTERNS:
         cleaned = pattern.sub(" ", cleaned)
     return _normalize_text(cleaned)
+
+
+def _contains_legacy_transport_marker(text: str) -> bool:
+    lowered = text.lower()
+    return "<injected context>" in lowered or "</injected context>" in lowered
+
+
+def _visible_turn_chrome_text(
+    stored_preview: Any,
+    execution: Optional[Mapping[str, Any]],
+) -> Optional[str]:
+    execution_metadata = _json_object(_row_get(execution, "metadata_json"))
+    return (
+        _visible_chrome_text(execution_metadata.get("title_seed"))
+        or _visible_chrome_text(execution_metadata.get("user_visible_text"))
+        or _visible_chrome_text(stored_preview)
+        or _visible_chrome_text(_row_get(execution, "prompt_text"))
+    )
 
 
 def _managed_thread_identity_title(row: Mapping[str, Any]) -> str:
@@ -1872,13 +1891,15 @@ def _managed_thread_identity_title(row: Mapping[str, Any]) -> str:
 def _surface_binding_display_name(surface: Mapping[str, Any]) -> Optional[str]:
     display = surface.get("display")
     display_map = display if isinstance(display, Mapping) else {}
-    return _normalize_text(display_map.get("display_name") or display_map.get("title"))
+    return _visible_chrome_text(
+        display_map.get("display_name")
+    ) or _visible_chrome_text(display_map.get("title"))
 
 
 def _binding_display_names(surfaces: Iterable[Mapping[str, Any]]) -> list[str]:
     names: list[str] = []
     for surface in surfaces:
-        name = _normalize_text(
+        name = _visible_chrome_text(
             surface.get("binding_display_name")
             or surface.get("display_name")
             or surface.get("title")

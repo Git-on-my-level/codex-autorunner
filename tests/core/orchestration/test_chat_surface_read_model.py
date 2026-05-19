@@ -107,6 +107,7 @@ def _seed_execution(
     status: str,
     execution_id: str | None = None,
     prompt_text: str | None = None,
+    metadata: dict[str, object] | None = None,
     created_at: str = "2026-05-11T00:01:00Z",
 ) -> None:
     eid = execution_id or f"exec-{thread_id}-{status}"
@@ -118,15 +119,17 @@ def _seed_execution(
                 thread_target_id,
                 request_kind,
                 prompt_text,
+                metadata_json,
                 status,
                 created_at
-            ) VALUES (?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 eid,
                 thread_id,
                 "message",
                 prompt_text,
+                json.dumps(metadata or {}),
                 status,
                 created_at,
             ),
@@ -386,7 +389,7 @@ def test_chat_index_uses_managed_lifecycle_after_telegram_surface_rebind(
     ]
 
 
-def test_chat_index_visible_chrome_uses_user_visible_prompt_after_injected_context(
+def test_chat_index_visible_chrome_uses_user_visible_prompt_metadata_not_delimiter_stripping(
     tmp_path: Path,
 ) -> None:
     hub_root = tmp_path / "hub"
@@ -402,6 +405,26 @@ def test_chat_index_visible_chrome_uses_user_visible_prompt_after_injected_conte
         display_name=injected_prompt,
         last_message_preview=injected_prompt,
     )
+    _seed_execution(
+        hub_root,
+        thread_id="thread-injected",
+        status="completed",
+        prompt_text=injected_prompt,
+        metadata={
+            "raw_model_prompt": injected_prompt,
+            "user_visible_text": "Investigate checkout failure",
+            "title_seed": "Investigate checkout failure",
+            "capsule_refs": [
+                {
+                    "capsule_id": "car.repo_awareness",
+                    "capsule_version": "1",
+                    "visibility": "model_only",
+                    "scope": "thread",
+                    "source_digest": "digest-1",
+                }
+            ],
+        },
+    )
 
     service = ChatSurfaceReadService(hub_root, durable=False)
     row = service.chat_index_snapshot(view="all", limit=20)["rows"][0]
@@ -409,6 +432,8 @@ def test_chat_index_visible_chrome_uses_user_visible_prompt_after_injected_conte
     assert row["display_title"] == "Investigate checkout failure"
     assert row["last_message_preview"] == "Investigate checkout failure"
     assert "model-only" not in row["search_text"]
+    assert "<injected context>" not in json.dumps(row["surfaces"])
+    assert "<injected context>" not in json.dumps(row["primary_surface"])
 
     search = service.chat_index_snapshot(query="checkout failure", limit=20)
     assert [item["managed_thread_id"] for item in search["rows"]] == ["thread-injected"]
@@ -430,7 +455,12 @@ def test_chat_index_falls_back_to_user_visible_execution_for_attachment_only_tur
         hub_root,
         thread_id="thread-attachment",
         status="completed",
-        prompt_text="Attachment: crash.log",
+        prompt_text="<injected context>runtime attachment notes</injected context>",
+        metadata={
+            "raw_model_prompt": "<injected context>runtime attachment notes</injected context>",
+            "user_visible_text": "Attachment: crash.log",
+            "title_seed": "Attachment: crash.log",
+        },
     )
 
     row = ChatSurfaceReadService(hub_root, durable=False).chat_index_snapshot(

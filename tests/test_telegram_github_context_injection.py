@@ -11,7 +11,9 @@ from codex_autorunner.adapters.github.service import parse_github_url
 from codex_autorunner.adapters.telegram.handlers.commands.execution import (
     ExecutionCommands,
 )
-from codex_autorunner.core.injected_context import wrap_injected_context
+from codex_autorunner.core.injected_context import (
+    render_legacy_injected_context_transport,
+)
 from codex_autorunner.core.utils import RepoNotFoundError
 
 
@@ -34,7 +36,7 @@ class _GitHubServiceStub:
         kind = parsed[1]
         number = parsed[2]
         rel_path = f".codex-autorunner/github_context/{kind}-{number}.md"
-        hint = wrap_injected_context(
+        hint = render_legacy_injected_context_transport(
             f"Context: see {rel_path} (gh available: true; use gh CLI for updates if asked)."
         )
         return {"path": rel_path, "hint": hint, "kind": kind}

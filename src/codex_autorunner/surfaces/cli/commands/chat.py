@@ -67,6 +67,60 @@ def _raise_chat_exit(message: str) -> None:
     raise typer.Exit(code=1)
 
 
+def _load_context_capsule_observations(
+    db_path: Path,
+    *,
+    managed_thread_id: Optional[str],
+    surface_kind: Optional[str],
+    capsule_id: Optional[str],
+    limit: int,
+) -> list[dict[str, Any]]:
+    if not db_path.exists():
+        return []
+    clauses: list[str] = []
+    params: list[Any] = []
+    if managed_thread_id:
+        clauses.append("managed_thread_id = ?")
+        params.append(managed_thread_id)
+    if surface_kind:
+        clauses.append("surface_kind = ?")
+        params.append(surface_kind)
+    if capsule_id:
+        clauses.append("capsule_id = ?")
+        params.append(capsule_id)
+    where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+    query = f"""
+        SELECT observation_id,
+               surface_kind,
+               surface_key,
+               managed_thread_id,
+               backend_thread_id,
+               scope_kind,
+               scope_id,
+               capsule_id,
+               capsule_version,
+               visibility,
+               expiry,
+               source_digest,
+               payload_digest,
+               render_reason,
+               first_observed_at,
+               last_observed_at,
+               render_count
+          FROM orch_context_capsule_ledger
+          {where}
+         ORDER BY last_observed_at DESC, first_observed_at DESC, observation_id ASC
+         LIMIT ?
+    """
+    try:
+        with sqlite3.connect(db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            rows = conn.execute(query, (*params, limit)).fetchall()
+    except sqlite3.Error:
+        return []
+    return [dict(row) for row in rows]
+
+
 def _normalize_chat_lookup_token(value: str) -> str:
     cleaned = str(value or "").strip()
     if not cleaned:
@@ -647,9 +701,14 @@ def register_chat_commands(
         add_completion=False,
         help="Inspect and repair the chat index read-model projection.",
     )
+    capsules_app = typer.Typer(
+        add_completion=False,
+        help="Inspect context capsule ledger observations.",
+    )
     app.add_typer(channels_app, name="channels")
     app.add_typer(queue_app, name="queue")
     app.add_typer(index_app, name="index")
+    app.add_typer(capsules_app, name="capsules")
 
     @app.command("resolve")
     def chat_resolve(
@@ -764,6 +823,68 @@ def register_chat_commands(
             f"revision={result['projection_revision']} "
             f"source_changed={'yes' if result['source_changed'] else 'no'}"
         )
+
+    @capsules_app.command("list")
+    def chat_capsules_list(
+        managed_thread_id: Optional[str] = typer.Option(
+            None,
+            "--managed-thread-id",
+            help="Filter observations for one managed thread.",
+        ),
+        surface_kind: Optional[str] = typer.Option(
+            None,
+            "--surface-kind",
+            help="Filter observations by surface kind.",
+        ),
+        capsule_id: Optional[str] = typer.Option(
+            None,
+            "--capsule-id",
+            help="Filter observations by capsule id.",
+        ),
+        limit: int = typer.Option(
+            50,
+            "--limit",
+            min=1,
+            max=500,
+            help="Maximum observations to print.",
+        ),
+        output_json: bool = typer.Option(False, "--json", help="Emit JSON output"),
+        path: Optional[Path] = hub_root_path_option(),
+    ) -> None:
+        """Inspect capsule ledger state and rendered capsule decisions."""
+        hub_root = resolve_hub_path(path)
+        db_path = resolve_orchestration_sqlite_path(hub_root)
+        rows = _load_context_capsule_observations(
+            db_path,
+            managed_thread_id=managed_thread_id,
+            surface_kind=surface_kind,
+            capsule_id=capsule_id,
+            limit=limit,
+        )
+        payload = {"observations": rows, "count": len(rows)}
+        if output_json:
+            typer.echo(json.dumps(payload, indent=2))
+            return
+        if not rows:
+            typer.echo("No context capsule observations found.")
+            return
+        for row in rows:
+            typer.echo(
+                " ".join(
+                    [
+                        str(row["last_observed_at"]),
+                        str(row["surface_kind"]),
+                        str(row["surface_key"]),
+                        f"thread={row['managed_thread_id']}",
+                        f"backend={row['backend_thread_id'] or '-'}",
+                        f"capsule={row['capsule_id']}@{row['capsule_version']}",
+                        f"visibility={row['visibility']}",
+                        f"expiry={row['expiry']}",
+                        f"renders={row['render_count']}",
+                        f"reason={row['render_reason']}",
+                    ]
+                )
+            )
 
     @index_app.command("repair-stale-bound-archives")
     def chat_index_repair_stale_bound_archives(

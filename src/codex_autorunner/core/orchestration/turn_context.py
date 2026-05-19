@@ -4,7 +4,7 @@ from dataclasses import asdict, dataclass
 from typing import Any, Iterable, Mapping, Optional
 
 from ..context_capsules import ContextCapsule, ContextCapsuleRenderPlan
-from ..injected_context import wrap_injected_context
+from ..injected_context import render_legacy_injected_context_transport
 
 
 @dataclass(frozen=True)
@@ -73,7 +73,7 @@ def render_context_capsule_for_prompt(capsule: ContextCapsule) -> str:
     text = str(payload_text).strip() if payload_text is not None else ""
     if not text:
         return ""
-    return wrap_injected_context(text)
+    return render_legacy_injected_context_transport(text)
 
 
 def capsule_refs_from_values(

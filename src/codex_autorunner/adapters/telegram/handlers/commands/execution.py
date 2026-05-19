@@ -110,7 +110,6 @@ from .....core.hub_control_plane import (
     RemoteSurfaceBindingStore,
     RemoteThreadExecutionStore,
 )
-from .....core.injected_context import wrap_injected_context
 from .....core.logging_utils import log_event
 from .....core.managed_thread_identity import (
     AppServerThreadRegistry,
@@ -1723,7 +1722,7 @@ class ExecutionCommands(TelegramCommandSupportMixin):
         provider = provider or "openai_whisper"
         capsule = build_whisper_disclaimer_capsule(
             surface="telegram",
-            disclaimer=wrap_injected_context(WHISPER_TRANSCRIPT_DISCLAIMER),
+            disclaimer=WHISPER_TRANSCRIPT_DISCLAIMER,
             provider=provider,
         )
         if capsule is None:

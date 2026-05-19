@@ -14,7 +14,9 @@ from codex_autorunner.core.context_capsules import (
     capsule_payload_digest,
     plan_capsule_render,
 )
-from codex_autorunner.core.injected_context import wrap_injected_context
+from codex_autorunner.core.injected_context import (
+    render_legacy_injected_context_transport,
+)
 from codex_autorunner.core.surface_context_capsules import (
     build_model_only_text_capsule,
     build_whisper_disclaimer_capsule,
@@ -152,7 +154,7 @@ def test_car_awareness_has_capsule_migration_path() -> None:
 def test_surface_text_capsules_unwrap_legacy_transport_markers() -> None:
     capsule = build_model_only_text_capsule(
         capsule_id="github.context_file",
-        text=wrap_injected_context(
+        text=render_legacy_injected_context_transport(
             "Context: see .codex-autorunner/github_context/issue-1.md"
         ),
         reason="github_link_context",

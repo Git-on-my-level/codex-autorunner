@@ -17,7 +17,7 @@ from ...adapters.chat.thread_summaries import (
     _tail_text_lines,
 )
 from ...adapters.github.service import find_github_links, parse_github_url
-from ...core.injected_context import strip_injected_context_blocks
+from ...core.injected_context import strip_legacy_injected_context_transport_blocks
 from .constants import (
     RESUME_PREVIEW_ASSISTANT_LIMIT,
     RESUME_PREVIEW_SCAN_LINES,
@@ -97,7 +97,7 @@ def _sanitize_user_preview(text: Optional[str]) -> Optional[str]:
         return text
     stripped = _strip_dispatch_begin(text)
     stripped = LEADING_HTML_COMMENT_RE.sub("", stripped)
-    stripped = strip_injected_context_blocks(stripped)
+    stripped = strip_legacy_injected_context_transport_blocks(stripped)
     stripped = COMPACT_SEED_BLOCK_RE.sub(" ", stripped)
     if _is_ignored_first_user_preview(stripped):
         return None

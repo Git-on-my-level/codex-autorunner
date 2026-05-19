@@ -10,13 +10,13 @@ _INJECTED_CONTEXT_BLOCK_RE = re.compile(
 )
 
 
-def wrap_injected_context(text: str) -> str:
-    """Wrap prompt hints in injected context blocks."""
+def render_legacy_injected_context_transport(text: str) -> str:
+    """Render a model-only capsule for runtimes without native context channels."""
     return f"{INJECTED_CONTEXT_START}\n{text}\n{INJECTED_CONTEXT_END}"
 
 
-def strip_injected_context_blocks(text: str | None) -> str | None:
-    """Remove injected context blocks from mixed user-visible text."""
+def strip_legacy_injected_context_transport_blocks(text: str | None) -> str | None:
+    """Clean archived pre-capsule transcripts; not a read-model correctness boundary."""
     if not isinstance(text, str) or not text:
         return text
     lowered = text.lower()

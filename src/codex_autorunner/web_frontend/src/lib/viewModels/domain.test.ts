@@ -110,11 +110,10 @@ describe('view model mappers', () => {
     });
   });
 
-  it('strips injected CAR context blocks from summary titles', () => {
+  it('trusts backend-projected summary titles without client delimiter cleanup', () => {
     const vm = mapPmaChatSummary({
       thread_target_id: 'thread-inj',
-      display_name:
-        '<injected context>\nYou are operating inside a Codex Autorunner (CAR) managed repo.\n</injected context>\n\nThe web UI gets frozen after a while',
+      display_name: 'The web UI gets frozen after a while',
       agent_id: 'codex',
       lifecycle_status: 'active',
       normalized_status: 'idle',
@@ -124,10 +123,10 @@ describe('view model mappers', () => {
     expect(vm.title).toBe('The web UI gets frozen after a while');
   });
 
-  it('falls back to first message excerpt when display title is only injected context', () => {
+  it('falls back to first message excerpt when display title is generic', () => {
     const vm = mapPmaChatSummary({
       thread_target_id: 'thread-inj-only',
-      display_name: '<injected context>\nCAR hint\n</injected context>',
+      display_name: 'New chat',
       first_message_excerpt: 'User-visible first line',
       agent_id: 'codex',
       lifecycle_status: 'active',
@@ -138,12 +137,11 @@ describe('view model mappers', () => {
     expect(vm.title).toBe('User-visible first line');
   });
 
-  it('strips injected context from first message excerpt when name is generic', () => {
+  it('uses backend-projected user-visible excerpts when name is generic', () => {
     const vm = mapPmaChatSummary({
       thread_target_id: 'thread-ex-inj',
       name: 'New chat',
-      first_message_excerpt:
-        '<injected context>\nCAR\n</injected context>\n\nReal question here',
+      first_user_visible_text: 'Real question here',
       repo_id: 'my-repo',
       agent_id: 'codex',
       lifecycle_status: 'active',

@@ -59,7 +59,6 @@ from ...core.context_awareness import (
     maybe_inject_prompt_writing_hint,
 )
 from ...core.filebox import inbox_dir
-from ...core.injected_context import wrap_injected_context
 from ...core.logging_utils import log_event
 from ...core.orchestration import (
     FlowTarget,
@@ -370,15 +369,13 @@ def _maybe_inject_discord_filebox_hint(
     workspace_root: Path,
     channel_id: str,
 ) -> tuple[str, bool]:
-    hint_text = wrap_injected_context(
-        render_agent_artifact_instructions(
-            ArtifactDeliveryContext(
-                surface="discord",
-                conversation_key=f"channel:{channel_id}",
-                workspace_scope=f"repo:{workspace_root}",
-                scope_label="repo/worktree artifact target for this Discord channel",
-                user_upload_inbox=inbox_dir(workspace_root),
-            )
+    hint_text = render_agent_artifact_instructions(
+        ArtifactDeliveryContext(
+            surface="discord",
+            conversation_key=f"channel:{channel_id}",
+            workspace_scope=f"repo:{workspace_root}",
+            scope_label="repo/worktree artifact target for this Discord channel",
+            user_upload_inbox=inbox_dir(workspace_root),
         )
     )
     return maybe_inject_filebox_hint(

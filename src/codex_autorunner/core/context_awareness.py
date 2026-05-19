@@ -10,7 +10,7 @@ from .car_context import (
     CarContextProfile,
     build_car_context_bundle,
     build_car_context_capsule,
-    render_injected_car_context,
+    render_car_context_transport,
 )
 from .orchestration.turn_context import render_context_capsule_for_prompt
 from .surface_context_capsules import (
@@ -18,7 +18,7 @@ from .surface_context_capsules import (
     build_prompt_writing_capsule,
 )
 
-CAR_AWARENESS_BLOCK = render_injected_car_context(
+CAR_AWARENESS_BLOCK = render_car_context_transport(
     build_car_context_bundle(DEFAULT_PMA_CONTEXT_PROFILE)
 )
 
@@ -149,13 +149,6 @@ def maybe_inject_filebox_hint(
             ),
         ),
     )
-
-
-def _append_injected_context(prompt_text: str, injection: str) -> tuple[str, bool]:
-    if prompt_text.strip():
-        separator = "\n" if prompt_text.endswith("\n") else "\n\n"
-        return f"{prompt_text}{separator}{injection}", True
-    return injection, True
 
 
 def format_file_role_addendum(

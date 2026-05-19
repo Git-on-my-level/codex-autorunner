@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable, Optional, Sequence
 
-from ...core.injected_context import strip_injected_context_blocks
+from ...core.injected_context import strip_legacy_injected_context_transport_blocks
 from .compaction import COMPACT_SEED_PREFIX, COMPACT_SEED_SUFFIX
 
 RESUME_PREVIEW_ASSISTANT_LIMIT = 80
@@ -241,7 +241,7 @@ def _sanitize_user_preview(text: Optional[str]) -> Optional[str]:
     if not isinstance(stripped, str):
         return None
     stripped = _LEADING_HTML_COMMENT_RE.sub("", stripped)
-    stripped = strip_injected_context_blocks(stripped)
+    stripped = strip_legacy_injected_context_transport_blocks(stripped)
     if not isinstance(stripped, str):
         return None
     stripped = _COMPACT_SEED_BLOCK_RE.sub(" ", stripped)
