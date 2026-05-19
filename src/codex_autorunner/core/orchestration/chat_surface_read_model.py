@@ -19,6 +19,10 @@ from ..injected_context import strip_legacy_injected_context_transport_blocks
 from ..text_utils import _normalize_optional_text, _parse_iso_timestamp
 from .chat_surface_events import ChatSurfaceEvent, SQLiteChatSurfaceEventJournal
 from .sqlite import open_orchestration_sqlite
+from .thread_titles import (
+    ManagedThreadTitleInputs,
+    resolve_managed_thread_display_title,
+)
 
 CHAT_SURFACE_READ_CONTRACT_VERSION = "chat_surface_read.v1"
 PMA_CHAT_EVENTS_CONTRACT_VERSION = "pma_chat_events.v1"
@@ -1416,6 +1420,9 @@ class ChatSurfaceReadService:
                     ),
                     "model": _normalize_text(metadata.get("model")),
                     "thread_kind": _normalize_text(metadata.get("thread_kind")),
+                    "provider_conversation_title": _normalize_text(
+                        metadata.get("provider_conversation_title")
+                    ),
                     "last_visible_message_at": last_visible_message_at,
                     "last_lifecycle_update_at": last_lifecycle_update_at,
                     "last_internal_update_at": last_internal_update_at,
@@ -1791,6 +1798,9 @@ def _chat_index_rows_from_surfaces(
                 "flow_type": metadata_map.get("flow_type"),
                 "ticket_id": metadata_map.get("ticket_id"),
                 "run_id": metadata_map.get("run_id"),
+                "provider_conversation_title": metadata_map.get(
+                    "provider_conversation_title"
+                ),
             }
             by_thread[managed_thread_id] = row
         row["surfaces"].append(base_surface)
@@ -1856,6 +1866,7 @@ def _chat_index_rows_from_surfaces(
                 "active_turn_id",
                 "ticket_id",
                 "run_id",
+                "provider_conversation_title",
             ):
                 if metadata_map.get(key) is not None:
                     row["agent" if key == "agent_id" else key] = metadata_map.get(key)
@@ -1975,13 +1986,24 @@ def _managed_thread_identity_title(row: Mapping[str, Any]) -> str:
     """Return the primary PMA-owned title for a managed-thread chat row."""
 
     managed_thread_id = _normalize_text(row.get("managed_thread_id"))
-    title = _visible_chrome_text(row.get("title"))
-    if title is not None and not _is_fallback_chat_title(title, row):
-        return title
-    preview = _visible_chrome_text(row.get("last_message_preview"))
-    if preview is not None:
-        return preview
-    return managed_thread_id or _normalize_text(row.get("chat_id")) or title or ""
+    return (
+        resolve_managed_thread_display_title(
+            ManagedThreadTitleInputs(
+                stored_title=_visible_chrome_text(row.get("title")),
+                provider_title=_visible_chrome_text(
+                    row.get("provider_conversation_title")
+                ),
+                user_visible_title_seed=_visible_chrome_text(
+                    row.get("last_message_preview")
+                ),
+                chat_display_name=_friendly_chat_title(row),
+                ticket_id=row.get("ticket_id"),
+                run_id=row.get("run_id"),
+                fallback_id=managed_thread_id or _normalize_text(row.get("chat_id")),
+            )
+        )
+        or ""
+    )
 
 
 def _surface_binding_display_name(surface: Mapping[str, Any]) -> Optional[str]:
@@ -2453,11 +2475,17 @@ def _chat_detail_thread_metadata(
         ),
         None,
     )
-    title = stored_title
-    if chat_display_name and _is_fallback_chat_title(
-        stored_title, {"managed_thread_id": managed_thread_id}
-    ):
-        title = chat_display_name
+    title = resolve_managed_thread_display_title(
+        ManagedThreadTitleInputs(
+            stored_title=stored_title,
+            provider_title=metadata_map.get("provider_conversation_title"),
+            user_visible_title_seed=thread.get("last_message_preview"),
+            chat_display_name=chat_display_name,
+            ticket_id=metadata_map.get("ticket_id"),
+            run_id=metadata_map.get("run_id"),
+            fallback_id=managed_thread_id,
+        )
+    )
     return {
         "managed_thread_id": managed_thread_id,
         "title": title,
@@ -3048,6 +3076,17 @@ def _pma_thread_from_surface(surface: Mapping[str, Any]) -> dict[str, Any]:
     )
     managed_thread_id = _normalize_text(surface.get("managed_thread_id"))
     chat_display_name = _visible_chrome_text(metadata.get("chat_display_name"))
+    display_title = resolve_managed_thread_display_title(
+        ManagedThreadTitleInputs(
+            stored_title=_visible_chrome_text(display.get("display_name")),
+            provider_title=metadata.get("provider_conversation_title"),
+            user_visible_title_seed=metadata.get("last_message_preview"),
+            chat_display_name=chat_display_name,
+            ticket_id=metadata.get("ticket_id"),
+            run_id=metadata.get("run_id"),
+            fallback_id=managed_thread_id,
+        )
+    )
     payload: dict[str, Any] = {
         "managed_thread_id": managed_thread_id,
         "agent": _normalize_text(metadata.get("agent_id")) or "unknown",
@@ -3056,7 +3095,9 @@ def _pma_thread_from_surface(surface: Mapping[str, Any]) -> dict[str, Any]:
         "resource_kind": _normalize_text(owner.get("resource_kind")),
         "resource_id": _normalize_text(owner.get("resource_id")),
         "workspace_root": _normalize_text(owner.get("workspace_root")),
-        "name": _visible_chrome_text(display.get("display_name")) or managed_thread_id,
+        "name": display_title or managed_thread_id,
+        "display_title": display_title,
+        "technical_title": managed_thread_id,
         "chat_display_name": chat_display_name,
         "model": _normalize_text(metadata.get("model")),
         "backend_thread_id": _normalize_text(metadata.get("backend_thread_id")),

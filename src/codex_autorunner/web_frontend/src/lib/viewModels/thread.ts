@@ -90,21 +90,14 @@ function buildThreadTitle(
   ticketId: string | null,
   scope: ScopeRef
 ): string {
-  const explicitRaw = stringValue(raw.display_name ?? raw.name ?? raw.title, fallback);
+  const explicitRaw = stringValue(raw.display_title ?? raw.display_name ?? raw.name ?? raw.title, fallback);
   let explicit = explicitRaw.trim();
   if (!explicit) {
     explicit = explicitRaw === fallback ? fallback : '';
   }
-  if (
-    !isGenericChatTitle(explicit) &&
-    !isGenericTicketFlowTitle(explicit) &&
-    !isCarTicketFlowControlPrompt(explicit)
-  ) {
+  if (!isCarTicketFlowControlPrompt(explicit)) {
     return explicit;
   }
-
-  const firstMessageExcerpt = firstUserMessageExcerpt(raw);
-  if (firstMessageExcerpt) return firstMessageExcerpt;
 
   if (isGenericChatTitle(explicit) && !ticketId && !isCarTicketFlowControlPrompt(explicit)) {
     const scopeStr = scopeLabelStr(scope);
@@ -151,33 +144,9 @@ function isGenericChatTitle(value: string): boolean {
   return text === 'new pma chat' || text === 'new chat' || text === 'untitled chat' || text === '';
 }
 
-function isGenericTicketFlowTitle(value: string): boolean {
-  return /^ticket-flow(?::\S+)?$/i.test(value.trim());
-}
-
 function isCarTicketFlowControlPrompt(value: string): boolean {
   const text = value.trim();
   return text.startsWith('<CAR_TICKET_FLOW_PROMPT') || text.includes('<CAR_CURRENT_TICKET_FILE>');
-}
-
-function firstUserMessageExcerpt(raw: Record<string, unknown>): string | null {
-  const candidate = firstText(
-    raw.first_user_visible_text,
-    raw.user_visible_text,
-    raw.title_seed,
-    raw.first_message_excerpt,
-    raw.first_user_message,
-    raw.last_user_message,
-    raw.last_message_preview,
-    raw.prompt_preview
-  );
-  if (!candidate) return null;
-  const trimmed = candidate.trim();
-  if (!trimmed) return null;
-  if (isCarTicketFlowControlPrompt(trimmed)) return null;
-  const oneLine = trimmed.split(/\r?\n/)[0]?.trim() ?? '';
-  if (!oneLine) return null;
-  return oneLine.length > 60 ? `${oneLine.slice(0, 57)}…` : oneLine;
 }
 
 function extractTicketId(raw: Record<string, unknown>): string | null {

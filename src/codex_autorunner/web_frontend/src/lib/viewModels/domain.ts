@@ -782,23 +782,14 @@ function normalizeMessageText(raw: JsonRecord, role: PmaChatMessage['role']): st
 }
 
 function readableThreadTitle(raw: JsonRecord, fallback: string, ticketId: string | null): string {
-  const explicitRaw = stringValue(raw.display_name ?? raw.name ?? raw.title, fallback);
+  const explicitRaw = stringValue(raw.display_title ?? raw.display_name ?? raw.name ?? raw.title, fallback);
   let explicit = explicitRaw.trim();
   if (!explicit) {
     explicit = explicitRaw === fallback ? fallback : '';
   }
-  const chatDisplayName = nullableString(raw.chat_display_name);
-  if (chatDisplayName && isChatSurfaceIdTitle(explicit, raw)) return chatDisplayName;
-  if (
-    !isGenericChatTitle(explicit) &&
-    !isGenericTicketFlowTitle(explicit) &&
-    !isCarTicketFlowControlPrompt(explicit)
-  ) {
+  if (!isCarTicketFlowControlPrompt(explicit)) {
     return explicit;
   }
-
-  const firstMessageExcerpt = firstUserMessageExcerpt(raw);
-  if (firstMessageExcerpt) return firstMessageExcerpt;
 
   const workspace = workspaceLabel(raw.workspace_root);
   const repo = nullableString(raw.repo_id);
@@ -822,34 +813,6 @@ function readableThreadTitle(raw: JsonRecord, fallback: string, ticketId: string
 function isGenericChatTitle(value: string): boolean {
   const text = value.trim().toLowerCase();
   return text === 'new pma chat' || text === 'new chat' || text === 'untitled chat' || text === '';
-}
-
-function isChatSurfaceIdTitle(value: string, raw: JsonRecord): boolean {
-  const text = value.trim().toLowerCase();
-  if (!/^(discord|telegram):\S+$/.test(text)) return false;
-  const bindingKind = nullableString(raw.binding_kind)?.toLowerCase();
-  if (bindingKind === 'discord' || bindingKind === 'telegram') return true;
-  return raw.chat_bound === true;
-}
-
-function firstUserMessageExcerpt(raw: JsonRecord): string | null {
-  const candidate = firstText(
-    raw.first_user_visible_text,
-    raw.user_visible_text,
-    raw.title_seed,
-    raw.first_message_excerpt,
-    raw.first_user_message,
-    raw.last_user_message,
-    raw.prompt_preview
-  );
-  if (!candidate) return null;
-  const trimmed = candidate.trim();
-  if (!trimmed) return null;
-  if (isCarTicketFlowControlPrompt(trimmed)) return null;
-  const oneLine = trimmed.split(/\r?\n/)[0]?.trim() ?? '';
-  if (!oneLine) return null;
-  const truncated = oneLine.length > 60 ? `${oneLine.slice(0, 57)}…` : oneLine;
-  return truncated;
 }
 
 function isGenericTicketFlowTitle(value: string): boolean {

@@ -1184,14 +1184,14 @@ def test_chat_index_and_detail_keep_bound_chat_display_secondary(
         for item in index["rows"]
         if item["managed_thread_id"] == "thread-discord-friendly"
     )
-    assert row["title"] == "thread-discord-friendly"
-    assert row["display_title"] == "thread-discord-friendly"
-    assert row["chat_display_name"] == "thread-discord-friendly"
+    assert row["title"] == "Agent Nexus / #codex"
+    assert row["display_title"] == "Agent Nexus / #codex"
+    assert row["chat_display_name"] == "Agent Nexus / #codex"
     assert row["binding_display_name"] == "Agent Nexus / #codex"
 
     detail = service.chat_detail_snapshot("thread-discord-friendly")
-    assert detail["thread"]["title"] == "thread-discord-friendly"
-    assert detail["thread"]["chat_display_name"] == "thread-discord-friendly"
+    assert detail["thread"]["title"] == "Agent Nexus / #codex"
+    assert detail["thread"]["chat_display_name"] == "Agent Nexus / #codex"
 
     custom_detail = service.chat_detail_snapshot("thread-discord-custom")
     assert custom_detail["thread"]["title"] == "Customer escalation"
@@ -1301,6 +1301,48 @@ def test_chat_index_uses_message_preview_before_thread_id_fallback(
     assert row["title"] == "Investigate failed deploy"
     assert row["display_title"] == "Investigate failed deploy"
     assert row["binding_display_name"] == "Agent Nexus / #deploys"
+
+
+def test_chat_index_uses_provider_title_before_visible_seed(tmp_path: Path) -> None:
+    hub_root = tmp_path / "hub"
+    _seed_thread(
+        hub_root,
+        thread_id="thread-provider-title",
+        display_name="New PMA chat",
+        last_message_preview="First visible request",
+        metadata={"provider_conversation_title": "Native runtime title"},
+    )
+
+    row = ChatSurfaceReadService(hub_root, durable=False).chat_index_snapshot(limit=20)[
+        "rows"
+    ][0]
+
+    assert row["title"] == "Native runtime title"
+    assert row["display_title"] == "Native runtime title"
+
+
+def test_chat_index_deprioritizes_uuid_and_ticket_flow_control_prompt_titles(
+    tmp_path: Path,
+) -> None:
+    hub_root = tmp_path / "hub"
+    _seed_thread(
+        hub_root,
+        thread_id="12345678-1234-5678-1234-567812345678",
+        display_name="12345678-1234-5678-1234-567812345678",
+        last_message_preview=(
+            "<CAR_TICKET_FLOW_PROMPT><CAR_CURRENT_TICKET_FILE>"
+            "PATH: .codex-autorunner/tickets/TICKET-002.md"
+            "</CAR_CURRENT_TICKET_FILE></CAR_TICKET_FLOW_PROMPT>"
+        ),
+        metadata={"ticket_id": "TICKET-002"},
+    )
+
+    row = ChatSurfaceReadService(hub_root, durable=False).chat_index_snapshot(limit=20)[
+        "rows"
+    ][0]
+
+    assert row["title"] == "Ticket flow · TICKET-002"
+    assert row["technical_title"] == "12345678-1234-5678-1234-567812345678"
 
 
 def test_chat_surface_read_model_allows_lifecycle_recovery_events(
@@ -1413,7 +1455,9 @@ def test_chat_surface_read_model_builds_pma_compat_snapshot(tmp_path: Path) -> N
             "resource_kind": "repo",
             "resource_id": "repo-1",
             "workspace_root": None,
-            "name": "Thread thread-pma",
+            "name": "Discord channel",
+            "display_title": "Discord channel",
+            "technical_title": "thread-pma",
             "model": None,
             "backend_thread_id": None,
             "lifecycle_status": "active",
