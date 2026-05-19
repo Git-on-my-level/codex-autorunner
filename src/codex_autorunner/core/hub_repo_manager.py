@@ -379,24 +379,24 @@ class RepoManager:
             raise ValueError(f"Repo path does not exist: {repo_path}")
 
         unbound_threads_by_repo = self._collect_unbound_repo_threads(manifest=manifest)
-        archived_thread_ids = self._archive_unbound_repo_threads(
+        retired_thread_ids = self._archive_unbound_repo_threads(
             repo_id=repo_id,
             unbound_threads_by_repo=unbound_threads_by_repo,
         )
-        archived_count = len(archived_thread_ids)
-        if archived_count == 0:
+        retired_count = len(retired_thread_ids)
+        if retired_count == 0:
             message = f"No stale non-chat-bound threads found for {repo_id}."
-        elif archived_count == 1:
-            message = f"Archived 1 stale non-chat-bound thread for {repo_id}."
+        elif retired_count == 1:
+            message = f"Retired 1 stale non-chat-bound thread for {repo_id}."
         else:
             message = (
-                f"Archived {archived_count} stale non-chat-bound threads for {repo_id}."
+                f"Retired {retired_count} stale non-chat-bound threads for {repo_id}."
             )
         return {
             "status": "ok",
             "repo_id": repo_id,
-            "archived_thread_ids": archived_thread_ids,
-            "archived_count": archived_count,
+            "retired_thread_ids": retired_thread_ids,
+            "retired_count": retired_count,
             "message": message,
         }
 
@@ -406,7 +406,7 @@ class RepoManager:
         unbound_threads_by_repo = self._collect_unbound_repo_threads(manifest=manifest)
         dirty_repo_ids: list[str] = []
         results: list[dict[str, object]] = []
-        total_archived = 0
+        total_retired = 0
 
         for repo_id, repo_path in base_repo_paths.items():
             is_dirty = False
@@ -418,36 +418,36 @@ class RepoManager:
             if is_dirty:
                 dirty_repo_ids.append(repo_id)
 
-            archived_thread_ids = self._archive_unbound_repo_threads(
+            retired_thread_ids = self._archive_unbound_repo_threads(
                 repo_id=repo_id,
                 unbound_threads_by_repo=unbound_threads_by_repo,
             )
-            archived_count = len(archived_thread_ids)
-            total_archived += archived_count
-            if archived_count > 0 or is_dirty:
+            retired_count = len(retired_thread_ids)
+            total_retired += retired_count
+            if retired_count > 0 or is_dirty:
                 results.append(
                     {
                         "repo_id": repo_id,
-                        "archived_thread_ids": archived_thread_ids,
-                        "archived_count": archived_count,
+                        "retired_thread_ids": retired_thread_ids,
+                        "retired_count": retired_count,
                         "is_dirty": is_dirty,
                     }
                 )
 
         cleaned_repo_count = 0
         for item in results:
-            archived_count_value = item.get("archived_count")
-            if isinstance(archived_count_value, int) and archived_count_value > 0:
+            retired_count_value = item.get("retired_count")
+            if isinstance(retired_count_value, int) and retired_count_value > 0:
                 cleaned_repo_count += 1
-        if total_archived == 0:
+        if total_retired == 0:
             message = "No stale non-chat-bound threads found across base repos."
-        elif total_archived == 1:
-            message = "Archived 1 stale non-chat-bound thread across base repos."
+        elif total_retired == 1:
+            message = "Retired 1 stale non-chat-bound thread across base repos."
         else:
-            message = f"Archived {total_archived} stale non-chat-bound threads across base repos."
+            message = f"Retired {total_retired} stale non-chat-bound threads across base repos."
         return {
             "status": "ok",
-            "archived_count": total_archived,
+            "retired_count": total_retired,
             "cleaned_repo_count": cleaned_repo_count,
             "dirty_repo_ids": dirty_repo_ids,
             "dirty_repo_count": len(dirty_repo_ids),

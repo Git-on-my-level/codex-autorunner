@@ -4,7 +4,7 @@
   import { onMount, untrack } from 'svelte';
   import AutoDismissNotice from '$lib/components/AutoDismissNotice.svelte';
   import RepoWorktreeViews from '$lib/components/RepoWorktreeViews.svelte';
-  import { confirmAndArchiveState, confirmAndRetireWorktree } from '$lib/actions/repoWorktreeActions';
+  import { confirmAndRetireState, confirmAndRetireWorktree } from '$lib/actions/repoWorktreeActions';
   import { webApi } from '$lib/api/client';
   import {
     createRepoWorktreeDetailSession,
@@ -21,7 +21,7 @@
     dependencies: {
       syncRepoMain: webApi.hub.syncRepoMain,
       retireWorktree: confirmAndRetireWorktree,
-      archiveState: confirmAndArchiveState,
+      retireState: confirmAndRetireState,
       currentPath: () => stripRuntimeBasePath(page.url.pathname),
       redirect: (path) => goto(href(path), { replaceState: true })
     }
@@ -51,7 +51,7 @@
   sectionIssues={sessionState.sectionIssues}
   onRetry={() => runSessionCommand(() => session.load())}
   onRetireWorktree={(target) => runSessionCommand(() => session.retireWorktree(target))}
-  onArchiveState={(target) => runSessionCommand(() => session.archiveState(target))}
+  onRetireState={(target) => runSessionCommand(() => session.retireState(target))}
   onSyncRepo={() => runSessionCommand(() => session.syncRepo())}
   syncRepoBusy={sessionState.syncRepoBusy}
   errorMessage={sessionState.error?.message ?? null}

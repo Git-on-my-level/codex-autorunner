@@ -244,10 +244,10 @@ def register_hub_runs_commands(
         delete_run: str = typer.Option(
             "true",
             "--delete-run",
-            help="Delete flow run record after archive (true|false)",
+            help="Delete flow run record after retirement (true|false)",
         ),
         force: bool = typer.Option(
-            False, "--force", help="Allow archiving paused/stopping runs"
+            False, "--force", help="Allow retiring paused/stopping runs"
         ),
         force_attestation: Optional[str] = typer.Option(
             None,
@@ -260,7 +260,7 @@ def register_hub_runs_commands(
         ),
         pretty: bool = typer.Option(False, "--pretty", help="Pretty-print JSON output"),
     ):
-        """Archive stale run artifacts across hub repos and optionally delete run records.
+        """Retire stale run artifacts across hub repos and optionally delete run records.
 
         Safety:
         This can delete flow run records when `--delete-run true` (default). Run

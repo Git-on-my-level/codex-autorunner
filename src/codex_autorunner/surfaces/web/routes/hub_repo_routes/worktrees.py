@@ -97,22 +97,22 @@ class HubWorktreeService:
         delete_remote: bool,
         force: bool,
         force_attestation: Optional[str],
-        force_archive: bool,
-        archive_note: Optional[str],
-        archive_profile: Optional[str],
+        force_retire: bool,
+        retire_note: Optional[str],
+        retire_profile: Optional[str],
     ) -> dict[str, Any]:
         from .....core.logging_utils import safe_log
 
         safe_log(
             self._context.logger,
             logging.INFO,
-            "Hub retire worktree id=%s delete_branch=%s delete_remote=%s force=%s force_archive=%s force_attestation=%s"
+            "Hub retire worktree id=%s delete_branch=%s delete_remote=%s force=%s force_retire=%s force_attestation=%s"
             % (
                 worktree_repo_id,
                 delete_branch,
                 delete_remote,
                 force,
-                force_archive,
+                force_retire,
                 bool(force_attestation),
             ),
         )
@@ -131,9 +131,9 @@ class HubWorktreeService:
                     if force_attestation is not None
                     else None
                 ),
-                force_archive=force_archive,
-                archive_note=archive_note,
-                archive_profile=archive_profile,
+                force_archive=force_retire,
+                archive_note=retire_note,
+                archive_profile=retire_profile,
             )
         except (RuntimeError, OSError, ValueError, TypeError, KeyError) as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -159,9 +159,9 @@ class HubWorktreeService:
                     if payload.force_attestation is not None
                     else None
                 ),
-                force_archive=payload.force_archive,
-                archive_note=payload.archive_note,
-                archive_profile=payload.archive_profile,
+                force_archive=payload.force_retire,
+                archive_note=payload.retire_note,
+                archive_profile=payload.retire_profile,
             )
             self._enricher.invalidate_runtime_caches()
             if isinstance(result, dict):
@@ -212,25 +212,25 @@ class HubWorktreeService:
         self._enricher.invalidate_runtime_caches()
         return cast(dict[str, Any], result)
 
-    async def archive_worktree_state(
+    async def retire_worktree_state(
         self,
         worktree_repo_id: str,
-        archive_note: Optional[str],
-        archive_profile: Optional[str],
+        retire_note: Optional[str],
+        retire_profile: Optional[str],
     ) -> dict[str, Any]:
         from .....core.logging_utils import safe_log
 
         safe_log(
             self._context.logger,
             logging.INFO,
-            "Hub archive worktree state id=%s" % (worktree_repo_id,),
+            "Hub retire worktree state id=%s" % (worktree_repo_id,),
         )
         try:
             result = await asyncio.to_thread(
                 self._context.supervisor.archive_repo_state,
                 repo_id=str(worktree_repo_id),
-                archive_note=archive_note,
-                archive_profile=archive_profile,
+                archive_note=retire_note,
+                archive_profile=retire_profile,
             )
         except (
             RuntimeError,

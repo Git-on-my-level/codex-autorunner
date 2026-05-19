@@ -56,7 +56,7 @@ from .....core.pma_automation_unified import PmaUnifiedAutomationAdapter
 from .....core.text_utils import _truncate_text
 from .....core.time_utils import now_iso
 from ...schemas import (
-    ManagedThreadBulkArchiveRequest,
+    ManagedThreadBulkRetireRequest,
     ManagedThreadCompactRequest,
     ManagedThreadCreateRequest,
     ManagedThreadForkRequest,
@@ -102,7 +102,7 @@ from .hermes_supervisors import resolve_cached_hermes_supervisor
 _logger = logging.getLogger(__name__)
 
 
-def _archiveable_notification_surfaces(
+def _retirable_notification_surfaces(
     row: dict[str, Any],
 ) -> list[dict[str, str]]:
     seen: set[tuple[str, str]] = set()
@@ -126,7 +126,7 @@ def _archiveable_notification_surfaces(
     return surfaces
 
 
-def _emit_notification_surface_archived(
+def _emit_notification_surface_retired(
     *,
     hub_root: Path,
     surface_key: str,
@@ -146,7 +146,7 @@ def _emit_notification_surface_archived(
         workspace_root=normalize_optional_text(row.get("workspace_root")),
         lifecycle_status="archived",
         status="archived",
-        source_kind="hub.pma.archive_active",
+        source_kind="hub.pma.retire_active",
         source_id=normalize_optional_text(row.get("row_id"))
         or normalize_optional_text(row.get("chat_id"))
         or surface_key,
@@ -1249,7 +1249,7 @@ def build_managed_thread_crud_routes(
     router: APIRouter,
     get_runtime_state,
 ) -> None:
-    """Build managed-thread CRUD routes (create, list, get, compact, resume, archive)."""
+    """Build managed-thread CRUD routes (create, list, get, compact, resume, retire)."""
 
     @router.post("/threads")
     async def create_managed_thread(
@@ -1624,8 +1624,8 @@ def build_managed_thread_crud_routes(
             )
         }
 
-    @router.post("/threads/{managed_thread_id}/archive")
-    def archive_managed_thread(
+    @router.post("/threads/{managed_thread_id}/retire")
+    def retire_managed_thread(
         managed_thread_id: str, request: Request
     ) -> dict[str, Any]:
         service = build_managed_thread_orchestration_service(request)
@@ -1638,7 +1638,7 @@ def build_managed_thread_crud_routes(
         context = get_pma_request_context(request)
         store = context.thread_store()
         store.append_action(
-            "managed_thread_archive",
+            "managed_thread_retire",
             managed_thread_id=managed_thread_id,
             payload_json=json.dumps({"old_status": old_status}, ensure_ascii=True),
         )
@@ -1650,14 +1650,14 @@ def build_managed_thread_crud_routes(
             )
         }
 
-    @router.post("/threads/archive")
-    def archive_managed_threads(
-        payload: ManagedThreadBulkArchiveRequest, request: Request
+    @router.post("/threads/retire")
+    def retire_managed_threads(
+        payload: ManagedThreadBulkRetireRequest, request: Request
     ) -> dict[str, Any]:
         service = build_managed_thread_orchestration_service(request)
         context = get_pma_request_context(request)
         store = context.thread_store()
-        archived_threads: list[Any] = []
+        retired_threads: list[Any] = []
         errors: list[dict[str, str]] = []
 
         for managed_thread_id in payload.thread_ids:
@@ -1674,11 +1674,11 @@ def build_managed_thread_crud_routes(
             old_status = normalize_optional_text(thread.lifecycle_status)
             updated = service.archive_thread_target(managed_thread_id)
             store.append_action(
-                "managed_thread_archive",
+                "managed_thread_retire",
                 managed_thread_id=managed_thread_id,
                 payload_json=json.dumps({"old_status": old_status}, ensure_ascii=True),
             )
-            archived_threads.append(updated)
+            retired_threads.append(updated)
 
         binding_metadata = _load_chat_binding_metadata_by_thread(context.hub_root)
         return {
@@ -1687,43 +1687,43 @@ def build_managed_thread_crud_routes(
                     thread,
                     binding_metadata_by_thread=binding_metadata,
                 )
-                for thread in archived_threads
+                for thread in retired_threads
             ],
-            "archived_count": len(archived_threads),
+            "retired_count": len(retired_threads),
             "requested_count": len(payload.thread_ids),
             "errors": errors,
             "error_count": len(errors),
         }
 
-    @router.post("/threads/archive-active")
-    def archive_active_managed_threads(request: Request) -> dict[str, Any]:
+    @router.post("/threads/retire-active")
+    def retire_active_managed_threads(request: Request) -> dict[str, Any]:
         service = build_managed_thread_orchestration_service(request)
         context = get_pma_request_context(request)
         store = context.thread_store()
-        archive_targets = ChatSurfaceReadService(
+        retire_targets = ChatSurfaceReadService(
             context.hub_root, durable=True
         ).chat_index_archive_targets()
-        archived_threads: list[Any] = []
+        retired_threads: list[Any] = []
         errors: list[dict[str, str]] = []
-        archived_row_ids: set[str] = set()
-        archived_thread_ids: set[str] = set()
-        archived_surfaces: list[dict[str, str]] = []
+        retired_row_ids: set[str] = set()
+        retired_thread_ids: set[str] = set()
+        retired_surfaces: list[dict[str, str]] = []
 
-        for row in archive_targets:
+        for row in retire_targets:
             row_id = (
                 normalize_optional_text(row.get("row_id"))
                 or normalize_optional_text(row.get("chat_id"))
                 or "unknown-chat-row"
             )
-            row_archived = False
+            row_retired = False
             managed_thread_id = normalize_optional_text(row.get("managed_thread_id"))
             if managed_thread_id is not None:
-                if managed_thread_id in archived_thread_ids:
-                    row_archived = True
+                if managed_thread_id in retired_thread_ids:
+                    row_retired = True
                 else:
                     thread = service.get_thread_target(managed_thread_id)
                     if thread is None:
-                        if not _archiveable_notification_surfaces(row):
+                        if not _retirable_notification_surfaces(row):
                             errors.append(
                                 {
                                     "thread_id": managed_thread_id,
@@ -1731,34 +1731,34 @@ def build_managed_thread_crud_routes(
                                 }
                             )
                     elif normalize_optional_text(thread.lifecycle_status) == "archived":
-                        archived_thread_ids.add(managed_thread_id)
-                        row_archived = True
+                        retired_thread_ids.add(managed_thread_id)
+                        row_retired = True
                     else:
                         old_status = normalize_optional_text(thread.lifecycle_status)
                         updated = service.archive_thread_target(managed_thread_id)
                         store.append_action(
-                            "managed_thread_archive",
+                            "managed_thread_retire",
                             managed_thread_id=managed_thread_id,
                             payload_json=json.dumps(
                                 {"old_status": old_status}, ensure_ascii=True
                             ),
                         )
-                        archived_threads.append(updated)
-                        archived_thread_ids.add(managed_thread_id)
-                        row_archived = True
+                        retired_threads.append(updated)
+                        retired_thread_ids.add(managed_thread_id)
+                        row_retired = True
 
-            for surface in _archiveable_notification_surfaces(row):
+            for surface in _retirable_notification_surfaces(row):
                 surface_key = surface["surface_key"]
-                _emit_notification_surface_archived(
+                _emit_notification_surface_retired(
                     hub_root=context.hub_root,
                     surface_key=surface_key,
                     row=row,
                 )
-                archived_surfaces.append(surface)
-                row_archived = True
+                retired_surfaces.append(surface)
+                row_retired = True
 
-            if row_archived:
-                archived_row_ids.add(row_id)
+            if row_retired:
+                retired_row_ids.add(row_id)
 
         binding_metadata = _load_chat_binding_metadata_by_thread(context.hub_root)
         return {
@@ -1767,11 +1767,11 @@ def build_managed_thread_crud_routes(
                     thread,
                     binding_metadata_by_thread=binding_metadata,
                 )
-                for thread in archived_threads
+                for thread in retired_threads
             ],
-            "archived_surfaces": archived_surfaces,
-            "archived_count": len(archived_row_ids),
-            "requested_count": len(archive_targets),
+            "retired_surfaces": retired_surfaces,
+            "retired_count": len(retired_row_ids),
+            "requested_count": len(retire_targets),
             "errors": errors,
             "error_count": len(errors),
         }

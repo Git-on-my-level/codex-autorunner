@@ -217,7 +217,7 @@ def test_cleanup_archives_uses_repo_retention_policy(monkeypatch, repo: Path) ->
     result = runner.invoke(
         cleanup_app,
         [
-            "archives",
+            "retirements",
             "--repo",
             str(repo),
             "--dry-run",

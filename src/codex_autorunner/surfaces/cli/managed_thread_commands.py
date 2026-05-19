@@ -1,7 +1,7 @@
 """PMA thread command implementations.
 
 Managed-thread CLI commands (spawn, list, info, status, send, turns, queue,
-cancel-queued, clear-queue, output, tail, compact, resume, fork, archive,
+cancel-queued, clear-queue, output, tail, compact, resume, fork, retire,
 interrupt) and supporting helpers and dataclasses.  Registered on the
 ``thread_app`` typer via
 :func:`register_thread_commands`.
@@ -589,16 +589,16 @@ def _render_assistant_text_window(
         )
 
 
-def _format_archived_thread_line(thread: dict[str, Any]) -> str:
+def _format_retired_thread_line(thread: dict[str, Any]) -> str:
     managed_thread_id = str(thread.get("managed_thread_id") or "").strip()
     name = str(thread.get("name") or "").strip()
     if managed_thread_id and name:
-        return f"Archived {managed_thread_id} ({name})"
+        return f"Retired {managed_thread_id} ({name})"
     if managed_thread_id:
-        return f"Archived {managed_thread_id}"
+        return f"Retired {managed_thread_id}"
     if name:
-        return f"Archived managed thread ({name})"
-    return "Archived managed thread"
+        return f"Retired managed thread ({name})"
+    return "Retired managed thread"
 
 
 def _iter_sse_events(lines):
@@ -2200,7 +2200,7 @@ def managed_thread_fork(
     typer.echo(str(thread.get("managed_thread_id")))
 
 
-def managed_thread_archive(
+def managed_thread_retire(
     managed_thread_id: Optional[str] = typer.Option(
         None, "--id", help="Managed PMA thread id", show_default=False
     ),
@@ -2218,7 +2218,7 @@ def managed_thread_archive(
     output_json: bool = typer.Option(False, "--json", help="Emit JSON output"),
     path: Optional[Path] = hub_root_path_option(),
 ):
-    """Archive a managed PMA thread."""
+    """Retire a managed PMA thread."""
     hub_root = _resolve_hub_path(path)
     thread_ids = _resolve_archive_thread_ids(
         managed_thread_id=managed_thread_id,
@@ -2229,7 +2229,7 @@ def managed_thread_archive(
         config = load_hub_config(hub_root)
         if len(thread_ids) == 1:
             archive_url = _build_hub_control_plane_url(
-                config, f"/threads/{thread_ids[0]}/archive"
+                config, f"/threads/{thread_ids[0]}/retire"
             )
             data = _request_json(
                 "POST",
@@ -2237,7 +2237,7 @@ def managed_thread_archive(
                 token_env=config.server_auth_token_env,
             )
         else:
-            archive_url = _build_hub_control_plane_url(config, "/threads/archive")
+            archive_url = _build_hub_control_plane_url(config, "/threads/retire")
             data = _request_json(
                 "POST",
                 archive_url,
@@ -2248,9 +2248,9 @@ def managed_thread_archive(
         typer.echo(
             format_hub_request_error(
                 action=(
-                    f"Failed to archive managed PMA thread {thread_ids[0]}."
+                    f"Failed to retire managed PMA thread {thread_ids[0]}."
                     if len(thread_ids) == 1
-                    else "Failed to archive managed PMA threads."
+                    else "Failed to retire managed PMA threads."
                 ),
                 url=archive_url,
                 exc=exc,
@@ -2271,30 +2271,30 @@ def managed_thread_archive(
     if len(thread_ids) == 1:
         thread = data.get("thread", {}) if isinstance(data, dict) else {}
         if isinstance(thread, dict) and thread:
-            typer.echo(_format_archived_thread_line(thread))
+            typer.echo(_format_retired_thread_line(thread))
         else:
-            typer.echo(f"Archived {thread_ids[0]}")
+            typer.echo(f"Retired {thread_ids[0]}")
         return
 
     threads = data.get("threads", []) if isinstance(data, dict) else []
     errors = data.get("errors", []) if isinstance(data, dict) else []
-    archived_count = len(threads) if isinstance(threads, list) else 0
+    retired_count = len(threads) if isinstance(threads, list) else 0
 
     if isinstance(threads, list):
         for thread in threads:
             if isinstance(thread, dict):
-                typer.echo(_format_archived_thread_line(thread))
+                typer.echo(_format_retired_thread_line(thread))
 
     if isinstance(errors, list):
         for error in errors:
             if not isinstance(error, dict):
                 continue
             thread_id = str(error.get("thread_id") or "unknown").strip()
-            detail = str(error.get("detail") or "Archive failed").strip()
-            typer.echo(f"Failed to archive {thread_id}: {detail}", err=True)
+            detail = str(error.get("detail") or "Retire failed").strip()
+            typer.echo(f"Failed to retire {thread_id}: {detail}", err=True)
 
     typer.echo(
-        f"Archived {archived_count} managed thread{'s' if archived_count != 1 else ''}."
+        f"Retired {retired_count} managed thread{'s' if retired_count != 1 else ''}."
     )
     if errors:
         raise typer.Exit(code=1) from None
@@ -2408,5 +2408,5 @@ def register_thread_commands(app: typer.Typer) -> None:
     app.command("compact")(managed_thread_compact)
     app.command("resume")(managed_thread_resume)
     app.command("fork")(managed_thread_fork)
-    app.command("archive")(managed_thread_archive)
+    app.command("retire")(managed_thread_retire)
     app.command("interrupt")(managed_thread_interrupt)

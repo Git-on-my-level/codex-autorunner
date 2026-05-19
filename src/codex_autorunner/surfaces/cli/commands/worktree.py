@@ -119,9 +119,9 @@ def register_worktree_commands(
         delete_remote: bool = typer.Option(
             False, "--delete-remote", help="Delete the remote branch"
         ),
-        force_archive: bool = typer.Option(
+        force_retire: bool = typer.Option(
             False,
-            "--force-archive",
+            "--force-retire",
             help="Continue retire if artifact preservation fails",
         ),
         force: bool = typer.Option(
@@ -132,15 +132,15 @@ def register_worktree_commands(
         force_attestation: Optional[str] = typer.Option(
             None,
             "--force-attestation",
-            help="Attestation text required with --force/--force-archive for dangerous actions.",
+            help="Attestation text required with --force/--force-retire for dangerous actions.",
         ),
-        archive_note: Optional[str] = typer.Option(
-            None, "--archive-note", help="Optional archive note"
+        retire_note: Optional[str] = typer.Option(
+            None, "--retire-note", help="Optional retire note"
         ),
-        archive_profile: Optional[str] = typer.Option(
+        retire_profile: Optional[str] = typer.Option(
             None,
-            "--archive-profile",
-            help="Override the configured archive profile for the retire snapshot (portable or full).",
+            "--retire-profile",
+            help="Override the configured retire profile for the retire snapshot (portable or full).",
         ),
     ):
         """Retire a worktree repo and optionally delete branches.
@@ -152,7 +152,7 @@ def register_worktree_commands(
         supervisor = build_supervisor(config)
         try:
             force_attestation_payload: Optional[dict[str, str]] = None
-            if force or force_archive:
+            if force or force_retire:
                 force_attestation_payload = _build_force_attestation(
                     force_attestation,
                     target_scope=f"hub.worktree.retire:{worktree_repo_id}",
@@ -162,21 +162,21 @@ def register_worktree_commands(
                     worktree_repo_id=worktree_repo_id,
                     delete_branch=delete_branch,
                     delete_remote=delete_remote,
-                    force_archive=force_archive,
-                    archive_note=archive_note,
+                    force_archive=force_retire,
+                    archive_note=retire_note,
                     force=force,
                     force_attestation=force_attestation_payload,
-                    archive_profile=archive_profile,
+                    archive_profile=retire_profile,
                 )
             else:
                 result = supervisor.retire_worktree(
                     worktree_repo_id=worktree_repo_id,
                     delete_branch=delete_branch,
                     delete_remote=delete_remote,
-                    force_archive=force_archive,
-                    archive_note=archive_note,
+                    force_archive=force_retire,
+                    archive_note=retire_note,
                     force=force,
-                    archive_profile=archive_profile,
+                    archive_profile=retire_profile,
                 )
         except (RuntimeError, OSError, ValueError) as exc:
             raise_exit(str(exc), cause=exc)
@@ -202,7 +202,7 @@ def register_worktree_commands(
         force_attestation: Optional[str] = typer.Option(
             None,
             "--force-attestation",
-            help="Attestation text required with --force/--force-archive for dangerous actions.",
+            help="Attestation text required with --force for dangerous actions.",
         ),
     ):
         """Delete a worktree without retiring it.

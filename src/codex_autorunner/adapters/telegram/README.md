@@ -53,7 +53,7 @@ Examples:
   - `/flow bootstrap` then send `https://github.com/org/repo/issues/123`
   - `/flow issue 123`
 - Bootstrap from plan text: `/flow plan <text>`
-- Status + buttons: `/flow status` (use Resume/Stop/Recover/Restart/Archive/Refresh buttons)
+- Status + buttons: `/flow status` (use Resume/Stop/Recover/Restart/Retire/Refresh buttons)
 - Reply to a pause: `/flow reply <message>`, then `/flow resume`
 
 ## Integration Harness

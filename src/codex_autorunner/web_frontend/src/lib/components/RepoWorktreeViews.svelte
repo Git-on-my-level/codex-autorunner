@@ -25,7 +25,7 @@
     sectionIssues = [],
     onRetry = undefined,
     onRetireWorktree = undefined,
-    onArchiveState = undefined,
+    onRetireState = undefined,
     onRepoPin = undefined,
     onSyncRepo = undefined,
     syncRepoBusy = false,
@@ -41,7 +41,7 @@
     sectionIssues?: PartialPageIssue[];
     onRetry?: (() => void) | undefined;
     onRetireWorktree?: ((worktree: { id: string; label: string; chatBound: boolean; cleanupBlockedByChatBinding: boolean }) => void | Promise<void>) | undefined;
-    onArchiveState?: ((target: { kind: 'repo' | 'worktree'; id: string; label: string; hasCarState: boolean; unboundManagedThreadCount: number }) => void | Promise<void>) | undefined;
+  onRetireState?: ((target: { kind: 'repo' | 'worktree'; id: string; label: string; hasCarState: boolean; unboundManagedThreadCount: number }) => void | Promise<void>) | undefined;
     onRepoPin?: ((target: { id: string; pinned: boolean }) => void | Promise<void>) | undefined;
     onSyncRepo?: (() => void | Promise<void>) | undefined;
     syncRepoBusy?: boolean;
@@ -152,7 +152,7 @@
     return target.chatBindingCount > 1 ? `${target.chatBindingCount} chats` : 'Chat-bound';
   }
 
-  function canArchiveState(target: { hasCarState: boolean; unboundManagedThreadCount: number }): boolean {
+  function canRetireState(target: { hasCarState: boolean; unboundManagedThreadCount: number }): boolean {
     return target.hasCarState || target.unboundManagedThreadCount > 0;
   }
 
@@ -165,13 +165,13 @@
     void onRetireWorktree?.(worktree);
   }
 
-  function handleArchiveClick(
+  function handleRetireStateClick(
     event: MouseEvent,
     target: { kind: 'repo' | 'worktree'; id: string; label: string; hasCarState: boolean; unboundManagedThreadCount: number }
   ): void {
     event.preventDefault();
     event.stopPropagation();
-    void onArchiveState?.(target);
+    void onRetireState?.(target);
   }
 
   function handleRepoPinClick(event: MouseEvent, id: string, pinned: boolean): void {
@@ -442,7 +442,7 @@
               {/if}
               {#if
                 (row.kind === 'repo' && onOpenRepoSettings) ||
-                (onArchiveState && canArchiveState(row)) ||
+                (onRetireState && canRetireState(row)) ||
                 (row.kind === 'worktree' && onRetireWorktree)}
                 <span class="repo-head-icon-actions">
                   {#if row.kind === 'repo' && onOpenRepoSettings}
@@ -464,13 +464,13 @@
                       <span class="emoji-icon" aria-hidden="true">⚙️</span>
                     </button>
                   {/if}
-                  {#if onArchiveState && canArchiveState(row)}
+                  {#if onRetireState && canRetireState(row)}
                     <button
-                      class="icon-action archive"
+                      class="icon-action retire-state"
                       type="button"
-                      title="Archive CAR state without deleting git files"
-                      aria-label={`Archive CAR state for ${row.label}`}
-                      onclick={(event) => handleArchiveClick(event, {
+                      title="Retire CAR state without deleting git files"
+                      aria-label={`Retire CAR state for ${row.label}`}
+                      onclick={(event) => handleRetireStateClick(event, {
                         kind: row.kind,
                         id: row.id,
                         label: row.label,
@@ -635,15 +635,15 @@
                         >
                           + Agent
                         </a>
-                        {#if (onArchiveState && canArchiveState(worktree)) || onRetireWorktree}
+                        {#if (onRetireState && canRetireState(worktree)) || onRetireWorktree}
                           <span class="worktree-row-icon-actions">
-                            {#if onArchiveState && canArchiveState(worktree)}
+                            {#if onRetireState && canRetireState(worktree)}
                               <button
-                                class="icon-action archive"
+                                class="icon-action retire-state"
                                 type="button"
-                                title="Archive CAR state without deleting git files"
-                                aria-label={`Archive CAR state for ${worktree.label}`}
-                                onclick={(event) => handleArchiveClick(event, {
+                                title="Retire CAR state without deleting git files"
+                                aria-label={`Retire CAR state for ${worktree.label}`}
+                                onclick={(event) => handleRetireStateClick(event, {
                                   kind: 'worktree',
                                   id: worktree.id,
                                   label: worktree.label,
@@ -701,13 +701,13 @@
     {:else}
     <PageHero title={shortDetailTitle} subtitle={detailSubtitle}>
       {#snippet actions()}
-        {#if onArchiveState && canArchiveState(detail)}
+        {#if onRetireState && canRetireState(detail)}
           <button
             class="hero-action icon-hero-action"
             type="button"
-            title="Archive CAR state without deleting git files"
-            aria-label={`Archive CAR state for ${detail.title}`}
-            onclick={(event) => handleArchiveClick(event, {
+            title="Retire CAR state without deleting git files"
+            aria-label={`Retire CAR state for ${detail.title}`}
+            onclick={(event) => handleRetireStateClick(event, {
               kind: detail.kind,
               id: detail.id,
               label: shortDetailTitle,
@@ -716,7 +716,7 @@
             })}
           >
             <span class="emoji-icon" aria-hidden="true">🧹</span>
-            <span>Archive</span>
+            <span>Retire</span>
           </button>
         {/if}
         {#if detail.kind === 'worktree' && onRetireWorktree}

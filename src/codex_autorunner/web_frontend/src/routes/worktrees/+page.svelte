@@ -2,7 +2,7 @@
   import { onDestroy, onMount } from 'svelte';
   import AutoDismissNotice from '$lib/components/AutoDismissNotice.svelte';
   import RepoWorktreeViews from '$lib/components/RepoWorktreeViews.svelte';
-  import { confirmAndArchiveState, confirmAndRetireWorktree, type ActionNotice } from '$lib/actions/repoWorktreeActions';
+  import { confirmAndRetireState, confirmAndRetireWorktree, type ActionNotice } from '$lib/actions/repoWorktreeActions';
   import { type ApiError } from '$lib/api/client';
   import { ensureRepoWorktreeIndexLoaded, readModelEntityStore, selectRepoSummaries, selectWorktreeSummaries } from '$lib/data';
   import {
@@ -66,8 +66,8 @@
     if (result.tone === 'success') await loadWorktrees();
   }
 
-  async function handleArchiveState(target: Parameters<typeof confirmAndArchiveState>[0]): Promise<void> {
-    const result = await confirmAndArchiveState(target);
+  async function handleRetireState(target: Parameters<typeof confirmAndRetireState>[0]): Promise<void> {
+    const result = await confirmAndRetireState(target);
     if (!result) return;
     notice = result;
     if (result.tone === 'success') await loadWorktrees();
@@ -81,6 +81,6 @@
   {index}
   onRetry={loadWorktrees}
   onRetireWorktree={handleRetireWorktree}
-  onArchiveState={handleArchiveState}
+  onRetireState={handleRetireState}
   errorMessage={error?.message ?? null}
 />

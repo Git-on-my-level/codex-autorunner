@@ -177,20 +177,22 @@ def register_cleanup_commands(
         )
         typer.echo(render_cleanup_reports_human(CleanupReportsResult(summary=summary)))
 
-    @cleanup_app.command("archives")
-    def cleanup_archives(
+    @cleanup_app.command("retirements")
+    def cleanup_retirements(
         repo: Optional[Path] = typer.Option(None, "--repo", help="Repo path"),
         hub: Optional[Path] = hub_root_path_option(),
         scope: str = typer.Option(
             "both",
             "--scope",
-            help="Archive scope to prune: worktrees, runs, or both.",
+            help="Retirement scope to prune: worktrees, runs, or both.",
         ),
         dry_run: bool = typer.Option(
-            False, "--dry-run", help="Preview archive pruning without deleting files."
+            False,
+            "--dry-run",
+            help="Preview retirement pruning without deleting files.",
         ),
     ) -> None:
-        """Prune retained archive snapshots under .codex-autorunner/archive."""
+        """Prune retained retirement snapshots under .codex-autorunner/archive."""
         engine = require_repo_config(repo, hub)
         scope_value = scope.strip().lower()
         if scope_value not in {"worktrees", "runs", "both"}:

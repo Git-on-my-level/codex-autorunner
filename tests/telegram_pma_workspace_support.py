@@ -289,14 +289,14 @@ async def test_archive_uses_shared_fresh_start_and_resets_topic(
         _fake_reset_telegram_thread_binding,
     )
 
-    await handler._handle_archive(
+    await handler._handle_retire(
         TelegramMessage(
             update_id=1,
             message_id=2,
             chat_id=10,
             thread_id=20,
             from_user_id=30,
-            text="/archive",
+            text="/retire",
             date=None,
             is_topic_message=True,
         )
@@ -315,7 +315,7 @@ async def test_archive_uses_shared_fresh_start_and_resets_topic(
     assert record.pending_compact_seed_thread_id is None
     assert handler._sent
     assert "Workspace CAR state was already clean." in handler._sent[-1]
-    assert "Archived 1 managed thread." in handler._sent[-1]
+    assert "Retired 1 managed thread." in handler._sent[-1]
 
 
 @pytest.mark.anyio
@@ -352,14 +352,14 @@ async def test_archive_without_hub_root_does_not_substitute_workspace_root(
         ),
     )
 
-    await handler._handle_archive(
+    await handler._handle_retire(
         TelegramMessage(
             update_id=1,
             message_id=2,
             chat_id=10,
             thread_id=20,
             from_user_id=30,
-            text="/archive",
+            text="/retire",
             date=None,
             is_topic_message=True,
         )

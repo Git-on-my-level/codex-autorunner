@@ -11,7 +11,7 @@ Common operations:
 - Watch intentionally: `car pma thread send --id <thread_id> --message "..." --watch --path <hub_root>`
 - Status: `car pma thread status --id <thread_id> --path <hub_root>`
 - Compact: `car pma thread compact --id <thread_id> --summary "..." --path <hub_root>`
-- Archive: `car pma thread archive --id <thread_id> --path <hub_root>`
+- Retire: `car pma thread retire --id <thread_id> --path <hub_root>`
 
 Reuse a relevant active managed thread before spawning a new one.
 
@@ -23,7 +23,7 @@ bindings are pointers to the current channel or topic generation.
 
 `/newt` on a bound Discord channel or Telegram topic starts a new active
 managed thread generation and rebinds the surface key to that thread. The old
-generation may be archived, but it remains addressable through Archive and the
+generation may be retired, but it remains addressable through Retirement and the
 direct chat detail route.
 
 Stale surface archive events are history for a previous binding generation.

@@ -65,7 +65,7 @@ describe('RepoWorktreeViews', () => {
     expect(body).toContain('1 waiting');
   });
 
-  it('renders repo archive plus child worktree archive and cleanup actions', () => {
+  it('renders repo retire plus child worktree retire and cleanup actions', () => {
     const index = buildRepoWorktreeIndexViewModel({
       repos: [{ ...mockRepoSummary, raw: { has_car_state: true } }],
       worktrees: [
@@ -92,17 +92,17 @@ describe('RepoWorktreeViews', () => {
         mode: 'index',
         index,
         onRetireWorktree: () => undefined,
-        onArchiveState: () => undefined
+        onRetireState: () => undefined
       }
     });
 
-    expect(body).toContain('Archive CAR state for codex-autorunner');
-    expect(body).toContain('Archive CAR state for discord-5');
+    expect(body).toContain('Retire CAR state for codex-autorunner');
+    expect(body).toContain('Retire CAR state for discord-5');
     expect(body).toContain('Retire worktree discord-5');
     expect(body).toContain('Chat-bound');
     expect(body).toContain('CAR / #ops');
     expect(body).toContain('icon-action retire');
-    expect(body).toContain('icon-action archive');
+    expect(body).toContain('icon-action retire-state');
   });
 
   it('renders sparse repo index empty-state copy', () => {

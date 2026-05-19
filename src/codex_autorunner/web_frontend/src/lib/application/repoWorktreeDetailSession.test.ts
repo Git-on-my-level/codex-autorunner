@@ -120,7 +120,7 @@ describe('repo worktree detail session', () => {
     expect(session.state.detail).toBeNull();
   });
 
-  it('reloads after successful retire and archive actions', async () => {
+  it('reloads after successful retire actions', async () => {
     const store = new ReadModelEntityStore();
     store.applyRepoDetailSnapshot(repoDetailSnapshot('repo-1'));
     const loadRepoDetail = vi.fn(async (repoId: string) => {
@@ -131,7 +131,7 @@ describe('repo worktree detail session', () => {
       store,
       loadRepoDetail,
       retireWorktree: vi.fn(async () => ({ tone: 'success' as const, message: 'retired' })),
-      archiveState: vi.fn(async () => ({ tone: 'success' as const, message: 'archived' }))
+      retireState: vi.fn(async () => ({ tone: 'success' as const, message: 'retired' }))
     });
 
     await session.retireWorktree({
@@ -140,7 +140,7 @@ describe('repo worktree detail session', () => {
       chatBound: false,
       cleanupBlockedByChatBinding: false
     });
-    await session.archiveState({
+    await session.retireState({
       kind: 'repo',
       id: 'repo-1',
       label: 'Repo',
@@ -149,7 +149,7 @@ describe('repo worktree detail session', () => {
     });
 
     expect(loadRepoDetail).toHaveBeenCalledTimes(2);
-    expect(session.state.notice).toEqual({ tone: 'success', message: 'archived' });
+    expect(session.state.notice).toEqual({ tone: 'success', message: 'retired' });
   });
 
   it('ignores stale async responses after the route owner changes', async () => {
@@ -190,7 +190,7 @@ function createSession(
       syncRepoMain: vi.fn(async () => ({ ok: true as const })),
       invalidateTags: vi.fn(async () => undefined),
       retireWorktree: vi.fn(async () => null),
-      archiveState: vi.fn(async () => null),
+      retireState: vi.fn(async () => null),
       ...overrides
     }
   });

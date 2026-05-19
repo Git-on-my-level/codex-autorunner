@@ -1052,7 +1052,7 @@ def register_hub_commands(
     @hub_app.command("cleanup")
     def hub_cleanup(
         dry_run: bool = typer.Option(
-            False, "--dry-run", help="Preview only, don't archive anything"
+            False, "--dry-run", help="Preview only, don't retire anything"
         ),
         path: Optional[Path] = hub_root_path_option(),
         output_json: bool = typer.Option(
@@ -1060,7 +1060,7 @@ def register_hub_commands(
         ),
         pretty: bool = typer.Option(False, "--pretty", help="Pretty-print JSON output"),
     ):
-        """Clean slate: archive unbound threads, eligible worktrees, and completed flow runs."""
+        """Clean slate: retire unbound threads, eligible worktrees, and completed flow runs."""
         config = require_hub_config(path)
         supervisor = build_supervisor(config)
         try:

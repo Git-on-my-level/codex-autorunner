@@ -7945,17 +7945,17 @@ class DiscordBotService(DiscordInteractionResponseMixin):
             channel_id=channel_id,
         )
 
-    async def _handle_car_archive(
+    async def _handle_car_retire(
         self,
         interaction_id: str,
         interaction_token: str,
         *,
         channel_id: str,
     ) -> None:
-        from .car_handlers.session_commands import handle_car_archive
+        from .car_handlers.session_commands import handle_car_retire
 
         await self._run_effectful_handler(
-            handle_car_archive,
+            handle_car_retire,
             interaction_id,
             interaction_token,
             channel_id=channel_id,

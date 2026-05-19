@@ -12,7 +12,7 @@ export type SlashCommandId =
   | 'reset'
   | 'resume'
   | 'interrupt'
-  | 'archive'
+  | 'retire'
   | 'tickets'
   | 'contextspace'
   | 'files'
@@ -156,7 +156,7 @@ export const WEB_SLASH_COMMANDS: SlashCommandSpec[] = [
     id: 'resume',
     name: 'resume',
     title: 'Resume thread',
-    description: 'Reactivate an archived or completed managed thread.',
+    description: 'Reactivate a retired or completed managed thread.',
     usage: '/resume',
     group: 'Session',
     requiresChat: true
@@ -174,11 +174,11 @@ export const WEB_SLASH_COMMANDS: SlashCommandSpec[] = [
     destructive: true
   },
   {
-    id: 'archive',
-    name: 'archive',
-    title: 'Archive thread',
-    description: 'Archive this chat so future work starts elsewhere.',
-    usage: '/archive',
+    id: 'retire',
+    name: 'retire',
+    title: 'Retire thread',
+    description: 'Retire this chat so future work starts elsewhere.',
+    usage: '/retire',
     group: 'Session',
     requiresChat: true,
     destructive: true

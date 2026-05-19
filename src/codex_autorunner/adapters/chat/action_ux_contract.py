@@ -283,7 +283,7 @@ CHAT_ACTION_UX_CONTRACT: tuple[ChatActionUxContractEntry, ...] = (
     _telegram_command_entry("bind", allow_during_turn=False),
     _telegram_command_entry("new", allow_during_turn=False),
     _telegram_command_entry("newt", allow_during_turn=False),
-    _telegram_command_entry("archive", allow_during_turn=False),
+    _telegram_command_entry("retire", allow_during_turn=False),
     _telegram_command_entry("reset", allow_during_turn=False),
     _telegram_command_entry("resume", allow_during_turn=False),
     _telegram_command_entry("review", allow_during_turn=False),
@@ -360,7 +360,7 @@ CHAT_ACTION_UX_CONTRACT: tuple[ChatActionUxContractEntry, ...] = (
     ),
     _discord_slash_entry("car.repos", ack_class="immediate", visibility="operator"),
     _discord_slash_entry(
-        "car.archive", ack_class="defer_ephemeral", visibility="public"
+        "car.retire", ack_class="defer_ephemeral", visibility="public"
     ),
     _discord_slash_entry(
         "car.files.inbox",

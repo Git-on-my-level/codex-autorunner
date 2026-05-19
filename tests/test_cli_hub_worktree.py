@@ -681,10 +681,10 @@ def test_cli_hub_worktree_retire_uses_cleanup_with_retire(
             "--delete-branch",
             "--delete-remote",
             "--force",
-            "--force-archive",
+            "--force-retire",
             "--force-attestation",
             "retire forced worktree",
-            "--archive-note",
+            "--retire-note",
             "save state",
         ],
     )
@@ -772,7 +772,7 @@ def test_cli_hub_worktree_retire_forwards_archive_profile(
             "wt-1",
             "--path",
             str(hub_root),
-            "--archive-profile",
+            "--retire-profile",
             "full",
         ],
     )

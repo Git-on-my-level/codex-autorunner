@@ -1084,27 +1084,27 @@
     await chatIndexSession.refresh();
   }
 
-  async function archiveChat(chatId: string, options: { confirmed?: boolean } = {}): Promise<void> {
+  async function retireChat(chatId: string, options: { confirmed?: boolean } = {}): Promise<void> {
     if (archiving) return;
     if (isLocalDraftChatId(chatId)) return;
     if (!options.confirmed) {
       const chat = chatSummaryForId(chatId);
       const ok = await confirmDialog({
-        title: 'Archive chat',
-        message: `Archive "${chat?.title ?? chatId}"?`,
-        confirmText: 'Archive',
+        title: 'Retire chat',
+        message: `Retire "${chat?.title ?? chatId}"?`,
+        confirmText: 'Retire',
         danger: true
       });
       if (!ok) return;
     }
     archiving = true;
     composeError = null;
-    const reconciliationId = `archive:${chatId}:${Date.now()}`;
-    readModelEntityStore.optimisticArchiveChat(chatId, reconciliationId);
-    const result = await webApi.pma.archiveThread(chatId);
+    const reconciliationId = `retire:${chatId}:${Date.now()}`;
+    readModelEntityStore.optimisticRetireChat(chatId, reconciliationId);
+    const result = await webApi.pma.retireThread(chatId);
     if (result.ok) {
       await invalidateChatMutation(chatId);
-      showCommandNotice('Chat archived.');
+      showCommandNotice('Chat retired.');
       if (activeChatId === chatId) {
         closeStream();
         await goto(href('/chats'));
@@ -1116,25 +1116,25 @@
     archiving = false;
   }
 
-  async function archiveAllActiveChats(): Promise<void> {
+  async function retireAllActiveChats(): Promise<void> {
     if (activeChatCount <= 0 || archiving) return;
     const ok = await confirmDialog({
-      title: 'Archive active chats',
-      message: `Archive ${activeChatCount} active chat${activeChatCount === 1 ? '' : 's'}?`,
-      confirmText: 'Archive',
+      title: 'Retire active chats',
+      message: `Retire ${activeChatCount} active chat${activeChatCount === 1 ? '' : 's'}?`,
+      confirmText: 'Retire',
       danger: true
     });
     if (!ok) return;
     archiving = true;
     composeError = null;
-    const result = await webApi.pma.archiveActiveThreads();
+    const result = await webApi.pma.retireActiveThreads();
     if (result.ok) {
       const targets = result.data.threads.map((chat) => chat.id);
       await invalidateChatMutations(targets);
       showCommandNotice(
         result.data.errorCount > 0
-          ? `Archived ${result.data.archivedCount}; ${result.data.errorCount} failed.`
-          : `Archived ${result.data.archivedCount} chats.`
+          ? `Retired ${result.data.retiredCount}; ${result.data.errorCount} failed.`
+          : `Retired ${result.data.retiredCount} chats.`
       );
       if (activeChatId && targets.includes(activeChatId)) {
         closeStream();
@@ -1674,9 +1674,9 @@
       }
       return true;
     }
-    if (spec.id === 'archive') {
+    if (spec.id === 'retire') {
       const archivedId = activeChatId;
-      await archiveChat(archivedId, { confirmed: true });
+      await retireChat(archivedId, { confirmed: true });
       clearSlashDraft();
       return true;
     }
@@ -1866,13 +1866,13 @@
       {/if}
       {#if activeChatCount > 0 && filter !== 'archived'}
         <button
-          class="new-chat-button archive-all-button"
+          class="new-chat-button retire-all-button"
           type="button"
-          onclick={archiveAllActiveChats}
+          onclick={retireAllActiveChats}
           disabled={archiving}
-          aria-label="Archive all active chats"
+          aria-label="Retire all active chats"
         >
-          {archiving ? 'Archiving...' : 'Archive All'}
+          {archiving ? 'Retiring...' : 'Retire All'}
         </button>
       {/if}
     </div>
@@ -1940,7 +1940,7 @@
                   <span class={`chat-scope-kind-tag ${scopeTags.kindKey}`}>{scopeTags.kindLabel}</span>
                 {/if}
                 {#if isPmaChatArchived(chat)}
-                  <span class="chat-scope-kind-tag archived">Archived</span>
+                  <span class="chat-scope-kind-tag retired">Retired</span>
                 {/if}
                 {#if pmaChatKind(chat) === 'coding_agent'}
                   <span class={`chat-kind-badge ${pmaChatKind(chat)}`}>{pmaChatKindLabel(pmaChatKind(chat))}</span>
@@ -2180,11 +2180,11 @@
             <button
               class="chat-header-action"
               type="button"
-              onclick={() => archiveChat(activeChat.id)}
+              onclick={() => retireChat(activeChat.id)}
               disabled={archiving}
-              aria-label="Archive this chat"
+              aria-label="Retire this chat"
             >
-              {archiving ? 'Archiving...' : 'Archive'}
+              {archiving ? 'Retiring...' : 'Retire'}
             </button>
           {/if}
           {#if showStreamHealthAside}

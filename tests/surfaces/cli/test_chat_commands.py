@@ -28,7 +28,7 @@ def test_chat_index_rebuild_dry_run_reports_projection_state(tmp_path) -> None:
     assert payload["projection"]["row_count"] == 0
 
 
-def test_chat_index_repair_stale_bound_archives_dry_run_reports_matches(
+def test_chat_index_repair_stale_bound_retirements_dry_run_reports_matches(
     tmp_path,
 ) -> None:
     result = CliRunner().invoke(
@@ -36,7 +36,7 @@ def test_chat_index_repair_stale_bound_archives_dry_run_reports_matches(
         [
             "chat",
             "index",
-            "repair-stale-bound-archives",
+            "repair-stale-bound-retirements",
             "--path",
             str(tmp_path),
             "--dry-run",

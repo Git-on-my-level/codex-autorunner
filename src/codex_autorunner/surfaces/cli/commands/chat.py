@@ -886,8 +886,8 @@ def register_chat_commands(
                 )
             )
 
-    @index_app.command("repair-stale-bound-archives")
-    def chat_index_repair_stale_bound_archives(
+    @index_app.command("repair-stale-bound-retirements")
+    def chat_index_repair_stale_bound_retirements(
         dry_run: bool = typer.Option(
             False,
             "--dry-run",
@@ -896,7 +896,7 @@ def register_chat_commands(
         output_json: bool = typer.Option(False, "--json", help="Emit JSON output"),
         path: Optional[Path] = hub_root_path_option(),
     ) -> None:
-        """Repair active Discord/Telegram chats shadowed by stale archive facts."""
+        """Repair active Discord/Telegram chats shadowed by stale retirement facts."""
         hub_root = resolve_hub_path(path)
         service = ChatSurfaceReadService(hub_root, durable=True)
         result = service.repair_stale_bound_surface_archive_state(dry_run=dry_run)
@@ -905,7 +905,7 @@ def register_chat_commands(
             return
         if dry_run:
             typer.echo(
-                "Stale bound archive repair dry run: " f"matched={result['matched']}"
+                "Stale bound retirement repair dry run: " f"matched={result['matched']}"
             )
             for candidate in result["candidates"]:
                 typer.echo(
@@ -916,7 +916,7 @@ def register_chat_commands(
             return
         projection = result.get("projection") or {}
         typer.echo(
-            "Repaired stale bound archive state: "
+            "Repaired stale bound retirement state: "
             f"matched={result['matched']} "
             f"repaired={result['repaired']} "
             f"already_recorded={result['already_recorded']} "

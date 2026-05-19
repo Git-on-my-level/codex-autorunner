@@ -129,8 +129,8 @@ def test_managed_thread_compact_archive_resume_lifecycle(hub_env) -> None:
         assert compact_summary in second_prompt
         assert f"User message:\n{second_message}" in second_prompt
 
-        archive_resp = client.post(f"/hub/pma/threads/{managed_thread_id}/archive")
-        assert archive_resp.status_code == 200
+        retire_resp = client.post(f"/hub/pma/threads/{managed_thread_id}/retire")
+        assert retire_resp.status_code == 200
 
         archived_thread = store.get_thread(managed_thread_id)
         assert archived_thread is not None
