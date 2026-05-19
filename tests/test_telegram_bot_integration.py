@@ -1454,8 +1454,9 @@ async def test_resume_compact_seed_button_label_is_condensed(
     )
     keyboard = resume_msg["reply_markup"]["inline_keyboard"]
     labels = [button["text"] for row in keyboard for button in row if "text" in button]
-    assert any("Compacted:" in label for label in labels)
+    assert all("Compacted:" not in label for label in labels)
     assert all("Context from previous conversation" not in label for label in labels)
+    assert all("Fix resume labels" not in label for label in labels)
     assert any("2026-03-31 09:15Z" in label for label in labels)
 
 

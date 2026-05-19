@@ -106,6 +106,7 @@ def _seed_execution(
     thread_id: str,
     status: str,
     execution_id: str | None = None,
+    prompt_text: str | None = None,
     created_at: str = "2026-05-11T00:01:00Z",
 ) -> None:
     eid = execution_id or f"exec-{thread_id}-{status}"
@@ -116,14 +117,16 @@ def _seed_execution(
                 execution_id,
                 thread_target_id,
                 request_kind,
+                prompt_text,
                 status,
                 created_at
-            ) VALUES (?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?)
             """,
             (
                 eid,
                 thread_id,
                 "message",
+                prompt_text,
                 status,
                 created_at,
             ),
@@ -381,6 +384,98 @@ def test_chat_index_uses_managed_lifecycle_after_telegram_surface_rebind(
     assert [row["managed_thread_id"] for row in archived["rows"]] == [
         "telegram-thread-a"
     ]
+
+
+def test_chat_index_visible_chrome_uses_user_visible_prompt_after_injected_context(
+    tmp_path: Path,
+) -> None:
+    hub_root = tmp_path / "hub"
+    injected_prompt = (
+        "<injected context>\n"
+        "model-only deployment instructions\n"
+        "</injected context>\n\n"
+        "Investigate checkout failure"
+    )
+    _seed_thread(
+        hub_root,
+        thread_id="thread-injected",
+        display_name=injected_prompt,
+        last_message_preview=injected_prompt,
+    )
+
+    service = ChatSurfaceReadService(hub_root, durable=False)
+    row = service.chat_index_snapshot(view="all", limit=20)["rows"][0]
+
+    assert row["display_title"] == "Investigate checkout failure"
+    assert row["last_message_preview"] == "Investigate checkout failure"
+    assert "model-only" not in row["search_text"]
+
+    search = service.chat_index_snapshot(query="checkout failure", limit=20)
+    assert [item["managed_thread_id"] for item in search["rows"]] == ["thread-injected"]
+    leaked = service.chat_index_snapshot(query="model-only", limit=20)
+    assert leaked["rows"] == []
+
+
+def test_chat_index_falls_back_to_user_visible_execution_for_attachment_only_turn(
+    tmp_path: Path,
+) -> None:
+    hub_root = tmp_path / "hub"
+    _seed_thread(
+        hub_root,
+        thread_id="thread-attachment",
+        display_name="Thread thread-attachment",
+        last_message_preview="<injected context>runtime attachment notes</injected context>",
+    )
+    _seed_execution(
+        hub_root,
+        thread_id="thread-attachment",
+        status="completed",
+        prompt_text="Attachment: crash.log",
+    )
+
+    row = ChatSurfaceReadService(hub_root, durable=False).chat_index_snapshot(
+        view="all",
+        limit=20,
+    )["rows"][0]
+
+    assert row["display_title"] == "Attachment: crash.log"
+    assert row["last_message_preview"] == "Attachment: crash.log"
+    assert "runtime attachment notes" not in row["search_text"]
+
+
+def test_chat_index_does_not_promote_compact_seed_to_visible_chrome(
+    tmp_path: Path,
+) -> None:
+    hub_root = tmp_path / "hub"
+    compact_prompt = (
+        "Context from previous conversation:\n\n"
+        "secret implementation notes\n\n"
+        "Continue from this context. Ask for missing info if needed.\n\n"
+        "Continue the release cleanup"
+    )
+    _seed_thread(
+        hub_root,
+        thread_id="thread-compact",
+        display_name=compact_prompt,
+        last_message_preview=compact_prompt,
+    )
+    _seed_execution(
+        hub_root,
+        thread_id="thread-compact",
+        status="completed",
+        prompt_text="Continue the release cleanup",
+    )
+
+    service = ChatSurfaceReadService(hub_root, durable=False)
+    row = service.chat_index_snapshot(view="all", limit=20)["rows"][0]
+
+    assert row["display_title"] == "Continue the release cleanup"
+    assert row["last_message_preview"] == "Continue the release cleanup"
+    assert "secret implementation notes" not in row["search_text"]
+    assert (
+        service.chat_index_snapshot(query="secret implementation", limit=20)["rows"]
+        == []
+    )
 
 
 def test_chat_index_sort_key_parts_serializes_missing_activity_as_null() -> None:

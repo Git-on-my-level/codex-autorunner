@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import re
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -14,6 +15,7 @@ from ..domain.workspace_scope import (
     workspace_scope_index_from_snapshots,
 )
 from ..hub_topology import load_hub_state
+from ..injected_context import strip_injected_context_blocks
 from ..text_utils import _normalize_optional_text, _parse_iso_timestamp
 from .chat_surface_events import ChatSurfaceEvent, SQLiteChatSurfaceEventJournal
 from .sqlite import open_orchestration_sqlite
@@ -43,6 +45,18 @@ _RUNNING_STATUSES = {"running", "in_progress", "started", "claimed", "delivering
 _QUEUED_STATUSES = {"queued", "pending"}
 _DELIVERY_RETRY_STATUSES = {"retry_scheduled"}
 _DYNAMIC_LIFECYCLES = frozenset({"idle", "queued", "running", "failed"})
+_COMPACT_SEED_BLOCK_PATTERNS = (
+    re.compile(
+        r"(?is)\bContext from previous conversation:\s*.*?"
+        r"(?:Continue from this context\. Ask for missing info if needed\.|$)"
+    ),
+    re.compile(
+        r"(?is)\bCompacted context summary:\s*.*?(?=\n\s*\n|\Z)",
+    ),
+    re.compile(
+        r"(?is)\bContext summary \(from compaction\):\s*.*?(?=\n\s*\n|\Z)",
+    ),
+)
 
 logger = logging.getLogger("codex_autorunner.chat_surface_read_model")
 
@@ -1262,6 +1276,7 @@ class ChatSurfaceReadService:
                 SELECT thread_target_id,
                        execution_id,
                        status,
+                       prompt_text,
                        created_at,
                        started_at,
                        finished_at,
@@ -1346,6 +1361,9 @@ class ChatSurfaceReadService:
                 _normalize_text(row["updated_at"]),
                 _normalize_text(execution["created_at"]) if execution else None,
             )
+            last_message_preview = _visible_chrome_text(
+                _row_get(row, "last_message_preview")
+            ) or _visible_chrome_text(_row_get(execution, "prompt_text"))
             projection.merge(
                 lifecycle=lifecycle,
                 lifecycle_status=lifecycle_status,
@@ -1396,9 +1414,7 @@ class ChatSurfaceReadService:
                     "status_terminal": bool(_row_get(row, "status_terminal")),
                     "status_turn_id": _normalize_text(_row_get(row, "status_turn_id")),
                     "last_turn_id": _normalize_text(_row_get(row, "last_execution_id")),
-                    "last_message_preview": _normalize_text(
-                        _row_get(row, "last_message_preview")
-                    ),
+                    "last_message_preview": last_message_preview,
                     "compact_seed": _normalize_text(_row_get(row, "compact_seed")),
                     **binding_summary,
                 },
@@ -1621,6 +1637,9 @@ def _chat_index_rows_from_surfaces(
         display_map = dict(display) if isinstance(display, Mapping) else {}
         metadata = surface.get("metadata")
         metadata_map = dict(metadata) if isinstance(metadata, Mapping) else {}
+        last_message_preview = _visible_chrome_text(
+            metadata_map.get("last_message_preview")
+        )
         base_surface = {
             "surface_kind": surface_kind,
             "surface_key": surface_key,
@@ -1659,7 +1678,7 @@ def _chat_index_rows_from_surfaces(
                     "last_activity_at": metadata_map.get("last_activity_at"),
                     "updated_at": surface.get("updated_at"),
                     "created_at": surface.get("created_at"),
-                    "last_message_preview": metadata_map.get("last_message_preview"),
+                    "last_message_preview": last_message_preview,
                     "unread": bool(metadata_map.get("unread")),
                     "unread_count": int(metadata_map.get("unread_count") or 0),
                     "active_turn_id": metadata_map.get("active_turn_id"),
@@ -1695,7 +1714,7 @@ def _chat_index_rows_from_surfaces(
                 or surface.get("updated_at"),
                 "updated_at": surface.get("updated_at"),
                 "created_at": surface.get("created_at"),
-                "last_message_preview": metadata_map.get("last_message_preview"),
+                "last_message_preview": last_message_preview,
                 "agent": metadata_map.get("agent_id"),
                 "agent_profile": metadata_map.get("agent_profile"),
                 "model": metadata_map.get("model"),
@@ -1742,7 +1761,6 @@ def _chat_index_rows_from_surfaces(
             for key in (
                 "runtime_status",
                 "target_runtime_status",
-                "last_message_preview",
                 "agent_id",
                 "agent_profile",
                 "chat_kind",
@@ -1754,12 +1772,17 @@ def _chat_index_rows_from_surfaces(
             ):
                 if metadata_map.get(key) is not None:
                     row["agent" if key == "agent_id" else key] = metadata_map.get(key)
+            if last_message_preview is not None:
+                row["last_message_preview"] = last_message_preview
             row["queue_depth"] = max(
                 int(row.get("queue_depth") or 0),
                 int(metadata_map.get("queue_depth") or 0),
             )
     rows = list(by_thread.values()) + external_rows
     for row in rows:
+        row["last_message_preview"] = _visible_chrome_text(
+            row.get("last_message_preview")
+        )
         if row.get("managed_thread_id") is None:
             friendly_title = _friendly_chat_title(row)
             if friendly_title is not None:
@@ -1815,20 +1838,32 @@ def _chat_index_rows_from_surfaces(
 
 def _display_title(display: Mapping[str, Any], fallback: str) -> str:
     return (
-        _normalize_text(display.get("title"))
-        or _normalize_text(display.get("display_name"))
+        _visible_chrome_text(display.get("title"))
+        or _visible_chrome_text(display.get("display_name"))
         or fallback
     )
+
+
+def _visible_chrome_text(value: Any) -> Optional[str]:
+    text = _normalize_text(value)
+    if text is None:
+        return None
+    cleaned = strip_injected_context_blocks(text)
+    if not isinstance(cleaned, str):
+        return None
+    for pattern in _COMPACT_SEED_BLOCK_PATTERNS:
+        cleaned = pattern.sub(" ", cleaned)
+    return _normalize_text(cleaned)
 
 
 def _managed_thread_identity_title(row: Mapping[str, Any]) -> str:
     """Return the primary PMA-owned title for a managed-thread chat row."""
 
     managed_thread_id = _normalize_text(row.get("managed_thread_id"))
-    title = _normalize_text(row.get("title"))
+    title = _visible_chrome_text(row.get("title"))
     if title is not None and not _is_fallback_chat_title(title, row):
         return title
-    preview = _normalize_text(row.get("last_message_preview"))
+    preview = _visible_chrome_text(row.get("last_message_preview"))
     if preview is not None:
         return preview
     return managed_thread_id or _normalize_text(row.get("chat_id")) or title or ""
@@ -1950,7 +1985,7 @@ def _friendly_chat_title(row: Mapping[str, Any]) -> Optional[str]:
         if kind == "pma":
             continue
         for key in ("title", "display_name"):
-            value = _normalize_text(surface.get(key))
+            value = _visible_chrome_text(surface.get(key))
             if value is None:
                 continue
             if _is_surface_id_title(value, surface):
@@ -2000,14 +2035,14 @@ def _log_read_model_metric(
 def _chat_row_search_text(row: Mapping[str, Any]) -> str:
     values = [
         row.get("managed_thread_id"),
-        row.get("title"),
+        _visible_chrome_text(row.get("title")),
         row.get("repo_id"),
         row.get("resource_kind"),
         row.get("resource_id"),
         row.get("agent"),
         row.get("agent_profile"),
         row.get("model"),
-        row.get("last_message_preview"),
+        _visible_chrome_text(row.get("last_message_preview")),
         " ".join(row.get("surface_kinds") or []),
     ]
     return " ".join(str(value).lower() for value in values if value)
@@ -2260,9 +2295,9 @@ def _chat_detail_thread_metadata(
     stored_title = thread.get("display_name") or thread.get("name")
     chat_display_name = next(
         (
-            _normalize_text(row.get("chat_display_name"))
+            _visible_chrome_text(row.get("chat_display_name"))
             for row in surface_rows
-            if _normalize_text(row.get("chat_display_name")) is not None
+            if _visible_chrome_text(row.get("chat_display_name")) is not None
         ),
         None,
     )
@@ -2287,7 +2322,9 @@ def _chat_detail_thread_metadata(
         or thread.get("runtime_status"),
         "backend_thread_id": thread.get("backend_thread_id"),
         "last_turn_id": thread.get("last_execution_id"),
-        "last_message_preview": thread.get("last_message_preview"),
+        "last_message_preview": _visible_chrome_text(
+            thread.get("last_message_preview")
+        ),
         "compact_seed": thread.get("compact_seed"),
         "surfaces": [
             surface
@@ -2318,7 +2355,7 @@ def _queue_summary_item(item: Mapping[str, Any], *, position: int) -> dict[str, 
         "position": position,
         "state": item.get("state"),
         "request_kind": item.get("request_kind"),
-        "prompt_preview": _normalize_text(item.get("prompt")) or "",
+        "prompt_preview": _visible_chrome_text(item.get("prompt")) or "",
         "enqueued_at": item.get("enqueued_at"),
         "visible_at": item.get("visible_at"),
     }
@@ -2844,7 +2881,7 @@ def _pma_thread_from_surface(surface: Mapping[str, Any]) -> dict[str, Any]:
         or ""
     )
     managed_thread_id = _normalize_text(surface.get("managed_thread_id"))
-    chat_display_name = _normalize_text(metadata.get("chat_display_name"))
+    chat_display_name = _visible_chrome_text(metadata.get("chat_display_name"))
     payload: dict[str, Any] = {
         "managed_thread_id": managed_thread_id,
         "agent": _normalize_text(metadata.get("agent_id")) or "unknown",
@@ -2853,7 +2890,7 @@ def _pma_thread_from_surface(surface: Mapping[str, Any]) -> dict[str, Any]:
         "resource_kind": _normalize_text(owner.get("resource_kind")),
         "resource_id": _normalize_text(owner.get("resource_id")),
         "workspace_root": _normalize_text(owner.get("workspace_root")),
-        "name": _normalize_text(display.get("display_name")) or managed_thread_id,
+        "name": _visible_chrome_text(display.get("display_name")) or managed_thread_id,
         "chat_display_name": chat_display_name,
         "model": _normalize_text(metadata.get("model")),
         "backend_thread_id": _normalize_text(metadata.get("backend_thread_id")),
@@ -2870,7 +2907,9 @@ def _pma_thread_from_surface(surface: Mapping[str, Any]) -> dict[str, Any]:
         "status_terminal": bool(metadata.get("status_terminal")),
         "status_turn_id": _normalize_text(metadata.get("status_turn_id")),
         "last_turn_id": _normalize_text(metadata.get("last_turn_id")),
-        "last_message_preview": _normalize_text(metadata.get("last_message_preview")),
+        "last_message_preview": _visible_chrome_text(
+            metadata.get("last_message_preview")
+        ),
         "compact_seed": _normalize_text(metadata.get("compact_seed")),
         "accepts_messages": lifecycle_status == "active",
         "updated_at": _normalize_text(surface.get("updated_at")),
