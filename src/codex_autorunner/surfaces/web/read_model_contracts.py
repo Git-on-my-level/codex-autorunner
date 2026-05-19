@@ -117,6 +117,22 @@ class ReadModelEventEnvelope(ReadModelContract):
 
 
 class ChatIndexRow(ReadModelContract):
+    """Chat row contract shared by snapshots and patch payloads.
+
+    Timestamp semantics:
+    - ``last_visible_message_at`` is the newest user-visible conversation input.
+    - ``last_lifecycle_update_at`` is durable thread/binding lifecycle churn.
+    - ``last_internal_update_at`` is runtime/execution/delivery bookkeeping.
+    - ``last_sort_activity_at`` is the backend-owned recency clock for row order.
+    - ``last_activity_at`` is a compatibility alias for ``last_sort_activity_at``.
+
+    Title semantics:
+    - ``title``/``display_title`` are backend-resolved human display strings.
+    - ``technical_title`` preserves the stable thread/surface identifier.
+    - binding display fields describe attached delivery surfaces and do not own
+      managed-thread identity.
+    """
+
     chat_id: str
     surface: Literal["pma", "file_chat", "telegram", "discord", "app_server", "other"]
     title: str
@@ -149,6 +165,13 @@ class ChatIndexRow(ReadModelContract):
     chat_kind: Optional[Literal["pma", "coding_agent"]] = None
     model: Optional[str] = None
     group_id: Optional[str] = None
+    debug: Optional[dict[str, Any]] = Field(
+        default=None,
+        description=(
+            "Non-authoritative diagnostic hints explaining title and activity "
+            "clock resolution for support/debug UIs."
+        ),
+    )
 
 
 class ChatIndexGroup(ReadModelContract):

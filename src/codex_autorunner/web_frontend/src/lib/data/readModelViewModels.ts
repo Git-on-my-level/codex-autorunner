@@ -58,7 +58,8 @@ export function pmaChatSummaryToChatIndexRow(chat: PmaChatSummary): ChatIndexRow
       chat.chatKind ??
       normalizeManagedThreadChatKind(chat.raw.chat_kind ?? chat.raw.thread_kind),
     model: chat.model,
-    groupId: chat.ticketId ? `ticket:${chat.ticketId}` : chat.runId ? `run:${chat.runId}` : null
+    groupId: chat.ticketId ? `ticket:${chat.ticketId}` : chat.runId ? `run:${chat.runId}` : null,
+    debug: recordValue(chat.raw.debug)
   };
 }
 
@@ -98,7 +99,8 @@ export function legacyChatIndexRecordToChatIndexRow(raw: JsonRecord): ChatIndexR
     agentProfile: stringValue(raw.agent_profile ?? raw.agentProfile),
     chatKind: normalizeManagedThreadChatKind(raw.chat_kind ?? raw.chatKind ?? raw.thread_kind),
     model: stringValue(raw.model),
-    groupId: stringValue(raw.group_id)
+    groupId: stringValue(raw.group_id),
+    debug: recordValue(raw.debug)
   };
 }
 
@@ -141,7 +143,8 @@ export function chatIndexRowToPmaChatSummary(row: ChatIndexRow): PmaChatSummary 
     last_internal_update_at: row.lastInternalUpdateAt,
     last_sort_activity_at: row.lastSortActivityAt,
     surface_kind: row.surface,
-    sort_key: row.sortKey
+    sort_key: row.sortKey,
+    debug: row.debug
   };
   return {
     id: row.chatId,
@@ -362,6 +365,13 @@ function stringValue(value: unknown, fallback: string | null = null): string | n
 function numberValue(value: unknown): number {
   const parsed = typeof value === 'number' ? value : Number.parseInt(String(value ?? ''), 10);
   return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function recordValue(value: unknown): Record<string, unknown> | null {
+  if (value && typeof value === 'object' && !Array.isArray(value)) {
+    return value as Record<string, unknown>;
+  }
+  return null;
 }
 
 function unreadCountFromRaw(raw: JsonRecord): number {

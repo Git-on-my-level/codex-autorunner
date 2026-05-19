@@ -353,6 +353,13 @@ def test_chat_index_contract_uses_terminal_thread_status_and_ticket_flow_metadat
     assert row.ticket_id == "TICKET-015"
     assert row.run_id == "run-015"
     assert row.group_id == "run:run-015"
+    assert row.last_activity_at == row.last_sort_activity_at
+    assert row.debug is not None
+    assert row.debug["activity"]["selected_source"] in {
+        "last_visible_message_at",
+        "last_sort_activity_at",
+    }
+    assert row.debug["title"]["selected"] == row.display_title
 
     active_response = client.get(
         "/hub/read-models/chats", params={"filter": "active", "limit": 20}

@@ -239,7 +239,14 @@ class ChatSurfaceReadService:
     def pma_compat_snapshot(
         self, *, limit: int = DEFAULT_CHAT_SURFACE_SNAPSHOT_LIMIT
     ) -> dict[str, Any]:
-        """Return the legacy PMA chat snapshot shape from the generic projection."""
+        """Return the legacy PMA chat snapshot shape from the generic projection.
+
+        PMA compatibility keeps legacy field names: ``updated_at`` means the
+        PMA thread/runtime lifecycle changed, while chat-index recency is exposed
+        as ``last_visible_message_at`` and ``last_sort_activity_at`` on
+        chat-index rows. Consumers that sort chat rows should use the chat-index
+        contract instead of PMA ``updated_at``.
+        """
 
         snapshot = self.snapshot(limit=limit)
         threads = [
@@ -1941,6 +1948,7 @@ def _chat_index_rows_from_surfaces(
             }
         )
         row["search_text"] = _chat_row_search_text(row)
+        row["debug"] = _chat_row_debug_info(row)
     return rows
 
 
@@ -2004,6 +2012,70 @@ def _managed_thread_identity_title(row: Mapping[str, Any]) -> str:
         )
         or ""
     )
+
+
+def _chat_row_debug_info(row: Mapping[str, Any]) -> dict[str, Any]:
+    """Return diagnostic-only row resolution hints for support tooling."""
+
+    selected_title = _normalize_text(row.get("display_title") or row.get("title"))
+    title_candidates = {
+        "stored_title": _visible_chrome_text(row.get("title")),
+        "provider_title": _visible_chrome_text(row.get("provider_conversation_title")),
+        "visible_message_seed": _visible_chrome_text(row.get("last_message_preview")),
+        "binding_display_name": _normalize_text(row.get("binding_display_name")),
+        "technical_title": _normalize_text(row.get("technical_title")),
+    }
+    selected_title_source = "fallback"
+    for source in (
+        "provider_title",
+        "visible_message_seed",
+        "binding_display_name",
+        "technical_title",
+        "stored_title",
+    ):
+        value = title_candidates.get(source)
+        if value is not None and selected_title == value:
+            selected_title_source = source
+            break
+    if (
+        selected_title_source == "fallback"
+        and _normalize_text(row.get("ticket_id")) is not None
+        and selected_title == f"Ticket flow · {_normalize_text(row.get('ticket_id'))}"
+    ):
+        selected_title_source = "ticket_id"
+
+    activity_clock = {
+        "selected": _normalize_text(row.get("last_sort_activity_at")),
+        "selected_source": "last_sort_activity_at",
+        "last_visible_message_at": _normalize_text(row.get("last_visible_message_at")),
+        "last_lifecycle_update_at": _normalize_text(
+            row.get("last_lifecycle_update_at")
+        ),
+        "last_internal_update_at": _normalize_text(row.get("last_internal_update_at")),
+        "last_activity_at": _normalize_text(row.get("last_activity_at")),
+    }
+    if activity_clock["selected"] == activity_clock["last_visible_message_at"]:
+        activity_clock["selected_source"] = "last_visible_message_at"
+    elif activity_clock["selected"] is None:
+        activity_clock["selected_source"] = "none"
+
+    return {
+        "title": {
+            "selected": selected_title,
+            "selected_source": selected_title_source,
+            "candidates": {
+                key: value for key, value in title_candidates.items() if value
+            },
+        },
+        "activity": activity_clock,
+        "status": {
+            "effective_status": _chat_index_effective_status(row),
+            "lifecycle": _normalize_text(row.get("lifecycle")),
+            "lifecycle_status": _normalize_text(row.get("lifecycle_status")),
+            "runtime_status": _normalize_text(row.get("runtime_status")),
+            "queue_depth": int(row.get("queue_depth") or 0),
+        },
+    }
 
 
 def _surface_binding_display_name(surface: Mapping[str, Any]) -> Optional[str]:

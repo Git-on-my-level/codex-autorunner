@@ -160,6 +160,12 @@ describe('read model view-model selectors', () => {
       last_sort_activity_at: '2026-05-11T00:01:00Z',
       last_lifecycle_update_at: '2026-05-11T00:05:00Z',
       last_internal_update_at: '2026-05-11T00:05:00Z',
+      debug: {
+        activity: {
+          selected: '2026-05-11T00:01:00Z',
+          selected_source: 'last_visible_message_at'
+        }
+      },
       updated_at: '2026-05-11T00:05:00Z',
       created_at: '2026-05-11T00:00:00Z'
     });
@@ -167,7 +173,10 @@ describe('read model view-model selectors', () => {
     expect(row.lastActivityAt).toBe('2026-05-11T00:01:00Z');
     expect(row.lastVisibleMessageAt).toBe('2026-05-11T00:01:00Z');
     expect(row.lastLifecycleUpdateAt).toBe('2026-05-11T00:05:00Z');
-    expect(chatIndexRowToPmaChatSummary(row).updatedAt).toBe('2026-05-11T00:01:00Z');
+    const summary = chatIndexRowToPmaChatSummary(row);
+    expect(summary.updatedAt).toBe('2026-05-11T00:01:00Z');
+    expect(summary.raw.debug).toEqual(row.debug);
+    expect(pmaChatSummaryToChatIndexRow(summary).debug).toEqual(row.debug);
   });
 
   it('selects chat and repo/worktree summaries from normalized state', () => {

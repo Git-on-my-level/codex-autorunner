@@ -638,6 +638,11 @@ def hub_chat_row_to_chat_index_row(raw: Mapping[str, Any]) -> ChatIndexRow:
         chat_kind=ck_type,
         model=_str_or_none(raw.get("model")),
         group_id=_str_or_none(raw.get("group_id")),
+        debug=(
+            dict(cast(Mapping[str, Any], raw.get("debug")))
+            if isinstance(raw.get("debug"), Mapping)
+            else None
+        ),
     )
 
 

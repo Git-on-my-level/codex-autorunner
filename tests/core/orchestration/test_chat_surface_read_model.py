@@ -11,6 +11,7 @@ from codex_autorunner.core.orchestration import (
     ChatSurfaceReadService,
     OrchestrationBindingStore,
     SQLiteChatSurfaceEventJournal,
+    ticket_flow_thread_metadata,
 )
 from codex_autorunner.core.orchestration.chat_surface_read_model import (
     _chat_index_sort_key_parts,
@@ -1491,3 +1492,117 @@ def test_chat_surface_read_model_builds_pma_compat_snapshot(tmp_path: Path) -> N
             "cleanup_protected": False,
         }
     ]
+
+
+def test_chat_read_model_contract_matrix_documents_shared_semantics(
+    tmp_path: Path,
+) -> None:
+    hub_root = tmp_path / "hub"
+    _seed_thread(
+        hub_root,
+        thread_id="thread-pma",
+        display_name="Web PMA chat",
+        last_message_preview="Web visible request",
+    )
+    _seed_execution(
+        hub_root,
+        thread_id="thread-pma",
+        status="ok",
+        metadata={"user_visible_text": "Web visible request"},
+        created_at="2026-05-11T00:01:00Z",
+    )
+    _seed_thread(
+        hub_root,
+        thread_id="thread-discord",
+        display_name="Thread thread-discord",
+        metadata={"provider_conversation_title": "Discord deploy triage"},
+    )
+    OrchestrationBindingStore(hub_root, durable=False).upsert_binding(
+        surface_kind="discord",
+        surface_key="guild:deploy",
+        thread_target_id="thread-discord",
+        repo_id="repo-1",
+        resource_kind="repo",
+        resource_id="repo-1",
+        metadata={"display_name": "Agent Nexus / #deploy"},
+    )
+    _seed_thread(
+        hub_root,
+        thread_id="thread-ticket",
+        display_name="ticket-flow:codex",
+        resource_kind="ticket",
+        resource_id="TICKET-005",
+        metadata=ticket_flow_thread_metadata(
+            flow_run_id="run-005",
+            ticket_id="TICKET-005",
+            workspace_root=str(hub_root),
+        ),
+    )
+    _seed_thread(hub_root, thread_id="thread-queued", display_name="Queued work")
+    _seed_execution(
+        hub_root,
+        thread_id="thread-queued",
+        status="queued",
+        metadata={"user_visible_text": "Queued visible request"},
+        created_at="2026-05-11T00:02:00Z",
+    )
+    _seed_thread(
+        hub_root,
+        thread_id="thread-archived",
+        display_name="Archived chat",
+        lifecycle_status="archived",
+        runtime_status="completed",
+    )
+    ChannelDirectoryStore(hub_root).record_seen(
+        "discord",
+        "guild-external",
+        None,
+        "External diagnostics channel",
+    )
+
+    service = ChatSurfaceReadService(hub_root, durable=False)
+    active_rows = {
+        row["managed_thread_id"]: row
+        for row in service.chat_index_snapshot(view="all", limit=20)["rows"]
+    }
+    archived_rows = {
+        row["managed_thread_id"]: row
+        for row in service.chat_index_snapshot(view="archived", limit=20)["rows"]
+    }
+    external_rows = {
+        row["chat_id"]: row
+        for row in service.chat_index_snapshot(view="external", limit=20)["rows"]
+    }
+    matrix = {
+        "web_pma": active_rows["thread-pma"],
+        "discord_bound": active_rows["thread-discord"],
+        "ticket_flow": active_rows["thread-ticket"],
+        "queued_only": active_rows["thread-queued"],
+        "archived": archived_rows["thread-archived"],
+        "external_unbound": external_rows["surface:discord:guild-external"],
+    }
+
+    assert matrix["web_pma"]["title"] == "Web PMA chat"
+    assert matrix["web_pma"]["last_visible_message_at"] == "2026-05-11T00:01:00Z"
+    assert matrix["web_pma"]["last_sort_activity_at"] == "2026-05-11T00:01:00Z"
+    assert matrix["discord_bound"]["title"] == "Discord deploy triage"
+    assert matrix["discord_bound"]["binding_display_name"] == "Agent Nexus / #deploy"
+    assert matrix["ticket_flow"]["group_id"] == "run:run-005"
+    assert matrix["queued_only"]["queue_depth"] == 1
+    assert matrix["queued_only"]["last_sort_activity_at"] == "2026-05-11T00:02:00Z"
+    assert matrix["archived"]["archive_state"] == "archived"
+    assert matrix["external_unbound"]["managed_thread_id"] is None
+    assert matrix["external_unbound"]["title"] == "External diagnostics channel"
+
+    for row in matrix.values():
+        assert row["last_activity_at"] == row["last_sort_activity_at"]
+        assert row["debug"]["title"]["selected"] == row["display_title"]
+        assert row["debug"]["activity"]["selected"] == row["last_sort_activity_at"]
+
+    pma_thread = next(
+        thread
+        for thread in service.pma_compat_snapshot()["threads"]
+        if thread["managed_thread_id"] == "thread-pma"
+    )
+    assert pma_thread["updated_at"] == "2026-05-11T00:01:00Z"
+    assert matrix["web_pma"]["last_lifecycle_update_at"] == "2026-05-11T00:00:10Z"

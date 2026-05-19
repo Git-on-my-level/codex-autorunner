@@ -50,9 +50,15 @@ const chatRow = {
   chatId: 'chat-1',
   surface: 'pma' as const,
   title: 'Ticket chat',
+  displayTitle: 'Ticket chat',
+  technicalTitle: 'chat-1',
   status: 'running' as const,
   unreadCount: 2,
   lastActivityAt: now,
+  lastVisibleMessageAt: now,
+  lastLifecycleUpdateAt: '2026-05-11T11:59:00Z',
+  lastInternalUpdateAt: now,
+  lastSortActivityAt: now,
   repoId: 'repo-1',
   worktreeId: 'wt-1',
   ticketId: 'TICKET-001',
@@ -60,7 +66,11 @@ const chatRow = {
   agent: 'codex',
   agentProfile: 'm4-pma',
   model: 'gpt-5.3-codex',
-  groupId: 'ticket-run:run-1'
+  groupId: 'ticket-run:run-1',
+  debug: {
+    title: { selected: 'Ticket chat', selected_source: 'stored_title' },
+    activity: { selected: now, selected_source: 'last_visible_message_at' }
+  }
 };
 
 function envelope(eventType: string, entityKind: string, entityId: string, operation = 'patch') {
@@ -100,6 +110,8 @@ describe('read model contracts', () => {
     });
 
     expect(snapshot.rows[0].chatId).toBe('chat-1');
+    expect(snapshot.rows[0].lastActivityAt).toBe(snapshot.rows[0].lastSortActivityAt);
+    expect(snapshot.rows[0].debug?.activity).toEqual(event.patch.rows[0].debug?.activity);
     expect(event.patch.rows[0].unreadCount).toBe(2);
   });
 
