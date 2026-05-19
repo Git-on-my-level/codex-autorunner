@@ -73,6 +73,11 @@ from ...core.orchestration.runtime_threads import (
     begin_next_queued_runtime_thread_execution,
     begin_runtime_thread_execution,
 )
+from ...core.orchestration.turn_context import (
+    ChatTurnDeliveryTarget,
+    ChatTurnEnvelope,
+    ChatTurnSource,
+)
 from ...core.pma_context import (
     build_hub_unavailable_snapshot,
     format_pma_discoverability_preamble,
@@ -1173,14 +1178,38 @@ async def _execute_discord_thread_message(
     if not visible_seed and transcript_message:
         visible_seed = transcript_message
     if visible_seed:
-        run_turn_kwargs["user_visible_text"] = visible_seed
-        run_turn_kwargs["title_seed"] = visible_seed
+        turn_envelope = ChatTurnEnvelope(
+            source=ChatTurnSource(
+                surface_kind="discord",
+                surface_key=dispatch.channel_id,
+                message_id=dispatch.event.message.message_id,
+                thread_id=dispatch.event.thread.thread_id,
+                update_id=dispatch.event.update_id,
+            ),
+            user_visible_text=visible_seed,
+            runtime_prompt=prompt_text,
+            title_seed=visible_seed,
+            input_items=turn_input_items,
+            existing_session_runtime_prompt=existing_session_prompt_text,
+            delivery_targets=(
+                ChatTurnDeliveryTarget(
+                    surface_kind="discord",
+                    surface_key=resolved_managed_thread_surface_key
+                    or dispatch.channel_id,
+                ),
+            ),
+        )
+        run_turn_kwargs["turn_envelope"] = turn_envelope
+        run_turn_kwargs["user_visible_text"] = turn_envelope.user_visible_text
+        run_turn_kwargs["title_seed"] = turn_envelope.title_seed
     if existing_session_prompt_text is not None:
         run_turn_kwargs["existing_session_prompt_text"] = existing_session_prompt_text
     run_turn_kwargs["chat_ux_snapshot"] = dispatch.chat_ux_snapshot
     try:
         try:
             run_turn = dispatch.service._run_agent_turn_for_message
+            if not _callable_accepts_keyword(run_turn, "turn_envelope"):
+                run_turn_kwargs.pop("turn_envelope", None)
             if not _callable_accepts_keyword(run_turn, "user_visible_text"):
                 run_turn_kwargs.pop("user_visible_text", None)
                 run_turn_kwargs.pop("title_seed", None)
@@ -1783,6 +1812,7 @@ async def run_agent_turn_for_message(
     *,
     workspace_root: Path,
     prompt_text: str,
+    turn_envelope: Optional[ChatTurnEnvelope] = None,
     input_items: Optional[list[dict[str, Any]]] = None,
     managed_thread_surface_key: Optional[str] = None,
     source_message_id: Optional[str] = None,
@@ -1816,6 +1846,7 @@ async def run_agent_turn_for_message(
         service,
         workspace_root=workspace_root,
         prompt_text=prompt_text,
+        turn_envelope=turn_envelope,
         input_items=input_items,
         managed_thread_surface_key=managed_thread_surface_key,
         source_message_id=source_message_id,
@@ -1847,6 +1878,7 @@ async def _run_discord_orchestrated_turn_for_message(
     *,
     workspace_root: Path,
     prompt_text: str,
+    turn_envelope: Optional[ChatTurnEnvelope] = None,
     input_items: Optional[list[dict[str, Any]]] = None,
     source_message_id: Optional[str] = None,
     agent: str,
@@ -1899,7 +1931,7 @@ async def _run_discord_orchestrated_turn_for_message(
     )
     execution_input_items = _build_managed_thread_input_items(
         execution_prompt,
-        input_items,
+        turn_envelope.input_items if turn_envelope is not None else input_items,
     )
     max_progress_len = max(int(service._config.max_message_length), 32)
     managed_thread_id = thread.thread_target_id
@@ -2535,25 +2567,43 @@ async def _run_discord_orchestrated_turn_for_message(
     async def _after_completion(_flow: Any) -> None:
         await _stop_progress_heartbeat()
 
+    if turn_envelope is None:
+        visible_text = (
+            user_visible_text
+            if isinstance(user_visible_text, str) and user_visible_text.strip()
+            else prompt_text
+        )
+        turn_envelope = ChatTurnEnvelope(
+            source=ChatTurnSource(
+                surface_kind="discord",
+                surface_key=channel_id,
+                message_id=source_message_id,
+            ),
+            user_visible_text=visible_text,
+            runtime_prompt=execution_prompt,
+            title_seed=(
+                title_seed
+                if isinstance(title_seed, str) and title_seed.strip()
+                else visible_text
+            ),
+            input_items=input_items,
+            existing_session_runtime_prompt=existing_session_prompt_text,
+            delivery_targets=(
+                ChatTurnDeliveryTarget(
+                    surface_kind="discord",
+                    surface_key=managed_thread_surface_key or channel_id,
+                ),
+            ),
+        )
     metadata = {
         "runtime_prompt": execution_prompt,
         "execution_error_message": public_execution_error,
     }
-    if isinstance(user_visible_text, str) and user_visible_text.strip():
-        metadata["user_visible_text"] = user_visible_text
-        metadata["title_seed"] = title_seed or user_visible_text
-    if (
-        isinstance(existing_session_prompt_text, str)
-        and existing_session_prompt_text.strip()
-    ):
-        metadata["existing_session_runtime_prompt"] = existing_session_prompt_text
     surface_key = managed_thread_surface_key or channel_id
     return await run_managed_surface_turn(
-        MessageRequest(
+        turn_envelope.to_message_request(
             target_id=thread.thread_target_id,
             target_kind="thread",
-            message_text=prompt_text,
-            busy_policy="queue",
             model=model_override,
             reasoning=reasoning_effort,
             approval_mode=approval_mode,
@@ -2654,6 +2704,7 @@ async def run_managed_thread_turn_for_message(
     *,
     workspace_root: Path,
     prompt_text: str,
+    turn_envelope: Optional[ChatTurnEnvelope] = None,
     input_items: Optional[list[dict[str, Any]]] = None,
     source_message_id: Optional[str] = None,
     agent: str,
@@ -2686,6 +2737,7 @@ async def run_managed_thread_turn_for_message(
         service,
         workspace_root=workspace_root,
         prompt_text=prompt_text,
+        turn_envelope=turn_envelope,
         input_items=input_items,
         source_message_id=source_message_id,
         agent=agent,

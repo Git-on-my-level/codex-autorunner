@@ -31,6 +31,12 @@ from codex_autorunner.core.orchestration.runtime_threads import (
     RuntimeThreadOutcome,
 )
 from codex_autorunner.core.orchestration.service import ManagedThreadExecutionStore
+from codex_autorunner.core.orchestration.turn_context import (
+    ChatTurnDeliveryTarget,
+    ChatTurnEnvelope,
+    ChatTurnSource,
+    ManagedThreadCapsuleRef,
+)
 from codex_autorunner.core.orchestration.turn_output_reducer import (
     build_assistant_transcript_prefix,
     trim_cumulative_assistant_text,
@@ -120,6 +126,84 @@ def _build_queue_delivery_hooks(
         send_failure=_send_failure,
         cleanup=_cleanup,
     )
+
+
+def test_chat_turn_envelope_builds_message_request_without_losing_metadata() -> None:
+    envelope = ChatTurnEnvelope(
+        source=ChatTurnSource(
+            surface_kind="discord",
+            surface_key="channel-1",
+            message_id="msg-1",
+            thread_id="thread-1",
+            update_id="update-1",
+        ),
+        user_visible_text="Visible user request",
+        runtime_prompt="<context>model-only</context>\n\nVisible user request",
+        title_seed="Visible title",
+        input_items=[
+            {"type": "text", "text": "placeholder"},
+            {"type": "input_image", "image_url": "file:///tmp/image.png"},
+        ],
+        model_context_refs=(
+            ManagedThreadCapsuleRef(
+                capsule_id="cap-1",
+                capsule_version="v1",
+                visibility="model_only",
+                scope="turn",
+                source_digest="sha256:abc",
+            ),
+        ),
+        delivery_targets=(
+            ChatTurnDeliveryTarget(surface_kind="discord", surface_key="channel-1"),
+        ),
+        existing_session_runtime_prompt="compact runtime prompt",
+    )
+
+    request = envelope.to_message_request(
+        target_id="managed-thread-1",
+        model="gpt-test",
+        reasoning="medium",
+        approval_mode="never",
+    )
+
+    assert request == MessageRequest(
+        target_id="managed-thread-1",
+        target_kind="thread",
+        message_text="Visible user request",
+        busy_policy="queue",
+        model="gpt-test",
+        reasoning="medium",
+        approval_mode="never",
+        input_items=[
+            {"type": "text", "text": "placeholder"},
+            {"type": "input_image", "image_url": "file:///tmp/image.png"},
+        ],
+        metadata=request.metadata,
+    )
+    assert request.metadata["runtime_prompt"] == (
+        "<context>model-only</context>\n\nVisible user request"
+    )
+    assert request.metadata["raw_model_prompt"] == (
+        "<context>model-only</context>\n\nVisible user request"
+    )
+    assert request.metadata["user_visible_text"] == "Visible user request"
+    assert request.metadata["title_seed"] == "Visible title"
+    assert request.metadata["existing_session_runtime_prompt"] == (
+        "compact runtime prompt"
+    )
+    assert request.metadata["capsule_refs"] == [
+        {
+            "capsule_id": "cap-1",
+            "capsule_version": "v1",
+            "visibility": "model_only",
+            "scope": "turn",
+            "source_digest": "sha256:abc",
+        }
+    ]
+    assert request.metadata["delivery_targets"] == [
+        {"surface_kind": "discord", "surface_key": "channel-1"}
+    ]
+    assert request.metadata["source_message_id"] == "msg-1"
 
 
 def test_render_managed_thread_response_text_prepends_session_notice() -> None:

@@ -186,6 +186,7 @@ from ...core.orchestration.chat_operation_scheduler_projection import (
 from ...core.orchestration.managed_thread_delivery_ledger import (
     SQLiteManagedThreadDeliveryEngine,
 )
+from ...core.orchestration.turn_context import ChatTurnEnvelope
 from ...core.runtime_services import RuntimeServices
 from ...core.state import now_iso
 from ...core.state_roots import resolve_global_state_root
@@ -3726,6 +3727,7 @@ class DiscordBotService(DiscordInteractionResponseMixin):
         *,
         workspace_root: Path,
         prompt_text: str,
+        turn_envelope: Optional[ChatTurnEnvelope] = None,
         input_items: Optional[list[dict[str, Any]]] = None,
         source_message_id: Optional[str] = None,
         agent: str,
@@ -3747,6 +3749,7 @@ class DiscordBotService(DiscordInteractionResponseMixin):
                     self,
                     workspace_root=workspace_root,
                     prompt_text=prompt_text,
+                    turn_envelope=turn_envelope,
                     input_items=input_items,
                     source_message_id=source_message_id,
                     agent=agent,
@@ -3766,6 +3769,7 @@ class DiscordBotService(DiscordInteractionResponseMixin):
                 self,
                 workspace_root=workspace_root,
                 prompt_text=prompt_text,
+                turn_envelope=turn_envelope,
                 input_items=input_items,
                 source_message_id=source_message_id,
                 agent=agent,
