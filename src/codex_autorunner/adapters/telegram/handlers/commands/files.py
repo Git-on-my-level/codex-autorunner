@@ -12,7 +12,6 @@ from typing import Any, Optional, Sequence
 
 from .....core.artifact_instructions import (
     ArtifactDeliveryContext,
-    render_agent_artifact_instructions,
 )
 from .....core.filebox import (
     inbox_dir as filebox_inbox_dir,
@@ -20,9 +19,12 @@ from .....core.filebox import (
 from .....core.filebox import (
     outbox_dir as filebox_outbox_dir,
 )
-from .....core.injected_context import wrap_injected_context
 from .....core.logging_utils import log_event
 from .....core.state import now_iso
+from .....core.surface_context_capsules import (
+    build_artifact_delivery_capsule,
+    render_capsules_for_prompt,
+)
 from ....chat.constants import TOPIC_NOT_BOUND_MESSAGE
 from ....chat.media import IMAGE_CONTENT_TYPES, IMAGE_EXTS
 from ...adapter import TelegramAPIError, TelegramMessage
@@ -1169,37 +1171,47 @@ class FilesCommands(FileBoxCommandsMixin, TelegramCommandSupportMixin):
         if pma_enabled:
             pma_inbox = self._pma_inbox_dir()
             if pma_inbox is not None:
-                return wrap_injected_context(
-                    render_agent_artifact_instructions(
-                        ArtifactDeliveryContext(
-                            surface="telegram",
-                            conversation_key=_artifact_conversation_key_from_topic(
-                                topic_key
+                return render_capsules_for_prompt(
+                    (
+                        build_artifact_delivery_capsule(
+                            ArtifactDeliveryContext(
+                                surface="telegram",
+                                conversation_key=_artifact_conversation_key_from_topic(
+                                    topic_key
+                                ),
+                                scope_label="hub PMA artifact target for this Telegram PMA chat",
+                                user_upload_inbox=pma_inbox,
+                                extra_agent_lines=(
+                                    f"Max file size: {self._config.media.max_file_bytes} bytes.",
+                                ),
                             ),
-                            scope_label="hub PMA artifact target for this Telegram PMA chat",
-                            user_upload_inbox=pma_inbox,
-                            extra_agent_lines=(
-                                f"Max file size: {self._config.media.max_file_bytes} bytes.",
-                            ),
+                            capsule_id="artifact_delivery.telegram_media",
+                            reason="telegram_pma_media_artifact_hint",
                         ),
                     )
                 )
         inbox_dir = self._files_inbox_dir(workspace_path, topic_key)
         topic_dir = self._files_topic_dir(workspace_path, topic_key)
-        return wrap_injected_context(
-            render_agent_artifact_instructions(
-                ArtifactDeliveryContext(
-                    surface="telegram",
-                    conversation_key=_artifact_conversation_key_from_topic(topic_key),
-                    workspace_scope=f"repo:{workspace_path}",
-                    scope_label="repo/worktree artifact target for this Telegram topic",
-                    user_upload_inbox=inbox_dir,
-                    extra_agent_lines=(
-                        f"Topic key: {topic_key}",
-                        f"Topic dir: {topic_dir}",
-                        f"Max file size: {self._config.media.max_file_bytes} bytes.",
+        return render_capsules_for_prompt(
+            (
+                build_artifact_delivery_capsule(
+                    ArtifactDeliveryContext(
+                        surface="telegram",
+                        conversation_key=_artifact_conversation_key_from_topic(
+                            topic_key
+                        ),
+                        workspace_scope=f"repo:{workspace_path}",
+                        scope_label="repo/worktree artifact target for this Telegram topic",
+                        user_upload_inbox=inbox_dir,
+                        extra_agent_lines=(
+                            f"Topic key: {topic_key}",
+                            f"Topic dir: {topic_dir}",
+                            f"Max file size: {self._config.media.max_file_bytes} bytes.",
+                        ),
                     ),
-                )
+                    capsule_id="artifact_delivery.telegram_media",
+                    reason="telegram_media_artifact_hint",
+                ),
             )
         )
 

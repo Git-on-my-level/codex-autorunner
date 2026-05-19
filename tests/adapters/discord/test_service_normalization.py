@@ -116,7 +116,10 @@ def test_build_attachment_context_payload_formats_transcripts_and_images() -> No
 
     assert payload.saved_count == 2
     assert payload.failed_count == 1
-    assert "Please review\n\nInbound Discord attachments:" in payload.prompt_text
+    assert (
+        "Please review\n\n<injected context>\nInbound Discord attachments:"
+        in payload.prompt_text
+    )
     assert "Transcript: spoken request" in payload.prompt_text
     assert "Transcript may be inaccurate." in payload.prompt_text
     assert "Artifact delivery (this turn):" in payload.prompt_text

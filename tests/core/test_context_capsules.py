@@ -14,6 +14,11 @@ from codex_autorunner.core.context_capsules import (
     capsule_payload_digest,
     plan_capsule_render,
 )
+from codex_autorunner.core.injected_context import wrap_injected_context
+from codex_autorunner.core.surface_context_capsules import (
+    build_model_only_text_capsule,
+    build_whisper_disclaimer_capsule,
+)
 
 
 def _capsule(
@@ -142,6 +147,40 @@ def test_car_awareness_has_capsule_migration_path() -> None:
     assert capsule.visibility is ContextCapsuleVisibility.MODEL_ONLY
     assert capsule.payload["initiated_by_ticket_flow"] is True
     assert "Codex Autorunner" in str(capsule.payload["text"])
+
+
+def test_surface_text_capsules_unwrap_legacy_transport_markers() -> None:
+    capsule = build_model_only_text_capsule(
+        capsule_id="github.context_file",
+        text=wrap_injected_context(
+            "Context: see .codex-autorunner/github_context/issue-1.md"
+        ),
+        reason="github_link_context",
+    )
+
+    assert capsule is not None
+    assert capsule.capsule_id == "github.context_file"
+    assert capsule.scope is ContextCapsuleScope.TURN
+    assert capsule.expiry is ContextCapsuleExpiry.TURN_SCOPED
+    assert capsule.can_seed_durable_user_fields is False
+    assert "<injected context>" not in str(capsule.payload["text"])
+    assert "Context: see .codex-autorunner/github_context/issue-1.md" in str(
+        capsule.payload["text"]
+    )
+
+
+def test_whisper_disclaimer_is_named_turn_scoped_capsule() -> None:
+    capsule = build_whisper_disclaimer_capsule(
+        surface="telegram",
+        disclaimer="Transcript may be inaccurate.",
+        provider="openai_whisper",
+    )
+
+    assert capsule is not None
+    assert capsule.capsule_id == "transcription.telegram.whisper_disclaimer"
+    assert capsule.visibility is ContextCapsuleVisibility.MODEL_ONLY
+    assert capsule.scope is ContextCapsuleScope.TURN
+    assert capsule.expiry is ContextCapsuleExpiry.TURN_SCOPED
 
 
 def first_observation(plan):

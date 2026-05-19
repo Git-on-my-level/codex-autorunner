@@ -66,7 +66,7 @@ def test_filebox_hint_triggers_from_raw_user_keyword_even_with_injected_context(
     )
 
     assert injected is True
-    assert prompt.endswith("hint")
+    assert prompt.endswith("hint\n</injected context>")
 
 
 def test_normalize_car_context_profile_rejects_unknown_values() -> None:

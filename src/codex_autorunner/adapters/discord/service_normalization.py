@@ -14,10 +14,14 @@ from ...adapters.chat.media import (
 from ...adapters.chat.update_notifier import format_update_status_message
 from ...core.artifact_instructions import (
     ArtifactDeliveryContext,
-    render_agent_artifact_instructions,
 )
 from ...core.flows.ux_helpers import summarize_flow_freshness
-from ...core.injected_context import wrap_injected_context
+from ...core.surface_context_capsules import (
+    build_artifact_delivery_capsule,
+    build_attachment_manifest_capsule,
+    build_whisper_disclaimer_capsule,
+    render_capsules_for_prompt,
+)
 from ...core.ticket_flow_summary import build_ticket_flow_display
 from .components import (
     DISCORD_BUTTON_STYLE_SUCCESS,
@@ -240,31 +244,52 @@ def build_attachment_context_payload(
         elif item.transcript_warning:
             details.append(f"  Transcript: {item.transcript_warning}")
 
-    if transcript_items and voice_provider_name == "openai_whisper":
-        disclaimer = _clean_optional_text(whisper_transcript_disclaimer)
-        if disclaimer:
-            details.append("")
-            details.append(wrap_injected_context(disclaimer))
-
+    manifest_capsule = build_attachment_manifest_capsule(
+        surface=target_surface,
+        text="\n".join(details),
+        reason="surface_attachment_turn",
+        source={
+            "saved_count": len(saved),
+            "failed_count": failed,
+            "attachments": [
+                {
+                    "name": item.original_name,
+                    "path": item.path,
+                    "size_bytes": item.size_bytes,
+                    "mime_type": item.mime_type,
+                    "is_audio": item.is_audio,
+                    "is_image": item.is_image,
+                    "has_transcript": bool(item.transcript_text),
+                    "has_transcript_warning": bool(item.transcript_warning),
+                }
+                for item in saved
+            ],
+        },
+    )
+    extra_capsules = []
+    disclaimer_capsule = build_whisper_disclaimer_capsule(
+        surface=target_surface,
+        disclaimer=whisper_transcript_disclaimer or "",
+        provider=voice_provider_name or "",
+    )
+    if transcript_items and disclaimer_capsule is not None:
+        extra_capsules.append(disclaimer_capsule)
     if any(not item.is_audio for item in saved):
-        details.append("")
-        details.append(
-            wrap_injected_context(
-                render_agent_artifact_instructions(
-                    ArtifactDeliveryContext(
-                        surface=target_surface,
-                        conversation_key=(
-                            target_conversation_key or "current-conversation"
-                        ),
-                        workspace_scope=workspace_scope,
-                        scope_label="repo/worktree artifact target for this attachment turn",
-                        user_upload_inbox=inbox_path,
-                    )
+        extra_capsules.append(
+            build_artifact_delivery_capsule(
+                ArtifactDeliveryContext(
+                    surface=target_surface,
+                    conversation_key=(
+                        target_conversation_key or "current-conversation"
+                    ),
+                    workspace_scope=workspace_scope,
+                    scope_label="repo/worktree artifact target for this attachment turn",
+                    user_upload_inbox=inbox_path,
                 )
             )
         )
 
-    attachment_context = "\n".join(details)
+    attachment_context = render_capsules_for_prompt((manifest_capsule, *extra_capsules))
     native_input_items = [
         {"type": "localImage", "path": str(item.path)}
         for item in saved
