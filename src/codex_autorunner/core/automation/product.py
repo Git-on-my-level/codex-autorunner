@@ -104,6 +104,7 @@ def automation_row(store: AutomationStore, rule: AutomationRule) -> dict[str, An
         "id": rule.rule_id,
         "name": rule.name,
         "enabled": rule.enabled,
+        "system_owned": rule.system_owned,
         "kind": display_kind(rule),
         "executor_kind": rule.executor_kind,
         "executor": rule.executor,

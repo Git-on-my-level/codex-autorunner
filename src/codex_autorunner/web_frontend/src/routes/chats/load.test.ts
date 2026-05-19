@@ -11,6 +11,7 @@ import {
 import type { ApiError, ApiResult } from '$lib/api/client';
 import { ReadModelEntityStore, selectChatDetailView } from '$lib/data/readModelStore';
 import type { ReadModelSnapshotClient } from '$lib/data/readModelClients';
+import { importRouteLoader } from '$lib/test/importRouteLoader';
 
 const now = '2026-05-11T12:00:00Z';
 
@@ -118,9 +119,7 @@ describe('/chats route load', () => {
 });
 
 async function importPageLoad(browser: boolean) {
-  vi.resetModules();
-  vi.doMock('$app/environment', () => ({ browser, dev: false, building: false, version: 'test' }));
-  return import('./[[chatId]]/loadChatRoute');
+  return importRouteLoader<typeof import('$lib/routes/loadChatRoute')>('$lib/routes/loadChatRoute', browser);
 }
 
 function mockClient(overrides: Partial<Record<keyof ReadModelSnapshotClient, ReturnType<typeof vi.fn>>> = {}): ReadModelSnapshotClient {

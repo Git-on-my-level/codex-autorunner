@@ -1,8 +1,9 @@
 <script lang="ts">
   import { goto } from '$app/navigation';
+  import { page } from '$app/state';
   import { onMount } from 'svelte';
   import AgentModelReasoningPicker from '$lib/components/AgentModelReasoningPicker.svelte';
-  import PageHero from '$lib/components/PageHero.svelte';
+  import MasterDetail from '$lib/components/MasterDetail.svelte';
   import RunHistoryList from '$lib/components/tickets/RunHistoryList.svelte';
   import TicketPackEditor from '$lib/components/tickets/TicketPackEditor.svelte';
   import { withRuntimeBasePath as href } from '$lib/runtime/basePath';
@@ -79,6 +80,7 @@
   let notice = $state<string | null>(null);
   let selectedKind = $state<SelectionKind>('preset');
   let selectedId = $state<string>(PRESETS[0].id);
+  let detailMode = $state<'list' | 'detail'>('list');
   let saveTimer: number | null = null;
 
   let selectedRepoId = $state('');
@@ -106,6 +108,9 @@
   let syncedSelectionKey = '';
 
   const automations = $derived(overview?.automations ?? []);
+  const userAutomations = $derived(automations.filter((automation) => !automation.systemOwned));
+  const systemAutomations = $derived(automations.filter((automation) => automation.systemOwned));
+  const routeRuleId = $derived(decodeURIComponent(page.params.ruleId ?? ''));
   const selectedRepo = $derived(repos.find((repo) => repo.id === selectedRepoId) ?? null);
   const scheduleTimeValue = $derived(`${pad(detailHour)}:${pad(detailMinute)}`);
 
@@ -135,17 +140,27 @@
       defaultAgentId = agentResult.data.default;
       defaultProfile = String(agentResult.data.defaults.profile ?? '');
     }
-    if (automationResult.ok && automationResult.data.automations.length > 0) {
-      selectedKind = 'automation';
-      selectedId = automationResult.data.automations[0].id;
-    }
     loading = false;
     syncDraftsForSelection(true);
   }
 
+  // The URL is the source of truth for which automation is open. Presets have no
+  // route — they stay an in-memory selection on the bare /automations path.
   $effect(() => {
+    const ruleId = routeRuleId;
+    if (ruleId && automations.some((automation) => automation.id === ruleId)) {
+      selectedKind = 'automation';
+      selectedId = ruleId;
+      detailMode = 'detail';
+    } else if (!ruleId) {
+      detailMode = selectedKind === 'preset' ? 'detail' : 'list';
+    }
     syncDraftsForSelection(false);
   });
+
+  function automationRoute(ruleId: string): string {
+    return href(`/automations/${encodeURIComponent(ruleId)}`);
+  }
 
   function selectedAutomation(): AutomationSummary | null {
     return selectedKind === 'automation' ? automations.find((automation) => automation.id === selectedId) ?? null : null;
@@ -217,15 +232,17 @@
   }
 
   function selectAutomation(automation: AutomationSummary): void {
-    selectedKind = 'automation';
-    selectedId = automation.id;
+    detailMode = 'detail';
     notice = null;
+    if (routeRuleId !== automation.id) void goto(automationRoute(automation.id));
   }
 
   function selectPreset(preset: AutomationPreset): void {
     selectedKind = 'preset';
     selectedId = preset.id;
+    detailMode = 'detail';
     notice = null;
+    if (routeRuleId) void goto(href('/automations'));
   }
 
   function replaceAutomation(updated: AutomationSummary): void {
@@ -327,9 +344,9 @@
     overview = overview
       ? { ...overview, automations: [...overview.automations, result.data] }
       : { automations: [result.data], summary: { total: 1, active: result.data.enabled ? 1 : 0, paused: result.data.enabled ? 0 : 1, failedJobs: 0 } };
-    selectedKind = 'automation';
-    selectedId = result.data.id;
     notice = `Created ${result.data.name}${result.data.enabled ? '' : ' — paused'}`;
+    detailMode = 'detail';
+    await goto(automationRoute(result.data.id));
     await load();
   }
 
@@ -668,120 +685,165 @@
   }
 </script>
 
-{#snippet heroActions()}
-  <button type="button" class="primary-button" onclick={() => openPmaWithDraft(createNewAutomationPrompt())}>Create with PMA</button>
-  <button type="button" class="hero-action" onclick={() => void load()} disabled={loading} aria-label="Refresh automations">Refresh</button>
-{/snippet}
-
-{#snippet heroStats()}
-  {#if overview}
-    <dl class="hero-stats">
-      <div class:active={overview.summary.active > 0}>
-        <dd>{overview.summary.active}</dd>
-        <dt>active</dt>
-      </div>
-      <div>
-        <dd>{overview.summary.paused}</dd>
-        <dt>paused</dt>
-      </div>
-      <div class:danger={overview.summary.failedJobs > 0}>
-        <dd>{overview.summary.failedJobs}</dd>
-        <dt>failed</dt>
-      </div>
-    </dl>
-  {/if}
+{#snippet automationRow(automation: AutomationSummary)}
+  {@const status = automationStatus(automation)}
+  <li>
+    <button
+      type="button"
+      class="automation-card status-{status.key}"
+      class:selected={selectedKind === 'automation' && selectedId === automation.id}
+      onclick={() => selectAutomation(automation)}
+    >
+      <span class="automation-avatar" style="--accent: {repoAccent(automation.name)}" aria-hidden="true">
+        {repoInitials(automation.name)}
+      </span>
+      <span class="automation-card-body">
+        <span class="automation-card-title">{automation.name}</span>
+        <span class="automation-card-meta">
+          <span class="status-dot {status.dot}"></span>
+          <span>{status.label}</span>
+          <span class="meta-dot">·</span>
+          <span>{scheduleLabel(automation)}</span>
+          <span class="meta-dot">·</span>
+          <span class="kind-chip">{kindLabel(automation.kind)}</span>
+        </span>
+      </span>
+      <span class="card-chevron" aria-hidden="true">→</span>
+    </button>
+  </li>
 {/snippet}
 
 <svelte:head>
-  <title>Automations</title>
+  <title>{selectedKind === 'automation' && detailName ? `${detailName} · Automations` : 'Automations'}</title>
 </svelte:head>
 
-<section class="page-stack automations-page">
-  <PageHero
-    title="Automations"
-    subtitle="Scheduled and event-driven PMA runs. Create them with PMA, tune saved rules here."
-    stats={heroStats}
-    actions={heroActions}
-  />
-
-  {#if error}
-    <div class="automation-notice error" role="alert">{error.message}</div>
-  {/if}
-  {#if notice}
-    <div class="automation-notice success" role="status">{notice}</div>
-  {/if}
-
-  <div class="automation-workbench">
+<MasterDetail
+  label="Automations workspace"
+  selected={true}
+  mode={detailMode}
+  listLabel="Automations"
+  detailLabel="Detail"
+  showSwitch={false}
+  onModeChange={(mode) => {
+    detailMode = mode;
+    if (mode === 'list' && routeRuleId) void goto(href('/automations'));
+  }}
+>
+  {#snippet list()}
     <aside class="automation-list" aria-label="Automations and presets">
-      <div class="list-group-head">
-        <h2>Saved</h2>
-        <span>{automations.length} {automations.length === 1 ? 'rule' : 'rules'}</span>
+      <header class="list-head">
+        <div class="list-head-top">
+          <div class="list-head-copy">
+            <h1>Automations</h1>
+            <p>Scheduled and event-driven PMA runs.</p>
+          </div>
+          <button
+            type="button"
+            class="icon-button"
+            onclick={() => void load()}
+            disabled={loading}
+            aria-label="Refresh automations"
+            title="Refresh"
+          >↻</button>
+        </div>
+        <button type="button" class="primary-button list-create" onclick={() => openPmaWithDraft(createNewAutomationPrompt())}>
+          Create with PMA
+        </button>
+        {#if overview}
+          <dl class="list-stats">
+            <div class:active={overview.summary.active > 0}>
+              <dd>{overview.summary.active}</dd>
+              <dt>active</dt>
+            </div>
+            <div>
+              <dd>{overview.summary.paused}</dd>
+              <dt>paused</dt>
+            </div>
+            <div class:danger={overview.summary.failedJobs > 0}>
+              <dd>{overview.summary.failedJobs}</dd>
+              <dt>failed</dt>
+            </div>
+          </dl>
+        {/if}
+      </header>
+
+      <div class="list-scroll">
+        {#if loading}
+          <div class="state-panel loading-state"><p>Loading automations…</p></div>
+        {:else}
+          <div class="list-group">
+            <div class="list-group-head">
+              <h2>Your automations</h2>
+              <span>{userAutomations.length}</span>
+            </div>
+            {#if userAutomations.length === 0}
+              <p class="group-empty">Nothing yet. Create one with PMA, or start from a preset below.</p>
+            {:else}
+              <ul class="card-list">
+                {#each userAutomations as automation (automation.id)}
+                  {@render automationRow(automation)}
+                {/each}
+              </ul>
+            {/if}
+          </div>
+
+          <div class="list-group">
+            <div class="list-group-head">
+              <h2>Start from a preset</h2>
+            </div>
+            <ul class="card-list">
+              {#each PRESETS as preset}
+                <li>
+                  <button
+                    type="button"
+                    class="automation-card preset-card"
+                    class:selected={selectedKind === 'preset' && selectedId === preset.id}
+                    onclick={() => selectPreset(preset)}
+                  >
+                    <span class="automation-avatar preset-avatar" aria-hidden="true">+</span>
+                    <span class="automation-card-body">
+                      <span class="automation-card-title">{preset.name}</span>
+                      <span class="automation-card-meta">
+                        <span>{preset.scheduleKind}</span>
+                        <span class="meta-dot">·</span>
+                        <span class="kind-chip">{kindLabel(preset.executorKind)}</span>
+                      </span>
+                    </span>
+                    <span class="card-chevron" aria-hidden="true">→</span>
+                  </button>
+                </li>
+              {/each}
+            </ul>
+          </div>
+
+          {#if systemAutomations.length > 0}
+            <details class="list-group system-group">
+              <summary>
+                <span class="system-summary-label">System &amp; PMA-managed</span>
+                <span class="system-count">{systemAutomations.length}</span>
+              </summary>
+              <p class="group-empty system-note">Built-in and PMA-mirrored rules. Managed automatically — view to inspect.</p>
+              <ul class="card-list">
+                {#each systemAutomations as automation (automation.id)}
+                  {@render automationRow(automation)}
+                {/each}
+              </ul>
+            </details>
+          {/if}
+        {/if}
       </div>
-      {#if loading}
-        <div class="state-panel loading-state"><p>Loading automations…</p></div>
-      {:else if automations.length === 0}
-        <div class="state-panel empty-state"><p>No saved automations yet. Pick a preset below or create one with PMA.</p></div>
-      {:else}
-        <ul class="card-list">
-          {#each automations as automation}
-            {@const status = automationStatus(automation)}
-            <li>
-              <button
-                type="button"
-                class="automation-card status-{status.key}"
-                class:selected={selectedKind === 'automation' && selectedId === automation.id}
-                onclick={() => selectAutomation(automation)}
-              >
-                <span class="automation-avatar" style="--accent: {repoAccent(automation.name)}" aria-hidden="true">
-                  {repoInitials(automation.name)}
-                </span>
-                <span class="automation-card-body">
-                  <span class="automation-card-title">{automation.name}</span>
-                  <span class="automation-card-meta">
-                    <span class="status-dot {status.dot}"></span>
-                    <span>{status.label}</span>
-                    <span class="meta-dot">·</span>
-                    <span>{scheduleLabel(automation)}</span>
-                    <span class="meta-dot">·</span>
-                    <span class="kind-chip">{kindLabel(automation.kind)}</span>
-                  </span>
-                </span>
-                <span class="card-chevron" aria-hidden="true">→</span>
-              </button>
-            </li>
-          {/each}
-        </ul>
+    </aside>
+  {/snippet}
+
+  {#snippet detail()}
+    <section class="automation-detail" aria-label="Automation detail">
+      {#if error}
+        <div class="automation-notice error" role="alert">{error.message}</div>
+      {/if}
+      {#if notice}
+        <div class="automation-notice success" role="status">{notice}</div>
       {/if}
 
-      <div class="list-group-head presets-head">
-        <h2>Start from a preset</h2>
-      </div>
-      <ul class="card-list">
-        {#each PRESETS as preset}
-          <li>
-            <button
-              type="button"
-              class="automation-card preset-card"
-              class:selected={selectedKind === 'preset' && selectedId === preset.id}
-              onclick={() => selectPreset(preset)}
-            >
-              <span class="automation-avatar preset-avatar" aria-hidden="true">+</span>
-              <span class="automation-card-body">
-                <span class="automation-card-title">{preset.name}</span>
-                <span class="automation-card-meta">
-                  <span>{preset.scheduleKind}</span>
-                  <span class="meta-dot">·</span>
-                  <span class="kind-chip">{kindLabel(preset.executorKind)}</span>
-                </span>
-              </span>
-              <span class="card-chevron" aria-hidden="true">→</span>
-            </button>
-          </li>
-        {/each}
-      </ul>
-    </aside>
-
-    <section class="automation-detail" aria-label="Automation detail">
       <header class="detail-head">
         <div class="detail-head-copy">
           <h2>{detailName || 'Automation'}</h2>
@@ -816,6 +878,8 @@
 
       {#if selectedKind === 'preset'}
         <p class="detail-banner">This is a template. Adjust the settings below, then create it to start running.</p>
+      {:else if selectedAutomation()?.systemOwned}
+        <p class="detail-banner system">System &amp; PMA-managed rule. It is kept in sync automatically — edits here may be overwritten.</p>
       {/if}
 
       <!-- At a glance: read-only runtime facts -->
@@ -926,6 +990,7 @@
           <h3>Ticket pack</h3>
           <TicketPackEditor
             tickets={selectedTicketPackTickets()}
+            {agents}
             onChange={saveTicketPack}
             allowAddRemove={selectedKind === 'automation'}
           />
@@ -980,15 +1045,10 @@
         </div>
       </details>
     </section>
-  </div>
-</section>
+  {/snippet}
+</MasterDetail>
 
 <style>
-  .automations-page {
-    padding: 0 var(--space-6) var(--space-8);
-    gap: var(--space-4);
-  }
-
   .automation-notice {
     border: 1px solid var(--color-border-subtle);
     border-radius: var(--radius-2);
@@ -1008,18 +1068,139 @@
     color: var(--color-success);
   }
 
-  .automation-workbench {
-    display: grid;
-    grid-template-columns: minmax(280px, 360px) minmax(0, 1fr);
-    gap: var(--space-4);
-    align-items: start;
-  }
-
   /* ---- List column ---- */
   .automation-list {
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    gap: var(--space-3);
+  }
+
+  .list-head {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3);
+    flex: 0 0 auto;
+  }
+
+  .list-head-top {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: var(--space-2);
+  }
+
+  .list-head-copy {
+    min-width: 0;
+    display: grid;
+    gap: 2px;
+  }
+
+  .list-head-copy h1 {
+    margin: 0;
+    font-size: var(--font-size-3);
+    font-weight: 680;
+    letter-spacing: -0.02em;
+    color: var(--color-ink);
+  }
+
+  .list-head-copy p {
+    margin: 0;
+    font-size: var(--font-size-0);
+    color: var(--color-ink-muted);
+  }
+
+  .icon-button {
+    flex: 0 0 auto;
+    width: 32px;
+    height: 32px;
+    display: grid;
+    place-items: center;
+    padding: 0;
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-2);
+    background: var(--color-surface);
+    color: var(--color-ink-muted);
+    font-size: var(--font-size-2);
+    cursor: pointer;
+    transition: border-color var(--transition-fast), color var(--transition-fast);
+  }
+
+  .icon-button:hover:not(:disabled) {
+    border-color: var(--color-border-strong);
+    color: var(--color-ink);
+  }
+
+  .icon-button:disabled {
+    opacity: 0.5;
+    cursor: default;
+  }
+
+  .list-create {
+    width: 100%;
+  }
+
+  .list-stats {
+    margin: 0;
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 1px;
+    background: var(--color-border-subtle);
+    border: 1px solid var(--color-border-subtle);
+    border-radius: var(--radius-2);
+    overflow: hidden;
+  }
+
+  .list-stats > div {
+    display: grid;
+    gap: 1px;
+    padding: var(--space-2);
+    background: var(--color-surface-sunken);
+  }
+
+  .list-stats dd {
+    margin: 0;
+    font-size: var(--font-size-2);
+    font-weight: 680;
+    color: var(--color-ink-muted);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .list-stats dt {
+    margin: 0;
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--color-ink-faint);
+  }
+
+  .list-stats > div.active dd { color: var(--color-success); }
+  .list-stats > div.danger dd { color: var(--color-danger); }
+
+  .list-scroll {
+    flex: 1 1 0%;
+    min-height: 0;
+    overflow: auto;
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-4);
+    padding-right: 2px;
+  }
+
+  .list-group {
     display: grid;
     gap: var(--space-2);
     align-content: start;
+  }
+
+  .group-empty {
+    margin: 0;
+    font-size: var(--font-size-0);
+    color: var(--color-ink-muted);
+    background: var(--color-surface-sunken);
+    border-radius: var(--radius-2);
+    padding: var(--space-3);
   }
 
   .list-group-head {
@@ -1044,8 +1225,65 @@
     font-variant-numeric: tabular-nums;
   }
 
-  .presets-head {
-    margin-top: var(--space-3);
+  /* ---- System group disclosure ---- */
+  .system-group {
+    border: 1px solid var(--color-border-subtle);
+    border-radius: 12px;
+    background: var(--color-surface-sunken);
+    padding: var(--space-2);
+  }
+
+  .system-group > summary {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    cursor: pointer;
+    list-style: none;
+    padding: var(--space-1) var(--space-2);
+    font-size: var(--font-size-1);
+    font-weight: 650;
+    color: var(--color-ink-soft);
+  }
+
+  .system-group > summary::-webkit-details-marker {
+    display: none;
+  }
+
+  .system-group > summary::before {
+    content: '▸';
+    color: var(--color-ink-faint);
+    font-size: 10px;
+    transition: transform var(--transition-fast);
+  }
+
+  .system-group[open] > summary::before {
+    transform: rotate(90deg);
+  }
+
+  .system-summary-label {
+    flex: 1 1 auto;
+  }
+
+  .system-count {
+    flex: 0 0 auto;
+    font-size: var(--font-size-0);
+    font-weight: 600;
+    color: var(--color-ink-muted);
+    background: var(--color-surface);
+    border: 1px solid var(--color-border-subtle);
+    border-radius: 999px;
+    padding: 1px 8px;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .system-note {
+    margin: var(--space-1) 0 var(--space-2);
+    background: transparent;
+    padding: 0 var(--space-2);
+  }
+
+  .system-group .card-list {
+    margin-top: var(--space-1);
   }
 
   .card-list {
@@ -1170,13 +1408,22 @@
 
   /* ---- Detail column ---- */
   .automation-detail {
-    display: grid;
+    display: flex;
+    flex-direction: column;
     gap: var(--space-4);
     border: 1px solid var(--color-border-subtle);
     border-radius: 12px;
     background: var(--color-surface);
     padding: var(--space-5);
     min-width: 0;
+    min-height: 0;
+    overflow: auto;
+  }
+
+  /* Flex children default to shrinking; that squashes the fact grid and other
+     fixed-content blocks. Pin them to natural height and let the pane scroll. */
+  .automation-detail > * {
+    flex: 0 0 auto;
   }
 
   .detail-head {
@@ -1221,6 +1468,11 @@
     background: var(--color-surface-sunken);
     border-radius: var(--radius-2);
     padding: var(--space-2) var(--space-3);
+  }
+
+  .detail-banner.system {
+    background: color-mix(in srgb, var(--color-accent) 8%, var(--color-surface-sunken));
+    border: 1px solid color-mix(in srgb, var(--color-accent) 22%, transparent);
   }
 
   /* ---- At-a-glance facts ---- */
@@ -1403,16 +1655,6 @@
   }
 
   @media (max-width: 1020px) {
-    .automation-workbench {
-      grid-template-columns: 1fr;
-    }
-  }
-
-  @media (max-width: 760px) {
-    .automations-page {
-      padding: 0 var(--space-4) var(--space-6);
-    }
-
     .automation-detail {
       padding: var(--space-4);
     }

@@ -214,6 +214,7 @@ def create_hub_app(
     @app.get("/tickets", include_in_schema=False)
     @app.get("/tickets/{ticket_id}", include_in_schema=False)
     @app.get("/automations", include_in_schema=False)
+    @app.get("/automations/{rest:path}", include_in_schema=False)
     @app.get("/settings", include_in_schema=False)
     @app.get("/hub", include_in_schema=False)
     def web_hub_index(rest: Optional[str] = None):

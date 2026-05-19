@@ -1,5 +1,5 @@
 import type { PageLoad } from './$types';
-import { loadChatRoute, type ChatRouteLoadData } from './loadChatRoute';
+import { loadChatRoute, type ChatRouteLoadData } from '$lib/routes/loadChatRoute';
 
 export type { ChatRouteLoadData };
 

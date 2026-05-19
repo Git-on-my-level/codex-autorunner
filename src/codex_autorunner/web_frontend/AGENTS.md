@@ -20,6 +20,14 @@ tests, and docs only; release/package builds produce and verify the static bundl
   choreography. For chats, repo/worktree, ticket, run, and artifact surfaces,
   prefer `src/lib/data/readModelClients.ts`, `readModelStream.ts`,
   `readModelStore.ts`, and selectors in `readModelViewModels.ts`.
+- Route loaders: keep testable helpers in `src/lib/routes/` (or another
+  non-`+page.ts` module). SvelteKit `+page.ts` / `+page.server.ts` may export
+  only `load`, `prerender`, `csr`, `ssr`, `trailingSlash`, `config`, `entries`,
+  or `_`-prefixed symbols. Type-only exports are fine. See
+  `src/lib/routes/pageModuleExports.test.ts`.
+- Route load tests should import helpers through
+  `src/lib/test/importRouteLoader.ts` instead of re-implementing the browser
+  environment mock in every file.
 - Normal updates should arrive through cursor streams plus repair snapshots.
   Do not add recurring `setInterval`/quiet-refresh loops for migrated screens.
 - High-cardinality UI must stay windowed and virtualized. Do not render
@@ -33,5 +41,7 @@ tests, and docs only; release/package builds produce and verify the static bundl
 
 - Run `pnpm web:lint` after Svelte or TypeScript changes.
 - Run `pnpm web:test` for Web frontend unit tests.
+- With `make serve` running, run `pnpm web:smoke:dev` to catch Vite dev-server
+  client routing regressions on repo deep links.
 - Run `pnpm run build` or `make build` to validate and locally regenerate ignored
   `web_static/`.

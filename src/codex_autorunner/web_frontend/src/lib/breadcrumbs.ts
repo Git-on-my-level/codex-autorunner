@@ -216,6 +216,21 @@ const STRUCTURED_ROUTES: StructuredRoute[] = [
     toCrumbs: () => [{ label: 'Hub', href: null }]
   },
   {
+    description: 'Automation detail',
+    pattern: /^\/automations\/([^/]+)$/,
+    toCrumbs: (m) => {
+      const ruleId = decodeURIComponent(m[1]);
+      // Drop the `user:automation:` / `builtin:pma:...` namespace and any trailing
+      // hex hash so the crumb reads as a slug, not a raw rule id.
+      const tail = (ruleId.split(':').pop() ?? ruleId).replace(/-[0-9a-f]{6,}$/i, '');
+      const short = tail.length > 22 ? `${tail.slice(0, 22)}…` : tail || ruleId;
+      return [
+        { label: 'Automations', href: '/automations' },
+        { label: short, href: null }
+      ];
+    }
+  },
+  {
     description: 'Chat detail',
     pattern: /^\/chats\/([^/]+)$/,
     toCrumbs: (m) => {

@@ -155,6 +155,7 @@ export type AutomationSummary = {
   id: string;
   name: string;
   enabled: boolean;
+  systemOwned: boolean;
   kind: string;
   executorKind: string;
   targetPolicy: string;
@@ -990,6 +991,7 @@ function mapAutomationSummary(raw: JsonRecord): AutomationSummary {
     id: stringValue(raw.id, ''),
     name: stringValue(raw.name, 'Untitled automation'),
     enabled: Boolean(raw.enabled),
+    systemOwned: Boolean(raw.system_owned ?? raw.systemOwned),
     kind: stringValue(raw.kind, ''),
     executorKind: stringValue(raw.executor_kind ?? raw.executorKind, ''),
     targetPolicy: stringValue(raw.target_policy ?? raw.targetPolicy, ''),

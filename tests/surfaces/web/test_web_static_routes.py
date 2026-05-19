@@ -93,6 +93,7 @@ def test_pma_dynamic_spa_fallback_routes_with_runtime_ids(tmp_path):
         "/repos/codex-autorunner--discord-5/tickets/",
         "/repos/codex-autorunner--discord-5/tickets/100/",
         "/automations",
+        "/automations/user:automation:weekly-sweep-abc123",
         "/tickets/tkt_pma_ui_regression_fixtures_smoke_qa",
         "/tickets/TICKET-290-web-ui-regression-fixtures-and-smoke-qa",
     ):

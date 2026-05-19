@@ -7,6 +7,7 @@ import {
 import type { ApiError, ApiResult } from '$lib/api/client';
 import { ReadModelEntityStore } from '$lib/data/readModelStore';
 import type { ReadModelSnapshotClient } from '$lib/data/readModelClients';
+import { importRouteLoader } from '$lib/test/importRouteLoader';
 
 const now = '2026-05-17T12:00:00Z';
 
@@ -17,9 +18,9 @@ describe('/repos/[repoId]/tickets route load', () => {
     const client = mockClient({
       repoDetail: vi.fn().mockResolvedValue(ok(repoDetailSnapshot('repo-1')))
     });
-    const { loadRepoTicketListRoute } = await importPageLoad(true);
+    const { loadRepoDetailRoute } = await importPageLoad(true);
 
-    const result = await loadRepoTicketListRoute({
+    const result = await loadRepoDetailRoute({
       repoId: 'repo-1',
       depends,
       loaderOptions: { store, client, blocking: true }
@@ -36,9 +37,9 @@ describe('/repos/[repoId]/tickets route load', () => {
     const client = mockClient({
       repoDetail: vi.fn().mockResolvedValue(ok(repoDetailSnapshot('repo-1')))
     });
-    const { loadRepoTicketListRoute } = await importPageLoad(true);
+    const { loadRepoDetailRoute } = await importPageLoad(true);
 
-    const result = await loadRepoTicketListRoute({
+    const result = await loadRepoDetailRoute({
       repoId: 'repo-1',
       loaderOptions: { store, client }
     });
@@ -51,9 +52,9 @@ describe('/repos/[repoId]/tickets route load', () => {
     const store = new ReadModelEntityStore();
     store.applyRepoDetailSnapshot(repoDetailSnapshot('repo-1'));
     const client = mockClient();
-    const { loadRepoTicketListRoute } = await importPageLoad(true);
+    const { loadRepoDetailRoute } = await importPageLoad(true);
 
-    const result = await loadRepoTicketListRoute({
+    const result = await loadRepoDetailRoute({
       repoId: 'repo-1',
       loaderOptions: { store, client }
     });
@@ -66,9 +67,9 @@ describe('/repos/[repoId]/tickets route load', () => {
     const store = new ReadModelEntityStore();
     const error = apiError('Not found');
     const client = mockClient({ repoDetail: vi.fn().mockResolvedValue(fail(error)) });
-    const { loadRepoTicketListRoute } = await importPageLoad(true);
+    const { loadRepoDetailRoute } = await importPageLoad(true);
 
-    const result = await loadRepoTicketListRoute({
+    const result = await loadRepoDetailRoute({
       repoId: 'repo-1',
       loaderOptions: { store, client, blocking: true }
     });
@@ -78,9 +79,7 @@ describe('/repos/[repoId]/tickets route load', () => {
 });
 
 async function importPageLoad(browser: boolean) {
-  vi.resetModules();
-  vi.doMock('$app/environment', () => ({ browser, dev: false, building: false, version: 'test' }));
-  return import('./+page');
+  return importRouteLoader<typeof import('$lib/routes/loadRepoDetailRoute')>('$lib/routes/loadRepoDetailRoute', browser);
 }
 
 function mockClient(overrides: Partial<Record<keyof ReadModelSnapshotClient, ReturnType<typeof vi.fn>>> = {}): ReadModelSnapshotClient {
