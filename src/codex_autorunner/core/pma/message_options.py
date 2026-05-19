@@ -18,7 +18,7 @@ from .attachments import (
 from .policies import BusyPolicy, normalize_busy_policy, validate_max_text_chars
 from .prompts import (
     ManagedThreadPromptRequest,
-    compose_managed_thread_execution_prompt,
+    compose_managed_thread_execution_prompt_with_capsules,
 )
 
 
@@ -62,6 +62,7 @@ class ManagedThreadMessageOptions:
     sandbox_policy: Optional[Any]
     live_backend_thread_id: str
     execution_prompt: str
+    capsule_refs: tuple[dict[str, Any], ...]
     execution_input_items: Optional[list[dict[str, Any]]]
     delivery_payload: dict[str, Any]
 
@@ -109,7 +110,7 @@ def resolve_managed_thread_message_options(
         context_profile,
         prompt_text=message,
     )
-    execution_prompt = compose_managed_thread_execution_prompt(
+    prompt_assembly = compose_managed_thread_execution_prompt_with_capsules(
         ManagedThreadPromptRequest(
             agent=input.thread.get("agent"),
             hub_root=input.hub_root,
@@ -121,6 +122,7 @@ def resolve_managed_thread_message_options(
             chat_kind=chat_kind,
         )
     )
+    execution_prompt = prompt_assembly.prompt
 
     delivery_payload: dict[str, Any] = {"delivered_message": message}
     if attachments:
@@ -143,6 +145,7 @@ def resolve_managed_thread_message_options(
         sandbox_policy=input.sandbox_policy,
         live_backend_thread_id=input.live_backend_thread_id,
         execution_prompt=execution_prompt,
+        capsule_refs=tuple(ref.to_dict() for ref in prompt_assembly.capsule_refs),
         execution_input_items=(
             attachment_context.input_items if attachment_context is not None else None
         ),

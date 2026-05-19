@@ -142,6 +142,10 @@ async def run_managed_thread_message_send(
             metadata=merge_bound_chat_execution_metadata(
                 {
                     "runtime_prompt": options.execution_prompt,
+                    "raw_model_prompt": options.execution_prompt,
+                    "user_visible_text": options.message,
+                    "title_seed": options.message,
+                    "capsule_refs": list(options.capsule_refs),
                     "execution_error_message": MANAGED_THREAD_PUBLIC_EXECUTION_ERROR,
                     **(
                         {"attachments": options.delivery_payload["attachments"]}

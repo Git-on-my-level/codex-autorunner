@@ -25,6 +25,7 @@ from .thread_titles import (
     provider_title_metadata,
 )
 from .transcript_mirror import TranscriptMirrorStore
+from .turn_context import turn_assembly_from_request_metadata
 
 _MISSING_THREAD_MARKERS = (
     "missing thread",
@@ -225,6 +226,9 @@ class _ThreadExecutionLifecycle:
     @staticmethod
     def resolve_runtime_prompt(request: MessageRequest) -> str:
         runtime_prompt = request.message_text
+        raw_model_prompt = request.metadata.get("raw_model_prompt")
+        if isinstance(raw_model_prompt, str) and raw_model_prompt.strip():
+            runtime_prompt = raw_model_prompt
         raw_runtime_prompt = request.metadata.get("runtime_prompt")
         if isinstance(raw_runtime_prompt, str) and raw_runtime_prompt.strip():
             runtime_prompt = raw_runtime_prompt
@@ -472,9 +476,13 @@ class _ThreadExecutionLifecycle:
                             metadata=provider_metadata,
                         )
                     )
+                    turn_assembly = turn_assembly_from_request_metadata(
+                        message_text=request.message_text,
+                        metadata=request.metadata,
+                    )
                     message_title = choose_owned_thread_title(
                         thread.display_name,
-                        message_preview=request.message_text,
+                        message_preview=turn_assembly.title_seed,
                     )
                     thread, message_title_changed = (
                         _update_owned_thread_title_best_effort(
