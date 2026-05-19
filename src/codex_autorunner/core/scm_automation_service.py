@@ -1038,10 +1038,6 @@ def _action_from_legacy_intent(intent: ReactionIntent) -> ScmActionDescriptor:
     )
 
 
-def _legacy_intent_from_action(action: Mapping[str, Any]) -> ReactionIntent:
-    return ScmActionDescriptor.from_mapping(action).to_intent()
-
-
 def _legacy_intents_from_actions(
     actions: tuple[ScmActionDescriptor, ...],
 ) -> tuple[ReactionIntent, ...]:
@@ -1096,13 +1092,6 @@ def _message_descriptor_from_payload(intent: ReactionIntent) -> ScmMessageDescri
         builder=None,
         payload_path="payload.content",
     )
-
-
-def _require_action_text(action: Mapping[str, Any], key: str) -> str:
-    text = _normalize_text(action.get(key))
-    if text is None:
-        raise ValueError(f"SCM action is missing {key}")
-    return text
 
 
 def _mapping_or_empty(value: Any) -> dict[str, Any]:
