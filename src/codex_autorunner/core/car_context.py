@@ -4,6 +4,13 @@ import re
 from dataclasses import dataclass
 from typing import Literal, Optional
 
+from .context_capsules import (
+    ContextCapsule,
+    ContextCapsuleExpiry,
+    ContextCapsuleScope,
+    ContextCapsuleVisibility,
+    stable_json_digest,
+)
 from .injected_context import wrap_injected_context
 
 CarContextProfile = Literal["car_core", "car_ambient", "none"]
@@ -172,6 +179,30 @@ def render_car_context_text(bundle: CarContextBundle) -> str:
     return "\n".join(lines)
 
 
+def build_car_context_capsule(bundle: CarContextBundle) -> ContextCapsule | None:
+    """Return the structured replacement for legacy rendered CAR awareness."""
+    text = render_car_context_text(bundle)
+    if not text:
+        return None
+    payload = {
+        "profile": bundle.effective_profile,
+        "declared_profile": bundle.declared_profile,
+        "target_path": bundle.target_path,
+        "initiated_by_ticket_flow": bundle.initiated_by_ticket_flow,
+        "text": text,
+    }
+    return ContextCapsule(
+        capsule_id="car.repo_awareness",
+        version=1,
+        scope=ContextCapsuleScope.THREAD,
+        visibility=ContextCapsuleVisibility.MODEL_ONLY,
+        source_digest=stable_json_digest(payload),
+        expiry=ContextCapsuleExpiry.WHEN_SOURCE_CHANGES,
+        reason=f"car_context_profile:{bundle.effective_profile}",
+        payload=payload,
+    )
+
+
 def render_injected_car_context(bundle: CarContextBundle) -> str:
     text = render_car_context_text(bundle)
     if not text:
@@ -187,6 +218,7 @@ __all__ = [
     "CarContextBundle",
     "CarContextProfile",
     "build_car_context_bundle",
+    "build_car_context_capsule",
     "default_managed_thread_context_profile",
     "is_car_artifact_path",
     "normalize_car_context_profile",
