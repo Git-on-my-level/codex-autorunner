@@ -809,8 +809,8 @@ export function countTicketRunGroups(chats: PmaChatSummary[]): number {
 }
 
 export function countSemanticTicketRunGroups(groups: TicketRunGroup[], chats: PmaChatSummary[] = []): number {
-  if (groups.length > 0) return groups.length;
-  return countTicketRunGroups(chats);
+  void chats;
+  return groups.length;
 }
 
 function isUnread(chat: PmaChatSummary, lastSeen: Record<string, string>): boolean {
@@ -829,7 +829,7 @@ function rollupGroupStatus(group: ChatRunGroup): WorkStatus {
 
 function chatCountsDoneForRun(chat: PmaChatSummary): boolean {
   if (chat.status === 'failed' || chat.status === 'invalid') return false;
-  return chat.ticketDone === true || chat.status === 'done';
+  return chat.ticketDone === true || chat.ticketStatus === 'done';
 }
 
 export function buildChatListEntries(
@@ -932,6 +932,8 @@ export function buildChatListEntries(
   return sortables.map((item) => item.entry);
 }
 
+// Compatibility path for pre-semantic chat snapshots only. Current `/chats`
+// rendering must pass backend TicketRunGroup rows and keep legacyFallback false.
 export function buildSemanticChatListEntries(
   chats: PmaChatSummary[],
   groups: TicketRunGroup[],
@@ -940,21 +942,23 @@ export function buildSemanticChatListEntries(
     repoLabel?: (repoId: string) => string | null;
     worktreeLabel?: (worktreeId: string) => string | null;
     groupRuns?: boolean;
+    legacyFallback?: boolean;
   } = {}
 ): ChatListEntry[] {
-  if (options.groupRuns === false || groups.length === 0) return buildChatListEntries(chats, options);
+  if (options.groupRuns === false) return buildChatListEntries(chats, { ...options, groupRuns: false });
+  if (groups.length === 0) {
+    return options.legacyFallback ? buildChatListEntries(chats, options) : sortChatsUnreadFirst(chats, options.lastSeen ?? {}).map((chat) => ({ kind: 'chat', chat }));
+  }
 
   const lastSeen = options.lastSeen ?? {};
   const chatsByGroup = new Map<string, PmaChatSummary[]>();
   const groupedIds = new Set<string>();
   for (const chat of chats) {
     const groupId = backendGroupIdForChat(chat);
-    if (!groupId && !chatRunGroupKey(chat)) continue;
-    const key = groupId || chatRunGroupKey(chat);
-    if (!key) continue;
-    const bucket = chatsByGroup.get(key) ?? [];
+    if (!groupId) continue;
+    const bucket = chatsByGroup.get(groupId) ?? [];
     bucket.push(chat);
-    chatsByGroup.set(key, bucket);
+    chatsByGroup.set(groupId, bucket);
   }
 
   const entries: ChatListEntry[] = [];
@@ -988,7 +992,7 @@ export function buildSemanticChatListEntries(
 
   for (const chat of chats) {
     if (groupedIds.has(chat.id)) continue;
-    const key = chatRunGroupKey(chat);
+    const key = backendGroupIdForChat(chat);
     if (key && seenGroups.has(key)) continue;
     entries.push({ kind: 'chat', chat });
   }

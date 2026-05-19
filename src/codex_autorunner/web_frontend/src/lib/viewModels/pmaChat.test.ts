@@ -251,6 +251,68 @@ describe('PMA chat view helpers', () => {
     expect(entries.some((entry) => entry.kind === 'chat' && entry.chat.id === 'generic-complete')).toBe(true);
   });
 
+  it('does not use legacy grouping when current semantic snapshots omit backend groups', () => {
+    const chats: PmaChatSummary[] = [
+      { ...baseChat, id: 'ticket-done', status: 'done', ticketId: 'TICKET-001', ticketDone: true, ticketStatus: 'done' },
+      { ...baseChat, id: 'ticket-running', status: 'running', ticketId: 'TICKET-002', ticketDone: false, ticketStatus: 'running' }
+    ];
+
+    const entries = buildSemanticChatListEntries(chats, [], { groupRuns: true });
+
+    expect(countSemanticTicketRunGroups([], chats)).toBe(0);
+    expect(entries).toHaveLength(2);
+    expect(entries.every((entry) => entry.kind === 'chat')).toBe(true);
+  });
+
+  it('runs legacy grouping only behind the explicit pre-semantic fallback flag', () => {
+    const chats: PmaChatSummary[] = [
+      { ...baseChat, id: 'ticket-done', status: 'idle', ticketId: 'TICKET-001', ticketDone: true, ticketStatus: 'done' },
+      { ...baseChat, id: 'generic-done', status: 'done', ticketId: 'TICKET-002', ticketDone: null, ticketStatus: null }
+    ];
+
+    const entries = buildSemanticChatListEntries(chats, [], { groupRuns: true, legacyFallback: true });
+
+    expect(entries).toHaveLength(1);
+    expect(entries[0].kind).toBe('group');
+    if (entries[0].kind === 'group') {
+      expect(entries[0].group.aggregateSource).toBeUndefined();
+      expect(entries[0].group.doneCount).toBe(1);
+      expect(entries[0].group.totalCount).toBe(2);
+    }
+  });
+
+  it('does not attach semantic group children by inferred run keys', () => {
+    const groups: TicketRunGroup[] = [
+      {
+        kind: 'ticket_run_group',
+        groupId: 'ticket-run:run-1',
+        runId: 'run-1',
+        scopeKind: 'worktree',
+        scopeId: 'wt-1',
+        label: 'run:run-1',
+        status: 'running',
+        totalCount: 1,
+        doneCount: 1,
+        runningCount: 0,
+        waitingCount: 0,
+        failedCount: 0,
+        unreadCount: 0,
+        updatedAt: '2026-05-04T05:00:00Z'
+      }
+    ];
+    const chats: PmaChatSummary[] = [
+      { ...baseChat, id: 'missing-backend-group-id', status: 'idle', runId: 'run-1', ticketId: 'TICKET-001', ticketDone: true, ticketStatus: 'done', raw: {} }
+    ];
+
+    const entries = buildSemanticChatListEntries(chats, groups, { groupRuns: true });
+    const groupEntry = entries.find((entry) => entry.kind === 'group');
+
+    expect(entries).toHaveLength(2);
+    expect(groupEntry?.kind).toBe('group');
+    if (groupEntry?.kind === 'group') expect(groupEntry.group.chats).toEqual([]);
+    expect(entries.some((entry) => entry.kind === 'chat' && entry.chat.id === 'missing-backend-group-id')).toBe(true);
+  });
+
   it('keeps separate ticket-flow runs under the same scope when run ids differ', () => {
     const chats: PmaChatSummary[] = [
       { ...baseChat, id: 'run-a-ticket-1', runId: 'run-a', isTicketFlow: true, worktreeId: 'wt-1', repoId: 'repo-1' },

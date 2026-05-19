@@ -4,6 +4,7 @@ import { render } from 'svelte/server';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   type ChatIndexRow,
+  type TicketRunGroup,
   type ProjectionCursor
 } from '$lib/api/readModelContracts';
 import { readModelEntityStore } from '$lib/data/readModelStore';
@@ -169,6 +170,76 @@ describe('/chats page', () => {
     expect(body).toContain('Unread');
     expect(body).toContain('7');
   });
+
+  it('renders ticket-run progress from backend aggregates instead of row status inference', () => {
+    const rows = [
+      ticketFlowRow('done-1', 'TICKET-001', 'idle', 'ticket-run:run-1'),
+      ticketFlowRow('done-2', 'TICKET-002', 'idle', 'ticket-run:run-1'),
+      ticketFlowRow('done-3', 'TICKET-003', 'idle', 'ticket-run:run-1'),
+      ticketFlowRow('running-1', 'TICKET-004', 'running', 'ticket-run:run-1'),
+      ticketFlowRow('running-2', 'TICKET-005', 'running', 'ticket-run:run-1'),
+      {
+        ...chatIndexRow(),
+        chatId: 'generic-complete',
+        title: 'Generic completed chat',
+        status: 'idle' as const,
+        runtimeStatus: 'completed',
+        ticketId: null,
+        runId: null,
+        groupId: null
+      }
+    ];
+    readModelEntityStore.applyChatIndexSnapshot({
+      cursor: projectionCursor(),
+      rows,
+      groups: [],
+      counters: { total: rows.length, waiting: 0, running: 2, unread: 0, archived: 0 }
+    });
+    readModelEntityStore.applyChatIndexSnapshot(
+      {
+        cursor: projectionCursor(2),
+        rows: rows.slice(0, 5),
+        groups: [ticketRunGroup()],
+        counters: { total: 5, waiting: 0, running: 2, unread: 0, archived: 0 }
+      },
+      { filter: 'ticket_runs', groupBy: 'ticket_run', limit: 50 }
+    );
+
+    const { body } = render(Page);
+
+    expect(body).toContain('2 active');
+    expect(body).toContain('3/5 done');
+    expect(body).toContain('Generic completed chat');
+    expect(body).not.toContain('4/6 done');
+  });
+
+  it('does not render legacy ticket-run grouping when current snapshots have no backend groups', () => {
+    const rows = [
+      ticketFlowRow('done-1', 'TICKET-001', 'idle', null, { ticketDone: true, ticketStatus: 'done' }),
+      ticketFlowRow('running-1', 'TICKET-002', 'running', null, { ticketDone: false, ticketStatus: 'running' })
+    ];
+    readModelEntityStore.applyChatIndexSnapshot({
+      cursor: projectionCursor(),
+      rows,
+      groups: [],
+      counters: { total: rows.length, waiting: 0, running: 1, unread: 0, archived: 0 }
+    });
+    readModelEntityStore.applyChatIndexSnapshot(
+      {
+        cursor: projectionCursor(2),
+        rows,
+        groups: [],
+        counters: { total: 2, waiting: 0, running: 1, unread: 0, archived: 0 }
+      },
+      { filter: 'ticket_runs', groupBy: 'ticket_run', limit: 50 }
+    );
+
+    const { body } = render(Page);
+
+    expect(body).toContain('TICKET-001');
+    expect(body).toContain('TICKET-002');
+    expect(body).not.toContain('1/2 done');
+  });
 });
 
 function chatIndexRow(): ChatIndexRow {
@@ -190,11 +261,54 @@ function chatIndexRow(): ChatIndexRow {
   };
 }
 
-function projectionCursor(): ProjectionCursor {
+function projectionCursor(sequence = 1): ProjectionCursor {
   return {
-    value: 'test:1',
-    sequence: 1,
+    value: `test:${sequence}`,
+    sequence,
     source: 'test',
     issuedAt: '2026-05-11T12:00:00Z'
+  };
+}
+
+function ticketFlowRow(
+  chatId: string,
+  ticketId: string,
+  status: ChatIndexRow['status'],
+  groupId: string | null,
+  overrides: Partial<ChatIndexRow> = {}
+): ChatIndexRow {
+  return {
+    ...chatIndexRow(),
+    chatId,
+    title: ticketId,
+    status,
+    runtimeStatus: status === 'idle' ? 'completed' : status,
+    ticketId,
+    runId: 'run-1',
+    worktreeId: 'wt-1',
+    flowType: 'ticket_flow',
+    groupId,
+    ticketDone: status === 'idle' ? null : false,
+    ticketStatus: status === 'running' ? 'running' : status === 'waiting' ? 'waiting' : 'unknown',
+    ...overrides
+  };
+}
+
+function ticketRunGroup(): TicketRunGroup {
+  return {
+    kind: 'ticket_run_group',
+    groupId: 'ticket-run:run-1',
+    runId: 'run-1',
+    scopeKind: 'worktree',
+    scopeId: 'wt-1',
+    label: 'Ticket run run-1',
+    status: 'running',
+    totalCount: 5,
+    doneCount: 3,
+    runningCount: 2,
+    waitingCount: 0,
+    failedCount: 0,
+    unreadCount: 0,
+    updatedAt: '2026-05-11T12:00:00Z'
   };
 }
