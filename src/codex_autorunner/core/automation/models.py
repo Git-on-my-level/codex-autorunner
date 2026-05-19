@@ -139,6 +139,16 @@ AUTOMATION_EVENT_TYPES = frozenset(
 )
 
 
+class AutomationContractError(ValueError):
+    def __init__(self, code: str, message: str) -> None:
+        self.code = code
+        super().__init__(f"{code}: {message}")
+
+
+def _contract_error(code: str, message: str) -> AutomationContractError:
+    return AutomationContractError(code, message)
+
+
 def normalize_timestamp(value: Any, *, fallback: Optional[str] = None) -> str:
     text = _normalize_text(value)
     if text is None:
@@ -201,6 +211,180 @@ def optional_text(value: Any) -> Optional[str]:
     return _normalize_text(value)
 
 
+def _require_optional_string_list(
+    value: Any, *, field_name: str, allow_templates: bool = True
+) -> list[str]:
+    if isinstance(value, str):
+        raw_values = [value]
+    elif isinstance(value, list):
+        raw_values = value
+    else:
+        raise _contract_error(
+            "AUTOMATION_CONTRACT_INVALID_LIST",
+            f"{field_name} must be a non-empty string list",
+        )
+    normalized: list[str] = []
+    for item in raw_values:
+        text = optional_text(item)
+        if text is None:
+            raise _contract_error(
+                "AUTOMATION_CONTRACT_INVALID_LIST",
+                f"{field_name} must contain only non-empty strings",
+            )
+        if not allow_templates and "{{" in text:
+            raise _contract_error(
+                "AUTOMATION_CONTRACT_INVALID_TEMPLATE",
+                f"{field_name} does not allow templates",
+            )
+        normalized.append(text)
+    if not normalized:
+        raise _contract_error(
+            "AUTOMATION_CONTRACT_INVALID_LIST",
+            f"{field_name} must be a non-empty string list",
+        )
+    return normalized
+
+
+def _require_int_range(value: Any, *, field_name: str, low: int, high: int) -> int:
+    if isinstance(value, bool):
+        raise _contract_error(
+            "AUTOMATION_CONTRACT_INVALID_NUMBER",
+            f"{field_name} must be an integer from {low} through {high}",
+        )
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError) as exc:
+        raise _contract_error(
+            "AUTOMATION_CONTRACT_INVALID_NUMBER",
+            f"{field_name} must be an integer from {low} through {high}",
+        ) from exc
+    if parsed < low or parsed > high:
+        raise _contract_error(
+            "AUTOMATION_CONTRACT_INVALID_NUMBER",
+            f"{field_name} must be an integer from {low} through {high}",
+        )
+    return parsed
+
+
+def validate_trigger_contract(
+    trigger_kind: str, trigger: dict[str, Any]
+) -> dict[str, Any]:
+    normalized = dict(trigger)
+    if "event_type" in normalized:
+        raise _contract_error(
+            "AUTOMATION_CONTRACT_LEGACY_TRIGGER",
+            "trigger.event_type is legacy; use trigger.event_types instead",
+        )
+    if trigger_kind == TRIGGER_KIND_EVENT:
+        event_types = _require_optional_string_list(
+            normalized.get("event_types"), field_name="trigger.event_types"
+        )
+        normalized["event_types"] = event_types
+    elif trigger_kind == TRIGGER_KIND_SCHEDULE:
+        schedule_kind = normalized.get("schedule_kind")
+        if schedule_kind is not None:
+            normalized["schedule_kind"] = require_choice(
+                schedule_kind,
+                field_name="trigger.schedule_kind",
+                choices=SCHEDULE_KINDS,
+            )
+        else:
+            event_types = _require_optional_string_list(
+                normalized.get("event_types"), field_name="trigger.event_types"
+            )
+            if "schedule.fire" not in event_types:
+                raise _contract_error(
+                    "AUTOMATION_CONTRACT_INVALID_TRIGGER",
+                    "schedule trigger event_types must include schedule.fire",
+                )
+            normalized["event_types"] = event_types
+    elif trigger_kind == TRIGGER_KIND_MANUAL:
+        if "event_types" in normalized:
+            event_types = _require_optional_string_list(
+                normalized.get("event_types"), field_name="trigger.event_types"
+            )
+            if "manual.run" not in event_types:
+                raise _contract_error(
+                    "AUTOMATION_CONTRACT_INVALID_TRIGGER",
+                    "manual trigger event_types must include manual.run",
+                )
+            normalized["event_types"] = event_types
+    return normalized
+
+
+def validate_target_contract(
+    target_policy: str, target: dict[str, Any]
+) -> dict[str, Any]:
+    normalized = dict(target)
+    if "policy" in normalized and normalized.get("policy") != target_policy:
+        raise _contract_error(
+            "AUTOMATION_CONTRACT_TARGET_POLICY_MISMATCH",
+            "target.policy must match target_policy when present",
+        )
+    for key in ("repo_id", "base_repo_id", "worktree_id", "thread_target_id"):
+        value = normalized.get(key)
+        if value is not None and not isinstance(value, str):
+            raise _contract_error(
+                "AUTOMATION_CONTRACT_INVALID_TARGET",
+                f"target.{key} must be a string when present",
+            )
+    if target_policy == TARGET_POLICY_NEW_AUTOMATION_WORKTREE and not normalized.get(
+        "base_repo_id"
+    ):
+        raise _contract_error(
+            "AUTOMATION_CONTRACT_TARGET_REQUIRED",
+            "new_automation_worktree requires target.base_repo_id",
+        )
+    return normalized
+
+
+def validate_executor_contract(
+    executor_kind: str, executor: dict[str, Any]
+) -> dict[str, Any]:
+    normalized = dict(executor)
+    kind = normalized.get("kind")
+    if kind is not None and kind != executor_kind:
+        raise _contract_error(
+            "AUTOMATION_CONTRACT_EXECUTOR_KIND_MISMATCH",
+            "executor.kind must match executor_kind when present",
+        )
+    for key in ("message", "prompt", "prompt_template", "operation_kind"):
+        value = normalized.get(key)
+        if value is not None and not isinstance(value, str):
+            raise _contract_error(
+                "AUTOMATION_CONTRACT_INVALID_EXECUTOR",
+                f"executor.{key} must be a string when present",
+            )
+    if executor_kind == EXECUTOR_TICKET_FLOW:
+        ticket_pack = normalized.get("ticket_pack") or normalized.get("pack")
+        if ticket_pack is not None and not isinstance(ticket_pack, dict):
+            raise _contract_error(
+                "AUTOMATION_CONTRACT_INVALID_TICKET_PACK",
+                "ticket_flow executor ticket_pack must be an object",
+            )
+    if executor_kind == EXECUTOR_PUBLISH_OPERATION:
+        payload = normalized.get("payload")
+        if payload is not None and not isinstance(payload, dict):
+            raise _contract_error(
+                "AUTOMATION_CONTRACT_INVALID_PUBLISH_OPERATION",
+                "publish_operation executor payload must be an object",
+            )
+    if executor_kind == EXECUTOR_PUBLISH_CHAT_NOTIFICATION:
+        delivery = normalized.get("delivery")
+        if delivery is not None and not isinstance(delivery, str):
+            raise _contract_error(
+                "AUTOMATION_CONTRACT_INVALID_PUBLISH_OPERATION",
+                "publish_chat_notification executor delivery must be a string",
+            )
+    actions = normalized.get("actions")
+    if actions is not None and not isinstance(actions, list):
+        raise _contract_error(
+            "AUTOMATION_CONTRACT_INVALID_ACTIONS",
+            "executor.actions must be a list when present",
+        )
+    return normalized
+
+
 def validate_policy(policy: dict[str, Any]) -> dict[str, Any]:
     normalized = dict(policy)
     normalized["max_attempts"] = normalize_positive_int(
@@ -216,6 +400,64 @@ def validate_policy(policy: dict[str, Any]) -> dict[str, Any]:
     normalized["approval_mode"] = require_choice(
         approval, field_name="approval_mode", choices=APPROVAL_MODES
     )
+    return normalized
+
+
+def validate_schedule_contract(
+    schedule_kind: str,
+    schedule: dict[str, Any],
+    *,
+    next_fire_at: Optional[str],
+    state: str = "active",
+) -> dict[str, Any]:
+    normalized = dict(schedule)
+    if "due_at" in normalized:
+        raise _contract_error(
+            "AUTOMATION_CONTRACT_LEGACY_SCHEDULE",
+            "schedule.due_at is legacy; use next_fire_at for one-shot schedules",
+        )
+    if schedule_kind == SCHEDULE_ONE_SHOT:
+        if next_fire_at is None and state == "active":
+            raise _contract_error(
+                "AUTOMATION_CONTRACT_SCHEDULE_TIME_REQUIRED",
+                "active one_shot schedules require next_fire_at",
+            )
+    elif schedule_kind == SCHEDULE_INTERVAL:
+        interval_seconds = _require_int_range(
+            normalized.get("interval_seconds"),
+            field_name="schedule.interval_seconds",
+            low=1,
+            high=31_536_000,
+        )
+        normalized["interval_seconds"] = interval_seconds
+    elif schedule_kind == SCHEDULE_DAILY:
+        if "hour" in normalized or "minute" in normalized:
+            normalized["hour"] = _require_int_range(
+                normalized.get("hour"), field_name="schedule.hour", low=0, high=23
+            )
+            normalized["minute"] = _require_int_range(
+                normalized.get("minute"),
+                field_name="schedule.minute",
+                low=0,
+                high=59,
+            )
+    elif schedule_kind == SCHEDULE_WEEKLY:
+        weekdays = normalized.get("weekdays")
+        if not isinstance(weekdays, list) or not weekdays:
+            raise _contract_error(
+                "AUTOMATION_CONTRACT_INVALID_WEEKDAYS",
+                "weekly schedules require schedule.weekdays as a non-empty list",
+            )
+        normalized["weekdays"] = [
+            _require_int_range(item, field_name="schedule.weekdays[]", low=0, high=6)
+            for item in weekdays
+        ]
+        normalized["hour"] = _require_int_range(
+            normalized.get("hour"), field_name="schedule.hour", low=0, high=23
+        )
+        normalized["minute"] = _require_int_range(
+            normalized.get("minute"), field_name="schedule.minute", low=0, high=59
+        )
     return normalized
 
 
@@ -280,25 +522,40 @@ class AutomationRule:
         created_at: Optional[str] = None,
         updated_at: Optional[str] = None,
     ) -> "AutomationRule":
+        normalized_trigger_kind = require_choice(
+            trigger_kind, field_name="trigger_kind", choices=TRIGGER_KINDS
+        )
+        normalized_target_policy = require_choice(
+            target_policy, field_name="target_policy", choices=TARGET_POLICIES
+        )
+        normalized_executor_kind = require_choice(
+            executor_kind, field_name="executor_kind", choices=EXECUTOR_KINDS
+        )
+        normalized_trigger = validate_trigger_contract(
+            normalized_trigger_kind,
+            normalize_json_object(trigger, field_name="trigger"),
+        )
+        normalized_target = validate_target_contract(
+            normalized_target_policy,
+            normalize_json_object(target, field_name="target"),
+        )
+        normalized_executor = validate_executor_contract(
+            normalized_executor_kind,
+            normalize_json_object(executor, field_name="executor"),
+        )
         stamp = normalize_timestamp(created_at)
         return cls(
             rule_id=optional_text(rule_id) or str(uuid.uuid4()),
             name=optional_text(name) or "Untitled automation",
             enabled=normalize_bool(enabled, fallback=True),
             system_owned=normalize_bool(system_owned, fallback=False),
-            trigger_kind=require_choice(
-                trigger_kind, field_name="trigger_kind", choices=TRIGGER_KINDS
-            ),
-            trigger=normalize_json_object(trigger, field_name="trigger"),
+            trigger_kind=normalized_trigger_kind,
+            trigger=normalized_trigger,
             filters=normalize_json_object(filters, field_name="filters"),
-            target_policy=require_choice(
-                target_policy, field_name="target_policy", choices=TARGET_POLICIES
-            ),
-            target=normalize_json_object(target, field_name="target"),
-            executor_kind=require_choice(
-                executor_kind, field_name="executor_kind", choices=EXECUTOR_KINDS
-            ),
-            executor=normalize_json_object(executor, field_name="executor"),
+            target_policy=normalized_target_policy,
+            target=normalized_target,
+            executor_kind=normalized_executor_kind,
+            executor=normalized_executor,
             policy=validate_policy(normalize_json_object(policy, field_name="policy")),
             metadata=normalize_json_object(metadata, field_name="metadata"),
             created_at=stamp,
@@ -541,26 +798,32 @@ class AutomationSchedule:
         resolved_rule_id = optional_text(rule_id)
         if resolved_rule_id is None:
             raise ValueError("rule_id is required")
+        normalized_schedule_kind = require_choice(
+            schedule_kind, field_name="schedule_kind", choices=SCHEDULE_KINDS
+        )
+        normalized_next_fire_at = (
+            normalize_timestamp(next_fire_at) if optional_text(next_fire_at) else None
+        )
+        normalized_schedule = validate_schedule_contract(
+            normalized_schedule_kind,
+            normalize_json_object(schedule, field_name="schedule"),
+            next_fire_at=normalized_next_fire_at,
+            state=optional_text(state) or "active",
+        )
         stamp = normalize_timestamp(created_at)
         return cls(
             schedule_id=optional_text(schedule_id) or str(uuid.uuid4()),
             rule_id=resolved_rule_id,
-            schedule_kind=require_choice(
-                schedule_kind, field_name="schedule_kind", choices=SCHEDULE_KINDS
-            ),
+            schedule_kind=normalized_schedule_kind,
             timezone=optional_text(timezone) or "UTC",
-            next_fire_at=(
-                normalize_timestamp(next_fire_at)
-                if optional_text(next_fire_at)
-                else None
-            ),
+            next_fire_at=normalized_next_fire_at,
             last_fire_at=(
                 normalize_timestamp(last_fire_at)
                 if optional_text(last_fire_at)
                 else None
             ),
             misfire_policy=optional_text(misfire_policy) or "fire_once",
-            schedule=normalize_json_object(schedule, field_name="schedule"),
+            schedule=normalized_schedule,
             state=optional_text(state) or "active",
             created_at=stamp,
             updated_at=normalize_timestamp(updated_at, fallback=stamp),
@@ -573,6 +836,7 @@ class AutomationSchedule:
 __all__ = [
     "APPROVAL_MODES",
     "AUTOMATION_EVENT_TYPES",
+    "AutomationContractError",
     "AutomationEvent",
     "AutomationJob",
     "AutomationJobAttempt",
@@ -594,4 +858,8 @@ __all__ = [
     "normalize_timestamp",
     "validate_job_transition",
     "validate_policy",
+    "validate_schedule_contract",
+    "validate_executor_contract",
+    "validate_target_contract",
+    "validate_trigger_contract",
 ]
