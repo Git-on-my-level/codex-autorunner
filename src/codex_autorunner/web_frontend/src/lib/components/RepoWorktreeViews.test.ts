@@ -68,7 +68,19 @@ describe('RepoWorktreeViews', () => {
   it('renders repo archive plus child worktree archive and cleanup actions', () => {
     const index = buildRepoWorktreeIndexViewModel({
       repos: [{ ...mockRepoSummary, raw: { has_car_state: true } }],
-      worktrees: [{ ...mockWorktreeSummary, raw: { has_car_state: true, chat_bound: true, cleanup_blocked_by_chat_binding: true } }],
+      worktrees: [
+        {
+          ...mockWorktreeSummary,
+          raw: {
+            has_car_state: true,
+            chat_bound: true,
+            chat_bound_thread_count: 1,
+            chat_binding_sources: { discord: 1 },
+            chat_binding_display_names: ['CAR / #ops'],
+            cleanup_blocked_by_chat_binding: true
+          }
+        }
+      ],
       runs: [],
       chats: [],
       tickets: [],
@@ -87,6 +99,8 @@ describe('RepoWorktreeViews', () => {
     expect(body).toContain('Archive CAR state for codex-autorunner');
     expect(body).toContain('Archive CAR state for discord-5');
     expect(body).toContain('Retire worktree discord-5');
+    expect(body).toContain('Chat-bound');
+    expect(body).toContain('CAR / #ops');
     expect(body).toContain('icon-action retire');
     expect(body).toContain('icon-action archive');
   });

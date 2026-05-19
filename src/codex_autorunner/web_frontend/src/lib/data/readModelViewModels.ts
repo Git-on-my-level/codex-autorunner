@@ -248,7 +248,11 @@ export function selectRepoSummaries(state: ReadModelEntityState): RepoSummary[] 
         ...(Array.isArray(repo.worktreeSetupCommands)
           ? { worktree_setup_commands: repo.worktreeSetupCommands }
           : {}),
-        ...runtimeRaw(state.runtime[`repo:${repo.repoId}`])
+        ...runtimeRaw(state.runtime[`repo:${repo.repoId}`]),
+        chat_bound: Boolean(repo.chatBound),
+        chat_bound_thread_count: repo.chatBindingCount ?? 0,
+        chat_binding_sources: repo.chatBindingSources ?? {},
+        chat_binding_display_names: repo.chatBindingDisplayNames ?? []
       })
     );
 }
@@ -265,7 +269,11 @@ export function selectWorktreeSummaries(state: ReadModelEntityState): WorktreeSu
         kind: 'worktree',
         worktree_of: worktree.repoId,
         branch: worktree.branch,
-        ...runtimeRaw(state.runtime[`worktree:${worktree.worktreeId}`])
+        ...runtimeRaw(state.runtime[`worktree:${worktree.worktreeId}`]),
+        chat_bound: Boolean(worktree.chatBound),
+        chat_bound_thread_count: worktree.chatBindingCount ?? 0,
+        chat_binding_sources: worktree.chatBindingSources ?? {},
+        chat_binding_display_names: worktree.chatBindingDisplayNames ?? []
       })
     );
 }
@@ -325,7 +333,9 @@ function runtimeRaw(row: RuntimeProjection | undefined): JsonRecord {
           ahead: row.gitAhead,
           behind: row.gitBehind
         },
-        chat_bound_thread_count: row.chatCount
+        chat_bound: row.chatCount > 0,
+        chat_bound_thread_count: row.chatCount,
+        cleanup_blocked_by_chat_binding: row.cleanupBlockers.includes('chat_binding')
       }
     : {};
 }

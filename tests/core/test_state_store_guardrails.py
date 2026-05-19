@@ -29,6 +29,7 @@ ALLOWED_RAW_STATE_PATH_FILES = {
     "src/codex_autorunner/adapters/telegram/ticket_flow_bridge.py",
     "src/codex_autorunner/surfaces/web/routes/hub_repo_routes/channels.py",
     "src/codex_autorunner/surfaces/web/routes/hub_repo_routes/tickets.py",
+    "src/codex_autorunner/surfaces/web/services/repo_worktree_read_models.py",
 }
 ALLOWED_RAW_ALTER_ADD_COLUMN_FILES = {
     "src/codex_autorunner/core/sqlite_utils.py",

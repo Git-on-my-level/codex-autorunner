@@ -24,7 +24,7 @@ import {
 } from './ticketFlowStatus';
 
 export type RepoWorktreeKind = 'repo' | 'worktree';
-export type RepoWorktreeIndexFilter = 'all' | 'active' | 'waiting';
+export type RepoWorktreeIndexFilter = 'all' | 'active' | 'waiting' | 'chat_bound';
 
 export type RepoWorktreeIndexRow = {
   id: string;
@@ -54,6 +54,9 @@ export type RepoWorktreeIndexRow = {
   hasCarState: boolean;
   unboundManagedThreadCount: number;
   chatBound: boolean;
+  chatBindingCount: number;
+  chatBindingSources: Record<string, number>;
+  chatBindingDisplayNames: string[];
   cleanupBlockedByChatBinding: boolean;
   /** Total worktree children for this repo (zero for worktree rows). */
   totalWorktrees: number;
@@ -92,6 +95,9 @@ export type RepoWorktreeChildRow = {
   hasCarState: boolean;
   unboundManagedThreadCount: number;
   chatBound: boolean;
+  chatBindingCount: number;
+  chatBindingSources: Record<string, number>;
+  chatBindingDisplayNames: string[];
   cleanupBlockedByChatBinding: boolean;
 };
 
@@ -191,6 +197,7 @@ export type RepoWorktreeIndexViewModel = {
   rows: RepoWorktreeIndexRow[];
   activeCount: number;
   waitingCount: number;
+  chatBoundCount: number;
   openTicketCount: number;
   /**
    * When false, ticket quantity chips and progress are hidden (hub ticket list did not load).
@@ -273,6 +280,9 @@ export type RepoWorktreeDetailViewModel = {
   hasCarState: boolean;
   unboundManagedThreadCount: number;
   chatBound: boolean;
+  chatBindingCount: number;
+  chatBindingSources: Record<string, number>;
+  chatBindingDisplayNames: string[];
   cleanupBlockedByChatBinding: boolean;
 };
 
@@ -340,6 +350,7 @@ export function buildRepoWorktreeIndexViewModel(
     rows,
     activeCount: countRepoWorktreeIndexEntities(rows, 'active'),
     waitingCount: countRepoWorktreeIndexEntities(rows, 'waiting'),
+    chatBoundCount: countRepoWorktreeIndexEntities(rows, 'chat_bound'),
     ticketIndexMetricsAvailable,
     openTicketCount: ticketIndexMetricsAvailable
       ? rows.reduce(
@@ -363,6 +374,9 @@ export function buildRepoWorktreeDetailViewModel(
       : source.worktrees.find((worktree) => worktree.id === id) ?? null;
   if (!resource) return missingDetailViewModel(kind, id);
   const title = resource?.name ?? id;
+  const chatBindingCount = chatBindingCountFromRaw(resource.raw);
+  const chatBindingSources = chatBindingSourcesFromRaw(resource.raw);
+  const chatBindingDisplayNames = chatBindingDisplayNamesFromRaw(resource.raw);
   const branch = kind === 'repo' ? (resource as RepoSummary | null)?.defaultBranch ?? null : (resource as WorktreeSummary | null)?.branch ?? null;
   const path = resource?.path ?? null;
   const childWorktreeSummaries = kind === 'repo' ? lookup.worktreesByRepo.get(id) ?? [] : [];
@@ -433,6 +447,9 @@ export function buildRepoWorktreeDetailViewModel(
     hasCarState: boolFromRaw(resource.raw, 'has_car_state'),
     unboundManagedThreadCount: numberFromRaw(resource.raw, 'unbound_managed_thread_count'),
     chatBound: boolFromRaw(resource.raw, 'chat_bound'),
+    chatBindingCount,
+    chatBindingSources,
+    chatBindingDisplayNames,
     cleanupBlockedByChatBinding: boolFromRaw(resource.raw, 'cleanup_blocked_by_chat_binding')
   };
 }
@@ -498,6 +515,9 @@ function missingDetailViewModel(kind: RepoWorktreeKind, id: string): RepoWorktre
     hasCarState: false,
     unboundManagedThreadCount: 0,
     chatBound: false,
+    chatBindingCount: 0,
+    chatBindingSources: {},
+    chatBindingDisplayNames: [],
     cleanupBlockedByChatBinding: false
   };
 }
@@ -516,6 +536,36 @@ function ticketIndexRollup(scoped: TicketSummary[]): { open: number; total: numb
   const done = scoped.filter((ticket) => ticket.status === 'done').length;
   const open = scoped.filter((ticket) => ticket.status !== 'done').length;
   return { open, total, done };
+}
+
+function chatBindingSourcesFromRaw(raw: Record<string, unknown>): Record<string, number> {
+  const source = asRecord(raw.chat_binding_sources);
+  const out: Record<string, number> = {};
+  for (const [key, value] of Object.entries(source)) {
+    const count = typeof value === 'number' ? value : Number.parseInt(String(value ?? ''), 10);
+    if (key && Number.isFinite(count) && count > 0) out[key] = count;
+  }
+  return out;
+}
+
+function chatBindingDisplayNamesFromRaw(raw: Record<string, unknown>): string[] {
+  const values = Array.isArray(raw.chat_binding_display_names) ? raw.chat_binding_display_names : [];
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const value of values) {
+    if (typeof value !== 'string') continue;
+    const text = value.trim();
+    if (!text || seen.has(text)) continue;
+    seen.add(text);
+    out.push(text);
+  }
+  return out;
+}
+
+function chatBindingCountFromRaw(raw: Record<string, unknown>): number {
+  const explicit = numberFromRaw(raw, 'chat_bound_thread_count');
+  if (explicit > 0) return explicit;
+  return Object.values(chatBindingSourcesFromRaw(raw)).reduce((total, count) => total + count, 0);
 }
 
 type RepoWorktreeLookup = {
@@ -606,6 +656,9 @@ function runResourceKeys(run: PmaRunProgress): Set<string> {
 
 function repoToIndexRow(repo: RepoSummary, worktrees: WorktreeSummary[], source: RepoWorktreeSourceData, lookup: RepoWorktreeLookup): RepoWorktreeIndexRow {
   const listLoaded = hubTicketListLoaded(source);
+  const chatBindingCount = chatBindingCountFromRaw(repo.raw);
+  const chatBindingSources = chatBindingSourcesFromRaw(repo.raw);
+  const chatBindingDisplayNames = chatBindingDisplayNamesFromRaw(repo.raw);
   const childWorktrees = worktrees
     .map((worktree) => worktreeToNavChildRow(worktree, repo.name, source, lookup))
     .sort(byChildActiveThenLabel);
@@ -650,6 +703,9 @@ function repoToIndexRow(repo: RepoSummary, worktrees: WorktreeSummary[], source:
     hasCarState: boolFromRaw(repo.raw, 'has_car_state'),
     unboundManagedThreadCount: numberFromRaw(repo.raw, 'unbound_managed_thread_count'),
     chatBound: boolFromRaw(repo.raw, 'chat_bound'),
+    chatBindingCount,
+    chatBindingSources,
+    chatBindingDisplayNames,
     cleanupBlockedByChatBinding: boolFromRaw(repo.raw, 'cleanup_blocked_by_chat_binding'),
     totalWorktrees: childWorktrees.length,
     inUseWorktrees,
@@ -666,6 +722,9 @@ function worktreeToNavChildRow(
   lookup: RepoWorktreeLookup | null = source ? buildRepoWorktreeLookup(source) : null
 ): RepoWorktreeChildRow {
   const listLoaded = source ? hubTicketListLoaded(source) : false;
+  const chatBindingCount = chatBindingCountFromRaw(worktree.raw);
+  const chatBindingSources = chatBindingSourcesFromRaw(worktree.raw);
+  const chatBindingDisplayNames = chatBindingDisplayNamesFromRaw(worktree.raw);
   const scoped = source ? ticketsForResource(source.tickets, 'worktree', worktree.id, lookup ?? undefined) : [];
   const rollup = listLoaded ? ticketIndexRollup(scoped) : { open: 0, total: 0, done: 0 };
   const primaryRuns = lookup?.runsByResource.get(resourceKey('worktree', worktree.id)) ?? (source ? source.runs.filter((run) => runMatchesResource(run, 'worktree', worktree.id)) : []);
@@ -697,12 +756,18 @@ function worktreeToNavChildRow(
     hasCarState: boolFromRaw(worktree.raw, 'has_car_state'),
     unboundManagedThreadCount: numberFromRaw(worktree.raw, 'unbound_managed_thread_count'),
     chatBound: boolFromRaw(worktree.raw, 'chat_bound'),
+    chatBindingCount,
+    chatBindingSources,
+    chatBindingDisplayNames,
     cleanupBlockedByChatBinding: boolFromRaw(worktree.raw, 'cleanup_blocked_by_chat_binding')
   };
 }
 
 function worktreeToIndexRow(worktree: WorktreeSummary, source: RepoWorktreeSourceData, lookup: RepoWorktreeLookup): RepoWorktreeIndexRow {
   const listLoaded = hubTicketListLoaded(source);
+  const chatBindingCount = chatBindingCountFromRaw(worktree.raw);
+  const chatBindingSources = chatBindingSourcesFromRaw(worktree.raw);
+  const chatBindingDisplayNames = chatBindingDisplayNamesFromRaw(worktree.raw);
   const scoped = ticketsForResource(source.tickets, 'worktree', worktree.id, lookup);
   const rollup = listLoaded ? ticketIndexRollup(scoped) : { open: 0, total: 0, done: 0 };
   return {
@@ -730,6 +795,9 @@ function worktreeToIndexRow(worktree: WorktreeSummary, source: RepoWorktreeSourc
     hasCarState: boolFromRaw(worktree.raw, 'has_car_state'),
     unboundManagedThreadCount: numberFromRaw(worktree.raw, 'unbound_managed_thread_count'),
     chatBound: boolFromRaw(worktree.raw, 'chat_bound'),
+    chatBindingCount,
+    chatBindingSources,
+    chatBindingDisplayNames,
     cleanupBlockedByChatBinding: boolFromRaw(worktree.raw, 'cleanup_blocked_by_chat_binding'),
     totalWorktrees: 0,
     inUseWorktrees: 0,
@@ -1302,11 +1370,13 @@ function childMatchesNeedle(child: RepoWorktreeChildRow, needle: string): boolea
 function rowMatchesFilter(row: RepoWorktreeIndexRow, filter: RepoWorktreeIndexFilter): boolean {
   if (filter === 'active') return row.activeRuns > 0 || row.status === 'running' || row.signalActive > 0;
   if (filter === 'waiting') return row.status === 'waiting' || row.status === 'blocked' || row.signalWaiting > 0;
+  if (filter === 'chat_bound') return row.chatBound;
   return true;
 }
 
 function childMatchesFilter(child: RepoWorktreeChildRow, filter: RepoWorktreeIndexFilter): boolean {
   if (filter === 'active') return child.activeRuns > 0 || child.status === 'running' || child.signalActive > 0;
   if (filter === 'waiting') return child.status === 'waiting' || child.status === 'blocked' || child.signalWaiting > 0;
+  if (filter === 'chat_bound') return child.chatBound;
   return true;
 }

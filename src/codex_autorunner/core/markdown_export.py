@@ -38,7 +38,8 @@ def rewrite_markdown_with_mermaid_images(
 
     parts: list[str] = []
     cursor = 0
-    for fence, image_name in zip(fences, image_names, strict=False):
+    for index, fence in enumerate(fences):
+        image_name = image_names[index]
         parts.append(markdown[cursor : fence.start])
         parts.append(f"![Mermaid Diagram {fence.index}]({image_name})\n\n")
         cursor = fence.end

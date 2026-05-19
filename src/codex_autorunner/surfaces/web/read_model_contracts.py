@@ -300,6 +300,10 @@ class RepoTopology(ReadModelContract):
     destination_id: Optional[str] = None
     child_worktree_ids: list[str] = Field(default_factory=list)
     worktree_setup_commands: Optional[list[str]] = None
+    chat_bound: bool = False
+    chat_binding_count: int = Field(default=0, ge=0)
+    chat_binding_sources: dict[str, int] = Field(default_factory=dict)
+    chat_binding_display_names: list[str] = Field(default_factory=list)
 
 
 class WorktreeTopology(ReadModelContract):
@@ -310,6 +314,10 @@ class WorktreeTopology(ReadModelContract):
     branch: Optional[str] = None
     archived: bool = False
     destination_id: Optional[str] = None
+    chat_bound: bool = False
+    chat_binding_count: int = Field(default=0, ge=0)
+    chat_binding_sources: dict[str, int] = Field(default_factory=dict)
+    chat_binding_display_names: list[str] = Field(default_factory=list)
 
 
 class RepoWorktreeTopologySnapshot(ReadModelContract):

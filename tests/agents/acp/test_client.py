@@ -1143,7 +1143,8 @@ class TestPromptResponseLifecycleDelegation:
             "cancelled",
             "failed",
         ]
-        for payload, expect in zip(payloads, expected, strict=False):
+        for index, payload in enumerate(payloads):
+            expect = expected[index]
             status = _classify_prompt_response_status(payload)
             method = _prompt_terminal_method_for_status(status)
             assert status == expect, f"payload={payload}"

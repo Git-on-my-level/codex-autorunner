@@ -420,9 +420,10 @@ def import_ticket_pack(
         width = max(3, max(len(str(i)) for i in list(existing_indices) + indices))
 
     pending_writes: list[tuple[Path, str]] = []
-    for (source_name, original_index, raw), target_index in zip(
-        ordered_entries, indices, strict=False
-    ):
+    for index, (source_name, original_index, raw) in enumerate(ordered_entries):
+        if index >= len(indices):
+            break
+        target_index = indices[index]
         item = TicketImportItem(
             source=source_name,
             target=None,
