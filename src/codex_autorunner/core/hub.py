@@ -1233,7 +1233,6 @@ class HubSupervisor:
         if not wakeups:
             return 0
 
-        automation_store.backfill_legacy_pma_automation()
         worker = self._lifecycle_orchestrator._automation_job_worker
         worker.process_once(limit=len(wakeups))
         drained = 0

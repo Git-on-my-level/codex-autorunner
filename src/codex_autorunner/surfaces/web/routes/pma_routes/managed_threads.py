@@ -246,8 +246,6 @@ def _create_unified_pma_subscription(
     store = AutomationStore(hub_root)
     idempotency_key = normalize_optional_text(payload.get("idempotency_key"))
     normalized_thread_id = normalize_optional_text(payload.get("thread_id"))
-    if normalized_thread_id is not None:
-        return PmaAutomationStore(hub_root).create_subscription(payload)
     if idempotency_key is not None:
         existing = _find_pma_rule_by_idempotency(
             store,
@@ -731,7 +729,6 @@ def _unified_subscription_rows(
     lane_id_norm = normalize_optional_text(lane_id)
     store = AutomationStore(context.hub_root)
     try:
-        store.backfill_legacy_pma_automation()
         rules = [
             rule
             for rule in store.list_rules(enabled=True)
@@ -819,7 +816,6 @@ def _unified_timer_rows(
     lane_id_norm = normalize_optional_text(lane_id)
     store = AutomationStore(context.hub_root)
     try:
-        store.backfill_legacy_pma_automation()
         rules = {
             rule.rule_id: rule
             for rule in store.list_rules(enabled=True)

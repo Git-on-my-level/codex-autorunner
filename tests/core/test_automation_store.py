@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 import pytest
 
 from codex_autorunner.core.automation import (
@@ -26,7 +28,9 @@ from codex_autorunner.core.automation.models import (
     TRIGGER_KIND_SCHEDULE,
 )
 from codex_autorunner.core.orchestration.sqlite import open_orchestration_sqlite
-from codex_autorunner.core.pma_automation_store import PmaAutomationStore
+from codex_autorunner.core.pma_automation_unified import (
+    PmaLegacyAutomationMigrationError,
+)
 
 
 def _rule() -> AutomationRule:
@@ -395,61 +399,155 @@ def test_schedule_crud(tmp_path) -> None:
     assert store.list_schedules(rule_id="daily-rule")[0].schedule["hour"] == 9
 
 
-def test_backfill_legacy_pma_rows_creates_unified_rows(tmp_path) -> None:
-    pma_store = PmaAutomationStore(tmp_path)
-    subscription = pma_store.create_subscription(
-        {
-            "event_types": ["flow_failed"],
-            "repo_id": "repo-legacy",
-            "run_id": "run-legacy",
-            "thread_id": "thread-legacy",
-            "lane_id": "pma:default",
-            "from_state": "running",
-            "to_state": "failed",
-            "metadata": {"source": "test"},
-        }
-    )["subscription"]
-    pma_store.create_timer(
-        {
-            "subscription_id": subscription["subscription_id"],
-            "due_at": "2026-01-01T00:00:00Z",
-            "thread_id": "thread-legacy",
-            "reason": "timer",
-            "idempotency_key": "timer-legacy",
-        }
-    )
-    pma_store.enqueue_wakeup(
-        source="lifecycle_subscription",
-        subscription_id=subscription["subscription_id"],
-        repo_id="repo-legacy",
-        run_id="run-legacy",
-        thread_id="thread-legacy",
-        lane_id="pma:default",
-        from_state="running",
-        to_state="failed",
-        reason="legacy wakeup",
-        event_type="flow_failed",
-        idempotency_key="wakeup-legacy",
-    )
+def _insert_legacy_pma_rows(tmp_path) -> None:
+    with open_orchestration_sqlite(tmp_path) as conn:
+        with conn:
+            conn.execute(
+                """
+                INSERT INTO orch_automation_subscriptions (
+                    subscription_id, event_types_json, repo_id, run_id,
+                    thread_target_id, lane_id, from_state, to_state, notify_once,
+                    state, match_count, metadata_json, created_at, updated_at,
+                    reason_text, idempotency_key, max_matches
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    "sub-legacy",
+                    json.dumps(["flow_failed"]),
+                    "repo-legacy",
+                    "run-legacy",
+                    "thread-legacy",
+                    "pma:default",
+                    "running",
+                    "failed",
+                    0,
+                    "active",
+                    0,
+                    json.dumps({"source": "test"}),
+                    "2026-01-01T00:00:00Z",
+                    "2026-01-01T00:00:00Z",
+                    "watch failures",
+                    "sub-key",
+                    None,
+                ),
+            )
+            conn.execute(
+                """
+                INSERT INTO orch_automation_timers (
+                    timer_id, subscription_id, repo_id, run_id, thread_target_id,
+                    timer_kind, schedule_key, available_at, payload_json, state,
+                    created_at, updated_at, fired_at, reason_text, idempotency_key,
+                    idle_seconds
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    "timer-legacy",
+                    "sub-legacy",
+                    "repo-legacy",
+                    "run-legacy",
+                    "thread-legacy",
+                    "one_shot",
+                    "sub-legacy",
+                    "2026-01-02T00:00:00Z",
+                    json.dumps({"lane_id": "pma:default", "metadata": {"source": "test"}}),
+                    "pending",
+                    "2026-01-01T00:00:00Z",
+                    "2026-01-01T00:00:00Z",
+                    None,
+                    "timer",
+                    "timer-key",
+                    None,
+                ),
+            )
+            conn.execute(
+                """
+                INSERT INTO orch_automation_wakeups (
+                    wakeup_id, subscription_id, repo_id, run_id, thread_target_id,
+                    lane_id, wakeup_kind, state, available_at, claimed_at,
+                    completed_at, reason_text, payload_json, created_at, updated_at,
+                    timestamp, idempotency_key, timer_id, event_id, event_type
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    "wakeup-legacy",
+                    "sub-legacy",
+                    "repo-legacy",
+                    "run-legacy",
+                    "thread-legacy",
+                    "pma:default",
+                    "lifecycle_subscription",
+                    "completed",
+                    "2026-01-01T00:00:00Z",
+                    "2026-01-01T00:00:01Z",
+                    "2026-01-01T00:00:02Z",
+                    "legacy wakeup",
+                    json.dumps({"from_state": "running", "to_state": "failed"}),
+                    "2026-01-01T00:00:00Z",
+                    "2026-01-01T00:00:02Z",
+                    "2026-01-01T00:00:00Z",
+                    "wakeup-key",
+                    None,
+                    "event-legacy",
+                    "flow_failed",
+                ),
+            )
+
+
+def test_explicit_legacy_pma_migration_creates_unified_rows(tmp_path) -> None:
+    _insert_legacy_pma_rows(tmp_path)
 
     store = AutomationStore(tmp_path)
-    counts = store.backfill_legacy_pma_automation()
+    counts = store.migrate_legacy_pma_automation()
 
-    assert counts["rules"] >= 1
+    assert counts["rules"] == 2
     assert counts["events"] == 1
     assert counts["jobs"] == 1
     assert counts["schedules"] == 1
+    assert counts["attempts"] == 1
+    assert counts["diagnostics"] == []
     assert any(
-        rule.metadata.get("legacy_source") == "orch_automation_subscriptions"
+        rule.metadata.get("legacy_source_table") == "orch_automation_subscriptions"
         for rule in store.list_rules()
     )
     assert store.list_events()[0].event_type == "lifecycle.flow_failed"
     assert store.list_jobs()[0].pma_lane_id == "pma:default"
+    assert store.list_attempts("legacy-pma-wakeup:wakeup-legacy")[0].status == "succeeded"
     assert store.list_schedules()[0].schedule_kind == "one_shot"
 
-    assert store.backfill_legacy_pma_automation() == {
+    assert store.migrate_legacy_pma_automation() == {
         "rules": 0,
         "events": 0,
         "jobs": 0,
         "schedules": 0,
+        "attempts": 0,
+        "diagnostics": [],
     }
+
+
+def test_legacy_pma_migration_reports_malformed_rows(tmp_path) -> None:
+    _insert_legacy_pma_rows(tmp_path)
+    with open_orchestration_sqlite(tmp_path) as conn:
+        conn.execute("PRAGMA foreign_keys = OFF")
+        with conn:
+            conn.execute(
+                "UPDATE orch_automation_subscriptions SET event_types_json = ? "
+                "WHERE subscription_id = ?",
+                ("not-json", "sub-legacy"),
+            )
+            conn.execute(
+                "UPDATE orch_automation_timers SET subscription_id = ? "
+                "WHERE timer_id = ?",
+                ("missing-sub", "timer-legacy"),
+            )
+
+    with pytest.raises(PmaLegacyAutomationMigrationError) as excinfo:
+        AutomationStore(tmp_path).migrate_legacy_pma_automation()
+
+    diagnostics = [item.to_dict() for item in excinfo.value.diagnostics]
+    assert {
+        item["code"] for item in diagnostics
+    } >= {
+        "PMA_LEGACY_AUTOMATION_MALFORMED_JSON",
+        "PMA_LEGACY_AUTOMATION_ORPHANED_ROW",
+    }
+    assert AutomationStore(tmp_path).list_rules() == []

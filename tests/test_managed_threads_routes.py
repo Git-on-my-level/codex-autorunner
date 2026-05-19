@@ -10,6 +10,7 @@ from fastapi.testclient import TestClient
 
 from codex_autorunner.adapters.chat.channel_directory import ChannelDirectoryStore
 from codex_autorunner.agents.registry import AgentDescriptor
+from codex_autorunner.core.automation import AutomationStore
 from codex_autorunner.core.config import CONFIG_FILENAME, DEFAULT_HUB_CONFIG
 from codex_autorunner.core.managed_thread_store import ManagedThreadStore
 from codex_autorunner.core.orchestration import (
@@ -1574,11 +1575,12 @@ def test_create_subscription_persists_max_matches_and_thread_scope(hub_env) -> N
     assert payload["subscription"]["thread_id"] == thread_id
     assert payload["subscription"]["max_matches"] == 1
 
-    automation_store = app.state.hub_supervisor.get_pma_automation_store()
-    subscriptions = automation_store.list_subscriptions(thread_id=thread_id)
-    assert len(subscriptions) == 1
-    assert subscriptions[0]["thread_id"] == thread_id
-    assert subscriptions[0]["max_matches"] == 1
+    rule = AutomationStore(hub_env.hub_root).get_rule(
+        f"builtin:pma:subscription:{payload['subscription']['subscription_id']}"
+    )
+    assert rule is not None
+    assert rule.target["thread_id"] == thread_id
+    assert rule.metadata["legacy_max_matches"] == 1
 
 
 def test_create_subscription_rejects_negative_max_matches(hub_env) -> None:

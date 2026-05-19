@@ -133,8 +133,8 @@ STANDARD_FILE_BUDGETS = (
     ),
     FileBudget(
         path="src/codex_autorunner/core/pma_automation_unified.py",
-        max_lines=590,
-        reason="Ticket 002 owns unified-plane PMA automation backfill/mirror translation in this bounded seam.",
+        max_lines=950,
+        reason="Ticket 002 owns unified-plane PMA automation mirror and explicit legacy migration translation in this bounded module.",
     ),
     FileBudget(
         path="src/codex_autorunner/core/pma_transcripts.py",
@@ -341,9 +341,9 @@ STANDARD_FUNCTION_BUDGETS = (
     ),
     FunctionBudget(
         path="src/codex_autorunner/core/pma_automation_unified.py",
-        qualname="PmaUnifiedAutomationBackfill.run",
+        qualname="PmaLegacyAutomationMigration.run",
         max_lines=80,
-        reason="Ticket 002 keeps PMA automation backfill ownership explicit and bounded.",
+        reason="Ticket 002 keeps explicit PMA automation migration ownership bounded.",
     ),
     FunctionBudget(
         path="src/codex_autorunner/core/pma_transcripts.py",
