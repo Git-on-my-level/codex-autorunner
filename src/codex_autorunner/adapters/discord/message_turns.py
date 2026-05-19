@@ -1937,9 +1937,11 @@ async def _run_discord_orchestrated_turn_for_message(
     )
     execution_input_items = _build_managed_thread_input_items(
         execution_prompt,
-        turn_envelope.input_items
-        if turn_envelope is not None and turn_envelope.input_items is not None
-        else input_items,
+        (
+            turn_envelope.input_items
+            if turn_envelope is not None and turn_envelope.input_items is not None
+            else input_items
+        ),
     )
     max_progress_len = max(int(service._config.max_message_length), 32)
     managed_thread_id = thread.thread_target_id
