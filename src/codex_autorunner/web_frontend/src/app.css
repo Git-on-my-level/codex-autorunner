@@ -3677,8 +3677,12 @@ textarea:hover {
   background: var(--color-accent);
   opacity: 0.55;
   transform-origin: left center;
-  transition: transform 80ms linear;
+  animation: toast-timeout-progress var(--notice-timeout, 3500ms) linear forwards;
   pointer-events: none;
+}
+
+.auto-dismiss-notice.no-timeout .auto-dismiss-notice__bar {
+  animation: none;
 }
 
 @keyframes toast-slide-in {
@@ -3692,8 +3696,18 @@ textarea:hover {
   }
 }
 
+@keyframes toast-timeout-progress {
+  from {
+    transform: scaleX(1);
+  }
+  to {
+    transform: scaleX(0);
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
-  .auto-dismiss-notice {
+  .auto-dismiss-notice,
+  .auto-dismiss-notice__bar {
     animation: none;
   }
 }

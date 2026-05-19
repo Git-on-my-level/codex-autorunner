@@ -80,6 +80,64 @@ describe('ChatDetailLiveProjection', () => {
     expect(projection.snapshot().streamState).toBe('interrupted');
   });
 
+  it('cancels pending repair refreshes when the stream reconnects before the repair fires', async () => {
+    const store = new ReadModelEntityStore();
+    const timers = timerFixture();
+    const stream = streamFixture();
+    const api = apiFixture({ transcriptRows: [messageCard('chat-1', 'assistant-1', 'assistant', 'repaired')] });
+    const projection = projectionFixture(store, api, {
+      openStream: stream.open,
+      setTimeout: timers.setTimeout,
+      clearTimeout: timers.clearTimeout
+    });
+
+    projection.connect('chat-1');
+    stream.options?.onError?.(new Event('error'));
+    expect(timers.pending()).toHaveLength(1);
+
+    stream.options?.onStatus?.('connected');
+    expect(timers.pending()).toHaveLength(0);
+    timers.runPending();
+    await Promise.resolve();
+
+    expect(api.getTranscriptCalls).toBe(0);
+    expect(projection.snapshot().streamState).toBe('connected');
+  });
+
+  it('does not cancel terminal refresh timers when later stream events arrive', async () => {
+    const store = new ReadModelEntityStore();
+    const timers = timerFixture();
+    const stream = streamFixture();
+    const api = apiFixture({ transcriptRows: [messageCard('chat-1', 'assistant-1', 'assistant', 'refreshed')] });
+    const projection = projectionFixture(store, api, {
+      openStream: stream.open,
+      setTimeout: timers.setTimeout,
+      clearTimeout: timers.clearTimeout
+    });
+
+    projection.connect('chat-1');
+    stream.options?.onEvent({
+      kind: 'transcript_patch',
+      lastEventId: '1',
+      payload: { status: rawProgress('chat-1', 'turn-1', { terminal: true }) }
+    });
+    expect(timers.pending()).toHaveLength(1);
+
+    stream.options?.onStatus?.('connected');
+    stream.options?.onEvent({
+      kind: 'transcript_append',
+      lastEventId: '2',
+      payload: { rows: [rawMessageRow('chat-1', 'assistant-2', 'assistant', 'after terminal', 'turn-1')] }
+    });
+    expect(timers.pending()).toHaveLength(1);
+
+    timers.runPending();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(api.getTranscriptCalls).toBe(1);
+  });
+
   it('refreshes queue once for a terminal managed turn with assistant output', async () => {
     const store = new ReadModelEntityStore();
     const timers = timerFixture();

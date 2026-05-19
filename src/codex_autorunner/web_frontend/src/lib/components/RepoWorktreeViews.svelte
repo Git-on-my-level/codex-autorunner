@@ -493,20 +493,21 @@
               </div>
             {/if}
 
-            {#if !collapsed && visibleChildren(row).length > 0}
+            {#if !collapsed}
               {@const childRows = visibleChildren(row)}
-              <VirtualList
-                items={childRows}
-                key={(worktree) => worktree.id}
-                estimatedItemSize={54}
-                overscan={6}
-                initialCount={32}
-                ariaLabel={`Worktrees owned by ${row.label}`}
-                class="worktree-list"
-                scrollable={false}
-              >
-                {#snippet children(worktree)}
-                  <div class={`worktree-item status-${worktree.status}`} role="listitem">
+              {#if childRows.length > 0}
+                <VirtualList
+                  items={childRows}
+                  key={(worktree) => worktree.id}
+                  estimatedItemSize={54}
+                  overscan={6}
+                  initialCount={32}
+                  ariaLabel={`Worktrees owned by ${row.label}`}
+                  class="worktree-list"
+                  scrollable={false}
+                >
+                  {#snippet children(worktree)}
+                    <div class={`worktree-item status-${worktree.status}`} role="listitem">
                     <div
                       class="worktree-card row-click-target"
                       role="link"
@@ -639,9 +640,10 @@
                         {/if}
                       </div>
                     </div>
-                  </div>
-                {/snippet}
-              </VirtualList>
+                    </div>
+                  {/snippet}
+                </VirtualList>
+              {/if}
             {/if}
           </div>
         {/snippet}

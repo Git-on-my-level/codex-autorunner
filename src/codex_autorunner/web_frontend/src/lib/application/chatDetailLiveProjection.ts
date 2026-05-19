@@ -84,6 +84,7 @@ export class ChatDetailLiveProjection {
   private activeRefreshSeq = 0;
   private activeQueueRefreshSeq = 0;
   private pendingRefreshTimer: unknown = null;
+  private pendingRefreshReason: 'terminal' | 'repair' | null = null;
   private pendingQueueRefreshTimer: unknown = null;
   private refreshedTerminalTurnId: string | null = null;
 
@@ -193,12 +194,16 @@ export class ChatDetailLiveProjection {
   private handleStreamStatus(chatId: string, status: 'connecting' | 'connected' | 'interrupted' | 'closed'): void {
     if (this.getActiveChatId() !== chatId) return;
     if (status === 'connecting' && this.state.streamState !== 'connected') this.setState({ streamState: 'connecting' });
-    if (status === 'connected') this.setState({ streamState: 'connected', streamError: null });
+    if (status === 'connected') {
+      this.clearPendingRepairRefresh();
+      this.setState({ streamState: 'connected', streamError: null });
+    }
     if (status === 'interrupted') this.setState({ streamState: 'interrupted' });
   }
 
   private handleStreamEvent(chatId: string, event: ChatTranscriptStreamEvent): void {
     if (this.getActiveChatId() !== chatId) return;
+    this.clearPendingRepairRefresh();
     this.setState({ streamState: 'connected' });
     if (event.kind === 'transcript_snapshot') {
       const rows = mapChatTranscriptRows(event.payload.rows);
@@ -225,7 +230,7 @@ export class ChatDetailLiveProjection {
       this.updateProgress(nextProgress);
       if (nextProgress.terminal && nextProgress.id && this.refreshedTerminalTurnId !== nextProgress.id) {
         this.refreshedTerminalTurnId = nextProgress.id;
-        this.scheduleRefresh(chatId, this.refreshDelayMs);
+        this.scheduleRefresh(chatId, this.refreshDelayMs, 'terminal');
       }
       if (nextProgress.streamShouldClose) this.closeStream();
     }
@@ -241,7 +246,7 @@ export class ChatDetailLiveProjection {
       streamState: 'interrupted',
       streamError: 'Live chat updates were interrupted. Reconnecting and repairing from the latest snapshot.'
     });
-    this.scheduleRefresh(chatId, this.repairDelayMs);
+    this.scheduleRefresh(chatId, this.repairDelayMs, 'repair');
   }
 
   private ensureStreamAfterSnapshot(chatId: string): void {
@@ -251,10 +256,12 @@ export class ChatDetailLiveProjection {
     if (this.shouldUseStream(seedChat, seedProgress, this.currentQueueDepth(chatId))) this.connect(chatId);
   }
 
-  private scheduleRefresh(chatId: string, delayMs: number): void {
+  private scheduleRefresh(chatId: string, delayMs: number, reason: 'terminal' | 'repair'): void {
     if (this.pendingRefreshTimer) this.clearTimer(this.pendingRefreshTimer);
+    this.pendingRefreshReason = reason;
     this.pendingRefreshTimer = this.setTimer(() => {
       this.pendingRefreshTimer = null;
+      this.pendingRefreshReason = null;
       if (this.getActiveChatId() === chatId) void this.refresh(chatId, { quiet: true });
     }, delayMs);
   }
@@ -271,7 +278,15 @@ export class ChatDetailLiveProjection {
     if (this.pendingRefreshTimer) this.clearTimer(this.pendingRefreshTimer);
     if (this.pendingQueueRefreshTimer) this.clearTimer(this.pendingQueueRefreshTimer);
     this.pendingRefreshTimer = null;
+    this.pendingRefreshReason = null;
     this.pendingQueueRefreshTimer = null;
+  }
+
+  private clearPendingRepairRefresh(): void {
+    if (!this.pendingRefreshTimer || this.pendingRefreshReason !== 'repair') return;
+    this.clearTimer(this.pendingRefreshTimer);
+    this.pendingRefreshTimer = null;
+    this.pendingRefreshReason = null;
   }
 
   private closeStream(): void {
