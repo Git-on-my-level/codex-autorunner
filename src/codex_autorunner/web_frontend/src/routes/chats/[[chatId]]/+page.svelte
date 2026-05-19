@@ -82,6 +82,7 @@
   import {
     adjustedUnreadFilterCount,
     buildSemanticChatListEntries,
+    chatRunGroupSummaryParts,
     buildPmaChatScopeOptions,
     buildPmaLiveActivity,
     buildManagedThreadMessagePayload,
@@ -423,12 +424,7 @@
   }
 
   function groupSummaryParts(group: ChatRunGroup): string[] {
-    const parts: string[] = [];
-    if (group.waitingCount > 0) parts.push(`${group.waitingCount} waiting`);
-    if (group.activeCount > 0) parts.push(`${group.activeCount} active`);
-    if (group.failedCount > 0) parts.push(`${group.failedCount} failed`);
-    parts.push(`${group.doneCount}/${group.totalCount} done`);
-    return parts;
+    return chatRunGroupSummaryParts(group);
   }
   const displayedProgress = $derived(progressWithLiveElapsed(progress, clockNowMs));
   const liveActivity = $derived(buildPmaLiveActivity(displayedProgress));

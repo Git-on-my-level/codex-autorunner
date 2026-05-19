@@ -780,6 +780,15 @@ export type ChatListEntry =
   | { kind: 'group'; group: ChatRunGroup }
   | { kind: 'chat'; chat: PmaChatSummary };
 
+export function chatRunGroupSummaryParts(group: ChatRunGroup): string[] {
+  const parts: string[] = [];
+  if (group.waitingCount > 0) parts.push(`${group.waitingCount} waiting`);
+  if (group.activeCount > 0) parts.push(`${group.activeCount} active`);
+  if (group.failedCount > 0) parts.push(`${group.failedCount} failed`);
+  parts.push(`${group.doneCount}/${group.totalCount} done`);
+  return parts;
+}
+
 export function chatRunGroupKey(chat: PmaChatSummary): string | null {
   if (!chat.isTicketFlow && !chat.ticketId) return null;
   const runSuffix = chat.runId ? `:run:${chat.runId}` : '';

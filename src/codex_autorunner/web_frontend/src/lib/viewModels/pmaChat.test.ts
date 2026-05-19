@@ -39,6 +39,7 @@ import {
   pmaChatKind,
   pmaChatKindLabel,
   pmaChatHeaderScopeLine,
+  chatRunGroupSummaryParts,
   chatMessengerSurface,
   pmaChatScopeLabelFromChat,
   pmaChatScopeTagView,
@@ -238,6 +239,7 @@ describe('PMA chat view helpers', () => {
       expect(entries[0].group.doneCount).toBe(3);
       expect(entries[0].group.activeCount).toBe(2);
       expect(entries[0].group.totalCount).toBe(5);
+      expect(chatRunGroupSummaryParts(entries[0].group)).toEqual(['2 active', '3/5 done']);
       expect(entries[0].group.chats.map((chat) => chat.id).sort()).toEqual([
         'done-1',
         'done-2',

@@ -81,6 +81,7 @@ def test_high_signal_seed_states_are_present() -> None:
         SeedFixtureKind.PMA_DISCORD_WEB_HANDOFF,
         SeedFixtureKind.PMA_GROUPED_TOOLS,
         SeedFixtureKind.CHAT_INDEX_HIGH_HISTORY,
+        SeedFixtureKind.CHAT_TICKET_RUN_GROUPING,
     }
     missing = required.difference(fixture_kinds)
     assert not missing, f"high-signal fixture coverage missing: {missing}"
@@ -164,6 +165,36 @@ def test_chat_index_high_history_regression_seed_is_bounded() -> None:
     assert screen_model["row_count"] == 1
     assert screen_model["visible_rows"] == 1
     assert "/hub/read-models/chats/patches" in scenario.read_models.read_model_routes
+
+
+def test_chat_ticket_run_grouping_regression_seed_captures_progress() -> None:
+    scenario = next(
+        item
+        for item in WEB_UI_SCENARIOS
+        if item.seed_fixture is SeedFixtureKind.CHAT_TICKET_RUN_GROUPING
+    )
+    payload = build_fixture_payload(scenario.seed_fixture)
+    screen_model = _normalize_screen_model(scenario, payload)
+
+    group = payload["chat_groups"][0]
+    ticket_flow_chats = [
+        chat for chat in payload["chats"] if chat.get("flow_type") == "ticket_flow"
+    ]
+    lookalikes = [
+        chat for chat in payload["chats"] if chat.get("flow_type") != "ticket_flow"
+    ]
+
+    assert group["done_count"] == 3
+    assert group["running_count"] == 2
+    assert group["total_count"] == 5
+    assert len(ticket_flow_chats) == 5
+    assert len(lookalikes) == 2
+    assert all("group_id" not in chat for chat in lookalikes)
+    assert "2 active - 3/5 done" in screen_model["landmarks"]
+    assert (
+        "/hub/read-models/chats?filter=ticket_runs&group_by=ticket_run&limit=50"
+        in scenario.read_models.read_model_routes
+    )
 
 
 def test_missing_optional_fields_invariant_reruns_screen_normalization() -> None:

@@ -29,6 +29,7 @@ def build_fixture_payload(fixture_kind: SeedFixtureKind) -> JsonDict:
         SeedFixtureKind.PMA_DISCORD_WEB_HANDOFF: _pma_discord_web_handoff,
         SeedFixtureKind.PMA_GROUPED_TOOLS: _pma_grouped_tools,
         SeedFixtureKind.CHAT_INDEX_HIGH_HISTORY: _chat_index_high_history,
+        SeedFixtureKind.CHAT_TICKET_RUN_GROUPING: _chat_ticket_run_grouping,
     }
     return builders[fixture_kind]()
 
@@ -156,6 +157,71 @@ def _chat_index_high_history() -> JsonDict:
         "expected_patch_stream_startup_events_max": 1,
         "patch_route": "/hub/read-models/chats/patches",
     }
+    return payload
+
+
+def _chat_ticket_run_grouping() -> JsonDict:
+    payload = _seeded_repo_worktree_ticket()
+    run_id = "run-ticket-regression"
+    payload["chats"] = [
+        {
+            "thread_target_id": f"ticket-flow-child-{index}",
+            "title": f"TICKET-{index:03d}",
+            "status": "completed" if index <= 3 else "running",
+            "agent_id": "codex",
+            "repo_id": "smoke-repo",
+            "worktree_id": "smoke-repo--ticket-flow",
+            "current_ticket_id": f"TICKET-{index:03d}",
+            "ticket_path": f".codex-autorunner/tickets/TICKET-{index:03d}.md",
+            "ticket_done": index <= 3,
+            "ticket_status": "done" if index <= 3 else "running",
+            "run_id": run_id,
+            "group_id": f"run:{run_id}",
+            "flow_type": "ticket_flow",
+            "last_activity_at": f"2026-05-01T10:1{index}:00Z",
+            "progress_percent": 100 if index <= 3 else 46,
+        }
+        for index in range(1, 6)
+    ]
+    payload["chats"].extend(
+        [
+            {
+                "thread_target_id": "generic-completed-same-worktree",
+                "title": "Generic completed same worktree",
+                "status": "completed",
+                "agent_id": "codex",
+                "repo_id": "smoke-repo",
+                "worktree_id": "smoke-repo--ticket-flow",
+                "last_activity_at": "2026-05-01T10:20:00Z",
+            },
+            {
+                "thread_target_id": "ticketish-title-no-flow",
+                "title": "TICKET-999 looks like ticket flow",
+                "status": "running",
+                "agent_id": "codex",
+                "repo_id": "smoke-repo",
+                "worktree_id": "smoke-repo--ticket-flow",
+                "metadata": {"title": "ticket_flow run lookalike"},
+                "last_activity_at": "2026-05-01T10:21:00Z",
+            },
+        ]
+    )
+    payload["chat_groups"] = [
+        {
+            "kind": "ticket_run_group",
+            "group_id": f"run:{run_id}",
+            "run_id": run_id,
+            "scope_kind": "worktree",
+            "scope_id": "smoke-repo--ticket-flow",
+            "status": "running",
+            "total_count": 5,
+            "done_count": 3,
+            "running_count": 2,
+            "waiting_count": 0,
+            "failed_count": 0,
+            "summary": "2 active - 3/5 done",
+        }
+    ]
     return payload
 
 

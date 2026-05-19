@@ -132,6 +132,72 @@ def _insert_thread_row(
             )
 
 
+def _insert_chat_thread_row(
+    hub_root: Path,
+    *,
+    thread_id: str,
+    repo_id: str,
+    resource_kind: str,
+    resource_id: str,
+    display_name: str,
+    runtime_status: str,
+    metadata: dict[str, object] | None = None,
+    updated_at: str = "2026-05-11T00:00:00Z",
+) -> None:
+    with open_orchestration_sqlite(hub_root, durable=True, migrate=True) as conn:
+        with conn:
+            conn.execute(
+                """
+                INSERT INTO orch_thread_targets (
+                    thread_target_id,
+                    agent_id,
+                    repo_id,
+                    resource_kind,
+                    resource_id,
+                    display_name,
+                    lifecycle_status,
+                    runtime_status,
+                    metadata_json,
+                    created_at,
+                    updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    thread_id,
+                    "codex",
+                    repo_id,
+                    resource_kind,
+                    resource_id,
+                    display_name,
+                    "active",
+                    runtime_status,
+                    json.dumps(metadata or {}),
+                    "2026-05-11T00:00:00Z",
+                    updated_at,
+                ),
+            )
+
+
+def _write_ticket(path: Path, *, done: bool) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        "\n".join(
+            [
+                "---",
+                f"title: {path.stem}",
+                "agent: codex",
+                f"done: {'true' if done else 'false'}",
+                "---",
+                "",
+                "## Goal",
+                "- Regression fixture ticket.",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+
 def _archive_thread_row(hub_root: Path, *, thread_id: str, updated_at: str) -> None:
     with open_orchestration_sqlite(hub_root, durable=True, migrate=True) as conn:
         with conn:
@@ -926,6 +992,115 @@ def test_hub_read_models_chats_contract_active_filter_matches_index_window(
     assert snapshot.rows[0].agent_profile == "m4-pma"
     assert snapshot.rows[0].chat_kind == "coding_agent"
     assert snapshot.rows[0].surface == "discord"
+
+
+def test_hub_read_models_chats_ticket_flow_group_regression_from_ticket_files(
+    hub_env,
+) -> None:
+    repo_root = hub_env.hub_root / "repos" / "smoke-repo"
+    worktree_id = "smoke-repo--ticket-flow"
+    run_id = "run-ticket-regression"
+    ticket_paths = [
+        f".codex-autorunner/tickets/TICKET-{index:03d}.md" for index in range(1, 6)
+    ]
+    for index, ticket_path in enumerate(ticket_paths, start=1):
+        _write_ticket(repo_root / ticket_path, done=index <= 3)
+        _insert_chat_thread_row(
+            hub_env.hub_root,
+            thread_id=f"ticket-flow-child-{index}",
+            repo_id="smoke-repo",
+            resource_kind="worktree",
+            resource_id=worktree_id,
+            display_name=f"Ticket flow child {index}",
+            runtime_status="completed" if index <= 3 else "running",
+            metadata=ticket_flow_thread_metadata(
+                flow_run_id=run_id,
+                ticket_id=f"TICKET-{index:03d}",
+                workspace_root=str(repo_root),
+                ticket_path=ticket_path,
+            ),
+            updated_at=f"2026-05-11T00:0{index}:00Z",
+        )
+
+    _insert_chat_thread_row(
+        hub_env.hub_root,
+        thread_id="generic-completed-same-worktree",
+        repo_id="smoke-repo",
+        resource_kind="worktree",
+        resource_id=worktree_id,
+        display_name="Generic completed same worktree",
+        runtime_status="completed",
+        updated_at="2026-05-11T00:06:00Z",
+    )
+    _insert_chat_thread_row(
+        hub_env.hub_root,
+        thread_id="ticketish-title-no-flow",
+        repo_id="smoke-repo",
+        resource_kind="worktree",
+        resource_id=worktree_id,
+        display_name="TICKET-999 looks like ticket flow",
+        runtime_status="running",
+        metadata={"title": "ticket_flow run lookalike"},
+        updated_at="2026-05-11T00:07:00Z",
+    )
+
+    client = TestClient(create_hub_app(hub_env.hub_root))
+    active_response = client.get(
+        "/hub/read-models/chats",
+        params={"filter": "active", "group_by": "ticket_run", "limit": 20},
+    )
+    ticket_runs_response = client.get(
+        "/hub/read-models/chats",
+        params={"filter": "ticket_runs", "group_by": "ticket_run", "limit": 20},
+    )
+    child_response = client.get(
+        "/hub/read-models/chats",
+        params={
+            "filter": "ticket_runs",
+            "group_by": "ticket_run",
+            "parent_group_id": f"run:{run_id}",
+            "limit": 20,
+        },
+    )
+
+    assert active_response.status_code == 200
+    assert ticket_runs_response.status_code == 200
+    assert child_response.status_code == 200
+    active_snapshot = load_read_model_contract(
+        ChatIndexSnapshot, active_response.json()
+    )
+    ticket_runs_snapshot = load_read_model_contract(
+        ChatIndexSnapshot, ticket_runs_response.json()
+    )
+    child_snapshot = load_read_model_contract(ChatIndexSnapshot, child_response.json())
+
+    assert [group.group_id for group in active_snapshot.groups] == [f"run:{run_id}"]
+    assert [group.group_id for group in ticket_runs_snapshot.groups] == [
+        f"run:{run_id}"
+    ]
+    group = ticket_runs_snapshot.groups[0]
+    assert group.kind == "ticket_run_group"
+    assert group.run_id == run_id
+    assert group.scope_kind == "worktree"
+    assert group.scope_id == worktree_id
+    assert group.status == "running"
+    assert group.total_count == 5
+    assert group.done_count == 3
+    assert group.running_count == 2
+    assert group.waiting_count == 0
+    assert group.failed_count == 0
+
+    children = {row.chat_id: row for row in child_snapshot.rows}
+    assert set(children) == {f"ticket-flow-child-{index}" for index in range(1, 6)}
+    assert "generic-completed-same-worktree" not in children
+    assert "ticketish-title-no-flow" not in children
+    for index in range(1, 6):
+        row = children[f"ticket-flow-child-{index}"]
+        assert row.flow_type == "ticket_flow"
+        assert row.run_id == run_id
+        assert row.ticket_path == ticket_paths[index - 1]
+        assert row.ticket_done == (index <= 3)
+        assert row.ticket_status == ("done" if index <= 3 else "running")
 
 
 def test_hub_read_models_chats_derives_rows_before_window_limit(hub_env) -> None:

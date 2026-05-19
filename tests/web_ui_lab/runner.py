@@ -72,6 +72,7 @@ def _normalize_screen_model(
     tickets = _records(normalized_payload, "tickets")
     runs = _records(normalized_payload, "runs")
     chats = _records(normalized_payload, "chats")
+    chat_groups = _records(normalized_payload, "chat_groups")
     timeline = _records(normalized_payload, "timeline")
     docs = _records(normalized_payload, "contextspace_docs")
     settings = (
@@ -88,6 +89,7 @@ def _normalize_screen_model(
         tickets=tickets,
         runs=runs,
         chats=chats,
+        chat_groups=chat_groups,
         timeline=timeline,
         docs=docs,
         settings=settings,
@@ -223,6 +225,7 @@ def _landmarks_for_route(
     tickets: list[dict[str, Any]],
     runs: list[dict[str, Any]],
     chats: list[dict[str, Any]],
+    chat_groups: list[dict[str, Any]],
     timeline: list[dict[str, Any]],
     docs: list[dict[str, Any]],
     settings: Any,
@@ -276,6 +279,11 @@ def _landmarks_for_route(
             "Chats",
             "Search chats, repos, tickets",
             *[_label(chat) for chat in chats],
+            *[
+                str(group.get("summary"))
+                for group in chat_groups
+                if isinstance(group.get("summary"), str)
+            ],
             *[_timeline_label(item) for item in timeline],
             *[
                 _label(attachment)
