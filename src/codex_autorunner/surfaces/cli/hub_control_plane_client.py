@@ -605,7 +605,9 @@ def recover_managed_thread_send_timeout(
                 (
                     managed_turn_id
                     for managed_turn_id, prompt_preview in zip(
-                        current.queued_turn_ids, current.queued_prompt_previews
+                        current.queued_turn_ids,
+                        current.queued_prompt_previews,
+                        strict=False,
                     )
                     if prompt_preview == expected_preview
                     and managed_turn_id not in baseline_queued_ids
@@ -628,7 +630,9 @@ def recover_managed_thread_send_timeout(
                 (
                     managed_turn_id
                     for managed_turn_id, prompt_preview in zip(
-                        current.queued_turn_ids, current.queued_prompt_previews
+                        current.queued_turn_ids,
+                        current.queued_prompt_previews,
+                        strict=False,
                     )
                     if prompt_preview == expected_preview
                     and managed_turn_id not in baseline_queued_ids
@@ -645,7 +649,9 @@ def recover_managed_thread_send_timeout(
                     (
                         managed_turn_id
                         for managed_turn_id, prompt_preview in zip(
-                            current.queued_turn_ids, current.queued_prompt_previews
+                            current.queued_turn_ids,
+                            current.queued_prompt_previews,
+                            strict=False,
                         )
                         if prompt_preview == expected_preview
                     ),

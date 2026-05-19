@@ -19,5 +19,10 @@
     "web:smoke:hub": ".venv/bin/python scripts/pma_live_hub_smoke.py",
     "web:smoke:journeys": ".venv/bin/python scripts/web_ui_smoke_journeys.py",
     "web:smoke:dev": ".venv/bin/python scripts/web_ui_dev_smoke.py"
+  },
+  "pnpm": {
+    "overrides": {
+      "cookie": "0.7.0"
+    }
   }
 }

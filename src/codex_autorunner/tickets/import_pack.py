@@ -421,7 +421,7 @@ def import_ticket_pack(
 
     pending_writes: list[tuple[Path, str]] = []
     for (source_name, original_index, raw), target_index in zip(
-        ordered_entries, indices
+        ordered_entries, indices, strict=False
     ):
         item = TicketImportItem(
             source=source_name,

@@ -9394,7 +9394,7 @@ async def test_reconcile_background_task_failure_variants(
 
     assert result == reconcile_return
     assert len(sent_messages) == len(expected_messages)
-    for actual, expected in zip(sent_messages, expected_messages):
+    for actual, expected in zip(sent_messages, expected_messages, strict=False):
         for key, val in expected.items():
             assert actual[key] == val
     if (

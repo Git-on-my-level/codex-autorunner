@@ -2671,7 +2671,9 @@ def _merge_usage_series(
                 cast(Optional[str], entry.get("token_type")),
             )
             values = cast(List[int], entry.get("values", []))
-            bucket_map = {label: int(val) for label, val in zip(buckets_ref, values)}
+            bucket_map = {
+                label: int(val) for label, val in zip(buckets_ref, values, strict=False)
+            }
             series_map[key] = bucket_map
         return series_map
 

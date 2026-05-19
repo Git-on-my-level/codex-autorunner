@@ -1493,7 +1493,7 @@ def _evaluate_static_expr(
 
     if isinstance(expr, ast.Dict):
         result: dict[Any, Any] = {}
-        for key_expr, value_expr in zip(expr.keys, expr.values):
+        for key_expr, value_expr in zip(expr.keys, expr.values, strict=False):
             if key_expr is None:
                 return _MISSING
             key = _evaluate_static_expr(
