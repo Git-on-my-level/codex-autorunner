@@ -271,11 +271,20 @@ class PmaUnifiedAutomationAdapter:
         if not timer_id:
             raise ValueError("timer_id is required")
         state = str(getattr(timer, "state", "pending") or "pending")
+        next_fire_at = None
+        if state == "pending":
+            next_fire_at = _optional_text(getattr(timer, "due_at", None))
+            if next_fire_at is None:
+                next_fire_at = _optional_text(getattr(timer, "created_at", None))
+            if next_fire_at is None:
+                from .pma_automation_types import _iso_after_seconds
+
+                next_fire_at = _iso_after_seconds(0)
         return AutomationSchedule.create(
             schedule_id=f"{PMA_TIMER_SCHEDULE_PREFIX}{timer_id}",
             rule_id=f"{PMA_TIMER_RULE_PREFIX}{timer_id}",
             schedule_kind=SCHEDULE_ONE_SHOT,
-            next_fire_at=getattr(timer, "due_at", None) if state == "pending" else None,
+            next_fire_at=next_fire_at,
             last_fire_at=getattr(timer, "fired_at", None),
             schedule={
                 "legacy_timer_id": timer_id,

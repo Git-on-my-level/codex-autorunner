@@ -324,6 +324,45 @@ class ScmMessageDescriptor:
         return {key: value for key, value in asdict(self).items() if value is not None}
 
 
+def _legacy_message_descriptor_from_action_payload(
+    *,
+    reaction_kind: ReactionKind,
+    operation_kind: ReactionOperationKind,
+    payload: Mapping[str, Any],
+) -> ScmMessageDescriptor:
+    if operation_kind == "enqueue_managed_turn":
+        request = payload.get("request")
+        request_map = request if isinstance(request, Mapping) else {}
+        preview = _optional_text(request_map.get("message_text")) or "SCM managed turn"
+        return ScmMessageDescriptor.create(
+            reaction_kind=reaction_kind,
+            operation_kind=operation_kind,
+            preview=preview,
+            source_kind="static_payload",
+            builder=None,
+            payload_path="payload.request.message_text",
+        )
+    if operation_kind == "notify_chat":
+        preview = _optional_text(payload.get("message")) or "SCM notification"
+        return ScmMessageDescriptor.create(
+            reaction_kind=reaction_kind,
+            operation_kind=operation_kind,
+            preview=preview,
+            source_kind="static_payload",
+            builder=None,
+            payload_path="payload.message",
+        )
+    preview = _optional_text(payload.get("content")) or "SCM reaction"
+    return ScmMessageDescriptor.create(
+        reaction_kind=reaction_kind,
+        operation_kind=operation_kind,
+        preview=preview,
+        source_kind="static_payload",
+        builder=None,
+        payload_path="payload.content",
+    )
+
+
 @dataclass(frozen=True)
 class ScmActionDescriptor:
     reaction_kind: ReactionKind
@@ -377,7 +416,19 @@ class ScmActionDescriptor:
             raise ValueError("SCM action payload must be an object")
         message = value.get("message")
         if not isinstance(message, Mapping):
-            raise ValueError("SCM action message descriptor is required")
+            return cls.create(
+                reaction_kind=reaction_kind,  # type: ignore[arg-type]
+                operation_kind=operation_kind,  # type: ignore[arg-type]
+                operation_key=_require_text(value.get("operation_key"), "operation_key"),
+                payload=payload,
+                message=_legacy_message_descriptor_from_action_payload(
+                    reaction_kind=reaction_kind,  # type: ignore[arg-type]
+                    operation_kind=operation_kind,  # type: ignore[arg-type]
+                    payload=payload,
+                ),
+                event_id=_optional_text(value.get("event_id")),
+                binding_id=_optional_text(value.get("binding_id")),
+            )
         return cls.create(
             reaction_kind=reaction_kind,  # type: ignore[arg-type]
             operation_kind=operation_kind,  # type: ignore[arg-type]
