@@ -57,6 +57,13 @@ _HELP_COMMANDS: tuple[HelpCommandDescriptor, ...] = (
         discord_path=("car", "archive"),
     ),
     HelpCommandDescriptor(
+        id="car.automation.list",
+        description="List scheduled automations",
+        section="core",
+        telegram_command="automation",
+        discord_path=("car", "automation", "list"),
+    ),
+    HelpCommandDescriptor(
         id="car.debug",
         description="Show debug info for troubleshooting",
         section="admin",
@@ -306,6 +313,7 @@ _TELEGRAM_COMMAND_ORDER: tuple[str, ...] = (
     "logout",
     "files",
     "flow",
+    "automation",
     "reply",
     "pma",
     "rollout",
@@ -332,6 +340,7 @@ _DISCORD_SECTION_ORDER: tuple[tuple[str, tuple[str, ...]], ...] = (
             "car.approvals",
             "car.mention",
             "car.archive",
+            "car.automation.list",
         ),
     ),
     (
@@ -454,6 +463,9 @@ def build_telegram_help_text(
         if command_name == "flow":
             lines.append("/flow - ticket flow controls")
             continue
+        if command_name == "automation":
+            lines.append("/automation - scheduled automation controls")
+            continue
         line = _render_telegram_line(command_name)
         if line is not None:
             lines.append(line)
@@ -486,6 +498,19 @@ def build_telegram_help_text(
         )
         if "reply" in legacy_available:
             lines.append("/reply <message> (legacy)")
+
+    if "automation" in available:
+        lines.extend(
+            [
+                "",
+                "Automation:",
+                "/automation list",
+                "/automation status <id>",
+                "/automation run <id>",
+                "/automation pause <id>",
+                "/automation resume <id>",
+            ]
+        )
 
     file_lines = _telegram_file_help_lines(available)
     if file_lines:

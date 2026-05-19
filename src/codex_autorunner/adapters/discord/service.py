@@ -209,6 +209,13 @@ from ...voice.provider_catalog import normalize_voice_provider
 from ...voice.service import VoiceTransientError
 from . import update_service as discord_update_service
 from .adapter import DiscordChatAdapter
+from .automation_commands import (
+    handle_automation_list,
+    handle_automation_pause,
+    handle_automation_resume,
+    handle_automation_run,
+    handle_automation_status,
+)
 from .car_command_dispatch import handle_car_command as dispatch_car_command
 from .channel_messaging import (
     _coerce_id as _cm_coerce_id,
@@ -7060,6 +7067,76 @@ class DiscordBotService(DiscordInteractionResponseMixin):
             close = getattr(handle, "close", None)
             if callable(close):
                 close()
+
+    async def _handle_automation_list(
+        self,
+        interaction_id: str,
+        interaction_token: str,
+        *,
+        options: dict[str, Any],
+    ) -> None:
+        await handle_automation_list(
+            self,
+            interaction_id,
+            interaction_token,
+            options=options,
+        )
+
+    async def _handle_automation_status(
+        self,
+        interaction_id: str,
+        interaction_token: str,
+        *,
+        options: dict[str, Any],
+    ) -> None:
+        await handle_automation_status(
+            self,
+            interaction_id,
+            interaction_token,
+            options=options,
+        )
+
+    async def _handle_automation_run(
+        self,
+        interaction_id: str,
+        interaction_token: str,
+        *,
+        options: dict[str, Any],
+    ) -> None:
+        await handle_automation_run(
+            self,
+            interaction_id,
+            interaction_token,
+            options=options,
+        )
+
+    async def _handle_automation_pause(
+        self,
+        interaction_id: str,
+        interaction_token: str,
+        *,
+        options: dict[str, Any],
+    ) -> None:
+        await handle_automation_pause(
+            self,
+            interaction_id,
+            interaction_token,
+            options=options,
+        )
+
+    async def _handle_automation_resume(
+        self,
+        interaction_id: str,
+        interaction_token: str,
+        *,
+        options: dict[str, Any],
+    ) -> None:
+        await handle_automation_resume(
+            self,
+            interaction_id,
+            interaction_token,
+            options=options,
+        )
 
     async def _handle_flow_status(
         self,

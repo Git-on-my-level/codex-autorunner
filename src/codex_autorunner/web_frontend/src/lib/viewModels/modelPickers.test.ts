@@ -10,7 +10,8 @@ import {
   modelExists,
   modelLabel,
   modelRecordForValue,
-  pickerReasoningOptions
+  pickerReasoningOptions,
+  resolveAgentModelSelection
 } from './modelPickers';
 
 describe('model picker helpers', () => {
@@ -78,5 +79,49 @@ describe('model picker helpers', () => {
     ]);
     expect(agentProfileEntriesForRecord(agents[0])).toEqual([]);
     expect(agentLabel(hermes)).toBe('Hermes');
+  });
+
+  it('resolves model and reasoning selection from the shared catalog rules', () => {
+    expect(
+      resolveAgentModelSelection({
+        agents,
+        agentId: 'hermes',
+        catalog: models,
+        preferredModel: 'openai/gpt-5.4',
+        currentReasoning: 'high',
+        keepReasoning: true
+      })
+    ).toEqual({ canListModels: false, model: '', reasoning: '' });
+
+    expect(
+      resolveAgentModelSelection({
+        agents,
+        agentId: 'codex',
+        catalog: models,
+        preferredModel: 'missing',
+        rememberedModel: 'anthropic/claude'
+      })
+    ).toEqual({ canListModels: true, model: 'anthropic/claude', reasoning: '' });
+
+    expect(
+      resolveAgentModelSelection({
+        agents,
+        agentId: 'codex',
+        catalog: models,
+        currentReasoning: 'high',
+        keepReasoning: true
+      })
+    ).toEqual({ canListModels: true, model: 'openai/gpt-5.4', reasoning: 'high' });
+
+    expect(
+      resolveAgentModelSelection({
+        agents,
+        agentId: 'codex',
+        catalog: models,
+        currentReasoning: 'high',
+        keepReasoning: true,
+        allowEmptyModel: true
+      })
+    ).toEqual({ canListModels: true, model: '', reasoning: '' });
   });
 });

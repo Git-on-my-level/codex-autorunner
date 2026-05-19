@@ -51,6 +51,7 @@ def test_build_application_commands_structure_is_stable() -> None:
         "archive",
         "session",
         "files",
+        "automation",
         "admin",
     ]
     assert [opt["name"] for opt in options] == expected_subcommands

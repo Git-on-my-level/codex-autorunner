@@ -92,6 +92,11 @@ def build_command_specs(handlers: Any) -> dict[str, CommandSpec]:
             f"ticket flow controls ({flow_action_summary()})",
             lambda message, args, _runtime: handlers._handle_flow(message, args),
         ),
+        "automation": _spec(
+            "automation",
+            "list, inspect, run, pause, or resume scheduled automations",
+            handlers._handle_automation,
+        ),
         "reply": _spec(
             "reply",
             "reply to a paused ticket flow dispatch (prefer /flow reply)",

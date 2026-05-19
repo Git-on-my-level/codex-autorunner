@@ -10,7 +10,7 @@
   import { statusLabel } from '$lib/viewModels/pmaChat';
   import type { PartialPageIssue } from '$lib/api/client';
   import PageHero from './PageHero.svelte';
-  import TicketDiffStats from './TicketDiffStats.svelte';
+  import TicketDiffStats from '$lib/components/tickets/TicketDiffStats.svelte';
   import VirtualList from '$lib/components/VirtualList.svelte';
   import FilterRow from '$lib/components/FilterRow.svelte';
   import { repoAccent, repoInitials } from '$lib/viewModels/repoIdentity';

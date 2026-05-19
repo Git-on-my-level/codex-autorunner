@@ -88,6 +88,96 @@ describe('API client error handling', () => {
     }
   });
 
+  it('maps automation overview responses', async () => {
+    const fetcher = vi.fn(async () =>
+      Response.json({
+        automations: [
+          {
+            id: 'rule-1',
+            name: 'Daily scan',
+            enabled: true,
+            kind: 'security_scan_pr',
+            executor_kind: 'pma_turn',
+            target_policy: 'hub',
+            target: { repo_id: 'repo-1' },
+            schedule: {
+              schedule_id: 'schedule-1',
+              schedule_kind: 'daily',
+              timezone: 'UTC',
+              next_fire_at: '2026-01-01T09:00:00Z',
+              schedule: { hour: 9, minute: 0 },
+              state: 'active'
+            },
+            last_job: { job_id: 'job-1', state: 'succeeded' },
+            job_count: 1
+          }
+        ],
+        summary: { total: 1, active: 1, paused: 0, failed_jobs: 0 }
+      })
+    ) as unknown as typeof fetch;
+    const client = new WebApiClient(fetcher);
+
+    const result = await client.hub.listAutomations();
+
+    expect(fetcher).toHaveBeenCalledWith('/hub/automations', expect.any(Object));
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.data.automations[0]).toMatchObject({
+        id: 'rule-1',
+        kind: 'security_scan_pr',
+        executorKind: 'pma_turn',
+        target: { repo_id: 'repo-1' },
+        schedule: { scheduleKind: 'daily', nextFireAt: '2026-01-01T09:00:00Z' },
+        lastJob: { jobId: 'job-1', state: 'succeeded' }
+      });
+    }
+  });
+
+  it('gets and updates automation detail responses', async () => {
+    const fetcher = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input).endsWith('/hub/automations/rule-1') && init?.method === 'PATCH') {
+        return Response.json({
+          automation: {
+            id: 'rule-1',
+            name: 'Updated scan',
+            enabled: false,
+            kind: 'security_scan_pr',
+            executor_kind: 'pma_turn',
+            target_policy: 'hub',
+            target: { repo_id: 'repo-1' },
+            executor: { message: 'Updated prompt' }
+          }
+        });
+      }
+      return Response.json({
+        automation: {
+          id: 'rule-1',
+          name: 'Daily scan',
+          enabled: true,
+          kind: 'security_scan_pr',
+          executor_kind: 'pma_turn',
+          target_policy: 'hub',
+          target: { repo_id: 'repo-1' }
+        }
+      });
+    }) as unknown as typeof fetch;
+    const client = new WebApiClient(fetcher);
+
+    const detail = await client.hub.getAutomation('rule-1');
+    const updated = await client.hub.updateAutomation('rule-1', { prompt: 'Updated prompt' });
+
+    expect(fetcher).toHaveBeenCalledWith('/hub/automations/rule-1', expect.any(Object));
+    expect(fetcher).toHaveBeenCalledWith(
+      '/hub/automations/rule-1',
+      expect.objectContaining({ method: 'PATCH', body: JSON.stringify({ prompt: 'Updated prompt' }) })
+    );
+    expect(detail.ok).toBe(true);
+    expect(updated.ok).toBe(true);
+    if (updated.ok) {
+      expect(updated.data).toMatchObject({ id: 'rule-1', name: 'Updated scan', raw: { executor: { message: 'Updated prompt' } } });
+    }
+  });
+
   it('maps PMA chat list status from backend execution state before lifecycle state', async () => {
     const fetcher = vi.fn(async () =>
       Response.json({

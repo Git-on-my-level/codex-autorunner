@@ -1,10 +1,9 @@
 import {
-  ensureChatIndexLoaded,
   ensureChatDetailLoaded,
-  type ReadModelDepends,
-  type ReadModelLoaderOptions,
+  ensureChatIndexLoaded,
   type ReadModelLoaderResult
 } from '$lib/data';
+import { readModelLoaderOptions, type LoadReadModelRouteOptions } from './loadReadModelRoute';
 
 export type ChatRouteLoadData = {
   chatId: string | null;
@@ -16,28 +15,22 @@ const CHAT_DETAIL_TIMELINE_LIMIT = 50;
 const CHAT_INDEX_WINDOW_LIMIT = 50;
 
 /** Testable helper; must not live in `+page.ts` (SvelteKit allows only reserved route exports there). */
-export async function loadChatRoute(options: {
-  chatId?: string;
-  depends?: ReadModelDepends;
-  loaderOptions?: ReadModelLoaderOptions;
-}): Promise<ChatRouteLoadData> {
+export async function loadChatRoute(
+  options: LoadReadModelRouteOptions & { chatId?: string }
+): Promise<ChatRouteLoadData> {
   const chatId = options.chatId?.trim() || null;
   const chatIndexPromise = ensureChatIndexLoaded(
     { limit: CHAT_INDEX_WINDOW_LIMIT },
     {
-      ...options.loaderOptions,
-      depends: options.depends,
-      refresh: true,
-      blocking: options.loaderOptions?.blocking ?? false
+      ...readModelLoaderOptions(options),
+      refresh: true
     }
   );
   if (!chatId) return { chatId: null, chatIndex: await chatIndexPromise, activeDetail: null };
 
   const activeDetailPromise = ensureChatDetailLoaded(chatId, {
-    ...options.loaderOptions,
-    depends: options.depends,
-    timelineLimit: CHAT_DETAIL_TIMELINE_LIMIT,
-    blocking: options.loaderOptions?.blocking ?? false
+    ...readModelLoaderOptions(options),
+    timelineLimit: CHAT_DETAIL_TIMELINE_LIMIT
   });
   const [chatIndex, activeDetail] = await Promise.all([chatIndexPromise, activeDetailPromise]);
 
