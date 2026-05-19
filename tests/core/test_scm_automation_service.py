@@ -207,6 +207,32 @@ class _ReactionRouterFake:
         return list(self.intents)
 
 
+class _MalformedActionRouterFake:
+    def __call__(
+        self,
+        event: ScmEvent,
+        *,
+        binding: Optional[PrBinding] = None,
+        config: ScmReactionConfig | dict | None = None,
+    ) -> list[dict]:
+        del event, binding, config
+        return [
+            {
+                "reaction_kind": "changes_requested",
+                "operation_kind": "unsupported_operation",
+                "operation_key": "scm:bad",
+                "payload": {},
+                "message": {
+                    "source_kind": "static_payload",
+                    "reaction_kind": "changes_requested",
+                    "operation_kind": "unsupported_operation",
+                    "preview": "bad",
+                    "payload_path": "payload.message",
+                },
+            }
+        ]
+
+
 class _JournalFake:
     def __init__(self) -> None:
         self.operations_by_key: dict[str, PublishOperation] = {}
@@ -621,7 +647,16 @@ def test_ingest_event_records_normalized_automation_event_and_builtin_rule_job(
     assert job.target["policy"] == "pr_worktree"
     assert job.executor["kind"] == "publish_operation"
     assert job.executor["reaction_kind"] == "changes_requested"
-    assert job.executor["action_source"] == "event.payload.actions"
+    assert job.executor["actions"] == {
+        "kind": "scm_action_descriptors",
+        "source": "automation_event.payload.actions",
+        "schema_version": 1,
+    }
+    assert (
+        job.executor["message_descriptor"]["source_kind"]
+        == "scm_reaction_message_builder"
+    )
+    assert job.executor["message_descriptor"]["builder"] == "build_reaction_message"
     assert "reaction_intents" not in job.executor
     assert job.state == "succeeded"
     assert job.publish_operation_id == result.publish_operations[0].operation_id
@@ -642,6 +677,27 @@ def test_ingest_event_records_normalized_automation_event_and_builtin_rule_job(
         "publish_operation_id": result.publish_operations[0].operation_id
     }
     assert attempts[0].executor_result["outcome"] == "published"
+
+
+def test_ingest_event_rejects_unsupported_scm_action_before_publish(
+    tmp_path: Path,
+) -> None:
+    event = _event()
+    journal = _JournalFake()
+    service = ScmAutomationService(
+        tmp_path,
+        event_store=_EventStoreFake(event),
+        binding_resolver=_BindingResolverFake(_binding()),
+        action_router=_MalformedActionRouterFake(),
+        reaction_state_store=_PermissiveReactionStateFake(),
+        journal=journal,
+        publish_processor=_ProcessorFake(processed=[]),
+    )
+
+    with pytest.raises(ValueError, match="Unsupported SCM action operation_kind"):
+        service.ingest_event("github:event-1")
+
+    assert journal.create_calls == []
 
 
 def test_minimal_noise_profile_seeds_disabled_rules_and_skips_their_jobs(

@@ -377,10 +377,10 @@ def validate_executor_contract(
                 "publish_chat_notification executor delivery must be a string",
             )
     actions = normalized.get("actions")
-    if actions is not None and not isinstance(actions, list):
+    if actions is not None and not isinstance(actions, (dict, list)):
         raise _contract_error(
             "AUTOMATION_CONTRACT_INVALID_ACTIONS",
-            "executor.actions must be a list when present",
+            "executor.actions must be an object or list when present",
         )
     return normalized
 
