@@ -147,6 +147,7 @@ if TYPE_CHECKING:
 
 from .commands import (
     ApprovalsCommands,
+    AutomationCommands,
     DocumentBrowserCommands,
     ExecutionCommands,
     FilesCommands,
@@ -202,6 +203,7 @@ class TelegramCommandHandlers(
     WorkspaceCommands,
     GitHubCommands,
     DocumentBrowserCommands,
+    AutomationCommands,
     FlowCommands,
     FilesCommands,
     VoiceCommands,

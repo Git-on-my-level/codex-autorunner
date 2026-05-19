@@ -288,6 +288,7 @@ CHAT_ACTION_UX_CONTRACT: tuple[ChatActionUxContractEntry, ...] = (
     _telegram_command_entry("resume", allow_during_turn=False),
     _telegram_command_entry("review", allow_during_turn=False),
     _telegram_command_entry("flow", allow_during_turn=True),
+    _telegram_command_entry("automation", allow_during_turn=True),
     _telegram_command_entry(
         "reply",
         visibility="legacy_alias",
@@ -424,6 +425,31 @@ CHAT_ACTION_UX_CONTRACT: tuple[ChatActionUxContractEntry, ...] = (
     ),
     _discord_slash_entry(
         "car.flow.reply",
+        ack_class="defer_ephemeral",
+        visibility="public",
+    ),
+    _discord_slash_entry(
+        "car.automation.list",
+        ack_class="defer_ephemeral",
+        visibility="public",
+    ),
+    _discord_slash_entry(
+        "car.automation.status",
+        ack_class="defer_ephemeral",
+        visibility="public",
+    ),
+    _discord_slash_entry(
+        "car.automation.run",
+        ack_class="defer_ephemeral",
+        visibility="public",
+    ),
+    _discord_slash_entry(
+        "car.automation.pause",
+        ack_class="defer_ephemeral",
+        visibility="public",
+    ),
+    _discord_slash_entry(
+        "car.automation.resume",
         ack_class="defer_ephemeral",
         visibility="public",
     ),

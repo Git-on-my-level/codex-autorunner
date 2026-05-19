@@ -56,7 +56,7 @@ If they also want GitHub SCM automation, ask whether they want:
 
 Verify the user has:
 
-1. **Python 3.9+** installed
+1. **Python 3.10+** installed
 2. **At least one supported agent** installed and working:
    - [Codex CLI](https://github.com/openai/codex) — `codex --version`
    - Hermes (ACP-backed) — `hermes --version` and `hermes acp --help`

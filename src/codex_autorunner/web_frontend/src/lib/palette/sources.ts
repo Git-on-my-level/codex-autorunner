@@ -67,6 +67,13 @@ export function scopeSource(
         action: { kind: 'navigate', href: '/repos' }
       });
       items.push({
+        id: 'scope:automations',
+        label: 'Automations',
+        group: 'Scopes',
+        keywords: 'automations schedules periodic jobs ticket flows',
+        action: { kind: 'navigate', href: '/automations' }
+      });
+      items.push({
         id: 'scope:settings',
         label: 'Settings',
         group: 'Scopes',

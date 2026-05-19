@@ -86,6 +86,14 @@ describe('breadcrumbsForPath', () => {
     ]);
   });
 
+  it('builds automations list and detail crumbs', () => {
+    expect(breadcrumbsForPath('/automations')).toEqual([{ label: 'Automations', href: null }]);
+    expect(breadcrumbsForPath('/automations/daily-security-scan')).toEqual([
+      { label: 'Automations', href: '/automations' },
+      { label: 'daily-security-scan', href: null }
+    ]);
+  });
+
   it('does not expose removed hub routes as named crumbs', () => {
     expect(breadcrumbsForPath('/dashboard')).toEqual([
       { label: 'Chats', href: '/chats' },

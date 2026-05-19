@@ -129,11 +129,11 @@
     agentId,
     agentLabel,
     agentRecordForId,
-    firstModelValue,
     modelExists,
     modelLabel,
     modelRecordForValue,
     pickerReasoningOptions,
+    resolveAgentModelSelection,
     resolvePmaChatSelectorsForActiveChat,
     stringField
   } from '$lib/viewModels/modelPickers';
@@ -672,9 +672,11 @@
     chatIndexSession.start();
     readModelEntityStore.setReadMarkers(loadLastSeenMap());
     pinnedChatIds = loadPinnedChats();
-    draft = page.url.searchParams.get('draft') ?? draft;
+    const initialDraft = page.url.searchParams.get('draft');
+    draft = initialDraft ?? draft;
     loadingChats = !hasChatIndexProjection(readModelEntityStore.snapshot());
     if (!loadingChats) activateRequestedChatFromCurrentRows();
+    if (initialDraft && !requestedDetailFromUrl()) void createChat({ preserveSelectedScope: true });
     void loadInitialSupportingData(
       webApi.pma.listFiles(),
       webApi.pma.listAgents(),
@@ -937,7 +939,8 @@
   }
 
   async function loadModels(agentId: string, preferredModel?: string): Promise<void> {
-    if (!agentCanListModels(agentRecordForId(agents, agentId))) {
+    const initialSelection = resolveAgentModelSelection({ agents, agentId });
+    if (!initialSelection.canListModels) {
       loadModelsSeq += 1;
       models = [];
       selectedModel = '';
@@ -948,6 +951,7 @@
     const seq = ++loadModelsSeq;
     loadingModels = true;
     models = [];
+    const currentReasoning = selectedReasoning;
     selectedModel = '';
     selectedReasoning = '';
 
@@ -962,16 +966,17 @@
       return;
     }
     models = result.data;
-    const remembered = getLastModelForAgent(agentId);
-    const pref = preferredModel?.trim();
-    let pick = '';
-    if (pref && modelExists(result.data, pref)) pick = pref;
-    else if (remembered && modelExists(result.data, remembered)) pick = remembered;
-    else pick = firstModelValue(result.data);
-    selectedModel = pick;
-    if (selectedReasoning && !pickerReasoningOptions(result.data, selectedModel).includes(selectedReasoning)) {
-      selectedReasoning = '';
-    }
+    const selection = resolveAgentModelSelection({
+      agents,
+      agentId,
+      catalog: result.data,
+      preferredModel,
+      rememberedModel: getLastModelForAgent(agentId),
+      currentReasoning,
+      keepReasoning: true
+    });
+    selectedModel = selection.model;
+    selectedReasoning = selection.reasoning;
     persistLastModelForAgent(agentId, selectedModel);
     loadingModels = false;
   }
