@@ -164,6 +164,9 @@ function isCarTicketFlowControlPrompt(value: string): boolean {
 function firstUserMessageExcerpt(raw: Record<string, unknown>): string | null {
   const candidate = stripInjectedContextBlocks(
     firstText(
+      raw.first_user_visible_text,
+      raw.user_visible_text,
+      raw.title_seed,
       raw.first_message_excerpt,
       raw.first_user_message,
       raw.last_user_message,

@@ -9,7 +9,7 @@ from .managed_thread_timeline import (
     timeline_item_from_tail_event,
 )
 
-TRANSCRIPT_CONTRACT_VERSION = "managed_thread_transcript.v1"
+TRANSCRIPT_CONTRACT_VERSION = "managed_thread_transcript.v2"
 
 
 def build_managed_thread_transcript(
@@ -128,6 +128,14 @@ def _timeline_item_to_transcript_rows(item: Mapping[str, Any]) -> list[dict[str,
         if not text.strip():
             return []
         role = "user" if kind == "user_message" else "assistant"
+        visibility = (
+            _optional_text(payload.get("visibility"))
+            or ("user_visible" if role == "user" else "assistant_visible")
+        )
+        user_visible_text = (
+            _optional_text(payload.get("user_visible_text")) if role == "user" else None
+        )
+        capsule_refs = _capsule_ref_list(payload.get("capsule_refs"))
         return [
             {
                 "kind": "message",
@@ -135,6 +143,9 @@ def _timeline_item_to_transcript_rows(item: Mapping[str, Any]) -> list[dict[str,
                 "turn_id": managed_turn_id,
                 "client_turn_id": client_turn_id,
                 "correlation_id": correlation_id,
+                "visibility": visibility,
+                "user_visible_text": user_visible_text,
+                "capsule_refs": capsule_refs,
                 "identity": dict(identity),
                 "order_key": order_key,
                 "timestamp": timestamp,
@@ -143,6 +154,9 @@ def _timeline_item_to_transcript_rows(item: Mapping[str, Any]) -> list[dict[str,
                     "chat_id": managed_thread_id,
                     "role": role,
                     "text": text,
+                    "visibility": visibility,
+                    "user_visible_text": user_visible_text,
+                    "capsule_refs": capsule_refs,
                     "created_at": timestamp,
                     "status": status,
                     "client_turn_id": client_turn_id,
@@ -374,6 +388,35 @@ def _artifact_list(value: Any) -> list[dict[str, Any]]:
     if not isinstance(value, list):
         return []
     return [dict(item) for item in value if isinstance(item, Mapping)]
+
+
+def _capsule_ref_list(value: Any) -> list[dict[str, Any]]:
+    if not isinstance(value, list):
+        return []
+    refs: list[dict[str, Any]] = []
+    for item in value:
+        if not isinstance(item, Mapping):
+            continue
+        capsule_id = _optional_text(item.get("capsule_id"))
+        capsule_version = _optional_text(item.get("capsule_version") or item.get("version"))
+        visibility = _optional_text(item.get("visibility"))
+        scope = _optional_text(item.get("scope"))
+        source_digest = _optional_text(item.get("source_digest"))
+        if not (capsule_id and capsule_version and visibility and scope and source_digest):
+            continue
+        ref: dict[str, Any] = {
+            "capsule_id": capsule_id,
+            "capsule_version": capsule_version,
+            "visibility": visibility,
+            "scope": scope,
+            "source_digest": source_digest,
+        }
+        for key in ("payload_digest", "render_decision", "reason"):
+            text = _optional_text(item.get(key))
+            if text is not None:
+                ref[key] = text
+        refs.append(ref)
+    return refs
 
 
 def _mapping(value: Any) -> Mapping[str, Any]:

@@ -52,13 +52,68 @@ def _kinds(payload: dict) -> list[str]:
 
 
 def _assert_v2_metadata(item: dict) -> None:
-    assert item["contract_version"] == "managed_thread_timeline.v2"
+    assert item["contract_version"] == "managed_thread_timeline.v3"
     assert item["identity"]["timeline_item_id"] == item["item_id"]
     assert isinstance(item["identity"]["progress_item_ids"], list)
     assert "correlation_id" in item["identity"]
     assert isinstance(item["provenance"]["source_event_ids"], list)
     assert isinstance(item["provenance"]["progress_event_ids"], list)
     assert item["provenance"]["cursor_event_id"] is None
+
+
+def test_user_message_timeline_projects_capsule_visibility_metadata(
+    tmp_path: Path,
+) -> None:
+    hub_root, store, thread_id = _store(tmp_path)
+    turn = store.create_turn(
+        thread_id,
+        prompt="<injected context>\nrepo guidance\n</injected context>\n\nFix login",
+        metadata={
+            "raw_model_prompt": (
+                "<injected context>\nrepo guidance\n</injected context>\n\nFix login"
+            ),
+            "user_visible_text": "Fix login",
+            "title_seed": "Fix login",
+            "capsule_refs": [
+                {
+                    "capsule_id": "car.repo_basics",
+                    "capsule_version": "1",
+                    "visibility": "model_only",
+                    "scope": "repo",
+                    "source_digest": "sha256:repo",
+                    "payload_digest": "sha256:payload",
+                    "render_decision": "rendered",
+                    "reason": "repo_context",
+                }
+            ],
+        },
+    )
+    turn_id = str(turn["managed_turn_id"])
+
+    payload = build_managed_thread_timeline(
+        hub_root,
+        thread_store=store,
+        managed_thread_id=thread_id,
+    )
+
+    user = next(item for item in payload["items"] if item["kind"] == "user_message")
+    assert user["item_id"] == f"turn:{turn_id}:user"
+    assert user["payload"]["text"] == "Fix login"
+    assert user["payload"]["user_visible_text"] == "Fix login"
+    assert user["payload"]["visibility"] == "user_visible"
+    assert user["payload"]["raw_model_prompt"].startswith("<injected context>")
+    assert user["payload"]["capsule_refs"] == [
+        {
+            "capsule_id": "car.repo_basics",
+            "capsule_version": "1",
+            "visibility": "model_only",
+            "scope": "repo",
+            "source_digest": "sha256:repo",
+            "payload_digest": "sha256:payload",
+            "render_decision": "rendered",
+            "reason": "repo_context",
+        }
+    ]
 
 
 def test_completed_timeline_separates_intermediate_and_final_output(
