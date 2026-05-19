@@ -213,6 +213,14 @@ describe('/chats page', () => {
     expect(body).not.toContain('4/6 done');
   });
 
+  it('registers ticket-run aggregate refresh as a chat-index companion window', () => {
+    const source = chatDetailPageSource();
+
+    expect(source).toContain('chatIndexSession.setCompanionRequests([ticketRunGroupRequest])');
+    expect(source).toMatch(/chatIndexSession\.setCompanionRequests\(\[ticketRunGroupRequest\]\);[\s\S]*chatIndexSession\.start\(\);/);
+    expect(source).toMatch(/chatIndexSession\.stop\(\);[\s\S]*chatIndexSession\.setCompanionRequests\(\[\]\);/);
+  });
+
   it('does not render legacy ticket-run grouping when current snapshots have no backend groups', () => {
     const rows = [
       ticketFlowRow('done-1', 'TICKET-001', 'idle', null, { ticketDone: true, ticketStatus: 'done' }),

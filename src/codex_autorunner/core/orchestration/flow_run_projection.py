@@ -126,6 +126,15 @@ def _summary_payload(
     state = record.state if isinstance(record.state, dict) else {}
     ticket_engine = state.get("ticket_engine")
     ticket_engine = ticket_engine if isinstance(ticket_engine, dict) else {}
+    ticket_engine_commit = ticket_engine.get("commit")
+    ticket_engine_commit = (
+        ticket_engine_commit if isinstance(ticket_engine_commit, dict) else {}
+    )
+    current_ticket_done = _bool_or_none(ticket_engine.get("current_ticket_done"))
+    if current_ticket_done is None:
+        current_ticket_done = _bool_or_none(
+            ticket_engine_commit.get("current_ticket_done")
+        )
     current_ticket = _text(ticket_engine.get("current_ticket")) or _text(
         state.get("current_ticket")
     )
@@ -148,6 +157,7 @@ def _summary_payload(
         "ticket_engine": {
             "status": _text(ticket_engine.get("status")) or status,
             "current_ticket": current_ticket,
+            "current_ticket_done": current_ticket_done,
             "ticket_turns": ticket_turns,
             "total_turns": total_turns,
             "reason": _text(ticket_engine.get("reason")),
@@ -204,3 +214,15 @@ def _int_or_none(value: Any) -> Optional[int]:
         return int(value)
     except (TypeError, ValueError):
         return None
+
+
+def _bool_or_none(value: Any) -> Optional[bool]:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"true", "1", "yes", "y", "on"}:
+            return True
+        if normalized in {"false", "0", "no", "n", "off"}:
+            return False
+    return None

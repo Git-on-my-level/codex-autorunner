@@ -444,7 +444,8 @@ function mapKeys(value: unknown): unknown {
   return Object.fromEntries(
     Object.entries(value as Record<string, unknown>).map(([key, entry]) => {
       const mappedKey = snakeToCamel(key);
-      return [mappedKey, opaqueContractRecordKeys.has(mappedKey) ? entry : mapKeys(entry)];
+      const opaqueValue = opaqueContractRecordKeys.has(mappedKey) || (opaqueContractObjectKeys.has(mappedKey) && isPlainObject(entry));
+      return [mappedKey, opaqueValue ? entry : mapKeys(entry)];
     })
   );
 }
@@ -457,8 +458,20 @@ const opaqueContractRecordKeys = new Set([
   'primarySurface',
   'surfaceBindings',
   'sortKey',
+  'identity',
+  'parentLinks',
+  'topology',
   'ticketDetail',
   'ticketQueue',
   'runQueue',
-  'chatQueue'
+  'chatQueue',
+  'contextspaceSummary',
+  'currentArtifacts',
+  'dispatches'
 ]);
+
+const opaqueContractObjectKeys = new Set(['runtime']);
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+}

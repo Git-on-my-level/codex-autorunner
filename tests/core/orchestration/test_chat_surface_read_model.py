@@ -7,6 +7,7 @@ from codex_autorunner.adapters.chat.channel_directory import ChannelDirectorySto
 from codex_autorunner.core.domain.workspace_scope import (
     workspace_scope_index_from_snapshots,
 )
+from codex_autorunner.core.flows import FlowRunStatus, FlowStore
 from codex_autorunner.core.orchestration import (
     ChatSurfaceReadService,
     OrchestrationBindingStore,
@@ -156,6 +157,83 @@ def _write_ticket(path: Path, *, done: bool) -> None:
         ),
         encoding="utf-8",
     )
+
+
+def _seed_ticket_flow_projection(
+    hub_root: Path,
+    *,
+    run_id: str,
+    status: str,
+    repo_id: str = "repo-1",
+    workspace_root: Path | None = None,
+    current_ticket: str | None = None,
+    current_ticket_done: bool | None = None,
+) -> None:
+    ticket_engine: dict[str, object] = {"status": status}
+    if current_ticket is not None:
+        ticket_engine["current_ticket"] = current_ticket
+    if current_ticket_done is not None:
+        ticket_engine["commit"] = {
+            "pending": True,
+            "current_ticket_done": current_ticket_done,
+        }
+    summary = {
+        "workspace_root": str((workspace_root or hub_root.parent / "repo").resolve()),
+        "current_ticket": current_ticket,
+        "ticket_engine": ticket_engine,
+        "projection_source": "repo_flow_store",
+    }
+    with open_orchestration_sqlite(hub_root, durable=False, migrate=True) as conn:
+        conn.execute(
+            """
+            INSERT INTO orch_flow_run_projections (
+                flow_run_id,
+                repo_id,
+                flow_type,
+                status,
+                summary_json,
+                updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (
+                run_id,
+                repo_id,
+                "ticket_flow",
+                status,
+                json.dumps(summary),
+                "2026-05-11T00:00:20Z",
+            ),
+        )
+
+
+def _seed_repo_flow_store_ticket_run(
+    repo_root: Path,
+    *,
+    run_id: str,
+    status: FlowRunStatus,
+    current_ticket: str,
+    current_ticket_done: bool,
+) -> None:
+    db_path = FlowStore.default_path(repo_root)
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    with FlowStore(db_path) as store:
+        store.create_flow_run(
+            run_id,
+            "ticket_flow",
+            input_data={"workspace_root": str(repo_root)},
+            metadata={"repo_id": "repo-1"},
+            state={
+                "ticket_engine": {
+                    "status": status.value,
+                    "current_ticket": current_ticket,
+                    "commit": {
+                        "pending": True,
+                        "current_ticket_done": current_ticket_done,
+                    },
+                }
+            },
+        )
+        store.update_flow_run_status(run_id, status)
 
 
 def _mark_projected_thread_archived(hub_root: Path, thread_id: str) -> None:
@@ -934,6 +1012,291 @@ def test_chat_index_ticket_file_frontmatter_wins_over_thread_state(
     assert child["ticket_done"] is False
     assert child["ticket_status"] == "unknown"
     assert grouped["rows"][0]["done_count"] == 0
+
+
+def test_chat_index_ticket_flow_store_fills_missing_ticket_file_progress(
+    tmp_path: Path,
+) -> None:
+    hub_root = tmp_path / "hub"
+    repo_root = tmp_path / "repo"
+    _seed_ticket_flow_projection(
+        hub_root,
+        run_id="run-102",
+        status="running",
+        current_ticket=".codex-autorunner/tickets/TICKET-011.md",
+        current_ticket_done=True,
+    )
+    _seed_thread(
+        hub_root,
+        thread_id="thread-ticket-flow-store",
+        repo_id="repo-1",
+        resource_kind="worktree",
+        resource_id="repo-1--ticket-flow",
+        runtime_status="running",
+        metadata=ticket_flow_thread_metadata(
+            flow_run_id="run-102",
+            ticket_id="TICKET-011",
+            workspace_root=str(repo_root),
+            ticket_path=".codex-autorunner/tickets/TICKET-011.md",
+        ),
+    )
+
+    grouped = ChatSurfaceReadService(hub_root, durable=False).chat_index_snapshot(
+        view="ticket_run",
+        group_by="ticket_run",
+        limit=20,
+    )
+    child = ChatSurfaceReadService(hub_root, durable=False).chat_index_snapshot(
+        view="ticket_run",
+        group_by="ticket_run",
+        parent_group_id="run:run-102",
+        limit=20,
+    )["rows"][0]
+
+    assert child["ticket_done"] is True
+    assert child["ticket_status"] == "done"
+    assert child["ticket_progress_source"] == "flow_store"
+    assert grouped["rows"][0]["done_count"] == 1
+
+
+def test_chat_index_ticket_file_frontmatter_wins_over_flow_store_state(
+    tmp_path: Path,
+) -> None:
+    hub_root = tmp_path / "hub"
+    repo_root = tmp_path / "repo"
+    ticket_path = repo_root / ".codex-autorunner" / "tickets" / "TICKET-012.md"
+    _write_ticket(ticket_path, done=False)
+    _seed_ticket_flow_projection(
+        hub_root,
+        run_id="run-103",
+        status="completed",
+        current_ticket=".codex-autorunner/tickets/TICKET-012.md",
+        current_ticket_done=True,
+    )
+    _seed_thread(
+        hub_root,
+        thread_id="thread-ticket-flow-store-conflict",
+        repo_id="repo-1",
+        resource_kind="worktree",
+        resource_id="repo-1--ticket-flow",
+        runtime_status="completed",
+        metadata=ticket_flow_thread_metadata(
+            flow_run_id="run-103",
+            ticket_id="TICKET-012",
+            workspace_root=str(repo_root),
+            ticket_path=".codex-autorunner/tickets/TICKET-012.md",
+        ),
+    )
+
+    grouped = ChatSurfaceReadService(hub_root, durable=False).chat_index_snapshot(
+        view="ticket_run",
+        group_by="ticket_run",
+        limit=20,
+    )
+    child = ChatSurfaceReadService(hub_root, durable=False).chat_index_snapshot(
+        view="ticket_run",
+        group_by="ticket_run",
+        parent_group_id="run:run-103",
+        limit=20,
+    )["rows"][0]
+
+    assert child["ticket_done"] is False
+    assert child["ticket_status"] == "unknown"
+    assert child["ticket_progress_source"] == "ticket_file"
+    assert grouped["rows"][0]["done_count"] == 0
+
+
+def test_chat_index_ticket_flow_store_preserves_failed_status_for_not_done_ticket(
+    tmp_path: Path,
+) -> None:
+    hub_root = tmp_path / "hub"
+    repo_root = tmp_path / "repo"
+    _seed_ticket_flow_projection(
+        hub_root,
+        run_id="run-104",
+        status="failed",
+        current_ticket=".codex-autorunner/tickets/TICKET-013.md",
+        current_ticket_done=False,
+    )
+    _seed_thread(
+        hub_root,
+        thread_id="thread-ticket-flow-store-failed",
+        repo_id="repo-1",
+        resource_kind="worktree",
+        resource_id="repo-1--ticket-flow",
+        runtime_status="running",
+        metadata=ticket_flow_thread_metadata(
+            flow_run_id="run-104",
+            ticket_id="TICKET-013",
+            workspace_root=str(repo_root),
+            ticket_path=".codex-autorunner/tickets/TICKET-013.md",
+        ),
+    )
+
+    child = ChatSurfaceReadService(hub_root, durable=False).chat_index_snapshot(
+        view="ticket_run",
+        group_by="ticket_run",
+        parent_group_id="run:run-104",
+        limit=20,
+    )["rows"][0]
+
+    assert child["ticket_done"] is False
+    assert child["ticket_status"] == "failed"
+    assert child["ticket_progress_source"] == "flow_store"
+
+
+def test_chat_index_ticket_flow_store_reads_repo_flow_store_when_projection_missing(
+    tmp_path: Path,
+) -> None:
+    hub_root = tmp_path / "hub"
+    repo_root = tmp_path / "repo"
+    _seed_repo_flow_store_ticket_run(
+        repo_root,
+        run_id="run-105",
+        status=FlowRunStatus.RUNNING,
+        current_ticket=".codex-autorunner/tickets/TICKET-014.md",
+        current_ticket_done=True,
+    )
+    _seed_thread(
+        hub_root,
+        thread_id="thread-ticket-flow-local-store",
+        repo_id="repo-1",
+        resource_kind="worktree",
+        resource_id="repo-1--ticket-flow",
+        runtime_status="running",
+        metadata=ticket_flow_thread_metadata(
+            flow_run_id="run-105",
+            ticket_id="TICKET-014",
+            workspace_root=str(repo_root),
+            ticket_path=".codex-autorunner/tickets/TICKET-014.md",
+        ),
+    )
+
+    grouped = ChatSurfaceReadService(hub_root, durable=False).chat_index_snapshot(
+        view="ticket_run",
+        group_by="ticket_run",
+        limit=20,
+    )
+    child = ChatSurfaceReadService(hub_root, durable=False).chat_index_snapshot(
+        view="ticket_run",
+        group_by="ticket_run",
+        parent_group_id="run:run-105",
+        limit=20,
+    )["rows"][0]
+
+    assert child["ticket_done"] is True
+    assert child["ticket_status"] == "done"
+    assert child["ticket_progress_source"] == "flow_store"
+    assert grouped["rows"][0]["done_count"] == 1
+
+
+def test_chat_index_ticket_flow_projection_rejects_wrong_scope_before_local_fallback(
+    tmp_path: Path,
+) -> None:
+    hub_root = tmp_path / "hub"
+    wrong_repo_root = tmp_path / "wrong-repo"
+    repo_root = tmp_path / "repo"
+    _seed_ticket_flow_projection(
+        hub_root,
+        run_id="run-reused",
+        repo_id="repo-wrong",
+        workspace_root=wrong_repo_root,
+        status="running",
+        current_ticket=".codex-autorunner/tickets/TICKET-015.md",
+        current_ticket_done=True,
+    )
+    _seed_repo_flow_store_ticket_run(
+        repo_root,
+        run_id="run-reused",
+        status=FlowRunStatus.RUNNING,
+        current_ticket=".codex-autorunner/tickets/TICKET-015.md",
+        current_ticket_done=False,
+    )
+    _seed_thread(
+        hub_root,
+        thread_id="thread-ticket-flow-scoped",
+        repo_id="repo-1",
+        resource_kind="worktree",
+        resource_id="repo-1--ticket-flow",
+        runtime_status="running",
+        metadata=ticket_flow_thread_metadata(
+            flow_run_id="run-reused",
+            ticket_id="TICKET-015",
+            workspace_root=str(repo_root),
+            ticket_path=".codex-autorunner/tickets/TICKET-015.md",
+        ),
+    )
+
+    grouped = ChatSurfaceReadService(hub_root, durable=False).chat_index_snapshot(
+        view="ticket_run",
+        group_by="ticket_run",
+        limit=20,
+    )
+    child = ChatSurfaceReadService(hub_root, durable=False).chat_index_snapshot(
+        view="ticket_run",
+        group_by="ticket_run",
+        parent_group_id="run:run-reused",
+        limit=20,
+    )["rows"][0]
+
+    assert child["ticket_done"] is False
+    assert child["ticket_status"] == "running"
+    assert child["ticket_progress_source"] == "flow_store"
+    assert grouped["rows"][0]["done_count"] == 0
+
+
+def test_chat_index_ticket_flow_store_wins_over_stale_hub_projection(
+    tmp_path: Path,
+) -> None:
+    hub_root = tmp_path / "hub"
+    repo_root = tmp_path / "repo"
+    _seed_ticket_flow_projection(
+        hub_root,
+        run_id="run-106",
+        repo_id="repo-1",
+        workspace_root=repo_root,
+        status="running",
+        current_ticket=".codex-autorunner/tickets/TICKET-016.md",
+        current_ticket_done=False,
+    )
+    _seed_repo_flow_store_ticket_run(
+        repo_root,
+        run_id="run-106",
+        status=FlowRunStatus.RUNNING,
+        current_ticket=".codex-autorunner/tickets/TICKET-016.md",
+        current_ticket_done=True,
+    )
+    _seed_thread(
+        hub_root,
+        thread_id="thread-ticket-flow-stale-projection",
+        repo_id="repo-1",
+        resource_kind="worktree",
+        resource_id="repo-1--ticket-flow",
+        runtime_status="running",
+        metadata=ticket_flow_thread_metadata(
+            flow_run_id="run-106",
+            ticket_id="TICKET-016",
+            workspace_root=str(repo_root),
+            ticket_path=".codex-autorunner/tickets/TICKET-016.md",
+        ),
+    )
+
+    grouped = ChatSurfaceReadService(hub_root, durable=False).chat_index_snapshot(
+        view="ticket_run",
+        group_by="ticket_run",
+        limit=20,
+    )
+    child = ChatSurfaceReadService(hub_root, durable=False).chat_index_snapshot(
+        view="ticket_run",
+        group_by="ticket_run",
+        parent_group_id="run:run-106",
+        limit=20,
+    )["rows"][0]
+
+    assert child["ticket_done"] is True
+    assert child["ticket_status"] == "done"
+    assert child["ticket_progress_source"] == "flow_store"
+    assert grouped["rows"][0]["done_count"] == 1
 
 
 def test_chat_index_sorts_by_conversation_activity_not_metadata_hydration(

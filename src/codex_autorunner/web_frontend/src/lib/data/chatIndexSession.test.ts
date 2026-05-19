@@ -5,7 +5,8 @@ import {
   type ChatIndexPatchEvent,
   type ChatIndexRow,
   type ChatIndexSnapshot,
-  type ProjectionCursor
+  type ProjectionCursor,
+  type TicketRunGroup
 } from '$lib/api/readModelContracts';
 import { ReadModelEntityStore, selectChatIndexWindowView } from './readModelStore';
 import { selectPmaChats } from './readModelViewModels';
@@ -78,6 +79,43 @@ function indexRow(
     chatKind: null,
     model: null,
     groupId: null
+  };
+}
+
+function ticketFlowRow(
+  id: string,
+  status: ChatIndexRow['status'],
+  lastActivityAt: string = issuedAt
+): ChatIndexRow {
+  return {
+    ...indexRow(id, id, status, lastActivityAt),
+    worktreeId: 'wt-1',
+    ticketId: id,
+    runId: 'run-1',
+    flowType: 'ticket_flow',
+    groupId: 'ticket-run:run-1',
+    ticketDone: status === 'idle',
+    ticketStatus: status === 'idle' ? 'done' : status === 'running' ? 'running' : 'unknown'
+  };
+}
+
+function ticketRunGroup(overrides: Partial<TicketRunGroup> = {}): TicketRunGroup {
+  return {
+    kind: 'ticket_run_group',
+    groupId: 'ticket-run:run-1',
+    runId: 'run-1',
+    scopeKind: 'worktree',
+    scopeId: 'wt-1',
+    label: 'Ticket run run-1',
+    status: 'running',
+    totalCount: 5,
+    doneCount: 3,
+    runningCount: 2,
+    waitingCount: 0,
+    failedCount: 0,
+    unreadCount: 0,
+    updatedAt: issuedAt,
+    ...overrides
   };
 }
 
@@ -190,6 +228,109 @@ describe('chat index session', () => {
       key: 'chat.index.entity',
       path: '/hub/read-models/chats/patches?filter=all'
     }));
+  });
+
+  it('refreshes companion ticket-run aggregate windows with the primary chat index', async () => {
+    const store = new ReadModelEntityStore();
+    const client = {
+      chatIndex: vi.fn(async (request = {}) => {
+        if (request.filter === 'ticket_runs') {
+          return ok({
+            ...chatIndexSnapshot('ticket_runs', [ticketFlowRow('ticket-1', 'running')]),
+            groups: [ticketRunGroup({ doneCount: 3, runningCount: 2 })],
+            counters: { total: 5, waiting: 0, running: 2, unread: 0, archived: 0 }
+          });
+        }
+        return ok(chatIndexSnapshot('all', [indexRow('chat-active', 'Active chat', 'running')]));
+      })
+    } as unknown as ReadModelSnapshotClient;
+    const session = createChatIndexSession({ client, store, streamFactory: mockStreamFactory() });
+
+    session.setCompanionRequests([{ filter: 'ticket_runs', groupBy: 'ticket_run', limit: 50 }]);
+    await session.refresh({ filter: 'all', limit: 50 });
+
+    expect(client.chatIndex).toHaveBeenCalledTimes(2);
+    expect(client.chatIndex).toHaveBeenNthCalledWith(1, { filter: 'all', limit: 50 });
+    expect(client.chatIndex).toHaveBeenNthCalledWith(2, { filter: 'ticket_runs', groupBy: 'ticket_run', limit: 50 });
+    expect(selectChatIndexWindowView(store.snapshot(), { filter: 'ticket_runs', groupBy: 'ticket_run', limit: 50 }).groups[0]).toMatchObject({
+      kind: 'ticket_run_group',
+      groupId: 'ticket-run:run-1',
+      doneCount: 3,
+      runningCount: 2
+    });
+  });
+
+  it('repairs stale companion ticket-run aggregates when ticket-flow rows change', async () => {
+    const store = new ReadModelEntityStore();
+    let streamOptions: ReadModelStreamOptions<ChatIndexPatchEvent> | null = null;
+    const streamFactory = vi.fn((options: ReadModelStreamOptions<ChatIndexPatchEvent>) => {
+      streamOptions = options;
+      return {
+        open: vi.fn(),
+        close: vi.fn(),
+        cursor: vi.fn(() => null),
+        resetCursor: vi.fn()
+      } as unknown as ReadModelStreamManager<ChatIndexPatchEvent>;
+    }) as ReturnType<typeof vi.fn> & ChatIndexStreamFactory;
+    let ticketRunRefreshes = 0;
+    const client = {
+      chatIndex: vi.fn(async (request = {}) => {
+        if (request.filter === 'ticket_runs') {
+          ticketRunRefreshes += 1;
+          const refreshed = ticketRunRefreshes > 1;
+          return ok({
+            ...chatIndexSnapshot('ticket_runs', [ticketFlowRow('ticket-1', refreshed ? 'idle' : 'running')]),
+            groups: [ticketRunGroup(refreshed ? { doneCount: 4, runningCount: 1 } : { doneCount: 3, runningCount: 2 })],
+            counters: { total: 5, waiting: 0, running: refreshed ? 1 : 2, unread: 0, archived: 0 }
+          });
+        }
+        return ok({
+          ...chatIndexSnapshot('waiting', [
+            indexRow('chat-visible', 'Visible chat', 'idle'),
+            indexRow('chat-window', 'Window chat', 'idle')
+          ]),
+          window: {
+            limit: 2,
+            nextCursor: null,
+            previousCursor: null,
+            totalEstimate: 2,
+            totalIsExact: true
+          },
+          counters: { total: 2, waiting: 0, running: 0, unread: 0, archived: 0 }
+        });
+      })
+    } as unknown as ReadModelSnapshotClient & { chatIndex: ReturnType<typeof vi.fn> };
+    const session = createChatIndexSession({ client, store, streamFactory });
+
+    session.setCompanionRequests([{ filter: 'ticket_runs', groupBy: 'ticket_run', limit: 50 }]);
+    await session.refresh({ filter: 'waiting', limit: 2 });
+    session.start();
+    const options = streamOptions as unknown as ReadModelStreamOptions<ChatIndexPatchEvent>;
+    options.onEvent?.({
+      envelope: {
+        contractVersion: READ_MODEL_CONTRACT_VERSION,
+        eventType: 'chat.index.patch',
+        cursor: projCursor(2, 'test.chat.index'),
+        entityKind: 'chat',
+        entityId: 'ticket-1',
+        operation: 'patch',
+        generatedAt: issuedAt
+      },
+      patch: {
+        rows: [ticketFlowRow('ticket-1', 'idle')],
+        groups: [],
+        removedRowIds: [],
+        removedGroupIds: [],
+        counters: { total: 3, waiting: 0, running: 0, unread: 0, archived: 0 }
+      }
+    }, null);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(client.chatIndex.mock.calls.filter(([request]) => request?.filter === 'ticket_runs')).toHaveLength(2);
+    expect(selectChatIndexWindowView(store.snapshot(), { filter: 'ticket_runs', groupBy: 'ticket_run', limit: 50 }).groups[0]).toMatchObject({
+      doneCount: 4,
+      runningCount: 1
+    });
   });
 
   it('refreshes the current window when stream patches leave it under-filled', async () => {

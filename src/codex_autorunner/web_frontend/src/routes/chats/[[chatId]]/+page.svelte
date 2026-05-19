@@ -676,6 +676,7 @@
         loadingChats = false;
       }
     });
+    chatIndexSession.setCompanionRequests([ticketRunGroupRequest]);
     chatIndexSession.start();
     readModelEntityStore.setReadMarkers(loadLastSeenMap());
     pinnedChatIds = loadPinnedChats();
@@ -756,6 +757,7 @@
     unsubscribeReadModels?.();
     unsubscribeChatIndexSession?.();
     chatIndexSession.stop();
+    chatIndexSession.setCompanionRequests([]);
     if (chatIndexFilterRefreshTimer) window.clearTimeout(chatIndexFilterRefreshTimer);
     stopActiveClock();
     closeStream();

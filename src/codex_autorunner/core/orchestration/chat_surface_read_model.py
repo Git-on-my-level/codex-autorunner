@@ -4,6 +4,7 @@ import hashlib
 import json
 import logging
 import re
+import sqlite3
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -15,6 +16,7 @@ from ..domain.workspace_scope import (
     workspace_scope_index_from_snapshots,
 )
 from ..hub_topology import load_hub_state
+from ..state_roots import resolve_repo_flows_db_path
 from ..text_utils import _normalize_optional_text, _parse_iso_timestamp
 from .chat_surface_events import ChatSurfaceEvent, SQLiteChatSurfaceEventJournal
 from .sqlite import open_orchestration_sqlite
@@ -1323,6 +1325,21 @@ class ChatSurfaceReadService:
                 if _table_exists(conn, "orch_notification_conversations")
                 else []
             )
+            flow_projection_rows = (
+                conn.execute(
+                    """
+                    SELECT flow_run_id,
+                           repo_id,
+                           status,
+                           summary_json,
+                           updated_at
+                      FROM orch_flow_run_projections
+                     WHERE flow_type = 'ticket_flow'
+                    """
+                ).fetchall()
+                if _table_exists(conn, "orch_flow_run_projections")
+                else []
+            )
 
         execution_by_thread = _latest_execution_by_thread(execution_rows)
         queue_depth_by_thread = _queue_depth_by_thread(execution_rows)
@@ -1330,6 +1347,9 @@ class ChatSurfaceReadService:
         delivery_by_thread = _latest_delivery_by_thread(delivery_rows)
         thread_owner: dict[str, Mapping[str, Any]] = {}
         binding_summary_by_thread = _binding_summary_by_thread(binding_rows)
+        ticket_flow_projections_by_run = _ticket_flow_projection_by_run_id(
+            flow_projection_rows
+        )
 
         for row in thread_rows:
             thread_id = str(row["thread_target_id"])
@@ -1358,6 +1378,7 @@ class ChatSurfaceReadService:
             lifecycle_status = _normalize_text(row["lifecycle_status"]) or "active"
             metadata = _json_object(_row_get(row, "metadata_json"))
             chat_kind = _normalize_text(metadata.get("chat_kind"))
+            run_id = _normalize_text(metadata.get("run_id"))
             last_activity_at = _max_iso(
                 _normalize_text(row["updated_at"]),
                 _normalize_text(execution["created_at"]) if execution else None,
@@ -1390,11 +1411,17 @@ class ChatSurfaceReadService:
                     "agent_profile": _normalize_text(metadata.get("agent_profile")),
                     "chat_kind": chat_kind,
                     "flow_type": _normalize_text(metadata.get("flow_type")),
-                    "run_id": _normalize_text(metadata.get("run_id")),
+                    "run_id": run_id,
                     "ticket_id": _normalize_text(metadata.get("ticket_id")),
                     "ticket_path": _normalize_text(metadata.get("ticket_path")),
                     "ticket_done": _bool_or_none(metadata.get("ticket_done")),
                     "ticket_status": _normalize_text(metadata.get("ticket_status")),
+                    "ticket_flow_projection": _ticket_flow_projection_for_row(
+                        ticket_flow_projections_by_run,
+                        run_id=run_id,
+                        repo_id=_normalize_text(row["repo_id"]),
+                        workspace_root=_normalize_text(metadata.get("workspace_root")),
+                    ),
                     "workspace_root": _normalize_text(metadata.get("workspace_root")),
                     "backend_thread_id": _normalize_text(
                         _row_get(row, "backend_thread_id")
@@ -1667,6 +1694,191 @@ def _ticket_flow_ticket_file_signature(conn: Any) -> list[dict[str, Any]]:
     )
 
 
+def _ticket_flow_projection_by_run_id(
+    rows: Iterable[Mapping[str, Any]],
+) -> dict[str, list[dict[str, Any]]]:
+    projections: dict[str, list[dict[str, Any]]] = {}
+    for row in rows:
+        run_id = _normalize_text(row["flow_run_id"])
+        if run_id is None:
+            continue
+        summary = _json_object(row["summary_json"])
+        projection = _ticket_flow_projection_from_summary(
+            run_id=run_id,
+            status=_normalize_text(row["status"]),
+            summary=summary,
+            updated_at=_normalize_text(row["updated_at"]),
+            repo_id=_normalize_text(row["repo_id"]),
+        )
+        projections.setdefault(run_id, []).append(projection)
+    return projections
+
+
+def _ticket_flow_projection_for_row(
+    projections_by_run: Mapping[str, Sequence[Mapping[str, Any]]],
+    *,
+    run_id: Optional[str],
+    repo_id: Optional[str],
+    workspace_root: Optional[str],
+) -> Optional[dict[str, Any]]:
+    if run_id is None:
+        return None
+    candidates = list(projections_by_run.get(run_id, ()))
+    local_projection = _ticket_flow_projection_from_local_store(
+        run_id=run_id,
+        workspace_root=workspace_root,
+    )
+    if local_projection is not None:
+        return local_projection
+    for candidate in candidates:
+        if _ticket_flow_projection_matches_row(
+            candidate,
+            repo_id=repo_id,
+            workspace_root=workspace_root,
+        ):
+            return dict(candidate)
+    if len(candidates) == 1 and _ticket_flow_projection_matches_row(
+        candidates[0],
+        repo_id=repo_id,
+        workspace_root=workspace_root,
+    ):
+        return dict(candidates[0])
+    return None
+
+
+def _ticket_flow_projection_matches_row(
+    projection: Mapping[str, Any],
+    *,
+    repo_id: Optional[str],
+    workspace_root: Optional[str],
+) -> bool:
+    projection_repo_id = _normalize_text(projection.get("repo_id"))
+    if repo_id is not None and projection_repo_id is None:
+        return False
+    if (
+        repo_id is not None
+        and projection_repo_id is not None
+        and repo_id != projection_repo_id
+    ):
+        return False
+    projection_workspace = _normalize_text(projection.get("workspace_root"))
+    if workspace_root is not None and projection_workspace is None:
+        return False
+    if (
+        workspace_root is not None
+        and projection_workspace is not None
+        and Path(workspace_root).resolve() != Path(projection_workspace).resolve()
+    ):
+        return False
+    return True
+
+
+def _ticket_flow_projection_from_local_store(
+    *,
+    run_id: str,
+    workspace_root: Optional[str],
+) -> Optional[dict[str, Any]]:
+    if workspace_root is None:
+        return None
+    try:
+        db_path = resolve_repo_flows_db_path(Path(workspace_root).resolve())
+        if not db_path.exists():
+            return None
+        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+        conn.row_factory = sqlite3.Row
+        try:
+            record = conn.execute(
+                """
+                SELECT id,
+                       flow_type,
+                       status,
+                       state,
+                       created_at,
+                       started_at,
+                       finished_at,
+                       metadata
+                  FROM flow_runs
+                 WHERE id = ?
+                """,
+                (run_id,),
+            ).fetchone()
+        finally:
+            conn.close()
+    except (OSError, RuntimeError, ValueError, sqlite3.Error):
+        logger.debug(
+            "Could not read local ticket-flow store for chat projection",
+            exc_info=True,
+        )
+        return None
+    if record is None or record["flow_type"] != "ticket_flow":
+        return None
+    return _ticket_flow_projection_from_flow_row(
+        record,
+        workspace_root=workspace_root,
+    )
+
+
+def _ticket_flow_projection_from_flow_row(
+    record: Mapping[str, Any],
+    *,
+    workspace_root: Optional[str],
+) -> dict[str, Any]:
+    state = _json_object(record["state"])
+    ticket_engine = state.get("ticket_engine")
+    ticket_engine = ticket_engine if isinstance(ticket_engine, Mapping) else {}
+    metadata = _json_object(record["metadata"])
+    summary = {
+        "workspace_root": workspace_root,
+        "current_ticket": ticket_engine.get("current_ticket")
+        or state.get("current_ticket"),
+        "ticket_engine": ticket_engine,
+    }
+    return _ticket_flow_projection_from_summary(
+        run_id=str(record["id"]),
+        status=_normalize_text(record["status"]),
+        summary=summary,
+        updated_at=(
+            _normalize_text(record["finished_at"])
+            or _normalize_text(record["started_at"])
+            or _normalize_text(record["created_at"])
+        ),
+        repo_id=_normalize_text(metadata.get("repo_id")),
+    )
+
+
+def _ticket_flow_projection_from_summary(
+    *,
+    run_id: str,
+    status: Optional[str],
+    summary: Mapping[str, Any],
+    updated_at: Optional[str],
+    repo_id: Optional[str],
+) -> dict[str, Any]:
+    ticket_engine = summary.get("ticket_engine")
+    ticket_engine = ticket_engine if isinstance(ticket_engine, Mapping) else {}
+    ticket_engine_commit = ticket_engine.get("commit")
+    ticket_engine_commit = (
+        ticket_engine_commit if isinstance(ticket_engine_commit, Mapping) else {}
+    )
+    raw_current_ticket_done = ticket_engine.get("current_ticket_done")
+    if raw_current_ticket_done is None:
+        raw_current_ticket_done = ticket_engine_commit.get("current_ticket_done")
+    if raw_current_ticket_done is None:
+        raw_current_ticket_done = summary.get("current_ticket_done")
+    return {
+        "run_id": run_id,
+        "repo_id": repo_id,
+        "workspace_root": _normalize_text(summary.get("workspace_root")),
+        "status": status,
+        "updated_at": updated_at,
+        "current_ticket": _normalize_text(
+            ticket_engine.get("current_ticket") or summary.get("current_ticket")
+        ),
+        "current_ticket_done": _bool_or_none(raw_current_ticket_done),
+        "ticket_engine_status": _normalize_text(ticket_engine.get("status")),
+    }
+
+
 def _chat_index_rows_from_surfaces(
     surfaces: Iterable[Mapping[str, Any]],
 ) -> list[dict[str, Any]]:
@@ -1782,6 +1994,7 @@ def _chat_index_rows_from_surfaces(
                 "ticket_path": metadata_map.get("ticket_path"),
                 "ticket_done": metadata_map.get("ticket_done"),
                 "ticket_status": metadata_map.get("ticket_status"),
+                "ticket_flow_projection": metadata_map.get("ticket_flow_projection"),
                 "run_id": metadata_map.get("run_id"),
             }
             by_thread[managed_thread_id] = row
@@ -1829,6 +2042,7 @@ def _chat_index_rows_from_surfaces(
                 "ticket_path",
                 "ticket_done",
                 "ticket_status",
+                "ticket_flow_projection",
                 "run_id",
             ):
                 if metadata_map.get(key) is not None:
@@ -2321,12 +2535,21 @@ def _apply_ticket_flow_child_state(row: dict[str, Any]) -> None:
             if ticket_file_done
             else _ticket_status_fallback(row, allow_done=False)
         )
+        row["ticket_progress_source"] = "ticket_file"
+        return
+
+    flow_store_state = _ticket_flow_store_child_state(row)
+    if flow_store_state is not None:
+        row["ticket_done"] = flow_store_state["ticket_done"]
+        row["ticket_status"] = flow_store_state["ticket_status"]
+        row["ticket_progress_source"] = "flow_store"
         return
 
     explicit_done = _bool_or_none(row.get("ticket_done"))
     if explicit_done is True:
         row["ticket_done"] = True
         row["ticket_status"] = "done"
+        row["ticket_progress_source"] = "managed_thread"
         return
     if explicit_done is False:
         row["ticket_done"] = False
@@ -2336,9 +2559,15 @@ def _apply_ticket_flow_child_state(row: dict[str, Any]) -> None:
         row["ticket_status"] = explicit_status
         if explicit_status == "done":
             row["ticket_done"] = True
+        row["ticket_progress_source"] = "managed_thread"
         return
 
     row["ticket_status"] = _ticket_status_fallback(row)
+    if row["ticket_status"] == "done":
+        row["ticket_done"] = True
+    elif _bool_or_none(row.get("ticket_done")) is None:
+        row["ticket_done"] = None
+    row["ticket_progress_source"] = "managed_thread_runtime"
 
 
 def _ticket_status_fallback(row: Mapping[str, Any], *, allow_done: bool = True) -> str:
@@ -2355,6 +2584,73 @@ def _ticket_status_fallback(row: Mapping[str, Any], *, allow_done: bool = True) 
     if _normalize_kind(row.get("lifecycle")) == "running":
         return "running"
     return "unknown"
+
+
+def _ticket_flow_store_child_state(
+    row: Mapping[str, Any],
+) -> Optional[dict[str, Any]]:
+    projection = row.get("ticket_flow_projection")
+    if not isinstance(projection, Mapping):
+        return None
+    current_ticket = _normalize_text(projection.get("current_ticket"))
+    if current_ticket is None or not _row_matches_flow_store_ticket(
+        row, current_ticket
+    ):
+        return None
+
+    current_ticket_done = _bool_or_none(projection.get("current_ticket_done"))
+    if current_ticket_done is True:
+        return {"ticket_done": True, "ticket_status": "done"}
+
+    status = _normalize_kind(
+        projection.get("ticket_engine_status") or projection.get("status")
+    )
+    ticket_status = _flow_store_status_to_ticket_status(status)
+    if current_ticket_done is False:
+        if ticket_status is None or ticket_status == "done":
+            ticket_status = "running"
+        return {"ticket_done": False, "ticket_status": ticket_status}
+    if ticket_status is None:
+        return None
+    return {"ticket_done": ticket_status == "done", "ticket_status": ticket_status}
+
+
+def _row_matches_flow_store_ticket(row: Mapping[str, Any], current_ticket: str) -> bool:
+    ticket_path = _normalize_text(row.get("ticket_path"))
+    if ticket_path is not None and _ticket_ref_matches(ticket_path, current_ticket):
+        return True
+    ticket_id = _normalize_text(row.get("ticket_id"))
+    if ticket_id is None:
+        return False
+    return _ticket_ref_matches(ticket_id, current_ticket)
+
+
+def _ticket_ref_matches(left: str, right: str) -> bool:
+    left_text = left.strip()
+    right_text = right.strip()
+    if left_text == right_text:
+        return True
+    left_name = Path(left_text).name
+    right_name = Path(right_text).name
+    if left_name == right_name:
+        return True
+    left_stem = Path(left_name).stem
+    right_stem = Path(right_name).stem
+    return bool(left_stem and right_stem and left_stem == right_stem)
+
+
+def _flow_store_status_to_ticket_status(status: Optional[str]) -> Optional[str]:
+    if status is None:
+        return None
+    if status in {"completed", "complete", "done", "succeeded", "success"}:
+        return "done"
+    if status in {"failed", "error", "cancelled", "canceled", "timeout", "stopped"}:
+        return "failed"
+    if status in {"paused", "pending", "queued", "waiting"}:
+        return "waiting"
+    if status in {"running", "in_progress", "started", "claimed"}:
+        return "running"
+    return None
 
 
 def _ticket_done_from_row_path(row: Mapping[str, Any]) -> Optional[bool]:

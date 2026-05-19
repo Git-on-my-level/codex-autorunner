@@ -11,6 +11,7 @@ import {
   type ProjectionCursor,
   type RepairPolicy,
   type RepoWorktreePatchEvent,
+  type RepoWorktreeDetailSnapshot,
   type RepoWorktreeRuntimeSnapshot,
   type RepoWorktreeTopologySnapshot,
   type TicketDetailPatchEvent,
@@ -320,6 +321,45 @@ describe('read model contracts', () => {
 
     expect(snapshot.ticket.ownerKind).toBe('worktree');
     expect(event.patch.linkedChats[0].ticketId).toBe('TICKET-001');
+  });
+
+  it('keeps raw nested detail records snake_case while mapping typed runtime arrays', () => {
+    const detail = mapReadModelContract<RepoWorktreeDetailSnapshot>({
+      contract_version: READ_MODEL_CONTRACT_VERSION,
+      kind: 'repo_worktree.detail.snapshot',
+      cursor: cursor(),
+      owner_kind: 'worktree',
+      owner_id: 'wt-1',
+      identity: { repo_id: 'repo-1', worktree_id: 'wt-1' },
+      parent_links: { parent_repo_id: 'repo-1' },
+      topology: { branch_name: 'feature/test' },
+      runtime: { active_run_id: 'run-1', active_run_status: 'running' },
+      ticket_queue: [{ ticket_id: 'TICKET-001', raw_status: 'done' }],
+      run_queue: [{ run_id: 'run-1', flow_status: 'running' }],
+      chat_queue: [{ chat_id: 'chat-1', ticket_id: 'TICKET-001' }],
+      contextspace_summary: [{ active_context_path: '.codex-autorunner/contextspace/active_context.md' }],
+      current_artifacts: [{ artifact_path: '.codex-autorunner/filebox/outbox/report.md' }],
+      ticket_window: window(),
+      run_window: window(),
+      chat_window: window(),
+      artifact_window: window(),
+      repair: repair('/hub/read-models/worktrees/wt-1/detail')
+    });
+    const runtime = mapReadModelContract<RepoWorktreeRuntimeSnapshot>({
+      contract_version: READ_MODEL_CONTRACT_VERSION,
+      kind: 'repo_worktree.runtime.snapshot',
+      cursor: cursor(),
+      window: window(),
+      runtime: [{ entity_kind: 'worktree', entity_id: 'wt-1', active_run_id: 'run-1', active_run_status: 'running' }],
+      repair: repair('/hub/read-models/repo-worktree/runtime')
+    });
+
+    expect(detail.ownerKind).toBe('worktree');
+    expect(detail.identity.repo_id).toBe('repo-1');
+    expect(detail.runtime.active_run_id).toBe('run-1');
+    expect(detail.ticketQueue[0].ticket_id).toBe('TICKET-001');
+    expect(runtime.runtime[0].entityKind).toBe('worktree');
+    expect(runtime.runtime[0].activeRunId).toBe('run-1');
   });
 
   it('flags reset events as repair-required', () => {
