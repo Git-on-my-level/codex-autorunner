@@ -1705,9 +1705,10 @@ async def test_send_message_defer_execution_drains_five_rapid_messages_in_order(
     assert store.get_running_turn(managed_thread_id) is None
     assert store.get_queue_depth(managed_thread_id) == 0
     assert len(fake_supervisor.client.turn_start_calls) == 5
-    for prompt, runtime_prompt in zip(
-        prompts, fake_supervisor.client.turn_start_calls, strict=False
-    ):
+    for index, prompt in enumerate(prompts):
+        if index >= len(fake_supervisor.client.turn_start_calls):
+            break
+        runtime_prompt = fake_supervisor.client.turn_start_calls[index]
         assert prompt in runtime_prompt
 
 

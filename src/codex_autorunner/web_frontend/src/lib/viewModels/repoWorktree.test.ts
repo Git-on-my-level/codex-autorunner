@@ -165,6 +165,9 @@ describe('repo/worktree view models', () => {
             has_car_state: true,
             unbound_managed_thread_count: 2,
             chat_bound: true,
+            chat_bound_thread_count: 1,
+            chat_binding_sources: { discord: 1 },
+            chat_binding_display_names: ['CAR / #ops'],
             cleanup_blocked_by_chat_binding: true
           }
         }
@@ -179,8 +182,13 @@ describe('repo/worktree view models', () => {
       hasCarState: true,
       unboundManagedThreadCount: 2,
       chatBound: true,
+      chatBindingCount: 1,
+      chatBindingSources: { discord: 1 },
+      chatBindingDisplayNames: ['CAR / #ops'],
       cleanupBlockedByChatBinding: true
     });
+    expect(vm.chatBoundCount).toBe(1);
+    expect(filterRepoWorktreeIndexRows(vm.rows, '', 'chat_bound')[0].childWorktrees[0].id).toBe('worktree-1');
   });
 
   it('keeps known child worktrees under their owning repo and only promotes orphan worktrees', () => {

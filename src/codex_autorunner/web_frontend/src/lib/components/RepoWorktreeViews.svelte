@@ -90,7 +90,7 @@
     return hasSignal || hasTicket || hasTurns || hasElapsed || hasProgress || hasActivity || hasReason;
   });
 
-  const REPO_FILTERS: RepoWorktreeIndexFilter[] = ['all', 'waiting', 'active'];
+  const REPO_FILTERS: RepoWorktreeIndexFilter[] = ['all', 'waiting', 'active', 'chat_bound'];
   let search = $state('');
   let filter = $state<RepoWorktreeIndexFilter>('all');
 
@@ -134,11 +134,22 @@
   function repoFilterCount(key: RepoWorktreeIndexFilter): number {
     if (key === 'all') return countRepoWorktreeIndexEntities(indexRows);
     if (key === 'active') return index?.activeCount ?? 0;
+    if (key === 'chat_bound') return index?.chatBoundCount ?? 0;
     return index?.waitingCount ?? 0;
   }
 
   function repoFilterLabel(key: RepoWorktreeIndexFilter): string {
+    if (key === 'chat_bound') return 'Chat-bound';
     return key === 'all' ? 'All' : key.charAt(0).toUpperCase() + key.slice(1);
+  }
+
+  function chatBindingLabel(target: { chatBindingDisplayNames: string[]; chatBindingSources: Record<string, number>; chatBindingCount: number }): string {
+    if (target.chatBindingDisplayNames.length > 0) return target.chatBindingDisplayNames.join(', ');
+    const sources = Object.entries(target.chatBindingSources)
+      .filter(([, count]) => count > 0)
+      .map(([source, count]) => `${source}${count > 1 ? ` ${count}` : ''}`);
+    if (sources.length > 0) return sources.join(', ');
+    return target.chatBindingCount > 1 ? `${target.chatBindingCount} chats` : 'Chat-bound';
   }
 
   function canArchiveState(target: { hasCarState: boolean; unboundManagedThreadCount: number }): boolean {
@@ -325,6 +336,11 @@
                     {#if row.status !== 'idle' && row.status !== 'done'}
                       <span class={`repo-status status-pill ${row.status}`}>{statusLabel(row.status)}</span>
                     {/if}
+                    {#if row.chatBound}
+                      <span class="chat-binding-pill" title={chatBindingLabel(row)}>
+                        Chat-bound
+                      </span>
+                    {/if}
                   </div>
                   <div class="repo-card-meta">
                     {#if row.branch}
@@ -334,8 +350,12 @@
                       {#if row.branch}<span class="repo-meta-dot" aria-hidden="true">·</span>{/if}
                       <span>{row.detail}</span>
                     {/if}
-                    {#if row.lastActivityAt}
+                    {#if row.chatBound}
                       {#if row.branch || row.detail}<span class="repo-meta-dot" aria-hidden="true">·</span>{/if}
+                      <span class="chat-binding-meta">{chatBindingLabel(row)}</span>
+                    {/if}
+                    {#if row.lastActivityAt}
+                      {#if row.branch || row.detail || row.chatBound}<span class="repo-meta-dot" aria-hidden="true">·</span>{/if}
                       <span class="repo-meta-time">{rowRelativeTime(row)}</span>
                     {/if}
                   </div>
@@ -526,8 +546,13 @@
                           {#if worktree.status !== 'idle' && worktree.status !== 'done'}
                             <span class={`status-pill ${worktree.status}`}>{statusLabel(worktree.status)}</span>
                           {/if}
+                          {#if worktree.chatBound}
+                            <span class="chat-binding-pill" title={chatBindingLabel(worktree)}>
+                              Chat-bound
+                            </span>
+                          {/if}
                         </div>
-                        {#if (worktree.branch && worktree.branch !== worktree.label) || worktree.currentRunTitle}
+                        {#if (worktree.branch && worktree.branch !== worktree.label) || worktree.currentRunTitle || worktree.chatBound}
                           <div class="worktree-card-meta">
                             {#if worktree.branch && worktree.branch !== worktree.label}
                               <span class="repo-meta-branch"><span class="branch-glyph" aria-hidden="true">⎇</span>{worktree.branch}</span>
@@ -535,6 +560,10 @@
                             {#if worktree.currentRunTitle}
                               {#if worktree.branch && worktree.branch !== worktree.label}<span class="repo-meta-dot" aria-hidden="true">·</span>{/if}
                               <span class="worktree-run-title">{worktree.currentRunTitle}</span>
+                            {/if}
+                            {#if worktree.chatBound}
+                              {#if (worktree.branch && worktree.branch !== worktree.label) || worktree.currentRunTitle}<span class="repo-meta-dot" aria-hidden="true">·</span>{/if}
+                              <span class="chat-binding-meta">{chatBindingLabel(worktree)}</span>
                             {/if}
                           </div>
                         {/if}
@@ -1648,6 +1677,30 @@
   .repo-meta-time {
     color: var(--color-ink-faint);
     font-variant-numeric: tabular-nums;
+  }
+
+  .chat-binding-pill {
+    display: inline-flex;
+    align-items: center;
+    min-height: 18px;
+    padding: 0 6px;
+    border: 1px solid color-mix(in srgb, var(--color-accent) 42%, var(--color-border));
+    border-radius: 4px;
+    background: color-mix(in srgb, var(--color-accent) 12%, transparent);
+    color: var(--color-ink);
+    font-size: 10px;
+    font-weight: 650;
+    line-height: 1;
+    text-transform: uppercase;
+  }
+
+  .chat-binding-meta {
+    min-width: 0;
+    max-width: 34ch;
+    overflow: hidden;
+    color: var(--color-ink-soft);
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   .repo-card-counts,

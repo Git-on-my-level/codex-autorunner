@@ -8,7 +8,9 @@ from typing import Any, Literal, Mapping, Optional, Protocol, cast
 
 from fastapi import HTTPException
 
+from ....adapters.chat.channel_directory import ChannelDirectoryStore, channel_entry_key
 from ....contextspace.paths import read_contextspace_docs
+from ....core.chat_bindings import active_chat_binding_counts_by_source
 from ....core.freshness import iso_now
 from ....core.orchestration.flow_run_projection import (
     project_ticket_flow_run_records,
@@ -33,6 +35,13 @@ from ..read_model_contracts import (
     dump_read_model_contract,
     read_model_now,
 )
+from ..routes.hub_repo_routes.channel_source_readers import (
+    read_discord_bindings,
+    read_orchestration_bindings,
+    read_telegram_bindings,
+    state_db_path,
+    workspace_scope_index,
+)
 from . import flow_store as flow_store_service
 from .flow_history_artifacts import get_dispatch_history
 from .ticket_read_models import (
@@ -40,6 +49,9 @@ from .ticket_read_models import (
     mark_duplicate_ticket_numbers,
     ticket_payload,
 )
+
+DISCORD_STATE_FILE_DEFAULT = ".codex-autorunner/discord_state.sqlite3"
+TELEGRAM_STATE_FILE_DEFAULT = ".codex-autorunner/telegram_state.sqlite3"
 
 
 class _HubSupervisorPort(Protocol):
@@ -67,7 +79,13 @@ class HubMountManagerPort(Protocol):
 
 
 class HubRepoEnricherPort(Protocol):
-    def enrich_repo(self, snapshot: Any) -> dict[str, Any]: ...
+    def enrich_repo(
+        self,
+        snapshot: Any,
+        chat_binding_counts: Optional[dict[str, int]] = None,
+        chat_binding_counts_by_source: Optional[dict[str, dict[str, int]]] = None,
+        unbound_thread_counts: Optional[dict[str, int]] = None,
+    ) -> dict[str, Any]: ...
 
 
 def _bounded_limit(limit: int, *, default: int = 50, maximum: int = 200) -> int:
@@ -127,6 +145,55 @@ def _topology_worktree_setup_commands(item: dict[str, Any]) -> Optional[list[str
         return None
     commands = [str(cmd) for cmd in raw if str(cmd).strip()]
     return commands or None
+
+
+def _positive_source_counts(value: object) -> dict[str, int]:
+    if not isinstance(value, Mapping):
+        return {}
+    out: dict[str, int] = {}
+    for raw_key, raw_count in value.items():
+        if not isinstance(raw_key, str) or not raw_key.strip():
+            continue
+        count = _int_value(raw_count)
+        if count > 0:
+            out[raw_key.strip()] = count
+    return out
+
+
+def _chat_binding_sources(item: Mapping[str, Any]) -> dict[str, int]:
+    sources = _positive_source_counts(item.get("chat_binding_sources"))
+    if sources:
+        return sources
+    fallback: dict[str, int] = {}
+    for source in ("pma", "discord", "telegram"):
+        count = _int_value(item.get(f"{source}_chat_bound_thread_count"))
+        if count > 0:
+            fallback[source] = count
+    return fallback
+
+
+def _chat_binding_display_names(item: Mapping[str, Any]) -> list[str]:
+    raw = item.get("chat_binding_display_names")
+    if not isinstance(raw, list):
+        return []
+    names: list[str] = []
+    seen: set[str] = set()
+    for value in raw:
+        if not isinstance(value, str):
+            continue
+        text = value.strip()
+        if not text or text in seen:
+            continue
+        seen.add(text)
+        names.append(text)
+    return names
+
+
+def _chat_binding_count(item: Mapping[str, Any]) -> int:
+    explicit = _int_value(item.get("chat_bound_thread_count"))
+    if explicit > 0:
+        return explicit
+    return sum(_chat_binding_sources(item).values())
 
 
 def _runtime_projection(item: dict[str, Any]) -> RuntimeProjection:
@@ -250,17 +317,227 @@ class RepoWorktreeReadModelService:
         self._mount_manager = mount_manager
         self._enricher = enricher
 
+    def _active_chat_binding_counts_by_source(self) -> dict[str, dict[str, int]]:
+        raw_config = getattr(self._context.config, "raw", {})
+        if not isinstance(raw_config, Mapping):
+            raw_config = {}
+        try:
+            return active_chat_binding_counts_by_source(
+                hub_root=self._context.config.root,
+                raw_config=raw_config,
+            )
+        except Exception as exc:  # intentional: keep repo/worktree read model available
+            logger = getattr(self._context, "logger", None)
+            if logger is not None:
+                logger.warning("Repo/worktree chat binding lookup failed: %s", exc)
+            return {}
+
+    def _chat_binding_display_names_by_repo(
+        self, snapshots: list[Any]
+    ) -> dict[str, list[str]]:
+        root = self._context.config.root
+        display_by_key = self._channel_display_by_key(root)
+        scope_index = workspace_scope_index(snapshots)
+        displays_by_repo: dict[str, list[str]] = {}
+        context = cast(Any, self._context)
+
+        binding_groups: list[tuple[str, dict[str, dict[str, Any]]]] = []
+        try:
+            discord_path = state_db_path(
+                context, "discord_bot", DISCORD_STATE_FILE_DEFAULT
+            )
+            binding_groups.append(
+                (
+                    "discord",
+                    read_discord_bindings(discord_path, scope_index, context=context),
+                )
+            )
+        except Exception as exc:  # intentional: optional display-name enrichment
+            logger = getattr(self._context, "logger", None)
+            if logger is not None:
+                logger.warning("Discord binding display lookup failed: %s", exc)
+        try:
+            telegram_path = state_db_path(
+                context, "telegram_bot", TELEGRAM_STATE_FILE_DEFAULT
+            )
+            binding_groups.append(
+                (
+                    "telegram",
+                    read_telegram_bindings(telegram_path, scope_index, context=context),
+                )
+            )
+        except Exception as exc:  # intentional: optional display-name enrichment
+            logger = getattr(self._context, "logger", None)
+            if logger is not None:
+                logger.warning("Telegram binding display lookup failed: %s", exc)
+        for surface in ("discord", "telegram"):
+            try:
+                binding_groups.append(
+                    (
+                        surface,
+                        read_orchestration_bindings(
+                            root, surface_kind=surface, context=context
+                        ),
+                    )
+                )
+            except Exception as exc:  # intentional: optional display-name enrichment
+                logger = getattr(self._context, "logger", None)
+                if logger is not None:
+                    logger.warning(
+                        "%s orchestration binding display lookup failed: %s",
+                        surface.capitalize(),
+                        exc,
+                    )
+
+        for surface, bindings in binding_groups:
+            for raw_key, binding in bindings.items():
+                if not isinstance(binding, dict):
+                    continue
+                repo_id = self._binding_repo_id(binding)
+                if not repo_id:
+                    continue
+                display = self._binding_display_name(
+                    surface=surface,
+                    raw_key=raw_key,
+                    binding=binding,
+                    display_by_key=display_by_key,
+                )
+                if not display:
+                    continue
+                self._append_unique_display(displays_by_repo, repo_id, display)
+        return displays_by_repo
+
+    @staticmethod
+    def _channel_display_by_key(root: Path) -> dict[str, str]:
+        try:
+            entries = ChannelDirectoryStore(root).list_entries(limit=None)
+        except Exception:
+            return {}
+        out: dict[str, str] = {}
+        for entry in entries:
+            key = channel_entry_key(entry)
+            display = entry.get("display") if isinstance(entry, dict) else None
+            if isinstance(key, str) and isinstance(display, str) and display.strip():
+                out[key] = display.strip()
+        return out
+
+    @staticmethod
+    def _binding_repo_id(binding: Mapping[str, Any]) -> Optional[str]:
+        worktree_id = binding.get("worktree_id")
+        if isinstance(worktree_id, str) and worktree_id.strip():
+            return worktree_id.strip()
+        resource_kind = str(binding.get("resource_kind") or "").strip().lower()
+        resource_id = binding.get("resource_id")
+        if (
+            resource_kind in {"worktree", "repo"}
+            and isinstance(resource_id, str)
+            and resource_id.strip()
+        ):
+            return resource_id.strip()
+        repo_id = binding.get("repo_id")
+        if isinstance(repo_id, str) and repo_id.strip():
+            return repo_id.strip()
+        return None
+
+    @staticmethod
+    def _append_unique_display(
+        displays_by_repo: dict[str, list[str]], repo_id: str, display: str
+    ) -> None:
+        existing = displays_by_repo.setdefault(repo_id, [])
+        if display not in existing:
+            existing.append(display)
+
+    @staticmethod
+    def _binding_display_name(
+        *,
+        surface: str,
+        raw_key: str,
+        binding: Mapping[str, Any],
+        display_by_key: Mapping[str, str],
+    ) -> Optional[str]:
+        candidates: list[str] = []
+        for key in (raw_key, binding.get("surface_key")):
+            if isinstance(key, str) and key.strip():
+                candidates.append(key.strip())
+        if surface == "discord":
+            chat_id = binding.get("chat_id")
+            guild_id = binding.get("guild_id")
+            if isinstance(chat_id, str) and chat_id.strip():
+                candidates.append(f"discord:{chat_id.strip()}")
+                if isinstance(guild_id, str) and guild_id.strip():
+                    candidates.append(f"discord:{chat_id.strip()}:{guild_id.strip()}")
+        elif surface == "telegram":
+            chat_id = binding.get("chat_id")
+            thread_id = binding.get("thread_id")
+            if isinstance(chat_id, str) and chat_id.strip():
+                if isinstance(thread_id, str) and thread_id.strip():
+                    candidates.append(f"telegram:{chat_id.strip()}:{thread_id.strip()}")
+                candidates.append(f"telegram:{chat_id.strip()}")
+
+        for candidate in candidates:
+            display = display_by_key.get(candidate)
+            if display:
+                return display
+
+        if surface == "discord":
+            chat_id = binding.get("chat_id")
+            guild_id = binding.get("guild_id")
+            if not isinstance(chat_id, str) or not chat_id.strip():
+                body = raw_key.removeprefix("discord:")
+                chat_id = body.split(":", 1)[0]
+            if isinstance(guild_id, str) and guild_id.strip():
+                return f"guild:{guild_id.strip()} / #{chat_id.strip()}"
+            return f"discord:{chat_id.strip()}" if chat_id.strip() else None
+        if surface == "telegram":
+            if raw_key.startswith("telegram:"):
+                return raw_key
+            chat_id = binding.get("chat_id")
+            thread_id = binding.get("thread_id")
+            if isinstance(chat_id, str) and chat_id.strip():
+                if isinstance(thread_id, str) and thread_id.strip():
+                    return f"telegram:{chat_id.strip()}:{thread_id.strip()}"
+                return f"telegram:{chat_id.strip()}"
+        return None
+
     async def _enriched_repos(self) -> list[dict[str, Any]]:
         snapshots = list(
             await asyncio.to_thread(self._context.supervisor.list_repos, use_cache=True)
         )
         await self._mount_manager.refresh_mounts(snapshots)
-        return await asyncio.gather(
+        chat_binding_counts_by_source = await asyncio.to_thread(
+            self._active_chat_binding_counts_by_source
+        )
+        chat_binding_counts = {
+            repo_id: sum(source_counts.values())
+            for repo_id, source_counts in chat_binding_counts_by_source.items()
+        }
+        display_names_by_repo = await asyncio.to_thread(
+            self._chat_binding_display_names_by_repo, snapshots
+        )
+        enriched = await asyncio.gather(
             *[
-                asyncio.to_thread(self._enricher.enrich_repo, snapshot)
+                asyncio.to_thread(
+                    self._enricher.enrich_repo,
+                    snapshot,
+                    chat_binding_counts,
+                    chat_binding_counts_by_source,
+                )
                 for snapshot in snapshots
             ]
         )
+        for item in enriched:
+            if not isinstance(item, dict):
+                continue
+            item_id = str(item.get("id") or "")
+            sources = _positive_source_counts(
+                chat_binding_counts_by_source.get(item_id, {})
+            )
+            if sources:
+                item["chat_binding_sources"] = sources
+            displays = display_names_by_repo.get(item_id, [])
+            if displays:
+                item["chat_binding_display_names"] = displays
+        return enriched
 
     def _snapshot_by_id(self, repo_id: str) -> Any:
         for snapshot in self._context.supervisor.list_repos(use_cache=True):
@@ -299,6 +576,10 @@ class RepoWorktreeReadModelService:
                 ),
                 child_worktree_ids=sorted(child_ids.get(str(item.get("id")), [])),
                 worktree_setup_commands=_topology_worktree_setup_commands(item),
+                chat_bound=bool(item.get("chat_bound")),
+                chat_binding_count=_chat_binding_count(item),
+                chat_binding_sources=_chat_binding_sources(item),
+                chat_binding_display_names=_chat_binding_display_names(item),
             )
             for item in enriched
             if str(item.get("kind") or "") != "worktree" and kind in {"all", "repo"}
@@ -316,6 +597,10 @@ class RepoWorktreeReadModelService:
                     if isinstance(item.get("destination_id"), str)
                     else None
                 ),
+                chat_bound=bool(item.get("chat_bound")),
+                chat_binding_count=_chat_binding_count(item),
+                chat_binding_sources=_chat_binding_sources(item),
+                chat_binding_display_names=_chat_binding_display_names(item),
             )
             for item in enriched
             if str(item.get("kind") or "") == "worktree" and kind in {"all", "worktree"}

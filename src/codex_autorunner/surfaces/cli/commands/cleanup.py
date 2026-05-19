@@ -575,9 +575,10 @@ def register_cleanup_commands(
             ),
             engine.repo_root,
         )
-        for rule_result, (bucket, reason) in zip(
-            summary.rules, resolved_specs, strict=False
-        ):
+        for index, rule_result in enumerate(summary.rules):
+            if index >= len(resolved_specs):
+                break
+            bucket, reason = resolved_specs[index]
             results.append(
                 adapt_housekeeping_rule_result_to_result(
                     rule_result,

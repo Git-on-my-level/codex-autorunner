@@ -26,7 +26,8 @@ if len(_VIEWPORT_NAMES) != len(DEFAULT_VIEWPORTS):
 
 DEFAULT_WEB_UI_VIEWPORTS: tuple[Viewport, ...] = tuple(
     Viewport(name, width, height)
-    for name, (width, height) in zip(_VIEWPORT_NAMES, DEFAULT_VIEWPORTS, strict=False)
+    for index, name in enumerate(_VIEWPORT_NAMES)
+    for width, height in (DEFAULT_VIEWPORTS[index],)
 )
 
 SCRIPT_ROUTE_PACK: dict[str, str] = dict(DEFAULT_ROUTES)

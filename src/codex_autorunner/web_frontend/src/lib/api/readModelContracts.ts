@@ -218,6 +218,10 @@ export type RepoTopology = {
   destinationId?: string | null;
   childWorktreeIds: string[];
   worktreeSetupCommands?: string[] | null;
+  chatBound?: boolean;
+  chatBindingCount?: number;
+  chatBindingSources?: Record<string, number>;
+  chatBindingDisplayNames?: string[];
 };
 
 export type WorktreeTopology = {
@@ -228,6 +232,10 @@ export type WorktreeTopology = {
   branch?: string | null;
   archived: boolean;
   destinationId?: string | null;
+  chatBound?: boolean;
+  chatBindingCount?: number;
+  chatBindingSources?: Record<string, number>;
+  chatBindingDisplayNames?: string[];
 };
 
 export type RepoWorktreeTopologySnapshot = {
