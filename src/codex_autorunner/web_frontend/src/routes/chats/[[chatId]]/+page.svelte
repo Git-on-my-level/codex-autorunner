@@ -532,7 +532,7 @@
   const activeMessengerSurface = $derived(chatMessengerSurface(activeChat));
   const activeRepoIngress = $derived(repoIngressForChat(activeChat));
   const createChatLabel = $derived(
-    creating ? 'Creating...' : newChatKind === 'agent' && canStartCodingAgentChat ? '+ Coding agent' : '+ Chat'
+    creating ? 'Creating...' : newChatKind === 'agent' && canStartCodingAgentChat ? '+ Coding agent' : '+ PMA'
   );
   const headerScopeLine = $derived(pmaChatHeaderScopeLine(activeChat, repoLabelForRepoId));
   /** Omit connected “Live · …” — redundant with the turn-status pill on the scope row. */

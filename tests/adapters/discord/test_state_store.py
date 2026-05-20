@@ -13,6 +13,8 @@ from codex_autorunner.adapters.discord.state import (
 )
 from codex_autorunner.adapters.discord.workspace_commands import (
     _bind_to_workspace_candidate,
+    _list_bind_workspace_candidates,
+    _resource_owner_for_workspace,
 )
 from codex_autorunner.core.managed_thread_store import ManagedThreadStore
 from codex_autorunner.core.orchestration import (
@@ -67,6 +69,55 @@ async def test_channel_binding_crud(tmp_path: Path) -> None:
         assert len(all_bindings) == 1
     finally:
         await store.close()
+
+
+def test_workspace_scope_resolution_preserves_manifest_worktrees(
+    tmp_path: Path,
+) -> None:
+    hub_root = tmp_path / "hub"
+    base = hub_root / "base"
+    worktree = hub_root / "worktrees" / "base--feature"
+    base.mkdir(parents=True)
+    worktree.mkdir(parents=True)
+    manifest_path = hub_root / ".codex-autorunner" / "manifest.yml"
+    manifest_path.parent.mkdir(parents=True)
+    manifest_path.write_text(
+        "\n".join(
+            [
+                "version: 3",
+                "repos:",
+                "  - id: base",
+                "    path: base",
+                "    kind: base",
+                "  - id: base--feature",
+                "    path: worktrees/base--feature",
+                "    kind: worktree",
+                "    worktree_of: base",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    service = SimpleNamespace(
+        _config=SimpleNamespace(root=hub_root),
+        _manifest_path=manifest_path,
+    )
+
+    assert _resource_owner_for_workspace(service, worktree) == (
+        "worktree",
+        "base--feature",
+        "base",
+    )
+    assert _resource_owner_for_workspace(
+        service,
+        worktree,
+        repo_id="base--feature",
+    ) == ("worktree", "base--feature", "base")
+    assert _list_bind_workspace_candidates(service)[0] == (
+        "worktree",
+        "base--feature",
+        str(worktree.resolve()),
+    )
 
 
 @pytest.mark.anyio

@@ -263,6 +263,28 @@ export type AutomationOverview = {
   };
 };
 
+export type AutomationTargetOption = {
+  id: string;
+  label: string;
+  kind: 'repo' | 'worktree';
+  disabled: boolean;
+  raw: JsonRecord;
+};
+
+export type AutomationAgentDefaults = {
+  defaultAgent: string;
+  defaultProfile: string | null;
+  defaultModel: string | null;
+  defaultReasoning: string | null;
+  raw: JsonRecord;
+};
+
+export type AutomationWorkspace = AutomationOverview & {
+  targetOptions: AutomationTargetOption[];
+  agentDefaults: AutomationAgentDefaults;
+  generatedAt: string | null;
+};
+
 export type AutomationCreateRequest = {
   preset: 'security_scan_pr' | 'weekly_ticket_flow';
   name?: string | null;
@@ -654,6 +676,8 @@ export class WebApiClient {
         await this.getJson<JsonRecord>('/hub/messages?sections=inbox,managed_threads,pma_files_detail,automation,action_queue,freshness'),
         mapDashboardSummary
       ),
+    getAutomationWorkspace: async (): Promise<ApiResult<AutomationWorkspace>> =>
+      mapResult(await this.getJson<JsonRecord>('/hub/read-models/automations/workspace'), mapAutomationWorkspace),
     listAutomations: async (): Promise<ApiResult<AutomationOverview>> =>
       mapResult(await this.getJson<JsonRecord>('/hub/automations'), mapAutomationOverview),
     getAutomation: async (ruleId: string): Promise<ApiResult<AutomationSummary>> =>
@@ -1057,6 +1081,36 @@ function mapAutomationOverview(raw: JsonRecord): AutomationOverview {
       paused: numberValue(summary.paused, 0),
       failedJobs: numberValue(summary.failed_jobs ?? summary.failedJobs, 0)
     }
+  };
+}
+
+function mapAutomationWorkspace(raw: JsonRecord): AutomationWorkspace {
+  return {
+    ...mapAutomationOverview(raw),
+    targetOptions: asArray(raw.target_options ?? raw.targetOptions).map(mapAutomationTargetOption),
+    agentDefaults: mapAutomationAgentDefaults(asRecord(raw.agent_defaults ?? raw.agentDefaults)),
+    generatedAt: nullableString(raw.generated_at ?? raw.generatedAt)
+  };
+}
+
+function mapAutomationTargetOption(raw: JsonRecord): AutomationTargetOption {
+  const rawKind = stringValue(raw.kind, 'repo');
+  return {
+    id: stringValue(raw.id, ''),
+    label: stringValue(raw.label, stringValue(raw.id, '')),
+    kind: rawKind === 'worktree' ? 'worktree' : 'repo',
+    disabled: Boolean(raw.disabled),
+    raw
+  };
+}
+
+function mapAutomationAgentDefaults(raw: JsonRecord): AutomationAgentDefaults {
+  return {
+    defaultAgent: stringValue(raw.default_agent ?? raw.defaultAgent, ''),
+    defaultProfile: nullableString(raw.default_profile ?? raw.defaultProfile),
+    defaultModel: nullableString(raw.default_model ?? raw.defaultModel),
+    defaultReasoning: nullableString(raw.default_reasoning ?? raw.defaultReasoning),
+    raw
   };
 }
 
