@@ -72,6 +72,7 @@ export type ChatIndexRow = {
   bindingDisplayNames?: string[];
   lifecycle?: string | null;
   runtimeStatus?: string | null;
+  effectiveStatus?: 'waiting' | 'running' | 'idle' | 'archived' | 'failed';
   archiveState?: 'active' | 'archived' | null;
   status: 'waiting' | 'running' | 'idle' | 'archived' | 'failed';
   unreadCount: number;

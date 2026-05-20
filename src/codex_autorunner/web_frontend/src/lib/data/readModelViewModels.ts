@@ -41,11 +41,13 @@ export function syntheticProjectionCursor(source: string, sequence = Date.now())
 }
 
 export function pmaChatSummaryToChatIndexRow(chat: PmaChatSummary): ChatIndexRow {
+  const status = chatIndexStatus(chat);
   return {
     chatId: chat.id,
     surface: surfaceFromRaw(chat.raw),
     title: chat.title,
-    status: chatIndexStatus(chat),
+    effectiveStatus: status,
+    status,
     unreadCount: chat.unreadCount ?? unreadCountFromRaw(chat.raw),
     lastActivityAt: chat.updatedAt,
     repoId: chat.repoId,
@@ -75,9 +77,15 @@ export function legacyChatIndexRecordToChatIndexRow(raw: JsonRecord): ChatIndexR
   const resourceId = stringValue(raw.resource_id);
   const worktreeId = stringValue(raw.worktree_id ?? raw.worktree_repo_id) ?? (resourceKind === 'worktree' ? resourceId : null);
   const queueDepth = numberValue(raw.queue_depth);
-  const lifecycle = stringValue(raw.lifecycle)?.toLowerCase() ?? '';
-  const lifecycleStatus = stringValue(raw.lifecycle_status)?.toLowerCase() ?? '';
   const runtimeStatus = stringValue(raw.runtime_status ?? raw.target_runtime_status)?.toLowerCase() ?? '';
+  const status =
+    chatEffectiveStatus(raw.effective_status ?? raw.effectiveStatus ?? raw.status) ??
+    legacyChatIndexStatus(
+      stringValue(raw.lifecycle)?.toLowerCase() ?? '',
+      stringValue(raw.lifecycle_status)?.toLowerCase() ?? '',
+      runtimeStatus,
+      queueDepth
+    );
   const rawTitle = stringValue(raw.title ?? raw.display_name, chatId) ?? chatId;
   const title = rawTitle.trim() || chatId;
   const lastVisibleMessageAt = stringValue(raw.last_visible_message_at);
@@ -88,7 +96,8 @@ export function legacyChatIndexRecordToChatIndexRow(raw: JsonRecord): ChatIndexR
     chatId,
     surface: surfaceFromKinds(raw.surface_kinds, raw.surface),
     title,
-    status: legacyChatIndexStatus(lifecycle, lifecycleStatus, runtimeStatus, queueDepth),
+    effectiveStatus: status,
+    status,
     unreadCount: numberValue(raw.unread_count ?? raw.unreadCount) || (raw.unread === true ? 1 : 0),
     lastActivityAt: lastSortActivityAt ?? stringValue(raw.last_activity_at) ?? lastVisibleMessageAt ?? stringValue(raw.created_at),
     lastVisibleMessageAt,
@@ -125,8 +134,8 @@ export function chatIndexRowToPmaChatSummary(row: ChatIndexRow): PmaChatSummary 
     binding_display_names: row.bindingDisplayNames ?? [],
     primary_surface: row.primarySurface,
     surface_bindings: row.surfaceBindings ?? [],
-    normalized_status: row.runtimeStatus ?? row.status,
-    runtime_status: row.runtimeStatus ?? row.status,
+    normalized_status: row.effectiveStatus ?? row.status,
+    runtime_status: row.effectiveStatus ?? row.status,
     status: row.status,
     lifecycle: row.lifecycle,
     lifecycle_status: row.archiveState ?? (row.status === 'archived' ? 'archived' : 'active'),
@@ -162,7 +171,7 @@ export function chatIndexRowToPmaChatSummary(row: ChatIndexRow): PmaChatSummary 
     id: row.chatId,
     title,
     lifecycleStatus: row.archiveState ?? (row.status === 'archived' ? 'archived' : 'active'),
-    status: normalizeWorkStatus(row.status),
+    status: normalizeWorkStatus(row.effectiveStatus ?? row.status),
     agentId: row.agent ?? null,
     chatKind: row.chatKind ?? null,
     agentProfile: row.agentProfile ?? null,
@@ -349,12 +358,25 @@ function legacyChatIndexStatus(
 }
 
 function chatIndexStatus(chat: PmaChatSummary): ChatIndexRow['status'] {
+  const effective = chatEffectiveStatus(chat.raw.effective_status ?? chat.raw.effectiveStatus ?? chat.status);
+  if (effective) return effective;
   if (pmaLifecycleTokenIsArchived(chat.lifecycleStatus)) return 'archived';
   if (!pmaLifecycleTokenIsActive(chat.lifecycleStatus) && pmaChatArchivedFromRawSignals(chat.raw)) return 'archived';
   if (chat.status === 'waiting') return 'waiting';
   if (chat.status === 'running') return 'running';
   if (chat.status === 'failed' || chat.status === 'blocked' || chat.status === 'invalid') return 'failed';
   return 'idle';
+}
+
+function chatEffectiveStatus(value: unknown): ChatIndexRow['status'] | null {
+  const raw = stringValue(value)?.toLowerCase();
+  if (!raw) return null;
+  if (raw === 'waiting' || raw === 'queued' || raw === 'pending') return 'waiting';
+  if (['running', 'in_progress', 'started', 'claimed', 'delivering'].includes(raw)) return 'running';
+  if (['idle', 'completed', 'complete', 'ok', 'succeeded', 'success', 'delivered'].includes(raw)) return 'idle';
+  if (['failed', 'error', 'blocked', 'invalid'].includes(raw)) return 'failed';
+  if (raw === 'archived') return 'archived';
+  return null;
 }
 
 function runtimeRaw(row: RuntimeProjection | undefined): JsonRecord {

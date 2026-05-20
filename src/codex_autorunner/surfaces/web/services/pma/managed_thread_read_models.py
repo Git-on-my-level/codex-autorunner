@@ -24,6 +24,7 @@ from .....core.orchestration import ActiveWorkSummary, ManagedThreadExecutionSto
 from .....core.orchestration.models import Binding, ThreadTarget
 from .....core.text_utils import _truncate_text
 from .....tickets.files import ticket_is_done
+from ..chat_status_contract import normalize_chat_effective_status
 from .common import normalize_optional_text
 from .managed_thread_scope import (
     ManagedThreadCreateResolution,
@@ -414,10 +415,13 @@ def _serialize_thread_target(
         if active_work_summary is not None
         else None
     )
-    effective_status = (
-        execution_status
-        if execution_status in {"running", "queued"}
-        else target_runtime_status
+    effective_status: str = (
+        normalize_chat_effective_status(
+            execution_status if execution_status in {"running", "queued"} else None
+        )
+        or normalize_chat_effective_status(target_runtime_status)
+        or target_runtime_status
+        or "idle"
     )
     payload = {
         "managed_thread_id": thread.thread_target_id,

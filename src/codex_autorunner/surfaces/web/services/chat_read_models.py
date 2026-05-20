@@ -37,11 +37,11 @@ from ..read_model_contracts import (
     dump_read_model_contract,
     read_model_now,
 )
+from .chat_status_contract import chat_effective_status_from_row
 
 ChatIndexContractFilter = Literal[
     "all", "waiting", "active", "unread", "archived", "ticket_runs", "external"
 ]
-ChatSurfaceStatus = Literal["waiting", "running", "idle", "archived", "failed"]
 SurfaceLiteral = Literal[
     "pma", "file_chat", "telegram", "discord", "app_server", "other"
 ]
@@ -520,37 +520,6 @@ def surface_from_hub_row(row: Mapping[str, Any]) -> SurfaceLiteral:
     return "pma"
 
 
-def _chat_surface_status_from_row(row: Mapping[str, Any]) -> ChatSurfaceStatus:
-    lifecycle = str(row.get("lifecycle") or "").strip().lower()
-    lifecycle_status = str(row.get("lifecycle_status") or "").strip().lower()
-    runtime = str(row.get("runtime_status") or row.get("target_runtime_status") or "")
-    runtime_l = runtime.strip().lower()
-    archive_state = str(row.get("archive_state") or "").strip().lower()
-    if lifecycle_status == "archived" or archive_state == "archived":
-        return "archived"
-    if row.get("managed_thread_id") is None and (
-        lifecycle == "archived" or runtime_l == "archived"
-    ):
-        return "archived"
-    queue_depth = _int_fallback(row.get("queue_depth"), 0)
-    if queue_depth > 0:
-        return "waiting"
-    if runtime_l in {
-        "completed",
-        "complete",
-        "ok",
-        "succeeded",
-        "success",
-        "delivered",
-    }:
-        return "idle"
-    if runtime_l in {"failed", "error", "blocked", "invalid"}:
-        return "failed"
-    if lifecycle == "running" or runtime_l == "running":
-        return "running"
-    return "idle"
-
-
 def hub_chat_row_to_chat_index_row(raw: Mapping[str, Any]) -> ChatIndexRow:
     managed_thread_id = _str_or_none(raw.get("managed_thread_id"))
     row_id = _str_or_none(raw.get("row_id")) or "unknown-chat-row"
@@ -602,7 +571,7 @@ def hub_chat_row_to_chat_index_row(raw: Mapping[str, Any]) -> ChatIndexRow:
         default=None,
     )
 
-    normalized_status = _chat_surface_status_from_row(raw)
+    normalized_status = chat_effective_status_from_row(raw)
     surface_bindings = [
         dict(cast(Mapping[str, Any], surface))
         for surface in raw.get("surface_bindings") or raw.get("surfaces") or []
@@ -634,6 +603,7 @@ def hub_chat_row_to_chat_index_row(raw: Mapping[str, Any]) -> ChatIndexRow:
         runtime_status=_str_or_none(
             raw.get("runtime_status") or raw.get("target_runtime_status")
         ),
+        effective_status=normalized_status,
         archive_state=(
             "archived"
             if _normalize_kind_text(_str_or_none(raw.get("archive_state")))
