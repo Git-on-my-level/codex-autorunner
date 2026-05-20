@@ -3,7 +3,6 @@
   import { withRuntimeBasePath as href } from '$lib/runtime/basePath';
   import { renderMarkdownToHtml } from '$lib/viewModels/contextspace';
   import {
-    compactChatTranscriptCards,
     formatCompactMessageDateTime,
     type ChatTranscriptCard,
     type ChatToolCallCard
@@ -151,7 +150,7 @@
     return `${ref.capsuleId} v${ref.capsuleVersion} · ${ref.scope}`;
   }
 
-  const displayCards = $derived(compactChatTranscriptCards(cards));
+  const displayCards = $derived(cards);
 </script>
 
 {#each displayCards as card (card.id)}
