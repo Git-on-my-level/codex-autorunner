@@ -44,4 +44,15 @@ describe('/automations page', () => {
     expect(source).toContain('preset.ticketBodyTemplate ? renderPresetTemplate(preset.ticketBodyTemplate, selectedRepoId) :');
     expect(source).not.toContain('const PRESETS');
   });
+
+  it('loads the workspace read model before hydrating repo and agent controls', () => {
+    const source = pageSource();
+
+    expect(source).toContain('webApi.hub.getAutomationWorkspace()');
+    expect(source).toContain('targetOptions = automationResult.data.targetOptions');
+    expect(source).toContain('void hydrateAgentCatalog()');
+    expect(source).toContain('Loading agent controls');
+    expect(source).not.toContain('webApi.hub.listRepos()');
+    expect(source).not.toContain('Promise.all([');
+  });
 });
