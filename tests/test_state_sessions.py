@@ -1,11 +1,17 @@
 import json
 import sqlite3
 
+import pytest
+
 from codex_autorunner.core.state import (
+    RunnerLifecycleStatus,
     RunnerState,
     SessionRecord,
+    StateLifecycleError,
     TerminalSessionStore,
     load_state,
+    runner_explicit_status,
+    runner_observed_lock_start,
     save_state,
 )
 
@@ -114,3 +120,104 @@ def test_state_migrates_legacy_singular_model_override(tmp_path):
     encoded = json.loads(row[0])
     assert "autorunner_model_override" not in encoded
     assert encoded["autorunner_model_overrides"] == {"opencode": "zai/legacy"}
+
+
+def test_runner_lifecycle_transitions_are_named_and_validated(tmp_path):
+    state = RunnerState(
+        last_run_id=None,
+        status="idle",
+        last_exit_code=None,
+        last_run_started_at=None,
+        last_run_finished_at=None,
+    )
+
+    running = runner_observed_lock_start(
+        state,
+        runner_pid=123,
+        now="2026-01-01T00:00:00Z",
+    )
+    assert running.status == "running"
+    assert running.runner_pid == 123
+    assert running.last_run_started_at == "2026-01-01T00:00:00Z"
+
+    reset = runner_explicit_status(
+        running,
+        RunnerLifecycleStatus.IDLE,
+        reason="test_reset",
+        last_exit_code=None,
+        last_run_finished_at=None,
+        runner_pid=None,
+    )
+    assert reset.status == "idle"
+    assert reset.runner_pid is None
+
+
+def test_unknown_runner_status_rejected_on_save_and_load(tmp_path):
+    state_path = tmp_path / "state.sqlite3"
+    state = RunnerState(
+        last_run_id=None,
+        status="idle",
+        last_exit_code=None,
+        last_run_started_at=None,
+        last_run_finished_at=None,
+    )
+    save_state(state_path, state)
+
+    state.status = "mystery"
+    with pytest.raises(StateLifecycleError, match="Unknown runner status"):
+        save_state(state_path, state)
+
+    conn = sqlite3.connect(state_path)
+    try:
+        conn.execute("UPDATE runner_state SET status = ? WHERE id = 1", ("mystery",))
+        conn.commit()
+    finally:
+        conn.close()
+
+    with pytest.raises(StateLifecycleError, match="Unknown runner status"):
+        load_state(state_path)
+
+
+def test_terminal_session_store_rejects_closed_to_active_transition(tmp_path):
+    state_path = tmp_path / "state.sqlite3"
+    store = TerminalSessionStore(state_path)
+    store.create_or_touch(
+        session_id="session-1",
+        repo_path="/tmp/example",
+        now="2026-01-01T00:00:00Z",
+    )
+    assert store.touch("session-1", now="2026-01-01T00:00:01Z") is True
+    assert store.close("session-1", now="2026-01-01T00:00:02Z") is True
+
+    with pytest.raises(StateLifecycleError, match="Illegal terminal session"):
+        store.touch("session-1", now="2026-01-01T00:00:03Z")
+
+
+def test_unknown_session_status_rejected_on_read_write_and_lookup(tmp_path):
+    state_path = tmp_path / "state.sqlite3"
+    store = TerminalSessionStore(state_path)
+    store.create_or_touch(
+        session_id="session-1",
+        repo_path="/tmp/example",
+        now="2026-01-01T00:00:00Z",
+    )
+
+    state = load_state(state_path)
+    state.sessions["session-1"].status = "mystery"
+    with pytest.raises(StateLifecycleError, match="Unknown terminal session status"):
+        save_state(state_path, state)
+
+    conn = sqlite3.connect(state_path)
+    try:
+        conn.execute(
+            "UPDATE sessions SET status = ? WHERE session_id = ?",
+            ("mystery", "session-1"),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    with pytest.raises(StateLifecycleError, match="Unknown terminal session status"):
+        load_state(state_path)
+    with pytest.raises(StateLifecycleError, match="Unknown terminal session status"):
+        store.lookup_for_repo("/tmp/example")

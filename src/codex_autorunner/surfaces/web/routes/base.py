@@ -18,6 +18,7 @@ from ....core.config import HubConfig
 from ....core.logging_utils import safe_log
 from ....core.state import (
     SessionRecord,
+    TerminalSessionStatus,
     TerminalSessionStore,
     now_iso,
     persist_session_registry,
@@ -170,9 +171,9 @@ def build_base_routes() -> APIRouter:
             if not record:
                 return
             timestamp = now_iso()
-            record.last_seen_at = timestamp
-            if record.status != "active":
-                record.status = "active"
+            session_registry[session_id] = record.touch(
+                now=timestamp, reason="websocket_activity"
+            )
             session_store.touch(session_id, now=timestamp)
             _mark_dirty()
             _maybe_persist_sessions()
@@ -304,7 +305,7 @@ def build_base_routes() -> APIRouter:
                         repo_path=repo_path,
                         created_at=timestamp,
                         last_seen_at=timestamp,
-                        status="active",
+                        status=TerminalSessionStatus.ACTIVE.value,
                         agent=session_agent,
                     )
                     session_store.create_or_touch(
@@ -337,7 +338,7 @@ def build_base_routes() -> APIRouter:
                         repo_path=repo_path,
                         created_at=timestamp,
                         last_seen_at=timestamp,
-                        status="active",
+                        status=TerminalSessionStatus.ACTIVE.value,
                         agent=session_agent,
                     )
                     session_store.create_or_touch(
@@ -397,8 +398,10 @@ def build_base_routes() -> APIRouter:
                                 async with terminal_lock:
                                     record = session_registry.get(session_id)
                                     if record:
-                                        record.status = "closed"
-                                        record.last_seen_at = now_iso()
+                                        session_registry[session_id] = record.close(
+                                            now=now_iso(),
+                                            reason="pty_exit",
+                                        )
                                 _mark_dirty()
                             notifier = getattr(engine, "notifier", None)
                             if notifier:
