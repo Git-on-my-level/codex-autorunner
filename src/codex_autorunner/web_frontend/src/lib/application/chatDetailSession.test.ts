@@ -67,7 +67,7 @@ describe('chat detail session', () => {
     });
 
     expect(command.state.activeChatId).toBe('deep-linked-chat');
-    expect(command.refresh).toBeNull();
+    expect(command.runtime).toBeNull();
     expect(command.syncUrl).toBe(false);
   });
 
