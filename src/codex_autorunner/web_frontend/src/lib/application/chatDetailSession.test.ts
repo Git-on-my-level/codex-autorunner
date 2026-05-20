@@ -4,6 +4,7 @@ import type { PmaChatSummary } from '$lib/viewModels/domain';
 import type { ChatListEntry } from '$lib/viewModels/pmaChat';
 import {
   activateChatDetailFromUrl,
+  activateRequestedChatFromRows,
   clearCommittedDraftPlaceholderIfPersisted,
   commitLocalDraftChat,
   initialChatDetailSessionState,
@@ -51,6 +52,24 @@ describe('chat detail session', () => {
     expect(command.state.loadingActive).toBe(false);
     expect(command.state.activeError).toBe(error);
     expect(command.refresh).toBeNull();
+  });
+
+  it('does not replace a deep-linked chat with the first loaded row while the requested row is absent', () => {
+    const state = {
+      ...initialChatDetailSessionState(),
+      activeChatId: 'deep-linked-chat',
+      detailMode: 'detail' as const
+    };
+
+    const command = activateRequestedChatFromRows(state, {
+      loadedChats: [chat({ id: 'visible-chat' })],
+      requestedChatId: 'deep-linked-chat',
+      hasCachedDetail: () => false
+    });
+
+    expect(command.state.activeChatId).toBe('deep-linked-chat');
+    expect(command.refresh).toBeNull();
+    expect(command.syncUrl).toBe(false);
   });
 
   it('chooses a sibling replacement when the active chat is archived out of the active window', () => {
