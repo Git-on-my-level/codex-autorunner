@@ -13,23 +13,20 @@
   import { confirmDialog } from '$lib/components/confirmDialog';
   import { webApi, type ApiError, type JsonRecord, type PmaQueuedTurn } from '$lib/api/client';
   import {
-    chatIndexSession,
     invalidateReadModelTags,
     readModelEntityStore,
     readModelEntityTags,
-    type ReadModelLoaderResult,
     type ChatIndexWindowRequest,
     canonicalChatIndexWindowKey,
-    selectRepoSummaries,
     selectPmaArtifacts,
     selectPmaChats,
     selectPmaProgress,
     selectPmaQueue,
     selectChatTranscript,
     selectTicketRunGroups,
-    selectWorktreeSummaries,
     selectReadMarkers
   } from '$lib/data';
+  import { chatIndexSession } from '$lib/data/chatIndexSession';
   import {
     isOptimisticQueuedTurn,
     progressWithLiveElapsed,
@@ -41,30 +38,25 @@
     type ChatDetailLiveProjectionState
   } from '$lib/application/chatDetailLiveProjection';
   import {
-    activateChatDetailFromUrl,
-    activateRequestedChatFromRows,
-    archivedFilterForSelectedChat,
     chatListVirtualKey as chatListVirtualKeyForPins,
     chatSummaryForSessionId,
-    clearCommittedDraftPlaceholderIfPersisted,
     initialChatDetailSessionState,
     isLocalDraftChatId,
-    loadPinnedChats,
     markActiveSummaryRead,
     markChatGroupRead,
     markSessionChatRead,
     markVisibleChatsRead,
     pinAwareChatRowKey as pinAwareChatRowKeyForPins,
-    requestedChatDetailFromUrl,
-    replacementForArchivedActiveChat,
     savePinnedChats,
-    selectChatDetail,
     sortEntriesForPinnedChats,
     startLocalDraftChat,
     togglePinnedChatId,
-    type ChatDetailSelectionCommand,
     type ChatDetailSessionState
   } from '$lib/application/chatDetailSession';
+  import {
+    createChatDetailPageController,
+    type ChatDetailPageSupportData
+  } from '$lib/application/chatDetailPageController';
   import { withRuntimeBasePath as href } from '$lib/runtime/basePath';
   import {
     repoContextspaceRoute,
@@ -157,9 +149,6 @@
   const COMPACT_SUMMARY_PROMPT =
     'Summarize the conversation so far into a concise context block I can paste into a new thread. Include goals, constraints, decisions, and current state.';
   let readModelState = $state(readModelEntityStore.snapshot());
-  let unsubscribeReadModels: (() => void) | null = null;
-  let unsubscribeChatIndexSession: (() => void) | null = null;
-  let chatIndexFilterRefreshTimer: number | null = null;
   let activeChatId = $state<string | null>(null);
   // Unsent new chats are page-local only: `localDraftChat` drives the composer until
   // the first send creates the managed thread. They are intentionally omitted from
@@ -247,6 +236,46 @@
     readModelStore: readModelEntityStore,
     getChatSummary: (chatId) => chatSummaryForId(chatId),
     onStateChange: writeLiveProjectionState
+  });
+  const pageController = createChatDetailPageController({
+    readModelStore: readModelEntityStore,
+    chatIndexSession,
+    liveProjection,
+    supportApi: {
+      listFiles: webApi.pma.listFiles,
+      listAgents: webApi.pma.listAgents,
+      repoWorktreeTopology: webApi.readModels.repoWorktreeTopology,
+      repoWorktreeRuntime: webApi.readModels.repoWorktreeRuntime
+    },
+    readSessionState: readChatDetailSessionState,
+    writeSessionState: writeChatDetailSessionState,
+    onReadModelState: (state) => {
+      readModelState = state;
+    },
+    onLoadingChats: (value) => {
+      loadingChats = value;
+    },
+    onChatError: (error) => {
+      chatError = error;
+    },
+    onFilterArchived: () => {
+      filter = 'archived';
+    },
+    onClockTick: (nowMs) => {
+      clockNowMs = nowMs;
+    },
+    onPinnedChatsLoaded: (pinned) => {
+      pinnedChatIds = pinned;
+    },
+    onInitialDraft: (value) => {
+      draft = value;
+    },
+    onCreateInitialDraft: () => {
+      pendingInitialDraftCreate = true;
+    },
+    onSupportDataLoaded: applyInitialSupportingData,
+    onSyncSelectors: syncSelectorsToActiveChat,
+    onMarkRead: markActiveChatRead
   });
   let fileInput: HTMLInputElement | null = $state(null);
   let imageInput: HTMLInputElement | null = $state(null);
@@ -356,7 +385,6 @@
     slashSuggestions;
     slashSelectedIndex = Math.min(slashSelectedIndex, Math.max(slashSuggestions.length - 1, 0));
   });
-  let activeClockInterval: number | null = null;
   let clockNowMs = $state(Date.now());
   let lastScrolledChatId: string | null = null;
   let lastScrolledCardCount = 0;
@@ -663,60 +691,24 @@
     removeDocumentChatPointerCapture = () => {
       document.removeEventListener('pointerdown', captureDocumentChatPointer, true);
     };
-    unsubscribeReadModels = readModelEntityStore.subscribe((state) => {
-      const replacementChatId = replacementForActiveChat(readModelState, state);
-      readModelState = state;
-      if (state.chatWindows[canonicalChatIndexWindowKey(currentChatIndexRequest)] || state.chatIndexCursor || state.chatOrder.length > 0) {
-        loadingChats = false;
-        chatError = null;
-        activateRequestedChatFromCurrentRows();
-      }
-      if (replacementChatId) void selectChat(replacementChatId);
-    });
-    unsubscribeChatIndexSession = chatIndexSession.state.subscribe((session) => {
-      if (session.status === 'loading' && !readModelEntityStore.snapshot().chatWindows[canonicalChatIndexWindowKey(currentChatIndexRequest)]) {
-        loadingChats = true;
-      }
-      if (session.error) {
-        chatError = session.error;
-        loadingChats = false;
-      }
-    });
-    chatIndexSession.setCompanionRequests([ticketRunGroupRequest]);
-    chatIndexSession.start();
     readModelEntityStore.setReadMarkers(loadLastSeenMap());
-    pinnedChatIds = loadPinnedChats();
-    const initialDraft = page.url.searchParams.get('draft');
-    draft = initialDraft ?? draft;
-    pendingInitialDraftCreate = Boolean(initialDraft && !requestedDetailFromUrl());
-    loadingChats = !hasChatIndexProjection(readModelEntityStore.snapshot());
-    if (!loadingChats) activateRequestedChatFromCurrentRows();
-    void loadInitialSupportingData(
-      webApi.pma.listFiles(),
-      webApi.pma.listAgents(),
-      webApi.readModels.repoWorktreeTopology('all', 50),
-      webApi.readModels.repoWorktreeRuntime('all', 50)
-    );
-  });
-
-  $effect(() => {
-    if (progress?.status === 'running') startActiveClock();
-    else stopActiveClock();
-  });
-
-  $effect(() => {
-    const requestedDetail = requestedDetailFromUrl();
-    const command = activateChatDetailFromUrl(readChatDetailSessionState(), {
-      detailId: requestedDetail,
-      chats: requestedDetail ? chats : [],
-      hasCachedDetail,
-      activeDetailLoadResult
+    pageController.mount({
+      route: currentRouteSnapshot(),
+      currentRequest: currentChatIndexRequest,
+      ticketRunGroupRequest
     });
-    applyChatDetailSelectionCommand(command);
   });
 
   $effect(() => {
-    writeChatDetailSessionState(clearCommittedDraftPlaceholderIfPersisted(readChatDetailSessionState(), persistedChats));
+    pageController.setProgressStatus(progress?.status);
+  });
+
+  $effect(() => {
+    pageController.setRoute(currentRouteSnapshot());
+  });
+
+  $effect(() => {
+    pageController.clearCommittedDraftPlaceholder(persistedChats);
   });
 
   $effect(() => {
@@ -724,14 +716,7 @@
   });
 
   $effect(() => {
-    const request = currentChatIndexRequest;
-    const snapshot = readModelEntityStore.snapshot();
-    loadingChats = !snapshot.chatWindows[canonicalChatIndexWindowKey(request)] && !hasChatIndexProjection(snapshot);
-    if (chatIndexFilterRefreshTimer) window.clearTimeout(chatIndexFilterRefreshTimer);
-    chatIndexFilterRefreshTimer = window.setTimeout(() => {
-      chatIndexFilterRefreshTimer = null;
-      void chatIndexSession.refresh(request);
-    }, 180);
+    pageController.setIndexRequest(currentChatIndexRequest);
   });
 
   $effect(() => {
@@ -760,28 +745,8 @@
 
   onDestroy(() => {
     removeDocumentChatPointerCapture?.();
-    unsubscribeReadModels?.();
-    unsubscribeChatIndexSession?.();
-    chatIndexSession.stop();
-    chatIndexSession.setCompanionRequests([]);
-    if (chatIndexFilterRefreshTimer) window.clearTimeout(chatIndexFilterRefreshTimer);
-    stopActiveClock();
-    closeStream();
+    pageController.destroy();
   });
-
-  function startActiveClock(): void {
-    if (activeClockInterval !== null) return;
-    clockNowMs = Date.now();
-    activeClockInterval = window.setInterval(() => {
-      clockNowMs = Date.now();
-    }, 1000);
-  }
-
-  function stopActiveClock(): void {
-    if (activeClockInterval === null) return;
-    window.clearInterval(activeClockInterval);
-    activeClockInterval = null;
-  }
 
   $effect(() => {
     const cardCount = activeCards.length;
@@ -835,13 +800,6 @@
     activeError = state.activeError;
   }
 
-  function applyChatDetailSelectionCommand(command: ChatDetailSelectionCommand): void {
-    if (command.runtime) void liveProjection.activate(command.runtime.chatId, { quiet: command.runtime.quiet });
-    writeChatDetailSessionState(command.state);
-    if (command.syncSelectors) syncSelectorsToActiveChat();
-    if (command.markRead) markActiveChatRead();
-  }
-
   function writeLiveProjectionState(state: ChatDetailLiveProjectionState): void {
     loadingActive = state.loadingActive;
     activeError = state.activeError;
@@ -849,81 +807,38 @@
     streamError = state.streamError;
   }
 
-  function activateRequestedChatFromCurrentRows(): void {
-    const loadedChats = selectPmaChats(readModelEntityStore.snapshot(), currentChatIndexRequest);
-    const requestedChat = page.params.chatId ?? page.url.searchParams.get('chat');
-    const command = activateRequestedChatFromRows(readChatDetailSessionState(), {
-      loadedChats,
-      requestedChatId: requestedChat,
-      hasCachedDetail
-    });
-    applyChatDetailSelectionCommand(command);
-    if (archivedFilterForSelectedChat(loadedChats, command.state.activeChatId)) filter = 'archived';
-  }
-
-  function replacementForActiveChat(
-    previousState: typeof readModelState,
-    nextState: typeof readModelState
-  ): string | null {
-    return replacementForArchivedActiveChat(
-      selectPmaChats(previousState, currentChatIndexRequest),
-      selectPmaChats(nextState, currentChatIndexRequest),
-      activeChatId
-    );
-  }
-
-  async function loadInitialSupportingData(
-    artifactPromise: ReturnType<typeof webApi.pma.listFiles>,
-    agentPromise: ReturnType<typeof webApi.pma.listAgents>,
-    topologyPromise: ReturnType<typeof webApi.readModels.repoWorktreeTopology>,
-    runtimePromise: ReturnType<typeof webApi.readModels.repoWorktreeRuntime>
-  ): Promise<void> {
-    const [artifactResult, agentResult, topologyResult, runtimeResult] = await Promise.all([
-      artifactPromise,
-      agentPromise,
-      topologyPromise,
-      runtimePromise
-    ]);
-    if (artifactResult.ok) readModelEntityStore.setPmaArtifacts('__global__', artifactResult.data);
-    if (topologyResult.ok) readModelEntityStore.applyRepoWorktreeTopologySnapshot(topologyResult.data);
-    if (runtimeResult.ok) readModelEntityStore.applyRepoWorktreeRuntimeSnapshot(runtimeResult.data);
-    const scopeState = readModelEntityStore.snapshot();
-    scopeOptions = buildPmaChatScopeOptions(
-      topologyResult.ok ? selectRepoSummaries(scopeState) : [],
-      topologyResult.ok ? selectWorktreeSummaries(scopeState) : []
-    );
+  function applyInitialSupportingData(data: ChatDetailPageSupportData): void {
+    scopeOptions = data.scopeOptions;
     if (!scopeOptions.some((scope) => scope.id === selectedScopeId)) {
       selectedScopeId = 'local';
       selectedScopeSource = 'default_hub';
     }
     if (!canStartCodingAgentChat) newChatKind = 'pma';
-    if (agentResult.ok) {
-      agents = agentResult.data.agents;
-      const defaults = agentResult.data.defaults;
-      const defaultAgent =
-        typeof defaults.agent === 'string' && defaults.agent.trim()
-          ? defaults.agent.trim().toLowerCase()
-          : agentResult.data.default;
-      const defaultProfile =
-        typeof defaults.profile === 'string' && defaults.profile.trim() ? defaults.profile.trim() : '';
-      configuredDefaultAgentId =
-        typeof defaultAgent === 'string' && defaultAgent.trim() ? defaultAgent.trim().toLowerCase() : undefined;
-      configuredDefaultProfile = defaultProfile;
-      if (!activeChat?.agentId) {
-        const resolved = resolvePmaChatSelectorsForActiveChat(
-          activeChat,
-          agents,
-          configuredDefaultAgentId,
-          configuredDefaultProfile
-        );
-        if (resolved.mode === 'defaults') {
-          selectedAgent = resolved.agentId;
-          selectedProfile = resolved.agentProfile;
-          selectedReasoning = resolved.reasoning;
-        }
+    agents = data.agents;
+    const defaults = data.defaults;
+    const defaultAgent =
+      typeof defaults.agent === 'string' && defaults.agent.trim()
+        ? defaults.agent.trim().toLowerCase()
+        : data.defaultAgent;
+    const defaultProfile =
+      typeof defaults.profile === 'string' && defaults.profile.trim() ? defaults.profile.trim() : '';
+    configuredDefaultAgentId =
+      typeof defaultAgent === 'string' && defaultAgent.trim() ? defaultAgent.trim().toLowerCase() : undefined;
+    configuredDefaultProfile = defaultProfile;
+    if (!activeChat?.agentId) {
+      const resolved = resolvePmaChatSelectorsForActiveChat(
+        activeChat,
+        agents,
+        configuredDefaultAgentId,
+        configuredDefaultProfile
+      );
+      if (resolved.mode === 'defaults') {
+        selectedAgent = resolved.agentId;
+        selectedProfile = resolved.agentProfile;
+        selectedReasoning = resolved.reasoning;
       }
-      void loadModels(selectedAgent, activeChat?.model ?? selectedModel);
     }
+    void loadModels(selectedAgent, activeChat?.model ?? selectedModel);
     applyNewChatQueryParam();
     if (pendingInitialDraftCreate && !page.url.searchParams.get('new')) {
       pendingInitialDraftCreate = false;
@@ -1031,9 +946,7 @@
   }
 
   async function selectChat(chatId: string): Promise<void> {
-    const cached = hasCachedDetail(chatId);
-    const command = selectChatDetail(readChatDetailSessionState(), chatId, { cached, syncUrl: true });
-    applyChatDetailSelectionCommand(command);
+    await pageController.selectChat(chatId, { syncUrl: true });
     const urlPromise = syncDetailUrl(chatId);
     await urlPromise;
   }
@@ -1065,34 +978,6 @@
     void selectChat(targetChatId);
   }
 
-  function requestedDetailFromUrl(): string | null {
-    return requestedChatDetailFromUrl(page.params.chatId, page.url.searchParams);
-  }
-
-  async function activateDetailFromUrl(detailId: string): Promise<void> {
-    applyChatDetailSelectionCommand(
-      activateChatDetailFromUrl(readChatDetailSessionState(), {
-        detailId,
-        chats,
-        hasCachedDetail,
-        activeDetailLoadResult
-      })
-    );
-  }
-
-  async function selectChatWithoutUrl(chatId: string): Promise<void> {
-    const cached = hasCachedDetail(chatId);
-    const loaderResult = activeDetailLoadResult(chatId);
-    applyChatDetailSelectionCommand(
-      selectChatDetail(readChatDetailSessionState(), chatId, {
-        cached,
-        loaderOwnsInitialDetail: Boolean(loaderResult && loaderResult.status !== 'cold'),
-        activeError: loaderResult?.status === 'error' ? loaderResult.error : null,
-        syncUrl: false
-      })
-    );
-  }
-
   function markActiveChatRead(): void {
     const next = markSessionChatRead(lastSeenMap, activeChatId, chats, localDraftChat);
     if (next === lastSeenMap) return;
@@ -1114,7 +999,7 @@
       readModelEntityTags.chatIndex,
       ...chatIds.map((chatId) => readModelEntityTags.chat(chatId))
     ]);
-    await chatIndexSession.refresh();
+    await pageController.refreshIndex();
   }
 
   async function retireChat(chatId: string, options: { confirmed?: boolean } = {}): Promise<void> {
@@ -1200,33 +1085,24 @@
   }
 
   async function refreshActive(chatId: string, options: { quiet?: boolean } = {}): Promise<void> {
-    await liveProjection.refresh(chatId, options);
+    await pageController.refreshActive(chatId, options);
   }
 
   function closeStream(): void {
-    liveProjection.close();
-  }
-
-  function hasCachedDetail(chatId: string): boolean {
-    const state = readModelEntityStore.snapshot();
-    return Boolean(
-      state.chatTranscripts[chatId]?.order.length ||
-      state.pmaProgress[chatId] ||
-      state.pmaQueues[chatId]?.length ||
-      state.timelines[chatId]?.order.length ||
-      state.chatDetails[chatId]?.thread
-    );
-  }
-
-  function activeDetailLoadResult(chatId: string): ReadModelLoaderResult | null {
-    const data = safePageData();
-    if (data?.chatId !== chatId) return null;
-    return data.activeDetail ?? null;
+    pageController.closeStream();
   }
 
   function chatIndexLoadError(): ApiError | null {
     const data = safePageData();
     return data?.chatIndex?.status === 'error' ? data.chatIndex.error : null;
+  }
+
+  function currentRouteSnapshot() {
+    return {
+      chatId: page.params.chatId,
+      searchParams: page.url.searchParams,
+      data: safePageData()
+    };
   }
 
   function safePageData(): ChatRouteLoadData | undefined {
@@ -1237,14 +1113,8 @@
     }
   }
 
-  function hasChatIndexProjection(state: typeof readModelState): boolean {
-    return Boolean(state.chatIndexCursor || state.chatOrder.length > 0);
-  }
-
   function retryStream(): void {
-    if (!activeChatId) return;
-    if (isLocalDraftChatId(activeChatId)) return;
-    liveProjection.retry(activeChatId);
+    pageController.retryStream(activeChatId);
   }
 
   function syncSelectorsToActiveChat(): void {
@@ -2053,7 +1923,7 @@
         <div class="state-panel error">
           <strong>Could not load chats</strong>
           <p>{visibleChatError.message}</p>
-          <button type="button" onclick={() => void chatIndexSession.refresh()}>Retry</button>
+          <button type="button" onclick={() => void pageController.refreshIndex()}>Retry</button>
         </div>
       {:else}
         <VirtualList

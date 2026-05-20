@@ -216,10 +216,16 @@ describe('/chats page', () => {
 
   it('registers ticket-run aggregate refresh as a chat-index companion window', () => {
     const source = chatDetailPageSource();
+    const controllerSource = readFileSync(
+      fileURLToPath(new URL('../../lib/application/chatDetailPageController.ts', import.meta.url)),
+      'utf8'
+    );
 
-    expect(source).toContain('chatIndexSession.setCompanionRequests([ticketRunGroupRequest])');
-    expect(source).toMatch(/chatIndexSession\.setCompanionRequests\(\[ticketRunGroupRequest\]\);[\s\S]*chatIndexSession\.start\(\);/);
-    expect(source).toMatch(/chatIndexSession\.stop\(\);[\s\S]*chatIndexSession\.setCompanionRequests\(\[\]\);/);
+    expect(source).toContain('ticketRunGroupRequest');
+    expect(source).toContain('createChatDetailPageController');
+    expect(controllerSource).toContain('this.deps.chatIndexSession.setCompanionRequests([this.ticketRunGroupRequest])');
+    expect(controllerSource).toMatch(/setCompanionRequests\(\[this\.ticketRunGroupRequest\]\);[\s\S]*this\.deps\.chatIndexSession\.start\(\);/);
+    expect(controllerSource).toMatch(/this\.deps\.chatIndexSession\.stop\(\);[\s\S]*this\.deps\.chatIndexSession\.setCompanionRequests\(\[\]\);/);
   });
 
   it('does not render legacy ticket-run grouping when current snapshots have no backend groups', () => {
