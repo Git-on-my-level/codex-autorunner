@@ -34,7 +34,6 @@ SCHEDULE_STATES = frozenset({SCHEDULE_STATE_ACTIVE, SCHEDULE_STATE_CANCELLED})
 SUBSCRIPTION_ACTIVE_STATES = frozenset({SUBSCRIPTION_STATE_ACTIVE})
 TIMER_ACTIVE_STATES = frozenset({TIMER_STATE_PENDING})
 WAKEUP_ACTIVE_STATES = frozenset({WAKEUP_STATE_PENDING, WAKEUP_STATE_QUEUED})
-SCHEDULE_ACTIVE_STATES = frozenset({SCHEDULE_STATE_ACTIVE})
 
 
 def _require_state(state: str, *, lifecycle: str, valid_states: frozenset[str]) -> str:
@@ -84,8 +83,3 @@ def timer_is_active_for_purge(state: str) -> bool:
 def wakeup_is_active_for_purge(state: str) -> bool:
     current = _require_state(state, lifecycle="wakeup", valid_states=WAKEUP_STATES)
     return current in WAKEUP_ACTIVE_STATES
-
-
-def schedule_is_active_for_purge(state: str) -> bool:
-    current = _require_state(state, lifecycle="schedule", valid_states=SCHEDULE_STATES)
-    return current in SCHEDULE_ACTIVE_STATES

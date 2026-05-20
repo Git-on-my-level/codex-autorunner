@@ -9,7 +9,6 @@ from typing import Any, Optional, cast
 from ...core.logging_utils import log_event
 from ...core.orchestration.runtime_turn_terminal_state import (
     classify_runtime_status,
-    extract_runtime_status_value,
     runtime_status_is_terminal,
     runtime_status_prefers_completion_settle,
 )
@@ -766,10 +765,6 @@ def final_message_for_result(state: TurnState, *, policy: str) -> str:
     if policy == "all_agent_messages":
         return "\n\n".join(cleaned)
     return cleaned[-1]
-
-
-def extract_status_value(value: Any) -> Optional[str]:
-    return extract_runtime_status_value(value)
 
 
 def status_is_terminal(status: Any) -> bool:
