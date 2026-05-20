@@ -1,4 +1,8 @@
 import { runtimeBasePath, withRuntimeBasePath } from '$lib/runtime/basePath';
+import {
+  alwaysLiveStreamVisibilityPolicy,
+  type StreamVisibilityPolicy
+} from '$lib/runtime/streamVisibilityPolicy';
 import { parseJsonSseFrame, type SseEvent, type StreamSubscription } from '$lib/api/streaming';
 
 export type ReadModelStreamStatus = 'idle' | 'connecting' | 'connected' | 'interrupted' | 'closed';
@@ -25,6 +29,8 @@ export type ReadModelStreamOptions<T> = {
   reconnectBaseMs?: number;
   reconnectMaxMs?: number;
   withCredentials?: boolean;
+  visibilityPolicy?: StreamVisibilityPolicy | null;
+  onResume?: () => void;
 };
 
 export class ReadModelStreamManager<T> implements StreamSubscription {
@@ -32,20 +38,27 @@ export class ReadModelStreamManager<T> implements StreamSubscription {
   private closed = false;
   private attempt = 0;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  private unsubscribeVisibility: (() => void) | null = null;
 
   constructor(private readonly options: ReadModelStreamOptions<T>) {}
 
   open(): void {
     this.closed = false;
+    this.subscribeVisibility();
+    if (this.shouldSuspendForHiddenTab()) {
+      this.options.onStatus?.('interrupted');
+      return;
+    }
     this.connect();
   }
 
   close(): void {
+    if (this.closed && !this.source && !this.reconnectTimer) return;
     this.closed = true;
-    if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
-    this.reconnectTimer = null;
-    this.source?.close();
-    this.source = null;
+    this.clearReconnectTimer();
+    this.closeSource();
+    this.unsubscribeVisibility?.();
+    this.unsubscribeVisibility = null;
     this.options.onStatus?.('closed');
   }
 
@@ -59,6 +72,8 @@ export class ReadModelStreamManager<T> implements StreamSubscription {
 
   private connect(): void {
     if (this.closed) return;
+    if (this.shouldSuspendForHiddenTab()) return;
+    this.closeSource();
     this.options.onStatus?.('connecting');
     const currentCursor = this.cursor();
     const params = new URLSearchParams();
@@ -80,15 +95,17 @@ export class ReadModelStreamManager<T> implements StreamSubscription {
     for (const eventType of this.options.eventTypes) source.addEventListener(eventType, handle);
     source.addEventListener('message', handle);
     source.addEventListener('error', (event) => {
+      if (source !== this.source) return;
       this.options.onStatus?.('interrupted');
       this.options.onError?.(event);
-      source.close();
+      this.closeSource();
       if (!this.closed) this.scheduleReconnect();
     });
   }
 
   private scheduleReconnect(): void {
-    if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
+    this.clearReconnectTimer();
+    if (this.shouldSuspendForHiddenTab()) return;
     const base = this.options.reconnectBaseMs ?? 500;
     const max = this.options.reconnectMaxMs ?? 8000;
     const delay = Math.min(max, base * 2 ** this.attempt);
@@ -97,6 +114,42 @@ export class ReadModelStreamManager<T> implements StreamSubscription {
       this.reconnectTimer = null;
       this.connect();
     }, delay);
+  }
+
+  private subscribeVisibility(): void {
+    if (this.unsubscribeVisibility) return;
+    const policy = this.visibilityPolicy();
+    if (!policy.suspendWhenHidden) return;
+    this.unsubscribeVisibility = policy.subscribe((visible) => {
+      if (this.closed) return;
+      if (!visible) {
+        this.clearReconnectTimer();
+        this.closeSource();
+        this.options.onStatus?.('interrupted');
+        return;
+      }
+      this.options.onResume?.();
+      this.connect();
+    });
+  }
+
+  private shouldSuspendForHiddenTab(): boolean {
+    const policy = this.visibilityPolicy();
+    return policy.suspendWhenHidden && !policy.isVisible();
+  }
+
+  private visibilityPolicy(): StreamVisibilityPolicy {
+    return this.options.visibilityPolicy ?? alwaysLiveStreamVisibilityPolicy;
+  }
+
+  private clearReconnectTimer(): void {
+    if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
+    this.reconnectTimer = null;
+  }
+
+  private closeSource(): void {
+    this.source?.close();
+    this.source = null;
   }
 }
 

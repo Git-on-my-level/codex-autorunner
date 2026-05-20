@@ -8,6 +8,7 @@ import {
   type ProjectionCursor,
   type TicketRunGroup
 } from '$lib/api/readModelContracts';
+import type { StreamVisibilityPolicy } from '$lib/runtime/streamVisibilityPolicy';
 import { ReadModelEntityStore, selectChatIndexWindowView } from './readModelStore';
 import { selectPmaChats } from './readModelViewModels';
 import { createChatIndexSession } from './chatIndexSession';
@@ -228,6 +229,34 @@ describe('chat index session', () => {
       key: 'chat.index.entity',
       path: '/hub/read-models/chats/patches?filter=all'
     }));
+  });
+
+  it('opts the chat-index entity stream into visibility suspension and repairs on resume', async () => {
+    const store = new ReadModelEntityStore();
+    const client = mockClient();
+    const visibilityPolicy = fakeVisibilityPolicy();
+    const createdStreamOptions: ReadModelStreamOptions<ChatIndexPatchEvent>[] = [];
+    const streamFactory = vi.fn((options: ReadModelStreamOptions<ChatIndexPatchEvent>) => {
+      createdStreamOptions.push(options);
+      return {
+        open: vi.fn(),
+        close: vi.fn(),
+        cursor: vi.fn(() => null),
+        resetCursor: vi.fn()
+      } as unknown as ReadModelStreamManager<ChatIndexPatchEvent>;
+    }) as ReturnType<typeof vi.fn> & ChatIndexStreamFactory;
+    const session = createChatIndexSession({ client, store, streamFactory, visibilityPolicy });
+
+    session.start();
+    await session.refresh({ filter: 'all', limit: 50 });
+    const streamOptions = createdStreamOptions[0];
+    expect(streamOptions?.visibilityPolicy).toBe(visibilityPolicy);
+
+    streamOptions?.onResume?.();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(client.chatIndex).toHaveBeenCalledTimes(2);
+    expect(client.chatIndex).toHaveBeenNthCalledWith(2, { filter: 'all', limit: 50 });
   });
 
   it('replaces the chat-index entity stream exactly once when activation changes its canonical request', async () => {
@@ -538,6 +567,14 @@ function mockStreamFactory(): ReturnType<typeof vi.fn> & ChatIndexStreamFactory 
     cursor: vi.fn(() => null),
     resetCursor: vi.fn()
   } as unknown as ReadModelStreamManager<ChatIndexPatchEvent>)) as ReturnType<typeof vi.fn> & ChatIndexStreamFactory;
+}
+
+function fakeVisibilityPolicy(): StreamVisibilityPolicy {
+  return {
+    suspendWhenHidden: true,
+    isVisible: () => true,
+    subscribe: () => () => {}
+  };
 }
 
 function chatPatchEvent(sequence: number, row: ChatIndexRow): ChatIndexPatchEvent {
