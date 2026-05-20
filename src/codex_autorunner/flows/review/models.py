@@ -62,8 +62,8 @@ class ReviewState(BaseModel):
             return ReviewStatus.IDLE
         try:
             return ReviewStatus(raw)
-        except ValueError:
-            return ReviewStatus.IDLE
+        except ValueError as exc:
+            raise ValueError(f"Unknown review status: {raw}") from exc
 
     @field_validator("prompt_kind", mode="before")
     @classmethod
@@ -98,55 +98,6 @@ class ReviewState(BaseModel):
                 "session_id": session_id,
                 "turn_id": turn_id,
                 "updated_at": now_iso(),
-            }
-        )
-
-    def request_stop(self) -> "ReviewState":
-        updates: dict[str, object] = {"stop_requested": True}
-        if self.status in ACTIVE_REVIEW_STATUSES:
-            updates["status"] = ReviewStatus.STOPPING
-            updates["updated_at"] = now_iso()
-        return self.model_copy(update=updates)
-
-    def recover_after_restart(self) -> "ReviewState":
-        return self.model_copy(
-            update={
-                "status": ReviewStatus.INTERRUPTED,
-                "last_error": "Recovered from restart",
-                "stop_requested": False,
-                "updated_at": now_iso(),
-            }
-        )
-
-    def mark_failed(self, message: str) -> "ReviewState":
-        now = now_iso()
-        return self.model_copy(
-            update={
-                "status": ReviewStatus.FAILED,
-                "last_error": message,
-                "finished_at": now,
-                "updated_at": now,
-            }
-        )
-
-    def mark_stopped(self) -> "ReviewState":
-        now = now_iso()
-        return self.model_copy(
-            update={
-                "status": ReviewStatus.STOPPED,
-                "finished_at": now,
-                "updated_at": now,
-            }
-        )
-
-    def mark_completed(self, *, scratchpad_bundle_path: Optional[str]) -> "ReviewState":
-        now = now_iso()
-        return self.model_copy(
-            update={
-                "status": ReviewStatus.COMPLETED,
-                "scratchpad_bundle_path": scratchpad_bundle_path,
-                "finished_at": now,
-                "updated_at": now,
             }
         )
 
