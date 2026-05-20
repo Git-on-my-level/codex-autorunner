@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { render } from 'svelte/server';
 import { describe, expect, it } from 'vitest';
 import TicketViews from './TicketViews.svelte';
@@ -23,6 +25,21 @@ const codexModels = [
 ];
 
 describe('TicketViews', () => {
+  it('keeps current-ticket chat preview stream ownership in the projection service', () => {
+    const componentSource = readFileSync(
+      fileURLToPath(new URL('./CurrentTicketChatStream.svelte', import.meta.url)),
+      'utf8'
+    );
+    const projectionSource = readFileSync(
+      fileURLToPath(new URL('../application/currentTicketChatPreviewProjection.ts', import.meta.url)),
+      'utf8'
+    );
+
+    expect(componentSource).toContain('createCurrentTicketChatPreviewProjection');
+    expect(componentSource).not.toContain('openChatTranscriptEventSource');
+    expect(projectionSource).toContain('openChatTranscriptEventSource');
+  });
+
   it('renders ticket rows without exposing raw markdown as the only representation', () => {
     const list = buildTicketListViewModel({
       tickets: [mockTicketSummary],
