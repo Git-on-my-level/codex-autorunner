@@ -252,8 +252,7 @@ describe('chat index session', () => {
     const streamOptions = createdStreamOptions[0];
     expect(streamOptions?.visibilityPolicy).toBe(visibilityPolicy);
 
-    streamOptions?.onResume?.();
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await streamOptions?.onResume?.();
 
     expect(client.chatIndex).toHaveBeenCalledTimes(2);
     expect(client.chatIndex).toHaveBeenNthCalledWith(2, { filter: 'all', limit: 50 });

@@ -48,6 +48,33 @@ describe('ChatDetailPageController', () => {
     expect(harness.supportData.at(-1)?.agents).toEqual([{ id: 'codex' }]);
   });
 
+  it('still applies support-data side effects when agent loading fails', async () => {
+    const createInitialDraft = vi.fn();
+    const harness = createHarness({
+      onCreateInitialDraft: createInitialDraft,
+      supportApi: {
+        ...supportApi(),
+        listAgents: async (): Promise<ApiResult<{ agents: JsonRecord[]; defaults: JsonRecord; default: string }>> =>
+          ({ ok: false, error: { kind: 'http', status: 500, code: 'agents_failed', message: 'agents failed' } })
+      }
+    });
+
+    harness.controller.mount({
+      route: { ...route(), searchParams: new URLSearchParams('draft=hello') },
+      currentRequest: { filter: 'all', limit: 50 },
+      ticketRunGroupRequest: { filter: 'ticket_runs', groupBy: 'ticket_run', limit: 50 }
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(harness.supportData.at(-1)).toMatchObject({
+      agents: [],
+      defaults: {},
+      defaultAgent: 'codex'
+    });
+    expect(createInitialDraft).toHaveBeenCalledOnce();
+  });
+
   it('activates a route replacement and delegates active transcript runtime to the live projection', () => {
     const harness = createHarness();
 
@@ -115,7 +142,11 @@ describe('ChatDetailPageController', () => {
   });
 });
 
-function createHarness(options: { now?: () => number } = {}) {
+function createHarness(options: {
+  now?: () => number;
+  supportApi?: ReturnType<typeof supportApi>;
+  onCreateInitialDraft?: () => void;
+} = {}) {
   const store = new ReadModelEntityStore();
   let sessionState: ChatDetailSessionState = initialChatDetailSessionState();
   const indexState = writable({ status: 'idle' as const, error: null as ApiError | null });
@@ -141,7 +172,7 @@ function createHarness(options: { now?: () => number } = {}) {
     readModelStore: store,
     chatIndexSession: session,
     liveProjection,
-    supportApi: supportApi(),
+    supportApi: options.supportApi ?? supportApi(),
     readSessionState: () => sessionState,
     writeSessionState: (state) => {
       sessionState = state;
@@ -153,7 +184,7 @@ function createHarness(options: { now?: () => number } = {}) {
     onClockTick: (value) => clockTicks.push(value),
     onPinnedChatsLoaded: vi.fn(),
     onInitialDraft: vi.fn(),
-    onCreateInitialDraft: vi.fn(),
+    onCreateInitialDraft: options.onCreateInitialDraft ?? vi.fn(),
     onSupportDataLoaded: (data) => supportData.push(data),
     onSyncSelectors: vi.fn(),
     onMarkRead: vi.fn(),

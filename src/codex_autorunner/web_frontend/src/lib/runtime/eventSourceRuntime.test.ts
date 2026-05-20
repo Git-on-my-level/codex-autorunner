@@ -112,7 +112,7 @@ describe('event source stream runtime', () => {
     vi.useRealTimers();
   });
 
-  it('suspends hidden streams and resumes with the latest path', () => {
+  it('suspends hidden streams and resumes with the latest path', async () => {
     FakeEventSource.instances = [];
     const visibilityPolicy = new FakeVisibilityPolicy();
     visibilityPolicy.setVisible(false);
@@ -132,9 +132,79 @@ describe('event source stream runtime', () => {
     expect(FakeEventSource.instances).toHaveLength(0);
 
     visibilityPolicy.setVisible(true);
+    await Promise.resolve();
 
     expect(FakeEventSource.instances).toHaveLength(1);
     expect(FakeEventSource.instances[0].url).toBe('/events?cursor=resumed');
     runtime.close();
+  });
+
+  it('schedules reconnect instead of leaking state when the source factory throws', () => {
+    vi.useFakeTimers();
+    FakeEventSource.instances = [];
+    const statuses: string[] = [];
+    const onError = vi.fn();
+    const runtime = new EventSourceStreamRuntime({
+      path: '/events',
+      eventTypes: ['patch'],
+      reconnectBaseMs: 10,
+      eventSourceFactory: vi
+        .fn()
+        .mockImplementationOnce(() => {
+          throw new Error('constructor failed');
+        })
+        .mockImplementation((url, init) => new FakeEventSource(url, init) as unknown as EventSource),
+      onStatus: (status) => statuses.push(status),
+      onError,
+      onMessage: () => {}
+    });
+
+    runtime.open();
+    expect(FakeEventSource.instances).toHaveLength(0);
+    expect(onError).toHaveBeenCalledOnce();
+    expect(statuses).toEqual(['connecting', 'interrupted']);
+
+    vi.advanceTimersByTime(10);
+
+    expect(FakeEventSource.instances).toHaveLength(1);
+    expect(FakeEventSource.instances[0].url).toBe('/events');
+    runtime.close();
+    vi.useRealTimers();
+  });
+
+  it('waits for async resume work before reconnecting a visible stream', async () => {
+    vi.useFakeTimers();
+    FakeEventSource.instances = [];
+    const visibilityPolicy = new FakeVisibilityPolicy();
+    let resolveResume!: () => void;
+    let cursor = 'old';
+    const runtime = new EventSourceStreamRuntime({
+      path: () => `/events?cursor=${cursor}`,
+      eventTypes: ['patch'],
+      visibilityPolicy,
+      eventSourceFactory: (url, init) => new FakeEventSource(url, init) as unknown as EventSource,
+      onResume: () =>
+        new Promise<void>((resolve) => {
+          resolveResume = () => {
+            cursor = 'fresh';
+            resolve();
+          };
+        }),
+      onMessage: () => {}
+    });
+
+    runtime.open();
+    expect(FakeEventSource.instances).toHaveLength(1);
+    visibilityPolicy.setVisible(false);
+    visibilityPolicy.setVisible(true);
+    expect(FakeEventSource.instances).toHaveLength(1);
+
+    resolveResume();
+    await Promise.resolve();
+
+    expect(FakeEventSource.instances).toHaveLength(2);
+    expect(FakeEventSource.instances[1].url).toBe('/events?cursor=fresh');
+    runtime.close();
+    vi.useRealTimers();
   });
 });

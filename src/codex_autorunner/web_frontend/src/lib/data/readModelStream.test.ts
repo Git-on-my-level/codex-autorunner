@@ -118,7 +118,7 @@ describe('read model stream manager', () => {
     vi.useRealTimers();
   });
 
-  it('cancels pending reconnects while hidden and resumes from the cursor when visible', () => {
+  it('cancels pending reconnects while hidden and resumes from the cursor when visible', async () => {
     vi.useFakeTimers();
     FakeEventSource.instances = [];
     const storage = memoryStorage();
@@ -147,6 +147,7 @@ describe('read model stream manager', () => {
     expect(FakeEventSource.instances[0].closed).toBe(true);
 
     visibilityPolicy.setVisible(true);
+    await Promise.resolve();
 
     expect(onResume).toHaveBeenCalledOnce();
     expect(FakeEventSource.instances).toHaveLength(2);
@@ -155,7 +156,7 @@ describe('read model stream manager', () => {
     vi.useRealTimers();
   });
 
-  it('does not open hidden streams until visibility returns', () => {
+  it('does not open hidden streams until visibility returns', async () => {
     FakeEventSource.instances = [];
     const visibilityPolicy = new FakeVisibilityPolicy();
     visibilityPolicy.setVisible(false);
@@ -176,6 +177,7 @@ describe('read model stream manager', () => {
     expect(statuses).toEqual(['interrupted']);
 
     visibilityPolicy.setVisible(true);
+    await Promise.resolve();
 
     expect(FakeEventSource.instances).toHaveLength(1);
     expect(statuses).toEqual(['interrupted', 'connecting']);

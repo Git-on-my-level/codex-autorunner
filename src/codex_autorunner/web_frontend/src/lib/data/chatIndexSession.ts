@@ -142,7 +142,7 @@ export function createChatIndexSession(deps: ChatIndexSessionDeps = {}): ChatInd
 
   function replaceStreamForActiveRequest(): void {
     if (!started || !stream) return;
-    if (sameChatIndexRequest(streamRequest, activeRequest, { ignoreLimit: true })) return;
+    if (sameChatIndexStreamRequest(streamRequest, activeRequest)) return;
     stream.close();
     stream = null;
     streamRequest = null;
@@ -183,7 +183,7 @@ export function createChatIndexSession(deps: ChatIndexSessionDeps = {}): ChatInd
       },
       visibilityPolicy,
       onResume: () => {
-        void refresh(activeRequest);
+        return refresh(activeRequest);
       }
     });
   }
@@ -250,15 +250,11 @@ function parseChatIndexPatchEvent(event: SseEvent<unknown>): ChatIndexPatchEvent
   return mapReadModelContract<ChatIndexPatchEvent>(event.data);
 }
 
-function sameChatIndexRequest(
-  left: ChatIndexRequest | null,
-  right: ChatIndexRequest | null,
-  options?: { ignoreLimit?: boolean }
-): boolean {
+function sameChatIndexRequest(left: ChatIndexRequest | null, right: ChatIndexRequest | null): boolean {
   if (!left || !right) return left === right;
   return (
     (left.filter ?? 'all') === (right.filter ?? 'all') &&
-    (options?.ignoreLimit || (left.limit ?? 50) === (right.limit ?? 50)) &&
+    (left.limit ?? 50) === (right.limit ?? 50) &&
     (left.query ?? '') === (right.query ?? '') &&
     (left.surfaceKind ?? '') === (right.surfaceKind ?? '') &&
     (left.groupBy ?? '') === (right.groupBy ?? '') &&
@@ -269,6 +265,17 @@ function sameChatIndexRequest(
 function sameChatIndexRequestList(left: ChatIndexRequest[], right: ChatIndexRequest[]): boolean {
   if (left.length !== right.length) return false;
   return left.every((request, index) => sameChatIndexRequest(request, right[index] ?? null));
+}
+
+function sameChatIndexStreamRequest(left: ChatIndexRequest | null, right: ChatIndexRequest | null): boolean {
+  if (!left || !right) return left === right;
+  return (
+    (left.filter ?? 'all') === (right.filter ?? 'all') &&
+    (left.query ?? '') === (right.query ?? '') &&
+    (left.surfaceKind ?? '') === (right.surfaceKind ?? '') &&
+    (left.groupBy ?? '') === (right.groupBy ?? '') &&
+    (left.parentGroupId ?? '') === (right.parentGroupId ?? '')
+  );
 }
 
 function normalizedChatIndexRequest(request: ChatIndexRequest): ChatIndexRequest {

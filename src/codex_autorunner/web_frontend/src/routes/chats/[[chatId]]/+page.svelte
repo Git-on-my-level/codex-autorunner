@@ -271,7 +271,7 @@
       draft = value;
     },
     onCreateInitialDraft: () => {
-      void createChat({ preserveSelectedScope: true });
+      pendingInitialDraftCreate = true;
     },
     onSupportDataLoaded: applyInitialSupportingData,
     onSyncSelectors: syncSelectorsToActiveChat,

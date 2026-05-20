@@ -26,7 +26,7 @@ export type ReadModelStreamOptions<T> = {
   reconnectMaxMs?: number;
   withCredentials?: boolean;
   visibilityPolicy?: StreamVisibilityPolicy | null;
-  onResume?: () => void;
+  onResume?: () => void | Promise<void>;
 };
 
 export class ReadModelStreamManager<T> implements StreamSubscription {
