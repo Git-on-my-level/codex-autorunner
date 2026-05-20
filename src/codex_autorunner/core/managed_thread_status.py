@@ -65,6 +65,33 @@ class ManagedThreadStatusReason(str, Enum):
     MANAGED_TURN_INTERRUPTED = "managed_turn_interrupted"
 
 
+class ManagedThreadLifecycleStatus(str, Enum):
+    ACTIVE = _STATUS_ACTIVE
+    ARCHIVED = _STATUS_ARCHIVED
+
+
+class ManagedThreadLifecycleTransition(str, Enum):
+    THREAD_CREATED = "thread_created"
+    THREAD_ACTIVATED = "thread_activated"
+    THREAD_ARCHIVED = "thread_archived"
+
+
+class ManagedThreadLifecycleTransitionError(ValueError):
+    def __init__(
+        self,
+        *,
+        transition: ManagedThreadLifecycleTransition,
+        current_status: str | None,
+    ) -> None:
+        current_detail = current_status if current_status is not None else "<missing>"
+        super().__init__(
+            "Illegal managed-thread lifecycle transition "
+            f"{transition.value} from {current_detail!r}"
+        )
+        self.transition = transition
+        self.current_status = current_status
+
+
 TERMINAL_STATUSES = frozenset(
     {
         _STATUS_COMPLETED,
@@ -136,6 +163,35 @@ _TRANSITIONS = {
     str(entry["signal"]).strip().lower(): entry for entry in TRANSITION_TABLE
 }
 
+LIFECYCLE_TRANSITION_TABLE: tuple[dict[str, Any], ...] = (
+    {
+        "transition": ManagedThreadLifecycleTransition.THREAD_CREATED.value,
+        "from": None,
+        "to": ManagedThreadLifecycleStatus.ACTIVE.value,
+    },
+    {
+        "transition": ManagedThreadLifecycleTransition.THREAD_ACTIVATED.value,
+        "from": (
+            ManagedThreadLifecycleStatus.ACTIVE.value,
+            ManagedThreadLifecycleStatus.ARCHIVED.value,
+        ),
+        "to": ManagedThreadLifecycleStatus.ACTIVE.value,
+    },
+    {
+        "transition": ManagedThreadLifecycleTransition.THREAD_ARCHIVED.value,
+        "from": (
+            ManagedThreadLifecycleStatus.ACTIVE.value,
+            ManagedThreadLifecycleStatus.ARCHIVED.value,
+        ),
+        "to": ManagedThreadLifecycleStatus.ARCHIVED.value,
+    },
+)
+
+_LIFECYCLE_TRANSITIONS = {
+    str(entry["transition"]).strip().lower(): entry
+    for entry in LIFECYCLE_TRANSITION_TABLE
+}
+
 
 def _parse_iso(value: Any) -> Optional[datetime]:
     text = _normalize_text(value)
@@ -154,6 +210,62 @@ def _normalize_reason(value: str | ManagedThreadStatusReason) -> str:
     if isinstance(value, ManagedThreadStatusReason):
         return value.value
     return str(value).strip().lower()
+
+
+def _normalize_lifecycle_transition(
+    value: str | ManagedThreadLifecycleTransition,
+) -> ManagedThreadLifecycleTransition:
+    if isinstance(value, ManagedThreadLifecycleTransition):
+        return value
+    normalized = str(value).strip().lower()
+    try:
+        return ManagedThreadLifecycleTransition(normalized)
+    except ValueError as exc:
+        raise ManagedThreadLifecycleTransitionError(
+            transition=ManagedThreadLifecycleTransition.THREAD_CREATED,
+            current_status=normalized,
+        ) from exc
+
+
+def normalize_managed_thread_lifecycle_status(
+    value: str | ManagedThreadLifecycleStatus | None,
+) -> ManagedThreadLifecycleStatus:
+    if isinstance(value, ManagedThreadLifecycleStatus):
+        return value
+    normalized = _normalize_text(value)
+    try:
+        return ManagedThreadLifecycleStatus(str(normalized or ""))
+    except ValueError as exc:
+        raise ManagedThreadLifecycleTransitionError(
+            transition=ManagedThreadLifecycleTransition.THREAD_CREATED,
+            current_status=normalized,
+        ) from exc
+
+
+def transition_managed_thread_lifecycle_status(
+    current_status: str | ManagedThreadLifecycleStatus | None,
+    *,
+    transition: str | ManagedThreadLifecycleTransition,
+) -> ManagedThreadLifecycleStatus:
+    lifecycle_transition = _normalize_lifecycle_transition(transition)
+    entry = _LIFECYCLE_TRANSITIONS[lifecycle_transition.value]
+    allowed = entry["from"]
+    if allowed is None:
+        if current_status is not None:
+            current = normalize_managed_thread_lifecycle_status(current_status)
+            raise ManagedThreadLifecycleTransitionError(
+                transition=lifecycle_transition,
+                current_status=current.value,
+            )
+        return ManagedThreadLifecycleStatus(str(entry["to"]))
+
+    current = normalize_managed_thread_lifecycle_status(current_status)
+    if current.value not in allowed:
+        raise ManagedThreadLifecycleTransitionError(
+            transition=lifecycle_transition,
+            current_status=current.value,
+        )
+    return ManagedThreadLifecycleStatus(str(entry["to"]))
 
 
 def normalize_status_timestamp(value: Optional[str]) -> str:
@@ -350,6 +462,10 @@ def derive_managed_thread_operator_status(
 
 
 __all__ = [
+    "LIFECYCLE_TRANSITION_TABLE",
+    "ManagedThreadLifecycleStatus",
+    "ManagedThreadLifecycleTransition",
+    "ManagedThreadLifecycleTransitionError",
     "ManagedThreadStatusReason",
     "ManagedThreadStatusSnapshot",
     "TERMINAL_STATUSES",
@@ -357,6 +473,8 @@ __all__ = [
     "backfill_managed_thread_status",
     "build_managed_thread_status_snapshot",
     "derive_managed_thread_operator_status",
+    "normalize_managed_thread_lifecycle_status",
     "normalize_status_timestamp",
+    "transition_managed_thread_lifecycle_status",
     "transition_managed_thread_status",
 ]

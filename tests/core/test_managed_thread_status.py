@@ -3,10 +3,13 @@ from __future__ import annotations
 import pytest
 
 from codex_autorunner.core.managed_thread_status import (
+    ManagedThreadLifecycleTransition,
+    ManagedThreadLifecycleTransitionError,
     ManagedThreadStatusReason,
     backfill_managed_thread_status,
     build_managed_thread_status_snapshot,
     derive_managed_thread_operator_status,
+    transition_managed_thread_lifecycle_status,
     transition_managed_thread_status,
 )
 
@@ -175,3 +178,43 @@ def test_operator_status_prefers_archived_lifecycle() -> None:
         )
         == "archived"
     )
+
+
+def test_lifecycle_status_contract_allows_create_archive_and_activate() -> None:
+    created = transition_managed_thread_lifecycle_status(
+        None,
+        transition=ManagedThreadLifecycleTransition.THREAD_CREATED,
+    )
+    archived = transition_managed_thread_lifecycle_status(
+        created,
+        transition=ManagedThreadLifecycleTransition.THREAD_ARCHIVED,
+    )
+    archive_idempotent = transition_managed_thread_lifecycle_status(
+        archived,
+        transition=ManagedThreadLifecycleTransition.THREAD_ARCHIVED,
+    )
+    activated = transition_managed_thread_lifecycle_status(
+        archive_idempotent,
+        transition=ManagedThreadLifecycleTransition.THREAD_ACTIVATED,
+    )
+    active_idempotent = transition_managed_thread_lifecycle_status(
+        activated,
+        transition=ManagedThreadLifecycleTransition.THREAD_ACTIVATED,
+    )
+
+    assert created.value == "active"
+    assert archived.value == "archived"
+    assert archive_idempotent.value == "archived"
+    assert activated.value == "active"
+    assert active_idempotent.value == "active"
+
+
+def test_lifecycle_status_contract_rejects_unknown_durable_status() -> None:
+    with pytest.raises(
+        ManagedThreadLifecycleTransitionError,
+        match="Illegal managed-thread lifecycle transition",
+    ):
+        transition_managed_thread_lifecycle_status(
+            "paused",
+            transition=ManagedThreadLifecycleTransition.THREAD_ARCHIVED,
+        )
