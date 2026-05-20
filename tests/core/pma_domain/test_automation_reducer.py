@@ -2,6 +2,14 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
+from codex_autorunner.core.pma_domain.automation_lifecycle import (
+    cancel_schedule_state,
+    cancel_subscription_state,
+    cancel_timer_state,
+    subscription_is_active_for_purge,
+    timer_is_active_for_purge,
+    wakeup_is_active_for_purge,
+)
 from codex_autorunner.core.pma_domain.automation_reducer import (
     reduce_dequeue_due_timers,
     reduce_timer_touch,
@@ -63,6 +71,48 @@ def _make_wakeup(
         state=state,
         dispatched_at=dispatched_at,
     )
+
+
+class TestAutomationLifecycleContracts:
+    def test_subscription_cancel_allows_active_and_idempotent_cancelled(self):
+        assert cancel_subscription_state("active") == ("cancelled", True)
+        assert cancel_subscription_state("cancelled") == ("cancelled", False)
+
+    def test_timer_cancel_allows_known_non_terminal_and_idempotent_cancelled(self):
+        assert cancel_timer_state("pending") == ("cancelled", True)
+        assert cancel_timer_state("fired") == ("cancelled", True)
+        assert cancel_timer_state("cancelled") == ("cancelled", False)
+
+    def test_schedule_cancel_allows_active_and_idempotent_cancelled(self):
+        assert cancel_schedule_state("active") == ("cancelled", True)
+        assert cancel_schedule_state("cancelled") == ("cancelled", False)
+
+    def test_unknown_durable_states_are_rejected(self):
+        for func in (
+            cancel_subscription_state,
+            cancel_timer_state,
+            cancel_schedule_state,
+            subscription_is_active_for_purge,
+            timer_is_active_for_purge,
+            wakeup_is_active_for_purge,
+        ):
+            try:
+                func("legacy_unknown")
+            except RuntimeError as exc:
+                assert "unknown PMA automation" in str(exc)
+            else:
+                raise AssertionError(f"{func.__name__} accepted an unknown state")
+
+    def test_purge_admission_classifies_known_active_states(self):
+        assert subscription_is_active_for_purge("active") is True
+        assert subscription_is_active_for_purge("cancelled") is False
+        assert timer_is_active_for_purge("pending") is True
+        assert timer_is_active_for_purge("fired") is False
+        assert timer_is_active_for_purge("cancelled") is False
+        assert wakeup_is_active_for_purge("pending") is True
+        assert wakeup_is_active_for_purge("queued") is True
+        assert wakeup_is_active_for_purge("worker_started") is False
+        assert wakeup_is_active_for_purge("dispatched") is False
 
 
 class TestReduceDequeueDueTimers:

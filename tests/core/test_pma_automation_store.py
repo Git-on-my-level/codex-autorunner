@@ -4,9 +4,14 @@ import logging
 
 import pytest
 
-from codex_autorunner.core.automation import AutomationStore
+from codex_autorunner.core.automation import (
+    AutomationRule,
+    AutomationSchedule,
+    AutomationStore,
+)
 from codex_autorunner.core.managed_thread_store import ManagedThreadStore
 from codex_autorunner.core.orchestration import OrchestrationBindingStore
+from codex_autorunner.core.orchestration.sqlite import open_orchestration_sqlite
 from codex_autorunner.core.pma_automation_store import (
     PmaAutomationStore,
     PmaAutomationThreadNotFoundError,
@@ -114,6 +119,50 @@ def test_legacy_timer_store_does_not_auto_create_unified_schedule(tmp_path) -> N
 
     assert store.cancel_timer(timer_id, {"reason": "done"}) is True
     assert automation_store.get_schedule(f"pma-timer:{timer_id}") is None
+
+
+def test_unified_schedule_cancel_validates_lifecycle_state(tmp_path) -> None:
+    automation_store = AutomationStore(tmp_path)
+    automation_store.upsert_rule(
+        AutomationRule.create(
+            rule_id="rule-lifecycle",
+            name="Lifecycle schedule",
+            trigger_kind="schedule",
+            trigger={"schedule_kind": "daily"},
+            target_policy="hub",
+            executor_kind="pma_turn",
+        )
+    )
+    automation_store.upsert_schedule(
+        AutomationSchedule.create(
+            schedule_id="schedule-lifecycle",
+            rule_id="rule-lifecycle",
+            schedule_kind="daily",
+            next_fire_at="2026-01-02T09:00:00Z",
+            schedule={"hour": 9, "minute": 0},
+        )
+    )
+
+    cancelled = automation_store.cancel_schedule("schedule-lifecycle")
+    assert cancelled is not None
+    assert cancelled.state == "cancelled"
+    assert cancelled.next_fire_at is None
+
+    cancelled_again = automation_store.cancel_schedule("schedule-lifecycle")
+    assert cancelled_again is not None
+    assert cancelled_again.state == "cancelled"
+
+    with open_orchestration_sqlite(tmp_path) as conn:
+        with conn:
+            conn.execute(
+                "UPDATE orch_automation_schedules SET state = ? WHERE schedule_id = ?",
+                ("legacy_unknown", "schedule-lifecycle"),
+            )
+
+    with pytest.raises(
+        RuntimeError, match="unknown PMA automation schedule lifecycle state"
+    ):
+        automation_store.cancel_schedule("schedule-lifecycle")
 
 
 def test_legacy_wakeup_store_does_not_auto_create_unified_job(tmp_path) -> None:

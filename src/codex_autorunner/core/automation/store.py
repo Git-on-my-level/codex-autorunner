@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any, Literal, Optional
 
 from ..orchestration.sqlite import open_orchestration_sqlite
+from ..pma_domain.automation_lifecycle import cancel_schedule_state
 from ..text_utils import _json_dumps, _json_loads_object
 from ..time_utils import now_iso
 from .models import (
@@ -134,16 +135,24 @@ class AutomationStore:
         stamp = now_iso()
         with open_orchestration_sqlite(self._hub_root, durable=self._durable) as conn:
             with conn:
+                row = conn.execute(
+                    "SELECT * FROM orch_automation_schedules WHERE schedule_id = ?",
+                    (schedule_id,),
+                ).fetchone()
+                if row is None:
+                    return None
+                next_state, changed = cancel_schedule_state(str(row["state"]))
+                if not changed:
+                    return self._row_to_schedule(row)
                 conn.execute(
                     """
                     UPDATE orch_automation_schedules
-                       SET state = 'cancelled',
+                       SET state = ?,
                            next_fire_at = NULL,
                            updated_at = ?
                      WHERE schedule_id = ?
-                       AND state != 'cancelled'
                     """,
-                    (stamp, schedule_id),
+                    (next_state, stamp, schedule_id),
                 )
         return self.get_schedule(schedule_id)
 
