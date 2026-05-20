@@ -144,6 +144,8 @@ DISCORD_INTERACTION_SCHEDULER_TRANSITIONS: dict[
         {
             DiscordInteractionSchedulerState.SCHEDULED,
             DiscordInteractionSchedulerState.EXECUTING,
+            DiscordInteractionSchedulerState.DELIVERY_PENDING,
+            DiscordInteractionSchedulerState.DELIVERY_REPLAYING,
             DiscordInteractionSchedulerState.RECOVERY_SCHEDULED,
             DiscordInteractionSchedulerState.DELIVERY_EXPIRED,
             DiscordInteractionSchedulerState.ABANDONED,

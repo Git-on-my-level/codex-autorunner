@@ -197,6 +197,10 @@ class TestDiscordInteractionLifecyclePolicy:
             DiscordInteractionSchedulerState.ACKNOWLEDGED,
             DiscordInteractionSchedulerState.SCHEDULED,
         )
+        assert is_valid_discord_interaction_scheduler_transition(
+            DiscordInteractionSchedulerState.WAITING_ON_RESOURCES,
+            DiscordInteractionSchedulerState.DELIVERY_PENDING,
+        )
         assert (
             validate_discord_interaction_scheduler_transition(
                 "acknowledged", "scheduled"

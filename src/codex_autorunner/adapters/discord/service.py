@@ -183,6 +183,7 @@ from ...core.orchestration.chat_operation_scheduler_projection import (
     discord_scheduler_state_to_chat_operation_state,
     discord_scheduler_terminal_outcome,
 )
+from ...core.orchestration.chat_operation_state import CHAT_OPERATION_TERMINAL_STATES
 from ...core.orchestration.discord_interaction_lifecycle import (
     DiscordInteractionSchedulerState,
     is_discord_interaction_scheduler_terminal,
@@ -434,7 +435,18 @@ _INTERACTION_RECOVERY_INITIAL_BACKOFF_SECONDS = 5.0
 _INTERACTION_RECOVERY_MAX_BACKOFF_SECONDS = 300.0
 _INTERACTION_RECOVERY_MAX_UNCHANGED_CURSOR_ATTEMPTS = 3
 _INTERACTION_RECOVERY_METADATA_KEY = "_recovery"
+_CHAT_OPERATION_RECOVERY_METADATA_KEY = "discord_recovery"
 _PATCH_STATE_UNSET = object()
+
+
+@dataclass(frozen=True)
+class _ChatOperationRecoveryWritePlan:
+    interaction_id: str
+    current_state: Optional[ChatOperationState]
+    requested_state: Optional[ChatOperationState]
+    recovery_action: Optional[str]
+    reason: Optional[str]
+    metadata_only: bool = False
 
 
 def _parse_interaction_recovery_datetime(value: Any) -> Optional[datetime]:
@@ -5199,6 +5211,24 @@ class DiscordBotService(DiscordInteractionResponseMixin):
                 requested_state = (
                     state if isinstance(state, ChatOperationState) else None
                 )
+                if (
+                    validate_transition
+                    and current_state == ChatOperationState.QUEUED
+                    and requested_state == ChatOperationState.DELIVERING
+                ):
+                    store.patch_operation(
+                        interaction_id,
+                        state=ChatOperationState.RUNNING,
+                        validate_transition=True,
+                    )
+                    changes_local = dict(changes)
+                    return store.patch_operation(
+                        interaction_id,
+                        state=ChatOperationState.DELIVERING,
+                        validate_transition=True,
+                        metadata_updates=metadata_updates,
+                        **changes_local,
+                    )
                 log_event(
                     self._logger,
                     (
@@ -5241,14 +5271,81 @@ class DiscordBotService(DiscordInteractionResponseMixin):
         interaction_id: str,
         *,
         state: Optional[ChatOperationState] = None,
+        recovery_action: Optional[ChatOperationRecoveryAction | str] = None,
+        recovery_reason: Optional[str] = None,
         metadata_updates: Optional[Mapping[str, Any]] = None,
         **changes: Any,
     ) -> Optional[ChatOperationSnapshot]:
+        current = await self._chat_operation_get(interaction_id)
+        current_state = current.state if current is not None else None
+        requested_state = state if isinstance(state, ChatOperationState) else None
+        action_value = (
+            recovery_action.value
+            if isinstance(recovery_action, ChatOperationRecoveryAction)
+            else (str(recovery_action) if recovery_action is not None else None)
+        )
+        metadata = dict(metadata_updates or {})
+        metadata[_CHAT_OPERATION_RECOVERY_METADATA_KEY] = {
+            "action": action_value,
+            "reason": recovery_reason,
+            "current_state": (
+                current_state.value if current_state is not None else None
+            ),
+            "requested_state": (
+                requested_state.value if requested_state is not None else None
+            ),
+        }
+        plan = _ChatOperationRecoveryWritePlan(
+            interaction_id=interaction_id,
+            current_state=current_state,
+            requested_state=requested_state,
+            recovery_action=action_value,
+            reason=recovery_reason,
+            metadata_only=(
+                current_state in CHAT_OPERATION_TERMINAL_STATES
+                and requested_state is not None
+                and requested_state != current_state
+            ),
+        )
+        if plan.metadata_only:
+            log_event(
+                self._logger,
+                logging.INFO,
+                "discord.chat_operation.recovery_terminal_metadata_only",
+                interaction_id=plan.interaction_id,
+                current_state=(
+                    plan.current_state.value if plan.current_state is not None else None
+                ),
+                requested_state=(
+                    plan.requested_state.value
+                    if plan.requested_state is not None
+                    else None
+                ),
+                recovery_action=plan.recovery_action,
+                reason=plan.reason,
+            )
+            return await self._patch_chat_operation(
+                interaction_id,
+                metadata_updates=metadata,
+            )
+        log_event(
+            self._logger,
+            logging.DEBUG,
+            "discord.chat_operation.recovery_write",
+            interaction_id=plan.interaction_id,
+            current_state=(
+                plan.current_state.value if plan.current_state is not None else None
+            ),
+            requested_state=(
+                plan.requested_state.value if plan.requested_state is not None else None
+            ),
+            recovery_action=plan.recovery_action,
+            reason=plan.reason,
+        )
         return await self._patch_chat_operation(
             interaction_id,
             state=state,
-            validate_transition=False,
-            metadata_updates=metadata_updates,
+            metadata_updates=metadata,
             **changes,
         )
 
@@ -5504,14 +5601,21 @@ class DiscordBotService(DiscordInteractionResponseMixin):
             if _for_recovery
             else self._patch_chat_operation
         )
-        await patch_fn(
-            ctx.interaction_id,
-            state=self._discord_chat_operation_state_for_scheduler(scheduler_state),
-            delivery_attempt_count=(
+        patch_kwargs: dict[str, Any] = {
+            "state": self._discord_chat_operation_state_for_scheduler(scheduler_state),
+            "delivery_attempt_count": (
                 int(record.attempt_count or 0) if record is not None else None
             ),
-            terminal_outcome=terminal_outcome,
-        )
+            "terminal_outcome": terminal_outcome,
+        }
+        if _for_recovery:
+            patch_kwargs.update(
+                {
+                    "recovery_action": ChatOperationRecoveryAction.RESUME_EXECUTION,
+                    "recovery_reason": f"scheduler_state:{scheduler_state}",
+                }
+            )
+        await patch_fn(ctx.interaction_id, **patch_kwargs)
 
     async def mark_interaction_scheduler_state(
         self,
@@ -5660,6 +5764,13 @@ class DiscordBotService(DiscordInteractionResponseMixin):
         await self._patch_chat_operation_recovery(
             record.interaction_id,
             state=self._discord_chat_operation_state_for_scheduler(scheduler_state),
+            recovery_action=(
+                ChatOperationRecoveryAction.MARK_EXPIRED
+                if scheduler_state
+                == DiscordInteractionSchedulerState.DELIVERY_EXPIRED.value
+                else ChatOperationRecoveryAction.MARK_ABANDONED
+            ),
+            recovery_reason=reason,
             terminal_outcome=discord_scheduler_terminal_outcome(scheduler_state),
             terminal_detail=reason,
         )
@@ -5856,6 +5967,8 @@ class DiscordBotService(DiscordInteractionResponseMixin):
                 await self._patch_chat_operation_recovery(
                     record.interaction_id,
                     state=ChatOperationState.DELIVERING,
+                    recovery_action=decision.action,
+                    recovery_reason=decision.reason,
                     delivery_state="pending",
                     delivery_cursor=updated_cursor,
                     delivery_attempt_count=(
@@ -5899,6 +6012,8 @@ class DiscordBotService(DiscordInteractionResponseMixin):
         await self._patch_chat_operation_recovery(
             ctx.interaction_id,
             state=ChatOperationState.RUNNING,
+            recovery_action=ChatOperationRecoveryAction.RESUME_EXECUTION,
+            recovery_reason="begin_recovery_execution",
         )
         return True
 
