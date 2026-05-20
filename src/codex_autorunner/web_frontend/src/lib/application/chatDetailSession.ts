@@ -189,6 +189,9 @@ export function activateRequestedChatFromRows(
   input: ChatDetailRequestedRowsInput
 ): ChatDetailSelectionCommand {
   if (isLocalDraftChatId(state.activeChatId)) return noDetailCommand(state);
+  if (input.requestedChatId && !input.loadedChats.some((chat) => chat.id === input.requestedChatId)) {
+    return noDetailCommand(state);
+  }
   const selectedChatId = chooseActiveChatId(input.loadedChats, state.activeChatId, input.requestedChatId);
   if (!selectedChatId || state.activeChatId === selectedChatId) return noDetailCommand(state);
   const command = selectChatDetail(state, selectedChatId, {
