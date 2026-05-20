@@ -48,6 +48,9 @@ from ...core.orchestration import (
     ChatOperationState,
     SQLiteChatOperationLedger,
 )
+from ...core.orchestration.chat_operation_state import (
+    CHAT_OPERATION_TERMINAL_STATES,
+)
 from ...core.orchestration.managed_thread_delivery import (
     ManagedThreadDeliveryAttemptResult,
     ManagedThreadDeliveryOutcome,
@@ -182,6 +185,20 @@ TELEGRAM_HUB_HANDSHAKE_RETRY_DELAY_SECONDS = 1.0
 TELEGRAM_HUB_HANDSHAKE_RETRY_MAX_DELAY_SECONDS = 5.0
 _CURRENT_TELEGRAM_OPERATION_ID: contextvars.ContextVar[Optional[str]] = (
     contextvars.ContextVar("telegram_chat_operation_id", default=None)
+)
+_LATE_CHAT_OPERATION_METADATA_FIELDS = frozenset(
+    {
+        "ack_completed_at",
+        "ack_requested_at",
+        "anchor_ref",
+        "delivery_attempt_count",
+        "delivery_claimed_at",
+        "delivery_cursor",
+        "delivery_state",
+        "first_visible_feedback_at",
+        "interrupt_ref",
+        "metadata_updates",
+    }
 )
 
 
@@ -1990,12 +2007,17 @@ class TelegramBotService(
         operation_id: Optional[str],
         *,
         state: ChatOperationState,
-        validate_transition: bool = False,
+        validate_transition: bool = True,
+        bypass_reason: Optional[str] = None,
         **changes: Any,
     ) -> None:
         normalized_operation_id = str(operation_id or "").strip()
         if not normalized_operation_id:
             return
+        if not validate_transition and not str(bypass_reason or "").strip():
+            raise ValueError(
+                "Telegram chat operation transition bypass requires bypass_reason"
+            )
         try:
             self._chat_operation_store.patch_operation(
                 normalized_operation_id,
@@ -2003,24 +2025,65 @@ class TelegramBotService(
                 validate_transition=validate_transition,
                 **changes,
             )
-        except ValueError:
+        except ValueError as exc:
             snapshot = self._chat_operation_store.get_operation(normalized_operation_id)
             if snapshot is None:
                 return
-            if snapshot.first_visible_feedback_at is not None:
-                changes["first_visible_feedback_at"] = (
-                    snapshot.first_visible_feedback_at
+            late_metadata_changes = {
+                key: value
+                for key, value in changes.items()
+                if key in _LATE_CHAT_OPERATION_METADATA_FIELDS
+            }
+            if snapshot.state in CHAT_OPERATION_TERMINAL_STATES:
+                if late_metadata_changes:
+                    self._chat_operation_store.patch_operation(
+                        normalized_operation_id,
+                        validate_transition=True,
+                        **late_metadata_changes,
+                    )
+                log_event(
+                    self._logger,
+                    logging.INFO,
+                    "telegram.chat_operation.transition_ignored_after_terminal",
+                    operation_id=normalized_operation_id,
+                    current_state=snapshot.state.value,
+                    requested_state=state.value,
+                    preserved_metadata=sorted(late_metadata_changes),
                 )
-            self._chat_operation_store.upsert_operation(
-                snapshot.__class__(
-                    **{
-                        **snapshot.__dict__,
-                        "state": state,
-                        "updated_at": now_iso(),
-                        **changes,
-                    }
+                return
+            if (
+                state
+                in {
+                    ChatOperationState.ACKNOWLEDGED,
+                    ChatOperationState.VISIBLE,
+                }
+                and late_metadata_changes
+            ):
+                self._chat_operation_store.patch_operation(
+                    normalized_operation_id,
+                    validate_transition=True,
+                    **late_metadata_changes,
                 )
+                log_event(
+                    self._logger,
+                    logging.INFO,
+                    "telegram.chat_operation.late_metadata_preserved",
+                    operation_id=normalized_operation_id,
+                    current_state=snapshot.state.value,
+                    requested_state=state.value,
+                    preserved_metadata=sorted(late_metadata_changes),
+                )
+                return
+            log_event(
+                self._logger,
+                logging.ERROR,
+                "telegram.chat_operation.invalid_transition",
+                operation_id=normalized_operation_id,
+                current_state=snapshot.state.value,
+                requested_state=state.value,
+                exc=exc,
             )
+            raise
 
     async def _should_process_update(self, key: str, update_id: int) -> bool:
         return await self._update_deduper.should_process(

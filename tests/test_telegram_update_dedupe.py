@@ -16,19 +16,23 @@ from codex_autorunner.adapters.telegram.service import TelegramBotService
 from codex_autorunner.core.orchestration import ChatOperationState
 
 
-@pytest.mark.anyio
-async def test_update_dedupe_skips_frequent_persist(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    config = TelegramBotConfig.from_raw(
+def _config(root: Path) -> TelegramBotConfig:
+    return TelegramBotConfig.from_raw(
         {
             "enabled": True,
             "allowed_chat_ids": [123],
             "allowed_user_ids": [456],
         },
-        root=tmp_path,
+        root=root,
         env={"CAR_TELEGRAM_BOT_TOKEN": "test-token"},
     )
+
+
+@pytest.mark.anyio
+async def test_update_dedupe_skips_frequent_persist(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = _config(tmp_path)
     service = TelegramBotService(config)
     try:
         key = "chat:thread"
@@ -57,15 +61,7 @@ async def test_update_dedupe_skips_frequent_persist(
 async def test_update_dedupe_persists_after_interval(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    config = TelegramBotConfig.from_raw(
-        {
-            "enabled": True,
-            "allowed_chat_ids": [123],
-            "allowed_user_ids": [456],
-        },
-        root=tmp_path,
-        env={"CAR_TELEGRAM_BOT_TOKEN": "test-token"},
-    )
+    config = _config(tmp_path)
     service = TelegramBotService(config)
     try:
         key = "chat:thread"
@@ -92,15 +88,7 @@ async def test_update_dedupe_persists_after_interval(
 
 @pytest.mark.anyio
 async def test_dispatch_update_registers_shared_chat_operation(tmp_path: Path) -> None:
-    config = TelegramBotConfig.from_raw(
-        {
-            "enabled": True,
-            "allowed_chat_ids": [123],
-            "allowed_user_ids": [456],
-        },
-        root=tmp_path,
-        env={"CAR_TELEGRAM_BOT_TOKEN": "test-token"},
-    )
+    config = _config(tmp_path)
     service = TelegramBotService(config)
     try:
         message = TelegramMessage(
@@ -146,15 +134,7 @@ async def test_dispatch_update_uses_shared_ledger_to_reject_restart_duplicate_me
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    config = TelegramBotConfig.from_raw(
-        {
-            "enabled": True,
-            "allowed_chat_ids": [123],
-            "allowed_user_ids": [456],
-        },
-        root=tmp_path,
-        env={"CAR_TELEGRAM_BOT_TOKEN": "test-token"},
-    )
+    config = _config(tmp_path)
     monkeypatch.setattr(
         "codex_autorunner.adapters.telegram.service.time.monotonic",
         lambda: 0.0,
@@ -209,15 +189,7 @@ async def test_dispatch_update_uses_shared_ledger_to_reject_restart_duplicate_ca
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    config = TelegramBotConfig.from_raw(
-        {
-            "enabled": True,
-            "allowed_chat_ids": [123],
-            "allowed_user_ids": [456],
-        },
-        root=tmp_path,
-        env={"CAR_TELEGRAM_BOT_TOKEN": "test-token"},
-    )
+    config = _config(tmp_path)
     monkeypatch.setattr(
         "codex_autorunner.adapters.telegram.service.time.monotonic",
         lambda: 0.0,
@@ -265,3 +237,173 @@ async def test_dispatch_update_uses_shared_ledger_to_reject_restart_duplicate_ca
         await restarted._runtime_services.close()
         await restarted._store.close()
         await restarted._bot.close()
+
+
+@pytest.mark.anyio
+async def test_telegram_chat_operation_legal_lifecycle_persists(
+    tmp_path: Path,
+) -> None:
+    service = TelegramBotService(_config(tmp_path), hub_root=tmp_path)
+    try:
+        await service._register_accepted_chat_operation(
+            operation_id="telegram:lifecycle:1",
+            surface_operation_key="telegram:lifecycle:1",
+            conversation_id="123:root",
+            chat_id=123,
+            thread_id=None,
+            user_id=456,
+            message_id=99,
+            kind="message",
+        )
+
+        await service._mark_chat_operation_state(
+            "telegram:lifecycle:1",
+            state=ChatOperationState.QUEUED,
+        )
+        await service._mark_chat_operation_state(
+            "telegram:lifecycle:1",
+            state=ChatOperationState.RUNNING,
+        )
+        await service._mark_chat_operation_state(
+            "telegram:lifecycle:1",
+            state=ChatOperationState.DELIVERING,
+            delivery_state="pending",
+        )
+        await service._mark_chat_operation_state(
+            "telegram:lifecycle:1",
+            state=ChatOperationState.COMPLETED,
+            terminal_outcome="ok",
+        )
+
+        snapshot = service._chat_operation_store.get_operation("telegram:lifecycle:1")
+        assert snapshot is not None
+        assert snapshot.state is ChatOperationState.COMPLETED
+        assert snapshot.delivery_state == "pending"
+        assert snapshot.terminal_outcome == "ok"
+    finally:
+        await service._runtime_services.close()
+        await service._store.close()
+        await service._bot.close()
+
+
+@pytest.mark.anyio
+async def test_telegram_chat_operation_terminal_to_running_is_ignored(
+    tmp_path: Path,
+) -> None:
+    service = TelegramBotService(_config(tmp_path), hub_root=tmp_path)
+    try:
+        await service._register_accepted_chat_operation(
+            operation_id="telegram:terminal:running",
+            surface_operation_key="telegram:terminal:running",
+            conversation_id="123:root",
+            chat_id=123,
+            thread_id=None,
+            user_id=456,
+            message_id=100,
+            kind="message",
+        )
+        await service._mark_chat_operation_state(
+            "telegram:terminal:running",
+            state=ChatOperationState.COMPLETED,
+            terminal_outcome="ok",
+        )
+
+        await service._mark_chat_operation_state(
+            "telegram:terminal:running",
+            state=ChatOperationState.RUNNING,
+            status_message="late start",
+        )
+
+        snapshot = service._chat_operation_store.get_operation(
+            "telegram:terminal:running"
+        )
+        assert snapshot is not None
+        assert snapshot.state is ChatOperationState.COMPLETED
+        assert snapshot.terminal_outcome == "ok"
+        assert snapshot.status_message is None
+    finally:
+        await service._runtime_services.close()
+        await service._store.close()
+        await service._bot.close()
+
+
+@pytest.mark.anyio
+async def test_telegram_chat_operation_terminal_to_delivering_preserves_metadata(
+    tmp_path: Path,
+) -> None:
+    service = TelegramBotService(_config(tmp_path), hub_root=tmp_path)
+    try:
+        await service._register_accepted_chat_operation(
+            operation_id="telegram:terminal:delivery",
+            surface_operation_key="telegram:terminal:delivery",
+            conversation_id="123:root",
+            chat_id=123,
+            thread_id=None,
+            user_id=456,
+            message_id=101,
+            kind="message",
+        )
+        await service._mark_chat_operation_state(
+            "telegram:terminal:delivery",
+            state=ChatOperationState.COMPLETED,
+            terminal_outcome="ok",
+        )
+
+        await service._mark_chat_operation_state(
+            "telegram:terminal:delivery",
+            state=ChatOperationState.DELIVERING,
+            delivery_state="pending",
+            delivery_attempt_count=2,
+        )
+
+        snapshot = service._chat_operation_store.get_operation(
+            "telegram:terminal:delivery"
+        )
+        assert snapshot is not None
+        assert snapshot.state is ChatOperationState.COMPLETED
+        assert snapshot.delivery_state == "pending"
+        assert snapshot.delivery_attempt_count == 2
+    finally:
+        await service._runtime_services.close()
+        await service._store.close()
+        await service._bot.close()
+
+
+@pytest.mark.anyio
+async def test_telegram_chat_operation_invalid_nonterminal_transition_raises(
+    tmp_path: Path,
+) -> None:
+    service = TelegramBotService(_config(tmp_path), hub_root=tmp_path)
+    try:
+        await service._register_accepted_chat_operation(
+            operation_id="telegram:invalid:delivery",
+            surface_operation_key="telegram:invalid:delivery",
+            conversation_id="123:root",
+            chat_id=123,
+            thread_id=None,
+            user_id=456,
+            message_id=102,
+            kind="message",
+        )
+        await service._mark_chat_operation_state(
+            "telegram:invalid:delivery",
+            state=ChatOperationState.QUEUED,
+        )
+
+        with pytest.raises(ValueError, match="invalid chat operation transition"):
+            await service._mark_chat_operation_state(
+                "telegram:invalid:delivery",
+                state=ChatOperationState.DELIVERING,
+                delivery_state="pending",
+            )
+
+        snapshot = service._chat_operation_store.get_operation(
+            "telegram:invalid:delivery"
+        )
+        assert snapshot is not None
+        assert snapshot.state is ChatOperationState.QUEUED
+        assert snapshot.delivery_state is None
+    finally:
+        await service._runtime_services.close()
+        await service._store.close()
+        await service._bot.close()
