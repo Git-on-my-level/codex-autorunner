@@ -340,6 +340,62 @@ describe('read model entity store', () => {
     expect(selectChatTranscript(store.snapshot(), 'chat-1')).toBe(selectedBefore);
   });
 
+  it('selects compacted transcript cards from a stable memoized projection boundary', () => {
+    const store = new ReadModelEntityStore();
+    store.replaceChatTranscript('chat-1', [
+      pmaMessageCard('chat-1', 'turn:1:user', 'Investigate'),
+      pmaTraceCard('thinking-1', 'Need', ['evt-1']),
+      pmaTraceCard('thinking-2', 'to inspect', ['evt-2'])
+    ]);
+
+    const selectedBefore = selectChatTranscript(store.snapshot(), 'chat-1');
+    const summary = selectedBefore.find((card): card is Extract<ChatTranscriptCard, { kind: 'turn_summary' }> => card.kind === 'turn_summary');
+
+    expect(selectedBefore).toHaveLength(2);
+    if (!summary) throw new Error('expected compacted turn summary');
+    expect(summary).toMatchObject({
+      kind: 'turn_summary',
+      title: '1 reasoning step'
+    });
+    expect(summary.cards[0]).toMatchObject({
+      kind: 'intermediate',
+      id: 'thinking-1',
+      text: 'Need to inspect',
+      eventIds: ['evt-1', 'evt-2']
+    });
+
+    store.setPmaProgress('chat-1', progress('chat-1', 1));
+
+    expect(selectChatTranscript(store.snapshot(), 'chat-1')).toBe(selectedBefore);
+  });
+
+  it('keeps large append-heavy transcript compaction behind selector invalidation', () => {
+    const store = new ReadModelEntityStore();
+    const baseCards = Array.from({ length: 1_000 }, (_, index) =>
+      pmaTraceCard(`thinking-${index}`, `token-${index}`, [`evt-${index}`], index)
+    );
+    store.replaceChatTranscript('chat-1', baseCards);
+    const selectedBefore = selectChatTranscript(store.snapshot(), 'chat-1');
+
+    expect(selectedBefore).toHaveLength(1);
+    expect(selectedBefore[0]).toMatchObject({ kind: 'turn_summary', title: '1 reasoning step' });
+    expect(selectChatTranscript(store.snapshot(), 'chat-1')).toBe(selectedBefore);
+
+    store.upsertChatTranscriptCards('chat-1', [
+      pmaTraceCard('thinking-1000', 'tail-token', ['evt-1000'], 1000)
+    ]);
+    const selectedAfter = selectChatTranscript(store.snapshot(), 'chat-1');
+
+    expect(selectedAfter).not.toBe(selectedBefore);
+    expect(selectedAfter).toHaveLength(1);
+    const summary = selectedAfter[0];
+    if (summary.kind !== 'turn_summary') throw new Error('expected compacted turn summary');
+    const trace = summary.cards[0];
+    if (trace.kind !== 'intermediate') throw new Error('expected compacted intermediate trace');
+    expect(trace.eventIds).toHaveLength(200);
+    expect(trace.text.length).toBeLessThanOrEqual(4000);
+  });
+
   it('does not clone untouched cached details when another detail patches', () => {
     const store = new ReadModelEntityStore();
     store.applyChatDetailSnapshot(detailSnapshot('chat-1'));
@@ -964,6 +1020,22 @@ function pmaMessageCard(chatId: string, id: string, text: string): ChatTranscrip
       artifacts: [],
       raw: {}
     }
+  };
+}
+
+function pmaTraceCard(id: string, text: string, eventIds: string[], index = 1): ChatTranscriptCard {
+  const order = String(index).padStart(6, '0');
+  return {
+    kind: 'intermediate',
+    id,
+    title: 'Thinking',
+    text,
+    eventIds,
+    progressSourceIds: [],
+    detail: null,
+    turnId: 'turn-1',
+    orderKey: `${order}|turn-1|activity|${id}`,
+    timestamp: now
   };
 }
 

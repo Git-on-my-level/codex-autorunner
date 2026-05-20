@@ -22,7 +22,7 @@ import {
 } from '$lib/viewModels/domain';
 import { normalizeManagedThreadChatKind } from '$lib/viewModels/managedThreadChatKind';
 import type { PmaQueuedTurn } from '$lib/api/client';
-import type { ChatTranscriptCard } from '$lib/viewModels/pmaChat';
+import { compactChatTranscriptCards, type ChatTranscriptCard } from '$lib/viewModels/pmaChat';
 import { selectChatIndexWindowView, type ChatIndexWindowRequest, type ReadModelEntityState } from './readModelStore';
 
 type JsonRecord = Record<string, unknown>;
@@ -222,9 +222,10 @@ export function selectChatTranscript(state: ReadModelEntityState, chatId: string
   if (!transcript) return emptyChatTranscript;
   const cached = chatTranscriptSelectionCache.get(transcript);
   if (cached) return cached;
-  const selected = transcript.order.map((id) => transcript.cardsById[id]).filter(Boolean);
-  chatTranscriptSelectionCache.set(transcript, selected);
-  return selected;
+  const ordered = transcript.order.map((id) => transcript.cardsById[id]).filter(Boolean);
+  const compacted = compactChatTranscriptCards(ordered);
+  chatTranscriptSelectionCache.set(transcript, compacted);
+  return compacted;
 }
 
 export function selectPmaProgress(state: ReadModelEntityState, chatId: string | null): PmaRunProgress | null {
