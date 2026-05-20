@@ -1,4 +1,5 @@
 import { runtimeBasePath, withRuntimeBasePath } from '$lib/runtime/basePath';
+import { EventSourceStreamRuntime } from '$lib/runtime/eventSourceRuntime';
 
 export type SseEvent<T = unknown> = {
   id: string | null;
@@ -122,14 +123,9 @@ export function openChatTranscriptEventSource(
   basePath = runtimeBasePath()
 ): StreamSubscription {
   const encoded = encodeURIComponent(managedThreadId);
-  let closed = false;
-  let source: EventSource | null = null;
-  let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
-  let attempt = 0;
   let lastEventId: string | null = optionalString(options.sinceEventId);
   let lastManagedTurnId: string | null = optionalString(options.sinceManagedTurnId);
   const handle = (message: MessageEvent) => {
-    attempt = 0;
     const event = normalizeChatTranscriptStreamEvent({
       id: message.lastEventId || null,
       event: message.type || 'message',
@@ -142,47 +138,29 @@ export function openChatTranscriptEventSource(
       lastEventId = null;
     }
     if (message.lastEventId) lastEventId = message.lastEventId;
-    options.onStatus?.('connected');
     options.onEvent(event);
   };
-  const connect = () => {
-    if (closed) return;
-    options.onStatus?.('connecting');
+  const path = () => {
     const params = new URLSearchParams();
     if (lastEventId) {
       params.set('since_event_id', lastEventId);
       if (lastManagedTurnId) params.set('since_managed_turn_id', lastManagedTurnId);
     }
     const cursorQuery = params.size > 0 ? `?${params.toString()}` : '';
-    source = new EventSource(withRuntimeBasePath(`/hub/pma/threads/${encoded}/transcript/events${cursorQuery}`, basePath), {
-      withCredentials: options.withCredentials
-    });
-    source.addEventListener('transcript.snapshot', handle);
-    source.addEventListener('transcript.append', handle);
-    source.addEventListener('transcript.patch', handle);
-    source.addEventListener('message', handle);
-    source.addEventListener('error', (event) => {
-      if (closed) return;
-      options.onStatus?.('interrupted');
-      options.onError?.(event);
-      source?.close();
-      const delay = Math.min(8000, 500 * 2 ** attempt);
-      attempt += 1;
-      if (reconnectTimer) clearTimeout(reconnectTimer);
-      reconnectTimer = setTimeout(() => {
-        reconnectTimer = null;
-        connect();
-      }, delay);
-    });
+    return `/hub/pma/threads/${encoded}/transcript/events${cursorQuery}`;
   };
-  connect();
+  const runtime = new EventSourceStreamRuntime({
+    path,
+    eventTypes: ['transcript.snapshot', 'transcript.append', 'transcript.patch'],
+    basePath,
+    withCredentials: options.withCredentials,
+    onStatus: options.onStatus,
+    onError: options.onError,
+    onMessage: handle
+  });
+  runtime.open();
   return {
-    close: () => {
-      closed = true;
-      if (reconnectTimer) clearTimeout(reconnectTimer);
-      source?.close();
-      options.onStatus?.('closed');
-    }
+    close: () => runtime.close()
   };
 }
 
@@ -222,14 +200,9 @@ export function openChatSurfaceEventSource(
   options: ChatSurfaceStreamOptions,
   basePath = runtimeBasePath()
 ): StreamSubscription {
-  let closed = false;
-  let source: EventSource | null = null;
-  let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
-  let attempt = 0;
   const storageKey = 'car.stream.cursor.chat.surface';
+  let openedCursor: string | null = null;
   const handle = (message: MessageEvent) => {
-    attempt = 0;
-    options.onStatus?.('connected');
     if (message.lastEventId) rememberCursor(storageKey, message.lastEventId);
     options.onEvent(
       normalizeChatSurfaceStreamEvent({
@@ -240,40 +213,26 @@ export function openChatSurfaceEventSource(
       })
     );
   };
-  const connect = () => {
-    if (closed) return;
-    options.onStatus?.('connecting');
+  const path = () => {
     const cursor = readCursor(storageKey);
-    const path = cursor ? `/hub/chat/events?cursor=${encodeURIComponent(cursor)}` : '/hub/chat/events';
-    source = new EventSource(withRuntimeBasePath(path, basePath), {
-      withCredentials: options.withCredentials
-    });
-    source.addEventListener('chat.snapshot', handle);
-    source.addEventListener('chat.event', handle);
-    source.addEventListener('message', handle);
-    source.addEventListener('error', (event) => {
-      if (closed) return;
-      options.onStatus?.('interrupted');
-      options.onError?.(event);
-      source?.close();
-      if (cursor) forgetCursor(storageKey);
-      const delay = Math.min(8000, 500 * 2 ** attempt);
-      attempt += 1;
-      if (reconnectTimer) clearTimeout(reconnectTimer);
-      reconnectTimer = setTimeout(() => {
-        reconnectTimer = null;
-        connect();
-      }, delay);
-    });
+    openedCursor = cursor;
+    return cursor ? `/hub/chat/events?cursor=${encodeURIComponent(cursor)}` : '/hub/chat/events';
   };
-  connect();
+  const runtime = new EventSourceStreamRuntime({
+    path,
+    eventTypes: ['chat.snapshot', 'chat.event'],
+    basePath,
+    withCredentials: options.withCredentials,
+    onStatus: options.onStatus,
+    onError: options.onError,
+    onBeforeReconnect: () => {
+      if (openedCursor) forgetCursor(storageKey);
+    },
+    onMessage: handle
+  });
+  runtime.open();
   return {
-    close: () => {
-      closed = true;
-      if (reconnectTimer) clearTimeout(reconnectTimer);
-      source?.close();
-      options.onStatus?.('closed');
-    }
+    close: () => runtime.close()
   };
 }
 
@@ -290,42 +249,25 @@ export function openFlowRunEventSource(
   const workspaceId = owner?.repo ?? owner?.worktree;
   const prefix = workspaceId ? `/repos/${encodeURIComponent(workspaceId)}/api/flows` : '/api/flows';
   const storageKey = `car.stream.cursor.flow.${workspaceId ?? 'hub'}.${runId}`;
-  let closed = false;
-  let source: EventSource | null = null;
-  let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
-  let attempt = 0;
-  const connect = () => {
-    if (closed) return;
+  const path = () => {
     const after = readCursor(storageKey);
     const query = after ? `?after=${encodeURIComponent(after)}` : '';
-    source = new EventSource(withRuntimeBasePath(`${prefix}/${encodeURIComponent(runId)}/events${query}`, basePath), {
-      withCredentials: options.withCredentials
-    });
-    source.addEventListener('message', (message: MessageEvent) => {
-      attempt = 0;
+    return `${prefix}/${encodeURIComponent(runId)}/events${query}`;
+  };
+  const runtime = new EventSourceStreamRuntime({
+    path,
+    eventTypes: [],
+    basePath,
+    withCredentials: options.withCredentials,
+    onError: options.onError,
+    onMessage: (message) => {
       if (message.lastEventId) rememberCursor(storageKey, message.lastEventId);
       options.onEvent({ id: message.lastEventId || null, payload: asRecord(parseJson(message.data)) });
-    });
-    source.addEventListener('error', (event) => {
-      if (closed) return;
-      options.onError?.(event);
-      source?.close();
-      const delay = Math.min(8000, 500 * 2 ** attempt);
-      attempt += 1;
-      if (reconnectTimer) clearTimeout(reconnectTimer);
-      reconnectTimer = setTimeout(() => {
-        reconnectTimer = null;
-        connect();
-      }, delay);
-    });
-  };
-  connect();
-  return {
-    close: () => {
-      closed = true;
-      if (reconnectTimer) clearTimeout(reconnectTimer);
-      source?.close();
     }
+  });
+  runtime.open();
+  return {
+    close: () => runtime.close()
   };
 }
 

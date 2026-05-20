@@ -502,6 +502,13 @@ export function pmaChatBindingKey(chat: PmaChatSummary | null): string | null {
   const surfaceKind = typeof raw.surface_kind === 'string' ? raw.surface_kind.trim() : '';
   const surfaceKey = typeof raw.surface_key === 'string' ? raw.surface_key.trim() : '';
   if (surfaceKind && surfaceKey) return `${surfaceKind}:${surfaceKey}`;
+  const primarySurface = raw.primary_surface;
+  if (primarySurface && typeof primarySurface === 'object' && !Array.isArray(primarySurface)) {
+    const primary = primarySurface as Record<string, unknown>;
+    const primaryKind = typeof primary.surface_kind === 'string' ? primary.surface_kind.trim() : '';
+    const primaryKey = typeof primary.surface_key === 'string' ? primary.surface_key.trim() : '';
+    if (primaryKind && primaryKey) return `${primaryKind}:${primaryKey}`;
+  }
   return null;
 }
 

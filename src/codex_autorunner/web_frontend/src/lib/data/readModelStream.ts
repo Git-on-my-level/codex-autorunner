@@ -1,15 +1,15 @@
-import { runtimeBasePath, withRuntimeBasePath } from '$lib/runtime/basePath';
+import {
+  EventSourceStreamRuntime,
+  storage,
+  type CursorStorage,
+  type EventSourceFactory
+} from '$lib/runtime/eventSourceRuntime';
+import type { StreamVisibilityPolicy } from '$lib/runtime/streamVisibilityPolicy';
 import { parseJsonSseFrame, type SseEvent, type StreamSubscription } from '$lib/api/streaming';
 
 export type ReadModelStreamStatus = 'idle' | 'connecting' | 'connected' | 'interrupted' | 'closed';
 
-export type CursorStorage = {
-  getItem(key: string): string | null;
-  setItem(key: string, value: string): void;
-  removeItem(key: string): void;
-};
-
-export type EventSourceFactory = (url: string, init?: EventSourceInit) => EventSource;
+export type { CursorStorage, EventSourceFactory };
 
 export type ReadModelStreamOptions<T> = {
   key: string;
@@ -25,28 +25,36 @@ export type ReadModelStreamOptions<T> = {
   reconnectBaseMs?: number;
   reconnectMaxMs?: number;
   withCredentials?: boolean;
+  visibilityPolicy?: StreamVisibilityPolicy | null;
+  onResume?: () => void;
 };
 
 export class ReadModelStreamManager<T> implements StreamSubscription {
-  private source: EventSource | null = null;
-  private closed = false;
-  private attempt = 0;
-  private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  private readonly runtime: EventSourceStreamRuntime;
 
-  constructor(private readonly options: ReadModelStreamOptions<T>) {}
+  constructor(private readonly options: ReadModelStreamOptions<T>) {
+    this.runtime = new EventSourceStreamRuntime({
+      path: () => this.pathWithCursor(),
+      eventTypes: options.eventTypes,
+      basePath: options.basePath,
+      reconnectBaseMs: options.reconnectBaseMs,
+      reconnectMaxMs: options.reconnectMaxMs,
+      withCredentials: options.withCredentials,
+      eventSourceFactory: options.eventSourceFactory,
+      visibilityPolicy: options.visibilityPolicy,
+      onResume: options.onResume,
+      onStatus: options.onStatus,
+      onError: options.onError,
+      onMessage: (message) => this.handleMessage(message)
+    });
+  }
 
   open(): void {
-    this.closed = false;
-    this.connect();
+    this.runtime.open();
   }
 
   close(): void {
-    this.closed = true;
-    if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
-    this.reconnectTimer = null;
-    this.source?.close();
-    this.source = null;
-    this.options.onStatus?.('closed');
+    this.runtime.close();
   }
 
   cursor(): string | null {
@@ -57,46 +65,21 @@ export class ReadModelStreamManager<T> implements StreamSubscription {
     storage(this.options.cursorStorage).removeItem(cursorKey(this.options.key));
   }
 
-  private connect(): void {
-    if (this.closed) return;
-    this.options.onStatus?.('connecting');
+  private pathWithCursor(): string {
     const currentCursor = this.cursor();
     const params = new URLSearchParams();
     if (currentCursor) params.set('cursor', currentCursor);
-    const path = `${this.options.path}${this.options.path.includes('?') ? '&' : '?'}${params.toString()}`;
-    const url = withRuntimeBasePath(path.endsWith('?') ? path.slice(0, -1) : path, this.options.basePath ?? runtimeBasePath());
-    const factory = this.options.eventSourceFactory ?? ((sourceUrl, init) => new EventSource(sourceUrl, init));
-    const source = factory(url, { withCredentials: this.options.withCredentials });
-    this.source = source;
-    const handle = (message: MessageEvent) => {
-      this.attempt = 0;
-      this.options.onStatus?.('connected');
-      const parsed = parseEventSourceMessage(message);
-      const mapped = this.options.parse(parsed);
-      const cursor = message.lastEventId || parsed.id;
-      if (cursor) storage(this.options.cursorStorage).setItem(cursorKey(this.options.key), cursor);
-      if (mapped) this.options.onEvent(mapped, cursor);
-    };
-    for (const eventType of this.options.eventTypes) source.addEventListener(eventType, handle);
-    source.addEventListener('message', handle);
-    source.addEventListener('error', (event) => {
-      this.options.onStatus?.('interrupted');
-      this.options.onError?.(event);
-      source.close();
-      if (!this.closed) this.scheduleReconnect();
-    });
+    const query = params.toString();
+    if (!query) return this.options.path;
+    return `${this.options.path}${this.options.path.includes('?') ? '&' : '?'}${query}`;
   }
 
-  private scheduleReconnect(): void {
-    if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
-    const base = this.options.reconnectBaseMs ?? 500;
-    const max = this.options.reconnectMaxMs ?? 8000;
-    const delay = Math.min(max, base * 2 ** this.attempt);
-    this.attempt += 1;
-    this.reconnectTimer = setTimeout(() => {
-      this.reconnectTimer = null;
-      this.connect();
-    }, delay);
+  private handleMessage(message: MessageEvent): void {
+    const parsed = parseEventSourceMessage(message);
+    const mapped = this.options.parse(parsed);
+    const cursor = message.lastEventId || parsed.id;
+    if (cursor) storage(this.options.cursorStorage).setItem(cursorKey(this.options.key), cursor);
+    if (mapped) this.options.onEvent(mapped, cursor);
   }
 }
 
@@ -134,20 +117,3 @@ function parseEventSourceMessage(message: MessageEvent): SseEvent<unknown> {
 function cursorKey(key: string): string {
   return `car.readModel.cursor.${key}`;
 }
-
-function storage(candidate: CursorStorage | null | undefined): CursorStorage {
-  if (candidate) return candidate;
-  if (typeof localStorage !== 'undefined') return localStorage;
-  return memoryStorage;
-}
-
-const memory = new Map<string, string>();
-const memoryStorage: CursorStorage = {
-  getItem: (key) => memory.get(key) ?? null,
-  setItem: (key, value) => {
-    memory.set(key, value);
-  },
-  removeItem: (key) => {
-    memory.delete(key);
-  }
-};

@@ -1,6 +1,9 @@
 <script lang="ts">
   import { onDestroy } from 'svelte';
-  import { openChatTranscriptEventSource, type StreamSubscription } from '$lib/api/streaming';
+  import {
+    createCurrentTicketChatPreviewProjection,
+    type CurrentTicketChatPreviewState
+  } from '$lib/application/currentTicketChatPreviewProjection';
   import { withRuntimeBasePath as href } from '$lib/runtime/basePath';
 
   let {
@@ -17,83 +20,25 @@
     statusSignal?: 'active' | 'waiting' | 'blocked' | 'failed' | 'invalid' | 'idle' | 'done';
   } = $props();
 
-  let latestText = $state<string>('');
-  let latestRole = $state<'user' | 'assistant' | 'intermediate' | null>(null);
-  let streamState = $state<'idle' | 'connecting' | 'connected' | 'interrupted'>('idle');
-  let subscription: StreamSubscription | null = null;
-  let activeChatId: string | null = null;
-
-  $effect(() => {
-    const id = chatId;
-    if (!id) {
-      teardown();
-      return;
+  let preview = $state<CurrentTicketChatPreviewState>({
+    targetChatId: null,
+    latestText: '',
+    latestRole: null,
+    streamState: 'idle'
+  });
+  const projection = createCurrentTicketChatPreviewProjection({
+    onStateChange: (state) => {
+      preview = state;
     }
-    if (id === activeChatId) return;
-    teardown();
-    activeChatId = id;
-    streamState = 'connecting';
-    connect(id);
   });
 
-  onDestroy(() => teardown());
+  $effect(() => {
+    projection.activate(chatId);
+  });
 
-  function connect(id: string): void {
-    subscription = openChatTranscriptEventSource(id, {
-      onEvent: (event) => {
-        if (activeChatId !== id) return;
-        streamState = 'connected';
-        if (event.kind === 'transcript_snapshot' || event.kind === 'transcript_append') {
-          for (const row of transcriptRows(event.payload).reverse()) {
-            const next = rowPreview(row);
-            if (!next) continue;
-            latestText = next.text;
-            latestRole = next.role;
-            return;
-          }
-        }
-      },
-      onError: () => {
-        if (activeChatId !== id) return;
-        streamState = 'interrupted';
-      }
-    });
-  }
+  onDestroy(() => projection.destroy());
 
-  function teardown(): void {
-    subscription?.close();
-    subscription = null;
-    activeChatId = null;
-    latestText = '';
-    latestRole = null;
-    streamState = 'idle';
-  }
-
-  function transcriptRows(payload: Record<string, unknown>): Record<string, unknown>[] {
-    const rows = payload.rows;
-    return Array.isArray(rows)
-      ? rows.filter((row): row is Record<string, unknown> => Boolean(row) && typeof row === 'object' && !Array.isArray(row))
-      : [];
-  }
-
-  function rowPreview(row: Record<string, unknown>): { text: string; role: 'user' | 'assistant' | 'intermediate' } | null {
-    const kind = String(row.kind ?? '');
-    if (kind === 'message') {
-      const message = row.message;
-      if (!message || typeof message !== 'object' || Array.isArray(message)) return null;
-      const text = String((message as Record<string, unknown>).text ?? '').trim();
-      if (!text) return null;
-      const role = String((message as Record<string, unknown>).role ?? '') === 'user' ? 'user' : 'assistant';
-      return { text, role };
-    }
-    if (kind === 'intermediate' || kind === 'tool_group' || kind === 'approval' || kind === 'lifecycle') {
-      const text = String(row.text ?? row.summary ?? row.title ?? '').trim();
-      return text ? { text, role: 'intermediate' } : null;
-    }
-    return null;
-  }
-
-  const dotClass = $derived(`stream-dot signal-${statusSignal} stream-${streamState}`);
+  const dotClass = $derived(`stream-dot signal-${statusSignal} stream-${preview.streamState}`);
   const linkHref = $derived(ticketHref ? href(ticketHref) : null);
   const chatHref = $derived(href(`/chats/${encodeURIComponent(chatId)}`));
 </script>
@@ -110,17 +55,17 @@
       <span class="cs-status signal-{statusSignal}">{statusText}</span>
     {/if}
   </div>
-  <div class="cs-body" title={latestText}>
-    {#if latestText}
-      {#if latestRole === 'user'}
+  <div class="cs-body" title={preview.latestText}>
+    {#if preview.latestText}
+      {#if preview.latestRole === 'user'}
         <span class="cs-role">you:</span>
-      {:else if latestRole === 'intermediate'}
+      {:else if preview.latestRole === 'intermediate'}
         <span class="cs-role">…</span>
       {/if}
-      <span class="cs-text">{latestText}</span>
+      <span class="cs-text">{preview.latestText}</span>
     {:else}
       <span class="cs-text muted">
-        {streamState === 'connecting' ? 'Connecting to live output…' : 'No output yet.'}
+        {preview.streamState === 'connecting' ? 'Connecting to live output…' : 'No output yet.'}
       </span>
     {/if}
   </div>
