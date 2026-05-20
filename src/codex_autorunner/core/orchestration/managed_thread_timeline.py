@@ -375,7 +375,7 @@ def _progress_item_for_entry(
             event=run_event,
         ),
     )
-    if item is None or item.hidden:
+    if item is None:
         return None
     return item
 
