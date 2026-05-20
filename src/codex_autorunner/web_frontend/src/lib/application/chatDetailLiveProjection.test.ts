@@ -209,6 +209,41 @@ describe('ChatDetailLiveProjection', () => {
     expect(stream.closeCalls).toBe(1);
     expect(projection.snapshot().streamState).toBe('idle');
   });
+
+  it('replaces the owned transcript stream when activating a different chat', async () => {
+    const store = new ReadModelEntityStore();
+    const stream = streamFixture();
+    let streamEligible = true;
+    const projection = projectionFixture(store, apiFixture(), {
+      openStream: stream.open,
+      shouldUseStream: () => streamEligible
+    });
+
+    projection.connect('old-running-chat');
+    streamEligible = false;
+    await projection.activate('new-idle-chat', { quiet: true });
+
+    expect(stream.closeCalls).toBe(1);
+    expect(stream.openedChatIds).toEqual(['old-running-chat']);
+    stream.options?.onEvent({
+      kind: 'transcript_append',
+      lastEventId: 'old-1',
+      payload: { rows: [rawMessageRow('old-running-chat', 'old-row', 'assistant', 'old', 'turn-old')] }
+    });
+    expect(store.snapshot().chatTranscripts['old-running-chat']).toBeUndefined();
+  });
+
+  it('does not churn the transcript stream when reactivating the same chat', async () => {
+    const store = new ReadModelEntityStore();
+    const stream = streamFixture();
+    const projection = projectionFixture(store, apiFixture(), { openStream: stream.open });
+
+    projection.connect('same-chat');
+    await projection.activate('same-chat', { quiet: true });
+
+    expect(stream.closeCalls).toBe(0);
+    expect(stream.openedChatIds).toEqual(['same-chat']);
+  });
 });
 
 function projectionFixture(
@@ -216,11 +251,9 @@ function projectionFixture(
   api: ReturnType<typeof apiFixture>,
   overrides: Partial<ChatDetailLiveProjectionDeps> = {}
 ): ChatDetailLiveProjection {
-  const activeChatId: string | null = 'chat-1';
   return new ChatDetailLiveProjection({
     api,
     readModelStore: store,
-    getActiveChatId: () => activeChatId,
     getChatSummary: (chatId) => chatSummary(chatId),
     shouldUseStream: () => true,
     now: () => 1_768_176_123_000,
@@ -257,16 +290,20 @@ function apiFixture(options: {
 function streamFixture(): {
   options: TranscriptStreamOptions | null;
   closeCalls: number;
+  openedChatIds: string[];
   open: (chatId: string, options: TranscriptStreamOptions) => { close: () => void };
 } {
   const fixture: {
     options: TranscriptStreamOptions | null;
     closeCalls: number;
+    openedChatIds: string[];
     open: (chatId: string, options: TranscriptStreamOptions) => { close: () => void };
   } = {
     options: null,
     closeCalls: 0,
-    open(_chatId: string, options: TranscriptStreamOptions) {
+    openedChatIds: [],
+    open(chatId: string, options: TranscriptStreamOptions) {
+      fixture.openedChatIds.push(chatId);
       fixture.options = options;
       return {
         close: () => {

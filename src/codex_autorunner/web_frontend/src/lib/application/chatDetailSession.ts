@@ -35,11 +35,10 @@ export type ChatDetailSessionState = {
 
 export type ChatDetailSelectionCommand = {
   state: ChatDetailSessionState;
-  refresh: { chatId: string; quiet: boolean } | null;
+  runtime: { chatId: string | null; quiet: boolean } | null;
   syncUrl: boolean;
   markRead: boolean;
   syncSelectors: boolean;
-  closeStream: boolean;
 };
 
 export type ChatDetailActivationInput = {
@@ -117,11 +116,10 @@ export function selectChatDetail(
       loadingActive: activeError ? false : !(options.cached || loaderOwnsInitialDetail),
       activeError
     },
-    refresh: activeError ? null : { chatId, quiet: options.cached || loaderOwnsInitialDetail },
+    runtime: activeError ? { chatId: null, quiet: true } : { chatId, quiet: options.cached || loaderOwnsInitialDetail },
     syncUrl: options.syncUrl ?? false,
     markRead: true,
-    syncSelectors: true,
-    closeStream: false
+    syncSelectors: true
   };
 }
 
@@ -144,11 +142,10 @@ export function activateChatDetailFromUrl(
         loadingActive: false,
         activeError: null
       },
-      refresh: null,
+      runtime: { chatId: null, quiet: true },
       syncUrl: false,
       markRead: false,
-      syncSelectors: false,
-      closeStream: true
+      syncSelectors: false
     };
   }
   if (detailId === state.activeChatId) return noDetailCommand(state);
@@ -169,11 +166,10 @@ export function activateChatDetailFromUrl(
         loadingActive: !activeError,
         activeError
       },
-      refresh: activeError ? null : { chatId: detailId, quiet: false },
+      runtime: activeError ? { chatId: null, quiet: true } : { chatId: detailId, quiet: false },
       syncUrl: false,
       markRead: false,
-      syncSelectors: false,
-      closeStream: true
+      syncSelectors: false
     };
   }
   const loaderResult = input.activeDetailLoadResult(detailId);
@@ -409,11 +405,10 @@ export function sortEntriesForPinnedChats(entries: ChatListEntry[], pinned: Pinn
 function noDetailCommand(state: ChatDetailSessionState): ChatDetailSelectionCommand {
   return {
     state,
-    refresh: null,
+    runtime: null,
     syncUrl: false,
     markRead: false,
-    syncSelectors: false,
-    closeStream: false
+    syncSelectors: false
   };
 }
 
