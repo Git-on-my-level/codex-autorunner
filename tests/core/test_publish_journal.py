@@ -3,8 +3,18 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 from codex_autorunner.core.orchestration.sqlite import open_orchestration_sqlite
-from codex_autorunner.core.publish_journal import PublishJournalStore
+from codex_autorunner.core.publish_journal import (
+    PublishAttemptState,
+    PublishAttemptTransition,
+    PublishJournalStore,
+    PublishOperationState,
+    PublishOperationTransition,
+    transition_publish_attempt_state,
+    transition_publish_operation_state,
+)
 
 
 def _attempt_rows(hub_root: Path, operation_id: str) -> list[dict[str, object]]:
@@ -19,6 +29,83 @@ def _attempt_rows(hub_root: Path, operation_id: str) -> list[dict[str, object]]:
             (operation_id,),
         ).fetchall()
     return [dict(row) for row in rows]
+
+
+def test_publish_lifecycle_contract_accepts_named_legal_transitions() -> None:
+    assert (
+        transition_publish_operation_state(
+            PublishOperationTransition.CREATE,
+            current_state=None,
+        )
+        == PublishOperationState.PENDING
+    )
+    assert (
+        transition_publish_operation_state(
+            PublishOperationTransition.CLAIM,
+            current_state=PublishOperationState.PENDING,
+        )
+        == PublishOperationState.RUNNING
+    )
+    assert (
+        transition_publish_operation_state(
+            PublishOperationTransition.RETRY,
+            current_state=PublishOperationState.RUNNING,
+        )
+        == PublishOperationState.PENDING
+    )
+    assert (
+        transition_publish_operation_state(
+            PublishOperationTransition.EFFECT_APPLIED,
+            current_state=PublishOperationState.RUNNING,
+        )
+        == PublishOperationState.EFFECT_APPLIED
+    )
+    assert (
+        transition_publish_operation_state(
+            PublishOperationTransition.RECONCILE_EFFECT_APPLIED,
+            current_state=PublishOperationState.EFFECT_APPLIED,
+        )
+        == PublishOperationState.SUCCEEDED
+    )
+    assert (
+        transition_publish_attempt_state(
+            PublishAttemptTransition.CLAIM,
+            current_state=None,
+        )
+        == PublishAttemptState.CLAIMED
+    )
+    assert (
+        transition_publish_attempt_state(
+            PublishAttemptTransition.START,
+            current_state=PublishAttemptState.CLAIMED,
+        )
+        == PublishAttemptState.RUNNING
+    )
+    assert (
+        transition_publish_attempt_state(
+            PublishAttemptTransition.SUCCEED,
+            current_state=PublishAttemptState.RUNNING,
+        )
+        == PublishAttemptState.SUCCEEDED
+    )
+
+
+def test_publish_lifecycle_contract_rejects_terminal_rewinds() -> None:
+    with pytest.raises(RuntimeError, match="invalid publish operation"):
+        transition_publish_operation_state(
+            PublishOperationTransition.CLAIM,
+            current_state=PublishOperationState.SUCCEEDED,
+        )
+    with pytest.raises(RuntimeError, match="invalid publish operation"):
+        transition_publish_operation_state(
+            PublishOperationTransition.RETRY,
+            current_state=PublishOperationState.FAILED,
+        )
+    with pytest.raises(RuntimeError, match="invalid publish attempt"):
+        transition_publish_attempt_state(
+            PublishAttemptTransition.START,
+            current_state=PublishAttemptState.SUCCEEDED,
+        )
 
 
 def test_create_operation_dedupes_active_operation_key(tmp_path: Path) -> None:
@@ -377,3 +464,95 @@ def test_list_operations_filters_effect_applied(tmp_path: Path) -> None:
 
     assert store.list_operations(state="succeeded") == []
     assert store.list_operations(state="failed") == []
+
+
+def test_unknown_persisted_operation_state_rejected_at_admission_boundaries(
+    tmp_path: Path,
+) -> None:
+    store = PublishJournalStore(tmp_path)
+    created, _ = store.create_operation(
+        operation_key="github:comment:unknown-operation",
+        operation_kind="github_comment",
+        payload={"body": "hello"},
+        next_attempt_at="2026-03-25T00:00:00Z",
+    )
+
+    with open_orchestration_sqlite(tmp_path) as conn:
+        conn.execute(
+            """
+            UPDATE orch_publish_operations
+               SET state = 'mystery'
+             WHERE operation_id = ?
+            """,
+            (created.operation_id,),
+        )
+
+    with pytest.raises(RuntimeError, match="unknown publish operation"):
+        store.get_operation(created.operation_id)
+    with pytest.raises(RuntimeError, match="unknown publish operation"):
+        store.list_operations()
+    with pytest.raises(RuntimeError, match="unknown publish operation"):
+        store.claim_pending_operations(now_timestamp="2026-03-25T01:00:00Z")
+    with pytest.raises(RuntimeError, match="unknown publish operation"):
+        store.create_operation(
+            operation_key="github:comment:unknown-operation",
+            operation_kind="github_comment",
+        )
+
+
+def test_unknown_persisted_attempt_state_rejected_at_write_boundary(
+    tmp_path: Path,
+) -> None:
+    store = PublishJournalStore(tmp_path)
+    created, _ = store.create_operation(
+        operation_key="github:comment:unknown-attempt",
+        operation_kind="github_comment",
+        payload={"body": "hello"},
+        next_attempt_at="2026-03-25T00:00:00Z",
+    )
+    store.claim_pending_operations(now_timestamp="2026-03-25T00:30:00Z")
+
+    with open_orchestration_sqlite(tmp_path) as conn:
+        conn.execute(
+            """
+            UPDATE orch_publish_attempts
+               SET state = 'mystery'
+             WHERE operation_id = ?
+            """,
+            (created.operation_id,),
+        )
+
+    with pytest.raises(RuntimeError, match="unknown publish attempt"):
+        store.mark_running(created.operation_id)
+    with pytest.raises(RuntimeError, match="unknown publish attempt"):
+        store.mark_succeeded(created.operation_id, response={"delivered": True})
+    with pytest.raises(RuntimeError, match="unknown publish attempt"):
+        store.mark_failed(created.operation_id, error_text="temporary")
+
+
+def test_succeeded_operation_cannot_be_rewound_to_failed_or_effect_applied(
+    tmp_path: Path,
+) -> None:
+    store = PublishJournalStore(tmp_path)
+    created, _ = store.create_operation(
+        operation_key="github:comment:terminal-rewind",
+        operation_kind="github_comment",
+        payload={"body": "hello"},
+        next_attempt_at="2026-03-25T00:00:00Z",
+    )
+    store.claim_pending_operations(now_timestamp="2026-03-25T00:30:00Z")
+    store.mark_running(created.operation_id)
+    succeeded = store.mark_succeeded(created.operation_id, response={"ok": True})
+    assert succeeded is not None
+    assert succeeded.state == "succeeded"
+
+    assert store.mark_failed(created.operation_id, error_text="late failure") is None
+    assert (
+        store.mark_effect_applied(
+            created.operation_id,
+            response={"ok": True},
+            error_text="late partial",
+        )
+        is None
+    )
+    assert store.get_operation(created.operation_id).state == "succeeded"
