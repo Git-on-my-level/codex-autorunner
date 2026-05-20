@@ -69,6 +69,34 @@ describe('CurrentTicketChatPreviewProjection', () => {
     });
   });
 
+  it('updates from append events and ignores patch events without preview rows', () => {
+    const stream = streamFixture();
+    const projection = new CurrentTicketChatPreviewProjection({ openStream: stream.open });
+
+    projection.activate('chat-1');
+    stream.opened[0].options.onEvent({
+      kind: 'transcript_append',
+      lastEventId: 'append-1',
+      payload: { rows: [{ kind: 'message', message: { role: 'user', text: 'latest append' } }] }
+    });
+    expect(projection.snapshot()).toMatchObject({
+      latestText: 'latest append',
+      latestRole: 'user',
+      streamState: 'connected'
+    });
+
+    stream.opened[0].options.onEvent({
+      kind: 'transcript_patch',
+      lastEventId: 'patch-1',
+      payload: { status: { status: 'running' } }
+    });
+    expect(projection.snapshot()).toMatchObject({
+      latestText: 'latest append',
+      latestRole: 'user',
+      streamState: 'connected'
+    });
+  });
+
   it('closes deterministically when deactivated or destroyed', () => {
     const stream = streamFixture();
     const projection = new CurrentTicketChatPreviewProjection({ openStream: stream.open });

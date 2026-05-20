@@ -3,6 +3,7 @@
   import { withRuntimeBasePath as href } from '$lib/runtime/basePath';
   import { renderMarkdownToHtml } from '$lib/viewModels/contextspace';
   import {
+    compactChatTranscriptCards,
     formatCompactMessageDateTime,
     type ChatTranscriptCard,
     type ChatToolCallCard
@@ -18,6 +19,7 @@
 
   const MAX_RENDERED_TOOL_GROUP_ITEMS = 80;
   const MAX_RENDERED_TURN_SUMMARY_CARDS = 80;
+  const displayCardCache = new WeakMap<ChatTranscriptCard[], ChatTranscriptCard[]>();
 
   const userToggled = $state<Record<string, boolean>>({});
 
@@ -150,7 +152,15 @@
     return `${ref.capsuleId} v${ref.capsuleVersion} · ${ref.scope}`;
   }
 
-  const displayCards = $derived(cards);
+  function displayCardsFor(input: ChatTranscriptCard[]): ChatTranscriptCard[] {
+    const cached = displayCardCache.get(input);
+    if (cached) return cached;
+    const compacted = compactChatTranscriptCards(input);
+    displayCardCache.set(input, compacted);
+    return compacted;
+  }
+
+  const displayCards = $derived(displayCardsFor(cards));
 </script>
 
 {#each displayCards as card (card.id)}

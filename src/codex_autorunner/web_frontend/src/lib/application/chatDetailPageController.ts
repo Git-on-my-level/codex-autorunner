@@ -283,12 +283,11 @@ export class ChatDetailPageController {
     if (artifactResult.ok) this.deps.readModelStore.setPmaArtifacts('__global__', artifactResult.data);
     if (topologyResult.ok) this.deps.readModelStore.applyRepoWorktreeTopologySnapshot(topologyResult.data as Parameters<ReadModelEntityStore['applyRepoWorktreeTopologySnapshot']>[0]);
     if (runtimeResult.ok) this.deps.readModelStore.applyRepoWorktreeRuntimeSnapshot(runtimeResult.data as Parameters<ReadModelEntityStore['applyRepoWorktreeRuntimeSnapshot']>[0]);
-    if (!agentResult.ok) return;
     const scopeState = this.deps.readModelStore.snapshot();
     this.deps.onSupportDataLoaded({
-      agents: agentResult.data.agents,
-      defaults: agentResult.data.defaults,
-      defaultAgent: agentResult.data.default,
+      agents: agentResult.ok ? agentResult.data.agents : [],
+      defaults: agentResult.ok ? agentResult.data.defaults : {},
+      defaultAgent: agentResult.ok ? agentResult.data.default : 'codex',
       scopeOptions: buildPmaChatScopeOptions(
         topologyResult.ok ? selectRepoSummaries(scopeState) : [],
         topologyResult.ok ? selectWorktreeSummaries(scopeState) : []

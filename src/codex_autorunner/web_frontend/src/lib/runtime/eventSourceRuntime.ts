@@ -20,7 +20,7 @@ export type EventSourceStreamRuntimeOptions = {
   onMessage: (message: MessageEvent) => void;
   onError?: (error: Event) => void;
   onStatus?: (status: EventSourceStreamStatus) => void;
-  onResume?: () => void;
+  onResume?: () => void | Promise<void>;
   onBeforeReconnect?: () => void;
   basePath?: string;
   reconnectBaseMs?: number;
@@ -36,6 +36,7 @@ export class EventSourceStreamRuntime {
   private attempt = 0;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private unsubscribeVisibility: (() => void) | null = null;
+  private resumeSeq = 0;
 
   constructor(private readonly options: EventSourceStreamRuntimeOptions) {}
 
@@ -65,7 +66,15 @@ export class EventSourceStreamRuntime {
     if (this.shouldSuspendForHiddenTab()) return;
     this.closeSource();
     this.options.onStatus?.('connecting');
-    const source = this.sourceFactory()(this.url(), { withCredentials: this.options.withCredentials });
+    let source: EventSource;
+    try {
+      source = this.sourceFactory()(this.url(), { withCredentials: this.options.withCredentials });
+    } catch (error) {
+      this.options.onStatus?.('interrupted');
+      this.options.onError?.(error instanceof Event ? error : new Event('error'));
+      if (!this.closed) this.scheduleReconnect();
+      return;
+    }
     this.source = source;
     const handle = (message: MessageEvent) => {
       if (source !== this.source) return;
@@ -112,9 +121,15 @@ export class EventSourceStreamRuntime {
         this.options.onStatus?.('interrupted');
         return;
       }
-      this.options.onResume?.();
-      this.connect();
+      void this.resumeFromVisibility();
     });
+  }
+
+  private async resumeFromVisibility(): Promise<void> {
+    const seq = ++this.resumeSeq;
+    await this.options.onResume?.();
+    if (this.closed || seq !== this.resumeSeq || this.shouldSuspendForHiddenTab()) return;
+    this.connect();
   }
 
   private shouldSuspendForHiddenTab(): boolean {

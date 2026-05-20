@@ -183,7 +183,7 @@ export function createChatIndexSession(deps: ChatIndexSessionDeps = {}): ChatInd
       },
       visibilityPolicy,
       onResume: () => {
-        void refresh(activeRequest);
+        return refresh(activeRequest);
       }
     });
   }
