@@ -22,7 +22,7 @@ describe('/chats page', () => {
     );
   }
 
-  it('preserves route-selected agent drafts when creating a scoped local draft', () => {
+  it('uses remembered new-chat preferences unless a route-selected draft is being created', () => {
     const source = chatDetailPageSource();
     const createChatBody = source.match(
       /async function createChat[\s\S]*?\n  async function sendMessage/
@@ -30,8 +30,9 @@ describe('/chats page', () => {
 
     expect(createChatBody).toContain('if (!options.preserveSelectedScope)');
     expect(createChatBody).toMatch(
-      /if \(!options\.preserveSelectedScope\) \{[\s\S]*newChatKind = 'pma';[\s\S]*\}/
+      /applyLastNewChatPreference\(newChatKind === 'agent' \? 'agent' : 'pma'\)/
     );
+    expect(createChatBody).toContain('persistCurrentNewChatPreference();');
     expect(createChatBody).not.toMatch(/detailMode = 'detail';\s*newChatKind = 'pma';/);
   });
 
