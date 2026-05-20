@@ -3,6 +3,10 @@ import type { ApiError } from '$lib/api/client';
 import { mapReadModelContract, type ChatIndexPatchEvent } from '$lib/api/readModelContracts';
 import type { SseEvent } from '$lib/api/streaming';
 import {
+  createDocumentStreamVisibilityPolicy,
+  type StreamVisibilityPolicy
+} from '$lib/runtime/streamVisibilityPolicy';
+import {
   readModelSnapshotClient,
   type ChatIndexRequest,
   type ReadModelSnapshotClient
@@ -37,6 +41,7 @@ type ChatIndexSessionDeps = {
   client?: ReadModelSnapshotClient;
   store?: ReadModelEntityStore;
   streamFactory?: ChatIndexStreamFactory;
+  visibilityPolicy?: StreamVisibilityPolicy | null;
 };
 
 export type ChatIndexStreamFactory = (options: ReadModelStreamOptions<ChatIndexPatchEvent>) => ReadModelStreamManager<ChatIndexPatchEvent>;
@@ -45,6 +50,7 @@ export function createChatIndexSession(deps: ChatIndexSessionDeps = {}): ChatInd
   const client = deps.client ?? readModelSnapshotClient;
   const store = deps.store ?? readModelEntityStore;
   const streamFactory = deps.streamFactory ?? openReadModelStream<ChatIndexPatchEvent>;
+  const visibilityPolicy = deps.visibilityPolicy ?? createDocumentStreamVisibilityPolicy();
   const state = writable<ChatIndexSessionState>({ status: 'idle', error: null });
   let refreshPromise: Promise<void> | null = null;
   let started = false;
@@ -174,6 +180,10 @@ export function createChatIndexSession(deps: ChatIndexSessionDeps = {}): ChatInd
         if (status === 'connecting') state.set({ status: 'loading', error: null });
         if (status === 'connected') state.set({ status: 'connected', error: null });
         if (status === 'interrupted') state.set({ status: 'interrupted', error: null });
+      },
+      visibilityPolicy,
+      onResume: () => {
+        void refresh(activeRequest);
       }
     });
   }
