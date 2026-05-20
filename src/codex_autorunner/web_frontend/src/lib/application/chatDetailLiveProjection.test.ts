@@ -233,6 +233,21 @@ describe('ChatDetailLiveProjection', () => {
     expect(store.snapshot().chatTranscripts['old-running-chat']).toBeUndefined();
   });
 
+  it('preserves active errors when deactivating the active chat runtime', async () => {
+    const store = new ReadModelEntityStore();
+    const stream = streamFixture();
+    const missing = missingThreadError();
+    const projection = projectionFixture(store, apiFixture(), { openStream: stream.open });
+
+    projection.connect('chat-1');
+    projection.replaceState({ activeError: missing, streamState: 'connected' });
+    await projection.activate(null);
+
+    expect(stream.closeCalls).toBe(1);
+    expect(projection.snapshot().activeError).toBe(missing);
+    expect(projection.snapshot().streamState).toBe('idle');
+  });
+
   it('does not churn the transcript stream when reactivating the same chat', async () => {
     const store = new ReadModelEntityStore();
     const stream = streamFixture();

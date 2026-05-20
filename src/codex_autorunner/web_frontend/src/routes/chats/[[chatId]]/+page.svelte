@@ -830,15 +830,10 @@
   }
 
   function applyChatDetailSelectionCommand(command: ChatDetailSelectionCommand): void {
+    if (command.runtime) void liveProjection.activate(command.runtime.chatId, { quiet: command.runtime.quiet });
     writeChatDetailSessionState(command.state);
     if (command.syncSelectors) syncSelectorsToActiveChat();
     if (command.markRead) markActiveChatRead();
-    if (command.runtime) {
-      void liveProjection.activate(command.runtime.chatId, {
-        quiet: command.runtime.quiet,
-        ...(command.runtime.chatId === null ? { sessionActiveError: command.state.activeError } : {})
-      });
-    }
   }
 
   function writeLiveProjectionState(state: ChatDetailLiveProjectionState): void {

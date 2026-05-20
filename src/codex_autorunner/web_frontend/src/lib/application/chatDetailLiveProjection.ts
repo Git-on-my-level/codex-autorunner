@@ -111,19 +111,10 @@ export class ChatDetailLiveProjection {
     this.setState(next);
   }
 
-  async activate(
-    chatId: string | null,
-    options: { quiet?: boolean; sessionActiveError?: ApiError | null } = {}
-  ): Promise<void> {
+  async activate(chatId: string | null, options: { quiet?: boolean } = {}): Promise<void> {
     if (!chatId) {
-      if ('sessionActiveError' in options) {
-        this.state.activeError = options.sessionActiveError ?? null;
-      }
       this.close();
-      this.setState({
-        loadingActive: false,
-        ...('sessionActiveError' in options ? {} : { activeError: null })
-      });
+      this.setState({ loadingActive: false });
       return;
     }
     if (this.activeChatId !== chatId) {
