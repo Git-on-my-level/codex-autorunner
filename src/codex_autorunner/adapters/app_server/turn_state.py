@@ -7,6 +7,12 @@ from dataclasses import dataclass, field
 from typing import Any, Optional, cast
 
 from ...core.logging_utils import log_event
+from ...core.orchestration.runtime_turn_terminal_state import (
+    classify_runtime_status,
+    extract_runtime_status_value,
+    runtime_status_is_terminal,
+    runtime_status_prefers_completion_settle,
+)
 from .protocol_helpers import _extract_agent_message_phase, _extract_agent_message_text
 
 TurnKey = tuple[str, str]
@@ -263,6 +269,18 @@ class TurnStateManager:
             state.errors.extend(errors)
         if status:
             state.status = status
+        classification = classify_runtime_status(status or state.status)
+        log_event(
+            self._logger,
+            logging.INFO,
+            "app_server.turn.resume_snapshot_applied",
+            turn_id=state.turn_id,
+            thread_id=state.thread_id,
+            source_status=classification.source_status,
+            normalized_outcome=classification.normalized_outcome,
+            terminal=classification.terminal,
+            reason=classification.reason,
+        )
         return status
 
     def maybe_fail_stalled_turn(
@@ -280,13 +298,15 @@ class TurnStateManager:
             return
         if max_attempts is None or state.recovery_attempts < max_attempts:
             return
+        source_status = recovery_status or state.status
+        classification = classify_runtime_status(source_status)
         error = (
             "Turn stalled and recovery exhausted: "
             f"attempts={state.recovery_attempts}, "
             f"max_attempts={max_attempts}, "
             f"reason={reason}, "
             f"last_method={state.last_method or 'unknown'}, "
-            f"status={recovery_status or state.status or 'unknown'}."
+            f"status={source_status or 'unknown'}."
         )
         state.status = "failed"
         state.errors.append(error)
@@ -300,7 +320,10 @@ class TurnStateManager:
                     "recoveryAttempts": state.recovery_attempts,
                     "maxRecoveryAttempts": max_attempts,
                     "lastMethod": state.last_method,
-                    "status": recovery_status or state.status,
+                    "status": source_status,
+                    "normalizedOutcome": classification.normalized_outcome,
+                    "recoverySource": "turn_stall",
+                    "recoveryReason": classification.reason,
                     "idleSeconds": round(idle_seconds, 2),
                 },
             }
@@ -315,7 +338,10 @@ class TurnStateManager:
             reason=reason,
             idle_seconds=round(idle_seconds, 2),
             last_method=state.last_method,
-            status=recovery_status or state.status,
+            status=source_status,
+            normalized_outcome=classification.normalized_outcome,
+            recovery_source="turn_stall",
+            recovery_reason=classification.reason,
             recovery_attempts=state.recovery_attempts,
             max_recovery_attempts=max_attempts,
         )
@@ -339,13 +365,15 @@ class TurnStateManager:
             or state.completion_gap_recovery_attempts < max_attempts
         ):
             return
+        source_status = recovery_status or state.status
+        classification = classify_runtime_status(source_status)
         error = (
             "Turn completion-gap recovery exhausted: "
             f"attempts={state.completion_gap_recovery_attempts}, "
             f"max_attempts={max_attempts}, "
             f"reason={reason}, "
             f"last_method={state.last_method or 'unknown'}, "
-            f"status={recovery_status or state.status or 'unknown'}, "
+            f"status={source_status or 'unknown'}, "
             f"item_completed_count={state.item_completed_count}."
         )
         state.status = "failed"
@@ -360,7 +388,10 @@ class TurnStateManager:
                     "recoveryAttempts": state.completion_gap_recovery_attempts,
                     "maxRecoveryAttempts": max_attempts,
                     "lastMethod": state.last_method,
-                    "status": recovery_status or state.status,
+                    "status": source_status,
+                    "normalizedOutcome": classification.normalized_outcome,
+                    "recoverySource": "turn_completion_gap",
+                    "recoveryReason": classification.reason,
                     "completionGapSeconds": round(completion_gap_seconds, 2),
                     "itemCompletedCount": state.item_completed_count,
                 },
@@ -378,7 +409,10 @@ class TurnStateManager:
             max_recovery_attempts=max_attempts,
             reason=reason,
             last_method=state.last_method,
-            status=recovery_status or state.status,
+            status=source_status,
+            normalized_outcome=classification.normalized_outcome,
+            recovery_source="turn_completion_gap",
+            recovery_reason=classification.reason,
             item_completed_count=state.item_completed_count,
         )
         self.set_turn_result_if_pending(state)
@@ -495,9 +529,21 @@ class TurnStateManager:
         state.turn_completed_seen = True
         state.active_item_ids.clear()
         state.completion_gap_started_at = None
-        if status_prefers_completion_settle(state.status) or not status_is_terminal(
-            state.status
-        ):
+        classification = classify_runtime_status(state.status)
+        log_event(
+            self._logger,
+            logging.INFO,
+            "app_server.turn.completed.decision",
+            turn_id=state.turn_id,
+            thread_id=state.thread_id,
+            source_status=classification.source_status,
+            normalized_outcome=classification.normalized_outcome,
+            recovery_source=(
+                params.get("recoverySource") if isinstance(params, dict) else None
+            ),
+            reason=classification.reason,
+        )
+        if classification.prefers_completion_settle or not classification.terminal:
             self.schedule_turn_completion_settle(state)
             return
         self.set_turn_result_if_pending(state)
@@ -723,47 +769,15 @@ def final_message_for_result(state: TurnState, *, policy: str) -> str:
 
 
 def extract_status_value(value: Any) -> Optional[str]:
-    if isinstance(value, str):
-        return value
-    if isinstance(value, dict):
-        for key in ("type", "status", "state"):
-            candidate = value.get(key)
-            if isinstance(candidate, str):
-                return candidate
-    return None
+    return extract_runtime_status_value(value)
 
 
 def status_is_terminal(status: Any) -> bool:
-    normalized = extract_status_value(status)
-    if not isinstance(normalized, str):
-        return False
-    return normalized.lower() in {
-        "completed",
-        "complete",
-        "done",
-        "failed",
-        "error",
-        "errored",
-        "cancelled",
-        "canceled",
-        "interrupted",
-        "stopped",
-        "success",
-        "succeeded",
-    }
+    return runtime_status_is_terminal(status)
 
 
 def status_prefers_completion_settle(status: Any) -> bool:
-    normalized = extract_status_value(status)
-    if not isinstance(normalized, str):
-        return False
-    return normalized.lower() in {
-        "completed",
-        "complete",
-        "done",
-        "success",
-        "succeeded",
-    }
+    return runtime_status_prefers_completion_settle(status)
 
 
 __all__ = [

@@ -1171,6 +1171,89 @@ async def test_completion_gap_recovery_emits_synthetic_turn_completed_notificati
 
 
 @pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("status", "normalized_outcome", "reason"),
+    [
+        ("done", "ok", "successful_status"),
+        ("success", "ok", "successful_status"),
+        ("interrupted", "interrupted", "interrupted_status"),
+        ("cancelled", "interrupted", "interrupted_status"),
+        ("aborted", "interrupted", "interrupted_status"),
+        ("failed", "error", "failed_status"),
+        ("error", "error", "failed_status"),
+    ],
+)
+async def test_completion_gap_recovery_uses_core_terminal_alias_policy(
+    tmp_path: Path,
+    status: str,
+    normalized_outcome: str,
+    reason: str,
+) -> None:
+    client = CodexAppServerClient(
+        fixture_command("basic"),
+        cwd=tmp_path,
+        turn_stall_timeout_seconds=10.0,
+        turn_stall_poll_interval_seconds=0.02,
+        turn_stall_recovery_min_interval_seconds=0.0,
+        turn_completion_gap_timeout_seconds=0.01,
+    )
+    try:
+        state = client._ensure_turn_state("turn-1", "thread-1")
+        state.status = "running"
+        state.item_completed_count = 3
+        state.completion_gap_started_at = time.monotonic() - 1.0
+
+        async def _resume(thread_id: str, **kwargs: object) -> dict[str, object]:
+            _ = kwargs
+            return {
+                "thread": {
+                    "id": thread_id,
+                    "turns": [
+                        {
+                            "id": "turn-1",
+                            "status": status,
+                            "items": [
+                                {
+                                    "type": "agentMessage",
+                                    "text": "recovered reply",
+                                }
+                            ],
+                        }
+                    ],
+                }
+            }
+
+        client.thread_resume = _resume  # type: ignore[method-assign]
+
+        result = await client.wait_for_turn("turn-1", thread_id="thread-1", timeout=1.0)
+
+        assert result.status == status
+        assert state.turn_completed_seen is True
+        recovered_events = [
+            event
+            for event in result.raw_events
+            if event.get("method") == "turn/completed"
+            and event.get("params", {}).get("synthetic") is True
+        ]
+        assert recovered_events
+        params = recovered_events[0]["params"]
+        assert params["turnId"] == "turn-1"
+        assert params["threadId"] == "thread-1"
+        assert params["status"] == status
+        assert params["normalizedOutcome"] == normalized_outcome
+        assert params["recoverySource"] == "turn_completion_gap"
+        assert params["recoveryReason"] == reason
+        assert any(
+            event.get("method") == "turn/completed"
+            and event.get("params", {}).get("synthetic") is True
+            and event.get("params", {}).get("normalizedOutcome") == normalized_outcome
+            for event in result.raw_events
+        )
+    finally:
+        await client.close()
+
+
+@pytest.mark.anyio
 async def test_completion_gap_recovery_cancels_gap_for_live_resume_snapshot(
     tmp_path: Path,
 ) -> None:
@@ -1491,6 +1574,10 @@ async def test_exhausted_stall_recovery_records_provenance_in_raw_events(
         assert params["reason"] == "resume_non_terminal"
         assert params["recoveryAttempts"] == 2
         assert params["maxRecoveryAttempts"] == 2
+        assert params["status"] == "running"
+        assert params["normalizedOutcome"] is None
+        assert params["recoverySource"] == "turn_stall"
+        assert params["recoveryReason"] == "active_or_unknown_status"
     finally:
         await client.close()
 
@@ -1535,6 +1622,10 @@ async def test_exhausted_completion_gap_recovery_records_provenance_in_raw_event
         assert params["reason"] == "resume_snapshot_missing"
         assert params["recoveryAttempts"] == 2
         assert params["maxRecoveryAttempts"] == 2
+        assert params["status"] == "running"
+        assert params["normalizedOutcome"] is None
+        assert params["recoverySource"] == "turn_completion_gap"
+        assert params["recoveryReason"] == "active_or_unknown_status"
     finally:
         await client.close()
 

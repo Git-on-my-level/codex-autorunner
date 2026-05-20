@@ -17,6 +17,7 @@ from codex_autorunner.core.orchestration.runtime_turn_terminal_state import (
     RuntimeThreadTerminalSignal,
     RuntimeTurnTerminalStateMachine,
     TerminalEvidence,
+    classify_runtime_status,
     reduce_terminal_evidence,
 )
 
@@ -140,6 +141,35 @@ def test_terminal_evidence_precedence_combinations() -> None:
             decision.completion_source,
         ) == expected, label
         assert decision.evidence_fields(evidence)["terminal_evidence_reason"]
+
+
+def test_runtime_status_classification_shared_aliases() -> None:
+    cases = [
+        ("completed", "ok", True, True, "successful_status"),
+        ("done", "ok", True, True, "successful_status"),
+        ("success", "ok", True, True, "successful_status"),
+        ("interrupted", "interrupted", True, False, "interrupted_status"),
+        ("cancelled", "interrupted", True, False, "interrupted_status"),
+        ("aborted", "interrupted", True, False, "interrupted_status"),
+        ("failed", "error", True, False, "failed_status"),
+        ("error", "error", True, False, "failed_status"),
+        ("running", None, False, False, "active_or_unknown_status"),
+    ]
+
+    for (
+        source_status,
+        normalized_outcome,
+        terminal,
+        prefers_settle,
+        reason,
+    ) in cases:
+        classification = classify_runtime_status(source_status)
+
+        assert classification.source_status == source_status
+        assert classification.normalized_outcome == normalized_outcome
+        assert classification.terminal is terminal
+        assert classification.prefers_completion_settle is prefers_settle
+        assert classification.reason == reason
 
 
 def test_runtime_turn_terminal_state_machine_shared_lifecycle_corpus() -> None:

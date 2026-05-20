@@ -52,6 +52,15 @@ class RuntimeThreadTerminalSignal:
 
 
 @dataclass(frozen=True)
+class RuntimeStatusClassification:
+    source_status: Optional[str]
+    normalized_outcome: Optional[RuntimeThreadOutcomeStatus]
+    terminal: bool
+    prefers_completion_settle: bool
+    reason: str
+
+
+@dataclass(frozen=True)
 class TerminalEvidence:
     """Inputs to the terminal-outcome precedence reducer.
 
@@ -144,8 +153,9 @@ def reduce_terminal_evidence(evidence: TerminalEvidence) -> TerminalEvidenceDeci
         or evidence.failure_cause
         or None
     )
-    successful_transport = status in _SUCCESSFUL_COMPLETION_STATUSES
-    interrupted_transport = status in _INTERRUPTED_COMPLETION_STATUSES
+    transport_classification = classify_runtime_status(status)
+    successful_transport = transport_classification.normalized_outcome == "ok"
+    interrupted_transport = transport_classification.normalized_outcome == "interrupted"
     failed_transport = (
         bool(status) and not successful_transport and not interrupted_transport
     )
@@ -285,6 +295,70 @@ def reduce_terminal_evidence(evidence: TerminalEvidence) -> TerminalEvidenceDeci
         completion_source="prompt_return",
         reason="successful_transport",
     )
+
+
+def extract_runtime_status_value(value: Any) -> Optional[str]:
+    if isinstance(value, str):
+        return value
+    if isinstance(value, dict):
+        for key in ("type", "status", "state"):
+            candidate = value.get(key)
+            if isinstance(candidate, str):
+                return candidate
+    return None
+
+
+def classify_runtime_status(value: Any) -> RuntimeStatusClassification:
+    source_status = extract_runtime_status_value(value)
+    normalized = source_status.strip().lower() if source_status else ""
+    if not normalized:
+        return RuntimeStatusClassification(
+            source_status=None,
+            normalized_outcome=None,
+            terminal=False,
+            prefers_completion_settle=False,
+            reason="missing_status",
+        )
+    if normalized in _SUCCESSFUL_COMPLETION_STATUSES:
+        return RuntimeStatusClassification(
+            source_status=source_status,
+            normalized_outcome="ok",
+            terminal=True,
+            prefers_completion_settle=normalized
+            in {"completed", "complete", "done", "success", "succeeded"},
+            reason="successful_status",
+        )
+    if normalized in _INTERRUPTED_COMPLETION_STATUSES or normalized == "stopped":
+        return RuntimeStatusClassification(
+            source_status=source_status,
+            normalized_outcome="interrupted",
+            terminal=True,
+            prefers_completion_settle=False,
+            reason="interrupted_status",
+        )
+    if normalized in {"failed", "failure", "error", "errored"}:
+        return RuntimeStatusClassification(
+            source_status=source_status,
+            normalized_outcome="error",
+            terminal=True,
+            prefers_completion_settle=False,
+            reason="failed_status",
+        )
+    return RuntimeStatusClassification(
+        source_status=source_status,
+        normalized_outcome=None,
+        terminal=False,
+        prefers_completion_settle=False,
+        reason="active_or_unknown_status",
+    )
+
+
+def runtime_status_is_terminal(value: Any) -> bool:
+    return classify_runtime_status(value).terminal
+
+
+def runtime_status_prefers_completion_settle(value: Any) -> bool:
+    return classify_runtime_status(value).prefers_completion_settle
 
 
 def _saw_successful_terminal_signal(
@@ -625,8 +699,13 @@ __all__ = [
     "RuntimeThreadOutcome",
     "RuntimeThreadOutcomeStatus",
     "RuntimeThreadTerminalSignal",
+    "RuntimeStatusClassification",
     "RuntimeTurnTerminalStateMachine",
     "TerminalEvidence",
     "TerminalEvidenceDecision",
+    "classify_runtime_status",
+    "extract_runtime_status_value",
     "reduce_terminal_evidence",
+    "runtime_status_is_terminal",
+    "runtime_status_prefers_completion_settle",
 ]
