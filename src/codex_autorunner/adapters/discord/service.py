@@ -183,6 +183,10 @@ from ...core.orchestration.chat_operation_scheduler_projection import (
     discord_scheduler_state_to_chat_operation_state,
     discord_scheduler_terminal_outcome,
 )
+from ...core.orchestration.discord_interaction_lifecycle import (
+    DiscordInteractionSchedulerState,
+    is_discord_interaction_scheduler_terminal,
+)
 from ...core.orchestration.managed_thread_delivery_ledger import (
     SQLiteManagedThreadDeliveryEngine,
 )
@@ -5433,8 +5437,9 @@ class DiscordBotService(DiscordInteractionResponseMixin):
             if (
                 record is not None
                 and record.execution_status == "completed"
-                and record.scheduler_state
-                not in {"completed", "delivery_expired", "abandoned"}
+                and not is_discord_interaction_scheduler_terminal(
+                    record.scheduler_state
+                )
             ):
                 scheduler_state = "completed"
         await self._store.update_interaction_delivery_cursor(
@@ -5644,7 +5649,8 @@ class DiscordBotService(DiscordInteractionResponseMixin):
     ) -> None:
         recovery_event = (
             "discord.interaction.recovery.delivery_expired"
-            if scheduler_state == "delivery_expired"
+            if scheduler_state
+            == DiscordInteractionSchedulerState.DELIVERY_EXPIRED.value
             else "discord.interaction.recovery.abandoned"
         )
         await self._store.mark_interaction_scheduler_state(
@@ -5654,11 +5660,7 @@ class DiscordBotService(DiscordInteractionResponseMixin):
         await self._patch_chat_operation_recovery(
             record.interaction_id,
             state=self._discord_chat_operation_state_for_scheduler(scheduler_state),
-            terminal_outcome=(
-                "abandoned"
-                if scheduler_state == "abandoned"
-                else ("expired" if scheduler_state == "delivery_expired" else None)
-            ),
+            terminal_outcome=discord_scheduler_terminal_outcome(scheduler_state),
             terminal_detail=reason,
         )
         log_event(

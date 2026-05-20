@@ -11,6 +11,18 @@ from codex_autorunner.core.orchestration.chat_operation_scheduler_projection imp
 from codex_autorunner.core.orchestration.chat_operation_state import (
     ChatOperationState,
 )
+from codex_autorunner.core.orchestration.discord_interaction_lifecycle import (
+    DiscordInteractionExecutionStatus,
+    DiscordInteractionSchedulerState,
+    is_discord_interaction_execution_terminal,
+    is_discord_interaction_scheduler_terminal,
+    is_valid_discord_interaction_execution_transition,
+    is_valid_discord_interaction_scheduler_transition,
+    normalize_discord_interaction_execution_status,
+    normalize_discord_interaction_scheduler_state,
+    validate_discord_interaction_execution_transition,
+    validate_discord_interaction_scheduler_transition,
+)
 
 
 class TestDiscordSchedulerStateToChatOperationState:
@@ -165,3 +177,66 @@ class TestDiscordInteractionHasPendingDelivery:
         assert not discord_interaction_has_pending_delivery(
             scheduler_state="completed", delivery_cursor_state=None
         )
+
+
+class TestDiscordInteractionLifecyclePolicy:
+    def test_scheduler_normalization_is_typed(self) -> None:
+        assert (
+            normalize_discord_interaction_scheduler_state(" EXECUTING ")
+            == DiscordInteractionSchedulerState.EXECUTING
+        )
+
+    def test_execution_normalization_is_typed(self) -> None:
+        assert (
+            normalize_discord_interaction_execution_status(" RUNNING ")
+            == DiscordInteractionExecutionStatus.RUNNING
+        )
+
+    def test_legal_scheduler_transition(self) -> None:
+        assert is_valid_discord_interaction_scheduler_transition(
+            DiscordInteractionSchedulerState.ACKNOWLEDGED,
+            DiscordInteractionSchedulerState.SCHEDULED,
+        )
+        assert (
+            validate_discord_interaction_scheduler_transition(
+                "acknowledged", "scheduled"
+            )
+            == DiscordInteractionSchedulerState.SCHEDULED
+        )
+
+    def test_illegal_scheduler_transition_out_of_terminal_state(self) -> None:
+        assert not is_valid_discord_interaction_scheduler_transition(
+            DiscordInteractionSchedulerState.ABANDONED,
+            DiscordInteractionSchedulerState.EXECUTING,
+        )
+        with pytest.raises(
+            ValueError, match="illegal interaction scheduler transition"
+        ):
+            validate_discord_interaction_scheduler_transition(
+                "delivery_expired", "executing"
+            )
+
+    def test_legal_execution_transition(self) -> None:
+        assert is_valid_discord_interaction_execution_transition(
+            DiscordInteractionExecutionStatus.ACKNOWLEDGED,
+            DiscordInteractionExecutionStatus.RUNNING,
+        )
+        assert (
+            validate_discord_interaction_execution_transition("running", "completed")
+            == DiscordInteractionExecutionStatus.COMPLETED
+        )
+
+    def test_illegal_execution_transition_out_of_terminal_status(self) -> None:
+        assert not is_valid_discord_interaction_execution_transition(
+            DiscordInteractionExecutionStatus.COMPLETED,
+            DiscordInteractionExecutionStatus.RUNNING,
+        )
+        with pytest.raises(
+            ValueError, match="illegal interaction execution transition"
+        ):
+            validate_discord_interaction_execution_transition("failed", "running")
+
+    def test_terminal_helpers_cover_recovery_states(self) -> None:
+        assert is_discord_interaction_scheduler_terminal("delivery_expired")
+        assert is_discord_interaction_scheduler_terminal("abandoned")
+        assert is_discord_interaction_execution_terminal("timeout")

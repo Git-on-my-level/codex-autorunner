@@ -44,6 +44,16 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable, Optional, cast
 
+from ...core.orchestration.discord_interaction_lifecycle import (
+    DiscordInteractionExecutionStatus,
+    DiscordInteractionSchedulerState,
+    is_discord_interaction_execution_terminal,
+    is_discord_interaction_scheduler_terminal,
+    normalize_discord_interaction_execution_status,
+    normalize_discord_interaction_scheduler_state,
+    validate_discord_interaction_execution_transition,
+    validate_discord_interaction_scheduler_transition,
+)
 from ...core.sqlite_utils import (
     SqliteMigrationStep,
     apply_versioned_schema,
@@ -60,55 +70,6 @@ DISCORD_STATE_SCHEMA_VERSION = 15
 DISCORD_INTERACTION_LEDGER_RETENTION_DAYS = 14
 _UNSET = object()
 _logger = logging.getLogger(__name__)
-
-_VALID_SCHEDULER_STATES = frozenset(
-    {
-        "received",
-        "dispatch_ready",
-        "dispatch_ack_pending",
-        "queue_wait_ack_pending",
-        "acknowledged",
-        "scheduled",
-        "waiting_on_resources",
-        "executing",
-        "delivery_pending",
-        "delivery_replaying",
-        "delivery_expired",
-        "recovery_scheduled",
-        "completed",
-        "abandoned",
-    }
-)
-
-_VALID_EXECUTION_STATUSES = frozenset(
-    {
-        "received",
-        "acknowledged",
-        "running",
-        "completed",
-        "failed",
-        "timeout",
-        "cancelled",
-    }
-)
-
-
-def _normalize_interaction_scheduler_state(value: str) -> str:
-    normalized = str(value or "").strip()
-    if not normalized:
-        raise ValueError("interaction scheduler state must be a non-empty string")
-    if normalized not in _VALID_SCHEDULER_STATES:
-        raise ValueError(f"unknown interaction scheduler state: {normalized}")
-    return normalized
-
-
-def _normalize_interaction_execution_status(value: str) -> str:
-    normalized = str(value or "").strip()
-    if not normalized:
-        raise ValueError("interaction execution status must be a non-empty string")
-    if normalized not in _VALID_EXECUTION_STATUSES:
-        raise ValueError(f"unknown interaction execution status: {normalized}")
-    return normalized
 
 
 @dataclass(frozen=True)
@@ -2151,6 +2112,41 @@ class DiscordStateStore:
             return None
         return self._interaction_from_row(row)
 
+    def _get_interaction_lifecycle_row_sync(
+        self,
+        conn: sqlite3.Connection,
+        interaction_id: str,
+    ) -> Optional[sqlite3.Row]:
+        return cast(
+            Optional[sqlite3.Row],
+            conn.execute(
+                """
+                SELECT scheduler_state, execution_status, delivery_cursor_json
+                FROM interaction_ledger
+                WHERE interaction_id = ?
+                """,
+                (interaction_id,),
+            ).fetchone(),
+        )
+
+    def _validate_scheduler_transition_for_row(
+        self,
+        row: sqlite3.Row,
+        scheduler_state: DiscordInteractionSchedulerState | str,
+    ) -> DiscordInteractionSchedulerState:
+        return validate_discord_interaction_scheduler_transition(
+            str(row["scheduler_state"]), scheduler_state
+        )
+
+    def _validate_execution_transition_for_row(
+        self,
+        row: sqlite3.Row,
+        execution_status: DiscordInteractionExecutionStatus | str,
+    ) -> DiscordInteractionExecutionStatus:
+        return validate_discord_interaction_execution_transition(
+            str(row["execution_status"]), execution_status
+        )
+
     def _persist_interaction_runtime_sync(
         self,
         interaction_id: str,
@@ -2162,12 +2158,19 @@ class DiscordStateStore:
         payload_json: dict[str, Any],
         envelope_json: dict[str, Any],
     ) -> None:
-        normalized_scheduler_state = _normalize_interaction_scheduler_state(
+        normalized_scheduler_state = normalize_discord_interaction_scheduler_state(
             scheduler_state
         )
         conn = self._connection_sync()
         now = now_iso()
         with conn:
+            row = self._get_interaction_lifecycle_row_sync(conn, interaction_id)
+            if row is not None:
+                normalized_scheduler_state = (
+                    self._validate_scheduler_transition_for_row(
+                        row, normalized_scheduler_state
+                    )
+                )
             conn.execute(
                 """
                 UPDATE interaction_ledger
@@ -2186,7 +2189,7 @@ class DiscordStateStore:
                     route_key,
                     handler_id,
                     conversation_id,
-                    normalized_scheduler_state,
+                    normalized_scheduler_state.value,
                     json.dumps(list(resource_keys), sort_keys=True),
                     json.dumps(payload_json, sort_keys=True),
                     json.dumps(envelope_json, sort_keys=True),
@@ -2202,12 +2205,19 @@ class DiscordStateStore:
         scheduler_state: str,
         increment_attempt_count: bool,
     ) -> None:
-        normalized_scheduler_state = _normalize_interaction_scheduler_state(
+        normalized_scheduler_state = normalize_discord_interaction_scheduler_state(
             scheduler_state
         )
         conn = self._connection_sync()
         now = now_iso()
         with conn:
+            row = self._get_interaction_lifecycle_row_sync(conn, interaction_id)
+            if row is not None:
+                normalized_scheduler_state = (
+                    self._validate_scheduler_transition_for_row(
+                        row, normalized_scheduler_state
+                    )
+                )
             conn.execute(
                 """
                 UPDATE interaction_ledger
@@ -2218,7 +2228,7 @@ class DiscordStateStore:
                 WHERE interaction_id = ?
                 """,
                 (
-                    normalized_scheduler_state,
+                    normalized_scheduler_state.value,
                     1 if increment_attempt_count else 0,
                     now,
                     now,
@@ -2234,13 +2244,20 @@ class DiscordStateStore:
         increment_attempt_count: bool,
     ) -> None:
         normalized_scheduler_state = (
-            _normalize_interaction_scheduler_state(scheduler_state)
+            normalize_discord_interaction_scheduler_state(scheduler_state)
             if scheduler_state is not None
             else None
         )
         conn = self._connection_sync()
         now = now_iso()
         with conn:
+            row = self._get_interaction_lifecycle_row_sync(conn, interaction_id)
+            if row is not None and normalized_scheduler_state is not None:
+                normalized_scheduler_state = (
+                    self._validate_scheduler_transition_for_row(
+                        row, normalized_scheduler_state
+                    )
+                )
             conn.execute(
                 """
                 UPDATE interaction_ledger
@@ -2257,7 +2274,11 @@ class DiscordStateStore:
                         if delivery_cursor_json is not None
                         else None
                     ),
-                    normalized_scheduler_state,
+                    (
+                        normalized_scheduler_state.value
+                        if normalized_scheduler_state is not None
+                        else None
+                    ),
                     1 if increment_attempt_count else 0,
                     now,
                     now,
@@ -2267,14 +2288,27 @@ class DiscordStateStore:
 
     def _list_recoverable_interactions_sync(self) -> list[InteractionLedgerRecord]:
         conn = self._connection_sync()
+        terminal_scheduler = tuple(
+            state.value
+            for state in DiscordInteractionSchedulerState
+            if state == DiscordInteractionSchedulerState.COMPLETED
+            or is_discord_interaction_scheduler_terminal(state)
+        )
+        terminal_execution = tuple(
+            status.value
+            for status in DiscordInteractionExecutionStatus
+            if status != DiscordInteractionExecutionStatus.COMPLETED
+            and is_discord_interaction_execution_terminal(status)
+        )
         rows = conn.execute(
-            """
+            f"""
             SELECT *
             FROM interaction_ledger
-            WHERE scheduler_state NOT IN ('completed', 'delivery_expired', 'abandoned')
-              AND execution_status NOT IN ('failed', 'timeout', 'cancelled')
+            WHERE scheduler_state NOT IN ({",".join("?" for _ in terminal_scheduler)})
+              AND execution_status NOT IN ({",".join("?" for _ in terminal_execution)})
             ORDER BY created_at ASC
-            """
+            """,
+            (*terminal_scheduler, *terminal_execution),
         ).fetchall()
         return [self._interaction_from_row(row) for row in rows]
 
@@ -2282,6 +2316,23 @@ class DiscordStateStore:
         conn = self._connection_sync()
         now = now_iso()
         with conn:
+            row = self._get_interaction_lifecycle_row_sync(conn, interaction_id)
+            if row is None:
+                return False
+            current_execution = normalize_discord_interaction_execution_status(
+                str(row["execution_status"])
+            )
+            if current_execution not in {
+                DiscordInteractionExecutionStatus.RECEIVED,
+                DiscordInteractionExecutionStatus.ACKNOWLEDGED,
+            }:
+                return False
+            self._validate_execution_transition_for_row(
+                row, DiscordInteractionExecutionStatus.RUNNING
+            )
+            self._validate_scheduler_transition_for_row(
+                row, DiscordInteractionSchedulerState.EXECUTING
+            )
             cursor = conn.execute(
                 """
                 UPDATE interaction_ledger
@@ -2308,6 +2359,27 @@ class DiscordStateStore:
         conn = self._connection_sync()
         now = now_iso()
         with conn:
+            row = self._get_interaction_lifecycle_row_sync(conn, interaction_id)
+            if row is not None:
+                current_scheduler = normalize_discord_interaction_scheduler_state(
+                    str(row["scheduler_state"])
+                )
+                current_execution = normalize_discord_interaction_execution_status(
+                    str(row["execution_status"])
+                )
+                if current_scheduler in {
+                    DiscordInteractionSchedulerState.RECEIVED,
+                    DiscordInteractionSchedulerState.DISPATCH_READY,
+                    DiscordInteractionSchedulerState.DISPATCH_ACK_PENDING,
+                    DiscordInteractionSchedulerState.QUEUE_WAIT_ACK_PENDING,
+                }:
+                    self._validate_scheduler_transition_for_row(
+                        row, DiscordInteractionSchedulerState.ACKNOWLEDGED
+                    )
+                if current_execution == DiscordInteractionExecutionStatus.RECEIVED:
+                    self._validate_execution_transition_for_row(
+                        row, DiscordInteractionExecutionStatus.ACKNOWLEDGED
+                    )
             conn.execute(
                 """
                 UPDATE interaction_ledger
@@ -2348,14 +2420,21 @@ class DiscordStateStore:
         execution_status: str,
         execution_error: Optional[str],
     ) -> None:
-        normalized_execution_status = _normalize_interaction_execution_status(
+        normalized_execution_status = normalize_discord_interaction_execution_status(
             execution_status
         )
         conn = self._connection_sync()
         now = now_iso()
         error_text = str(execution_error)[:500] if execution_error is not None else None
-        if normalized_execution_status == "running":
+        if normalized_execution_status == DiscordInteractionExecutionStatus.RUNNING:
             with conn:
+                row = self._get_interaction_lifecycle_row_sync(conn, interaction_id)
+                if row is not None:
+                    normalized_execution_status = (
+                        self._validate_execution_transition_for_row(
+                            row, normalized_execution_status
+                        )
+                    )
                 conn.execute(
                     """
                     UPDATE interaction_ledger
@@ -2367,7 +2446,7 @@ class DiscordStateStore:
                     WHERE interaction_id = ?
                     """,
                     (
-                        normalized_execution_status,
+                        normalized_execution_status.value,
                         now,
                         error_text,
                         now,
@@ -2377,6 +2456,26 @@ class DiscordStateStore:
                 )
             return
         with conn:
+            row = self._get_interaction_lifecycle_row_sync(conn, interaction_id)
+            target_scheduler_state: Optional[DiscordInteractionSchedulerState] = None
+            if row is not None:
+                normalized_execution_status = (
+                    self._validate_execution_transition_for_row(
+                        row, normalized_execution_status
+                    )
+                )
+                if (
+                    normalized_execution_status
+                    == DiscordInteractionExecutionStatus.COMPLETED
+                ):
+                    target_scheduler_state = (
+                        DiscordInteractionSchedulerState.COMPLETED
+                        if row["delivery_cursor_json"] is None
+                        else DiscordInteractionSchedulerState.DELIVERY_PENDING
+                    )
+                    self._validate_scheduler_transition_for_row(
+                        row, target_scheduler_state
+                    )
             conn.execute(
                 """
                 UPDATE interaction_ledger
@@ -2395,9 +2494,9 @@ class DiscordStateStore:
                 WHERE interaction_id = ?
                 """,
                 (
-                    normalized_execution_status,
-                    normalized_execution_status,
-                    normalized_execution_status,
+                    normalized_execution_status.value,
+                    normalized_execution_status.value,
+                    normalized_execution_status.value,
                     now,
                     error_text,
                     now,
@@ -2417,6 +2516,18 @@ class DiscordStateStore:
         now = now_iso()
         error_text = str(delivery_error)[:500] if delivery_error is not None else None
         with conn:
+            row = self._get_interaction_lifecycle_row_sync(conn, interaction_id)
+            if (
+                row is not None
+                and row["delivery_cursor_json"] is None
+                and normalize_discord_interaction_execution_status(
+                    str(row["execution_status"])
+                )
+                == DiscordInteractionExecutionStatus.COMPLETED
+            ):
+                self._validate_scheduler_transition_for_row(
+                    row, DiscordInteractionSchedulerState.COMPLETED
+                )
             conn.execute(
                 """
                 UPDATE interaction_ledger

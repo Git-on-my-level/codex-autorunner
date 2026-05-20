@@ -83,6 +83,18 @@ from .chat_surface_read_model import (
 )
 from .cold_trace_store import ColdTraceStore
 from .context_capsule_ledger import SQLiteContextCapsuleLedger
+from .discord_interaction_lifecycle import (
+    DiscordInteractionExecutionStatus,
+    DiscordInteractionSchedulerState,
+    is_discord_interaction_execution_terminal,
+    is_discord_interaction_scheduler_terminal,
+    is_valid_discord_interaction_execution_transition,
+    is_valid_discord_interaction_scheduler_transition,
+    normalize_discord_interaction_execution_status,
+    normalize_discord_interaction_scheduler_state,
+    validate_discord_interaction_execution_transition,
+    validate_discord_interaction_scheduler_transition,
+)
 from .execution_history_maintenance import (
     audit_execution_history,
     backfill_legacy_execution_history,
@@ -280,6 +292,8 @@ __all__ = [
     "CHAT_SURFACE_EVENT_TYPES",
     "CHAT_SURFACE_READ_CONTRACT_VERSION",
     "ColdTraceStore",
+    "DiscordInteractionExecutionStatus",
+    "DiscordInteractionSchedulerState",
     "ExecutionRecord",
     "FlowBackedOrchestrationService",
     "FlowTarget",
@@ -359,6 +373,10 @@ __all__ = [
     "get_agent_definition",
     "get_surface_orchestration_ingress",
     "initialize_orchestration_sqlite",
+    "is_discord_interaction_execution_terminal",
+    "is_discord_interaction_scheduler_terminal",
+    "is_valid_discord_interaction_execution_transition",
+    "is_valid_discord_interaction_scheduler_transition",
     "is_valid_managed_thread_delivery_transition",
     "list_agent_definitions",
     "list_orchestration_table_definitions",
@@ -369,6 +387,8 @@ __all__ = [
     "normalize_chat_surface_key",
     "normalize_chat_surface_kind",
     "normalize_chat_surface_lifecycle",
+    "normalize_discord_interaction_execution_status",
+    "normalize_discord_interaction_scheduler_state",
     "parse_chat_surface_cursor",
     "plan_chat_operation_duplicate",
     "plan_chat_operation_recovery",
@@ -384,5 +404,7 @@ __all__ = [
     "ticket_flow_thread_link_key",
     "ticket_flow_thread_metadata",
     "validate_ticket_flow_thread_metadata",
+    "validate_discord_interaction_execution_transition",
+    "validate_discord_interaction_scheduler_transition",
     "vacuum_execution_history",
 ]

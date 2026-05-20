@@ -587,3 +587,70 @@ async def test_interaction_ledger_rejects_unknown_execution_status(
             )
     finally:
         await store.close()
+
+
+@pytest.mark.anyio
+async def test_interaction_ledger_rejects_scheduler_transition_from_terminal(
+    tmp_path: Path,
+) -> None:
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    try:
+        await store.initialize()
+        await store.register_interaction(
+            interaction_id="terminal-scheduler-1",
+            interaction_token="token-terminal-scheduler-1",
+            interaction_kind="slash_command",
+            channel_id="chan-1",
+            guild_id="guild-1",
+            user_id="user-1",
+            metadata_json={"command_path": ["car", "status"]},
+        )
+        await store.mark_interaction_scheduler_state(
+            "terminal-scheduler-1",
+            scheduler_state="abandoned",
+        )
+
+        with pytest.raises(
+            ValueError,
+            match="illegal interaction scheduler transition: abandoned -> executing",
+        ):
+            await store.mark_interaction_scheduler_state(
+                "terminal-scheduler-1",
+                scheduler_state="executing",
+            )
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_interaction_ledger_rejects_execution_transition_from_terminal(
+    tmp_path: Path,
+) -> None:
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    try:
+        await store.initialize()
+        await store.register_interaction(
+            interaction_id="terminal-execution-1",
+            interaction_token="token-terminal-execution-1",
+            interaction_kind="slash_command",
+            channel_id="chan-1",
+            guild_id="guild-1",
+            user_id="user-1",
+            metadata_json={"command_path": ["car", "status"]},
+        )
+        assert await store.claim_interaction_execution("terminal-execution-1") is True
+        await store.mark_interaction_execution(
+            "terminal-execution-1",
+            execution_status="completed",
+        )
+
+        with pytest.raises(
+            ValueError,
+            match="illegal interaction execution transition: completed -> running",
+        ):
+            await store.mark_interaction_execution(
+                "terminal-execution-1",
+                execution_status="running",
+            )
+    finally:
+        await store.close()
