@@ -483,10 +483,11 @@ def _json_detail(value: Any) -> Optional[str]:
 def _is_hidden_intermediate(payload: Mapping[str, Any]) -> bool:
     if payload.get("hidden") is True:
         return True
+    progress_item = _mapping(payload.get("progress_item"))
+    if progress_item.get("hidden") is True:
+        return True
     intermediate_kind = str(payload.get("intermediate_kind") or "").lower()
     event_type = str(payload.get("event_type") or "").lower()
-    if intermediate_kind == "decode_failure":
-        return True
     return event_type == "output_delta" and intermediate_kind in {
         "assistant_stream",
         "assistant_message",

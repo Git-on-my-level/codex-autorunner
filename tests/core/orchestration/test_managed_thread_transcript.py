@@ -18,6 +18,19 @@ def _user_item(payload: dict) -> dict:
     }
 
 
+def _intermediate_item(payload: dict) -> dict:
+    return {
+        "kind": "intermediate",
+        "item_id": f"turn:1:intermediate:{payload.get('intermediate_kind', 'notice')}",
+        "order_key": "002",
+        "timestamp": "2026-05-10T12:00:01Z",
+        "managed_thread_id": "thread-1",
+        "managed_turn_id": "turn-1",
+        "payload": payload,
+        "identity": {"timeline_item_id": "turn:1:intermediate"},
+    }
+
+
 def test_transcript_projects_legacy_injected_prompt_as_model_context() -> None:
     rows = transcript_rows_from_timeline_items(
         [
@@ -39,6 +52,51 @@ def test_transcript_projects_legacy_injected_prompt_as_model_context() -> None:
     assert row["message"]["text"].startswith("<injected context>")
     assert row["message"]["visible_text"] == "Fix login"
     assert row["message"]["model_context_text"] == "repo guidance"
+
+
+def test_transcript_hides_internal_lifecycle_notices() -> None:
+    rows = transcript_rows_from_timeline_items(
+        [
+            _intermediate_item(
+                {
+                    "intermediate_kind": "chat_execution_journal",
+                    "text": "terminal=3977ms",
+                    "event_type": "run_notice",
+                    "event": {"kind": "chat_execution_journal"},
+                    "hidden": True,
+                }
+            ),
+            _intermediate_item(
+                {
+                    "intermediate_kind": "notice",
+                    "text": "Compacted hot timeline rows.",
+                    "event_type": "run_notice",
+                    "event": {"kind": "compaction_summary"},
+                    "progress_item": {"hidden": True},
+                }
+            ),
+            _intermediate_item(
+                {
+                    "intermediate_kind": "notice",
+                    "text": "Decoder missed event shape.",
+                    "event_type": "run_notice",
+                    "progress_item": {"hidden": True},
+                }
+            ),
+            _intermediate_item(
+                {
+                    "intermediate_kind": "thinking",
+                    "title": "Thinking",
+                    "text": "Reading files",
+                    "event_type": "assistant_update",
+                }
+            ),
+        ]
+    )
+
+    assert len(rows) == 1
+    assert rows[0]["kind"] == "intermediate"
+    assert rows[0]["text"] == "Reading files"
 
 
 def test_transcript_projects_capsule_only_model_context_refs() -> None:
