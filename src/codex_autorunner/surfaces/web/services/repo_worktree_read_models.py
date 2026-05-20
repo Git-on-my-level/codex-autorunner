@@ -758,6 +758,7 @@ class RepoWorktreeReadModelService:
     ) -> list[dict[str, Any]]:
         db_rows: list[dict[str, Any]] = []
         try:
+            self._repair_chat_resource_owners_from_topology()
             with open_orchestration_sqlite(
                 self._context.config.root, durable=True, migrate=True
             ) as conn:
@@ -802,6 +803,67 @@ class RepoWorktreeReadModelService:
                 }
             )
         return db_rows
+
+    def _repair_chat_resource_owners_from_topology(self) -> None:
+        """Normalize legacy repo-shaped rows whose id is now known as a worktree."""
+
+        snapshots = self._context.supervisor.list_repos(use_cache=True)
+        scope_index = workspace_scope_index(snapshots)
+        try:
+            with open_orchestration_sqlite(
+                self._context.config.root, durable=True, migrate=True
+            ) as conn:
+                rows = conn.execute(
+                    """
+                    SELECT thread_target_id, repo_id, resource_kind, resource_id,
+                           workspace_root
+                    FROM orch_thread_targets
+                    WHERE resource_kind = 'repo'
+                    """
+                ).fetchall()
+                for row in rows:
+                    resolution = scope_index.resolve(
+                        raw_repo_id=row["repo_id"],
+                        workspace_path=row["workspace_root"],
+                        resource_kind=row["resource_kind"],
+                        resource_id=row["resource_id"],
+                    )
+                    if resolution is None or resolution.scope.kind != "worktree":
+                        continue
+                    owner = resolution.owner_fields()
+                    conn.execute(
+                        """
+                        UPDATE orch_thread_targets
+                           SET repo_id = ?,
+                               resource_kind = ?,
+                               resource_id = ?
+                         WHERE thread_target_id = ?
+                        """,
+                        (
+                            owner.get("repo_id"),
+                            owner.get("resource_kind"),
+                            owner.get("resource_id"),
+                            row["thread_target_id"],
+                        ),
+                    )
+                    conn.execute(
+                        """
+                        UPDATE orch_bindings
+                           SET repo_id = ?,
+                               resource_kind = ?,
+                               resource_id = ?
+                         WHERE target_kind = 'thread'
+                           AND target_id = ?
+                        """,
+                        (
+                            owner.get("repo_id"),
+                            owner.get("resource_kind"),
+                            owner.get("resource_id"),
+                            row["thread_target_id"],
+                        ),
+                    )
+        except sqlite3.Error:
+            return
 
     def _contextspace_summary(self, workspace_root: Path) -> list[dict[str, Any]]:
         docs = read_contextspace_docs(workspace_root)

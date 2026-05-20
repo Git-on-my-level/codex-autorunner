@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Mapping, Optional, Sequence, cast
 
@@ -19,6 +20,7 @@ from ...adapters.chat.ticket_flow_cleanliness import (
     get_ticket_flow_cleanliness,
 )
 from ...core.chat_bindings import emit_adapter_binding_chat_surface_event
+from ...core.domain.workspace_scope import workspace_scope_index_from_snapshots
 from ...core.flows import FlowRunStatus
 from ...core.logging_utils import log_event
 from ...core.utils import canonicalize_path
@@ -68,6 +70,14 @@ from .state import ChannelBinding
 _logger = logging.getLogger(__name__)
 
 
+@dataclass(frozen=True)
+class _ManifestWorkspace:
+    resource_kind: str
+    resource_id: str
+    repo_id: Optional[str]
+    path: str
+
+
 def _resolve_process_monitor_root(
     service: Any,
     binding: Optional[Mapping[str, Any]],
@@ -92,30 +102,66 @@ def _resolve_process_monitor_root(
     return None
 
 
-def _list_manifest_repos(
-    service: Any,
-) -> list[tuple[str, str]]:
+def _list_manifest_workspaces(service: Any) -> list[_ManifestWorkspace]:
     if not service._manifest_path or not service._manifest_path.exists():
         return []
     try:
         manifest = load_manifest(service._manifest_path, service._config.root)
-        ordered: list[tuple[int, int, str, str]] = []
+        snapshots: list[dict[str, Any]] = []
         for index, repo in enumerate(manifest.repos):
             if not repo.id:
                 continue
-            worktree_priority = 0 if repo.kind == "worktree" else 1
+            snapshots.append(
+                {
+                    "id": repo.id,
+                    "kind": repo.kind,
+                    "worktree_of": repo.worktree_of,
+                    "path": str(canonicalize_path(service._config.root / repo.path)),
+                    "_index": index,
+                }
+            )
+        scope_index = workspace_scope_index_from_snapshots(snapshots)
+        ordered: list[tuple[int, int, str, _ManifestWorkspace]] = []
+        for snapshot in snapshots:
+            repo_id = str(snapshot["id"])
+            resolution = scope_index.resolve(
+                raw_repo_id=repo_id,
+                workspace_path=snapshot["path"],
+            )
+            if resolution is None:
+                continue
+            owner = resolution.owner_fields()
+            resource_kind = owner.get("resource_kind")
+            resource_id = owner.get("resource_id")
+            if not resource_kind or not resource_id:
+                continue
+            kind = str(snapshot.get("kind") or "")
+            worktree_priority = 0 if kind == "worktree" else 1
             ordered.append(
                 (
                     worktree_priority,
-                    -index,
-                    repo.id,
-                    str(service._config.root / repo.path),
+                    -int(snapshot["_index"]),
+                    repo_id,
+                    _ManifestWorkspace(
+                        resource_kind=resource_kind,
+                        resource_id=resource_id,
+                        repo_id=owner.get("repo_id"),
+                        path=str(snapshot["path"]),
+                    ),
                 )
             )
         ordered.sort(key=lambda item: (item[0], item[1], item[2]))
-        return [(repo_id, path) for _, _, repo_id, path in ordered]
+        return [entry for _, _, _, entry in ordered]
     except (ManifestError, OSError, ValueError):
         return []
+
+
+def _list_manifest_repos(
+    service: Any,
+) -> list[tuple[str, str]]:
+    return [
+        (entry.resource_id, entry.path) for entry in _list_manifest_workspaces(service)
+    ]
 
 
 def _resource_owner_for_workspace(
@@ -139,15 +185,26 @@ def _resource_owner_for_workspace(
         if isinstance(resource_id, str) and resource_id.strip()
         else None
     )
-    if normalized_resource_kind == "repo" and normalized_resource_id:
-        return "repo", normalized_resource_id, normalized_resource_id
+    manifest_workspaces = _list_manifest_workspaces(service)
+    if normalized_resource_kind and normalized_resource_id:
+        for entry in manifest_workspaces:
+            if (
+                entry.resource_kind == normalized_resource_kind
+                and entry.resource_id == normalized_resource_id
+            ):
+                return entry.resource_kind, entry.resource_id, entry.repo_id
+        if normalized_resource_kind == "repo":
+            return "repo", normalized_resource_id, normalized_resource_id
     if normalized_repo_id:
+        for entry in manifest_workspaces:
+            if entry.resource_id == normalized_repo_id:
+                return entry.resource_kind, entry.resource_id, entry.repo_id
         return "repo", normalized_repo_id, normalized_repo_id
 
     canonical_workspace = str(canonicalize_path(workspace_root))
-    for listed_repo_id, listed_path in service._list_manifest_repos():
-        if str(canonicalize_path(Path(listed_path))) == canonical_workspace:
-            return "repo", listed_repo_id, listed_repo_id
+    for entry in manifest_workspaces:
+        if str(canonicalize_path(Path(entry.path))) == canonical_workspace:
+            return entry.resource_kind, entry.resource_id, entry.repo_id
     return None, None, None
 
 
@@ -157,9 +214,9 @@ def _list_bind_workspace_candidates(
     candidates: list[tuple[Optional[str], Optional[str], str]] = []
     manifest_paths: set[str] = set()
 
-    for repo_id, path in service._list_manifest_repos():
-        normalized_path = str(canonicalize_path(Path(path)))
-        candidates.append(("repo", repo_id, normalized_path))
+    for entry in _list_manifest_workspaces(service):
+        normalized_path = str(canonicalize_path(Path(entry.path)))
+        candidates.append((entry.resource_kind, entry.resource_id, normalized_path))
         manifest_paths.add(normalized_path)
 
     seen_paths: set[str] = set(manifest_paths)
