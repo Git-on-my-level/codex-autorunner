@@ -35,8 +35,7 @@ describe('chat detail session', () => {
       loadingActive: true,
       activeError: null
     });
-    expect(command.refresh).toEqual({ chatId: 'deep-linked-chat', quiet: false });
-    expect(command.closeStream).toBe(true);
+    expect(command.runtime).toEqual({ chatId: 'deep-linked-chat', quiet: false });
     expect(command.markRead).toBe(false);
   });
 
@@ -51,7 +50,7 @@ describe('chat detail session', () => {
 
     expect(command.state.loadingActive).toBe(false);
     expect(command.state.activeError).toBe(error);
-    expect(command.refresh).toBeNull();
+    expect(command.runtime).toEqual({ chatId: null, quiet: true });
   });
 
   it('does not replace a deep-linked chat with the first loaded row while the requested row is absent', () => {
@@ -68,7 +67,7 @@ describe('chat detail session', () => {
     });
 
     expect(command.state.activeChatId).toBe('deep-linked-chat');
-    expect(command.refresh).toBeNull();
+    expect(command.runtime).toBeNull();
     expect(command.syncUrl).toBe(false);
   });
 

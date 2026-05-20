@@ -240,7 +240,6 @@
   const liveProjection = createChatDetailLiveProjection({
     api: webApi.pma,
     readModelStore: readModelEntityStore,
-    getActiveChatId: () => activeChatId,
     getChatSummary: (chatId) => chatSummaryForId(chatId),
     onStateChange: writeLiveProjectionState
   });
@@ -831,11 +830,10 @@
   }
 
   function applyChatDetailSelectionCommand(command: ChatDetailSelectionCommand): void {
+    if (command.runtime) void liveProjection.activate(command.runtime.chatId, { quiet: command.runtime.quiet });
     writeChatDetailSessionState(command.state);
-    if (command.closeStream) closeStream();
     if (command.syncSelectors) syncSelectorsToActiveChat();
     if (command.markRead) markActiveChatRead();
-    if (command.refresh) void refreshActive(command.refresh.chatId, { quiet: command.refresh.quiet });
   }
 
   function writeLiveProjectionState(state: ChatDetailLiveProjectionState): void {
@@ -1178,10 +1176,6 @@
 
   async function refreshActive(chatId: string, options: { quiet?: boolean } = {}): Promise<void> {
     await liveProjection.refresh(chatId, options);
-  }
-
-  function connectStream(chatId: string): void {
-    liveProjection.connect(chatId);
   }
 
   function closeStream(): void {
