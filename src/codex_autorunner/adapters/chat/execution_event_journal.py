@@ -3,6 +3,9 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass, field
 from typing import Any, Iterable, Mapping, Optional, Sequence
 
+from ...core.orchestration.run_notice_visibility import (
+    CHAT_EXECUTION_JOURNAL_NOTICE_KIND,
+)
 from ...core.orchestration.turn_timeline import append_turn_timeline, list_turn_timeline
 from ...core.ports.run_event import (
     ApprovalRequested,
@@ -19,7 +22,6 @@ from ...core.ports.run_event import (
 )
 from ...core.time_utils import now_iso
 
-CHAT_EXECUTION_JOURNAL_NOTICE_KIND = "chat_execution_journal"
 CHAT_EXECUTION_JOURNAL_SCHEMA_VERSION = 1
 
 

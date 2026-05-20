@@ -20,6 +20,7 @@ from ..ports.run_event import (
 )
 from ..redaction import redact_text
 from ..text_utils import _truncate_text
+from .run_notice_visibility import is_internal_run_notice_kind
 from .stream_text_merge import merge_assistant_stream_text
 
 PROGRESS_PROJECTION_VERSION = "pma_progress_projection.v1"
@@ -278,14 +279,9 @@ def reduce_progress_event(
         )
 
     if isinstance(event, RunNotice):
-        # decode_failure notices are operator/debug telemetry emitted when
-        # the decoder doesn't have a handler for a runtime method. They are
-        # logged via `_log_decode_failure`; surfacing them as user-visible
-        # cards would leak internal plumbing into the chat. Keep them in
-        # the projection (so journal replay sees them too) but hide them.
-        if event.kind == "decode_failure":
+        if is_internal_run_notice_kind(event.kind):
             return ProgressProjectionItem(
-                item_id=f"progress:hidden:decode_failure:{event_key}",
+                item_id=f"progress:hidden:{event.kind or 'notice'}:{event_key}",
                 kind="hidden",
                 state="hidden",
                 title="Hidden progress",

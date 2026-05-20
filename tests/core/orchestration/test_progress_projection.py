@@ -2,7 +2,9 @@ from __future__ import annotations
 
 from codex_autorunner.core.orchestration.progress_projection import (
     ProgressProjectionInput,
+    ProgressProjectionState,
     project_progress_events,
+    reduce_progress_event,
 )
 from codex_autorunner.core.ports.run_event import (
     RUN_EVENT_DELTA_TYPE_ASSISTANT_STREAM,
@@ -80,6 +82,41 @@ def test_progress_projection_keeps_strict_assistant_deltas_append_only() -> None
     assert len(items) == 1
     assert items[0].summary == "Reading files now"
     assert items[0].merge_strategy == "delta"
+
+
+def test_progress_projection_marks_internal_run_notices_hidden() -> None:
+    state = ProgressProjectionState()
+    items = [
+        reduce_progress_event(
+            state,
+            ProgressProjectionInput(
+                event_id=index,
+                timestamp=f"2026-05-06T10:00:0{index}Z",
+                event=RunNotice(
+                    timestamp=f"2026-05-06T10:00:0{index}Z",
+                    kind=kind,
+                    message="internal telemetry",
+                ),
+            ),
+        )
+        for index, kind in enumerate(
+            ("chat_execution_journal", "compaction_summary", "decode_failure"),
+            start=1,
+        )
+    ]
+
+    assert all(item is not None and item.kind == "hidden" for item in items)
+    assert all(item is not None and item.hidden for item in items)
+    assert (
+        _project(
+            RunNotice(
+                timestamp="2026-05-06T10:00:01Z",
+                kind="chat_execution_journal",
+                message="terminal=3977ms",
+            )
+        )
+        == []
+    )
 
 
 def test_progress_projection_groups_tool_call_and_result_pairs() -> None:

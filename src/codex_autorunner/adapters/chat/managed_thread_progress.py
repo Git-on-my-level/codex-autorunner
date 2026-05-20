@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+from ...core.orchestration.run_notice_visibility import is_internal_run_notice_kind
 from ...core.ports.run_event import (
     RUN_EVENT_DELTA_TYPE_ASSISTANT_MESSAGE,
     RUN_EVENT_DELTA_TYPE_LOG_LINE,
@@ -113,7 +114,7 @@ def apply_run_event_to_progress_tracker(
         notice = run_event.message.strip() if run_event.message else ""
         if not notice:
             notice = run_event.kind.strip() if run_event.kind else "notice"
-        if run_event.kind == "decode_failure":
+        if is_internal_run_notice_kind(run_event.kind):
             return ProgressTrackerEventOutcome(changed=False)
         if run_event.kind in {"thinking", "reasoning"}:
             prior_transient = tracker.transient_action

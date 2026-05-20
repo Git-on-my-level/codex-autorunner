@@ -488,6 +488,35 @@ def test_live_tail_event_uses_progress_metadata_for_intermediate_titles() -> Non
     assert item["payload"]["intermediate_kind"] == "progress"
 
 
+def test_live_tail_event_carries_hidden_progress_metadata() -> None:
+    item = timeline_item_from_tail_event(
+        managed_thread_id="thread-1",
+        managed_turn_id="turn-1",
+        tail_event={
+            "event_id": 4,
+            "event_type": "progress",
+            "summary": "terminal=3977ms",
+            "received_at": "2026-05-06T10:00:04Z",
+            "progress_item": {
+                "item_id": "progress:hidden:chat_execution_journal:0004",
+                "kind": "hidden",
+                "state": "hidden",
+                "title": "Hidden progress",
+                "summary": None,
+                "event_ids": [4],
+                "hidden": True,
+            },
+            "progress_kind": "hidden",
+            "progress_state": "hidden",
+        },
+    )
+
+    assert item is not None
+    assert item["kind"] == "intermediate"
+    assert item["payload"]["hidden"] is True
+    assert item["payload"]["progress_item"]["hidden"] is True
+
+
 def test_timeline_includes_delivery_state_items(tmp_path: Path) -> None:
     hub_root, store, thread_id = _store(tmp_path)
     turn = store.create_turn(thread_id, prompt="deliver this")

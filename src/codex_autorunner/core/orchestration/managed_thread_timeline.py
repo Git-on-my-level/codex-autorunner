@@ -702,6 +702,9 @@ def _append_timeline_event_items(
             progress_item_ids, progress_event_ids = _progress_item_metadata(
                 progress_item
             )
+            progress_item_dict = (
+                progress_item.to_dict() if progress_item is not None else None
+            )
             items.append(
                 ManagedThreadTimelineItem(
                     item_id=item_id,
@@ -727,11 +730,10 @@ def _append_timeline_event_items(
                         "source_event_ids": [event_index],
                         "source_event_type": event_type,
                         "detail_available": True,
-                        "progress_item": (
-                            progress_item.to_dict()
-                            if progress_item is not None
-                            else None
+                        "hidden": bool(
+                            progress_item is not None and progress_item.hidden
                         ),
+                        "progress_item": progress_item_dict,
                     },
                 )
             )
@@ -945,6 +947,7 @@ def timeline_item_from_tail_event(
                 "source_event_ids": source_event_ids,
                 "source_event_type": event_type,
                 "detail_available": True,
+                "hidden": bool(progress.get("hidden") is True),
                 "progress_item": progress or None,
                 "live_tail_event": dict(tail_event),
             },
