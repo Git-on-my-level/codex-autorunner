@@ -22,6 +22,14 @@ from .pma_automation_types import (
     _normalize_text,
     default_pma_automation_state,
 )
+from .pma_domain.automation_lifecycle import (
+    cancel_schedule_state,
+    cancel_subscription_state,
+    cancel_timer_state,
+    subscription_is_active_for_purge,
+    timer_is_active_for_purge,
+    wakeup_is_active_for_purge,
+)
 from .text_utils import lock_path_for
 
 logger = logging.getLogger(__name__)
@@ -801,16 +809,24 @@ class PmaAutomationPersistence:
         return self._row_to_wakeup(row) if row is not None else None
 
     def cancel_subscription(self, conn: Any, subscription_id: str, stamp: str) -> bool:
+        row = conn.execute(
+            "SELECT state FROM orch_automation_subscriptions WHERE subscription_id = ?",
+            (subscription_id,),
+        ).fetchone()
+        if row is None:
+            return False
+        next_state, changed = cancel_subscription_state(str(row["state"]))
+        if not changed:
+            return False
         cursor = conn.execute(
             """
             UPDATE orch_automation_subscriptions
-               SET state = 'cancelled',
+               SET state = ?,
                    updated_at = ?,
                    disabled_at = ?
              WHERE subscription_id = ?
-               AND state != 'cancelled'
             """,
-            (stamp, stamp, subscription_id),
+            (next_state, stamp, stamp, subscription_id),
         )
         if cursor.rowcount <= 0:
             return False
@@ -834,7 +850,7 @@ class PmaAutomationPersistence:
         ).fetchone()
         if row is None:
             return False
-        if require_inactive and str(row["state"]) == "active":
+        if require_inactive and subscription_is_active_for_purge(str(row["state"])):
             return False
         self._delete_subscription_dependents(conn, [subscription_id])
         conn.execute(
@@ -857,6 +873,8 @@ class PmaAutomationPersistence:
             params = (state_filter,)
         rows = conn.execute(query, params).fetchall()
         removed = [self._row_to_subscription(row) for row in rows]
+        for row in rows:
+            subscription_is_active_for_purge(str(row["state"]))
         if removed and not dry_run:
             removed_ids = [entry.subscription_id for entry in removed]
             self._delete_subscription_dependents(conn, removed_ids)
@@ -904,40 +922,76 @@ class PmaAutomationPersistence:
         cancelled_at: str,
         reason: Optional[str],
     ) -> bool:
+        row = conn.execute(
+            "SELECT state FROM orch_automation_timers WHERE timer_id = ?",
+            (timer_id,),
+        ).fetchone()
+        if row is None:
+            return False
+        next_state, changed = cancel_timer_state(str(row["state"]))
+        if not changed:
+            return False
         if reason is not None:
             cursor = conn.execute(
                 """
                 UPDATE orch_automation_timers
-                   SET state = 'cancelled',
+                   SET state = ?,
                        updated_at = ?,
                        reason_text = ?
                  WHERE timer_id = ?
-                   AND state != 'cancelled'
                 """,
-                (cancelled_at, reason, timer_id),
+                (next_state, cancelled_at, reason, timer_id),
             )
         else:
             cursor = conn.execute(
                 """
                 UPDATE orch_automation_timers
-                   SET state = 'cancelled',
+                   SET state = ?,
                        updated_at = ?
                  WHERE timer_id = ?
-                   AND state != 'cancelled'
                 """,
-                (cancelled_at, timer_id),
+                (next_state, cancelled_at, timer_id),
             )
         if cursor.rowcount <= 0:
+            return False
+        schedule_id = f"pma-timer:{timer_id}"
+        schedule_row = conn.execute(
+            "SELECT state FROM orch_automation_schedules WHERE schedule_id = ?",
+            (schedule_id,),
+        ).fetchone()
+        if schedule_row is not None:
+            schedule_next_state, _ = cancel_schedule_state(str(schedule_row["state"]))
+            conn.execute(
+                """
+                UPDATE orch_automation_schedules
+                   SET state = ?,
+                       next_fire_at = NULL,
+                       updated_at = ?
+                 WHERE schedule_id = ?
+                """,
+                (schedule_next_state, cancelled_at, schedule_id),
+            )
+        return True
+
+    def cancel_schedule(self, conn: Any, schedule_id: str, stamp: str) -> bool:
+        row = conn.execute(
+            "SELECT state FROM orch_automation_schedules WHERE schedule_id = ?",
+            (schedule_id,),
+        ).fetchone()
+        if row is None:
+            return False
+        next_state, changed = cancel_schedule_state(str(row["state"]))
+        if not changed:
             return False
         conn.execute(
             """
             UPDATE orch_automation_schedules
-               SET state = 'cancelled',
+               SET state = ?,
                    next_fire_at = NULL,
                    updated_at = ?
              WHERE schedule_id = ?
             """,
-            (cancelled_at, f"pma-timer:{timer_id}"),
+            (next_state, stamp, schedule_id),
         )
         return True
 
@@ -948,7 +1002,7 @@ class PmaAutomationPersistence:
         ).fetchone()
         if row is None:
             return False
-        if require_inactive and str(row["state"]) == "pending":
+        if require_inactive and timer_is_active_for_purge(str(row["state"])):
             return False
         conn.execute(
             "DELETE FROM orch_automation_timers WHERE timer_id = ?",
@@ -965,7 +1019,7 @@ class PmaAutomationPersistence:
         ).fetchone()
         if row is None:
             return False
-        if require_inactive and str(row["state"]) in {"pending", "queued"}:
+        if require_inactive and wakeup_is_active_for_purge(str(row["state"])):
             return False
         conn.execute(
             "DELETE FROM orch_automation_wakeups WHERE wakeup_id = ?",

@@ -98,6 +98,21 @@ describe('read model view-model selectors', () => {
     expect(filterPmaChats([summary], 'archived', '').map((chat) => chat.id)).toEqual([]);
   });
 
+  it('uses backend effective status before raw lifecycle detail', () => {
+    const row = legacyChatIndexRecordToChatIndexRow({
+      row_id: 'row-effective',
+      title: 'Effective row',
+      lifecycle: 'running',
+      runtime_status: 'running',
+      queue_depth: 5,
+      effective_status: 'idle'
+    });
+
+    expect(row.status).toBe('idle');
+    expect(row.effectiveStatus).toBe('idle');
+    expect(chatIndexRowToPmaChatSummary(row).status).toBe('idle');
+  });
+
   it('preserves unread counts through PMA chat row conversion', () => {
     const row: ChatIndexRow = {
       chatId: 'chat-1',

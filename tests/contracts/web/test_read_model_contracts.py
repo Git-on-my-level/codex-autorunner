@@ -92,6 +92,7 @@ def chat_row() -> ChatIndexRow:
         binding_display_names=["Release room"],
         lifecycle="running",
         runtime_status="running",
+        effective_status="running",
         archive_state="active",
         status="running",
         unread_count=2,
@@ -125,6 +126,7 @@ def test_chat_index_snapshot_and_patch_round_trip_with_camel_case_payloads() -> 
 
     assert payload["contractVersion"] == "web-read-models.v1"
     assert payload["rows"][0]["chatId"] == "chat-1"
+    assert payload["rows"][0]["effectiveStatus"] == "running"
     assert payload["rows"][0]["displayTitle"] == "Release room"
     assert payload["rows"][0]["surfaceBindings"][0]["surface_kind"] == "discord"
     assert load_read_model_contract(ChatIndexSnapshot, payload) == snapshot

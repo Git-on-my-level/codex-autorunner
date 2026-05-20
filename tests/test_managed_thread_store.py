@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import concurrent.futures
 import threading
 from pathlib import Path
@@ -7,6 +8,9 @@ from pathlib import Path
 import pytest
 
 from codex_autorunner.core.domain.refs import AgentRef, ScopeRef, SurfaceRef
+from codex_autorunner.core.managed_thread_status import (
+    ManagedThreadLifecycleTransitionError,
+)
 from codex_autorunner.core.managed_thread_store import (
     ManagedThreadAlreadyHasRunningTurnError,
     ManagedThreadNotActiveError,
@@ -25,6 +29,7 @@ from codex_autorunner.core.orchestration.runtime_bindings import (
     clear_runtime_thread_binding,
 )
 from codex_autorunner.core.orchestration.sqlite import open_orchestration_sqlite
+from codex_autorunner.core.ports.thread_store import ThreadStatus
 
 
 def test_create_list_get_thread(tmp_path: Path) -> None:
@@ -1449,6 +1454,78 @@ def test_archive_then_activate_restores_ready_status(tmp_path: Path) -> None:
     assert resumed["normalized_status"] == "idle"
     assert resumed["status_reason_code"] == "thread_resumed"
     assert resumed["status_terminal"] is False
+
+
+def test_activate_active_thread_is_idempotent(tmp_path: Path) -> None:
+    store = ManagedThreadStore(tmp_path / "hub")
+    thread = store.create_thread("codex", tmp_path / "workspace")
+
+    store.activate_thread(thread["managed_thread_id"])
+
+    activated = store.get_thread(thread["managed_thread_id"])
+    assert activated is not None
+    assert activated["lifecycle_status"] == "active"
+    assert activated["normalized_status"] == "idle"
+    assert activated["status_reason_code"] == "thread_created"
+
+
+def test_lifecycle_write_rejects_unknown_durable_status(tmp_path: Path) -> None:
+    store = ManagedThreadStore(tmp_path / "hub")
+    thread = store.create_thread("codex", tmp_path / "workspace")
+
+    with store._write_conn() as conn:
+        with conn:
+            conn.execute(
+                """
+                UPDATE orch_thread_targets
+                   SET lifecycle_status = 'paused'
+                 WHERE thread_target_id = ?
+                """,
+                (thread["managed_thread_id"],),
+            )
+
+    with pytest.raises(
+        ManagedThreadLifecycleTransitionError,
+        match="Illegal managed-thread lifecycle transition",
+    ):
+        store.archive_thread(thread["managed_thread_id"])
+
+
+def test_create_turn_rejects_unknown_durable_lifecycle_status(
+    tmp_path: Path,
+) -> None:
+    store = ManagedThreadStore(tmp_path / "hub")
+    thread = store.create_thread("codex", tmp_path / "workspace")
+
+    with store._write_conn() as conn:
+        with conn:
+            conn.execute(
+                """
+                UPDATE orch_thread_targets
+                   SET lifecycle_status = 'paused'
+                 WHERE thread_target_id = ?
+                """,
+                (thread["managed_thread_id"],),
+            )
+
+    with pytest.raises(
+        ManagedThreadLifecycleTransitionError,
+        match="Illegal managed-thread lifecycle transition",
+    ):
+        store.create_turn(thread["managed_thread_id"], prompt="should reject")
+
+
+def test_update_status_rejects_unsupported_lifecycle_status(tmp_path: Path) -> None:
+    store = ManagedThreadStore(tmp_path / "hub")
+    thread = store.create_thread("codex", tmp_path / "workspace")
+
+    with pytest.raises(ValueError, match="Unsupported managed-thread lifecycle status"):
+        asyncio.run(
+            store.update_status(
+                thread["managed_thread_id"],
+                ThreadStatus.COMPLETED,
+            )
+        )
 
 
 def test_duplicate_completion_event_is_idempotent(tmp_path: Path) -> None:

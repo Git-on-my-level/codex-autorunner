@@ -34,11 +34,13 @@ from codex_autorunner.adapters.discord.interaction_session import (
 )
 from codex_autorunner.adapters.discord.response_helpers import DiscordResponder
 from codex_autorunner.adapters.discord.service import (
+    _CHAT_OPERATION_RECOVERY_METADATA_KEY,
     _INTERACTION_RECOVERY_METADATA_KEY,
     DiscordBotService,
 )
 from codex_autorunner.adapters.discord.state import DiscordStateStore
 from codex_autorunner.core.orchestration import (
+    ChatOperationRecoveryAction,
     ChatOperationState,
     SQLiteChatOperationLedger,
     initialize_orchestration_sqlite,
@@ -895,6 +897,68 @@ async def test_known_transition_race_is_logged_at_warning(
         assert records[-1].levelno == logging.WARNING
     finally:
         await harness.close()
+
+
+@pytest.mark.anyio
+async def test_recovery_terminal_rewind_is_metadata_only(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    harness = _ChaosHarness(tmp_path)
+    await harness.initialize()
+    try:
+        service = _build_recovery_service(
+            store=harness.store,
+            rest=harness.rest,
+            operation_store=harness.operation_store,
+        )
+        harness.operation_store.register_operation(
+            operation_id="terminal-recovery-rewind-1",
+            surface_kind="discord",
+            surface_operation_key="terminal-recovery-rewind-1",
+            state=ChatOperationState.COMPLETED,
+        )
+
+        with caplog.at_level(logging.INFO, logger=service._logger.name):
+            updated = await service._patch_chat_operation_recovery(
+                "terminal-recovery-rewind-1",
+                state=ChatOperationState.RUNNING,
+                recovery_action=ChatOperationRecoveryAction.RESUME_EXECUTION,
+                recovery_reason="late_recovery_race",
+                terminal_outcome="recovered",
+            )
+
+        assert updated is not None
+        assert updated.state is ChatOperationState.COMPLETED
+        assert updated.terminal_outcome is None
+        assert updated.metadata[_CHAT_OPERATION_RECOVERY_METADATA_KEY] == {
+            "action": "resume_execution",
+            "reason": "late_recovery_race",
+            "current_state": "completed",
+            "requested_state": "running",
+        }
+        events = _logged_events(caplog, service._logger.name)
+        assert any(
+            event["event"] == "discord.chat_operation.recovery_terminal_metadata_only"
+            and event["current_state"] == "completed"
+            and event["requested_state"] == "running"
+            for event in events
+        )
+    finally:
+        await harness.close()
+
+
+def test_discord_recovery_does_not_bypass_transition_validation() -> None:
+    service_path = (
+        Path(__file__).parents[3] / "src/codex_autorunner/adapters/discord/service.py"
+    )
+    source = service_path.read_text(encoding="utf-8")
+    recovery_helper = source.split("async def _patch_chat_operation_recovery", 1)[1]
+    recovery_helper = recovery_helper.split(
+        "    @staticmethod\n    def _is_interrupt_component_custom_id",
+        1,
+    )[0]
+    assert "validate_transition=False" not in recovery_helper
 
 
 @pytest.mark.anyio

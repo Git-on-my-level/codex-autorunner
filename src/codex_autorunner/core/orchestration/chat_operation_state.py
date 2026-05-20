@@ -140,6 +140,7 @@ CHAT_OPERATION_ALLOWED_TRANSITIONS: dict[
     ChatOperationState.INTERRUPTING: frozenset(
         {
             ChatOperationState.DELIVERING,
+            ChatOperationState.COMPLETED,
             ChatOperationState.INTERRUPTED,
             ChatOperationState.FAILED,
             ChatOperationState.CANCELLED,

@@ -4,6 +4,7 @@ import hashlib
 import sqlite3
 from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass, field
+from enum import Enum
 from pathlib import Path
 from typing import Any, Optional
 
@@ -19,7 +20,132 @@ from .text_utils import (
 )
 from .time_utils import now_iso
 
-_RESOLVED_STATES_ALLOW_REEMIT = frozenset({"resolved"})
+
+class ScmReactionLifecycleState(str, Enum):
+    EMITTED = "emitted"
+    DELIVERY_FAILED = "delivery_failed"
+    RESOLVED = "resolved"
+    SUPPRESSED = "suppressed"
+
+
+class ScmReactionLifecycleTransition(str, Enum):
+    EMIT = "emit"
+    DELIVERY_FAILED = "delivery_failed"
+    DELIVERY_SUCCEEDED = "delivery_succeeded"
+    RESOLVE = "resolve"
+    SUPPRESS = "suppress"
+    ESCALATE = "escalate"
+
+
+@dataclass(frozen=True)
+class ScmReactionLifecyclePlan:
+    transition: ScmReactionLifecycleTransition
+    previous_state: ScmReactionLifecycleState | None
+    state: ScmReactionLifecycleState
+
+
+_ACTIVE_REACTION_STATES = frozenset(
+    {
+        ScmReactionLifecycleState.EMITTED,
+        ScmReactionLifecycleState.DELIVERY_FAILED,
+    }
+)
+_RESOLVED_STATES_ALLOW_REEMIT = frozenset({ScmReactionLifecycleState.RESOLVED})
+_SCM_REACTION_TRANSITIONS: dict[
+    ScmReactionLifecycleTransition,
+    dict[ScmReactionLifecycleState | None, ScmReactionLifecycleState],
+] = {
+    ScmReactionLifecycleTransition.EMIT: {
+        None: ScmReactionLifecycleState.EMITTED,
+        ScmReactionLifecycleState.EMITTED: ScmReactionLifecycleState.EMITTED,
+        ScmReactionLifecycleState.DELIVERY_FAILED: ScmReactionLifecycleState.EMITTED,
+        ScmReactionLifecycleState.RESOLVED: ScmReactionLifecycleState.EMITTED,
+    },
+    ScmReactionLifecycleTransition.DELIVERY_FAILED: {
+        None: ScmReactionLifecycleState.DELIVERY_FAILED,
+        ScmReactionLifecycleState.EMITTED: ScmReactionLifecycleState.DELIVERY_FAILED,
+        ScmReactionLifecycleState.DELIVERY_FAILED: (
+            ScmReactionLifecycleState.DELIVERY_FAILED
+        ),
+    },
+    ScmReactionLifecycleTransition.DELIVERY_SUCCEEDED: {
+        ScmReactionLifecycleState.EMITTED: ScmReactionLifecycleState.EMITTED,
+        ScmReactionLifecycleState.DELIVERY_FAILED: ScmReactionLifecycleState.EMITTED,
+    },
+    ScmReactionLifecycleTransition.RESOLVE: {
+        None: ScmReactionLifecycleState.RESOLVED,
+        ScmReactionLifecycleState.EMITTED: ScmReactionLifecycleState.RESOLVED,
+        ScmReactionLifecycleState.DELIVERY_FAILED: ScmReactionLifecycleState.RESOLVED,
+        ScmReactionLifecycleState.RESOLVED: ScmReactionLifecycleState.RESOLVED,
+    },
+    ScmReactionLifecycleTransition.SUPPRESS: {
+        None: ScmReactionLifecycleState.SUPPRESSED,
+        ScmReactionLifecycleState.EMITTED: ScmReactionLifecycleState.EMITTED,
+        ScmReactionLifecycleState.DELIVERY_FAILED: (
+            ScmReactionLifecycleState.DELIVERY_FAILED
+        ),
+        ScmReactionLifecycleState.SUPPRESSED: ScmReactionLifecycleState.SUPPRESSED,
+    },
+    ScmReactionLifecycleTransition.ESCALATE: {
+        ScmReactionLifecycleState.EMITTED: ScmReactionLifecycleState.EMITTED,
+        ScmReactionLifecycleState.DELIVERY_FAILED: (
+            ScmReactionLifecycleState.DELIVERY_FAILED
+        ),
+    },
+}
+
+
+def _reaction_lifecycle_state(value: str | None) -> ScmReactionLifecycleState | None:
+    if value is None:
+        return None
+    try:
+        return ScmReactionLifecycleState(value)
+    except ValueError as exc:
+        raise RuntimeError(f"unknown SCM reaction lifecycle state: {value!r}") from exc
+
+
+def _required_reaction_lifecycle_state(value: str) -> ScmReactionLifecycleState:
+    state = _reaction_lifecycle_state(value)
+    if state is None:
+        raise RuntimeError("SCM reaction lifecycle state is required")
+    return state
+
+
+def plan_reaction_lifecycle_transition(
+    transition: ScmReactionLifecycleTransition | str,
+    *,
+    current_state: str | ScmReactionLifecycleState | None,
+) -> ScmReactionLifecyclePlan:
+    try:
+        resolved_transition = ScmReactionLifecycleTransition(transition)
+    except ValueError as exc:
+        raise RuntimeError(
+            f"unknown SCM reaction lifecycle transition: {transition!r}"
+        ) from exc
+    resolved_current = _reaction_lifecycle_state(
+        str(current_state) if current_state is not None else None
+    )
+    allowed = _SCM_REACTION_TRANSITIONS[resolved_transition]
+    next_state = allowed.get(resolved_current)
+    if next_state is None:
+        raise RuntimeError(
+            "invalid SCM reaction lifecycle transition: "
+            f"{resolved_transition.value} from "
+            f"{resolved_current.value if resolved_current is not None else '<new>'}"
+        )
+    return ScmReactionLifecyclePlan(
+        transition=resolved_transition,
+        previous_state=resolved_current,
+        state=next_state,
+    )
+
+
+def _required_previous_reaction_state(plan: ScmReactionLifecyclePlan) -> str:
+    if plan.previous_state is None:
+        raise RuntimeError(
+            "SCM reaction lifecycle previous state is required for update"
+        )
+    return plan.previous_state.value
 
 
 def reaction_state_kind(*, reaction_kind: str, operation_kind: str) -> str:
@@ -220,7 +346,7 @@ class ScmReactionState:
     binding_id: str
     reaction_kind: str
     fingerprint: str
-    state: str
+    state: ScmReactionLifecycleState
     created_at: str
     updated_at: str
     first_event_id: Optional[str] = None
@@ -245,7 +371,7 @@ def _state_from_row(row: sqlite3.Row) -> ScmReactionState:
         binding_id=str(row["binding_id"]),
         reaction_kind=str(row["reaction_kind"]),
         fingerprint=str(row["fingerprint"]),
-        state=str(row["state"]),
+        state=_required_reaction_lifecycle_state(str(row["state"])),
         created_at=str(row["created_at"]),
         updated_at=str(row["updated_at"]),
         first_event_id=_normalize_text(row["first_event_id"]),
@@ -408,8 +534,12 @@ class ScmReactionStateStore:
                 reaction_kind=normalized_reaction_kind,
                 fingerprint=normalized_fingerprint,
             )
+            plan = plan_reaction_lifecycle_transition(
+                ScmReactionLifecycleTransition.EMIT,
+                current_state=str(row["state"]) if row is not None else None,
+            )
             if row is None:
-                conn.execute(
+                cursor = conn.execute(
                     """
                     INSERT INTO orch_reaction_state (
                         binding_id,
@@ -430,12 +560,13 @@ class ScmReactionStateStore:
                         delivery_failure_count,
                         last_error_text,
                         metadata_json
-                    ) VALUES (?, ?, ?, 'emitted', ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, 1, 0, NULL, ?)
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, 1, 0, NULL, ?)
                     """,
                     (
                         normalized_binding_id,
                         normalized_reaction_kind,
                         normalized_fingerprint,
+                        plan.state.value,
                         normalized_event_id,
                         normalized_event_id,
                         normalized_operation_key,
@@ -448,10 +579,10 @@ class ScmReactionStateStore:
                 )
             else:
                 merged_metadata = self._merge_metadata(row, metadata_object)
-                conn.execute(
+                cursor = conn.execute(
                     """
                     UPDATE orch_reaction_state
-                       SET state = 'emitted',
+                       SET state = ?,
                            first_event_id = COALESCE(first_event_id, ?),
                            last_event_id = ?,
                            last_operation_key = COALESCE(?, last_operation_key),
@@ -466,8 +597,10 @@ class ScmReactionStateStore:
                      WHERE binding_id = ?
                        AND reaction_kind = ?
                        AND fingerprint = ?
+                       AND state = ?
                     """,
                     (
+                        plan.state.value,
                         normalized_event_id,
                         normalized_event_id,
                         normalized_operation_key,
@@ -478,8 +611,21 @@ class ScmReactionStateStore:
                         normalized_binding_id,
                         normalized_reaction_kind,
                         normalized_fingerprint,
+                        _required_previous_reaction_state(plan),
                     ),
                 )
+                if cursor.rowcount == 0:
+                    refreshed = self._load_reaction_state_row(
+                        conn,
+                        binding_id=normalized_binding_id,
+                        reaction_kind=normalized_reaction_kind,
+                        fingerprint=normalized_fingerprint,
+                    )
+                    if refreshed is None:
+                        raise RuntimeError(
+                            "reaction state row missing after stale emission"
+                        )
+                    return _state_from_row(refreshed)
             refreshed = self._load_reaction_state_row(
                 conn,
                 binding_id=normalized_binding_id,
@@ -519,8 +665,12 @@ class ScmReactionStateStore:
                 reaction_kind=normalized_reaction_kind,
                 fingerprint=normalized_fingerprint,
             )
+            plan = plan_reaction_lifecycle_transition(
+                ScmReactionLifecycleTransition.DELIVERY_FAILED,
+                current_state=str(row["state"]) if row is not None else None,
+            )
             if row is None:
-                conn.execute(
+                cursor = conn.execute(
                     """
                     INSERT INTO orch_reaction_state (
                         binding_id,
@@ -541,12 +691,13 @@ class ScmReactionStateStore:
                         delivery_failure_count,
                         last_error_text,
                         metadata_json
-                    ) VALUES (?, ?, ?, 'delivery_failed', ?, ?, NULL, ?, ?, NULL, NULL, ?, NULL, NULL, 0, 1, ?, ?)
+                    ) VALUES (?, ?, ?, ?, ?, ?, NULL, ?, ?, NULL, NULL, ?, NULL, NULL, 0, 1, ?, ?)
                     """,
                     (
                         normalized_binding_id,
                         normalized_reaction_kind,
                         normalized_fingerprint,
+                        plan.state.value,
                         normalized_event_id,
                         normalized_event_id,
                         timestamp,
@@ -558,10 +709,10 @@ class ScmReactionStateStore:
                 )
             else:
                 merged_metadata = self._merge_metadata(row, metadata_object)
-                conn.execute(
+                cursor = conn.execute(
                     """
                     UPDATE orch_reaction_state
-                       SET state = 'delivery_failed',
+                       SET state = ?,
                            first_event_id = COALESCE(first_event_id, ?),
                            last_event_id = ?,
                            updated_at = ?,
@@ -572,8 +723,10 @@ class ScmReactionStateStore:
                      WHERE binding_id = ?
                        AND reaction_kind = ?
                        AND fingerprint = ?
+                       AND state = ?
                     """,
                     (
+                        plan.state.value,
                         normalized_event_id,
                         normalized_event_id,
                         timestamp,
@@ -583,8 +736,21 @@ class ScmReactionStateStore:
                         normalized_binding_id,
                         normalized_reaction_kind,
                         normalized_fingerprint,
+                        _required_previous_reaction_state(plan),
                     ),
                 )
+                if cursor.rowcount == 0:
+                    refreshed = self._load_reaction_state_row(
+                        conn,
+                        binding_id=normalized_binding_id,
+                        reaction_kind=normalized_reaction_kind,
+                        fingerprint=normalized_fingerprint,
+                    )
+                    if refreshed is None:
+                        raise RuntimeError(
+                            "reaction state row missing after stale delivery failure"
+                        )
+                    return _state_from_row(refreshed)
             refreshed = self._load_reaction_state_row(
                 conn,
                 binding_id=normalized_binding_id,
@@ -628,11 +794,15 @@ class ScmReactionStateStore:
             )
             if row is None:
                 raise RuntimeError("reaction state row missing before delivery success")
+            plan = plan_reaction_lifecycle_transition(
+                ScmReactionLifecycleTransition.DELIVERY_SUCCEEDED,
+                current_state=str(row["state"]),
+            )
             merged_metadata = self._merge_metadata(row, metadata_object)
-            conn.execute(
+            cursor = conn.execute(
                 """
                 UPDATE orch_reaction_state
-                   SET state = 'emitted',
+                   SET state = ?,
                        last_event_id = COALESCE(?, last_event_id),
                        last_operation_key = COALESCE(?, last_operation_key),
                        updated_at = ?,
@@ -644,8 +814,10 @@ class ScmReactionStateStore:
                  WHERE binding_id = ?
                    AND reaction_kind = ?
                    AND fingerprint = ?
+                   AND state = ?
                 """,
                 (
+                    plan.state.value,
                     normalized_event_id,
                     normalized_operation_key,
                     timestamp,
@@ -655,8 +827,21 @@ class ScmReactionStateStore:
                     normalized_binding_id,
                     normalized_reaction_kind,
                     normalized_fingerprint,
+                    _required_previous_reaction_state(plan),
                 ),
             )
+            if cursor.rowcount == 0:
+                refreshed = self._load_reaction_state_row(
+                    conn,
+                    binding_id=normalized_binding_id,
+                    reaction_kind=normalized_reaction_kind,
+                    fingerprint=normalized_fingerprint,
+                )
+                if refreshed is None:
+                    raise RuntimeError(
+                        "reaction state row missing after stale delivery success"
+                    )
+                return _state_from_row(refreshed)
             refreshed = self._load_reaction_state_row(
                 conn,
                 binding_id=normalized_binding_id,
@@ -696,8 +881,12 @@ class ScmReactionStateStore:
                 reaction_kind=normalized_reaction_kind,
                 fingerprint=normalized_fingerprint,
             )
+            plan = plan_reaction_lifecycle_transition(
+                ScmReactionLifecycleTransition.RESOLVE,
+                current_state=str(row["state"]) if row is not None else None,
+            )
             if row is None:
-                conn.execute(
+                cursor = conn.execute(
                     """
                     INSERT INTO orch_reaction_state (
                         binding_id,
@@ -718,12 +907,13 @@ class ScmReactionStateStore:
                         delivery_failure_count,
                         last_error_text,
                         metadata_json
-                    ) VALUES (?, ?, ?, 'resolved', ?, ?, NULL, ?, ?, NULL, NULL, NULL, NULL, ?, 0, 0, NULL, ?)
+                    ) VALUES (?, ?, ?, ?, ?, ?, NULL, ?, ?, NULL, NULL, NULL, NULL, ?, 0, 0, NULL, ?)
                     """,
                     (
                         normalized_binding_id,
                         normalized_reaction_kind,
                         normalized_fingerprint,
+                        plan.state.value,
                         normalized_event_id,
                         normalized_event_id,
                         timestamp,
@@ -734,20 +924,23 @@ class ScmReactionStateStore:
                 )
             else:
                 merged_metadata = self._merge_metadata(row, metadata_object)
-                conn.execute(
+                cursor = conn.execute(
                     """
                     UPDATE orch_reaction_state
-                       SET state = 'resolved',
+                       SET state = ?,
                            first_event_id = COALESCE(first_event_id, ?),
                            last_event_id = ?,
                            updated_at = ?,
                            resolved_at = ?,
+                           last_error_text = NULL,
                            metadata_json = ?
                      WHERE binding_id = ?
                        AND reaction_kind = ?
                        AND fingerprint = ?
+                       AND state = ?
                     """,
                     (
+                        plan.state.value,
                         normalized_event_id,
                         normalized_event_id,
                         timestamp,
@@ -756,8 +949,21 @@ class ScmReactionStateStore:
                         normalized_binding_id,
                         normalized_reaction_kind,
                         normalized_fingerprint,
+                        _required_previous_reaction_state(plan),
                     ),
                 )
+                if cursor.rowcount == 0:
+                    refreshed = self._load_reaction_state_row(
+                        conn,
+                        binding_id=normalized_binding_id,
+                        reaction_kind=normalized_reaction_kind,
+                        fingerprint=normalized_fingerprint,
+                    )
+                    if refreshed is None:
+                        raise RuntimeError(
+                            "reaction state row missing after stale resolve"
+                        )
+                    return _state_from_row(refreshed)
             refreshed = self._load_reaction_state_row(
                 conn,
                 binding_id=normalized_binding_id,
@@ -797,6 +1003,10 @@ class ScmReactionStateStore:
                 reaction_kind=normalized_reaction_kind,
                 fingerprint=normalized_fingerprint,
             )
+            plan = plan_reaction_lifecycle_transition(
+                ScmReactionLifecycleTransition.SUPPRESS,
+                current_state=str(row["state"]) if row is not None else None,
+            )
             if row is None:
                 conn.execute(
                     """
@@ -819,12 +1029,13 @@ class ScmReactionStateStore:
                         delivery_failure_count,
                         last_error_text,
                         metadata_json
-                    ) VALUES (?, ?, ?, 'suppressed', ?, ?, NULL, ?, ?, NULL, NULL, NULL, NULL, NULL, 1, 0, NULL, ?)
+                    ) VALUES (?, ?, ?, ?, ?, ?, NULL, ?, ?, NULL, NULL, NULL, NULL, NULL, 1, 0, NULL, ?)
                     """,
                     (
                         normalized_binding_id,
                         normalized_reaction_kind,
                         normalized_fingerprint,
+                        plan.state.value,
                         normalized_event_id,
                         normalized_event_id,
                         timestamp,
@@ -837,7 +1048,8 @@ class ScmReactionStateStore:
                 conn.execute(
                     """
                     UPDATE orch_reaction_state
-                       SET last_event_id = COALESCE(?, last_event_id),
+                       SET state = ?,
+                           last_event_id = COALESCE(?, last_event_id),
                            updated_at = ?,
                            attempt_count = attempt_count + 1,
                            metadata_json = ?
@@ -846,6 +1058,7 @@ class ScmReactionStateStore:
                        AND fingerprint = ?
                     """,
                     (
+                        plan.state.value,
                         normalized_event_id,
                         timestamp,
                         _json_dumps(merged_metadata),
@@ -897,11 +1110,16 @@ class ScmReactionStateStore:
             )
             if row is None:
                 raise RuntimeError("reaction state row missing before escalation")
+            plan = plan_reaction_lifecycle_transition(
+                ScmReactionLifecycleTransition.ESCALATE,
+                current_state=str(row["state"]),
+            )
             merged_metadata = self._merge_metadata(row, metadata_object)
             conn.execute(
                 """
                 UPDATE orch_reaction_state
-                   SET last_event_id = COALESCE(?, last_event_id),
+                   SET state = ?,
+                       last_event_id = COALESCE(?, last_event_id),
                        last_operation_key = COALESCE(?, last_operation_key),
                        updated_at = ?,
                        escalated_at = COALESCE(escalated_at, ?),
@@ -912,6 +1130,7 @@ class ScmReactionStateStore:
                    AND fingerprint = ?
                 """,
                 (
+                    plan.state.value,
                     normalized_event_id,
                     normalized_operation_key,
                     timestamp,
@@ -955,21 +1174,23 @@ class ScmReactionStateStore:
         normalized_event_id = _normalize_text(event_id)
         metadata_object = _normalize_json_object(metadata, field_name="metadata")
         timestamp = now_iso()
+        active_states = tuple(state.value for state in _ACTIVE_REACTION_STATES)
 
         with open_orchestration_sqlite(self._hub_root, durable=True) as conn:
             rows = conn.execute(
                 """
-                SELECT fingerprint, metadata_json
+                SELECT fingerprint, state, metadata_json
                   FROM orch_reaction_state
                  WHERE binding_id = ?
                    AND reaction_kind = ?
                    AND fingerprint != ?
-                   AND state IN ('delivery_failed', 'emitted')
+                   AND state IN (?, ?)
                 """,
                 (
                     normalized_binding_id,
                     normalized_reaction_kind,
                     normalized_keep_fingerprint,
+                    *active_states,
                 ),
             ).fetchall()
             resolved = 0
@@ -979,10 +1200,14 @@ class ScmReactionStateStore:
                     continue
                 merged_metadata = _json_loads_object(row["metadata_json"])
                 merged_metadata.update(metadata_object)
+                plan = plan_reaction_lifecycle_transition(
+                    ScmReactionLifecycleTransition.RESOLVE,
+                    current_state=str(row["state"]),
+                )
                 cursor = conn.execute(
                     """
                     UPDATE orch_reaction_state
-                       SET state = 'resolved',
+                       SET state = ?,
                            last_event_id = COALESCE(?, last_event_id),
                            updated_at = ?,
                            resolved_at = ?,
@@ -990,9 +1215,10 @@ class ScmReactionStateStore:
                      WHERE binding_id = ?
                        AND reaction_kind = ?
                        AND fingerprint = ?
-                       AND state IN ('delivery_failed', 'emitted')
+                       AND state IN (?, ?)
                     """,
                     (
+                        plan.state.value,
                         normalized_event_id,
                         timestamp,
                         timestamp,
@@ -1000,6 +1226,7 @@ class ScmReactionStateStore:
                         normalized_binding_id,
                         normalized_reaction_kind,
                         fingerprint,
+                        *active_states,
                     ),
                 )
                 resolved += int(cursor.rowcount or 0)
@@ -1102,6 +1329,9 @@ def mark_reaction_resolved(hub_root: Path, **kwargs: Any) -> ScmReactionState:
 
 
 __all__ = [
+    "ScmReactionLifecyclePlan",
+    "ScmReactionLifecycleState",
+    "ScmReactionLifecycleTransition",
     "ScmReactionState",
     "ScmReactionStateStore",
     "compute_reaction_fingerprint",
@@ -1110,6 +1340,7 @@ __all__ = [
     "mark_reaction_delivery_failed",
     "mark_reaction_emitted",
     "mark_reaction_resolved",
+    "plan_reaction_lifecycle_transition",
     "reaction_state_kind",
     "should_emit_reaction",
     "stable_reaction_fingerprint",

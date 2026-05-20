@@ -6,9 +6,11 @@ from codex_autorunner.core.orchestration.managed_turn_lifecycle_contract import 
     MANAGED_TURN_LIFECYCLE_PHASES,
     MANAGED_TURN_OPTIONAL_SIDE_EFFECTS,
     ManagedTurnTerminalOutcome,
+    classify_managed_turn_recovery_action,
     classify_terminal_recording,
     is_legal_managed_turn_phase_transition,
     managed_turn_phase_unblocks_queue,
+    plan_managed_turn_phase_transition,
 )
 from codex_autorunner.core.orchestration.models import ExecutionRecord
 from codex_autorunner.core.orchestration.recovery_lifecycle import (
@@ -56,6 +58,40 @@ def test_contract_rejects_optional_side_effects_before_terminal_recorded() -> No
     assert "archive_cleanup" in MANAGED_TURN_OPTIONAL_SIDE_EFFECTS
 
 
+def test_phase_transition_planner_accepts_initial_and_duplicate_transitions() -> None:
+    initial = plan_managed_turn_phase_transition(
+        managed_thread_id="thread-1",
+        execution_id="turn-1",
+        current_phase=None,
+        next_phase="accepted",
+    )
+    duplicate = plan_managed_turn_phase_transition(
+        managed_thread_id="thread-1",
+        execution_id="turn-1",
+        current_phase="terminal_recorded",
+        next_phase="terminal_recorded",
+        terminal_status="ok",
+    )
+
+    assert initial.action == "advance"
+    assert initial.should_persist is True
+    assert duplicate.action == "duplicate"
+    assert duplicate.should_persist is False
+    assert duplicate.unblocks_queue is True
+
+
+def test_phase_transition_planner_rejects_illegal_regression() -> None:
+    decision = plan_managed_turn_phase_transition(
+        managed_thread_id="thread-1",
+        execution_id="turn-1",
+        current_phase="runtime_running",
+        next_phase="runtime_starting",
+    )
+
+    assert decision.action == "reject"
+    assert decision.reason == "illegal_phase_transition"
+
+
 def test_duplicate_terminal_recording_is_idempotent_and_unblocks_queue() -> None:
     outcome = ManagedTurnTerminalOutcome(status="ok")
 
@@ -78,6 +114,18 @@ def test_conflicting_terminal_outcome_preserves_first_durable_outcome() -> None:
     assert decision.existing == existing
     assert decision.should_write is False
     assert decision.unblocks_queue is True
+
+
+def test_contract_owns_recovery_action_classification() -> None:
+    decision = classify_managed_turn_recovery_action(
+        phase="delivery_enqueued",
+        status="ok",
+        terminal_statuses=frozenset({"ok", "error", "interrupted"}),
+    )
+
+    assert decision.phase == "delivery_enqueued"
+    assert decision.selected_action == "recover_delivery"
+    assert decision.reason == "post_terminal_phase_recovery"
 
 
 @pytest.mark.parametrize(

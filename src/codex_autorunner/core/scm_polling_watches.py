@@ -4,6 +4,7 @@ import sqlite3
 import uuid
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timedelta, timezone
+from enum import Enum
 from pathlib import Path
 from typing import Any, Mapping, Optional
 
@@ -16,7 +17,70 @@ from .text_utils import (
 )
 from .time_utils import now_iso
 
-_WATCH_STATES = frozenset({"active", "expired", "closed", "error"})
+
+class ScmPollingWatchLifecycleState(str, Enum):
+    ACTIVE = "active"
+    EXPIRED = "expired"
+    CLOSED = "closed"
+    ERROR = "error"
+
+
+class ScmPollingWatchLifecycleTransition(str, Enum):
+    CREATE = "create"
+    REACTIVATE = "reactivate"
+    CLOSE = "close"
+    EXPIRE = "expire"
+    ERROR = "error"
+    REFRESH = "refresh"
+    ADMIT_DUE = "admit_due"
+    CLAIM_DUE = "claim_due"
+
+
+@dataclass(frozen=True)
+class ScmPollingWatchLifecyclePlan:
+    transition: ScmPollingWatchLifecycleTransition
+    previous_state: ScmPollingWatchLifecycleState | None
+    state: ScmPollingWatchLifecycleState
+
+
+_SCM_POLLING_WATCH_TRANSITIONS: dict[
+    ScmPollingWatchLifecycleTransition,
+    dict[ScmPollingWatchLifecycleState | None, ScmPollingWatchLifecycleState],
+] = {
+    ScmPollingWatchLifecycleTransition.CREATE: {
+        None: ScmPollingWatchLifecycleState.ACTIVE,
+    },
+    ScmPollingWatchLifecycleTransition.REACTIVATE: {
+        ScmPollingWatchLifecycleState.ACTIVE: ScmPollingWatchLifecycleState.ACTIVE,
+        ScmPollingWatchLifecycleState.CLOSED: ScmPollingWatchLifecycleState.ACTIVE,
+    },
+    ScmPollingWatchLifecycleTransition.CLOSE: {
+        ScmPollingWatchLifecycleState.ACTIVE: ScmPollingWatchLifecycleState.CLOSED,
+        ScmPollingWatchLifecycleState.CLOSED: ScmPollingWatchLifecycleState.CLOSED,
+    },
+    ScmPollingWatchLifecycleTransition.EXPIRE: {
+        ScmPollingWatchLifecycleState.ACTIVE: ScmPollingWatchLifecycleState.EXPIRED,
+        ScmPollingWatchLifecycleState.EXPIRED: ScmPollingWatchLifecycleState.EXPIRED,
+    },
+    ScmPollingWatchLifecycleTransition.ERROR: {
+        ScmPollingWatchLifecycleState.ACTIVE: ScmPollingWatchLifecycleState.ERROR,
+        ScmPollingWatchLifecycleState.ERROR: ScmPollingWatchLifecycleState.ERROR,
+    },
+    ScmPollingWatchLifecycleTransition.REFRESH: {
+        ScmPollingWatchLifecycleState.ACTIVE: ScmPollingWatchLifecycleState.ACTIVE,
+        ScmPollingWatchLifecycleState.CLOSED: ScmPollingWatchLifecycleState.CLOSED,
+        ScmPollingWatchLifecycleState.EXPIRED: ScmPollingWatchLifecycleState.EXPIRED,
+        ScmPollingWatchLifecycleState.ERROR: ScmPollingWatchLifecycleState.ERROR,
+    },
+    ScmPollingWatchLifecycleTransition.ADMIT_DUE: {
+        ScmPollingWatchLifecycleState.ACTIVE: ScmPollingWatchLifecycleState.ACTIVE,
+    },
+    ScmPollingWatchLifecycleTransition.CLAIM_DUE: {
+        ScmPollingWatchLifecycleState.ACTIVE: ScmPollingWatchLifecycleState.ACTIVE,
+    },
+}
+
+_WATCH_STATES = frozenset(state.value for state in ScmPollingWatchLifecycleState)
 
 
 def _normalize_int(value: Any, *, field_name: str) -> int:
@@ -37,6 +101,59 @@ def _normalize_state(value: Any, *, field_name: str = "state") -> str:
         allowed = ", ".join(sorted(_WATCH_STATES))
         raise ValueError(f"{field_name} must be one of: {allowed}")
     return normalized
+
+
+def _watch_lifecycle_state(value: Any) -> ScmPollingWatchLifecycleState:
+    normalized = _normalize_text(value)
+    if normalized is None:
+        raise RuntimeError("SCM polling watch lifecycle state is required")
+    try:
+        return ScmPollingWatchLifecycleState(normalized)
+    except ValueError as exc:
+        raise RuntimeError(
+            f"unknown SCM polling watch lifecycle state: {normalized!r}"
+        ) from exc
+
+
+def plan_polling_watch_lifecycle_transition(
+    transition: ScmPollingWatchLifecycleTransition | str,
+    *,
+    current_state: str | ScmPollingWatchLifecycleState | None,
+) -> ScmPollingWatchLifecyclePlan:
+    try:
+        resolved_transition = ScmPollingWatchLifecycleTransition(transition)
+    except ValueError as exc:
+        raise RuntimeError(
+            f"unknown SCM polling watch lifecycle transition: {transition!r}"
+        ) from exc
+    resolved_current = (
+        _watch_lifecycle_state(current_state) if current_state is not None else None
+    )
+    allowed = _SCM_POLLING_WATCH_TRANSITIONS[resolved_transition]
+    next_state = allowed.get(resolved_current)
+    if next_state is None:
+        raise RuntimeError(
+            "invalid SCM polling watch lifecycle transition: "
+            f"{resolved_transition.value} from "
+            f"{resolved_current.value if resolved_current is not None else '<new>'}"
+        )
+    return ScmPollingWatchLifecyclePlan(
+        transition=resolved_transition,
+        previous_state=resolved_current,
+        state=next_state,
+    )
+
+
+def _close_transition_for_state(
+    state: ScmPollingWatchLifecycleState,
+) -> ScmPollingWatchLifecycleTransition:
+    if state is ScmPollingWatchLifecycleState.CLOSED:
+        return ScmPollingWatchLifecycleTransition.CLOSE
+    if state is ScmPollingWatchLifecycleState.EXPIRED:
+        return ScmPollingWatchLifecycleTransition.EXPIRE
+    if state is ScmPollingWatchLifecycleState.ERROR:
+        return ScmPollingWatchLifecycleTransition.ERROR
+    raise RuntimeError(f"cannot close SCM polling watch to {state.value!r}")
 
 
 def _normalize_timestamp(value: Any, *, field_name: str) -> str:
@@ -104,7 +221,7 @@ def _watch_from_row(row: sqlite3.Row) -> ScmPollingWatch:
         poll_interval_seconds=_normalize_int(
             row["poll_interval_seconds"], field_name="poll_interval_seconds"
         ),
-        state=_normalize_state(row["state"]),
+        state=_watch_lifecycle_state(row["state"]).value,
         started_at=str(row["started_at"]),
         updated_at=str(row["updated_at"]),
         expires_at=str(row["expires_at"]),
@@ -200,6 +317,10 @@ class ScmPollingWatchStore:
             )
             if row is None:
                 watch_id = uuid.uuid4().hex
+                create_plan = plan_polling_watch_lifecycle_transition(
+                    ScmPollingWatchLifecycleTransition.CREATE,
+                    current_state=None,
+                )
                 conn.execute(
                     """
                     INSERT INTO orch_scm_polling_watches (
@@ -221,7 +342,7 @@ class ScmPollingWatchStore:
                         last_error_text,
                         reaction_config_json,
                         snapshot_json
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, ?, ?, NULL, NULL, ?, ?)
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?)
                     """,
                     (
                         watch_id,
@@ -233,6 +354,7 @@ class ScmPollingWatchStore:
                         normalized_workspace_root,
                         normalized_thread_target_id,
                         normalized_poll_interval,
+                        create_plan.state.value,
                         timestamp,
                         timestamp,
                         normalized_expires_at,
@@ -242,6 +364,10 @@ class ScmPollingWatchStore:
                     ),
                 )
             else:
+                reactivation_plan = plan_polling_watch_lifecycle_transition(
+                    ScmPollingWatchLifecycleTransition.REACTIVATE,
+                    current_state=row["state"],
+                )
                 conn.execute(
                     """
                     UPDATE orch_scm_polling_watches
@@ -254,7 +380,7 @@ class ScmPollingWatchStore:
                                ELSE ?
                            END,
                            poll_interval_seconds = ?,
-                           state = 'active',
+                           state = ?,
                            updated_at = ?,
                            expires_at = ?,
                            next_poll_at = ?,
@@ -271,6 +397,7 @@ class ScmPollingWatchStore:
                         normalized_thread_target_id,
                         normalized_thread_target_id,
                         normalized_poll_interval,
+                        reactivation_plan.state.value,
                         timestamp,
                         normalized_expires_at,
                         normalized_next_poll_at,
@@ -303,7 +430,7 @@ class ScmPollingWatchStore:
             now_timestamp or now_iso(),
             field_name="now_timestamp",
         )
-        where_clauses = ["state = 'active'", "next_poll_at <= ?"]
+        where_clauses = ["next_poll_at <= ?"]
         params: list[Any] = [current_timestamp]
 
         normalized_provider = _normalize_text(provider)
@@ -313,17 +440,36 @@ class ScmPollingWatchStore:
 
         params.append(resolved_limit)
         with open_orchestration_sqlite(self._hub_root, durable=True) as conn:
+            self._assert_no_unknown_due_rows(
+                conn,
+                provider=normalized_provider,
+                now_timestamp=current_timestamp,
+            )
             rows = conn.execute(
                 f"""
                 SELECT *
                   FROM orch_scm_polling_watches
                  WHERE {" AND ".join(where_clauses)}
+                   AND state = ?
                  ORDER BY next_poll_at ASC, started_at ASC, watch_id ASC
                  LIMIT ?
                 """,
-                tuple(params),
+                tuple(
+                    [
+                        *params[:-1],
+                        ScmPollingWatchLifecycleState.ACTIVE.value,
+                        params[-1],
+                    ]
+                ),
             ).fetchall()
-        return [_watch_from_row(row) for row in rows]
+        watches: list[ScmPollingWatch] = []
+        for row in rows:
+            plan_polling_watch_lifecycle_transition(
+                ScmPollingWatchLifecycleTransition.ADMIT_DUE,
+                current_state=row["state"],
+            )
+            watches.append(_watch_from_row(row))
+        return watches
 
     def claim_due_watches(
         self,
@@ -340,7 +486,7 @@ class ScmPollingWatchStore:
             now_timestamp or now_iso(),
             field_name="now_timestamp",
         )
-        where_clauses = ["state = 'active'", "next_poll_at <= ?"]
+        where_clauses = ["next_poll_at <= ?"]
         params: list[Any] = [claimed_at]
 
         normalized_provider = _normalize_text(provider)
@@ -351,18 +497,34 @@ class ScmPollingWatchStore:
         params.append(resolved_limit)
         with open_orchestration_sqlite(self._hub_root, durable=True) as conn:
             conn.execute("BEGIN IMMEDIATE")
+            self._assert_no_unknown_due_rows(
+                conn,
+                provider=normalized_provider,
+                now_timestamp=claimed_at,
+            )
             rows = conn.execute(
                 f"""
                 SELECT *
                   FROM orch_scm_polling_watches
                  WHERE {" AND ".join(where_clauses)}
+                   AND state = ?
                  ORDER BY next_poll_at ASC, started_at ASC, watch_id ASC
                  LIMIT ?
                 """,
-                tuple(params),
+                tuple(
+                    [
+                        *params[:-1],
+                        ScmPollingWatchLifecycleState.ACTIVE.value,
+                        params[-1],
+                    ]
+                ),
             ).fetchall()
             claimed: list[ScmPollingWatch] = []
             for row in rows:
+                plan_polling_watch_lifecycle_transition(
+                    ScmPollingWatchLifecycleTransition.CLAIM_DUE,
+                    current_state=row["state"],
+                )
                 watch = _watch_from_row(row)
                 claimed_until = _timestamp_after_seconds(
                     claimed_at,
@@ -374,13 +536,14 @@ class ScmPollingWatchStore:
                        SET updated_at = ?,
                            next_poll_at = ?
                      WHERE watch_id = ?
-                       AND state = 'active'
+                       AND state = ?
                        AND next_poll_at <= ?
                     """,
                     (
                         claimed_at,
                         claimed_until,
                         watch.watch_id,
+                        ScmPollingWatchLifecycleState.ACTIVE.value,
                         claimed_at,
                     ),
                 )
@@ -434,6 +597,20 @@ class ScmPollingWatchStore:
         timestamp = now_iso()
 
         with open_orchestration_sqlite(self._hub_root, durable=True) as conn:
+            row = conn.execute(
+                """
+                SELECT *
+                  FROM orch_scm_polling_watches
+                 WHERE watch_id = ?
+                """,
+                (normalized_watch_id,),
+            ).fetchone()
+            if row is None:
+                return None
+            refresh_plan = plan_polling_watch_lifecycle_transition(
+                ScmPollingWatchLifecycleTransition.REFRESH,
+                current_state=row["state"],
+            )
             cursor = conn.execute(
                 """
                 UPDATE orch_scm_polling_watches
@@ -446,10 +623,7 @@ class ScmPollingWatchStore:
                        expires_at = COALESCE(?, expires_at),
                        last_polled_at = COALESCE(?, last_polled_at),
                        last_error_text = ?,
-                       state = CASE
-                           WHEN state = 'active' THEN 'active'
-                           ELSE state
-                       END
+                       state = ?
                  WHERE watch_id = ?
                 """,
                 (
@@ -460,6 +634,7 @@ class ScmPollingWatchStore:
                     normalized_expires_at,
                     normalized_last_polled_at,
                     normalized_last_error_text,
+                    refresh_plan.state.value,
                     normalized_watch_id,
                 ),
             )
@@ -490,6 +665,20 @@ class ScmPollingWatchStore:
         timestamp = now_iso()
 
         with open_orchestration_sqlite(self._hub_root, durable=True) as conn:
+            row = conn.execute(
+                """
+                SELECT *
+                  FROM orch_scm_polling_watches
+                 WHERE watch_id = ?
+                """,
+                (normalized_watch_id,),
+            ).fetchone()
+            if row is None:
+                return None
+            close_plan = plan_polling_watch_lifecycle_transition(
+                _close_transition_for_state(_watch_lifecycle_state(normalized_state)),
+                current_state=row["state"],
+            )
             cursor = conn.execute(
                 """
                 UPDATE orch_scm_polling_watches
@@ -499,7 +688,7 @@ class ScmPollingWatchStore:
                  WHERE watch_id = ?
                 """,
                 (
-                    normalized_state,
+                    close_plan.state.value,
                     timestamp,
                     normalized_last_error_text,
                     normalized_watch_id,
@@ -536,5 +725,40 @@ class ScmPollingWatchStore:
         ).fetchone()
         return row if isinstance(row, sqlite3.Row) else None
 
+    def _assert_no_unknown_due_rows(
+        self,
+        conn: sqlite3.Connection,
+        *,
+        provider: Optional[str],
+        now_timestamp: str,
+    ) -> None:
+        states = tuple(state.value for state in ScmPollingWatchLifecycleState)
+        provider_clause = ""
+        params: list[Any] = [now_timestamp, *states]
+        if provider is not None:
+            provider_clause = " AND provider = ?"
+            params.append(provider)
+        row = conn.execute(
+            f"""
+            SELECT state
+              FROM orch_scm_polling_watches
+             WHERE next_poll_at <= ?
+               AND state NOT IN (?, ?, ?, ?)
+               {provider_clause}
+             ORDER BY next_poll_at ASC, started_at ASC, watch_id ASC
+             LIMIT 1
+            """,
+            tuple(params),
+        ).fetchone()
+        if row is not None:
+            _watch_lifecycle_state(row["state"])
 
-__all__ = ["ScmPollingWatch", "ScmPollingWatchStore"]
+
+__all__ = [
+    "ScmPollingWatch",
+    "ScmPollingWatchLifecyclePlan",
+    "ScmPollingWatchLifecycleState",
+    "ScmPollingWatchLifecycleTransition",
+    "ScmPollingWatchStore",
+    "plan_polling_watch_lifecycle_transition",
+]

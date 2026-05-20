@@ -225,6 +225,64 @@ class TestAutomationCanonicalInvariants:
         assert len(matched) == 1
         assert matched[0]["state"] == "cancelled"
 
+    def test_cancel_subscription_validates_durable_lifecycle_state(
+        self, tmp_path: Path
+    ) -> None:
+        hub_root = tmp_path / "hub"
+        store = PmaAutomationStore(hub_root)
+        thread_id = _create_thread(hub_root)
+        sub_id = store.create_subscription(
+            thread_id=thread_id,
+            event_types=["lifecycle"],
+            from_state="running",
+            to_state="completed",
+            lane_id="pma:default",
+        )["subscription"]["subscription_id"]
+
+        assert store.cancel_subscription(sub_id) is True
+        assert store.cancel_subscription(sub_id) is False
+
+        with open_orchestration_sqlite(hub_root, durable=False) as conn:
+            with conn:
+                conn.execute(
+                    "UPDATE orch_automation_subscriptions SET state = ? WHERE subscription_id = ?",
+                    ("legacy_unknown", sub_id),
+                )
+
+        with pytest.raises(
+            RuntimeError, match="unknown PMA automation subscription lifecycle state"
+        ):
+            store.cancel_subscription(sub_id)
+
+    def test_cancel_timer_validates_durable_lifecycle_state(
+        self, tmp_path: Path
+    ) -> None:
+        hub_root = tmp_path / "hub"
+        store = PmaAutomationStore(hub_root)
+        timer_id = store.create_timer(
+            {
+                "due_at": "2026-01-01T00:00:00Z",
+                "thread_id": "thread-timer-lifecycle",
+                "reason": "timer_due",
+                "idempotency_key": "timer-lifecycle-key",
+            }
+        )["timer"]["timer_id"]
+
+        assert store.cancel_timer(timer_id) is True
+        assert store.cancel_timer(timer_id) is False
+
+        with open_orchestration_sqlite(hub_root, durable=False) as conn:
+            with conn:
+                conn.execute(
+                    "UPDATE orch_automation_timers SET state = ? WHERE timer_id = ?",
+                    ("legacy_unknown", timer_id),
+                )
+
+        with pytest.raises(
+            RuntimeError, match="unknown PMA automation timer lifecycle state"
+        ):
+            store.cancel_timer(timer_id)
+
     def test_timer_touch_uses_row_level_update(self, tmp_path: Path) -> None:
         hub_root = tmp_path / "hub"
         store = PmaAutomationStore(hub_root)
@@ -349,6 +407,61 @@ class TestAutomationCanonicalInvariants:
             ).fetchone()["c"]
 
         assert timer_count == 0, "orphaned timer rows dropped on full-table rewrite"
+
+    def test_purge_admission_rejects_unknown_subscription_timer_and_wakeup_states(
+        self, tmp_path: Path
+    ) -> None:
+        hub_root = tmp_path / "hub"
+        store = PmaAutomationStore(hub_root)
+        thread_id = _create_thread(hub_root)
+        sub_id = store.create_subscription(
+            thread_id=thread_id,
+            event_types=["lifecycle"],
+            from_state="running",
+            to_state="completed",
+            lane_id="pma:default",
+        )["subscription"]["subscription_id"]
+        timer_id = store.create_timer(
+            {
+                "due_at": "2026-01-01T00:00:00Z",
+                "subscription_id": sub_id,
+                "lane_id": "pma:default",
+            }
+        )["timer"]["timer_id"]
+        wakeup, _ = store.enqueue_wakeup(
+            subscription_id=sub_id,
+            lane_id="pma:default",
+            source="timer",
+            idempotency_key="wakeup-lifecycle-key",
+        )
+
+        with open_orchestration_sqlite(hub_root, durable=False) as conn:
+            with conn:
+                conn.execute(
+                    "UPDATE orch_automation_subscriptions SET state = ? WHERE subscription_id = ?",
+                    ("legacy_unknown", sub_id),
+                )
+                conn.execute(
+                    "UPDATE orch_automation_timers SET state = ? WHERE timer_id = ?",
+                    ("legacy_unknown", timer_id),
+                )
+                conn.execute(
+                    "UPDATE orch_automation_wakeups SET state = ? WHERE wakeup_id = ?",
+                    ("legacy_unknown", wakeup.wakeup_id),
+                )
+
+        with pytest.raises(
+            RuntimeError, match="unknown PMA automation subscription lifecycle state"
+        ):
+            store.purge_subscription(sub_id)
+        with pytest.raises(
+            RuntimeError, match="unknown PMA automation timer lifecycle state"
+        ):
+            store.purge_timer(timer_id)
+        with pytest.raises(
+            RuntimeError, match="unknown PMA automation wakeup lifecycle state"
+        ):
+            store.purge_wakeup(wakeup.wakeup_id)
 
 
 # ---------------------------------------------------------------------------

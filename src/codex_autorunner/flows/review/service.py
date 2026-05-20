@@ -7,8 +7,11 @@ import os
 import threading
 import uuid
 import zipfile
+from dataclasses import replace
 from pathlib import Path
 from typing import Any, Optional
+
+from pydantic import ValidationError
 
 from ...agents.opencode.run_prompt import OpenCodeRunConfig, run_opencode_prompt
 from ...agents.opencode.runtime import PERMISSION_ALLOW
@@ -26,6 +29,12 @@ from ...core.locks import (
 from ...core.runtime import RuntimeContext
 from ...core.state import load_state, now_iso
 from ...core.utils import atomic_write, read_json
+from .lifecycle import (
+    ReviewTransitionResult,
+    ReviewTrigger,
+    ReviewTriggerKind,
+    reduce_review_lifecycle,
+)
 from .models import (
     ACTIVE_REVIEW_STATUSES,
     ReviewPromptKind,
@@ -407,8 +416,14 @@ class ReviewService:
         lock_alive = bool(lock_info.pid and process_alive(lock_info.pid))
         is_running = bool(self._thread and self._thread.is_alive()) or lock_alive
         if state.status in ACTIVE_REVIEW_STATUSES and not is_running:
-            state = state.recover_after_restart()
-            self._save_state(state)
+            state = self._transition_and_save(
+                state,
+                ReviewTrigger(
+                    kind=ReviewTriggerKind.RECOVER_INTERRUPTED,
+                    reason="active review has no live worker or lock",
+                    error_message="Recovered from restart",
+                ),
+            )
         return state.with_runtime(running=is_running)
 
     def start(self, *, payload: dict[str, Any]) -> ReviewState:
@@ -426,7 +441,8 @@ class ReviewService:
             self._acquire_lock()
             thread_started = False
             try:
-                state = self._initialize_state(payload=payload)
+                start_result = self._initialize_state(payload=payload)
+                state = start_result.state
                 if state.id is None:
                     raise ReviewError("Review state is incomplete")
                 self._stop_event.clear()
@@ -435,7 +451,7 @@ class ReviewService:
                     worker_pid=os.getpid(),
                     worker_started_at=now_iso(),
                 )
-                self._save_state(state)
+                self._save_transition(replace(start_result, state=state))
                 self._thread = threading.Thread(
                     target=self._run_review, args=(state.id,), daemon=True
                 )
@@ -466,7 +482,10 @@ class ReviewService:
                 )
             self._acquire_lock()
             try:
-                state = self._initialize_state(payload=payload, prompt_kind=prompt_kind)
+                start_result = self._initialize_state(
+                    payload=payload, prompt_kind=prompt_kind
+                )
+                state = start_result.state
                 if state.id is None or state.scratchpad_dir is None:
                     raise ReviewError("Review state is incomplete")
                 self._stop_event.clear()
@@ -475,7 +494,7 @@ class ReviewService:
                     worker_pid=os.getpid(),
                     worker_started_at=now_iso(),
                 )
-                self._save_state(state)
+                self._save_transition(replace(start_result, state=state))
                 self._log(f"Started review run {state.id} (blocking)")
             except (
                 Exception
@@ -505,8 +524,14 @@ class ReviewService:
                 ConnectionResetError,
             ) as exc:  # intentional: top-level review error handler, must capture any agent/infra failure
                 self._log(f"Review run failed: {exc}")
-                failure_state = self._load_state().mark_failed(str(exc))
-                self._save_state(failure_state)
+                self._transition_and_save(
+                    self._load_state(),
+                    ReviewTrigger(
+                        kind=ReviewTriggerKind.MARK_FAILED,
+                        reason="blocking review raised an exception",
+                        error_message=str(exc),
+                    ),
+                )
                 raise
             return self._load_state()
         finally:
@@ -532,9 +557,16 @@ class ReviewService:
     def stop(self) -> ReviewState:
         self._stop_event.set()
         state = self._load_state()
-        next_state = state.request_stop()
+        result = reduce_review_lifecycle(
+            state,
+            ReviewTrigger(
+                kind=ReviewTriggerKind.REQUEST_STOP,
+                reason="stop requested by caller",
+            ),
+        )
+        next_state = result.state
         if state.status in ACTIVE_REVIEW_STATUSES:
-            self._save_state(next_state)
+            self._save_transition(result)
             self._log("Stop requested")
         return next_state
 
@@ -545,8 +577,13 @@ class ReviewService:
                 raise ReviewBusyError(
                     "Cannot reset while review is running", status_code=409
                 )
-            state = _default_state()
-            self._save_state(state)
+            state = self._transition_and_save(
+                self._load_state(),
+                ReviewTrigger(
+                    kind=ReviewTriggerKind.RESET,
+                    reason="reset requested by caller",
+                ),
+            )
             self._log("Review state reset")
             return state
 
@@ -576,13 +613,51 @@ class ReviewService:
         state = read_json(self._state_path) or {}
         if not isinstance(state, dict):
             return _default_state()
-        return ReviewState.model_validate(state)
+        try:
+            return ReviewState.model_validate(state)
+        except ValidationError as exc:
+            raw_status = state.get("status")
+            raise ReviewError(
+                f"Review state is corrupted: unknown or invalid status "
+                f"{raw_status!r} in {self._state_path}",
+                status_code=500,
+            ) from exc
 
     def _save_state(self, state: ReviewState) -> None:
         self._state_path.parent.mkdir(parents=True, exist_ok=True)
         atomic_write(
             self._state_path,
             json.dumps(state.persist_payload(), indent=2) + "\n",
+        )
+
+    def _transition_and_save(
+        self, state: ReviewState, trigger: ReviewTrigger
+    ) -> ReviewState:
+        result = reduce_review_lifecycle(state, trigger)
+        self._save_transition(result)
+        return result.state
+
+    def _save_transition(self, result: ReviewTransitionResult) -> None:
+        self._save_state(result.state)
+        if result.changed:
+            self._log_lifecycle_transition(result)
+
+    def _log_lifecycle_transition(self, result: ReviewTransitionResult) -> None:
+        data = {
+            "run_id": result.state.id,
+            "from_status": result.from_status.value,
+            "to_status": result.to_status.value,
+            "trigger": result.trigger.value,
+            "reason": result.reason,
+        }
+        self._logger.info("Review lifecycle transition", extra=data)
+        self._append_workflow_log(
+            "Lifecycle transition "
+            f"run_id={data['run_id'] or 'none'} "
+            f"from={data['from_status']} "
+            f"to={data['to_status']} "
+            f"trigger={data['trigger']} "
+            f"reason={data['reason']}"
         )
 
     def _workflow_log_path(self, state: Optional[ReviewState] = None) -> Optional[Path]:
@@ -649,7 +724,7 @@ class ReviewService:
         *,
         payload: dict[str, Any],
         prompt_kind: ReviewPromptKind | str = ReviewPromptKind.CODE,
-    ) -> ReviewState:
+    ) -> ReviewTransitionResult:
         config = self._repo_config()
         try:
             runner_state = load_state(self.ctx.state_path)
@@ -702,7 +777,7 @@ class ReviewService:
         state = ReviewState(
             version=REVIEW_STATE_VERSION,
             id=run_id,
-            status=ReviewStatus.RUNNING,
+            status=ReviewStatus.IDLE,
             agent=agent_id,
             model=model,
             reasoning=reasoning,
@@ -714,8 +789,16 @@ class ReviewService:
             updated_at=now_iso(),
             prompt_kind=prompt_kind_value,
         )
+        result = reduce_review_lifecycle(
+            state,
+            ReviewTrigger(
+                kind=ReviewTriggerKind.START,
+                reason="review run initialized",
+            ),
+        )
+        state = result.state
         self._ensure_workflow_log(state)
-        return state
+        return result
 
     def _run_review(self, run_id: str) -> None:
         try:
@@ -726,7 +809,14 @@ class ReviewService:
             self._log(f"Review run failed: {exc}")
             state = self._load_state()
             if state.id == run_id:
-                self._save_state(state.mark_failed(str(exc)))
+                self._transition_and_save(
+                    state,
+                    ReviewTrigger(
+                        kind=ReviewTriggerKind.MARK_FAILED,
+                        reason="review thread raised an exception",
+                        error_message=str(exc),
+                    ),
+                )
         finally:
             self._release_lock()
 
@@ -800,7 +890,13 @@ class ReviewService:
                     Exception
                 ) as exc:  # intentional: cancelled task cleanup, must not block stop
                     self._log(f"Cancelled review task raised: {exc}")
-                self._save_state(self._load_state().mark_stopped())
+                self._transition_and_save(
+                    self._load_state(),
+                    ReviewTrigger(
+                        kind=ReviewTriggerKind.MARK_STOPPED,
+                        reason="codex review interrupted after stop request",
+                    ),
+                )
                 return
 
             stop_task.cancel()
@@ -860,7 +956,13 @@ class ReviewService:
             self._save_state(state)
 
             if opencode_result.stopped:
-                self._save_state(self._load_state().mark_stopped())
+                self._transition_and_save(
+                    self._load_state(),
+                    ReviewTrigger(
+                        kind=ReviewTriggerKind.MARK_STOPPED,
+                        reason="opencode review stopped",
+                    ),
+                )
                 return
 
             if opencode_result.timed_out:
@@ -888,14 +990,17 @@ class ReviewService:
             Path(state.run_dir),
             state.id,
         )
-        self._save_state(
-            self._load_state().mark_completed(
+        self._transition_and_save(
+            self._load_state(),
+            ReviewTrigger(
+                kind=ReviewTriggerKind.MARK_COMPLETED,
+                reason="final report written and scratchpad bundled",
                 scratchpad_bundle_path=(
                     scratchpad_bundle_path.as_posix()
                     if scratchpad_bundle_path is not None
                     else None
-                )
-            )
+                ),
+            ),
         )
 
     def _create_scratchpad_bundle(self, run_dir: Path, run_id: str) -> Optional[Path]:

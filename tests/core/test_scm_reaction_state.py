@@ -2,9 +2,16 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
+from codex_autorunner.core.orchestration.sqlite import open_orchestration_sqlite
 from codex_autorunner.core.pr_bindings import PrBinding
 from codex_autorunner.core.scm_events import ScmEvent
-from codex_autorunner.core.scm_reaction_state import ScmReactionStateStore
+from codex_autorunner.core.scm_reaction_state import (
+    ScmReactionLifecycleTransition,
+    ScmReactionStateStore,
+    plan_reaction_lifecycle_transition,
+)
 from codex_autorunner.core.scm_reaction_types import ReactionIntent
 
 
@@ -371,6 +378,7 @@ def test_reaction_state_store_tracks_failure_and_resolution_transitions(
         fingerprint=fingerprint,
         event_id="github:event-1b",
     )
+    assert suppressed.state == "delivery_failed"
     assert suppressed.attempt_count == 1
 
     recovered = store.mark_reaction_delivery_succeeded(
@@ -405,6 +413,7 @@ def test_reaction_state_store_tracks_failure_and_resolution_transitions(
 
     assert resolved.state == "resolved"
     assert resolved.resolved_at is not None
+    assert resolved.last_error_text is None
     assert (
         store.should_emit_reaction(
             binding_id="binding-1",
@@ -427,6 +436,108 @@ def test_reaction_state_store_tracks_failure_and_resolution_transitions(
     assert re_emitted.last_event_id == "github:event-4"
     assert re_emitted.last_operation_key == "scm:key-3"
     assert re_emitted.escalated_at is None
+
+
+def test_reaction_lifecycle_contract_rejects_invalid_rewinds() -> None:
+    with pytest.raises(RuntimeError, match="invalid SCM reaction lifecycle transition"):
+        plan_reaction_lifecycle_transition(
+            ScmReactionLifecycleTransition.DELIVERY_FAILED,
+            current_state="resolved",
+        )
+
+
+def test_reaction_state_store_rejects_delivery_failure_after_resolution(
+    tmp_path: Path,
+) -> None:
+    store = ScmReactionStateStore(tmp_path)
+    store.mark_reaction_emitted(
+        binding_id="binding-1",
+        reaction_kind="changes_requested",
+        fingerprint="fp-rewind",
+        event_id="github:event-1",
+        operation_key="scm:key-1",
+    )
+    store.mark_reaction_resolved(
+        binding_id="binding-1",
+        reaction_kind="changes_requested",
+        fingerprint="fp-rewind",
+        event_id="github:event-2",
+    )
+
+    with pytest.raises(RuntimeError, match="invalid SCM reaction lifecycle transition"):
+        store.mark_reaction_delivery_failed(
+            binding_id="binding-1",
+            reaction_kind="changes_requested",
+            fingerprint="fp-rewind",
+            event_id="github:event-3",
+            error_text="late failure",
+        )
+
+    state = store.get_reaction_state(
+        binding_id="binding-1",
+        reaction_kind="changes_requested",
+        fingerprint="fp-rewind",
+    )
+    assert state is not None
+    assert state.state == "resolved"
+    assert state.last_error_text is None
+
+
+def test_reaction_state_store_rejects_unknown_durable_state(
+    tmp_path: Path,
+) -> None:
+    store = ScmReactionStateStore(tmp_path)
+    store.mark_reaction_emitted(
+        binding_id="binding-1",
+        reaction_kind="changes_requested",
+        fingerprint="fp-unknown",
+        event_id="github:event-1",
+        operation_key="scm:key-1",
+    )
+    with open_orchestration_sqlite(tmp_path, durable=True) as conn:
+        conn.execute(
+            """
+            UPDATE orch_reaction_state
+               SET state = 'legacy_unknown'
+             WHERE binding_id = 'binding-1'
+               AND reaction_kind = 'changes_requested'
+               AND fingerprint = 'fp-unknown'
+            """
+        )
+
+    with pytest.raises(RuntimeError, match="unknown SCM reaction lifecycle state"):
+        store.mark_reaction_emitted(
+            binding_id="binding-1",
+            reaction_kind="changes_requested",
+            fingerprint="fp-unknown",
+            event_id="github:event-2",
+            operation_key="scm:key-2",
+        )
+
+
+def test_reaction_state_store_suppression_preserves_active_state(
+    tmp_path: Path,
+) -> None:
+    store = ScmReactionStateStore(tmp_path)
+    store.mark_reaction_emitted(
+        binding_id="binding-1",
+        reaction_kind="changes_requested",
+        fingerprint="fp-suppress",
+        event_id="github:event-1",
+        operation_key="scm:key-1",
+    )
+
+    suppressed = store.mark_reaction_suppressed(
+        binding_id="binding-1",
+        reaction_kind="changes_requested",
+        fingerprint="fp-suppress",
+        event_id="github:event-2",
+        metadata={"reason": "duplicate"},
+    )
+
+    assert suppressed.state == "emitted"
+    assert suppressed.attempt_count == 2
+    assert suppressed.metadata["reason"] == "duplicate"
 
 
 def test_reaction_state_store_resolves_other_active_fingerprints(

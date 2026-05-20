@@ -8,9 +8,13 @@ from typing import Any, Awaitable, Callable, Dict, Optional
 
 from ...core.exceptions import CircuitOpenError
 from ...core.logging_utils import log_event
+from ...core.orchestration.runtime_turn_terminal_state import (
+    RuntimeThreadOutcomeStatus,
+    classify_runtime_status,
+)
 from .errors import CodexAppServerError
 from .protocol_helpers import extract_resume_snapshot
-from .turn_state import TurnState, TurnStateManager, status_is_terminal
+from .turn_state import TurnState, TurnStateManager
 
 ResumeFn = Callable[[str], Awaitable[Dict[str, Any]]]
 DispatchNotificationFn = Callable[[Dict[str, Any]], None]
@@ -36,6 +40,9 @@ class RecoveryConfig:
 class _ResumeAttempt:
     applied_status: Optional[str]
     effective_status: Optional[str]
+    normalized_outcome: Optional[RuntimeThreadOutcomeStatus] = None
+    terminal: bool = False
+    reason: str = "missing_status"
     exception: Optional[Exception] = None
     snapshot_missing: bool = False
 
@@ -135,18 +142,35 @@ class TurnRecoveryCoordinator:
 
         applied_status = self._turn_state_manager.apply_resume_snapshot(state, snapshot)
         effective_status = applied_status or state.status
-        is_terminal = effective_status is not None and status_is_terminal(
-            effective_status
+        classification = classify_runtime_status(effective_status)
+        log_event(
+            self._logger,
+            logging.INFO,
+            "app_server.turn_recovery.resume_decision",
+            turn_id=turn_id,
+            thread_id=thread_id,
+            source_status=classification.source_status,
+            normalized_outcome=classification.normalized_outcome,
+            recovery_source=recovery_source,
+            reason=classification.reason,
+            terminal=classification.terminal,
         )
-        if is_terminal and not state.future.done():
+        if classification.terminal and not state.future.done():
             self._emit_recovered_notification(
-                state, thread_id=thread_id, recovery_source=recovery_source
+                state,
+                thread_id=thread_id,
+                recovery_source=recovery_source,
+                normalized_outcome=classification.normalized_outcome,
+                reason=classification.reason,
             )
             self._turn_state_manager.set_turn_result_if_pending(state)
 
         return _ResumeAttempt(
             applied_status=applied_status,
             effective_status=effective_status,
+            normalized_outcome=classification.normalized_outcome,
+            terminal=classification.terminal,
+            reason=classification.reason,
         )
 
     async def maybe_recover_stalled_turn(
@@ -247,9 +271,7 @@ class TurnRecoveryCoordinator:
             state.last_event_at = now
             return
 
-        if attempt.effective_status is not None and status_is_terminal(
-            attempt.effective_status
-        ):
+        if attempt.terminal:
             log_event(
                 self._logger,
                 logging.INFO,
@@ -258,7 +280,9 @@ class TurnRecoveryCoordinator:
                 thread_id=tid,
                 idle_seconds=round(idle_seconds, 2),
                 effective_status=attempt.effective_status,
+                normalized_outcome=attempt.normalized_outcome,
                 recovery_source="turn_stall",
+                reason=attempt.reason,
                 recovery_attempts=state.recovery_attempts,
             )
             return
@@ -357,7 +381,7 @@ class TurnRecoveryCoordinator:
             return
 
         effective_status = attempt.effective_status
-        if effective_status is not None and status_is_terminal(effective_status):
+        if attempt.terminal:
             log_event(
                 self._logger,
                 logging.INFO,
@@ -365,11 +389,14 @@ class TurnRecoveryCoordinator:
                 turn_id=turn_id,
                 thread_id=tid,
                 status=effective_status,
+                normalized_outcome=attempt.normalized_outcome,
                 item_completed_count=state.item_completed_count,
                 recovery_attempts=state.completion_gap_recovery_attempts,
+                recovery_source="turn_completion_gap",
+                reason=attempt.reason,
             )
             return
-        if effective_status and not status_is_terminal(effective_status):
+        if effective_status and not attempt.terminal:
             self._turn_state_manager.reset_completion_gap_recovery(state)
             state.last_event_at = now
             log_event(
@@ -379,7 +406,10 @@ class TurnRecoveryCoordinator:
                 turn_id=turn_id,
                 thread_id=tid,
                 status=effective_status,
+                normalized_outcome=attempt.normalized_outcome,
                 item_completed_count=state.item_completed_count,
+                recovery_source="turn_completion_gap",
+                reason=attempt.reason,
             )
             return
 
@@ -409,6 +439,8 @@ class TurnRecoveryCoordinator:
         *,
         thread_id: str,
         recovery_source: str,
+        normalized_outcome: Optional[RuntimeThreadOutcomeStatus],
+        reason: str,
     ) -> None:
         if state.turn_completed_seen:
             return
@@ -416,8 +448,10 @@ class TurnRecoveryCoordinator:
             "turnId": state.turn_id,
             "threadId": thread_id,
             "status": state.status,
+            "normalizedOutcome": normalized_outcome,
             "recoveredVia": "thread/resume",
             "recoverySource": recovery_source,
+            "recoveryReason": reason,
             "synthetic": True,
         }
         message: Dict[str, Any] = {

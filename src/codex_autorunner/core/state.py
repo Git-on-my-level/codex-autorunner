@@ -4,12 +4,120 @@ import dataclasses
 import json
 import sqlite3
 from contextlib import contextmanager
+from enum import Enum
 from pathlib import Path
 from typing import Any, Iterator, Optional, cast
 
 from .locks import file_lock
 from .sqlite_utils import open_sqlite
 from .time_utils import now_iso
+
+
+class StateLifecycleError(ValueError):
+    """Raised when runner-state storage observes an invalid lifecycle state."""
+
+
+class RunnerLifecycleStatus(str, Enum):
+    IDLE = "idle"
+    RUNNING = "running"
+    ERROR = "error"
+
+
+class TerminalSessionStatus(str, Enum):
+    ACTIVE = "active"
+    CLOSED = "closed"
+
+
+_RUNNER_TRANSITIONS: dict[RunnerLifecycleStatus, frozenset[RunnerLifecycleStatus]] = {
+    RunnerLifecycleStatus.IDLE: frozenset(
+        {
+            RunnerLifecycleStatus.IDLE,
+            RunnerLifecycleStatus.RUNNING,
+            RunnerLifecycleStatus.ERROR,
+        }
+    ),
+    RunnerLifecycleStatus.RUNNING: frozenset(
+        {
+            RunnerLifecycleStatus.IDLE,
+            RunnerLifecycleStatus.RUNNING,
+            RunnerLifecycleStatus.ERROR,
+        }
+    ),
+    RunnerLifecycleStatus.ERROR: frozenset(
+        {
+            RunnerLifecycleStatus.IDLE,
+            RunnerLifecycleStatus.RUNNING,
+            RunnerLifecycleStatus.ERROR,
+        }
+    ),
+}
+
+_SESSION_TRANSITIONS: dict[TerminalSessionStatus, frozenset[TerminalSessionStatus]] = {
+    TerminalSessionStatus.ACTIVE: frozenset(
+        {TerminalSessionStatus.ACTIVE, TerminalSessionStatus.CLOSED}
+    ),
+    TerminalSessionStatus.CLOSED: frozenset({TerminalSessionStatus.CLOSED}),
+}
+
+
+def _status_value(value: str | Enum) -> str:
+    if isinstance(value, Enum):
+        return cast(str, value.value)
+    return value
+
+
+def validate_runner_status(
+    value: str | Enum, *, boundary: str
+) -> RunnerLifecycleStatus:
+    text = _status_value(value)
+    try:
+        return RunnerLifecycleStatus(text)
+    except ValueError as exc:
+        raise StateLifecycleError(
+            f"Unknown runner status {text!r} at {boundary}"
+        ) from exc
+
+
+def validate_session_status(
+    value: str | Enum, *, boundary: str
+) -> TerminalSessionStatus:
+    text = _status_value(value)
+    try:
+        return TerminalSessionStatus(text)
+    except ValueError as exc:
+        raise StateLifecycleError(
+            f"Unknown terminal session status {text!r} at {boundary}"
+        ) from exc
+
+
+def transition_runner_status(
+    current: str | Enum,
+    target: RunnerLifecycleStatus,
+    *,
+    reason: str,
+) -> str:
+    source = validate_runner_status(current, boundary=f"runner transition {reason}")
+    if target not in _RUNNER_TRANSITIONS[source]:
+        raise StateLifecycleError(
+            f"Illegal runner status transition {source.value!r}->{target.value!r} "
+            f"for {reason}"
+        )
+    return target.value
+
+
+def transition_session_status(
+    current: str | Enum,
+    target: TerminalSessionStatus,
+    *,
+    reason: str,
+) -> str:
+    source = validate_session_status(current, boundary=f"session transition {reason}")
+    if target not in _SESSION_TRANSITIONS[source]:
+        raise StateLifecycleError(
+            f"Illegal terminal session status transition "
+            f"{source.value!r}->{target.value!r} for {reason}"
+        )
+    return target.value
 
 
 @dataclasses.dataclass
@@ -32,9 +140,10 @@ class RunnerState:
     repo_to_session: dict[str, str] = dataclasses.field(default_factory=dict)
 
     def to_json(self) -> str:
+        status = validate_runner_status(self.status, boundary="RunnerState.to_json")
         payload = {
             "last_run_id": self.last_run_id,
-            "status": self.status,
+            "status": status.value,
             "last_exit_code": self.last_exit_code,
             "last_run_started_at": self.last_run_started_at,
             "last_run_finished_at": self.last_run_finished_at,
@@ -75,8 +184,13 @@ class SessionRecord:
         if not isinstance(last_seen_at, str):
             last_seen_at = None
         status = payload.get("status")
-        if not isinstance(status, str) or not status:
-            status = "active"
+        if not isinstance(status, str):
+            raise StateLifecycleError(
+                "Missing terminal session status at SessionRecord.from_dict"
+            )
+        status = validate_session_status(
+            status, boundary="SessionRecord.from_dict"
+        ).value
         agent = payload.get("agent", "codex")
         if not isinstance(agent, str):
             agent = "codex"
@@ -89,13 +203,100 @@ class SessionRecord:
         )
 
     def to_dict(self) -> dict[str, Any]:
+        status = validate_session_status(self.status, boundary="SessionRecord.to_dict")
         return {
             "repo_path": self.repo_path,
             "created_at": self.created_at,
             "last_seen_at": self.last_seen_at,
-            "status": self.status,
+            "status": status.value,
             "agent": self.agent,
         }
+
+    def touch(self, *, now: str, reason: str = "touch") -> "SessionRecord":
+        return dataclasses.replace(
+            self,
+            last_seen_at=now,
+            status=transition_session_status(
+                self.status, TerminalSessionStatus.ACTIVE, reason=reason
+            ),
+        )
+
+    def close(self, *, now: str, reason: str = "close") -> "SessionRecord":
+        return dataclasses.replace(
+            self,
+            last_seen_at=now,
+            status=transition_session_status(
+                self.status, TerminalSessionStatus.CLOSED, reason=reason
+            ),
+        )
+
+
+def runner_observed_lock_start(
+    state: RunnerState,
+    *,
+    runner_pid: int,
+    now: Optional[str] = None,
+) -> RunnerState:
+    timestamp = now or now_iso()
+    return dataclasses.replace(
+        state,
+        status=transition_runner_status(
+            state.status,
+            RunnerLifecycleStatus.RUNNING,
+            reason="observed_lock_start",
+        ),
+        last_run_started_at=timestamp,
+        last_run_finished_at=None,
+        runner_pid=runner_pid,
+    )
+
+
+def runner_stale_running_to_error(
+    state: RunnerState,
+    *,
+    now: Optional[str] = None,
+) -> RunnerState:
+    timestamp = now or now_iso()
+    status = state.status
+    exit_code = state.last_exit_code
+    finished_at = state.last_run_finished_at
+    if (
+        validate_runner_status(status, boundary="stale runner recovery admission")
+        == RunnerLifecycleStatus.RUNNING
+    ):
+        status = transition_runner_status(
+            status,
+            RunnerLifecycleStatus.ERROR,
+            reason="stale_running_to_error_recovery",
+        )
+        exit_code = 1
+        if finished_at is None:
+            finished_at = timestamp
+    return dataclasses.replace(
+        state,
+        status=status,
+        last_exit_code=exit_code,
+        last_run_finished_at=finished_at,
+        runner_pid=None,
+    )
+
+
+def runner_explicit_status(
+    state: RunnerState,
+    target: RunnerLifecycleStatus,
+    *,
+    reason: str,
+    last_exit_code: Optional[int] = None,
+    last_run_finished_at: Optional[str] = None,
+    runner_pid: Optional[int] = None,
+) -> RunnerState:
+    return dataclasses.replace(
+        state,
+        status=transition_runner_status(state.status, target, reason=reason),
+        last_exit_code=last_exit_code,
+        last_run_finished_at=last_run_finished_at,
+        runner_pid=runner_pid,
+    )
 
 
 def _normalize_agent(agent: str) -> str:
@@ -123,23 +324,40 @@ class TerminalSessionStore:
         session_id: str,
         repo_path: str,
         agent: str = "codex",
-        status: str = "active",
+        status: str = TerminalSessionStatus.ACTIVE.value,
         now: Optional[str] = None,
     ) -> SessionRecord:
         timestamp = now or now_iso()
         clean_agent = _normalize_agent(agent)
+        target_status = validate_session_status(
+            status, boundary="TerminalSessionStore.create_or_touch target"
+        )
         with state_lock(self._state_path):
             with open_sqlite(self._state_path, durable=self._durable) as conn:
                 _ensure_state_schema(conn)
                 existing = conn.execute(
                     """
-                    SELECT created_at
+                    SELECT created_at,
+                           status
                       FROM sessions
                      WHERE session_id=?
                     """,
                     (session_id,),
                 ).fetchone()
-                created_at = existing["created_at"] if existing else timestamp
+                if existing:
+                    created_at = existing["created_at"]
+                    persisted_status = validate_session_status(
+                        existing["status"],
+                        boundary="TerminalSessionStore.create_or_touch existing",
+                    )
+                    next_status = transition_session_status(
+                        persisted_status,
+                        target_status,
+                        reason="create_or_touch",
+                    )
+                else:
+                    created_at = timestamp
+                    next_status = target_status.value
                 with conn:
                     conn.execute(
                         """
@@ -163,7 +381,7 @@ class TerminalSessionStore:
                             repo_path,
                             created_at,
                             timestamp,
-                            status,
+                            next_status,
                             clean_agent,
                         ),
                     )
@@ -184,7 +402,7 @@ class TerminalSessionStore:
             repo_path=repo_path,
             created_at=created_at,
             last_seen_at=timestamp,
-            status=status,
+            status=next_status,
             agent=clean_agent,
         )
 
@@ -193,15 +411,26 @@ class TerminalSessionStore:
         with state_lock(self._state_path):
             with open_sqlite(self._state_path, durable=self._durable) as conn:
                 _ensure_state_schema(conn)
+                existing = conn.execute(
+                    "SELECT status FROM sessions WHERE session_id=?",
+                    (session_id,),
+                ).fetchone()
+                if existing is None:
+                    return False
+                next_status = transition_session_status(
+                    existing["status"],
+                    TerminalSessionStatus.ACTIVE,
+                    reason="touch",
+                )
                 with conn:
                     result = conn.execute(
                         """
                         UPDATE sessions
                            SET last_seen_at=?,
-                               status='active'
+                               status=?
                          WHERE session_id=?
                         """,
-                        (timestamp, session_id),
+                        (timestamp, next_status, session_id),
                     )
                     if result.rowcount:
                         conn.execute(
@@ -215,15 +444,26 @@ class TerminalSessionStore:
         with state_lock(self._state_path):
             with open_sqlite(self._state_path, durable=self._durable) as conn:
                 _ensure_state_schema(conn)
+                existing = conn.execute(
+                    "SELECT status FROM sessions WHERE session_id=?",
+                    (session_id,),
+                ).fetchone()
+                if existing is None:
+                    return False
+                next_status = transition_session_status(
+                    existing["status"],
+                    TerminalSessionStatus.CLOSED,
+                    reason="close",
+                )
                 with conn:
                     result = conn.execute(
                         """
                         UPDATE sessions
-                           SET status='closed',
+                           SET status=?,
                                last_seen_at=?
                          WHERE session_id=?
                         """,
-                        (timestamp, session_id),
+                        (next_status, timestamp, session_id),
                     )
                     conn.execute(
                         "DELETE FROM repo_to_session WHERE session_id=?",
@@ -247,6 +487,9 @@ class TerminalSessionStore:
             keys.append(f"{repo_path}:codex")
         with open_sqlite(self._state_path, durable=self._durable) as conn:
             _ensure_state_schema(conn)
+            _validate_persisted_session_statuses(
+                conn, boundary="TerminalSessionStore.lookup_for_repo admission"
+            )
             for key in keys:
                 row = conn.execute(
                     """
@@ -254,10 +497,10 @@ class TerminalSessionStore:
                       FROM repo_to_session r
                       JOIN sessions s ON s.session_id = r.session_id
                      WHERE r.repo_key=?
-                       AND s.status != 'closed'
+                       AND s.status != ?
                        AND s.agent=?
                     """,
-                    (key, _normalize_agent(agent)),
+                    (key, TerminalSessionStatus.CLOSED.value, _normalize_agent(agent)),
                 ).fetchone()
                 if row is not None:
                     return cast(str, row["session_id"])
@@ -267,6 +510,9 @@ class TerminalSessionStore:
         with state_lock(self._state_path):
             with open_sqlite(self._state_path, durable=self._durable) as conn:
                 _ensure_state_schema(conn)
+                _validate_persisted_session_statuses(
+                    conn, boundary="TerminalSessionStore.prune admission"
+                )
                 with conn:
                     result = conn.execute(
                         """
@@ -274,10 +520,11 @@ class TerminalSessionStore:
                          WHERE session_id NOT IN (SELECT session_id FROM sessions)
                             OR session_id IN (
                                 SELECT session_id
-                                  FROM sessions
-                                 WHERE status = 'closed'
+                                 FROM sessions
+                                 WHERE status = ?
                             )
-                        """
+                        """,
+                        (TerminalSessionStatus.CLOSED.value,),
                     )
                     conn.execute(
                         "UPDATE runner_state SET updated_at=? WHERE id=1",
@@ -325,7 +572,16 @@ def _ensure_state_schema(conn: sqlite3.Connection) -> None:
         )
         conn.execute(
             "INSERT OR IGNORE INTO runner_state (id, status, updated_at) VALUES (1, ?, ?)",
-            ("idle", now_iso()),
+            (RunnerLifecycleStatus.IDLE.value, now_iso()),
+        )
+
+
+def _validate_persisted_session_statuses(
+    conn: sqlite3.Connection, *, boundary: str
+) -> None:
+    for row in conn.execute("SELECT session_id, status FROM sessions"):
+        validate_session_status(
+            row["status"], boundary=f"{boundary} session_id={row['session_id']!r}"
         )
 
 
@@ -432,17 +688,16 @@ def load_state(state_path: Path, durable: bool = False) -> RunnerState:
             """
         ).fetchone()
         if row is None:
-            state = RunnerState(None, "idle", None, None, None)
-        else:
-            state = RunnerState(
-                last_run_id=row["last_run_id"],
-                status=row["status"] or "idle",
-                last_exit_code=row["last_exit_code"],
-                last_run_started_at=row["last_run_started_at"],
-                last_run_finished_at=row["last_run_finished_at"],
-                runner_pid=row["runner_pid"],
-            )
-            _apply_overrides(state, row["overrides_json"])
+            raise StateLifecycleError("Missing runner_state row at load_state")
+        state = RunnerState(
+            last_run_id=row["last_run_id"],
+            status=validate_runner_status(row["status"], boundary="load_state").value,
+            last_exit_code=row["last_exit_code"],
+            last_run_started_at=row["last_run_started_at"],
+            last_run_finished_at=row["last_run_finished_at"],
+            runner_pid=row["runner_pid"],
+        )
+        _apply_overrides(state, row["overrides_json"])
         sessions: dict[str, SessionRecord] = {}
         for record in conn.execute(
             """
@@ -459,7 +714,10 @@ def load_state(state_path: Path, durable: bool = False) -> RunnerState:
                 repo_path=record["repo_path"],
                 created_at=record["created_at"],
                 last_seen_at=record["last_seen_at"],
-                status=record["status"],
+                status=validate_session_status(
+                    record["status"],
+                    boundary=f"load_state session_id={record['session_id']!r}",
+                ).value,
                 agent=record["agent"],
             )
             sessions[record["session_id"]] = parsed
@@ -473,6 +731,7 @@ def load_state(state_path: Path, durable: bool = False) -> RunnerState:
 
 def save_state(state_path: Path, state: RunnerState, durable: bool = False) -> None:
     overrides_json = _encode_overrides(state)
+    status = validate_runner_status(state.status, boundary="save_state").value
     with open_sqlite(state_path, durable=durable) as conn:
         _ensure_state_schema(conn)
         updated_at = now_iso()
@@ -504,7 +763,7 @@ def save_state(state_path: Path, state: RunnerState, durable: bool = False) -> N
                 (
                     1,
                     state.last_run_id,
-                    state.status,
+                    status,
                     state.last_exit_code,
                     state.last_run_started_at,
                     state.last_run_finished_at,
@@ -533,7 +792,10 @@ def save_state(state_path: Path, state: RunnerState, durable: bool = False) -> N
                             record.repo_path,
                             record.created_at,
                             record.last_seen_at,
-                            record.status,
+                            validate_session_status(
+                                record.status,
+                                boundary=f"save_state session_id={session_id!r}",
+                            ).value,
                             record.agent,
                         )
                         for session_id, record in state.sessions.items()
@@ -587,7 +849,13 @@ def persist_session_registry(
                                 record.repo_path,
                                 record.created_at,
                                 record.last_seen_at,
-                                record.status,
+                                validate_session_status(
+                                    record.status,
+                                    boundary=(
+                                        "persist_session_registry "
+                                        f"session_id={session_id!r}"
+                                    ),
+                                ).value,
                                 record.agent,
                             )
                             for session_id, record in sessions.items()

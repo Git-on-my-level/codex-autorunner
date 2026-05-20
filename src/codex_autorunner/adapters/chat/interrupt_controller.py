@@ -1,13 +1,19 @@
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from enum import Enum
 from typing import Any, Optional, Protocol
 
+from ...core.logging_utils import log_event
 from ...core.orchestration.chat_operation_state import (
+    CHAT_OPERATION_TERMINAL_STATES,
     ChatOperationSnapshot,
     ChatOperationState,
 )
+
+_logger = logging.getLogger(__name__)
+_PATCH_STATE_UNSET = object()
 
 
 class SharedInterruptState(str, Enum):
@@ -52,6 +58,8 @@ class _ManagedThreadInterruptService(Protocol):
 
 
 class _InterruptOperationStore(Protocol):
+    def get_operation(self, operation_id: str) -> Optional[ChatOperationSnapshot]: ...
+
     def patch_operation(
         self,
         operation_id: str,
@@ -69,6 +77,20 @@ class _InterruptOperationStore(Protocol):
         include_terminal: bool = False,
         limit: int = 20,
     ) -> list[ChatOperationSnapshot]: ...
+
+
+@dataclass(frozen=True)
+class _InterruptOperationWriteDecision:
+    operation_id: str
+    current_state: Optional[ChatOperationState]
+    requested_state: ChatOperationState
+    effective_state: Optional[ChatOperationState]
+    interrupt_state: SharedInterruptState
+    recovery_reason: Optional[str] = None
+
+    @property
+    def metadata_only(self) -> bool:
+        return self.effective_state is None
 
 
 def _normalized_optional_text(value: Any) -> Optional[str]:
@@ -138,6 +160,68 @@ def _find_inflight_interrupt(
     return None
 
 
+def _plan_interrupt_operation_write(
+    current: Optional[ChatOperationSnapshot],
+    *,
+    operation_id: str,
+    requested_state: ChatOperationState,
+    interrupt_state: SharedInterruptState,
+) -> _InterruptOperationWriteDecision:
+    current_state = current.state if current is not None else None
+    if current_state in CHAT_OPERATION_TERMINAL_STATES:
+        return _InterruptOperationWriteDecision(
+            operation_id=operation_id,
+            current_state=current_state,
+            requested_state=requested_state,
+            effective_state=None,
+            interrupt_state=interrupt_state,
+            recovery_reason="terminal_state_metadata_only",
+        )
+    if (
+        current_state == ChatOperationState.DELIVERING
+        and requested_state == ChatOperationState.INTERRUPTING
+    ):
+        return _InterruptOperationWriteDecision(
+            operation_id=operation_id,
+            current_state=current_state,
+            requested_state=requested_state,
+            effective_state=None,
+            interrupt_state=interrupt_state,
+            recovery_reason="delivery_state_metadata_only",
+        )
+    return _InterruptOperationWriteDecision(
+        operation_id=operation_id,
+        current_state=current_state,
+        requested_state=requested_state,
+        effective_state=requested_state,
+        interrupt_state=interrupt_state,
+    )
+
+
+def _log_interrupt_operation_recovery(
+    decision: _InterruptOperationWriteDecision,
+) -> None:
+    if decision.recovery_reason is None:
+        return
+    log_event(
+        _logger,
+        logging.INFO,
+        "chat.interrupt.operation_transition_recovery",
+        operation_id=decision.operation_id,
+        current_state=(
+            decision.current_state.value if decision.current_state is not None else None
+        ),
+        requested_state=decision.requested_state.value,
+        effective_state=(
+            decision.effective_state.value
+            if decision.effective_state is not None
+            else None
+        ),
+        interrupt_state=decision.interrupt_state.value,
+        recovery_reason=decision.recovery_reason,
+    )
+
+
 def _write_interrupt_operation(
     store: Optional[_InterruptOperationStore],
     *,
@@ -168,20 +252,38 @@ def _write_interrupt_operation(
         next_state = ChatOperationState.FAILED
         terminal_outcome = interrupt_state.value
         terminal_detail = error
+    current = store.get_operation(normalized_operation_id)
+    decision = _plan_interrupt_operation_write(
+        current,
+        operation_id=normalized_operation_id,
+        requested_state=next_state,
+        interrupt_state=interrupt_state,
+    )
+    metadata_updates = _interrupt_metadata(
+        interrupt_state=interrupt_state,
+        cancel_queued=cancel_queued,
+        referenced_execution_id=referenced_execution_id,
+        duplicate_of_operation_id=duplicate_of_operation_id,
+    )
+    _log_interrupt_operation_recovery(decision)
+    if decision.metadata_only:
+        return store.patch_operation(
+            normalized_operation_id,
+            state=_PATCH_STATE_UNSET,
+            metadata_updates={
+                **metadata_updates,
+                "interrupt_operation_recovery_reason": decision.recovery_reason,
+            },
+        )
     return store.patch_operation(
         normalized_operation_id,
-        state=next_state,
-        validate_transition=False,
+        state=decision.effective_state,
+        validate_transition=True,
         thread_target_id=thread_target_id,
         execution_id=execution_id,
         terminal_outcome=terminal_outcome,
         terminal_detail=terminal_detail,
-        metadata_updates=_interrupt_metadata(
-            interrupt_state=interrupt_state,
-            cancel_queued=cancel_queued,
-            referenced_execution_id=referenced_execution_id,
-            duplicate_of_operation_id=duplicate_of_operation_id,
-        ),
+        metadata_updates=metadata_updates,
     )
 
 
@@ -273,19 +375,15 @@ async def request_managed_thread_interrupt(
                 getattr(resolved_execution, "status", "") or ""
             ).strip()
             if resolved_execution is not None and resolved_status.lower() != "running":
-                operation = None
-                if operation_store is not None:
-                    operation = operation_store.patch_operation(
-                        inflight_interrupt.operation_id,
-                        state=ChatOperationState.COMPLETED,
-                        validate_transition=False,
-                        terminal_outcome=SharedInterruptState.ALREADY_FINISHED.value,
-                        metadata_updates=_interrupt_metadata(
-                            interrupt_state=SharedInterruptState.ALREADY_FINISHED,
-                            cancel_queued=cancel_queued,
-                            referenced_execution_id=inflight_execution_id,
-                        ),
-                    )
+                operation = _write_interrupt_operation(
+                    operation_store,
+                    operation_id=inflight_interrupt.operation_id,
+                    thread_target_id=normalized_thread_target_id,
+                    execution_id=inflight_execution_id,
+                    cancel_queued=cancel_queued,
+                    referenced_execution_id=inflight_execution_id,
+                    interrupt_state=SharedInterruptState.ALREADY_FINISHED,
+                )
                 return SharedInterruptOutcome(
                     state=SharedInterruptState.ALREADY_FINISHED,
                     thread_target_id=normalized_thread_target_id,

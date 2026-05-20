@@ -6,6 +6,12 @@ from dataclasses import dataclass
 from typing import Any, Callable, Optional
 
 from ..time_utils import now_iso
+from .managed_turn_lifecycle_contract import (
+    ManagedTurnLifecyclePhase,
+    ManagedTurnTerminalOutcome,
+    ManagedTurnTerminalStatus,
+    classify_terminal_recording,
+)
 from .models import ExecutionRecord, ThreadTarget
 
 logger = logging.getLogger(__name__)
@@ -29,6 +35,37 @@ _STATUS_TRANSITIONS = {
         "managed_thread_interrupted",
     ),
 }
+_TERMINAL_STATUSES = frozenset({"ok", "error", "interrupted"})
+_MANAGED_TURN_LIFECYCLE_PHASE_KEY = "managed_turn_lifecycle_phase"
+
+
+def _execution_lifecycle_phase(execution: Optional[ExecutionRecord]) -> str:
+    if execution is None:
+        return ""
+    return str(execution.metadata.get(_MANAGED_TURN_LIFECYCLE_PHASE_KEY) or "").strip()
+
+
+def _terminal_outcome_from_execution(
+    execution: Optional[ExecutionRecord],
+) -> Optional[ManagedTurnTerminalOutcome]:
+    if execution is None or execution.status not in _TERMINAL_STATUSES:
+        return None
+    return ManagedTurnTerminalOutcome(
+        status=execution.status,  # type: ignore[arg-type]
+        error=execution.error,
+    )
+
+
+def _terminal_outcome_from_status(
+    status: str, error: Optional[str]
+) -> ManagedTurnTerminalOutcome:
+    normalized_status = str(status or "").strip().lower()
+    if normalized_status not in _TERMINAL_STATUSES:
+        normalized_status = "error"
+    return ManagedTurnTerminalOutcome(
+        status=normalized_status,  # type: ignore[arg-type]
+        error=error,
+    )
 
 
 def build_terminal_transition(
@@ -102,6 +139,7 @@ class ExecutionResultCoordinator:
     mark_turn_finished: Callable[..., Any]
     mark_turn_interrupted: Callable[[str], Any]
     notify_transition: Callable[[dict[str, Any]], dict[str, Any]]
+    advance_lifecycle_phase: Optional[Callable[..., Any]] = None
     logger: logging.Logger = logger
     retry_delays: tuple[float, ...] = (0.25, 0.75)
     sleep: Callable[[float], None] = time.sleep
@@ -117,6 +155,60 @@ class ExecutionResultCoordinator:
         backend_turn_id: Optional[str] = None,
         transcript_turn_id: Optional[str] = None,
     ) -> ExecutionRecord:
+        proposed_outcome = _terminal_outcome_from_status(status, error)
+        existing = self.get_execution(thread_target_id, execution_id)
+        terminal_decision = classify_terminal_recording(
+            existing=_terminal_outcome_from_execution(existing),
+            proposed=proposed_outcome,
+        )
+        self.logger.info(
+            "Managed-turn terminal recording decision "
+            "(thread_target_id=%s, execution_id=%s, action=%s, "
+            "terminal_status=%s, existing_status=%s)",
+            thread_target_id,
+            execution_id,
+            terminal_decision.action,
+            proposed_outcome.status,
+            terminal_decision.existing.status if terminal_decision.existing else None,
+        )
+        if terminal_decision.action in {"duplicate", "conflict"}:
+            if existing is not None:
+                if (
+                    terminal_decision.action == "duplicate"
+                    and _execution_lifecycle_phase(existing) != "terminal_recorded"
+                ):
+                    self._backfill_terminal_recorded_phase(
+                        thread_target_id,
+                        execution_id,
+                        current_phase=_execution_lifecycle_phase(existing),
+                        terminal_status=terminal_decision.outcome.status,
+                    )
+                    existing = (
+                        self.get_execution(thread_target_id, execution_id) or existing
+                    )
+                    self.notify_terminal_transition(
+                        thread_target_id=thread_target_id,
+                        execution_id=execution_id,
+                        status=existing.status,
+                        error=existing.error,
+                    )
+                return existing
+            raise KeyError(f"Execution '{execution_id}' is missing")
+        current_phase = _execution_lifecycle_phase(existing)
+        if current_phase != "terminal_recording":
+            if current_phase != "runtime_terminal_observed":
+                self._advance_lifecycle_phase(
+                    thread_target_id,
+                    execution_id,
+                    to_phase="runtime_terminal_observed",
+                    terminal_status=proposed_outcome.status,
+                )
+            self._advance_lifecycle_phase(
+                thread_target_id,
+                execution_id,
+                to_phase="terminal_recording",
+                terminal_status=proposed_outcome.status,
+            )
         updated = self.mark_turn_finished(
             execution_id,
             status=status,
@@ -132,6 +224,13 @@ class ExecutionResultCoordinator:
             raise KeyError(
                 f"Execution '{execution_id}' is missing after result recording"
             )
+        self._advance_lifecycle_phase(
+            thread_target_id,
+            execution_id,
+            to_phase="terminal_recorded",
+            terminal_status=proposed_outcome.status,
+        )
+        execution = self.get_execution(thread_target_id, execution_id) or execution
         self.notify_terminal_transition(
             thread_target_id=thread_target_id,
             execution_id=execution_id,
@@ -143,6 +242,59 @@ class ExecutionResultCoordinator:
     def record_execution_interrupted(
         self, thread_target_id: str, execution_id: str
     ) -> ExecutionRecord:
+        existing = self.get_execution(thread_target_id, execution_id)
+        proposed_outcome = ManagedTurnTerminalOutcome(status="interrupted")
+        terminal_decision = classify_terminal_recording(
+            existing=_terminal_outcome_from_execution(existing),
+            proposed=proposed_outcome,
+        )
+        self.logger.info(
+            "Managed-turn terminal recording decision "
+            "(thread_target_id=%s, execution_id=%s, action=%s, "
+            "terminal_status=interrupted, existing_status=%s)",
+            thread_target_id,
+            execution_id,
+            terminal_decision.action,
+            terminal_decision.existing.status if terminal_decision.existing else None,
+        )
+        if terminal_decision.action in {"duplicate", "conflict"}:
+            if existing is not None:
+                if (
+                    terminal_decision.action == "duplicate"
+                    and _execution_lifecycle_phase(existing) != "terminal_recorded"
+                ):
+                    self._backfill_terminal_recorded_phase(
+                        thread_target_id,
+                        execution_id,
+                        current_phase=_execution_lifecycle_phase(existing),
+                        terminal_status=terminal_decision.outcome.status,
+                    )
+                    existing = (
+                        self.get_execution(thread_target_id, execution_id) or existing
+                    )
+                    self.notify_terminal_transition(
+                        thread_target_id=thread_target_id,
+                        execution_id=execution_id,
+                        status=existing.status,
+                        error=existing.error,
+                    )
+                return existing
+            raise KeyError(f"Execution '{execution_id}' is missing")
+        current_phase = _execution_lifecycle_phase(existing)
+        if current_phase != "terminal_recording":
+            if current_phase != "runtime_terminal_observed":
+                self._advance_lifecycle_phase(
+                    thread_target_id,
+                    execution_id,
+                    to_phase="runtime_terminal_observed",
+                    terminal_status="interrupted",
+                )
+            self._advance_lifecycle_phase(
+                thread_target_id,
+                execution_id,
+                to_phase="terminal_recording",
+                terminal_status="interrupted",
+            )
         updated = self.mark_turn_interrupted(execution_id)
         execution = self.get_execution(thread_target_id, execution_id)
         if not updated:
@@ -153,6 +305,13 @@ class ExecutionResultCoordinator:
             raise KeyError(
                 f"Execution '{execution_id}' is missing after interrupt recording"
             )
+        self._advance_lifecycle_phase(
+            thread_target_id,
+            execution_id,
+            to_phase="terminal_recorded",
+            terminal_status="interrupted",
+        )
+        execution = self.get_execution(thread_target_id, execution_id) or execution
         self.notify_terminal_transition(
             thread_target_id=thread_target_id,
             execution_id=execution_id,
@@ -160,6 +319,52 @@ class ExecutionResultCoordinator:
             error=execution.error,
         )
         return execution
+
+    def _advance_lifecycle_phase(
+        self,
+        thread_target_id: str,
+        execution_id: str,
+        *,
+        to_phase: ManagedTurnLifecyclePhase,
+        terminal_status: Optional[ManagedTurnTerminalStatus] = None,
+    ) -> None:
+        if self.advance_lifecycle_phase is None:
+            return
+        self.advance_lifecycle_phase(
+            thread_target_id,
+            execution_id,
+            to_phase=to_phase,
+            terminal_status=terminal_status,
+        )
+
+    def _backfill_terminal_recorded_phase(
+        self,
+        thread_target_id: str,
+        execution_id: str,
+        *,
+        current_phase: str,
+        terminal_status: Optional[ManagedTurnTerminalStatus],
+    ) -> None:
+        if current_phase != "terminal_recording":
+            if current_phase != "runtime_terminal_observed":
+                self._advance_lifecycle_phase(
+                    thread_target_id,
+                    execution_id,
+                    to_phase="runtime_terminal_observed",
+                    terminal_status=terminal_status,
+                )
+            self._advance_lifecycle_phase(
+                thread_target_id,
+                execution_id,
+                to_phase="terminal_recording",
+                terminal_status=terminal_status,
+            )
+        self._advance_lifecycle_phase(
+            thread_target_id,
+            execution_id,
+            to_phase="terminal_recorded",
+            terminal_status=terminal_status,
+        )
 
     def notify_terminal_transition(
         self,

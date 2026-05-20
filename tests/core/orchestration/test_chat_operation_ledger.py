@@ -243,6 +243,7 @@ def test_patch_operation_preserves_first_visible_feedback_timestamp(
         (ChatOperationState.RUNNING, ChatOperationState.DELIVERING),
         (ChatOperationState.RUNNING, ChatOperationState.COMPLETED),
         (ChatOperationState.RUNNING, ChatOperationState.FAILED),
+        (ChatOperationState.INTERRUPTING, ChatOperationState.COMPLETED),
         (ChatOperationState.DELIVERING, ChatOperationState.COMPLETED),
     ),
 )

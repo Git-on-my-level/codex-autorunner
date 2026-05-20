@@ -146,6 +146,7 @@ class ChatIndexRow(ReadModelContract):
     binding_display_names: list[str] = Field(default_factory=list)
     lifecycle: Optional[str] = None
     runtime_status: Optional[str] = None
+    effective_status: Literal["waiting", "running", "idle", "archived", "failed"]
     archive_state: Optional[Literal["active", "archived"]] = None
     status: Literal["waiting", "running", "idle", "archived", "failed"]
     unread_count: int = Field(ge=0)

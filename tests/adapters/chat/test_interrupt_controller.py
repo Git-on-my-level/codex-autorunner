@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import logging
 from types import SimpleNamespace
 
 import pytest
 
 from codex_autorunner.adapters.chat.interrupt_controller import (
     SharedInterruptState,
+    _write_interrupt_operation,
     request_managed_thread_interrupt,
 )
 from codex_autorunner.core.orchestration.chat_operation_ledger import (
@@ -246,3 +248,91 @@ async def test_interrupt_controller_returns_already_finished_for_completed_infli
     assert stored is not None
     assert stored.state == ChatOperationState.COMPLETED
     assert stored.terminal_outcome == "already_finished"
+
+
+@pytest.mark.anyio
+async def test_interrupt_controller_preserves_terminal_state_as_metadata_only(
+    tmp_path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    ledger = SQLiteChatOperationLedger(tmp_path)
+    _register_operation(ledger, operation_id="terminal-op")
+    ledger.patch_operation(
+        "terminal-op",
+        state=ChatOperationState.COMPLETED,
+        terminal_outcome="confirmed",
+    )
+    service = _InterruptServiceStub(
+        running_execution=SimpleNamespace(execution_id="turn-1", status="running"),
+        stop_outcome=SimpleNamespace(
+            interrupted_active=True,
+            recovered_lost_backend=False,
+            cancelled_queued=0,
+            execution=SimpleNamespace(execution_id="turn-1", status="interrupted"),
+        ),
+    )
+
+    with caplog.at_level(
+        logging.INFO,
+        logger="codex_autorunner.adapters.chat.interrupt_controller",
+    ):
+        outcome = await request_managed_thread_interrupt(
+            orchestration_service=service,
+            thread_target_id="thread-1",
+            cancel_queued=True,
+            operation_store=ledger,
+            operation_id="terminal-op",
+        )
+
+    assert outcome.state == SharedInterruptState.CONFIRMED
+    stored = ledger.get_operation("terminal-op")
+    assert stored is not None
+    assert stored.state == ChatOperationState.COMPLETED
+    assert stored.terminal_outcome == "confirmed"
+    assert stored.metadata["interrupt_state"] == "confirmed"
+    assert (
+        stored.metadata["interrupt_operation_recovery_reason"]
+        == "terminal_state_metadata_only"
+    )
+    assert '"operation_id":"terminal-op"' in caplog.text
+    assert '"current_state":"completed"' in caplog.text
+    assert '"requested_state":"interrupting"' in caplog.text
+    assert '"interrupt_state":"requested"' in caplog.text
+    assert '"recovery_reason":"terminal_state_metadata_only"' in caplog.text
+
+
+def test_interrupt_controller_preserves_delivering_state_as_metadata_only(
+    tmp_path,
+) -> None:
+    ledger = SQLiteChatOperationLedger(tmp_path)
+    _register_operation(ledger, operation_id="delivering-op")
+    ledger.patch_operation(
+        "delivering-op",
+        state=ChatOperationState.RUNNING,
+        thread_target_id="thread-1",
+        execution_id="turn-1",
+    )
+    ledger.patch_operation(
+        "delivering-op",
+        state=ChatOperationState.DELIVERING,
+    )
+
+    patched = _write_interrupt_operation(
+        ledger,
+        operation_id="delivering-op",
+        thread_target_id="thread-1",
+        execution_id="turn-1",
+        cancel_queued=True,
+        referenced_execution_id="turn-1",
+        interrupt_state=SharedInterruptState.REQUESTED,
+    )
+
+    assert patched is not None
+    stored = ledger.get_operation("delivering-op")
+    assert stored is not None
+    assert stored.state == ChatOperationState.DELIVERING
+    assert stored.metadata["interrupt_state"] == "requested"
+    assert (
+        stored.metadata["interrupt_operation_recovery_reason"]
+        == "delivery_state_metadata_only"
+    )

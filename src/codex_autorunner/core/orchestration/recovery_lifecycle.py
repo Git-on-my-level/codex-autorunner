@@ -4,7 +4,7 @@ import logging
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Callable, Literal, Optional
+from typing import Callable, Optional
 
 from ..freshness import parse_iso_datetime
 from ..logging_utils import log_event
@@ -17,6 +17,10 @@ from .execution_lifecycle import (
 from .interfaces import (
     RuntimeThreadHarness,
     ThreadExecutionStore,
+)
+from .managed_turn_lifecycle_contract import (
+    ManagedTurnRecoveryAction,
+    classify_managed_turn_recovery_action,
 )
 from .models import (
     ExecutionRecord,
@@ -32,29 +36,7 @@ MISSING_BACKEND_THREAD_ERROR = (
 _RESTART_WAIT_AND_SEE_AGENTS = frozenset({"codex"})
 logger = logging.getLogger(__name__)
 
-ManagedTurnRecoveryAction = Literal[
-    "none",
-    "recover_from_harness",
-    "record_error",
-    "recover_delivery",
-    "recover_side_effects",
-]
-
 _TERMINAL_STATUSES = frozenset({"ok", "error", "interrupted"})
-_LIVE_PHASE_RECOVERY_ACTIONS: dict[str, ManagedTurnRecoveryAction] = {
-    "accepted": "record_error",
-    "queued": "record_error",
-    "runtime_starting": "record_error",
-    "runtime_running": "recover_from_harness",
-    "runtime_terminal_observed": "recover_from_harness",
-    "terminal_recording": "recover_from_harness",
-}
-_POST_TERMINAL_PHASE_RECOVERY_ACTIONS: dict[str, ManagedTurnRecoveryAction] = {
-    "terminal_recorded": "none",
-    "delivery_enqueued": "recover_delivery",
-    "side_effects_pending": "recover_side_effects",
-    "side_effects_complete": "none",
-}
 
 
 @dataclass(frozen=True)
@@ -130,26 +112,17 @@ def classify_stale_managed_turn_recovery(
     phase = _managed_turn_lifecycle_phase(execution)
     status = str(execution.status or "").strip().lower()
     age_seconds = _execution_age_seconds(execution, now=resolved_now)
-    if status in _TERMINAL_STATUSES:
-        selected_action = _POST_TERMINAL_PHASE_RECOVERY_ACTIONS.get(phase, "none")
-        reason = (
-            "post_terminal_phase_recovery"
-            if selected_action != "none"
-            else "already_terminal"
-        )
-    else:
-        selected_action = _LIVE_PHASE_RECOVERY_ACTIONS.get(phase, "record_error")
-        reason = (
-            "runtime_outcome_may_be_recoverable"
-            if selected_action == "recover_from_harness"
-            else "live_phase_stale_without_terminal_record"
-        )
+    action = classify_managed_turn_recovery_action(
+        phase=phase,
+        status=status,
+        terminal_statuses=_TERMINAL_STATUSES,
+    )
     return ManagedTurnRecoveryDecision(
         managed_thread_id=managed_thread_id,
         execution_id=execution.execution_id,
-        prior_phase=phase,
-        selected_action=selected_action,
-        reason=reason,
+        prior_phase=action.phase,
+        selected_action=action.selected_action,
+        reason=action.reason,
         age_seconds=age_seconds,
         current_status=status,
         queue_depth=queue_depth,

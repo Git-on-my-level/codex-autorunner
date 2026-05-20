@@ -4,6 +4,7 @@ import sqlite3
 import uuid
 from dataclasses import asdict, dataclass
 from datetime import datetime
+from enum import Enum
 from pathlib import Path
 from typing import Any, Optional
 
@@ -16,8 +17,174 @@ from .text_utils import (
 )
 from .time_utils import now_iso
 
-_ACTIVE_DEDUPE_STATES = ("pending", "running", "succeeded", "effect_applied")
-_ACTIVE_ATTEMPT_STATES = ("claimed", "running")
+
+class PublishOperationState(str, Enum):
+    PENDING = "pending"
+    RUNNING = "running"
+    SUCCEEDED = "succeeded"
+    EFFECT_APPLIED = "effect_applied"
+    FAILED = "failed"
+
+
+class PublishAttemptState(str, Enum):
+    CLAIMED = "claimed"
+    RUNNING = "running"
+    SUCCEEDED = "succeeded"
+    FAILED = "failed"
+
+
+class PublishOperationTransition(str, Enum):
+    CREATE = "create"
+    CLAIM = "claim"
+    RETRY = "retry"
+    SUCCEED = "succeed"
+    EFFECT_APPLIED = "effect_applied"
+    RECONCILE_EFFECT_APPLIED = "reconcile_effect_applied"
+    FAIL = "fail"
+
+
+class PublishAttemptTransition(str, Enum):
+    CLAIM = "claim"
+    START = "start"
+    SUCCEED = "succeed"
+    FAIL = "fail"
+
+
+_ACTIVE_DEDUPE_STATES = (
+    PublishOperationState.PENDING,
+    PublishOperationState.RUNNING,
+    PublishOperationState.SUCCEEDED,
+    PublishOperationState.EFFECT_APPLIED,
+)
+_ACTIVE_ATTEMPT_STATES = (
+    PublishAttemptState.CLAIMED,
+    PublishAttemptState.RUNNING,
+)
+_OPERATION_TRANSITIONS: dict[
+    PublishOperationTransition,
+    dict[PublishOperationState | None, PublishOperationState],
+] = {
+    PublishOperationTransition.CREATE: {
+        None: PublishOperationState.PENDING,
+    },
+    PublishOperationTransition.CLAIM: {
+        PublishOperationState.PENDING: PublishOperationState.RUNNING,
+    },
+    PublishOperationTransition.RETRY: {
+        PublishOperationState.RUNNING: PublishOperationState.PENDING,
+    },
+    PublishOperationTransition.SUCCEED: {
+        PublishOperationState.RUNNING: PublishOperationState.SUCCEEDED,
+    },
+    PublishOperationTransition.EFFECT_APPLIED: {
+        PublishOperationState.RUNNING: PublishOperationState.EFFECT_APPLIED,
+    },
+    PublishOperationTransition.RECONCILE_EFFECT_APPLIED: {
+        PublishOperationState.EFFECT_APPLIED: PublishOperationState.SUCCEEDED,
+    },
+    PublishOperationTransition.FAIL: {
+        PublishOperationState.RUNNING: PublishOperationState.FAILED,
+    },
+}
+_ATTEMPT_TRANSITIONS: dict[
+    PublishAttemptTransition,
+    dict[PublishAttemptState | None, PublishAttemptState],
+] = {
+    PublishAttemptTransition.CLAIM: {
+        None: PublishAttemptState.CLAIMED,
+    },
+    PublishAttemptTransition.START: {
+        PublishAttemptState.CLAIMED: PublishAttemptState.RUNNING,
+    },
+    PublishAttemptTransition.SUCCEED: {
+        PublishAttemptState.CLAIMED: PublishAttemptState.SUCCEEDED,
+        PublishAttemptState.RUNNING: PublishAttemptState.SUCCEEDED,
+    },
+    PublishAttemptTransition.FAIL: {
+        PublishAttemptState.CLAIMED: PublishAttemptState.FAILED,
+        PublishAttemptState.RUNNING: PublishAttemptState.FAILED,
+    },
+}
+
+
+class _PublishJournalConcurrentTransition(RuntimeError):
+    pass
+
+
+def _operation_state(
+    value: PublishOperationState | str | None,
+) -> PublishOperationState | None:
+    if value is None:
+        return None
+    if isinstance(value, PublishOperationState):
+        return value
+    try:
+        return PublishOperationState(value)
+    except ValueError as exc:
+        raise RuntimeError(
+            f"unknown publish operation lifecycle state: {value!r}"
+        ) from exc
+
+
+def _required_operation_state(value: str) -> PublishOperationState:
+    state = _operation_state(value)
+    if state is None:
+        raise RuntimeError("publish operation lifecycle state is required")
+    return state
+
+
+def _attempt_state(
+    value: PublishAttemptState | str | None,
+) -> PublishAttemptState | None:
+    if value is None:
+        return None
+    if isinstance(value, PublishAttemptState):
+        return value
+    try:
+        return PublishAttemptState(value)
+    except ValueError as exc:
+        raise RuntimeError(
+            f"unknown publish attempt lifecycle state: {value!r}"
+        ) from exc
+
+
+def _required_attempt_state(value: str) -> PublishAttemptState:
+    state = _attempt_state(value)
+    if state is None:
+        raise RuntimeError("publish attempt lifecycle state is required")
+    return state
+
+
+def transition_publish_operation_state(
+    transition: PublishOperationTransition,
+    *,
+    current_state: PublishOperationState | str | None,
+) -> PublishOperationState:
+    resolved_current = _operation_state(current_state)
+    next_state = _OPERATION_TRANSITIONS[transition].get(resolved_current)
+    if next_state is None:
+        raise RuntimeError(
+            "invalid publish operation lifecycle transition: "
+            f"{transition.value} from "
+            f"{resolved_current.value if resolved_current is not None else '<new>'}"
+        )
+    return next_state
+
+
+def transition_publish_attempt_state(
+    transition: PublishAttemptTransition,
+    *,
+    current_state: PublishAttemptState | str | None,
+) -> PublishAttemptState:
+    resolved_current = _attempt_state(current_state)
+    next_state = _ATTEMPT_TRANSITIONS[transition].get(resolved_current)
+    if next_state is None:
+        raise RuntimeError(
+            "invalid publish attempt lifecycle transition: "
+            f"{transition.value} from "
+            f"{resolved_current.value if resolved_current is not None else '<new>'}"
+        )
+    return next_state
 
 
 def _normalize_json_object(value: Any, *, field_name: str) -> dict[str, Any]:
@@ -61,11 +228,12 @@ class PublishOperation:
 
 
 def _operation_from_row(row: sqlite3.Row) -> PublishOperation:
+    state = _required_operation_state(str(row["state"]))
     return PublishOperation(
         operation_id=str(row["operation_id"]),
         operation_key=str(row["operation_key"]),
         operation_kind=str(row["operation_kind"]),
-        state=str(row["state"]),
+        state=state.value,
         payload=_json_loads_object(row["payload_json"]),
         response=_json_loads_object(row["response_json"]),
         created_at=str(row["created_at"]),
@@ -81,6 +249,10 @@ def _operation_from_row(row: sqlite3.Row) -> PublishOperation:
 
 def _coerce_row(value: Any) -> Optional[sqlite3.Row]:
     return value if isinstance(value, sqlite3.Row) else None
+
+
+def _attempt_state_from_row(row: sqlite3.Row) -> PublishAttemptState:
+    return _required_attempt_state(str(row["state"]))
 
 
 class PublishJournalStore:
@@ -123,10 +295,15 @@ class PublishJournalStore:
         )
 
         with open_orchestration_sqlite(self._hub_root, durable=True) as conn:
+            self._ensure_known_operation_states(conn)
             existing = self._find_dedupable_operation(conn, normalized_key)
             if existing is not None:
                 return _operation_from_row(existing), True
             operation_id = uuid.uuid4().hex
+            created_state = transition_publish_operation_state(
+                PublishOperationTransition.CREATE,
+                current_state=None,
+            )
             try:
                 conn.execute(
                     """
@@ -145,12 +322,13 @@ class PublishJournalStore:
                         next_attempt_at,
                         last_error_text,
                         attempt_count
-                    ) VALUES (?, ?, ?, 'pending', ?, '{}', ?, ?, NULL, NULL, NULL, ?, NULL, 0)
+                    ) VALUES (?, ?, ?, ?, ?, '{}', ?, ?, NULL, NULL, NULL, ?, NULL, 0)
                     """,
                     (
                         operation_id,
                         normalized_key,
                         normalized_kind,
+                        created_state.value,
                         _json_dumps(payload_object),
                         timestamp,
                         timestamp,
@@ -190,7 +368,10 @@ class PublishJournalStore:
         updated_at = now_iso()
         with open_orchestration_sqlite(self._hub_root, durable=True) as conn:
             row = self._load_operation_row(conn, normalized_operation_id)
-            if row is None or str(row["state"]) != "pending":
+            if row is None:
+                return None
+            state = _required_operation_state(str(row["state"]))
+            if state != PublishOperationState.PENDING:
                 return None
             resolved_payload = (
                 payload_object
@@ -210,13 +391,14 @@ class PublishJournalStore:
                            next_attempt_at = ?,
                            updated_at = ?
                      WHERE operation_id = ?
-                       AND state = 'pending'
+                       AND state = ?
                     """,
                     (
                         _json_dumps(resolved_payload),
                         resolved_next_attempt,
                         updated_at,
                         normalized_operation_id,
+                        PublishOperationState.PENDING.value,
                     ),
                 )
                 if cursor.rowcount == 0:
@@ -241,7 +423,10 @@ class PublishJournalStore:
         updated_at = now_iso()
         with open_orchestration_sqlite(self._hub_root, durable=True) as conn:
             row = self._load_operation_row(conn, normalized_operation_id)
-            if row is None or str(row["state"]) != "running":
+            if row is None:
+                return None
+            state = _required_operation_state(str(row["state"]))
+            if state != PublishOperationState.RUNNING:
                 return None
             payload = _json_loads_object(row["payload_json"])
             payload.update(patch)
@@ -252,12 +437,13 @@ class PublishJournalStore:
                        SET payload_json = ?,
                            updated_at = ?
                      WHERE operation_id = ?
-                       AND state = 'running'
+                       AND state = ?
                     """,
                     (
                         _json_dumps(payload),
                         updated_at,
                         normalized_operation_id,
+                        PublishOperationState.RUNNING.value,
                     ),
                 )
                 if cursor.rowcount == 0:
@@ -288,11 +474,12 @@ class PublishJournalStore:
 
         with open_orchestration_sqlite(self._hub_root, durable=True) as conn:
             conn.execute("BEGIN IMMEDIATE")
+            self._ensure_known_operation_states(conn)
             rows = conn.execute(
                 """
                 SELECT *
                   FROM orch_publish_operations
-                 WHERE state = 'pending'
+                 WHERE state = ?
                    AND COALESCE(next_attempt_at, created_at) <= ?
                  ORDER BY COALESCE(next_attempt_at, created_at) ASC,
                           CASE operation_kind
@@ -303,18 +490,26 @@ class PublishJournalStore:
                           END ASC,
                           created_at ASC,
                           operation_id ASC
-                 LIMIT ?
+                LIMIT ?
                 """,
-                (claimed_at, resolved_limit),
+                (PublishOperationState.PENDING.value, claimed_at, resolved_limit),
             ).fetchall()
             claimed: list[PublishOperation] = []
             for row in rows:
                 operation_id = str(row["operation_id"])
                 attempt_number = int(row["attempt_count"] or 0) + 1
+                next_operation_state = transition_publish_operation_state(
+                    PublishOperationTransition.CLAIM,
+                    current_state=str(row["state"]),
+                )
+                new_attempt_state = transition_publish_attempt_state(
+                    PublishAttemptTransition.CLAIM,
+                    current_state=None,
+                )
                 cursor = conn.execute(
                     """
                     UPDATE orch_publish_operations
-                       SET state = 'running',
+                       SET state = ?,
                            updated_at = ?,
                            claimed_at = ?,
                            started_at = NULL,
@@ -324,13 +519,15 @@ class PublishJournalStore:
                            response_json = '{}',
                            attempt_count = ?
                      WHERE operation_id = ?
-                       AND state = 'pending'
+                       AND state = ?
                     """,
                     (
+                        next_operation_state.value,
                         claimed_at,
                         claimed_at,
                         attempt_number,
                         operation_id,
+                        PublishOperationState.PENDING.value,
                     ),
                 )
                 if cursor.rowcount == 0:
@@ -350,12 +547,13 @@ class PublishJournalStore:
                         finished_at,
                         created_at,
                         updated_at
-                    ) VALUES (?, ?, ?, 'claimed', '{}', NULL, ?, NULL, NULL, ?, ?)
+                    ) VALUES (?, ?, ?, ?, '{}', NULL, ?, NULL, NULL, ?, ?)
                     """,
                     (
                         attempt_id,
                         operation_id,
                         attempt_number,
+                        new_attempt_state.value,
                         claimed_at,
                         claimed_at,
                         claimed_at,
@@ -381,25 +579,34 @@ class PublishJournalStore:
             )
             if latest_attempt is None:
                 return None
-            attempt_state = str(latest_attempt["state"])
-            if attempt_state == "running":
-                return _operation_from_row(operation_row)
-            if attempt_state != "claimed":
+            operation_state = _required_operation_state(str(operation_row["state"]))
+            if operation_state != PublishOperationState.RUNNING:
                 return None
+            attempt_state = _attempt_state_from_row(latest_attempt)
+            if attempt_state == PublishAttemptState.RUNNING:
+                return _operation_from_row(operation_row)
+            if attempt_state != PublishAttemptState.CLAIMED:
+                return None
+            next_attempt_state = transition_publish_attempt_state(
+                PublishAttemptTransition.START,
+                current_state=attempt_state,
+            )
             with conn:
                 cursor = conn.execute(
                     """
                     UPDATE orch_publish_attempts
-                       SET state = 'running',
+                       SET state = ?,
                            started_at = ?,
                            updated_at = ?
                      WHERE attempt_id = ?
-                       AND state = 'claimed'
+                       AND state = ?
                     """,
                     (
+                        next_attempt_state.value,
                         started_at,
                         started_at,
                         str(latest_attempt["attempt_id"]),
+                        PublishAttemptState.CLAIMED.value,
                     ),
                 )
                 if cursor.rowcount == 0:
@@ -410,12 +617,13 @@ class PublishJournalStore:
                        SET started_at = ?,
                            updated_at = ?
                      WHERE operation_id = ?
-                       AND state = 'running'
+                       AND state = ?
                     """,
                     (
                         started_at,
                         started_at,
                         normalized_operation_id,
+                        PublishOperationState.RUNNING.value,
                     ),
                 )
                 refreshed = self._load_operation_row(conn, normalized_operation_id)
@@ -442,54 +650,76 @@ class PublishJournalStore:
             )
             if latest_attempt is None:
                 return None
-            attempt_state = str(latest_attempt["state"])
-            if operation_row["state"] == "succeeded" and attempt_state == "succeeded":
+            operation_state = _required_operation_state(str(operation_row["state"]))
+            attempt_state = _attempt_state_from_row(latest_attempt)
+            if (
+                operation_state == PublishOperationState.SUCCEEDED
+                and attempt_state == PublishAttemptState.SUCCEEDED
+            ):
                 return _operation_from_row(operation_row)
             if attempt_state not in _ACTIVE_ATTEMPT_STATES:
                 return None
-            with conn:
-                cursor = conn.execute(
-                    """
-                    UPDATE orch_publish_attempts
-                       SET state = 'succeeded',
-                           response_json = ?,
-                           error_text = NULL,
-                           started_at = COALESCE(started_at, claimed_at),
-                           finished_at = ?,
-                           updated_at = ?
-                     WHERE attempt_id = ?
-                       AND state IN ('claimed', 'running')
-                    """,
-                    (
-                        response_json,
-                        finished_at,
-                        finished_at,
-                        str(latest_attempt["attempt_id"]),
-                    ),
-                )
-                if cursor.rowcount == 0:
-                    return None
-                conn.execute(
-                    """
-                    UPDATE orch_publish_operations
-                       SET state = 'succeeded',
-                           response_json = ?,
-                           updated_at = ?,
-                           started_at = COALESCE(started_at, claimed_at),
-                           finished_at = ?,
-                           next_attempt_at = NULL,
-                           last_error_text = NULL
-                     WHERE operation_id = ?
-                       AND state = 'running'
-                    """,
-                    (
-                        response_json,
-                        finished_at,
-                        finished_at,
-                        normalized_operation_id,
-                    ),
-                )
-                refreshed = self._load_operation_row(conn, normalized_operation_id)
+            next_attempt_state = transition_publish_attempt_state(
+                PublishAttemptTransition.SUCCEED,
+                current_state=attempt_state,
+            )
+            next_operation_state = transition_publish_operation_state(
+                PublishOperationTransition.SUCCEED,
+                current_state=operation_state,
+            )
+            try:
+                with conn:
+                    cursor = conn.execute(
+                        """
+                        UPDATE orch_publish_attempts
+                           SET state = ?,
+                               response_json = ?,
+                               error_text = NULL,
+                               started_at = COALESCE(started_at, claimed_at),
+                               finished_at = ?,
+                               updated_at = ?
+                         WHERE attempt_id = ?
+                           AND state IN (?, ?)
+                        """,
+                        (
+                            next_attempt_state.value,
+                            response_json,
+                            finished_at,
+                            finished_at,
+                            str(latest_attempt["attempt_id"]),
+                            PublishAttemptState.CLAIMED.value,
+                            PublishAttemptState.RUNNING.value,
+                        ),
+                    )
+                    if cursor.rowcount == 0:
+                        raise _PublishJournalConcurrentTransition
+                    cursor = conn.execute(
+                        """
+                        UPDATE orch_publish_operations
+                           SET state = ?,
+                               response_json = ?,
+                               updated_at = ?,
+                               started_at = COALESCE(started_at, claimed_at),
+                               finished_at = ?,
+                               next_attempt_at = NULL,
+                               last_error_text = NULL
+                         WHERE operation_id = ?
+                           AND state = ?
+                        """,
+                        (
+                            next_operation_state.value,
+                            response_json,
+                            finished_at,
+                            finished_at,
+                            normalized_operation_id,
+                            PublishOperationState.RUNNING.value,
+                        ),
+                    )
+                    if cursor.rowcount == 0:
+                        raise _PublishJournalConcurrentTransition
+                    refreshed = self._load_operation_row(conn, normalized_operation_id)
+            except _PublishJournalConcurrentTransition:
+                return None
         return _operation_from_row(refreshed) if refreshed is not None else None
 
     def mark_failed(
@@ -504,7 +734,11 @@ class PublishJournalStore:
             return None
         normalized_error = _normalize_text(error_text)
         retry_at = _normalize_timestamp(next_attempt_at, field_name="next_attempt_at")
-        target_state = "pending" if retry_at is not None else "failed"
+        transition = (
+            PublishOperationTransition.RETRY
+            if retry_at is not None
+            else PublishOperationTransition.FAIL
+        )
         finished_at = now_iso()
         with open_orchestration_sqlite(self._hub_root, durable=True) as conn:
             operation_row = self._load_operation_row(conn, normalized_operation_id)
@@ -515,56 +749,77 @@ class PublishJournalStore:
             )
             if latest_attempt is None:
                 return None
-            attempt_state = str(latest_attempt["state"])
-            if operation_row["state"] == "failed" and attempt_state == "failed":
+            operation_state = _required_operation_state(str(operation_row["state"]))
+            attempt_state = _attempt_state_from_row(latest_attempt)
+            if (
+                operation_state == PublishOperationState.FAILED
+                and attempt_state == PublishAttemptState.FAILED
+            ):
                 return _operation_from_row(operation_row)
             if attempt_state not in _ACTIVE_ATTEMPT_STATES:
                 return None
-            with conn:
-                cursor = conn.execute(
-                    """
-                    UPDATE orch_publish_attempts
-                       SET state = 'failed',
-                           response_json = '{}',
-                           error_text = ?,
-                           started_at = COALESCE(started_at, claimed_at),
-                           finished_at = ?,
-                           updated_at = ?
-                     WHERE attempt_id = ?
-                       AND state IN ('claimed', 'running')
-                    """,
-                    (
-                        normalized_error,
-                        finished_at,
-                        finished_at,
-                        str(latest_attempt["attempt_id"]),
-                    ),
-                )
-                if cursor.rowcount == 0:
-                    return None
-                conn.execute(
-                    """
-                    UPDATE orch_publish_operations
-                       SET state = ?,
-                           response_json = '{}',
-                           updated_at = ?,
-                           started_at = COALESCE(started_at, claimed_at),
-                           finished_at = ?,
-                           next_attempt_at = ?,
-                           last_error_text = ?
-                     WHERE operation_id = ?
-                       AND state = 'running'
-                    """,
-                    (
-                        target_state,
-                        finished_at,
-                        finished_at,
-                        retry_at,
-                        normalized_error,
-                        normalized_operation_id,
-                    ),
-                )
-                refreshed = self._load_operation_row(conn, normalized_operation_id)
+            next_attempt_state = transition_publish_attempt_state(
+                PublishAttemptTransition.FAIL,
+                current_state=attempt_state,
+            )
+            next_operation_state = transition_publish_operation_state(
+                transition,
+                current_state=operation_state,
+            )
+            try:
+                with conn:
+                    cursor = conn.execute(
+                        """
+                        UPDATE orch_publish_attempts
+                           SET state = ?,
+                               response_json = '{}',
+                               error_text = ?,
+                               started_at = COALESCE(started_at, claimed_at),
+                               finished_at = ?,
+                               updated_at = ?
+                         WHERE attempt_id = ?
+                           AND state IN (?, ?)
+                        """,
+                        (
+                            next_attempt_state.value,
+                            normalized_error,
+                            finished_at,
+                            finished_at,
+                            str(latest_attempt["attempt_id"]),
+                            PublishAttemptState.CLAIMED.value,
+                            PublishAttemptState.RUNNING.value,
+                        ),
+                    )
+                    if cursor.rowcount == 0:
+                        raise _PublishJournalConcurrentTransition
+                    cursor = conn.execute(
+                        """
+                        UPDATE orch_publish_operations
+                           SET state = ?,
+                               response_json = '{}',
+                               updated_at = ?,
+                               started_at = COALESCE(started_at, claimed_at),
+                               finished_at = ?,
+                               next_attempt_at = ?,
+                               last_error_text = ?
+                         WHERE operation_id = ?
+                           AND state = ?
+                        """,
+                        (
+                            next_operation_state.value,
+                            finished_at,
+                            finished_at,
+                            retry_at,
+                            normalized_error,
+                            normalized_operation_id,
+                            PublishOperationState.RUNNING.value,
+                        ),
+                    )
+                    if cursor.rowcount == 0:
+                        raise _PublishJournalConcurrentTransition
+                    refreshed = self._load_operation_row(conn, normalized_operation_id)
+            except _PublishJournalConcurrentTransition:
+                return None
         return _operation_from_row(refreshed) if refreshed is not None else None
 
     def mark_effect_applied(
@@ -597,55 +852,74 @@ class PublishJournalStore:
             )
             if latest_attempt is None:
                 return None
-            attempt_state = str(latest_attempt["state"])
-            if operation_row["state"] == "effect_applied":
+            operation_state = _required_operation_state(str(operation_row["state"]))
+            attempt_state = _attempt_state_from_row(latest_attempt)
+            if operation_state == PublishOperationState.EFFECT_APPLIED:
                 return _operation_from_row(operation_row)
             if attempt_state not in _ACTIVE_ATTEMPT_STATES:
                 return None
-            with conn:
-                cursor = conn.execute(
-                    """
-                    UPDATE orch_publish_attempts
-                       SET state = 'succeeded',
-                           response_json = ?,
-                           error_text = NULL,
-                           started_at = COALESCE(started_at, claimed_at),
-                           finished_at = ?,
-                           updated_at = ?
-                     WHERE attempt_id = ?
-                       AND state IN ('claimed', 'running')
-                    """,
-                    (
-                        response_json,
-                        finished_at,
-                        finished_at,
-                        str(latest_attempt["attempt_id"]),
-                    ),
-                )
-                if cursor.rowcount == 0:
-                    return None
-                conn.execute(
-                    """
-                    UPDATE orch_publish_operations
-                       SET state = 'effect_applied',
-                           response_json = ?,
-                           updated_at = ?,
-                           started_at = COALESCE(started_at, claimed_at),
-                           finished_at = ?,
-                           next_attempt_at = NULL,
-                           last_error_text = ?
-                     WHERE operation_id = ?
-                       AND state = 'running'
-                    """,
-                    (
-                        response_json,
-                        finished_at,
-                        finished_at,
-                        normalized_error,
-                        normalized_operation_id,
-                    ),
-                )
-                refreshed = self._load_operation_row(conn, normalized_operation_id)
+            next_attempt_state = transition_publish_attempt_state(
+                PublishAttemptTransition.SUCCEED,
+                current_state=attempt_state,
+            )
+            next_operation_state = transition_publish_operation_state(
+                PublishOperationTransition.EFFECT_APPLIED,
+                current_state=operation_state,
+            )
+            try:
+                with conn:
+                    cursor = conn.execute(
+                        """
+                        UPDATE orch_publish_attempts
+                           SET state = ?,
+                               response_json = ?,
+                               error_text = NULL,
+                               started_at = COALESCE(started_at, claimed_at),
+                               finished_at = ?,
+                               updated_at = ?
+                         WHERE attempt_id = ?
+                           AND state IN (?, ?)
+                        """,
+                        (
+                            next_attempt_state.value,
+                            response_json,
+                            finished_at,
+                            finished_at,
+                            str(latest_attempt["attempt_id"]),
+                            PublishAttemptState.CLAIMED.value,
+                            PublishAttemptState.RUNNING.value,
+                        ),
+                    )
+                    if cursor.rowcount == 0:
+                        raise _PublishJournalConcurrentTransition
+                    cursor = conn.execute(
+                        """
+                        UPDATE orch_publish_operations
+                           SET state = ?,
+                               response_json = ?,
+                               updated_at = ?,
+                               started_at = COALESCE(started_at, claimed_at),
+                               finished_at = ?,
+                               next_attempt_at = NULL,
+                               last_error_text = ?
+                         WHERE operation_id = ?
+                           AND state = ?
+                        """,
+                        (
+                            next_operation_state.value,
+                            response_json,
+                            finished_at,
+                            finished_at,
+                            normalized_error,
+                            normalized_operation_id,
+                            PublishOperationState.RUNNING.value,
+                        ),
+                    )
+                    if cursor.rowcount == 0:
+                        raise _PublishJournalConcurrentTransition
+                    refreshed = self._load_operation_row(conn, normalized_operation_id)
+            except _PublishJournalConcurrentTransition:
+                return None
         return _operation_from_row(refreshed) if refreshed is not None else None
 
     def reconcile_effect_applied(self, operation_id: str) -> Optional[PublishOperation]:
@@ -663,21 +937,28 @@ class PublishJournalStore:
             operation_row = self._load_operation_row(conn, normalized_operation_id)
             if operation_row is None:
                 return None
-            if str(operation_row["state"]) != "effect_applied":
+            operation_state = _required_operation_state(str(operation_row["state"]))
+            if operation_state != PublishOperationState.EFFECT_APPLIED:
                 return None
+            next_operation_state = transition_publish_operation_state(
+                PublishOperationTransition.RECONCILE_EFFECT_APPLIED,
+                current_state=operation_state,
+            )
             with conn:
                 conn.execute(
                     """
                     UPDATE orch_publish_operations
-                       SET state = 'succeeded',
+                       SET state = ?,
                            updated_at = ?,
                            last_error_text = NULL
                      WHERE operation_id = ?
-                       AND state = 'effect_applied'
+                       AND state = ?
                     """,
                     (
+                        next_operation_state.value,
                         updated_at,
                         normalized_operation_id,
+                        PublishOperationState.EFFECT_APPLIED.value,
                     ),
                 )
                 refreshed = self._load_operation_row(conn, normalized_operation_id)
@@ -696,6 +977,7 @@ class PublishJournalStore:
         normalized_state = _normalize_text(state)
         normalized_kind = _normalize_text(operation_kind)
         if normalized_state is not None:
+            normalized_state = _required_operation_state(normalized_state).value
             where_clauses.append("state = ?")
             params.append(normalized_state)
         if normalized_kind is not None:
@@ -711,6 +993,7 @@ class PublishJournalStore:
             params.append(resolved_limit)
 
         with open_orchestration_sqlite(self._hub_root, durable=True) as conn:
+            self._ensure_known_operation_states(conn)
             rows = conn.execute(
                 f"""
                 SELECT *
@@ -730,6 +1013,7 @@ class PublishJournalStore:
         operation_key: str,
     ) -> Optional[sqlite3.Row]:
         placeholders = ",".join("?" for _ in _ACTIVE_DEDUPE_STATES)
+        active_states = tuple(state.value for state in _ACTIVE_DEDUPE_STATES)
         row = conn.execute(
             f"""
             SELECT *
@@ -746,9 +1030,20 @@ class PublishJournalStore:
                       operation_id DESC
              LIMIT 1
             """,
-            (operation_key, *_ACTIVE_DEDUPE_STATES),
+            (operation_key, *active_states),
         ).fetchone()
         return _coerce_row(row)
+
+    @staticmethod
+    def _ensure_known_operation_states(conn: sqlite3.Connection) -> None:
+        rows = conn.execute(
+            """
+            SELECT DISTINCT state
+              FROM orch_publish_operations
+            """
+        ).fetchall()
+        for row in rows:
+            _required_operation_state(str(row["state"]))
 
     @staticmethod
     def _load_operation_row(
@@ -784,6 +1079,12 @@ class PublishJournalStore:
 
 
 __all__ = [
+    "PublishAttemptState",
+    "PublishAttemptTransition",
     "PublishJournalStore",
     "PublishOperation",
+    "PublishOperationState",
+    "PublishOperationTransition",
+    "transition_publish_attempt_state",
+    "transition_publish_operation_state",
 ]

@@ -29,10 +29,11 @@ from ....core.config_validation import is_loopback_host
 from ....core.git_utils import GitError, run_git
 from ....core.runtime import RuntimeContext, clear_stale_lock
 from ....core.state import (
-    RunnerState,
+    RunnerLifecycleStatus,
     TerminalSessionStore,
     load_state,
     now_iso,
+    runner_explicit_status,
     save_state,
     state_lock,
 )
@@ -624,22 +625,13 @@ def register_root_commands(app: typer.Typer) -> None:
         pid = engine.kill_running_process()
         with state_lock(engine.state_path):
             state = load_state(engine.state_path)
-            new_state = RunnerState(
-                last_run_id=state.last_run_id,
-                status="error",
+            new_state = runner_explicit_status(
+                state,
+                RunnerLifecycleStatus.ERROR,
+                reason="cli_kill",
                 last_exit_code=137,
-                last_run_started_at=state.last_run_started_at,
                 last_run_finished_at=now_iso(),
-                autorunner_agent_override=state.autorunner_agent_override,
-                autorunner_model_overrides=state.autorunner_model_overrides,
-                autorunner_effort_override=state.autorunner_effort_override,
-                autorunner_approval_policy=state.autorunner_approval_policy,
-                autorunner_sandbox_mode=state.autorunner_sandbox_mode,
-                autorunner_workspace_write_network=state.autorunner_workspace_write_network,
-                ticket_flow_require_commit=state.ticket_flow_require_commit,
                 runner_pid=None,
-                sessions=state.sessions,
-                repo_to_session=state.repo_to_session,
             )
             save_state(engine.state_path, new_state)
         clear_stale_lock(engine.lock_path)

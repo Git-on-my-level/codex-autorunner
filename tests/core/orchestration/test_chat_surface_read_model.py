@@ -1519,9 +1519,11 @@ def test_chat_index_snapshot_reads_rebuilt_sql_projection_without_reprojecting(
 
     active = service.chat_index_snapshot(view="active", limit=20)
     assert [row["managed_thread_id"] for row in active["rows"]] == ["thread-running"]
+    assert active["rows"][0]["effective_status"] == "running"
 
     archived = service.chat_index_snapshot(view="archived", limit=20)
     assert [row["managed_thread_id"] for row in archived["rows"]] == ["thread-archived"]
+    assert archived["rows"][0]["effective_status"] == "archived"
 
 
 def test_chat_index_rebuild_repairs_stale_archived_bound_surface_projection(

@@ -9,9 +9,12 @@ from .config import load_hub_config
 from .domain.refs import AgentRef, ScopeRef, SurfaceRef
 from .freshness import resolve_stale_threshold_seconds
 from .managed_thread_status import (
+    ManagedThreadLifecycleTransition,
     ManagedThreadStatusReason,
     ManagedThreadStatusSnapshot,
     build_managed_thread_status_snapshot,
+    normalize_managed_thread_lifecycle_status,
+    transition_managed_thread_lifecycle_status,
     transition_managed_thread_status,
 )
 from .managed_thread_store_bootstrap import (
@@ -127,17 +130,16 @@ def _thread_row_to_thread(row: Any) -> Any:
 
 def _thread_model_to_port_record(thread: Any) -> ThreadRecord:
     payload = thread.to_dict()
+    lifecycle_status = normalize_managed_thread_lifecycle_status(
+        thread.lifecycle_status
+    )
     return ThreadRecord(
         thread_id=thread.id,
         scope=thread.scope,
         agent=thread.agent,
         surface=thread.surface,
         backend_binding=thread.backend_binding.to_dict(),
-        status=(
-            ThreadStatus(thread.lifecycle_status)
-            if thread.lifecycle_status in ThreadStatus._value2member_map_
-            else ThreadStatus.ACTIVE
-        ),
+        status=ThreadStatus(lifecycle_status.value),
         display_name=thread.display_name or "",
         last_turn_id=thread.last_execution_id,
         last_execution_id=thread.last_execution_id,
@@ -399,6 +401,34 @@ class ManagedThreadStore:
         )
         return self._fetch_thread(conn, managed_thread_id)
 
+    def _transition_thread_lifecycle_status_in_transaction(
+        self,
+        conn: Any,
+        managed_thread_id: str,
+        *,
+        transition: ManagedThreadLifecycleTransition,
+        changed_at: str,
+    ) -> Optional[dict[str, Any]]:
+        thread = self._fetch_thread(conn, managed_thread_id)
+        if thread is None:
+            return None
+        next_status = transition_managed_thread_lifecycle_status(
+            thread.get("lifecycle_status"),
+            transition=transition,
+        )
+        if thread.get("lifecycle_status") == next_status.value:
+            return thread
+        conn.execute(
+            """
+            UPDATE orch_thread_targets
+               SET lifecycle_status = ?,
+                   updated_at = ?
+             WHERE thread_target_id = ?
+            """,
+            (next_status.value, changed_at, managed_thread_id),
+        )
+        return self._fetch_thread(conn, managed_thread_id)
+
     def _recover_stale_running_turns(
         self,
         conn: Any,
@@ -506,6 +536,10 @@ class ManagedThreadStore:
             ).to_dict()
         )
 
+        lifecycle_status = transition_managed_thread_lifecycle_status(
+            None,
+            transition=ManagedThreadLifecycleTransition.THREAD_CREATED,
+        )
         snapshot = build_managed_thread_status_snapshot(
             reason=ManagedThreadStatusReason.THREAD_CREATED,
             changed_at=now,
@@ -552,7 +586,7 @@ class ManagedThreadStore:
                         normalized_surface_urn,
                         backend_binding_json,
                         name,
-                        "active",
+                        lifecycle_status.value,
                         snapshot.status,
                         snapshot.reason_code,
                         snapshot.turn_id,
@@ -581,7 +615,7 @@ class ManagedThreadStore:
             idempotency_action="created",
             event_type="lifecycle.status_changed",
             status=str(snapshot.status),
-            lifecycle_status="active",
+            lifecycle_status=lifecycle_status.value,
             source_id=managed_thread_id,
             occurred_at=now,
             include_bindings=False,
@@ -646,7 +680,7 @@ class ManagedThreadStore:
         elif status in {ThreadStatus.ACTIVE, ThreadStatus.IDLE, ThreadStatus.PENDING}:
             self.activate_thread(thread_id)
         else:
-            pass
+            raise ValueError(f"Unsupported managed-thread lifecycle status: {status}")
         if self.get_thread(thread_id) is None:
             return None
         model = self.get_thread_model(thread_id)
@@ -1019,20 +1053,19 @@ class ManagedThreadStore:
         changed_at = now_iso()
         with self._write_conn() as conn:
             with conn:
+                transitioned = self._transition_thread_lifecycle_status_in_transaction(
+                    conn,
+                    managed_thread_id,
+                    transition=ManagedThreadLifecycleTransition.THREAD_ARCHIVED,
+                    changed_at=changed_at,
+                )
+                if transitioned is None:
+                    return
                 self._terminalize_open_turns_for_thread(
                     conn,
                     managed_thread_id,
                     finished_at=changed_at,
                     error_text="thread_archived",
-                )
-                conn.execute(
-                    """
-                    UPDATE orch_thread_targets
-                       SET lifecycle_status = 'archived',
-                           updated_at = ?
-                     WHERE thread_target_id = ?
-                    """,
-                    (changed_at, managed_thread_id),
                 )
             self._transition_thread_status(
                 conn,
@@ -1115,15 +1148,14 @@ class ManagedThreadStore:
         changed_at = now_iso()
         with self._write_conn() as conn:
             with conn:
-                conn.execute(
-                    """
-                    UPDATE orch_thread_targets
-                       SET lifecycle_status = 'active',
-                           updated_at = ?
-                     WHERE thread_target_id = ?
-                    """,
-                    (changed_at, managed_thread_id),
+                transitioned = self._transition_thread_lifecycle_status_in_transaction(
+                    conn,
+                    managed_thread_id,
+                    transition=ManagedThreadLifecycleTransition.THREAD_ACTIVATED,
+                    changed_at=changed_at,
                 )
+                if transitioned is None:
+                    return
             self._transition_thread_status(
                 conn,
                 managed_thread_id,
@@ -1173,7 +1205,10 @@ class ManagedThreadStore:
                 if status_row is not None and status_row["lifecycle_status"] is not None
                 else None
             )
-            if thread_status != "active":
+            if status_row is None:
+                raise ManagedThreadNotActiveError(managed_thread_id, thread_status)
+            lifecycle_status = normalize_managed_thread_lifecycle_status(thread_status)
+            if lifecycle_status.value != "active":
                 raise ManagedThreadNotActiveError(managed_thread_id, thread_status)
             self._recover_stale_running_turns(conn, managed_thread_id)
             with conn:
@@ -1444,6 +1479,51 @@ class ManagedThreadStore:
                         (normalized_backend_turn_id, managed_turn_id),
                     )
 
+    def update_turn_metadata(
+        self,
+        managed_turn_id: str,
+        metadata: dict[str, Any],
+    ) -> Optional[dict[str, Any]]:
+        metadata_patch = dict(metadata or {})
+        if not metadata_patch:
+            return None
+        with self._write_conn() as conn:
+            row = conn.execute(
+                """
+                SELECT *
+                  FROM orch_thread_executions
+                 WHERE execution_id = ?
+                """,
+                (managed_turn_id,),
+            ).fetchone()
+            if row is None:
+                return None
+            current_metadata = _json_loads_object(row["metadata_json"])
+            updated_metadata = dict(current_metadata)
+            updated_metadata.update(metadata_patch)
+            if updated_metadata == current_metadata:
+                return _execution_row_to_record(row)
+            with conn:
+                conn.execute(
+                    """
+                    UPDATE orch_thread_executions
+                       SET metadata_json = ?
+                     WHERE execution_id = ?
+                    """,
+                    (_json_dumps(updated_metadata), managed_turn_id),
+                )
+            updated = conn.execute(
+                """
+                SELECT *
+                  FROM orch_thread_executions
+                 WHERE execution_id = ?
+                """,
+                (managed_turn_id,),
+            ).fetchone()
+        if updated is None:
+            return None
+        return _execution_row_to_record(updated)
+
     def mark_turn_interrupted(self, managed_turn_id: str) -> bool:
         finished_at = now_iso()
         with self._write_conn() as conn:
@@ -1562,6 +1642,20 @@ class ManagedThreadStore:
                    AND execution_id = ?
                 """,
                 (managed_thread_id, managed_turn_id),
+            ).fetchone()
+        if row is None:
+            return None
+        return _execution_row_to_record(row)
+
+    def get_turn_by_id(self, managed_turn_id: str) -> Optional[dict[str, Any]]:
+        with self._read_conn() as conn:
+            row = conn.execute(
+                """
+                SELECT *
+                  FROM orch_thread_executions
+                 WHERE execution_id = ?
+                """,
+                (managed_turn_id,),
             ).fetchone()
         if row is None:
             return None

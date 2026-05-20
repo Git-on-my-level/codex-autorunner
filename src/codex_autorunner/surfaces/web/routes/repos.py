@@ -8,7 +8,15 @@ from typing import Optional
 from fastapi import APIRouter, HTTPException, Request
 
 from ....core.runtime import LockError, clear_stale_lock
-from ....core.state import RunnerState, load_state, now_iso, save_state, state_lock
+from ....core.state import (
+    RunnerLifecycleStatus,
+    RunnerState,
+    load_state,
+    now_iso,
+    runner_explicit_status,
+    save_state,
+    state_lock,
+)
 from ..schemas import (
     RunControlRequest,
     RunControlResponse,
@@ -114,22 +122,13 @@ def build_repos_routes() -> APIRouter:
         manager.kill()
         with state_lock(engine.state_path):
             state = load_state(engine.state_path)
-            new_state = RunnerState(
-                last_run_id=state.last_run_id,
-                status="error",
+            new_state = runner_explicit_status(
+                state,
+                RunnerLifecycleStatus.ERROR,
+                reason="web_kill",
                 last_exit_code=137,
-                last_run_started_at=state.last_run_started_at,
                 last_run_finished_at=now_iso(),
-                autorunner_agent_override=state.autorunner_agent_override,
-                autorunner_model_overrides=state.autorunner_model_overrides,
-                autorunner_effort_override=state.autorunner_effort_override,
-                autorunner_approval_policy=state.autorunner_approval_policy,
-                autorunner_sandbox_mode=state.autorunner_sandbox_mode,
-                autorunner_workspace_write_network=state.autorunner_workspace_write_network,
-                ticket_flow_require_commit=state.ticket_flow_require_commit,
                 runner_pid=None,
-                sessions=state.sessions,
-                repo_to_session=state.repo_to_session,
             )
             save_state(engine.state_path, new_state)
         clear_stale_lock(engine.lock_path)
@@ -182,23 +181,16 @@ def build_repos_routes() -> APIRouter:
         with state_lock(engine.state_path):
             current_state = load_state(engine.state_path)
             engine.lock_path.unlink(missing_ok=True)
-            initial_state = RunnerState(
-                last_run_id=None,
-                status="idle",
+            initial_state = runner_explicit_status(
+                current_state,
+                RunnerLifecycleStatus.IDLE,
+                reason="web_reset",
                 last_exit_code=None,
-                last_run_started_at=None,
                 last_run_finished_at=None,
-                autorunner_agent_override=current_state.autorunner_agent_override,
-                autorunner_model_overrides=current_state.autorunner_model_overrides,
-                autorunner_effort_override=current_state.autorunner_effort_override,
-                autorunner_approval_policy=current_state.autorunner_approval_policy,
-                autorunner_sandbox_mode=current_state.autorunner_sandbox_mode,
-                autorunner_workspace_write_network=current_state.autorunner_workspace_write_network,
-                ticket_flow_require_commit=current_state.ticket_flow_require_commit,
                 runner_pid=None,
-                sessions=current_state.sessions,
-                repo_to_session=current_state.repo_to_session,
             )
+            initial_state.last_run_id = None
+            initial_state.last_run_started_at = None
             save_state(engine.state_path, initial_state)
         if engine.log_path.exists():
             engine.log_path.unlink()

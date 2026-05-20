@@ -4,7 +4,13 @@ from typing import Callable, Optional
 from .locks import DEFAULT_RUNNER_CMD_HINTS, assess_lock, process_matches_identity
 from .runner_process import build_runner_cmd, spawn_detached
 from .runtime import LockError, RuntimeContext
-from .state import RunnerState, load_state, now_iso, save_state, state_lock
+from .state import (
+    load_state,
+    runner_observed_lock_start,
+    runner_stale_running_to_error,
+    save_state,
+    state_lock,
+)
 
 SpawnRunnerFn = Callable[[list[str], RuntimeContext], object]
 
@@ -42,23 +48,7 @@ class ProcessRunnerController:
             state = load_state(self.ctx.state_path, durable=durable)
             if lock_pid:
                 if state.runner_pid != lock_pid or state.status != "running":
-                    new_state = RunnerState(
-                        last_run_id=state.last_run_id,
-                        status="running",
-                        last_exit_code=state.last_exit_code,
-                        last_run_started_at=state.last_run_started_at or now_iso(),
-                        last_run_finished_at=None,
-                        autorunner_agent_override=state.autorunner_agent_override,
-                        autorunner_model_overrides=state.autorunner_model_overrides,
-                        autorunner_effort_override=state.autorunner_effort_override,
-                        autorunner_approval_policy=state.autorunner_approval_policy,
-                        autorunner_sandbox_mode=state.autorunner_sandbox_mode,
-                        autorunner_workspace_write_network=state.autorunner_workspace_write_network,
-                        ticket_flow_require_commit=state.ticket_flow_require_commit,
-                        runner_pid=lock_pid,
-                        sessions=state.sessions,
-                        repo_to_session=state.repo_to_session,
-                    )
+                    new_state = runner_observed_lock_start(state, runner_pid=lock_pid)
                     save_state(self.ctx.state_path, new_state, durable=durable)
                 return
 
@@ -67,32 +57,7 @@ class ProcessRunnerController:
                 pid,
                 expected_cmd_substrings=DEFAULT_RUNNER_CMD_HINTS,
             ):
-                status = state.status
-                exit_code = state.last_exit_code
-                finished_at = state.last_run_finished_at
-                if status == "running":
-                    status = "error"
-                    if exit_code is None:
-                        exit_code = 1
-                    if finished_at is None:
-                        finished_at = now_iso()
-                new_state = RunnerState(
-                    last_run_id=state.last_run_id,
-                    status=status,
-                    last_exit_code=exit_code,
-                    last_run_started_at=state.last_run_started_at,
-                    last_run_finished_at=finished_at,
-                    autorunner_agent_override=state.autorunner_agent_override,
-                    autorunner_model_overrides=state.autorunner_model_overrides,
-                    autorunner_effort_override=state.autorunner_effort_override,
-                    autorunner_approval_policy=state.autorunner_approval_policy,
-                    autorunner_sandbox_mode=state.autorunner_sandbox_mode,
-                    autorunner_workspace_write_network=state.autorunner_workspace_write_network,
-                    ticket_flow_require_commit=state.ticket_flow_require_commit,
-                    runner_pid=None,
-                    sessions=state.sessions,
-                    repo_to_session=state.repo_to_session,
-                )
+                new_state = runner_stale_running_to_error(state)
                 save_state(self.ctx.state_path, new_state, durable=durable)
 
     def _ensure_unlocked(self) -> None:
@@ -120,26 +85,7 @@ class ProcessRunnerController:
         with state_lock(self.ctx.state_path):
             state = load_state(self.ctx.state_path, durable=durable)
             if state.status == "running" or state.runner_pid:
-                exit_code = state.last_exit_code
-                if exit_code is None:
-                    exit_code = 1
-                new_state = RunnerState(
-                    last_run_id=state.last_run_id,
-                    status="error" if state.status == "running" else state.status,
-                    last_exit_code=exit_code,
-                    last_run_started_at=state.last_run_started_at,
-                    last_run_finished_at=state.last_run_finished_at or now_iso(),
-                    autorunner_agent_override=state.autorunner_agent_override,
-                    autorunner_model_overrides=state.autorunner_model_overrides,
-                    autorunner_effort_override=state.autorunner_effort_override,
-                    autorunner_approval_policy=state.autorunner_approval_policy,
-                    autorunner_sandbox_mode=state.autorunner_sandbox_mode,
-                    autorunner_workspace_write_network=state.autorunner_workspace_write_network,
-                    ticket_flow_require_commit=state.ticket_flow_require_commit,
-                    runner_pid=None,
-                    sessions=state.sessions,
-                    repo_to_session=state.repo_to_session,
-                )
+                new_state = runner_stale_running_to_error(state)
                 save_state(self.ctx.state_path, new_state, durable=durable)
         return assessment
 

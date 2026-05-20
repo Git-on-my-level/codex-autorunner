@@ -467,7 +467,7 @@ class ChatSurfaceReadService:
                 _chat_index_row_from_projection(row)
                 for row in conn.execute(
                     f"""
-                    SELECT row_json
+                    SELECT row_json, effective_status
                       FROM orch_chat_index_projection
                      WHERE {where_sql}
                      ORDER BY sort_unread_priority DESC,
@@ -1162,7 +1162,7 @@ class ChatSurfaceReadService:
                     _chat_index_row_from_projection(row)
                     for row in conn.execute(
                         f"""
-                        SELECT row_json
+                        SELECT row_json, effective_status
                           FROM orch_chat_index_projection
                          WHERE {where_sql}
                          ORDER BY sort_unread_priority DESC,
@@ -1186,7 +1186,7 @@ class ChatSurfaceReadService:
                     _chat_index_row_from_projection(row)
                     for row in conn.execute(
                         f"""
-                        SELECT row_json
+                        SELECT row_json, effective_status
                           FROM orch_chat_index_projection
                          WHERE {where_sql}
                          ORDER BY sort_unread_priority DESC,
@@ -1202,7 +1202,7 @@ class ChatSurfaceReadService:
                         _chat_index_row_from_projection(row)
                         for row in conn.execute(
                             f"""
-                            SELECT row_json
+                            SELECT row_json, effective_status
                               FROM orch_chat_index_projection
                              WHERE {where_sql}
                              ORDER BY sort_unread_priority DESC,
@@ -2648,7 +2648,12 @@ def _chat_index_projection_params(
         str(row.get("search_text") or ""),
         int(sort_key.get("unread_priority") or 0),
         last_activity_desc,
-        json.dumps(dict(row), sort_keys=True, separators=(",", ":"), default=str),
+        json.dumps(
+            {**dict(row), "effective_status": _chat_index_effective_status(row)},
+            sort_keys=True,
+            separators=(",", ":"),
+            default=str,
+        ),
         source_signature,
         rebuilt_at,
     )
@@ -2659,7 +2664,16 @@ def _chat_index_row_from_projection(row: Mapping[str, Any]) -> dict[str, Any]:
         parsed = json.loads(str(row["row_json"]))
     except (KeyError, TypeError, json.JSONDecodeError):
         return {}
-    return parsed if isinstance(parsed, dict) else {}
+    if not isinstance(parsed, dict):
+        return {}
+    try:
+        effective_status_raw = row["effective_status"]
+    except (KeyError, IndexError, TypeError):
+        effective_status_raw = None
+    effective_status = _normalize_text(effective_status_raw)
+    if effective_status:
+        parsed["effective_status"] = effective_status
+    return parsed
 
 
 _CHAT_INDEX_NON_ARCHIVED_SQL = (

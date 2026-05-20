@@ -13,6 +13,7 @@ from codex_autorunner.core.orchestration import (
     ticket_flow_thread_metadata,
 )
 from codex_autorunner.core.orchestration.sqlite import open_orchestration_sqlite
+from codex_autorunner.core.pma_notification_store import PmaNotificationStore
 from codex_autorunner.server import create_hub_app
 from codex_autorunner.surfaces.web.read_model_contracts import (
     ChatDetailSnapshot,
@@ -430,6 +431,7 @@ def test_chat_index_contract_uses_terminal_thread_status_and_ticket_flow_metadat
     snapshot = load_read_model_contract(ChatIndexSnapshot, response.json())
     row = next(item for item in snapshot.rows if item.chat_id == thread_id)
     assert row.status == "idle"
+    assert row.effective_status == "idle"
     assert row.ticket_id == "TICKET-015"
     assert row.run_id == "run-015"
     assert row.group_id == "run:run-015"
@@ -511,6 +513,7 @@ def test_chat_index_contract_prioritizes_failed_runtime_over_running_lifecycle(
     snapshot = load_read_model_contract(ChatIndexSnapshot, response.json())
     row = next(item for item in snapshot.rows if item.chat_id == thread_id)
     assert row.status == "failed"
+    assert row.effective_status == "failed"
 
 
 def test_chat_detail_snapshot_contains_timeline_queue_and_cursor(hub_env) -> None:
@@ -653,7 +656,151 @@ def test_hub_read_models_chats_returns_web_contract_snapshot(hub_env) -> None:
     assert "chatId" in body["rows"][0]
     snapshot = load_read_model_contract(ChatIndexSnapshot, body)
     assert snapshot.rows[0].chat_id.startswith("thread-")
+    assert snapshot.rows[0].effective_status == snapshot.rows[0].status
     assert len(snapshot.rows) == 10
+
+
+def test_chat_index_contract_status_matches_backend_effective_statuses(
+    hub_env,
+) -> None:
+    for thread_id, runtime_status in (
+        ("thread-queued-contract", "idle"),
+        ("thread-running-contract", "running"),
+        ("thread-success-contract", "completed"),
+        ("thread-failed-contract", "failed"),
+        ("thread-archived-contract", "completed"),
+    ):
+        _insert_thread_row(
+            hub_env.hub_root,
+            thread_id=thread_id,
+            display_name=thread_id,
+            lifecycle_status=(
+                "archived" if thread_id == "thread-archived-contract" else "active"
+            ),
+            runtime_status=runtime_status,
+        )
+    SQLiteChatSurfaceEventJournal(hub_env.hub_root, durable=True).append_event(
+        idempotency_key="queued-contract",
+        event_type="queue.state_changed",
+        surface_kind="pma",
+        surface_key="thread-queued-contract",
+        managed_thread_id="thread-queued-contract",
+        repo_id="repo",
+        status="queued",
+    )
+    with open_orchestration_sqlite(
+        hub_env.hub_root, durable=True, migrate=True
+    ) as conn:
+        with conn:
+            conn.execute(
+                """
+                INSERT INTO orch_thread_executions (
+                    execution_id,
+                    thread_target_id,
+                    request_kind,
+                    status,
+                    created_at
+                ) VALUES (?, ?, ?, ?, ?)
+                """,
+                (
+                    "exec-queued-contract",
+                    "thread-queued-contract",
+                    "message",
+                    "queued",
+                    "2026-05-11T01:00:00Z",
+                ),
+            )
+    PmaNotificationStore(hub_env.hub_root).record_notification(
+        correlation_id="notification-contract",
+        source_kind="pma",
+        delivery_mode="direct",
+        surface_kind="discord",
+        surface_key="guild:alerts",
+        delivery_record_id="delivery-notification-contract",
+        repo_id="repo",
+        notification_id="notification-contract",
+    )
+
+    client = TestClient(create_hub_app(hub_env.hub_root))
+    response = client.get(
+        "/hub/read-models/chats", params={"filter": "all", "limit": 20}
+    )
+    response.raise_for_status()
+    snapshot = load_read_model_contract(
+        ChatIndexSnapshot,
+        response.json(),
+    )
+    rows = {row.chat_id: row for row in snapshot.rows}
+
+    expected = {
+        "thread-queued-contract": "waiting",
+        "thread-running-contract": "running",
+        "thread-success-contract": "idle",
+        "thread-failed-contract": "failed",
+    }
+    for chat_id, status in expected.items():
+        assert rows[chat_id].effective_status == status
+        assert rows[chat_id].status == status
+
+    archived_response = client.get(
+        "/hub/read-models/chats", params={"filter": "archived", "limit": 20}
+    )
+    archived_response.raise_for_status()
+    archived_snapshot = load_read_model_contract(
+        ChatIndexSnapshot,
+        archived_response.json(),
+    )
+    archived_rows = {row.chat_id: row for row in archived_snapshot.rows}
+    assert archived_rows["thread-archived-contract"].effective_status == "archived"
+    assert archived_rows["thread-archived-contract"].status == "archived"
+
+    external_response = client.get(
+        "/hub/read-models/chats", params={"filter": "external", "limit": 20}
+    )
+    external_response.raise_for_status()
+    external_snapshot = load_read_model_contract(
+        ChatIndexSnapshot,
+        external_response.json(),
+    )
+    notification_row = next(
+        row for row in external_snapshot.rows if row.chat_id.startswith("surface:")
+    )
+    assert notification_row.effective_status == "idle"
+    assert notification_row.status == "idle"
+
+
+def test_legacy_archived_chat_row_overrides_terminal_status(hub_env) -> None:
+    _insert_thread_row(
+        hub_env.hub_root,
+        thread_id="thread-legacy-archived-completed",
+        display_name="legacy archived completed",
+        lifecycle_status="archived",
+        runtime_status="completed",
+    )
+
+    client = TestClient(create_hub_app(hub_env.hub_root))
+    active_response = client.get(
+        "/hub/read-models/chats", params={"filter": "all", "limit": 20}
+    )
+    active_response.raise_for_status()
+    active_snapshot = load_read_model_contract(
+        ChatIndexSnapshot,
+        active_response.json(),
+    )
+    assert "thread-legacy-archived-completed" not in {
+        row.chat_id for row in active_snapshot.rows
+    }
+
+    archived_response = client.get(
+        "/hub/read-models/chats", params={"filter": "archived", "limit": 20}
+    )
+    archived_response.raise_for_status()
+    archived_snapshot = load_read_model_contract(
+        ChatIndexSnapshot,
+        archived_response.json(),
+    )
+    rows = {row.chat_id: row for row in archived_snapshot.rows}
+    assert rows["thread-legacy-archived-completed"].effective_status == "archived"
 
 
 def test_hub_read_models_chats_counters_cover_full_filtered_set(hub_env) -> None:

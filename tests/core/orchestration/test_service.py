@@ -2376,6 +2376,7 @@ async def test_record_execution_result_updates_execution_state(tmp_path: Path) -
 
     assert completed.status == "ok"
     assert completed.output_text == "Done"
+    assert completed.metadata["managed_turn_lifecycle_phase"] == "terminal_recorded"
 
 
 def test_builder_wraps_pma_store_with_default_catalog(tmp_path: Path) -> None:
