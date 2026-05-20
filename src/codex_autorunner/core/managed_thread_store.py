@@ -1444,6 +1444,51 @@ class ManagedThreadStore:
                         (normalized_backend_turn_id, managed_turn_id),
                     )
 
+    def update_turn_metadata(
+        self,
+        managed_turn_id: str,
+        metadata: dict[str, Any],
+    ) -> Optional[dict[str, Any]]:
+        metadata_patch = dict(metadata or {})
+        if not metadata_patch:
+            return None
+        with self._write_conn() as conn:
+            row = conn.execute(
+                """
+                SELECT *
+                  FROM orch_thread_executions
+                 WHERE execution_id = ?
+                """,
+                (managed_turn_id,),
+            ).fetchone()
+            if row is None:
+                return None
+            current_metadata = _json_loads_object(row["metadata_json"])
+            updated_metadata = dict(current_metadata)
+            updated_metadata.update(metadata_patch)
+            if updated_metadata == current_metadata:
+                return _execution_row_to_record(row)
+            with conn:
+                conn.execute(
+                    """
+                    UPDATE orch_thread_executions
+                       SET metadata_json = ?
+                     WHERE execution_id = ?
+                    """,
+                    (_json_dumps(updated_metadata), managed_turn_id),
+                )
+            updated = conn.execute(
+                """
+                SELECT *
+                  FROM orch_thread_executions
+                 WHERE execution_id = ?
+                """,
+                (managed_turn_id,),
+            ).fetchone()
+        if updated is None:
+            return None
+        return _execution_row_to_record(updated)
+
     def mark_turn_interrupted(self, managed_turn_id: str) -> bool:
         finished_at = now_iso()
         with self._write_conn() as conn:
@@ -1562,6 +1607,20 @@ class ManagedThreadStore:
                    AND execution_id = ?
                 """,
                 (managed_thread_id, managed_turn_id),
+            ).fetchone()
+        if row is None:
+            return None
+        return _execution_row_to_record(row)
+
+    def get_turn_by_id(self, managed_turn_id: str) -> Optional[dict[str, Any]]:
+        with self._read_conn() as conn:
+            row = conn.execute(
+                """
+                SELECT *
+                  FROM orch_thread_executions
+                 WHERE execution_id = ?
+                """,
+                (managed_turn_id,),
             ).fetchone()
         if row is None:
             return None

@@ -7,14 +7,22 @@ from typing import Any, Mapping, Optional
 from ..automation import AutomationEvent, AutomationRuleEngine, AutomationStore
 from ..car_context import CarContextProfile, normalize_car_context_profile
 from ..domain.refs import ScopeRef
+from ..logging_utils import log_event
 from ..managed_thread_store import ManagedThreadStore
 from .execution_result_coordinator import ExecutionResultCoordinator
 from .interfaces import ThreadExecutionStore
+from .managed_turn_lifecycle_contract import (
+    ManagedTurnLifecyclePhase,
+    ManagedTurnPhaseTransitionDecision,
+    ManagedTurnTerminalStatus,
+    plan_managed_turn_phase_transition,
+)
 from .models import ExecutionRecord, MessageRequestKind, ThreadTarget
 from .runtime_bindings import RuntimeThreadBinding
 from .thread_titles import choose_owned_thread_title
 
 logger = logging.getLogger(__name__)
+_MANAGED_TURN_LIFECYCLE_PHASE_KEY = "managed_turn_lifecycle_phase"
 
 
 def _notify_pma_lifecycle_automation_transition(
@@ -112,6 +120,7 @@ class ManagedThreadExecutionStore(ThreadExecutionStore):
             get_thread_target=self.get_thread_target,
             mark_turn_finished=self._store.mark_turn_finished,
             mark_turn_interrupted=self._store.mark_turn_interrupted,
+            advance_lifecycle_phase=self._advance_execution_lifecycle_phase,
             notify_transition=lambda payload: _notify_pma_lifecycle_automation_transition(
                 self._store.hub_root, payload
             ),
@@ -251,6 +260,12 @@ class ManagedThreadExecutionStore(ThreadExecutionStore):
         metadata: Optional[dict[str, Any]] = None,
         queue_payload: Optional[dict[str, Any]] = None,
     ) -> ExecutionRecord:
+        metadata_payload = dict(metadata or {})
+        initialized_lifecycle_phase = (
+            _MANAGED_TURN_LIFECYCLE_PHASE_KEY not in metadata_payload
+        )
+        if initialized_lifecycle_phase:
+            metadata_payload[_MANAGED_TURN_LIFECYCLE_PHASE_KEY] = "accepted"
         create_kwargs: dict[str, Any] = {
             "prompt": prompt,
             "request_kind": request_kind,
@@ -258,7 +273,7 @@ class ManagedThreadExecutionStore(ThreadExecutionStore):
             "model": model,
             "reasoning": reasoning,
             "client_turn_id": client_request_id,
-            "metadata": metadata,
+            "metadata": metadata_payload,
             "queue_payload": queue_payload,
         }
         try:
@@ -268,7 +283,14 @@ class ManagedThreadExecutionStore(ThreadExecutionStore):
                 raise
             create_kwargs.pop("metadata", None)
             created = self._store.create_turn(thread_target_id, **create_kwargs)
-        return _execution_record_from_store_row(created)
+        record = _execution_record_from_store_row(created)
+        if initialized_lifecycle_phase:
+            self._advance_execution_lifecycle_phase(
+                record.target_id,
+                record.execution_id,
+                to_phase="queued" if record.status == "queued" else "runtime_starting",
+            )
+        return self.get_execution(record.target_id, record.execution_id) or record
 
     def get_execution(
         self, thread_target_id: str, execution_id: str
@@ -346,7 +368,14 @@ class ManagedThreadExecutionStore(ThreadExecutionStore):
         if claimed is None:
             return None
         execution, payload = claimed
-        return _execution_record_from_store_row(execution), payload
+        record = _execution_record_from_store_row(execution)
+        self._advance_execution_lifecycle_phase(
+            record.target_id,
+            record.execution_id,
+            to_phase="runtime_starting",
+        )
+        refreshed = self.get_execution(record.target_id, record.execution_id) or record
+        return refreshed, payload
 
     def set_execution_backend_id(
         self,
@@ -360,6 +389,82 @@ class ManagedThreadExecutionStore(ThreadExecutionStore):
             backend_turn_id,
             confirmed_start=confirmed_start,
         )
+        record = self._get_execution_by_id(execution_id)
+        if record is None:
+            return
+        current_phase = str(
+            record.metadata.get(_MANAGED_TURN_LIFECYCLE_PHASE_KEY) or ""
+        ).strip()
+        if not confirmed_start and current_phase == "runtime_running":
+            return
+        if current_phase in {
+            "runtime_terminal_observed",
+            "terminal_recording",
+            "terminal_recorded",
+            "delivery_enqueued",
+            "side_effects_pending",
+            "side_effects_complete",
+        }:
+            return
+        self._advance_execution_lifecycle_phase(
+            record.target_id,
+            record.execution_id,
+            to_phase="runtime_running" if confirmed_start else "runtime_starting",
+        )
+
+    def _get_execution_by_id(self, execution_id: str) -> Optional[ExecutionRecord]:
+        getter = getattr(self._store, "get_turn_by_id", None)
+        if callable(getter):
+            record = getter(execution_id)
+            if record is not None:
+                return _execution_record_from_store_row(record)
+        return None
+
+    def _advance_execution_lifecycle_phase(
+        self,
+        thread_target_id: str,
+        execution_id: str,
+        *,
+        to_phase: ManagedTurnLifecyclePhase,
+        terminal_status: Optional[ManagedTurnTerminalStatus] = None,
+    ) -> ManagedTurnPhaseTransitionDecision:
+        execution = self.get_execution(thread_target_id, execution_id)
+        if execution is None:
+            raise KeyError(f"Execution '{execution_id}' is missing")
+        decision = plan_managed_turn_phase_transition(
+            managed_thread_id=thread_target_id,
+            execution_id=execution_id,
+            current_phase=execution.metadata.get(_MANAGED_TURN_LIFECYCLE_PHASE_KEY),
+            next_phase=to_phase,
+            terminal_status=terminal_status,
+        )
+        log_event(
+            logger,
+            logging.INFO if decision.action != "reject" else logging.WARNING,
+            "orchestration.thread.managed_turn_lifecycle_phase",
+            managed_thread_id=decision.managed_thread_id,
+            execution_id=decision.execution_id,
+            from_phase=decision.from_phase,
+            to_phase=decision.to_phase,
+            action=decision.action,
+            reason=decision.reason,
+            terminal_status=decision.terminal_status,
+        )
+        if decision.action == "reject":
+            raise RuntimeError(
+                "Illegal managed-turn lifecycle phase transition "
+                f"for execution '{execution_id}': "
+                f"{decision.from_phase!r} -> {decision.to_phase!r}"
+            )
+        if decision.should_persist:
+            updater = getattr(self._store, "update_turn_metadata", None)
+            if not callable(updater):
+                raise RuntimeError("PMA store cannot persist execution metadata")
+            updater(
+                execution_id,
+                {_MANAGED_TURN_LIFECYCLE_PHASE_KEY: decision.to_phase},
+            )
+        return decision
 
     def _notify_terminal_transition(
         self,

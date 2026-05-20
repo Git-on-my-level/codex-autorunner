@@ -25,6 +25,7 @@ def test_record_execution_result_persists_and_notifies_terminal_transition() -> 
     )
     finished_calls: list[dict[str, object]] = []
     transition_payloads: list[dict[str, object]] = []
+    phase_transitions: list[dict[str, object]] = []
 
     def mark_turn_finished(execution_id: str, **kwargs: object) -> bool:
         nonlocal execution
@@ -39,6 +40,15 @@ def test_record_execution_result_persists_and_notifies_terminal_transition() -> 
         mark_turn_interrupted=lambda _execution_id: True,
         notify_transition=lambda payload: transition_payloads.append(payload)
         or {"created": 1},
+        advance_lifecycle_phase=lambda thread_id, execution_id, **kwargs: (
+            phase_transitions.append(
+                {
+                    "thread_id": thread_id,
+                    "execution_id": execution_id,
+                    **kwargs,
+                }
+            )
+        ),
     ).record_execution_result(
         "thread-1",
         "exec-1",
@@ -64,6 +74,16 @@ def test_record_execution_result_persists_and_notifies_terminal_transition() -> 
     assert transition_payloads[0]["resource_kind"] == "ticket"
     assert transition_payloads[0]["resource_id"] == "TICKET-005"
     assert transition_payloads[0]["agent"] == "codex"
+    assert [call["to_phase"] for call in phase_transitions] == [
+        "runtime_terminal_observed",
+        "terminal_recording",
+        "terminal_recorded",
+    ]
+    assert [call["terminal_status"] for call in phase_transitions] == [
+        "ok",
+        "ok",
+        "ok",
+    ]
 
 
 def test_terminal_transition_retry_recovers_transient_notify_failure() -> None:
@@ -114,11 +134,16 @@ def test_record_execution_interrupted_is_idempotent_without_duplicate_notify() -
     )
     interrupted_results = [True, False]
     transition_payloads: list[dict[str, object]] = []
+    phase_transitions: list[dict[str, object]] = []
 
     def mark_turn_interrupted(_execution_id: str) -> bool:
         nonlocal execution
         updated = interrupted_results.pop(0)
-        execution = replace(execution, status="interrupted")
+        execution = replace(
+            execution,
+            status="interrupted",
+            metadata={"managed_turn_lifecycle_phase": "terminal_recorded"},
+        )
         return updated
 
     coordinator = ExecutionResultCoordinator(
@@ -128,6 +153,15 @@ def test_record_execution_interrupted_is_idempotent_without_duplicate_notify() -
         mark_turn_interrupted=mark_turn_interrupted,
         notify_transition=lambda payload: transition_payloads.append(payload)
         or {"created": 1},
+        advance_lifecycle_phase=lambda thread_id, execution_id, **kwargs: (
+            phase_transitions.append(
+                {
+                    "thread_id": thread_id,
+                    "execution_id": execution_id,
+                    **kwargs,
+                }
+            )
+        ),
     )
 
     first = coordinator.record_execution_interrupted("thread-1", "exec-1")
@@ -138,6 +172,46 @@ def test_record_execution_interrupted_is_idempotent_without_duplicate_notify() -
     assert len(transition_payloads) == 1
     assert transition_payloads[0]["to_state"] == "interrupted"
     assert transition_payloads[0]["event_type"] == "managed_thread_interrupted"
+    assert [call["to_phase"] for call in phase_transitions] == [
+        "runtime_terminal_observed",
+        "terminal_recording",
+        "terminal_recorded",
+    ]
+
+
+def test_record_execution_result_handles_conflicting_duplicate_without_rewrite() -> (
+    None
+):
+    execution = ExecutionRecord(
+        execution_id="exec-1",
+        target_id="thread-1",
+        target_kind="thread",
+        status="ok",
+        metadata={"managed_turn_lifecycle_phase": "terminal_recorded"},
+    )
+    finished_calls: list[str] = []
+    transition_payloads: list[dict[str, object]] = []
+
+    result = ExecutionResultCoordinator(
+        get_execution=lambda _thread_id, _execution_id: execution,
+        get_thread_target=lambda _thread_id: None,
+        mark_turn_finished=lambda execution_id, **_kwargs: finished_calls.append(
+            execution_id
+        )
+        or True,
+        mark_turn_interrupted=lambda _execution_id: True,
+        notify_transition=lambda payload: transition_payloads.append(payload)
+        or {"created": 1},
+    ).record_execution_result(
+        "thread-1",
+        "exec-1",
+        status="error",
+        error="late failure",
+    )
+
+    assert result.status == "ok"
+    assert finished_calls == []
+    assert transition_payloads == []
 
 
 def test_terminal_transition_maps_unknown_status_to_failed() -> None:
