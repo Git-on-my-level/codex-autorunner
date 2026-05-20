@@ -152,6 +152,27 @@ def test_runner_lifecycle_transitions_are_named_and_validated(tmp_path):
     assert reset.runner_pid is None
 
 
+def test_runner_observed_lock_refreshes_started_at() -> None:
+    state = RunnerState(
+        last_run_id=None,
+        status="error",
+        last_exit_code=1,
+        last_run_started_at="2026-01-01T00:00:00Z",
+        last_run_finished_at="2026-01-01T00:10:00Z",
+    )
+
+    running = runner_observed_lock_start(
+        state,
+        runner_pid=456,
+        now="2026-01-02T00:00:00Z",
+    )
+
+    assert running.status == "running"
+    assert running.runner_pid == 456
+    assert running.last_run_started_at == "2026-01-02T00:00:00Z"
+    assert running.last_run_finished_at is None
+
+
 def test_unknown_runner_status_rejected_on_save_and_load(tmp_path):
     state_path = tmp_path / "state.sqlite3"
     state = RunnerState(

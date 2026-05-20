@@ -140,6 +140,14 @@ def plan_reaction_lifecycle_transition(
     )
 
 
+def _required_previous_reaction_state(plan: ScmReactionLifecyclePlan) -> str:
+    if plan.previous_state is None:
+        raise RuntimeError(
+            "SCM reaction lifecycle previous state is required for update"
+        )
+    return plan.previous_state.value
+
+
 def reaction_state_kind(*, reaction_kind: str, operation_kind: str) -> str:
     if reaction_kind != "review_comment":
         return reaction_kind
@@ -531,7 +539,7 @@ class ScmReactionStateStore:
                 current_state=str(row["state"]) if row is not None else None,
             )
             if row is None:
-                conn.execute(
+                cursor = conn.execute(
                     """
                     INSERT INTO orch_reaction_state (
                         binding_id,
@@ -571,7 +579,7 @@ class ScmReactionStateStore:
                 )
             else:
                 merged_metadata = self._merge_metadata(row, metadata_object)
-                conn.execute(
+                cursor = conn.execute(
                     """
                     UPDATE orch_reaction_state
                        SET state = ?,
@@ -589,6 +597,7 @@ class ScmReactionStateStore:
                      WHERE binding_id = ?
                        AND reaction_kind = ?
                        AND fingerprint = ?
+                       AND state = ?
                     """,
                     (
                         plan.state.value,
@@ -602,8 +611,21 @@ class ScmReactionStateStore:
                         normalized_binding_id,
                         normalized_reaction_kind,
                         normalized_fingerprint,
+                        _required_previous_reaction_state(plan),
                     ),
                 )
+                if cursor.rowcount == 0:
+                    refreshed = self._load_reaction_state_row(
+                        conn,
+                        binding_id=normalized_binding_id,
+                        reaction_kind=normalized_reaction_kind,
+                        fingerprint=normalized_fingerprint,
+                    )
+                    if refreshed is None:
+                        raise RuntimeError(
+                            "reaction state row missing after stale emission"
+                        )
+                    return _state_from_row(refreshed)
             refreshed = self._load_reaction_state_row(
                 conn,
                 binding_id=normalized_binding_id,
@@ -648,7 +670,7 @@ class ScmReactionStateStore:
                 current_state=str(row["state"]) if row is not None else None,
             )
             if row is None:
-                conn.execute(
+                cursor = conn.execute(
                     """
                     INSERT INTO orch_reaction_state (
                         binding_id,
@@ -687,7 +709,7 @@ class ScmReactionStateStore:
                 )
             else:
                 merged_metadata = self._merge_metadata(row, metadata_object)
-                conn.execute(
+                cursor = conn.execute(
                     """
                     UPDATE orch_reaction_state
                        SET state = ?,
@@ -701,6 +723,7 @@ class ScmReactionStateStore:
                      WHERE binding_id = ?
                        AND reaction_kind = ?
                        AND fingerprint = ?
+                       AND state = ?
                     """,
                     (
                         plan.state.value,
@@ -713,8 +736,21 @@ class ScmReactionStateStore:
                         normalized_binding_id,
                         normalized_reaction_kind,
                         normalized_fingerprint,
+                        _required_previous_reaction_state(plan),
                     ),
                 )
+                if cursor.rowcount == 0:
+                    refreshed = self._load_reaction_state_row(
+                        conn,
+                        binding_id=normalized_binding_id,
+                        reaction_kind=normalized_reaction_kind,
+                        fingerprint=normalized_fingerprint,
+                    )
+                    if refreshed is None:
+                        raise RuntimeError(
+                            "reaction state row missing after stale delivery failure"
+                        )
+                    return _state_from_row(refreshed)
             refreshed = self._load_reaction_state_row(
                 conn,
                 binding_id=normalized_binding_id,
@@ -763,7 +799,7 @@ class ScmReactionStateStore:
                 current_state=str(row["state"]),
             )
             merged_metadata = self._merge_metadata(row, metadata_object)
-            conn.execute(
+            cursor = conn.execute(
                 """
                 UPDATE orch_reaction_state
                    SET state = ?,
@@ -778,6 +814,7 @@ class ScmReactionStateStore:
                  WHERE binding_id = ?
                    AND reaction_kind = ?
                    AND fingerprint = ?
+                   AND state = ?
                 """,
                 (
                     plan.state.value,
@@ -790,8 +827,21 @@ class ScmReactionStateStore:
                     normalized_binding_id,
                     normalized_reaction_kind,
                     normalized_fingerprint,
+                    _required_previous_reaction_state(plan),
                 ),
             )
+            if cursor.rowcount == 0:
+                refreshed = self._load_reaction_state_row(
+                    conn,
+                    binding_id=normalized_binding_id,
+                    reaction_kind=normalized_reaction_kind,
+                    fingerprint=normalized_fingerprint,
+                )
+                if refreshed is None:
+                    raise RuntimeError(
+                        "reaction state row missing after stale delivery success"
+                    )
+                return _state_from_row(refreshed)
             refreshed = self._load_reaction_state_row(
                 conn,
                 binding_id=normalized_binding_id,
@@ -836,7 +886,7 @@ class ScmReactionStateStore:
                 current_state=str(row["state"]) if row is not None else None,
             )
             if row is None:
-                conn.execute(
+                cursor = conn.execute(
                     """
                     INSERT INTO orch_reaction_state (
                         binding_id,
@@ -874,7 +924,7 @@ class ScmReactionStateStore:
                 )
             else:
                 merged_metadata = self._merge_metadata(row, metadata_object)
-                conn.execute(
+                cursor = conn.execute(
                     """
                     UPDATE orch_reaction_state
                        SET state = ?,
@@ -882,10 +932,12 @@ class ScmReactionStateStore:
                            last_event_id = ?,
                            updated_at = ?,
                            resolved_at = ?,
+                           last_error_text = NULL,
                            metadata_json = ?
                      WHERE binding_id = ?
                        AND reaction_kind = ?
                        AND fingerprint = ?
+                       AND state = ?
                     """,
                     (
                         plan.state.value,
@@ -897,8 +949,21 @@ class ScmReactionStateStore:
                         normalized_binding_id,
                         normalized_reaction_kind,
                         normalized_fingerprint,
+                        _required_previous_reaction_state(plan),
                     ),
                 )
+                if cursor.rowcount == 0:
+                    refreshed = self._load_reaction_state_row(
+                        conn,
+                        binding_id=normalized_binding_id,
+                        reaction_kind=normalized_reaction_kind,
+                        fingerprint=normalized_fingerprint,
+                    )
+                    if refreshed is None:
+                        raise RuntimeError(
+                            "reaction state row missing after stale resolve"
+                        )
+                    return _state_from_row(refreshed)
             refreshed = self._load_reaction_state_row(
                 conn,
                 binding_id=normalized_binding_id,

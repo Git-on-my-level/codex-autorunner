@@ -245,7 +245,7 @@ def runner_observed_lock_start(
             RunnerLifecycleStatus.RUNNING,
             reason="observed_lock_start",
         ),
-        last_run_started_at=state.last_run_started_at or timestamp,
+        last_run_started_at=timestamp,
         last_run_finished_at=None,
         runner_pid=runner_pid,
     )
@@ -269,8 +269,7 @@ def runner_stale_running_to_error(
             RunnerLifecycleStatus.ERROR,
             reason="stale_running_to_error_recovery",
         )
-        if exit_code is None:
-            exit_code = 1
+        exit_code = 1
         if finished_at is None:
             finished_at = timestamp
     return dataclasses.replace(

@@ -769,6 +769,40 @@ def test_chat_index_contract_status_matches_backend_effective_statuses(
     assert notification_row.status == "idle"
 
 
+def test_legacy_archived_chat_row_overrides_terminal_status(hub_env) -> None:
+    _insert_thread_row(
+        hub_env.hub_root,
+        thread_id="thread-legacy-archived-completed",
+        display_name="legacy archived completed",
+        lifecycle_status="archived",
+        runtime_status="completed",
+    )
+
+    client = TestClient(create_hub_app(hub_env.hub_root))
+    active_response = client.get(
+        "/hub/read-models/chats", params={"filter": "all", "limit": 20}
+    )
+    active_response.raise_for_status()
+    active_snapshot = load_read_model_contract(
+        ChatIndexSnapshot,
+        active_response.json(),
+    )
+    assert "thread-legacy-archived-completed" not in {
+        row.chat_id for row in active_snapshot.rows
+    }
+
+    archived_response = client.get(
+        "/hub/read-models/chats", params={"filter": "archived", "limit": 20}
+    )
+    archived_response.raise_for_status()
+    archived_snapshot = load_read_model_contract(
+        ChatIndexSnapshot,
+        archived_response.json(),
+    )
+    rows = {row.chat_id: row for row in archived_snapshot.rows}
+    assert rows["thread-legacy-archived-completed"].effective_status == "archived"
+
+
 def test_hub_read_models_chats_counters_cover_full_filtered_set(hub_env) -> None:
     _seed_thread_rows(hub_env.hub_root, 30)
     client = TestClient(create_hub_app(hub_env.hub_root))

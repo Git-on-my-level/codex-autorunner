@@ -214,6 +214,53 @@ def test_record_execution_result_handles_conflicting_duplicate_without_rewrite()
     assert transition_payloads == []
 
 
+def test_record_execution_result_backfills_duplicate_terminal_phase() -> None:
+    execution = ExecutionRecord(
+        execution_id="exec-1",
+        target_id="thread-1",
+        target_kind="thread",
+        status="ok",
+        metadata={"managed_turn_lifecycle_phase": "runtime_terminal_observed"},
+    )
+    finished_calls: list[str] = []
+    transition_payloads: list[dict[str, object]] = []
+    phase_transitions: list[dict[str, object]] = []
+
+    def advance_lifecycle_phase(
+        _thread_id: str, _execution_id: str, **kwargs: object
+    ) -> None:
+        nonlocal execution
+        phase_transitions.append(dict(kwargs))
+        execution = replace(
+            execution,
+            metadata={"managed_turn_lifecycle_phase": str(kwargs["to_phase"])},
+        )
+
+    result = ExecutionResultCoordinator(
+        get_execution=lambda _thread_id, _execution_id: execution,
+        get_thread_target=lambda _thread_id: None,
+        mark_turn_finished=lambda execution_id, **_kwargs: finished_calls.append(
+            execution_id
+        )
+        or True,
+        mark_turn_interrupted=lambda _execution_id: True,
+        notify_transition=lambda payload: transition_payloads.append(payload)
+        or {"created": 1},
+        advance_lifecycle_phase=advance_lifecycle_phase,
+    ).record_execution_result(
+        "thread-1",
+        "exec-1",
+        status="ok",
+    )
+
+    assert result.status == "ok"
+    assert result.metadata["managed_turn_lifecycle_phase"] == "terminal_recorded"
+    assert finished_calls == []
+    assert [call["to_phase"] for call in phase_transitions] == ["terminal_recorded"]
+    assert len(transition_payloads) == 1
+    assert transition_payloads[0]["to_state"] == "completed"
+
+
 def test_terminal_transition_maps_unknown_status_to_failed() -> None:
     transition = build_terminal_transition(
         thread_target_id="thread-1",

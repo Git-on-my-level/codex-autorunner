@@ -556,3 +556,60 @@ def test_succeeded_operation_cannot_be_rewound_to_failed_or_effect_applied(
         is None
     )
     assert store.get_operation(created.operation_id).state == "succeeded"
+
+
+def test_mark_succeeded_rolls_back_attempt_when_operation_update_is_stale(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store = PublishJournalStore(tmp_path)
+    created, _ = store.create_operation(
+        operation_key="github:comment:stale-terminal",
+        operation_kind="github_comment",
+        payload={"body": "hello"},
+        next_attempt_at="2026-03-25T00:00:00Z",
+    )
+    store.claim_pending_operations(now_timestamp="2026-03-25T00:30:00Z")
+    original_load_operation_row = store._load_operation_row
+
+    def fake_running_operation_row(conn, operation_id: str):
+        row = original_load_operation_row(conn, operation_id)
+        if row is None:
+            return None
+        return {**dict(row), "state": "running"}
+
+    with open_orchestration_sqlite(tmp_path) as conn:
+        conn.execute(
+            """
+            UPDATE orch_publish_operations
+               SET state = 'pending'
+             WHERE operation_id = ?
+            """,
+            (created.operation_id,),
+        )
+    monkeypatch.setattr(store, "_load_operation_row", fake_running_operation_row)
+
+    assert store.mark_succeeded(created.operation_id, response={"ok": True}) is None
+
+    monkeypatch.setattr(store, "_load_operation_row", original_load_operation_row)
+    with open_orchestration_sqlite(tmp_path) as conn:
+        operation = conn.execute(
+            """
+            SELECT state
+              FROM orch_publish_operations
+             WHERE operation_id = ?
+            """,
+            (created.operation_id,),
+        ).fetchone()
+        attempt = conn.execute(
+            """
+            SELECT state
+              FROM orch_publish_attempts
+             WHERE operation_id = ?
+            """,
+            (created.operation_id,),
+        ).fetchone()
+    assert operation is not None
+    assert attempt is not None
+    assert operation["state"] == "pending"
+    assert attempt["state"] == "claimed"

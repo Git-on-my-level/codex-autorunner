@@ -35,6 +35,28 @@ def test_reconcile_clears_stale_runner_pid(repo: Path, monkeypatch) -> None:
     assert updated.last_run_finished_at is not None
 
 
+def test_reconcile_stale_runner_overwrites_success_exit_code(
+    repo: Path, monkeypatch
+) -> None:
+    engine = RuntimeContext(repo)
+    state = load_state(engine.state_path)
+    state.status = "running"
+    state.runner_pid = 99999
+    state.last_exit_code = 0
+    save_state(engine.state_path, state)
+
+    monkeypatch.setattr(
+        "codex_autorunner.core.runner_controller.process_matches_identity",
+        lambda _pid, **_kwargs: False,
+    )
+
+    ProcessRunnerController(engine).reconcile()
+
+    updated = load_state(engine.state_path)
+    assert updated.status == "error"
+    assert updated.last_exit_code == 1
+
+
 def test_reconcile_marks_observed_lock_as_running(repo: Path, monkeypatch) -> None:
     engine = RuntimeContext(repo)
     engine.lock_path.write_text(json.dumps({"pid": 24680}), encoding="utf-8")

@@ -413,6 +413,7 @@ def test_reaction_state_store_tracks_failure_and_resolution_transitions(
 
     assert resolved.state == "resolved"
     assert resolved.resolved_at is not None
+    assert resolved.last_error_text is None
     assert (
         store.should_emit_reaction(
             binding_id="binding-1",
