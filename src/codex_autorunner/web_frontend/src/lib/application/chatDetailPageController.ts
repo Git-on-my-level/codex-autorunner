@@ -37,6 +37,11 @@ type ChatIndexSessionState = {
 
 export type ChatDetailPageIndexSession = {
   state: Readable<ChatIndexSessionState>;
+  activate: (activation: {
+    primaryRequest?: ChatIndexWindowRequest;
+    companionRequests?: ChatIndexWindowRequest[];
+    refresh?: boolean;
+  }) => Promise<void>;
   start: () => void;
   stop: () => void;
   refresh: (request?: ChatIndexWindowRequest) => Promise<void>;
@@ -137,7 +142,11 @@ export class ChatDetailPageController {
     this.ticketRunGroupRequest = input.ticketRunGroupRequest;
     this.unsubscribeReadModels = this.deps.readModelStore.subscribe((state) => this.handleReadModelState(state));
     this.unsubscribeChatIndexSession = this.deps.chatIndexSession.state.subscribe((session) => this.handleIndexSessionState(session));
-    this.deps.chatIndexSession.setCompanionRequests([this.ticketRunGroupRequest]);
+    void this.deps.chatIndexSession.activate({
+      primaryRequest: this.currentRequest,
+      companionRequests: [this.ticketRunGroupRequest],
+      refresh: false
+    });
     this.deps.chatIndexSession.start();
     this.deps.onPinnedChatsLoaded(loadPinnedChats());
     const initialDraft = input.route.searchParams.get('draft');
@@ -166,7 +175,7 @@ export class ChatDetailPageController {
     if (this.filterRefreshTimer) this.timers.clearTimeout(this.filterRefreshTimer);
     this.filterRefreshTimer = this.timers.setTimeout(() => {
       this.filterRefreshTimer = null;
-      void this.deps.chatIndexSession.refresh(request);
+      void this.deps.chatIndexSession.activate({ primaryRequest: request });
     }, 180);
   }
 
@@ -213,7 +222,7 @@ export class ChatDetailPageController {
     this.unsubscribeReadModels?.();
     this.unsubscribeChatIndexSession?.();
     this.deps.chatIndexSession.stop();
-    this.deps.chatIndexSession.setCompanionRequests([]);
+    void this.deps.chatIndexSession.activate({ companionRequests: [], refresh: false });
     if (this.filterRefreshTimer) this.timers.clearTimeout(this.filterRefreshTimer);
     this.stopActiveClock();
     this.deps.liveProjection.close();

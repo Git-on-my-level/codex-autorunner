@@ -230,6 +230,70 @@ describe('chat index session', () => {
     }));
   });
 
+  it('replaces the chat-index entity stream exactly once when activation changes its canonical request', async () => {
+    const store = new ReadModelEntityStore();
+    const client = mockClient();
+    const streams: ReadModelStreamManager<ChatIndexPatchEvent>[] = [];
+    const streamFactory = vi.fn((options: ReadModelStreamOptions<ChatIndexPatchEvent>) => {
+      const manager = {
+        open: vi.fn(),
+        close: vi.fn(),
+        cursor: vi.fn(() => null),
+        resetCursor: vi.fn(),
+        options
+      } as unknown as ReadModelStreamManager<ChatIndexPatchEvent>;
+      streams.push(manager);
+      return manager;
+    }) as ReturnType<typeof vi.fn> & ChatIndexStreamFactory;
+    const session = createChatIndexSession({ client, store, streamFactory });
+
+    session.start();
+    await session.refresh({ filter: 'all', limit: 50 });
+    await session.activate({ primaryRequest: { filter: 'archived', limit: 50 } });
+
+    expect(streamFactory).toHaveBeenCalledTimes(2);
+    expect(streamFactory).toHaveBeenNthCalledWith(1, expect.objectContaining({
+      path: '/hub/read-models/chats/patches?filter=all'
+    }));
+    expect(streamFactory).toHaveBeenNthCalledWith(2, expect.objectContaining({
+      path: '/hub/read-models/chats/patches?filter=archived'
+    }));
+    expect(streams[0]?.close).toHaveBeenCalledTimes(1);
+    expect(client.chatIndex).toHaveBeenLastCalledWith({ filter: 'archived', limit: 50 });
+  });
+
+  it('does not churn stream or refresh snapshots for a no-op activation', async () => {
+    const store = new ReadModelEntityStore();
+    const client = mockClient();
+    const streamFactory = mockStreamFactory();
+    const session = createChatIndexSession({ client, store, streamFactory });
+
+    session.start();
+    await session.refresh({ filter: 'all', limit: 50 });
+    await session.activate({ primaryRequest: { filter: 'all', limit: 50 } });
+
+    expect(streamFactory).toHaveBeenCalledTimes(1);
+    expect(client.chatIndex).toHaveBeenCalledTimes(1);
+  });
+
+  it('refreshes changed companion requests without replacing the active stream', async () => {
+    const store = new ReadModelEntityStore();
+    const client = mockClient();
+    const streamFactory = mockStreamFactory();
+    const session = createChatIndexSession({ client, store, streamFactory });
+
+    session.start();
+    await session.refresh({ filter: 'all', limit: 50 });
+    await session.activate({
+      companionRequests: [{ filter: 'ticket_runs', groupBy: 'ticket_run', limit: 50 }]
+    });
+
+    expect(streamFactory).toHaveBeenCalledTimes(1);
+    expect(client.chatIndex).toHaveBeenCalledTimes(3);
+    expect(client.chatIndex).toHaveBeenNthCalledWith(2, { filter: 'all', limit: 50 });
+    expect(client.chatIndex).toHaveBeenNthCalledWith(3, { filter: 'ticket_runs', groupBy: 'ticket_run', limit: 50 });
+  });
+
   it('refreshes companion ticket-run aggregate windows with the primary chat index', async () => {
     const store = new ReadModelEntityStore();
     const client = {
@@ -379,6 +443,7 @@ describe('chat index session', () => {
     } as unknown as ReadModelSnapshotClient;
     const session = createChatIndexSession({ client, store, streamFactory });
 
+    await session.activate({ primaryRequest: { filter: 'all', limit: 2 }, refresh: false });
     session.start();
     await session.refresh({ filter: 'all', limit: 2 });
     expect(streamOptions).not.toBeNull();

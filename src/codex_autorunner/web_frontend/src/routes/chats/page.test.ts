@@ -223,9 +223,10 @@ describe('/chats page', () => {
 
     expect(source).toContain('ticketRunGroupRequest');
     expect(source).toContain('createChatDetailPageController');
-    expect(controllerSource).toContain('this.deps.chatIndexSession.setCompanionRequests([this.ticketRunGroupRequest])');
-    expect(controllerSource).toMatch(/setCompanionRequests\(\[this\.ticketRunGroupRequest\]\);[\s\S]*this\.deps\.chatIndexSession\.start\(\);/);
-    expect(controllerSource).toMatch(/this\.deps\.chatIndexSession\.stop\(\);[\s\S]*this\.deps\.chatIndexSession\.setCompanionRequests\(\[\]\);/);
+    expect(controllerSource).toContain('this.deps.chatIndexSession.activate({');
+    expect(controllerSource).toContain('companionRequests: [this.ticketRunGroupRequest]');
+    expect(controllerSource).toMatch(/activate\(\{[\s\S]*refresh: false[\s\S]*\}\);[\s\S]*this\.deps\.chatIndexSession\.start\(\);/);
+    expect(controllerSource).toMatch(/this\.deps\.chatIndexSession\.stop\(\);[\s\S]*activate\(\{ companionRequests: \[\], refresh: false \}\);/);
   });
 
   it('does not render legacy ticket-run grouping when current snapshots have no backend groups', () => {
