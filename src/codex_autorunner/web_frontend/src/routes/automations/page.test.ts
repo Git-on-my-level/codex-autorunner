@@ -50,6 +50,8 @@ describe('/automations page', () => {
 
     expect(source).toContain('webApi.hub.getAutomationWorkspace()');
     expect(source).toContain('targetOptions = automationResult.data.targetOptions');
+    expect(source).toContain("const presetTargetOptions = $derived(targetOptions.filter((option) => option.kind === 'repo'))");
+    expect(source).toContain('{#each presetTargetOptions as repo}');
     expect(source).toContain('void hydrateAgentCatalog()');
     expect(source).toContain('Loading agent controls');
     expect(source).not.toContain('webApi.hub.listRepos()');

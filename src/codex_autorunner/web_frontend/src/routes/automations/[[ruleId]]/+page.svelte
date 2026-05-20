@@ -72,6 +72,7 @@
   const userAutomations = $derived(automations.filter((automation) => !isManagedAutomation(automation)));
   const managedAutomations = $derived(automations.filter(isManagedAutomation));
   const routeRuleId = $derived(decodeURIComponent(page.params.ruleId ?? ''));
+  const presetTargetOptions = $derived(targetOptions.filter((option) => option.kind === 'repo'));
   const selectedRepo = $derived(targetOptions.find((repo) => repo.id === selectedRepoId) ?? null);
   const scheduleTimeValue = $derived(`${pad(detailHour)}:${pad(detailMinute)}`);
 
@@ -90,7 +91,7 @@
       overview = automationResult.data;
       targetOptions = automationResult.data.targetOptions;
       if (!selectedRepoId) {
-        selectedRepoId = targetOptions.find((option) => !option.disabled)?.id ?? targetOptions[0]?.id ?? '';
+        selectedRepoId = presetTargetOptions.find((option) => !option.disabled)?.id ?? presetTargetOptions[0]?.id ?? '';
       }
       defaultAgentId = automationResult.data.agentDefaults.defaultAgent;
       defaultProfile = automationResult.data.agentDefaults.defaultProfile ?? '';
@@ -993,7 +994,7 @@
             <label class="field">
               <span>Repo</span>
               <select bind:value={selectedRepoId}>
-                {#each targetOptions as repo}
+                {#each presetTargetOptions as repo}
                   <option value={repo.id} disabled={repo.disabled}>{repo.label || repo.id}</option>
                 {/each}
               </select>
