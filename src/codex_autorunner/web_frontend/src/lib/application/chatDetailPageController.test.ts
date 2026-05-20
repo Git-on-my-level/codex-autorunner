@@ -36,7 +36,11 @@ describe('ChatDetailPageController', () => {
     await Promise.resolve();
     await Promise.resolve();
 
-    expect(harness.session.setCompanionRequests).toHaveBeenCalledWith([{ filter: 'ticket_runs', groupBy: 'ticket_run', limit: 50 }]);
+    expect(harness.session.activate).toHaveBeenCalledWith({
+      primaryRequest: { filter: 'all', limit: 50 },
+      companionRequests: [{ filter: 'ticket_runs', groupBy: 'ticket_run', limit: 50 }],
+      refresh: false
+    });
     expect(harness.session.start).toHaveBeenCalledTimes(1);
     expect(harness.loadingChats.at(-1)).toBe(false);
     expect(harness.sessionState.activeChatId).toBe('chat-1');
@@ -60,10 +64,10 @@ describe('ChatDetailPageController', () => {
     const request: ChatIndexWindowRequest = { filter: 'archived', query: 'old', limit: 50 };
 
     harness.controller.setIndexRequest(request);
-    expect(harness.session.refresh).not.toHaveBeenCalled();
+    expect(harness.session.activate).not.toHaveBeenCalled();
     vi.advanceTimersByTime(180);
 
-    expect(harness.session.refresh).toHaveBeenCalledWith(request);
+    expect(harness.session.activate).toHaveBeenCalledWith({ primaryRequest: request });
   });
 
   it('selects the active chat replacement when the current chat is archived out of the active window', () => {
@@ -106,7 +110,7 @@ describe('ChatDetailPageController', () => {
 
     expect(harness.clockTicks).toEqual([1000, 2000]);
     expect(harness.session.stop).toHaveBeenCalledTimes(1);
-    expect(harness.session.setCompanionRequests).toHaveBeenLastCalledWith([]);
+    expect(harness.session.activate).toHaveBeenLastCalledWith({ companionRequests: [], refresh: false });
     expect(harness.liveProjection.close).toHaveBeenCalledTimes(1);
   });
 });
@@ -117,6 +121,7 @@ function createHarness(options: { now?: () => number } = {}) {
   const indexState = writable({ status: 'idle' as const, error: null as ApiError | null });
   const session = {
     state: indexState,
+    activate: vi.fn(async () => undefined),
     start: vi.fn(),
     stop: vi.fn(),
     refresh: vi.fn(async () => undefined),

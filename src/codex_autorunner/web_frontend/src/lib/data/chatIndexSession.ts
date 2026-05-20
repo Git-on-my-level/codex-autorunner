@@ -19,11 +19,18 @@ export type ChatIndexSessionState = {
 
 export type ChatIndexSession = {
   state: Readable<ChatIndexSessionState>;
+  activate: (activation: ChatIndexSessionActivation) => Promise<void>;
   start: () => void;
   stop: () => void;
   refresh: (request?: ChatIndexRequest) => Promise<void>;
   setCompanionRequests: (requests: ChatIndexRequest[]) => void;
   isStarted: () => boolean;
+};
+
+export type ChatIndexSessionActivation = {
+  primaryRequest?: ChatIndexRequest;
+  companionRequests?: ChatIndexRequest[];
+  refresh?: boolean;
 };
 
 type ChatIndexSessionDeps = {
@@ -42,11 +49,26 @@ export function createChatIndexSession(deps: ChatIndexSessionDeps = {}): ChatInd
   let refreshPromise: Promise<void> | null = null;
   let started = false;
   let stream: ReadModelStreamManager<ChatIndexPatchEvent> | null = null;
-  let currentRequest: ChatIndexRequest = { filter: 'all', limit: 50 };
+  let activeRequest: ChatIndexRequest = { filter: 'all', limit: 50 };
+  let refreshRequest: ChatIndexRequest = { filter: 'all', limit: 50 };
+  let streamRequest: ChatIndexRequest | null = null;
   let companionRequests: ChatIndexRequest[] = [];
   let inFlightRequest: ChatIndexRequest | null = null;
   let inFlightCompanionRequests: ChatIndexRequest[] = [];
   let refreshAgain = false;
+
+  async function activate(activation: ChatIndexSessionActivation): Promise<void> {
+    const nextPrimary = activation.primaryRequest ? normalizedChatIndexRequest(activation.primaryRequest) : activeRequest;
+    const nextCompanions = activation.companionRequests ? uniqueChatIndexRequests(activation.companionRequests) : companionRequests;
+    const primaryChanged = !sameChatIndexRequest(activeRequest, nextPrimary);
+    const companionsChanged = !sameChatIndexRequestList(companionRequests, nextCompanions);
+    activeRequest = nextPrimary;
+    companionRequests = nextCompanions;
+    if (primaryChanged) replaceStreamForActiveRequest();
+    if (activation.refresh === false) return;
+    if (!primaryChanged && !companionsChanged && refreshPromise === null) return;
+    if (started) await refresh(activeRequest);
+  }
 
   function start(): void {
     if (started) return;
@@ -56,38 +78,32 @@ export function createChatIndexSession(deps: ChatIndexSessionDeps = {}): ChatInd
       void refresh();
       return;
     }
-    openStream();
+    openStream(activeRequest);
   }
 
   function stop(): void {
     started = false;
     stream?.close();
     stream = null;
+    streamRequest = null;
     state.set({ status: 'closed', error: null });
   }
 
   function setCompanionRequests(requests: ChatIndexRequest[]): void {
-    const next = uniqueChatIndexRequests(requests);
-    if (sameChatIndexRequestList(companionRequests, next)) return;
-    companionRequests = next;
-    if (refreshPromise) {
-      refreshAgain = true;
-      return;
-    }
-    if (started) void refresh(currentRequest);
+    void activate({ companionRequests: requests });
   }
 
-  async function refresh(request: ChatIndexRequest = currentRequest): Promise<void> {
-    currentRequest = { ...currentRequest, ...request };
+  async function refresh(request: ChatIndexRequest = activeRequest): Promise<void> {
+    refreshRequest = normalizedChatIndexRequest(request);
     if (refreshPromise) {
-      if (!sameChatIndexRequest(inFlightRequest, currentRequest) || !sameChatIndexRequestList(inFlightCompanionRequests, companionRequests)) refreshAgain = true;
+      if (!sameChatIndexRequest(inFlightRequest, refreshRequest) || !sameChatIndexRequestList(inFlightCompanionRequests, companionRequests)) refreshAgain = true;
       return refreshPromise;
     }
     state.set({ status: 'loading', error: null });
     refreshPromise = refreshChatListUntilSettled()
       .then(() => {
         state.set({ status: started ? 'connected' : 'idle', error: null });
-        if (started && !stream) openStream();
+        if (started && !stream) openStream(activeRequest);
       })
       .catch((error: ApiError) => {
         state.set({ status: 'interrupted', error });
@@ -104,7 +120,7 @@ export function createChatIndexSession(deps: ChatIndexSessionDeps = {}): ChatInd
   async function refreshChatListUntilSettled(): Promise<void> {
     do {
       refreshAgain = false;
-      inFlightRequest = { ...currentRequest };
+      inFlightRequest = { ...refreshRequest };
       inFlightCompanionRequests = companionRequests.map((request) => ({ ...request }));
       for (const request of requestsForRefresh(inFlightRequest, inFlightCompanionRequests)) {
         const result = await client.chatIndex(request);
@@ -113,16 +129,26 @@ export function createChatIndexSession(deps: ChatIndexSessionDeps = {}): ChatInd
       }
     } while (
       refreshAgain ||
-      !sameChatIndexRequest(inFlightRequest, currentRequest) ||
+      !sameChatIndexRequest(inFlightRequest, refreshRequest) ||
       !sameChatIndexRequestList(inFlightCompanionRequests, companionRequests)
     );
   }
 
-  function openStream(): void {
+  function replaceStreamForActiveRequest(): void {
+    if (!started || !stream) return;
+    if (sameChatIndexStreamRequest(streamRequest, activeRequest)) return;
+    stream.close();
+    stream = null;
+    streamRequest = null;
+    openStream(activeRequest);
+  }
+
+  function openStream(request: ChatIndexRequest): void {
     if (stream) return;
+    streamRequest = normalizedChatIndexRequest(request);
     stream = streamFactory({
       key: 'chat.index.entity',
-      path: chatIndexPatchPath(currentRequest),
+      path: chatIndexPatchPath(streamRequest),
       eventTypes: ['chat.index.patch', 'projection.cursor_gap'],
       cursorStorage: seededCursorStorage(
         store.snapshot().chatIndexCursor?.sequence
@@ -139,9 +165,9 @@ export function createChatIndexSession(deps: ChatIndexSessionDeps = {}): ChatInd
         }
         if (result === 'applied') {
           const state = store.snapshot();
-          const interrupted = requestsForRefresh(currentRequest, companionRequests)
+          const interrupted = requestsForRefresh(activeRequest, companionRequests)
             .some((request) => state.chatWindows[canonicalChatIndexWindowKey(request)]?.status === 'interrupted');
-          if (interrupted) void refresh(currentRequest);
+          if (interrupted) void refresh(activeRequest);
         }
       },
       onStatus: (status) => {
@@ -154,6 +180,7 @@ export function createChatIndexSession(deps: ChatIndexSessionDeps = {}): ChatInd
 
   return {
     state,
+    activate,
     start,
     stop,
     refresh,
@@ -228,6 +255,30 @@ function sameChatIndexRequest(left: ChatIndexRequest | null, right: ChatIndexReq
 function sameChatIndexRequestList(left: ChatIndexRequest[], right: ChatIndexRequest[]): boolean {
   if (left.length !== right.length) return false;
   return left.every((request, index) => sameChatIndexRequest(request, right[index] ?? null));
+}
+
+function sameChatIndexStreamRequest(left: ChatIndexRequest | null, right: ChatIndexRequest | null): boolean {
+  if (!left || !right) return left === right;
+  return (
+    (left.filter ?? 'all') === (right.filter ?? 'all') &&
+    (left.query ?? '') === (right.query ?? '') &&
+    (left.surfaceKind ?? '') === (right.surfaceKind ?? '') &&
+    (left.groupBy ?? '') === (right.groupBy ?? '') &&
+    (left.parentGroupId ?? '') === (right.parentGroupId ?? '')
+  );
+}
+
+function normalizedChatIndexRequest(request: ChatIndexRequest): ChatIndexRequest {
+  const normalized: ChatIndexRequest = {
+    filter: request.filter ?? 'all',
+    limit: request.limit ?? 50
+  };
+  if (request.query) normalized.query = request.query;
+  if (request.surfaceKind) normalized.surfaceKind = request.surfaceKind;
+  if (request.groupBy) normalized.groupBy = request.groupBy;
+  if (request.parentGroupId) normalized.parentGroupId = request.parentGroupId;
+  if (request.cursor) normalized.cursor = request.cursor;
+  return normalized;
 }
 
 function uniqueChatIndexRequests(requests: ChatIndexRequest[]): ChatIndexRequest[] {
