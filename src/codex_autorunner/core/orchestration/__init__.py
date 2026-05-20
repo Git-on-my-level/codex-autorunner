@@ -135,6 +135,8 @@ from .managed_thread_delivery_ledger import (
     SQLiteManagedThreadDeliveryLedger,
 )
 from .managed_thread_side_effects import (
+    MANAGED_THREAD_SIDE_EFFECT_ALLOWED_TRANSITIONS,
+    MANAGED_THREAD_SIDE_EFFECT_TERMINAL_STATES,
     ManagedThreadSideEffectAttemptResult,
     ManagedThreadSideEffectIntent,
     ManagedThreadSideEffectOutcome,
@@ -144,6 +146,7 @@ from .managed_thread_side_effects import (
     SQLiteManagedThreadSideEffectLedger,
     build_managed_thread_side_effect_id,
     build_managed_thread_side_effect_idempotency_key,
+    is_valid_managed_thread_side_effect_transition,
 )
 from .migrations import (
     ORCHESTRATION_SCHEMA_VERSION,
@@ -313,6 +316,8 @@ __all__ = [
     "ManagedThreadSideEffectOutcome",
     "ManagedThreadSideEffectRecord",
     "ManagedThreadSideEffectState",
+    "MANAGED_THREAD_SIDE_EFFECT_ALLOWED_TRANSITIONS",
+    "MANAGED_THREAD_SIDE_EFFECT_TERMINAL_STATES",
     "MappingAgentDefinitionCatalog",
     "MessageRequest",
     "MessageRequestKind",
@@ -331,6 +336,7 @@ __all__ = [
     "SQLiteManagedThreadDeliveryLedger",
     "SQLiteManagedThreadSideEffectEngine",
     "SQLiteManagedThreadSideEffectLedger",
+    "is_valid_managed_thread_side_effect_transition",
     "SurfaceIngressResult",
     "SurfaceOrchestrationIngress",
     "SurfaceThreadMessageRequest",

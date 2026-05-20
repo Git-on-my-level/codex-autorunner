@@ -38,6 +38,39 @@ MANAGED_THREAD_SIDE_EFFECT_TERMINAL_STATES = frozenset(
 )
 
 
+MANAGED_THREAD_SIDE_EFFECT_ALLOWED_TRANSITIONS: dict[
+    ManagedThreadSideEffectState, frozenset[ManagedThreadSideEffectState]
+] = {
+    ManagedThreadSideEffectState.PENDING: frozenset(
+        {
+            ManagedThreadSideEffectState.CLAIMED,
+        }
+    ),
+    ManagedThreadSideEffectState.CLAIMED: frozenset(
+        {
+            ManagedThreadSideEffectState.RUNNING,
+            ManagedThreadSideEffectState.RETRY_SCHEDULED,
+        }
+    ),
+    ManagedThreadSideEffectState.RUNNING: frozenset(
+        {
+            ManagedThreadSideEffectState.RETRY_SCHEDULED,
+            ManagedThreadSideEffectState.SUCCEEDED,
+            ManagedThreadSideEffectState.FAILED,
+            ManagedThreadSideEffectState.ABANDONED,
+        }
+    ),
+    ManagedThreadSideEffectState.RETRY_SCHEDULED: frozenset(
+        {
+            ManagedThreadSideEffectState.CLAIMED,
+        }
+    ),
+    ManagedThreadSideEffectState.SUCCEEDED: frozenset(),
+    ManagedThreadSideEffectState.FAILED: frozenset(),
+    ManagedThreadSideEffectState.ABANDONED: frozenset(),
+}
+
+
 class ManagedThreadSideEffectOutcome(str, Enum):
     SUCCEEDED = "succeeded"
     RETRY = "retry"
@@ -135,6 +168,17 @@ def build_managed_thread_side_effect_id(
         effect_kind=effect_kind,
     )
     return "mtse-" + uuid.uuid5(uuid.NAMESPACE_URL, seed).hex
+
+
+def is_valid_managed_thread_side_effect_transition(
+    current: ManagedThreadSideEffectState,
+    nxt: ManagedThreadSideEffectState,
+) -> bool:
+    if current == nxt:
+        return True
+    return nxt in MANAGED_THREAD_SIDE_EFFECT_ALLOWED_TRANSITIONS.get(
+        current, frozenset()
+    )
 
 
 class SQLiteManagedThreadSideEffectLedger:
@@ -241,9 +285,17 @@ class SQLiteManagedThreadSideEffectLedger:
             return None
         if expected_states is not None and current.state not in expected_states:
             return None
+        next_state = state or current.state
+        if not is_valid_managed_thread_side_effect_transition(
+            current.state, next_state
+        ):
+            raise ValueError(
+                "invalid managed-thread side-effect transition: "
+                f"{current.state.value} -> {next_state.value}"
+            )
         updated = replace(
             current,
-            state=state or current.state,
+            state=next_state,
             attempt_count=changes.get("attempt_count", current.attempt_count),
             claim_token=changes.get("claim_token", current.claim_token),
             claimed_at=changes.get("claimed_at", current.claimed_at),
