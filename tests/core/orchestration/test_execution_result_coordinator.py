@@ -256,7 +256,10 @@ def test_record_execution_result_backfills_duplicate_terminal_phase() -> None:
     assert result.status == "ok"
     assert result.metadata["managed_turn_lifecycle_phase"] == "terminal_recorded"
     assert finished_calls == []
-    assert [call["to_phase"] for call in phase_transitions] == ["terminal_recorded"]
+    assert [call["to_phase"] for call in phase_transitions] == [
+        "terminal_recording",
+        "terminal_recorded",
+    ]
     assert len(transition_payloads) == 1
     assert transition_payloads[0]["to_state"] == "completed"
 

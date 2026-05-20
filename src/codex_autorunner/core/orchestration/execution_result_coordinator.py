@@ -177,10 +177,10 @@ class ExecutionResultCoordinator:
                     terminal_decision.action == "duplicate"
                     and _execution_lifecycle_phase(existing) != "terminal_recorded"
                 ):
-                    self._advance_lifecycle_phase(
+                    self._backfill_terminal_recorded_phase(
                         thread_target_id,
                         execution_id,
-                        to_phase="terminal_recorded",
+                        current_phase=_execution_lifecycle_phase(existing),
                         terminal_status=terminal_decision.outcome.status,
                     )
                     existing = (
@@ -263,10 +263,10 @@ class ExecutionResultCoordinator:
                     terminal_decision.action == "duplicate"
                     and _execution_lifecycle_phase(existing) != "terminal_recorded"
                 ):
-                    self._advance_lifecycle_phase(
+                    self._backfill_terminal_recorded_phase(
                         thread_target_id,
                         execution_id,
-                        to_phase="terminal_recorded",
+                        current_phase=_execution_lifecycle_phase(existing),
                         terminal_status=terminal_decision.outcome.status,
                     )
                     existing = (
@@ -334,6 +334,35 @@ class ExecutionResultCoordinator:
             thread_target_id,
             execution_id,
             to_phase=to_phase,
+            terminal_status=terminal_status,
+        )
+
+    def _backfill_terminal_recorded_phase(
+        self,
+        thread_target_id: str,
+        execution_id: str,
+        *,
+        current_phase: str,
+        terminal_status: Optional[ManagedTurnTerminalStatus],
+    ) -> None:
+        if current_phase != "terminal_recording":
+            if current_phase != "runtime_terminal_observed":
+                self._advance_lifecycle_phase(
+                    thread_target_id,
+                    execution_id,
+                    to_phase="runtime_terminal_observed",
+                    terminal_status=terminal_status,
+                )
+            self._advance_lifecycle_phase(
+                thread_target_id,
+                execution_id,
+                to_phase="terminal_recording",
+                terminal_status=terminal_status,
+            )
+        self._advance_lifecycle_phase(
+            thread_target_id,
+            execution_id,
+            to_phase="terminal_recorded",
             terminal_status=terminal_status,
         )
 
