@@ -298,6 +298,43 @@ class AutomationStore:
             ).fetchall()
         return [self._row_to_job(row) for row in rows]
 
+    def recent_jobs_by_rule(
+        self, rule_ids: list[str], *, per_rule_limit: int = 25
+    ) -> dict[str, list[AutomationJob]]:
+        normalized_rule_ids = [
+            rule_id for rule_id in dict.fromkeys(rule_ids) if rule_id
+        ]
+        if not normalized_rule_ids:
+            return {}
+        bounded_limit = max(0, min(int(per_rule_limit), 100))
+        if bounded_limit == 0:
+            return {rule_id: [] for rule_id in normalized_rule_ids}
+        placeholders = ",".join("?" for _ in normalized_rule_ids)
+        with open_orchestration_sqlite(self._hub_root, durable=self._durable) as conn:
+            rows = conn.execute(
+                f"""
+                SELECT *
+                  FROM (
+                    SELECT jobs.*,
+                           ROW_NUMBER() OVER (
+                             PARTITION BY rule_id
+                             ORDER BY updated_at DESC, available_at DESC, job_id DESC
+                           ) AS row_number
+                      FROM orch_automation_jobs AS jobs
+                     WHERE rule_id IN ({placeholders})
+                  )
+                 WHERE row_number <= ?
+                 ORDER BY rule_id ASC, updated_at DESC, available_at DESC, job_id DESC
+                """,
+                (*normalized_rule_ids, bounded_limit),
+            ).fetchall()
+        grouped: dict[str, list[AutomationJob]] = {
+            rule_id: [] for rule_id in normalized_rule_ids
+        }
+        for row in rows:
+            grouped.setdefault(str(row["rule_id"]), []).append(self._row_to_job(row))
+        return grouped
+
     def count_jobs(
         self, *, state: Optional[str] = None, rule_id: Optional[str] = None
     ) -> int:
@@ -316,6 +353,27 @@ class AutomationStore:
                 tuple(params),
             ).fetchone()
         return int(row["count"] if row is not None else 0)
+
+    def job_counts_by_rule(self, rule_ids: list[str]) -> dict[str, int]:
+        normalized_rule_ids = [
+            rule_id for rule_id in dict.fromkeys(rule_ids) if rule_id
+        ]
+        if not normalized_rule_ids:
+            return {}
+        placeholders = ",".join("?" for _ in normalized_rule_ids)
+        with open_orchestration_sqlite(self._hub_root, durable=self._durable) as conn:
+            rows = conn.execute(
+                f"""
+                SELECT rule_id, COUNT(*) AS count
+                  FROM orch_automation_jobs
+                 WHERE rule_id IN ({placeholders})
+                 GROUP BY rule_id
+                """,
+                tuple(normalized_rule_ids),
+            ).fetchall()
+        counts = {rule_id: 0 for rule_id in normalized_rule_ids}
+        counts.update({str(row["rule_id"]): int(row["count"]) for row in rows})
+        return counts
 
     def claim_next_job(
         self, *, lock_key: Optional[str] = None, now: Optional[str] = None
@@ -685,6 +743,34 @@ class AutomationStore:
                 tuple(params),
             ).fetchall()
         return [self._row_to_schedule(row) for row in rows]
+
+    def schedules_by_rule(
+        self, rule_ids: list[str]
+    ) -> dict[str, list[AutomationSchedule]]:
+        normalized_rule_ids = [
+            rule_id for rule_id in dict.fromkeys(rule_ids) if rule_id
+        ]
+        if not normalized_rule_ids:
+            return {}
+        placeholders = ",".join("?" for _ in normalized_rule_ids)
+        with open_orchestration_sqlite(self._hub_root, durable=self._durable) as conn:
+            rows = conn.execute(
+                f"""
+                SELECT *
+                  FROM orch_automation_schedules
+                 WHERE rule_id IN ({placeholders})
+                 ORDER BY rule_id ASC, next_fire_at ASC, created_at ASC
+                """,
+                tuple(normalized_rule_ids),
+            ).fetchall()
+        grouped: dict[str, list[AutomationSchedule]] = {
+            rule_id: [] for rule_id in normalized_rule_ids
+        }
+        for row in rows:
+            grouped.setdefault(str(row["rule_id"]), []).append(
+                self._row_to_schedule(row)
+            )
+        return grouped
 
     def list_due_schedules(
         self, *, now: Optional[str] = None, limit: int = 100

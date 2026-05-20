@@ -213,7 +213,7 @@ def automation_store(hub_root: Path) -> AutomationStore:
 def automation_overview(store: AutomationStore, *, limit: int = 100) -> dict[str, Any]:
     take = max(1, min(int(limit or 100), 500))
     rules = store.list_rules()[:take]
-    rows = [automation_row(store, rule) for rule in rules]
+    rows = automation_rows(store, rules, recent_job_limit=25)
     summary = {
         "total": len(rows),
         "active": sum(1 for row in rows if row["enabled"]),
@@ -227,6 +227,29 @@ def automation_overview(store: AutomationStore, *, limit: int = 100) -> dict[str
     return {"automations": rows, "summary": summary, "presets": automation_presets()}
 
 
+def automation_rows(
+    store: AutomationStore,
+    rules: list[AutomationRule],
+    *,
+    recent_job_limit: int = 25,
+) -> list[dict[str, Any]]:
+    rule_ids = [rule.rule_id for rule in rules]
+    schedules_by_rule = store.schedules_by_rule(rule_ids)
+    recent_jobs_by_rule = store.recent_jobs_by_rule(
+        rule_ids, per_rule_limit=recent_job_limit
+    )
+    job_counts_by_rule = store.job_counts_by_rule(rule_ids)
+    return [
+        _automation_row_from_enrichment(
+            rule,
+            schedules=schedules_by_rule.get(rule.rule_id, []),
+            recent_jobs=recent_jobs_by_rule.get(rule.rule_id, []),
+            job_count=job_counts_by_rule.get(rule.rule_id, 0),
+        )
+        for rule in rules
+    ]
+
+
 def automation_presets() -> list[dict[str, Any]]:
     return [
         descriptor.to_dict() for descriptor in AUTOMATION_PRESET_DESCRIPTORS.values()
@@ -236,8 +259,20 @@ def automation_presets() -> list[dict[str, Any]]:
 def automation_row(store: AutomationStore, rule: AutomationRule) -> dict[str, Any]:
     schedules = store.list_schedules(rule_id=rule.rule_id)
     recent_jobs = store.list_jobs(rule_id=rule.rule_id, limit=25, order="newest")
-    last_job = recent_jobs[0] if recent_jobs else None
     job_count = store.count_jobs(rule_id=rule.rule_id)
+    return _automation_row_from_enrichment(
+        rule, schedules=schedules, recent_jobs=recent_jobs, job_count=job_count
+    )
+
+
+def _automation_row_from_enrichment(
+    rule: AutomationRule,
+    *,
+    schedules: list[AutomationSchedule],
+    recent_jobs: list[AutomationJob],
+    job_count: int,
+) -> dict[str, Any]:
+    last_job = recent_jobs[0] if recent_jobs else None
     schedule = schedules[0] if schedules else None
     typed = _typed_product_projection(rule, schedule)
     return {

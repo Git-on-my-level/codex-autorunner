@@ -15,10 +15,10 @@
     type AutomationOverview,
     type AutomationPresetDescriptor,
     type AutomationSummary,
+    type AutomationTargetOption,
     type AutomationUpdateRequest,
     type JsonRecord
   } from '$lib/api/client';
-  import type { RepoSummary } from '$lib/viewModels/domain';
   import { resolveAgentModelSelection } from '$lib/viewModels/modelPickers';
 
   type PresetId = 'security_scan_pr' | 'weekly_ticket_flow';
@@ -27,10 +27,11 @@
   type TicketPackTicket = { path: string; content: string };
 
   let overview = $state<AutomationOverview | null>(null);
-  let repos = $state<RepoSummary[]>([]);
+  let targetOptions = $state<AutomationTargetOption[]>([]);
   let agents = $state<JsonRecord[]>([]);
   let models = $state<JsonRecord[]>([]);
   let loading = $state(true);
+  let loadingAgents = $state(false);
   let loadingModels = $state(false);
   let saving = $state(false);
   let actionId = $state<string | null>(null);
@@ -48,6 +49,7 @@
   let selectedProfile = $state('');
   let selectedModel = $state('');
   let selectedReasoning = $state('');
+  let agentCatalogError = $state<string | null>(null);
   let modelCatalogError = $state<string | null>(null);
   let timezone = $state(Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC');
   let detailName = $state('');
@@ -70,7 +72,8 @@
   const userAutomations = $derived(automations.filter((automation) => !isManagedAutomation(automation)));
   const managedAutomations = $derived(automations.filter(isManagedAutomation));
   const routeRuleId = $derived(decodeURIComponent(page.params.ruleId ?? ''));
-  const selectedRepo = $derived(repos.find((repo) => repo.id === selectedRepoId) ?? null);
+  const presetTargetOptions = $derived(targetOptions.filter((option) => option.kind === 'repo'));
+  const selectedRepo = $derived(targetOptions.find((repo) => repo.id === selectedRepoId) ?? null);
   const scheduleTimeValue = $derived(`${pad(detailHour)}:${pad(detailMinute)}`);
 
   onMount(() => {
@@ -83,24 +86,37 @@
   async function load(): Promise<void> {
     loading = true;
     error = null;
-    const [automationResult, repoResult, agentResult] = await Promise.all([
-      webApi.hub.listAutomations(),
-      webApi.hub.listRepos(),
-      webApi.pma.listAgents()
-    ]);
-    if (automationResult.ok) overview = automationResult.data;
-    else error = automationResult.error;
-    if (repoResult.ok) {
-      repos = repoResult.data;
-      if (!selectedRepoId && repos[0]) selectedRepoId = repos[0].id;
+    const automationResult = await webApi.hub.getAutomationWorkspace();
+    if (automationResult.ok) {
+      overview = automationResult.data;
+      targetOptions = automationResult.data.targetOptions;
+      if (!selectedRepoId) {
+        selectedRepoId = presetTargetOptions.find((option) => !option.disabled)?.id ?? presetTargetOptions[0]?.id ?? '';
+      }
+      defaultAgentId = automationResult.data.agentDefaults.defaultAgent;
+      defaultProfile = automationResult.data.agentDefaults.defaultProfile ?? '';
+      selectedModel = selectedModel || automationResult.data.agentDefaults.defaultModel || '';
+      selectedReasoning = selectedReasoning || automationResult.data.agentDefaults.defaultReasoning || '';
     }
+    else error = automationResult.error;
+    loading = false;
+    syncDraftsForSelection(true);
+    void hydrateAgentCatalog();
+  }
+
+  async function hydrateAgentCatalog(): Promise<void> {
+    loadingAgents = true;
+    agentCatalogError = null;
+    const agentResult = await webApi.pma.listAgents();
+    loadingAgents = false;
     if (agentResult.ok) {
       agents = agentResult.data.agents;
       defaultAgentId = agentResult.data.default;
       defaultProfile = String(agentResult.data.defaults.profile ?? '');
+      syncDraftsForSelection(true);
+    } else {
+      agentCatalogError = agentResult.error.message;
     }
-    loading = false;
-    syncDraftsForSelection(true);
   }
 
   // The URL is the source of truth for which automation is open. Presets have no
@@ -417,7 +433,7 @@
     return [
       `I want to create an automation based on the ${preset.name} preset.`,
       '',
-      `Repo: ${(selectedRepo?.name ?? selectedRepoId) || '(choose repo)'}`,
+      `Repo: ${(selectedRepo?.label ?? selectedRepoId) || '(choose repo)'}`,
       ...agentLines,
       `Schedule: ${preset.schedule.kind} at ${pad(detailHour)}:${pad(detailMinute)} ${timezone}`,
       '',
@@ -441,11 +457,11 @@
   }
 
   function targetLabel(automation: AutomationSummary | null): string {
-    if (!automation) return selectedRepo?.name || selectedRepoId || 'Hub';
+    if (!automation) return selectedRepo?.label || selectedRepoId || 'Hub';
     const repoId = String(automation.product.targetSummary.repo_id ?? automation.product.targetSummary.base_repo_id ?? automation.target.repo_id ?? automation.target.base_repo_id ?? '');
     if (repoId) {
-      const repo = repos.find((entry) => entry.id === repoId);
-      return repo?.name || repoId;
+      const repo = targetOptions.find((entry) => entry.id === repoId);
+      return repo?.label || repoId;
     }
     return String(automation.product.targetSummary.label ?? automation.target.worktree_id ?? 'Hub');
   }
@@ -978,8 +994,8 @@
             <label class="field">
               <span>Repo</span>
               <select bind:value={selectedRepoId}>
-                {#each repos as repo}
-                  <option value={repo.id}>{repo.name || repo.id}</option>
+                {#each presetTargetOptions as repo}
+                  <option value={repo.id} disabled={repo.disabled}>{repo.label || repo.id}</option>
                 {/each}
               </select>
             </label>
@@ -1031,15 +1047,21 @@
 
         {#if selectedExecutorKind() === 'pma_turn' && canEditPrompt()}
           <div class="agent-picker-row">
+            {#if loadingAgents}
+              <p class="detail-hint">Loading agent controls…</p>
+            {:else if agentCatalogError}
+              <p class="detail-hint error-text">{agentCatalogError}</p>
+            {/if}
             <AgentModelReasoningPicker
               {agents}
+              fallbackAgentIds={defaultAgentId ? [defaultAgentId] : []}
               bind:agentValue={selectedAgent}
               bind:profileValue={selectedProfile}
               bind:modelValue={selectedModel}
               bind:reasoningValue={selectedReasoning}
               {models}
-              loading={loadingModels}
-              {modelCatalogError}
+              loading={loadingAgents || loadingModels}
+              modelCatalogError={agentCatalogError ?? modelCatalogError}
               variant="ticket"
               allowEmptyModelOption={true}
               unsetModelLabel="Default model"

@@ -18,7 +18,10 @@ from ....core.automation.product import (
 from ....core.automation.product import (
     set_automation_enabled as set_automation_enabled_core,
 )
+from ....core.time_utils import now_iso
 from ..app_state import HubAppContext
+
+AUTOMATION_WORKSPACE_ROUTE = "/hub/read-models/automations/workspace"
 
 
 class AutomationCreateRequest(BaseModel):
@@ -65,16 +68,26 @@ class AutomationUpdatePayload(BaseModel):
 
 
 def build_automation_routes(context: HubAppContext) -> APIRouter:
-    router = APIRouter(prefix="/hub/automations", tags=["hub-automations"])
+    router = APIRouter(tags=["hub-automations"])
 
     def store() -> AutomationStore:
         return AutomationStore(context.config.root)
 
-    @router.get("")
+    @router.get(AUTOMATION_WORKSPACE_ROUTE)
+    async def automation_workspace(limit: int = 100) -> dict[str, Any]:
+        overview = automation_overview(store(), limit=limit)
+        return {
+            **overview,
+            "target_options": _automation_target_options(context),
+            "agent_defaults": _automation_agent_defaults(context),
+            "generated_at": now_iso(),
+        }
+
+    @router.get("/hub/automations")
     async def list_automations(limit: int = 100) -> dict[str, Any]:
         return automation_overview(store(), limit=limit)
 
-    @router.get("/{rule_id}")
+    @router.get("/hub/automations/{rule_id}")
     async def get_automation(rule_id: str) -> dict[str, Any]:
         try:
             return {"automation": automation_detail(store(), rule_id)}
@@ -83,7 +96,7 @@ def build_automation_routes(context: HubAppContext) -> APIRouter:
                 status_code=404, detail=f"Automation not found: {rule_id}"
             ) from exc
 
-    @router.post("")
+    @router.post("/hub/automations")
     async def create_automation(payload: AutomationCreateRequest) -> dict[str, Any]:
         try:
             created = create_preset_automation(
@@ -109,7 +122,7 @@ def build_automation_routes(context: HubAppContext) -> APIRouter:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return {"automation": created}
 
-    @router.patch("/{rule_id}")
+    @router.patch("/hub/automations/{rule_id}")
     async def update_automation_route(
         rule_id: str, payload: AutomationUpdatePayload
     ) -> dict[str, Any]:
@@ -141,7 +154,7 @@ def build_automation_routes(context: HubAppContext) -> APIRouter:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return {"automation": updated}
 
-    @router.post("/{rule_id}/run")
+    @router.post("/hub/automations/{rule_id}/run")
     async def run_automation(rule_id: str) -> dict[str, Any]:
         try:
             return run_automation_now(
@@ -152,7 +165,7 @@ def build_automation_routes(context: HubAppContext) -> APIRouter:
                 status_code=404, detail=f"Automation not found: {rule_id}"
             ) from exc
 
-    @router.post("/{rule_id}/enabled")
+    @router.post("/hub/automations/{rule_id}/enabled")
     async def set_automation_enabled(
         rule_id: str, payload: AutomationEnabledRequest
     ) -> dict[str, Any]:
@@ -170,4 +183,38 @@ def build_automation_routes(context: HubAppContext) -> APIRouter:
     return router
 
 
-__all__ = ["build_automation_routes"]
+def _automation_target_options(context: HubAppContext) -> list[dict[str, Any]]:
+    options: list[dict[str, Any]] = []
+    for snapshot in context.supervisor.list_repos(use_cache=True):
+        repo_id = str(getattr(snapshot, "id", "") or "").strip()
+        if not repo_id:
+            continue
+        kind = "worktree" if getattr(snapshot, "kind", None) == "worktree" else "repo"
+        label = str(
+            getattr(snapshot, "display_name", None)
+            or getattr(snapshot, "branch", None)
+            or repo_id
+        )
+        disabled = not bool(getattr(snapshot, "exists_on_disk", True)) or not bool(
+            getattr(snapshot, "initialized", True)
+        )
+        option: dict[str, Any] = {"id": repo_id, "label": label, "kind": kind}
+        if disabled:
+            option["disabled"] = True
+        options.append(option)
+    return sorted(options, key=lambda item: (item["kind"] == "worktree", item["label"]))
+
+
+def _automation_agent_defaults(context: HubAppContext) -> dict[str, Any]:
+    raw_config = getattr(context.config, "raw", {})
+    pma_config = raw_config.get("pma", {}) if isinstance(raw_config, dict) else {}
+    defaults = pma_config if isinstance(pma_config, dict) else {}
+    return {
+        "default_agent": str(defaults.get("default_agent") or "codex"),
+        "default_profile": defaults.get("profile") or None,
+        "default_model": defaults.get("model") or None,
+        "default_reasoning": defaults.get("reasoning") or None,
+    }
+
+
+__all__ = ["AUTOMATION_WORKSPACE_ROUTE", "build_automation_routes"]

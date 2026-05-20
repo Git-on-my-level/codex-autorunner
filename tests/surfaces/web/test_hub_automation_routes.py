@@ -1,3 +1,5 @@
+from types import SimpleNamespace
+
 from fastapi.testclient import TestClient
 
 from codex_autorunner.bootstrap import seed_hub_files
@@ -9,12 +11,16 @@ from codex_autorunner.core.automation import (
 from codex_autorunner.core.automation.models import (
     EXECUTOR_PMA_TURN,
     EXECUTOR_PUBLISH_OPERATION,
+    JOB_FAILED,
+    JOB_SUCCEEDED,
     SCHEDULE_ONE_SHOT,
     TARGET_POLICY_HUB,
     TRIGGER_KIND_EVENT,
     TRIGGER_KIND_SCHEDULE,
 )
+from codex_autorunner.core.automation.product import automation_overview
 from codex_autorunner.server import create_hub_app
+from codex_autorunner.surfaces.web.routes.automations import _automation_target_options
 
 
 def test_hub_automations_create_security_scan_saved_disabled(tmp_path):
@@ -141,6 +147,130 @@ def test_hub_automations_create_weekly_ticket_flow_and_run_now(tmp_path):
     assert weekly_preset["executor_kind"] == "ticket_flow"
     assert weekly_preset["target_policy"] == "new_automation_worktree"
     assert "{ticket_id}" in weekly_preset["ticket_body_template"]
+
+
+def test_hub_automation_workspace_batches_jobs_and_target_options(
+    tmp_path, monkeypatch
+):
+    hub_root = tmp_path / "hub"
+    seed_hub_files(hub_root, force=True)
+    store = AutomationStore(hub_root)
+    rule_ids: list[str] = []
+    for index in range(2):
+        rule = store.upsert_rule(
+            AutomationRule.create(
+                rule_id=f"rule-{index}",
+                name=f"Rule {index}",
+                enabled=index == 0,
+                trigger_kind=TRIGGER_KIND_SCHEDULE,
+                trigger={"event_types": ["schedule.fire"]},
+                target_policy=TARGET_POLICY_HUB,
+                target={"repo_id": f"repo-{index}"},
+                executor_kind=EXECUTOR_PMA_TURN,
+                executor={"message": f"Run rule {index}"},
+            )
+        )
+        rule_ids.append(rule.rule_id)
+        store.upsert_schedule(
+            AutomationSchedule.create(
+                schedule_id=f"schedule-{index}",
+                rule_id=rule.rule_id,
+                schedule_kind="daily",
+                next_fire_at=f"2026-01-0{index + 1}T00:00:00Z",
+                schedule={"hour": index, "minute": 0},
+            )
+        )
+        event = store.create_event(
+            event_id=f"event-{index}",
+            event_type="schedule.fire",
+            source="test",
+            target={"rule_id": rule.rule_id},
+            payload={},
+        )
+        job_total = 30 if index == 0 else 3
+        for job_index in range(job_total):
+            store.create_job(
+                job_id=f"job-{index}-{job_index:02d}",
+                rule_id=rule.rule_id,
+                event_id=event.event_id,
+                state=(
+                    JOB_FAILED
+                    if index == 0 and job_index == job_total - 1
+                    else JOB_SUCCEEDED
+                ),
+                dedupe_key=f"dedupe-{index}-{job_index}",
+                target=rule.target,
+                executor=rule.executor,
+                created_at=f"2026-01-01T00:{job_index:02d}:00Z",
+            )
+
+    def fail_per_rule_query(*args, **kwargs):
+        raise AssertionError("per-rule automation overview query was called")
+
+    monkeypatch.setattr(store, "list_schedules", fail_per_rule_query)
+    monkeypatch.setattr(store, "list_jobs", fail_per_rule_query)
+    monkeypatch.setattr(store, "count_jobs", fail_per_rule_query)
+
+    overview = automation_overview(store)
+
+    rows = {row["id"]: row for row in overview["automations"]}
+    assert overview["summary"] == {
+        "total": 2,
+        "active": 1,
+        "paused": 1,
+        "failed_jobs": 1,
+    }
+    assert rows["rule-0"]["job_count"] == 30
+    assert rows["rule-1"]["job_count"] == 3
+    assert len(rows["rule-0"]["jobs"]) == 25
+    assert rows["rule-0"]["last_job"]["state"] == "failed"
+    assert rows["rule-1"]["schedule"]["schedule_id"] == "schedule-1"
+
+    client = TestClient(create_hub_app(hub_root))
+    response = client.get("/hub/read-models/automations/workspace")
+
+    assert response.status_code == 200
+    workspace = response.json()
+    assert workspace["summary"]["failed_jobs"] == 1
+    assert len(workspace["automations"][0]["jobs"]) <= 25
+    assert set(workspace["agent_defaults"]) == {
+        "default_agent",
+        "default_profile",
+        "default_model",
+        "default_reasoning",
+    }
+    assert workspace["generated_at"]
+
+    context = SimpleNamespace(
+        supervisor=SimpleNamespace(
+            list_repos=lambda use_cache=True: [
+                SimpleNamespace(
+                    id="repo-1",
+                    display_name="Repo One",
+                    kind="repo",
+                    exists_on_disk=True,
+                    initialized=True,
+                ),
+                SimpleNamespace(
+                    id="repo-1--feature",
+                    display_name="Feature worktree",
+                    kind="worktree",
+                    exists_on_disk=False,
+                    initialized=True,
+                ),
+            ]
+        )
+    )
+    target_options = _automation_target_options(context)
+    assert target_options == [
+        {"id": "repo-1", "label": "Repo One", "kind": "repo"},
+        {
+            "id": "repo-1--feature",
+            "label": "Feature worktree",
+            "kind": "worktree",
+            "disabled": True,
+        },
+    ]
 
 
 def test_hub_automations_pause_and_resume(tmp_path):
