@@ -7,6 +7,7 @@ import pytest
 
 from codex_autorunner.adapters.chat.interrupt_controller import (
     SharedInterruptState,
+    _write_interrupt_operation,
     request_managed_thread_interrupt,
 )
 from codex_autorunner.core.orchestration.chat_operation_ledger import (
@@ -298,3 +299,40 @@ async def test_interrupt_controller_preserves_terminal_state_as_metadata_only(
     assert '"requested_state":"interrupting"' in caplog.text
     assert '"interrupt_state":"requested"' in caplog.text
     assert '"recovery_reason":"terminal_state_metadata_only"' in caplog.text
+
+
+def test_interrupt_controller_preserves_delivering_state_as_metadata_only(
+    tmp_path,
+) -> None:
+    ledger = SQLiteChatOperationLedger(tmp_path)
+    _register_operation(ledger, operation_id="delivering-op")
+    ledger.patch_operation(
+        "delivering-op",
+        state=ChatOperationState.RUNNING,
+        thread_target_id="thread-1",
+        execution_id="turn-1",
+    )
+    ledger.patch_operation(
+        "delivering-op",
+        state=ChatOperationState.DELIVERING,
+    )
+
+    patched = _write_interrupt_operation(
+        ledger,
+        operation_id="delivering-op",
+        thread_target_id="thread-1",
+        execution_id="turn-1",
+        cancel_queued=True,
+        referenced_execution_id="turn-1",
+        interrupt_state=SharedInterruptState.REQUESTED,
+    )
+
+    assert patched is not None
+    stored = ledger.get_operation("delivering-op")
+    assert stored is not None
+    assert stored.state == ChatOperationState.DELIVERING
+    assert stored.metadata["interrupt_state"] == "requested"
+    assert (
+        stored.metadata["interrupt_operation_recovery_reason"]
+        == "delivery_state_metadata_only"
+    )

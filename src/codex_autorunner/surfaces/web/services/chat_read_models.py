@@ -37,7 +37,7 @@ from ..read_model_contracts import (
     dump_read_model_contract,
     read_model_now,
 )
-from .chat_status_contract import chat_effective_status_from_row
+from .chat_status_contract import ChatSurfaceStatus, chat_effective_status_from_row
 
 ChatIndexContractFilter = Literal[
     "all", "waiting", "active", "unread", "archived", "ticket_runs", "external"

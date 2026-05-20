@@ -177,6 +177,18 @@ def _plan_interrupt_operation_write(
             interrupt_state=interrupt_state,
             recovery_reason="terminal_state_metadata_only",
         )
+    if (
+        current_state == ChatOperationState.DELIVERING
+        and requested_state == ChatOperationState.INTERRUPTING
+    ):
+        return _InterruptOperationWriteDecision(
+            operation_id=operation_id,
+            current_state=current_state,
+            requested_state=requested_state,
+            effective_state=None,
+            interrupt_state=interrupt_state,
+            recovery_reason="delivery_state_metadata_only",
+        )
     return _InterruptOperationWriteDecision(
         operation_id=operation_id,
         current_state=current_state,
