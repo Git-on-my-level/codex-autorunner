@@ -5,10 +5,15 @@ from pathlib import Path
 
 import pytest
 
+from codex_autorunner.core.orchestration.sqlite import open_orchestration_sqlite
 from codex_autorunner.core.pr_bindings import PrBindingStore
 from codex_autorunner.core.publish_journal import PublishJournalStore
 from codex_autorunner.core.scm_events import ScmEventStore
-from codex_autorunner.core.scm_polling_watches import ScmPollingWatchStore
+from codex_autorunner.core.scm_polling_watches import (
+    ScmPollingWatchLifecycleTransition,
+    ScmPollingWatchStore,
+    plan_polling_watch_lifecycle_transition,
+)
 from codex_autorunner.core.scm_reaction_state import ScmReactionStateStore
 
 _REQUIRED_EVENT_DICT_KEYS = frozenset(
@@ -362,6 +367,163 @@ class TestScmPollingWatchShape:
         assert second.watch_id == first.watch_id
         assert second.state == "active"
         assert second.poll_interval_seconds == 60
+
+    def test_watch_lifecycle_contract_accepts_legal_transitions(self) -> None:
+        created = plan_polling_watch_lifecycle_transition(
+            ScmPollingWatchLifecycleTransition.CREATE,
+            current_state=None,
+        )
+        assert created.state.value == "active"
+        closed = plan_polling_watch_lifecycle_transition(
+            ScmPollingWatchLifecycleTransition.CLOSE,
+            current_state="active",
+        )
+        assert closed.state.value == "closed"
+        expired = plan_polling_watch_lifecycle_transition(
+            ScmPollingWatchLifecycleTransition.EXPIRE,
+            current_state="active",
+        )
+        assert expired.state.value == "expired"
+        errored = plan_polling_watch_lifecycle_transition(
+            ScmPollingWatchLifecycleTransition.ERROR,
+            current_state="active",
+        )
+        assert errored.state.value == "error"
+        reactivated = plan_polling_watch_lifecycle_transition(
+            ScmPollingWatchLifecycleTransition.REACTIVATE,
+            current_state="closed",
+        )
+        assert reactivated.state.value == "active"
+
+    def test_watch_upsert_rejects_terminal_reactivation(self, tmp_path: Path) -> None:
+        store = ScmPollingWatchStore(tmp_path)
+        binding = PrBindingStore(tmp_path).upsert_binding(
+            provider="github",
+            repo_slug="acme/widgets",
+            pr_number=17,
+            pr_state="open",
+        )
+        first = store.upsert_watch(
+            provider="github",
+            binding_id=binding.binding_id,
+            repo_slug="acme/widgets",
+            pr_number=17,
+            workspace_root=str(tmp_path / "repo"),
+            poll_interval_seconds=90,
+            next_poll_at="2026-04-01T10:01:30Z",
+            expires_at="2026-04-01T11:00:00Z",
+        )
+        store.close_watch(watch_id=first.watch_id, state="expired")
+        with pytest.raises(RuntimeError, match="invalid SCM polling watch"):
+            store.upsert_watch(
+                provider="github",
+                binding_id=binding.binding_id,
+                repo_slug="acme/widgets",
+                pr_number=17,
+                workspace_root=str(tmp_path / "repo"),
+                poll_interval_seconds=60,
+                next_poll_at="2026-04-01T10:02:00Z",
+                expires_at="2026-04-01T12:00:00Z",
+            )
+
+    def test_watch_terminal_state_rejects_different_close_transition(
+        self, tmp_path: Path
+    ) -> None:
+        store = ScmPollingWatchStore(tmp_path)
+        binding = PrBindingStore(tmp_path).upsert_binding(
+            provider="github",
+            repo_slug="acme/widgets",
+            pr_number=17,
+            pr_state="open",
+        )
+        watch = store.upsert_watch(
+            provider="github",
+            binding_id=binding.binding_id,
+            repo_slug="acme/widgets",
+            pr_number=17,
+            workspace_root=str(tmp_path / "repo"),
+            poll_interval_seconds=90,
+            next_poll_at="2026-04-01T10:01:30Z",
+            expires_at="2026-04-01T11:00:00Z",
+        )
+        store.close_watch(watch_id=watch.watch_id, state="expired")
+        with pytest.raises(RuntimeError, match="invalid SCM polling watch"):
+            store.close_watch(watch_id=watch.watch_id, state="closed")
+
+    def test_watch_unknown_persisted_state_rejected_at_read_and_write_admission(
+        self, tmp_path: Path
+    ) -> None:
+        store = ScmPollingWatchStore(tmp_path)
+        binding = PrBindingStore(tmp_path).upsert_binding(
+            provider="github",
+            repo_slug="acme/widgets",
+            pr_number=17,
+            pr_state="open",
+        )
+        watch = store.upsert_watch(
+            provider="github",
+            binding_id=binding.binding_id,
+            repo_slug="acme/widgets",
+            pr_number=17,
+            workspace_root=str(tmp_path / "repo"),
+            poll_interval_seconds=90,
+            next_poll_at="2026-04-01T10:01:30Z",
+            expires_at="2026-04-01T11:00:00Z",
+        )
+        with open_orchestration_sqlite(tmp_path, durable=True) as conn:
+            conn.execute(
+                "UPDATE orch_scm_polling_watches SET state = 'paused' WHERE watch_id = ?",
+                (watch.watch_id,),
+            )
+
+        with pytest.raises(RuntimeError, match="unknown SCM polling watch"):
+            store.get_watch(provider="github", binding_id=binding.binding_id)
+        with pytest.raises(RuntimeError, match="unknown SCM polling watch"):
+            store.upsert_watch(
+                provider="github",
+                binding_id=binding.binding_id,
+                repo_slug="acme/widgets",
+                pr_number=17,
+                workspace_root=str(tmp_path / "repo"),
+                poll_interval_seconds=60,
+                next_poll_at="2026-04-01T10:02:00Z",
+                expires_at="2026-04-01T12:00:00Z",
+            )
+        with pytest.raises(RuntimeError, match="unknown SCM polling watch"):
+            store.close_watch(watch_id=watch.watch_id, state="closed")
+        with pytest.raises(RuntimeError, match="unknown SCM polling watch"):
+            store.refresh_watch(watch_id=watch.watch_id)
+
+    def test_due_and_claim_admission_validate_state(self, tmp_path: Path) -> None:
+        store = ScmPollingWatchStore(tmp_path)
+        binding = PrBindingStore(tmp_path).upsert_binding(
+            provider="github",
+            repo_slug="acme/widgets",
+            pr_number=17,
+            pr_state="open",
+        )
+        watch = store.upsert_watch(
+            provider="github",
+            binding_id=binding.binding_id,
+            repo_slug="acme/widgets",
+            pr_number=17,
+            workspace_root=str(tmp_path / "repo"),
+            poll_interval_seconds=90,
+            next_poll_at="2026-04-01T10:01:30Z",
+            expires_at="2026-04-01T11:00:00Z",
+        )
+        due = store.list_due_watches(now_timestamp="2026-04-01T10:01:30Z")
+        assert [item.watch_id for item in due] == [watch.watch_id]
+
+        with open_orchestration_sqlite(tmp_path, durable=True) as conn:
+            conn.execute(
+                "UPDATE orch_scm_polling_watches SET state = 'paused' WHERE watch_id = ?",
+                (watch.watch_id,),
+            )
+        with pytest.raises(RuntimeError, match="unknown SCM polling watch"):
+            store.list_due_watches(now_timestamp="2026-04-01T10:01:30Z")
+        with pytest.raises(RuntimeError, match="unknown SCM polling watch"):
+            store.claim_due_watches(now_timestamp="2026-04-01T10:01:30Z")
 
 
 _REQUIRED_OPERATION_DICT_KEYS = frozenset(
