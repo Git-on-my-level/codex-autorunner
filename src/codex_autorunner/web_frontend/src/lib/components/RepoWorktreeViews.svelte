@@ -414,7 +414,7 @@
                 aria-label={`Start PMA chat for ${row.label}`}
                 data-sveltekit-preload-data="tap"
               >
-                + Chat
+                + PMA
               </a>
               <a
                 class="row-action-button row-action-link"
@@ -624,7 +624,7 @@
                           aria-label={`Start PMA chat for ${worktree.label}`}
                           data-sveltekit-preload-data="tap"
                         >
-                          + Chat
+                          + PMA
                         </a>
                         <a
                           class="row-action-button row-action-link"
@@ -980,7 +980,7 @@
         <div class="panel-heading-row chats-panel-heading">
           <h2>Chats</h2>
           <div class="panel-heading-actions">
-            <a class="chip-button" href={href(detail.pmaChatHref)} data-sveltekit-preload-data="tap">+ Chat</a>
+            <a class="chip-button" href={href(detail.pmaChatHref)} data-sveltekit-preload-data="tap">+ PMA</a>
             <a class="chip-button" href={href(detail.codingAgentChatHref)} data-sveltekit-preload-data="tap">+ Coding agent</a>
           </div>
         </div>
@@ -1249,7 +1249,7 @@
     font-weight: 550;
   }
 
-  /* Primary affordance: "+ Chat" reads as the strongest of the row.
+  /* Primary affordance: "+ PMA" reads as the strongest of the row.
      Still ghost-shaped — accent-tinted border and ink-strong text at rest. */
   .row-action-button.is-primary-affordance {
     border-color: color-mix(in srgb, var(--color-accent) 22%, var(--color-border-subtle));
