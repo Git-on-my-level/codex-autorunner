@@ -195,7 +195,6 @@ def _resource_owner_for_workspace(
                 return entry.resource_kind, entry.resource_id, entry.repo_id
         if normalized_resource_kind == "repo":
             return "repo", normalized_resource_id, normalized_resource_id
-        return normalized_resource_kind, normalized_resource_id, None
     if normalized_repo_id:
         for entry in manifest_workspaces:
             if entry.resource_id == normalized_repo_id:
