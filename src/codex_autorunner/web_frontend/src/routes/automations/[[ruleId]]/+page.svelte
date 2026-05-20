@@ -395,29 +395,13 @@
   function editWithPmaPrompt(): string {
     const automation = selectedAutomation();
     if (automation) {
-      const agentLines =
-        automation.executorKind === 'pma_turn'
-          ? [
-              `Agent: ${selectedAgent || '(default)'}`,
-              `Model: ${selectedModel || '(default)'}`,
-              `Reasoning: ${selectedReasoning || '(default)'}`,
-              `Profile: ${selectedProfile || '(default)'}`
-            ]
-          : ['Ticket-flow agent/model assignment is controlled by ticket frontmatter.'];
       return [
-        `I want to edit automation ${automation.id}.`,
+        `Please edit CAR automation ${automation.id}.`,
         '',
-        `Name: ${automation.name}`,
-        `Kind: ${automation.kind}`,
-        `Executor: ${automation.executorKind}`,
-        ...agentLines,
-        `Target policy: ${automation.targetPolicy}`,
-        `Schedule: ${scheduleLabel(automation)}`,
+        'Read the existing automation rule and related run history from the hub automation data before making changes.',
         '',
-        'Current prompt or ticket body:',
-        promptDraft || ticketDraft || '(none)',
-        '',
-        'Help me make the right semantic changes, then tell me what direct fields to update in the automation detail view.'
+        'Change request:',
+        '<describe the change you want>'
       ].join('\n');
     }
     const preset = selectedPreset();

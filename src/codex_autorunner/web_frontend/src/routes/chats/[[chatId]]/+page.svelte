@@ -133,6 +133,11 @@
   } from '$lib/viewModels/modelPickers';
   import { getLastModelForAgent, persistLastModelForAgent } from '$lib/viewModels/lastModelByAgent';
   import {
+    getLastNewChatPreference,
+    persistLastNewChatPreference,
+    type NewChatPreferenceKind
+  } from '$lib/viewModels/lastNewChatPreferences';
+  import {
     buildSlashCommandSuggestions,
     parseSlashCommand,
     WEB_SLASH_COMMANDS,
@@ -281,6 +286,7 @@
   let slashSelectedIndex = $state(0);
   let composerFocused = $state(false);
   let composerEditVersion = 0;
+  let pendingInitialDraftCreate = false;
   let pendingPointerChatId: string | null = null;
   let pendingCommittedDetailUrlChatId = $state<string | null>(null);
   let removeDocumentChatPointerCapture: (() => void) | null = null;
@@ -834,6 +840,11 @@
     }
     void loadModels(selectedAgent, activeChat?.model ?? selectedModel);
     applyNewChatQueryParam();
+    if (pendingInitialDraftCreate && !page.url.searchParams.get('new')) {
+      pendingInitialDraftCreate = false;
+      applyLastNewChatPreference('pma');
+      void createChat({ preserveSelectedScope: true });
+    }
   }
 
   function applyNewChatQueryParam(): void {
@@ -873,8 +884,22 @@
     params.delete('kind');
     const query = params.toString();
     void goto(href(`/chats${query ? `?${query}` : ''}`), { replaceState: true }).then(() => {
-      if (appliedScope) void createChat({ preserveSelectedScope: true });
+      if (appliedScope) {
+        pendingInitialDraftCreate = false;
+        persistCurrentNewChatPreference();
+        void createChat({ preserveSelectedScope: true });
+      }
     });
+  }
+
+  function applyLastNewChatPreference(kind: NewChatPreferenceKind): boolean {
+    const preference = getLastNewChatPreference(kind);
+    if (!preference) return false;
+    if (!scopeOptions.some((scope) => scope.id === preference.scopeId)) return false;
+    selectedScopeId = preference.scopeId;
+    selectedScopeSource = preference.scopeId === 'local' ? 'default_hub' : 'picker_explicit';
+    newChatKind = kind === 'agent' && preference.scopeId !== 'local' ? 'agent' : 'pma';
+    return true;
   }
 
   async function loadModels(agentId: string, preferredModel?: string): Promise<void> {
@@ -1142,6 +1167,15 @@
   function handleScopePickerChange(): void {
     selectedScopeSource = selectedScopeId === 'local' ? 'default_hub' : 'picker_explicit';
     if (newChatKind === 'agent' && selectedScopeId === 'local') newChatKind = 'pma';
+    persistCurrentNewChatPreference();
+  }
+
+  function currentNewChatPreferenceKind(): NewChatPreferenceKind {
+    return newChatKind === 'agent' && canStartCodingAgentChat ? 'agent' : 'pma';
+  }
+
+  function persistCurrentNewChatPreference(): void {
+    persistLastNewChatPreference(currentNewChatPreferenceKind(), { scopeId: selectedScopeId });
   }
 
   function newChatDisplayName(): string {
@@ -1282,10 +1316,14 @@
     creating = true;
     composeError = null;
     if (!options.preserveSelectedScope) {
-      selectedScopeId = 'local';
-      selectedScopeSource = 'default_hub';
-      newChatKind = 'pma';
+      const applied = applyLastNewChatPreference(newChatKind === 'agent' ? 'agent' : 'pma');
+      if (!applied) {
+        selectedScopeId = 'local';
+        selectedScopeSource = 'default_hub';
+        newChatKind = 'pma';
+      }
     }
+    persistCurrentNewChatPreference();
     writeChatDetailSessionState(startLocalDraftChat(readChatDetailSessionState(), newDraftChatSummary()));
     closeStream();
     void goto(href('/chats'), { replaceState: true });

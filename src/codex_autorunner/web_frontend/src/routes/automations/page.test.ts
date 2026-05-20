@@ -57,4 +57,17 @@ describe('/automations page', () => {
     expect(source).not.toContain('webApi.hub.listRepos()');
     expect(source).not.toContain('Promise.all([');
   });
+
+  it('keeps edit-with-PMA drafts minimal and points PMA at the stored automation data', () => {
+    const source = pageSource();
+    const promptBody = source.match(
+      /function editWithPmaPrompt\(\): string \{[\s\S]*?\n  function openPmaWithDraft/
+    )?.[0] ?? '';
+
+    expect(promptBody).toContain('Please edit CAR automation ${automation.id}.');
+    expect(promptBody).toContain('Read the existing automation rule and related run history from the hub automation data before making changes.');
+    expect(promptBody).toContain('<describe the change you want>');
+    expect(promptBody).not.toContain('Current prompt or ticket body:');
+    expect(promptBody).not.toContain('promptDraft || ticketDraft');
+  });
 });
