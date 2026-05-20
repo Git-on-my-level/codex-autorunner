@@ -22,11 +22,11 @@ jobs:
         with:
           node-version: "22"
 
+      - name: Install pnpm
+        run: npm install -g pnpm@9.15.4
+
       - name: Install frontend dependencies
-        run: |
-          corepack enable
-          corepack prepare pnpm@9.15.4 --activate
-          pnpm install --frozen-lockfile
+        run: pnpm install --frozen-lockfile
 
       - name: Verify tag matches version
         run: |
