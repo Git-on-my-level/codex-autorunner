@@ -5,18 +5,16 @@ from __future__ import annotations
 from pathlib import Path
 
 from ..ticket_helper_script_common import portable_ticket_validation_source
-from .ticket_linter_cli import ensure_ticket_lint_impl
 
 MANAGER_BASENAME = "ticket_tool.py"
 MANAGER_REL_PATH = Path(".codex-autorunner/bin") / MANAGER_BASENAME
 _COMMON_VALIDATION = portable_ticket_validation_source()
 
 _SCRIPT = """#!/usr/bin/env python3
-\"\"\"Manage Codex Autorunner tickets (list, insert, move, create, lint).
+\"\"\"Manage Codex Autorunner tickets (list, insert, move, create).
 
 Commands:
   list                   Show ticket order with titles/done flags.
-  lint                   Validate ticket filenames and frontmatter.
   insert --before N      Shift tickets >= N up by COUNT (default 1).
   insert --after N       Shift tickets > N up by COUNT (default 1).
                          Optionally create a ticket in the new slot.
@@ -30,13 +28,10 @@ Examples:
   ticket_tool.py insert --before 3
   ticket_tool.py create --title "Investigate flaky test" --at 3
   ticket_tool.py move --start 5 --end 7 --to 2
-  ticket_tool.py lint
 
 Notes:
 - Filenames must match TICKET-<number>[suffix].md.
-- `python3 .codex-autorunner/bin/lint_tickets.py` is the canonical lint entrypoint.
-- `ticket_tool.py lint` is a compatibility wrapper around the same shared implementation.
-- PyYAML is preferred for linting/title extraction, but the shipped tool keeps a fallback parser for common ticket frontmatter.
+- PyYAML is preferred for title extraction, but the shipped tool keeps a fallback parser for common ticket frontmatter.
 - The tool is intentionally dependency-light and safe to run from any
   virtualenv (or none).
 \"\"\"
@@ -44,7 +39,6 @@ Notes:
 from __future__ import annotations
 
 import argparse
-import importlib.util
 import re
 import sys
 import uuid
@@ -77,25 +71,6 @@ def _repo_root() -> Path:
 
 def _ticket_dir(repo_root: Path) -> Path:
     return repo_root / ".codex-autorunner" / "tickets"
-
-
-def _load_shared_linter():
-    module_path = Path(__file__).resolve().with_name("_ticket_lint_impl.py")
-    spec = importlib.util.spec_from_file_location("_ticket_lint_impl", module_path)
-    if spec is None or spec.loader is None:
-        sys.stderr.write(
-            f"Unable to load shared ticket lint implementation from {module_path}\\n"
-        )
-        return None
-    module = importlib.util.module_from_spec(spec)
-    try:
-        spec.loader.exec_module(module)
-    except Exception as exc:  # noqa: BLE001 - wrapper should surface import failures directly
-        sys.stderr.write(
-            f"Unable to import shared ticket lint implementation from {module_path}: {exc}\\n"
-        )
-        return None
-    return getattr(module, "run_ticket_lint", None)
 
 
 def _ticket_paths(ticket_dir: Path) -> Tuple[List[Path], List[str]]:
@@ -278,19 +253,12 @@ def cmd_list(ticket_dir: Path) -> int:
     return 0
 
 
-def cmd_lint(ticket_dir: Path, *, fix_ticket_ids: bool) -> int:
-    run_ticket_lint = _load_shared_linter()
-    if run_ticket_lint is None:
-        return 2
-    return run_ticket_lint(ticket_dir, fix_ticket_ids=fix_ticket_ids)
-
-
 def _shift(ticket_dir: Path, start_idx: int, delta: int) -> None:
     if delta == 0:
         return
     paths, errors = _ticket_paths(ticket_dir)
     if errors:
-        raise ValueError("Cannot shift while filenames are invalid; run lint first.")
+        raise ValueError("Cannot shift while ticket filenames are invalid.")
     iterable = reversed(paths) if delta > 0 else paths
     width = _pad_width([_parse_index(p.name) for p in paths] + [start_idx + delta])
     mapping: list[tuple[Path, Path]] = []
@@ -480,15 +448,6 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     sub = parser.add_subparsers(dest="cmd", required=True)
 
     sub.add_parser("list", help="List tickets in order")
-    lint_p = sub.add_parser(
-        "lint",
-        help="Validate ticket filenames and frontmatter (compatibility wrapper)",
-    )
-    lint_p.add_argument(
-        "--fix-ticket-ids",
-        action="store_true",
-        help="Backfill missing or invalid ticket_id values before linting.",
-    )
 
     insert_p = sub.add_parser("insert", help="Insert gap by shifting tickets")
     insert_group = insert_p.add_mutually_exclusive_group(required=True)
@@ -528,8 +487,6 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
     if args.cmd == "list":
         return cmd_list(ticket_dir)
-    if args.cmd == "lint":
-        return cmd_lint(ticket_dir, fix_ticket_ids=args.fix_ticket_ids)
     if args.cmd == "insert":
         return cmd_insert(
             ticket_dir,
@@ -555,8 +512,6 @@ _SCRIPT = _SCRIPT.replace("__COMMON_VALIDATION__", _COMMON_VALIDATION)
 
 def ensure_ticket_manager(repo_root: Path, *, force: bool = False) -> Path:
     """Ensure the ticket management CLI exists under .codex-autorunner/bin."""
-
-    ensure_ticket_lint_impl(repo_root, force=force)
 
     path = repo_root / MANAGER_REL_PATH
     path.parent.mkdir(parents=True, exist_ok=True)

@@ -43,7 +43,7 @@ FULL_TICKET_FLOW_INSTRUCTIONS = (
     "- Dispatch with `mode: pause` rather than guessing.\n\n"
     "Creating follow-up tickets (optional):\n"
     "- New tickets live under `.codex-autorunner/tickets/` and follow the `TICKET-###*.md` naming pattern.\n"
-    "- If present, `.codex-autorunner/bin/ticket_tool.py` can create/insert/move tickets; `.codex-autorunner/bin/lint_tickets.py` is the canonical ticket linter and `ticket_tool.py lint` is only a compatibility wrapper (see `.codex-autorunner/ABOUT_CAR.md`).\n"
+    "- If present, `.codex-autorunner/bin/ticket_tool.py` can create/insert/move tickets; lint the queue with `car tickets lint --repo <path>`.\n"
     "Using ticket templates (optional):\n"
     "- If you need a standard ticket pattern, prefer: `car templates fetch <repo_id>:<path>[@<ref>]`\n"
     "  - Trusted repos skip scanning; untrusted repos are scanned (cached by blob SHA).\n\n"

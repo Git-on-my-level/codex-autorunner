@@ -84,11 +84,15 @@
   }
 
   async function handleRepoPin(target: { id: string; pinned: boolean }): Promise<void> {
+    const reconciliationId = `repo-pin:${target.id}:${target.pinned ? 'pin' : 'unpin'}:${Date.now()}`;
+    readModelEntityStore.optimisticRepoPin(target.id, target.pinned, reconciliationId);
     const result = await webApi.hub.setRepoPinned(target.id, target.pinned);
     if (!result.ok) {
+      readModelEntityStore.revertOptimisticMutation(reconciliationId);
       notice = { tone: 'danger', message: result.error.message };
       return;
     }
+    readModelEntityStore.reconcileOptimisticMutation(reconciliationId);
     await invalidateReadModelTags([
       readModelEntityTags.repoWorktreeIndex,
       readModelEntityTags.repo(target.id)

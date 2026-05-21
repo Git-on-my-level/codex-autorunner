@@ -8,6 +8,7 @@ from .inbox import register_inbox_commands
 from .repos import register_repos_commands
 from .telegram import register_telegram_commands
 from .templates import register_templates_commands
+from .tickets import register_tickets_commands
 from .worktree import register_worktree_commands
 
 __all__ = [
@@ -21,5 +22,6 @@ __all__ = [
     "register_repos_commands",
     "register_telegram_commands",
     "register_templates_commands",
+    "register_tickets_commands",
     "register_worktree_commands",
 ]

@@ -34,6 +34,7 @@ from .commands.templates import (
     register_template_index_commands,
     register_templates_commands,
 )
+from .commands.tickets import register_tickets_commands
 from .commands.utils import (
     build_hub_supervisor as _build_hub_supervisor,
 )
@@ -114,6 +115,9 @@ artifacts_app = typer.Typer(
 )
 templates_app = typer.Typer(
     add_completion=False, help="Fetch, apply, and discover ticket templates."
+)
+tickets_app = typer.Typer(
+    add_completion=False, help="Validate and maintain repo tickets."
 )
 repos_app = typer.Typer(
     add_completion=False, help="Manage trusted/untrusted template repositories."
@@ -236,6 +240,8 @@ register_render_commands(
 app.add_typer(apps_app, name="apps")
 app.add_typer(artifacts_app, name="artifacts")
 app.add_typer(templates_app, name="templates")
+app.add_typer(tickets_app, name="tickets")
+register_tickets_commands(tickets_app, raise_exit=_raise_exit)
 app.add_typer(cleanup_app, name="cleanup")
 app.add_typer(chat_app, name="chat")
 app.add_typer(docs_app, name="docs")

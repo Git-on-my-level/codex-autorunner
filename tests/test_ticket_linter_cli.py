@@ -1,28 +1,42 @@
 from __future__ import annotations
 
+import os
 import stat
 import subprocess
 import sys
 from pathlib import Path
 
-from codex_autorunner.core.ticket_linter_cli import LINTER_REL_PATH
-
 
 def _run_linter(repo: Path) -> subprocess.CompletedProcess[str]:
-    linter_path = repo / LINTER_REL_PATH
+    env = os.environ.copy()
+    src_dir = Path(__file__).resolve().parents[1] / "src"
+    env["PYTHONPATH"] = (
+        str(src_dir)
+        if not env.get("PYTHONPATH")
+        else f"{src_dir}{os.pathsep}{env['PYTHONPATH']}"
+    )
     return subprocess.run(
-        [sys.executable, str(linter_path)],
+        [
+            sys.executable,
+            "-m",
+            "codex_autorunner.cli",
+            "tickets",
+            "lint",
+            "--repo",
+            str(repo),
+        ],
         cwd=repo,
         text=True,
         capture_output=True,
+        env=env,
     )
 
 
-def test_linter_is_seeded_with_repo(repo: Path) -> None:
-    linter_path = repo / LINTER_REL_PATH
-    assert linter_path.exists()
-    mode = linter_path.stat().st_mode
-    assert mode & stat.S_IXUSR, "linter should be executable"
+def test_repo_seed_includes_car_cli_shim(repo: Path) -> None:
+    car_path = repo / ".codex-autorunner" / "bin" / "car"
+    assert car_path.exists()
+    mode = car_path.stat().st_mode
+    assert mode & stat.S_IXUSR, "car shim should be executable"
 
 
 def test_linter_rejects_invalid_filename_and_extension(repo: Path) -> None:
@@ -195,6 +209,26 @@ def test_linter_detects_duplicate_indices(repo: Path) -> None:
     result_clean = _run_linter(repo)
     assert result_clean.returncode == 0
     assert "OK" in result_clean.stdout
+
+
+def test_linter_detects_duplicate_ticket_ids(repo: Path) -> None:
+    tickets_dir = repo / ".codex-autorunner" / "tickets"
+    tickets_dir.mkdir(parents=True, exist_ok=True)
+    body = (
+        "---\n"
+        'ticket_id: "tkt_lintshared001"\n'
+        "agent: codex\n"
+        "done: false\n"
+        "---\n"
+        "Body\n"
+    )
+
+    (tickets_dir / "TICKET-001.md").write_text(body, encoding="utf-8")
+    (tickets_dir / "TICKET-002.md").write_text(body, encoding="utf-8")
+
+    result = _run_linter(repo)
+    assert result.returncode == 1
+    assert "Duplicate ticket_id 'tkt_lintshared001'" in result.stderr
 
 
 def test_linter_ignores_ingest_receipt_file(repo: Path) -> None:

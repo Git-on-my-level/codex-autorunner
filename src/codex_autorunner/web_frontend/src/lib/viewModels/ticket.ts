@@ -605,7 +605,7 @@ export function buildTicketRepairPrompt(ticket: TicketDetailViewModel): string {
   const workspaceRoot = stringField(raw, 'workspace_root') ?? ticket.workspacePathLabel ?? '(unknown workspace root)';
   const ticketPath = ticket.pathLabel ?? '(unknown ticket path)';
   const errors = ticket.errors.length ? ticket.errors.map((err) => `- ${err}`).join('\n') : '- Frontmatter validation failed';
-  return `Please repair this CAR ticket frontmatter and lint the ticket queue.\n\nHub root: ${hubRoot}\nWorkspace root: ${workspaceRoot}\nTicket path: ${ticketPath}\nAbsolute ticket path: ${workspaceRoot}/${ticketPath}\n\nValidation errors:\n${errors}\n\nRequirements:\n- Edit only the ticket file unless linting reveals directly related ticket metadata issues.\n- Fix the YAML frontmatter so the ticket can run.\n- Preserve the ticket body content.\n- Run: python3 .codex-autorunner/bin/lint_tickets.py from the workspace root.\n- Report exactly what changed and the lint result.`;
+  return `Please repair this CAR ticket frontmatter and lint the ticket queue.\n\nHub root: ${hubRoot}\nWorkspace root: ${workspaceRoot}\nTicket path: ${ticketPath}\nAbsolute ticket path: ${workspaceRoot}/${ticketPath}\n\nValidation errors:\n${errors}\n\nRequirements:\n- Edit only the ticket file unless linting reveals directly related ticket metadata issues.\n- Fix the YAML frontmatter so the ticket can run.\n- Preserve the ticket body content.\n- Run: car tickets lint --repo "${workspaceRoot}"\n- Report exactly what changed and the lint result.`;
 }
 
 export function mergeTicketRunProgress(runs: PmaRunProgress[], progress: PmaRunProgress | null): PmaRunProgress[] {
