@@ -16,9 +16,11 @@ from .execution_graph import (
     automation_execution_snapshots_by_job_id,
 )
 from .models import (
+    EXECUTOR_AGENT_TASK_TURN,
     EXECUTOR_GITHUB_COMMENT,
     EXECUTOR_GITHUB_REACTION,
     EXECUTOR_MANAGED_THREAD_TURN,
+    EXECUTOR_PMA_OPERATOR_TURN,
     EXECUTOR_PUBLISH_CHAT_NOTIFICATION,
     EXECUTOR_PUBLISH_OPERATION,
     EXECUTOR_TICKET_FLOW,
@@ -115,9 +117,11 @@ AUTOMATION_PRESET_DESCRIPTORS: dict[str, AutomationPresetDescriptor] = {
         id="security_scan_pr",
         name="Daily Security Scan",
         automation_kind="security_scan_pr",
-        description=("Daily PMA security scan that opens a PR when issues are found."),
+        description=(
+            "Daily agent security scan that opens a PR when issues are found."
+        ),
         schedule_kind=SCHEDULE_DAILY,
-        executor_kind=EXECUTOR_MANAGED_THREAD_TURN,
+        executor_kind=EXECUTOR_AGENT_TASK_TURN,
         target_policy=TARGET_POLICY_HUB,
         default_timezone="UTC",
         default_hour=9,
@@ -573,8 +577,12 @@ def display_kind(rule: AutomationRule) -> str:
         return kind
     if rule.executor_kind == EXECUTOR_TICKET_FLOW:
         return "ticket_flow"
+    if rule.executor_kind == EXECUTOR_AGENT_TASK_TURN:
+        return "agent_task"
+    if rule.executor_kind == EXECUTOR_PMA_OPERATOR_TURN:
+        return "pma_operator"
     if rule.executor_kind == EXECUTOR_MANAGED_THREAD_TURN:
-        return "pma_prompt"
+        return "legacy_managed_thread_turn"
     return rule.executor_kind
 
 
@@ -918,8 +926,10 @@ def _product_diagnostics(
 
 def _executor_label(executor_kind: str) -> str:
     return {
+        EXECUTOR_AGENT_TASK_TURN: "Agent task turn",
+        EXECUTOR_PMA_OPERATOR_TURN: "PMA operator turn",
         EXECUTOR_TICKET_FLOW: "Ticket flow",
-        EXECUTOR_MANAGED_THREAD_TURN: "Managed thread turn",
+        EXECUTOR_MANAGED_THREAD_TURN: "Legacy managed thread turn",
         EXECUTOR_PUBLISH_OPERATION: "Publish operation",
         EXECUTOR_PUBLISH_CHAT_NOTIFICATION: "Chat notification",
         EXECUTOR_GITHUB_REACTION: "GitHub reaction",
@@ -1108,7 +1118,7 @@ def _build_security_scan_pr(
         filters={"schedule.rule_id": rule_id},
         target_policy=TARGET_POLICY_HUB,
         target={"repo_id": repo_id},
-        executor_kind=EXECUTOR_MANAGED_THREAD_TURN,
+        executor_kind=EXECUTOR_AGENT_TASK_TURN,
         executor=_executor_with_agent_options({"message_text": prompt}, payload),
         enabled=payload.enabled,
         policy=policy,

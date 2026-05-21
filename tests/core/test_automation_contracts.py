@@ -8,9 +8,15 @@ from codex_autorunner.core.automation import (
     AutomationSchedule,
 )
 from codex_autorunner.core.automation.models import (
+    AUTOMATION_CHILD_KIND_AGENT_TASK,
+    EXECUTOR_AGENT_TASK_TURN,
+    EXECUTOR_INPUT_KINDS,
+    EXECUTOR_KINDS,
     EXECUTOR_MANAGED_THREAD_TURN,
+    EXECUTOR_PMA_OPERATOR_TURN,
     EXECUTOR_PUBLISH_OPERATION,
     EXECUTOR_TICKET_FLOW,
+    LEGACY_EXECUTOR_KINDS,
     SCHEDULE_DAILY,
     SCHEDULE_INTERVAL,
     SCHEDULE_ONE_SHOT,
@@ -20,24 +26,37 @@ from codex_autorunner.core.automation.models import (
     TRIGGER_KIND_EVENT,
     TRIGGER_KIND_MANUAL,
     TRIGGER_KIND_SCHEDULE,
+    AutomationChildExecutionEdge,
+    AutomationRuntimeContract,
 )
 
 
 def test_canonical_automation_contracts_cover_supported_rule_shapes() -> None:
     event_rule = AutomationRule.create(
-        name="Event managed turn",
+        name="Event agent task turn",
         trigger_kind=TRIGGER_KIND_EVENT,
         trigger={"event_types": ["scm.github.pull_request.opened"]},
         target_policy=TARGET_POLICY_HUB,
-        executor_kind=EXECUTOR_MANAGED_THREAD_TURN,
-        executor={"prompt_template": "Review {{ event.repo_id }}"},
+        executor_kind=EXECUTOR_AGENT_TASK_TURN,
+        executor={
+            "prompt_template": "Review {{ event.repo_id }}",
+            "requested_runtime": {
+                "agent": "codex",
+                "model": "gpt-5.5",
+                "profile": "default",
+                "reasoning": "medium",
+                "approval_policy": "never",
+                "sandbox_policy": "danger-full-access",
+                "workspace_scope": {"kind": "hub"},
+            },
+        },
     )
     manual_rule = AutomationRule.create(
-        name="Manual managed thread turn",
+        name="Manual PMA operator turn",
         trigger_kind=TRIGGER_KIND_MANUAL,
         trigger={"event_types": ["manual.run"]},
         target_policy=TARGET_POLICY_HUB,
-        executor_kind=EXECUTOR_MANAGED_THREAD_TURN,
+        executor_kind=EXECUTOR_PMA_OPERATOR_TURN,
         executor={"message": "Wake {{ event.payload.prompt }}"},
     )
     ticket_flow_rule = AutomationRule.create(
@@ -62,9 +81,84 @@ def test_canonical_automation_contracts_cover_supported_rule_shapes() -> None:
     )
 
     assert event_rule.executor["prompt_template"] == "Review {{ event.repo_id }}"
+    assert event_rule.executor["requested_runtime"]["agent"] == "codex"
     assert manual_rule.trigger["event_types"] == ["manual.run"]
     assert ticket_flow_rule.trigger["schedule_kind"] == SCHEDULE_WEEKLY
     assert publish_rule.executor["operation_kind"] == "notify_chat"
+
+
+def test_executor_kind_sets_separate_product_modes_from_legacy_inputs() -> None:
+    assert EXECUTOR_AGENT_TASK_TURN in EXECUTOR_KINDS
+    assert EXECUTOR_PMA_OPERATOR_TURN in EXECUTOR_KINDS
+    assert EXECUTOR_TICKET_FLOW in EXECUTOR_KINDS
+    assert EXECUTOR_PUBLISH_OPERATION in EXECUTOR_KINDS
+    assert EXECUTOR_MANAGED_THREAD_TURN not in EXECUTOR_KINDS
+    assert EXECUTOR_MANAGED_THREAD_TURN in LEGACY_EXECUTOR_KINDS
+    assert EXECUTOR_MANAGED_THREAD_TURN in EXECUTOR_INPUT_KINDS
+
+
+def test_runtime_contract_and_child_edge_serialize_canonical_shape() -> None:
+    requested = AutomationRuntimeContract.from_dict(
+        {
+            "agent": "opencode",
+            "model": "zai-coding-plan/glm-5.1",
+            "profile": "security",
+            "reasoning": "high",
+            "approval_policy": "never",
+            "sandbox_policy": "danger-full-access",
+            "prompt_ref": {"kind": "inline", "sha256": "prompt-sha"},
+            "input_ref": {"kind": "automation_event", "event_id": "event-1"},
+            "workspace_scope": {"repo_id": "repo-1", "worktree_policy": "hub"},
+        }
+    )
+    actual = AutomationRuntimeContract.from_dict(
+        {
+            "agent": "opencode",
+            "model": "zai-coding-plan/glm-5.1",
+            "profile": "security",
+            "reasoning": "high",
+            "backend_runtime_id": "backend-1",
+            "provider_payload": {"provider": "zai"},
+        }
+    )
+
+    edge = AutomationChildExecutionEdge.create(
+        edge_id="edge-1",
+        parent_job_id="job-1",
+        child_kind=AUTOMATION_CHILD_KIND_AGENT_TASK,
+        child_id="thread-1",
+        requested_runtime=requested,
+        actual_runtime=actual,
+        terminal_mapping={"succeeded": "succeeded", "failed": "failed"},
+        created_at="2026-01-01T00:00:00Z",
+    )
+
+    serialized = edge.to_dict()
+
+    assert serialized["authoritative_for_parent_completion"] is True
+    assert serialized["requested_runtime"]["agent"] == "opencode"
+    assert serialized["actual_runtime"]["backend_runtime_id"] == "backend-1"
+    assert serialized["terminal_mapping"] == {
+        "succeeded": "succeeded",
+        "failed": "failed",
+    }
+
+
+def test_contracts_reject_unknown_new_mode_and_child_kind() -> None:
+    with pytest.raises(ValueError, match="executor_kind must be one of"):
+        AutomationRule.create(
+            name="Unknown mode",
+            trigger_kind=TRIGGER_KIND_MANUAL,
+            target_policy=TARGET_POLICY_HUB,
+            executor_kind="agent_turn",
+        )
+    with pytest.raises(ValueError, match="child_kind must be one of"):
+        AutomationChildExecutionEdge.create(
+            parent_job_id="job-1",
+            child_kind="managed_thread",
+            child_id="child-1",
+            requested_runtime={},
+        )
 
 
 def test_canonical_schedule_contracts_cover_supported_schedule_shapes() -> None:

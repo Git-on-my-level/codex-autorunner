@@ -9,6 +9,7 @@ from codex_autorunner.core.automation import (
     AutomationStore,
 )
 from codex_autorunner.core.automation.models import (
+    EXECUTOR_AGENT_TASK_TURN,
     EXECUTOR_MANAGED_THREAD_TURN,
     EXECUTOR_PUBLISH_OPERATION,
     JOB_FAILED,
@@ -44,7 +45,7 @@ def test_hub_automations_create_security_scan_saved_disabled(tmp_path):
     assert response.status_code == 200
     automation = response.json()["automation"]
     assert automation["kind"] == "security_scan_pr"
-    assert automation["executor_kind"] == "managed_thread_turn"
+    assert automation["executor_kind"] == EXECUTOR_AGENT_TASK_TURN
     assert automation["enabled"] is False
     assert automation["schedule"]["schedule_kind"] == "daily"
     assert automation["target"]["repo_id"] == "repo-1"
@@ -65,7 +66,7 @@ def test_hub_automations_create_security_scan_saved_disabled(tmp_path):
     assert automation["message_source"] == "executor.message_text"
     assert "Run a security scan" in automation["message_preview"]
     assert automation["target_summary"]["repo_id"] == "repo-1"
-    assert automation["executor_summary"]["kind"] == "managed_thread_turn"
+    assert automation["executor_summary"]["kind"] == EXECUTOR_AGENT_TASK_TURN
     assert automation["raw_links"]["control_plane_rule"].endswith(automation["id"])
 
     listing = client.get("/hub/automations")
@@ -74,7 +75,7 @@ def test_hub_automations_create_security_scan_saved_disabled(tmp_path):
     presets = {preset["id"]: preset for preset in listing.json()["presets"]}
     security_preset = presets["security_scan_pr"]
     assert security_preset["schedule"]["kind"] == "daily"
-    assert security_preset["executor_kind"] == "managed_thread_turn"
+    assert security_preset["executor_kind"] == EXECUTOR_AGENT_TASK_TURN
     assert security_preset["target_policy"] == "hub"
     assert security_preset["policy"]["max_attempts"] == 3
     assert "{repo_id}" in security_preset["prompt_template"]

@@ -33,15 +33,20 @@ TARGET_POLICIES = frozenset(
     }
 )
 
-EXECUTOR_MANAGED_THREAD_TURN = "managed_thread_turn"
+EXECUTOR_AGENT_TASK_TURN = "agent_task_turn"
+EXECUTOR_PMA_OPERATOR_TURN = "pma_operator_turn"
 EXECUTOR_TICKET_FLOW = "ticket_flow"
 EXECUTOR_PUBLISH_CHAT_NOTIFICATION = "publish_chat_notification"
 EXECUTOR_GITHUB_REACTION = "github_reaction"
 EXECUTOR_GITHUB_COMMENT = "github_comment"
 EXECUTOR_PUBLISH_OPERATION = "publish_operation"
+LEGACY_EXECUTOR_MANAGED_THREAD_TURN = "managed_thread_turn"
+LEGACY_EXECUTOR_PMA_TURN = "pma_turn"
+EXECUTOR_MANAGED_THREAD_TURN = LEGACY_EXECUTOR_MANAGED_THREAD_TURN
 EXECUTOR_KINDS = frozenset(
     {
-        EXECUTOR_MANAGED_THREAD_TURN,
+        EXECUTOR_AGENT_TASK_TURN,
+        EXECUTOR_PMA_OPERATOR_TURN,
         EXECUTOR_TICKET_FLOW,
         EXECUTOR_PUBLISH_CHAT_NOTIFICATION,
         EXECUTOR_GITHUB_REACTION,
@@ -49,6 +54,30 @@ EXECUTOR_KINDS = frozenset(
         EXECUTOR_PUBLISH_OPERATION,
     }
 )
+LEGACY_EXECUTOR_KINDS = frozenset(
+    {LEGACY_EXECUTOR_MANAGED_THREAD_TURN, LEGACY_EXECUTOR_PMA_TURN}
+)
+EXECUTOR_INPUT_KINDS = EXECUTOR_KINDS | LEGACY_EXECUTOR_KINDS
+
+AUTOMATION_CHILD_KIND_AGENT_TASK = "agent_task"
+AUTOMATION_CHILD_KIND_PMA_OPERATOR = "pma_operator"
+AUTOMATION_CHILD_KIND_TICKET_FLOW = "ticket_flow"
+AUTOMATION_CHILD_KIND_PUBLISH_OPERATION = "publish_operation"
+AUTOMATION_CHILD_KINDS = frozenset(
+    {
+        AUTOMATION_CHILD_KIND_AGENT_TASK,
+        AUTOMATION_CHILD_KIND_PMA_OPERATOR,
+        AUTOMATION_CHILD_KIND_TICKET_FLOW,
+        AUTOMATION_CHILD_KIND_PUBLISH_OPERATION,
+    }
+)
+AUTOMATION_CHILD_TERMINAL_MAPPING = {
+    "succeeded": "succeeded",
+    "failed": "failed",
+    "policy_violated": "failed",
+    "cancelled": "cancelled",
+    "interrupted": "cancelled",
+}
 
 JOB_PENDING = "pending"
 JOB_CLAIMED = "claimed"
@@ -165,6 +194,16 @@ def normalize_json_object(value: Any, *, field_name: str) -> dict[str, Any]:
         return {}
     if not isinstance(value, dict):
         raise ValueError(f"{field_name} must be a JSON object")
+    return dict(value)
+
+
+def normalize_optional_json_object(
+    value: Any, *, field_name: str
+) -> Optional[dict[str, Any]]:
+    if value is None:
+        return None
+    if not isinstance(value, dict):
+        raise ValueError(f"{field_name} must be a JSON object when present")
     return dict(value)
 
 
@@ -346,6 +385,8 @@ def validate_executor_contract(
             "AUTOMATION_CONTRACT_EXECUTOR_KIND_MISMATCH",
             "executor.kind must match executor_kind when present",
         )
+    if executor_kind in LEGACY_EXECUTOR_KINDS:
+        normalized["legacy_executor_kind"] = executor_kind
     for key in ("message", "prompt", "prompt_template", "operation_kind"):
         value = normalized.get(key)
         if value is not None and not isinstance(value, str):
@@ -353,6 +394,12 @@ def validate_executor_contract(
                 "AUTOMATION_CONTRACT_INVALID_EXECUTOR",
                 f"executor.{key} must be a string when present",
             )
+    if executor_kind in {EXECUTOR_AGENT_TASK_TURN, EXECUTOR_PMA_OPERATOR_TURN}:
+        requested_runtime = normalized.get("requested_runtime")
+        if requested_runtime is not None:
+            normalized["requested_runtime"] = AutomationRuntimeContract.from_dict(
+                requested_runtime, field_name="executor.requested_runtime"
+            ).to_dict()
     if executor_kind == EXECUTOR_TICKET_FLOW:
         ticket_pack = normalized.get("ticket_pack") or normalized.get("pack")
         if ticket_pack is not None and not isinstance(ticket_pack, dict):
@@ -482,6 +529,178 @@ def default_dedupe_key(*, rule_id: str, event_id: str, target: dict[str, Any]) -
     return hashlib.sha256(source.encode("utf-8")).hexdigest()
 
 
+@dataclass(frozen=True)
+class AutomationRuntimeContract:
+    agent: Optional[str] = None
+    model: Optional[str] = None
+    profile: Optional[str] = None
+    reasoning: Optional[str] = None
+    approval_policy: Optional[str] = None
+    sandbox_policy: Optional[str] = None
+    prompt_ref: Optional[dict[str, Any]] = None
+    input_ref: Optional[dict[str, Any]] = None
+    workspace_scope: Optional[dict[str, Any]] = None
+    backend_runtime_id: Optional[str] = None
+    provider_payload: Optional[dict[str, Any]] = None
+
+    @classmethod
+    def from_dict(
+        cls, value: Any, *, field_name: str = "runtime"
+    ) -> "AutomationRuntimeContract":
+        data = normalize_json_object(value, field_name=field_name)
+        return cls(
+            agent=optional_text(data.get("agent")),
+            model=optional_text(data.get("model")),
+            profile=optional_text(data.get("profile")),
+            reasoning=optional_text(data.get("reasoning")),
+            approval_policy=optional_text(data.get("approval_policy")),
+            sandbox_policy=optional_text(data.get("sandbox_policy")),
+            prompt_ref=normalize_optional_json_object(
+                data.get("prompt_ref"), field_name=f"{field_name}.prompt_ref"
+            ),
+            input_ref=normalize_optional_json_object(
+                data.get("input_ref"), field_name=f"{field_name}.input_ref"
+            ),
+            workspace_scope=normalize_optional_json_object(
+                data.get("workspace_scope"),
+                field_name=f"{field_name}.workspace_scope",
+            ),
+            backend_runtime_id=optional_text(data.get("backend_runtime_id")),
+            provider_payload=normalize_optional_json_object(
+                data.get("provider_payload"),
+                field_name=f"{field_name}.provider_payload",
+            ),
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass(frozen=True)
+class AutomationChildExecutionEdge:
+    edge_id: str
+    parent_job_id: str
+    child_kind: str
+    child_id: str
+    authoritative_for_parent_completion: bool
+    requested_runtime: AutomationRuntimeContract
+    actual_runtime: Optional[AutomationRuntimeContract]
+    terminal_mapping: dict[str, str]
+    created_at: str
+    updated_at: str
+
+    @classmethod
+    def create(
+        cls,
+        *,
+        parent_job_id: str,
+        child_kind: str,
+        child_id: str,
+        requested_runtime: AutomationRuntimeContract | dict[str, Any],
+        actual_runtime: Optional[AutomationRuntimeContract | dict[str, Any]] = None,
+        authoritative_for_parent_completion: bool = True,
+        terminal_mapping: Optional[dict[str, Any]] = None,
+        edge_id: Optional[str] = None,
+        created_at: Optional[str] = None,
+        updated_at: Optional[str] = None,
+    ) -> "AutomationChildExecutionEdge":
+        resolved_parent_job_id = optional_text(parent_job_id)
+        resolved_child_id = optional_text(child_id)
+        if resolved_parent_job_id is None:
+            raise ValueError("parent_job_id is required")
+        if resolved_child_id is None:
+            raise ValueError("child_id is required")
+        normalized_child_kind = require_choice(
+            child_kind, field_name="child_kind", choices=AUTOMATION_CHILD_KINDS
+        )
+        requested = (
+            requested_runtime
+            if isinstance(requested_runtime, AutomationRuntimeContract)
+            else AutomationRuntimeContract.from_dict(
+                requested_runtime, field_name="requested_runtime"
+            )
+        )
+        actual = (
+            actual_runtime
+            if isinstance(actual_runtime, AutomationRuntimeContract)
+            else (
+                AutomationRuntimeContract.from_dict(
+                    actual_runtime, field_name="actual_runtime"
+                )
+                if actual_runtime is not None
+                else None
+            )
+        )
+        mapping = normalize_json_object(
+            terminal_mapping or AUTOMATION_CHILD_TERMINAL_MAPPING,
+            field_name="terminal_mapping",
+        )
+        normalized_mapping: dict[str, str] = {}
+        for key, value in mapping.items():
+            normalized_key = optional_text(key)
+            normalized_value = optional_text(value)
+            if normalized_key is None or normalized_value is None:
+                raise ValueError("terminal_mapping must map strings to strings")
+            normalized_mapping[normalized_key] = require_choice(
+                normalized_value,
+                field_name="terminal_mapping value",
+                choices=JOB_STATES,
+            )
+        stamp = normalize_timestamp(created_at)
+        return cls(
+            edge_id=optional_text(edge_id) or str(uuid.uuid4()),
+            parent_job_id=resolved_parent_job_id,
+            child_kind=normalized_child_kind,
+            child_id=resolved_child_id,
+            authoritative_for_parent_completion=normalize_bool(
+                authoritative_for_parent_completion, fallback=True
+            ),
+            requested_runtime=requested,
+            actual_runtime=actual,
+            terminal_mapping=normalized_mapping,
+            created_at=stamp,
+            updated_at=normalize_timestamp(updated_at, fallback=stamp),
+        )
+
+    @classmethod
+    def from_dict(cls, value: Any) -> "AutomationChildExecutionEdge":
+        data = normalize_json_object(value, field_name="child_execution_edge")
+        parent_job_id = optional_text(data.get("parent_job_id"))
+        child_kind = optional_text(data.get("child_kind"))
+        child_id = optional_text(data.get("child_id"))
+        requested_runtime = data.get("requested_runtime")
+        if parent_job_id is None:
+            raise ValueError("parent_job_id is required")
+        if child_kind is None:
+            raise ValueError("child_kind is required")
+        if child_id is None:
+            raise ValueError("child_id is required")
+        if not isinstance(requested_runtime, dict):
+            raise ValueError("requested_runtime is required")
+        return cls.create(
+            edge_id=data.get("edge_id"),
+            parent_job_id=parent_job_id,
+            child_kind=child_kind,
+            child_id=child_id,
+            authoritative_for_parent_completion=data.get(
+                "authoritative_for_parent_completion", True
+            ),
+            requested_runtime=requested_runtime,
+            actual_runtime=data.get("actual_runtime"),
+            terminal_mapping=data.get("terminal_mapping"),
+            created_at=data.get("created_at"),
+            updated_at=data.get("updated_at"),
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        data = asdict(self)
+        data["requested_runtime"] = self.requested_runtime.to_dict()
+        data["actual_runtime"] = (
+            self.actual_runtime.to_dict() if self.actual_runtime is not None else None
+        )
+        return data
+
+
 @dataclass
 class AutomationRule:
     rule_id: str
@@ -527,7 +746,7 @@ class AutomationRule:
             target_policy, field_name="target_policy", choices=TARGET_POLICIES
         )
         normalized_executor_kind = require_choice(
-            executor_kind, field_name="executor_kind", choices=EXECUTOR_KINDS
+            executor_kind, field_name="executor_kind", choices=EXECUTOR_INPUT_KINDS
         )
         normalized_trigger = validate_trigger_contract(
             normalized_trigger_kind,
@@ -834,13 +1053,24 @@ class AutomationSchedule:
 __all__ = [
     "APPROVAL_MODES",
     "AUTOMATION_EVENT_TYPES",
+    "AUTOMATION_CHILD_KINDS",
+    "AUTOMATION_CHILD_KIND_AGENT_TASK",
+    "AUTOMATION_CHILD_KIND_PMA_OPERATOR",
+    "AUTOMATION_CHILD_KIND_PUBLISH_OPERATION",
+    "AUTOMATION_CHILD_KIND_TICKET_FLOW",
+    "AUTOMATION_CHILD_TERMINAL_MAPPING",
+    "AutomationChildExecutionEdge",
     "AutomationContractError",
     "AutomationEvent",
     "AutomationJob",
     "AutomationJobAttempt",
     "AutomationRule",
+    "AutomationRuntimeContract",
     "AutomationSchedule",
+    "EXECUTOR_AGENT_TASK_TURN",
+    "EXECUTOR_INPUT_KINDS",
     "EXECUTOR_KINDS",
+    "EXECUTOR_PMA_OPERATOR_TURN",
     "JOB_CLAIMED",
     "JOB_DEAD_LETTERED",
     "JOB_FAILED",
@@ -849,6 +1079,9 @@ __all__ = [
     "JOB_STATE_TRANSITIONS",
     "JOB_STATES",
     "JOB_SUCCEEDED",
+    "LEGACY_EXECUTOR_KINDS",
+    "LEGACY_EXECUTOR_MANAGED_THREAD_TURN",
+    "LEGACY_EXECUTOR_PMA_TURN",
     "SCHEDULE_KINDS",
     "TARGET_POLICIES",
     "TRIGGER_KINDS",

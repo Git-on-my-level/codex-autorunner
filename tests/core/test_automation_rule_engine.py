@@ -8,7 +8,7 @@ from codex_autorunner.core.automation import (
     render_template,
 )
 from codex_autorunner.core.automation.models import (
-    EXECUTOR_MANAGED_THREAD_TURN,
+    EXECUTOR_AGENT_TASK_TURN,
     TARGET_POLICY_HUB,
     TRIGGER_KIND_EVENT,
     TRIGGER_KIND_MANUAL,
@@ -24,7 +24,7 @@ def _rule(**overrides):
         "filters": {"repo_id": "repo-1", "pr.number": {"eq": 42}},
         "target_policy": TARGET_POLICY_HUB,
         "target": {"repo_id": "{{ event.repo_id }}", "pr": "{{ pr.number }}"},
-        "executor_kind": EXECUTOR_MANAGED_THREAD_TURN,
+        "executor_kind": EXECUTOR_AGENT_TASK_TURN,
         "executor": {
             "lane_id": "pma:default",
             "message": "Review PR {{ pr.number }} in {{ event.repo_id }}",
@@ -135,7 +135,7 @@ def test_rule_engine_selected_manual_rule_uses_templating_and_policy(tmp_path) -
         trigger_kind=TRIGGER_KIND_MANUAL,
         target_policy=TARGET_POLICY_HUB,
         target={"repo_id": "{{ event.target.repo_id }}"},
-        executor_kind=EXECUTOR_MANAGED_THREAD_TURN,
+        executor_kind=EXECUTOR_AGENT_TASK_TURN,
         executor={"message": "Wake {{ event.payload.prompt }}"},
         policy={"dedupe_key": "{{ metadata.manual_dedupe_key }}"},
     )
