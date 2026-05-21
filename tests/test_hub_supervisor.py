@@ -1204,6 +1204,50 @@ def test_cleanup_all_archives_all_terminal_flow_statuses(tmp_path: Path) -> None
         ).read_text(encoding="utf-8") == "{}"
 
 
+def test_cleanup_all_archives_orphaned_flow_artifact_dirs(tmp_path: Path) -> None:
+    hub_root = tmp_path / "hub"
+    _write_default_hub_config(hub_root)
+    supervisor = HubSupervisor(
+        load_hub_config(hub_root),
+        backend_factory_builder=build_agent_backend_factory,
+        app_server_supervisor_factory_builder=build_app_server_supervisor_factory,
+        backend_orchestrator_builder=build_backend_orchestrator,
+    )
+    base = supervisor.create_repo("base")
+    _init_git_repo(base.path)
+
+    orphan_run_id = "22222222-2222-2222-2222-222222222222"
+    with FlowStore(base.path / ".codex-autorunner" / "flows.db") as store:
+        store.initialize()
+    flow_dir = base.path / ".codex-autorunner" / "flows" / orphan_run_id / "chat"
+    flow_dir.mkdir(parents=True, exist_ok=True)
+    (flow_dir / "outbound.jsonl").write_text(
+        '{"event_type":"flow_terminal_notice"}\n',
+        encoding="utf-8",
+    )
+
+    dry = supervisor.cleanup_all(dry_run=True)
+    assert dry["flow_runs"]["retired_count"] == 1
+    assert dry["flow_runs"]["by_repo"] == [{"repo_id": base.id, "count": 1}]
+    assert (base.path / ".codex-autorunner" / "flows" / orphan_run_id).exists()
+
+    result = supervisor.cleanup_all(dry_run=False)
+
+    assert result["flow_runs"]["retired_count"] == 1
+    assert result["flow_runs"]["by_repo"] == [{"repo_id": base.id, "count": 1}]
+    assert not (base.path / ".codex-autorunner" / "flows" / orphan_run_id).exists()
+    assert (
+        base.path
+        / ".codex-autorunner"
+        / "archive"
+        / "runs"
+        / orphan_run_id
+        / "flow_state"
+        / "chat"
+        / "outbound.jsonl"
+    ).read_text(encoding="utf-8") == '{"event_type":"flow_terminal_notice"}\n'
+
+
 def test_cleanup_all_skips_worktree_when_binding_lookup_raises_runtime_error(
     tmp_path: Path, monkeypatch
 ):
