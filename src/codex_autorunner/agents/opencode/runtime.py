@@ -65,6 +65,7 @@ from .protocol_payload import (
     summarize_question_answers,
 )
 from .stream_lifecycle import (
+    _OPENCODE_FIRST_EVENT_TIMEOUT_REASON,
     _OPENCODE_FIRST_EVENT_TIMEOUT_SECONDS,
     _OPENCODE_STREAM_STALL_TIMEOUT_SECONDS,
     LifecycleAction,
@@ -76,6 +77,7 @@ PermissionDecision = str
 PermissionHandler = Callable[[str, dict[str, Any]], Awaitable[PermissionDecision]]
 QuestionHandler = Callable[[str, dict[str, Any]], Awaitable[Optional[list[list[str]]]]]
 PartHandler = Callable[[str, dict[str, Any], Optional[str]], Awaitable[None]]
+TurnActivityFetcher = Callable[[], bool | Awaitable[bool]]
 
 
 @dataclass(frozen=True)
@@ -224,6 +226,7 @@ async def collect_opencode_output_from_events(
     reply_question: Optional[Callable[[str, list[list[str]]], Awaitable[None]]] = None,
     reject_question: Optional[Callable[[str], Awaitable[None]]] = None,
     part_handler: Optional[PartHandler] = None,
+    turn_activity_fetcher: Optional[TurnActivityFetcher] = None,
     event_stream_factory: Optional[Callable[[], AsyncIterator[SSEEvent]]] = None,
     session_fetcher: Optional[Callable[[], Awaitable[Any]]] = None,
     provider_fetcher: Optional[Callable[[], Awaitable[Any]]] = None,
@@ -258,6 +261,7 @@ async def collect_opencode_output_from_events(
         stall_timeout_seconds=stall_timeout_seconds,
         first_event_timeout_seconds=first_event_timeout_seconds,
         status_event_handler=part_handler,
+        turn_activity_fetcher=turn_activity_fetcher,
         logger=logger,
     )
 
@@ -655,9 +659,17 @@ async def collect_opencode_output_from_events(
         await lifecycle.close()
 
     result = await assembler.build_result()
+    error = result.error
+    if (
+        error
+        and error.startswith(_OPENCODE_FIRST_EVENT_TIMEOUT_REASON)
+        and result.output_source == "messages_snapshot"
+        and result.text
+    ):
+        error = None
     return OpenCodeTurnOutput(
         text=result.text,
-        error=result.error,
+        error=error,
         usage=result.usage,
         output_source=result.output_source,
         terminal_signal=terminal_signal,
@@ -679,6 +691,7 @@ async def collect_opencode_output(
     should_stop: Optional[Callable[[], bool]] = None,
     ready_event: Optional[Any] = None,
     part_handler: Optional[PartHandler] = None,
+    turn_activity_fetcher: Optional[TurnActivityFetcher] = None,
     stall_timeout_seconds: Optional[float] = _OPENCODE_STREAM_STALL_TIMEOUT_SECONDS,
     first_event_timeout_seconds: Optional[
         float
@@ -736,6 +749,7 @@ async def collect_opencode_output(
         reply_question=_reply_question,
         reject_question=_reject_question,
         part_handler=part_handler,
+        turn_activity_fetcher=turn_activity_fetcher,
         event_stream_factory=_stream_factory,
         model_payload=model_payload,
         session_fetcher=_fetch_session,

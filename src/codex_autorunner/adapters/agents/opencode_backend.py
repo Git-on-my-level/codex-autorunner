@@ -369,6 +369,11 @@ class OpenCodeBackend(AgentBackend):
             stall_timeout, first_event_timeout = opencode_stream_timeouts(
                 self._session_stall_timeout_seconds,
             )
+            prompt_task: Optional[asyncio.Task[Any]] = None
+
+            def _prompt_is_active() -> bool:
+                return prompt_task is not None and not prompt_task.done()
+
             output_task = asyncio.create_task(
                 collect_opencode_output(
                     client,
@@ -378,6 +383,7 @@ class OpenCodeBackend(AgentBackend):
                     model_payload=model_payload,
                     permission_policy=permission_policy,
                     part_handler=_part_handler,
+                    turn_activity_fetcher=_prompt_is_active,
                     ready_event=ready_event,
                     stall_timeout_seconds=stall_timeout,
                     first_event_timeout_seconds=first_event_timeout,
@@ -419,7 +425,7 @@ class OpenCodeBackend(AgentBackend):
                     executor=_run_prompt,
                 )
             )
-            prompt_task: Optional[asyncio.Task[Any]] = started_command.task
+            prompt_task = started_command.task
             runtime_task = asyncio.create_task(
                 observe_turn_runtime(
                     collect_task=output_task,
