@@ -2599,7 +2599,7 @@ def test_managed_thread_message_route_preserves_literal_message_whitespace(
     assert response.status_code == 200
     payload = response.json()
     assert payload["delivered_message"] == literal_message
-    assert captured["request"].message_text == literal_message
+    assert captured["request"].prompt_text == literal_message
     runtime_prompt = captured["request"].metadata["runtime_prompt"]
     assert f"<user_message>\n{literal_message}" in runtime_prompt
     assert runtime_prompt.endswith("\n</user_message>\n")

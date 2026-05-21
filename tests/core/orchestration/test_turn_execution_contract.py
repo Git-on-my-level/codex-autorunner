@@ -160,6 +160,15 @@ def test_turn_execution_request_rejects_invalid_required_fields(
         _request(**overrides)
 
 
+def test_turn_execution_request_preserves_literal_prompt_whitespace() -> None:
+    request = _request(prompt_text="  keep literal text\n")
+
+    assert request.prompt_text == "  keep literal text\n"
+    assert TurnExecutionRequest.from_mapping(request.to_dict()).prompt_text == (
+        "  keep literal text\n"
+    )
+
+
 def test_surface_origin_requires_surface_identity() -> None:
     with pytest.raises(TurnExecutionContractError, match="surface_kind"):
         TurnExecutionOrigin(kind="surface", source_id="message-1")

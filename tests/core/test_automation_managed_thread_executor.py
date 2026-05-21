@@ -206,6 +206,7 @@ def test_managed_thread_turn_materializes_opencode_model_in_canonical_record(
     tmp_path: Path,
 ) -> None:
     store, threads, thread_id = _store_rule_event(tmp_path)
+    started_workers: list[str] = []
     store.enqueue_job(
         _job(
             thread_id,
@@ -227,6 +228,7 @@ def test_managed_thread_turn_materializes_opencode_model_in_canonical_record(
             hub_root=tmp_path / "hub",
             automation_store=store,
             thread_store=threads,
+            queue_worker_starter_fn=started_workers.append,
         ),
     )
 
@@ -236,6 +238,7 @@ def test_managed_thread_turn_materializes_opencode_model_in_canonical_record(
 
     saved = store.get_job("job-1")
     assert result.running == 1
+    assert started_workers == [thread_id]
     assert saved.managed_thread_execution_id is not None
     request = threads.get_turn_execution_request(
         thread_id,

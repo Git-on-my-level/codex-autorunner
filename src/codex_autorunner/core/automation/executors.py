@@ -2,18 +2,17 @@ from __future__ import annotations
 
 import hashlib
 from pathlib import Path
-from typing import Any, Optional, cast
-from typing import Callable
+from typing import Any, Callable, Optional, cast
 
 from ..domain.refs import AgentRef, ScopeRef
 from ..managed_thread_store import ManagedThreadStore
-from ..pma_reactive import PmaReactiveStore
 from ..orchestration.turn_execution_contract import (
     TurnExecutionContractError,
     TurnExecutionOrigin,
     TurnExecutionRequest,
     TurnExecutionRequestKind,
 )
+from ..pma_reactive import PmaReactiveStore
 from ..publish_executor import PublishExecutorRegistry, drain_pending_publish_operations
 from ..publish_journal import PublishJournalStore
 from ..text_utils import _normalize_text

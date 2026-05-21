@@ -68,6 +68,12 @@ def _optional_text(value: object) -> Optional[str]:
     return _normalize_optional_text(value)
 
 
+def _optional_prompt_text(value: object) -> Optional[str]:
+    if isinstance(value, str):
+        return value if value.strip() else None
+    return _normalize_optional_text(value)
+
+
 def _normalize_choice(
     value: object,
     *,
@@ -300,7 +306,7 @@ class TurnExecutionRequest:
         agent = _required_text(self.agent, "agent")
         approval_policy = _required_text(self.approval_policy, "approval_policy")
         sandbox_policy = _json_safe(self.sandbox_policy, field_name="sandbox_policy")
-        prompt_text = _optional_text(self.prompt_text)
+        prompt_text = _optional_prompt_text(self.prompt_text)
         input_items = _mapping_tuple(self.input_items, field_name="input_items")
         if prompt_text is None and not input_items:
             raise TurnExecutionContractError("prompt_text or input_items is required")
