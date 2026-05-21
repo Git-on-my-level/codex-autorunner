@@ -29,6 +29,7 @@ from tests.chat_surface_lab.transcript_models import (
     TranscriptTimeline,
 )
 from tests.conftest import write_test_config
+from tests.support.turn_execution import create_test_turn
 
 
 @dataclass(frozen=True)
@@ -101,7 +102,7 @@ class WebPmaSurfaceSimulator:
         managed_thread_id = self._require_thread()
         _ = wait_for_confirmation, busy_policy
         store = ManagedThreadStore(self.hub.hub_root)
-        turn = store.create_turn(managed_thread_id, prompt=message)
+        turn = create_test_turn(store, managed_thread_id, prompt=message)
         self.managed_turn_id = str(turn.get("managed_turn_id") or "")
         assistant_text = "fixture reply"
         assert store.mark_turn_finished(

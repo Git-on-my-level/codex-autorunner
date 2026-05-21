@@ -105,6 +105,7 @@ async def test_file_chat_service_non_stream_and_stream_share_turn_lifecycle(
     target_path.write_text("before\n", encoding="utf-8")
     request = _make_request(repo_root)
     calls: list[str] = []
+    canonical_requests: list[dict[str, object]] = []
 
     async def fake_execute_file_chat_agent_turn(
         _request,
@@ -113,6 +114,9 @@ async def test_file_chat_service_non_stream_and_stream_share_turn_lifecycle(
         message: str,
         **kwargs,
     ) -> dict[str, object]:
+        turn_request = kwargs.get("turn_request")
+        assert turn_request is not None
+        canonical_requests.append(turn_request.to_dict())
         on_meta = kwargs.get("on_meta")
         assert on_meta is not None
         await on_meta("codex", f"thread-{message}", f"turn-{message}")
@@ -158,6 +162,19 @@ async def test_file_chat_service_non_stream_and_stream_share_turn_lifecycle(
     )
     stream_items = [item async for item in stream_iter]
     assert calls == ["nonstream", "stream"]
+    assert [item["request_id"] for item in canonical_requests] == [
+        "client-nonstream",
+        "client-stream",
+    ]
+    assert {
+        key: canonical_requests[0][key]
+        for key in ("target_id", "target_kind", "request_kind", "agent")
+    } == {
+        key: canonical_requests[1][key]
+        for key in ("target_id", "target_kind", "request_kind", "agent")
+    }
+    assert canonical_requests[0]["approval_policy"] == "on-request"
+    assert canonical_requests[0]["sandbox_policy"] == "dangerFullAccess"
     assert [item.event for item in stream_items] == [
         "status",
         "app-server",
@@ -169,6 +186,72 @@ async def test_file_chat_service_non_stream_and_stream_share_turn_lifecycle(
     assert state.active_chats == {}
     assert state.current_by_client == {}
     assert state.last_by_client["client-stream"]["turn_id"] == "turn-stream"
+    assert state.last_by_client["client-stream"]["execution_id"] == "client-stream"
+    assert state.last_by_client["client-stream"]["turn_request"]["request_id"] == (
+        "client-stream"
+    )
+
+
+@pytest.mark.asyncio
+async def test_file_chat_service_active_state_uses_canonical_execution_id(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo_root = tmp_path
+    target_path = repo_root / ".codex-autorunner" / "contextspace" / "spec.md"
+    target_path.parent.mkdir(parents=True, exist_ok=True)
+    target_path.write_text("before\n", encoding="utf-8")
+    request = _make_request(repo_root)
+    started = asyncio.Event()
+    finish = asyncio.Event()
+
+    async def fake_execute_file_chat_agent_turn(
+        _request,
+        _repo_root: Path,
+        _target,
+        _message: str,
+        **kwargs,
+    ) -> dict[str, object]:
+        on_meta = kwargs.get("on_meta")
+        assert on_meta is not None
+        await on_meta("codex", "thread-active", "turn-active")
+        started.set()
+        await finish.wait()
+        return {
+            "status": "ok",
+            "message": "done",
+            "thread_id": "thread-active",
+            "turn_id": "turn-active",
+        }
+
+    monkeypatch.setattr(
+        file_chat_service,
+        "execute_file_chat_agent_turn",
+        fake_execute_file_chat_agent_turn,
+    )
+
+    run_task = asyncio.create_task(
+        file_chat_service.run_turn(
+            request,
+            file_chat_service.FileChatTurnRequest(
+                target="contextspace:spec",
+                message="active",
+                client_turn_id="client-active",
+            ),
+        )
+    )
+    await asyncio.wait_for(started.wait(), timeout=1.0)
+    snapshot = await file_chat_service.get_active_snapshot(request, "client-active")
+    assert snapshot.active is True
+    assert snapshot.current["execution_id"] == "client-active"
+    assert snapshot.current["turn_record"]["execution_id"] == "client-active"
+    assert snapshot.current["turn_request"]["request_id"] == "client-active"
+
+    finish.set()
+    result = await run_task
+    assert result["execution_id"] == "client-active"
+    last = await file_chat_service.get_active_snapshot(request, "client-active")
+    assert last.active is False
+    assert last.last_result["execution_id"] == "client-active"
 
 
 @pytest.mark.asyncio
@@ -204,6 +287,42 @@ async def test_file_chat_service_rejects_already_running_turn(
 
     assert exc_info.value.status_code == 409
     assert exc_info.value.detail == "Ticket chat already running"
+
+
+@pytest.mark.asyncio
+async def test_file_chat_service_rejects_opencode_without_resolved_model(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo_root = tmp_path
+    target_path = repo_root / ".codex-autorunner" / "contextspace" / "spec.md"
+    target_path.parent.mkdir(parents=True, exist_ok=True)
+    target_path.write_text("before\n", encoding="utf-8")
+    request = _make_request(repo_root)
+
+    async def fail_execute(*args, **kwargs):
+        raise AssertionError("OpenCode execution should not start")
+
+    monkeypatch.setattr(
+        file_chat_service,
+        "execute_file_chat_agent_turn",
+        fail_execute,
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        await file_chat_service.run_turn(
+            request,
+            file_chat_service.FileChatTurnRequest(
+                target="contextspace:spec",
+                message="edit",
+                agent="opencode",
+            ),
+        )
+
+    assert exc_info.value.status_code == 400
+    assert (
+        exc_info.value.detail
+        == "opencode requests require resolved provider/model before execution"
+    )
 
 
 @pytest.mark.asyncio
@@ -856,13 +975,20 @@ async def test_execute_file_chat_reports_capability_driven_error_for_unsupported
         agent="broken",
     )
 
-    assert result == {
+    assert {
+        key: result[key]
+        for key in (
+            "status",
+            "detail",
+        )
+    } == {
         "status": "error",
         "detail": (
             "Agent 'broken' does not support file-chat execution "
             "(missing capability: message_turns)"
         ),
     }
+    assert result["turn_request"]["agent"] == "broken"
 
 
 def test_resolve_file_chat_agent_selection_rejects_invalid_hermes_profile(

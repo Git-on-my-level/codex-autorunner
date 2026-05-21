@@ -20,6 +20,7 @@ from .managed_turn_lifecycle_contract import (
 from .models import ExecutionRecord, MessageRequestKind, ThreadTarget
 from .runtime_bindings import RuntimeThreadBinding
 from .thread_titles import choose_owned_thread_title
+from .turn_execution_contract import TurnExecutionRecord, TurnExecutionRequest
 
 logger = logging.getLogger(__name__)
 
@@ -134,7 +135,19 @@ def _thread_target_from_store_row_with_runtime_binding(
 
 
 def _execution_record_from_store_row(record: Mapping[str, Any]) -> ExecutionRecord:
-    return ExecutionRecord.from_mapping(record)
+    metadata = record.get("metadata")
+    if not isinstance(metadata, dict):
+        metadata = {}
+    merged_metadata = dict(metadata)
+    turn_request = record.get("turn_request")
+    if isinstance(turn_request, dict) and turn_request:
+        merged_metadata["turn_request"] = dict(turn_request)
+    turn_record = record.get("turn_record")
+    if isinstance(turn_record, dict) and turn_record:
+        merged_metadata["turn_record"] = dict(turn_record)
+    payload = dict(record)
+    payload["metadata"] = merged_metadata
+    return ExecutionRecord.from_mapping(payload)
 
 
 class ManagedThreadExecutionStore(ThreadExecutionStore):
@@ -341,6 +354,7 @@ class ManagedThreadExecutionStore(ThreadExecutionStore):
         client_request_id: Optional[str] = None,
         metadata: Optional[dict[str, Any]] = None,
         queue_payload: Optional[dict[str, Any]] = None,
+        turn_request: Optional[TurnExecutionRequest] = None,
     ) -> ExecutionRecord:
         metadata_payload = dict(metadata or {})
         initialized_lifecycle_phase = (
@@ -348,6 +362,10 @@ class ManagedThreadExecutionStore(ThreadExecutionStore):
         )
         if initialized_lifecycle_phase:
             metadata_payload[_MANAGED_TURN_LIFECYCLE_PHASE_KEY] = "accepted"
+        if turn_request is None:
+            raise ValueError(
+                "create_execution requires a canonical TurnExecutionRequest"
+            )
         create_kwargs: dict[str, Any] = {
             "prompt": prompt,
             "request_kind": request_kind,
@@ -357,14 +375,9 @@ class ManagedThreadExecutionStore(ThreadExecutionStore):
             "client_turn_id": client_request_id,
             "metadata": metadata_payload,
             "queue_payload": queue_payload,
+            "turn_request": turn_request,
         }
-        try:
-            created = self._store.create_turn(thread_target_id, **create_kwargs)
-        except TypeError as exc:
-            if "metadata" not in str(exc):
-                raise
-            create_kwargs.pop("metadata", None)
-            created = self._store.create_turn(thread_target_id, **create_kwargs)
+        created = self._store.create_turn(thread_target_id, **create_kwargs)
         record = _execution_record_from_store_row(created)
         if initialized_lifecycle_phase:
             self._advance_execution_lifecycle_phase(
@@ -381,6 +394,16 @@ class ManagedThreadExecutionStore(ThreadExecutionStore):
         if record is None:
             return None
         return _execution_record_from_store_row(record)
+
+    def get_turn_execution_request(
+        self, thread_target_id: str, execution_id: str
+    ) -> Optional[TurnExecutionRequest]:
+        return self._store.get_turn_execution_request(thread_target_id, execution_id)
+
+    def get_turn_execution_record(
+        self, thread_target_id: str, execution_id: str
+    ) -> Optional[TurnExecutionRecord]:
+        return self._store.get_turn_execution_record(thread_target_id, execution_id)
 
     def get_previous_completed_execution(
         self,

@@ -371,6 +371,7 @@ async def execute_opencode(
     interrupt_event: asyncio.Event,
     *,
     model: Optional[str] = None,
+    model_payload: Optional[dict[str, str]] = None,
     reasoning: Optional[str] = None,
     thread_registry: Optional[Any] = None,
     thread_key: Optional[str] = None,
@@ -410,7 +411,11 @@ async def execute_opencode(
         ):  # intentional: user-provided callback must not crash execution
             logger.debug("file chat opencode meta failed", exc_info=True)
 
-    model_payload = resolve_opencode_model_payload(model)
+    model_payload = model_payload or resolve_opencode_model_payload(model)
+    if model_payload is None:
+        raise FileChatError(
+            "OpenCode model must include provider/model before execution"
+        )
     await supervisor.mark_turn_started(repo_root)
 
     usage_parts: list[Dict[str, Any]] = []

@@ -19,7 +19,11 @@ from codex_autorunner.adapters.github.publisher import (
 from codex_autorunner.adapters.github.service import RepoInfo
 from codex_autorunner.core.config import CONFIG_FILENAME, DEFAULT_HUB_CONFIG
 from codex_autorunner.core.managed_thread_store import ManagedThreadStore
-from codex_autorunner.core.orchestration import OrchestrationBindingStore
+from codex_autorunner.core.orchestration import (
+    OrchestrationBindingStore,
+    TurnExecutionOrigin,
+    TurnExecutionRequest,
+)
 from codex_autorunner.core.orchestration.sqlite import open_orchestration_sqlite
 from codex_autorunner.core.pr_bindings import PrBindingStore
 from codex_autorunner.core.publish_executor import (
@@ -46,6 +50,28 @@ _ALLOW_REVIEW_COMMENT_REACTION_POLICY = {
 
 def _parse_utc(value: str) -> datetime:
     return datetime.fromisoformat(value.replace("Z", "+00:00")).astimezone(timezone.utc)
+
+
+def _test_turn_request(
+    *,
+    request_id: str,
+    thread_target_id: str,
+    workspace_root: Path,
+    prompt: str,
+) -> TurnExecutionRequest:
+    return TurnExecutionRequest(
+        request_id=request_id,
+        target_id=thread_target_id,
+        target_kind="thread",
+        workspace_root=str(workspace_root),
+        request_kind="message",
+        busy_policy="reject",
+        prompt_text=prompt,
+        agent="codex",
+        approval_policy="never",
+        sandbox_policy="dangerFullAccess",
+        origin=TurnExecutionOrigin(kind="system", source_id="test"),
+    )
 
 
 class _QueuedClock:
@@ -1025,7 +1051,14 @@ def test_enqueue_managed_turn_executor_merges_into_existing_queued_scm_turn(
         metadata={"head_branch": "feature/scm-rebind"},
     )
     running_turn = thread_store.create_turn(
-        thread["managed_thread_id"], prompt="already running"
+        thread["managed_thread_id"],
+        prompt="already running",
+        turn_request=_test_turn_request(
+            request_id="already-running",
+            thread_target_id=thread["managed_thread_id"],
+            workspace_root=workspace_root,
+            prompt="already running",
+        ),
     )
     binding = PrBindingStore(hub_root).upsert_binding(
         provider="github",
@@ -1159,7 +1192,8 @@ def test_enqueue_managed_turn_executor_merges_into_existing_queued_scm_turn(
         queued_turn["managed_turn_id"],
     )
     assert queued_payload is not None
-    assert queued_payload["request"]["message_text"] == queued_turn["prompt"]
+    turn_request = TurnExecutionRequest.from_mapping(queued_payload["turn_request"])
+    assert turn_request.prompt_text == queued_turn["prompt"]
 
 
 def test_enqueue_managed_turn_executor_rebinds_instead_of_merging_stale_archived_queue(

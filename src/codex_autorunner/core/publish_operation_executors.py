@@ -5,6 +5,7 @@ import hashlib
 import logging
 import threading
 from collections.abc import Mapping
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable, Coroutine, Optional, cast
@@ -12,7 +13,11 @@ from typing import Any, Callable, Coroutine, Optional, cast
 from ..manifest import ManifestError, load_manifest
 from .config import load_hub_config
 from .managed_thread_store import ManagedThreadNotActiveError, ManagedThreadStore
-from .orchestration.models import MessageRequest, MessageRequestKind
+from .orchestration.models import MessageRequestKind
+from .orchestration.turn_execution_contract import (
+    TurnExecutionOrigin,
+    TurnExecutionRequest,
+)
 from .pma_chat_delivery import (
     deliver_pma_notification,
     notify_preferred_bound_chat_for_workspace,
@@ -73,6 +78,15 @@ def _normalize_request_kind(value: Any) -> MessageRequestKind:
     return "review" if _normalize_optional_text(value) == "review" else "message"
 
 
+def _opencode_model_payload(model: Optional[str]) -> dict[str, str]:
+    if model is None or "/" not in model:
+        return {}
+    provider_id, model_id = (part.strip() for part in model.split("/", 1))
+    if not provider_id or not model_id:
+        return {}
+    return {"providerID": provider_id, "modelID": model_id}
+
+
 def _operation_digest(operation: PublishOperation, *, prefix: str) -> str:
     digest = hashlib.sha256(
         f"{operation.operation_kind}:{operation.operation_key}".encode("utf-8")
@@ -106,7 +120,15 @@ def _run_coroutine_sync(coro: Coroutine[Any, Any, Any]) -> Any:
 def _managed_turn_request(
     thread_target_id: str,
     payload: dict[str, Any],
-) -> tuple[MessageRequest, Optional[Any]]:
+    *,
+    operation: PublishOperation,
+    thread: Optional[Mapping[str, Any]],
+    client_request_id: str,
+) -> TurnExecutionRequest:
+    canonical = payload.get("turn_request")
+    if isinstance(canonical, Mapping):
+        return TurnExecutionRequest.from_mapping(canonical)
+
     request_payload = _normalize_mapping(payload.get("request"))
     source = request_payload or payload
     message_text = _normalize_optional_text(
@@ -130,20 +152,55 @@ def _managed_turn_request(
         if items:
             input_items = items
 
-    request = MessageRequest(
+    agent = (
+        _normalize_optional_text(source.get("agent"))
+        or _normalize_optional_text((thread or {}).get("agent_id"))
+        or _normalize_optional_text((thread or {}).get("agent"))
+        or "codex"
+    )
+    model = _normalize_optional_text(source.get("model"))
+    request = TurnExecutionRequest(
+        request_id=client_request_id,
         target_id=_normalize_optional_text(source.get("target_id")) or thread_target_id,
         target_kind="thread",
-        message_text=message_text,
-        kind=_normalize_request_kind(source.get("kind") or source.get("request_kind")),
+        workspace_root=_normalize_optional_text((thread or {}).get("workspace_root")),
+        request_kind=_normalize_request_kind(
+            source.get("kind") or source.get("request_kind")
+        ),
         busy_policy="queue",
-        model=_normalize_optional_text(source.get("model")),
+        prompt_text=message_text,
+        agent=agent,
+        profile=_normalize_optional_text(
+            source.get("agent_profile") or source.get("profile")
+        ),
+        model=model,
+        model_payload=_opencode_model_payload(model) if agent == "opencode" else {},
         reasoning=_normalize_optional_text(source.get("reasoning")),
+        approval_policy=(
+            _normalize_optional_text(source.get("approval_policy"))
+            or _normalize_optional_text(source.get("approval_mode"))
+            or "never"
+        ),
         approval_mode=_normalize_optional_text(source.get("approval_mode")),
-        input_items=input_items,
+        sandbox_policy=payload.get("sandbox_policy") or "dangerFullAccess",
+        client_request_id=client_request_id,
+        idempotency_key=_normalize_optional_text(operation.operation_key)
+        or client_request_id,
+        correlation_id=correlation_id,
+        origin=TurnExecutionOrigin(
+            kind="publish",
+            source_id=operation.operation_id,
+            publish_operation_id=operation.operation_id,
+            metadata={
+                "operation_kind": operation.operation_kind,
+                "operation_key": operation.operation_key,
+            },
+        ),
+        input_items=tuple(input_items or ()),
         context_profile=source.get("context_profile"),
         metadata=metadata,
     )
-    return request, payload.get("sandbox_policy")
+    return request
 
 
 def _managed_turn_result(
@@ -153,6 +210,7 @@ def _managed_turn_result(
     turn: dict[str, Any],
     existed: bool,
     correlation_id: Optional[str] = None,
+    turn_request: Optional[TurnExecutionRequest] = None,
 ) -> dict[str, Any]:
     status = _normalize_optional_text(turn.get("status")) or "unknown"
     result = {
@@ -167,6 +225,8 @@ def _managed_turn_result(
     }
     if correlation_id is not None:
         result["correlation_id"] = correlation_id
+    if turn_request is not None:
+        result["turn_request"] = turn_request.to_dict()
     return result
 
 
@@ -557,10 +617,33 @@ def _merge_into_existing_queued_scm_turn(
         merged_bundle,
     )
     updated_request = updated_payload.get("request")
-    if not isinstance(updated_request, Mapping):
-        return None
-    updated_prompt = _normalize_optional_text(updated_request.get("message_text"))
-    if updated_prompt is None:
+    canonical_request = updated_payload.get("turn_request")
+    if isinstance(canonical_request, Mapping):
+        existing_turn_request = TurnExecutionRequest.from_mapping(canonical_request)
+        request_metadata = _normalize_mapping(
+            updated_request.get("metadata")
+            if isinstance(updated_request, Mapping)
+            else None
+        )
+        updated_prompt = _normalize_optional_text(
+            updated_request.get("message_text")
+            if isinstance(updated_request, Mapping)
+            else None
+        )
+        if updated_prompt is None:
+            return None
+        updated_payload = {
+            "turn_request": replace(
+                existing_turn_request,
+                prompt_text=updated_prompt,
+                metadata=request_metadata,
+            ).to_dict()
+        }
+    elif isinstance(updated_request, Mapping):
+        updated_prompt = _normalize_optional_text(updated_request.get("message_text"))
+        if updated_prompt is None:
+            return None
+    else:
         return None
     updated_turn = store.update_queued_turn_request(
         thread_target_id,
@@ -787,37 +870,29 @@ def _build_scm_rebootstrap_message(
 
 
 def _build_scm_rebootstrap_request(
-    request: MessageRequest,
+    request: TurnExecutionRequest,
     *,
     replacement_thread_target_id: str,
     previous_thread_target_id: str,
     binding: PrBinding,
     event: Optional[ScmEvent],
     tracking: Mapping[str, Any],
-) -> MessageRequest:
+) -> TurnExecutionRequest:
     metadata = dict(request.metadata)
     scm_metadata = _normalize_mapping(metadata.get("scm"))
     scm_metadata["binding_id"] = binding.binding_id
     scm_metadata["previous_thread_target_id"] = previous_thread_target_id
     scm_metadata["thread_target_id"] = replacement_thread_target_id
     metadata["scm"] = scm_metadata
-    return MessageRequest(
+    return replace(
+        request,
         target_id=replacement_thread_target_id,
-        target_kind=request.target_kind,
-        message_text=_build_scm_rebootstrap_message(
+        prompt_text=_build_scm_rebootstrap_message(
             binding=binding,
             event=event,
             tracking=tracking,
             previous_thread_target_id=previous_thread_target_id,
         ),
-        kind=request.kind,
-        busy_policy=request.busy_policy,
-        agent_profile=request.agent_profile,
-        model=request.model,
-        reasoning=request.reasoning,
-        approval_mode=request.approval_mode,
-        input_items=request.input_items,
-        context_profile=request.context_profile,
         metadata=metadata,
     )
 
@@ -827,10 +902,10 @@ def _repair_scm_thread_binding(
     store: ManagedThreadStore,
     *,
     current_thread_target_id: str,
-    request: MessageRequest,
+    request: TurnExecutionRequest,
     tracking: Mapping[str, Any],
     source_status: Optional[str] = None,
-) -> tuple[str, MessageRequest]:
+) -> tuple[str, TurnExecutionRequest]:
     binding = _resolve_scm_binding(hub_root, tracking=tracking)
     if binding is None:
         raise ManagedThreadNotActiveError(current_thread_target_id, source_status)
@@ -970,11 +1045,16 @@ def build_enqueue_managed_turn_executor(
             _coerce_int(tracking.get("pr_number")),
         )
 
-        request, sandbox_policy = _managed_turn_request(thread_target_id, payload)
+        request = _managed_turn_request(
+            thread_target_id,
+            payload,
+            operation=operation,
+            thread=_active_thread or store.get_thread(thread_target_id),
+            client_request_id=client_request_id,
+        )
         queue_payload = {
-            "request": request.to_dict(),
+            "turn_request": request.to_dict(),
             "client_request_id": client_request_id,
-            "sandbox_policy": sandbox_policy,
         }
         rebound_from_thread_target_id: Optional[str] = None
         try:
@@ -1007,17 +1087,18 @@ def build_enqueue_managed_turn_executor(
                         turn=merged_turn,
                         existed=True,
                         correlation_id=correlation_id,
+                        turn_request=request,
                     )
             created = store.create_turn(
                 thread_target_id,
-                prompt=request.message_text,
-                request_kind=request.kind,
+                prompt=request.prompt_text or "",
+                request_kind=request.request_kind,
                 busy_policy="queue",
                 model=request.model,
                 reasoning=request.reasoning,
                 client_turn_id=client_request_id,
                 metadata=request.metadata,
-                queue_payload=queue_payload,
+                turn_request=request,
                 force_queue=bool(tracking),
             )
             _log_scm_enqueue_managed_turn_queued(
@@ -1065,24 +1146,20 @@ def build_enqueue_managed_turn_executor(
                     turn=existing,
                     existed=True,
                     correlation_id=correlation_id,
+                    turn_request=request,
                 )
                 result["rebound_from_thread_target_id"] = rebound_from_thread_target_id
                 return result
-            queue_payload = {
-                "request": request.to_dict(),
-                "client_request_id": client_request_id,
-                "sandbox_policy": sandbox_policy,
-            }
             created = store.create_turn(
                 thread_target_id,
-                prompt=request.message_text,
-                request_kind=request.kind,
+                prompt=request.prompt_text or "",
+                request_kind=request.request_kind,
                 busy_policy="queue",
                 model=request.model,
                 reasoning=request.reasoning,
                 client_turn_id=client_request_id,
                 metadata=request.metadata,
-                queue_payload=queue_payload,
+                turn_request=request,
                 force_queue=bool(tracking),
             )
             _log_scm_enqueue_managed_turn_queued(
@@ -1106,6 +1183,7 @@ def build_enqueue_managed_turn_executor(
             turn=created,
             existed=False,
             correlation_id=correlation_id,
+            turn_request=request,
         )
         if rebound_from_thread_target_id is not None:
             result["rebound_from_thread_target_id"] = rebound_from_thread_target_id

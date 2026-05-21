@@ -825,7 +825,9 @@ def test_managed_thread_message_route_no_wait_returns_after_enqueue(
     assert payload["execution_state"] == "running"
     assert payload["managed_turn_id"] == "managed-turn-1"
     assert payload["delivered_message"] == "hello from route"
-    assert observed["prepare_request"].message_text == "hello from route"
+    assert observed["prepare_request"].prompt_text == "hello from route"
+    assert observed["prepare_request"].target_id == managed_thread_id
+    assert observed["prepare_request"].approval_policy == "never"
     assert observed["sandbox_policy"] == "dangerFullAccess"
     assert observed["background_started"] is True
 
@@ -2597,7 +2599,7 @@ def test_managed_thread_message_route_preserves_literal_message_whitespace(
     assert response.status_code == 200
     payload = response.json()
     assert payload["delivered_message"] == literal_message
-    assert captured["request"].message_text == literal_message
+    assert captured["request"].prompt_text == literal_message
     runtime_prompt = captured["request"].metadata["runtime_prompt"]
     assert f"<user_message>\n{literal_message}" in runtime_prompt
     assert runtime_prompt.endswith("\n</user_message>\n")
@@ -2638,7 +2640,7 @@ def test_managed_thread_message_route_delegates_harness_to_shared_finalization(
             _ = thread_target_id
             return None
 
-        def claim_next_queued_execution_request(self, thread_target_id: str):
+        def claim_next_queued_execution_context(self, thread_target_id: str):
             _ = thread_target_id
             return None
 

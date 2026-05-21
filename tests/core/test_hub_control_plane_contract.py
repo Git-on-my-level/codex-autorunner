@@ -23,6 +23,7 @@ from codex_autorunner.core.hub_control_plane import (
     evaluate_handshake_compatibility,
     redact_automation_mapping,
 )
+from tests.support.turn_execution import build_test_turn_request
 
 
 def test_control_plane_version_parsing_and_ordering() -> None:
@@ -302,6 +303,15 @@ def test_thread_target_response_round_trips_agent_and_backend_ids() -> None:
 
 
 def test_execution_models_round_trip_with_existing_execution_record() -> None:
+    turn_request = build_test_turn_request(
+        managed_thread_id="thread-1",
+        workspace_root="/repo",
+        prompt="Summarize the latest run",
+        busy_policy="queue",
+        model="gpt-5.4",
+        reasoning="medium",
+        client_turn_id="client-77",
+    ).to_dict()
     create_request = ExecutionCreateRequest.from_mapping(
         {
             "thread_target_id": "thread-1",
@@ -312,6 +322,7 @@ def test_execution_models_round_trip_with_existing_execution_record() -> None:
             "reasoning": "medium",
             "client_request_id": "client-77",
             "queue_payload": {"priority": "high"},
+            "turn_request": turn_request,
         }
     )
     execution_response = ExecutionResponse.from_mapping(
@@ -362,6 +373,7 @@ def test_execution_models_round_trip_with_existing_execution_record() -> None:
         "reasoning": "medium",
         "client_request_id": "client-77",
         "queue_payload": {"priority": "high"},
+        "turn_request": turn_request,
     }
     assert execution_response.execution is not None
     assert execution_response.execution.execution_id == "exec-1"

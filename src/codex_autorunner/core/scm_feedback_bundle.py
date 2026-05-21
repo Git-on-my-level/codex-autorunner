@@ -129,6 +129,8 @@ def extract_feedback_bundle(
         return None
     request = payload.get("request")
     if not isinstance(request, Mapping):
+        request = payload.get("turn_request")
+    if not isinstance(request, Mapping):
         return None
     metadata = request.get("metadata")
     if not isinstance(metadata, Mapping):

@@ -2,10 +2,16 @@ from __future__ import annotations
 
 import hashlib
 from pathlib import Path
-from typing import Any, Callable, Optional
+from typing import Any, Callable, Optional, cast
 
 from ..domain.refs import AgentRef, ScopeRef
 from ..managed_thread_store import ManagedThreadStore
+from ..orchestration.turn_execution_contract import (
+    TurnExecutionContractError,
+    TurnExecutionOrigin,
+    TurnExecutionRequest,
+    TurnExecutionRequestKind,
+)
 from ..pma_reactive import PmaReactiveStore
 from ..publish_executor import PublishExecutorRegistry, drain_pending_publish_operations
 from ..publish_journal import PublishJournalStore
@@ -36,6 +42,26 @@ _PUBLISH_KIND_BY_AUTOMATION_EXECUTOR = {
     EXECUTOR_GITHUB_REACTION: "react_pr_review_comment",
     EXECUTOR_GITHUB_COMMENT: "post_pr_comment",
 }
+
+_TURN_EXECUTION_REQUEST_KINDS = frozenset(
+    {"message", "review", "automation", "publish", "recovery", "lifecycle"}
+)
+
+
+def _opencode_model_payload(model: Optional[str]) -> dict[str, str]:
+    if model is None or "/" not in model:
+        return {}
+    provider_id, model_id = (part.strip() for part in model.split("/", 1))
+    if not provider_id or not model_id:
+        return {}
+    return {"providerID": provider_id, "modelID": model_id}
+
+
+def _turn_request_kind(value: Any) -> TurnExecutionRequestKind:
+    normalized = _normalize_text(value)
+    if normalized in _TURN_EXECUTION_REQUEST_KINDS:
+        return cast(TurnExecutionRequestKind, normalized)
+    return "automation"
 
 
 class ManagedThreadTurnAutomationExecutor:
@@ -144,6 +170,7 @@ class ManagedThreadTurnAutomationExecutor:
                 ),
             )
 
+        thread = self._thread_store.get_thread(thread_id) or {}
         metadata = request.get("metadata")
         if not isinstance(metadata, dict):
             metadata = {}
@@ -161,29 +188,71 @@ class ManagedThreadTurnAutomationExecutor:
         elif approval == APPROVAL_INHERIT_PROFILE:
             metadata["automation"]["approval_override"] = "inherit_profile"
 
-        queue_payload = {
-            "request": {
-                "target_id": thread_id,
-                "target_kind": "thread",
-                "message_text": prompt,
-                "kind": request.get("kind") or request.get("request_kind") or "message",
-                "busy_policy": request.get("busy_policy") or "queue",
-                "agent_profile": request.get("agent_profile") or request.get("profile"),
-                "model": request.get("model"),
-                "reasoning": request.get("reasoning"),
-                "approval_mode": (
-                    request.get("approval_mode")
-                    if approval == APPROVAL_INHERIT_PROFILE
-                    else None
+        agent = _require_text(
+            request.get("agent")
+            or thread.get("agent_id")
+            or thread.get("agent")
+            or "codex",
+            "agent",
+        )
+        model = _normalize_text(request.get("model"))
+        approval_mode = (
+            _normalize_text(request.get("approval_mode"))
+            if approval == APPROVAL_INHERIT_PROFILE
+            else None
+        )
+        try:
+            turn_request = TurnExecutionRequest(
+                request_id=client_turn_id,
+                target_id=thread_id,
+                target_kind="thread",
+                workspace_root=_normalize_text(thread.get("workspace_root")),
+                request_kind=_turn_request_kind(
+                    request.get("request_kind") or request.get("kind")
                 ),
-                "input_items": request.get("input_items"),
-                "context_profile": request.get("context_profile"),
-                "metadata": metadata,
-            },
-            "client_request_id": client_turn_id,
-            "sandbox_policy": request.get("sandbox_policy"),
-            "stream": request.get("stream"),
-        }
+                busy_policy=request.get("busy_policy") or "queue",
+                prompt_text=prompt,
+                input_items=(
+                    tuple(
+                        dict(item)
+                        for item in request.get("input_items", ())
+                        if isinstance(item, dict)
+                    )
+                    if isinstance(request.get("input_items"), (list, tuple))
+                    else ()
+                ),
+                context_profile=request.get("context_profile"),
+                agent=agent,
+                profile=request.get("agent_profile") or request.get("profile"),
+                model=model,
+                model_payload=(
+                    _opencode_model_payload(model) if agent == "opencode" else {}
+                ),
+                reasoning=_normalize_text(request.get("reasoning")),
+                approval_policy=(
+                    _normalize_text(request.get("approval_policy"))
+                    or approval_mode
+                    or approval
+                ),
+                approval_mode=approval_mode,
+                sandbox_policy=request.get("sandbox_policy") or "dangerFullAccess",
+                client_request_id=client_turn_id,
+                idempotency_key=client_turn_id,
+                correlation_id=_normalize_text(
+                    request.get("correlation_id") or job.payload.get("correlation_id")
+                )
+                or job.job_id,
+                origin=TurnExecutionOrigin(
+                    kind="automation",
+                    source_id=job.job_id,
+                    automation_rule_id=job.rule_id,
+                    metadata={"event_id": job.event_id},
+                ),
+                metadata=metadata,
+            )
+        except TurnExecutionContractError as exc:
+            return AutomationExecutorResult(status=JOB_FAILED, summary=str(exc))
+
         turn = self._thread_store.create_turn(
             thread_id,
             prompt=prompt,
@@ -191,11 +260,11 @@ class ManagedThreadTurnAutomationExecutor:
                 request.get("kind") or request.get("request_kind") or "message"
             ),
             busy_policy=str(request.get("busy_policy") or "queue"),
-            model=_normalize_text(request.get("model")),
+            model=model,
             reasoning=_normalize_text(request.get("reasoning")),
             client_turn_id=client_turn_id,
             metadata=metadata,
-            queue_payload=queue_payload,
+            turn_request=turn_request,
             force_queue=True,
         )
         self._request_queue_worker_start(thread_id)

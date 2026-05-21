@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import concurrent.futures
+import json
 import threading
 from pathlib import Path
 
@@ -19,7 +20,7 @@ from codex_autorunner.core.managed_thread_store import (
     managed_threads_db_lock_path,
 )
 from codex_autorunner.core.managed_thread_store_rows import ManagedThreadRecord
-from codex_autorunner.core.orchestration import ColdTraceStore
+from codex_autorunner.core.orchestration import ColdTraceStore, TurnExecutionRequest
 from codex_autorunner.core.orchestration.chat_surface_events import (
     SQLiteChatSurfaceEventJournal,
 )
@@ -698,8 +699,9 @@ def test_claim_next_queued_turn_promotes_queued_execution(tmp_path: Path) -> Non
     assert execution["managed_turn_id"] == queued_turn["managed_turn_id"]
     assert execution["request_kind"] == "review"
     assert execution["status"] == "running"
-    assert payload["request"]["kind"] == "review"
-    assert payload["request"]["message_text"] == "second"
+    turn_request = TurnExecutionRequest.from_mapping(payload["turn_request"])
+    assert turn_request.request_kind == "review"
+    assert turn_request.prompt_text == "second"
     assert store.get_queue_depth(thread["managed_thread_id"]) == 0
 
 
@@ -924,8 +926,9 @@ def test_claim_next_queued_turn_recovers_stale_running_execution(
     execution, payload = claimed
     assert execution["managed_turn_id"] == queued_turn["managed_turn_id"]
     assert execution["status"] == "running"
-    assert payload["request"]["kind"] == "review"
-    assert payload["request"]["message_text"] == "third queued"
+    turn_request = TurnExecutionRequest.from_mapping(payload["turn_request"])
+    assert turn_request.request_kind == "review"
+    assert turn_request.prompt_text == "third queued"
 
     stale_after = store.get_turn(
         thread["managed_thread_id"], stale_running_turn["managed_turn_id"]
@@ -1123,7 +1126,8 @@ def test_claim_next_queued_turn_recovers_old_running_execution_when_status_turn_
     execution, payload = claimed
     assert execution["managed_turn_id"] == queued_turn["managed_turn_id"]
     assert execution["status"] == "running"
-    assert payload["request"]["message_text"] == "second queued"
+    turn_request = TurnExecutionRequest.from_mapping(payload["turn_request"])
+    assert turn_request.prompt_text == "second queued"
 
     stale_after = store.get_turn(
         thread["managed_thread_id"], stale_running_turn["managed_turn_id"]
@@ -1177,8 +1181,9 @@ def test_claim_next_queued_turn_recovers_running_turn_when_thread_status_is_term
     execution, payload = claimed
     assert execution["managed_turn_id"] == queued_turn["managed_turn_id"]
     assert execution["status"] == "running"
-    assert payload["request"]["kind"] == "review"
-    assert payload["request"]["message_text"] == "second queued"
+    turn_request = TurnExecutionRequest.from_mapping(payload["turn_request"])
+    assert turn_request.request_kind == "review"
+    assert turn_request.prompt_text == "second queued"
 
     stale_after = store.get_turn(
         thread["managed_thread_id"], stale_running_turn["managed_turn_id"]
@@ -1398,6 +1403,64 @@ def test_create_turn_rejects_archived_thread(tmp_path: Path) -> None:
         store.create_turn(thread["managed_thread_id"], prompt="should reject")
 
     assert store.list_turns(thread["managed_thread_id"]) == []
+
+
+def test_queued_turn_payload_persists_canonical_turn_request_only(
+    tmp_path: Path,
+) -> None:
+    store = ManagedThreadStore(tmp_path / "hub")
+    thread = store.create_thread("opencode", tmp_path / "workspace")
+    running = store.create_turn(
+        thread["managed_thread_id"],
+        prompt="first",
+        model="zai-coding-plan/glm-5.1",
+    )
+    queued = store.create_turn(
+        thread["managed_thread_id"],
+        prompt="scheduled opencode request",
+        busy_policy="queue",
+        model="zai-coding-plan/glm-5.1",
+        reasoning="medium",
+        client_turn_id="client-turn-1905",
+        queue_payload={
+            "request": {
+                "message_text": "scheduled opencode request",
+                "model": "wrong/legacy",
+            },
+            "client_request_id": "legacy-client",
+        },
+    )
+
+    assert running["status"] == "running"
+    assert queued["status"] == "queued"
+    turn_request = store.get_turn_execution_request(
+        thread["managed_thread_id"], queued["managed_turn_id"]
+    )
+    assert turn_request is not None
+    assert turn_request.model == "zai-coding-plan/glm-5.1"
+    assert turn_request.model_payload == {
+        "providerID": "zai-coding-plan",
+        "modelID": "glm-5.1",
+    }
+    assert turn_request.reasoning == "medium"
+    assert turn_request.client_request_id == "client-turn-1905"
+
+    with open_orchestration_sqlite(store.hub_root) as conn:
+        row = conn.execute(
+            """
+            SELECT payload_json
+              FROM orch_queue_items
+             WHERE source_kind = 'thread_execution'
+               AND source_key = ?
+            """,
+            (queued["managed_turn_id"],),
+        ).fetchone()
+
+    assert row is not None
+    queue_payload = json.loads(str(row["payload_json"]))
+    assert set(queue_payload) == {"turn_request"}
+    assert queue_payload["turn_request"] == turn_request.to_dict()
+    assert "request" not in queue_payload
 
 
 def test_archived_thread_terminalizes_live_running_turn(tmp_path: Path) -> None:

@@ -17,6 +17,13 @@ from ..orchestration.models import (
     owner_fields_from_scope_ref,
 )
 from ..orchestration.runtime_bindings import RuntimeThreadBinding
+from ..orchestration.turn_execution_contract import (
+    TurnExecutionRecord,
+    TurnExecutionRequest,
+)
+from ..orchestration.turn_execution_storage import (
+    build_turn_execution_record_from_storage,
+)
 from .background_runner import BackgroundRunnerSaturated, BoundedBackgroundRunner
 from .client import HubControlPlaneClient
 from .errors import HubControlPlaneError
@@ -69,6 +76,9 @@ class RemoteThreadExecutionStore(ThreadExecutionStore):
         self._client = client
         self._timeout_seconds = timeout_seconds
         self._background_runner = background_runner or _BACKGROUND_RUNNER
+        self._thread_cache: dict[str, ThreadTarget] = {}
+        self._turn_request_cache: dict[tuple[str, str], TurnExecutionRequest] = {}
+        self._turn_record_cache: dict[tuple[str, str], TurnExecutionRecord] = {}
 
     def _hub_unavailable(
         self,
@@ -238,10 +248,12 @@ class RemoteThreadExecutionStore(ThreadExecutionStore):
                 )
             ),
         )
-        return self._require_thread(
+        thread = self._require_thread(
             response.thread,
             operation="create_thread_target",
         )
+        self._thread_cache[thread.thread_target_id] = thread
+        return thread
 
     def get_thread_target(self, thread_target_id: str) -> Optional[ThreadTarget]:
         response = self._run(
@@ -250,6 +262,8 @@ class RemoteThreadExecutionStore(ThreadExecutionStore):
                 ThreadTargetLookupRequest(thread_target_id=thread_target_id)
             ),
         )
+        if response.thread is not None:
+            self._thread_cache[response.thread.thread_target_id] = response.thread
         return response.thread
 
     def get_thread_runtime_binding(
@@ -302,7 +316,10 @@ class RemoteThreadExecutionStore(ThreadExecutionStore):
                 )
             ),
         )
-        return list(response.threads)
+        threads = list(response.threads)
+        for thread in threads:
+            self._thread_cache[thread.thread_target_id] = thread
+        return threads
 
     def resume_thread_target(
         self,
@@ -325,6 +342,8 @@ class RemoteThreadExecutionStore(ThreadExecutionStore):
                 )
             ),
         )
+        if response.thread is not None:
+            self._thread_cache[response.thread.thread_target_id] = response.thread
         return response.thread
 
     def archive_thread_target(self, thread_target_id: str) -> Optional[ThreadTarget]:
@@ -334,6 +353,8 @@ class RemoteThreadExecutionStore(ThreadExecutionStore):
                 ThreadTargetArchiveRequest(thread_target_id=thread_target_id)
             ),
         )
+        if response.thread is not None:
+            self._thread_cache[response.thread.thread_target_id] = response.thread
         return response.thread
 
     def set_thread_backend_binding(
@@ -393,7 +414,12 @@ class RemoteThreadExecutionStore(ThreadExecutionStore):
         client_request_id: Optional[str] = None,
         metadata: Optional[dict[str, Any]] = None,
         queue_payload: Optional[dict[str, Any]] = None,
+        turn_request: Optional[TurnExecutionRequest] = None,
     ) -> ExecutionRecord:
+        if turn_request is None:
+            raise RuntimeError(
+                "remote execution creation requires a canonical TurnExecutionRequest"
+            )
         response = self._run(
             operation="create_execution",
             action=lambda client: client.create_execution(
@@ -407,13 +433,39 @@ class RemoteThreadExecutionStore(ThreadExecutionStore):
                     client_request_id=client_request_id,
                     metadata=dict(metadata or {}),
                     queue_payload=dict(queue_payload or {}),
+                    turn_request=turn_request,
                 )
             ),
         )
-        return self._require_execution(
+        execution = self._require_execution(
             response.execution,
             operation="create_execution",
         )
+        thread = self._thread_cache.get(thread_target_id)
+        if thread is None:
+            thread = self.get_thread_target(thread_target_id)
+        if thread is not None:
+            request = turn_request
+            record = build_turn_execution_record_from_storage(
+                execution=execution.to_dict(),
+                thread=thread.to_dict(),
+                request=request,
+                queue_item={},
+            )
+            cache_key = (thread_target_id, execution.execution_id)
+            self._turn_request_cache[cache_key] = request
+            self._turn_record_cache[cache_key] = record
+        return execution
+
+    def get_turn_execution_request(
+        self, thread_target_id: str, execution_id: str
+    ) -> Optional[TurnExecutionRequest]:
+        return self._turn_request_cache.get((thread_target_id, execution_id))
+
+    def get_turn_execution_record(
+        self, thread_target_id: str, execution_id: str
+    ) -> Optional[TurnExecutionRecord]:
+        return self._turn_record_cache.get((thread_target_id, execution_id))
 
     def get_execution(
         self, thread_target_id: str, execution_id: str

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Iterable, Optional
@@ -14,6 +15,7 @@ from .ticket_flow_chat_ledger_contract import (
     ticket_flow_thread_metadata,
     validate_ticket_flow_thread_metadata,
 )
+from .turn_execution_contract import TurnExecutionOrigin, TurnExecutionRequest
 
 
 @dataclass(frozen=True)
@@ -558,18 +560,42 @@ def _create_repaired_ticket_flow_thread(
         metadata=metadata,
     )
     thread_id = str(thread["managed_thread_id"])
+    prompt = (
+        "Backfilled ticket-flow visibility placeholder. Original runtime prompt "
+        "is unavailable in canonical orchestration records."
+    )
     turn = thread_store.create_turn(
         thread_id,
-        prompt=(
-            "Backfilled ticket-flow visibility placeholder. Original runtime prompt "
-            "is unavailable in canonical orchestration records."
-        ),
+        prompt=prompt,
         metadata={
             "repair_provenance": metadata["repair_provenance"],
             "flow_run_id": evidence.run_id,
             "ticket_id": evidence.ticket_id,
             "ticket_path": evidence.ticket_path,
         },
+        turn_request=TurnExecutionRequest(
+            request_id=uuid.uuid4().hex,
+            target_id=thread_id,
+            target_kind="thread",
+            workspace_root=str(repo_root),
+            request_kind="recovery",
+            busy_policy="reject",
+            prompt_text=prompt,
+            agent=evidence.agent_id,
+            approval_policy="never",
+            sandbox_policy="dangerFullAccess",
+            origin=TurnExecutionOrigin(
+                kind="recovery",
+                source_id=evidence.run_id,
+                metadata={"source": "ticket_flow_visibility_repair"},
+            ),
+            metadata={
+                "repair_provenance": metadata["repair_provenance"],
+                "flow_run_id": evidence.run_id,
+                "ticket_id": evidence.ticket_id,
+                "ticket_path": evidence.ticket_path,
+            },
+        ),
     )
     thread_store.mark_turn_finished(
         str(turn["managed_turn_id"]),

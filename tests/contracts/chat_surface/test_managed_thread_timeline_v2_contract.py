@@ -18,6 +18,7 @@ from codex_autorunner.core.ports.run_event import (
     ToolCall,
     ToolResult,
 )
+from tests.support.turn_execution import create_test_turn
 
 
 def _store(tmp_path: Path) -> tuple[Path, ManagedThreadStore, str]:
@@ -46,7 +47,7 @@ def test_managed_thread_timeline_v2_authors_identity_and_provenance_for_core_ite
     tmp_path: Path,
 ) -> None:
     hub_root, store, thread_id = _store(tmp_path)
-    turn = store.create_turn(thread_id, prompt="run checks")
+    turn = create_test_turn(store, thread_id, prompt="run checks")
     turn_id = str(turn["managed_turn_id"])
     persist_turn_timeline(
         hub_root,

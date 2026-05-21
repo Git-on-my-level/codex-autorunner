@@ -4,6 +4,7 @@ import asyncio
 import json
 import logging
 import time
+import uuid
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Awaitable, Callable, cast
@@ -28,8 +29,32 @@ from .execution_history_maintenance import (
     vacuum_execution_history,
 )
 from .sqlite import open_orchestration_sqlite, resolve_orchestration_sqlite_path
+from .turn_execution_contract import TurnExecutionOrigin, TurnExecutionRequest
 
 _CREATE_HUB_APP: Callable[[Path], Any]
+
+
+def _canary_turn_request(
+    *,
+    request_id: str,
+    thread_target_id: str,
+    workspace_root: Path,
+    prompt: str,
+) -> TurnExecutionRequest:
+    return TurnExecutionRequest(
+        request_id=request_id,
+        target_id=thread_target_id,
+        target_kind="thread",
+        workspace_root=str(workspace_root),
+        request_kind="recovery",
+        busy_policy="reject",
+        prompt_text=prompt,
+        agent="codex",
+        approval_policy="never",
+        sandbox_policy="dangerFullAccess",
+        origin=TurnExecutionOrigin(kind="system", source_id="canary"),
+        metadata={"source": "orchestration_canary"},
+    )
 
 
 def _round_duration(value: float) -> float:
@@ -392,7 +417,17 @@ async def _run_recovery_validation(
             "codex", workspace_root.resolve(), repo_id="repo-canary"
         )
         managed_thread_id = str(managed_thread["managed_thread_id"])
-        pma_turn = store.create_turn(managed_thread_id, prompt="recover pma turn")
+        pma_turn_id_seed = uuid.uuid4().hex
+        pma_turn = store.create_turn(
+            managed_thread_id,
+            prompt="recover pma turn",
+            turn_request=_canary_turn_request(
+                request_id=pma_turn_id_seed,
+                thread_target_id=managed_thread_id,
+                workspace_root=workspace_root.resolve(),
+                prompt="recover pma turn",
+            ),
+        )
         pma_turn_id = str(pma_turn["managed_turn_id"])
         store.set_thread_backend_binding(managed_thread_id, None)
         store.set_turn_backend_turn_id(pma_turn_id, None)
@@ -413,8 +448,16 @@ async def _run_recovery_validation(
             repo_id="repo-canary",
         )
         discord_thread_id = str(discord_thread["managed_thread_id"])
+        discord_turn_id_seed = uuid.uuid4().hex
         discord_turn = store.create_turn(
-            discord_thread_id, prompt="recover discord turn"
+            discord_thread_id,
+            prompt="recover discord turn",
+            turn_request=_canary_turn_request(
+                request_id=discord_turn_id_seed,
+                thread_target_id=discord_thread_id,
+                workspace_root=workspace_root.resolve(),
+                prompt="recover discord turn",
+            ),
         )
         discord_turn_id = str(discord_turn["managed_turn_id"])
         store.set_thread_backend_binding(discord_thread_id, None)
