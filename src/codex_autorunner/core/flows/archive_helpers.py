@@ -189,20 +189,22 @@ def _checkpoint_and_vacuum_flow_db(
 
 
 def _known_flow_run_ids(repo_root: Path, records: list[Any] | None) -> set[str]:
+    known: set[str] = set()
     if records is not None:
-        return {
+        known.update(
             str(record.id).strip()
             for record in records
             if getattr(record, "id", None) is not None and str(record.id).strip()
-        }
+        )
     db_path = resolve_repo_flows_db_path(repo_root)
     if not db_path.exists():
-        return set()
+        return known
     try:
         with FlowStore(db_path, durable=_get_durable_writes(repo_root)) as store:
-            return {record.id for record in store.list_flow_runs()}
+            known.update(record.id for record in store.list_flow_runs())
     except (sqlite3.Error, OSError, RuntimeError, ValueError, TypeError):
-        return set()
+        pass
+    return known
 
 
 def _iter_orphaned_flow_artifact_dirs(
