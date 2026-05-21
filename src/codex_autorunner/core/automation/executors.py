@@ -367,9 +367,7 @@ class ManagedThreadTurnAutomationExecutor:
                 requested_runtime=_runtime_contract_from_request(
                     turn_request, thread=thread
                 ),
-                actual_runtime=_runtime_contract_from_request(
-                    turn_request, thread=thread
-                ),
+                actual_runtime=None,
                 authoritative_for_parent_completion=True,
             )
         )
@@ -628,7 +626,7 @@ class PmaOperatorTurnAutomationExecutor:
                     requested_runtime=_runtime_contract_from_request(
                         coordinator_request
                     ),
-                    actual_runtime=_runtime_contract_from_request(coordinator_request),
+                    actual_runtime=None,
                     authoritative_for_parent_completion=bool(
                         request.get("coordinator_authoritative", True)
                     ),
@@ -752,6 +750,14 @@ class PmaOperatorTurnAutomationExecutor:
                 "executor_kind": EXECUTOR_PMA_OPERATOR_TURN,
             },
         }
+        prompt = (
+            f"{prompt}\n\n"
+            "Automation child execution contract:\n"
+            f"- parent_job_id: {job.job_id}\n"
+            "- If you launch worker agent turns for this automation, attach them "
+            "to the durable automation graph at launch time by passing "
+            f"`--automation-parent-job-id {job.job_id}` to `car pma thread send`."
+        )
         return TurnExecutionRequest(
             request_id=client_turn_id,
             target_id=lane_id,

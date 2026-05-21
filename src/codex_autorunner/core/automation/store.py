@@ -42,13 +42,16 @@ def _agent_task_runtime_mismatch(edge: AutomationChildExecutionEdge) -> bool:
     if edge.child_kind != AUTOMATION_CHILD_KIND_AGENT_TASK:
         return False
     if edge.actual_runtime is None:
-        return False
+        requested = edge.requested_runtime.to_dict()
+        return any(
+            requested.get(key) for key in ("agent", "model", "profile", "reasoning")
+        )
     requested = edge.requested_runtime.to_dict()
     actual = edge.actual_runtime.to_dict()
     for key in ("agent", "model", "profile", "reasoning"):
         requested_value = requested.get(key)
         actual_value = actual.get(key)
-        if requested_value and actual_value and requested_value != actual_value:
+        if requested_value and requested_value != actual_value:
             return True
     return False
 

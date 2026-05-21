@@ -348,9 +348,7 @@ def test_agent_task_turn_launches_direct_codex_task_and_records_runtime_edge(
     assert edge.child_id == saved.managed_thread_execution_id
     assert edge.requested_runtime.agent == "codex"
     assert edge.requested_runtime.model == "gpt-5.5"
-    assert edge.actual_runtime is not None
-    assert edge.actual_runtime.agent == "codex"
-    assert edge.actual_runtime.model == "gpt-5.5"
+    assert edge.actual_runtime is None
 
 
 def test_agent_task_turn_launches_direct_opencode_task_with_model_payload(
@@ -410,10 +408,7 @@ def test_agent_task_turn_launches_direct_opencode_task_with_model_payload(
         "providerID": "zai-coding-plan",
         "modelID": "glm-5.1",
     }
-    assert edge.actual_runtime.provider_payload == {
-        "providerID": "zai-coding-plan",
-        "modelID": "glm-5.1",
-    }
+    assert edge.actual_runtime is None
     assert started_workers == [str(saved.managed_thread_target_id)]
 
 
@@ -528,7 +523,7 @@ def test_pma_operator_turn_queues_coordinator_and_records_runtime_edge(
     assert edges[0].child_id == saved.pma_queue_item_id
     assert edges[0].authoritative_for_parent_completion is True
     assert edges[0].requested_runtime.agent == "codex"
-    assert edges[0].actual_runtime.agent == "codex"
+    assert edges[0].actual_runtime is None
 
 
 def test_pma_operator_turn_records_separate_declared_worker_child_edge(

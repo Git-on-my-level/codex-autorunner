@@ -17,6 +17,12 @@ from .....adapters.chat.managed_thread_turns import (
     ManagedThreadCoordinatorHooks,
     build_managed_thread_input_items,
 )
+from .....core.automation.models import (
+    AUTOMATION_CHILD_KIND_AGENT_TASK,
+    JOB_RUNNING,
+    AutomationChildExecutionEdge,
+)
+from .....core.automation.store import AutomationStore
 from .....core.managed_thread_store import (
     ManagedThreadAlreadyHasRunningTurnError,
     ManagedThreadNotActiveError,
@@ -25,6 +31,7 @@ from .....core.managed_thread_store import (
 from .....core.orchestration import MessageRequest
 from .....core.orchestration.runtime_threads import RuntimeThreadExecution
 from .....core.orchestration.service import BusyInterruptFailedError
+from .....core.orchestration.turn_execution_contract import TurnExecutionRequest
 from .....core.pma.message_options import ManagedThreadMessageOptions
 from .....core.pma.outbound_payloads import (
     MANAGED_THREAD_PUBLIC_EXECUTION_ERROR,
@@ -80,6 +87,95 @@ def _queue_depth(service: Any, managed_thread_id: str) -> int:
     return int(resolver(managed_thread_id))
 
 
+def _record_automation_child_edge_for_send(
+    hub_root: Any,
+    automation_child: Optional[dict[str, Any]],
+    *,
+    managed_turn_id: str,
+    turn_request: TurnExecutionRequest,
+    thread: Any,
+) -> None:
+    if not isinstance(automation_child, dict):
+        return
+    parent_job_id = normalize_optional_text(automation_child.get("parent_job_id"))
+    if parent_job_id is None:
+        raise HTTPException(
+            status_code=400,
+            detail="automation_child.parent_job_id is required",
+        )
+    automation_store = AutomationStore(hub_root)
+    parent_job = automation_store.get_job(parent_job_id)
+    if parent_job is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"automation parent job not found: {parent_job_id}",
+        )
+    if parent_job.state != JOB_RUNNING:
+        raise HTTPException(
+            status_code=409,
+            detail=f"automation parent job is not running: {parent_job_id}",
+        )
+    requested_runtime = automation_child.get("requested_runtime")
+    if not isinstance(requested_runtime, dict):
+        requested_runtime = _runtime_contract_from_turn_request(
+            turn_request,
+            parent_job_id=parent_job_id,
+            thread=thread,
+        )
+    authoritative = automation_child.get("authoritative_for_parent_completion", True)
+    if not isinstance(authoritative, bool):
+        raise HTTPException(
+            status_code=400,
+            detail="automation_child.authoritative_for_parent_completion must be boolean",
+        )
+    automation_store.upsert_child_execution_edge(
+        AutomationChildExecutionEdge.create(
+            parent_job_id=parent_job_id,
+            child_kind=AUTOMATION_CHILD_KIND_AGENT_TASK,
+            child_id=managed_turn_id,
+            requested_runtime=requested_runtime,
+            actual_runtime=None,
+            authoritative_for_parent_completion=authoritative,
+        )
+    )
+
+
+def _runtime_contract_from_turn_request(
+    request: TurnExecutionRequest, *, parent_job_id: str, thread: Any
+) -> dict[str, Any]:
+    metadata = dict(request.metadata) if isinstance(request.metadata, dict) else {}
+    return {
+        "agent": request.agent,
+        "model": request.model,
+        "profile": request.profile
+        or normalize_optional_text(metadata.get("agent_profile")),
+        "reasoning": request.reasoning,
+        "approval_policy": request.approval_policy,
+        "sandbox_policy": (
+            request.sandbox_policy
+            if isinstance(request.sandbox_policy, str)
+            else str(request.sandbox_policy)
+        ),
+        "prompt_ref": {
+            "kind": "turn_execution_request",
+            "request_id": request.request_id,
+        },
+        "input_ref": {
+            "kind": "automation_job",
+            "job_id": parent_job_id,
+        },
+        "workspace_scope": {
+            "target_kind": request.target_kind,
+            "target_id": request.target_id,
+            "workspace_root": request.workspace_root,
+        },
+        "backend_runtime_id": normalize_optional_text(
+            getattr(thread, "backend_runtime_instance_id", None)
+        ),
+        "provider_payload": dict(request.model_payload) or None,
+    }
+
+
 async def run_managed_thread_message_send(
     *,
     managed_thread_id: str,
@@ -95,6 +191,7 @@ async def run_managed_thread_message_send(
     client_turn_id = normalize_optional_text(payload.client_turn_id) or str(
         uuid.uuid4()
     )
+    hub_root = request.app.state.config.root
 
     if payload.profile_explicit:
         meta = thread.get("metadata")
@@ -243,6 +340,13 @@ async def run_managed_thread_message_send(
     managed_turn_id = execution.execution_id
     if not managed_turn_id:
         raise HTTPException(status_code=500, detail="Failed to create managed turn")
+    _record_automation_child_edge_for_send(
+        hub_root,
+        payload.automation_child,
+        managed_turn_id=managed_turn_id,
+        turn_request=canonical_request,
+        thread=thread_after_send,
+    )
     backend_thread_id = (
         normalize_optional_text(thread_after_send.backend_thread_id)
         or options.live_backend_thread_id

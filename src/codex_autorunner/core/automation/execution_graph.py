@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional
@@ -99,7 +98,6 @@ class _AutomationExecutionSnapshotCache:
     _conn: Any = field(default=None, init=False, repr=False)
     _conn_cm: Any = field(default=None, init=False, repr=False)
     _pma_items: dict[str, Optional[PmaQueueItem]] = field(default_factory=dict)
-    _thread_prefixes: dict[str, Optional[str]] = field(default_factory=dict)
     _latest_executions: dict[
         tuple[Optional[str], Optional[str], Optional[str]], Optional[dict[str, Any]]
     ] = field(default_factory=dict)
@@ -143,16 +141,6 @@ class _AutomationExecutionSnapshotCache:
         item = self._repository.row_to_item(row) if row is not None else None
         self._pma_items[normalized] = item
         return item
-
-    def resolve_thread_prefix(self, prefix: str) -> Optional[str]:
-        normalized = prefix.strip()
-        if not normalized:
-            return None
-        if normalized in self._thread_prefixes:
-            return self._thread_prefixes[normalized]
-        resolved = _resolve_thread_prefix_with_conn(self._connection(), normalized)
-        self._thread_prefixes[normalized] = resolved
-        return resolved
 
     def latest_thread_execution(
         self,
@@ -305,58 +293,6 @@ def _managed_thread_id_from_pma_item(
     return explicit
 
 
-def _thread_prefix_from_pma_result(item: Optional[PmaQueueItem]) -> Optional[str]:
-    """Diagnostic-only hint extraction; lifecycle code must use durable ids."""
-    result = item.result if item is not None and isinstance(item.result, dict) else {}
-    message = result.get("message")
-    if isinstance(message, str):
-        match = re.search(r"Thread\s+`([0-9a-fA-F]{8,36})`", message)
-        if match:
-            return match.group(1)
-    raw_events = result.get("raw_events")
-    if isinstance(raw_events, list):
-        for event in raw_events:
-            output = _nested_string(
-                event,
-                ("message", "params", "properties", "part", "state", "output"),
-            )
-            match = re.search(
-                r"\b([0-9a-fA-F]{8}-[0-9a-fA-F-]{27}|[0-9a-fA-F]{8})\b",
-                output or "",
-            )
-            if match:
-                return match.group(1)
-    return None
-
-
-def _resolve_thread_prefix(hub_root: Path, prefix: str) -> Optional[str]:
-    normalized = prefix.strip()
-    if not normalized:
-        return None
-    try:
-        with open_orchestration_sqlite(hub_root, durable=True, migrate=False) as conn:
-            return _resolve_thread_prefix_with_conn(conn, normalized)
-    except Exception:
-        return None
-
-
-def _resolve_thread_prefix_with_conn(conn: Any, prefix: str) -> Optional[str]:
-    row = conn.execute(
-        """
-        SELECT thread_target_id
-          FROM orch_thread_targets
-         WHERE thread_target_id = ?
-            OR thread_target_id LIKE ?
-         ORDER BY updated_at DESC
-         LIMIT 1
-        """,
-        (prefix, f"{prefix}%"),
-    ).fetchone()
-    if row is None:
-        return None
-    return str(row["thread_target_id"] or "").strip() or None
-
-
 def _latest_thread_execution(
     *,
     hub_root: Optional[Path],
@@ -399,6 +335,7 @@ def _latest_thread_execution_with_conn(
                    error_text,
                    assistant_text,
                    model_id,
+                   transcript_mirror_id,
                    started_at,
                    finished_at,
                    created_at
@@ -419,6 +356,7 @@ def _latest_thread_execution_with_conn(
                error_text,
                assistant_text,
                model_id,
+               transcript_mirror_id,
                started_at,
                finished_at,
                created_at
@@ -452,6 +390,7 @@ def _thread_execution_row_to_dict(row: Any) -> dict[str, Any]:
         "error_text": row["error_text"],
         "assistant_text": row["assistant_text"],
         "model_id": row["model_id"],
+        "transcript_mirror_id": row["transcript_mirror_id"],
         "started_at": row["started_at"],
         "finished_at": row["finished_at"],
         "created_at": row["created_at"],
@@ -468,17 +407,6 @@ def _pma_result_string(item: Optional[PmaQueueItem], key: str) -> Optional[str]:
 
 def _dict_string(data: Optional[dict[str, Any]], key: str) -> Optional[str]:
     value = data.get(key) if data else None
-    if isinstance(value, str) and value.strip():
-        return value.strip()
-    return None
-
-
-def _nested_string(data: Any, path: tuple[str, ...]) -> Optional[str]:
-    value = data
-    for key in path:
-        if not isinstance(value, dict):
-            return None
-        value = value.get(key)
     if isinstance(value, str) and value.strip():
         return value.strip()
     return None

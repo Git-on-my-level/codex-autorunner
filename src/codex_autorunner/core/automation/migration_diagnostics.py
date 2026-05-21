@@ -640,7 +640,7 @@ def _migrate_legacy_job_edge(
                 child_kind=AUTOMATION_CHILD_KIND_PMA_OPERATOR,
                 child_id=str(row["pma_queue_item_id"]),
                 requested_runtime=runtime,
-                actual_runtime=runtime,
+                actual_runtime=None,
                 authoritative_for_parent_completion=True,
             )
         )
@@ -652,7 +652,7 @@ def _migrate_legacy_job_edge(
                 child_kind=AUTOMATION_CHILD_KIND_AGENT_TASK,
                 child_id=str(row["managed_thread_execution_id"]),
                 requested_runtime=runtime,
-                actual_runtime=runtime,
+                actual_runtime=None,
                 authoritative_for_parent_completion=True,
             )
         )
@@ -675,7 +675,7 @@ def _migrate_legacy_job_edge(
                     child_kind=AUTOMATION_CHILD_KIND_AGENT_TASK,
                     child_id=str(explicit["execution_id"]),
                     requested_runtime=runtime,
-                    actual_runtime=runtime,
+                    actual_runtime=None,
                     authoritative_for_parent_completion=True,
                 )
             )

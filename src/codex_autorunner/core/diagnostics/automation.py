@@ -209,16 +209,14 @@ def collect_automation_architecture_diagnostics(
 def _runtime_mismatch_fields(edge: AutomationChildExecutionEdge) -> list[str]:
     if edge.child_kind != AUTOMATION_CHILD_KIND_AGENT_TASK:
         return []
-    if edge.actual_runtime is None:
+    if edge.terminal_state is None:
         return []
     requested = edge.requested_runtime.to_dict()
-    actual = edge.actual_runtime.to_dict()
+    actual = edge.actual_runtime.to_dict() if edge.actual_runtime is not None else {}
     return [
         key
         for key in ("agent", "model", "profile", "reasoning")
-        if requested.get(key)
-        and actual.get(key)
-        and requested.get(key) != actual.get(key)
+        if requested.get(key) and requested.get(key) != actual.get(key)
     ]
 
 

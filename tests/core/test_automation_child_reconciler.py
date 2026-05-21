@@ -27,6 +27,7 @@ from codex_autorunner.core.automation.models import (
     AUTOMATION_CHILD_KIND_PMA_OPERATOR,
     AUTOMATION_CHILD_KIND_TICKET_FLOW,
     EXECUTOR_PMA_OPERATOR_TURN,
+    LEGACY_EXECUTOR_PMA_TURN,
     TARGET_POLICY_EXISTING_REPO,
     TRIGGER_KIND_EVENT,
     AutomationChildExecutionEdge,
@@ -80,6 +81,23 @@ def _store_with_running_ticket_flow_job(
             "ticket_flow_worktree_id": repo_id,
             "ticket_flow_run_id": run_id,
         },
+    )
+    store.upsert_child_execution_edge(
+        AutomationChildExecutionEdge.create(
+            parent_job_id="job-1",
+            child_kind=AUTOMATION_CHILD_KIND_TICKET_FLOW,
+            child_id=run_id,
+            requested_runtime=AutomationRuntimeContract(
+                workspace_scope={"repo_id": repo_id}
+            ),
+            actual_runtime=None,
+            terminal_mapping={
+                "succeeded": "succeeded",
+                "failed": "failed",
+                "interrupted": JOB_PAUSED,
+                "cancelled": "cancelled",
+            },
+        )
     )
     return store
 
@@ -289,6 +307,64 @@ def test_reducer_fails_authoritative_agent_task_runtime_mismatch(
     assert "runtime mismatch" in (reduced.error_text or "")
 
 
+def test_reducer_fails_terminal_agent_task_without_actual_runtime(
+    tmp_path: Path,
+) -> None:
+    hub = tmp_path / "hub"
+    store = AutomationStore(hub)
+    store.upsert_rule(
+        AutomationRule.create(
+            rule_id="rule-agent-task-missing-actual",
+            name="Agent task missing actual",
+            trigger_kind=TRIGGER_KIND_EVENT,
+            trigger={"event_types": ["manual.run"]},
+            target_policy=TARGET_POLICY_EXISTING_REPO,
+            executor_kind=EXECUTOR_AGENT_TASK_TURN,
+        )
+    )
+    store.record_event(
+        AutomationEvent.create(
+            event_id="event-agent-task-missing-actual", event_type="manual.run"
+        )
+    )
+    store.enqueue_job(
+        AutomationJob.create(
+            job_id="job-agent-task-missing-actual",
+            rule_id="rule-agent-task-missing-actual",
+            event_id="event-agent-task-missing-actual",
+            state=JOB_RUNNING,
+            target={"policy": TARGET_POLICY_EXISTING_REPO, "repo_id": "repo-1"},
+            executor={
+                "kind": EXECUTOR_AGENT_TASK_TURN,
+                "requested_runtime": {
+                    "agent": "opencode",
+                    "model": "zai-coding-plan/glm-5.1",
+                },
+            },
+            available_at="2026-01-01T00:00:00Z",
+            created_at="2026-01-01T00:00:00Z",
+            dedupe_key="job-agent-task-missing-actual",
+        )
+    )
+    store.upsert_child_execution_edge(
+        AutomationChildExecutionEdge.create(
+            parent_job_id="job-agent-task-missing-actual",
+            child_kind=AUTOMATION_CHILD_KIND_AGENT_TASK,
+            child_id="exec-agent-task-missing-actual",
+            requested_runtime={"agent": "opencode", "model": "zai-coding-plan/glm-5.1"},
+            actual_runtime=None,
+            terminal_state="succeeded",
+            terminal_observed_at="2026-01-01T00:05:00Z",
+        )
+    )
+
+    reduced = store.reduce_parent_job_from_children("job-agent-task-missing-actual")
+
+    assert reduced is not None
+    assert reduced.state == JOB_FAILED
+    assert "runtime mismatch" in (reduced.error_text or "")
+
+
 def test_automation_architecture_diagnostics_cover_graph_invariants(
     tmp_path: Path,
 ) -> None:
@@ -461,6 +537,62 @@ def test_reconciler_closes_authoritative_pma_operator_without_worker_child(
     assert edge.terminal_state == "succeeded"
 
 
+def test_reconciler_rejects_pma_queue_without_durable_child_edge(
+    tmp_path: Path,
+) -> None:
+    hub = tmp_path / "hub"
+    store = AutomationStore(hub)
+    store.upsert_rule(
+        AutomationRule.create(
+            rule_id="rule-legacy-pma",
+            name="Legacy PMA",
+            trigger_kind=TRIGGER_KIND_EVENT,
+            trigger={"event_types": ["manual.run"]},
+            target_policy=TARGET_POLICY_EXISTING_REPO,
+            executor_kind=LEGACY_EXECUTOR_PMA_TURN,
+        )
+    )
+    store.record_event(
+        AutomationEvent.create(event_id="event-legacy-pma", event_type="manual.run")
+    )
+    store.enqueue_job(
+        AutomationJob.create(
+            job_id="job-legacy-pma",
+            rule_id="rule-legacy-pma",
+            event_id="event-legacy-pma",
+            state=JOB_RUNNING,
+            target={"policy": TARGET_POLICY_EXISTING_REPO, "repo_id": "repo-1"},
+            executor={"kind": LEGACY_EXECUTOR_PMA_TURN},
+            available_at="2026-01-01T00:00:00Z",
+            created_at="2026-01-01T00:00:00Z",
+            dedupe_key="job-legacy-pma",
+        )
+    )
+    store.update_running_job(
+        "job-legacy-pma",
+        execution_refs={
+            "pma_lane_id": "pma:default",
+            "pma_queue_item_id": "item-legacy",
+        },
+    )
+    _insert_pma_queue_item(
+        hub,
+        item_id="item-legacy",
+        lane_id="pma:default",
+        state="completed",
+    )
+
+    result = AutomationChildRunReconciler(
+        store, resolve_repo_path=lambda _repo_id: None, hub_root=hub
+    ).reconcile_running_jobs()
+
+    saved = store.get_job("job-legacy-pma")
+    assert result.failed == 1
+    assert saved.state == JOB_FAILED
+    assert "explicit automation executor migration" in (saved.error_text or "")
+    assert store.list_child_execution_edges("job-legacy-pma") == []
+
+
 def _store_with_running_managed_thread_job(hub: Path) -> AutomationStore:
     store = AutomationStore(hub)
     store.upsert_rule(
@@ -495,6 +627,18 @@ def _store_with_running_managed_thread_job(hub: Path) -> AutomationStore:
             "managed_thread_target_id": "29998b57-94e9-49a4-8299-0349872e4b70",
             "managed_thread_execution_id": "exec-1",
         },
+    )
+    store.upsert_child_execution_edge(
+        AutomationChildExecutionEdge.create(
+            parent_job_id="job-pma",
+            child_kind=AUTOMATION_CHILD_KIND_AGENT_TASK,
+            child_id="exec-1",
+            requested_runtime=AutomationRuntimeContract(
+                agent="opencode",
+                model="zai-coding-plan/glm-5.1",
+            ),
+            actual_runtime=None,
+        )
     )
     return store
 
@@ -741,7 +885,9 @@ def _insert_thread_execution(
     started_at: str = "2026-01-01T00:00:00Z",
     finished_at: str | None = None,
     insert_thread_target: bool = True,
+    transcript_model_id: str | None = "zai-coding-plan/glm-5.1",
 ) -> None:
+    transcript_mirror_id = f"transcript-{execution_id}" if transcript_model_id else None
     with open_orchestration_sqlite(hub, durable=True) as conn:
         with conn:
             if insert_thread_target:
@@ -802,7 +948,7 @@ def _insert_thread_execution(
                     error_text,
                     "zai-coding-plan/glm-5.1",
                     None,
-                    None,
+                    transcript_mirror_id,
                     started_at,
                     (
                         finished_at
@@ -816,6 +962,30 @@ def _insert_thread_execution(
                     "{}",
                 ),
             )
+            if transcript_mirror_id is not None:
+                conn.execute(
+                    """
+                    INSERT INTO orch_transcript_mirrors (
+                        transcript_mirror_id, target_kind, target_id, execution_id,
+                        message_role, text_content, text_preview, repo_id, agent_id,
+                        model_id, created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        transcript_mirror_id,
+                        "thread",
+                        thread_id,
+                        execution_id,
+                        "assistant",
+                        "result",
+                        "result",
+                        "repo-1",
+                        "opencode",
+                        transcript_model_id,
+                        started_at,
+                        finished_at or "2026-01-01T00:01:00Z",
+                    ),
+                )
 
 
 def _insert_pma_queue_item(

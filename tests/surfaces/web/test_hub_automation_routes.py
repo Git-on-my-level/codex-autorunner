@@ -1,10 +1,14 @@
 from types import SimpleNamespace
 
+import pytest
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
 from codex_autorunner.bootstrap import seed_hub_files
 from codex_autorunner.core.automation import (
     AutomationChildExecutionEdge,
+    AutomationEvent,
+    AutomationJob,
     AutomationRule,
     AutomationSchedule,
     AutomationStore,
@@ -22,8 +26,15 @@ from codex_autorunner.core.automation.models import (
     TRIGGER_KIND_SCHEDULE,
 )
 from codex_autorunner.core.automation.product import automation_overview
+from codex_autorunner.core.orchestration.turn_execution_contract import (
+    TurnExecutionOrigin,
+    TurnExecutionRequest,
+)
 from codex_autorunner.server import create_hub_app
 from codex_autorunner.surfaces.web.routes.automations import _automation_target_options
+from codex_autorunner.surfaces.web.services.pma.managed_thread_send_runtime import (
+    _record_automation_child_edge_for_send,
+)
 
 
 def test_hub_automations_create_security_scan_saved_disabled(tmp_path):
@@ -190,6 +201,117 @@ def test_hub_automations_create_pma_operator_security_scan_and_run_now(tmp_path)
     assert run.json()["jobs_created"] == 1
     jobs = AutomationStore(hub_root).list_jobs(rule_id=rule_id)
     assert jobs[0].executor["kind"] == EXECUTOR_PMA_OPERATOR_TURN
+
+
+def test_managed_thread_send_records_canonical_automation_child_edge(tmp_path):
+    hub_root = tmp_path / "hub"
+    store = AutomationStore(hub_root)
+    store.upsert_rule(
+        AutomationRule.create(
+            rule_id="rule-pma-parent",
+            name="PMA parent",
+            trigger_kind=TRIGGER_KIND_EVENT,
+            trigger={"event_types": ["manual.run"]},
+            target_policy=TARGET_POLICY_HUB,
+            executor_kind=EXECUTOR_PMA_OPERATOR_TURN,
+        )
+    )
+    store.record_event(
+        AutomationEvent.create(event_id="event-pma-parent", event_type="manual.run")
+    )
+    store.enqueue_job(
+        AutomationJob.create(
+            job_id="job-pma-parent",
+            rule_id="rule-pma-parent",
+            event_id="event-pma-parent",
+            state="running",
+            target={"policy": TARGET_POLICY_HUB},
+            executor={"kind": EXECUTOR_PMA_OPERATOR_TURN},
+            available_at="2026-01-01T00:00:00Z",
+            created_at="2026-01-01T00:00:00Z",
+            dedupe_key="job-pma-parent",
+        )
+    )
+    request = TurnExecutionRequest(
+        request_id="turn-worker",
+        target_id="thread-worker",
+        target_kind="thread",
+        workspace_root=str(tmp_path),
+        request_kind="message",
+        busy_policy="queue",
+        prompt_text="Do worker task",
+        agent="opencode",
+        profile="security",
+        model="zai-coding-plan/glm-5.1",
+        model_payload={"providerID": "zai-coding-plan", "modelID": "glm-5.1"},
+        reasoning="high",
+        approval_policy="never",
+        sandbox_policy="dangerFullAccess",
+        origin=TurnExecutionOrigin(
+            kind="surface",
+            source_id="web:thread-worker",
+            surface_kind="web",
+            surface_key="thread-worker",
+        ),
+    )
+
+    _record_automation_child_edge_for_send(
+        hub_root,
+        {
+            "parent_job_id": "job-pma-parent",
+            "authoritative_for_parent_completion": True,
+        },
+        managed_turn_id="turn-worker",
+        turn_request=request,
+        thread=SimpleNamespace(backend_runtime_instance_id="runtime-1"),
+    )
+
+    edge = store.list_child_execution_edges("job-pma-parent")[0]
+    assert edge.child_kind == "agent_task"
+    assert edge.child_id == "turn-worker"
+    assert edge.requested_runtime.agent == "opencode"
+    assert edge.requested_runtime.model == "zai-coding-plan/glm-5.1"
+    assert edge.requested_runtime.provider_payload == {
+        "providerID": "zai-coding-plan",
+        "modelID": "glm-5.1",
+    }
+    assert edge.actual_runtime is None
+
+
+def test_managed_thread_send_rejects_orphan_automation_child_edge(tmp_path):
+    hub_root = tmp_path / "hub"
+    request = TurnExecutionRequest(
+        request_id="turn-worker",
+        target_id="thread-worker",
+        target_kind="thread",
+        workspace_root=str(tmp_path),
+        request_kind="message",
+        busy_policy="queue",
+        prompt_text="Do worker task",
+        agent="opencode",
+        model="zai-coding-plan/glm-5.1",
+        model_payload={"providerID": "zai-coding-plan", "modelID": "glm-5.1"},
+        approval_policy="never",
+        sandbox_policy="dangerFullAccess",
+        origin=TurnExecutionOrigin(
+            kind="surface",
+            source_id="web:thread-worker",
+            surface_kind="web",
+            surface_key="thread-worker",
+        ),
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        _record_automation_child_edge_for_send(
+            hub_root,
+            {"parent_job_id": "missing-job"},
+            managed_turn_id="turn-worker",
+            turn_request=request,
+            thread=SimpleNamespace(backend_runtime_instance_id="runtime-1"),
+        )
+
+    assert exc_info.value.status_code == 404
+    assert AutomationStore(hub_root).list_child_execution_edges("missing-job") == []
 
 
 def test_hub_automations_reject_invalid_product_runtime_combinations(tmp_path):
