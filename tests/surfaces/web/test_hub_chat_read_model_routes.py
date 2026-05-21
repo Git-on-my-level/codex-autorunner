@@ -660,6 +660,44 @@ def test_hub_read_models_chats_returns_web_contract_snapshot(hub_env) -> None:
     assert len(snapshot.rows) == 10
 
 
+def test_hub_read_models_chats_returns_backend_facets_and_counts(hub_env) -> None:
+    _insert_chat_thread_row(
+        hub_env.hub_root,
+        thread_id="route-regular",
+        repo_id="repo",
+        resource_kind="repo",
+        resource_id="repo",
+        display_name="Route regular",
+        runtime_status="idle",
+    )
+    _insert_chat_thread_row(
+        hub_env.hub_root,
+        thread_id="route-automation",
+        repo_id="repo",
+        resource_kind="repo",
+        resource_id="repo",
+        display_name="Route automation",
+        runtime_status="idle",
+        metadata={"automation_job_id": "job-route", "automation_rule_id": "rule-route"},
+        updated_at="2026-05-11T00:01:00Z",
+    )
+
+    client = TestClient(create_hub_app(hub_env.hub_root))
+    response = client.get(
+        "/hub/read-models/chats",
+        params=[("filter", "all"), ("category", "automation"), ("limit", "20")],
+    )
+
+    assert response.status_code == 200
+    snapshot = load_read_model_contract(ChatIndexSnapshot, response.json())
+    assert [row.chat_id for row in snapshot.rows] == ["route-automation"]
+    assert snapshot.rows[0].facets is not None
+    assert snapshot.rows[0].facets.category == "automation"
+    assert snapshot.facet_counts.category["automation"] == 1
+    assert snapshot.facet_counts.category.get("regular", 0) == 0
+    assert snapshot.facet_request.categories == ["automation"]
+
+
 def test_chat_index_contract_status_matches_backend_effective_statuses(
     hub_env,
 ) -> None:
