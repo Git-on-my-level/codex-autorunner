@@ -98,7 +98,7 @@ def test_hub_runs_cleanup_force_requires_attestation(hub_env) -> None:
     )
 
     assert result.exit_code == 1, result.output
-    assert FORCE_ATTESTATION_REQUIRED_ERROR in result.stdout
+    assert FORCE_ATTESTATION_REQUIRED_ERROR in result.output
 
 
 def test_hub_runs_cleanup_force_with_attestation_succeeds(hub_env) -> None:
