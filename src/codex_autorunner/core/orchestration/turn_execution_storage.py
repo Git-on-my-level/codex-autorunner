@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from typing import Any, Mapping, Optional, cast
 
-from ..agent_model_defaults import builtin_default_model_for_agent
 from ..text_utils import _json_loads_object, _normalize_optional_text
 from .turn_execution_contract import (
     TURN_EXECUTION_CONTRACT_VERSION,
@@ -83,11 +82,9 @@ def _model_and_payload(
 ) -> tuple[Optional[str], dict[str, Any]]:
     resolved_model = _normalize_optional_text(model)
     payload = _mapping(metadata_payload)
-    if agent != "opencode":
+    if agent != "opencode" or payload or resolved_model is None:
         return resolved_model, payload
-    if resolved_model is None:
-        resolved_model = builtin_default_model_for_agent(agent)
-    if payload or resolved_model is None or "/" not in resolved_model:
+    if "/" not in resolved_model:
         return resolved_model, payload
     provider_id, model_id = (part.strip() for part in resolved_model.split("/", 1))
     if provider_id and model_id:

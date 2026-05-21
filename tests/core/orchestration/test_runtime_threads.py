@@ -8,6 +8,8 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Optional
 
+import pytest
+
 from codex_autorunner.agents.registry import AgentDescriptor
 from codex_autorunner.agents.types import TerminalTurnResult
 from codex_autorunner.core.hub_control_plane import (
@@ -32,6 +34,9 @@ from codex_autorunner.core.orchestration.runtime_threads import (
     begin_next_queued_runtime_thread_execution,
     begin_runtime_thread_execution,
     stream_runtime_thread_events,
+)
+from codex_autorunner.core.orchestration.turn_execution_contract import (
+    TurnExecutionContractError,
 )
 
 
@@ -445,6 +450,7 @@ async def test_runtime_threads_use_wait_for_turn_contract_for_session_runtimes(
             target_id=thread.thread_target_id,
             target_kind="thread",
             message_text="hello world",
+            model="anthropic/claude-sonnet-4",
         ),
     )
     outcome = await await_runtime_thread_outcome(
@@ -457,6 +463,31 @@ async def test_runtime_threads_use_wait_for_turn_contract_for_session_runtimes(
     assert outcome.status == "ok"
     assert harness.wait_calls == [(workspace_root, "session-1", "stream-turn-1")]
     assert outcome.assistant_text == "hello world"
+
+
+async def test_opencode_runtime_thread_requires_resolved_model_before_start(
+    tmp_path: Path,
+) -> None:
+    harness = _HarnessWithStream()
+    service = _build_service(tmp_path, harness, agent_id="opencode", name="OpenCode")
+    workspace_root = tmp_path / "workspace"
+    workspace_root.mkdir()
+    thread = service.create_thread_target("opencode", workspace_root)
+
+    with pytest.raises(
+        TurnExecutionContractError,
+        match="opencode requests require resolved provider/model",
+    ):
+        await begin_runtime_thread_execution(
+            service,
+            MessageRequest(
+                target_id=thread.thread_target_id,
+                target_kind="thread",
+                message_text="hello world",
+            ),
+        )
+
+    assert harness.ensure_ready_calls == []
 
 
 async def test_runtime_threads_begin_and_wait_via_serialized_remote_store(
@@ -1121,6 +1152,7 @@ async def test_stream_runtime_thread_events_proxies_harness_stream(
             target_id=thread.thread_target_id,
             target_kind="thread",
             message_text="hello world",
+            model="anthropic/claude-sonnet-4",
         ),
     )
 

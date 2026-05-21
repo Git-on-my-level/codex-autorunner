@@ -33,6 +33,7 @@ from .thread_titles import (
 )
 from .transcript_mirror import TranscriptMirrorStore
 from .turn_context import turn_assembly_from_request_metadata
+from .turn_execution_contract import TurnExecutionRecord, TurnExecutionRequest
 
 _MISSING_THREAD_MARKERS = (
     "missing thread",
@@ -229,6 +230,8 @@ class _ClaimedThreadExecutionRequest:
     thread: ThreadTarget
     execution: ExecutionRecord
     queued_request: QueuedExecutionRequest
+    turn_request: Optional[TurnExecutionRequest] = None
+    turn_record: Optional[TurnExecutionRecord] = None
 
     @property
     def request(self) -> MessageRequest:
@@ -252,6 +255,25 @@ class _ClaimedThreadExecutionRequest:
             self.client_request_id,
             self.sandbox_policy,
         )
+
+
+def _message_request_from_turn_request(
+    request: TurnExecutionRequest,
+) -> MessageRequest:
+    return MessageRequest(
+        target_id=request.target_id,
+        target_kind="thread" if request.target_kind == "thread" else "flow",
+        message_text=request.prompt_text or "",
+        kind="review" if request.request_kind == "review" else "message",
+        busy_policy=request.busy_policy,
+        agent_profile=request.profile,
+        model=request.model,
+        reasoning=request.reasoning,
+        approval_mode=request.approval_mode,
+        input_items=[dict(item) for item in request.input_items] or None,
+        context_profile=request.context_profile,
+        metadata=dict(request.metadata),
+    )
 
 
 @dataclass
@@ -369,10 +391,13 @@ class _ThreadExecutionLifecycle:
         harness: RuntimeThreadHarness,
         workspace_root: Path,
         sandbox_policy: Optional[Any],
+        turn_request: Optional[TurnExecutionRequest] = None,
     ) -> ExecutionRecord:
-        new_session_runtime_prompt = self.resolve_runtime_prompt(request)
+        canonical_request = turn_request
+        legacy_request = request
+        new_session_runtime_prompt = self.resolve_runtime_prompt(legacy_request)
         existing_session_runtime_prompt = (
-            self.resolve_existing_session_runtime_prompt(request)
+            self.resolve_existing_session_runtime_prompt(legacy_request)
             or new_session_runtime_prompt
         )
         fresh_conversation_retry_attempted = False
@@ -495,7 +520,7 @@ class _ThreadExecutionLifecycle:
                                     or "missing_backend_binding"
                                 )
                                 self.mark_fresh_backend_session(
-                                    request,
+                                    legacy_request,
                                     reason=fresh_backend_session_reason,
                                     rehydrated=bool(prefix),
                                 )
@@ -508,7 +533,11 @@ class _ThreadExecutionLifecycle:
                                     previous_backend_thread_id=(
                                         previous_backend_thread_id
                                     ),
-                                    request_kind=request.kind,
+                                    request_kind=(
+                                        canonical_request.request_kind
+                                        if canonical_request is not None
+                                        else legacy_request.kind
+                                    ),
                                     reason=fresh_backend_session_reason,
                                     rehydrated=bool(prefix),
                                 )
@@ -542,8 +571,8 @@ class _ThreadExecutionLifecycle:
                         )
                     )
                     turn_assembly = turn_assembly_from_request_metadata(
-                        message_text=request.message_text,
-                        metadata=request.metadata,
+                        message_text=legacy_request.message_text,
+                        metadata=legacy_request.metadata,
                     )
                     message_title = choose_owned_thread_title(
                         thread.display_name,
@@ -582,7 +611,37 @@ class _ThreadExecutionLifecycle:
                         conversation_id=conversation_id,
                         provisional_turn_id=provisional_turn_id,
                     )
-                    if request.kind == "review":
+                    request_kind = (
+                        canonical_request.request_kind
+                        if canonical_request is not None
+                        else legacy_request.kind
+                    )
+                    runtime_model = (
+                        canonical_request.model
+                        if canonical_request is not None
+                        else legacy_request.model
+                    )
+                    runtime_reasoning = (
+                        canonical_request.reasoning
+                        if canonical_request is not None
+                        else legacy_request.reasoning
+                    )
+                    runtime_approval_mode = (
+                        canonical_request.approval_mode
+                        if canonical_request is not None
+                        else legacy_request.approval_mode
+                    )
+                    runtime_sandbox_policy = (
+                        canonical_request.sandbox_policy
+                        if canonical_request is not None
+                        else sandbox_policy
+                    )
+                    runtime_input_items = (
+                        [dict(item) for item in canonical_request.input_items] or None
+                        if canonical_request is not None
+                        else legacy_request.input_items
+                    )
+                    if request_kind == "review":
                         if not harness.supports("review"):
                             raise RuntimeError(
                                 f"Agent '{thread.agent_id}' does not support review mode"
@@ -591,21 +650,21 @@ class _ThreadExecutionLifecycle:
                             workspace_root,
                             conversation_id,
                             attempt_runtime_prompt,
-                            request.model,
-                            request.reasoning,
-                            approval_mode=request.approval_mode,
-                            sandbox_policy=sandbox_policy,
+                            runtime_model,
+                            runtime_reasoning,
+                            approval_mode=runtime_approval_mode,
+                            sandbox_policy=runtime_sandbox_policy,
                         )
                     else:
                         turn = await harness.start_turn(
                             workspace_root,
                             conversation_id,
                             attempt_runtime_prompt,
-                            request.model,
-                            request.reasoning,
-                            approval_mode=request.approval_mode,
-                            sandbox_policy=sandbox_policy,
-                            input_items=request.input_items,
+                            runtime_model,
+                            runtime_reasoning,
+                            approval_mode=runtime_approval_mode,
+                            sandbox_policy=runtime_sandbox_policy,
+                            input_items=runtime_input_items,
                         )
                     resolved_turn_id = str(getattr(turn, "turn_id", "") or "").strip()
                     if not resolved_turn_id:
@@ -689,7 +748,11 @@ class _ThreadExecutionLifecycle:
                 thread_target_id=thread.thread_target_id,
                 execution_id=execution.execution_id,
                 backend_thread_id=conversation_id,
-                request_kind=request.kind,
+                request_kind=(
+                    canonical_request.request_kind
+                    if canonical_request is not None
+                    else legacy_request.kind
+                ),
                 fresh_conversation_retry_attempted=fresh_conversation_retry_attempted,
                 reported_error=detail,
                 error_type=type(exc).__name__,
@@ -730,7 +793,11 @@ class _ThreadExecutionLifecycle:
                 backend_thread_id=(
                     runtime_binding.backend_thread_id if runtime_binding else None
                 ),
-                request_kind=request.kind,
+                request_kind=(
+                    canonical_request.request_kind
+                    if canonical_request is not None
+                    else legacy_request.kind
+                ),
                 fresh_conversation_retry_attempted=fresh_conversation_retry_attempted,
                 reported_error=detail,
             )
@@ -776,7 +843,11 @@ class _ThreadExecutionLifecycle:
             execution_id=execution.execution_id,
             backend_thread_id=resolved_conversation_id,
             backend_turn_id=resolved_turn_id,
-            request_kind=request.kind,
+            request_kind=(
+                canonical_request.request_kind
+                if canonical_request is not None
+                else legacy_request.kind
+            ),
             reused_conversation=used_existing_conversation,
             stale_session_recovery=fresh_conversation_retry_attempted,
         )
@@ -863,6 +934,7 @@ class _ThreadExecutionLifecycle:
                 harness=resolved_harness,
                 workspace_root=resolved_workspace_root,
                 sandbox_policy=claimed.sandbox_policy,
+                turn_request=claimed.turn_request,
             )
             return started, resolved_harness
         except BaseException as exc:

@@ -240,7 +240,11 @@ def test_binding_store_active_work_by_agent(tmp_path: Path) -> None:
         repo_id="repo-1",
     )
     thread_store.create_turn(codex_thread_id, prompt="codex busy")
-    thread_store.create_turn(opencode_thread_id, prompt="opencode busy")
+    thread_store.create_turn(
+        opencode_thread_id,
+        prompt="opencode busy",
+        model="anthropic/claude-sonnet-4",
+    )
 
     codex_work = bindings.list_active_work_summaries(agent_id="codex")
     opencode_work = bindings.list_active_work_summaries(agent_id="opencode")

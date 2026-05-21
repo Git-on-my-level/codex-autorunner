@@ -13,6 +13,7 @@ from ..text_utils import _truncate_text
 from .bindings import ActiveWorkSummary, OrchestrationBindingStore
 from .execution_lifecycle import (
     _ClaimedThreadExecutionRequest,
+    _message_request_from_turn_request,
     _resolve_harness_runtime_instance_id,
     _resolve_thread_runtime_binding,
     _ThreadExecutionLifecycle,
@@ -40,7 +41,7 @@ from .recovery_lifecycle import (
 )
 from .runtime_bindings import RuntimeThreadBinding
 from .turn_context import turn_assembly_from_request_metadata
-from .turn_execution_contract import TurnExecutionRequest
+from .turn_execution_contract import TurnExecutionRecord, TurnExecutionRequest
 
 MessagePreviewLimit = 120
 logger = logging.getLogger("codex_autorunner.core.orchestration.service")
@@ -53,6 +54,8 @@ class PreparedThreadExecution:
 
     thread: ThreadTarget
     request: MessageRequest
+    turn_request: TurnExecutionRequest
+    turn_record: TurnExecutionRecord
     execution: ExecutionRecord
     workspace_root: Path
     sandbox_policy: Optional[Any]
@@ -66,6 +69,8 @@ class PreparedThreadExecution:
                 request=self.request,
                 sandbox_policy=self.sandbox_policy,
             ),
+            turn_request=self.turn_request,
+            turn_record=self.turn_record,
         )
 
 
@@ -292,20 +297,7 @@ class _ThreadQueueRequestAdapter:
         self, request: TurnExecutionRequest
     ) -> QueuedExecutionRequest:
         return QueuedExecutionRequest(
-            request=MessageRequest(
-                target_id=request.target_id,
-                target_kind="thread",
-                message_text=request.prompt_text or "",
-                kind="review" if request.request_kind == "review" else "message",
-                busy_policy="queue",
-                agent_profile=request.profile,
-                model=request.model,
-                reasoning=request.reasoning,
-                approval_mode=request.approval_mode,
-                input_items=[dict(item) for item in request.input_items] or None,
-                context_profile=request.context_profile,
-                metadata=dict(request.metadata),
-            ),
+            request=_message_request_from_turn_request(request),
             client_request_id=request.client_request_id,
             sandbox_policy=(
                 None
@@ -327,18 +319,26 @@ class _ThreadQueueRequestAdapter:
         if not thread.workspace_root:
             raise RuntimeError("Thread target is missing workspace_root")
         request_loader = getattr(self.thread_store, "get_turn_execution_request", None)
-        if not callable(request_loader):
+        record_loader = getattr(self.thread_store, "get_turn_execution_record", None)
+        if not callable(request_loader) or not callable(record_loader):
             raise RuntimeError("Thread store cannot load canonical turn requests")
         turn_request = request_loader(thread_target_id, execution.execution_id)
         if not isinstance(turn_request, TurnExecutionRequest):
             raise RuntimeError(
                 f"Execution '{execution.execution_id}' is missing canonical turn request"
             )
+        turn_record = record_loader(thread_target_id, execution.execution_id)
+        if not isinstance(turn_record, TurnExecutionRecord):
+            raise RuntimeError(
+                f"Execution '{execution.execution_id}' is missing canonical turn record"
+            )
         queued_request = self.queued_request_from_turn_request(turn_request)
         return _ClaimedThreadExecutionRequest(
             thread=thread,
             execution=execution,
             queued_request=queued_request,
+            turn_request=turn_request,
+            turn_record=turn_record,
         )
 
 
@@ -641,6 +641,13 @@ class HarnessBackedOrchestrationService(OrchestrationThreadService):
             harness=harness,
             workspace_root=workspace_root,
             sandbox_policy=sandbox_policy,
+            turn_request=(
+                self.thread_store.get_turn_execution_request(
+                    thread.thread_target_id, execution.execution_id
+                )
+                if hasattr(self.thread_store, "get_turn_execution_request")
+                else None
+            ),
         )
 
     async def send_message(
@@ -772,6 +779,20 @@ class HarnessBackedOrchestrationService(OrchestrationThreadService):
                 turn_assembly.title_seed, MessagePreviewLimit
             ),
         )
+        request_loader = getattr(self.thread_store, "get_turn_execution_request", None)
+        record_loader = getattr(self.thread_store, "get_turn_execution_record", None)
+        if not callable(request_loader) or not callable(record_loader):
+            raise RuntimeError("Thread store cannot load canonical turn execution data")
+        turn_request = request_loader(thread.thread_target_id, execution.execution_id)
+        if not isinstance(turn_request, TurnExecutionRequest):
+            raise RuntimeError(
+                f"Execution '{execution.execution_id}' is missing canonical turn request"
+            )
+        turn_record = record_loader(thread.thread_target_id, execution.execution_id)
+        if not isinstance(turn_record, TurnExecutionRecord):
+            raise RuntimeError(
+                f"Execution '{execution.execution_id}' is missing canonical turn record"
+            )
         resolved_harness = harness if execution.status == "running" else None
         if resolved_harness is None and execution.status == "running":
             resolved_harness = self._harness_for_agent(
@@ -781,6 +802,8 @@ class HarnessBackedOrchestrationService(OrchestrationThreadService):
         return PreparedThreadExecution(
             thread=thread,
             request=request,
+            turn_request=turn_request,
+            turn_record=turn_record,
             execution=execution,
             workspace_root=workspace_root,
             sandbox_policy=sandbox_policy,
@@ -849,6 +872,13 @@ class HarnessBackedOrchestrationService(OrchestrationThreadService):
                 queued_request=QueuedExecutionRequest(
                     request=request,
                     sandbox_policy=sandbox_policy,
+                ),
+                turn_request=(
+                    self.thread_store.get_turn_execution_request(
+                        thread.thread_target_id, execution.execution_id
+                    )
+                    if hasattr(self.thread_store, "get_turn_execution_request")
+                    else None
                 ),
             ),
             harness=harness,

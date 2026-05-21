@@ -1343,6 +1343,8 @@ async def test_claim_next_queued_execution_context_preserves_typed_request_paylo
             target_kind="thread",
             message_text="second",
             approval_mode="never",
+            model="gpt-5.4",
+            reasoning="high",
             input_items=[
                 {"type": "text", "text": "second"},
                 {"type": "image", "image_url": "https://example.com/diagram.png"},
@@ -1363,9 +1365,10 @@ async def test_claim_next_queued_execution_context_preserves_typed_request_paylo
     assert stored_request is not None
     assert stored_request.request_id == queued.execution_id
     assert stored_request.request_kind == "message"
+    assert stored_request.busy_policy == "queue"
     assert stored_request.client_request_id == "client-2"
-    assert stored_request.model is None
-    assert stored_request.reasoning is None
+    assert stored_request.model == "gpt-5.4"
+    assert stored_request.reasoning == "high"
     assert stored_request.approval_mode == "never"
     assert stored_request.approval_policy == "never"
     assert stored_request.sandbox_policy == {"mode": "workspace-write"}
@@ -1382,7 +1385,24 @@ async def test_claim_next_queued_execution_context_preserves_typed_request_paylo
     assert claimed is not None
     assert claimed.thread.thread_target_id == thread.thread_target_id
     assert claimed.execution.execution_id == queued.execution_id
+    assert claimed.turn_request is not None
+    assert claimed.turn_request.request_id == queued.execution_id
+    assert claimed.turn_request.request_kind == "message"
+    assert claimed.turn_request.busy_policy == "queue"
+    assert claimed.turn_request.client_request_id == "client-2"
+    assert claimed.turn_request.model == "gpt-5.4"
+    assert claimed.turn_request.reasoning == "high"
+    assert claimed.turn_request.approval_mode == "never"
+    assert claimed.turn_request.approval_policy == "never"
+    assert claimed.turn_request.sandbox_policy == {"mode": "workspace-write"}
+    assert claimed.turn_request.input_items == (
+        {"type": "text", "text": "second"},
+        {"type": "image", "image_url": "https://example.com/diagram.png"},
+    )
+    assert claimed.turn_request.context_profile == "car_core"
     assert claimed.request.message_text == "second"
+    assert claimed.request.model == "gpt-5.4"
+    assert claimed.request.reasoning == "high"
     assert claimed.request.approval_mode == "never"
     assert claimed.request.input_items == [
         {"type": "text", "text": "second"},
