@@ -17,7 +17,7 @@
     readModelEntityStore,
     readModelEntityTags,
     type ChatIndexWindowRequest,
-    canonicalChatIndexWindowKey,
+    selectChatIndexWindowView,
     selectPmaArtifacts,
     selectPmaChats,
     selectPmaProgress,
@@ -194,6 +194,11 @@
   const persistedChats = $derived<PmaChatSummary[]>(selectPmaChats(readModelState, currentChatIndexRequest));
   const facetPersistedChats = $derived<PmaChatSummary[]>(selectPmaChats(readModelState, { filter: 'all', limit: 50 }));
   const backendTicketRunGroups = $derived(selectTicketRunGroups(readModelState, ticketRunGroupRequest));
+  const currentTicketRunGroups = $derived(
+    filter === CHAT_TICKET_RUNS_FILTER
+      ? selectTicketRunGroups(readModelState, currentChatIndexRequest)
+      : backendTicketRunGroups
+  );
   const committedChatPlaceholders = $derived<PmaChatSummary[]>(
     [committedDraftChat].filter((chat): chat is PmaChatSummary => Boolean(chat))
   );
@@ -225,6 +230,7 @@
   const lastSeenMap = $derived<ChatLastSeenMap>(selectReadMarkers(readModelState) as ChatLastSeenMap);
   let draft = $state('');
   let loadingChats = $state(true);
+  let loadingMoreChats = $state(false);
   let loadingActive = $state(false);
   let sending = $state(false);
   let creating = $state(false);
@@ -414,21 +420,24 @@
   let expandedRunGroups = $state<Record<string, boolean>>({});
   let pinnedChatIds = $state<Record<string, true>>({});
   const chatListEntries = $derived(
-    buildSemanticChatListEntries(chatListSourceChats, backendTicketRunGroups, {
+    buildSemanticChatListEntries(chatListSourceChats, currentTicketRunGroups, {
       lastSeen: lastSeenMap,
       repoLabel: repoLabelForRepoId,
       worktreeLabel: (wid) => worktreeScopeOption(wid)?.label ?? null,
       groupRuns: true
     })
   );
-  const filteredEntries = $derived(sortEntriesForPinnedChats(filterChatEntries(chatListEntries, filter, search, lastSeenMap), pinnedChatIds));
+  const filteredEntries = $derived(sortEntriesForPinnedChats(filterChatEntries(chatListEntries, filter, '', lastSeenMap), pinnedChatIds));
   const filterCounts = $derived(chatStatusFilterCounts());
   const surfaceFilterChips = $derived(chatSurfaceFilterOptions(facetChats));
   const ticketRunGroupCount = $derived(countSemanticTicketRunGroups(backendTicketRunGroups, facetChats));
   const localChatPlaceholderCount = $derived(visibleLocalChatPlaceholders.filter((chat) => !isPmaChatArchived(chat)).length);
   const activeChatCount = $derived(readModelState.chatCounters.total + localChatPlaceholderCount);
   const hasUsableChatIndex = $derived(Boolean(readModelState.chatIndexCursor || readModelState.chatOrder.length > 0));
-  const hasSelectedChatWindow = $derived(Boolean(readModelState.chatWindows[canonicalChatIndexWindowKey(currentChatIndexRequest)]));
+  const selectedChatWindowView = $derived(selectChatIndexWindowView(readModelState, currentChatIndexRequest));
+  const selectedChatWindow = $derived(selectedChatWindowView.window);
+  const hasSelectedChatWindow = $derived(Boolean(selectedChatWindow));
+  const canLoadMoreChats = $derived(Boolean(selectedChatWindow?.window?.nextCursor));
   const initialChatIndexError = $derived(chatIndexLoadError());
   const visibleChatError = $derived(chatError ?? (!hasUsableChatIndex ? initialChatIndexError : null));
   const showChatListSkeleton = $derived(loadingChats && !hasSelectedChatWindow && !visibleChatError);
@@ -474,6 +483,25 @@
 
   function groupSummaryParts(group: ChatRunGroup): string[] {
     return chatRunGroupSummaryParts(group);
+  }
+
+  async function loadMoreChats(): Promise<void> {
+    if (loadingMoreChats || !canLoadMoreChats) return;
+    loadingMoreChats = true;
+    try {
+      await pageController.loadMoreIndex(currentChatIndexRequest);
+      chatError = null;
+    } catch (error) {
+      chatError = {
+        kind: 'network',
+        status: 0,
+        code: 'chat_index_load_more_failed',
+        message: error instanceof Error ? error.message : 'Could not load more chats',
+        details: error
+      };
+    } finally {
+      loadingMoreChats = false;
+    }
   }
   const displayedProgress = $derived(progressWithLiveElapsed(progress, clockNowMs));
   const liveActivity = $derived(buildPmaLiveActivity(displayedProgress));
@@ -2068,6 +2096,7 @@
           initialCount={48}
           ariaLabel="Chat rows"
           class="chat-list-virtual-list"
+          onEndReached={() => void loadMoreChats()}
         >
         {#snippet children(entry)}
           {#if entry.kind === 'chat'}
@@ -2150,6 +2179,9 @@
           {/if}
         {/snippet}
         </VirtualList>
+        {#if loadingMoreChats}
+          <div class="chat-list-loading-more" role="status">Loading more chats...</div>
+        {/if}
         {#if filteredEntries.length === 0}
           <div class="state-panel empty-state compact-empty chat-filter-empty">
             <strong>No chats match this filter</strong>

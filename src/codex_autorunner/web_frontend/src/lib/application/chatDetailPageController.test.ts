@@ -156,6 +156,7 @@ function createHarness(options: {
     start: vi.fn(),
     stop: vi.fn(),
     refresh: vi.fn(async () => undefined),
+    loadMore: vi.fn(async () => undefined),
     setCompanionRequests: vi.fn()
   } satisfies ChatDetailPageIndexSession;
   const liveProjection = {

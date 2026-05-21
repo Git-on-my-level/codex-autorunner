@@ -256,7 +256,7 @@ export class ReadModelEntityStore implements Readable<ReadModelEntityState> {
     filter?: ChatIndexSnapshot['filter'];
     query?: string | null;
     window?: PageWindow;
-  }, request: ChatIndexWindowRequest = {}): void {
+  }, request: ChatIndexWindowRequest = {}, options: { append?: boolean } = {}): void {
     const rows = uniqueChatIndexRows(snapshot.rows);
     const next = cloneState(this.state);
     const windowRequest = normalizeChatIndexWindowRequest({
@@ -268,6 +268,7 @@ export class ReadModelEntityStore implements Readable<ReadModelEntityState> {
       limit: request.limit ?? snapshot.window?.limit
     });
     const windowKey = canonicalChatIndexWindowKey(windowRequest);
+    const previousWindow = options.append ? next.chatWindows[windowKey] : null;
     for (const row of rows) next.chats[row.chatId] = row;
     for (const group of snapshot.groups) next.chatGroups[group.groupId] = group;
     if (isDefaultChatIndexWindow(windowRequest)) next.chatCounters = snapshot.counters;
@@ -275,8 +276,12 @@ export class ReadModelEntityStore implements Readable<ReadModelEntityState> {
     next.chatWindows[windowKey] = {
       key: windowKey,
       request: windowRequest,
-      rowIds: rows.map((row) => row.chatId),
-      groupIds: snapshot.groups.map((group) => group.groupId),
+      rowIds: previousWindow
+        ? uniqueStrings([...previousWindow.rowIds, ...rows.map((row) => row.chatId)])
+        : rows.map((row) => row.chatId),
+      groupIds: previousWindow
+        ? uniqueStrings([...previousWindow.groupIds, ...snapshot.groups.map((group) => group.groupId)])
+        : snapshot.groups.map((group) => group.groupId),
       counters: snapshot.counters,
       cursor: snapshot.cursor,
       window: snapshot.window ?? null,
@@ -1119,9 +1124,12 @@ function reconcileChatIndexWindowsAfterEntityPatch(next: ReadModelEntityState, e
     window.groupIds = window.groupIds.filter((groupId) => Boolean(next.chatGroups[groupId]));
     if (defaultWindow) {
       if (event.patch.order) {
+        const loadedLimit = Math.max(window.request.limit, window.rowIds.length);
+        const orderedIds = new Set(event.patch.order);
         window.rowIds = event.patch.order
           .filter((rowId) => Boolean(next.chats[rowId] ?? incomingRows.get(rowId)))
-          .slice(0, window.request.limit);
+          .concat(window.rowIds.filter((rowId) => !orderedIds.has(rowId)))
+          .slice(0, loadedLimit);
       }
       if (event.patch.counters) window.counters = event.patch.counters;
       window.cursor = event.envelope.cursor;
@@ -1254,6 +1262,17 @@ function uniqueChatIndexRows(rows: ChatIndexRow[]): ChatIndexRow[] {
     byChatId.set(row.chatId, row);
   }
   return order.map((chatId) => byChatId.get(chatId)).filter((row): row is ChatIndexRow => Boolean(row));
+}
+
+function uniqueStrings(values: string[]): string[] {
+  const seen = new Set<string>();
+  const unique: string[] = [];
+  for (const value of values) {
+    if (seen.has(value)) continue;
+    seen.add(value);
+    unique.push(value);
+  }
+  return unique;
 }
 
 function seedDetailBackedChatRow(state: ReadModelEntityState, thread: ChatThreadProjection): void {

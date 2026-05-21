@@ -1,4 +1,5 @@
 export * from './chatIndexSession';
+export * from './paginatedWindowSession';
 export * from './readModelClients';
 export * from './readModelInvalidation';
 export * from './readModelLoaders';
