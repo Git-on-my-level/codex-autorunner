@@ -8,6 +8,7 @@ from types import SimpleNamespace
 from typing import Any, Optional
 
 import pytest
+from tests.support.turn_execution import build_test_turn_request
 
 import codex_autorunner.adapters.chat.managed_thread_turns as managed_thread_turns_module
 from codex_autorunner.adapters.chat.managed_thread_surface_kernel import (
@@ -329,21 +330,48 @@ def test_prior_completed_assistant_text_prefix_reads_execution_store_wrapper(
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     thread = store.create_thread_target("hermes", workspace)
-    first = store.create_execution(thread.thread_target_id, prompt="first")
+    first = store.create_execution(
+        thread.thread_target_id,
+        prompt="first",
+        turn_request=build_test_turn_request(
+            managed_thread_id=thread.thread_target_id,
+            workspace_root=str(workspace),
+            agent="hermes",
+            prompt="first",
+        ),
+    )
     store.record_execution_result(
         thread.thread_target_id,
         first.execution_id,
         status="ok",
         assistant_text="first answer",
     )
-    second = store.create_execution(thread.thread_target_id, prompt="second")
+    second = store.create_execution(
+        thread.thread_target_id,
+        prompt="second",
+        turn_request=build_test_turn_request(
+            managed_thread_id=thread.thread_target_id,
+            workspace_root=str(workspace),
+            agent="hermes",
+            prompt="second",
+        ),
+    )
     store.record_execution_result(
         thread.thread_target_id,
         second.execution_id,
         status="ok",
         assistant_text="first answersecond answer",
     )
-    current = store.create_execution(thread.thread_target_id, prompt="third")
+    current = store.create_execution(
+        thread.thread_target_id,
+        prompt="third",
+        turn_request=build_test_turn_request(
+            managed_thread_id=thread.thread_target_id,
+            workspace_root=str(workspace),
+            agent="hermes",
+            prompt="third",
+        ),
+    )
 
     prefix = managed_thread_turns_module._prior_completed_assistant_text_prefix(
         SimpleNamespace(thread_store=store),

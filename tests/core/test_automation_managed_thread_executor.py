@@ -202,6 +202,64 @@ def test_managed_thread_turn_dead_letters_when_queue_worker_unavailable(
     assert started_workers == []
 
 
+def test_managed_thread_turn_materializes_opencode_model_in_canonical_record(
+    tmp_path: Path,
+) -> None:
+    store, threads, thread_id = _store_rule_event(tmp_path)
+    started_workers: list[str] = []
+    store.enqueue_job(
+        _job(
+            thread_id,
+            executor={
+                "kind": EXECUTOR_MANAGED_THREAD_TURN,
+                "prompt": "Say hi to {{ event.payload.name }}",
+                "client_turn_id": "client-opencode-1",
+                "agent": "opencode",
+                "model": "zai-coding-plan/glm-5.1",
+                "reasoning": "medium",
+            },
+            policy={"approval_mode": "never_require_approval"},
+        )
+    )
+    registry = AutomationExecutorRegistry()
+    registry.register(
+        EXECUTOR_MANAGED_THREAD_TURN,
+        ManagedThreadTurnAutomationExecutor(
+            hub_root=tmp_path / "hub",
+            automation_store=store,
+            thread_store=threads,
+            queue_worker_starter_fn=started_workers.append,
+        ),
+    )
+
+    result = AutomationJobWorker(store, registry).process_once(
+        now="2026-01-01T00:00:00Z"
+    )
+
+    saved = store.get_job("job-1")
+    assert result.running == 1
+    assert started_workers == [thread_id]
+    assert saved.managed_thread_execution_id is not None
+    request = threads.get_turn_execution_request(
+        thread_id,
+        str(saved.managed_thread_execution_id),
+    )
+    record = threads.get_turn_execution_record(
+        thread_id,
+        str(saved.managed_thread_execution_id),
+    )
+    assert request is not None
+    assert record is not None
+    assert request.agent == "opencode"
+    assert request.model == "zai-coding-plan/glm-5.1"
+    assert request.model_payload == {
+        "providerID": "zai-coding-plan",
+        "modelID": "glm-5.1",
+    }
+    assert record.request.model == "zai-coding-plan/glm-5.1"
+    assert record.request.reasoning == "medium"
+
+
 def test_managed_thread_default_approval_pauses_unattended_job(tmp_path: Path) -> None:
     store, threads, thread_id = _store_rule_event(tmp_path)
     store.enqueue_job(_job(thread_id))

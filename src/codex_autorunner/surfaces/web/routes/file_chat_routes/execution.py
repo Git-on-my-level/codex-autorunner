@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import asyncio
-from dataclasses import dataclass
+import uuid
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Callable, Dict, Optional
 
@@ -9,8 +10,15 @@ from fastapi import Request
 
 from .....adapters.chat.agents import resolve_chat_agent_and_profile
 from .....agents.registry import has_capability, validate_agent_id
+from .....agents.runtime_options import resolve_agent_runtime_options
 from .....core import drafts as draft_utils
 from .....core.managed_thread_identity import file_chat_target_key
+from .....core.orchestration import (
+    DeliveryIntentRef,
+    TurnExecutionOrigin,
+    TurnExecutionRequest,
+)
+from .....core.state import load_state
 from .....core.utils import atomic_write
 from ..agent_profile_validation import resolve_requested_agent_profile
 from .draft_state import load_draft_snapshot, persist_draft, relative_to_repo
@@ -30,11 +38,104 @@ class FileChatAgentSelection:
     thread_key: str
 
 
+@dataclass(frozen=True)
+class FileChatCanonicalTurn:
+    request: TurnExecutionRequest
+    selection: FileChatAgentSelection
+
+
 def _normalize_optional_text(value: object) -> Optional[str]:
     if not isinstance(value, str):
         return None
     normalized = value.strip().lower()
     return normalized or None
+
+
+def _load_runner_state(request: Request) -> Any:
+    try:
+        state_path = request.app.state.engine.state_path
+    except (AttributeError, TypeError):
+        return None
+    try:
+        return load_state(state_path)
+    except (OSError, ValueError, TypeError):
+        return None
+
+
+def build_file_chat_turn_request(
+    request: Request,
+    repo_root: Path,
+    target: FileChatTarget,
+    message: str,
+    *,
+    agent: object = "codex",
+    profile: object = None,
+    model: Optional[str] = None,
+    reasoning: Optional[str] = None,
+    client_turn_id: Optional[str] = None,
+    prompt_text: Optional[str] = None,
+) -> FileChatCanonicalTurn:
+    selection = resolve_file_chat_agent_selection(
+        request,
+        target,
+        agent=agent,
+        profile=profile,
+    )
+    runtime_options = resolve_agent_runtime_options(
+        selection.agent_id,
+        profile=selection.profile,
+        state=_load_runner_state(request),
+        config=getattr(request.app.state, "config", None),
+        workspace_root=repo_root,
+        explicit_model=model,
+        explicit_reasoning=reasoning,
+        approval_policy="on-request",
+        sandbox_policy="dangerFullAccess",
+        include_builtin_model=False,
+    )
+    request_id = client_turn_id or f"file-chat-{uuid.uuid4().hex}"
+    turn_request = TurnExecutionRequest(
+        request_id=request_id,
+        target_id=target.state_key,
+        target_kind="thread",
+        workspace_root=str(repo_root),
+        request_kind="message",
+        busy_policy="reject",
+        prompt_text=prompt_text or message,
+        agent=selection.agent_id,
+        profile=selection.profile,
+        model=runtime_options.model,
+        model_payload=runtime_options.opencode_model_payload or {},
+        reasoning=runtime_options.reasoning,
+        approval_policy=runtime_options.effective_approval_policy,
+        approval_mode=runtime_options.effective_approval_policy,
+        sandbox_policy=runtime_options.sandbox.policy,
+        client_request_id=client_turn_id,
+        idempotency_key=client_turn_id or request_id,
+        correlation_id=client_turn_id or request_id,
+        origin=TurnExecutionOrigin(
+            kind="surface",
+            source_id=f"web:file-chat:{target.state_key}",
+            surface_kind="web",
+            surface_key=target.state_key,
+            metadata={"route": "file-chat", "target": target.target},
+        ),
+        metadata={
+            "surface": "file_chat",
+            "target": target.target,
+            "chat_scope": target.chat_scope,
+            "thread_key": selection.thread_key,
+            "user_message": message,
+        },
+        delivery_intents=(
+            DeliveryIntentRef(
+                kind="file_chat_state",
+                intent_id=client_turn_id or request_id,
+                metadata={"target": target.target},
+            ),
+        ),
+    )
+    return FileChatCanonicalTurn(request=turn_request, selection=selection)
 
 
 def resolve_file_chat_agent_selection(
@@ -103,7 +204,11 @@ def _missing_file_chat_capability(
 
 
 async def _update_file_chat_turn_state(
-    request: Request, target: FileChatTarget, selection: FileChatAgentSelection
+    request: Request,
+    target: FileChatTarget,
+    selection: FileChatAgentSelection,
+    *,
+    turn_request: Optional[TurnExecutionRequest] = None,
 ) -> None:
     from .runtime import update_turn_state
 
@@ -113,6 +218,8 @@ async def _update_file_chat_turn_state(
     }
     if selection.profile is not None:
         turn_state_updates["profile"] = selection.profile
+    if turn_request is not None:
+        turn_state_updates["turn_request"] = turn_request.to_dict()
     await update_turn_state(request, target, **turn_state_updates)
 
 
@@ -129,6 +236,7 @@ async def _execute_selected_agent(
     events: Any,
     stall_timeout_seconds: Optional[float],
     model: Optional[str],
+    model_payload: Optional[dict[str, Any]],
     reasoning: Optional[str],
     on_meta: Optional[Callable[[str, str, str], Any]],
     on_usage: Optional[Callable[[Dict[str, Any]], Any]],
@@ -142,6 +250,14 @@ async def _execute_selected_agent(
             prompt,
             interrupt_event,
             model=model,
+            model_payload=(
+                {
+                    "providerID": str(model_payload.get("providerID") or ""),
+                    "modelID": str(model_payload.get("modelID") or ""),
+                }
+                if model_payload
+                else None
+            ),
             reasoning=reasoning,
             thread_registry=threads,
             thread_key=selection.thread_key,
@@ -267,6 +383,7 @@ async def execute_file_chat(
     profile: Optional[str] = None,
     model: Optional[str] = None,
     reasoning: Optional[str] = None,
+    turn_request: Optional[TurnExecutionRequest] = None,
     on_meta: Optional[Callable[[str, str, str], Any]] = None,
     on_usage: Optional[Callable[[Dict[str, Any]], Any]] = None,
 ) -> Dict[str, Any]:
@@ -290,6 +407,32 @@ async def execute_file_chat(
         before=before,
         editable_rel_path=relative_to_repo(repo_root, draft_path),
     )
+    if turn_request is None:
+        canonical = build_file_chat_turn_request(
+            request,
+            repo_root,
+            target,
+            message,
+            agent=agent,
+            profile=profile,
+            model=model,
+            reasoning=reasoning,
+            prompt_text=prompt,
+        )
+        turn_request = canonical.request
+        selection = canonical.selection
+    else:
+        turn_request = replace(
+            turn_request,
+            prompt_text=prompt,
+            metadata={**turn_request.metadata, "user_message": message},
+        )
+        selection = resolve_file_chat_agent_selection(
+            request,
+            target,
+            agent=turn_request.agent,
+            profile=turn_request.profile,
+        )
 
     from .runtime import get_or_create_interrupt_event
 
@@ -297,13 +440,12 @@ async def execute_file_chat(
     if interrupt_event.is_set():
         return {"status": "interrupted", "detail": "File chat interrupted"}
 
-    selection = resolve_file_chat_agent_selection(
+    await _update_file_chat_turn_state(
         request,
         target,
-        agent=agent,
-        profile=profile,
+        selection,
+        turn_request=turn_request,
     )
-    await _update_file_chat_turn_state(request, target, selection)
     result = await _execute_selected_agent(
         request,
         repo_root,
@@ -315,16 +457,19 @@ async def execute_file_chat(
         opencode=opencode,
         events=events,
         stall_timeout_seconds=stall_timeout_seconds,
-        model=model,
-        reasoning=reasoning,
+        model=turn_request.model,
+        model_payload=turn_request.model_payload,
+        reasoning=turn_request.reasoning,
         on_meta=on_meta,
         on_usage=on_usage,
     )
 
     if result.get("status") != "ok":
+        result = dict(result)
+        result["turn_request"] = turn_request.to_dict()
         return result
 
-    return _build_file_chat_success_result(
+    response = _build_file_chat_success_result(
         repo_root,
         target,
         state=state,
@@ -338,6 +483,8 @@ async def execute_file_chat(
         profile=selection.profile,
         result=result,
     )
+    response["turn_request"] = turn_request.to_dict()
+    return response
 
 
 async def execute_app_server(
@@ -377,6 +524,7 @@ async def execute_opencode(
     interrupt_event: asyncio.Event,
     *,
     model: Optional[str] = None,
+    model_payload: Optional[dict[str, str]] = None,
     reasoning: Optional[str] = None,
     thread_registry: Optional[Any] = None,
     thread_key: Optional[str] = None,
@@ -390,6 +538,7 @@ async def execute_opencode(
         prompt,
         interrupt_event,
         model=model,
+        model_payload=model_payload,
         reasoning=reasoning,
         thread_registry=thread_registry,
         thread_key=thread_key,

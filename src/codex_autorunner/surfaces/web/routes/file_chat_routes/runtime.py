@@ -23,18 +23,31 @@ async def clear_interrupt_event(request: Request, key: str) -> None:
 
 
 async def begin_turn_state(
-    request: Request, target: Any, client_turn_id: Optional[str]
+    request: Request,
+    target: Any,
+    client_turn_id: Optional[str],
+    *,
+    turn_request: Any = None,
+    turn_record: Any = None,
 ) -> None:
     s = get_state(request)
     async with s.turn_lock:
+        execution_id = str(getattr(turn_record, "execution_id", "") or "").strip()
         state: Dict[str, Any] = {
             "client_turn_id": client_turn_id or "",
+            "execution_id": execution_id,
             "target": target.target,
             "status": "starting",
             "agent": None,
             "thread_id": None,
             "turn_id": None,
         }
+        if turn_request is not None and callable(
+            getattr(turn_request, "to_dict", None)
+        ):
+            state["turn_request"] = turn_request.to_dict()
+        if turn_record is not None and callable(getattr(turn_record, "to_dict", None)):
+            state["turn_record"] = turn_record.to_dict()
         s.current_by_target[target.state_key] = state
         if client_turn_id:
             s.current_by_client[client_turn_id] = state

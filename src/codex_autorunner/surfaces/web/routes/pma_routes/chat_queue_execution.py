@@ -7,9 +7,10 @@ from typing import Any, Optional
 from fastapi import HTTPException
 
 from .....adapters.github.context_injection import maybe_inject_github_context
-from .....agents.runtime_options import resolve_agent_runtime_options
 from .....core.orchestration import (
     SurfaceThreadMessageRequest,
+    TurnExecutionContractError,
+    TurnExecutionRequest,
     build_surface_orchestration_ingress,
 )
 from .....core.pma.queue_prompts import (
@@ -29,7 +30,6 @@ from .....core.pma_context import (
     load_pma_prompt,
 )
 from .....core.pma_origin import PmaOriginContext, extract_pma_origin_metadata
-from .....core.state import load_state
 from .....core.text_utils import _normalize_optional_text
 from ...services.pma import get_pma_request_context
 from ...services.pma.common import pma_config_from_raw
@@ -43,31 +43,20 @@ from .runtime_state import PmaRuntimeState
 logger = logging.getLogger(__name__)
 
 
+def _turn_request_from_queue_payload(
+    payload: dict[str, Any],
+) -> Optional[TurnExecutionRequest]:
+    turn_request_payload = payload.get("turn_request")
+    if turn_request_payload is None:
+        return None
+    if not isinstance(turn_request_payload, dict):
+        raise ValueError("PMA queue payload turn_request must be an object")
+    return TurnExecutionRequest.from_mapping(turn_request_payload)
+
+
 def _get_pma_config(request: Any) -> dict[str, Any]:
     context = get_pma_request_context(request)
     return pma_config_from_raw(context.raw_config)
-
-
-def _resolve_queue_default_model(
-    request: Any,
-    *,
-    agent: Optional[str],
-    configured_default: Optional[str],
-) -> Optional[str]:
-    try:
-        state = load_state(request.app.state.engine.state_path)
-    except (OSError, ValueError, AttributeError):
-        state = None
-    defaults = _get_pma_config(request)
-    options = resolve_agent_runtime_options(
-        agent or defaults.get("default_agent") or "codex",
-        state=state,
-        config=request.app.state.config,
-        workspace_root=getattr(request.app.state.config, "root", None),
-        configured_model_default=configured_default,
-        include_builtin_model=False,
-    )
-    return options.model
 
 
 def _resolve_profile_with_stale_pma_origin_fallback(
@@ -127,16 +116,35 @@ async def execute_queue_item(
     hub_root = context.hub_root
     payload = item.payload
 
-    client_turn_id = payload.get("client_turn_id")
-    message = payload.get("message", "")
-    agent = payload.get("agent")
-    profile = _normalize_optional_text(payload.get("profile"))
-    model = _normalize_optional_text(payload.get("model"))
-    reasoning = _normalize_optional_text(payload.get("reasoning"))
+    try:
+        turn_request = _turn_request_from_queue_payload(payload)
+    except (TurnExecutionContractError, ValueError) as exc:
+        return {"status": "error", "detail": str(exc)}
+    if turn_request is None:
+        return {
+            "status": "error",
+            "detail": "PMA queue item is missing canonical turn_request",
+        }
+
+    request_metadata = (
+        dict(turn_request.metadata) if isinstance(turn_request.metadata, dict) else {}
+    )
+    client_turn_id = turn_request.client_request_id
+    message = turn_request.prompt_text or ""
+    agent = turn_request.agent
+    profile = turn_request.profile
+    model = turn_request.model
+    reasoning = turn_request.reasoning
+    approval_mode = turn_request.approval_mode or turn_request.approval_policy
+    sandbox_policy = turn_request.sandbox_policy
     lifecycle_event = payload.get("lifecycle_event")
+    if not isinstance(lifecycle_event, dict):
+        lifecycle_event = request_metadata.get("lifecycle_event")
     if not isinstance(lifecycle_event, dict):
         lifecycle_event = None
     wake_up = payload.get("wake_up")
+    if not isinstance(wake_up, dict):
+        wake_up = request_metadata.get("wake_up")
     if not isinstance(wake_up, dict):
         wake_up = None
     automation_trigger = lifecycle_event is not None or wake_up is not None
@@ -291,15 +299,6 @@ async def execute_queue_item(
             persist=False,
         )
 
-    if not model:
-        model = _resolve_queue_default_model(
-            request,
-            agent=agent,
-            configured_default=defaults.get("model"),
-        )
-    if not reasoning and defaults.get("reasoning"):
-        reasoning = defaults["reasoning"]
-
     try:
         prompt_base = load_pma_prompt(hub_root)
         supervisor = context.hub_supervisor
@@ -446,6 +445,8 @@ async def execute_queue_item(
             interrupt_event,
             model=model,
             reasoning=reasoning,
+            approval_mode=approval_mode,
+            sandbox_policy=sandbox_policy,
             thread_registry=registry,
             thread_key=execution_origin.session_key,
             backend_thread_id=execution_origin.backend_thread_id,

@@ -214,6 +214,7 @@ class ThreadExecutionStore(Protocol):
         client_request_id: Optional[str] = None,
         metadata: Optional[dict[str, Any]] = None,
         queue_payload: Optional[dict[str, Any]] = None,
+        turn_request: Optional[Any] = None,
     ) -> ExecutionRecord: ...
 
     def get_execution(

@@ -62,7 +62,6 @@ from ...core.filebox import inbox_dir
 from ...core.logging_utils import log_event
 from ...core.orchestration import (
     FlowTarget,
-    MessageRequest,
     PausedFlowTarget,
     SurfaceThreadMessageRequest,
     build_surface_orchestration_ingress,
@@ -91,6 +90,7 @@ from ...core.pma_notification_store import (
 from ...core.utils import canonicalize_path
 from ..chat.agents import DEFAULT_CHAT_AGENT_MODELS
 from ..chat.bound_chat_execution_metadata import merge_bound_chat_execution_metadata
+from ..chat.canonical_turns import build_surface_turn_execution_request
 from ..chat.managed_thread_progress_projector import (
     ManagedThreadProgressProjector,
 )
@@ -2170,7 +2170,7 @@ async def _run_discord_orchestrated_turn_for_message(
 
     async def _begin_execution(
         orchestration_service: Any,
-        request: MessageRequest,
+        request: Any,
         *,
         client_request_id: Optional[str],
         sandbox_policy: Optional[Any],
@@ -2610,25 +2610,47 @@ async def _run_discord_orchestrated_turn_for_message(
         "execution_error_message": public_execution_error,
     }
     surface_key = managed_thread_surface_key or channel_id
-    return await run_managed_surface_turn(
-        turn_envelope.to_message_request(
-            target_id=thread.thread_target_id,
-            target_kind="thread",
-            model=model_override,
-            reasoning=reasoning_effort,
-            approval_mode=approval_mode,
-            input_items=execution_input_items,
-            metadata=merge_bound_chat_execution_metadata(
-                metadata,
-                origin_kind="surface",
-                origin_surface_kind="discord",
-                origin_surface_key=surface_key,
-                progress_targets=(("discord", surface_key),),
-            ),
+    client_request_id = f"discord:{channel_id}:{uuid.uuid4().hex[:12]}"
+    message_request = turn_envelope.to_message_request(
+        target_id=thread.thread_target_id,
+        target_kind="thread",
+        model=model_override,
+        reasoning=reasoning_effort,
+        approval_mode=approval_mode,
+        input_items=execution_input_items,
+        metadata=merge_bound_chat_execution_metadata(
+            metadata,
+            origin_kind="surface",
+            origin_surface_kind="discord",
+            origin_surface_key=surface_key,
+            progress_targets=(("discord", surface_key),),
         ),
+    )
+    turn_request = build_surface_turn_execution_request(
+        message_request,
+        request_id=uuid.uuid4().hex,
+        workspace_root=workspace_root,
+        surface_kind="discord",
+        surface_key=surface_key,
+        agent=agent,
+        approval_policy=approval_mode,
+        sandbox_policy=sandbox_policy,
+        profile=getattr(thread, "agent_profile", None),
+        client_request_id=client_request_id,
+        origin_metadata={
+            "channel_id": channel_id,
+            "session_key": session_key,
+            "mode": mode,
+            "pma_enabled": pma_enabled,
+            "source_message_id": source_message_id,
+        },
+        delivery_surface_key=surface_key,
+    )
+    return await run_managed_surface_turn(
+        turn_request,
         config=ManagedSurfaceRunnerConfig(
             coordinator=coordinator,
-            client_request_id=f"discord:{channel_id}:{uuid.uuid4().hex[:12]}",
+            client_request_id=client_request_id,
             sandbox_policy=sandbox_policy,
             hooks=runner_hooks,
             queue=ManagedSurfaceQueueConfig(

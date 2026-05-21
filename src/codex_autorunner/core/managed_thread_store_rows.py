@@ -478,6 +478,8 @@ class PmaExecutionRecord:
     started_at: Optional[str]
     finished_at: Optional[str]
     metadata: dict[str, Any]
+    turn_request: dict[str, Any]
+    turn_record: dict[str, Any]
 
     @classmethod
     def from_orchestration_row(cls, row: Any) -> "PmaExecutionRecord":
@@ -502,13 +504,30 @@ class PmaExecutionRecord:
             started_at=coerce_text(row["started_at"]),
             finished_at=coerce_text(row["finished_at"]),
             metadata=metadata,
+            turn_request=(
+                _json_loads_object(row["turn_request_json"])
+                if "turn_request_json" in row.keys()
+                else {}
+            ),
+            turn_record=(
+                _json_loads_object(row["turn_record_json"])
+                if "turn_record_json" in row.keys()
+                else {}
+            ),
         )
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
 
     def to_execution_record(self) -> ExecutionRecord:
-        return ExecutionRecord.from_mapping(self.to_dict())
+        payload = self.to_dict()
+        metadata = dict(self.metadata)
+        if self.turn_request:
+            metadata["turn_request"] = dict(self.turn_request)
+        if self.turn_record:
+            metadata["turn_record"] = dict(self.turn_record)
+        payload["metadata"] = metadata
+        return ExecutionRecord.from_mapping(payload)
 
 
 @dataclass(frozen=True)
@@ -523,6 +542,7 @@ class PmaPendingQueueItem:
     model: Optional[str]
     reasoning: Optional[str]
     client_turn_id: Optional[str]
+    turn_request: dict[str, Any]
 
     @classmethod
     def from_queue_row(cls, row: Any) -> "PmaPendingQueueItem":
@@ -537,6 +557,11 @@ class PmaPendingQueueItem:
             model=coerce_text(row["model_id"]),
             reasoning=coerce_text(row["reasoning_level"]),
             client_turn_id=coerce_text(row["client_request_id"]),
+            turn_request=(
+                _json_loads_object(row["turn_request_json"])
+                if "turn_request_json" in row.keys()
+                else {}
+            ),
         )
 
     def to_dict(self) -> dict[str, Any]:

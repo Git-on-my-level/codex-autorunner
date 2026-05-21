@@ -85,6 +85,10 @@ class ManagedTurnRecoveryDecision:
     age_seconds: Optional[float]
     current_status: str
     queue_depth: int = 0
+    canonical_request_id: Optional[str] = None
+    surface_origin: Optional[str] = None
+    target: Optional[dict[str, str]] = None
+    resolved_runtime_options: Optional[dict[str, object]] = None
 
 
 @dataclass(frozen=True)
@@ -135,6 +139,41 @@ def _managed_turn_lifecycle_phase(execution: ExecutionRecord) -> str:
     return status or "unknown"
 
 
+def _canonical_recovery_context(execution: ExecutionRecord) -> dict[str, object]:
+    request = execution.metadata.get("turn_request")
+    if not isinstance(request, dict):
+        request = execution.metadata.get("canonical_request")
+    if not isinstance(request, dict):
+        return {}
+    origin_obj = request.get("origin")
+    origin: dict[str, object] = origin_obj if isinstance(origin_obj, dict) else {}
+    surface_kind = str(origin.get("surface_kind") or "").strip()
+    surface_key = str(origin.get("surface_key") or "").strip()
+    surface_origin = (
+        f"{surface_kind}:{surface_key}" if surface_kind and surface_key else None
+    )
+    return {
+        "canonical_request_id": str(request.get("request_id") or "").strip() or None,
+        "surface_origin": surface_origin
+        or str(origin.get("source_id") or "").strip()
+        or None,
+        "target": {
+            "target_id": str(request.get("target_id") or execution.target_id),
+            "target_kind": str(request.get("target_kind") or execution.target_kind),
+        },
+        "resolved_runtime_options": {
+            "agent": request.get("agent"),
+            "profile": request.get("profile"),
+            "model": request.get("model"),
+            "model_payload": request.get("model_payload") or {},
+            "reasoning": request.get("reasoning"),
+            "approval_policy": request.get("approval_policy"),
+            "approval_mode": request.get("approval_mode"),
+            "sandbox_policy": request.get("sandbox_policy"),
+        },
+    }
+
+
 def classify_stale_managed_turn_recovery(
     *,
     managed_thread_id: str,
@@ -151,6 +190,7 @@ def classify_stale_managed_turn_recovery(
         status=status,
         terminal_statuses=_TERMINAL_STATUSES,
     )
+    canonical = _canonical_recovery_context(execution)
     return ManagedTurnRecoveryDecision(
         managed_thread_id=managed_thread_id,
         execution_id=execution.execution_id,
@@ -160,6 +200,10 @@ def classify_stale_managed_turn_recovery(
         age_seconds=age_seconds,
         current_status=status,
         queue_depth=queue_depth,
+        canonical_request_id=canonical.get("canonical_request_id"),  # type: ignore[arg-type]
+        surface_origin=canonical.get("surface_origin"),  # type: ignore[arg-type]
+        target=canonical.get("target"),  # type: ignore[arg-type]
+        resolved_runtime_options=canonical.get("resolved_runtime_options"),  # type: ignore[arg-type]
     )
 
 
@@ -223,6 +267,10 @@ class RecoveryScanner:
             age_seconds=decision.age_seconds,
             current_status=decision.current_status,
             queue_depth=decision.queue_depth,
+            canonical_request_id=decision.canonical_request_id,
+            surface_origin=decision.surface_origin,
+            target=decision.target,
+            resolved_runtime_options=decision.resolved_runtime_options,
         )
         recovered: Optional[ExecutionRecord] = None
         if decision.selected_action == "recover_from_harness":

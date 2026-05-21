@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
+import secrets
 import time
 from contextlib import suppress
 from dataclasses import dataclass
@@ -13,6 +14,7 @@ from typing import TYPE_CHECKING, Any, Optional
 
 import httpx
 
+from .....adapters.chat.canonical_turns import build_surface_turn_execution_request
 from .....agents.base import harness_progress_event_stream
 from .....agents.opencode.harness import OpenCodeHarness
 from .....agents.opencode.runtime import (
@@ -22,6 +24,7 @@ from .....agents.opencode.runtime import (
 )
 from .....agents.runtime_options import resolve_opencode_model_payload
 from .....core.logging_utils import log_event
+from .....core.orchestration import MessageRequest
 from .....core.orchestration.runtime_thread_events import (
     RuntimeThreadRunEventState,
     normalize_runtime_thread_raw_event,
@@ -889,6 +892,58 @@ class GitHubCommands(TelegramCommandSupportMixin):
                 turn_started_at = time.monotonic()
                 self._token_usage_by_thread.pop(setup.review_session_id, None)
                 harness = OpenCodeHarness(setup.supervisor)
+                topic_key = await self._resolve_topic_key(
+                    message.chat_id, message.thread_id
+                )
+                message_request = MessageRequest(
+                    target_id=setup.review_session_id,
+                    target_kind="thread",
+                    message_text=setup.review_args,
+                    kind="review",
+                    busy_policy="reject",
+                    model=record.model,
+                    approval_mode=setup.approval_mode,
+                    metadata={
+                        "runtime_prompt": setup.review_args,
+                        "legacy_runtime": "telegram_opencode_review",
+                        "repo_id": record.repo_id,
+                    },
+                )
+                canonical_turn_request = build_surface_turn_execution_request(
+                    message_request,
+                    request_id=secrets.token_hex(16),
+                    workspace_root=setup.workspace_root,
+                    surface_kind="telegram",
+                    surface_key=topic_key,
+                    agent="opencode",
+                    approval_policy=setup.approval_mode or "never",
+                    sandbox_policy=setup.sandbox_policy or "dangerFullAccess",
+                    client_request_id=(
+                        f"telegram:{topic_key}:review:{secrets.token_hex(6)}"
+                    ),
+                    origin_metadata={
+                        "chat_id": message.chat_id,
+                        "thread_id": message.thread_id,
+                        "message_id": message.message_id,
+                        "codex_thread_id": setup.review_session_id,
+                        "runtime": "opencode_review",
+                        "repo_id": record.repo_id,
+                    },
+                    delivery_surface_key=topic_key,
+                )
+                runtime.current_turn_request = canonical_turn_request.to_dict()
+                log_event(
+                    self._logger,
+                    logging.INFO,
+                    "telegram.review.canonical_request_built",
+                    topic_key=topic_key,
+                    chat_id=message.chat_id,
+                    thread_id=message.thread_id,
+                    codex_thread_id=setup.review_session_id,
+                    request_id=canonical_turn_request.request_id,
+                    target_id=canonical_turn_request.target_id,
+                    agent=canonical_turn_request.agent,
+                )
                 turn_ref = await harness.start_review(
                     setup.workspace_root,
                     setup.review_session_id,
@@ -901,9 +956,6 @@ class GitHubCommands(TelegramCommandSupportMixin):
                 turn_id = turn_ref.turn_id
                 runtime.current_turn_id = turn_id
                 runtime.current_turn_key = (setup.review_session_id, turn_id)
-                topic_key = await self._resolve_topic_key(
-                    message.chat_id, message.thread_id
-                )
                 ctx = TurnContext(
                     topic_key=topic_key,
                     chat_id=message.chat_id,

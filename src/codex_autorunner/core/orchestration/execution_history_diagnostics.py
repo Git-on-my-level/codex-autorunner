@@ -3,10 +3,12 @@ from __future__ import annotations
 import dataclasses
 import logging
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
 
-from ..text_utils import _json_dumps
+from ..freshness import parse_iso_datetime
+from ..text_utils import _json_dumps, _json_loads_object
 from ..time_utils import now_iso
 from .cold_trace_store import ColdTraceStore
 from .execution_history import timeline_hot_family_for_event_type
@@ -103,10 +105,27 @@ class ExecutionHistoryThresholdBreach:
 
 
 @dataclasses.dataclass(frozen=True)
+class CanonicalTurnStateDiagnostic:
+    request_id: str
+    execution_id: str
+    surface_origin: Optional[str]
+    target: dict[str, Any]
+    lifecycle_phase: str
+    terminal_status: Optional[str]
+    runtime_options: dict[str, Any]
+    recovery_action: str
+    evidence: dict[str, Any]
+
+    def to_dict(self) -> dict[str, Any]:
+        return dataclasses.asdict(self)
+
+
+@dataclasses.dataclass(frozen=True)
 class ExecutionHistoryDiagnosticReport:
     metrics: ExecutionHistoryMetrics
     top_n: ExecutionHistoryTopN
     threshold_breaches: tuple[ExecutionHistoryThresholdBreach, ...]
+    canonical_turns: tuple[CanonicalTurnStateDiagnostic, ...]
     startup_recovery_duration_seconds: Optional[float]
     generated_at: str
 
@@ -459,6 +478,178 @@ def detect_completion_gap_repeated_attempts(
     return tuple(detections)
 
 
+def _surface_origin(request: dict[str, Any]) -> Optional[str]:
+    origin = request.get("origin")
+    if not isinstance(origin, dict):
+        return None
+    surface_kind = str(origin.get("surface_kind") or "").strip()
+    surface_key = str(origin.get("surface_key") or "").strip()
+    if surface_kind and surface_key:
+        return f"{surface_kind}:{surface_key}"
+    source_id = str(origin.get("source_id") or "").strip()
+    return source_id or None
+
+
+def _terminal_status_from_record(status: str) -> Optional[str]:
+    normalized = str(status or "").strip().lower()
+    if normalized in {"ok", "completed", "complete", "success", "succeeded"}:
+        return "completed"
+    if normalized in {"error", "failed"}:
+        return "failed"
+    if normalized in {"cancelled", "canceled"}:
+        return "cancelled"
+    if normalized in {"interrupted", "lost"}:
+        return normalized
+    return None
+
+
+def _terminal_write_evidence(conn: Any, execution_id: str) -> dict[str, Any]:
+    rows = conn.execute(
+        """
+        SELECT event_id, event_type, timestamp, status, payload_json
+          FROM orch_event_projections
+         WHERE event_family = ?
+           AND execution_id = ?
+           AND event_type IN ('turn_completed', 'turn_failed', 'turn_interrupted')
+         ORDER BY timestamp ASC, event_id ASC
+        """,
+        (_TIMELINE_EVENT_FAMILY, execution_id),
+    ).fetchall()
+    writes: list[dict[str, Any]] = []
+    signatures: set[tuple[str, str, str]] = set()
+    for row in rows:
+        payload = _json_loads_object(row["payload_json"])
+        event_obj = payload.get("event")
+        event: dict[str, Any] = event_obj if isinstance(event_obj, dict) else {}
+        signature = (
+            str(row["event_type"] or ""),
+            str(row["status"] or ""),
+            str(event.get("final_message") or event.get("error_message") or ""),
+        )
+        signatures.add(signature)
+        writes.append(
+            {
+                "event_id": str(row["event_id"] or ""),
+                "event_type": str(row["event_type"] or ""),
+                "status": str(row["status"] or ""),
+                "timestamp": str(row["timestamp"] or ""),
+                "message": signature[2] or None,
+            }
+        )
+    evidence: dict[str, Any] = {"terminal_write_count": len(writes)}
+    if writes:
+        evidence["terminal_writes"] = writes
+    if len(writes) > 1:
+        evidence["duplicate_terminal_writes"] = True
+        evidence["conflicting_terminal_writes"] = len(signatures) > 1
+    return evidence
+
+
+def _recovery_action_for_record(
+    *,
+    status: str,
+    started_at: Optional[str],
+    created_at: Optional[str],
+    terminal_status: Optional[str],
+    stale_after_seconds: float,
+    now: datetime,
+) -> tuple[str, str]:
+    normalized = str(status or "").strip().lower()
+    if terminal_status is not None:
+        return "none", "terminal"
+    if normalized == "queued":
+        return "replay_queued", "queued"
+    if normalized == "running":
+        basis = parse_iso_datetime(started_at) or parse_iso_datetime(created_at)
+        if basis is None:
+            return "record_conflict", "running_unknown_age"
+        age_seconds = max(0.0, (now - basis).total_seconds())
+        if age_seconds >= stale_after_seconds:
+            return "classify_stale_running", "stale_running"
+        return "wait", "running"
+    if normalized in {"claiming"}:
+        return "replay_queued", normalized
+    return "record_conflict", normalized or "unknown"
+
+
+def collect_canonical_turn_state_diagnostics(
+    hub_root: Path,
+    *,
+    stale_after_seconds: float = 30 * 60,
+    now: Optional[datetime] = None,
+) -> tuple[CanonicalTurnStateDiagnostic, ...]:
+    resolved_now = now or datetime.now(timezone.utc)
+    diagnostics: list[CanonicalTurnStateDiagnostic] = []
+    with open_orchestration_sqlite(hub_root) as conn:
+        rows = conn.execute(
+            """
+            SELECT execution_id, thread_target_id, status, started_at, finished_at,
+                   created_at, turn_request_json, turn_record_json, error_text
+              FROM orch_thread_executions
+             ORDER BY created_at ASC, execution_id ASC
+            """
+        ).fetchall()
+        for row in rows:
+            execution_id = str(row["execution_id"] or "").strip()
+            request = _json_loads_object(row["turn_request_json"])
+            record = _json_loads_object(row["turn_record_json"])
+            if not execution_id or not request or not record:
+                continue
+            record_status = str(record.get("status") or row["status"] or "").strip()
+            terminal_status = _terminal_status_from_record(record_status)
+            recovery_action, lifecycle_phase = _recovery_action_for_record(
+                status=record_status,
+                started_at=record.get("started_at") or row["started_at"],
+                created_at=row["created_at"],
+                terminal_status=terminal_status,
+                stale_after_seconds=stale_after_seconds,
+                now=resolved_now,
+            )
+            evidence = _terminal_write_evidence(conn, execution_id)
+            error_text = (
+                str(record.get("error_text") or row["error_text"] or "").strip() or None
+            )
+            if error_text is not None:
+                evidence["error_text"] = error_text
+                if "opencode_first_event_timeout" in error_text:
+                    evidence["runtime_error_code"] = "opencode_first_event_timeout"
+            conflict_evidence = record.get("conflict_evidence")
+            if isinstance(conflict_evidence, dict) and conflict_evidence:
+                evidence["record_conflict_evidence"] = conflict_evidence
+            diagnostics.append(
+                CanonicalTurnStateDiagnostic(
+                    request_id=str(
+                        record.get("request_id")
+                        or request.get("request_id")
+                        or execution_id
+                    ),
+                    execution_id=execution_id,
+                    surface_origin=_surface_origin(request),
+                    target={
+                        "target_id": request.get("target_id")
+                        or row["thread_target_id"],
+                        "target_kind": request.get("target_kind") or "thread",
+                        "workspace_root": request.get("workspace_root"),
+                    },
+                    lifecycle_phase=lifecycle_phase,
+                    terminal_status=terminal_status,
+                    runtime_options={
+                        "agent": request.get("agent"),
+                        "profile": request.get("profile"),
+                        "model": request.get("model"),
+                        "model_payload": request.get("model_payload") or {},
+                        "reasoning": request.get("reasoning"),
+                        "approval_policy": request.get("approval_policy"),
+                        "approval_mode": request.get("approval_mode"),
+                        "sandbox_policy": request.get("sandbox_policy"),
+                    },
+                    recovery_action=recovery_action,
+                    evidence=evidence,
+                )
+            )
+    return tuple(diagnostics)
+
+
 def run_execution_history_diagnostics(
     hub_root: Path,
     *,
@@ -473,6 +664,7 @@ def run_execution_history_diagnostics(
     top_n = collect_top_n_heavy_executions(hub_root, top_n=t.top_n_heavy_executions)
     breaches = check_thresholds(metrics, thresholds=t)
     gap_detections = detect_completion_gap_repeated_attempts(hub_root, thresholds=t)
+    canonical_turns = collect_canonical_turn_state_diagnostics(hub_root)
 
     gap_breaches = [
         ExecutionHistoryThresholdBreach(
@@ -525,6 +717,7 @@ def run_execution_history_diagnostics(
         metrics=metrics,
         top_n=top_n,
         threshold_breaches=all_breaches,
+        canonical_turns=canonical_turns,
         startup_recovery_duration_seconds=startup_duration,
         generated_at=now_iso(),
     )
@@ -728,6 +921,7 @@ def log_startup_recovery(
 
 
 __all__ = [
+    "CanonicalTurnStateDiagnostic",
     "CompletionGapDetection",
     "ExecutionHistoryDiagnosticReport",
     "ExecutionHistoryMetrics",
@@ -735,6 +929,7 @@ __all__ = [
     "ExecutionHistoryThresholds",
     "ExecutionHistoryTopN",
     "check_thresholds",
+    "collect_canonical_turn_state_diagnostics",
     "collect_execution_history_metrics",
     "collect_top_n_heavy_executions",
     "detect_completion_gap_repeated_attempts",

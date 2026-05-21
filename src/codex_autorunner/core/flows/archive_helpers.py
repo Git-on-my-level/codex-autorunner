@@ -86,6 +86,19 @@ def flow_run_archive_root(repo_root: Path, run_id: str) -> Path:
     return _run_archive_root(repo_root) / run_id
 
 
+def count_orphaned_flow_artifact_dirs(
+    repo_root: Path, records: list[Any] | None = None
+) -> int:
+    """Count live flow artifact dirs that no longer have a flow_runs row."""
+    flows_root = repo_root / ".codex-autorunner" / "flows"
+    if not flows_root.exists() or not flows_root.is_dir():
+        return 0
+    known_run_ids = _known_flow_run_ids(repo_root, records)
+    return sum(
+        1 for path in _iter_orphaned_flow_artifact_dirs(flows_root, known_run_ids)
+    )
+
+
 def _get_run_archive_retention_policy(
     repo_root: Path,
 ) -> Optional[RunArchiveRetentionPolicy]:
@@ -173,6 +186,102 @@ def _checkpoint_and_vacuum_flow_db(
             "flows.db checkpoint/vacuum skipped after archive (database may be busy): %s",
             exc,
         )
+
+
+def _known_flow_run_ids(repo_root: Path, records: list[Any] | None) -> set[str]:
+    known: set[str] = set()
+    if records is not None:
+        known.update(
+            str(record.id).strip()
+            for record in records
+            if getattr(record, "id", None) is not None and str(record.id).strip()
+        )
+    db_path = resolve_repo_flows_db_path(repo_root)
+    if not db_path.exists():
+        return known
+    try:
+        with FlowStore(db_path, durable=_get_durable_writes(repo_root)) as store:
+            known.update(record.id for record in store.list_flow_runs())
+    except (sqlite3.Error, OSError, RuntimeError, ValueError, TypeError):
+        pass
+    return known
+
+
+def _iter_orphaned_flow_artifact_dirs(
+    flows_root: Path, known_run_ids: set[str]
+) -> list[Path]:
+    try:
+        children = sorted(flows_root.iterdir(), key=lambda path: path.name)
+    except OSError:
+        return []
+    return [
+        child
+        for child in children
+        if child.is_dir() and child.name.strip() and child.name not in known_run_ids
+    ]
+
+
+def _archive_orphaned_flow_artifact_dirs(
+    repo_root: Path,
+    *,
+    records: list[Any],
+) -> dict[str, Any]:
+    flows_root = repo_root / ".codex-autorunner" / "flows"
+    orphan_dirs = _iter_orphaned_flow_artifact_dirs(
+        flows_root, _known_flow_run_ids(repo_root, records)
+    )
+    archived: list[str] = []
+    failed: list[dict[str, str]] = []
+    summaries: list[dict[str, Any]] = []
+
+    for orphan_dir in orphan_dirs:
+        run_id = orphan_dir.name
+        archive_root = flow_run_archive_root(repo_root, run_id)
+        target_flow_state_dir = _next_archive_dir(archive_root / "flow_state")
+        try:
+            execution = execute_archive_entries(
+                (
+                    ArchiveEntrySpec(
+                        label="flow_state",
+                        source=orphan_dir,
+                        dest=target_flow_state_dir,
+                        mode="move",
+                    ),
+                ),
+                worktree_root=repo_root,
+            )
+        except Exception as exc:  # intentional: sibling cleanup must stay best-effort
+            logger.warning(
+                "Failed to archive orphaned flow artifacts %s",
+                run_id,
+                exc_info=exc,
+            )
+            failed.append(
+                {
+                    "run_id": run_id,
+                    "error": str(exc).strip() or exc.__class__.__name__,
+                }
+            )
+            continue
+        if "flow_state" in execution.moved_paths:
+            archived.append(run_id)
+            summaries.append(
+                {
+                    "run_id": run_id,
+                    "archive_dir": str(archive_root),
+                    "archived_flow_state_dir": str(target_flow_state_dir),
+                    "archived_paths": list(execution.moved_paths),
+                    "missing_paths": list(execution.missing_paths),
+                }
+            )
+
+    return {
+        "archived_orphan_flow_state_ids": archived,
+        "archived_orphan_flow_state_count": len(archived),
+        "archived_orphan_flow_states": summaries,
+        "failed_orphan_flow_states": failed,
+        "failed_orphan_flow_state_count": len(failed),
+    }
 
 
 def build_flow_archive_entries(
@@ -590,9 +699,10 @@ def archive_terminal_flow_runs(
     maintain_db: bool = True,
 ) -> dict[str, Any]:
     excluded = exclude_run_ids or frozenset()
+    all_records = store.list_flow_runs(flow_type="ticket_flow")
     records = [
         record
-        for record in store.list_flow_runs(flow_type="ticket_flow")
+        for record in all_records
         if record.status.is_terminal() and record.id not in excluded
     ]
     archived_run_ids: list[str] = []
@@ -633,6 +743,14 @@ def archive_terminal_flow_runs(
             )
         if delete_run and store.delete_flow_run(record.id):
             deleted_run_ids.append(record.id)
+    orphan_summary = _archive_orphaned_flow_artifact_dirs(
+        repo_root,
+        records=[
+            record
+            for record in all_records
+            if record.id not in deleted_run_ids and record.id not in archived_run_ids
+        ],
+    )
     if maintain_db and deleted_run_ids:
         _checkpoint_and_vacuum_flow_db(
             store=store,
@@ -650,6 +768,7 @@ def archive_terminal_flow_runs(
         "archived_runs": archived_run_summaries,
         "failed_runs": failed_runs,
         "failed_run_count": len(failed_runs),
+        **orphan_summary,
     }
 
 

@@ -143,6 +143,41 @@ class TestManagedThreadStatusShape:
         payload = response.json()
         assert payload["turn"]["activity"] == "idle"
 
+    def test_status_running_thread_exposes_canonical_request_metadata(
+        self, hub_env
+    ) -> None:
+        _enable_pma(hub_env.hub_root)
+        app = create_hub_app(hub_env.hub_root)
+        store = ManagedThreadStore(hub_env.hub_root)
+        created = store.create_thread(
+            "opencode",
+            hub_env.repo_root.resolve(),
+            repo_id=hub_env.repo_id,
+        )
+        managed_thread_id = str(created["managed_thread_id"])
+        turn = store.create_turn(
+            managed_thread_id,
+            prompt="Run canonical diagnostics",
+            model="zai-coding-plan/glm-5.1",
+            reasoning="medium",
+        )
+
+        with TestClient(app) as client:
+            response = client.get(f"/hub/pma/threads/{managed_thread_id}/status")
+
+        assert response.status_code == 200
+        payload = response.json()
+        canonical = payload["turn"]["canonical_request"]
+        assert canonical["request_id"] == turn["managed_turn_id"]
+        assert canonical["target_id"] == managed_thread_id
+        assert canonical["runtime_options"]["agent"] == "opencode"
+        assert canonical["runtime_options"]["model"] == "zai-coding-plan/glm-5.1"
+        assert canonical["runtime_options"]["model_payload"] == {
+            "providerID": "zai-coding-plan",
+            "modelID": "glm-5.1",
+        }
+        assert canonical["runtime_options"]["reasoning"] == "medium"
+
     def test_status_endpoint_exposes_queue_depth_field(self, hub_env) -> None:
         _enable_pma(hub_env.hub_root)
         app = create_hub_app(hub_env.hub_root)

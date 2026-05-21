@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from tests.support.turn_execution import create_test_turn
+
 from codex_autorunner.core.managed_thread_store import ManagedThreadStore
 from codex_autorunner.core.orchestration import (
     OrchestrationBindingStore,
@@ -185,7 +187,7 @@ def test_binding_store_lists_bindings_and_active_work_by_agent_and_repo(
         repo_id="repo-2",
     )
     store = ManagedThreadStore(hub_root)
-    running_turn = store.create_turn(codex_thread_id, prompt="busy")
+    running_turn = create_test_turn(store, codex_thread_id, prompt="busy")
 
     repo_bindings = bindings.list_bindings(repo_id="repo-1")
     agent_bindings = bindings.list_bindings(agent_id="codex")
@@ -239,8 +241,13 @@ def test_binding_store_active_work_by_agent(tmp_path: Path) -> None:
         agent_id="opencode",
         repo_id="repo-1",
     )
-    thread_store.create_turn(codex_thread_id, prompt="codex busy")
-    thread_store.create_turn(opencode_thread_id, prompt="opencode busy")
+    create_test_turn(thread_store, codex_thread_id, prompt="codex busy")
+    create_test_turn(
+        thread_store,
+        opencode_thread_id,
+        prompt="opencode busy",
+        model="anthropic/claude-sonnet-4",
+    )
 
     codex_work = bindings.list_active_work_summaries(agent_id="codex")
     opencode_work = bindings.list_active_work_summaries(agent_id="opencode")
@@ -323,8 +330,8 @@ def test_binding_store_active_work_by_repo(tmp_path: Path) -> None:
         agent_id="codex",
         repo_id="repo-b",
     )
-    thread_store.create_turn(thread1_id, prompt="repo a busy")
-    thread_store.create_turn(thread2_id, prompt="repo b busy")
+    create_test_turn(thread_store, thread1_id, prompt="repo a busy")
+    create_test_turn(thread_store, thread2_id, prompt="repo b busy")
 
     repo_a_work = bindings.list_active_work_summaries(repo_id="repo-a")
     repo_b_work = bindings.list_active_work_summaries(repo_id="repo-b")
@@ -346,8 +353,9 @@ def test_binding_store_active_work_includes_queue_depth(tmp_path: Path) -> None:
     thread_id = _create_thread(
         hub_root, repo_id="repo-1", workspace_name="repo-1", thread_store=thread_store
     )
-    running_turn = thread_store.create_turn(thread_id, prompt="first")
-    queued_turn = thread_store.create_turn(
+    running_turn = create_test_turn(thread_store, thread_id, prompt="first")
+    queued_turn = create_test_turn(
+        thread_store,
         thread_id,
         prompt="second",
         busy_policy="queue",
@@ -435,17 +443,20 @@ def test_binding_store_active_work_excludes_idle_completed_and_archived_threads(
             repo_id="repo-1",
         )
 
-    completed_turn = thread_store.create_turn(completed_thread_id, prompt="completed")
+    completed_turn = create_test_turn(
+        thread_store, completed_thread_id, prompt="completed"
+    )
     assert thread_store.mark_turn_finished(
         completed_turn["managed_turn_id"], status="ok"
     )
 
-    running_turn = thread_store.create_turn(running_thread_id, prompt="running")
+    running_turn = create_test_turn(thread_store, running_thread_id, prompt="running")
 
-    queued_running_turn = thread_store.create_turn(
-        queued_thread_id, prompt="queued parent"
+    queued_running_turn = create_test_turn(
+        thread_store, queued_thread_id, prompt="queued parent"
     )
-    queued_turn = thread_store.create_turn(
+    queued_turn = create_test_turn(
+        thread_store,
         queued_thread_id,
         prompt="queued child",
         busy_policy="queue",
@@ -454,20 +465,23 @@ def test_binding_store_active_work_excludes_idle_completed_and_archived_threads(
         queued_running_turn["managed_turn_id"], status="ok"
     )
 
-    running_with_queue_turn = thread_store.create_turn(
+    running_with_queue_turn = create_test_turn(
+        thread_store,
         running_and_queued_thread_id,
         prompt="running parent",
     )
-    thread_store.create_turn(
+    create_test_turn(
+        thread_store,
         running_and_queued_thread_id,
         prompt="running child",
         busy_policy="queue",
     )
 
-    archived_running_turn = thread_store.create_turn(
-        archived_thread_id, prompt="archived"
+    archived_running_turn = create_test_turn(
+        thread_store, archived_thread_id, prompt="archived"
     )
-    thread_store.create_turn(
+    create_test_turn(
+        thread_store,
         archived_thread_id,
         prompt="archived child",
         busy_policy="queue",
@@ -565,7 +579,7 @@ def test_binding_store_supports_repo_resource_owner_queries(tmp_path: Path) -> N
         agent_id="codex",
         repo_id="hub-repo",
     )
-    store.create_turn(thread_id, prompt="busy")
+    create_test_turn(store, thread_id, prompt="busy")
 
     listed = bindings.list_bindings(
         resource_kind="repo",

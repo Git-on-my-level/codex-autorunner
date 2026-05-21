@@ -100,6 +100,7 @@ from ...core.orchestration.turn_assistant_output import (
     TurnAssistantOutput,
     TurnAssistantOutputOwnership,
 )
+from ...core.orchestration.turn_execution_contract import TurnExecutionRequest
 from ...core.orchestration.turn_output_reducer import (
     assistant_text_extends_prefix,
     build_assistant_transcript_prefix,
@@ -133,7 +134,7 @@ class ManagedThreadExecutionStarter(Protocol):
     async def __call__(
         self,
         orchestration_service: Any,
-        request: MessageRequest,
+        request: MessageRequest | TurnExecutionRequest,
         *,
         client_request_id: Optional[str],
         sandbox_policy: Optional[Any],
@@ -1612,7 +1613,7 @@ class ManagedThreadTurnCoordinator:
 
     async def submit_execution(
         self,
-        request: MessageRequest,
+        request: MessageRequest | TurnExecutionRequest,
         *,
         client_request_id: Optional[str],
         sandbox_policy: Optional[Any],
@@ -1640,7 +1641,12 @@ class ManagedThreadTurnCoordinator:
         turn_preview = self.turn_preview
         if self.preview_builder is not None:
             try:
-                turn_preview = self.preview_builder(started.request.message_text)
+                request_message = (
+                    getattr(started.request, "message_text", None)
+                    or getattr(started.request, "prompt_text", None)
+                    or ""
+                )
+                turn_preview = self.preview_builder(str(request_message))
             except (
                 RuntimeError,
                 ValueError,
@@ -2246,7 +2252,7 @@ async def _shutdown_progress_pump(
 
 async def submit_managed_thread_execution(
     orchestration_service: Any,
-    request: MessageRequest,
+    request: MessageRequest | TurnExecutionRequest,
     *,
     client_request_id: Optional[str],
     sandbox_policy: Optional[Any],

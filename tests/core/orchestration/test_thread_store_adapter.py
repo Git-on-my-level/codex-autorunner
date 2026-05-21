@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from tests.support.turn_execution import build_test_turn_request
+
 from codex_autorunner.core.managed_thread_store import ManagedThreadStore
 from codex_autorunner.core.orchestration.thread_store_adapter import (
     ManagedThreadExecutionStore,
@@ -45,6 +47,11 @@ def test_managed_thread_execution_store_records_thread_activity(
     execution = store.create_execution(
         thread.thread_target_id,
         prompt="Summarize the current queue",
+        turn_request=build_test_turn_request(
+            managed_thread_id=thread.thread_target_id,
+            workspace_root=str(workspace_root),
+            prompt="Summarize the current queue",
+        ),
     )
     store.record_thread_activity(
         thread.thread_target_id,

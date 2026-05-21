@@ -462,7 +462,7 @@ async def _run_managed_thread_execution(
         request,
         service=service,
         managed_thread_id=managed_thread_id,
-        message_text=started.request.message_text,
+        message_text=_runtime_request_message_text(started),
     )
     finalized = _finalized_with_backend_thread_fallback(
         await coordinator.run_started_execution(
@@ -546,7 +546,7 @@ async def _finalize_managed_thread_execution(
         request,
         service=service,
         managed_thread_id=managed_thread_id,
-        message_text=started.request.message_text,
+        message_text=_runtime_request_message_text(started),
     )
     finalized = _finalized_with_backend_thread_fallback(
         await coordinator.run_started_execution(
@@ -558,6 +558,18 @@ async def _finalize_managed_thread_execution(
         fallback_backend_thread_id=fallback_backend_thread_id,
     )
     return finalized
+
+
+def _runtime_request_message_text(started: RuntimeThreadExecution) -> str:
+    runtime_request = started.request
+    for field_name in ("message_text", "prompt_text"):
+        value = getattr(runtime_request, field_name, None)
+        if isinstance(value, str) and value.strip():
+            return value
+        normalized = normalize_optional_text(value)
+        if normalized is not None:
+            return normalized
+    return ""
 
 
 async def _deliver_managed_thread_execution_result(

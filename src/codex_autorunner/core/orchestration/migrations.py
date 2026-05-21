@@ -8,8 +8,16 @@ from typing import Callable
 from ..sqlite_utils import table_columns, table_exists
 from ..time_utils import now_iso
 from .models import OrchestrationTableDefinition
+from .turn_execution_storage import (
+    TURN_EXECUTION_CONTRACT_VERSION,
+    TURN_EXECUTION_CONTRACT_VERSION_COLUMN,
+    TURN_EXECUTION_RECORD_COLUMN,
+    TURN_EXECUTION_REQUEST_COLUMN,
+    build_turn_execution_record_from_storage,
+    build_turn_execution_request_from_storage,
+)
 
-ORCHESTRATION_SCHEMA_VERSION = 37
+ORCHESTRATION_SCHEMA_VERSION = 38
 
 
 @dataclass(frozen=True)
@@ -2108,6 +2116,163 @@ def _apply_v36(conn: sqlite3.Connection) -> None:
 def _apply_v37(conn: sqlite3.Connection) -> None:
     _ensure_column(
         conn,
+        "orch_thread_executions",
+        TURN_EXECUTION_CONTRACT_VERSION_COLUMN,
+        f"{TURN_EXECUTION_CONTRACT_VERSION_COLUMN} INTEGER NOT NULL DEFAULT {TURN_EXECUTION_CONTRACT_VERSION}",
+    )
+    _ensure_column(
+        conn,
+        "orch_thread_executions",
+        TURN_EXECUTION_REQUEST_COLUMN,
+        f"{TURN_EXECUTION_REQUEST_COLUMN} TEXT",
+    )
+    _ensure_column(
+        conn,
+        "orch_thread_executions",
+        TURN_EXECUTION_RECORD_COLUMN,
+        f"{TURN_EXECUTION_RECORD_COLUMN} TEXT",
+    )
+    if not (
+        table_exists(conn, "orch_thread_executions")
+        and table_exists(conn, "orch_thread_targets")
+    ):
+        return
+    queue_join = ""
+    queue_select = """
+               NULL AS queue_payload_json,
+               NULL AS queue_item_id,
+               NULL AS queue_state,
+               NULL AS queue_visible_at,
+               NULL AS queue_claimed_at,
+               NULL AS queue_completed_at,
+               NULL AS queue_created_at,
+               NULL AS queue_updated_at
+    """
+    if table_exists(conn, "orch_queue_items"):
+        queue_select = """
+               q.payload_json AS queue_payload_json,
+               q.queue_item_id AS queue_item_id,
+               q.state AS queue_state,
+               q.visible_at AS queue_visible_at,
+               q.claimed_at AS queue_claimed_at,
+               q.completed_at AS queue_completed_at,
+               q.created_at AS queue_created_at,
+               q.updated_at AS queue_updated_at
+        """
+        queue_join = """
+          LEFT JOIN orch_queue_items AS q
+            ON q.source_kind = 'thread_execution'
+           AND q.source_key = e.execution_id
+        """
+    rows = conn.execute(
+        f"""
+        SELECT e.*, t.*, e.execution_id AS execution_id,
+               e.thread_target_id AS thread_target_id,
+               e.created_at AS execution_created_at,
+               {queue_select}
+          FROM orch_thread_executions AS e
+          JOIN orch_thread_targets AS t
+            ON t.thread_target_id = e.thread_target_id
+          {queue_join}
+         WHERE e.turn_request_json IS NULL
+            OR e.turn_record_json IS NULL
+            OR e.turn_contract_version != ?
+        """,
+        (TURN_EXECUTION_CONTRACT_VERSION,),
+    ).fetchall()
+    for row in rows:
+        row_map = {key: row[key] for key in row.keys()}
+        execution = {
+            key: row_map.get(key)
+            for key in (
+                "execution_id",
+                "thread_target_id",
+                "client_request_id",
+                "request_kind",
+                "prompt_text",
+                "status",
+                "backend_turn_id",
+                "assistant_text",
+                "error_text",
+                "model_id",
+                "reasoning_level",
+                "metadata_json",
+                "transcript_mirror_id",
+                "started_at",
+                "finished_at",
+            )
+        }
+        execution["created_at"] = row_map.get("execution_created_at")
+        thread = {
+            key: row_map.get(key)
+            for key in (
+                "thread_target_id",
+                "agent_id",
+                "backend_thread_id",
+                "repo_id",
+                "resource_kind",
+                "resource_id",
+                "workspace_root",
+                "scope_urn",
+                "surface_urn",
+                "metadata_json",
+            )
+        }
+        queue_payload = {}
+        try:
+            import json
+
+            loaded = json.loads(str(row_map.get("queue_payload_json") or "{}"))
+            if isinstance(loaded, dict):
+                queue_payload = loaded
+        except (TypeError, ValueError):
+            queue_payload = {}
+        queue_item = {
+            "queue_item_id": row_map.get("queue_item_id"),
+            "state": row_map.get("queue_state"),
+            "visible_at": row_map.get("queue_visible_at"),
+            "claimed_at": row_map.get("queue_claimed_at"),
+            "completed_at": row_map.get("queue_completed_at"),
+            "created_at": row_map.get("queue_created_at"),
+            "updated_at": row_map.get("queue_updated_at"),
+        }
+        request = build_turn_execution_request_from_storage(
+            execution=execution,
+            thread=thread,
+            queue_payload=queue_payload,
+        )
+        record = build_turn_execution_record_from_storage(
+            execution=execution,
+            thread=thread,
+            request=request,
+            queue_item=queue_item,
+        )
+        conn.execute(
+            """
+            UPDATE orch_thread_executions
+               SET turn_contract_version = ?,
+                   turn_request_json = ?,
+                   turn_record_json = ?
+             WHERE execution_id = ?
+            """,
+            (
+                TURN_EXECUTION_CONTRACT_VERSION,
+                request.to_json(),
+                record.to_json(),
+                request.request_id,
+            ),
+        )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_orch_thread_executions_turn_contract
+            ON orch_thread_executions(turn_contract_version, status, created_at)
+        """
+    )
+
+
+def _apply_v38(conn: sqlite3.Connection) -> None:
+    _ensure_column(
+        conn,
         "orch_managed_thread_deliveries",
         "failure_recovery_json",
         "failure_recovery_json TEXT",
@@ -2193,8 +2358,13 @@ _MIGRATIONS = (
     ),
     _MigrationStep(
         37,
-        "add_managed_thread_failure_recovery_payload",
+        "add_canonical_turn_execution_envelopes",
         _apply_v37,
+    ),
+    _MigrationStep(
+        38,
+        "add_managed_thread_failure_recovery_payload",
+        _apply_v38,
     ),
 )
 
@@ -2208,7 +2378,7 @@ _TABLE_DEFINITIONS = (
     OrchestrationTableDefinition(
         name="orch_thread_executions",
         role="authoritative",
-        description="Canonical startup-critical execution metadata for thread targets, excluding full provider/raw traces.",
+        description="Canonical turn execution request/record envelopes plus indexed execution metadata for thread targets.",
     ),
     OrchestrationTableDefinition(
         name="orch_thread_actions",

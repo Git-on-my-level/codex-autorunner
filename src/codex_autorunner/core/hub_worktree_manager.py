@@ -39,7 +39,10 @@ from .destinations import (
     resolve_effective_repo_destination,
 )
 from .flows import FlowStore
-from .flows.archive_helpers import archive_terminal_flow_runs
+from .flows.archive_helpers import (
+    archive_terminal_flow_runs,
+    count_orphaned_flow_artifact_dirs,
+)
 from .force_attestation import enforce_force_attestation
 from .git_utils import (
     GitError,
@@ -1329,10 +1332,13 @@ print(
             finally:
                 store.close()
             terminal = [r for r in records if r.status.is_terminal()]
-            if not terminal:
+            orphan_flow_state_count = count_orphaned_flow_artifact_dirs(
+                repo_root, records
+            )
+            if not terminal and not orphan_flow_state_count:
                 continue
             if dry_run:
-                n = len(terminal)
+                n = len(terminal) + orphan_flow_state_count
                 flow_by_repo.append({"repo_id": entry.id, "count": n})
                 total_flow_count += n
                 continue
@@ -1350,6 +1356,10 @@ print(
                     exc_info=exc,
                 )
                 archived_here = 0
+            else:
+                archived_here += int(
+                    cleanup_summary.get("archived_orphan_flow_state_count") or 0
+                )
             if archived_here:
                 flow_by_repo.append({"repo_id": entry.id, "count": archived_here})
             total_flow_count += archived_here

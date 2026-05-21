@@ -27,6 +27,7 @@ from codex_autorunner.core.hub_control_plane.background_runner import (
 )
 from codex_autorunner.core.orchestration.interfaces import ThreadExecutionStore
 from codex_autorunner.core.orchestration.models import ExecutionRecord, ThreadTarget
+from tests.support.turn_execution import build_test_turn_request
 
 
 def _thread_payload() -> dict[str, Any]:
@@ -114,13 +115,13 @@ class _FakeHubClient:
                     status="running",
                 ),
                 "queue_payload": {
-                    "request": {
-                        "target_id": "thread-1",
-                        "target_kind": "thread",
-                        "message_text": "queued prompt",
-                        "kind": "message",
-                        "busy_policy": "queue",
-                    },
+                    "turn_request": build_test_turn_request(
+                        managed_thread_id="thread-1",
+                        workspace_root="/workspace",
+                        prompt="queued prompt",
+                        busy_policy="queue",
+                        client_turn_id="client-2",
+                    ).to_dict(),
                     "client_request_id": "client-2",
                 },
             }
@@ -274,6 +275,15 @@ def test_remote_execution_store_delegates_to_hub_client_for_thread_and_execution
         backend_runtime_instance_id="runtime-2",
     )
 
+    turn_request = build_test_turn_request(
+        managed_thread_id="thread-1",
+        workspace_root="/workspace",
+        prompt="Run this",
+        busy_policy="queue",
+        model="gpt-5.4",
+        reasoning="high",
+        client_turn_id="client-1",
+    )
     created_execution = store.create_execution(
         "thread-1",
         prompt="Run this",
@@ -283,6 +293,7 @@ def test_remote_execution_store_delegates_to_hub_client_for_thread_and_execution
         reasoning="high",
         client_request_id="client-1",
         queue_payload={"priority": "high"},
+        turn_request=turn_request,
     )
     fetched_execution = store.get_execution("thread-1", "exec-1")
     running_execution = store.get_running_execution("thread-1")
@@ -392,6 +403,7 @@ def test_remote_execution_store_delegates_to_hub_client_for_thread_and_execution
         "reasoning": "high",
         "client_request_id": "client-1",
         "queue_payload": {"priority": "high"},
+        "turn_request": turn_request.to_dict(),
     }
 
     set_thread_backend_request = client.calls[5][1]
@@ -504,9 +516,14 @@ def test_remote_execution_store_translates_transport_failures_to_hub_unavailable
     None
 ):
     store = RemoteThreadExecutionStore(_TransportFailingClient())
+    turn_request = build_test_turn_request(
+        managed_thread_id="thread-1",
+        workspace_root="/workspace",
+        prompt="Run this",
+    )
 
     with pytest.raises(HubControlPlaneError) as exc_info:
-        store.create_execution("thread-1", prompt="Run this")
+        store.create_execution("thread-1", prompt="Run this", turn_request=turn_request)
 
     assert exc_info.value.code == "hub_unavailable"
     assert "create_execution" in str(exc_info.value)
