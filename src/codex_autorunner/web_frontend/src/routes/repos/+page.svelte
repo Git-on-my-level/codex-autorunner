@@ -33,7 +33,7 @@
   let coldHydrating = $state<boolean>(true);
   let refreshError = $state<ApiError | null>(null);
   const loading = $derived((data.status === 'cold' && coldHydrating && !hasCachedRows) || (refreshing && !hasCachedRows));
-  const error = $derived(refreshError ?? (data.status === 'error' ? data.error : null));
+  const error = $derived(!hasCachedRows ? refreshError ?? (data.status === 'error' ? data.error : null) : null);
   let sectionIssues = $state<PartialPageIssue[]>([]);
   let notice = $state<ActionNotice | null>(null);
 
