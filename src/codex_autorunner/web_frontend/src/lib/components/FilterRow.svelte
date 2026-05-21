@@ -66,9 +66,8 @@
   });
 
   $effect(() => {
-    // Re-measure when item set changes.
-    items.length;
-    items.map((i) => i.key).join('|');
+    // Re-measure when visible chip content changes.
+    items.map((i) => `${i.key}:${i.label}:${i.count ?? ''}`).join('|');
     queueMicrotask(recompute);
   });
 
@@ -174,6 +173,7 @@
 <style>
   .filter-row-container {
     position: relative;
+    min-width: 0;
   }
 
   .filter-row-measure {

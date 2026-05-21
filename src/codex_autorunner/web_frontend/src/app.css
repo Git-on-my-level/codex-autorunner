@@ -650,9 +650,12 @@ a {
   width: 100%;
 }
 
-.chat-filter-bar > .chat-filter-chips-row {
+.chat-filter-bar > .filter-row-container {
   flex: 1 1 auto;
   min-width: 0;
+}
+
+.chat-filter-bar .chat-filter-chips-row {
   flex-wrap: wrap;
   gap: var(--space-2);
 }
