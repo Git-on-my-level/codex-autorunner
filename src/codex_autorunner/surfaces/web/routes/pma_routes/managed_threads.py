@@ -42,6 +42,10 @@ from .....core.orchestration.managed_thread_timeline import (
     build_managed_thread_timeline,
 )
 from .....core.orchestration.turn_timeline import list_turn_timeline
+from .....core.pma_automation_rule_projection import (
+    subscription_row_from_rule,
+    timer_rows_from_rules_and_schedules,
+)
 from .....core.pma_automation_services import (
     MANAGED_THREAD_AUTO_SUBSCRIPTION_PREFIXES,
     PmaAutomationThreadNotFoundError,
@@ -214,7 +218,9 @@ def _unified_pma_automation_read_model(
     purpose_set = (
         _SUBSCRIPTION_PURPOSES
         if purpose in _SUBSCRIPTION_PURPOSES
-        else _TIMER_PURPOSES if purpose in _TIMER_PURPOSES else {purpose}
+        else _TIMER_PURPOSES
+        if purpose in _TIMER_PURPOSES
+        else {purpose}
     )
     try:
         store = AutomationStore(context.hub_root)
@@ -261,7 +267,7 @@ def _create_unified_pma_subscription(
         )
         if existing is not None:
             return {
-                "subscription": _subscription_row_from_rule(existing),
+                "subscription": subscription_row_from_rule(existing),
                 "deduped": True,
             }
 
@@ -290,7 +296,7 @@ def _create_unified_pma_subscription(
             to_state=normalized_to_state,
         )
         if existing_auto is not None:
-            row = _subscription_row_from_rule(existing_auto)
+            row = subscription_row_from_rule(existing_auto)
             if _is_auto_subscription_key(idempotency_key):
                 return {"subscription": row, "deduped": True}
             return {
@@ -376,7 +382,8 @@ def _create_unified_pma_subscription(
         },
         policy={
             "dedupe_key": (
-                f"managed-thread-subscription:{subscription_id}:" "{{ event.event_id }}"
+                f"managed-thread-subscription:{subscription_id}:"
+                "{{ event.event_id }}"
             ),
             "approval_mode": "pause_and_request_user",
             "max_attempts": 3,
@@ -398,7 +405,7 @@ def _create_unified_pma_subscription(
     )
     store.upsert_rule(rule)
     return {
-        "subscription": _subscription_row_from_rule(rule),
+        "subscription": subscription_row_from_rule(rule),
         "deduped": False,
     }
 
@@ -444,7 +451,7 @@ def _find_covering_auto_subscription_rule(
     for rule in store.list_rules(enabled=True):
         if rule.metadata.get("purpose") not in _SUBSCRIPTION_PURPOSES:
             continue
-        row = _subscription_row_from_rule(rule)
+        row = subscription_row_from_rule(rule)
         if not _is_auto_subscription_key(row.get("idempotency_key")):
             continue
         if not _subscription_event_types_are_covered(
@@ -623,7 +630,7 @@ def _create_unified_pma_timer(
             idempotency_key=idempotency_key,
         )
         if existing is not None:
-            rows = _timer_rows_from_rules_and_schedules(
+            rows = timer_rows_from_rules_and_schedules(
                 {existing.rule_id: existing},
                 store.list_schedules(rule_id=existing.rule_id),
             )
@@ -735,7 +742,7 @@ def _create_unified_pma_timer(
     )
     store.upsert_rule(rule)
     saved_schedule = store.upsert_schedule(schedule)
-    rows = _timer_rows_from_rules_and_schedules({rule.rule_id: rule}, [saved_schedule])
+    rows = timer_rows_from_rules_and_schedules({rule.rule_id: rule}, [saved_schedule])
     return {
         "timer": rows[0] if rows else {"timer_id": timer_id, "due_at": due_at},
         "deduped": False,
@@ -787,7 +794,7 @@ def _touch_unified_pma_timer(
         updated_at=now_iso(),
     )
     saved = store.upsert_schedule(updated)
-    rows = _timer_rows_from_rules_and_schedules(
+    rows = timer_rows_from_rules_and_schedules(
         {schedule.rule_id: store.get_rule(schedule.rule_id)},
         [saved],
     )
@@ -805,7 +812,9 @@ def _find_pma_rule_by_idempotency(
     purpose_set = (
         _SUBSCRIPTION_PURPOSES
         if purpose in _SUBSCRIPTION_PURPOSES
-        else _TIMER_PURPOSES if purpose in _TIMER_PURPOSES else {purpose}
+        else _TIMER_PURPOSES
+        if purpose in _TIMER_PURPOSES
+        else {purpose}
     )
     for rule in store.list_rules():
         if rule.metadata.get("purpose") not in purpose_set:
@@ -843,31 +852,6 @@ def _pma_origin_metadata_from_payload(payload: dict[str, Any]) -> dict[str, Any]
     return metadata
 
 
-def _subscription_row_from_rule(rule: Any) -> dict[str, Any]:
-    executor = rule.executor if isinstance(rule.executor, dict) else {}
-    target = rule.target if isinstance(rule.target, dict) else {}
-    filters = rule.filters if isinstance(rule.filters, dict) else {}
-    return {
-        "subscription_id": rule.metadata.get("legacy_subscription_id")
-        or rule.rule_id.removeprefix(PMA_SUBSCRIPTION_RULE_PREFIX),
-        "created_at": rule.created_at,
-        "updated_at": rule.updated_at,
-        "state": "active" if rule.enabled else "cancelled",
-        "event_types": list(rule.trigger.get("event_types") or []),
-        "repo_id": target.get("repo_id") or filters.get("event.repo_id"),
-        "run_id": target.get("run_id") or filters.get("event.payload.run_id"),
-        "thread_id": target.get("thread_id") or filters.get("event.payload.thread_id"),
-        "lane_id": executor.get("lane_id") or "pma:default",
-        "from_state": filters.get("event.payload.from_state"),
-        "to_state": filters.get("event.payload.to_state"),
-        "reason": rule.metadata.get("legacy_reason"),
-        "idempotency_key": rule.metadata.get("legacy_idempotency_key"),
-        "max_matches": rule.metadata.get("legacy_max_matches"),
-        "match_count": rule.metadata.get("legacy_match_count") or 0,
-        "metadata": dict(rule.metadata.get("legacy_metadata") or {}),
-    }
-
-
 def _unified_subscription_rows(
     request: Request,
     *,
@@ -896,7 +880,7 @@ def _unified_subscription_rows(
 
     out: list[dict[str, Any]] = []
     for rule in rules:
-        row = _subscription_row_from_rule(rule)
+        row = subscription_row_from_rule(rule)
         if repo_id_norm is not None and row["repo_id"] != repo_id_norm:
             continue
         if run_id_norm is not None and row["run_id"] != run_id_norm:
@@ -907,48 +891,6 @@ def _unified_subscription_rows(
             continue
         out.append(row)
     return out[:limit]
-
-
-def _timer_rows_from_rules_and_schedules(
-    rules: dict[str, Any], schedules: list[AutomationSchedule]
-) -> list[dict[str, Any]]:
-    out: list[dict[str, Any]] = []
-    for schedule in schedules:
-        rule = rules.get(schedule.rule_id)
-        if rule is None:
-            continue
-        schedule_config = (
-            schedule.schedule if isinstance(schedule.schedule, dict) else {}
-        )
-        payload = schedule_config.get("payload")
-        payload = payload if isinstance(payload, dict) else {}
-        out.append(
-            {
-                "timer_id": payload.get("timer_id")
-                or rule.metadata.get("legacy_timer_id")
-                or schedule.schedule_id.removeprefix("pma-timer:"),
-                "due_at": schedule.next_fire_at,
-                "created_at": schedule.created_at,
-                "updated_at": schedule.updated_at,
-                "state": "pending" if schedule.state == "active" else schedule.state,
-                "fired_at": schedule.last_fire_at,
-                "timer_type": payload.get("timer_type")
-                or schedule_config.get("timer_kind")
-                or "one_shot",
-                "idle_seconds": payload.get("idle_seconds"),
-                "subscription_id": payload.get("subscription_id"),
-                "repo_id": payload.get("repo_id"),
-                "run_id": payload.get("run_id"),
-                "thread_id": payload.get("thread_id"),
-                "lane_id": payload.get("lane_id") or "pma:default",
-                "from_state": payload.get("from_state"),
-                "to_state": payload.get("to_state"),
-                "reason": payload.get("reason"),
-                "idempotency_key": rule.metadata.get("legacy_idempotency_key"),
-                "metadata": dict(payload.get("metadata") or {}),
-            }
-        )
-    return out
 
 
 def _unified_timer_rows(
@@ -987,7 +929,7 @@ def _unified_timer_rows(
         return []
 
     out: list[dict[str, Any]] = []
-    for row in _timer_rows_from_rules_and_schedules(rules, schedules):
+    for row in timer_rows_from_rules_and_schedules(rules, schedules):
         if timer_type_norm is not None and row["timer_type"] != timer_type_norm:
             continue
         if (

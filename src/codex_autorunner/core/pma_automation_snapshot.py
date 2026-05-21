@@ -9,6 +9,10 @@ from .automation import (
     AutomationStore,
 )
 from .hub import HubSupervisor
+from .pma_automation_rule_projection import (
+    subscription_row_from_rule,
+    timer_rows_from_rules_and_schedules,
+)
 
 _logger = logging.getLogger(__name__)
 
@@ -78,7 +82,7 @@ def snapshot_pma_automation(
         "active_count": sum(1 for rule in subscription_rules if rule.enabled),
         "sample": [
             _pick(
-                _subscription_row_from_rule(rule),
+                subscription_row_from_rule(rule),
                 (
                     "subscription_id",
                     "event_types",
@@ -94,7 +98,7 @@ def snapshot_pma_automation(
             for rule in subscription_rules[:max_items]
         ],
     }
-    timer_rows = _timer_rows_from_rules_and_schedules(timer_rules, timer_schedules)
+    timer_rows = timer_rows_from_rules_and_schedules(timer_rules, timer_schedules)
     out["timers"] = {
         "pending_count": len(timer_rows),
         "sample": [
@@ -231,54 +235,3 @@ def _attach_unified_automation_snapshot(
             for job in recent_jobs[:max_items]
         ],
     }
-
-
-def _subscription_row_from_rule(rule: Any) -> dict[str, Any]:
-    executor = rule.executor if isinstance(rule.executor, dict) else {}
-    target = rule.target if isinstance(rule.target, dict) else {}
-    filters = rule.filters if isinstance(rule.filters, dict) else {}
-    return {
-        "subscription_id": rule.metadata.get("legacy_subscription_id")
-        or rule.rule_id.removeprefix(PMA_SUBSCRIPTION_RULE_PREFIX),
-        "event_types": list(rule.trigger.get("event_types") or []),
-        "repo_id": target.get("repo_id") or filters.get("event.repo_id"),
-        "run_id": target.get("run_id") or filters.get("event.payload.run_id"),
-        "thread_id": target.get("thread_id") or filters.get("event.payload.thread_id"),
-        "lane_id": executor.get("lane_id") or "pma:default",
-        "from_state": filters.get("event.payload.from_state"),
-        "to_state": filters.get("event.payload.to_state"),
-        "reason": rule.metadata.get("legacy_reason"),
-    }
-
-
-def _timer_rows_from_rules_and_schedules(
-    rules: dict[str, Any], schedules: list[Any]
-) -> list[dict[str, Any]]:
-    rows: list[dict[str, Any]] = []
-    for schedule in schedules:
-        rule = rules.get(schedule.rule_id)
-        if rule is None:
-            continue
-        schedule_config = (
-            schedule.schedule if isinstance(schedule.schedule, dict) else {}
-        )
-        payload = schedule_config.get("payload")
-        payload = payload if isinstance(payload, dict) else {}
-        rows.append(
-            {
-                "timer_id": payload.get("timer_id")
-                or rule.metadata.get("legacy_timer_id")
-                or schedule.schedule_id.removeprefix("pma-timer:"),
-                "timer_type": payload.get("timer_type")
-                or schedule_config.get("timer_kind")
-                or "one_shot",
-                "due_at": schedule.next_fire_at,
-                "idle_seconds": payload.get("idle_seconds"),
-                "repo_id": payload.get("repo_id"),
-                "run_id": payload.get("run_id"),
-                "thread_id": payload.get("thread_id"),
-                "lane_id": payload.get("lane_id") or "pma:default",
-                "reason": payload.get("reason"),
-            }
-        )
-    return rows

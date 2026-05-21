@@ -40,6 +40,7 @@ from ....core.orchestration.execution_history_maintenance import (
     prune_execution_history_retention,
 )
 from ....core.orchestration.sqlite import open_orchestration_sqlite
+from ....core.pma_automation_rule_projection import subscription_row_from_rule
 from ....manifest import Manifest, load_manifest, save_manifest
 from ...web.app import create_hub_app
 from ...web.services.pma.managed_thread_runtime import (
@@ -118,32 +119,6 @@ def register_hub_commands(
         max_text = str(max_matches) if max_matches is not None else "-"
         return f"{count_text}/{max_text}"
 
-    def _subscription_row_from_rule(rule: Any) -> dict[str, Any]:
-        executor = rule.executor if isinstance(rule.executor, dict) else {}
-        target = rule.target if isinstance(rule.target, dict) else {}
-        filters = rule.filters if isinstance(rule.filters, dict) else {}
-        return {
-            "subscription_id": rule.metadata.get("legacy_subscription_id")
-            or rule.rule_id.removeprefix(PMA_SUBSCRIPTION_RULE_PREFIX),
-            "rule_id": rule.rule_id,
-            "created_at": rule.created_at,
-            "updated_at": rule.updated_at,
-            "state": "active" if rule.enabled else "cancelled",
-            "event_types": list(rule.trigger.get("event_types") or []),
-            "repo_id": target.get("repo_id") or filters.get("event.repo_id"),
-            "run_id": target.get("run_id") or filters.get("event.payload.run_id"),
-            "thread_id": target.get("thread_id")
-            or filters.get("event.payload.thread_id"),
-            "lane_id": executor.get("lane_id") or "pma:default",
-            "from_state": filters.get("event.payload.from_state"),
-            "to_state": filters.get("event.payload.to_state"),
-            "reason": rule.metadata.get("legacy_reason"),
-            "idempotency_key": rule.metadata.get("legacy_idempotency_key"),
-            "max_matches": rule.metadata.get("legacy_max_matches"),
-            "match_count": rule.metadata.get("legacy_match_count") or 0,
-            "metadata": dict(rule.metadata.get("legacy_metadata") or {}),
-        }
-
     def _list_subscription_rows(store: AutomationStore) -> list[dict[str, Any]]:
         rows: list[dict[str, Any]] = []
         for rule in store.list_rules():
@@ -155,7 +130,7 @@ def register_hub_commands(
                 }
             ):
                 continue
-            rows.append(_subscription_row_from_rule(rule))
+            rows.append(subscription_row_from_rule(rule, include_rule_id=True))
         return rows
 
     def _render_subscription_table(subscriptions: list[dict[str, Any]]) -> list[str]:

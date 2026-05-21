@@ -19,9 +19,7 @@ from ..manifest import load_manifest
 from .automation import (
     PMA_SUBSCRIPTION_RULE_PREFIX,
     PMA_TIMER_RULE_PREFIX,
-    PMA_TIMER_SCHEDULE_PREFIX,
     AutomationRule,
-    AutomationSchedule,
     AutomationStore,
 )
 from .chat_bindings import repo_has_active_non_pma_chat_binding
@@ -32,6 +30,10 @@ from .git_utils import git_available, git_is_clean
 from .hub_worktree_manager import worktree_non_metadata_child_names
 from .managed_thread_store import ManagedThreadStore
 from .orchestration.bindings import OrchestrationBindingStore
+from .pma_automation_rule_projection import (
+    subscription_row_from_rule,
+    timer_row_from_rule_and_schedule,
+)
 from .pma_dispatches import list_pma_dispatches
 from .pma_thread_classification import (
     classify_thread_followup,
@@ -422,7 +424,7 @@ def _build_automation_candidates(hub_root: Path) -> list[dict[str, Any]]:
     candidates: list[dict[str, Any]] = []
 
     for rule in _automation_subscription_rules(store):
-        subscription = _automation_subscription_row(rule)
+        subscription = subscription_row_from_rule(rule, include_rule_id=True)
         subscription_id = str(subscription.get("subscription_id") or "").strip()
         if not subscription_id:
             continue
@@ -464,7 +466,7 @@ def _build_automation_candidates(hub_root: Path) -> list[dict[str, Any]]:
         timer_rule = timer_rules.get(schedule.rule_id)
         if timer_rule is None:
             continue
-        timer = _automation_timer_row(timer_rule, schedule)
+        timer = timer_row_from_rule_and_schedule(timer_rule, schedule)
         timer_id = str(timer.get("timer_id") or "").strip()
         if not timer_id:
             continue
@@ -515,55 +517,6 @@ def _is_timer_rule(rule: AutomationRule) -> bool:
 
 def _automation_subscription_rules(store: AutomationStore) -> list[AutomationRule]:
     return [rule for rule in store.list_rules() if _is_subscription_rule(rule)]
-
-
-def _automation_subscription_row(rule: AutomationRule) -> dict[str, Any]:
-    executor = rule.executor if isinstance(rule.executor, dict) else {}
-    target = rule.target if isinstance(rule.target, dict) else {}
-    filters = rule.filters if isinstance(rule.filters, dict) else {}
-    return {
-        "subscription_id": rule.metadata.get("legacy_subscription_id")
-        or rule.rule_id.removeprefix(PMA_SUBSCRIPTION_RULE_PREFIX),
-        "rule_id": rule.rule_id,
-        "created_at": rule.created_at,
-        "updated_at": rule.updated_at,
-        "state": "active" if rule.enabled else "cancelled",
-        "event_types": list(rule.trigger.get("event_types") or []),
-        "repo_id": target.get("repo_id") or filters.get("event.repo_id"),
-        "run_id": target.get("run_id") or filters.get("event.payload.run_id"),
-        "thread_id": target.get("thread_id") or filters.get("event.payload.thread_id"),
-        "lane_id": executor.get("lane_id") or "pma:default",
-        "match_count": rule.metadata.get("legacy_match_count") or 0,
-        "max_matches": rule.metadata.get("legacy_max_matches"),
-    }
-
-
-def _automation_timer_row(
-    rule: AutomationRule, schedule: AutomationSchedule
-) -> dict[str, Any]:
-    schedule_config = schedule.schedule if isinstance(schedule.schedule, dict) else {}
-    payload = schedule_config.get("payload")
-    payload = payload if isinstance(payload, dict) else {}
-    timer_id = (
-        payload.get("timer_id")
-        or rule.metadata.get("legacy_timer_id")
-        or schedule.schedule_id.removeprefix(PMA_TIMER_SCHEDULE_PREFIX)
-    )
-    return {
-        "timer_id": timer_id,
-        "due_at": schedule.next_fire_at,
-        "created_at": schedule.created_at,
-        "updated_at": schedule.updated_at,
-        "state": "pending" if schedule.state == "active" else schedule.state,
-        "fired_at": schedule.last_fire_at,
-        "timer_type": payload.get("timer_type")
-        or schedule_config.get("timer_kind")
-        or "one_shot",
-        "repo_id": payload.get("repo_id"),
-        "run_id": payload.get("run_id"),
-        "thread_id": payload.get("thread_id"),
-        "lane_id": payload.get("lane_id") or "pma:default",
-    }
 
 
 def _build_alert_candidates(
