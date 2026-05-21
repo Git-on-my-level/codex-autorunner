@@ -2668,6 +2668,14 @@ textarea:hover {
   min-width: 0;
 }
 
+.chat-files-section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
 .chat-files-list {
   display: grid;
   gap: var(--space-2);
@@ -2712,6 +2720,34 @@ textarea:hover {
 
 .chat-files-list .attachment-kind {
   flex: 0 0 auto;
+}
+
+.chat-file-delete,
+.chat-file-delete-all {
+  flex: 0 0 auto;
+  min-height: 28px;
+  border: 1px solid color-mix(in srgb, var(--color-danger) 48%, var(--color-border));
+  border-radius: var(--radius-1);
+  background: transparent;
+  color: var(--color-danger);
+  font: inherit;
+  font-size: var(--font-size-0);
+  cursor: pointer;
+}
+
+.chat-file-delete {
+  margin-left: auto;
+  padding: 0 var(--space-2);
+}
+
+.chat-file-delete-all {
+  padding: 0 var(--space-2);
+}
+
+.chat-file-delete:disabled,
+.chat-file-delete-all:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
 }
 
 .chat-files-list li.delivery-sent {

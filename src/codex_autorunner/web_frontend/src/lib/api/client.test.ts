@@ -810,6 +810,27 @@ describe('API client error handling', () => {
     expect(result).toEqual({ ok: true, data: ['screen.png'] });
   });
 
+  it('deletes PMA filebox files and boxes', async () => {
+    const fetcher = vi.fn(async () => Response.json({ status: 'ok' })) as unknown as typeof fetch;
+    const client = new WebApiClient(fetcher);
+
+    const fileResult = await client.pma.deleteFile('inbox', 'screen shot.png');
+    const boxResult = await client.pma.deleteFileBox('outbox');
+
+    expect(fetcher).toHaveBeenNthCalledWith(
+      1,
+      '/hub/pma/files/inbox/screen%20shot.png',
+      expect.objectContaining({ method: 'DELETE' })
+    );
+    expect(fetcher).toHaveBeenNthCalledWith(
+      2,
+      '/hub/pma/files/outbox',
+      expect.objectContaining({ method: 'DELETE' })
+    );
+    expect(fileResult.ok).toBe(true);
+    expect(boxResult.ok).toBe(true);
+  });
+
   it('lists repo artifact deliveries through the hub filebox route', async () => {
     const fetcher = vi.fn(async () =>
       Response.json({

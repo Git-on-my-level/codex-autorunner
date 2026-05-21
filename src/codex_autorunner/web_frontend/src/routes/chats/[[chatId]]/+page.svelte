@@ -155,6 +155,7 @@
     | { kind: 'card'; id: string; card: ChatTranscriptCard }
     | { kind: 'typing'; id: string; title: string }
     | { kind: 'shared-files'; id: string };
+  type FileBoxName = 'inbox' | 'outbox';
   let readModelState = $state(readModelEntityStore.snapshot());
   let activeChatId = $state<string | null>(null);
   // Unsent new chats are page-local only: `localDraftChat` drives the composer until
@@ -175,6 +176,8 @@
   let loadingArtifactDeliveries = $state(false);
   let artifactDeliveryError = $state<ApiError | null>(null);
   let artifactDeliveryLoadKey = '';
+  let deletingFileKeys = $state<Set<string>>(new Set());
+  let deletingFileBox = $state<FileBoxName | null>(null);
   let selectedAgent = $state('codex');
   let selectedModel = $state('');
   let selectedReasoning = $state('');
@@ -221,6 +224,7 @@
   const progress = $derived<PmaRunProgress | null>(selectPmaProgress(readModelState, activeChatId));
   const artifacts = $derived<SurfaceArtifact[]>(selectPmaArtifacts(readModelState, activeChatId));
   const inboxArtifacts = $derived(artifacts.filter((artifact) => String(artifact.raw.box ?? '').toLowerCase() === 'inbox'));
+  const outboxArtifacts = $derived(artifacts.filter((artifact) => String(artifact.raw.box ?? '').toLowerCase() === 'outbox'));
   const queuedTurns = $derived<PmaQueuedTurn[]>(selectPmaQueue(readModelState, activeChatId));
   const lastSeenMap = $derived<ChatLastSeenMap>(selectReadMarkers(readModelState) as ChatLastSeenMap);
   let draft = $state('');
@@ -1143,6 +1147,89 @@
     }
   }
 
+  async function refreshPmaFiles(options: { quiet?: boolean } = {}): Promise<number | null> {
+    const result = await webApi.pma.listFiles();
+    if (!result.ok) {
+      composeError = result.error;
+      return null;
+    }
+    readModelEntityStore.setPmaArtifacts('__global__', result.data);
+    if (activeChatId) readModelEntityStore.setPmaArtifacts(activeChatId, result.data);
+    if (!options.quiet) showCommandNotice(result.data.length ? `Files refreshed (${result.data.length}).` : 'No PMA files yet.');
+    return result.data.length;
+  }
+
+  function fileBoxNameFromArtifact(artifact: SurfaceArtifact): FileBoxName | null {
+    const box = String(artifact.raw.box ?? '').toLowerCase();
+    return box === 'inbox' || box === 'outbox' ? box : null;
+  }
+
+  function fileBoxFilenameFromArtifact(artifact: SurfaceArtifact): string | null {
+    const rawName = artifact.raw.name;
+    return typeof rawName === 'string' && rawName.trim() ? rawName : artifact.title;
+  }
+
+  function deletingFileKey(box: FileBoxName, filename: string): string {
+    return `${box}:${filename}`;
+  }
+
+  function isDeletingFile(box: FileBoxName, filename: string): boolean {
+    return deletingFileKeys.has(deletingFileKey(box, filename));
+  }
+
+  function setDeletingFile(box: FileBoxName, filename: string, deleting: boolean): void {
+    const next = new Set(deletingFileKeys);
+    const key = deletingFileKey(box, filename);
+    if (deleting) next.add(key);
+    else next.delete(key);
+    deletingFileKeys = next;
+  }
+
+  async function deletePmaFile(artifact: SurfaceArtifact): Promise<void> {
+    const box = fileBoxNameFromArtifact(artifact);
+    const filename = fileBoxFilenameFromArtifact(artifact);
+    if (!box || !filename) return;
+    if (isDeletingFile(box, filename)) return;
+    const ok = await confirmDialog({
+      title: 'Delete file',
+      message: `Delete "${filename}" from ${box}?`,
+      confirmText: 'Delete',
+      danger: true
+    });
+    if (!ok) return;
+    setDeletingFile(box, filename, true);
+    composeError = null;
+    const result = await webApi.pma.deleteFile(box, filename);
+    if (result.ok) {
+      await refreshPmaFiles({ quiet: true });
+      showCommandNotice(`Deleted ${filename}.`);
+    } else {
+      composeError = result.error;
+    }
+    setDeletingFile(box, filename, false);
+  }
+
+  async function deletePmaFileBox(box: FileBoxName, count: number): Promise<void> {
+    if (count <= 0 || deletingFileBox) return;
+    const ok = await confirmDialog({
+      title: `Clear ${box}`,
+      message: `Delete all ${count} file${count === 1 ? '' : 's'} from ${box}?`,
+      confirmText: 'Delete all',
+      danger: true
+    });
+    if (!ok) return;
+    deletingFileBox = box;
+    composeError = null;
+    const result = await webApi.pma.deleteFileBox(box);
+    if (result.ok) {
+      await refreshPmaFiles({ quiet: true });
+      showCommandNotice(`Cleared ${box}.`);
+    } else {
+      composeError = result.error;
+    }
+    deletingFileBox = null;
+  }
+
   function compareArtifactDeliveries(left: ArtifactDelivery, right: ArtifactDelivery): number {
     return deliveryTimeValue(right) - deliveryTimeValue(left);
   }
@@ -1646,16 +1733,14 @@
       return true;
     }
     if (spec.id === 'files') {
-      const result = await webApi.pma.listFiles();
-      if (!result.ok) composeError = result.error;
-      else {
-        readModelEntityStore.setPmaArtifacts(activeChatId ?? '__global__', result.data);
+      const refreshedCount = await refreshPmaFiles({ quiet: true });
+      if (refreshedCount !== null) {
         if (activeChat && !isLocalDraftChatId(activeChat.id)) {
           const key = `${activeChat.id}|${activeChat.repoId ?? ''}`;
           artifactDeliveryLoadKey = key;
           await refreshArtifactDeliveries(activeChat.repoId ?? null, key, { quiet: true });
         }
-        showCommandNotice(result.data.length ? `Files refreshed (${result.data.length}).` : 'No PMA files yet.');
+        showCommandNotice(refreshedCount ? `Files refreshed (${refreshedCount}).` : 'No PMA files yet.');
         clearSlashDraft();
       }
       return true;
@@ -2393,12 +2478,24 @@
         </div>
         <div class="chat-files-sections">
           <section class="chat-files-section" aria-label="Files from you">
-            <h3>From you</h3>
+            <div class="chat-files-section-head">
+              <h3>From you</h3>
+              <button
+                type="button"
+                class="chat-file-delete-all"
+                disabled={inboxArtifacts.length === 0 || deletingFileBox !== null}
+                onclick={() => deletePmaFileBox('inbox', inboxArtifacts.length)}
+              >
+                {deletingFileBox === 'inbox' ? 'Deleting...' : 'Delete all'}
+              </button>
+            </div>
             {#if inboxArtifacts.length === 0}
               <p class="chat-files-empty">No uploaded files for this chat.</p>
             {:else}
               <ul class="chat-files-list">
                 {#each inboxArtifacts as artifact (artifact.id)}
+                  {@const box = fileBoxNameFromArtifact(artifact)}
+                  {@const filename = fileBoxFilenameFromArtifact(artifact)}
                   <li>
                     <span class="attachment-kind">{artifact.kind}</span>
                     {#if artifact.url}
@@ -2409,18 +2506,71 @@
                     {#if artifact.summary}
                       <em>{artifact.summary}</em>
                     {/if}
+                    {#if box && filename}
+                      <button
+                        type="button"
+                        class="chat-file-delete"
+                        disabled={isDeletingFile(box, filename) || deletingFileBox !== null}
+                        aria-label={`Delete ${filename}`}
+                        title={`Delete ${filename}`}
+                        onclick={() => deletePmaFile(artifact)}
+                      >
+                        {isDeletingFile(box, filename) ? 'Deleting...' : 'Delete'}
+                      </button>
+                    {/if}
                   </li>
                 {/each}
               </ul>
             {/if}
           </section>
           <section class="chat-files-section" aria-label="Files from assistant">
-            <h3>From agent</h3>
+            <div class="chat-files-section-head">
+              <h3>From agent</h3>
+              <button
+                type="button"
+                class="chat-file-delete-all"
+                disabled={outboxArtifacts.length === 0 || deletingFileBox !== null}
+                onclick={() => deletePmaFileBox('outbox', outboxArtifacts.length)}
+              >
+                {deletingFileBox === 'outbox' ? 'Deleting...' : 'Delete all'}
+              </button>
+            </div>
+            {#if outboxArtifacts.length > 0}
+              <ul class="chat-files-list">
+                {#each outboxArtifacts as artifact (artifact.id)}
+                  {@const box = fileBoxNameFromArtifact(artifact)}
+                  {@const filename = fileBoxFilenameFromArtifact(artifact)}
+                  <li>
+                    <span class="attachment-kind">{artifact.kind}</span>
+                    {#if artifact.url}
+                      <a href={href(artifact.url)} target="_blank" rel="noopener"><strong>{artifact.title}</strong></a>
+                    {:else}
+                      <strong>{artifact.title}</strong>
+                    {/if}
+                    {#if artifact.summary}
+                      <em>{artifact.summary}</em>
+                    {/if}
+                    {#if box && filename}
+                      <button
+                        type="button"
+                        class="chat-file-delete"
+                        disabled={isDeletingFile(box, filename) || deletingFileBox !== null}
+                        aria-label={`Delete ${filename}`}
+                        title={`Delete ${filename}`}
+                        onclick={() => deletePmaFile(artifact)}
+                      >
+                        {isDeletingFile(box, filename) ? 'Deleting...' : 'Delete'}
+                      </button>
+                    {/if}
+                  </li>
+                {/each}
+              </ul>
+            {/if}
             {#if artifactDeliveryError}
               <p class="chat-files-empty error">{artifactDeliveryError.message}</p>
-            {:else if activeSurfaceDeliveries.length === 0}
+            {:else if activeSurfaceDeliveries.length === 0 && outboxArtifacts.length === 0}
               <p class="chat-files-empty">No agent-shared files yet.</p>
-            {:else}
+            {:else if activeSurfaceDeliveries.length > 0}
               <ul class="chat-files-list delivery-list">
                 {#each activeSurfaceDeliveries as delivery (delivery.deliveryId)}
                   {@const stateLabel = artifactDeliveryStateLabel(delivery)}

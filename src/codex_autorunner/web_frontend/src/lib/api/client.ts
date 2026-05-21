@@ -613,6 +613,12 @@ export class WebApiClient {
         Array.isArray(payload.saved) ? payload.saved.filter((name): name is string => typeof name === 'string') : []
       );
     },
+    deleteFile: async (box: 'inbox' | 'outbox', filename: string): Promise<ApiResult<JsonRecord>> =>
+      this.requestJson<JsonRecord>(`/hub/pma/files/${encodeURIComponent(box)}/${encodeURIComponent(filename)}`, {
+        method: 'DELETE'
+      }),
+    deleteFileBox: async (box: 'inbox' | 'outbox'): Promise<ApiResult<JsonRecord>> =>
+      this.requestJson<JsonRecord>(`/hub/pma/files/${encodeURIComponent(box)}`, { method: 'DELETE' }),
     listAgents: async (): Promise<ApiResult<{ agents: JsonRecord[]; default: string; defaults: JsonRecord }>> =>
       mapResult(await this.getJson<JsonRecord>('/hub/pma/agents'), (payload) => ({
         agents: asArray(payload.agents),
