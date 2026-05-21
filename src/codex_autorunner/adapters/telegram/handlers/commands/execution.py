@@ -60,6 +60,7 @@ from .....adapters.chat.managed_thread_turns import (
     ManagedThreadTurnCoordinator,
     complete_managed_thread_execution,
     render_managed_thread_delivery_record_text,
+    render_managed_thread_failure_delivery_record_text,
     render_managed_thread_response_text,
 )
 from .....adapters.chat.managed_thread_turns import (
@@ -923,7 +924,10 @@ def _build_telegram_failure_delivery(
         transport_target = dict(record.target.transport_target or {})
         target_chat_id = int(transport_target.get("chat_id") or chat_id)
         target_thread_id = transport_target.get("thread_id", thread_id)
-        text = f"Turn failed: {record.envelope.error_text or public_execution_error}"
+        text = render_managed_thread_failure_delivery_record_text(
+            record,
+            default_error=public_execution_error,
+        )
         send_with_outbox = getattr(handlers, "_send_message_with_outbox", None)
         if callable(send_with_outbox):
             delivered = await _send_telegram_terminal_message_with_outbox(

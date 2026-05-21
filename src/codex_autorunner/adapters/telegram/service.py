@@ -94,6 +94,7 @@ from ..chat.managed_thread_delivery_worker import (
 )
 from ..chat.managed_thread_turns import (
     render_managed_thread_delivery_record_text,
+    render_managed_thread_failure_delivery_record_text,
 )
 from ..chat.queue_status import (
     QUEUE_STATUS_ITEM_LIMIT,
@@ -623,9 +624,9 @@ class TelegramBotService(
                 async def _send_failure(
                     _context: ManagedThreadDeliveryCleanupContext,
                 ) -> ManagedThreadDeliverySendResult:
-                    text = (
-                        f"Turn failed: "
-                        f"{record.envelope.error_text or 'execution error'}"
+                    text = render_managed_thread_failure_delivery_record_text(
+                        record,
+                        default_error="execution error",
                     )
                     send_with_outbox = getattr(
                         service, "_send_message_with_outbox", None

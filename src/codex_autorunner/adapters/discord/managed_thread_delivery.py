@@ -11,6 +11,7 @@ from ...adapters.chat.managed_thread_surface_kernel import (
 from ...adapters.chat.managed_thread_turns import (
     ManagedThreadSurfaceInfo,
     render_managed_thread_delivery_record_text,
+    render_managed_thread_failure_delivery_record_text,
 )
 from ...core.orchestration import (
     ManagedThreadDeliveryAttemptResult,
@@ -94,8 +95,9 @@ async def deliver_discord_managed_thread_record(
         delivered = await service._send_channel_message_safe(
             target_channel_id,
             {
-                "content": (
-                    f"Turn failed: {record.envelope.error_text or default_execution_error}"
+                "content": render_managed_thread_failure_delivery_record_text(
+                    record,
+                    default_error=default_execution_error,
                 )
             },
             record_id=(
@@ -223,8 +225,9 @@ def build_discord_managed_thread_durable_delivery_hooks(
         delivered = await service._send_channel_message_safe(
             target_channel_id,
             {
-                "content": (
-                    f"Turn failed: {record.envelope.error_text or public_execution_error}"
+                "content": render_managed_thread_failure_delivery_record_text(
+                    record,
+                    default_error=public_execution_error,
                 )
             },
             record_id=(

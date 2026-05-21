@@ -138,6 +138,69 @@ class ManagedThreadDeliveryAttachment:
 
 
 @dataclass(frozen=True)
+class ManagedThreadFailureRecoverySummary:
+    """Transport-agnostic recovery context for a failed managed-thread turn."""
+
+    failure_kind: str
+    error_text: str
+    recovered_assistant_tail: str = ""
+    recovered_notice_tail: str = ""
+    trace_manifest_id: Optional[str] = None
+    backend_thread_id: Optional[str] = None
+    backend_turn_id: Optional[str] = None
+    managed_turn_id: Optional[str] = None
+    side_effects_may_have_occurred: bool = True
+    metadata: Mapping[str, Any] = field(default_factory=dict)
+
+    def to_dict(self) -> dict[str, Any]:
+        payload: dict[str, Any] = {
+            "failure_kind": self.failure_kind,
+            "error_text": self.error_text,
+            "recovered_assistant_tail": self.recovered_assistant_tail,
+            "recovered_notice_tail": self.recovered_notice_tail,
+            "side_effects_may_have_occurred": self.side_effects_may_have_occurred,
+            "metadata": dict(self.metadata or {}),
+        }
+        for key, value in {
+            "trace_manifest_id": self.trace_manifest_id,
+            "backend_thread_id": self.backend_thread_id,
+            "backend_turn_id": self.backend_turn_id,
+            "managed_turn_id": self.managed_turn_id,
+        }.items():
+            if value:
+                payload[key] = value
+        return payload
+
+    @classmethod
+    def from_mapping(
+        cls, payload: Mapping[str, Any]
+    ) -> Optional["ManagedThreadFailureRecoverySummary"]:
+        failure_kind = _normalized_optional_text(payload.get("failure_kind"))
+        error_text = _normalized_optional_text(payload.get("error_text"))
+        if not failure_kind or not error_text:
+            return None
+        metadata = payload.get("metadata")
+        return cls(
+            failure_kind=failure_kind,
+            error_text=error_text,
+            recovered_assistant_tail=str(payload.get("recovered_assistant_tail") or ""),
+            recovered_notice_tail=str(payload.get("recovered_notice_tail") or ""),
+            trace_manifest_id=_normalized_optional_text(
+                payload.get("trace_manifest_id")
+            ),
+            backend_thread_id=_normalized_optional_text(
+                payload.get("backend_thread_id")
+            ),
+            backend_turn_id=_normalized_optional_text(payload.get("backend_turn_id")),
+            managed_turn_id=_normalized_optional_text(payload.get("managed_turn_id")),
+            side_effects_may_have_occurred=bool(
+                payload.get("side_effects_may_have_occurred", True)
+            ),
+            metadata=dict(metadata) if isinstance(metadata, Mapping) else {},
+        )
+
+
+@dataclass(frozen=True)
 class ManagedThreadDeliveryEnvelope:
     """Stable final-delivery payload persisted before adapter IO begins."""
 
@@ -151,6 +214,7 @@ class ManagedThreadDeliveryEnvelope:
     attachments: tuple[ManagedThreadDeliveryAttachment, ...] = field(
         default_factory=tuple
     )
+    failure_recovery: Optional[ManagedThreadFailureRecoverySummary] = None
     transport_hints: Mapping[str, Any] = field(default_factory=dict)
     metadata: Mapping[str, Any] = field(default_factory=dict)
 
@@ -581,6 +645,7 @@ __all__ = [
     "ManagedThreadDeliveryRecoverySweepResult",
     "ManagedThreadDeliveryState",
     "ManagedThreadDeliveryTarget",
+    "ManagedThreadFailureRecoverySummary",
     "build_managed_thread_delivery_id",
     "build_managed_thread_delivery_idempotency_key",
     "default_claim_expiry",

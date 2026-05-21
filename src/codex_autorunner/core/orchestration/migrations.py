@@ -9,7 +9,7 @@ from ..sqlite_utils import table_columns, table_exists
 from ..time_utils import now_iso
 from .models import OrchestrationTableDefinition
 
-ORCHESTRATION_SCHEMA_VERSION = 36
+ORCHESTRATION_SCHEMA_VERSION = 37
 
 
 @dataclass(frozen=True)
@@ -1302,6 +1302,7 @@ def _apply_v22(conn: sqlite3.Connection) -> None:
             backend_thread_id TEXT,
             token_usage_json TEXT,
             attachments_json TEXT NOT NULL DEFAULT '[]',
+            failure_recovery_json TEXT,
             transport_hints_json TEXT NOT NULL DEFAULT '{}',
             envelope_metadata_json TEXT NOT NULL DEFAULT '{}',
             source TEXT NOT NULL DEFAULT 'managed_thread.finalization',
@@ -2104,6 +2105,15 @@ def _apply_v36(conn: sqlite3.Connection) -> None:
     )
 
 
+def _apply_v37(conn: sqlite3.Connection) -> None:
+    _ensure_column(
+        conn,
+        "orch_managed_thread_deliveries",
+        "failure_recovery_json",
+        "failure_recovery_json TEXT",
+    )
+
+
 _MIGRATIONS = (
     _MigrationStep(1, "create_core_orchestration_schema", _apply_v1),
     _MigrationStep(2, "add_binding_and_flow_projection_scaffolding", _apply_v2),
@@ -2180,6 +2190,11 @@ _MIGRATIONS = (
         36,
         "add_explicit_chat_activity_clocks",
         _apply_v36,
+    ),
+    _MigrationStep(
+        37,
+        "add_managed_thread_failure_recovery_payload",
+        _apply_v37,
     ),
 )
 
