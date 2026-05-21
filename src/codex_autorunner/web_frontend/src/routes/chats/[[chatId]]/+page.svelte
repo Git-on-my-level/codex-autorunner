@@ -11,7 +11,14 @@
   import VoiceComposerButton from '$lib/components/VoiceComposerButton.svelte';
   import ContentSkeleton from '$lib/components/ContentSkeleton.svelte';
   import { confirmDialog } from '$lib/components/confirmDialog';
-  import { webApi, type ApiError, type JsonRecord, type PmaQueuedTurn } from '$lib/api/client';
+  import {
+    webApi,
+    type ApiError,
+    type ChatFileBoxScope,
+    type FileBoxName,
+    type JsonRecord,
+    type PmaQueuedTurn
+  } from '$lib/api/client';
   import {
     invalidateReadModelTags,
     readModelEntityStore,
@@ -155,7 +162,6 @@
     | { kind: 'card'; id: string; card: ChatTranscriptCard }
     | { kind: 'typing'; id: string; title: string }
     | { kind: 'shared-files'; id: string };
-  type FileBoxName = 'inbox' | 'outbox';
   let readModelState = $state(readModelEntityStore.snapshot());
   let activeChatId = $state<string | null>(null);
   // Unsent new chats are page-local only: `localDraftChat` drives the composer until
@@ -259,7 +265,7 @@
     chatIndexSession,
     liveProjection,
     supportApi: {
-      listFiles: webApi.pma.listFiles,
+      listFiles: () => webApi.filebox.listFiles({ kind: 'hub' }),
       listAgents: webApi.pma.listAgents,
       repoWorktreeTopology: webApi.readModels.repoWorktreeTopology,
       repoWorktreeRuntime: webApi.readModels.repoWorktreeRuntime
@@ -783,6 +789,7 @@
     if (key === artifactDeliveryLoadKey) return;
     artifactDeliveryLoadKey = key;
     void refreshArtifactDeliveries(chat.repoId ?? null, key, { quiet: true });
+    if (fileDrawerOpen) void refreshChatFileBox({ quiet: true });
   });
 
   onDestroy(() => {
@@ -1147,15 +1154,24 @@
     }
   }
 
-  async function refreshPmaFiles(options: { quiet?: boolean } = {}): Promise<number | null> {
-    const result = await webApi.pma.listFiles();
+  function fileBoxScopeForChat(chat: PmaChatSummary | null): ChatFileBoxScope {
+    return chat?.repoId ? { kind: 'repo', repoId: chat.repoId } : { kind: 'hub' };
+  }
+
+  function fileBoxScopeLabel(scope: ChatFileBoxScope): string {
+    return scope.kind === 'repo' ? 'repo filebox' : 'hub filebox';
+  }
+
+  async function refreshChatFileBox(options: { quiet?: boolean } = {}): Promise<number | null> {
+    const scope = fileBoxScopeForChat(activeChat);
+    const result = await webApi.filebox.listFiles(scope);
     if (!result.ok) {
       composeError = result.error;
       return null;
     }
-    readModelEntityStore.setPmaArtifacts('__global__', result.data);
     if (activeChatId) readModelEntityStore.setPmaArtifacts(activeChatId, result.data);
-    if (!options.quiet) showCommandNotice(result.data.length ? `Files refreshed (${result.data.length}).` : 'No PMA files yet.');
+    if (!activeChatId || scope.kind === 'hub') readModelEntityStore.setPmaArtifacts('__global__', result.data);
+    if (!options.quiet) showCommandNotice(result.data.length ? `Files refreshed (${result.data.length}).` : 'No files yet.');
     return result.data.length;
   }
 
@@ -1185,23 +1201,24 @@
     deletingFileKeys = next;
   }
 
-  async function deletePmaFile(artifact: SurfaceArtifact): Promise<void> {
+  async function deleteChatFileBoxFile(artifact: SurfaceArtifact): Promise<void> {
     const box = fileBoxNameFromArtifact(artifact);
     const filename = fileBoxFilenameFromArtifact(artifact);
+    const scope = fileBoxScopeForChat(activeChat);
     if (!box || !filename) return;
     if (isDeletingFile(box, filename)) return;
     const ok = await confirmDialog({
       title: 'Delete file',
-      message: `Delete "${filename}" from ${box}?`,
+      message: `Delete "${filename}" from ${fileBoxScopeLabel(scope)} ${box}?`,
       confirmText: 'Delete',
       danger: true
     });
     if (!ok) return;
     setDeletingFile(box, filename, true);
     composeError = null;
-    const result = await webApi.pma.deleteFile(box, filename);
+    const result = await webApi.filebox.deleteFile(scope, box, filename);
     if (result.ok) {
-      await refreshPmaFiles({ quiet: true });
+      await refreshChatFileBox({ quiet: true });
       showCommandNotice(`Deleted ${filename}.`);
     } else {
       composeError = result.error;
@@ -1209,20 +1226,21 @@
     setDeletingFile(box, filename, false);
   }
 
-  async function deletePmaFileBox(box: FileBoxName, count: number): Promise<void> {
+  async function deleteChatFileBox(box: FileBoxName, count: number): Promise<void> {
     if (count <= 0 || deletingFileBox) return;
+    const scope = fileBoxScopeForChat(activeChat);
     const ok = await confirmDialog({
       title: `Clear ${box}`,
-      message: `Delete all ${count} file${count === 1 ? '' : 's'} from ${box}?`,
+      message: `Delete all ${count} file${count === 1 ? '' : 's'} from ${fileBoxScopeLabel(scope)} ${box}?`,
       confirmText: 'Delete all',
       danger: true
     });
     if (!ok) return;
     deletingFileBox = box;
     composeError = null;
-    const result = await webApi.pma.deleteFileBox(box);
+    const result = await webApi.filebox.deleteBox(scope, box);
     if (result.ok) {
-      await refreshPmaFiles({ quiet: true });
+      await refreshChatFileBox({ quiet: true });
       showCommandNotice(`Cleared ${box}.`);
     } else {
       composeError = result.error;
@@ -1273,11 +1291,13 @@
 
   async function openFileDrawer(): Promise<void> {
     fileDrawerOpen = true;
+    const refreshes: Promise<unknown>[] = [refreshChatFileBox({ quiet: true })];
     if (activeChat && !isLocalDraftChatId(activeChat.id)) {
       const key = `${activeChat.id}|${activeChat.repoId ?? ''}`;
       artifactDeliveryLoadKey = key;
-      await refreshArtifactDeliveries(activeChat.repoId ?? null, key);
+      refreshes.push(refreshArtifactDeliveries(activeChat.repoId ?? null, key));
     }
+    await Promise.all(refreshes);
   }
 
   function closeStream(): void {
@@ -1733,14 +1753,14 @@
       return true;
     }
     if (spec.id === 'files') {
-      const refreshedCount = await refreshPmaFiles({ quiet: true });
+      const refreshedCount = await refreshChatFileBox({ quiet: true });
       if (refreshedCount !== null) {
         if (activeChat && !isLocalDraftChatId(activeChat.id)) {
           const key = `${activeChat.id}|${activeChat.repoId ?? ''}`;
           artifactDeliveryLoadKey = key;
           await refreshArtifactDeliveries(activeChat.repoId ?? null, key, { quiet: true });
         }
-        showCommandNotice(refreshedCount ? `Files refreshed (${refreshedCount}).` : 'No PMA files yet.');
+        showCommandNotice(refreshedCount ? `Files refreshed (${refreshedCount}).` : 'No files yet.');
         clearSlashDraft();
       }
       return true;
@@ -2484,7 +2504,7 @@
                 type="button"
                 class="chat-file-delete-all"
                 disabled={inboxArtifacts.length === 0 || deletingFileBox !== null}
-                onclick={() => deletePmaFileBox('inbox', inboxArtifacts.length)}
+                onclick={() => deleteChatFileBox('inbox', inboxArtifacts.length)}
               >
                 {deletingFileBox === 'inbox' ? 'Deleting...' : 'Delete all'}
               </button>
@@ -2513,7 +2533,7 @@
                         disabled={isDeletingFile(box, filename) || deletingFileBox !== null}
                         aria-label={`Delete ${filename}`}
                         title={`Delete ${filename}`}
-                        onclick={() => deletePmaFile(artifact)}
+                        onclick={() => deleteChatFileBoxFile(artifact)}
                       >
                         {isDeletingFile(box, filename) ? 'Deleting...' : 'Delete'}
                       </button>
@@ -2530,7 +2550,7 @@
                 type="button"
                 class="chat-file-delete-all"
                 disabled={outboxArtifacts.length === 0 || deletingFileBox !== null}
-                onclick={() => deletePmaFileBox('outbox', outboxArtifacts.length)}
+                onclick={() => deleteChatFileBox('outbox', outboxArtifacts.length)}
               >
                 {deletingFileBox === 'outbox' ? 'Deleting...' : 'Delete all'}
               </button>
@@ -2557,7 +2577,7 @@
                         disabled={isDeletingFile(box, filename) || deletingFileBox !== null}
                         aria-label={`Delete ${filename}`}
                         title={`Delete ${filename}`}
-                        onclick={() => deletePmaFile(artifact)}
+                        onclick={() => deleteChatFileBoxFile(artifact)}
                       >
                         {isDeletingFile(box, filename) ? 'Deleting...' : 'Delete'}
                       </button>

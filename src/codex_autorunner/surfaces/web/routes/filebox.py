@@ -157,6 +157,14 @@ def build_filebox_routes() -> APIRouter:
         repo_root = _resolve_repo_root(request)
         return await _upload_files_to_box(repo_root=repo_root, box=box, request=request)
 
+    @router.delete("/filebox/{box}")
+    def delete_box_entries(box: str, request: Request) -> dict[str, Any]:
+        repo_root = _resolve_repo_root(request)
+        try:
+            return service.delete_box(repo_root, box)
+        except WorkspaceResourceError as exc:
+            _raise_http(exc)
+
     @router.get("/filebox/{box}/{filename}")
     def download_file(box: str, filename: str, request: Request):
         repo_root = _resolve_repo_root(request)
@@ -247,6 +255,14 @@ def build_hub_filebox_routes() -> APIRouter:
     async def hub_upload(repo_id: str, box: str, request: Request) -> dict[str, Any]:
         repo_root = _resolve_hub_repo_root(request, repo_id)
         return await _upload_files_to_box(repo_root=repo_root, box=box, request=request)
+
+    @router.delete("/{repo_id}/{box}")
+    def hub_delete_box(repo_id: str, box: str, request: Request) -> dict[str, Any]:
+        repo_root = _resolve_hub_repo_root(request, repo_id)
+        try:
+            return service.delete_box(repo_root, box)
+        except WorkspaceResourceError as exc:
+            _raise_http(exc)
 
     @router.get("/{repo_id}/{box}/{filename}")
     def hub_download(repo_id: str, box: str, filename: str, request: Request):

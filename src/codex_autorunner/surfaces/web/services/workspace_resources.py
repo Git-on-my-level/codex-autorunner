@@ -399,6 +399,30 @@ class FileBoxResourceService:
             raise WorkspaceResourceError(404, "File not found")
         return {"status": "ok"}
 
+    def delete_box(self, repo_root: Path, box: str) -> dict[str, Any]:
+        self.validate_box(box)
+        try:
+            entries = ArtifactFileBoxStorage(repo_root).list_filebox()
+        except ValueError as exc:
+            raise WorkspaceResourceError(400, str(exc)) from exc
+        except OSError as exc:
+            raise WorkspaceResourceError(500, "Failed to list files") from exc
+
+        deleted_files: list[str] = []
+        for entry in entries.get(box, []):
+            try:
+                entry.path.unlink()
+                deleted_files.append(entry.name)
+            except FileNotFoundError:
+                continue
+            except OSError as exc:
+                raise WorkspaceResourceError(500, "Failed to delete files") from exc
+        return {
+            "status": "ok",
+            "deleted": deleted_files,
+            "deleted_count": len(deleted_files),
+        }
+
     def list_artifact_deliveries(
         self,
         repo_root: Path,

@@ -831,6 +831,38 @@ describe('API client error handling', () => {
     expect(boxResult.ok).toBe(true);
   });
 
+  it('manages repo-scoped filebox files through generic helpers', async () => {
+    const fetcher = vi.fn(async (input: RequestInfo | URL) => {
+      if (String(input) === '/hub/filebox/repo-1') {
+        return Response.json({
+          inbox: [{ name: 'screen.png', box: 'inbox', url: '/hub/filebox/repo-1/inbox/screen.png' }],
+          outbox: []
+        });
+      }
+      return Response.json({ status: 'ok' });
+    }) as unknown as typeof fetch;
+    const client = new WebApiClient(fetcher);
+
+    const listed = await client.filebox.listFiles({ kind: 'repo', repoId: 'repo-1' });
+    const deleted = await client.filebox.deleteFile({ kind: 'repo', repoId: 'repo-1' }, 'inbox', 'screen.png');
+    const cleared = await client.filebox.deleteBox({ kind: 'repo', repoId: 'repo-1' }, 'outbox');
+
+    expect(fetcher).toHaveBeenNthCalledWith(1, '/hub/filebox/repo-1', expect.any(Object));
+    expect(fetcher).toHaveBeenNthCalledWith(
+      2,
+      '/hub/filebox/repo-1/inbox/screen.png',
+      expect.objectContaining({ method: 'DELETE' })
+    );
+    expect(fetcher).toHaveBeenNthCalledWith(
+      3,
+      '/hub/filebox/repo-1/outbox',
+      expect.objectContaining({ method: 'DELETE' })
+    );
+    expect(listed.ok && listed.data[0]).toMatchObject({ title: 'screen.png', raw: { box: 'inbox' } });
+    expect(deleted.ok).toBe(true);
+    expect(cleared.ok).toBe(true);
+  });
+
   it('lists repo artifact deliveries through the hub filebox route', async () => {
     const fetcher = vi.fn(async () =>
       Response.json({
