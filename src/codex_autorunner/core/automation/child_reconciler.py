@@ -405,8 +405,10 @@ def _ticket_flow_terminal_state(status: FlowRunStatus) -> Optional[str]:
 def _terminal_result_counts(terminal_state: str) -> ChildReconcileResult:
     if terminal_state == "succeeded":
         return ChildReconcileResult(inspected=1, completed=1)
-    if terminal_state in {"cancelled", "interrupted"}:
+    if terminal_state == "cancelled":
         return ChildReconcileResult(inspected=1, cancelled=1)
+    if terminal_state == "interrupted":
+        return ChildReconcileResult(inspected=1)
     return ChildReconcileResult(inspected=1, failed=1)
 
 
