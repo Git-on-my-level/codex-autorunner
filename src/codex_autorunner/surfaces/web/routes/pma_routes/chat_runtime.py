@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import uuid
 from typing import Any, Optional, cast
 
 from fastapi import APIRouter, HTTPException, Request
@@ -13,7 +14,16 @@ from .....adapters.github.context_injection import (
 from .....agents.base import harness_supports_event_streaming
 from .....agents.codex.harness import CodexHarness
 from .....agents.registry import get_registered_agents as _get_registered_agents
-from .....agents.runtime_options import resolve_agent_runtime_options
+from .....agents.registry import validate_agent_id
+from .....agents.runtime_options import (
+    AgentRuntimeOptionsError,
+    resolve_agent_runtime_options,
+)
+from .....core.orchestration import (
+    TurnExecutionContractError,
+    TurnExecutionOrigin,
+    TurnExecutionRequest,
+)
 from .....core.orchestration import (
     build_surface_orchestration_ingress as _build_surface_orchestration_ingress,
 )
@@ -37,6 +47,7 @@ from ...services.pma import get_pma_request_context
 from ...services.pma.common import (
     build_idempotency_key as service_build_idempotency_key,
 )
+from ..agent_profile_validation import resolve_requested_agent_profile
 from ..shared import SSE_HEADERS
 from .chat_queue_execution import execute_queue_item
 from .chat_runtime_execution import (
@@ -84,6 +95,84 @@ def _resolve_pma_default_model(
         include_builtin_model=False,
     )
     return options.model
+
+
+def _resolve_pma_chat_turn_request(
+    request: Request,
+    *,
+    lane_id: str,
+    message: str,
+    agent: Optional[str],
+    profile: Optional[str],
+    model: Optional[str],
+    reasoning: Optional[str],
+    client_turn_id: Optional[str],
+    stream: bool,
+) -> TurnExecutionRequest:
+    pma_config = _get_pma_config(request)
+    try:
+        agent_id = validate_agent_id(
+            agent or pma_config.get("default_agent") or "codex",
+            get_pma_request_context(request).agent_context,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    resolved_profile = resolve_requested_agent_profile(
+        request,
+        agent_id,
+        profile,
+        default_profile=_normalize_optional_text(pma_config.get("profile")),
+    )
+    try:
+        state = load_state(request.app.state.engine.state_path)
+    except (OSError, ValueError, AttributeError):
+        state = None
+    try:
+        runtime_options = resolve_agent_runtime_options(
+            agent_id,
+            profile=resolved_profile,
+            state=state,
+            config=request.app.state.config,
+            workspace_root=getattr(request.app.state.config, "root", None),
+            explicit_model=model,
+            configured_model_default=pma_config.get("model"),
+            explicit_reasoning=reasoning or pma_config.get("reasoning"),
+            approval_policy="on-request",
+            sandbox_policy="dangerFullAccess",
+            include_builtin_model=False,
+        )
+        return TurnExecutionRequest(
+            request_id=client_turn_id or f"pma-{uuid.uuid4().hex}",
+            target_id=lane_id,
+            target_kind="thread",
+            workspace_root=str(get_pma_request_context(request).hub_root),
+            request_kind="message",
+            busy_policy="queue",
+            prompt_text=message,
+            input_items=(),
+            context_profile=None,
+            agent=agent_id,
+            profile=resolved_profile,
+            model=runtime_options.model,
+            model_payload=runtime_options.opencode_model_payload or {},
+            reasoning=runtime_options.reasoning,
+            approval_policy=runtime_options.effective_approval_policy,
+            approval_mode=runtime_options.effective_approval_policy,
+            sandbox_policy=runtime_options.sandbox.policy,
+            client_request_id=client_turn_id,
+            idempotency_key=client_turn_id,
+            correlation_id=client_turn_id,
+            origin=TurnExecutionOrigin(
+                kind="surface",
+                source_id=f"web:{lane_id}",
+                surface_kind="web",
+                surface_key=lane_id,
+                metadata={"route": "/hub/pma/chat"},
+            ),
+            metadata={"stream": bool(stream)},
+        )
+    except (AgentRuntimeOptionsError, TurnExecutionContractError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 def _pma_turn_idle_timeout_seconds(request: Request) -> float:
@@ -405,11 +494,21 @@ def build_chat_runtime_router(
         queue = runtime.get_pma_queue(hub_root)
 
         lane_id = "pma:default"
-        model = model or _resolve_pma_default_model(
+        turn_request = _resolve_pma_chat_turn_request(
             request,
+            lane_id=lane_id,
+            message=message,
             agent=agent,
-            configured_default=pma_config.get("model"),
+            profile=profile,
+            model=model,
+            reasoning=reasoning,
+            client_turn_id=client_turn_id,
+            stream=stream,
         )
+        agent = turn_request.agent
+        profile = turn_request.profile
+        model = turn_request.model
+        reasoning = turn_request.reasoning
 
         idempotency_key = _build_idempotency_key(
             lane_id=lane_id,
@@ -421,16 +520,7 @@ def build_chat_runtime_router(
             message=message,
         )
 
-        queue_payload = {
-            "message": message,
-            "agent": agent,
-            "profile": profile,
-            "model": model,
-            "reasoning": reasoning,
-            "client_turn_id": client_turn_id,
-            "stream": stream,
-            "hub_root": str(hub_root),
-        }
+        queue_payload = {"turn_request": turn_request.to_dict()}
 
         item, dupe_reason = await queue.enqueue(lane_id, idempotency_key, queue_payload)
         if dupe_reason:

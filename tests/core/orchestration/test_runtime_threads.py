@@ -463,6 +463,16 @@ async def test_runtime_threads_use_wait_for_turn_contract_for_session_runtimes(
     assert outcome.status == "ok"
     assert harness.wait_calls == [(workspace_root, "session-1", "stream-turn-1")]
     assert outcome.assistant_text == "hello world"
+    turn_request = service.thread_store.get_turn_execution_request(
+        thread.thread_target_id,
+        started.execution.execution_id,
+    )
+    assert turn_request is not None
+    assert turn_request.model == "anthropic/claude-sonnet-4"
+    assert turn_request.model_payload == {
+        "providerID": "anthropic",
+        "modelID": "claude-sonnet-4",
+    }
 
 
 async def test_opencode_runtime_thread_requires_resolved_model_before_start(

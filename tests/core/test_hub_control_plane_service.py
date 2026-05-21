@@ -44,7 +44,10 @@ from codex_autorunner.core.managed_thread_store import (
     ManagedThreadStore,
     prepare_managed_thread_store,
 )
-from codex_autorunner.core.orchestration import SQLiteChatSurfaceEventJournal
+from codex_autorunner.core.orchestration import (
+    SQLiteChatSurfaceEventJournal,
+    TurnExecutionRequest,
+)
 from codex_autorunner.core.orchestration.cold_trace_store import ColdTraceStore
 from codex_autorunner.core.orchestration.sqlite import prepare_orchestration_sqlite
 from codex_autorunner.core.pma_notification_store import PmaNotificationStore
@@ -515,7 +518,10 @@ def test_shared_state_service_execution_lifecycle_delegates_to_thread_store(
     assert lookup.execution.backend_id == "backend-1"
     assert claimed.execution is not None
     assert claimed.execution.execution_id == second.execution.execution_id
-    assert claimed.queue_payload == {"priority": "normal"}
+    turn_request = TurnExecutionRequest.from_mapping(
+        claimed.queue_payload["turn_request"]
+    )
+    assert turn_request.prompt_text == "Second turn"
     assert interrupted.execution is not None
     assert interrupted.execution.status == "interrupted"
 

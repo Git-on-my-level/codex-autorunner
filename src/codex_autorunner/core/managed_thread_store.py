@@ -1413,6 +1413,9 @@ class ManagedThreadStore:
                     thread=thread_row,
                     queue_payload=queue_payload or {},
                 )
+                canonical_queue_payload = {
+                    "turn_request": turn_request.to_dict(),
+                }
                 turn_record = build_turn_execution_record_from_storage(
                     execution=execution_mapping,
                     thread=thread_row,
@@ -1474,7 +1477,7 @@ class ManagedThreadStore:
                         dedupe_key=client_turn_id or managed_turn_id,
                         state="queued",
                         visible_at=started_at,
-                        payload_json=_json_dumps(queue_payload or {}),
+                        payload_json=_json_dumps(canonical_queue_payload),
                         created_at=started_at,
                         idempotency_key=client_turn_id or managed_turn_id,
                     )
@@ -2039,9 +2042,7 @@ class ManagedThreadStore:
                 execution_cursor = conn.execute(
                     """
                     UPDATE orch_thread_executions
-                       SET prompt_text = ?,
-                           turn_request_json = NULL,
-                           turn_record_json = NULL
+                       SET prompt_text = ?
                      WHERE execution_id = ?
                        AND thread_target_id = ?
                        AND status = 'queued'
@@ -2054,6 +2055,28 @@ class ManagedThreadStore:
                 )
                 if execution_cursor.rowcount == 0:
                     return None
+                row = conn.execute(
+                    """
+                    SELECT *
+                      FROM orch_thread_executions
+                     WHERE execution_id = ?
+                    """,
+                    (managed_turn_id,),
+                ).fetchone()
+                if row is None:
+                    return None
+                execution = {key: row[key] for key in row.keys()}
+                thread = self._fetch_thread(conn, managed_thread_id)
+                if thread is None:
+                    return None
+                turn_request = build_turn_execution_request_from_storage(
+                    execution=execution,
+                    thread=thread,
+                    queue_payload=queue_payload,
+                )
+                canonical_queue_payload = {
+                    "turn_request": turn_request.to_dict(),
+                }
                 queue_cursor = conn.execute(
                     """
                     UPDATE orch_queue_items
@@ -2065,7 +2088,7 @@ class ManagedThreadStore:
                        AND state IN ('pending', 'queued', 'waiting')
                     """,
                     (
-                        _json_dumps(queue_payload),
+                        _json_dumps(canonical_queue_payload),
                         updated_at,
                         managed_turn_id,
                         thread_queue_lane_id(managed_thread_id),
@@ -2076,15 +2099,27 @@ class ManagedThreadStore:
                         "Queued turn execution was updated but no matching queue item "
                         "was found; refusing partial commit"
                     )
-                self._refresh_turn_execution_envelopes(conn, managed_turn_id)
-                row = conn.execute(
+                turn_record = build_turn_execution_record_from_storage(
+                    execution=execution,
+                    thread=thread,
+                    request=turn_request,
+                    queue_item=self._queue_item_for_execution(conn, managed_turn_id),
+                )
+                conn.execute(
                     """
-                    SELECT *
-                      FROM orch_thread_executions
+                    UPDATE orch_thread_executions
+                       SET turn_contract_version = ?,
+                           turn_request_json = ?,
+                           turn_record_json = ?
                      WHERE execution_id = ?
                     """,
-                    (managed_turn_id,),
-                ).fetchone()
+                    (
+                        TURN_EXECUTION_CONTRACT_VERSION,
+                        turn_request.to_json(),
+                        turn_record.to_json(),
+                        managed_turn_id,
+                    ),
+                )
         record = _execution_row_to_record(row) if row is not None else None
         if record is not None:
             self._emit_thread_event(

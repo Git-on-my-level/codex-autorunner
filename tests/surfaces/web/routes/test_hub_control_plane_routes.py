@@ -36,6 +36,7 @@ from codex_autorunner.core.managed_thread_store import (
     ManagedThreadStore,
     prepare_managed_thread_store,
 )
+from codex_autorunner.core.orchestration import TurnExecutionRequest
 from codex_autorunner.core.orchestration.sqlite import prepare_orchestration_sqlite
 from codex_autorunner.core.pma_notification_store import PmaNotificationStore
 from codex_autorunner.core.ports.run_event import Completed, Started
@@ -456,7 +457,10 @@ async def test_hub_control_plane_http_client_round_trip(tmp_path: Path) -> None:
     assert finalized.execution.backend_id == "backend-77"
     assert claimed.execution is not None
     assert claimed.execution.execution_id == queued_execution.execution.execution_id
-    assert claimed.queue_payload == {"source": "test"}
+    turn_request = TurnExecutionRequest.from_mapping(
+        claimed.queue_payload["turn_request"]
+    )
+    assert turn_request.prompt_text == "Queued remote turn"
     assert setup_result.setup_command_count == 3
 
 
