@@ -18,16 +18,14 @@ class RuntimeThreadBinding:
 def _ensure_runtime_bindings_table(hub_root: Path) -> None:
     with open_orchestration_sqlite(hub_root) as conn:
         with conn:
-            conn.execute(
-                """
+            conn.execute("""
                 CREATE TABLE IF NOT EXISTS orch_runtime_thread_bindings (
                     thread_target_id TEXT PRIMARY KEY,
                     backend_thread_id TEXT NOT NULL,
                     backend_runtime_instance_id TEXT,
                     updated_at TEXT NOT NULL
                 )
-                """
-            )
+                """)
 
 
 def _normalized_thread_target_id(thread_target_id: str) -> Optional[str]:

@@ -15,8 +15,7 @@ def test_ticket_flow_compact_live_output_falls_back_to_stream_deltas() -> None:
         repo_root / "src" / "codex_autorunner" / "static" / "generated" / "tickets.js"
     )
 
-    script = textwrap.dedent(
-        f"""
+    script = textwrap.dedent(f"""
         import assert from "node:assert/strict";
         import {{ pathToFileURL }} from "node:url";
         import {{ JSDOM }} from "jsdom";
@@ -79,8 +78,7 @@ def test_ticket_flow_compact_live_output_falls_back_to_stream_deltas() -> None:
 
         assert.match(detail, /This is live codex output/);
         assert.equal(status, "Streaming");
-        """
-    )
+        """)
 
     subprocess.run(["node", "--input-type=module", "-e", script], check=True)
 
@@ -91,8 +89,7 @@ def test_ticket_flow_live_output_expands_from_collapsed_bar() -> None:
         repo_root / "src" / "codex_autorunner" / "static" / "generated" / "tickets.js"
     )
 
-    script = textwrap.dedent(
-        f"""
+    script = textwrap.dedent(f"""
         import assert from "node:assert/strict";
         import {{ pathToFileURL }} from "node:url";
         import {{ JSDOM }} from "jsdom";
@@ -167,8 +164,7 @@ def test_ticket_flow_live_output_expands_from_collapsed_bar() -> None:
         assert.equal(panelToggle?.getAttribute("aria-expanded"), "true");
         assert.equal(detailWrapper?.classList.contains("hidden"), false);
         assert.equal(compactWrapper?.classList.contains("hidden"), true);
-        """
-    )
+        """)
 
     subprocess.run(["node", "--input-type=module", "-e", script], check=True)
 
@@ -181,8 +177,7 @@ def test_ticket_flow_compact_live_output_shows_step_progress_when_no_agent_text(
         repo_root / "src" / "codex_autorunner" / "static" / "generated" / "tickets.js"
     )
 
-    script = textwrap.dedent(
-        f"""
+    script = textwrap.dedent(f"""
         import assert from "node:assert/strict";
         import {{ pathToFileURL }} from "node:url";
         import {{ JSDOM }} from "jsdom";
@@ -238,7 +233,6 @@ def test_ticket_flow_compact_live_output_shows_step_progress_when_no_agent_text(
         const detail = document.getElementById("ticket-live-output-text")?.textContent || "";
 
         assert.match(detail, /--- Step: ticket_turn ---/);
-        """
-    )
+        """)
 
     subprocess.run(["node", "--input-type=module", "-e", script], check=True)

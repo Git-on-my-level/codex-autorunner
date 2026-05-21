@@ -193,9 +193,7 @@ def clear_pma_prompt_state_sessions(
                  WHERE surface_kind = ?
                    AND capsule_id LIKE 'pma.%'
                    AND managed_thread_id IN ({})
-                """.format(
-                    ",".join("?" for _ in cleared_keys)
-                ),
+                """.format(",".join("?" for _ in cleared_keys)),
                 (PMA_PROMPT_LEDGER_SURFACE_KIND, *cleared_keys),
             )
 

@@ -2049,13 +2049,11 @@ class ManagedThreadStore:
         payload_json: Optional[str] = None,
     ) -> int:
         with self._write_conn() as conn:
-            row = conn.execute(
-                """
+            row = conn.execute("""
                 SELECT MAX(CAST(action_id AS INTEGER)) AS max_action_id
                   FROM orch_thread_actions
                  WHERE action_id GLOB '[0-9]*'
-                """
-            ).fetchone()
+                """).fetchone()
             next_id = int(row["max_action_id"] or 0) + 1
             with conn:
                 conn.execute(

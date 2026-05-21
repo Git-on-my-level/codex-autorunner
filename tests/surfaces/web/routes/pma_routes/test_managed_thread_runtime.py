@@ -2847,14 +2847,12 @@ def test_managed_thread_interrupt_route_uses_orchestration_service_seam(
     assert response.status_code == 200
     assert calls == [managed_thread_id]
     with open_orchestration_sqlite(hub_env.hub_root) as conn:
-        row = conn.execute(
-            """
+        row = conn.execute("""
             SELECT payload_json
               FROM orch_thread_actions
              ORDER BY CAST(action_id AS INTEGER) DESC
              LIMIT 1
-            """
-        ).fetchone()
+            """).fetchone()
     assert row is not None
     payload = json.loads(row["payload_json"])
     assert payload["backend_interrupt_attempted"] is True

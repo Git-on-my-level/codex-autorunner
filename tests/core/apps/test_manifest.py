@@ -366,16 +366,12 @@ class TestInvalidManifest:
 class TestLoadAppManifest:
     def test_loads_from_file(self, tmp_path):
         manifest_file = tmp_path / "car-app.yaml"
-        manifest_file.write_text(
-            textwrap.dedent(
-                """\
+        manifest_file.write_text(textwrap.dedent("""\
                 schema_version: 1
                 id: test.file
                 name: File Test
                 version: "1.0"
-            """
-            )
-        )
+            """))
         m = load_app_manifest(manifest_file)
         assert m.id == "test.file"
 

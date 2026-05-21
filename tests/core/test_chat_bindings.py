@@ -67,16 +67,14 @@ def _write_discord_binding(
     conn = sqlite3.connect(db_path)
     try:
         with conn:
-            conn.execute(
-                """
+            conn.execute("""
                 CREATE TABLE IF NOT EXISTS channel_bindings (
                     channel_id TEXT PRIMARY KEY,
                     workspace_path TEXT,
                     repo_id TEXT,
                     updated_at TEXT
                 )
-                """
-            )
+                """)
             conn.execute(
                 """
                 INSERT INTO channel_bindings (
@@ -117,8 +115,7 @@ def _write_telegram_binding(
     conn = sqlite3.connect(db_path)
     try:
         with conn:
-            conn.execute(
-                """
+            conn.execute("""
                 CREATE TABLE IF NOT EXISTS telegram_topics (
                     topic_key TEXT PRIMARY KEY,
                     chat_id INTEGER NOT NULL,
@@ -129,18 +126,15 @@ def _write_telegram_binding(
                     last_active_at TEXT,
                     updated_at TEXT
                 )
-                """
-            )
-            conn.execute(
-                """
+                """)
+            conn.execute("""
                 CREATE TABLE IF NOT EXISTS telegram_topic_scopes (
                     chat_id INTEGER NOT NULL,
                     thread_id INTEGER,
                     scope TEXT,
                     PRIMARY KEY (chat_id, thread_id)
                 )
-                """
-            )
+                """)
             conn.execute(
                 """
                 INSERT INTO telegram_topics (
@@ -185,16 +179,14 @@ def _write_telegram_topic_scope(
     conn = sqlite3.connect(db_path)
     try:
         with conn:
-            conn.execute(
-                """
+            conn.execute("""
                 CREATE TABLE IF NOT EXISTS telegram_topic_scopes (
                     chat_id INTEGER NOT NULL,
                     thread_id INTEGER,
                     scope TEXT,
                     PRIMARY KEY (chat_id, thread_id)
                 )
-                """
-            )
+                """)
             conn.execute(
                 """
                 INSERT INTO telegram_topic_scopes (chat_id, thread_id, scope)

@@ -40,8 +40,7 @@ def write_discord_binding_rows(db_path: Path, rows: list[dict]) -> None:
     conn = sqlite3.connect(db_path)
     try:
         with conn:
-            conn.execute(
-                """
+            conn.execute("""
                 CREATE TABLE IF NOT EXISTS channel_bindings (
                     channel_id TEXT PRIMARY KEY,
                     guild_id TEXT,
@@ -54,8 +53,7 @@ def write_discord_binding_rows(db_path: Path, rows: list[dict]) -> None:
                     agent_profile TEXT,
                     updated_at TEXT
                 )
-                """
-            )
+                """)
             for row in rows:
                 conn.execute(
                     """
@@ -110,8 +108,7 @@ def write_telegram_topic_rows(
     conn = sqlite3.connect(db_path)
     try:
         with conn:
-            conn.execute(
-                """
+            conn.execute("""
                 CREATE TABLE IF NOT EXISTS telegram_topics (
                     topic_key TEXT PRIMARY KEY,
                     chat_id INTEGER NOT NULL,
@@ -123,10 +120,8 @@ def write_telegram_topic_rows(
                     payload_json TEXT,
                     updated_at TEXT
                 )
-                """
-            )
-            conn.execute(
-                """
+                """)
+            conn.execute("""
                 CREATE TABLE IF NOT EXISTS telegram_topic_scopes (
                     chat_id INTEGER NOT NULL,
                     thread_id INTEGER,
@@ -134,8 +129,7 @@ def write_telegram_topic_rows(
                     updated_at TEXT,
                     PRIMARY KEY (chat_id, thread_id)
                 )
-                """
-            )
+                """)
             for row in topics:
                 payload_json = row.get("payload_json")
                 payload_text = (

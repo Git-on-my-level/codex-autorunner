@@ -333,14 +333,12 @@ def _recent_notification_targets(hub_root: Path, *, limit: int) -> list[str]:
     try:
         conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
         conn.row_factory = sqlite3.Row
-        rows = conn.execute(
-            """
+        rows = conn.execute("""
             SELECT surface_kind, surface_key
               FROM orch_notification_conversations
              WHERE surface_kind IN ('discord', 'telegram')
              ORDER BY updated_at DESC, created_at DESC
-            """
-        ).fetchall()
+            """).fetchall()
     except sqlite3.Error:
         return []
     finally:

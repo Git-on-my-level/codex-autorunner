@@ -463,19 +463,14 @@ class ChatSurfaceReadService:
         with open_orchestration_sqlite(
             self._hub_root, durable=self._durable, migrate=True
         ) as conn:
-            rows = [
-                _chat_index_row_from_projection(row)
-                for row in conn.execute(
-                    f"""
+            rows = [_chat_index_row_from_projection(row) for row in conn.execute(f"""
                     SELECT row_json, effective_status
                       FROM orch_chat_index_projection
                      WHERE {where_sql}
                      ORDER BY sort_unread_priority DESC,
                               sort_last_activity_desc ASC,
                               row_id ASC
-                    """
-                ).fetchall()
-            ]
+                    """).fetchall()]
         return [row for row in rows if row]
 
     def chat_detail_snapshot(
@@ -693,13 +688,11 @@ class ChatSurfaceReadService:
         with open_orchestration_sqlite(
             self._hub_root, durable=self._durable, migrate=True
         ) as conn:
-            row = conn.execute(
-                """
+            row = conn.execute("""
                 SELECT value
                   FROM orch_chat_index_projection_meta
                  WHERE key = 'projection_revision'
-                """
-            ).fetchone()
+                """).fetchone()
         if row is None:
             return 0
         try:
@@ -724,16 +717,11 @@ class ChatSurfaceReadService:
                     "row_count": 0,
                     "needs_rebuild": True,
                 }
-            meta = {
-                str(row["key"]): str(row["value"])
-                for row in conn.execute(
-                    """
+            meta = {str(row["key"]): str(row["value"]) for row in conn.execute("""
                     SELECT key, value
                       FROM orch_chat_index_projection_meta
                      WHERE key IN ('source_signature', 'projection_revision')
-                    """
-                ).fetchall()
-            }
+                    """).fetchall()}
             row = conn.execute(
                 "SELECT COUNT(*) AS row_count FROM orch_chat_index_projection"
             ).fetchone()
@@ -764,8 +752,7 @@ class ChatSurfaceReadService:
         with open_orchestration_sqlite(
             self._hub_root, durable=self._durable, migrate=True
         ) as conn:
-            binding_rows = conn.execute(
-                """
+            binding_rows = conn.execute("""
                 SELECT b.binding_id,
                        b.surface_kind,
                        b.surface_key,
@@ -787,8 +774,7 @@ class ChatSurfaceReadService:
                    AND lower(b.surface_kind) IN ('discord', 'telegram')
                    AND COALESCE(t.lifecycle_status, 'active') != 'archived'
                  ORDER BY b.surface_kind ASC, b.surface_key ASC, b.binding_id ASC
-                """
-            ).fetchall()
+                """).fetchall()
 
         candidates: list[dict[str, Any]] = []
         for row in binding_rows:
@@ -908,14 +894,11 @@ class ChatSurfaceReadService:
         ) as conn:
             with conn:
                 existing_meta = {
-                    str(row["key"]): str(row["value"])
-                    for row in conn.execute(
-                        """
+                    str(row["key"]): str(row["value"]) for row in conn.execute("""
                         SELECT key, value
                           FROM orch_chat_index_projection_meta
                          WHERE key IN ('source_signature', 'projection_revision')
-                        """
-                    ).fetchall()
+                        """).fetchall()
                 }
                 if existing_meta.get("source_signature") == source_signature:
                     projection_revision = max(
@@ -1012,13 +995,11 @@ class ChatSurfaceReadService:
             ) or not _table_exists(conn, "orch_chat_index_projection_meta"):
                 needs_rebuild = True
             else:
-                row = conn.execute(
-                    """
+                row = conn.execute("""
                     SELECT value
                       FROM orch_chat_index_projection_meta
                      WHERE key = 'source_signature'
-                    """
-                ).fetchone()
+                    """).fetchone()
                 needs_rebuild = row is None or row["value"] != source_signature
         if needs_rebuild:
             self.rebuild_chat_index_projection()
@@ -1049,15 +1030,13 @@ class ChatSurfaceReadService:
                     "max_updated": row["max_updated"],
                 }
             if _table_exists(conn, "orch_thread_targets"):
-                row = conn.execute(
-                    """
+                row = conn.execute("""
                     SELECT COUNT(*) AS count,
                            MAX(COALESCE(updated_at, created_at)) AS max_updated
                       FROM orch_thread_targets
                      WHERE json_extract(metadata_json, '$.flow_type') = 'ticket_flow'
                        AND json_extract(metadata_json, '$.ticket_flow_link_key') IS NOT NULL
-                    """
-                ).fetchone()
+                    """).fetchone()
                 facts["ticket_flow_thread_links"] = {
                     "count": int(row["count"] or 0),
                     "max_updated": row["max_updated"],
@@ -1066,14 +1045,12 @@ class ChatSurfaceReadService:
                 facts["ticket_flow_thread_links"] = None
             facts["ticket_flow_ticket_files"] = _ticket_flow_ticket_file_signature(conn)
             if _table_exists(conn, "orch_flow_run_projections"):
-                row = conn.execute(
-                    """
+                row = conn.execute("""
                     SELECT COUNT(*) AS count,
                            MAX(updated_at) AS max_updated
                       FROM orch_flow_run_projections
                      WHERE flow_type = 'ticket_flow'
-                    """
-                ).fetchone()
+                    """).fetchone()
                 facts["ticket_flow_flow_projections"] = {
                     "count": int(row["count"] or 0),
                     "max_updated": row["max_updated"],
@@ -1289,8 +1266,7 @@ class ChatSurfaceReadService:
                  ORDER BY updated_at DESC, created_at DESC, thread_target_id ASC
                 """,
             ).fetchall()
-            execution_rows = conn.execute(
-                """
+            execution_rows = conn.execute("""
                 SELECT thread_target_id,
                        execution_id,
                        status,
@@ -1302,11 +1278,9 @@ class ChatSurfaceReadService:
                        error_text
                   FROM orch_thread_executions
                  ORDER BY created_at ASC, execution_id ASC
-                """
-            ).fetchall()
+                """).fetchall()
             delivery_rows = (
-                conn.execute(
-                    """
+                conn.execute("""
                     SELECT managed_thread_id,
                            surface_kind,
                            surface_key,
@@ -1317,8 +1291,7 @@ class ChatSurfaceReadService:
                            created_at
                       FROM orch_managed_thread_deliveries
                      ORDER BY updated_at ASC, created_at ASC, delivery_id ASC
-                    """
-                ).fetchall()
+                    """).fetchall()
                 if _table_exists(conn, "orch_managed_thread_deliveries")
                 else []
             )
@@ -1342,8 +1315,7 @@ class ChatSurfaceReadService:
                 else []
             )
             flow_projection_rows = (
-                conn.execute(
-                    """
+                conn.execute("""
                     SELECT flow_run_id,
                            repo_id,
                            status,
@@ -1351,8 +1323,7 @@ class ChatSurfaceReadService:
                            updated_at
                       FROM orch_flow_run_projections
                      WHERE flow_type = 'ticket_flow'
-                    """
-                ).fetchall()
+                    """).fetchall()
                 if _table_exists(conn, "orch_flow_run_projections")
                 else []
             )
@@ -1716,15 +1687,13 @@ def _stable_revision(payload: Mapping[str, Any]) -> str:
 def _ticket_flow_ticket_file_signature(conn: Any) -> list[dict[str, Any]]:
     if not _table_exists(conn, "orch_thread_targets"):
         return []
-    rows = conn.execute(
-        """
+    rows = conn.execute("""
         SELECT json_extract(metadata_json, '$.workspace_root') AS workspace_root,
                json_extract(metadata_json, '$.ticket_path') AS ticket_path
           FROM orch_thread_targets
          WHERE json_extract(metadata_json, '$.flow_type') = 'ticket_flow'
            AND json_extract(metadata_json, '$.ticket_path') IS NOT NULL
-        """
-    ).fetchall()
+        """).fetchall()
     facts: list[dict[str, Any]] = []
     seen: set[tuple[str, str]] = set()
     for row in rows:

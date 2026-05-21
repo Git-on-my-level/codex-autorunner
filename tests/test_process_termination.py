@@ -40,8 +40,7 @@ def _assert_process_gone(pid: int) -> None:
 
 @pytest.mark.skipif(os.name == "nt", reason="Requires POSIX process groups")
 def test_terminate_record_kills_sigterm_ignoring_process_group() -> None:
-    parent_code = textwrap.dedent(
-        """
+    parent_code = textwrap.dedent("""
         import os
         import signal
         import subprocess
@@ -64,8 +63,7 @@ def test_terminate_record_kills_sigterm_ignoring_process_group() -> None:
         print(f"{os.getpid()} {child.pid} {os.getpgrp()}", flush=True)
         while True:
             time.sleep(1)
-        """
-    )
+        """)
 
     process = subprocess.Popen(
         [sys.executable, "-c", parent_code],

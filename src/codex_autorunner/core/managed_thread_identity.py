@@ -300,13 +300,11 @@ class ManagedThreadIdentityStore:
             )
 
     def _load_from_conn(self, conn: Any) -> dict[str, str]:
-        rows = conn.execute(
-            """
+        rows = conn.execute("""
             SELECT feature_key, thread_id
               FROM orch_thread_identity_bindings
              ORDER BY feature_key ASC
-            """
-        ).fetchall()
+            """).fetchall()
         return {
             str(row["feature_key"]): str(row["thread_id"])
             for row in rows

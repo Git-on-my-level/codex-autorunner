@@ -100,8 +100,7 @@ def list_discord_channel_bindings(hub_root: Path) -> list[DiscordChannelBinding]
         thread_columns = table_columns(conn, "orch_thread_targets")
         if not binding_columns:
             return []
-        rows = conn.execute(
-            f"""
+        rows = conn.execute(f"""
             SELECT
                 b.binding_id,
                 b.surface_key AS channel_id,
@@ -121,8 +120,7 @@ def list_discord_channel_bindings(hub_root: Path) -> list[DiscordChannelBinding]
                 ON t.thread_target_id = b.target_id
              WHERE b.surface_kind = 'discord'
           ORDER BY b.updated_at DESC, b.created_at DESC
-            """
-        ).fetchall()
+            """).fetchall()
     bindings: list[DiscordChannelBinding] = []
     for row in rows:
         channel_id = _normalize_text(row["channel_id"])

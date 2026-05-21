@@ -2245,15 +2245,13 @@ class TestIssue975DeltaPmaPromptAssembly:
 
         db_path = resolve_orchestration_sqlite_path(tmp_path)
         with sqlite3.connect(db_path) as conn:
-            conn.execute(
-                """
+            conn.execute("""
                 UPDATE orch_context_capsule_ledger
                    SET payload_digest = 'not-a-digest'
                  WHERE surface_kind = 'pma'
                    AND managed_thread_id = 'pma.test-digest-mismatch'
                    AND capsule_id = 'pma.base_prompt'
-                """
-            )
+                """)
 
         result = format_pma_prompt(
             "Base prompt",

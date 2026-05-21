@@ -60,17 +60,14 @@ class OrchestrationMigrationStatus:
 
 
 def _ensure_migration_tables(conn: sqlite3.Connection) -> None:
-    conn.execute(
-        """
+    conn.execute("""
         CREATE TABLE IF NOT EXISTS orch_schema_migrations (
             version INTEGER PRIMARY KEY,
             name TEXT NOT NULL,
             applied_at TEXT NOT NULL
         )
-        """
-    )
-    conn.execute(
-        """
+        """)
+    conn.execute("""
         CREATE TABLE IF NOT EXISTS orch_migration_runs (
             run_id TEXT PRIMARY KEY,
             from_version INTEGER NOT NULL,
@@ -80,10 +77,8 @@ def _ensure_migration_tables(conn: sqlite3.Connection) -> None:
             status TEXT NOT NULL,
             error_text TEXT
         )
-        """
-    )
-    conn.execute(
-        """
+        """)
+    conn.execute("""
         CREATE TABLE IF NOT EXISTS orch_migration_attempts (
             attempt_id TEXT PRIMARY KEY,
             run_id TEXT NOT NULL,
@@ -96,19 +91,15 @@ def _ensure_migration_tables(conn: sqlite3.Connection) -> None:
             FOREIGN KEY (run_id) REFERENCES orch_migration_runs(run_id)
                 ON DELETE CASCADE
         )
-        """
-    )
-    conn.execute(
-        """
+        """)
+    conn.execute("""
         CREATE INDEX IF NOT EXISTS idx_orch_migration_attempts_run_version
             ON orch_migration_attempts(run_id, version)
-        """
-    )
+        """)
 
 
 def _apply_v1(conn: sqlite3.Connection) -> None:
-    conn.execute(
-        """
+    conn.execute("""
         CREATE TABLE IF NOT EXISTS orch_thread_targets (
             thread_target_id TEXT PRIMARY KEY,
             agent_id TEXT NOT NULL,
@@ -126,10 +117,8 @@ def _apply_v1(conn: sqlite3.Connection) -> None:
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL
         )
-        """
-    )
-    conn.execute(
-        """
+        """)
+    conn.execute("""
         CREATE TABLE IF NOT EXISTS orch_thread_executions (
             execution_id TEXT PRIMARY KEY,
             thread_target_id TEXT NOT NULL,
@@ -149,10 +138,8 @@ def _apply_v1(conn: sqlite3.Connection) -> None:
             FOREIGN KEY (thread_target_id) REFERENCES orch_thread_targets(thread_target_id)
                 ON DELETE CASCADE
         )
-        """
-    )
-    conn.execute(
-        """
+        """)
+    conn.execute("""
         CREATE TABLE IF NOT EXISTS orch_thread_actions (
             action_id TEXT PRIMARY KEY,
             thread_target_id TEXT NOT NULL,
@@ -165,10 +152,8 @@ def _apply_v1(conn: sqlite3.Connection) -> None:
             FOREIGN KEY (execution_id) REFERENCES orch_thread_executions(execution_id)
                 ON DELETE SET NULL
         )
-        """
-    )
-    conn.execute(
-        """
+        """)
+    conn.execute("""
         CREATE TABLE IF NOT EXISTS orch_automation_subscriptions (
             subscription_id TEXT PRIMARY KEY,
             event_types_json TEXT NOT NULL DEFAULT '[]',
@@ -187,10 +172,8 @@ def _apply_v1(conn: sqlite3.Connection) -> None:
             updated_at TEXT NOT NULL,
             disabled_at TEXT
         )
-        """
-    )
-    conn.execute(
-        """
+        """)
+    conn.execute("""
         CREATE TABLE IF NOT EXISTS orch_automation_timers (
             timer_id TEXT PRIMARY KEY,
             subscription_id TEXT,
@@ -207,10 +190,8 @@ def _apply_v1(conn: sqlite3.Connection) -> None:
             FOREIGN KEY (subscription_id) REFERENCES orch_automation_subscriptions(subscription_id)
                 ON DELETE SET NULL
         )
-        """
-    )
-    conn.execute(
-        """
+        """)
+    conn.execute("""
         CREATE TABLE IF NOT EXISTS orch_automation_wakeups (
             wakeup_id TEXT PRIMARY KEY,
             subscription_id TEXT,
@@ -230,10 +211,8 @@ def _apply_v1(conn: sqlite3.Connection) -> None:
             FOREIGN KEY (subscription_id) REFERENCES orch_automation_subscriptions(subscription_id)
                 ON DELETE SET NULL
         )
-        """
-    )
-    conn.execute(
-        """
+        """)
+    conn.execute("""
         CREATE TABLE IF NOT EXISTS orch_queue_items (
             queue_item_id TEXT PRIMARY KEY,
             lane_id TEXT NOT NULL,
@@ -248,10 +227,8 @@ def _apply_v1(conn: sqlite3.Connection) -> None:
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL
         )
-        """
-    )
-    conn.execute(
-        """
+        """)
+    conn.execute("""
         CREATE TABLE IF NOT EXISTS orch_reactive_debounce_state (
             debounce_key TEXT PRIMARY KEY,
             repo_id TEXT,
@@ -263,10 +240,8 @@ def _apply_v1(conn: sqlite3.Connection) -> None:
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL
         )
-        """
-    )
-    conn.execute(
-        """
+        """)
+    conn.execute("""
         CREATE TABLE IF NOT EXISTS orch_transcript_mirrors (
             transcript_mirror_id TEXT PRIMARY KEY,
             target_kind TEXT NOT NULL,
@@ -281,10 +256,8 @@ def _apply_v1(conn: sqlite3.Connection) -> None:
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL
         )
-        """
-    )
-    conn.execute(
-        """
+        """)
+    conn.execute("""
         CREATE TABLE IF NOT EXISTS orch_event_projections (
             event_id TEXT PRIMARY KEY,
             event_family TEXT NOT NULL,
@@ -298,10 +271,8 @@ def _apply_v1(conn: sqlite3.Connection) -> None:
             status TEXT,
             payload_json TEXT NOT NULL DEFAULT '{}'
         )
-        """
-    )
-    conn.execute(
-        """
+        """)
+    conn.execute("""
         CREATE TABLE IF NOT EXISTS orch_audit_entries (
             audit_id TEXT PRIMARY KEY,
             action_type TEXT NOT NULL,
@@ -313,49 +284,35 @@ def _apply_v1(conn: sqlite3.Connection) -> None:
             payload_json TEXT NOT NULL DEFAULT '{}',
             created_at TEXT NOT NULL
         )
-        """
-    )
-    conn.execute(
-        """
+        """)
+    conn.execute("""
         CREATE INDEX IF NOT EXISTS idx_orch_thread_targets_agent_status
             ON orch_thread_targets(agent_id, lifecycle_status, runtime_status)
-        """
-    )
-    conn.execute(
-        """
+        """)
+    conn.execute("""
         CREATE INDEX IF NOT EXISTS idx_orch_thread_executions_thread_status
             ON orch_thread_executions(thread_target_id, status, created_at)
-        """
-    )
-    conn.execute(
-        """
+        """)
+    conn.execute("""
         CREATE INDEX IF NOT EXISTS idx_orch_automation_wakeups_state_available
             ON orch_automation_wakeups(state, available_at)
-        """
-    )
-    conn.execute(
-        """
+        """)
+    conn.execute("""
         CREATE INDEX IF NOT EXISTS idx_orch_queue_items_lane_state
             ON orch_queue_items(lane_id, state, visible_at)
-        """
-    )
-    conn.execute(
-        """
+        """)
+    conn.execute("""
         CREATE INDEX IF NOT EXISTS idx_orch_transcript_mirrors_target
             ON orch_transcript_mirrors(target_kind, target_id, created_at)
-        """
-    )
-    conn.execute(
-        """
+        """)
+    conn.execute("""
         CREATE INDEX IF NOT EXISTS idx_orch_event_projections_target
             ON orch_event_projections(target_kind, target_id, timestamp)
-        """
-    )
+        """)
 
 
 def _apply_v2(conn: sqlite3.Connection) -> None:
-    conn.execute(
-        """
+    conn.execute("""
         CREATE TABLE IF NOT EXISTS orch_bindings (
             binding_id TEXT PRIMARY KEY,
             surface_kind TEXT NOT NULL,
@@ -370,10 +327,8 @@ def _apply_v2(conn: sqlite3.Connection) -> None:
             updated_at TEXT NOT NULL,
             disabled_at TEXT
         )
-        """
-    )
-    conn.execute(
-        """
+        """)
+    conn.execute("""
         CREATE TABLE IF NOT EXISTS orch_flow_run_projections (
             flow_run_id TEXT PRIMARY KEY,
             repo_id TEXT,
@@ -384,20 +339,15 @@ def _apply_v2(conn: sqlite3.Connection) -> None:
             finished_at TEXT,
             updated_at TEXT NOT NULL
         )
-        """
-    )
-    conn.execute(
-        """
+        """)
+    conn.execute("""
         CREATE INDEX IF NOT EXISTS idx_orch_bindings_surface
             ON orch_bindings(surface_kind, surface_key, disabled_at)
-        """
-    )
-    conn.execute(
-        """
+        """)
+    conn.execute("""
         CREATE INDEX IF NOT EXISTS idx_orch_flow_run_projections_repo_status
             ON orch_flow_run_projections(repo_id, status, updated_at)
-        """
-    )
+        """)
 
 
 def _table_exists(conn: sqlite3.Connection, table_name: str) -> bool:
@@ -452,8 +402,7 @@ def _ensure_resource_owner_columns(
     columns = _table_columns(conn, table_name)
     if repo_column not in columns:
         return
-    conn.execute(
-        f"""
+    conn.execute(f"""
         UPDATE {table_name}
            SET resource_kind = CASE
                    WHEN NULLIF(TRIM(COALESCE(resource_kind, '')), '') IS NOT NULL
@@ -470,8 +419,7 @@ def _ensure_resource_owner_columns(
                    ELSE resource_id
                END
          WHERE NULLIF(TRIM(COALESCE({repo_column}, '')), '') IS NOT NULL
-        """
-    )
+        """)
 
 
 def _apply_v3(conn: sqlite3.Connection) -> None:
@@ -597,8 +545,7 @@ def _apply_v3(conn: sqlite3.Connection) -> None:
     )
 
     if _column_not_null(conn, "orch_thread_actions", "thread_target_id"):
-        conn.execute(
-            """
+        conn.execute("""
             CREATE TABLE IF NOT EXISTS orch_thread_actions_v3 (
                 action_id TEXT PRIMARY KEY,
                 thread_target_id TEXT,
@@ -611,10 +558,8 @@ def _apply_v3(conn: sqlite3.Connection) -> None:
                 FOREIGN KEY (execution_id) REFERENCES orch_thread_executions(execution_id)
                     ON DELETE SET NULL
             )
-            """
-        )
-        conn.execute(
-            """
+            """)
+        conn.execute("""
             INSERT INTO orch_thread_actions_v3 (
                 action_id,
                 thread_target_id,
@@ -631,8 +576,7 @@ def _apply_v3(conn: sqlite3.Connection) -> None:
                 payload_json,
                 created_at
               FROM orch_thread_actions
-            """
-        )
+            """)
         conn.execute("DROP TABLE orch_thread_actions")
         conn.execute("ALTER TABLE orch_thread_actions_v3 RENAME TO orch_thread_actions")
 
@@ -657,51 +601,39 @@ def _apply_v4(conn: sqlite3.Connection) -> None:
         "fingerprint TEXT",
     )
     if _table_exists(conn, "orch_event_projections"):
-        conn.execute(
-            """
+        conn.execute("""
             CREATE INDEX IF NOT EXISTS idx_orch_event_projections_family_processed
                 ON orch_event_projections(event_family, processed, timestamp)
-            """
-        )
+            """)
     if _table_exists(conn, "orch_audit_entries"):
-        conn.execute(
-            """
+        conn.execute("""
             CREATE INDEX IF NOT EXISTS idx_orch_audit_entries_action_created
                 ON orch_audit_entries(action_type, created_at)
-            """
-        )
-        conn.execute(
-            """
+            """)
+        conn.execute("""
             CREATE INDEX IF NOT EXISTS idx_orch_audit_entries_fingerprint_created
                 ON orch_audit_entries(fingerprint, created_at)
-            """
-        )
+            """)
 
 
 def _apply_v5(conn: sqlite3.Connection) -> None:
     if _table_exists(conn, "orch_bindings"):
-        conn.execute(
-            """
+        conn.execute("""
             CREATE UNIQUE INDEX IF NOT EXISTS idx_orch_bindings_active_surface_unique
                 ON orch_bindings(surface_kind, surface_key)
              WHERE disabled_at IS NULL
-            """
-        )
-        conn.execute(
-            """
+            """)
+        conn.execute("""
             CREATE INDEX IF NOT EXISTS idx_orch_bindings_agent_repo_active
                 ON orch_bindings(agent_id, repo_id, updated_at)
              WHERE disabled_at IS NULL
-            """
-        )
+            """)
     thread_target_columns = _table_columns(conn, "orch_thread_targets")
     if {"repo_id", "updated_at"}.issubset(thread_target_columns):
-        conn.execute(
-            """
+        conn.execute("""
             CREATE INDEX IF NOT EXISTS idx_orch_thread_targets_repo_updated
                 ON orch_thread_targets(repo_id, updated_at)
-            """
-        )
+            """)
 
 
 def _apply_v6(conn: sqlite3.Connection) -> None:
@@ -719,21 +651,17 @@ def _apply_v6(conn: sqlite3.Connection) -> None:
     ):
         _ensure_resource_owner_columns(conn, table_name)
     if _table_exists(conn, "orch_bindings"):
-        conn.execute(
-            """
+        conn.execute("""
             CREATE INDEX IF NOT EXISTS idx_orch_bindings_resource_active
                 ON orch_bindings(resource_kind, resource_id, updated_at)
              WHERE disabled_at IS NULL
-            """
-        )
+            """)
     thread_target_columns = _table_columns(conn, "orch_thread_targets")
     if {"resource_kind", "resource_id", "updated_at"}.issubset(thread_target_columns):
-        conn.execute(
-            """
+        conn.execute("""
             CREATE INDEX IF NOT EXISTS idx_orch_thread_targets_resource_updated
                 ON orch_thread_targets(resource_kind, resource_id, updated_at)
-            """
-        )
+            """)
 
 
 def _apply_v7(conn: sqlite3.Connection) -> None:
@@ -747,8 +675,7 @@ def _apply_v7(conn: sqlite3.Connection) -> None:
 
 
 def _apply_v8(conn: sqlite3.Connection) -> None:
-    conn.execute(
-        """
+    conn.execute("""
         CREATE TABLE IF NOT EXISTS orch_publish_operations (
             operation_id TEXT PRIMARY KEY,
             operation_key TEXT NOT NULL,
@@ -765,10 +692,8 @@ def _apply_v8(conn: sqlite3.Connection) -> None:
             last_error_text TEXT,
             attempt_count INTEGER NOT NULL DEFAULT 0
         )
-        """
-    )
-    conn.execute(
-        """
+        """)
+    conn.execute("""
         CREATE TABLE IF NOT EXISTS orch_publish_attempts (
             attempt_id TEXT PRIMARY KEY,
             operation_id TEXT NOT NULL,
@@ -785,32 +710,24 @@ def _apply_v8(conn: sqlite3.Connection) -> None:
                 ON DELETE CASCADE,
             UNIQUE (operation_id, attempt_number)
         )
-        """
-    )
-    conn.execute(
-        """
+        """)
+    conn.execute("""
         CREATE UNIQUE INDEX IF NOT EXISTS idx_orch_publish_operations_active_key
             ON orch_publish_operations(operation_key)
          WHERE state IN ('pending', 'running', 'succeeded')
-        """
-    )
-    conn.execute(
-        """
+        """)
+    conn.execute("""
         CREATE INDEX IF NOT EXISTS idx_orch_publish_operations_state_next_attempt
             ON orch_publish_operations(state, next_attempt_at, created_at)
-        """
-    )
-    conn.execute(
-        """
+        """)
+    conn.execute("""
         CREATE INDEX IF NOT EXISTS idx_orch_publish_attempts_operation_attempt
             ON orch_publish_attempts(operation_id, attempt_number)
-        """
-    )
+        """)
 
 
 def _apply_v9(conn: sqlite3.Connection) -> None:
-    conn.execute(
-        """
+    conn.execute("""
         CREATE TABLE IF NOT EXISTS orch_scm_events (
             event_id TEXT PRIMARY KEY,
             provider TEXT NOT NULL,
@@ -825,43 +742,31 @@ def _apply_v9(conn: sqlite3.Connection) -> None:
             raw_payload_json TEXT,
             created_at TEXT NOT NULL
         )
-        """
-    )
-    conn.execute(
-        """
+        """)
+    conn.execute("""
         CREATE INDEX IF NOT EXISTS idx_orch_scm_events_provider_type_timestamp
             ON orch_scm_events(provider, event_type, occurred_at, created_at)
-        """
-    )
-    conn.execute(
-        """
+        """)
+    conn.execute("""
         CREATE INDEX IF NOT EXISTS idx_orch_scm_events_repo_slug_timestamp
             ON orch_scm_events(repo_slug, occurred_at, created_at)
-        """
-    )
-    conn.execute(
-        """
+        """)
+    conn.execute("""
         CREATE INDEX IF NOT EXISTS idx_orch_scm_events_repo_id_timestamp
             ON orch_scm_events(repo_id, occurred_at, created_at)
-        """
-    )
-    conn.execute(
-        """
+        """)
+    conn.execute("""
         CREATE INDEX IF NOT EXISTS idx_orch_scm_events_pr_timestamp
             ON orch_scm_events(pr_number, occurred_at, created_at)
-        """
-    )
-    conn.execute(
-        """
+        """)
+    conn.execute("""
         CREATE INDEX IF NOT EXISTS idx_orch_scm_events_delivery_timestamp
             ON orch_scm_events(delivery_id, occurred_at, created_at)
-        """
-    )
+        """)
 
 
 def _apply_v10(conn: sqlite3.Connection) -> None:
-    conn.execute(
-        """
+    conn.execute("""
         CREATE TABLE IF NOT EXISTS orch_pr_bindings (
             binding_id TEXT PRIMARY KEY,
             provider TEXT NOT NULL,
@@ -878,43 +783,31 @@ def _apply_v10(conn: sqlite3.Connection) -> None:
             FOREIGN KEY (thread_target_id) REFERENCES orch_thread_targets(thread_target_id)
                 ON DELETE SET NULL
         )
-        """
-    )
-    conn.execute(
-        """
+        """)
+    conn.execute("""
         CREATE UNIQUE INDEX IF NOT EXISTS idx_orch_pr_bindings_provider_repo_pr
             ON orch_pr_bindings(provider, repo_slug, pr_number)
-        """
-    )
-    conn.execute(
-        """
+        """)
+    conn.execute("""
         CREATE INDEX IF NOT EXISTS idx_orch_pr_bindings_repo_state_updated
             ON orch_pr_bindings(provider, repo_slug, pr_state, updated_at)
-        """
-    )
-    conn.execute(
-        """
+        """)
+    conn.execute("""
         CREATE INDEX IF NOT EXISTS idx_orch_pr_bindings_branch_state_updated
             ON orch_pr_bindings(provider, repo_slug, head_branch, pr_state, updated_at)
-        """
-    )
-    conn.execute(
-        """
+        """)
+    conn.execute("""
         CREATE INDEX IF NOT EXISTS idx_orch_pr_bindings_repo_id_updated
             ON orch_pr_bindings(repo_id, updated_at)
-        """
-    )
-    conn.execute(
-        """
+        """)
+    conn.execute("""
         CREATE INDEX IF NOT EXISTS idx_orch_pr_bindings_thread_updated
             ON orch_pr_bindings(thread_target_id, updated_at)
-        """
-    )
+        """)
 
 
 def _apply_v11(conn: sqlite3.Connection) -> None:
-    conn.execute(
-        """
+    conn.execute("""
         CREATE TABLE IF NOT EXISTS orch_reaction_state (
             binding_id TEXT NOT NULL,
             reaction_kind TEXT NOT NULL,
@@ -936,20 +829,15 @@ def _apply_v11(conn: sqlite3.Connection) -> None:
             metadata_json TEXT NOT NULL DEFAULT '{}',
             PRIMARY KEY (binding_id, reaction_kind, fingerprint)
         )
-        """
-    )
-    conn.execute(
-        """
+        """)
+    conn.execute("""
         CREATE INDEX IF NOT EXISTS idx_orch_reaction_state_binding_kind_state
             ON orch_reaction_state(binding_id, reaction_kind, state, updated_at)
-        """
-    )
-    conn.execute(
-        """
+        """)
+    conn.execute("""
         CREATE INDEX IF NOT EXISTS idx_orch_reaction_state_state_updated
             ON orch_reaction_state(state, updated_at)
-        """
-    )
+        """)
 
 
 def _apply_v12(conn: sqlite3.Connection) -> None:
@@ -969,17 +857,14 @@ def _apply_v13(conn: sqlite3.Connection) -> None:
         "correlation_id TEXT",
     )
     if _table_exists(conn, "orch_scm_events"):
-        conn.execute(
-            """
+        conn.execute("""
             CREATE INDEX IF NOT EXISTS idx_orch_scm_events_correlation_timestamp
                 ON orch_scm_events(correlation_id, occurred_at, created_at)
-            """
-        )
+            """)
 
 
 def _apply_v14(conn: sqlite3.Connection) -> None:
-    conn.execute(
-        """
+    conn.execute("""
         CREATE TABLE IF NOT EXISTS orch_feedback_reports (
             report_id TEXT PRIMARY KEY,
             repo_id TEXT,
@@ -996,31 +881,23 @@ def _apply_v14(conn: sqlite3.Connection) -> None:
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL
         )
-        """
-    )
-    conn.execute(
-        """
+        """)
+    conn.execute("""
         CREATE INDEX IF NOT EXISTS idx_orch_feedback_reports_dedupe_updated
             ON orch_feedback_reports(dedupe_key, updated_at, created_at)
-        """
-    )
-    conn.execute(
-        """
+        """)
+    conn.execute("""
         CREATE INDEX IF NOT EXISTS idx_orch_feedback_reports_repo_thread_updated
             ON orch_feedback_reports(repo_id, thread_target_id, updated_at, created_at)
-        """
-    )
-    conn.execute(
-        """
+        """)
+    conn.execute("""
         CREATE INDEX IF NOT EXISTS idx_orch_feedback_reports_status_updated
             ON orch_feedback_reports(status, updated_at, created_at)
-        """
-    )
+        """)
 
 
 def _apply_v15(conn: sqlite3.Connection) -> None:
-    conn.execute(
-        """
+    conn.execute("""
         CREATE TABLE IF NOT EXISTS orch_scm_polling_watches (
             watch_id TEXT PRIMARY KEY,
             provider TEXT NOT NULL,
@@ -1045,31 +922,23 @@ def _apply_v15(conn: sqlite3.Connection) -> None:
             FOREIGN KEY (thread_target_id) REFERENCES orch_thread_targets(thread_target_id)
                 ON DELETE SET NULL
         )
-        """
-    )
-    conn.execute(
-        """
+        """)
+    conn.execute("""
         CREATE UNIQUE INDEX IF NOT EXISTS idx_orch_scm_polling_watches_provider_binding
             ON orch_scm_polling_watches(provider, binding_id)
-        """
-    )
-    conn.execute(
-        """
+        """)
+    conn.execute("""
         CREATE INDEX IF NOT EXISTS idx_orch_scm_polling_watches_due
             ON orch_scm_polling_watches(state, next_poll_at, expires_at)
-        """
-    )
-    conn.execute(
-        """
+        """)
+    conn.execute("""
         CREATE INDEX IF NOT EXISTS idx_orch_scm_polling_watches_repo_pr
             ON orch_scm_polling_watches(provider, repo_slug, pr_number, updated_at)
-        """
-    )
+        """)
 
 
 def _apply_v16(conn: sqlite3.Connection) -> None:
-    conn.execute(
-        """
+    conn.execute("""
         CREATE TABLE IF NOT EXISTS orch_notification_conversations (
             notification_id TEXT PRIMARY KEY,
             correlation_id TEXT NOT NULL,
@@ -1088,10 +957,8 @@ def _apply_v16(conn: sqlite3.Connection) -> None:
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL
         )
-        """
-    )
-    conn.execute(
-        """
+        """)
+    conn.execute("""
         CREATE INDEX IF NOT EXISTS idx_orch_notification_reply_target
             ON orch_notification_conversations(
                 surface_kind,
@@ -1100,24 +967,19 @@ def _apply_v16(conn: sqlite3.Connection) -> None:
                 updated_at,
                 created_at
             )
-        """
-    )
-    conn.execute(
-        """
+        """)
+    conn.execute("""
         CREATE INDEX IF NOT EXISTS idx_orch_notification_correlation
             ON orch_notification_conversations(correlation_id, updated_at, created_at)
-        """
-    )
-    conn.execute(
-        """
+        """)
+    conn.execute("""
         CREATE INDEX IF NOT EXISTS idx_orch_notification_thread
             ON orch_notification_conversations(
                 continuation_thread_target_id,
                 updated_at,
                 created_at
             )
-        """
-    )
+        """)
 
 
 def _apply_v17(conn: sqlite3.Connection) -> None:
@@ -1125,8 +987,7 @@ def _apply_v17(conn: sqlite3.Connection) -> None:
 
 
 def _apply_v18(conn: sqlite3.Connection) -> None:
-    conn.execute(
-        """
+    conn.execute("""
         CREATE TABLE IF NOT EXISTS orch_cold_trace_manifests (
             trace_id TEXT PRIMARY KEY,
             execution_id TEXT NOT NULL,
@@ -1146,10 +1007,8 @@ def _apply_v18(conn: sqlite3.Connection) -> None:
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL
         )
-        """
-    )
-    conn.execute(
-        """
+        """)
+    conn.execute("""
         CREATE TABLE IF NOT EXISTS orch_execution_checkpoints (
             execution_id TEXT PRIMARY KEY,
             thread_target_id TEXT,
@@ -1159,44 +1018,33 @@ def _apply_v18(conn: sqlite3.Connection) -> None:
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL
         )
-        """
-    )
-    conn.execute(
-        """
+        """)
+    conn.execute("""
         CREATE INDEX IF NOT EXISTS idx_orch_cold_trace_manifests_execution
             ON orch_cold_trace_manifests(execution_id, status)
-        """
-    )
-    conn.execute(
-        """
+        """)
+    conn.execute("""
         CREATE INDEX IF NOT EXISTS idx_orch_cold_trace_manifests_status_updated
             ON orch_cold_trace_manifests(status, updated_at)
-        """
-    )
-    conn.execute(
-        """
+        """)
+    conn.execute("""
         CREATE INDEX IF NOT EXISTS idx_orch_execution_checkpoints_thread
             ON orch_execution_checkpoints(thread_target_id, updated_at)
-        """
-    )
+        """)
 
 
 def _apply_v19(conn: sqlite3.Connection) -> None:
     if _table_exists(conn, "orch_event_projections"):
-        conn.execute(
-            """
+        conn.execute("""
             CREATE INDEX IF NOT EXISTS idx_orch_event_projections_family_execution
                 ON orch_event_projections(event_family, execution_id, timestamp)
              WHERE execution_id IS NOT NULL
-            """
-        )
-        conn.execute(
-            """
+            """)
+        conn.execute("""
             CREATE INDEX IF NOT EXISTS idx_orch_event_projections_family_type_execution
                 ON orch_event_projections(event_family, event_type, execution_id, timestamp)
              WHERE execution_id IS NOT NULL
-            """
-        )
+            """)
 
 
 def _apply_v20(conn: sqlite3.Connection) -> None:
@@ -1205,8 +1053,7 @@ def _apply_v20(conn: sqlite3.Connection) -> None:
         conn.execute(
             "DROP INDEX IF EXISTS idx_orch_event_projections_family_type_execution"
         )
-        conn.execute(
-            """
+        conn.execute("""
             CREATE INDEX IF NOT EXISTS idx_orch_event_projections_family_execution_order
                 ON orch_event_projections(
                     event_family,
@@ -1214,19 +1061,15 @@ def _apply_v20(conn: sqlite3.Connection) -> None:
                     timestamp,
                     event_id
                 )
-            """
-        )
-        conn.execute(
-            """
+            """)
+        conn.execute("""
             CREATE INDEX IF NOT EXISTS idx_orch_event_projections_family_type_execution
                 ON orch_event_projections(event_family, event_type, execution_id)
-            """
-        )
+            """)
 
 
 def _apply_v21(conn: sqlite3.Connection) -> None:
-    conn.execute(
-        """
+    conn.execute("""
         CREATE TABLE IF NOT EXISTS orch_chat_operations (
             operation_id TEXT PRIMARY KEY,
             surface_kind TEXT NOT NULL,
@@ -1254,37 +1097,27 @@ def _apply_v21(conn: sqlite3.Connection) -> None:
             metadata_json TEXT NOT NULL DEFAULT '{}',
             UNIQUE(surface_kind, surface_operation_key)
         )
-        """
-    )
-    conn.execute(
-        """
+        """)
+    conn.execute("""
         CREATE INDEX IF NOT EXISTS idx_orch_chat_operations_thread_updated
             ON orch_chat_operations(thread_target_id, updated_at)
-        """
-    )
-    conn.execute(
-        """
+        """)
+    conn.execute("""
         CREATE INDEX IF NOT EXISTS idx_orch_chat_operations_surface_state_updated
             ON orch_chat_operations(surface_kind, state, updated_at)
-        """
-    )
-    conn.execute(
-        """
+        """)
+    conn.execute("""
         CREATE INDEX IF NOT EXISTS idx_orch_chat_operations_conversation_updated
             ON orch_chat_operations(conversation_id, updated_at)
-        """
-    )
-    conn.execute(
-        """
+        """)
+    conn.execute("""
         CREATE INDEX IF NOT EXISTS idx_orch_chat_operations_recovery
             ON orch_chat_operations(state, terminal_outcome, updated_at)
-        """
-    )
+        """)
 
 
 def _apply_v22(conn: sqlite3.Connection) -> None:
-    conn.execute(
-        """
+    conn.execute("""
         CREATE TABLE IF NOT EXISTS orch_managed_thread_deliveries (
             delivery_id TEXT PRIMARY KEY,
             managed_thread_id TEXT NOT NULL,
@@ -1319,33 +1152,24 @@ def _apply_v22(conn: sqlite3.Connection) -> None:
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL
         )
-        """
-    )
-    conn.execute(
-        """
+        """)
+    conn.execute("""
         CREATE INDEX IF NOT EXISTS idx_orch_mtd_state_next_attempt
             ON orch_managed_thread_deliveries(state, next_attempt_at, created_at)
-        """
-    )
-    conn.execute(
-        """
+        """)
+    conn.execute("""
         CREATE INDEX IF NOT EXISTS idx_orch_mtd_adapter_state_next_attempt
             ON orch_managed_thread_deliveries(adapter_key, state, next_attempt_at, created_at)
-        """
-    )
-    conn.execute(
-        """
+        """)
+    conn.execute("""
         CREATE INDEX IF NOT EXISTS idx_orch_mtd_thread_turn
             ON orch_managed_thread_deliveries(managed_thread_id, managed_turn_id, state)
-        """
-    )
-    conn.execute(
-        """
+        """)
+    conn.execute("""
         CREATE INDEX IF NOT EXISTS idx_orch_mtd_claim_expiry
             ON orch_managed_thread_deliveries(state, claim_expires_at)
          WHERE state IN ('claimed', 'delivering')
-        """
-    )
+        """)
 
 
 def _apply_v23(conn: sqlite3.Connection) -> None:
@@ -1358,22 +1182,18 @@ def _apply_v23(conn: sqlite3.Connection) -> None:
 
 
 def _apply_v24(conn: sqlite3.Connection) -> None:
-    conn.execute(
-        """
+    conn.execute("""
         CREATE TABLE IF NOT EXISTS orch_thread_identity_bindings (
             feature_key TEXT PRIMARY KEY,
             thread_id TEXT NOT NULL,
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL
         )
-        """
-    )
-    conn.execute(
-        """
+        """)
+    conn.execute("""
         CREATE INDEX IF NOT EXISTS idx_orch_thread_identity_updated
             ON orch_thread_identity_bindings(updated_at, feature_key)
-        """
-    )
+        """)
 
 
 def _apply_v25(conn: sqlite3.Connection) -> None:
@@ -1382,49 +1202,40 @@ def _apply_v25(conn: sqlite3.Connection) -> None:
     ).fetchone()[0]
     if has_table:
         conn.execute("DROP INDEX IF EXISTS idx_orch_publish_operations_active_key")
-        conn.execute(
-            """
+        conn.execute("""
             CREATE UNIQUE INDEX IF NOT EXISTS idx_orch_publish_operations_active_key
                 ON orch_publish_operations(operation_key)
              WHERE state IN ('pending', 'running', 'succeeded', 'effect_applied')
-            """
-        )
+            """)
 
 
 def _apply_v26(conn: sqlite3.Connection) -> None:
-    conn.execute(
-        """
+    conn.execute("""
         CREATE TABLE IF NOT EXISTS orch_operation_flags (
             flag_key TEXT PRIMARY KEY,
             completed_at TEXT NOT NULL
         )
-        """
-    )
-    has_legacy_flags = conn.execute(
-        """
+        """)
+    has_legacy_flags = conn.execute("""
         SELECT 1
           FROM sqlite_master
          WHERE type = 'table'
            AND name = 'orch_legacy_backfill_flags'
          LIMIT 1
-        """
-    ).fetchone()
+        """).fetchone()
     if has_legacy_flags is None:
         return
-    conn.execute(
-        """
+    conn.execute("""
         INSERT OR REPLACE INTO orch_operation_flags (flag_key, completed_at)
         SELECT backfill_key, completed_at
           FROM orch_legacy_backfill_flags
-        """
-    )
+        """)
 
 
 def _apply_v27(conn: sqlite3.Connection) -> None:
     if not table_exists(conn, "orch_queue_items"):
         return
-    conn.execute(
-        """
+    conn.execute("""
         UPDATE orch_queue_items
            SET state = 'deduped',
                dedupe_reason = COALESCE(
@@ -1452,17 +1263,14 @@ def _apply_v27(conn: sqlite3.Connection) -> None:
                   AND idempotency_key != ''
                 GROUP BY lane_id, source_kind, idempotency_key
            )
-        """
-    )
-    conn.execute(
-        """
+        """)
+    conn.execute("""
         CREATE UNIQUE INDEX IF NOT EXISTS idx_orch_queue_items_active_idempotency
             ON orch_queue_items(lane_id, source_kind, idempotency_key)
          WHERE state IN ('pending', 'running')
            AND idempotency_key IS NOT NULL
            AND idempotency_key != ''
-        """
-    )
+        """)
 
 
 def _apply_v28(conn: sqlite3.Connection) -> None:
@@ -1486,8 +1294,7 @@ def _apply_v28(conn: sqlite3.Connection) -> None:
         "workspace_root",
     }.issubset(columns):
         _rk_ws = "agent_" + "workspace"
-        conn.execute(
-            f"""
+        conn.execute(f"""
             UPDATE orch_thread_targets
                SET scope_urn = CASE
                        WHEN NULLIF(TRIM(COALESCE(scope_urn, '')), '') IS NOT NULL
@@ -1505,24 +1312,20 @@ def _apply_v28(conn: sqlite3.Connection) -> None:
                        ELSE scope_urn
                    END
              WHERE NULLIF(TRIM(COALESCE(scope_urn, '')), '') IS NULL
-            """
-        )
+            """)
     if {"backend_binding_json", "backend_thread_id"}.issubset(columns):
-        conn.execute(
-            """
+        conn.execute("""
             UPDATE orch_thread_targets
                SET backend_binding_json =
                    '{"backend_thread_id":"' || REPLACE(backend_thread_id, '"', '\\"') || '"}'
              WHERE NULLIF(TRIM(COALESCE(backend_binding_json, '{}')), '{}') IS NULL
                AND NULLIF(TRIM(COALESCE(backend_thread_id, '')), '') IS NOT NULL
-            """
-        )
+            """)
     if table_exists(conn, "orch_bindings") and {
         "surface_urn",
         "thread_target_id",
     }.issubset(columns):
-        conn.execute(
-            """
+        conn.execute("""
             UPDATE orch_thread_targets
                SET surface_urn = (
                        SELECT b.surface_kind || ':' || b.surface_key
@@ -1541,20 +1344,15 @@ def _apply_v28(conn: sqlite3.Connection) -> None:
                           AND b.target_id = orch_thread_targets.thread_target_id
                           AND b.disabled_at IS NULL
                    )
-            """
-        )
-    conn.execute(
-        """
+            """)
+    conn.execute("""
         CREATE INDEX IF NOT EXISTS idx_orch_thread_targets_scope_updated
             ON orch_thread_targets(scope_urn, updated_at)
-        """
-    )
-    conn.execute(
-        """
+        """)
+    conn.execute("""
         CREATE INDEX IF NOT EXISTS idx_orch_thread_targets_surface_updated
             ON orch_thread_targets(surface_urn, updated_at)
-        """
-    )
+        """)
 
 
 def _apply_v29(conn: sqlite3.Connection) -> None:
@@ -1563,19 +1361,16 @@ def _apply_v29(conn: sqlite3.Connection) -> None:
         conn.execute(
             f"DELETE FROM orch_thread_targets WHERE scope_urn LIKE '{_rk_ws}:%'"
         )
-        conn.execute(
-            f"""
+        conn.execute(f"""
             DELETE FROM orch_thread_targets
              WHERE NULLIF(TRIM(COALESCE(resource_kind, '')), '') = '{_rk_ws}'
-            """
-        )
+            """)
     if table_exists(conn, "orch_bindings"):
         conn.execute(f"DELETE FROM orch_bindings WHERE target_kind = '{_rk_ws}'")
 
 
 def _apply_v30(conn: sqlite3.Connection) -> None:
-    conn.execute(
-        """
+    conn.execute("""
         CREATE TABLE IF NOT EXISTS orch_chat_surface_events (
             event_id INTEGER PRIMARY KEY AUTOINCREMENT,
             idempotency_key TEXT NOT NULL UNIQUE,
@@ -1596,33 +1391,24 @@ def _apply_v30(conn: sqlite3.Connection) -> None:
             created_at TEXT NOT NULL,
             payload_json TEXT NOT NULL DEFAULT '{}'
         )
-        """
-    )
-    conn.execute(
-        """
+        """)
+    conn.execute("""
         CREATE INDEX IF NOT EXISTS idx_orch_chat_surface_events_cursor
             ON orch_chat_surface_events(event_id)
-        """
-    )
-    conn.execute(
-        """
+        """)
+    conn.execute("""
         CREATE INDEX IF NOT EXISTS idx_orch_chat_surface_events_surface_cursor
             ON orch_chat_surface_events(surface_kind, surface_key, event_id)
-        """
-    )
-    conn.execute(
-        """
+        """)
+    conn.execute("""
         CREATE INDEX IF NOT EXISTS idx_orch_chat_surface_events_thread_cursor
             ON orch_chat_surface_events(managed_thread_id, event_id)
          WHERE managed_thread_id IS NOT NULL
-        """
-    )
-    conn.execute(
-        """
+        """)
+    conn.execute("""
         CREATE INDEX IF NOT EXISTS idx_orch_chat_surface_events_type_cursor
             ON orch_chat_surface_events(event_type, event_id)
-        """
-    )
+        """)
 
 
 def _apply_v31(conn: sqlite3.Connection) -> None:
@@ -1693,18 +1479,15 @@ def _apply_v31(conn: sqlite3.Connection) -> None:
             """,
             (finished_at,),
         )
-        conn.execute(
-            """
+        conn.execute("""
             CREATE UNIQUE INDEX IF NOT EXISTS idx_orch_thread_executions_one_running
                 ON orch_thread_executions(thread_target_id)
              WHERE status = 'running'
-            """
-        )
+            """)
 
 
 def _apply_v32(conn: sqlite3.Connection) -> None:
-    conn.execute(
-        """
+    conn.execute("""
         CREATE TABLE IF NOT EXISTS orch_managed_thread_side_effects (
             effect_id TEXT PRIMARY KEY,
             managed_thread_id TEXT NOT NULL,
@@ -1725,38 +1508,28 @@ def _apply_v32(conn: sqlite3.Connection) -> None:
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL
         )
-        """
-    )
-    conn.execute(
-        """
+        """)
+    conn.execute("""
         CREATE INDEX IF NOT EXISTS idx_orch_mtse_state_next_attempt
             ON orch_managed_thread_side_effects(state, next_attempt_at, created_at)
-        """
-    )
-    conn.execute(
-        """
+        """)
+    conn.execute("""
         CREATE INDEX IF NOT EXISTS idx_orch_mtse_kind_state_next_attempt
             ON orch_managed_thread_side_effects(effect_kind, state, next_attempt_at, created_at)
-        """
-    )
-    conn.execute(
-        """
+        """)
+    conn.execute("""
         CREATE INDEX IF NOT EXISTS idx_orch_mtse_thread_turn
             ON orch_managed_thread_side_effects(managed_thread_id, managed_turn_id, state)
-        """
-    )
-    conn.execute(
-        """
+        """)
+    conn.execute("""
         CREATE INDEX IF NOT EXISTS idx_orch_mtse_claim_expiry
             ON orch_managed_thread_side_effects(state, claim_expires_at)
          WHERE state IN ('claimed', 'running')
-        """
-    )
+        """)
 
 
 def _apply_v33(conn: sqlite3.Connection) -> None:
-    conn.execute(
-        """
+    conn.execute("""
         CREATE TABLE IF NOT EXISTS orch_chat_index_projection (
             row_id TEXT PRIMARY KEY,
             chat_id TEXT NOT NULL,
@@ -1790,58 +1563,42 @@ def _apply_v33(conn: sqlite3.Connection) -> None:
             source_signature TEXT NOT NULL,
             rebuilt_at TEXT NOT NULL
         )
-        """
-    )
-    conn.execute(
-        """
+        """)
+    conn.execute("""
         CREATE TABLE IF NOT EXISTS orch_chat_index_projection_meta (
             key TEXT PRIMARY KEY,
             value TEXT NOT NULL,
             updated_at TEXT NOT NULL
         )
-        """
-    )
-    conn.execute(
-        """
+        """)
+    conn.execute("""
         CREATE INDEX IF NOT EXISTS idx_orch_chat_index_projection_status
             ON orch_chat_index_projection(lifecycle_status, effective_status)
-        """
-    )
-    conn.execute(
-        """
+        """)
+    conn.execute("""
         CREATE INDEX IF NOT EXISTS idx_orch_chat_index_projection_surface
             ON orch_chat_index_projection(surface_kind_list)
-        """
-    )
-    conn.execute(
-        """
+        """)
+    conn.execute("""
         CREATE INDEX IF NOT EXISTS idx_orch_chat_index_projection_group
             ON orch_chat_index_projection(group_id)
-        """
-    )
-    conn.execute(
-        """
+        """)
+    conn.execute("""
         CREATE INDEX IF NOT EXISTS idx_orch_chat_index_projection_activity
             ON orch_chat_index_projection(sort_unread_priority DESC, sort_last_activity_desc ASC, row_id ASC)
-        """
-    )
-    conn.execute(
-        """
+        """)
+    conn.execute("""
         CREATE INDEX IF NOT EXISTS idx_orch_chat_index_projection_owner
             ON orch_chat_index_projection(repo_id, worktree_id, ticket_id, run_id)
-        """
-    )
-    conn.execute(
-        """
+        """)
+    conn.execute("""
         CREATE INDEX IF NOT EXISTS idx_orch_chat_index_projection_search
             ON orch_chat_index_projection(search_text)
-        """
-    )
+        """)
 
 
 def _apply_v34(conn: sqlite3.Connection) -> None:
-    conn.execute(
-        """
+    conn.execute("""
         CREATE TABLE IF NOT EXISTS orch_automation_rules (
             rule_id TEXT PRIMARY KEY,
             name TEXT NOT NULL,
@@ -1859,10 +1616,8 @@ def _apply_v34(conn: sqlite3.Connection) -> None:
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL
         )
-        """
-    )
-    conn.execute(
-        """
+        """)
+    conn.execute("""
         CREATE TABLE IF NOT EXISTS orch_automation_rule_versions (
             version_id TEXT PRIMARY KEY,
             rule_id TEXT NOT NULL,
@@ -1871,10 +1626,8 @@ def _apply_v34(conn: sqlite3.Connection) -> None:
             FOREIGN KEY (rule_id) REFERENCES orch_automation_rules(rule_id)
                 ON DELETE CASCADE
         )
-        """
-    )
-    conn.execute(
-        """
+        """)
+    conn.execute("""
         CREATE TABLE IF NOT EXISTS orch_automation_events (
             event_id TEXT PRIMARY KEY,
             event_type TEXT NOT NULL,
@@ -1886,10 +1639,8 @@ def _apply_v34(conn: sqlite3.Connection) -> None:
             raw_payload_json TEXT NOT NULL DEFAULT '{}',
             metadata_json TEXT NOT NULL DEFAULT '{}'
         )
-        """
-    )
-    conn.execute(
-        """
+        """)
+    conn.execute("""
         CREATE TABLE IF NOT EXISTS orch_automation_jobs (
             job_id TEXT PRIMARY KEY,
             rule_id TEXT NOT NULL,
@@ -1927,10 +1678,8 @@ def _apply_v34(conn: sqlite3.Connection) -> None:
             FOREIGN KEY (event_id) REFERENCES orch_automation_events(event_id)
                 ON DELETE CASCADE
         )
-        """
-    )
-    conn.execute(
-        """
+        """)
+    conn.execute("""
         CREATE TABLE IF NOT EXISTS orch_automation_job_attempts (
             attempt_id TEXT PRIMARY KEY,
             job_id TEXT NOT NULL,
@@ -1945,10 +1694,8 @@ def _apply_v34(conn: sqlite3.Connection) -> None:
             FOREIGN KEY (job_id) REFERENCES orch_automation_jobs(job_id)
                 ON DELETE CASCADE
         )
-        """
-    )
-    conn.execute(
-        """
+        """)
+    conn.execute("""
         CREATE TABLE IF NOT EXISTS orch_automation_schedules (
             schedule_id TEXT PRIMARY KEY,
             rule_id TEXT NOT NULL,
@@ -1964,55 +1711,39 @@ def _apply_v34(conn: sqlite3.Connection) -> None:
             FOREIGN KEY (rule_id) REFERENCES orch_automation_rules(rule_id)
                 ON DELETE CASCADE
         )
-        """
-    )
-    conn.execute(
-        """
+        """)
+    conn.execute("""
         CREATE INDEX IF NOT EXISTS idx_orch_automation_rules_enabled_trigger
             ON orch_automation_rules(enabled, trigger_kind)
-        """
-    )
-    conn.execute(
-        """
+        """)
+    conn.execute("""
         CREATE INDEX IF NOT EXISTS idx_orch_automation_events_type_observed
             ON orch_automation_events(event_type, observed_at)
-        """
-    )
-    conn.execute(
-        """
+        """)
+    conn.execute("""
         CREATE INDEX IF NOT EXISTS idx_orch_automation_jobs_state_available
             ON orch_automation_jobs(state, available_at)
-        """
-    )
-    conn.execute(
-        """
+        """)
+    conn.execute("""
         CREATE INDEX IF NOT EXISTS idx_orch_automation_jobs_rule_state
             ON orch_automation_jobs(rule_id, state)
-        """
-    )
-    conn.execute(
-        """
+        """)
+    conn.execute("""
         CREATE INDEX IF NOT EXISTS idx_orch_automation_jobs_event
             ON orch_automation_jobs(event_id)
-        """
-    )
-    conn.execute(
-        """
+        """)
+    conn.execute("""
         CREATE UNIQUE INDEX IF NOT EXISTS idx_orch_automation_attempts_job_number
             ON orch_automation_job_attempts(job_id, attempt_number)
-        """
-    )
-    conn.execute(
-        """
+        """)
+    conn.execute("""
         CREATE INDEX IF NOT EXISTS idx_orch_automation_schedules_next_fire
             ON orch_automation_schedules(state, next_fire_at)
-        """
-    )
+        """)
 
 
 def _apply_v35(conn: sqlite3.Connection) -> None:
-    conn.execute(
-        """
+    conn.execute("""
         CREATE TABLE IF NOT EXISTS orch_context_capsule_ledger (
             observation_id TEXT PRIMARY KEY,
             surface_kind TEXT NOT NULL,
@@ -2033,10 +1764,8 @@ def _apply_v35(conn: sqlite3.Connection) -> None:
             last_observed_at TEXT NOT NULL,
             render_count INTEGER NOT NULL DEFAULT 1
         )
-        """
-    )
-    conn.execute(
-        """
+        """)
+    conn.execute("""
         CREATE UNIQUE INDEX IF NOT EXISTS idx_orch_context_capsule_key
             ON orch_context_capsule_ledger(
                 surface_kind,
@@ -2048,24 +1777,19 @@ def _apply_v35(conn: sqlite3.Connection) -> None:
                 capsule_id,
                 capsule_version
             )
-        """
-    )
-    conn.execute(
-        """
+        """)
+    conn.execute("""
         CREATE INDEX IF NOT EXISTS idx_orch_context_capsule_thread
             ON orch_context_capsule_ledger(
                 managed_thread_id,
                 backend_thread_id,
                 capsule_id
             )
-        """
-    )
-    conn.execute(
-        """
+        """)
+    conn.execute("""
         CREATE INDEX IF NOT EXISTS idx_orch_context_capsule_surface
             ON orch_context_capsule_ledger(surface_kind, surface_key, capsule_id)
-        """
-    )
+        """)
 
 
 def _apply_v36(conn: sqlite3.Connection) -> None:
@@ -2093,15 +1817,13 @@ def _apply_v36(conn: sqlite3.Connection) -> None:
         "last_sort_activity_at",
         "last_sort_activity_at TEXT",
     )
-    conn.execute(
-        """
+    conn.execute("""
         UPDATE orch_chat_index_projection
            SET last_visible_message_at = COALESCE(last_visible_message_at, last_activity_at),
                last_lifecycle_update_at = COALESCE(last_lifecycle_update_at, updated_at),
                last_internal_update_at = COALESCE(last_internal_update_at, updated_at),
                last_sort_activity_at = COALESCE(last_sort_activity_at, last_activity_at, created_at, updated_at)
-        """
-    )
+        """)
 
 
 _MIGRATIONS = (

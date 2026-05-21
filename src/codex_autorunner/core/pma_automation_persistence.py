@@ -470,33 +470,27 @@ class PmaAutomationPersistence:
         self,
         conn: Any,
     ) -> list[PmaLifecycleSubscription]:
-        rows = conn.execute(
-            """
+        rows = conn.execute("""
             SELECT *
               FROM orch_automation_subscriptions
              ORDER BY created_at ASC, subscription_id ASC
-            """
-        ).fetchall()
+            """).fetchall()
         return [self._row_to_subscription(row) for row in rows]
 
     def _load_timers_from_sqlite(self, conn: Any) -> list[PmaAutomationTimer]:
-        rows = conn.execute(
-            """
+        rows = conn.execute("""
             SELECT *
               FROM orch_automation_timers
              ORDER BY created_at ASC, timer_id ASC
-            """
-        ).fetchall()
+            """).fetchall()
         return [self._row_to_timer(row) for row in rows]
 
     def _load_wakeups_from_sqlite(self, conn: Any) -> list[PmaAutomationWakeup]:
-        rows = conn.execute(
-            """
+        rows = conn.execute("""
             SELECT *
               FROM orch_automation_wakeups
              ORDER BY created_at ASC, wakeup_id ASC
-            """
-        ).fetchall()
+            """).fetchall()
         return [self._row_to_wakeup(row) for row in rows]
 
     def _insert_subscription_row(

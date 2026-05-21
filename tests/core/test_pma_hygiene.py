@@ -445,13 +445,11 @@ def test_build_pma_hygiene_report_blocks_worktree_purge_when_repo_has_fresh_thre
     )
     # Keep the second thread recent so only one thread is stale for this report.
     with open_orchestration_sqlite(hub_root, durable=False) as conn:
-        cur = conn.execute(
-            """
+        cur = conn.execute("""
             SELECT thread_target_id
               FROM orch_thread_targets
              WHERE display_name = 'still-fresh'
-            """
-        )
+            """)
         row = cur.fetchone()
         assert row is not None
         _bump_thread_status_timestamps(

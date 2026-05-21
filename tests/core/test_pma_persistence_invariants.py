@@ -308,39 +308,33 @@ class TestAutomationCanonicalInvariants:
         )
 
         with open_orchestration_sqlite(hub_root, durable=False) as conn:
-            conn.execute(
-                """
+            conn.execute("""
                 CREATE TABLE automation_row_audit (
                     table_name TEXT NOT NULL,
                     op TEXT NOT NULL
                 )
-                """
-            )
+                """)
             for table_name in (
                 "orch_automation_subscriptions",
                 "orch_automation_timers",
                 "orch_automation_wakeups",
             ):
-                conn.execute(
-                    f"""
+                conn.execute(f"""
                     CREATE TRIGGER audit_{table_name}_delete
                     AFTER DELETE ON {table_name}
                     BEGIN
                         INSERT INTO automation_row_audit(table_name, op)
                         VALUES ('{table_name}', 'DELETE');
                     END
-                    """
-                )
-                conn.execute(
-                    f"""
+                    """)
+                conn.execute(f"""
                     CREATE TRIGGER audit_{table_name}_insert
                     AFTER INSERT ON {table_name}
                     BEGIN
                         INSERT INTO automation_row_audit(table_name, op)
                         VALUES ('{table_name}', 'INSERT');
                     END
-                    """
-                )
+                    """)
 
         touched = store.touch_timer(timer_id, {"due_at": "2026-01-02T00:00:00Z"})
         assert touched["touched"] is True

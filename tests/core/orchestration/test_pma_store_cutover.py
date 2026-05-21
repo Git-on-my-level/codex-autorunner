@@ -68,12 +68,10 @@ def test_reactive_cutover_works_after_legacy_state_file_is_removed(
     assert reloaded.check_and_update("repo-1:event-1", 30) is False
 
     with open_orchestration_sqlite(hub_root, durable=False) as conn:
-        row = conn.execute(
-            """
+        row = conn.execute("""
             SELECT last_enqueued_at
               FROM orch_reactive_debounce_state
              WHERE debounce_key = 'repo-1:event-1'
-            """
-        ).fetchone()
+            """).fetchone()
     assert row is not None
     assert float(row["last_enqueued_at"]) > 0

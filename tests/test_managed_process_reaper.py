@@ -442,8 +442,7 @@ def test_reaper_treats_zombie_owner_pid_as_not_running(
 
 @pytest.mark.skipif(os.name == "nt", reason="Requires POSIX process groups")
 def test_reaper_reaps_sigterm_ignoring_process_group(tmp_path: Path) -> None:
-    parent_code = textwrap.dedent(
-        """
+    parent_code = textwrap.dedent("""
         import os
         import signal
         import subprocess
@@ -464,8 +463,7 @@ def test_reaper_reaps_sigterm_ignoring_process_group(tmp_path: Path) -> None:
         print(f"{os.getpid()} {child.pid} {os.getpgrp()}", flush=True)
         while True:
             time.sleep(1)
-        """
-    )
+        """)
     process = subprocess.Popen(
         [sys.executable, "-c", parent_code],
         stdout=subprocess.PIPE,

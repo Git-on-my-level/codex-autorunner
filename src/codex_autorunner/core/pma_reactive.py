@@ -75,13 +75,11 @@ class PmaReactiveStore:
                 durable=True,
                 migrate=False,
             ) as conn:
-                rows = conn.execute(
-                    """
+                rows = conn.execute("""
                     SELECT debounce_key, last_enqueued_at
                       FROM orch_reactive_debounce_state
                      ORDER BY debounce_key ASC
-                    """
-                ).fetchall()
+                    """).fetchall()
         except sqlite3.OperationalError as exc:
             if "no such table" not in str(exc).lower():
                 raise
