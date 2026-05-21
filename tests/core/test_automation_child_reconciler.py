@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from codex_autorunner.core.automation import (
+    EXECUTOR_AGENT_TASK_TURN,
     EXECUTOR_MANAGED_THREAD_TURN,
     EXECUTOR_TICKET_FLOW,
     JOB_FAILED,
@@ -30,6 +31,12 @@ from codex_autorunner.core.automation.models import (
     TRIGGER_KIND_EVENT,
     AutomationChildExecutionEdge,
     AutomationRuntimeContract,
+)
+from codex_autorunner.core.diagnostics.automation import (
+    AUTOMATION_CHILD_EDGE_MISSING,
+    AUTOMATION_PARENT_STATE_STALE,
+    AUTOMATION_RUNTIME_MISMATCH,
+    collect_automation_architecture_diagnostics,
 )
 from codex_autorunner.core.flows.models import FlowRunStatus
 from codex_autorunner.core.flows.store import FlowStore
@@ -217,6 +224,138 @@ def test_reconciler_closes_parent_from_durable_managed_thread_edge(
     assert saved.managed_thread_execution_id == "exec-1"
     assert edges[0].terminal_state == "succeeded"
     assert edges[0].actual_runtime.model == "zai-coding-plan/glm-5.1"
+
+
+def test_reducer_fails_authoritative_agent_task_runtime_mismatch(
+    tmp_path: Path,
+) -> None:
+    hub = tmp_path / "hub"
+    store = AutomationStore(hub)
+    store.upsert_rule(
+        AutomationRule.create(
+            rule_id="rule-agent-task",
+            name="Direct agent task",
+            trigger_kind=TRIGGER_KIND_EVENT,
+            trigger={"event_types": ["manual.run"]},
+            target_policy=TARGET_POLICY_EXISTING_REPO,
+            executor_kind=EXECUTOR_AGENT_TASK_TURN,
+            executor={
+                "kind": EXECUTOR_AGENT_TASK_TURN,
+                "requested_runtime": {
+                    "agent": "opencode",
+                    "model": "zai-coding-plan/glm-5.1",
+                },
+            },
+        )
+    )
+    store.record_event(
+        AutomationEvent.create(event_id="event-agent-task", event_type="manual.run")
+    )
+    store.enqueue_job(
+        AutomationJob.create(
+            job_id="job-agent-task",
+            rule_id="rule-agent-task",
+            event_id="event-agent-task",
+            state=JOB_RUNNING,
+            target={"policy": TARGET_POLICY_EXISTING_REPO, "repo_id": "repo-1"},
+            executor={
+                "kind": EXECUTOR_AGENT_TASK_TURN,
+                "requested_runtime": {
+                    "agent": "opencode",
+                    "model": "zai-coding-plan/glm-5.1",
+                },
+            },
+            available_at="2026-01-01T00:00:00Z",
+            created_at="2026-01-01T00:00:00Z",
+            dedupe_key="job-agent-task",
+        )
+    )
+    store.upsert_child_execution_edge(
+        AutomationChildExecutionEdge.create(
+            parent_job_id="job-agent-task",
+            child_kind=AUTOMATION_CHILD_KIND_AGENT_TASK,
+            child_id="exec-agent-task",
+            requested_runtime={"agent": "opencode", "model": "zai-coding-plan/glm-5.1"},
+            actual_runtime={"agent": "codex", "model": "gpt-5.5"},
+            terminal_state="succeeded",
+            terminal_observed_at="2026-01-01T00:05:00Z",
+        )
+    )
+
+    reduced = store.reduce_parent_job_from_children("job-agent-task")
+
+    assert reduced is not None
+    assert reduced.state == JOB_FAILED
+    assert "runtime mismatch" in (reduced.error_text or "")
+
+
+def test_automation_architecture_diagnostics_cover_graph_invariants(
+    tmp_path: Path,
+) -> None:
+    hub = tmp_path / "hub"
+    store = AutomationStore(hub)
+    store.upsert_rule(
+        AutomationRule.create(
+            rule_id="rule-diagnostics",
+            name="Diagnostics",
+            trigger_kind=TRIGGER_KIND_EVENT,
+            trigger={"event_types": ["manual.run"]},
+            target_policy=TARGET_POLICY_EXISTING_REPO,
+            executor_kind=EXECUTOR_AGENT_TASK_TURN,
+            executor={"kind": EXECUTOR_AGENT_TASK_TURN},
+        )
+    )
+    store.record_event(
+        AutomationEvent.create(event_id="event-diagnostics", event_type="manual.run")
+    )
+    store.enqueue_job(
+        AutomationJob.create(
+            job_id="job-stale",
+            rule_id="rule-diagnostics",
+            event_id="event-diagnostics",
+            state=JOB_RUNNING,
+            target={"policy": TARGET_POLICY_EXISTING_REPO, "repo_id": "repo-1"},
+            executor={"kind": EXECUTOR_AGENT_TASK_TURN},
+            available_at="2026-01-01T00:00:00Z",
+            created_at="2026-01-01T00:00:00Z",
+            dedupe_key="job-stale",
+        )
+    )
+    store.enqueue_job(
+        AutomationJob.create(
+            job_id="job-missing-edge",
+            rule_id="rule-diagnostics",
+            event_id="event-diagnostics",
+            state=JOB_RUNNING,
+            target={"policy": TARGET_POLICY_EXISTING_REPO, "repo_id": "repo-1"},
+            executor={"kind": EXECUTOR_AGENT_TASK_TURN},
+            available_at="2026-01-01T00:00:00Z",
+            created_at="2026-01-01T00:00:00Z",
+            dedupe_key="job-missing-edge",
+        )
+    )
+    store.update_running_job(
+        "job-missing-edge",
+        execution_refs={"managed_thread_execution_id": "exec-missing-edge"},
+    )
+    store.upsert_child_execution_edge(
+        AutomationChildExecutionEdge.create(
+            parent_job_id="job-stale",
+            child_kind=AUTOMATION_CHILD_KIND_AGENT_TASK,
+            child_id="exec-stale",
+            requested_runtime={"agent": "opencode", "model": "zai-coding-plan/glm-5.1"},
+            actual_runtime={"agent": "codex", "model": "gpt-5.5"},
+            terminal_state="succeeded",
+            terminal_observed_at="2026-01-01T00:05:00Z",
+        )
+    )
+
+    diagnostics = collect_automation_architecture_diagnostics(hub)
+
+    codes = {item.code for item in diagnostics}
+    assert AUTOMATION_PARENT_STATE_STALE in codes
+    assert AUTOMATION_RUNTIME_MISMATCH in codes
+    assert AUTOMATION_CHILD_EDGE_MISSING in codes
 
 
 def test_reconciler_closes_parent_from_durable_ticket_flow_edge(

@@ -417,6 +417,95 @@ def test_hub_automation_jobs_project_effective_state_and_child_runtime(tmp_path)
     assert job["policy_violations"][0]["code"] == "AUTOMATION_PARENT_STATE_STALE"
 
 
+def test_hub_automation_jobs_project_pma_coordinator_and_worker_runtime(tmp_path):
+    hub_root = tmp_path / "hub"
+    seed_hub_files(hub_root, force=True)
+    store = AutomationStore(hub_root)
+    rule = store.upsert_rule(
+        AutomationRule.create(
+            rule_id="rule-pma-runtime",
+            name="PMA runtime rule",
+            enabled=True,
+            trigger_kind=TRIGGER_KIND_EVENT,
+            trigger={"event_types": ["manual.run"]},
+            target_policy=TARGET_POLICY_HUB,
+            target={"repo_id": "repo-1"},
+            executor_kind=EXECUTOR_PMA_OPERATOR_TURN,
+            executor={
+                "kind": EXECUTOR_PMA_OPERATOR_TURN,
+                "message": "Coordinate follow-up",
+                "requested_runtime": {"agent": "codex", "model": "gpt-5.5"},
+                "worker_child_policy": {"default_authoritative": True},
+            },
+        )
+    )
+    event = store.create_event(
+        event_id="event-pma-runtime",
+        event_type="manual.run",
+        source="test",
+        target={"rule_id": rule.rule_id},
+        payload={},
+    )
+    store.create_job(
+        job_id="job-pma-runtime",
+        rule_id=rule.rule_id,
+        event_id=event.event_id,
+        state="running",
+        dedupe_key="dedupe-pma-runtime",
+        target=rule.target,
+        executor=rule.executor,
+        created_at="2026-01-01T00:00:00Z",
+    )
+    store.upsert_child_execution_edge(
+        AutomationChildExecutionEdge.create(
+            parent_job_id="job-pma-runtime",
+            child_kind="pma_operator",
+            child_id="pma-item-runtime",
+            authoritative_for_parent_completion=False,
+            requested_runtime={"agent": "codex", "model": "gpt-5.5"},
+            actual_runtime={"agent": "codex", "model": "gpt-5.5"},
+            terminal_state="succeeded",
+            terminal_observed_at="2026-01-01T00:02:00Z",
+        )
+    )
+    store.upsert_child_execution_edge(
+        AutomationChildExecutionEdge.create(
+            parent_job_id="job-pma-runtime",
+            child_kind="agent_task",
+            child_id="worker-runtime",
+            authoritative_for_parent_completion=True,
+            requested_runtime={
+                "agent": "opencode",
+                "model": "zai-coding-plan/glm-5.1",
+            },
+            actual_runtime={
+                "agent": "opencode",
+                "model": "zai-coding-plan/glm-5.1",
+            },
+            terminal_state="succeeded",
+            terminal_observed_at="2026-01-01T00:05:00Z",
+        )
+    )
+    client = TestClient(create_hub_app(hub_root))
+
+    response = client.get(f"/hub/automations/{rule.rule_id}")
+
+    assert response.status_code == 200
+    automation = response.json()["automation"]
+    assert automation["execution_mode"] == EXECUTOR_PMA_OPERATOR_TURN
+    assert automation["coordinator_runtime_contract"]["agent"] == "codex"
+    assert automation["coordinator_runtime_contract"]["model"] == "gpt-5.5"
+    assert automation["direct_runtime_contract"] is None
+    assert automation["executor_summary"]["agent"] is None
+    job = automation["last_job"]
+    assert job["effective_state"] == JOB_SUCCEEDED
+    children = {child["child_id"]: child for child in job["children"]}
+    assert children["pma-item-runtime"]["child_kind"] == "pma_operator"
+    assert children["pma-item-runtime"]["requested_runtime"]["agent"] == "codex"
+    assert children["worker-runtime"]["child_kind"] == "agent_task"
+    assert children["worker-runtime"]["requested_runtime"]["agent"] == "opencode"
+
+
 def test_hub_automations_pause_and_resume(tmp_path):
     hub_root = tmp_path / "hub"
     seed_hub_files(hub_root, force=True)

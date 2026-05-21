@@ -16,6 +16,7 @@ from .execution_graph import (
     automation_execution_snapshots_by_job_id,
 )
 from .models import (
+    AUTOMATION_CHILD_KIND_AGENT_TASK,
     EXECUTOR_AGENT_TASK_TURN,
     EXECUTOR_GITHUB_COMMENT,
     EXECUTOR_GITHUB_REACTION,
@@ -426,6 +427,8 @@ def _effective_job_state(
     authoritative = [edge for edge in edges if edge.authoritative_for_parent_completion]
     if not authoritative or any(edge.terminal_state is None for edge in authoritative):
         return job.state
+    if any(_agent_task_runtime_mismatch(edge) for edge in authoritative):
+        return JOB_FAILED
     mapped = [
         edge.terminal_mapping.get(str(edge.terminal_state), JOB_FAILED)
         for edge in authoritative
@@ -494,23 +497,40 @@ def _job_policy_violations(
         actual = (
             edge.actual_runtime.to_dict() if edge.actual_runtime is not None else {}
         )
-        for key in ("agent", "model", "profile", "reasoning"):
+        for key in _runtime_mismatch_fields(edge):
             requested_value = requested.get(key)
             actual_value = actual.get(key)
-            if requested_value and actual_value and requested_value != actual_value:
-                violations.append(
-                    {
-                        "code": "AUTOMATION_RUNTIME_MISMATCH",
-                        "severity": "error",
-                        "child_id": edge.child_id,
-                        "field": key,
-                        "message": (
-                            f"Requested {key}={requested_value!r} but child ran "
-                            f"{actual_value!r}."
-                        ),
-                    }
-                )
+            violations.append(
+                {
+                    "code": "AUTOMATION_RUNTIME_MISMATCH",
+                    "severity": "error",
+                    "child_id": edge.child_id,
+                    "field": key,
+                    "message": (
+                        f"Requested {key}={requested_value!r} but child ran "
+                        f"{actual_value!r}."
+                    ),
+                }
+            )
     return violations
+
+
+def _agent_task_runtime_mismatch(edge: AutomationChildExecutionEdge) -> bool:
+    return bool(_runtime_mismatch_fields(edge))
+
+
+def _runtime_mismatch_fields(edge: AutomationChildExecutionEdge) -> list[str]:
+    if edge.child_kind != AUTOMATION_CHILD_KIND_AGENT_TASK:
+        return []
+    requested = edge.requested_runtime.to_dict()
+    actual = edge.actual_runtime.to_dict() if edge.actual_runtime is not None else {}
+    fields: list[str] = []
+    for key in ("agent", "model", "profile", "reasoning"):
+        requested_value = requested.get(key)
+        actual_value = actual.get(key)
+        if requested_value and actual_value and requested_value != actual_value:
+            fields.append(key)
+    return fields
 
 
 def _job_runtime_contract(

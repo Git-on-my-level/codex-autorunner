@@ -10,6 +10,7 @@ from ..pma_domain.automation_lifecycle import cancel_schedule_state
 from ..text_utils import _json_dumps, _json_loads_object
 from ..time_utils import now_iso
 from .models import (
+    AUTOMATION_CHILD_KIND_AGENT_TASK,
     JOB_CANCELLED,
     JOB_CLAIMED,
     JOB_DEAD_LETTERED,
@@ -35,6 +36,21 @@ from .models import (
 
 def _json_object_from_row(row: sqlite3.Row, column: str) -> dict[str, Any]:
     return _json_loads_object(row[column])
+
+
+def _agent_task_runtime_mismatch(edge: AutomationChildExecutionEdge) -> bool:
+    if edge.child_kind != AUTOMATION_CHILD_KIND_AGENT_TASK:
+        return False
+    if edge.actual_runtime is None:
+        return False
+    requested = edge.requested_runtime.to_dict()
+    actual = edge.actual_runtime.to_dict()
+    for key in ("agent", "model", "profile", "reasoning"):
+        requested_value = requested.get(key)
+        actual_value = actual.get(key)
+        if requested_value and actual_value and requested_value != actual_value:
+            return True
+    return False
 
 
 class AutomationStore:
@@ -896,6 +912,20 @@ class AutomationStore:
         ]
         if not edges or any(edge.terminal_state is None for edge in edges):
             return None
+        runtime_mismatched_edges = [
+            edge.edge_id for edge in edges if _agent_task_runtime_mismatch(edge)
+        ]
+        if runtime_mismatched_edges:
+            return self.fail_job(
+                parent_job_id,
+                error_text=error_text
+                or (
+                    "authoritative automation child runtime mismatch: "
+                    + ",".join(runtime_mismatched_edges)
+                ),
+                execution_refs=execution_refs,
+                now=now,
+            )
         mapped_states = [
             edge.terminal_mapping.get(str(edge.terminal_state), JOB_FAILED)
             for edge in edges
