@@ -836,6 +836,44 @@ describe('read model entity store', () => {
     expect(allWindow.window?.refreshing).toBe(true);
   });
 
+  it('preserves appended default chat pages when live order patches arrive', () => {
+    const store = new ReadModelEntityStore();
+    store.applyChatIndexSnapshot({
+      cursor: cursor(1),
+      rows: [chat('chat-1'), chat('chat-2')],
+      groups: [],
+      counters: { total: 4, waiting: 0, running: 0, unread: 0, archived: 0 },
+      filter: 'all',
+      query: null,
+      window: { limit: 2, nextCursor: '2', totalIsExact: true, totalEstimate: 4 }
+    }, { filter: 'all', limit: 2 });
+    store.applyChatIndexSnapshot({
+      cursor: cursor(1),
+      rows: [chat('chat-3'), chat('chat-4')],
+      groups: [],
+      counters: { total: 4, waiting: 0, running: 0, unread: 0, archived: 0 },
+      filter: 'all',
+      query: null,
+      window: { limit: 2, nextCursor: null, previousCursor: '0', totalIsExact: true, totalEstimate: 4 }
+    }, { filter: 'all', limit: 2 }, { append: true });
+
+    expect(store.applyChatIndexPatchEvent({
+      ...chatPatch(2, chat('chat-2', 'running')),
+      patch: {
+        ...chatPatch(2, chat('chat-2', 'running')).patch,
+        order: ['chat-2', 'chat-1'],
+        counters: { total: 4, waiting: 0, running: 1, unread: 0, archived: 0 }
+      }
+    })).toBe('applied');
+
+    expect(selectChatIndexWindowView(store.snapshot(), { filter: 'all', limit: 2 }).rows.map((row) => row.chatId)).toEqual([
+      'chat-2',
+      'chat-1',
+      'chat-3',
+      'chat-4'
+    ]);
+  });
+
   it('preserves chat kind when detail snapshots omit the durable field', () => {
     const store = new ReadModelEntityStore();
     const row = chat('chat-1');

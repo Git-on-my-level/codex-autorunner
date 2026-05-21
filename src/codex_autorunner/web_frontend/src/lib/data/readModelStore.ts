@@ -1094,9 +1094,12 @@ function reconcileChatIndexWindowsAfterEntityPatch(next: ReadModelEntityState, e
     window.groupIds = window.groupIds.filter((groupId) => Boolean(next.chatGroups[groupId]));
     if (defaultWindow) {
       if (event.patch.order) {
+        const loadedLimit = Math.max(window.request.limit, window.rowIds.length);
+        const orderedIds = new Set(event.patch.order);
         window.rowIds = event.patch.order
           .filter((rowId) => Boolean(next.chats[rowId] ?? incomingRows.get(rowId)))
-          .slice(0, window.request.limit);
+          .concat(window.rowIds.filter((rowId) => !orderedIds.has(rowId)))
+          .slice(0, loadedLimit);
       }
       if (event.patch.counters) window.counters = event.patch.counters;
       window.cursor = event.envelope.cursor;
