@@ -1346,6 +1346,7 @@ class ManagedThreadStore:
         client_turn_id: Optional[str] = None,
         metadata: Optional[dict[str, Any]] = None,
         queue_payload: Optional[dict[str, Any]] = None,
+        turn_request: Optional[TurnExecutionRequest] = None,
         force_queue: bool = False,
     ) -> dict[str, Any]:
         managed_turn_id = str(uuid.uuid4())
@@ -1408,11 +1409,16 @@ class ManagedThreadStore:
                     "finished_at": None,
                     "created_at": started_at,
                 }
-                turn_request = build_turn_execution_request_from_storage(
-                    execution=execution_mapping,
-                    thread=thread_row,
-                    queue_payload=queue_payload or {},
-                )
+                if turn_request is None:
+                    turn_request = build_turn_execution_request_from_storage(
+                        execution=execution_mapping,
+                        thread=thread_row,
+                        queue_payload=queue_payload or {},
+                    )
+                elif turn_request.target_id != managed_thread_id:
+                    raise ValueError(
+                        "canonical turn request target_id must match managed_thread_id"
+                    )
                 canonical_queue_payload = {
                     "turn_request": turn_request.to_dict(),
                 }
