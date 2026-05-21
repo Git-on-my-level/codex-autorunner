@@ -188,16 +188,14 @@ def _write_discord_binding(
     conn = sqlite3.connect(db_path)
     try:
         with conn:
-            conn.execute(
-                """
+            conn.execute("""
                 CREATE TABLE IF NOT EXISTS channel_bindings (
                     channel_id TEXT PRIMARY KEY,
                     workspace_path TEXT,
                     repo_id TEXT,
                     updated_at TEXT
                 )
-                """
-            )
+                """)
             conn.execute(
                 """
                 INSERT INTO channel_bindings (
@@ -233,8 +231,7 @@ def _write_discord_binding_full(
             conn.execute(
                 "INSERT INTO schema_info(version) VALUES (13) ON CONFLICT DO NOTHING"
             )
-            conn.execute(
-                """
+            conn.execute("""
                 CREATE TABLE IF NOT EXISTS channel_bindings (
                     channel_id TEXT PRIMARY KEY,
                     guild_id TEXT,
@@ -264,8 +261,7 @@ def _write_discord_binding_full(
                     pending_compact_session_key TEXT,
                     updated_at TEXT NOT NULL
                 )
-                """
-            )
+                """)
             conn.execute(
                 """
                 INSERT INTO channel_bindings (
@@ -279,8 +275,7 @@ def _write_discord_binding_full(
                 """,
                 (channel_id, workspace_path, repo_id, updated_at),
             )
-            conn.execute(
-                """
+            conn.execute("""
                 CREATE TABLE IF NOT EXISTS outbox (
                     record_id TEXT PRIMARY KEY,
                     channel_id TEXT NOT NULL,
@@ -293,10 +288,8 @@ def _write_discord_binding_full(
                     last_error TEXT,
                     operation_id TEXT
                 )
-                """
-            )
-            conn.execute(
-                """
+                """)
+            conn.execute("""
                 CREATE TABLE IF NOT EXISTS turn_progress_leases (
                     lease_id TEXT PRIMARY KEY,
                     managed_thread_id TEXT NOT NULL,
@@ -309,10 +302,8 @@ def _write_discord_binding_full(
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL
                 )
-                """
-            )
-            conn.execute(
-                """
+                """)
+            conn.execute("""
                 CREATE TABLE IF NOT EXISTS interaction_ledger (
                     interaction_id TEXT PRIMARY KEY,
                     interaction_token TEXT NOT NULL,
@@ -343,8 +334,7 @@ def _write_discord_binding_full(
                     updated_at TEXT NOT NULL,
                     last_seen_at TEXT NOT NULL
                 )
-                """
-            )
+                """)
             for ddl in (
                 "CREATE INDEX IF NOT EXISTS idx_discord_outbox_next_attempt ON outbox(next_attempt_at)",
                 "CREATE INDEX IF NOT EXISTS idx_discord_outbox_created ON outbox(created_at)",

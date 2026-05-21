@@ -426,8 +426,7 @@ demo:
 publish:
   enabled: true
   outbox_dir: ~/outbox
-""".strip()
-        + "\n",
+""".strip() + "\n",
         encoding="utf-8",
     )
 
@@ -457,8 +456,7 @@ demo:
 publish:
   enabled: true
   outbox_dir: ./outbox
-""".strip()
-        + "\n",
+""".strip() + "\n",
         encoding="utf-8",
     )
 
@@ -486,8 +484,7 @@ demo:
   script: ~missing-user/demo-script.yaml
 publish:
   enabled: false
-""".strip()
-        + "\n",
+""".strip() + "\n",
         encoding="utf-8",
     )
 

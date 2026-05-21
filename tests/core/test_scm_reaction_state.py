@@ -495,15 +495,13 @@ def test_reaction_state_store_rejects_unknown_durable_state(
         operation_key="scm:key-1",
     )
     with open_orchestration_sqlite(tmp_path, durable=True) as conn:
-        conn.execute(
-            """
+        conn.execute("""
             UPDATE orch_reaction_state
                SET state = 'legacy_unknown'
              WHERE binding_id = 'binding-1'
                AND reaction_kind = 'changes_requested'
                AND fingerprint = 'fp-unknown'
-            """
-        )
+            """)
 
     with pytest.raises(RuntimeError, match="unknown SCM reaction lifecycle state"):
         store.mark_reaction_emitted(

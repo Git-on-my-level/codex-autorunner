@@ -538,8 +538,7 @@ def test_chat_index_rebuilds_projection_when_facet_schema_marker_is_missing(
     service.rebuild_chat_index_projection()
 
     with open_orchestration_sqlite(hub_root, durable=False, migrate=True) as conn:
-        conn.execute(
-            """
+        conn.execute("""
             UPDATE orch_chat_index_projection
                SET facet_category = NULL,
                    facet_turn_kind_list = '',
@@ -548,14 +547,11 @@ def test_chat_index_rebuilds_projection_when_facet_schema_marker_is_missing(
                    facet_scope_kind = NULL,
                    facet_scope_id = NULL,
                    facet_agent_kind = NULL
-            """
-        )
-        conn.execute(
-            """
+            """)
+        conn.execute("""
             DELETE FROM orch_chat_index_projection_meta
              WHERE key = 'projection_schema_version'
-            """
-        )
+            """)
 
     assert service.chat_index_projection_status()["needs_rebuild"] is True
     automation = service.chat_index_snapshot(

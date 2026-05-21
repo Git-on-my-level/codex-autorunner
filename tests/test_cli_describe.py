@@ -99,14 +99,12 @@ def test_describe_json_does_not_contain_secrets(repo):
 def test_describe_json_redacts_secret_values_in_config(repo):
     """Test that secret values in config are redacted."""
     secret_config = repo / "codex-autorunner.yml"
-    secret_config.write_text(
-        """
+    secret_config.write_text("""
 agents:
   custom:
     api_key: "sk-1234567890123456789012345678901234567890"
     password: "super-secret-password"
-"""
-    )
+""")
 
     result = runner.invoke(app, ["describe", "--repo", str(repo), "--json"])
 

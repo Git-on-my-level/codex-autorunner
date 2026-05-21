@@ -445,8 +445,7 @@ async def test_default_chat_skips_when_discord_binding_is_preferred(
     conn = sqlite3.connect(state_dir / "discord_state.sqlite3")
     try:
         with conn:
-            conn.execute(
-                """
+            conn.execute("""
                 CREATE TABLE channel_bindings (
                     channel_id TEXT PRIMARY KEY,
                     guild_id TEXT,
@@ -456,8 +455,7 @@ async def test_default_chat_skips_when_discord_binding_is_preferred(
                     last_pause_dispatch_seq TEXT,
                     updated_at TEXT NOT NULL
                 )
-                """
-            )
+                """)
             conn.execute(
                 """
                 INSERT INTO channel_bindings (

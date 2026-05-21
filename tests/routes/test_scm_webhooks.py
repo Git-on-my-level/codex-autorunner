@@ -283,14 +283,12 @@ def test_scm_webhook_persists_event_and_can_drain_inline(tmp_path: Path) -> None
     assert events[0].raw_payload == payload
     assert drained == ["github:delivery-1"]
     with open_orchestration_sqlite(hub_root) as conn:
-        audit_row = conn.execute(
-            """
+        audit_row = conn.execute("""
             SELECT action_type, payload_json
               FROM orch_audit_entries
              ORDER BY created_at ASC, audit_id ASC
              LIMIT 1
-            """
-        ).fetchone()
+            """).fetchone()
     assert audit_row is not None
     assert audit_row["action_type"] == "scm.ingest"
     assert '"correlation_id":"scm:github:delivery-1"' in str(audit_row["payload_json"])

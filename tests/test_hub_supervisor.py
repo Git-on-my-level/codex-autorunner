@@ -208,14 +208,12 @@ def _write_discord_binding(hub_root: Path, *, channel_id: str, repo_id: str) -> 
     conn = sqlite3.connect(db_path)
     try:
         with conn:
-            conn.execute(
-                """
+            conn.execute("""
                 CREATE TABLE IF NOT EXISTS channel_bindings (
                     channel_id TEXT PRIMARY KEY,
                     repo_id TEXT
                 )
-                """
-            )
+                """)
             conn.execute(
                 """
                 INSERT INTO channel_bindings (channel_id, repo_id)

@@ -45,8 +45,7 @@ def _wait_process_gone(pid: int, *, timeout: float = 6.0) -> None:
 def _write_fixture_server_script(tmp_path: Path) -> Path:
     script_path = tmp_path / "fixture_server.py"
     script_path.write_text(
-        textwrap.dedent(
-            """
+        textwrap.dedent("""
             import argparse
             import http.server
             import os
@@ -84,8 +83,7 @@ def _write_fixture_server_script(tmp_path: Path) -> Path:
             ready_line = args.ready_line or f"READY http://127.0.0.1:{args.port}/health"
             print(ready_line, flush=True)
             server.serve_forever()
-            """
-        ),
+            """),
         encoding="utf-8",
     )
     return script_path

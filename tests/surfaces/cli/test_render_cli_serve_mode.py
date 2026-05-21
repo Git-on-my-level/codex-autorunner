@@ -66,8 +66,7 @@ def _wait_process_gone(pid: int, *, timeout: float = 6.0) -> None:
 def _write_server_script(tmp_path: Path) -> Path:
     script = tmp_path / "cli_server_fixture.py"
     script.write_text(
-        textwrap.dedent(
-            """
+        textwrap.dedent("""
             import argparse
             import http.server
             import os
@@ -95,8 +94,7 @@ def _write_server_script(tmp_path: Path) -> Path:
             server = http.server.ThreadingHTTPServer(("127.0.0.1", args.port), Handler)
             print(f"READY http://127.0.0.1:{args.port}/health", flush=True)
             server.serve_forever()
-            """
-        ),
+            """),
         encoding="utf-8",
     )
     return script

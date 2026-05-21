@@ -102,13 +102,11 @@ def ensure_schema_version_table(
     *,
     table_name: str = DEFAULT_SCHEMA_VERSION_TABLE,
 ) -> None:
-    conn.execute(
-        f"""
+    conn.execute(f"""
         CREATE TABLE IF NOT EXISTS {table_name} (
             version INTEGER NOT NULL PRIMARY KEY
         )
-        """
-    )
+        """)
 
 
 def read_schema_version(
@@ -143,17 +141,14 @@ def ensure_migration_record_tables(
     history_table: str = DEFAULT_SCHEMA_MIGRATIONS_TABLE,
     runs_table: str = DEFAULT_SCHEMA_MIGRATION_RUNS_TABLE,
 ) -> None:
-    conn.execute(
-        f"""
+    conn.execute(f"""
         CREATE TABLE IF NOT EXISTS {history_table} (
             version INTEGER PRIMARY KEY,
             name TEXT NOT NULL,
             applied_at TEXT NOT NULL
         )
-        """
-    )
-    conn.execute(
-        f"""
+        """)
+    conn.execute(f"""
         CREATE TABLE IF NOT EXISTS {runs_table} (
             run_id TEXT PRIMARY KEY,
             from_version INTEGER NOT NULL,
@@ -163,8 +158,7 @@ def ensure_migration_record_tables(
             status TEXT NOT NULL,
             error_text TEXT
         )
-        """
-    )
+        """)
 
 
 def apply_versioned_schema(

@@ -131,8 +131,7 @@ class HubProjectionStore:
         return cls(hub_root)
 
     def _ensure_schema(self, conn: Any) -> None:
-        conn.execute(
-            f"""
+        conn.execute(f"""
             CREATE TABLE IF NOT EXISTS {_CACHE_TABLE} (
                 namespace TEXT NOT NULL,
                 cache_key TEXT NOT NULL,
@@ -141,19 +140,15 @@ class HubProjectionStore:
                 updated_at TEXT NOT NULL,
                 PRIMARY KEY(namespace, cache_key)
             )
-            """
-        )
-        conn.execute(
-            f"""
+            """)
+        conn.execute(f"""
             CREATE TABLE IF NOT EXISTS {_META_TABLE} (
                 meta_key TEXT PRIMARY KEY,
                 meta_value TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             )
-            """
-        )
-        conn.execute(
-            f"""
+            """)
+        conn.execute(f"""
             CREATE TABLE IF NOT EXISTS {_EVENT_TABLE} (
                 cursor INTEGER PRIMARY KEY,
                 idempotency_key TEXT NOT NULL UNIQUE,
@@ -164,10 +159,8 @@ class HubProjectionStore:
                 source_revision TEXT,
                 generated_at TEXT NOT NULL
             )
-            """
-        )
-        conn.execute(
-            f"""
+            """)
+        conn.execute(f"""
             CREATE TABLE IF NOT EXISTS {_READ_MODEL_TABLE} (
                 family TEXT NOT NULL,
                 read_key TEXT NOT NULL,
@@ -179,26 +172,19 @@ class HubProjectionStore:
                 updated_at TEXT NOT NULL,
                 PRIMARY KEY(family, read_key)
             )
-            """
-        )
-        conn.execute(
-            f"""
+            """)
+        conn.execute(f"""
             CREATE INDEX IF NOT EXISTS idx_{_EVENT_TABLE}_entity_cursor
                 ON {_EVENT_TABLE}(entity_kind, entity_id, cursor)
-            """
-        )
-        conn.execute(
-            f"""
+            """)
+        conn.execute(f"""
             CREATE INDEX IF NOT EXISTS idx_{_EVENT_TABLE}_generated_cursor
                 ON {_EVENT_TABLE}(generated_at, cursor)
-            """
-        )
-        conn.execute(
-            f"""
+            """)
+        conn.execute(f"""
             CREATE INDEX IF NOT EXISTS idx_{_READ_MODEL_TABLE}_family_cursor
                 ON {_READ_MODEL_TABLE}(family, cursor, read_key)
-            """
-        )
+            """)
         conn.execute(
             f"""
             INSERT INTO {_META_TABLE} (meta_key, meta_value, updated_at)

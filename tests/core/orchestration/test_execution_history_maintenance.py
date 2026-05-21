@@ -376,33 +376,24 @@ def test_compact_completed_execution_history_reduces_hot_rows_and_keeps_cold_tra
     assert manifest.event_count == 26
 
     with open_orchestration_sqlite(hub_root, durable=False) as conn:
-        count_row = conn.execute(
-            """
+        count_row = conn.execute("""
             SELECT COUNT(*) AS cnt
               FROM orch_event_projections
              WHERE event_family = 'turn.timeline'
                AND execution_id = 'exec-compact'
-            """
-        ).fetchone()
-        summary_row = conn.execute(
-            """
+            """).fetchone()
+        summary_row = conn.execute("""
             SELECT payload_json
               FROM orch_event_projections
              WHERE execution_id = 'exec-compact'
                AND event_id LIKE '%:compaction-summary'
-            """
-        ).fetchone()
-        retained_event_types = [
-            str(row["event_type"] or "")
-            for row in conn.execute(
-                """
+            """).fetchone()
+        retained_event_types = [str(row["event_type"] or "") for row in conn.execute("""
                 SELECT event_type
                   FROM orch_event_projections
                  WHERE event_family = 'turn.timeline'
                    AND execution_id = 'exec-compact'
-                """
-            ).fetchall()
-        ]
+                """).fetchall()]
 
     assert int(count_row["cnt"] or 0) <= 8
     assert summary_row is not None
@@ -555,14 +546,12 @@ def test_prune_execution_history_retention_removes_old_hot_rows_and_traces(
 
     with open_orchestration_sqlite(hub_root, durable=False) as conn:
         with conn:
-            conn.execute(
-                """
+            conn.execute("""
                 UPDATE orch_cold_trace_manifests
                    SET started_at = '2000-01-01T00:00:00Z',
                        finished_at = '2000-01-01T00:05:00Z'
                  WHERE execution_id = 'exec-old'
-                """
-            )
+                """)
             conn.execute(
                 """
                 INSERT OR REPLACE INTO orch_execution_checkpoints (
@@ -654,14 +643,12 @@ def test_prune_execution_history_retention_clears_checkpoint_trace_manifest_json
 
     with open_orchestration_sqlite(hub_root, durable=False) as conn:
         with conn:
-            conn.execute(
-                """
+            conn.execute("""
                 UPDATE orch_cold_trace_manifests
                    SET started_at = '2000-01-01T00:00:00Z',
                        finished_at = '2000-01-01T00:05:00Z'
                  WHERE execution_id = 'exec-old-json'
-                """
-            )
+                """)
 
     prune_execution_history_retention(
         hub_root,
@@ -700,14 +687,12 @@ def test_run_execution_history_housekeeping_once_runs_compaction_and_vacuum(
     assert summary.database_size_after_bytes >= 0
 
     with open_orchestration_sqlite(hub_root, durable=False) as conn:
-        row = conn.execute(
-            """
+        row = conn.execute("""
             SELECT COUNT(*) AS cnt
               FROM orch_event_projections
              WHERE event_family = 'turn.timeline'
                AND execution_id = 'exec-housekeep'
-            """
-        ).fetchone()
+            """).fetchone()
     assert int(row["cnt"] or 0) <= 8
 
 
@@ -777,14 +762,12 @@ def test_compaction_never_keeps_more_than_policy_limit(
 
     assert summary.compacted_executions == 1
     with open_orchestration_sqlite(hub_root, durable=False) as conn:
-        row = conn.execute(
-            """
+        row = conn.execute("""
             SELECT COUNT(*) AS cnt
               FROM orch_event_projections
              WHERE event_family = 'turn.timeline'
                AND execution_id = 'exec-tight-limit'
-            """
-        ).fetchone()
+            """).fetchone()
     assert int(row["cnt"] or 0) <= 4
 
 
@@ -825,14 +808,12 @@ def test_compaction_refreshes_checkpoint_hot_state_after_reducing_hot_rows(
     )
 
     with open_orchestration_sqlite(hub_root, durable=False) as conn:
-        row = conn.execute(
-            """
+        row = conn.execute("""
             SELECT COUNT(*) AS cnt
               FROM orch_event_projections
              WHERE event_family = 'turn.timeline'
                AND execution_id = 'exec-refresh-state'
-            """
-        ).fetchone()
+            """).fetchone()
     assert int(row["cnt"] or 0) <= 9
 
 

@@ -47,8 +47,7 @@ def normalize_backend_binding_state(value: object) -> str:
 def _ensure_runtime_bindings_table(hub_root: Path) -> None:
     with open_orchestration_sqlite(hub_root) as conn:
         with conn:
-            conn.execute(
-                """
+            conn.execute("""
                 CREATE TABLE IF NOT EXISTS orch_runtime_thread_bindings (
                     thread_target_id TEXT PRIMARY KEY,
                     backend_thread_id TEXT NOT NULL,
@@ -57,8 +56,7 @@ def _ensure_runtime_bindings_table(hub_root: Path) -> None:
                     state_reason TEXT,
                     updated_at TEXT NOT NULL
                 )
-            """
-            )
+            """)
             columns = {
                 str(row["name"])
                 for row in conn.execute(
@@ -66,19 +64,15 @@ def _ensure_runtime_bindings_table(hub_root: Path) -> None:
                 ).fetchall()
             }
             if "binding_state" not in columns:
-                conn.execute(
-                    """
+                conn.execute("""
                     ALTER TABLE orch_runtime_thread_bindings
                     ADD COLUMN binding_state TEXT NOT NULL DEFAULT 'bound'
-                    """
-                )
+                    """)
             if "state_reason" not in columns:
-                conn.execute(
-                    """
+                conn.execute("""
                     ALTER TABLE orch_runtime_thread_bindings
                     ADD COLUMN state_reason TEXT
-                    """
-                )
+                    """)
 
 
 def _normalized_thread_target_id(thread_target_id: str) -> Optional[str]:

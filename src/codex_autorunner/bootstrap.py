@@ -272,10 +272,7 @@ def seed_hub_files(hub_root: Path, force: bool = False) -> None:
 
 
 def pma_prompt_content() -> str:
-    return (
-        PMA_DOCS_GENERATED_MARKER
-        + "\n"
-        + """# Project Management Agent (PMA)
+    return PMA_DOCS_GENERATED_MARKER + "\n" + """# Project Management Agent (PMA)
 
 You are the hub-level Project Management Agent (PMA), the user's primary interface for coordinating work across repos.
 
@@ -391,14 +388,10 @@ Prefer writing durable guidance and recurring best-practices to the hub PMA `AGE
 Keep short-lived working context in the hub PMA `active_context.md` and prune it when it grows.
 When pruning, append the prior context to the hub PMA `context_log.md` with a timestamp.
 """
-    )
 
 
 def pma_notes_content() -> str:
-    return (
-        PMA_DOCS_GENERATED_MARKER
-        + "\n"
-        + """# PMA Operations Guide
+    return PMA_DOCS_GENERATED_MARKER + "\n" + """# PMA Operations Guide
 
 ## Tickets (create/modify)
 
@@ -605,7 +598,6 @@ Notes:
 - Handlers should be idempotent; duplicate events can occur by design.
 - Canonical durable storage: hub `orchestration.sqlite3` automation tables.
 """
-    )
 
 
 def pma_about_content() -> str:

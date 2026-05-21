@@ -147,16 +147,13 @@ class FlowStore:
             )
 
     def _create_schema(self, conn: sqlite3.Connection) -> None:
-        conn.execute(
-            """
+        conn.execute("""
             CREATE TABLE IF NOT EXISTS schema_info (
                 version INTEGER NOT NULL PRIMARY KEY
             )
-        """
-        )
+        """)
 
-        conn.execute(
-            """
+        conn.execute("""
             CREATE TABLE IF NOT EXISTS flow_runs (
                 id TEXT PRIMARY KEY,
                 flow_type TEXT NOT NULL,
@@ -171,11 +168,9 @@ class FlowStore:
                 error_message TEXT,
                 metadata TEXT NOT NULL DEFAULT '{}'
             )
-        """
-        )
+        """)
 
-        conn.execute(
-            """
+        conn.execute("""
             CREATE TABLE IF NOT EXISTS flow_events (
                 seq INTEGER PRIMARY KEY AUTOINCREMENT,
                 id TEXT NOT NULL UNIQUE,
@@ -186,11 +181,9 @@ class FlowStore:
                 step_id TEXT,
                 FOREIGN KEY (run_id) REFERENCES flow_runs(id) ON DELETE CASCADE
             )
-        """
-        )
+        """)
 
-        conn.execute(
-            """
+        conn.execute("""
             CREATE TABLE IF NOT EXISTS flow_artifacts (
                 id TEXT PRIMARY KEY,
                 run_id TEXT NOT NULL,
@@ -200,11 +193,9 @@ class FlowStore:
                 metadata TEXT NOT NULL DEFAULT '{}',
                 FOREIGN KEY (run_id) REFERENCES flow_runs(id) ON DELETE CASCADE
             )
-        """
-        )
+        """)
 
-        conn.execute(
-            """
+        conn.execute("""
             CREATE TABLE IF NOT EXISTS flow_telemetry (
                 seq INTEGER PRIMARY KEY AUTOINCREMENT,
                 id TEXT NOT NULL UNIQUE,
@@ -214,11 +205,9 @@ class FlowStore:
                 data TEXT NOT NULL,
                 FOREIGN KEY (run_id) REFERENCES flow_runs(id) ON DELETE CASCADE
             )
-        """
-        )
+        """)
 
-        conn.execute(
-            """
+        conn.execute("""
             CREATE TABLE IF NOT EXISTS flow_notification_intents (
                 intent_id TEXT PRIMARY KEY,
                 run_id TEXT NOT NULL,
@@ -237,8 +226,7 @@ class FlowStore:
                 delivery_attempts TEXT NOT NULL DEFAULT '{}',
                 FOREIGN KEY (run_id) REFERENCES flow_runs(id) ON DELETE CASCADE
             )
-        """
-        )
+        """)
 
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_flow_runs_status ON flow_runs(status)"
@@ -293,8 +281,7 @@ class FlowStore:
     def _apply_v2_migration(self, conn: sqlite3.Connection) -> None:
         _logger.info("Migrating FlowStore schema to version 2")
         conn.execute("ALTER TABLE flow_events RENAME TO flow_events_old")
-        conn.execute(
-            """
+        conn.execute("""
             CREATE TABLE flow_events (
                 seq INTEGER PRIMARY KEY AUTOINCREMENT,
                 id TEXT NOT NULL UNIQUE,
@@ -305,16 +292,13 @@ class FlowStore:
                 step_id TEXT,
                 FOREIGN KEY (run_id) REFERENCES flow_runs(id) ON DELETE CASCADE
             )
-            """
-        )
-        conn.execute(
-            """
+            """)
+        conn.execute("""
             INSERT INTO flow_events (id, run_id, event_type, timestamp, data, step_id)
             SELECT id, run_id, event_type, timestamp, data, step_id
             FROM flow_events_old
             ORDER BY timestamp ASC
-            """
-        )
+            """)
         conn.execute("DROP TABLE flow_events_old")
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_flow_events_run_id ON flow_events(run_id, seq)"
@@ -325,8 +309,7 @@ class FlowStore:
 
     def _apply_v3_migration(self, conn: sqlite3.Connection) -> None:
         _logger.info("Migrating FlowStore schema to version 3")
-        conn.execute(
-            """
+        conn.execute("""
             CREATE TABLE IF NOT EXISTS flow_telemetry (
                 seq INTEGER PRIMARY KEY AUTOINCREMENT,
                 id TEXT NOT NULL UNIQUE,
@@ -336,8 +319,7 @@ class FlowStore:
                 data TEXT NOT NULL,
                 FOREIGN KEY (run_id) REFERENCES flow_runs(id) ON DELETE CASCADE
             )
-            """
-        )
+            """)
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_flow_telemetry_run_id ON flow_telemetry(run_id, seq)"
         )
@@ -347,8 +329,7 @@ class FlowStore:
 
     def _apply_v4_migration(self, conn: sqlite3.Connection) -> None:
         _logger.info("Migrating FlowStore schema to version 4")
-        conn.execute(
-            """
+        conn.execute("""
             CREATE TABLE IF NOT EXISTS flow_notification_intents (
                 intent_id TEXT PRIMARY KEY,
                 run_id TEXT NOT NULL,
@@ -367,8 +348,7 @@ class FlowStore:
                 delivery_attempts TEXT NOT NULL DEFAULT '{}',
                 FOREIGN KEY (run_id) REFERENCES flow_runs(id) ON DELETE CASCADE
             )
-            """
-        )
+            """)
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_flow_notification_intents_run_type "
             "ON flow_notification_intents(run_id, event_type, resolved)"
