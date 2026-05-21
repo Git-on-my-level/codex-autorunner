@@ -17,7 +17,7 @@ from .turn_execution_storage import (
     build_turn_execution_request_from_storage,
 )
 
-ORCHESTRATION_SCHEMA_VERSION = 38
+ORCHESTRATION_SCHEMA_VERSION = 39
 
 
 @dataclass(frozen=True)
@@ -1999,6 +1999,55 @@ def _apply_v38(conn: sqlite3.Connection) -> None:
     )
 
 
+def _apply_v39(conn: sqlite3.Connection) -> None:
+    _ensure_column(
+        conn,
+        "orch_chat_index_projection",
+        "facet_category",
+        "facet_category TEXT",
+    )
+    _ensure_column(
+        conn,
+        "orch_chat_index_projection",
+        "facet_turn_kind_list",
+        "facet_turn_kind_list TEXT NOT NULL DEFAULT ''",
+    )
+    _ensure_column(
+        conn,
+        "orch_chat_index_projection",
+        "facet_origin_kind_list",
+        "facet_origin_kind_list TEXT NOT NULL DEFAULT ''",
+    )
+    _ensure_column(
+        conn,
+        "orch_chat_index_projection",
+        "facet_transport_list",
+        "facet_transport_list TEXT NOT NULL DEFAULT ''",
+    )
+    _ensure_column(
+        conn,
+        "orch_chat_index_projection",
+        "facet_scope_kind",
+        "facet_scope_kind TEXT",
+    )
+    _ensure_column(
+        conn,
+        "orch_chat_index_projection",
+        "facet_scope_id",
+        "facet_scope_id TEXT",
+    )
+    _ensure_column(
+        conn,
+        "orch_chat_index_projection",
+        "facet_agent_kind",
+        "facet_agent_kind TEXT",
+    )
+    conn.execute("""
+        CREATE INDEX IF NOT EXISTS idx_orch_chat_index_projection_facets
+            ON orch_chat_index_projection(facet_category, facet_scope_kind, facet_agent_kind)
+        """)
+
+
 _MIGRATIONS = (
     _MigrationStep(1, "create_core_orchestration_schema", _apply_v1),
     _MigrationStep(2, "add_binding_and_flow_projection_scaffolding", _apply_v2),
@@ -2085,6 +2134,11 @@ _MIGRATIONS = (
         38,
         "add_managed_thread_failure_recovery_payload",
         _apply_v38,
+    ),
+    _MigrationStep(
+        39,
+        "add_chat_index_facet_projection_columns",
+        _apply_v39,
     ),
 )
 

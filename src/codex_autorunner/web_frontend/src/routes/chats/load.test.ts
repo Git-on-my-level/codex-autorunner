@@ -9,11 +9,28 @@ import {
   type TicketDetailSnapshot
 } from '$lib/api/readModelContracts';
 import type { ApiError, ApiResult } from '$lib/api/client';
-import { ReadModelEntityStore, selectChatDetailView } from '$lib/data/readModelStore';
+import { CHAT_TICKET_RUN_GROUP_WINDOW_REQUEST, ReadModelEntityStore, selectChatDetailView } from '$lib/data/readModelStore';
 import type { ReadModelSnapshotClient } from '$lib/data/readModelClients';
 import { importRouteLoader } from '$lib/test/importRouteLoader';
 
 const now = '2026-05-11T12:00:00Z';
+const emptyFacetRequest = {
+  categories: [],
+  turnKinds: [],
+  originKinds: [],
+  transports: [],
+  scopeKinds: [],
+  scopeIds: [],
+  agentKinds: []
+};
+const emptyFacetCounts = {
+  category: {},
+  turnKind: {},
+  originKind: {},
+  transport: {},
+  scopeKind: {},
+  agentKind: {}
+};
 
 describe('/chats route load', () => {
   it('returns cold list-mode data without blocking navigation when no active chat id is present', async () => {
@@ -80,7 +97,7 @@ describe('/chats route load', () => {
 
     expect(client.chatIndex).toHaveBeenCalledTimes(4);
     expect(client.chatIndex).toHaveBeenNthCalledWith(1, { limit: 50 });
-    expect(client.chatIndex).toHaveBeenNthCalledWith(2, { filter: 'ticket_runs', groupBy: 'ticket_run', limit: 50 });
+    expect(client.chatIndex).toHaveBeenNthCalledWith(2, CHAT_TICKET_RUN_GROUP_WINDOW_REQUEST);
     expect(store.snapshot().chatOrder).toEqual(firstOrder);
     expect(store.snapshot().chatOrder).toEqual(['chat-b', 'chat-a']);
     expect(store.snapshot().chatOrder.map((id) => store.snapshot().chats[id]?.title)).toEqual(firstTitles);
@@ -161,6 +178,7 @@ function chatIndexSnapshot(rows: ChatIndexSnapshot['rows'] = []): ChatIndexSnaps
     window: { limit: 50, totalEstimate: 1, totalIsExact: true },
     filter: 'all',
     query: null,
+    facetRequest: emptyFacetRequest,
     rows,
     groups: [],
     counters: {
@@ -170,6 +188,7 @@ function chatIndexSnapshot(rows: ChatIndexSnapshot['rows'] = []): ChatIndexSnaps
       unread: rows.filter((row) => row.unreadCount > 0).length,
       archived: rows.filter((row) => row.status === 'archived').length
     },
+    facetCounts: emptyFacetCounts,
     repair: repair('/hub/read-models/chats')
   };
 }

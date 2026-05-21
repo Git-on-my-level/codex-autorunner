@@ -8,6 +8,23 @@ import {
 import { createReadModelSnapshotClient } from './readModelClients';
 
 const issuedAt = '2026-05-11T12:00:00.000Z';
+const emptyFacetRequest = {
+  categories: [],
+  turnKinds: [],
+  originKinds: [],
+  transports: [],
+  scopeKinds: [],
+  scopeIds: [],
+  agentKinds: []
+};
+const emptyFacetCounts = {
+  category: {},
+  turnKind: {},
+  originKind: {},
+  transport: {},
+  scopeKind: {},
+  agentKind: {}
+};
 
 function projCursor(sequence: number, source: string): ProjectionCursor {
   return { value: `${source}:${sequence}`, sequence, source, issuedAt };
@@ -29,6 +46,7 @@ describe('read model snapshot client', () => {
       },
       filter: 'active',
       query: null,
+      facetRequest: emptyFacetRequest,
       rows: [
         {
           chatId: 'chat-1',
@@ -56,6 +74,7 @@ describe('read model snapshot client', () => {
         unread: 0,
         archived: 0
       },
+      facetCounts: emptyFacetCounts,
       repair: {
         snapshotRoute: '/hub/read-models/chats',
         cursorQueryParam: 'after',
@@ -75,9 +94,23 @@ describe('read model snapshot client', () => {
       readModels: {}
     } as never);
 
-    const result = await client.chatIndex({ filter: 'active', query: 'build', surfaceKind: 'discord', limit: 25 });
+    const result = await client.chatIndex({
+      filter: 'active',
+      query: 'build',
+      surfaceKind: 'discord',
+      facets: {
+        categories: ['automation'],
+        transports: ['discord'],
+        scopeKinds: ['worktree'],
+        scopeIds: ['wt-1'],
+        agentKinds: ['coding_agent']
+      },
+      limit: 25
+    });
 
-    expect(calls).toEqual(['/hub/read-models/chats?filter=active&limit=25&search=build&surface_kind=discord']);
+    expect(calls).toEqual([
+      '/hub/read-models/chats?filter=active&limit=25&search=build&surface_kind=discord&category=automation&transport=discord&scope_kind=worktree&scope_id=wt-1&agent_kind=coding_agent'
+    ]);
     expect(result.ok && result.data.rows[0]).toMatchObject({
       chatId: 'chat-1',
       agent: 'hermes',

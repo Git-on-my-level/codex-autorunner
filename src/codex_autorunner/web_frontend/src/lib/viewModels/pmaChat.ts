@@ -1,4 +1,8 @@
-import type { TicketRunGroup } from '$lib/api/readModelContracts';
+import type {
+  ChatFacetTransport,
+  ChatIndexFacets,
+  TicketRunGroup
+} from '$lib/api/readModelContracts';
 import type {
   PmaChatMessage,
   PmaMessageCapsuleRef,
@@ -11,7 +15,6 @@ import type {
   WorkStatus
 } from './domain';
 import { mapPmaMessageCapsuleRef, normalizeOptionalWorkStatus, pmaChatArchivedFromRawSignals, pmaLifecycleTokenIsActive, pmaLifecycleTokenIsArchived, pmaTimelineContractFields } from './domain';
-import { surfaceRefFromThreadRaw } from './thread';
 import { isChatUnread } from './unread';
 
 /** Status chips (All / Waiting / …) on the chat list. */
@@ -28,29 +31,12 @@ export const CHAT_MEMORY_LIST_ID = '__memory__';
 
 export const CHAT_FILTER_ORDER: ChatStatusFilter[] = ['all', 'waiting', 'active', 'unread', 'archived'];
 
-const INTERNAL_MESSENGER_SURFACE_KINDS = new Set([
-  'managed_thread',
-  'web',
-  'hub',
-  'local',
-  'api'
-]);
-
 const TOOL_PROGRESS_KINDS = new Set(['tool', 'tool_call', 'tool_result', 'function_call']);
 const MAX_COMPACT_ACTIVITY_SOURCE_IDS = 200;
 const MAX_MERGED_INTERMEDIATE_TEXT_CHARS = 4000;
 
 function rawString(value: unknown): string | null {
   return typeof value === 'string' && value.trim() ? value : null;
-}
-
-function normalizeMessengerSlug(kind: string): string {
-  const slug = kind
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '_')
-    .replace(/^_+|_+$/g, '');
-  return slug || 'external';
 }
 
 function messengerSurfaceLabel(slug: string): string {
@@ -77,29 +63,44 @@ function messengerBadgeClass(slug: string): string {
   return `surface-${safe}`;
 }
 
-/** Badge + filter slug for chats bound to an external messenger surface (Discord, Telegram, …). */
+export function pmaChatFacets(chat: PmaChatSummary | null): ChatIndexFacets | null {
+  const rawFacets = chat?.raw.facets;
+  if (!rawFacets || typeof rawFacets !== 'object' || Array.isArray(rawFacets)) return null;
+  const facets = rawFacets as Partial<ChatIndexFacets>;
+  if (!['regular', 'ticket_run', 'automation', 'system'].includes(String(facets.category))) return null;
+  return {
+    category: facets.category as ChatIndexFacets['category'],
+    turnKinds: Array.isArray(facets.turnKinds) ? facets.turnKinds : [],
+    originKinds: Array.isArray(facets.originKinds) ? facets.originKinds : [],
+    transports: Array.isArray(facets.transports) ? facets.transports : [],
+    scopeKind: facets.scopeKind ?? null,
+    scopeId: facets.scopeId ?? null,
+    agentKind: facets.agentKind ?? null
+  };
+}
+
+export function chatTransportLabel(transport: ChatFacetTransport): string {
+  return transport === 'pma' ? 'PMA' : messengerSurfaceLabel(transport);
+}
+
+export function pmaChatTransportBadges(
+  chat: PmaChatSummary | null
+): { slug: ChatFacetTransport; label: string; badgeClass: string }[] {
+  const facets = pmaChatFacets(chat);
+  if (!facets) return [];
+  return facets.transports.map((transport) => ({
+    slug: transport,
+    label: chatTransportLabel(transport),
+    badgeClass: messengerBadgeClass(transport)
+  }));
+}
+
+/** Badge + filter slug for chats bound to a backend-declared transport facet. */
 export function chatMessengerSurface(
   chat: PmaChatSummary | null
 ): { slug: string; label: string; badgeClass: string } | null {
-  if (!chat) return null;
-  const raw = chat.raw as Record<string, unknown>;
-  const ref = surfaceRefFromThreadRaw(raw);
-  if (ref) {
-    const kindLower = ref.kind.trim().toLowerCase();
-    if (!INTERNAL_MESSENGER_SURFACE_KINDS.has(kindLower)) {
-      const slug = normalizeMessengerSlug(ref.kind);
-      return { slug, label: messengerSurfaceLabel(slug), badgeClass: messengerBadgeClass(slug) };
-    }
-  }
-  const kindOnly = rawString(raw.surface_kind ?? raw.channel_kind)?.toLowerCase() ?? '';
-  if (kindOnly && !INTERNAL_MESSENGER_SURFACE_KINDS.has(kindOnly)) {
-    if (kindOnly === 'other' && chat.title.trim().toLowerCase().startsWith('notification ')) {
-      return { slug: 'notifications', label: 'Notifications', badgeClass: 'surface-notifications' };
-    }
-    const slug = normalizeMessengerSlug(kindOnly);
-    return { slug, label: messengerSurfaceLabel(slug), badgeClass: messengerBadgeClass(slug) };
-  }
-  return null;
+  const transport = pmaChatFacets(chat)?.transports.find((value) => value !== 'pma') ?? null;
+  return transport ? { slug: transport, label: messengerSurfaceLabel(transport), badgeClass: messengerBadgeClass(transport) } : null;
 }
 
 export function chatSurfaceFilterToken(slug: string): ChatFilter {
@@ -738,20 +739,7 @@ export function summarizeFilterCounts(
 }
 
 export function pmaChatIsAutomation(chat: PmaChatSummary | null): boolean {
-  if (!chat) return false;
-  const debug = recordValue(chat.raw.debug);
-  const row = recordValue(chat.raw.row);
-  return Boolean(
-    recordValue(debug?.automation) ||
-      stringValue(debug?.automation_job_id) ||
-      stringValue(debug?.automation_rule_id) ||
-      recordValue(row?.automation) ||
-      stringValue(row?.automation_job_id) ||
-      stringValue(row?.automation_rule_id) ||
-      recordValue(chat.raw.automation) ||
-      stringValue(chat.raw.automation_job_id) ||
-      stringValue(chat.raw.automation_rule_id)
-  );
+  return pmaChatFacets(chat)?.category === 'automation';
 }
 
 export function adjustedUnreadFilterCount(
@@ -817,7 +805,7 @@ export function chatRunGroupSummaryParts(group: ChatRunGroup): string[] {
 }
 
 export function chatRunGroupKey(chat: PmaChatSummary): string | null {
-  if (!chat.isTicketFlow && !chat.ticketId) return null;
+  if (pmaChatFacets(chat)?.category !== 'ticket_run') return null;
   const runSuffix = chat.runId ? `:run:${chat.runId}` : '';
   if (chat.worktreeId) return `worktree:${chat.worktreeId}${runSuffix}`;
   if (chat.repoId) return `repo:${chat.repoId}${runSuffix}`;
@@ -959,8 +947,7 @@ export function buildChatListEntries(
   return sortables.map((item) => item.entry);
 }
 
-// Compatibility path for pre-semantic chat snapshots only. Current `/chats`
-// rendering must pass backend TicketRunGroup rows and keep legacyFallback false.
+// Current `/chats` rendering uses backend TicketRunGroup rows for semantic run groups.
 export function buildSemanticChatListEntries(
   chats: PmaChatSummary[],
   groups: TicketRunGroup[],
@@ -969,12 +956,11 @@ export function buildSemanticChatListEntries(
     repoLabel?: (repoId: string) => string | null;
     worktreeLabel?: (worktreeId: string) => string | null;
     groupRuns?: boolean;
-    legacyFallback?: boolean;
   } = {}
 ): ChatListEntry[] {
   if (options.groupRuns === false) return buildChatListEntries(chats, { ...options, groupRuns: false });
   if (groups.length === 0) {
-    return options.legacyFallback ? buildChatListEntries(chats, options) : sortChatsUnreadFirst(chats, options.lastSeen ?? {}).map((chat) => ({ kind: 'chat', chat }));
+    return sortChatsUnreadFirst(chats, options.lastSeen ?? {}).map((chat) => ({ kind: 'chat', chat }));
   }
 
   const lastSeen = options.lastSeen ?? {};

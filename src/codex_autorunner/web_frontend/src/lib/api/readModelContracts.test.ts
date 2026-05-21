@@ -68,6 +68,15 @@ const chatRow = {
   agentProfile: 'm4-pma',
   model: 'gpt-5.3-codex',
   groupId: 'ticket-run:run-1',
+  facets: {
+    category: 'ticket_run' as const,
+    turnKinds: ['message' as const, 'review' as const],
+    originKinds: ['surface' as const],
+    transports: ['pma' as const, 'discord' as const],
+    scopeKind: 'worktree' as const,
+    scopeId: 'wt-1',
+    agentKind: 'coding_agent' as const
+  },
   debug: {
     title: { selected: 'Ticket chat', selected_source: 'stored_title' },
     activity: { selected: now, selected_source: 'last_visible_message_at' }
@@ -94,6 +103,15 @@ describe('read model contracts', () => {
       cursor: cursor(),
       window: window(),
       filter: 'active',
+      facetRequest: {
+        categories: ['ticket_run'],
+        turnKinds: ['message'],
+        originKinds: [],
+        transports: ['pma', 'discord'],
+        scopeKinds: ['worktree'],
+        scopeIds: [],
+        agentKinds: ['coding_agent']
+      },
       rows: [chatRow],
       groups: [
         {
@@ -111,6 +129,14 @@ describe('read model contracts', () => {
         }
       ],
       counters: { total: 1, waiting: 0, running: 1, unread: 2, archived: 0 },
+      facetCounts: {
+        category: { regular: 120, ticket_run: 5, automation: 14, system: 2 },
+        turnKind: { message: 125, review: 8, automation: 14 },
+        originKind: { surface: 130, automation: 14, system: 2 },
+        transport: { pma: 204, discord: 14, telegram: 1, notification: 2 },
+        scopeKind: { hub: 12, repo: 48, worktree: 91 },
+        agentKind: { pma: 40, coding_agent: 161 }
+      },
       repair: repair('/hub/read-models/chats')
     });
     const event = mapReadModelContract<ChatIndexPatchEvent>({
@@ -129,6 +155,10 @@ describe('read model contracts', () => {
     expect(snapshot.groups[0].lastActivityAt).toBe(snapshot.groups[0].lastSortActivityAt);
     expect(snapshot.groups[0].waitingCount).toBe(1);
     expect(snapshot.groups[0].debug?.activity).toEqual({ selectedSource: 'lastSortActivityAt' });
+    expect(snapshot.rows[0].facets?.category).toBe('ticket_run');
+    expect(snapshot.rows[0].facets?.turnKinds).toEqual(['message', 'review']);
+    expect(snapshot.facetRequest.categories).toEqual(['ticket_run']);
+    expect(snapshot.facetCounts.transport.discord).toBe(14);
     expect(snapshot.rows[0].debug?.activity).toEqual(event.patch.rows[0].debug?.activity);
     expect(event.patch.rows[0].unreadCount).toBe(2);
   });

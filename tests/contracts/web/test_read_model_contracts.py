@@ -9,7 +9,10 @@ from codex_autorunner.surfaces.web.read_model_contracts import (
     ChatDetailPatch,
     ChatDetailPatchEvent,
     ChatDetailSnapshot,
+    ChatFacetCounts,
+    ChatFacetRequest,
     ChatIndexCounters,
+    ChatIndexFacets,
     ChatIndexPatch,
     ChatIndexPatchEvent,
     ChatIndexRow,
@@ -108,6 +111,15 @@ def chat_row() -> ChatIndexRow:
         agent="codex",
         agent_profile="m4-pma",
         chat_kind="coding_agent",
+        facets=ChatIndexFacets(
+            category="ticket_run",
+            turn_kinds=["message", "review"],
+            origin_kinds=["surface"],
+            transports=["pma", "discord"],
+            scope_kind="worktree",
+            scope_id="wt-1",
+            agent_kind="coding_agent",
+        ),
         model="gpt-5.3-codex",
         group_id="ticket-run:run-1",
     )
@@ -118,8 +130,23 @@ def test_chat_index_snapshot_and_patch_round_trip_with_camel_case_payloads() -> 
         cursor=cursor(),
         window=window(),
         filter="active",
+        facet_request=ChatFacetRequest(
+            categories=["ticket_run"],
+            turn_kinds=["message"],
+            transports=["pma", "discord"],
+            scope_kinds=["worktree"],
+            agent_kinds=["coding_agent"],
+        ),
         rows=[chat_row()],
         counters=ChatIndexCounters(total=1, waiting=0, running=1, unread=2, archived=0),
+        facet_counts=ChatFacetCounts(
+            category={"regular": 120, "ticket_run": 5, "automation": 14, "system": 2},
+            turn_kind={"message": 125, "review": 8, "automation": 14},
+            origin_kind={"surface": 130, "automation": 14, "system": 2},
+            transport={"pma": 204, "discord": 14, "telegram": 1, "notification": 2},
+            scope_kind={"hub": 12, "repo": 48, "worktree": 91},
+            agent_kind={"pma": 40, "coding_agent": 161},
+        ),
         repair=repair("/hub/read-models/chats"),
     )
     payload = dump_read_model_contract(snapshot)
@@ -128,6 +155,10 @@ def test_chat_index_snapshot_and_patch_round_trip_with_camel_case_payloads() -> 
     assert payload["rows"][0]["chatId"] == "chat-1"
     assert payload["rows"][0]["effectiveStatus"] == "running"
     assert payload["rows"][0]["displayTitle"] == "Release room"
+    assert payload["rows"][0]["facets"]["category"] == "ticket_run"
+    assert payload["rows"][0]["facets"]["turnKinds"] == ["message", "review"]
+    assert payload["facetRequest"]["categories"] == ["ticket_run"]
+    assert payload["facetCounts"]["transport"]["discord"] == 14
     assert payload["rows"][0]["surfaceBindings"][0]["surface_kind"] == "discord"
     assert load_read_model_contract(ChatIndexSnapshot, payload) == snapshot
 

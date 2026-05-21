@@ -1,6 +1,7 @@
 import { browser } from '$app/environment';
 import type { ApiError } from '$lib/api/client';
 import {
+  canonicalChatIndexWindowKey,
   readModelEntityStore,
   repoWorktreeWindowKey,
   type ReadModelEntityState,
@@ -61,7 +62,7 @@ export async function ensureChatIndexLoaded(
   return ensureSnapshotLoaded({
     tags,
     options,
-    isCached: (state) => Boolean(state.chatIndexCursor),
+    isCached: (state) => Boolean(state.chatWindows[canonicalChatIndexWindowKey(request)]),
     fetchAndApply: async (client, store) => {
       const result = await client.chatIndex(request);
       if (!result.ok) return result;

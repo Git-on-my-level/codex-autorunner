@@ -110,7 +110,50 @@ describe('/chats page', () => {
     const pageSource = chatDetailPageSource();
 
     expect(pageSource).toContain('query: search.trim() || null');
-    expect(pageSource).toContain("filterChatEntries(chatListEntries, filter, '', lastSeenMap)");
+    expect(pageSource).toContain("filterChatEntries(chatListEntries, statusFilter, '', lastSeenMap)");
+  });
+
+  it('renders backend-counted facet filters and typed row badges', () => {
+    readModelEntityStore.applyChatIndexSnapshot({
+      cursor: projectionCursor(),
+      window: { limit: 50, totalEstimate: 3, totalIsExact: true },
+      filter: 'all',
+      query: null,
+      rows: [
+        {
+          ...chatIndexRow(),
+          chatId: 'automation-discord',
+          title: 'Automation Discord',
+          facets: {
+            category: 'automation',
+            turnKinds: ['automation'],
+            originKinds: ['automation'],
+            transports: ['discord'],
+            scopeKind: 'worktree',
+            scopeId: 'wt-1',
+            agentKind: 'coding_agent'
+          }
+        }
+      ],
+      groups: [],
+      counters: { total: 3, waiting: 0, running: 0, unread: 0, archived: 0 },
+      facetCounts: {
+        category: { regular: 2, automation: 1 },
+        turnKind: { automation: 1 },
+        originKind: { automation: 1 },
+        transport: { pma: 2, discord: 1 },
+        scopeKind: { hub: 2, worktree: 1 },
+        agentKind: { coding_agent: 1 }
+      }
+    });
+
+    const { body } = render(Page);
+
+    expect(body).toContain('Regular');
+    expect(body).toContain('Automation');
+    expect(body).toContain('Discord');
+    expect(body).toContain('Worktree');
+    expect(body).toContain('Automation Discord');
   });
 
   it('renders cached chat rows instead of the skeleton while the index cursor is still missing', () => {
@@ -210,7 +253,7 @@ describe('/chats page', () => {
         groups: [ticketRunGroup()],
         counters: { total: 5, waiting: 0, running: 2, unread: 0, archived: 0 }
       },
-      { filter: 'ticket_runs', groupBy: 'ticket_run', limit: 50 }
+      { facets: { categories: ['ticket_run'] }, groupBy: 'ticket_run', limit: 50 }
     );
 
     const { body } = render(Page);
@@ -254,7 +297,7 @@ describe('/chats page', () => {
         groups: [],
         counters: { total: 2, waiting: 0, running: 1, unread: 0, archived: 0 }
       },
-      { filter: 'ticket_runs', groupBy: 'ticket_run', limit: 50 }
+      { facets: { categories: ['ticket_run'] }, groupBy: 'ticket_run', limit: 50 }
     );
 
     const { body } = render(Page);
@@ -311,6 +354,15 @@ function ticketFlowRow(
     worktreeId: 'wt-1',
     flowType: 'ticket_flow',
     groupId,
+    facets: {
+      category: 'ticket_run',
+      turnKinds: ['message'],
+      originKinds: ['surface'],
+      transports: ['pma'],
+      scopeKind: 'worktree',
+      scopeId: 'wt-1',
+      agentKind: 'coding_agent'
+    },
     ticketDone: status === 'idle' ? null : false,
     ticketStatus: status === 'running' ? 'running' : status === 'waiting' ? 'waiting' : 'unknown',
     ...overrides

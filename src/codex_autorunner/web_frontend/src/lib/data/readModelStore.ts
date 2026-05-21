@@ -1,7 +1,10 @@
 import { writable, type Readable } from 'svelte/store';
 import type { PmaQueuedTurn } from '$lib/api/client';
+import { chatFacetRequestIsEmpty, normalizeChatFacetRequest } from '$lib/api/readModelContracts';
 import type {
   ChatArtifactSummary,
+  ChatFacetCounts,
+  ChatFacetRequest,
   ChatDetailPatchEvent,
   ChatDetailSnapshot,
   ChatIndexCounters,
@@ -79,11 +82,19 @@ export type EntityVersions = Record<EntityKind, Record<string, number>>;
 export type ChatIndexWindowRequest = {
   filter?: ChatIndexSnapshot['filter'];
   query?: string | null;
+  facets?: Partial<ChatFacetRequest> | null;
   surfaceKind?: string | null;
   groupBy?: 'ticket_run' | null;
   parentGroupId?: string | null;
   limit?: number;
 };
+
+/** Shared companion window for backend ticket-run groups; must match route preload. */
+export const CHAT_TICKET_RUN_GROUP_WINDOW_REQUEST = {
+  facets: { categories: ['ticket_run'] as const },
+  groupBy: 'ticket_run' as const,
+  limit: 50
+} satisfies ChatIndexWindowRequest;
 
 export type ChatIndexWindowStatus = 'idle' | 'loading' | 'ready' | 'interrupted';
 
@@ -91,6 +102,7 @@ export type ChatIndexWindow = {
   key: string;
   request: Required<Pick<ChatIndexWindowRequest, 'filter'>> & {
     query: string | null;
+    facets: ChatFacetRequest;
     surfaceKind: string | null;
     groupBy: 'ticket_run' | null;
     parentGroupId: string | null;
@@ -99,6 +111,7 @@ export type ChatIndexWindow = {
   rowIds: string[];
   groupIds: string[];
   counters: ChatIndexCounters;
+  facetCounts: ChatFacetCounts;
   cursor: ProjectionCursor | null;
   window: PageWindow | null;
   status: ChatIndexWindowStatus;
@@ -127,6 +140,7 @@ export type ReadModelEntityState = {
   chatGroups: Record<string, ChatIndexGroup>;
   chatGroupOrder: string[];
   chatCounters: ChatIndexCounters;
+  chatFacetCounts: ChatFacetCounts;
   chatWindows: Record<string, ChatIndexWindow>;
   chatDetails: Record<string, ChatDetailProjection>;
   timelines: Record<string, TimelineProjection>;
@@ -162,6 +176,7 @@ export type ChatIndexView = {
   rows: ChatIndexRow[];
   groups: ChatIndexGroup[];
   counters: ChatIndexCounters;
+  facetCounts: ChatFacetCounts;
   cursor: ProjectionCursor | null;
 };
 
@@ -180,6 +195,25 @@ export const emptyChatCounters: ChatIndexCounters = {
   archived: 0
 };
 
+export const emptyChatFacetCounts: ChatFacetCounts = {
+  category: {},
+  turnKind: {},
+  originKind: {},
+  transport: {},
+  scopeKind: {},
+  agentKind: {}
+};
+
+export const emptyChatFacetRequest: ChatFacetRequest = {
+  categories: [],
+  turnKinds: [],
+  originKinds: [],
+  transports: [],
+  scopeKinds: [],
+  scopeIds: [],
+  agentKinds: []
+};
+
 export const PMA_LIVE_PROGRESS_EVENT_LIMIT = 80;
 
 export function createInitialReadModelState(): ReadModelEntityState {
@@ -191,6 +225,7 @@ export function createInitialReadModelState(): ReadModelEntityState {
     chatGroups: {},
     chatGroupOrder: [],
     chatCounters: emptyChatCounters,
+    chatFacetCounts: emptyChatFacetCounts,
     chatWindows: {},
     chatDetails: {},
     timelines: {},
@@ -255,13 +290,16 @@ export class ReadModelEntityStore implements Readable<ReadModelEntityState> {
     counters: ChatIndexCounters;
     filter?: ChatIndexSnapshot['filter'];
     query?: string | null;
+    facetRequest?: ChatFacetRequest;
     window?: PageWindow;
-  }, request: ChatIndexWindowRequest = {}, options: { append?: boolean } = {}): void {
+    facetCounts?: ChatFacetCounts;
+    }, request: ChatIndexWindowRequest = {}, options: { append?: boolean } = {}): void {
     const rows = uniqueChatIndexRows(snapshot.rows);
     const next = cloneState(this.state);
     const windowRequest = normalizeChatIndexWindowRequest({
       filter: request.filter ?? snapshot.filter,
       query: request.query ?? snapshot.query,
+      facets: request.facets ?? snapshot.facetRequest,
       surfaceKind: request.surfaceKind,
       groupBy: request.groupBy,
       parentGroupId: request.parentGroupId,
@@ -272,6 +310,7 @@ export class ReadModelEntityStore implements Readable<ReadModelEntityState> {
     for (const row of rows) next.chats[row.chatId] = row;
     for (const group of snapshot.groups) next.chatGroups[group.groupId] = group;
     if (isDefaultChatIndexWindow(windowRequest)) next.chatCounters = snapshot.counters;
+    if (isDefaultChatIndexWindow(windowRequest)) next.chatFacetCounts = cloneChatFacetCounts(snapshot.facetCounts ?? emptyChatFacetCounts);
     next.chatIndexCursor = snapshot.cursor;
     next.chatWindows[windowKey] = {
       key: windowKey,
@@ -283,6 +322,7 @@ export class ReadModelEntityStore implements Readable<ReadModelEntityState> {
         ? uniqueStrings([...previousWindow.groupIds, ...snapshot.groups.map((group) => group.groupId)])
         : snapshot.groups.map((group) => group.groupId),
       counters: snapshot.counters,
+      facetCounts: cloneChatFacetCounts(snapshot.facetCounts ?? emptyChatFacetCounts),
       cursor: snapshot.cursor,
       window: snapshot.window ?? null,
       status: 'ready',
@@ -327,6 +367,7 @@ export class ReadModelEntityStore implements Readable<ReadModelEntityState> {
       rowIds: orderedRows.map((row) => row.chatId),
       groupIds: [],
       counters: next.chatCounters,
+      facetCounts: next.chatFacetCounts,
       cursor: next.chatIndexCursor,
       window: null,
       status: 'ready',
@@ -375,6 +416,7 @@ export class ReadModelEntityStore implements Readable<ReadModelEntityState> {
     }
     if (event.patch.order) next.chatOrder = event.patch.order.filter((id) => Boolean(next.chats[id] ?? incomingRows.get(id)));
     if (event.patch.counters) next.chatCounters = event.patch.counters;
+    if (event.patch.facetCounts) next.chatFacetCounts = cloneChatFacetCounts(event.patch.facetCounts);
     reconcileChatIndexWindowsAfterEntityPatch(next, event);
     next.chatIndexCursor = event.envelope.cursor;
     rememberCursor(next, 'chat.index', event.envelope.cursor);
@@ -867,6 +909,7 @@ export function selectChatIndexView(state: ReadModelEntityState): ChatIndexView 
     rows: state.chatOrder.map((id) => state.chats[id]).filter(Boolean),
     groups: state.chatGroupOrder.map((id) => state.chatGroups[id]).filter(Boolean),
     counters: state.chatCounters,
+    facetCounts: state.chatFacetCounts,
     cursor: state.chatIndexCursor
   };
 }
@@ -877,11 +920,12 @@ export function selectChatIndexWindowView(
 ): ChatIndexView & { window: ChatIndexWindow | null } {
   const key = canonicalChatIndexWindowKey(request);
   const window = state.chatWindows[key] ?? null;
-  if (!window) return { rows: [], groups: [], counters: emptyChatCounters, cursor: null, window: null };
+  if (!window) return { rows: [], groups: [], counters: emptyChatCounters, facetCounts: emptyChatFacetCounts, cursor: null, window: null };
   return {
     rows: window.rowIds.map((id) => state.chats[id]).filter(Boolean),
     groups: window.groupIds.map((id) => state.chatGroups[id]).filter(Boolean),
     counters: window.counters,
+    facetCounts: window.facetCounts,
     cursor: window.cursor,
     window
   };
@@ -912,6 +956,7 @@ function cloneState(state: ReadModelEntityState): ReadModelEntityState {
     chatGroups: { ...state.chatGroups },
     chatGroupOrder: [...state.chatGroupOrder],
     chatCounters: { ...state.chatCounters },
+    chatFacetCounts: cloneChatFacetCounts(state.chatFacetCounts),
     chatWindows: Object.fromEntries(Object.entries(state.chatWindows).map(([key, window]) => [key, cloneChatIndexWindow(window)])),
     chatDetails: { ...state.chatDetails },
     timelines: { ...state.timelines },
@@ -1084,6 +1129,7 @@ function cloneChatIndexWindow(window: ChatIndexWindow): ChatIndexWindow {
     rowIds: [...window.rowIds],
     groupIds: [...window.groupIds],
     counters: { ...window.counters },
+    facetCounts: cloneChatFacetCounts(window.facetCounts),
     window: window.window ? { ...window.window } : null
   };
 }
@@ -1132,6 +1178,7 @@ function reconcileChatIndexWindowsAfterEntityPatch(next: ReadModelEntityState, e
           .slice(0, loadedLimit);
       }
       if (event.patch.counters) window.counters = event.patch.counters;
+      if (event.patch.facetCounts) window.facetCounts = cloneChatFacetCounts(event.patch.facetCounts);
       window.cursor = event.envelope.cursor;
       const affected = event.patch.removedRowIds.some((rowId) => existingIds.has(rowId)) || event.patch.rows.some((row) => existingIds.has(row.chatId) || (event.patch.order ? event.patch.order.includes(row.chatId) : chatIndexRowMatchesWindow(row, window.request)));
       const needsBackfill = affected && !event.patch.order && (window.window?.totalEstimate ?? window.rowIds.length) > window.rowIds.length;
@@ -1195,6 +1242,7 @@ function retainedChatIndexRowIds(state: ReadModelEntityState): Set<string> {
 function chatIndexRowMatchesWindow(row: ChatIndexRow, request: ChatIndexWindow['request']): boolean {
   if (request.parentGroupId && row.groupId !== request.parentGroupId) return false;
   if (request.surfaceKind && row.surface !== request.surfaceKind) return false;
+  if (!chatIndexRowMatchesFacetRequest(row, request.facets)) return false;
   if (!chatIndexRowMatchesFilter(row, request.filter)) return false;
   if (!request.query) return true;
   const query = request.query.toLocaleLowerCase();
@@ -1207,9 +1255,30 @@ function chatIndexRowMatchesFilter(row: ChatIndexRow, filter: ChatIndexSnapshot[
   if (filter === 'active') return row.status === 'running';
   if (filter === 'unread') return row.unreadCount > 0;
   if (filter === 'archived') return row.status === 'archived';
-  if (filter === 'ticket_runs') return row.flowType === 'ticket_flow';
+  if (filter === 'ticket_runs') return row.facets?.category === 'ticket_run';
   if (filter === 'external') return row.surface !== 'pma';
   return true;
+}
+
+function chatIndexRowMatchesFacetRequest(row: ChatIndexRow, request: ChatFacetRequest): boolean {
+  if (chatFacetRequestIsEmpty(request)) return true;
+  const facets = row.facets;
+  if (!facets) return false;
+  return (
+    matchesAny(request.categories, facets.category) &&
+    matchesAny(request.turnKinds, facets.turnKinds) &&
+    matchesAny(request.originKinds, facets.originKinds) &&
+    matchesAny(request.transports, facets.transports) &&
+    matchesAny(request.scopeKinds, facets.scopeKind ?? null) &&
+    matchesAny(request.scopeIds, facets.scopeId ?? null) &&
+    matchesAny(request.agentKinds, facets.agentKind ?? null)
+  );
+}
+
+function matchesAny<T extends string>(requested: T[], actual: T | T[] | string | null | undefined): boolean {
+  if (!requested.length) return true;
+  if (Array.isArray(actual)) return actual.some((value) => requested.includes(value as T));
+  return typeof actual === 'string' && requested.includes(actual as T);
 }
 
 export function canonicalChatIndexWindowKey(request: ChatIndexWindowRequest = {}): string {
@@ -1217,6 +1286,7 @@ export function canonicalChatIndexWindowKey(request: ChatIndexWindowRequest = {}
   return JSON.stringify({
     filter: normalized.filter,
     query: normalized.query,
+    facets: normalized.facets,
     surfaceKind: normalized.surfaceKind,
     groupBy: normalized.groupBy,
     parentGroupId: normalized.parentGroupId,
@@ -1226,6 +1296,7 @@ export function canonicalChatIndexWindowKey(request: ChatIndexWindowRequest = {}
 
 function normalizeChatIndexWindowRequest(request: ChatIndexWindowRequest = {}): Required<Pick<ChatIndexWindowRequest, 'filter'>> & {
   query: string | null;
+  facets: ChatFacetRequest;
   surfaceKind: string | null;
   groupBy: 'ticket_run' | null;
   parentGroupId: string | null;
@@ -1237,6 +1308,7 @@ function normalizeChatIndexWindowRequest(request: ChatIndexWindowRequest = {}): 
   return {
     filter: request.filter ?? 'all',
     query,
+    facets: normalizeChatFacetRequest(request.facets),
     surfaceKind,
     groupBy: request.groupBy === 'ticket_run' ? 'ticket_run' : null,
     parentGroupId,
@@ -1245,7 +1317,18 @@ function normalizeChatIndexWindowRequest(request: ChatIndexWindowRequest = {}): 
 }
 
 function isDefaultChatIndexWindow(request: ReturnType<typeof normalizeChatIndexWindowRequest>): boolean {
-  return request.filter === 'all' && request.query === null && request.surfaceKind === null && request.groupBy === null && request.parentGroupId === null;
+  return request.filter === 'all' && request.query === null && chatFacetRequestIsEmpty(request.facets) && request.surfaceKind === null && request.groupBy === null && request.parentGroupId === null;
+}
+
+function cloneChatFacetCounts(counts: ChatFacetCounts): ChatFacetCounts {
+  return {
+    category: { ...counts.category },
+    turnKind: { ...counts.turnKind },
+    originKind: { ...counts.originKind },
+    transport: { ...counts.transport },
+    scopeKind: { ...counts.scopeKind },
+    agentKind: { ...counts.agentKind }
+  };
 }
 
 function keyed<T>(items: T[], key: (item: T) => string): Record<string, T> {

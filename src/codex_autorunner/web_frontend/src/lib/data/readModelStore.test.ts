@@ -178,6 +178,43 @@ describe('read model entity store', () => {
     expect(selectorFingerprint(store.snapshot(), 'chat', ['chat-2'])).not.toBe(chatTwoBefore);
   });
 
+  it('keys chat index windows by typed facet request and stores facet counts', () => {
+    const store = new ReadModelEntityStore();
+    const ticket = {
+      ...chat('ticket-chat'),
+      facets: {
+        category: 'ticket_run' as const,
+        turnKinds: ['message' as const],
+        originKinds: ['surface' as const],
+        transports: ['pma' as const],
+        scopeKind: 'worktree' as const,
+        scopeId: 'wt-1',
+        agentKind: 'coding_agent' as const
+      }
+    };
+    const request = { facets: { categories: ['ticket_run' as const], transports: ['pma' as const] }, limit: 25 };
+    store.applyChatIndexSnapshot({
+      cursor: cursor(1),
+      rows: [ticket],
+      groups: [],
+      counters: { total: 1, waiting: 0, running: 0, unread: 0, archived: 0 },
+      facetRequest: { categories: ['ticket_run'], turnKinds: [], originKinds: [], transports: ['pma'], scopeKinds: [], scopeIds: [], agentKinds: [] },
+      facetCounts: {
+        category: { ticket_run: 1 },
+        turnKind: { message: 1 },
+        originKind: { surface: 1 },
+        transport: { pma: 1 },
+        scopeKind: { worktree: 1 },
+        agentKind: { coding_agent: 1 }
+      }
+    }, request);
+
+    const typedWindow = selectChatIndexWindowView(store.snapshot(), request);
+    expect(typedWindow.rows.map((row) => row.chatId)).toEqual(['ticket-chat']);
+    expect(typedWindow.facetCounts.category.ticket_run).toBe(1);
+    expect(selectChatIndexWindowView(store.snapshot(), { facets: { categories: ['automation'] }, limit: 25 }).rows).toEqual([]);
+  });
+
   it('applies chat detail timeline patches and reconciles optimistic sends', () => {
     const store = new ReadModelEntityStore();
     store.applyChatDetailSnapshot(detailSnapshot());

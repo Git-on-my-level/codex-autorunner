@@ -36,6 +36,7 @@ import {
   mapChatSurfaceEventToPmaChatSummary,
   modelReasoningOptions,
   modelSelectorState,
+  pmaChatTransportBadges,
   pmaChatKind,
   pmaChatKindLabel,
   pmaChatHeaderScopeLine,
@@ -75,7 +76,17 @@ const baseChat: PmaChatSummary = {
   isTicketFlow: true,
   progressPercent: null,
   updatedAt: '2026-05-04T00:00:00Z',
-  raw: {}
+  raw: {
+    facets: {
+      category: 'ticket_run',
+      turnKinds: ['message'],
+      originKinds: ['surface'],
+      transports: ['pma'],
+      scopeKind: 'worktree',
+      scopeId: 'repo-1--pma',
+      agentKind: 'coding_agent'
+    }
+  }
 };
 
 const baseArtifact: SurfaceArtifact = {
@@ -265,21 +276,16 @@ describe('PMA chat view helpers', () => {
     expect(entries.every((entry) => entry.kind === 'chat')).toBe(true);
   });
 
-  it('runs legacy grouping only behind the explicit pre-semantic fallback flag', () => {
+  it('does not run legacy grouping when semantic snapshots omit backend groups', () => {
     const chats: PmaChatSummary[] = [
       { ...baseChat, id: 'ticket-done', status: 'idle', ticketId: 'TICKET-001', ticketDone: true, ticketStatus: 'done' },
       { ...baseChat, id: 'generic-done', status: 'done', ticketId: 'TICKET-002', ticketDone: null, ticketStatus: null }
     ];
 
-    const entries = buildSemanticChatListEntries(chats, [], { groupRuns: true, legacyFallback: true });
+    const entries = buildSemanticChatListEntries(chats, [], { groupRuns: true });
 
-    expect(entries).toHaveLength(1);
-    expect(entries[0].kind).toBe('group');
-    if (entries[0].kind === 'group') {
-      expect(entries[0].group.aggregateSource).toBeUndefined();
-      expect(entries[0].group.doneCount).toBe(1);
-      expect(entries[0].group.totalCount).toBe(2);
-    }
+    expect(entries).toHaveLength(2);
+    expect(entries.every((entry) => entry.kind === 'chat')).toBe(true);
   });
 
   it('does not attach semantic group children by inferred run keys', () => {
@@ -406,16 +412,41 @@ describe('PMA chat view helpers', () => {
     expect(summarizeFilterCounts(chats, lastSeen)).toEqual({ all: 3, active: 1, waiting: 1, unread: 2, archived: 0 });
   });
 
-  it('filters automation-owned chats by backend metadata', () => {
+  it('filters automation-owned chats by typed backend facets', () => {
     const automationChat: PmaChatSummary = {
       ...baseChat,
       id: 'automation-chat',
-      raw: { debug: { automation_job_id: 'job-1' } }
+      raw: {
+        facets: {
+          category: 'automation',
+          turnKinds: ['automation'],
+          originKinds: ['automation'],
+          transports: ['pma'],
+          scopeKind: 'hub',
+          scopeId: 'hub',
+          agentKind: 'coding_agent'
+        }
+      }
     };
     const chats = [baseChat, automationChat];
 
     expect(pmaChatIsAutomation(automationChat)).toBe(true);
     expect(filterPmaChats(chats, 'automation', '').map((chat) => chat.id)).toEqual(['automation-chat']);
+  });
+
+  it('does not classify raw automation diagnostics as automation without typed facets', () => {
+    const diagnosticOnlyChat: PmaChatSummary = {
+      ...baseChat,
+      id: 'diagnostic-only-chat',
+      raw: {
+        automation_job_id: 'job-1',
+        automation_rule_id: 'rule-1',
+        debug: { automation: { rule_id: 'rule-1' } }
+      }
+    };
+
+    expect(pmaChatIsAutomation(diagnosticOnlyChat)).toBe(false);
+    expect(filterPmaChats([diagnosticOnlyChat], 'automation', '')).toEqual([]);
   });
 
   it('keeps archived chats out of the working filters and exposes them through archived', () => {
@@ -454,28 +485,28 @@ describe('PMA chat view helpers', () => {
       id: 'discord-chat',
       ticketId: null,
       isTicketFlow: false,
-      raw: { surface_kind: 'discord' }
+      raw: { facets: { category: 'regular', turnKinds: ['message'], originKinds: ['surface'], transports: ['discord'] } }
     };
     const telegram = {
       ...baseChat,
       id: 'telegram-chat',
       ticketId: null,
       isTicketFlow: false,
-      raw: { surface_kind: 'telegram' }
+      raw: { facets: { category: 'regular', turnKinds: ['message'], originKinds: ['surface'], transports: ['telegram'] } }
     };
     const selectedSlack = {
       ...baseChat,
       id: 'slack-chat',
       ticketId: null,
       isTicketFlow: false,
-      raw: { surface_kind: 'slack' }
+      raw: { facets: { category: 'regular', turnKinds: ['message'], originKinds: ['surface'], transports: ['notification'] } }
     };
 
     const facetChats = mergeChatFacetSourceChats([discord, telegram], [selectedSlack], []);
 
     expect(chatSurfaceFilterOptions(facetChats).map((option) => option.slug)).toEqual([
       'discord',
-      'slack',
+      'notification',
       'telegram'
     ]);
   });
@@ -527,6 +558,7 @@ describe('PMA chat view helpers', () => {
         lifecycle_status: 'active',
         lifecycle: 'archived',
         runtime_status: 'archived',
+        facets: { category: 'regular', turnKinds: ['message'], originKinds: ['surface'], transports: ['discord'] },
         surface_kind: 'discord',
         surface_bindings: [{ surface_kind: 'discord', surface_key: 'channel-1', lifecycle: 'archived' }],
         primary_surface: { surface_kind: 'pma', lifecycle: 'running' }
@@ -555,7 +587,7 @@ describe('PMA chat view helpers', () => {
       repoId: 'repo-1',
       lifecycleStatus: null,
       status: 'done',
-      raw: { lifecycle: 'archived' }
+      raw: { ...baseChat.raw, lifecycle: 'archived' }
     };
     const chats: PmaChatSummary[] = [active, archivedViaRaw];
     const entries = buildChatListEntries(chats, { groupRuns: true });
@@ -567,7 +599,7 @@ describe('PMA chat view helpers', () => {
     expect(filtered[0].group.totalCount).toBe(1);
   });
 
-  it('detects messenger surface from API fields, not protocol-id titles', () => {
+  it('detects messenger surface from typed transport facets, not titles or raw API fields', () => {
     expect(
       chatMessengerSurface({
         ...baseChat,
@@ -580,15 +612,15 @@ describe('PMA chat view helpers', () => {
       chatMessengerSurface({
         ...baseChat,
         title: 'General',
-        raw: { surface_kind: 'discord', surface_key: 'ch-1' }
+        raw: { facets: { category: 'regular', turnKinds: ['message'], originKinds: ['surface'], transports: ['discord'] } }
       })
     ).toEqual({ slug: 'discord', label: 'Discord', badgeClass: 'surface-discord' });
 
     expect(
       chatMessengerSurface({
         ...baseChat,
-        title: 'side thread',
-        raw: { managed_thread_id: 't1', surface_urn: 'managed_thread:t1' }
+        title: 'Raw Discord only',
+        raw: { surface_kind: 'discord', surface_key: 'ch-1' }
       })
     ).toBeNull();
   });
@@ -981,24 +1013,52 @@ describe('PMA chat view helpers', () => {
   });
 
   it('filters chats by messenger surface slug', () => {
-    const discordChat = { ...baseChat, id: 'd1', title: 'Engineering', raw: { surface_kind: 'discord' } };
+    const discordChat = {
+      ...baseChat,
+      id: 'd1',
+      title: 'Engineering',
+      raw: { facets: { category: 'regular', turnKinds: ['message'], originKinds: ['surface'], transports: ['discord'] } }
+    };
     const hubChat = { ...baseChat, id: 'h1', title: 'Chat · repo', raw: {} };
     const list = [discordChat, hubChat];
     expect(filterPmaChats(list, chatSurfaceFilterToken('discord'), '')).toEqual([discordChat]);
     expect(chatSurfaceFilterOptions(list)).toEqual([{ slug: 'discord', label: 'Discord', count: 1 }]);
   });
 
-  it('gives notification chats their own surface filter instead of generic other when identifiable', () => {
-    const notificationChat = { ...baseChat, id: 'n1', title: 'Notification run_finished', raw: { surface_kind: 'other' } };
+  it('renders transport badges from typed facets instead of raw surface fields', () => {
+    const chat = {
+      ...baseChat,
+      id: 'typed-transport',
+      raw: {
+        surface_kind: 'telegram',
+        facets: {
+          category: 'regular',
+          turnKinds: ['message'],
+          originKinds: ['surface'],
+          transports: ['discord', 'notification']
+        }
+      }
+    };
+
+    expect(pmaChatTransportBadges(chat).map((badge) => badge.slug)).toEqual(['discord', 'notification']);
+  });
+
+  it('gives notification chats their own surface filter from typed transport facets', () => {
+    const notificationChat = {
+      ...baseChat,
+      id: 'n1',
+      title: 'Notification run_finished',
+      raw: { facets: { category: 'regular', turnKinds: ['message'], originKinds: ['surface'], transports: ['notification'] } }
+    };
     const list = [notificationChat, { ...baseChat, id: 'h1', title: 'Chat', raw: {} }];
 
     expect(chatMessengerSurface(notificationChat)).toEqual({
-      slug: 'notifications',
+      slug: 'notification',
       label: 'Notifications',
-      badgeClass: 'surface-notifications'
+      badgeClass: 'surface-notification'
     });
-    expect(chatSurfaceFilterOptions(list)).toEqual([{ slug: 'notifications', label: 'Notifications', count: 1 }]);
-    expect(filterPmaChats(list, chatSurfaceFilterToken('notifications'), '')).toEqual([notificationChat]);
+    expect(chatSurfaceFilterOptions(list)).toEqual([{ slug: 'notification', label: 'Notifications', count: 1 }]);
+    expect(filterPmaChats(list, chatSurfaceFilterToken('notification'), '')).toEqual([notificationChat]);
   });
 
   it('sorts waiting chats ahead of others then by recent updates', () => {
@@ -1038,8 +1098,8 @@ describe('PMA chat view helpers', () => {
 
   it('keeps local draft placeholders ahead of unread and recent persisted chats', () => {
     const chats: PmaChatSummary[] = [
-      { ...baseChat, id: 'unread-new', status: 'idle', ticketId: null, isTicketFlow: false, updatedAt: '2026-05-04T03:00:00Z' },
-      { ...baseChat, id: 'read-new', status: 'idle', ticketId: null, isTicketFlow: false, updatedAt: '2026-05-04T04:00:00Z' },
+      { ...baseChat, id: 'unread-new', status: 'idle', ticketId: null, isTicketFlow: false, updatedAt: '2026-05-04T03:00:00Z', raw: {} },
+      { ...baseChat, id: 'read-new', status: 'idle', ticketId: null, isTicketFlow: false, updatedAt: '2026-05-04T04:00:00Z', raw: {} },
       {
         ...baseChat,
         id: 'draft:pma:1',

@@ -246,8 +246,9 @@ def test_hub_automation_workspace_batches_jobs_and_target_options(
     index = client.get("/hub/read-models/automations/workspace-index")
     assert index.status_code == 200
     index_workspace = index.json()
-    assert len(index_workspace["automations"][0]["jobs"]) == 0
-    assert "executor" not in index_workspace["automations"][0]
+    index_rows = {row["id"]: row for row in index_workspace["automations"]}
+    assert len(index_rows["rule-0"]["jobs"]) == 0
+    assert "executor" not in index_rows["rule-0"]
     assert "target_options" not in index_workspace
     assert (
         client.get(

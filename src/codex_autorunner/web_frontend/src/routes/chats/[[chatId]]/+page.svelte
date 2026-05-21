@@ -20,6 +20,7 @@
     type PmaQueuedTurn
   } from '$lib/api/client';
   import {
+    CHAT_TICKET_RUN_GROUP_WINDOW_REQUEST,
     invalidateReadModelTags,
     readModelEntityStore,
     readModelEntityTags,
@@ -34,6 +35,11 @@
     selectReadMarkers
   } from '$lib/data';
   import { chatIndexSession } from '$lib/data/chatIndexSession';
+  import type {
+    ChatFacetCategory,
+    ChatFacetScopeKind,
+    ChatFacetTransport
+  } from '$lib/api/readModelContracts';
   import {
     isOptimisticQueuedTurn,
     progressWithLiveElapsed,
@@ -101,11 +107,10 @@
     pmaChatKind,
     pmaChatKindLabel,
     pmaChatHeaderScopeLine,
-    pmaChatIsAutomation,
-    chatMessengerSurface,
+    pmaChatFacets,
+    pmaChatTransportBadges,
+    chatTransportLabel,
     pmaChatScopeTagView,
-    chatSurfaceFilterOptions,
-    chatSurfaceFilterToken,
     progressPercent,
     visibleLocalChatPlaceholders as selectVisibleLocalChatPlaceholders,
     removePendingAttachment,
@@ -113,7 +118,6 @@
     summarizeVisibleLocalPlaceholderStatusCounts,
     type PendingAttachment,
     type ChatTranscriptCard,
-    type ChatFilter,
     type ChatStatusFilter,
     type ChatListEntry,
     type ChatRunGroup,
@@ -192,20 +196,19 @@
   let selectedScopeId = $state('local');
   let selectedScopeSource = $state<PmaChatScopeSource>('default_hub');
   let newChatKind = $state<'pma' | 'agent'>('pma');
-  let filter = $state<ChatFilter>('all');
+  let statusFilter = $state<ChatStatusFilter>('all');
+  let categoryFilter = $state<ChatFacetCategory | null>(null);
+  let transportFilter = $state<ChatFacetTransport | null>(null);
+  let scopeKindFilter = $state<ChatFacetScopeKind | null>(null);
   let detailMode = $state<'list' | 'detail'>('list');
   let search = $state('');
   const currentChatIndexRequest = $derived<ChatIndexWindowRequest>(chatIndexRequestForCurrentFilters());
-  const ticketRunGroupRequest = $derived<ChatIndexWindowRequest>({
-    filter: 'ticket_runs',
-    groupBy: 'ticket_run',
-    limit: 50
-  });
+  const ticketRunGroupRequest = $derived<ChatIndexWindowRequest>(CHAT_TICKET_RUN_GROUP_WINDOW_REQUEST);
   const persistedChats = $derived<PmaChatSummary[]>(selectPmaChats(readModelState, currentChatIndexRequest));
   const facetPersistedChats = $derived<PmaChatSummary[]>(selectPmaChats(readModelState, { filter: 'all', limit: 50 }));
   const backendTicketRunGroups = $derived(selectTicketRunGroups(readModelState, ticketRunGroupRequest));
   const currentTicketRunGroups = $derived(
-    filter === CHAT_TICKET_RUNS_FILTER
+    categoryFilter === 'ticket_run'
       ? selectTicketRunGroups(readModelState, currentChatIndexRequest)
       : backendTicketRunGroups
   );
@@ -225,7 +228,7 @@
     mergeChatFacetSourceChats(facetPersistedChats, persistedChats, committedChatPlaceholders)
   );
   const chatListSourceChats = $derived<PmaChatSummary[]>(
-    filter === CHAT_TICKET_RUNS_FILTER ? facetChats : chats
+    categoryFilter === 'ticket_run' ? facetChats : chats
   );
 
   function chatSummaryForId(chatId: string | null): PmaChatSummary | null {
@@ -289,7 +292,7 @@
       chatError = error;
     },
     onFilterArchived: () => {
-      filter = 'archived';
+      statusFilter = 'archived';
     },
     onClockTick: (nowMs) => {
       clockNowMs = nowMs;
@@ -438,15 +441,14 @@
       groupRuns: true
     })
   );
-  const filteredEntries = $derived(sortEntriesForPinnedChats(filterChatEntries(chatListEntries, filter, '', lastSeenMap), pinnedChatIds));
+  const selectedChatWindowView = $derived(selectChatIndexWindowView(readModelState, currentChatIndexRequest));
+  const selectedChatWindow = $derived(selectedChatWindowView.window);
+  const filteredEntries = $derived(sortEntriesForPinnedChats(filterChatEntries(chatListEntries, statusFilter, '', lastSeenMap), pinnedChatIds));
   const filterCounts = $derived(chatStatusFilterCounts());
-  const surfaceFilterChips = $derived(chatSurfaceFilterOptions(facetChats));
   const ticketRunGroupCount = $derived(countSemanticTicketRunGroups(backendTicketRunGroups, facetChats));
   const localChatPlaceholderCount = $derived(visibleLocalChatPlaceholders.filter((chat) => !isPmaChatArchived(chat)).length);
   const activeChatCount = $derived(readModelState.chatCounters.total + localChatPlaceholderCount);
   const hasUsableChatIndex = $derived(Boolean(readModelState.chatIndexCursor || readModelState.chatOrder.length > 0));
-  const selectedChatWindowView = $derived(selectChatIndexWindowView(readModelState, currentChatIndexRequest));
-  const selectedChatWindow = $derived(selectedChatWindowView.window);
   const hasSelectedChatWindow = $derived(Boolean(selectedChatWindow));
   const canLoadMoreChats = $derived(Boolean(selectedChatWindow?.window?.nextCursor));
   const initialChatIndexError = $derived(chatIndexLoadError());
@@ -625,7 +627,7 @@
     const text = (card.message.text ?? '').trim();
     return text.length > 120 ? text.slice(text.length - 120) : text;
   });
-  const activeMessengerSurface = $derived(chatMessengerSurface(activeChat));
+  const activeTransportBadges = $derived(pmaChatTransportBadges(activeChat));
   const activeSharedFileCount = $derived(activeSurfaceDeliveries.length);
   const activeRepoIngress = $derived(repoIngressForChat(activeChat));
   const createChatLabel = $derived(creating ? 'Creating...' : '+ New');
@@ -704,26 +706,27 @@
     return key === 'all' ? 'All' : key.charAt(0).toUpperCase() + key.slice(1);
   }
 
-  function readModelChatIndexFilter(value: ChatFilter): 'all' | 'waiting' | 'active' | 'unread' | 'archived' | 'ticket_runs' | 'external' {
-    if (value === 'ticket_runs') return 'ticket_runs';
-    if (value === 'automation') return 'all';
-    if (value.startsWith('surface:')) return 'external';
-    if (value === 'all' || value === 'waiting' || value === 'active' || value === 'unread' || value === 'archived') return value;
-    return 'all';
+  function facetChipLabel(value: string): string {
+    return value.charAt(0).toUpperCase() + value.slice(1).replace(/_/g, ' ');
   }
 
   function chatIndexRequestForCurrentFilters(): ChatIndexWindowRequest {
+    const facets = {
+      categories: categoryFilter ? [categoryFilter] : [],
+      transports: transportFilter ? [transportFilter] : [],
+      scopeKinds: scopeKindFilter ? [scopeKindFilter] : []
+    };
     return {
-      filter: readModelChatIndexFilter(filter),
+      filter: statusFilter,
       query: search.trim() || null,
-      surfaceKind: filter.startsWith('surface:') ? filter.slice('surface:'.length) : null,
-      groupBy: filter === CHAT_TICKET_RUNS_FILTER ? 'ticket_run' : null,
+      facets,
+      groupBy: categoryFilter === 'ticket_run' ? 'ticket_run' : null,
       limit: 50
     };
   }
 
   function chatStatusFilterCounts(): Record<ChatStatusFilter, number> {
-    const counters = readModelState.chatCounters;
+    const counters = selectedChatWindowView.window ? selectedChatWindowView.counters : readModelState.chatCounters;
     const knownChats = facetChats;
     const localStatusCounts = summarizeVisibleLocalPlaceholderStatusCounts(persistedFacetChats, committedChatPlaceholders);
     return {
@@ -735,7 +738,37 @@
     };
   }
 
-  const automationChatCount = $derived(facetChats.filter(pmaChatIsAutomation).length);
+  const categoryFilterOptions = $derived(chatCategoryFilterOptions());
+  const transportFilterOptions = $derived(chatTransportFilterOptions());
+  const scopeKindFilterOptions = $derived(chatScopeKindFilterOptions());
+
+  function chatCategoryFilterOptions(): { key: ChatFacetCategory | null; label: string; count: number }[] {
+    const counts = readModelState.chatFacetCounts.category;
+    const items: { key: ChatFacetCategory | null; label: string; count: number }[] = [
+      { key: null, label: 'All', count: filterCounts.all },
+      { key: 'regular', label: 'Regular', count: counts.regular ?? 0 },
+      { key: 'ticket_run', label: 'Ticket Runs', count: counts.ticket_run ?? 0 },
+      { key: 'automation', label: 'Automation', count: counts.automation ?? 0 },
+      { key: 'system', label: 'System', count: counts.system ?? 0 }
+    ];
+    return items.filter((item) => item.key === null || item.count > 0 || categoryFilter === item.key);
+  }
+
+  function chatTransportFilterOptions(): { key: ChatFacetTransport; label: string; count: number }[] {
+    const counts = readModelState.chatFacetCounts.transport;
+    const order: ChatFacetTransport[] = ['pma', 'discord', 'telegram', 'notification'];
+    return order
+      .map((transport) => ({ key: transport, label: chatTransportLabel(transport), count: counts[transport] ?? 0 }))
+      .filter((item) => item.count > 0 || transportFilter === item.key);
+  }
+
+  function chatScopeKindFilterOptions(): { key: ChatFacetScopeKind; label: string; count: number }[] {
+    const counts = readModelState.chatFacetCounts.scopeKind;
+    const order: ChatFacetScopeKind[] = ['hub', 'repo', 'worktree', 'filesystem'];
+    return order
+      .map((scopeKind) => ({ key: scopeKind, label: facetChipLabel(scopeKind), count: counts[scopeKind] ?? 0 }))
+      .filter((item) => item.count > 0 || scopeKindFilter === item.key);
+  }
 
   function composerRecipientLabel(chat: PmaChatSummary | null): string {
     if (!chat) return 'Chat';
@@ -1995,60 +2028,59 @@
     <div class="chat-filter-bar">
       <FilterRow
         rootClass="chat-filter-chips-row"
-        ariaLabel="Chat filters"
+        ariaLabel="Chat category filters"
         maxRows={1}
-        items={[
-          ...CHAT_FILTER_ORDER.filter(
-            (item) => item !== 'unread' || filterCounts.unread > 0 || filter === 'unread'
-          ).map((item) => ({
-            key: `status:${item}`,
-            label: filterChipLabel(item),
-            count: filterCounts[item],
-            active: filter === item,
-            onSelect: () => (filter = item)
-          })),
-          ...(ticketRunGroupCount > 0 || filter === CHAT_TICKET_RUNS_FILTER
-            ? [
-                {
-                  key: 'ticket-runs',
-                  label: 'Ticket Runs',
-                  count: ticketRunGroupCount,
-                  active: filter === CHAT_TICKET_RUNS_FILTER,
-                  onSelect: () => (filter = CHAT_TICKET_RUNS_FILTER)
-                }
-              ]
-            : []),
-          ...(automationChatCount > 0 || filter === 'automation'
-            ? [
-                {
-                  key: 'automation',
-                  label: 'Automation',
-                  count: automationChatCount,
-                  active: filter === 'automation',
-                  onSelect: () => (filter = 'automation')
-                }
-              ]
-            : []),
-          ...surfaceFilterChips
-            .filter((surf) => surf.count > 0 || filter === chatSurfaceFilterToken(surf.slug))
-            // Suppress the surface chip when it is the only surface available and its
-            // count duplicates the All count — the chip would communicate nothing new
-            // and forces the filter row onto a second line.
-            .filter((surf, _idx, arr) => {
-              if (filter === chatSurfaceFilterToken(surf.slug)) return true;
-              if (arr.length !== 1) return true;
-              return surf.count !== filterCounts.all;
-            })
-            .map((surf) => ({
-              key: `surface:${surf.slug}`,
-              label: surf.label,
-              count: surf.count,
-              active: filter === chatSurfaceFilterToken(surf.slug),
-              onSelect: () => (filter = chatSurfaceFilterToken(surf.slug))
-            }))
-        ]}
+        items={categoryFilterOptions.map((item) => ({
+          key: `category:${item.key ?? 'all'}`,
+          label: item.label,
+          count: item.key === 'ticket_run' ? ticketRunGroupCount : item.count,
+          active: categoryFilter === item.key,
+          onSelect: () => (categoryFilter = item.key)
+        }))}
       />
-      {#if filter === 'unread' && filterCounts.unread > 0}
+      <FilterRow
+        rootClass="chat-filter-chips-row"
+        ariaLabel="Chat status filters"
+        maxRows={1}
+        items={CHAT_FILTER_ORDER.filter(
+          (item) => item !== 'unread' || filterCounts.unread > 0 || statusFilter === 'unread'
+        ).map((item) => ({
+          key: `status:${item}`,
+          label: filterChipLabel(item),
+          count: filterCounts[item],
+          active: statusFilter === item,
+          onSelect: () => (statusFilter = item)
+        }))}
+      />
+      {#if transportFilterOptions.length > 0}
+        <FilterRow
+          rootClass="chat-filter-chips-row"
+          ariaLabel="Chat transport filters"
+          maxRows={1}
+          items={transportFilterOptions.map((item) => ({
+            key: `transport:${item.key}`,
+            label: item.label,
+            count: item.count,
+            active: transportFilter === item.key,
+            onSelect: () => (transportFilter = transportFilter === item.key ? null : item.key)
+          }))}
+        />
+      {/if}
+      {#if scopeKindFilterOptions.length > 0}
+        <FilterRow
+          rootClass="chat-filter-chips-row"
+          ariaLabel="Chat scope filters"
+          maxRows={1}
+          items={scopeKindFilterOptions.map((item) => ({
+            key: `scope:${item.key}`,
+            label: item.label,
+            count: item.count,
+            active: scopeKindFilter === item.key,
+            onSelect: () => (scopeKindFilter = scopeKindFilter === item.key ? null : item.key)
+          }))}
+        />
+      {/if}
+      {#if statusFilter === 'unread' && filterCounts.unread > 0}
         <button
           class="new-chat-button"
           type="button"
@@ -2058,7 +2090,7 @@
           Mark all as read
         </button>
       {/if}
-      {#if activeChatCount > 0 && filter !== 'archived'}
+      {#if activeChatCount > 0 && statusFilter !== 'archived'}
         <button
           class="new-chat-button retire-all-button"
           type="button"
@@ -2076,7 +2108,8 @@
         repoLabel: repoLabelForRepoId,
         worktreeLabel: (wid) => worktreeScopeOption(wid)?.label ?? null
       })}
-      {@const messengerSurface = chatMessengerSurface(chat)}
+      {@const facets = pmaChatFacets(chat)}
+      {@const transportBadges = pmaChatTransportBadges(chat)}
       {@const listScopeAccent = chatListScopeAccentLabel(chat, scopeTags)}
       {@const listScopeAccentHex = listScopeAccent ? repoAccent(listScopeAccent) : null}
       {@const listAgentLabel = agentDisplayForChat(agents, chat)}
@@ -2139,12 +2172,12 @@
                 {#if pmaChatKind(chat) === 'coding_agent'}
                   <span class={`chat-kind-badge ${pmaChatKind(chat)}`}>{pmaChatKindLabel(pmaChatKind(chat))}</span>
                 {/if}
-                {#if pmaChatIsAutomation(chat)}
+                {#if facets?.category === 'automation'}
                   <span class="chat-kind-badge automation">Automation</span>
                 {/if}
-                {#if messengerSurface}
-                  <span class={`chat-surface-badge ${messengerSurface.badgeClass}`}>{messengerSurface.label}</span>
-                {/if}
+                {#each transportBadges as transport}
+                  <span class={`chat-surface-badge ${transport.badgeClass}`}>{transport.label}</span>
+                {/each}
               </span>
             </span>
             <span class="chat-title-trailing">
@@ -2346,12 +2379,12 @@
           </div>
           <p class="chat-header-subtitle">
             <span class={`chat-kind-badge ${activeChatKind}`}>{activeChatKindLabel}</span>
-            {#if pmaChatIsAutomation(activeChat)}
+            {#if pmaChatFacets(activeChat)?.category === 'automation'}
               <span class="chat-kind-badge automation">Automation</span>
             {/if}
-            {#if activeMessengerSurface}
-              <span class={`chat-surface-badge ${activeMessengerSurface.badgeClass}`}>{activeMessengerSurface.label}</span>
-            {/if}
+            {#each activeTransportBadges as transport}
+              <span class={`chat-surface-badge ${transport.badgeClass}`}>{transport.label}</span>
+            {/each}
             {#if activeChat.status === 'done' && displayedProgress?.elapsedSeconds !== null && displayedProgress?.elapsedSeconds !== undefined && statusBar}
               <span class={`status-dot status-${activeChat.status}`} aria-hidden="true"></span>
               <strong class="chat-header-status-strong">{statusLabel(activeChat.status)}</strong>
