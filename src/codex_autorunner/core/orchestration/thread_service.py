@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import uuid
+from collections.abc import Mapping
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Callable, Optional
@@ -47,6 +48,7 @@ from .turn_execution_contract import (
     TurnExecutionRecord,
     TurnExecutionRequest,
 )
+from .turn_execution_storage import build_turn_execution_record_from_storage
 
 MessagePreviewLimit = 120
 logger = logging.getLogger("codex_autorunner.core.orchestration.service")
@@ -329,14 +331,28 @@ class _ThreadQueueRequestAdapter:
             raise RuntimeError("Thread store cannot load canonical turn requests")
         turn_request = request_loader(thread_target_id, execution.execution_id)
         if not isinstance(turn_request, TurnExecutionRequest):
-            raise RuntimeError(
-                f"Execution '{execution.execution_id}' is missing canonical turn request"
-            )
+            request_data = payload.get("turn_request")
+            if not isinstance(request_data, Mapping):
+                raise RuntimeError(
+                    f"Execution '{execution.execution_id}' is missing canonical turn request"
+                )
+            turn_request = TurnExecutionRequest.from_mapping(request_data)
+            if turn_request.target_id != thread_target_id:
+                raise RuntimeError(
+                    "Queued execution turn_request target_id does not match thread_target_id"
+                )
         turn_record = record_loader(thread_target_id, execution.execution_id)
         if not isinstance(turn_record, TurnExecutionRecord):
-            raise RuntimeError(
-                f"Execution '{execution.execution_id}' is missing canonical turn record"
-            )
+            record_data = payload.get("turn_record")
+            if isinstance(record_data, Mapping):
+                turn_record = TurnExecutionRecord.from_mapping(record_data)
+            else:
+                turn_record = build_turn_execution_record_from_storage(
+                    execution=execution.to_dict(),
+                    thread=thread.to_dict(),
+                    request=turn_request,
+                    queue_item=payload,
+                )
         queued_request = self.queued_request_from_turn_request(turn_request)
         return _ClaimedThreadExecutionRequest(
             thread=thread,

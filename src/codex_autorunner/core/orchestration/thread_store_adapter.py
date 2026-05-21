@@ -135,7 +135,19 @@ def _thread_target_from_store_row_with_runtime_binding(
 
 
 def _execution_record_from_store_row(record: Mapping[str, Any]) -> ExecutionRecord:
-    return ExecutionRecord.from_mapping(record)
+    metadata = record.get("metadata")
+    if not isinstance(metadata, dict):
+        metadata = {}
+    merged_metadata = dict(metadata)
+    turn_request = record.get("turn_request")
+    if isinstance(turn_request, dict) and turn_request:
+        merged_metadata["turn_request"] = dict(turn_request)
+    turn_record = record.get("turn_record")
+    if isinstance(turn_record, dict) and turn_record:
+        merged_metadata["turn_record"] = dict(turn_record)
+    payload = dict(record)
+    payload["metadata"] = merged_metadata
+    return ExecutionRecord.from_mapping(payload)
 
 
 class ManagedThreadExecutionStore(ThreadExecutionStore):
