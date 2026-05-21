@@ -17,8 +17,8 @@ importers:
         specifier: ^3.12.0
         version: 3.12.0
       marked:
-        specifier: ^18.0.3
-        version: 18.0.3
+        specifier: ^18.0.4
+        version: 18.0.4
     devDependencies:
       '@sveltejs/adapter-static':
         specifier: ^3.0.9
@@ -723,8 +723,8 @@ packages:
   magic-string@0.30.21:
     resolution: {integrity: sha512-vd2F4YUyEXKGcLHoq+TEyCjxueSeHnFxyyjNp80yg0XV4vUhnDer/lvvlqM/arB5bXQN5K2/3oinyCRyx8T2CQ==}
 
-  marked@18.0.3:
-    resolution: {integrity: sha512-7VT90JOkDeaRWpfjOReRGPEKn0ecdARBkDGL+tT1wZY0efPPqkUxLUSmzy/C7TIylQYJC9STISEsCHrqb/7VIA==}
+  marked@18.0.4:
+    resolution: {integrity: sha512-c/BTaKzg0G6ezQx97DAkYU7k0HM6ys0FqYeKBL6hlBByZwy+ycA1+f0vDdjMHKKeEjdgkx0GOv9Il6D+85cOqA==}
     engines: {node: '>= 20'}
     hasBin: true
 
@@ -1288,7 +1288,7 @@ snapshots:
 
   '@types/marked@6.0.0':
     dependencies:
-      marked: 18.0.3
+      marked: 18.0.4
 
   '@types/node@25.7.0':
     dependencies:
@@ -1548,7 +1548,7 @@ snapshots:
     dependencies:
       '@jridgewell/sourcemap-codec': 1.5.5
 
-  marked@18.0.3: {}
+  marked@18.0.4: {}
 
   mdn-data@2.27.1: {}
 
