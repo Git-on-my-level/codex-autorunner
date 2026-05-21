@@ -75,28 +75,6 @@ def _get_pma_config(request: Request) -> dict[str, Any]:
     return get_pma_request_context(request).pma_config
 
 
-def _resolve_pma_default_model(
-    request: Request,
-    *,
-    agent: Optional[str],
-    configured_default: Optional[str],
-) -> Optional[str]:
-    try:
-        state = load_state(request.app.state.engine.state_path)
-    except (OSError, ValueError, AttributeError):
-        state = None
-    pma_config = _get_pma_config(request)
-    options = resolve_agent_runtime_options(
-        agent or pma_config.get("default_agent") or "codex",
-        state=state,
-        config=request.app.state.config,
-        workspace_root=getattr(request.app.state.config, "root", None),
-        configured_model_default=configured_default,
-        include_builtin_model=False,
-    )
-    return options.model
-
-
 def _resolve_pma_chat_turn_request(
     request: Request,
     *,
