@@ -2282,7 +2282,7 @@
           </p>
         {/if}
       </div>
-      {#if activeChat && (showStreamHealthAside || !isPmaChatArchived(activeChat) || activeSharedFileCount > 0 || inboxArtifacts.length > 0)}
+      {#if activeChat && (showStreamHealthAside || !isPmaChatArchived(activeChat) || activeSharedFileCount > 0 || inboxArtifacts.length > 0 || outboxArtifacts.length > 0)}
         <div class="chat-header-tools">
           <button
             class="chat-header-action files-action"
