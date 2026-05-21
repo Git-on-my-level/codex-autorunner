@@ -586,6 +586,9 @@ class AutomationChildExecutionEdge:
     requested_runtime: AutomationRuntimeContract
     actual_runtime: Optional[AutomationRuntimeContract]
     terminal_mapping: dict[str, str]
+    terminal_event_id: Optional[str]
+    terminal_state: Optional[str]
+    terminal_observed_at: Optional[str]
     created_at: str
     updated_at: str
 
@@ -600,6 +603,9 @@ class AutomationChildExecutionEdge:
         actual_runtime: Optional[AutomationRuntimeContract | dict[str, Any]] = None,
         authoritative_for_parent_completion: bool = True,
         terminal_mapping: Optional[dict[str, Any]] = None,
+        terminal_event_id: Optional[str] = None,
+        terminal_state: Optional[str] = None,
+        terminal_observed_at: Optional[str] = None,
         edge_id: Optional[str] = None,
         created_at: Optional[str] = None,
         updated_at: Optional[str] = None,
@@ -658,6 +664,13 @@ class AutomationChildExecutionEdge:
             requested_runtime=requested,
             actual_runtime=actual,
             terminal_mapping=normalized_mapping,
+            terminal_event_id=optional_text(terminal_event_id),
+            terminal_state=optional_text(terminal_state),
+            terminal_observed_at=(
+                normalize_timestamp(terminal_observed_at)
+                if terminal_observed_at is not None
+                else None
+            ),
             created_at=stamp,
             updated_at=normalize_timestamp(updated_at, fallback=stamp),
         )
@@ -688,6 +701,9 @@ class AutomationChildExecutionEdge:
             requested_runtime=requested_runtime,
             actual_runtime=data.get("actual_runtime"),
             terminal_mapping=data.get("terminal_mapping"),
+            terminal_event_id=data.get("terminal_event_id"),
+            terminal_state=data.get("terminal_state"),
+            terminal_observed_at=data.get("terminal_observed_at"),
             created_at=data.get("created_at"),
             updated_at=data.get("updated_at"),
         )

@@ -26,6 +26,7 @@ from .models import (
     APPROVAL_PAUSE_AND_REQUEST_USER,
     AUTOMATION_CHILD_KIND_AGENT_TASK,
     AUTOMATION_CHILD_KIND_PMA_OPERATOR,
+    AUTOMATION_CHILD_KIND_PUBLISH_OPERATION,
     EXECUTOR_GITHUB_COMMENT,
     EXECUTOR_GITHUB_REACTION,
     EXECUTOR_PMA_OPERATOR_TURN,
@@ -818,10 +819,12 @@ class PublishOperationAutomationExecutor:
         *,
         hub_root: Path,
         executor_registry: PublishExecutorRegistry,
+        automation_store: Optional[AutomationStore] = None,
         journal_store: Optional[PublishJournalStore] = None,
     ) -> None:
         self._journal = journal_store or PublishJournalStore(hub_root)
         self._executor_registry = executor_registry
+        self._store = automation_store
 
     def execute(self, job: AutomationJob) -> AutomationExecutorResult:
         operation_kind = _publish_operation_kind(job)
@@ -846,9 +849,17 @@ class PublishOperationAutomationExecutor:
                 self._journal.get_operation(operation.operation_id) or operation,
             )
         refs = {"publish_operation_id": operation.operation_id}
+        edge_id = self._record_child_edge(
+            job,
+            operation_id=operation.operation_id,
+            operation_state=operation.state,
+        )
+        if edge_id is not None:
+            refs["automation_child_edge_id"] = edge_id
         data = {
             "operation": operation.to_dict(),
             "deduped": deduped,
+            "automation_child_edge_id": edge_id,
         }
         if operation.state == "succeeded":
             return AutomationExecutorResult(
@@ -871,6 +882,28 @@ class PublishOperationAutomationExecutor:
             data=data,
             execution_refs=refs,
         )
+
+    def _record_child_edge(
+        self, job: AutomationJob, *, operation_id: str, operation_state: str
+    ) -> Optional[str]:
+        if self._store is None:
+            return None
+        runtime = AutomationRuntimeContract(
+            input_ref={"kind": "automation_job", "job_id": job.job_id},
+            workspace_scope={"kind": "publish_operation"},
+        )
+        edge = self._store.upsert_child_execution_edge(
+            AutomationChildExecutionEdge.create(
+                parent_job_id=job.job_id,
+                child_kind=AUTOMATION_CHILD_KIND_PUBLISH_OPERATION,
+                child_id=operation_id,
+                requested_runtime=runtime,
+                actual_runtime=runtime,
+                authoritative_for_parent_completion=True,
+                terminal_state=_publish_child_terminal_state(operation_state),
+            )
+        )
+        return edge.edge_id
 
 
 def _managed_turn_result(
@@ -970,6 +1003,15 @@ def _publish_payload(job: AutomationJob) -> dict[str, Any]:
     payload.pop("operation_kind", None)
     payload.pop("operation_key", None)
     return payload
+
+
+def _publish_child_terminal_state(operation_state: str) -> Optional[str]:
+    normalized = str(operation_state or "").strip().lower()
+    if normalized == "succeeded":
+        return "succeeded"
+    if normalized == "failed":
+        return "failed"
+    return None
 
 
 def _publish_operation_key(

@@ -22,8 +22,14 @@ from codex_autorunner.core.automation.execution_graph import (
     automation_execution_snapshots_by_job_id,
 )
 from codex_autorunner.core.automation.models import (
+    AUTOMATION_CHILD_KIND_AGENT_TASK,
+    AUTOMATION_CHILD_KIND_PMA_OPERATOR,
+    AUTOMATION_CHILD_KIND_TICKET_FLOW,
+    EXECUTOR_PMA_OPERATOR_TURN,
     TARGET_POLICY_EXISTING_REPO,
     TRIGGER_KIND_EVENT,
+    AutomationChildExecutionEdge,
+    AutomationRuntimeContract,
 )
 from codex_autorunner.core.flows.models import FlowRunStatus
 from codex_autorunner.core.flows.store import FlowStore
@@ -168,6 +174,152 @@ def test_reconciler_pauses_parent_when_child_ticket_flow_pauses(tmp_path: Path) 
     assert result.paused == 1
     assert saved.state == JOB_PAUSED
     assert saved.result_summary == "ticket-flow run paused: run-1"
+
+
+def test_reconciler_closes_parent_from_durable_managed_thread_edge(
+    tmp_path: Path,
+) -> None:
+    hub = tmp_path / "hub"
+    store = _store_with_running_managed_thread_job(hub)
+    store.update_running_job(
+        "job-pma",
+        execution_refs={"managed_thread_target_id": None},
+    )
+    store.upsert_child_execution_edge(
+        AutomationChildExecutionEdge.create(
+            parent_job_id="job-pma",
+            child_kind=AUTOMATION_CHILD_KIND_AGENT_TASK,
+            child_id="exec-1",
+            requested_runtime=AutomationRuntimeContract(
+                agent="opencode",
+                model="zai-coding-plan/glm-5.1",
+            ),
+            actual_runtime=None,
+        )
+    )
+    _insert_thread_execution(
+        hub,
+        thread_id="29998b57-94e9-49a4-8299-0349872e4b70",
+        backend_thread_id="backend-session-1",
+        execution_id="exec-1",
+        status="ok",
+        error_text=None,
+    )
+
+    result = AutomationChildRunReconciler(
+        store, resolve_repo_path=lambda _repo_id: None, hub_root=hub
+    ).reconcile_running_jobs()
+
+    saved = store.get_job("job-pma")
+    edges = store.list_child_execution_edges("job-pma")
+    assert result.completed == 1
+    assert saved.state == JOB_SUCCEEDED
+    assert saved.managed_thread_execution_id == "exec-1"
+    assert edges[0].terminal_state == "succeeded"
+    assert edges[0].actual_runtime.model == "zai-coding-plan/glm-5.1"
+
+
+def test_reconciler_closes_parent_from_durable_ticket_flow_edge(
+    tmp_path: Path,
+) -> None:
+    hub = tmp_path / "hub"
+    repo = tmp_path / "repo"
+    repo.mkdir(parents=True)
+    store = _store_with_running_ticket_flow_job(hub)
+    store.upsert_child_execution_edge(
+        AutomationChildExecutionEdge.create(
+            parent_job_id="job-1",
+            child_kind=AUTOMATION_CHILD_KIND_TICKET_FLOW,
+            child_id="run-1",
+            requested_runtime=AutomationRuntimeContract(
+                workspace_scope={"repo_id": "repo-1"}
+            ),
+            actual_runtime=AutomationRuntimeContract(
+                workspace_scope={"repo_id": "repo-1"}
+            ),
+            terminal_mapping={
+                "succeeded": JOB_SUCCEEDED,
+                "failed": JOB_FAILED,
+                "interrupted": JOB_PAUSED,
+                "cancelled": "cancelled",
+            },
+        )
+    )
+    _create_child_flow(repo, status=FlowRunStatus.COMPLETED)
+
+    result = AutomationChildRunReconciler(
+        store, resolve_repo_path=lambda repo_id: repo if repo_id == "repo-1" else None
+    ).reconcile_running_jobs()
+
+    saved = store.get_job("job-1")
+    edge = store.list_child_execution_edges("job-1")[0]
+    assert result.completed == 1
+    assert saved.state == JOB_SUCCEEDED
+    assert edge.terminal_state == "succeeded"
+
+
+def test_reconciler_closes_authoritative_pma_operator_without_worker_child(
+    tmp_path: Path,
+) -> None:
+    hub = tmp_path / "hub"
+    store = AutomationStore(hub)
+    store.upsert_rule(
+        AutomationRule.create(
+            rule_id="rule-pma-operator",
+            name="PMA operator",
+            trigger_kind=TRIGGER_KIND_EVENT,
+            trigger={"event_types": ["manual.run"]},
+            target_policy=TARGET_POLICY_EXISTING_REPO,
+            executor_kind=EXECUTOR_PMA_OPERATOR_TURN,
+        )
+    )
+    store.record_event(
+        AutomationEvent.create(event_id="event-pma-operator", event_type="manual.run")
+    )
+    store.enqueue_job(
+        AutomationJob.create(
+            job_id="job-pma-operator",
+            rule_id="rule-pma-operator",
+            event_id="event-pma-operator",
+            state=JOB_RUNNING,
+            target={"policy": TARGET_POLICY_EXISTING_REPO, "repo_id": "repo-1"},
+            executor={"kind": EXECUTOR_PMA_OPERATOR_TURN},
+            available_at="2026-01-01T00:00:00Z",
+            created_at="2026-01-01T00:00:00Z",
+            dedupe_key="job-pma-operator",
+        )
+    )
+    store.update_running_job(
+        "job-pma-operator",
+        execution_refs={"pma_lane_id": "pma:default", "pma_queue_item_id": "item-1"},
+    )
+    store.upsert_child_execution_edge(
+        AutomationChildExecutionEdge.create(
+            parent_job_id="job-pma-operator",
+            child_kind=AUTOMATION_CHILD_KIND_PMA_OPERATOR,
+            child_id="item-1",
+            requested_runtime=AutomationRuntimeContract(agent="codex"),
+            actual_runtime=AutomationRuntimeContract(agent="codex"),
+            authoritative_for_parent_completion=True,
+        )
+    )
+    _insert_pma_queue_item(
+        hub,
+        item_id="item-1",
+        lane_id="pma:default",
+        state="completed",
+    )
+
+    result = AutomationChildRunReconciler(
+        store, resolve_repo_path=lambda _repo_id: None, hub_root=hub
+    ).reconcile_running_jobs()
+
+    saved = store.get_job("job-pma-operator")
+    edge = store.list_child_execution_edges("job-pma-operator")[0]
+    assert result.completed == 1
+    assert saved.state == JOB_SUCCEEDED
+    assert saved.result_summary == "PMA operator completed: item-1"
+    assert edge.terminal_state == "succeeded"
 
 
 def _store_with_running_managed_thread_job(hub: Path) -> AutomationStore:
@@ -523,5 +675,41 @@ def _insert_thread_execution(
                     ),
                     started_at,
                     "{}",
+                ),
+            )
+
+
+def _insert_pma_queue_item(
+    hub: Path,
+    *,
+    item_id: str,
+    lane_id: str,
+    state: str,
+) -> None:
+    with open_orchestration_sqlite(hub, durable=True) as conn:
+        with conn:
+            conn.execute(
+                """
+                INSERT INTO orch_queue_items (
+                    queue_item_id, lane_id, source_kind, source_key, dedupe_key,
+                    state, visible_at, claimed_at, completed_at, payload_json,
+                    result_json, error_text, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    item_id,
+                    lane_id,
+                    "automation_test",
+                    item_id,
+                    item_id,
+                    state,
+                    "2026-01-01T00:00:00Z",
+                    "2026-01-01T00:00:01Z",
+                    "2026-01-01T00:00:02Z",
+                    "{}",
+                    "{}",
+                    None,
+                    "2026-01-01T00:00:00Z",
+                    "2026-01-01T00:00:02Z",
                 ),
             )

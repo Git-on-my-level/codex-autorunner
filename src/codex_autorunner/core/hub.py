@@ -271,6 +271,7 @@ class HubSupervisor:
                 hub_root=hub_config.root,
                 topology_repository=self._topology_repository,
                 worktree_manager=self._worktree_manager,
+                automation_store=AutomationStore(hub_config.root),
                 run_coroutine_fn=self._run_coroutine,
             ),
         )
@@ -315,6 +316,7 @@ class HubSupervisor:
         publish_executor = PublishOperationAutomationExecutor(
             hub_root=hub_config.root,
             executor_registry=publish_registry,
+            automation_store=AutomationStore(hub_config.root),
         )
         for executor_kind in (
             EXECUTOR_PUBLISH_OPERATION,
