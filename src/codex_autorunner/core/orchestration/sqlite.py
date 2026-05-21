@@ -6,14 +6,16 @@ import time
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Iterator, Optional
+from typing import Any, Callable, Iterator, Literal, Optional
 
+from ..locks import file_lock
 from ..sqlite_utils import open_sqlite
 from ..state_roots import (
     ORCHESTRATION_COMPATIBILITY_METADATA_FILENAME,
     ORCHESTRATION_DB_FILENAME,
     resolve_hub_orchestration_compatibility_metadata_path,
     resolve_hub_orchestration_db_path,
+    resolve_hub_state_root,
 )
 from ..time_utils import now_iso
 from ..utils import atomic_write
@@ -35,6 +37,43 @@ from .migrations import (
 
 # Hub/chat orchestration DB: higher busy_timeout than generic SQLite defaults (#1266).
 _DEFAULT_ORCH_BUSY_TIMEOUT_MS = 30_000
+OrchestrationMigrationMode = Literal[
+    "hub",
+    "worker",
+    "test",
+    "upgrade",
+]
+_MIGRATION_LOCK_FILENAME = "orchestration.sqlite3.migrate.lock"
+
+
+@dataclass(frozen=True)
+class OrchestrationMigrationRefusal:
+    current_schema: int
+    target_schema: int
+    hub_supported_schema: int | None
+    caller_role: str
+    build_id: str
+    guidance: str
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "current_schema": self.current_schema,
+            "target_schema": self.target_schema,
+            "hub_supported_schema": self.hub_supported_schema,
+            "caller_role": self.caller_role,
+            "build_id": self.build_id,
+            "guidance": self.guidance,
+        }
+
+
+class OrchestrationMigrationRefused(SchemaCompatibilityError):
+    def __init__(
+        self,
+        evaluation: CompatibilityEvaluation,
+        refusal: OrchestrationMigrationRefusal,
+    ) -> None:
+        super().__init__(evaluation)
+        self.refusal = refusal
 
 
 @dataclass(frozen=True)
@@ -89,6 +128,32 @@ def resolve_orchestration_compatibility_metadata_path(hub_root: Path) -> Path:
     return resolve_hub_orchestration_compatibility_metadata_path(hub_root)
 
 
+def resolve_orchestration_migration_lock_path(hub_root: Path) -> Path:
+    return resolve_hub_state_root(hub_root) / _MIGRATION_LOCK_FILENAME
+
+
+def _registry_with_stale_declarations_pruned(
+    registry: CompatibilityRegistry,
+    *,
+    now_timestamp: float,
+    pid_start_time_matches: Callable[[int, float], bool] | None = None,
+) -> CompatibilityRegistry:
+    active_declarations, stale_declarations = classify_registry_declarations(
+        registry.declarations,
+        now_timestamp=now_timestamp,
+        pid_start_time_matches=pid_start_time_matches,
+    )
+    stale_by_id = {
+        item.process_id: item
+        for item in (*registry.stale_declarations, *stale_declarations)
+    }
+    return CompatibilityRegistry(
+        declarations=active_declarations,
+        stale_declarations=tuple(stale_by_id.values()),
+        updated_at=registry.updated_at,
+    )
+
+
 def _write_orchestration_compatibility_metadata(
     hub_root: Path,
     *,
@@ -98,18 +163,9 @@ def _write_orchestration_compatibility_metadata(
 ) -> OrchestrationCompatibilityMetadata:
     previous = read_orchestration_compatibility_metadata(hub_root)
     registry = previous.registry if previous is not None else CompatibilityRegistry()
-    active_declarations, stale_declarations = classify_registry_declarations(
-        registry.declarations,
+    registry = _registry_with_stale_declarations_pruned(
+        registry,
         now_timestamp=time.time(),
-    )
-    stale_by_id = {
-        item.process_id: item
-        for item in (*registry.stale_declarations, *stale_declarations)
-    }
-    registry = CompatibilityRegistry(
-        declarations=active_declarations,
-        stale_declarations=tuple(stale_by_id.values()),
-        updated_at=registry.updated_at,
     )
     if declaration is not None:
         now_text = now_iso()
@@ -155,19 +211,122 @@ def read_orchestration_compatibility_metadata(
         return None
 
 
+def _active_hub_declarations(
+    hub_root: Path,
+    *,
+    pid_start_time_matches: Callable[[int, float], bool] | None = None,
+) -> tuple[ProcessCompatibilityDeclaration, ...]:
+    metadata = read_orchestration_compatibility_metadata(hub_root)
+    registry = metadata.registry if metadata is not None else CompatibilityRegistry()
+    registry = _registry_with_stale_declarations_pruned(
+        registry,
+        now_timestamp=time.time(),
+        pid_start_time_matches=pid_start_time_matches,
+    )
+    return tuple(item for item in registry.declarations if item.role == "hub")
+
+
+def _migration_refusal_evaluation(
+    *,
+    current_schema: int,
+    target_schema: int,
+    hub_supported_schema: int | None,
+    caller_role: str,
+    build_id: str,
+    guidance: str,
+) -> OrchestrationMigrationRefused:
+    supported_schema = (
+        int(hub_supported_schema)
+        if hub_supported_schema is not None
+        else max(0, int(current_schema))
+    )
+    evaluation = CompatibilityEvaluation(
+        status="restart_required",
+        observed_schema=max(0, int(target_schema)),
+        supported_schema=max(0, supported_schema),
+        process_role=caller_role,
+        build_id=build_id,
+        restart_required=True,
+        reason=guidance,
+    )
+    refusal = OrchestrationMigrationRefusal(
+        current_schema=max(0, int(current_schema)),
+        target_schema=max(0, int(target_schema)),
+        hub_supported_schema=hub_supported_schema,
+        caller_role=caller_role,
+        build_id=build_id,
+        guidance=guidance,
+    )
+    return OrchestrationMigrationRefused(evaluation, refusal)
+
+
+def _assert_migration_permitted(
+    hub_root: Path,
+    *,
+    current_schema: int,
+    target_schema: int,
+    migration_mode: OrchestrationMigrationMode,
+    process_role: str,
+    build_id: str,
+    pid_start_time_matches: Callable[[int, float], bool] | None = None,
+) -> None:
+    if current_schema >= target_schema:
+        return
+    if migration_mode in {"hub", "upgrade", "test"}:
+        return
+
+    active_hubs = _active_hub_declarations(
+        hub_root,
+        pid_start_time_matches=pid_start_time_matches,
+    )
+    if active_hubs:
+        hub_supported_schema = min(
+            item.max_supported_schema_generation for item in active_hubs
+        )
+        if target_schema > hub_supported_schema:
+            raise _migration_refusal_evaluation(
+                current_schema=current_schema,
+                target_schema=target_schema,
+                hub_supported_schema=hub_supported_schema,
+                caller_role=process_role,
+                build_id=build_id,
+                guidance=(
+                    "restart the hub or run the hub-owned upgrade path before "
+                    "worker code advances orchestration.sqlite3"
+                ),
+            )
+        return
+
+    if current_schema == 0:
+        return
+
+    raise _migration_refusal_evaluation(
+        current_schema=current_schema,
+        target_schema=target_schema,
+        hub_supported_schema=None,
+        caller_role=process_role,
+        build_id=build_id,
+        guidance=(
+            "existing orchestration.sqlite3 migrations must be advanced by hub "
+            "startup or an explicit upgrade command"
+        ),
+    )
+
+
 def initialize_orchestration_sqlite(hub_root: Path, *, durable: bool = True) -> Path:
     """Create or migrate the canonical orchestration SQLite database."""
     db_path = resolve_orchestration_sqlite_path(hub_root)
-    with open_sqlite(
-        db_path,
-        durable=durable,
-        busy_timeout_ms=orchestration_sqlite_busy_timeout_ms(),
-    ) as conn:
-        apply_orchestration_migrations(conn)
-        _write_orchestration_compatibility_metadata(
-            hub_root,
-            schema_generation=current_orchestration_schema_version(conn),
-        )
+    with file_lock(resolve_orchestration_migration_lock_path(hub_root)):
+        with open_sqlite(
+            db_path,
+            durable=durable,
+            busy_timeout_ms=orchestration_sqlite_busy_timeout_ms(),
+        ) as conn:
+            apply_orchestration_migrations(conn)
+            _write_orchestration_compatibility_metadata(
+                hub_root,
+                schema_generation=current_orchestration_schema_version(conn),
+            )
     return db_path
 
 
@@ -181,25 +340,26 @@ def prepare_orchestration_sqlite(
 ) -> OrchestrationCompatibilityMetadata:
     """Explicitly prepare orchestration shared state for hub-owned startup."""
     db_path = resolve_orchestration_sqlite_path(hub_root)
-    with open_sqlite(
-        db_path,
-        durable=durable,
-        busy_timeout_ms=orchestration_sqlite_busy_timeout_ms(),
-    ) as conn:
-        apply_orchestration_migrations(conn)
-        schema_generation = current_orchestration_schema_version(conn)
-    declaration = build_process_declaration(
-        role=process_role,
-        supported_control_plane_api_version=control_plane_api_version,
-        max_supported_schema_generation=ORCHESTRATION_SCHEMA_VERSION,
-        observed_schema_generation=schema_generation,
-        ttl_seconds=heartbeat_ttl_seconds,
-    )
-    return _write_orchestration_compatibility_metadata(
-        hub_root,
-        schema_generation=schema_generation,
-        declaration=declaration,
-    )
+    with file_lock(resolve_orchestration_migration_lock_path(hub_root)):
+        with open_sqlite(
+            db_path,
+            durable=durable,
+            busy_timeout_ms=orchestration_sqlite_busy_timeout_ms(),
+        ) as conn:
+            apply_orchestration_migrations(conn)
+            schema_generation = current_orchestration_schema_version(conn)
+        declaration = build_process_declaration(
+            role=process_role,
+            supported_control_plane_api_version=control_plane_api_version,
+            max_supported_schema_generation=ORCHESTRATION_SCHEMA_VERSION,
+            observed_schema_generation=schema_generation,
+            ttl_seconds=heartbeat_ttl_seconds,
+        )
+        return _write_orchestration_compatibility_metadata(
+            hub_root,
+            schema_generation=schema_generation,
+            declaration=declaration,
+        )
 
 
 def evaluate_current_orchestration_compatibility(
@@ -291,27 +451,75 @@ def open_orchestration_sqlite(
     *,
     durable: bool = True,
     migrate: bool = True,
+    migration_mode: OrchestrationMigrationMode | None = None,
+    process_role: str | None = None,
+    pid_start_time_matches: Callable[[int, float], bool] | None = None,
 ) -> Iterator[sqlite3.Connection]:
     """Open the canonical orchestration SQLite database."""
     db_path = resolve_orchestration_sqlite_path(hub_root)
-    with open_sqlite(
-        db_path,
-        durable=durable,
-        busy_timeout_ms=orchestration_sqlite_busy_timeout_ms(),
-    ) as conn:
-        if migrate:
-            apply_orchestration_migrations(conn)
-        else:
+    mode = migration_mode or ("worker" if migrate else "worker")
+    role = process_role or mode
+    if migrate:
+        build_id, _unknown_reason = resolve_build_identity()
+        with open_sqlite(
+            db_path,
+            durable=durable,
+            busy_timeout_ms=orchestration_sqlite_busy_timeout_ms(),
+        ) as conn:
             current_version = _read_orchestration_schema_version_if_present(conn)
             if current_version > ORCHESTRATION_SCHEMA_VERSION:
                 raise SchemaCompatibilityError(
                     evaluate_schema_compatibility(
                         observed_schema=current_version,
                         supported_schema=ORCHESTRATION_SCHEMA_VERSION,
-                        process_role="unknown",
-                        build_id="unknown",
+                        process_role=role,
+                        build_id=build_id,
                     )
                 )
+            if current_version == ORCHESTRATION_SCHEMA_VERSION:
+                yield conn
+                return
+
+        with file_lock(resolve_orchestration_migration_lock_path(hub_root)):
+            with open_sqlite(
+                db_path,
+                durable=durable,
+                busy_timeout_ms=orchestration_sqlite_busy_timeout_ms(),
+            ) as conn:
+                current_version = _read_orchestration_schema_version_if_present(conn)
+                _assert_migration_permitted(
+                    hub_root,
+                    current_schema=current_version,
+                    target_schema=ORCHESTRATION_SCHEMA_VERSION,
+                    migration_mode=mode,
+                    process_role=role,
+                    build_id=build_id,
+                    pid_start_time_matches=pid_start_time_matches,
+                )
+                if current_version < ORCHESTRATION_SCHEMA_VERSION:
+                    apply_orchestration_migrations(conn)
+                    _write_orchestration_compatibility_metadata(
+                        hub_root,
+                        schema_generation=current_orchestration_schema_version(conn),
+                    )
+                yield conn
+        return
+
+    with open_sqlite(
+        db_path,
+        durable=durable,
+        busy_timeout_ms=orchestration_sqlite_busy_timeout_ms(),
+    ) as conn:
+        current_version = _read_orchestration_schema_version_if_present(conn)
+        if current_version > ORCHESTRATION_SCHEMA_VERSION:
+            raise SchemaCompatibilityError(
+                evaluate_schema_compatibility(
+                    observed_schema=current_version,
+                    supported_schema=ORCHESTRATION_SCHEMA_VERSION,
+                    process_role=role,
+                    build_id="unknown",
+                )
+            )
         yield conn
 
 
@@ -322,11 +530,14 @@ __all__ = [
     "evaluate_current_orchestration_compatibility",
     "initialize_orchestration_sqlite",
     "OrchestrationCompatibilityMetadata",
+    "OrchestrationMigrationRefusal",
+    "OrchestrationMigrationRefused",
     "open_orchestration_sqlite",
     "orchestration_sqlite_busy_timeout_ms",
     "prepare_orchestration_sqlite",
     "read_orchestration_compatibility_metadata",
     "refresh_orchestration_process_heartbeat",
     "resolve_orchestration_compatibility_metadata_path",
+    "resolve_orchestration_migration_lock_path",
     "resolve_orchestration_sqlite_path",
 ]

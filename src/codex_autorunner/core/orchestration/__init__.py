@@ -177,9 +177,12 @@ from .models import (
 )
 from .sqlite import (
     ORCHESTRATION_DB_FILENAME,
+    OrchestrationMigrationRefusal,
+    OrchestrationMigrationRefused,
     assert_current_orchestration_compatible,
     evaluate_current_orchestration_compatibility,
     initialize_orchestration_sqlite,
+    resolve_orchestration_migration_lock_path,
     resolve_orchestration_sqlite_path,
 )
 from .threads import SurfaceThreadMessageRequest
@@ -411,6 +414,8 @@ __all__ = [
     "get_agent_definition",
     "get_surface_orchestration_ingress",
     "initialize_orchestration_sqlite",
+    "OrchestrationMigrationRefusal",
+    "OrchestrationMigrationRefused",
     "is_discord_interaction_execution_terminal",
     "is_discord_interaction_scheduler_terminal",
     "is_valid_discord_interaction_execution_transition",
@@ -436,6 +441,7 @@ __all__ = [
     "collect_orchestration_storage_maintenance_read_model",
     "record_from_intent",
     "resolve_execution_history_maintenance_policy",
+    "resolve_orchestration_migration_lock_path",
     "resolve_orchestration_sqlite_path",
     "serialize_chat_surface_event",
     "ticket_flow_chat_ledger_contract",
