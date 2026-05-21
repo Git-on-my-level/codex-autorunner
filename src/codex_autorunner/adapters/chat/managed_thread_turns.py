@@ -99,6 +99,7 @@ from ...core.orchestration.turn_assistant_output import (
     TurnAssistantOutput,
     TurnAssistantOutputOwnership,
 )
+from ...core.orchestration.turn_execution_contract import TurnExecutionRequest
 from ...core.orchestration.turn_output_reducer import (
     assistant_text_extends_prefix,
     build_assistant_transcript_prefix,
@@ -130,7 +131,7 @@ class ManagedThreadExecutionStarter(Protocol):
     async def __call__(
         self,
         orchestration_service: Any,
-        request: MessageRequest,
+        request: MessageRequest | TurnExecutionRequest,
         *,
         client_request_id: Optional[str],
         sandbox_policy: Optional[Any],
@@ -1506,7 +1507,7 @@ class ManagedThreadTurnCoordinator:
 
     async def submit_execution(
         self,
-        request: MessageRequest,
+        request: MessageRequest | TurnExecutionRequest,
         *,
         client_request_id: Optional[str],
         sandbox_policy: Optional[Any],
@@ -2140,7 +2141,7 @@ async def _shutdown_progress_pump(
 
 async def submit_managed_thread_execution(
     orchestration_service: Any,
-    request: MessageRequest,
+    request: MessageRequest | TurnExecutionRequest,
     *,
     client_request_id: Optional[str],
     sandbox_policy: Optional[Any],

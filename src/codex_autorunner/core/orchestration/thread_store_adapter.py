@@ -342,6 +342,7 @@ class ManagedThreadExecutionStore(ThreadExecutionStore):
         client_request_id: Optional[str] = None,
         metadata: Optional[dict[str, Any]] = None,
         queue_payload: Optional[dict[str, Any]] = None,
+        turn_request: Optional[TurnExecutionRequest] = None,
     ) -> ExecutionRecord:
         metadata_payload = dict(metadata or {})
         initialized_lifecycle_phase = (
@@ -358,13 +359,17 @@ class ManagedThreadExecutionStore(ThreadExecutionStore):
             "client_turn_id": client_request_id,
             "metadata": metadata_payload,
             "queue_payload": queue_payload,
+            "turn_request": turn_request,
         }
         try:
             created = self._store.create_turn(thread_target_id, **create_kwargs)
         except TypeError as exc:
-            if "metadata" not in str(exc):
+            if "turn_request" in str(exc):
+                create_kwargs.pop("turn_request", None)
+            elif "metadata" in str(exc):
+                create_kwargs.pop("metadata", None)
+            else:
                 raise
-            create_kwargs.pop("metadata", None)
             created = self._store.create_turn(thread_target_id, **create_kwargs)
         record = _execution_record_from_store_row(created)
         if initialized_lifecycle_phase:

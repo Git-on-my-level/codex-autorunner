@@ -415,6 +415,7 @@ class RemoteThreadExecutionStore(ThreadExecutionStore):
         client_request_id: Optional[str] = None,
         metadata: Optional[dict[str, Any]] = None,
         queue_payload: Optional[dict[str, Any]] = None,
+        turn_request: Optional[TurnExecutionRequest] = None,
     ) -> ExecutionRecord:
         response = self._run(
             operation="create_execution",
@@ -429,6 +430,7 @@ class RemoteThreadExecutionStore(ThreadExecutionStore):
                     client_request_id=client_request_id,
                     metadata=dict(metadata or {}),
                     queue_payload=dict(queue_payload or {}),
+                    turn_request=turn_request,
                 )
             ),
         )
@@ -440,7 +442,7 @@ class RemoteThreadExecutionStore(ThreadExecutionStore):
         if thread is None:
             thread = self.get_thread_target(thread_target_id)
         if thread is not None:
-            request = build_turn_execution_request_from_storage(
+            request = turn_request or build_turn_execution_request_from_storage(
                 execution=execution.to_dict(),
                 thread=thread.to_dict(),
                 queue_payload=dict(queue_payload or {}),

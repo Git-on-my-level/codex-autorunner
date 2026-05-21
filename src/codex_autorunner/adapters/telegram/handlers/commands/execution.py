@@ -20,6 +20,7 @@ from .....adapters.chat.bound_live_progress import (
     cleanup_bound_chat_live_progress_success,
     resolve_bound_chat_queue_progress_context,
 )
+from .....adapters.chat.canonical_turns import build_surface_turn_execution_request
 from .....adapters.chat.chat_ux_telemetry import (
     ChatUxFailureReason,
     ChatUxMilestone,
@@ -997,16 +998,27 @@ def _build_telegram_delivery_cleanup(handlers: Any, *, topic_key: str) -> Any:
         target_chat_id = int(transport_target.get("chat_id") or 0)
         target_thread_id = transport_target.get("thread_id")
         target_topic_key = str(context.transport_target.get("topic_key") or topic_key)
-        await handlers._flush_outbox_files(
-            SimpleNamespace(
-                workspace_path=context.transport_target.get("workspace_path"),
-                pma_enabled=bool(context.transport_target.get("pma_enabled")),
-            ),
-            chat_id=target_chat_id,
-            thread_id=target_thread_id,
-            reply_to=None,
-            topic_key=target_topic_key,
+        outbox_record = SimpleNamespace(
+            workspace_path=context.transport_target.get("workspace_path"),
+            pma_enabled=bool(context.transport_target.get("pma_enabled")),
         )
+        try:
+            await handlers._flush_outbox_files(
+                outbox_record,
+                chat_id=target_chat_id,
+                thread_id=target_thread_id,
+                reply_to=None,
+                topic_key=target_topic_key,
+            )
+        except TypeError as exc:
+            if "topic_key" not in str(exc):
+                raise
+            await handlers._flush_outbox_files(
+                outbox_record,
+                chat_id=target_chat_id,
+                thread_id=target_thread_id,
+                reply_to=None,
+            )
         await cleanup_bound_chat_live_progress_success(
             hub_root=handlers._config.root,
             raw_config=(
@@ -1660,27 +1672,49 @@ async def _run_telegram_managed_thread_turn(
         and existing_session_prompt_text.strip()
     ):
         metadata["existing_session_runtime_prompt"] = existing_session_prompt_text
-    return await run_managed_surface_turn(
-        MessageRequest(
-            target_id=thread.thread_target_id,
-            target_kind="thread",
-            message_text=prompt_text,
-            busy_policy="queue",
-            model=record.model,
-            reasoning=record.effort,
-            approval_mode=approval_policy,
-            input_items=execution_input_items,
-            metadata=merge_bound_chat_execution_metadata(
-                metadata,
-                origin_kind="surface",
-                origin_surface_kind="telegram",
-                origin_surface_key=topic_key,
-                progress_targets=(("telegram", topic_key),),
-            ),
+    client_request_id = f"telegram:{topic_key}:{secrets.token_hex(6)}"
+    message_request = MessageRequest(
+        target_id=thread.thread_target_id,
+        target_kind="thread",
+        message_text=prompt_text,
+        busy_policy="queue",
+        model=record.model,
+        reasoning=record.effort,
+        approval_mode=approval_policy,
+        input_items=execution_input_items,
+        metadata=merge_bound_chat_execution_metadata(
+            metadata,
+            origin_kind="surface",
+            origin_surface_kind="telegram",
+            origin_surface_key=topic_key,
+            progress_targets=(("telegram", topic_key),),
         ),
+    )
+    turn_request = build_surface_turn_execution_request(
+        message_request,
+        request_id=secrets.token_hex(16),
+        workspace_root=workspace_root,
+        surface_kind="telegram",
+        surface_key=topic_key,
+        agent=runtime_agent,
+        approval_policy=approval_policy or "never",
+        sandbox_policy=sandbox_policy or "dangerFullAccess",
+        profile=agent_profile,
+        client_request_id=client_request_id,
+        origin_metadata={
+            "chat_id": message.chat_id,
+            "thread_id": message.thread_id,
+            "message_id": message.message_id,
+            "mode": mode,
+            "pma_enabled": pma_enabled,
+        },
+        delivery_surface_key=topic_key,
+    )
+    return await run_managed_surface_turn(
+        turn_request,
         config=ManagedSurfaceRunnerConfig(
             coordinator=coordinator,
-            client_request_id=(f"telegram:{topic_key}:{secrets.token_hex(6)}"),
+            client_request_id=client_request_id,
             sandbox_policy=sandbox_policy,
             hooks=ManagedThreadCoordinatorHooks(
                 on_progress_event=_handle_progress_event,
@@ -2775,6 +2809,47 @@ class ExecutionCommands(TelegramCommandSupportMixin):
                 turn_kwargs["effort"] = record.effort
             if record.summary:
                 turn_kwargs["summary"] = record.summary
+            canonical_client_request_id = f"telegram:{key}:{secrets.token_hex(6)}"
+
+            def _build_direct_turn_request(current_thread_id: str) -> Any:
+                message_request = MessageRequest(
+                    target_id=current_thread_id,
+                    target_kind="thread",
+                    message_text=prompt_text,
+                    busy_policy="reject",
+                    model=record.model,
+                    reasoning=record.effort if supports_effort else None,
+                    approval_mode=approval_policy,
+                    input_items=input_items,
+                    metadata={
+                        "runtime_prompt": prompt_text,
+                        "legacy_runtime": "telegram_app_server",
+                        "repo_id": record.repo_id,
+                    },
+                )
+                return build_surface_turn_execution_request(
+                    message_request,
+                    request_id=secrets.token_hex(16),
+                    workspace_root=record.workspace_path or "",
+                    surface_kind="telegram",
+                    surface_key=key,
+                    agent=agent or "codex",
+                    approval_policy=approval_policy or "never",
+                    sandbox_policy=sandbox_policy or "dangerFullAccess",
+                    profile=profile,
+                    client_request_id=canonical_client_request_id,
+                    origin_metadata={
+                        "chat_id": message.chat_id,
+                        "thread_id": message.thread_id,
+                        "message_id": message.message_id,
+                        "codex_thread_id": current_thread_id,
+                        "runtime": "app_server",
+                        "pma_enabled": pma_mode,
+                        "repo_id": record.repo_id,
+                    },
+                    delivery_surface_key=key,
+                )
+
             log_event(
                 self._logger,
                 logging.INFO,
@@ -2831,6 +2906,20 @@ class ExecutionCommands(TelegramCommandSupportMixin):
                 )
 
                 try:
+                    canonical_turn_request = _build_direct_turn_request(thread_id)
+                    runtime.current_turn_request = canonical_turn_request.to_dict()
+                    log_event(
+                        self._logger,
+                        logging.INFO,
+                        "telegram.turn.canonical_request_built",
+                        topic_key=key,
+                        chat_id=message.chat_id,
+                        thread_id=message.thread_id,
+                        codex_thread_id=thread_id,
+                        request_id=canonical_turn_request.request_id,
+                        target_id=canonical_turn_request.target_id,
+                        agent=canonical_turn_request.agent,
+                    )
                     turn_handle = await client.turn_start(
                         thread_id,
                         prompt_text,
@@ -2882,6 +2971,20 @@ class ExecutionCommands(TelegramCommandSupportMixin):
                         )
                         if thread_id is None:
                             raise
+                        canonical_turn_request = _build_direct_turn_request(thread_id)
+                        runtime.current_turn_request = canonical_turn_request.to_dict()
+                        log_event(
+                            self._logger,
+                            logging.INFO,
+                            "telegram.turn.canonical_request_built",
+                            topic_key=key,
+                            chat_id=message.chat_id,
+                            thread_id=message.thread_id,
+                            codex_thread_id=thread_id,
+                            request_id=canonical_turn_request.request_id,
+                            target_id=canonical_turn_request.target_id,
+                            agent=canonical_turn_request.agent,
+                        )
                         turn_handle = await client.turn_start(
                             thread_id,
                             prompt_text,

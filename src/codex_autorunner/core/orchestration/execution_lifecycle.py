@@ -524,6 +524,20 @@ class _ThreadExecutionLifecycle:
                                     reason=fresh_backend_session_reason,
                                     rehydrated=bool(prefix),
                                 )
+                                if canonical_request is not None:
+                                    canonical_request.metadata.update(
+                                        {
+                                            "fresh_backend_session_started": True,
+                                            "fresh_backend_session_reason": (
+                                                fresh_backend_session_reason
+                                            ),
+                                            "fresh_backend_session_notice": (
+                                                legacy_request.metadata[
+                                                    "fresh_backend_session_notice"
+                                                ]
+                                            ),
+                                        }
+                                    )
                                 log_event(
                                     self._log,
                                     logging.INFO,
@@ -722,7 +736,9 @@ class _ThreadExecutionLifecycle:
                         execution_id=execution.execution_id,
                         backend_thread_id=conversation_id,
                         operation=(
-                            "start_review" if request.kind == "review" else "start_turn"
+                            "start_review"
+                            if legacy_request.kind == "review"
+                            else "start_turn"
                         ),
                         status_code=None,
                         reason=str(exc),

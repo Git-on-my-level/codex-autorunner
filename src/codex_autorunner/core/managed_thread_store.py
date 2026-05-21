@@ -1349,7 +1349,9 @@ class ManagedThreadStore:
         turn_request: Optional[TurnExecutionRequest] = None,
         force_queue: bool = False,
     ) -> dict[str, Any]:
-        managed_turn_id = str(uuid.uuid4())
+        managed_turn_id = (
+            turn_request.request_id if turn_request is not None else str(uuid.uuid4())
+        )
         started_at = now_iso()
         queue_item_id = uuid.uuid4().hex
         normalized_request_kind = _normalize_request_kind(request_kind)

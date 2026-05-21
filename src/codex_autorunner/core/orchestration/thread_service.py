@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Callable, Optional
 
@@ -652,7 +652,7 @@ class HarnessBackedOrchestrationService(OrchestrationThreadService):
 
     async def send_message(
         self,
-        request: MessageRequest,
+        request: MessageRequest | TurnExecutionRequest,
         *,
         client_request_id: Optional[str] = None,
         sandbox_policy: Optional[Any] = None,
@@ -668,7 +668,7 @@ class HarnessBackedOrchestrationService(OrchestrationThreadService):
 
     async def send_message_with_started_harness(
         self,
-        request: MessageRequest,
+        request: MessageRequest | TurnExecutionRequest,
         *,
         client_request_id: Optional[str] = None,
         sandbox_policy: Optional[Any] = None,
@@ -687,18 +687,31 @@ class HarnessBackedOrchestrationService(OrchestrationThreadService):
 
     async def prepare_thread_execution(
         self,
-        request: MessageRequest,
+        request: MessageRequest | TurnExecutionRequest,
         *,
         client_request_id: Optional[str] = None,
         sandbox_policy: Optional[Any] = None,
         harness: Optional[RuntimeThreadHarness] = None,
     ) -> PreparedThreadExecution:
-        if request.target_kind != "thread":
+        if isinstance(request, TurnExecutionRequest):
+            canonical_request = request
+            client_request_id = client_request_id or canonical_request.client_request_id
+            sandbox_policy = (
+                sandbox_policy
+                if sandbox_policy is not None
+                else canonical_request.sandbox_policy
+            )
+            message_request = _message_request_from_turn_request(canonical_request)
+        else:
+            canonical_request = None
+            message_request = request
+
+        if message_request.target_kind != "thread":
             raise ValueError("Thread orchestration service only handles thread targets")
 
-        thread = self.get_thread_target(request.target_id)
+        thread = self.get_thread_target(message_request.target_id)
         if thread is None:
-            raise KeyError(f"Unknown thread target '{request.target_id}'")
+            raise KeyError(f"Unknown thread target '{message_request.target_id}'")
         if not thread.workspace_root:
             raise RuntimeError("Thread target is missing workspace_root")
         runtime_binding = _resolve_thread_runtime_binding(
@@ -711,23 +724,23 @@ class HarnessBackedOrchestrationService(OrchestrationThreadService):
 
         workspace_root = Path(thread.workspace_root)
         turn_assembly = turn_assembly_from_request_metadata(
-            message_text=request.message_text,
-            metadata=request.metadata,
+            message_text=message_request.message_text,
+            metadata=message_request.metadata,
         )
         request_metadata = {
-            **request.metadata,
+            **message_request.metadata,
             **turn_assembly.metadata_patch(),
             "runtime_prompt": turn_assembly.raw_model_prompt,
         }
-        request.metadata.clear()
-        request.metadata.update(request_metadata)
+        message_request.metadata.clear()
+        message_request.metadata.update(request_metadata)
         queue_payload = self._queue_adapter.payload_for_request(
-            request,
+            message_request,
             client_request_id=client_request_id,
             sandbox_policy=sandbox_policy,
         )
         running = self.get_running_execution(thread.thread_target_id)
-        if running is not None and request.busy_policy == "interrupt":
+        if running is not None and message_request.busy_policy == "interrupt":
             try:
                 await self.stop_thread(thread.thread_target_id)
             except (
@@ -760,16 +773,20 @@ class HarnessBackedOrchestrationService(OrchestrationThreadService):
                 )
             thread = self.get_thread_target(thread.thread_target_id) or thread
 
+        turn_request = canonical_request
+        if turn_request is not None and dict(turn_request.metadata) != request_metadata:
+            turn_request = replace(turn_request, metadata=request_metadata)
         execution = self.thread_store.create_execution(
             thread.thread_target_id,
             prompt=turn_assembly.user_visible_text,
-            request_kind=request.kind,
-            busy_policy=request.busy_policy,
-            model=request.model,
-            reasoning=request.reasoning,
+            request_kind=message_request.kind,
+            busy_policy=message_request.busy_policy,
+            model=message_request.model,
+            reasoning=message_request.reasoning,
             client_request_id=client_request_id,
             metadata=request_metadata,
             queue_payload=queue_payload,
+            turn_request=turn_request,
         )
         _record_thread_activity_best_effort(
             self.thread_store,
@@ -797,11 +814,11 @@ class HarnessBackedOrchestrationService(OrchestrationThreadService):
         if resolved_harness is None and execution.status == "running":
             resolved_harness = self._harness_for_agent(
                 definition.agent_id,
-                request.agent_profile,
+                message_request.agent_profile,
             )
         return PreparedThreadExecution(
             thread=thread,
-            request=request,
+            request=message_request,
             turn_request=turn_request,
             turn_record=turn_record,
             execution=execution,
