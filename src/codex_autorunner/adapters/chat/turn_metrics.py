@@ -43,6 +43,8 @@ def _select_context_usage_bucket(
     total = token_usage.get("total")
     if isinstance(total, dict):
         return total
+    if isinstance(token_usage.get("totalTokens"), int):
+        return token_usage
     return None
 
 

@@ -623,6 +623,22 @@ class TestUsageDecoder:
         assert len(events) == 1
         assert isinstance(events[0], TokenUsage)
 
+    def test_session_update_usage_update_maps_acp_size_used_context(self) -> None:
+        state, ctx = _ctx(
+            "session/update",
+            {"update": {"sessionUpdate": "usage_update", "size": 200, "used": 50}},
+        )
+        events = SessionUpdateDecoder().decode(
+            "session/update",
+            {"update": {"sessionUpdate": "usage_update", "size": 200, "used": 50}},
+            state,
+            ctx,
+        )
+        assert len(events) == 1
+        assert isinstance(events[0], TokenUsage)
+        assert events[0].usage == {"totalTokens": 50, "modelContextWindow": 200}
+        assert state.token_usage == {"totalTokens": 50, "modelContextWindow": 200}
+
 
 class TestSessionUpdateDecoder:
     def setup_method(self) -> None:

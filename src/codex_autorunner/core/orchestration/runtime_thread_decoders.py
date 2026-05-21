@@ -82,6 +82,7 @@ from .opencode_event_fields import (
 from .runtime_payload_shapes import (
     OpenCodeToolPartShape,
     TokenUsageShape,
+    canonicalize_token_usage,
 )
 
 
@@ -146,7 +147,9 @@ def _coerce_dict(value: Any) -> dict[str, Any]:
 
 def _extract_usage(params: dict[str, Any]) -> Optional[dict[str, Any]]:
     result = _shared_extract_usage(params)
-    return result if result else None
+    if result:
+        return canonicalize_token_usage(result)
+    return canonicalize_token_usage(params)
 
 
 def _extract_output_delta(params: dict[str, Any]) -> str:
@@ -506,7 +509,7 @@ def _extract_opencode_usage_part(part: dict[str, Any]) -> Optional[dict[str, Any
     shape = TokenUsageShape.from_raw(part)
     if shape.is_empty():
         return None
-    return shape.to_dict()
+    return canonicalize_token_usage(shape.to_dict())
 
 
 def _normalize_message_part_updated(
@@ -611,7 +614,6 @@ def _reasoning_summary_part_text(params: dict[str, Any]) -> str:
 
 
 class CodexItemDecoder(MessageDecoder):
-
     def methods(self) -> frozenset[str]:
         return (
             frozenset(
@@ -768,7 +770,6 @@ class CodexItemDecoder(MessageDecoder):
 
 
 class LifecycleBoundaryDecoder(MessageDecoder):
-
     def methods(self) -> frozenset[str]:
         return frozenset(
             {
@@ -996,7 +997,6 @@ class PermissionDecoder(MessageDecoder):
 
 
 class UsageDecoder(MessageDecoder):
-
     def methods(self) -> frozenset[str]:
         return frozenset(
             {
@@ -1018,7 +1018,6 @@ class UsageDecoder(MessageDecoder):
 
 
 class SessionUpdateDecoder(MessageDecoder):
-
     def methods(self) -> frozenset[str]:
         return frozenset(
             {
@@ -1105,7 +1104,6 @@ class SessionUpdateDecoder(MessageDecoder):
 
 
 class OpenCodeMessageDecoder(MessageDecoder):
-
     def methods(self) -> frozenset[str]:
         return frozenset(
             {
@@ -1170,7 +1168,6 @@ class OpenCodeMessageDecoder(MessageDecoder):
 
 
 class StreamDeltaDecoder(MessageDecoder):
-
     def methods(self) -> frozenset[str]:
         return frozenset({"turn/streamDelta"})
 
@@ -1187,7 +1184,6 @@ class StreamDeltaDecoder(MessageDecoder):
 
 
 class ErrorDecoder(MessageDecoder):
-
     def methods(self) -> frozenset[str]:
         return frozenset({"turn/error", "error"})
 

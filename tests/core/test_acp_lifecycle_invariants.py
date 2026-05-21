@@ -1112,6 +1112,25 @@ class TestSessionUpdateKindAliases:
         )
         assert snap.normalized_kind == "token_usage"
 
+    def test_usage_update_size_used_maps_to_token_usage(self) -> None:
+        snap = analyze_acp_lifecycle_message(
+            {
+                "method": "session/update",
+                "params": {
+                    "update": {
+                        "sessionUpdate": "usage_update",
+                        "size": 200000,
+                        "used": 50000,
+                    }
+                },
+            }
+        )
+        assert snap.normalized_kind == "token_usage"
+        assert snap.usage == {
+            "totalTokens": 50000,
+            "modelContextWindow": 200000,
+        }
+
 
 class TestOutputDeltaKeyAliases:
     def test_delta_key(self) -> None:

@@ -29,3 +29,17 @@ def test_format_tui_token_usage_uses_last_for_ctx_percent() -> None:
     }
     line = _format_tui_token_usage(token_usage)
     assert line == "Token usage: total 80 input 60 output 20 ctx 20%"
+
+
+def test_format_tui_token_usage_accepts_flat_canonical_usage() -> None:
+    token_usage = {
+        "totalTokens": 50,
+        "inputTokens": 40,
+        "outputTokens": 10,
+        "modelContextWindow": 200,
+    }
+    assert _extract_context_usage_percent(token_usage) == 75
+    assert (
+        _format_tui_token_usage(token_usage)
+        == "Token usage: total 50 input 40 output 10 ctx 75%"
+    )

@@ -325,7 +325,7 @@ async def test_normalize_runtime_thread_raw_event_handles_codex_app_server_updat
     assert isinstance(approval[0], ApprovalRequested)
     assert approval[0].description == "rm -rf /tmp/example"
     assert isinstance(usage[0], TokenUsage)
-    assert usage[0].usage == {"total_tokens": 12}
+    assert usage[0].usage == {"totalTokens": 12}
     assert isinstance(output[0], OutputDelta)
     assert output[0].content == "partial reply"
     assert state.best_assistant_text() == "partial reply"
@@ -581,7 +581,7 @@ async def test_normalize_runtime_thread_raw_event_handles_acp_failure_and_usage(
     )
 
     assert isinstance(usage[0], TokenUsage)
-    assert usage[0].usage == {"total_tokens": 42}
+    assert usage[0].usage == {"totalTokens": 42}
     assert isinstance(failure[0], Failed)
     assert failure[0].error_message == "boom"
     assert state.last_error_message == "boom"
@@ -647,9 +647,9 @@ async def test_normalize_runtime_thread_raw_event_handles_official_session_updat
     assert isinstance(output[0], OutputDelta)
     assert output[0].content == "hello"
     assert isinstance(usage[0], TokenUsage)
-    assert usage[0].usage == {"total_tokens": 42}
+    assert usage[0].usage == {"totalTokens": 42}
     assert state.best_assistant_text() == "hello"
-    assert state.token_usage == {"total_tokens": 42}
+    assert state.token_usage == {"totalTokens": 42}
 
 
 async def test_normalize_runtime_thread_raw_event_preserves_session_update_object_shapes() -> (
@@ -1900,6 +1900,38 @@ class TestCrossBackendUsageParity:
         assert events[0].usage == {"totalTokens": 100}
         assert state.token_usage == {"totalTokens": 100}
 
+    async def test_session_update_usage_update_maps_acp_size_used_context(
+        self,
+    ) -> None:
+        state = RuntimeThreadRunEventState()
+
+        events = await normalize_runtime_thread_raw_event(
+            {
+                "message": {
+                    "method": "session/update",
+                    "params": {
+                        "update": {
+                            "sessionUpdate": "usage_update",
+                            "size": 200000,
+                            "used": 50000,
+                        }
+                    },
+                }
+            },
+            state,
+        )
+
+        assert len(events) == 1
+        assert isinstance(events[0], TokenUsage)
+        assert events[0].usage == {
+            "totalTokens": 50000,
+            "modelContextWindow": 200000,
+        }
+        assert state.token_usage == {
+            "totalTokens": 50000,
+            "modelContextWindow": 200000,
+        }
+
     async def test_thread_token_usage_updated_produces_token_usage_event(self) -> None:
         state = RuntimeThreadRunEventState()
 
@@ -1969,7 +2001,7 @@ class TestCrossBackendUsageParity:
         )
 
         assert canonical_state.token_usage == {"totalTokens": 42}
-        assert snake_state.token_usage == {"total_tokens": 42}
+        assert snake_state.token_usage == {"totalTokens": 42}
 
 
 class TestCrossBackendToolParity:

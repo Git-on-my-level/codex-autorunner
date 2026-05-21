@@ -3,6 +3,7 @@ from __future__ import annotations
 from codex_autorunner.core.orchestration.runtime_payload_shapes import (
     OpenCodeToolPartShape,
     TokenUsageShape,
+    canonicalize_token_usage,
 )
 
 
@@ -114,6 +115,52 @@ class TestTokenUsageShape:
         assert shape.total_tokens == 42
         assert shape.input_tokens is None
         assert not shape.is_empty()
+
+
+class TestCanonicalizeTokenUsage:
+    def test_preserves_codex_bucketed_usage(self) -> None:
+        assert canonicalize_token_usage(
+            {
+                "last": {"total_tokens": 80, "input_tokens": 60},
+                "total": {"totalTokens": 120},
+                "modelContextWindow": 100,
+            }
+        ) == {
+            "last": {"totalTokens": 80, "inputTokens": 60},
+            "total": {"totalTokens": 120},
+            "modelContextWindow": 100,
+        }
+
+    def test_accepts_flat_opencode_usage(self) -> None:
+        assert canonicalize_token_usage(
+            {"totalTokens": 80, "inputTokens": 60, "modelContextWindow": 100}
+        ) == {
+            "totalTokens": 80,
+            "inputTokens": 60,
+            "modelContextWindow": 100,
+        }
+
+    def test_maps_acp_size_used_usage_update(self) -> None:
+        assert canonicalize_token_usage({"size": 200000, "used": 50000}) == {
+            "totalTokens": 50000,
+            "modelContextWindow": 200000,
+        }
+
+    def test_computes_total_from_component_counters(self) -> None:
+        assert canonicalize_token_usage(
+            {
+                "input_tokens": 10,
+                "cached_input_tokens": 5,
+                "output_tokens": 3,
+                "reasoning_tokens": 2,
+            }
+        ) == {
+            "totalTokens": 20,
+            "inputTokens": 10,
+            "cachedInputTokens": 5,
+            "outputTokens": 3,
+            "reasoningTokens": 2,
+        }
 
 
 class TestOpenCodeToolPartShape:

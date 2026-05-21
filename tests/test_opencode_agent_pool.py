@@ -368,7 +368,11 @@ async def test_run_turn_maps_runtime_events_to_result_and_emits(tmp_path: Path):
     assert result.turn_id == "turn-1"
     assert result.raw["final_status"] == "completed"
     assert result.raw["log_lines"] == ["log line"]
-    assert result.raw["token_usage"] == {"input": 3, "output": 5}
+    assert result.raw["token_usage"] == {
+        "totalTokens": 8,
+        "inputTokens": 3,
+        "outputTokens": 5,
+    }
     assert isinstance(result.raw["execution_id"], str)
     assert result.raw["backend_thread_id"] == "session-1"
 
