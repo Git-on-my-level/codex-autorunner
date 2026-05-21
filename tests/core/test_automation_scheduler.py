@@ -9,7 +9,7 @@ from codex_autorunner.core.automation import (
     calculate_next_fire_at,
 )
 from codex_autorunner.core.automation.models import (
-    EXECUTOR_PMA_TURN,
+    EXECUTOR_MANAGED_THREAD_TURN,
     SCHEDULE_DAILY,
     SCHEDULE_INTERVAL,
     SCHEDULE_ONE_SHOT,
@@ -23,12 +23,12 @@ from codex_autorunner.core.automation.models import (
 def _schedule_rule(rule_id="rule-1") -> AutomationRule:
     return AutomationRule.create(
         rule_id=rule_id,
-        name="Scheduled PMA turn",
+        name="Scheduled managed thread turn",
         trigger_kind=TRIGGER_KIND_EVENT,
         trigger={"event_types": ["schedule.fire"]},
         filters={"schedule.rule_id": rule_id},
         target_policy=TARGET_POLICY_HUB,
-        executor_kind=EXECUTOR_PMA_TURN,
+        executor_kind=EXECUTOR_MANAGED_THREAD_TURN,
         executor={"lane_id": "pma:default"},
         policy={"dedupe_key": "{{ event.event_id }}"},
     )
@@ -62,12 +62,12 @@ def test_due_schedule_rule_uses_schedule_fire_event_path(tmp_path) -> None:
     store.upsert_rule(
         AutomationRule.create(
             rule_id="daily-rule",
-            name="Daily PMA turn",
+            name="Daily managed thread turn",
             trigger_kind=TRIGGER_KIND_SCHEDULE,
             trigger={"schedule_kind": SCHEDULE_DAILY},
             target_policy=TARGET_POLICY_HUB,
             target={"repo_id": "{{ schedule.payload.repo_id }}"},
-            executor_kind=EXECUTOR_PMA_TURN,
+            executor_kind=EXECUTOR_MANAGED_THREAD_TURN,
             executor={"message": "Fire {{ schedule.rule_id }}"},
             policy={"dedupe_key": "{{ event.event_id }}"},
         )

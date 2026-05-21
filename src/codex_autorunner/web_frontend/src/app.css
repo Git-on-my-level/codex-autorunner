@@ -528,7 +528,9 @@ a {
 }
 
 .content-shell:has(.repos-index-v2),
-.content-shell:has(.ticket-list-page) {
+.content-shell:has(.ticket-list-page),
+.content-shell:has(.master-detail),
+.content-shell:has(.pma-layout) {
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -541,8 +543,8 @@ a {
   grid-template-rows: minmax(0, 1fr);
   align-items: stretch;
   gap: var(--space-3);
-  height: calc(100dvh - 72px);
-  min-height: calc(100vh - 72px);
+  flex: 1 1 auto;
+  min-height: 0;
 }
 
 .master-detail.has-rail {

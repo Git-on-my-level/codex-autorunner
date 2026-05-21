@@ -437,7 +437,7 @@ def _serialize_thread_target(
         "lifecycle_status": thread.lifecycle_status,
         "runtime_status": effective_status,
         "normalized_status": effective_status,
-        "status": effective_status,
+        "status": target_runtime_status or effective_status,
         "target_runtime_status": target_runtime_status,
         "execution_status": execution_status,
         "active_turn_id": (

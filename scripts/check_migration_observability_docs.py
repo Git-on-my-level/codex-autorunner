@@ -94,8 +94,8 @@ DOC_LITERALS = (
     ),
     RequiredLiteral(
         "docs/ops/unified-automation-migration.md",
-        "car pma automation migration-status --json",
-        "PMA automation migration diagnostic command",
+        "car automation migration-status --json",
+        "automation migration diagnostic command",
     ),
     RequiredLiteral(
         "docs/ops/release.md",

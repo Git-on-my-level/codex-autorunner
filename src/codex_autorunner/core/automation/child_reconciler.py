@@ -7,7 +7,6 @@ from typing import Callable, Optional
 
 from ..flows.models import FlowRunRecord, FlowRunStatus
 from ..flows.store import FlowStore
-from ..pma_queue import PmaQueue, QueueItemState
 from .execution_graph import automation_execution_snapshot
 from .models import JOB_RUNNING, AutomationJob
 from .store import AutomationStore
@@ -86,73 +85,27 @@ class AutomationChildRunReconciler:
                 and job.ticket_flow_run_id
             )
             or (
-                str(job.executor.get("kind") or "").strip() == "pma_turn"
-                and job.pma_queue_item_id
+                str(job.executor.get("kind") or "").strip() == "managed_thread_turn"
+                and job.managed_thread_target_id
+                and job.managed_thread_execution_id
             )
         ]
 
     def _reconcile_child_job(self, job: AutomationJob) -> ChildReconcileResult:
         kind = str(job.executor.get("kind") or "").strip()
-        if kind == "pma_turn":
-            return self._reconcile_pma_queue_job(job)
+        if kind == "managed_thread_turn":
+            return self._reconcile_managed_thread_job(job)
         return self._reconcile_ticket_flow_job(job)
 
-    def _reconcile_pma_queue_job(self, job: AutomationJob) -> ChildReconcileResult:
-        if self._hub_root is None:
-            self._store.fail_job(
-                job.job_id,
-                error_text="pma_queue child reconcile missing hub root",
-            )
-            return ChildReconcileResult(missing=1)
-        item = PmaQueue(Path(self._hub_root)).get_item_sync(str(job.pma_queue_item_id))
-        if item is None:
-            child_result = self._reconcile_completed_pma_child(job, None)
-            if child_result.changed or child_result.inspected:
-                return child_result
-            self._store.fail_job(
-                job.job_id,
-                error_text=f"pma queue item not found: {job.pma_queue_item_id}",
-            )
-            return ChildReconcileResult(missing=1)
-        if item.state in {QueueItemState.PENDING, QueueItemState.RUNNING}:
-            return ChildReconcileResult()
-        refs = {"pma_lane_id": item.lane_id, "pma_queue_item_id": item.item_id}
-        if item.state == QueueItemState.COMPLETED:
-            result = item.result if isinstance(item.result, dict) else {}
-            status = str(result.get("status") or "").strip().lower()
-            if status in {"error", "failed", "failure"}:
-                self._store.fail_job(
-                    job.job_id,
-                    error_text=_pma_queue_error_summary(item),
-                    execution_refs=refs,
-                )
-                return ChildReconcileResult(failed=1)
-            child_result = self._reconcile_completed_pma_child(job, item)
-            if child_result.changed or child_result.inspected:
-                return child_result
-            self._store.complete_job(
-                job.job_id,
-                result_summary=_pma_queue_success_summary(item),
-                execution_refs=refs,
-            )
-            return ChildReconcileResult(completed=1)
-        if item.state == QueueItemState.CANCELLED:
-            self._store.cancel_job(job.job_id, execution_refs=refs)
-            return ChildReconcileResult(cancelled=1)
-        self._store.fail_job(
-            job.job_id,
-            error_text=_pma_queue_error_summary(item),
-            execution_refs=refs,
-        )
-        return ChildReconcileResult(failed=1)
-
-    def _reconcile_completed_pma_child(
-        self, job: AutomationJob, item: object | None
-    ) -> ChildReconcileResult:
+    def _reconcile_managed_thread_job(self, job: AutomationJob) -> ChildReconcileResult:
         snapshot = automation_execution_snapshot(job, hub_root=self._hub_root).to_dict()
         managed_thread = snapshot.get("managed_thread")
         if not isinstance(managed_thread, dict):
-            return ChildReconcileResult()
+            self._store.fail_job(
+                job.job_id,
+                error_text="managed thread child run missing execution snapshot",
+            )
+            return ChildReconcileResult(missing=1)
         latest_execution = managed_thread.get("latest_execution")
         if not isinstance(latest_execution, dict):
             return ChildReconcileResult(inspected=1)
@@ -160,9 +113,6 @@ class AutomationChildRunReconciler:
         if status in {"pending", "queued", "running", "starting"}:
             return ChildReconcileResult(inspected=1)
         refs = {
-            "pma_lane_id": getattr(item, "lane_id", None) or job.pma_lane_id,
-            "pma_queue_item_id": getattr(item, "item_id", None)
-            or job.pma_queue_item_id,
             "managed_thread_target_id": managed_thread.get("thread_target_id"),
             "managed_thread_execution_id": latest_execution.get("execution_id"),
         }
@@ -173,14 +123,10 @@ class AutomationChildRunReconciler:
                 execution_refs=refs,
             )
             return ChildReconcileResult(inspected=1, failed=1)
-        if status in {"completed", "succeeded", "success", "done"}:
+        if status in {"completed", "succeeded", "success", "done", "ok"}:
             self._store.complete_job(
                 job.job_id,
-                result_summary=(
-                    _pma_queue_success_summary(item)
-                    if item is not None
-                    else _managed_thread_success_summary(latest_execution)
-                ),
+                result_summary=_managed_thread_success_summary(latest_execution),
                 execution_refs=refs,
             )
             return ChildReconcileResult(inspected=1, completed=1)
@@ -272,29 +218,6 @@ def _ticket_flow_success_summary(repo_path: Path, record: FlowRunRecord) -> str:
     if census.open_pr_url:
         parts.append(f"pr_url={census.open_pr_url}")
     return "; ".join(parts)
-
-
-def _pma_queue_success_summary(item: object) -> str:
-    result = getattr(item, "result", None)
-    if isinstance(result, dict):
-        for key in ("summary", "detail", "message"):
-            value = result.get(key)
-            if isinstance(value, str) and value.strip():
-                return value.strip()[:500]
-    return f"PMA automation turn completed: {getattr(item, 'item_id', '')}"
-
-
-def _pma_queue_error_summary(item: object) -> str:
-    error = getattr(item, "error", None)
-    if isinstance(error, str) and error.strip():
-        return error.strip()[:500]
-    result = getattr(item, "result", None)
-    if isinstance(result, dict):
-        for key in ("detail", "error", "message", "summary"):
-            value = result.get(key)
-            if isinstance(value, str) and value.strip():
-                return value.strip()[:500]
-    return f"PMA automation turn failed: {getattr(item, 'item_id', '')}"
 
 
 def _managed_thread_error_summary(execution: dict[str, object]) -> str:

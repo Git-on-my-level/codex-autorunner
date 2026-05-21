@@ -8,6 +8,8 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Optional
 
+import pytest
+
 from codex_autorunner.agents.registry import AgentDescriptor
 from codex_autorunner.agents.types import TerminalTurnResult
 from codex_autorunner.core.hub_control_plane import (
@@ -32,6 +34,9 @@ from codex_autorunner.core.orchestration.runtime_threads import (
     begin_next_queued_runtime_thread_execution,
     begin_runtime_thread_execution,
     stream_runtime_thread_events,
+)
+from codex_autorunner.core.orchestration.turn_execution_contract import (
+    TurnExecutionContractError,
 )
 
 
@@ -360,6 +365,7 @@ class _SerializedHubClient:
                 reasoning=request.reasoning,
                 client_request_id=request.client_request_id,
                 queue_payload=request.queue_payload,
+                turn_request=request.turn_request,
             )
         )
 
@@ -373,8 +379,8 @@ class _SerializedHubClient:
             self._store.get_running_execution(request.thread_target_id)
         )
 
-    async def set_thread_backend_id(self, request: Any) -> None:
-        self._store.set_thread_backend_id(
+    async def set_thread_backend_binding(self, request: Any) -> None:
+        self._store.set_thread_backend_binding(
             request.thread_target_id,
             request.backend_thread_id,
             backend_runtime_instance_id=request.backend_runtime_instance_id,
@@ -445,6 +451,7 @@ async def test_runtime_threads_use_wait_for_turn_contract_for_session_runtimes(
             target_id=thread.thread_target_id,
             target_kind="thread",
             message_text="hello world",
+            model="anthropic/claude-sonnet-4",
         ),
     )
     outcome = await await_runtime_thread_outcome(
@@ -457,6 +464,41 @@ async def test_runtime_threads_use_wait_for_turn_contract_for_session_runtimes(
     assert outcome.status == "ok"
     assert harness.wait_calls == [(workspace_root, "session-1", "stream-turn-1")]
     assert outcome.assistant_text == "hello world"
+    turn_request = service.thread_store.get_turn_execution_request(
+        thread.thread_target_id,
+        started.execution.execution_id,
+    )
+    assert turn_request is not None
+    assert turn_request.model == "anthropic/claude-sonnet-4"
+    assert turn_request.model_payload == {
+        "providerID": "anthropic",
+        "modelID": "claude-sonnet-4",
+    }
+
+
+async def test_opencode_runtime_thread_requires_resolved_model_before_start(
+    tmp_path: Path,
+) -> None:
+    harness = _HarnessWithStream()
+    service = _build_service(tmp_path, harness, agent_id="opencode", name="OpenCode")
+    workspace_root = tmp_path / "workspace"
+    workspace_root.mkdir()
+    thread = service.create_thread_target("opencode", workspace_root)
+
+    with pytest.raises(
+        TurnExecutionContractError,
+        match="opencode requests require resolved provider/model",
+    ):
+        await begin_runtime_thread_execution(
+            service,
+            MessageRequest(
+                target_id=thread.thread_target_id,
+                target_kind="thread",
+                message_text="hello world",
+            ),
+        )
+
+    assert harness.ensure_ready_calls == []
 
 
 async def test_runtime_threads_begin_and_wait_via_serialized_remote_store(
@@ -1121,6 +1163,7 @@ async def test_stream_runtime_thread_events_proxies_harness_stream(
             target_id=thread.thread_target_id,
             target_kind="thread",
             message_text="hello world",
+            model="anthropic/claude-sonnet-4",
         ),
     )
 

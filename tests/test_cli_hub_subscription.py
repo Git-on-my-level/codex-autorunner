@@ -3,7 +3,16 @@ import json
 from typer.testing import CliRunner
 
 from codex_autorunner.cli import app
-from codex_autorunner.core.pma_automation_store import PmaAutomationStore
+from codex_autorunner.core.automation import (
+    EXECUTOR_MANAGED_THREAD_TURN,
+    PMA_SUBSCRIPTION_RULE_PREFIX,
+    AutomationRule,
+    AutomationStore,
+)
+from codex_autorunner.core.automation.models import (
+    TARGET_POLICY_HUB,
+    TRIGGER_KIND_EVENT,
+)
 
 runner = CliRunner()
 
@@ -15,14 +24,31 @@ def _seed_subscription(
     lane_id: str,
     event_types: list[str],
 ) -> dict:
-    store = PmaAutomationStore(hub_root)
-    return store.create_subscription(
-        {
-            "thread_id": thread_id,
-            "lane_id": lane_id,
-            "event_types": event_types,
-        }
-    )["subscription"]
+    store = AutomationStore(hub_root)
+    subscription_id = f"sub-{thread_id}"
+    rule = store.upsert_rule(
+        AutomationRule.create(
+            rule_id=f"{PMA_SUBSCRIPTION_RULE_PREFIX}{subscription_id}",
+            name=f"Subscription {thread_id}",
+            trigger_kind=TRIGGER_KIND_EVENT,
+            trigger={"kind": "lifecycle_event", "event_types": event_types},
+            target_policy=TARGET_POLICY_HUB,
+            target={"thread_id": thread_id},
+            executor_kind=EXECUTOR_MANAGED_THREAD_TURN,
+            executor={"lane_id": lane_id, "message_text": "Follow up"},
+            metadata={
+                "purpose": "managed_thread_lifecycle_subscription",
+                "legacy_subscription_id": subscription_id,
+            },
+        )
+    )
+    return {
+        "subscription_id": subscription_id,
+        "rule_id": rule.rule_id,
+        "thread_id": thread_id,
+        "lane_id": lane_id,
+        "event_types": event_types,
+    }
 
 
 def test_hub_subscription_list_renders_table_and_state_filter(hub_env) -> None:
@@ -38,8 +64,8 @@ def test_hub_subscription_list_renders_table_and_state_filter(hub_env) -> None:
         lane_id="pma:lane-cancelled",
         event_types=["failed"],
     )
-    store = PmaAutomationStore(hub_env.hub_root)
-    assert store.cancel_subscription(cancelled["subscription_id"]) is True
+    store = AutomationStore(hub_env.hub_root)
+    assert store.set_rule_enabled(cancelled["rule_id"], False) is not None
 
     result = runner.invoke(
         app,
@@ -99,17 +125,15 @@ def test_hub_subscription_cancel_marks_subscription_cancelled(hub_env) -> None:
     assert "Cancelled" in result.output
     assert subscription["subscription_id"][:8] in result.output
 
-    store = PmaAutomationStore(hub_env.hub_root)
-    subscriptions = store.list_subscriptions(include_inactive=True)
-    cancelled = next(
-        entry
-        for entry in subscriptions
-        if entry["subscription_id"] == subscription["subscription_id"]
-    )
-    assert cancelled["state"] == "cancelled"
+    store = AutomationStore(hub_env.hub_root)
+    cancelled = store.get_rule(subscription["rule_id"])
+    assert cancelled is not None
+    assert cancelled.enabled is False
 
 
-def test_hub_subscription_purge_supports_dry_run_and_apply(hub_env) -> None:
+def test_hub_subscription_purge_previews_disabled_rules_without_deleting(
+    hub_env,
+) -> None:
     active = _seed_subscription(
         hub_env.hub_root,
         thread_id="thread-keep",
@@ -122,22 +146,8 @@ def test_hub_subscription_purge_supports_dry_run_and_apply(hub_env) -> None:
         lane_id="pma:lane-purge",
         event_types=["failed"],
     )
-    store = PmaAutomationStore(hub_env.hub_root)
-    store.create_timer(
-        {
-            "subscription_id": cancelled["subscription_id"],
-            "thread_id": "thread-purge",
-            "reason": "subscription-timer",
-        }
-    )
-    store.enqueue_wakeup(
-        source="lifecycle_subscription",
-        subscription_id=cancelled["subscription_id"],
-        thread_id="thread-purge",
-        reason="subscription-wakeup",
-        idempotency_key="purge-wakeup-1",
-    )
-    assert store.cancel_subscription(cancelled["subscription_id"]) is True
+    store = AutomationStore(hub_env.hub_root)
+    assert store.set_rule_enabled(cancelled["rule_id"], False) is not None
 
     dry_run = runner.invoke(
         app,
@@ -159,8 +169,8 @@ def test_hub_subscription_purge_supports_dry_run_and_apply(hub_env) -> None:
     assert dry_run_payload["dry_run"] is True
     assert dry_run_payload["count"] == 1
     assert dry_run_payload["subscription_ids"] == [cancelled["subscription_id"]]
-    remaining_after_dry_run = store.list_subscriptions(include_inactive=True)
-    assert len(remaining_after_dry_run) == 2
+    assert store.get_rule(active["rule_id"]) is not None
+    assert store.get_rule(cancelled["rule_id"]) is not None
 
     apply_result = runner.invoke(
         app,
@@ -176,15 +186,7 @@ def test_hub_subscription_purge_supports_dry_run_and_apply(hub_env) -> None:
         ],
     )
 
-    assert apply_result.exit_code == 0, apply_result.output
-    apply_payload = json.loads(apply_result.stdout)
-    assert apply_payload["dry_run"] is False
-    assert apply_payload["count"] == 1
-    assert apply_payload["subscription_ids"] == [cancelled["subscription_id"]]
-
-    remaining = store.list_subscriptions(include_inactive=True)
-    assert [entry["subscription_id"] for entry in remaining] == [
-        active["subscription_id"]
-    ]
-    assert store.list_timers(include_inactive=True) == []
-    assert store.list_wakeups() == []
+    assert apply_result.exit_code != 0, apply_result.output
+    assert "disabled generalized rules" in apply_result.output
+    assert store.get_rule(active["rule_id"]) is not None
+    assert store.get_rule(cancelled["rule_id"]) is not None

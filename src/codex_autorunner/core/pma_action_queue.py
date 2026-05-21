@@ -518,7 +518,8 @@ def _build_automation_queue_items(
         repo_id = str(entry.get("repo_id") or "").strip()
         thread_id = str(entry.get("thread_id") or "").strip()
         wakeup_id = str(entry.get("wakeup_id") or "").strip()
-        basis_at = entry.get("timestamp")
+        job_id = str(entry.get("job_id") or "").strip()
+        basis_at = entry.get("timestamp") or entry.get("available_at")
         freshness = build_freshness_payload(
             generated_at=generated_at,
             stale_threshold_seconds=stale_threshold_seconds,
@@ -537,6 +538,7 @@ def _build_automation_queue_items(
             {
                 "item_type": "automation_wakeup",
                 "wakeup_id": wakeup_id or None,
+                "job_id": job_id or None,
                 "source": entry.get("source"),
                 "event_type": entry.get("event_type"),
                 "subscription_id": entry.get("subscription_id"),
@@ -549,15 +551,15 @@ def _build_automation_queue_items(
                 "to_state": entry.get("to_state"),
                 "reason": entry.get("reason"),
                 "timestamp": basis_at,
-                "action_queue_id": f"automation_wakeup:{wakeup_id or scope_key}",
+                "action_queue_id": f"automation_wakeup:{wakeup_id or job_id or scope_key}",
                 "queue_source": "automation_wakeup",
                 "precedence": {"rank": rank, "label": label},
-                "why_selected": "Pending automation wakeup signals follow-up work",
+                "why_selected": "Pending automation job signals follow-up work",
                 "recommended_action": "handle_automation_wakeup",
                 "recommended_detail": (
                     f"Continue lane {entry.get('lane_id')}"
                     if entry.get("lane_id")
-                    else "Inspect the pending PMA automation wakeup"
+                    else "Inspect the pending automation job"
                 ),
                 "operator_need_rank": 5,
                 "freshness": freshness,

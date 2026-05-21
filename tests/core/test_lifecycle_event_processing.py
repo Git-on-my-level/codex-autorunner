@@ -80,6 +80,10 @@ def _read_queue_items(
     return items
 
 
+def _automation_jobs(hub_root: Path) -> list[dict[str, object]]:
+    return [job.to_dict() for job in AutomationStore(hub_root).list_jobs()]
+
+
 def test_lifecycle_dispatch_auto_resolve_does_not_enqueue_pma(
     tmp_path: Path,
 ) -> None:
@@ -126,12 +130,12 @@ def test_lifecycle_dispatch_escalate_enqueues_pma(tmp_path: Path) -> None:
         store = LifecycleEventStore(hub_root)
         assert store.get_unprocessed() == []
 
-        items = _read_queue_items(hub_root)
-        assert len(items) == 1
-        payload = items[0].get("payload") or {}
-        lifecycle_event = payload.get("lifecycle_event") or {}
-        assert lifecycle_event.get("event_type") == "dispatch_created"
-        assert lifecycle_event.get("repo_id") == "repo-1"
+        jobs = _automation_jobs(hub_root)
+        assert len(jobs) == 1
+        event = (jobs[0].get("payload") or {}).get("event") or {}
+        event_payload = event.get("payload") or {}
+        assert event_payload.get("event_type") == "dispatch_created"
+        assert event_payload.get("repo_id") == "repo-1"
     finally:
         supervisor.shutdown()
 
@@ -148,12 +152,12 @@ def test_lifecycle_flow_failed_enqueues_pma(tmp_path: Path) -> None:
         store = LifecycleEventStore(hub_root)
         assert store.get_unprocessed() == []
 
-        items = _read_queue_items(hub_root)
-        assert len(items) == 1
-        payload = items[0].get("payload") or {}
-        lifecycle_event = payload.get("lifecycle_event") or {}
-        assert lifecycle_event.get("event_type") == "flow_failed"
-        assert lifecycle_event.get("repo_id") == "repo-1"
+        jobs = _automation_jobs(hub_root)
+        assert len(jobs) == 1
+        event = (jobs[0].get("payload") or {}).get("event") or {}
+        event_payload = event.get("payload") or {}
+        assert event_payload.get("event_type") == "flow_failed"
+        assert event_payload.get("repo_id") == "repo-1"
     finally:
         supervisor.shutdown()
 
@@ -218,11 +222,11 @@ def test_lifecycle_reactive_debounce(tmp_path: Path) -> None:
         store = LifecycleEventStore(hub_root)
         assert store.get_unprocessed() == []
 
-        items = _read_queue_items(hub_root)
-        assert len(items) == 1
-        payload = items[0].get("payload") or {}
-        lifecycle_event = payload.get("lifecycle_event") or {}
-        assert lifecycle_event.get("event_type") == "flow_failed"
+        jobs = _automation_jobs(hub_root)
+        assert len(jobs) == 1
+        event = (jobs[0].get("payload") or {}).get("event") or {}
+        event_payload = event.get("payload") or {}
+        assert event_payload.get("event_type") == "flow_failed"
     finally:
         supervisor.shutdown()
 
@@ -268,8 +272,7 @@ def test_lifecycle_reactive_rate_limit(tmp_path: Path) -> None:
         store = LifecycleEventStore(hub_root)
         assert store.get_unprocessed() == []
 
-        items = _read_queue_items(hub_root)
-        assert len(items) == 1
+        assert len(_automation_jobs(hub_root)) == 2
     finally:
         supervisor.shutdown()
 
@@ -398,19 +401,18 @@ def test_lifecycle_subscription_enqueues_wakeup_payload(tmp_path: Path) -> None:
         )
         supervisor.process_lifecycle_events()
 
-        items = _read_queue_items(hub_root)
-        assert len(items) == 1
-        payload = items[0].get("payload") or {}
-        wake_up = payload.get("wake_up") or {}
-        assert wake_up.get("repo_id") == "repo-1"
-        assert wake_up.get("run_id") == "run-1"
-        assert wake_up.get("from_state") == "running"
-        assert wake_up.get("to_state") == "failed"
-        assert wake_up.get("reason") == "flow_error"
-        assert isinstance(wake_up.get("timestamp"), str)
-        assert wake_up.get("source") == "transition"
-        assert wake_up.get("event_type") == "flow_failed"
-        message = str(payload.get("message") or "")
+        jobs = _automation_jobs(hub_root)
+        assert len(jobs) == 1
+        executor = jobs[0].get("executor") or {}
+        assert executor.get("repo_id") == "repo-1"
+        assert executor.get("run_id") == "run-1"
+        assert executor.get("from_state") == "running"
+        assert executor.get("to_state") == "failed"
+        assert executor.get("reason") == "flow_error"
+        assert isinstance(executor.get("timestamp"), str)
+        assert executor.get("source") == "transition"
+        assert executor.get("event_type") == "flow_failed"
+        message = str(executor.get("message_text") or "")
         assert "source: transition" in message
         assert "event_type: flow_failed" in message
         assert "suggested_next_action:" in message
@@ -440,28 +442,23 @@ def test_automation_timer_due_drains_to_pma_queue(tmp_path: Path) -> None:
             timer=timer
         )
 
-        created = supervisor.process_pma_automation_timers()
-        assert created == 1
+        supervisor.process_automation_timers()
+        assert len(_automation_jobs(hub_root)) == 1
 
-        assert supervisor.process_pma_automation_timers() == 0
+        assert supervisor.process_automation_timers() == 0
 
-        items = _read_queue_items(hub_root)
-        assert len(items) == 1
-        payload = items[0].get("payload") or {}
-        wake_up = payload.get("wake_up") or {}
-        assert wake_up.get("thread_id") == "thread-123"
-        assert wake_up.get("repo_id") is None
-        assert wake_up.get("run_id") is None
-        assert wake_up.get("from_state") == "idle"
-        assert wake_up.get("to_state") == "follow_up"
-        assert wake_up.get("reason") == "timer_due"
-        assert isinstance(wake_up.get("timestamp"), str)
-        assert wake_up.get("source") == "timer"
-        assert wake_up.get("timer_id") == timer.timer_id
-        message = str(payload.get("message") or "")
+        jobs = _automation_jobs(hub_root)
+        assert len(jobs) == 1
+        executor = jobs[0].get("executor") or {}
+        target = jobs[0].get("target") or {}
+        assert target.get("thread_id") == "thread-123"
+        assert target.get("repo_id") is None
+        assert target.get("run_id") is None
+        message = str(executor.get("message_text") or "")
+        assert "thread_id: thread-123" in message
         assert "source: timer" in message
         assert "timer_id:" in message
-        assert "/hub/pma/timers/{timer_id}/touch" in message
+        assert "generalized automation schedule" in message
     finally:
         supervisor.shutdown()
 
@@ -496,13 +493,11 @@ def test_flow_completion_subscription_can_trigger_next_lane(tmp_path: Path) -> N
         )
         supervisor.process_lifecycle_events()
 
-        default_items = _read_queue_items(hub_root, "pma:default")
-        next_lane_items = _read_queue_items(hub_root, "pma:lane-next")
-        assert default_items == []
-        assert len(next_lane_items) == 1
-        wake_up = (next_lane_items[0].get("payload") or {}).get("wake_up") or {}
-        assert wake_up.get("lane_id") == "pma:lane-next"
-        assert wake_up.get("to_state") == "completed"
+        assert _read_queue_items(hub_root, "pma:default") == []
+        jobs = _automation_jobs(hub_root)
+        assert len(jobs) == 1
+        executor = jobs[0].get("executor") or {}
+        assert executor.get("to_state") == "completed"
     finally:
         supervisor.shutdown()
 
@@ -538,10 +533,10 @@ def test_drain_automation_wakeup_copies_delivery_target_from_subscription(
         supervisor.lifecycle_emitter.emit_flow_completed("repo-1", "run-1")
         supervisor.process_lifecycle_events()
 
-        items = _read_queue_items(hub_root, "pma:default")
-        assert len(items) == 1
-        wake_up = (items[0].get("payload") or {}).get("wake_up") or {}
-        assert wake_up.get("delivery_target") == {
+        jobs = _automation_jobs(hub_root)
+        assert len(jobs) == 1
+        executor = jobs[0].get("executor") or {}
+        assert executor.get("delivery_target") == {
             "surface_kind": "discord",
             "surface_key": "discord:channel-1",
         }

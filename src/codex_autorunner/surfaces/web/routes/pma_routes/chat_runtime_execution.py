@@ -153,6 +153,8 @@ async def execute_harness_turn(
     *,
     model: Optional[str] = None,
     reasoning: Optional[str] = None,
+    approval_mode: Optional[str] = "on-request",
+    sandbox_policy: Optional[Any] = "dangerFullAccess",
     backend_thread_id: Optional[str] = None,
     thread_registry: Optional[Any] = None,
     thread_key: Optional[str] = None,
@@ -224,8 +226,8 @@ async def execute_harness_turn(
             await _effective_prompt_for_start_turn(),
             model,
             reasoning,
-            approval_mode="on-request",
-            sandbox_policy="dangerFullAccess",
+            approval_mode=approval_mode,
+            sandbox_policy=sandbox_policy,
         )
     except Exception as exc:
         if not had_existing_conversation or not requires_fresh_pma_conversation(exc):
@@ -249,8 +251,8 @@ async def execute_harness_turn(
             await _effective_prompt_for_start_turn(),
             model,
             reasoning,
-            approval_mode="on-request",
-            sandbox_policy="dangerFullAccess",
+            approval_mode=approval_mode,
+            sandbox_policy=sandbox_policy,
         )
     resolved_conversation_id = str(
         getattr(turn, "conversation_id", None) or conversation_id or ""

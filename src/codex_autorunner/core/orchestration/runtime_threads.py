@@ -8,12 +8,14 @@ from typing import Any, AsyncIterator, Optional
 
 from ...harness_capabilities import harness_supports_event_streaming
 from ..sse import format_sse
+from .execution_lifecycle import _message_request_from_turn_request
 from .models import ExecutionRecord, MessageRequest, ThreadTarget
 from .runtime_turn_terminal_state import (
     RuntimeThreadOutcome,
     RuntimeTurnTerminalStateMachine,
 )
 from .service import HarnessBackedOrchestrationService
+from .turn_execution_contract import TurnExecutionRequest
 
 _INTERRUPT_POLL_INTERVAL_SECONDS = 0.05
 _STALL_POLL_INTERVAL_SECONDS = 0.25
@@ -95,16 +97,21 @@ class RuntimeThreadExecution:
 
 async def begin_runtime_thread_execution(
     service: HarnessBackedOrchestrationService,
-    request: MessageRequest,
+    request: MessageRequest | TurnExecutionRequest,
     *,
     client_request_id: Optional[str] = None,
     sandbox_policy: Optional[Any] = None,
 ) -> RuntimeThreadExecution:
     """Start a runtime-backed thread execution via the orchestration service."""
 
-    if request.target_kind != "thread":
+    lookup_request = (
+        _message_request_from_turn_request(request)
+        if isinstance(request, TurnExecutionRequest)
+        else request
+    )
+    if lookup_request.target_kind != "thread":
         raise ValueError("Runtime thread execution only supports thread targets")
-    thread = service.get_thread_target(request.target_id)
+    thread = service.get_thread_target(lookup_request.target_id)
     if thread is None:
         raise KeyError(f"Unknown thread target '{request.target_id}'")
     if not thread.workspace_root:
@@ -116,7 +123,38 @@ async def begin_runtime_thread_execution(
         sandbox_policy=sandbox_policy,
         harness=harness,
     )
-    refreshed_thread = service.get_thread_target(request.target_id)
+    if isinstance(request, TurnExecutionRequest):
+        request_loader = getattr(
+            service.thread_store, "get_turn_execution_request", None
+        )
+        stored_request = (
+            request_loader(lookup_request.target_id, execution.execution_id)
+            if callable(request_loader)
+            else None
+        )
+        runtime_request = _message_request_from_turn_request(
+            stored_request
+            if isinstance(stored_request, TurnExecutionRequest)
+            else request
+        )
+        if (
+            not runtime_request.metadata.get("fresh_backend_session_started")
+            and not thread.backend_thread_id
+            and (
+                str(getattr(thread, "last_execution_id", "") or "").strip()
+                or str(getattr(thread, "compact_seed", "") or "").strip()
+            )
+        ):
+            runtime_request.metadata["fresh_backend_session_started"] = True
+            runtime_request.metadata["fresh_backend_session_reason"] = (
+                "missing_backend_binding"
+            )
+            runtime_request.metadata["fresh_backend_session_notice"] = (
+                "Notice: I started a new live session for this conversation."
+            )
+    else:
+        runtime_request = request
+    refreshed_thread = service.get_thread_target(lookup_request.target_id)
     if refreshed_thread is None:
         raise KeyError(f"Unknown thread target '{request.target_id}' after send")
     return RuntimeThreadExecution(
@@ -125,7 +163,7 @@ async def begin_runtime_thread_execution(
         thread=refreshed_thread,
         execution=execution,
         workspace_root=Path(refreshed_thread.workspace_root or thread.workspace_root),
-        request=request,
+        request=runtime_request,
     )
 
 

@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from tests.support.turn_execution import create_test_turn
+
 from codex_autorunner.core.managed_thread_store import ManagedThreadStore
 from codex_autorunner.core.orchestration import (
     ManagedThreadDeliveryEnvelope,
@@ -65,7 +67,8 @@ def test_user_message_timeline_projects_capsule_visibility_metadata(
     tmp_path: Path,
 ) -> None:
     hub_root, store, thread_id = _store(tmp_path)
-    turn = store.create_turn(
+    turn = create_test_turn(
+        store,
         thread_id,
         prompt="<injected context>\nrepo guidance\n</injected context>\n\nFix login",
         metadata={
@@ -120,7 +123,8 @@ def test_completed_timeline_separates_intermediate_and_final_output(
     tmp_path: Path,
 ) -> None:
     hub_root, store, thread_id = _store(tmp_path)
-    turn = store.create_turn(
+    turn = create_test_turn(
+        store,
         thread_id,
         prompt="summarize the repo",
         metadata={
@@ -183,7 +187,7 @@ def test_high_volume_assistant_and_log_deltas_do_not_expand_default_timeline(
     tmp_path: Path,
 ) -> None:
     hub_root, store, thread_id = _store(tmp_path)
-    turn = store.create_turn(thread_id, prompt="stream a lot")
+    turn = create_test_turn(store, thread_id, prompt="stream a lot")
     turn_id = str(turn["managed_turn_id"])
     events = [
         OutputDelta(
@@ -232,7 +236,7 @@ def test_running_timeline_projects_progress_tool_group_and_approval(
     tmp_path: Path,
 ) -> None:
     hub_root, store, thread_id = _store(tmp_path)
-    turn = store.create_turn(thread_id, prompt="run tests")
+    turn = create_test_turn(store, thread_id, prompt="run tests")
     turn_id = str(turn["managed_turn_id"])
     persist_turn_timeline(
         hub_root,
@@ -319,13 +323,15 @@ def test_queued_user_messages_remain_distinct_and_ordered_while_running(
     tmp_path: Path,
 ) -> None:
     hub_root, store, thread_id = _store(tmp_path)
-    active = store.create_turn(thread_id, prompt="active turn")
-    queued_one = store.create_turn(
+    active = create_test_turn(store, thread_id, prompt="active turn")
+    queued_one = create_test_turn(
+        store,
         thread_id,
         prompt="queued one",
         busy_policy="queue",
     )
-    queued_two = store.create_turn(
+    queued_two = create_test_turn(
+        store,
         thread_id,
         prompt="queued two",
         busy_policy="queue",
@@ -370,7 +376,7 @@ def test_failed_and_interrupted_timelines_include_terminal_status(
     tmp_path: Path,
 ) -> None:
     hub_root, store, thread_id = _store(tmp_path)
-    failed = store.create_turn(thread_id, prompt="will fail")
+    failed = create_test_turn(store, thread_id, prompt="will fail")
     failed_id = str(failed["managed_turn_id"])
     persist_turn_timeline(
         hub_root,
@@ -386,7 +392,7 @@ def test_failed_and_interrupted_timelines_include_terminal_status(
     )
     assert store.mark_turn_finished(failed_id, status="error", error="boom")
 
-    interrupted = store.create_turn(thread_id, prompt="will stop")
+    interrupted = create_test_turn(store, thread_id, prompt="will stop")
     interrupted_id = str(interrupted["managed_turn_id"])
     persist_turn_timeline(
         hub_root,
@@ -519,7 +525,7 @@ def test_live_tail_event_carries_hidden_progress_metadata() -> None:
 
 def test_timeline_includes_delivery_state_items(tmp_path: Path) -> None:
     hub_root, store, thread_id = _store(tmp_path)
-    turn = store.create_turn(thread_id, prompt="deliver this")
+    turn = create_test_turn(store, thread_id, prompt="deliver this")
     turn_id = str(turn["managed_turn_id"])
     assert store.mark_turn_finished(turn_id, status="ok", assistant_text="done")
     ledger = SQLiteManagedThreadDeliveryLedger(hub_root, durable=False)
@@ -589,7 +595,7 @@ def test_timeline_projects_equivalent_delivery_state_for_chat_surfaces(
     tmp_path: Path,
 ) -> None:
     hub_root, store, thread_id = _store(tmp_path)
-    turn = store.create_turn(thread_id, prompt="deliver everywhere")
+    turn = create_test_turn(store, thread_id, prompt="deliver everywhere")
     turn_id = str(turn["managed_turn_id"])
     assert store.mark_turn_finished(turn_id, status="ok", assistant_text="done")
     ledger = SQLiteManagedThreadDeliveryLedger(hub_root, durable=False)

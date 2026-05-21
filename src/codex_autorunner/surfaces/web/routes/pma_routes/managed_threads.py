@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import uuid
 from pathlib import Path
 from typing import Annotated, Any, Optional, cast
 
@@ -15,13 +16,20 @@ from .....agents.registry import (
     wrap_requested_agent_context,
 )
 from .....core.automation import (
+    EXECUTOR_MANAGED_THREAD_TURN,
     PMA_SUBSCRIPTION_RULE_PREFIX,
     PMA_TIMER_RULE_PREFIX,
     PMA_TIMER_SCHEDULE_PREFIX,
+    AutomationRule,
     AutomationSchedule,
     AutomationStore,
 )
 from .....core.automation.builtins import _normalize_reactive_event_types
+from .....core.automation.models import (
+    SCHEDULE_ONE_SHOT,
+    TARGET_POLICY_HUB,
+    TRIGGER_KIND_EVENT,
+)
 from .....core.managed_thread_store import ManagedThreadStore
 from .....core.orchestration import (
     ChatSurfaceReadService,
@@ -34,12 +42,13 @@ from .....core.orchestration.managed_thread_timeline import (
     build_managed_thread_timeline,
 )
 from .....core.orchestration.turn_timeline import list_turn_timeline
-from .....core.pma_automation_store import (
+from .....core.pma_automation_rule_projection import (
+    subscription_row_from_rule,
+    timer_rows_from_rules_and_schedules,
+)
+from .....core.pma_automation_services import (
     MANAGED_THREAD_AUTO_SUBSCRIPTION_PREFIXES,
-    PmaAutomationStore,
     PmaAutomationThreadNotFoundError,
-    PmaAutomationTimer,
-    PmaLifecycleSubscription,
 )
 from .....core.pma_automation_types import (
     DEFAULT_PMA_LANE_ID,
@@ -52,7 +61,6 @@ from .....core.pma_automation_types import (
     _normalize_positive_int,
     _normalize_timer_type,
 )
-from .....core.pma_automation_unified import PmaUnifiedAutomationAdapter
 from .....core.text_utils import _truncate_text
 from .....core.time_utils import now_iso
 from ...schemas import (
@@ -68,10 +76,6 @@ from ...schemas import (
 )
 from ...services.pma import get_pma_request_context
 from ...services.pma.automation import (
-    call_store_action_with_id,
-    call_store_create_with_payload,
-    call_store_list,
-    get_pma_automation_store,
     normalize_optional_text,
 )
 from ...services.pma.managed_thread_followup import (
@@ -100,6 +104,12 @@ from ...services.pma.managed_thread_scope import (
 from .hermes_supervisors import resolve_cached_hermes_supervisor
 
 _logger = logging.getLogger(__name__)
+
+_SUBSCRIPTION_PURPOSES = {
+    "managed_thread_lifecycle_subscription",
+    "pma_lifecycle_subscription",
+}
+_TIMER_PURPOSES = {"managed_thread_timer", "pma_timer"}
 
 
 def _retirable_notification_surfaces(
@@ -205,12 +215,17 @@ def _unified_pma_automation_read_model(
     limit: int,
 ) -> dict[str, Any]:
     context = get_pma_request_context(request)
+    purpose_set = (
+        _SUBSCRIPTION_PURPOSES
+        if purpose in _SUBSCRIPTION_PURPOSES
+        else _TIMER_PURPOSES if purpose in _TIMER_PURPOSES else {purpose}
+    )
     try:
         store = AutomationStore(context.hub_root)
         rules = [
             rule
             for rule in store.list_rules()
-            if rule.metadata.get("purpose") == purpose
+            if rule.metadata.get("purpose") in purpose_set
         ]
         rule_ids = {rule.rule_id for rule in rules}
         schedules = [
@@ -234,10 +249,6 @@ def _unified_pma_automation_read_model(
     }
 
 
-def _is_builtin_pma_store(store: Any) -> bool:
-    return isinstance(store, PmaAutomationStore)
-
-
 def _create_unified_pma_subscription(
     request: Request, payload: dict[str, Any]
 ) -> dict[str, Any]:
@@ -254,7 +265,7 @@ def _create_unified_pma_subscription(
         )
         if existing is not None:
             return {
-                "subscription": _subscription_row_from_rule(existing),
+                "subscription": subscription_row_from_rule(existing),
                 "deduped": True,
             }
 
@@ -283,7 +294,7 @@ def _create_unified_pma_subscription(
             to_state=normalized_to_state,
         )
         if existing_auto is not None:
-            row = _subscription_row_from_rule(existing_auto)
+            row = subscription_row_from_rule(existing_auto)
             if _is_auto_subscription_key(idempotency_key):
                 return {"subscription": row, "deduped": True}
             return {
@@ -298,28 +309,102 @@ def _create_unified_pma_subscription(
                 ),
             }
 
+    created_at = now_iso()
+    subscription_id = normalize_optional_text(payload.get("subscription_id")) or str(
+        uuid.uuid4()
+    )
     metadata = _resolved_unified_subscription_metadata(hub_root, payload)
-    subscription = PmaLifecycleSubscription.create(
-        event_types=normalized_event_types or None,
-        repo_id=normalized_repo_id,
-        run_id=normalized_run_id,
-        thread_id=normalized_thread_id,
-        lane_id=_resolve_unified_subscription_lane_id(
-            hub_root,
-            payload,
-            metadata=metadata,
-        ),
-        from_state=normalized_from_state,
-        to_state=normalized_to_state,
-        reason=normalize_optional_text(payload.get("reason")),
-        idempotency_key=idempotency_key,
-        max_matches=_normalize_positive_int(payload.get("max_matches"), fallback=None),
+    lane_id = _resolve_unified_subscription_lane_id(
+        hub_root,
+        payload,
         metadata=metadata,
     )
-    PmaUnifiedAutomationAdapter(store).mirror_subscription_rule(
-        subscription=subscription
+    reason = normalize_optional_text(payload.get("reason"))
+    max_matches = _normalize_positive_int(payload.get("max_matches"), fallback=None)
+    if max_matches is None and bool(payload.get("notify_once")):
+        max_matches = 1
+    event_types_for_rule = _normalize_reactive_event_types(normalized_event_types)
+    filters: dict[str, Any] = {}
+    for value, path in (
+        (normalized_repo_id, "event.repo_id"),
+        (normalized_run_id, "event.payload.run_id"),
+        (normalized_thread_id, "event.payload.thread_id"),
+        (normalized_from_state, "event.payload.from_state"),
+        (normalized_to_state, "event.payload.to_state"),
+    ):
+        if value is not None:
+            filters[path] = value
+    rule = AutomationRule.create(
+        rule_id=f"{PMA_SUBSCRIPTION_RULE_PREFIX}{subscription_id}",
+        name=f"Managed-thread subscription {subscription_id}",
+        enabled=True,
+        system_owned=True,
+        trigger_kind=TRIGGER_KIND_EVENT,
+        trigger={"kind": "lifecycle_event", "event_types": event_types_for_rule},
+        filters=filters,
+        target_policy=TARGET_POLICY_HUB,
+        target={
+            "repo_id": normalized_repo_id,
+            "run_id": normalized_run_id,
+            "thread_id": normalized_thread_id,
+        },
+        executor_kind=EXECUTOR_MANAGED_THREAD_TURN,
+        executor={
+            "wake_up_kind": "managed_thread_subscription",
+            "source": "transition",
+            "subscription_id": subscription_id,
+            "lane_id": lane_id,
+            "event_type": "{{ event.payload.event_type }}",
+            "repo_id": "{{ event.repo_id }}",
+            "run_id": "{{ event.payload.run_id }}",
+            "thread_id": "{{ event.payload.thread_id }}",
+            "from_state": "{{ event.payload.from_state }}",
+            "to_state": "{{ event.payload.to_state }}",
+            "reason": "{{ event.payload.reason }}",
+            "timestamp": "{{ event.raw_payload.timestamp }}",
+            "message_text": (
+                "Automation wake-up received.\n"
+                "source: transition\n"
+                "event_type: {{ event.payload.event_type }}\n"
+                f"subscription_id: {subscription_id}\n"
+                "repo_id: {{ event.repo_id }}\n"
+                "run_id: {{ event.payload.run_id }}\n"
+                "thread_id: {{ event.payload.thread_id }}\n"
+                "from_state: {{ event.payload.from_state }}\n"
+                "to_state: {{ event.payload.to_state }}\n"
+                "reason: {{ event.payload.reason }}\n"
+                "timestamp: {{ event.raw_payload.timestamp }}\n"
+                "suggested_next_action: inspect the transition and adjust "
+                "managed-thread automation subscriptions or timers as needed."
+            ),
+        },
+        policy={
+            "dedupe_key": (
+                f"managed-thread-subscription:{subscription_id}:" "{{ event.event_id }}"
+            ),
+            "approval_mode": "pause_and_request_user",
+            "max_attempts": 3,
+            "max_concurrent_per_rule": 1,
+            "max_concurrent_per_target": 1,
+        },
+        metadata={
+            "builtin": True,
+            "purpose": "managed_thread_lifecycle_subscription",
+            "legacy_subscription_id": subscription_id,
+            "legacy_idempotency_key": idempotency_key,
+            "legacy_reason": reason,
+            "legacy_max_matches": max_matches,
+            "legacy_match_count": 0,
+            "legacy_metadata": metadata,
+        },
+        created_at=created_at,
+        updated_at=created_at,
     )
-    return {"subscription": subscription.to_dict(), "deduped": False}
+    store.upsert_rule(rule)
+    return {
+        "subscription": subscription_row_from_rule(rule),
+        "deduped": False,
+    }
 
 
 def _is_auto_subscription_key(idempotency_key: Optional[str]) -> bool:
@@ -361,9 +446,9 @@ def _find_covering_auto_subscription_rule(
     to_state: Optional[str],
 ) -> Optional[Any]:
     for rule in store.list_rules(enabled=True):
-        if rule.metadata.get("purpose") != "pma_lifecycle_subscription":
+        if rule.metadata.get("purpose") not in _SUBSCRIPTION_PURPOSES:
             continue
-        row = _subscription_row_from_rule(rule)
+        row = subscription_row_from_rule(rule)
         if not _is_auto_subscription_key(row.get("idempotency_key")):
             continue
         if not _subscription_event_types_are_covered(
@@ -542,7 +627,7 @@ def _create_unified_pma_timer(
             idempotency_key=idempotency_key,
         )
         if existing is not None:
-            rows = _timer_rows_from_rules_and_schedules(
+            rows = timer_rows_from_rules_and_schedules(
                 {existing.rule_id: existing},
                 store.list_schedules(rule_id=existing.rule_id),
             )
@@ -568,28 +653,97 @@ def _create_unified_pma_timer(
         else:
             due_at = _iso_after_seconds(delay_seconds or 0)
 
+    created_at = now_iso()
+    timer_id = normalize_optional_text(payload.get("timer_id")) or str(uuid.uuid4())
     metadata_raw = payload.get("metadata")
-    metadata = dict(metadata_raw) if isinstance(metadata_raw, dict) else None
-    timer = PmaAutomationTimer.create(
-        due_at=due_at,
-        timer_type=timer_type,
-        idle_seconds=idle_seconds,
-        subscription_id=subscription_id,
-        repo_id=normalize_optional_text(payload.get("repo_id")),
-        run_id=normalize_optional_text(payload.get("run_id")),
-        thread_id=normalize_optional_text(payload.get("thread_id")),
-        lane_id=normalize_optional_text(payload.get("lane_id")),
-        from_state=normalize_optional_text(payload.get("from_state")),
-        to_state=normalize_optional_text(payload.get("to_state")),
-        reason=normalize_optional_text(payload.get("reason")),
-        idempotency_key=idempotency_key,
-        metadata=metadata,
+    metadata = dict(metadata_raw) if isinstance(metadata_raw, dict) else {}
+    repo_id = normalize_optional_text(payload.get("repo_id"))
+    run_id = normalize_optional_text(payload.get("run_id"))
+    thread_id = normalize_optional_text(payload.get("thread_id"))
+    lane_id = _normalize_lane_id(payload.get("lane_id"))
+    from_state = normalize_optional_text(payload.get("from_state"))
+    to_state = normalize_optional_text(payload.get("to_state"))
+    reason = normalize_optional_text(payload.get("reason"))
+    rule = AutomationRule.create(
+        rule_id=f"{PMA_TIMER_RULE_PREFIX}{timer_id}",
+        name=f"Managed-thread timer {timer_id}",
+        enabled=True,
+        system_owned=True,
+        trigger_kind=TRIGGER_KIND_EVENT,
+        trigger={"event_types": ["schedule.fire"]},
+        filters={"schedule.rule_id": f"{PMA_TIMER_RULE_PREFIX}{timer_id}"},
+        target_policy=TARGET_POLICY_HUB,
+        target={
+            "repo_id": repo_id,
+            "run_id": run_id,
+            "thread_id": thread_id,
+        },
+        executor_kind=EXECUTOR_MANAGED_THREAD_TURN,
+        executor={
+            "message_text": (
+                "Automation wake-up received.\n"
+                "source: timer\n"
+                f"timer_id: {timer_id}\n"
+                "repo_id: {{ schedule.payload.repo_id }}\n"
+                "run_id: {{ schedule.payload.run_id }}\n"
+                "thread_id: {{ schedule.payload.thread_id }}\n"
+                "suggested_next_action: verify progress, then touch or cancel "
+                "the managed-thread automation timer."
+            ),
+            "wake_up_kind": "managed_thread_timer",
+            "source": "timer",
+        },
+        policy={
+            "dedupe_key": f"managed-thread-timer:{timer_id}:{{{{ schedule.next_fire_at }}}}",
+            "approval_mode": "pause_and_request_user",
+            "max_attempts": 3,
+            "max_concurrent_per_rule": 1,
+            "max_concurrent_per_target": 1,
+        },
+        metadata={
+            "builtin": True,
+            "purpose": "managed_thread_timer",
+            "legacy_timer_id": timer_id,
+            "legacy_idempotency_key": idempotency_key,
+        },
+        created_at=created_at,
+        updated_at=created_at,
     )
-    requested_timer_id = normalize_optional_text(payload.get("timer_id"))
-    if requested_timer_id is not None:
-        timer.timer_id = requested_timer_id
-    PmaUnifiedAutomationAdapter(store).mirror_timer_schedule(timer=timer)
-    return {"timer": timer.to_dict(), "deduped": False}
+    schedule = AutomationSchedule.create(
+        schedule_id=f"{PMA_TIMER_SCHEDULE_PREFIX}{timer_id}",
+        rule_id=rule.rule_id,
+        schedule_kind=SCHEDULE_ONE_SHOT,
+        next_fire_at=due_at,
+        schedule={
+            "legacy_timer_id": timer_id,
+            "timer_kind": timer_type,
+            "payload": {
+                "timer_id": timer_id,
+                "timer_type": timer_type,
+                "idle_seconds": idle_seconds,
+                "subscription_id": subscription_id,
+                "repo_id": repo_id,
+                "run_id": run_id,
+                "thread_id": thread_id,
+                "lane_id": lane_id,
+                "from_state": from_state,
+                "to_state": to_state,
+                "reason": reason,
+                "timestamp": due_at,
+                "metadata": metadata,
+            },
+        },
+        state="active",
+        created_at=created_at,
+        updated_at=created_at,
+    )
+    store.upsert_rule(rule)
+    saved_schedule = store.upsert_schedule(schedule)
+    rows = timer_rows_from_rules_and_schedules({rule.rule_id: rule}, [saved_schedule])
+    return {
+        "timer": rows[0] if rows else {"timer_id": timer_id, "due_at": due_at},
+        "deduped": False,
+    }
 
 
 def _touch_unified_pma_timer(
@@ -637,7 +791,7 @@ def _touch_unified_pma_timer(
         updated_at=now_iso(),
     )
     saved = store.upsert_schedule(updated)
-    rows = _timer_rows_from_rules_and_schedules(
+    rows = timer_rows_from_rules_and_schedules(
         {schedule.rule_id: store.get_rule(schedule.rule_id)},
         [saved],
     )
@@ -652,8 +806,13 @@ def _touch_unified_pma_timer(
 def _find_pma_rule_by_idempotency(
     store: AutomationStore, *, purpose: str, idempotency_key: str
 ):
+    purpose_set = (
+        _SUBSCRIPTION_PURPOSES
+        if purpose in _SUBSCRIPTION_PURPOSES
+        else _TIMER_PURPOSES if purpose in _TIMER_PURPOSES else {purpose}
+    )
     for rule in store.list_rules():
-        if rule.metadata.get("purpose") != purpose:
+        if rule.metadata.get("purpose") not in purpose_set:
             continue
         if rule.metadata.get("legacy_idempotency_key") == idempotency_key:
             return rule
@@ -688,31 +847,6 @@ def _pma_origin_metadata_from_payload(payload: dict[str, Any]) -> dict[str, Any]
     return metadata
 
 
-def _subscription_row_from_rule(rule: Any) -> dict[str, Any]:
-    executor = rule.executor if isinstance(rule.executor, dict) else {}
-    target = rule.target if isinstance(rule.target, dict) else {}
-    filters = rule.filters if isinstance(rule.filters, dict) else {}
-    return {
-        "subscription_id": rule.metadata.get("legacy_subscription_id")
-        or rule.rule_id.removeprefix(PMA_SUBSCRIPTION_RULE_PREFIX),
-        "created_at": rule.created_at,
-        "updated_at": rule.updated_at,
-        "state": "active" if rule.enabled else "cancelled",
-        "event_types": list(rule.trigger.get("event_types") or []),
-        "repo_id": target.get("repo_id") or filters.get("event.repo_id"),
-        "run_id": target.get("run_id") or filters.get("event.payload.run_id"),
-        "thread_id": target.get("thread_id") or filters.get("event.payload.thread_id"),
-        "lane_id": executor.get("lane_id") or "pma:default",
-        "from_state": filters.get("event.payload.from_state"),
-        "to_state": filters.get("event.payload.to_state"),
-        "reason": rule.metadata.get("legacy_reason"),
-        "idempotency_key": rule.metadata.get("legacy_idempotency_key"),
-        "max_matches": rule.metadata.get("legacy_max_matches"),
-        "match_count": rule.metadata.get("legacy_match_count") or 0,
-        "metadata": dict(rule.metadata.get("legacy_metadata") or {}),
-    }
-
-
 def _unified_subscription_rows(
     request: Request,
     *,
@@ -733,7 +867,7 @@ def _unified_subscription_rows(
             rule
             for rule in store.list_rules(enabled=True)
             if rule.rule_id.startswith(PMA_SUBSCRIPTION_RULE_PREFIX)
-            or rule.metadata.get("purpose") == "pma_lifecycle_subscription"
+            or rule.metadata.get("purpose") in _SUBSCRIPTION_PURPOSES
         ]
     except (RuntimeError, OSError, ValueError, TypeError):
         _logger.exception("Failed to list unified PMA subscription rows")
@@ -741,7 +875,7 @@ def _unified_subscription_rows(
 
     out: list[dict[str, Any]] = []
     for rule in rules:
-        row = _subscription_row_from_rule(rule)
+        row = subscription_row_from_rule(rule)
         if repo_id_norm is not None and row["repo_id"] != repo_id_norm:
             continue
         if run_id_norm is not None and row["run_id"] != run_id_norm:
@@ -752,48 +886,6 @@ def _unified_subscription_rows(
             continue
         out.append(row)
     return out[:limit]
-
-
-def _timer_rows_from_rules_and_schedules(
-    rules: dict[str, Any], schedules: list[AutomationSchedule]
-) -> list[dict[str, Any]]:
-    out: list[dict[str, Any]] = []
-    for schedule in schedules:
-        rule = rules.get(schedule.rule_id)
-        if rule is None:
-            continue
-        schedule_config = (
-            schedule.schedule if isinstance(schedule.schedule, dict) else {}
-        )
-        payload = schedule_config.get("payload")
-        payload = payload if isinstance(payload, dict) else {}
-        out.append(
-            {
-                "timer_id": payload.get("timer_id")
-                or rule.metadata.get("legacy_timer_id")
-                or schedule.schedule_id.removeprefix("pma-timer:"),
-                "due_at": schedule.next_fire_at,
-                "created_at": schedule.created_at,
-                "updated_at": schedule.updated_at,
-                "state": "pending" if schedule.state == "active" else schedule.state,
-                "fired_at": schedule.last_fire_at,
-                "timer_type": payload.get("timer_type")
-                or schedule_config.get("timer_kind")
-                or "one_shot",
-                "idle_seconds": payload.get("idle_seconds"),
-                "subscription_id": payload.get("subscription_id"),
-                "repo_id": payload.get("repo_id"),
-                "run_id": payload.get("run_id"),
-                "thread_id": payload.get("thread_id"),
-                "lane_id": payload.get("lane_id") or "pma:default",
-                "from_state": payload.get("from_state"),
-                "to_state": payload.get("to_state"),
-                "reason": payload.get("reason"),
-                "idempotency_key": rule.metadata.get("legacy_idempotency_key"),
-                "metadata": dict(payload.get("metadata") or {}),
-            }
-        )
-    return out
 
 
 def _unified_timer_rows(
@@ -820,7 +912,7 @@ def _unified_timer_rows(
             rule.rule_id: rule
             for rule in store.list_rules(enabled=True)
             if rule.rule_id.startswith(PMA_TIMER_RULE_PREFIX)
-            or rule.metadata.get("purpose") == "pma_timer"
+            or rule.metadata.get("purpose") in _TIMER_PURPOSES
         }
         schedules = [
             schedule
@@ -832,7 +924,7 @@ def _unified_timer_rows(
         return []
 
     out: list[dict[str, Any]] = []
-    for row in _timer_rows_from_rules_and_schedules(rules, schedules):
+    for row in timer_rows_from_rules_and_schedules(rules, schedules):
         if timer_type_norm is not None and row["timer_type"] != timer_type_norm:
             continue
         if (
@@ -981,7 +1073,6 @@ def build_automation_routes(
         request: Request, payload: PmaAutomationSubscriptionCreateRequest
     ) -> dict[str, Any]:
         runtime_state = get_runtime_state()
-        store = await get_pma_automation_store(request, runtime_state)
         try:
             normalized_payload = payload.normalized_payload()
             if not _subscription_request_has_explicit_routing(normalized_payload):
@@ -989,17 +1080,7 @@ def build_automation_routes(
                     normalized_payload,
                     runtime_state,
                 )
-            if _is_builtin_pma_store(store):
-                created = _create_unified_pma_subscription(request, normalized_payload)
-            else:
-                created = await call_store_create_with_payload(
-                    store,
-                    (
-                        "create_subscription",
-                        "upsert_subscription",
-                    ),
-                    normalized_payload,
-                )
+            created = _create_unified_pma_subscription(request, normalized_payload)
         except PmaAutomationThreadNotFoundError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         except ValueError as exc:
@@ -1020,42 +1101,22 @@ def build_automation_routes(
     ) -> dict[str, Any]:
         if limit <= 0:
             raise HTTPException(status_code=400, detail="limit must be greater than 0")
-        store = await get_pma_automation_store(request, get_runtime_state())
         unified = _unified_pma_automation_read_model(
             request,
-            purpose="pma_lifecycle_subscription",
+            purpose="managed_thread_lifecycle_subscription",
             limit=limit,
         )
-        if _is_builtin_pma_store(store):
-            return {
-                "subscriptions": _unified_subscription_rows(
-                    request,
-                    repo_id=repo_id,
-                    run_id=run_id,
-                    thread_id=thread_id,
-                    lane_id=lane_id,
-                    limit=limit,
-                ),
-                "unified": unified,
-            }
-        subscriptions = await call_store_list(
-            store,
-            ("list_subscriptions", "get_subscriptions"),
-            {
-                k: v
-                for k, v in {
-                    "repo_id": normalize_optional_text(repo_id),
-                    "run_id": normalize_optional_text(run_id),
-                    "thread_id": normalize_optional_text(thread_id),
-                    "lane_id": normalize_optional_text(lane_id),
-                    "limit": limit,
-                }.items()
-                if v is not None
-            },
-        )
-        if isinstance(subscriptions, dict) and "subscriptions" in subscriptions:
-            return {**subscriptions, "unified": unified}
-        return {"subscriptions": list(subscriptions or []), "unified": unified}
+        return {
+            "subscriptions": _unified_subscription_rows(
+                request,
+                repo_id=repo_id,
+                run_id=run_id,
+                thread_id=thread_id,
+                lane_id=lane_id,
+                limit=limit,
+            ),
+            "unified": unified,
+        }
 
     @router.delete("/automation/subscriptions/{subscription_id}")
     @router.delete("/subscriptions/{subscription_id}")
@@ -1065,32 +1126,11 @@ def build_automation_routes(
         normalized_id = (subscription_id or "").strip()
         if not normalized_id:
             raise HTTPException(status_code=400, detail="subscription_id is required")
-        store = await get_pma_automation_store(request, get_runtime_state())
-        if _is_builtin_pma_store(store):
-            unified_deleted = _cancel_unified_pma_subscription(request, normalized_id)
-            return {
-                "status": "ok",
-                "subscription_id": normalized_id,
-                "deleted": unified_deleted,
-                "unified_deleted": unified_deleted,
-                "legacy_deleted": False,
-            }
-        deleted = await call_store_action_with_id(
-            store,
-            ("cancel_subscription",),
-            normalized_id,
-            payload={},
-            id_aliases=("subscription_id", "id"),
-        )
-        if isinstance(deleted, dict):
-            payload = dict(deleted)
-            payload.setdefault("status", "ok")
-            payload.setdefault("subscription_id", normalized_id)
-            return payload
+        deleted = _cancel_unified_pma_subscription(request, normalized_id)
         return {
             "status": "ok",
             "subscription_id": normalized_id,
-            "deleted": True if deleted is None else bool(deleted),
+            "deleted": deleted,
         }
 
     @router.post("/automation/timers")
@@ -1098,17 +1138,9 @@ def build_automation_routes(
     async def create_automation_timer(
         request: Request, payload: PmaAutomationTimerCreateRequest
     ) -> dict[str, Any]:
-        store = await get_pma_automation_store(request, get_runtime_state())
         try:
             normalized_payload = payload.normalized_payload()
-            if _is_builtin_pma_store(store):
-                created = _create_unified_pma_timer(request, normalized_payload)
-            else:
-                created = await call_store_create_with_payload(
-                    store,
-                    ("create_timer", "upsert_timer"),
-                    normalized_payload,
-                )
+            created = _create_unified_pma_timer(request, normalized_payload)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         if isinstance(created, dict) and "timer" in created:
@@ -1129,46 +1161,24 @@ def build_automation_routes(
     ) -> dict[str, Any]:
         if limit <= 0:
             raise HTTPException(status_code=400, detail="limit must be greater than 0")
-        store = await get_pma_automation_store(request, get_runtime_state())
         unified = _unified_pma_automation_read_model(
             request,
-            purpose="pma_timer",
+            purpose="managed_thread_timer",
             limit=limit,
         )
-        if _is_builtin_pma_store(store):
-            return {
-                "timers": _unified_timer_rows(
-                    request,
-                    timer_type=timer_type,
-                    subscription_id=subscription_id,
-                    repo_id=repo_id,
-                    run_id=run_id,
-                    thread_id=thread_id,
-                    lane_id=lane_id,
-                    limit=limit,
-                ),
-                "unified": unified,
-            }
-        timers = await call_store_list(
-            store,
-            ("list_timers", "get_timers"),
-            {
-                k: v
-                for k, v in {
-                    "timer_type": normalize_optional_text(timer_type),
-                    "subscription_id": normalize_optional_text(subscription_id),
-                    "repo_id": normalize_optional_text(repo_id),
-                    "run_id": normalize_optional_text(run_id),
-                    "thread_id": normalize_optional_text(thread_id),
-                    "lane_id": normalize_optional_text(lane_id),
-                    "limit": limit,
-                }.items()
-                if v is not None
-            },
-        )
-        if isinstance(timers, dict) and "timers" in timers:
-            return {**timers, "unified": unified}
-        return {"timers": list(timers or []), "unified": unified}
+        return {
+            "timers": _unified_timer_rows(
+                request,
+                timer_type=timer_type,
+                subscription_id=subscription_id,
+                repo_id=repo_id,
+                run_id=run_id,
+                thread_id=thread_id,
+                lane_id=lane_id,
+                limit=limit,
+            ),
+            "unified": unified,
+        }
 
     @router.post("/automation/timers/{timer_id}/touch")
     @router.post("/timers/{timer_id}/touch")
@@ -1180,21 +1190,11 @@ def build_automation_routes(
         normalized_id = (timer_id or "").strip()
         if not normalized_id:
             raise HTTPException(status_code=400, detail="timer_id is required")
-        store = await get_pma_automation_store(request, get_runtime_state())
         try:
             normalized_payload = payload.normalized_payload() if payload else {}
-            if _is_builtin_pma_store(store):
-                touched = _touch_unified_pma_timer(
-                    request, normalized_id, normalized_payload
-                )
-            else:
-                touched = await call_store_action_with_id(
-                    store,
-                    ("touch_timer",),
-                    normalized_id,
-                    payload=normalized_payload,
-                    id_aliases=("timer_id", "id"),
-                )
+            touched = _touch_unified_pma_timer(
+                request, normalized_id, normalized_payload
+            )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         if isinstance(touched, dict):
@@ -1216,33 +1216,17 @@ def build_automation_routes(
         normalized_id = (timer_id or "").strip()
         if not normalized_id:
             raise HTTPException(status_code=400, detail="timer_id is required")
-        store = await get_pma_automation_store(request, get_runtime_state())
         try:
-            if _is_builtin_pma_store(store):
-                unified_deleted = _cancel_unified_pma_timer(request, normalized_id)
-                return {
-                    "status": "ok",
-                    "timer_id": normalized_id,
-                    "cancelled": unified_deleted,
-                    "unified_deleted": unified_deleted,
-                    "legacy_deleted": False,
-                }
-            normalized_payload = payload.normalized_payload() if payload else {}
-            cancelled = await call_store_action_with_id(
-                store,
-                ("cancel_timer",),
-                normalized_id,
-                payload=normalized_payload,
-                id_aliases=("timer_id", "id"),
-            )
+            if payload is not None:
+                payload.normalized_payload()
+            cancelled = _cancel_unified_pma_timer(request, normalized_id)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        if isinstance(cancelled, dict):
-            out = dict(cancelled)
-            out.setdefault("status", "ok")
-            out.setdefault("timer_id", normalized_id)
-            return out
-        return {"status": "ok", "timer_id": normalized_id}
+        return {
+            "status": "ok",
+            "timer_id": normalized_id,
+            "cancelled": cancelled,
+        }
 
 
 def build_managed_thread_crud_routes(

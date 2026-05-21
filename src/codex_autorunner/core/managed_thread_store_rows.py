@@ -300,6 +300,20 @@ class ManagedThreadRecord:
         )
         if backend_runtime_instance_id is not None:
             backend_binding["backend_runtime_instance_id"] = backend_runtime_instance_id
+        binding_state = coerce_text(
+            record.get("backend_binding_state")
+            or record.get("binding_state")
+            or backend_binding.get("binding_state")
+        )
+        if binding_state is not None:
+            backend_binding["binding_state"] = binding_state
+        state_reason = coerce_text(
+            record.get("backend_binding_state_reason")
+            or record.get("state_reason")
+            or backend_binding.get("state_reason")
+        )
+        if state_reason is not None:
+            backend_binding["state_reason"] = state_reason
         resource_kind, resource_id, repo_id = normalize_resource_owner_fields(
             resource_kind=record.get("resource_kind"),
             resource_id=record.get("resource_id"),
@@ -393,6 +407,18 @@ class ManagedThreadRecord:
         return ThreadTarget(
             thread_target_id=self.managed_thread_id,
             agent_id=self.agent,
+            backend_thread_id=coerce_text(
+                self.backend_binding.get("backend_thread_id")
+            ),
+            backend_runtime_instance_id=coerce_text(
+                self.backend_binding.get("backend_runtime_instance_id")
+            ),
+            backend_binding_state=coerce_text(
+                self.backend_binding.get("binding_state")
+            ),
+            backend_binding_state_reason=coerce_text(
+                self.backend_binding.get("state_reason")
+            ),
             repo_id=self.repo_id,
             resource_kind=self.resource_kind,
             resource_id=self.resource_id,
@@ -452,6 +478,8 @@ class PmaExecutionRecord:
     started_at: Optional[str]
     finished_at: Optional[str]
     metadata: dict[str, Any]
+    turn_request: dict[str, Any]
+    turn_record: dict[str, Any]
 
     @classmethod
     def from_orchestration_row(cls, row: Any) -> "PmaExecutionRecord":
@@ -476,13 +504,30 @@ class PmaExecutionRecord:
             started_at=coerce_text(row["started_at"]),
             finished_at=coerce_text(row["finished_at"]),
             metadata=metadata,
+            turn_request=(
+                _json_loads_object(row["turn_request_json"])
+                if "turn_request_json" in row.keys()
+                else {}
+            ),
+            turn_record=(
+                _json_loads_object(row["turn_record_json"])
+                if "turn_record_json" in row.keys()
+                else {}
+            ),
         )
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
 
     def to_execution_record(self) -> ExecutionRecord:
-        return ExecutionRecord.from_mapping(self.to_dict())
+        payload = self.to_dict()
+        metadata = dict(self.metadata)
+        if self.turn_request:
+            metadata["turn_request"] = dict(self.turn_request)
+        if self.turn_record:
+            metadata["turn_record"] = dict(self.turn_record)
+        payload["metadata"] = metadata
+        return ExecutionRecord.from_mapping(payload)
 
 
 @dataclass(frozen=True)
@@ -497,6 +542,7 @@ class PmaPendingQueueItem:
     model: Optional[str]
     reasoning: Optional[str]
     client_turn_id: Optional[str]
+    turn_request: dict[str, Any]
 
     @classmethod
     def from_queue_row(cls, row: Any) -> "PmaPendingQueueItem":
@@ -511,6 +557,11 @@ class PmaPendingQueueItem:
             model=coerce_text(row["model_id"]),
             reasoning=coerce_text(row["reasoning_level"]),
             client_turn_id=coerce_text(row["client_request_id"]),
+            turn_request=(
+                _json_loads_object(row["turn_request_json"])
+                if "turn_request_json" in row.keys()
+                else {}
+            ),
         )
 
     def to_dict(self) -> dict[str, Any]:

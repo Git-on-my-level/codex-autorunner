@@ -36,6 +36,7 @@ from .managed_thread_delivery import (
     ManagedThreadDeliveryRegistration,
     ManagedThreadDeliveryState,
     ManagedThreadDeliveryTarget,
+    ManagedThreadFailureRecoverySummary,
     default_claim_expiry,
     is_valid_managed_thread_delivery_transition,
     normalize_managed_thread_delivery_intent,
@@ -325,6 +326,7 @@ class SQLiteManagedThreadDeliveryLedger:
                         backend_thread_id,
                         token_usage_json,
                         attachments_json,
+                        failure_recovery_json,
                         transport_hints_json,
                         envelope_metadata_json,
                         source,
@@ -341,7 +343,7 @@ class SQLiteManagedThreadDeliveryLedger:
                         record_metadata_json,
                         created_at,
                         updated_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     ON CONFLICT(delivery_id) DO UPDATE SET
                         managed_thread_id = excluded.managed_thread_id,
                         managed_turn_id = excluded.managed_turn_id,
@@ -358,6 +360,7 @@ class SQLiteManagedThreadDeliveryLedger:
                         backend_thread_id = excluded.backend_thread_id,
                         token_usage_json = excluded.token_usage_json,
                         attachments_json = excluded.attachments_json,
+                        failure_recovery_json = excluded.failure_recovery_json,
                         transport_hints_json = excluded.transport_hints_json,
                         envelope_metadata_json = excluded.envelope_metadata_json,
                         source = excluded.source,
@@ -935,6 +938,7 @@ def _record_to_row_values(record: ManagedThreadDeliveryRecord) -> tuple[Any, ...
         json.dumps(
             [dict(a.__dict__) for a in (envelope.attachments or ())], sort_keys=True
         ),
+        _failure_recovery_json(envelope.failure_recovery),
         json.dumps(dict(envelope.transport_hints or {}), sort_keys=True),
         json.dumps(dict(envelope.metadata or {}), sort_keys=True),
         record.source,
@@ -980,6 +984,7 @@ def _record_from_row(row: Any) -> ManagedThreadDeliveryRecord:
         backend_thread_id=_optional_text(row["backend_thread_id"]),
         token_usage=_decode_json_or_none(row["token_usage_json"]),
         attachments=attachments,
+        failure_recovery=_failure_recovery_from_json(row["failure_recovery_json"]),
         transport_hints=_decode_json(row["transport_hints_json"]),
         metadata=_decode_json(row["envelope_metadata_json"]),
     )
@@ -1020,6 +1025,23 @@ def _attachment_from_dict(data: Any) -> Any:
         caption=data.get("caption"),
         metadata=data.get("metadata", {}),
     )
+
+
+def _failure_recovery_json(
+    failure_recovery: Optional[ManagedThreadFailureRecoverySummary],
+) -> Optional[str]:
+    if failure_recovery is None:
+        return None
+    return json.dumps(failure_recovery.to_dict(), sort_keys=True)
+
+
+def _failure_recovery_from_json(
+    raw: Any,
+) -> Optional[ManagedThreadFailureRecoverySummary]:
+    payload = _decode_json(raw, default=None)
+    if not isinstance(payload, Mapping):
+        return None
+    return ManagedThreadFailureRecoverySummary.from_mapping(payload)
 
 
 def _decode_json(raw: Any, default: Any = None) -> Any:

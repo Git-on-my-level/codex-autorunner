@@ -6,6 +6,7 @@ import httpx
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from tests.support.turn_execution import build_test_turn_request
 
 from codex_autorunner.core.hub_control_plane import (
     AutomationRequest,
@@ -24,7 +25,7 @@ from codex_autorunner.core.hub_control_plane import (
     QueuedExecutionListRequest,
     SurfaceBindingListRequest,
     SurfaceBindingUpsertRequest,
-    ThreadBackendIdUpdateRequest,
+    ThreadBackendBindingUpdateRequest,
     ThreadTargetListRequest,
     ThreadTargetLookupRequest,
     TranscriptWriteRequest,
@@ -36,6 +37,7 @@ from codex_autorunner.core.managed_thread_store import (
     ManagedThreadStore,
     prepare_managed_thread_store,
 )
+from codex_autorunner.core.orchestration import TurnExecutionRequest
 from codex_autorunner.core.orchestration.sqlite import prepare_orchestration_sqlite
 from codex_autorunner.core.pma_notification_store import PmaNotificationStore
 from codex_autorunner.core.ports.run_event import Completed, Started
@@ -53,7 +55,7 @@ class _SupervisorStub:
     ) -> int:
         return 3 if repo_id_hint == "repo-1" else 1
 
-    def process_pma_automation_now(
+    def process_automation_now(
         self, *, include_timers: bool = True, limit: int = 100
     ) -> dict[str, int]:
         return {
@@ -106,6 +108,21 @@ def _build_test_app(tmp_path: Path) -> tuple[FastAPI, str]:
     return app, str(thread["managed_thread_id"])
 
 
+def _test_turn_request(
+    tmp_path: Path,
+    thread_target_id: str,
+    *,
+    prompt: str,
+    busy_policy: str = "reject",
+) -> dict[str, object]:
+    return build_test_turn_request(
+        managed_thread_id=thread_target_id,
+        workspace_root=str(tmp_path / "hub" / "repos" / "repo-1"),
+        prompt=prompt,
+        busy_policy=busy_policy,
+    ).to_dict()
+
+
 def test_hub_control_plane_routes_return_typed_validation_errors(
     tmp_path: Path,
 ) -> None:
@@ -151,7 +168,7 @@ def test_hub_control_plane_automation_routes_create_run_and_cancel(
                 "name": "Manual PMA",
                 "trigger_kind": "manual",
                 "target_policy": "hub",
-                "executor_kind": "pma_turn",
+                "executor_kind": "managed_thread_turn",
                 "executor": {"api_token": "secret-value"},
             },
         )
@@ -322,6 +339,11 @@ async def test_hub_control_plane_http_client_round_trip(tmp_path: Path) -> None:
                 {
                     "thread_target_id": thread_target_id,
                     "prompt": "First remote turn",
+                    "turn_request": _test_turn_request(
+                        tmp_path,
+                        thread_target_id,
+                        prompt="First remote turn",
+                    ),
                 }
             )
         )
@@ -332,6 +354,12 @@ async def test_hub_control_plane_http_client_round_trip(tmp_path: Path) -> None:
                     "prompt": "Queued remote turn",
                     "busy_policy": "queue",
                     "queue_payload": {"source": "test"},
+                    "turn_request": _test_turn_request(
+                        tmp_path,
+                        thread_target_id,
+                        prompt="Queued remote turn",
+                        busy_policy="queue",
+                    ),
                 }
             )
         )
@@ -456,7 +484,10 @@ async def test_hub_control_plane_http_client_round_trip(tmp_path: Path) -> None:
     assert finalized.execution.backend_id == "backend-77"
     assert claimed.execution is not None
     assert claimed.execution.execution_id == queued_execution.execution.execution_id
-    assert claimed.queue_payload == {"source": "test"}
+    turn_request = TurnExecutionRequest.from_mapping(
+        claimed.queue_payload["turn_request"]
+    )
+    assert turn_request.prompt_text == "Queued remote turn"
     assert setup_result.setup_command_count == 3
 
 
@@ -474,16 +505,54 @@ async def test_hub_control_plane_http_client_preserves_thread_backend_ids(
             base_url="http://testserver",
             http_client=http_client,
         )
-        await client.set_thread_backend_id(
-            ThreadBackendIdUpdateRequest.from_mapping(
+        await client.set_thread_backend_binding(
+            ThreadBackendBindingUpdateRequest.from_mapping(
                 {
                     "thread_target_id": thread_target_id,
                     "backend_thread_id": "conversation-1",
                     "backend_runtime_instance_id": "runtime-1",
+                    "backend_binding_state": "suspect",
+                    "backend_binding_state_reason": "startup_lost_backend_binding",
                 }
             )
         )
         fetched = await client.get_thread_target(
+            ThreadTargetLookupRequest(thread_target_id=thread_target_id)
+        )
+        binding_response = await http_client.post(
+            f"/hub/api/control-plane/thread-targets/{thread_target_id}/backend-binding",
+            json={
+                "backend_thread_id": "conversation-2",
+                "backend_runtime_instance_id": "runtime-2",
+                "backend_binding_state": "bound",
+            },
+        )
+        binding_fetched = await client.get_thread_target(
+            ThreadTargetLookupRequest(thread_target_id=thread_target_id)
+        )
+        state_only_response = await http_client.post(
+            f"/hub/api/control-plane/thread-targets/{thread_target_id}/backend-binding",
+            json={
+                "backend_binding_state": "suspect",
+                "backend_binding_state_reason": "startup_lost_backend_binding",
+            },
+        )
+        state_only_fetched = await client.get_thread_target(
+            ThreadTargetLookupRequest(thread_target_id=thread_target_id)
+        )
+        removed_alias_response = await http_client.post(
+            f"/hub/api/control-plane/thread-targets/{thread_target_id}/backend-id",
+            json={"backend_thread_id": "conversation-legacy"},
+        )
+        invalid_state_response = await http_client.post(
+            f"/hub/api/control-plane/thread-targets/{thread_target_id}/backend-binding",
+            json={"backend_binding_state": "definitely-not-a-state"},
+        )
+        blank_state_response = await http_client.post(
+            f"/hub/api/control-plane/thread-targets/{thread_target_id}/backend-binding",
+            json={"backend_binding_state": ""},
+        )
+        after_invalid_fetched = await client.get_thread_target(
             ThreadTargetLookupRequest(thread_target_id=thread_target_id)
         )
 
@@ -491,6 +560,33 @@ async def test_hub_control_plane_http_client_preserves_thread_backend_ids(
     assert fetched.thread.agent_id == "codex"
     assert fetched.thread.backend_thread_id == "conversation-1"
     assert fetched.thread.backend_runtime_instance_id == "runtime-1"
+    assert fetched.thread.backend_binding_state == "suspect"
+    assert fetched.thread.backend_binding_state_reason == "startup_lost_backend_binding"
+    assert binding_response.status_code == 204
+    assert binding_fetched.thread is not None
+    assert binding_fetched.thread.backend_thread_id == "conversation-2"
+    assert binding_fetched.thread.backend_runtime_instance_id == "runtime-2"
+    assert binding_fetched.thread.backend_binding_state == "bound"
+    assert state_only_response.status_code == 204
+    assert state_only_fetched.thread is not None
+    assert state_only_fetched.thread.backend_thread_id == "conversation-2"
+    assert state_only_fetched.thread.backend_runtime_instance_id == "runtime-2"
+    assert state_only_fetched.thread.backend_binding_state == "suspect"
+    assert (
+        state_only_fetched.thread.backend_binding_state_reason
+        == "startup_lost_backend_binding"
+    )
+    assert removed_alias_response.status_code == 404
+    assert invalid_state_response.status_code == 400
+    assert blank_state_response.status_code == 400
+    assert after_invalid_fetched.thread is not None
+    assert after_invalid_fetched.thread.backend_thread_id == "conversation-2"
+    assert after_invalid_fetched.thread.backend_runtime_instance_id == "runtime-2"
+    assert after_invalid_fetched.thread.backend_binding_state == "suspect"
+    assert (
+        after_invalid_fetched.thread.backend_binding_state_reason
+        == "startup_lost_backend_binding"
+    )
 
 
 @pytest.mark.anyio

@@ -130,7 +130,7 @@ def test_unified_schedule_cancel_validates_lifecycle_state(tmp_path) -> None:
             trigger_kind="schedule",
             trigger={"schedule_kind": "daily"},
             target_policy="hub",
-            executor_kind="pma_turn",
+            executor_kind="managed_thread_turn",
         )
     )
     automation_store.upsert_schedule(

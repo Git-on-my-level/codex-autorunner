@@ -24,6 +24,8 @@ from codex_autorunner.core.orchestration import (
     ColdTraceStore,
     ExecutionRecord,
     ThreadTarget,
+    TurnExecutionOrigin,
+    TurnExecutionRequest,
 )
 from codex_autorunner.core.pma_queue import PmaQueue, QueueItemState
 from codex_autorunner.core.pma_transcripts import (
@@ -70,6 +72,53 @@ def _hermes_cfg(
         "default_profile": "m4",
     }
     return cfg
+
+
+def _pma_queue_turn_payload(
+    hub_env,
+    *,
+    lane_id: str,
+    message: str,
+    client_turn_id: str,
+    wake_up: Optional[dict[str, Any]] = None,
+) -> dict[str, Any]:
+    metadata: dict[str, Any] = {"stream": False}
+    if wake_up is not None:
+        metadata["wake_up"] = wake_up
+    turn_request = TurnExecutionRequest(
+        request_id=client_turn_id,
+        target_id=lane_id,
+        target_kind="thread",
+        workspace_root=str(hub_env.hub_root),
+        request_kind="message",
+        busy_policy="queue",
+        prompt_text=message,
+        input_items=(),
+        context_profile=None,
+        agent="codex",
+        profile=None,
+        model=None,
+        model_payload={},
+        reasoning=None,
+        approval_policy="on-request",
+        approval_mode="on-request",
+        sandbox_policy={"policy": "dangerFullAccess"},
+        client_request_id=client_turn_id,
+        idempotency_key=client_turn_id,
+        correlation_id=client_turn_id,
+        origin=TurnExecutionOrigin(
+            kind="surface",
+            source_id=f"test:{lane_id}:{client_turn_id}",
+            surface_kind="web",
+            surface_key=lane_id,
+            metadata={"test": True},
+        ),
+        metadata=metadata,
+    )
+    payload: dict[str, Any] = {"turn_request": turn_request.to_dict()}
+    if wake_up is not None:
+        payload["wake_up"] = wake_up
+    return payload
 
 
 def test_build_pma_routes_does_not_construct_async_primitives_on_route_build(
@@ -360,6 +409,15 @@ def test_pma_chat_submits_through_surface_orchestration_ingress(
         "prompt_text": "hello through ingress",
         "pma_enabled": True,
     }
+    queue_items = anyio.run(PmaQueue(hub_env.hub_root).list_items, "pma:default")
+    assert len(queue_items) == 1
+    queue_payload = queue_items[0].payload
+    assert set(queue_payload) == {"turn_request"}
+    turn_request = TurnExecutionRequest.from_mapping(queue_payload["turn_request"])
+    assert turn_request.prompt_text == "hello through ingress"
+    assert turn_request.agent == "codex"
+    assert turn_request.target_id == "pma:default"
+    assert turn_request.origin.surface_kind == "web"
 
 
 @pytest.mark.anyio
@@ -540,6 +598,8 @@ def test_pma_chat_applies_model_reasoning_defaults(hub_env) -> None:
     class FakeClient:
         def __init__(self) -> None:
             self.turn_kwargs = None
+            self.approval_policy = None
+            self.sandbox_policy = None
 
         async def thread_resume(self, thread_id: str) -> None:
             return None
@@ -555,6 +615,8 @@ def test_pma_chat_applies_model_reasoning_defaults(hub_env) -> None:
             sandbox_policy: str,
             **turn_kwargs,
         ):
+            self.approval_policy = approval_policy
+            self.sandbox_policy = sandbox_policy
             self.turn_kwargs = turn_kwargs
             return FakeTurnHandle()
 
@@ -576,6 +638,8 @@ def test_pma_chat_applies_model_reasoning_defaults(hub_env) -> None:
         "model": "test-model",
         "effort": "high",
     }
+    assert app.state.app_server_supervisor.client.approval_policy == "on-request"
+    assert app.state.app_server_supervisor.client.sandbox_policy == "dangerFullAccess"
 
 
 def test_pma_chat_response_omits_legacy_delivery_fields(hub_env) -> None:
@@ -1367,7 +1431,14 @@ async def test_pma_second_lane_item_does_not_clobber_active_turn(hub_env) -> Non
     app.state.app_server_supervisor = FakeSupervisor()
     app.state.app_server_events = object()
 
+    async def _fast_snapshot(_supervisor: Any, *, hub_root: Path) -> dict[str, Any]:
+        _ = hub_root
+        return {}
+
+    app.state.pma_container.ports.build_hub_snapshot = _fast_snapshot
+
     queue = PmaQueue(hub_env.hub_root)
+    runtime_state = app.state.pma_container.runtime_state
     lane_id = "pma:test-concurrency"
     start_lane_worker = app.state.pma_lane_worker_start
     stop_lane_worker = app.state.pma_lane_worker_stop
@@ -1387,9 +1458,10 @@ async def test_pma_second_lane_item_does_not_clobber_active_turn(hub_env) -> Non
         try:
             with anyio.fail_after(2):
                 while True:
-                    active_resp = await client.get("/hub/pma/active")
-                    assert active_resp.status_code == 200
-                    active_payload = active_resp.json()
+                    active_payload = {
+                        "active": bool(runtime_state.pma_active),
+                        "current": await runtime_state.get_current_snapshot(),
+                    }
                     current = active_payload.get("current") or {}
                     if (
                         active_payload.get("active")
@@ -1406,11 +1478,12 @@ async def test_pma_second_lane_item_does_not_clobber_active_turn(hub_env) -> Non
             second_item, _ = await queue.enqueue(
                 lane_id,
                 "pma:test-concurrency:key-2",
-                {
-                    "message": "second turn",
-                    "agent": "codex",
-                    "client_turn_id": "turn-2",
-                },
+                _pma_queue_turn_payload(
+                    hub_env,
+                    lane_id=lane_id,
+                    message="second turn",
+                    client_turn_id="turn-2",
+                ),
             )
             await start_lane_worker(app, lane_id)
 
@@ -1440,7 +1513,10 @@ async def test_pma_second_lane_item_does_not_clobber_active_turn(hub_env) -> Non
             assert "already active" in (second_result.get("detail") or "").lower()
             assert turn_start_calls == 1
 
-            still_active = (await client.get("/hub/pma/active")).json()
+            still_active = {
+                "active": bool(runtime_state.pma_active),
+                "current": await runtime_state.get_current_snapshot(),
+            }
             assert still_active["active"] is True
             assert still_active["current"]["client_turn_id"] == "turn-1"
             assert still_active["current"]["thread_id"] == first_current["thread_id"]
@@ -1520,21 +1596,23 @@ async def test_pma_wakeup_turn_publishes_to_discord_and_telegram_outboxes(
     assert callable(start_lane_worker)
     assert callable(stop_lane_worker)
 
+    wake_up = {
+        "wakeup_id": "wakeup-123",
+        "repo_id": hub_env.repo_id,
+        "event_type": "managed_thread_completed",
+        "source": "lifecycle_subscription",
+        "run_id": "run-123",
+    }
     item, _ = await queue.enqueue(
         lane_id,
         "pma:test-publish:key-1",
-        {
-            "message": "Automation wake-up received.",
-            "agent": "codex",
-            "client_turn_id": "wakeup-123",
-            "wake_up": {
-                "wakeup_id": "wakeup-123",
-                "repo_id": hub_env.repo_id,
-                "event_type": "managed_thread_completed",
-                "source": "lifecycle_subscription",
-                "run_id": "run-123",
-            },
-        },
+        _pma_queue_turn_payload(
+            hub_env,
+            lane_id=lane_id,
+            message="Automation wake-up received.",
+            client_turn_id="wakeup-123",
+            wake_up=wake_up,
+        ),
     )
 
     try:
@@ -1593,21 +1671,23 @@ async def test_pma_wakeup_failure_publishes_failure_summary(hub_env) -> None:
     assert callable(start_lane_worker)
     assert callable(stop_lane_worker)
 
+    wake_up = {
+        "wakeup_id": "wakeup-456",
+        "repo_id": hub_env.repo_id,
+        "event_type": "managed_thread_failed",
+        "source": "lifecycle_subscription",
+        "run_id": "run-456",
+    }
     item, _ = await queue.enqueue(
         lane_id,
         "pma:test-publish:key-2",
-        {
-            "message": "Automation wake-up received.",
-            "agent": "codex",
-            "client_turn_id": "wakeup-456",
-            "wake_up": {
-                "wakeup_id": "wakeup-456",
-                "repo_id": hub_env.repo_id,
-                "event_type": "managed_thread_failed",
-                "source": "lifecycle_subscription",
-                "run_id": "run-456",
-            },
-        },
+        _pma_queue_turn_payload(
+            hub_env,
+            lane_id=lane_id,
+            message="Automation wake-up received.",
+            client_turn_id="wakeup-456",
+            wake_up=wake_up,
+        ),
     )
 
     try:
@@ -1690,21 +1770,23 @@ async def test_pma_wakeup_publish_retries_transient_telegram_enqueue_failure(
     assert callable(start_lane_worker)
     assert callable(stop_lane_worker)
 
+    wake_up = {
+        "wakeup_id": "wakeup-retry-123",
+        "repo_id": hub_env.repo_id,
+        "event_type": "managed_thread_completed",
+        "source": "lifecycle_subscription",
+        "run_id": "run-retry-123",
+    }
     item, _ = await queue.enqueue(
         lane_id,
         "pma:test-publish-retry:key-1",
-        {
-            "message": "Automation wake-up received.",
-            "agent": "codex",
-            "client_turn_id": "wakeup-retry-123",
-            "wake_up": {
-                "wakeup_id": "wakeup-retry-123",
-                "repo_id": hub_env.repo_id,
-                "event_type": "managed_thread_completed",
-                "source": "lifecycle_subscription",
-                "run_id": "run-retry-123",
-            },
-        },
+        _pma_queue_turn_payload(
+            hub_env,
+            lane_id=lane_id,
+            message="Automation wake-up received.",
+            client_turn_id="wakeup-retry-123",
+            wake_up=wake_up,
+        ),
     )
 
     try:
@@ -1813,21 +1895,23 @@ async def test_pma_wakeup_turn_publishes_using_prev_workspace_repo_context(
     assert callable(start_lane_worker)
     assert callable(stop_lane_worker)
 
+    wake_up = {
+        "wakeup_id": "wakeup-prev-workspace-123",
+        "repo_id": hub_env.repo_id,
+        "event_type": "managed_thread_completed",
+        "source": "lifecycle_subscription",
+        "run_id": "run-prev-workspace-123",
+    }
     item, _ = await queue.enqueue(
         lane_id,
         "pma:test-publish-prev-workspace:key-1",
-        {
-            "message": "Automation wake-up received.",
-            "agent": "codex",
-            "client_turn_id": "wakeup-prev-workspace-123",
-            "wake_up": {
-                "wakeup_id": "wakeup-prev-workspace-123",
-                "repo_id": hub_env.repo_id,
-                "event_type": "managed_thread_completed",
-                "source": "lifecycle_subscription",
-                "run_id": "run-prev-workspace-123",
-            },
-        },
+        _pma_queue_turn_payload(
+            hub_env,
+            lane_id=lane_id,
+            message="Automation wake-up received.",
+            client_turn_id="wakeup-prev-workspace-123",
+            wake_up=wake_up,
+        ),
     )
 
     try:

@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 from typing import Any, Mapping, Optional
 
 from ..orchestration.models import BusyThreadPolicy, ExecutionRecord, MessageRequestKind
+from ..orchestration.turn_execution_contract import TurnExecutionRequest
 from ._normalizers import (
     coerce_int,
     copy_mapping,
@@ -20,6 +21,7 @@ from ._normalizers import (
 class ExecutionCreateRequest:
     thread_target_id: str
     prompt: str
+    turn_request: TurnExecutionRequest
     request_kind: MessageRequestKind = "message"
     busy_policy: BusyThreadPolicy = "reject"
     model: Optional[str] = None
@@ -46,6 +48,9 @@ class ExecutionCreateRequest:
             client_request_id=normalize_optional_text(data.get("client_request_id")),
             metadata=copy_mapping(data.get("metadata")),
             queue_payload=copy_mapping(data.get("queue_payload")),
+            turn_request=TurnExecutionRequest.from_mapping(
+                _required_mapping(data.get("turn_request"), field_name="turn_request")
+            ),
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -61,7 +66,14 @@ class ExecutionCreateRequest:
         }
         if self.metadata:
             payload["metadata"] = dict(self.metadata)
+        payload["turn_request"] = self.turn_request.to_dict()
         return payload
+
+
+def _required_mapping(value: Any, *, field_name: str) -> dict[str, Any]:
+    if not isinstance(value, Mapping):
+        raise ValueError(f"{field_name} is required")
+    return dict(value)
 
 
 @dataclass(frozen=True)

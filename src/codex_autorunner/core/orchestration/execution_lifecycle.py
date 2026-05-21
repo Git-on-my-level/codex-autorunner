@@ -19,13 +19,21 @@ from .models import (
     QueuedExecutionRequest,
     ThreadTarget,
 )
-from .runtime_bindings import RuntimeThreadBinding, get_runtime_thread_binding
+from .runtime_bindings import (
+    BACKEND_BINDING_BOUND,
+    RuntimeThreadBinding,
+    get_runtime_thread_binding,
+    mark_thread_store_runtime_binding_fresh_required,
+    mark_thread_store_runtime_binding_invalid,
+    runtime_thread_binding_allows_resume,
+)
 from .thread_titles import (
     choose_owned_thread_title,
     provider_title_metadata,
 )
 from .transcript_mirror import TranscriptMirrorStore
 from .turn_context import turn_assembly_from_request_metadata
+from .turn_execution_contract import TurnExecutionRecord, TurnExecutionRequest
 
 _MISSING_THREAD_MARKERS = (
     "missing thread",
@@ -91,6 +99,56 @@ def _resolve_thread_runtime_binding(
     if isinstance(hub_root, Path):
         return get_runtime_thread_binding(hub_root, thread_target_id)
     return None
+
+
+def _resolve_thread_backend_binding(
+    thread_store: ThreadExecutionStore,
+    thread: ThreadTarget,
+) -> Optional[RuntimeThreadBinding]:
+    runtime_binding = _resolve_thread_runtime_binding(
+        thread_store,
+        thread.thread_target_id,
+    )
+    if runtime_binding is not None:
+        return runtime_binding
+    if not thread.backend_thread_id:
+        return None
+    return RuntimeThreadBinding(
+        backend_thread_id=thread.backend_thread_id,
+        backend_runtime_instance_id=thread.backend_runtime_instance_id,
+        binding_state=thread.backend_binding_state or BACKEND_BINDING_BOUND,
+        state_reason=thread.backend_binding_state_reason,
+    )
+
+
+def _binding_allows_resume(binding: Optional[RuntimeThreadBinding]) -> bool:
+    return runtime_thread_binding_allows_resume(binding)
+
+
+def _mark_runtime_binding_invalid(
+    thread_store: ThreadExecutionStore,
+    thread_target_id: str,
+    *,
+    reason: str,
+) -> None:
+    mark_thread_store_runtime_binding_invalid(
+        thread_store,
+        thread_target_id,
+        state_reason=reason,
+    )
+
+
+def _mark_runtime_binding_fresh_required(
+    thread_store: ThreadExecutionStore,
+    thread_target_id: str,
+    *,
+    reason: str,
+) -> None:
+    mark_thread_store_runtime_binding_fresh_required(
+        thread_store,
+        thread_target_id,
+        state_reason=reason,
+    )
 
 
 def _truncate_rehydration_text(value: str, limit: int = _REHYDRATION_TEXT_LIMIT) -> str:
@@ -172,6 +230,8 @@ class _ClaimedThreadExecutionRequest:
     thread: ThreadTarget
     execution: ExecutionRecord
     queued_request: QueuedExecutionRequest
+    turn_request: Optional[TurnExecutionRequest] = None
+    turn_record: Optional[TurnExecutionRecord] = None
 
     @property
     def request(self) -> MessageRequest:
@@ -185,16 +245,24 @@ class _ClaimedThreadExecutionRequest:
     def sandbox_policy(self) -> Optional[Any]:
         return self.queued_request.sandbox_policy
 
-    def as_legacy_tuple(
-        self,
-    ) -> tuple[ThreadTarget, ExecutionRecord, MessageRequest, Optional[str], Any]:
-        return (
-            self.thread,
-            self.execution,
-            self.request,
-            self.client_request_id,
-            self.sandbox_policy,
-        )
+
+def _message_request_from_turn_request(
+    request: TurnExecutionRequest,
+) -> MessageRequest:
+    return MessageRequest(
+        target_id=request.target_id,
+        target_kind="thread" if request.target_kind == "thread" else "flow",
+        message_text=request.prompt_text or "",
+        kind="review" if request.request_kind == "review" else "message",
+        busy_policy=request.busy_policy,
+        agent_profile=request.profile,
+        model=request.model,
+        reasoning=request.reasoning,
+        approval_mode=request.approval_mode,
+        input_items=[dict(item) for item in request.input_items] or None,
+        context_profile=request.context_profile,
+        metadata=dict(request.metadata),
+    )
 
 
 @dataclass
@@ -312,10 +380,13 @@ class _ThreadExecutionLifecycle:
         harness: RuntimeThreadHarness,
         workspace_root: Path,
         sandbox_policy: Optional[Any],
+        turn_request: Optional[TurnExecutionRequest] = None,
     ) -> ExecutionRecord:
-        new_session_runtime_prompt = self.resolve_runtime_prompt(request)
+        canonical_request = turn_request
+        legacy_request = request
+        new_session_runtime_prompt = self.resolve_runtime_prompt(legacy_request)
         existing_session_runtime_prompt = (
-            self.resolve_existing_session_runtime_prompt(request)
+            self.resolve_existing_session_runtime_prompt(legacy_request)
             or new_session_runtime_prompt
         )
         fresh_conversation_retry_attempted = False
@@ -330,12 +401,11 @@ class _ThreadExecutionLifecycle:
             runtime_instance_id = await _resolve_harness_runtime_instance_id(
                 harness, workspace_root
             )
-            runtime_binding = _resolve_thread_runtime_binding(
-                self.thread_store, thread.thread_target_id
-            )
+            runtime_binding = _resolve_thread_backend_binding(self.thread_store, thread)
             conversation_id = (
                 runtime_binding.backend_thread_id
                 if runtime_binding is not None
+                and _binding_allows_resume(runtime_binding)
                 else None
             )
             if self._stale_binding_checker is not None:
@@ -378,10 +448,10 @@ class _ThreadExecutionLifecycle:
                             )
                             fresh_backend_session_reason = "resume_recoverable_error"
                             previous_backend_thread_id = conversation_id
-                            self.thread_store.set_thread_backend_id(
+                            _mark_runtime_binding_invalid(
+                                self.thread_store,
                                 thread.thread_target_id,
-                                None,
-                                backend_runtime_instance_id=None,
+                                reason="resume_recoverable_error",
                             )
                             conversation_id = None
                             continue
@@ -392,7 +462,7 @@ class _ThreadExecutionLifecycle:
                             and resumed_conversation_id != conversation_id
                         ):
                             conversation_id = resumed_conversation_id
-                            self.thread_store.set_thread_backend_id(
+                            self.thread_store.set_thread_backend_binding(
                                 thread.thread_target_id,
                                 conversation_id,
                                 backend_runtime_instance_id=runtime_instance_id,
@@ -403,7 +473,16 @@ class _ThreadExecutionLifecycle:
                             and runtime_binding.backend_runtime_instance_id
                             != runtime_instance_id
                         ):
-                            self.thread_store.set_thread_backend_id(
+                            self.thread_store.set_thread_backend_binding(
+                                thread.thread_target_id,
+                                conversation_id,
+                                backend_runtime_instance_id=runtime_instance_id,
+                            )
+                        elif (
+                            runtime_binding
+                            and runtime_binding.binding_state != BACKEND_BINDING_BOUND
+                        ):
+                            self.thread_store.set_thread_backend_binding(
                                 thread.thread_target_id,
                                 conversation_id,
                                 backend_runtime_instance_id=runtime_instance_id,
@@ -430,10 +509,24 @@ class _ThreadExecutionLifecycle:
                                     or "missing_backend_binding"
                                 )
                                 self.mark_fresh_backend_session(
-                                    request,
+                                    legacy_request,
                                     reason=fresh_backend_session_reason,
                                     rehydrated=bool(prefix),
                                 )
+                                if canonical_request is not None:
+                                    canonical_request.metadata.update(
+                                        {
+                                            "fresh_backend_session_started": True,
+                                            "fresh_backend_session_reason": (
+                                                fresh_backend_session_reason
+                                            ),
+                                            "fresh_backend_session_notice": (
+                                                legacy_request.metadata[
+                                                    "fresh_backend_session_notice"
+                                                ]
+                                            ),
+                                        }
+                                    )
                                 log_event(
                                     self._log,
                                     logging.INFO,
@@ -443,7 +536,11 @@ class _ThreadExecutionLifecycle:
                                     previous_backend_thread_id=(
                                         previous_backend_thread_id
                                     ),
-                                    request_kind=request.kind,
+                                    request_kind=(
+                                        canonical_request.request_kind
+                                        if canonical_request is not None
+                                        else legacy_request.kind
+                                    ),
                                     reason=fresh_backend_session_reason,
                                     rehydrated=bool(prefix),
                                 )
@@ -457,7 +554,7 @@ class _ThreadExecutionLifecycle:
                             title=thread.display_name,
                         )
                         conversation_id = conversation.id
-                        self.thread_store.set_thread_backend_id(
+                        self.thread_store.set_thread_backend_binding(
                             thread.thread_target_id,
                             conversation_id,
                             backend_runtime_instance_id=runtime_instance_id,
@@ -477,8 +574,8 @@ class _ThreadExecutionLifecycle:
                         )
                     )
                     turn_assembly = turn_assembly_from_request_metadata(
-                        message_text=request.message_text,
-                        metadata=request.metadata,
+                        message_text=legacy_request.message_text,
+                        metadata=legacy_request.metadata,
                     )
                     message_title = choose_owned_thread_title(
                         thread.display_name,
@@ -517,7 +614,37 @@ class _ThreadExecutionLifecycle:
                         conversation_id=conversation_id,
                         provisional_turn_id=provisional_turn_id,
                     )
-                    if request.kind == "review":
+                    request_kind = (
+                        canonical_request.request_kind
+                        if canonical_request is not None
+                        else legacy_request.kind
+                    )
+                    runtime_model = (
+                        canonical_request.model
+                        if canonical_request is not None
+                        else legacy_request.model
+                    )
+                    runtime_reasoning = (
+                        canonical_request.reasoning
+                        if canonical_request is not None
+                        else legacy_request.reasoning
+                    )
+                    runtime_approval_mode = (
+                        canonical_request.approval_mode
+                        if canonical_request is not None
+                        else legacy_request.approval_mode
+                    )
+                    runtime_sandbox_policy = (
+                        canonical_request.sandbox_policy
+                        if canonical_request is not None
+                        else sandbox_policy
+                    )
+                    runtime_input_items = (
+                        [dict(item) for item in canonical_request.input_items] or None
+                        if canonical_request is not None
+                        else legacy_request.input_items
+                    )
+                    if request_kind == "review":
                         if not harness.supports("review"):
                             raise RuntimeError(
                                 f"Agent '{thread.agent_id}' does not support review mode"
@@ -526,21 +653,21 @@ class _ThreadExecutionLifecycle:
                             workspace_root,
                             conversation_id,
                             attempt_runtime_prompt,
-                            request.model,
-                            request.reasoning,
-                            approval_mode=request.approval_mode,
-                            sandbox_policy=sandbox_policy,
+                            runtime_model,
+                            runtime_reasoning,
+                            approval_mode=runtime_approval_mode,
+                            sandbox_policy=runtime_sandbox_policy,
                         )
                     else:
                         turn = await harness.start_turn(
                             workspace_root,
                             conversation_id,
                             attempt_runtime_prompt,
-                            request.model,
-                            request.reasoning,
-                            approval_mode=request.approval_mode,
-                            sandbox_policy=sandbox_policy,
-                            input_items=request.input_items,
+                            runtime_model,
+                            runtime_reasoning,
+                            approval_mode=runtime_approval_mode,
+                            sandbox_policy=runtime_sandbox_policy,
+                            input_items=runtime_input_items,
                         )
                     resolved_turn_id = str(getattr(turn, "turn_id", "") or "").strip()
                     if not resolved_turn_id:
@@ -568,10 +695,10 @@ class _ThreadExecutionLifecycle:
                     )
                     fresh_backend_session_reason = "fresh_conversation_required"
                     previous_backend_thread_id = conversation_id
-                    self.thread_store.set_thread_backend_id(
+                    _mark_runtime_binding_fresh_required(
+                        self.thread_store,
                         thread.thread_target_id,
-                        None,
-                        backend_runtime_instance_id=None,
+                        reason="fresh_conversation_required",
                     )
                     conversation_id = None
                     continue
@@ -598,17 +725,19 @@ class _ThreadExecutionLifecycle:
                         execution_id=execution.execution_id,
                         backend_thread_id=conversation_id,
                         operation=(
-                            "start_review" if request.kind == "review" else "start_turn"
+                            "start_review"
+                            if legacy_request.kind == "review"
+                            else "start_turn"
                         ),
                         status_code=None,
                         reason=str(exc),
                     )
                     fresh_backend_session_reason = "start_turn_recoverable_error"
                     previous_backend_thread_id = conversation_id
-                    self.thread_store.set_thread_backend_id(
+                    _mark_runtime_binding_invalid(
+                        self.thread_store,
                         thread.thread_target_id,
-                        None,
-                        backend_runtime_instance_id=None,
+                        reason="start_turn_recoverable_error",
                     )
                     conversation_id = None
                     continue
@@ -624,7 +753,11 @@ class _ThreadExecutionLifecycle:
                 thread_target_id=thread.thread_target_id,
                 execution_id=execution.execution_id,
                 backend_thread_id=conversation_id,
-                request_kind=request.kind,
+                request_kind=(
+                    canonical_request.request_kind
+                    if canonical_request is not None
+                    else legacy_request.kind
+                ),
                 fresh_conversation_retry_attempted=fresh_conversation_retry_attempted,
                 reported_error=detail,
                 error_type=type(exc).__name__,
@@ -665,7 +798,11 @@ class _ThreadExecutionLifecycle:
                 backend_thread_id=(
                     runtime_binding.backend_thread_id if runtime_binding else None
                 ),
-                request_kind=request.kind,
+                request_kind=(
+                    canonical_request.request_kind
+                    if canonical_request is not None
+                    else legacy_request.kind
+                ),
                 fresh_conversation_retry_attempted=fresh_conversation_retry_attempted,
                 reported_error=detail,
             )
@@ -693,7 +830,7 @@ class _ThreadExecutionLifecycle:
             and resolved_conversation_id
             and resolved_conversation_id != conversation_id
         ):
-            self.thread_store.set_thread_backend_id(
+            self.thread_store.set_thread_backend_binding(
                 thread.thread_target_id,
                 resolved_conversation_id,
                 backend_runtime_instance_id=runtime_instance_id,
@@ -711,7 +848,11 @@ class _ThreadExecutionLifecycle:
             execution_id=execution.execution_id,
             backend_thread_id=resolved_conversation_id,
             backend_turn_id=resolved_turn_id,
-            request_kind=request.kind,
+            request_kind=(
+                canonical_request.request_kind
+                if canonical_request is not None
+                else legacy_request.kind
+            ),
             reused_conversation=used_existing_conversation,
             stale_session_recovery=fresh_conversation_retry_attempted,
         )
@@ -798,6 +939,7 @@ class _ThreadExecutionLifecycle:
                 harness=resolved_harness,
                 workspace_root=resolved_workspace_root,
                 sandbox_policy=claimed.sandbox_policy,
+                turn_request=claimed.turn_request,
             )
             return started, resolved_harness
         except BaseException as exc:

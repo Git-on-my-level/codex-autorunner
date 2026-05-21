@@ -13,6 +13,7 @@ from codex_autorunner.core.orchestration.execution_history_diagnostics import (
     ExecutionHistoryThresholds,
     ExecutionHistoryTopN,
     check_thresholds,
+    collect_canonical_turn_state_diagnostics,
     collect_execution_history_metrics,
     collect_top_n_heavy_executions,
     detect_completion_gap_repeated_attempts,
@@ -250,6 +251,113 @@ def _seed_execution(
                         1,
                     ),
                 )
+
+
+def _canonical_payloads(
+    *,
+    execution_id: str,
+    status: str,
+    agent: str = "codex",
+    model: str | None = "gpt-test",
+    error_text: str | None = None,
+) -> tuple[dict[str, object], dict[str, object]]:
+    request: dict[str, object] = {
+        "contract_version": 1,
+        "request_id": f"request-{execution_id}",
+        "target_id": "thread-1",
+        "target_kind": "thread",
+        "workspace_root": "/workspace",
+        "request_kind": "message",
+        "busy_policy": "queue",
+        "prompt_text": "Summarize state",
+        "input_items": [],
+        "context_profile": None,
+        "agent": agent,
+        "profile": None,
+        "model": model,
+        "model_payload": (
+            {"providerID": "zai-coding-plan", "modelID": "glm-5.1"}
+            if agent == "opencode"
+            else {}
+        ),
+        "reasoning": "high",
+        "approval_policy": "never",
+        "approval_mode": None,
+        "sandbox_policy": "dangerFullAccess",
+        "client_request_id": f"client-{execution_id}",
+        "idempotency_key": execution_id,
+        "correlation_id": None,
+        "origin": {
+            "kind": "surface",
+            "source_id": "discord:channel-1",
+            "surface_kind": "discord",
+            "surface_key": "channel-1",
+            "automation_rule_id": None,
+            "publish_operation_id": None,
+            "parent_request_id": None,
+            "metadata": {},
+        },
+        "metadata": {},
+        "delivery_intents": [],
+    }
+    record_status = "completed" if status == "ok" else status
+    record: dict[str, object] = {
+        "contract_version": 1,
+        "request_id": request["request_id"],
+        "execution_id": execution_id,
+        "status": record_status,
+        "queued_at": "2026-04-12T00:00:00Z",
+        "claimed_at": None,
+        "started_at": "2026-04-12T00:00:00Z",
+        "terminal_at": ("2026-04-12T00:05:00Z" if record_status != "running" else None),
+        "backend_conversation_id": "backend-thread-1",
+        "backend_turn_id": "backend-turn-1",
+        "assistant_text": "done" if record_status == "completed" else None,
+        "error_text": error_text,
+        "transcript_ref": None,
+        "timeline_ref": None,
+        "cold_trace_ref": None,
+        "conflict_evidence": {},
+        "metadata": {},
+        "request": request,
+    }
+    return request, record
+
+
+def _attach_canonical_payloads(
+    hub_root: Path,
+    *,
+    execution_id: str,
+    status: str,
+    agent: str = "codex",
+    model: str | None = "gpt-test",
+    error_text: str | None = None,
+) -> None:
+    request, record = _canonical_payloads(
+        execution_id=execution_id,
+        status=status,
+        agent=agent,
+        model=model,
+        error_text=error_text,
+    )
+    with open_orchestration_sqlite(hub_root, durable=False) as conn:
+        with conn:
+            conn.execute(
+                """
+                UPDATE orch_thread_executions
+                   SET turn_contract_version = 1,
+                       turn_request_json = ?,
+                       turn_record_json = ?,
+                       error_text = COALESCE(?, error_text)
+                 WHERE execution_id = ?
+                """,
+                (
+                    json.dumps(request),
+                    json.dumps(record),
+                    error_text,
+                    execution_id,
+                ),
+            )
 
 
 def test_collect_metrics_counts_executions_and_rows(tmp_path: Path) -> None:
@@ -709,6 +817,172 @@ def test_detect_completion_gap_no_false_positives(tmp_path: Path) -> None:
     detections = detect_completion_gap_repeated_attempts(hub_root)
 
     assert len(detections) == 0
+
+
+def test_canonical_turn_diagnostics_classify_stale_running(tmp_path: Path) -> None:
+    hub_root = tmp_path / "hub"
+    hub_root.mkdir()
+    _seed_execution(
+        hub_root,
+        execution_id="exec-stale",
+        status="running",
+    )
+    with open_orchestration_sqlite(hub_root, durable=False) as conn:
+        with conn:
+            conn.execute(
+                """
+                UPDATE orch_thread_executions
+                   SET finished_at = NULL
+                 WHERE execution_id = ?
+                """,
+                ("exec-stale",),
+            )
+    _attach_canonical_payloads(hub_root, execution_id="exec-stale", status="running")
+
+    diagnostics = collect_canonical_turn_state_diagnostics(
+        hub_root,
+        stale_after_seconds=60,
+    )
+
+    assert len(diagnostics) == 1
+    diag = diagnostics[0]
+    assert diag.request_id == "request-exec-stale"
+    assert diag.execution_id == "exec-stale"
+    assert diag.surface_origin == "discord:channel-1"
+    assert diag.target["target_id"] == "thread-1"
+    assert diag.lifecycle_phase == "stale_running"
+    assert diag.recovery_action == "classify_stale_running"
+    assert diag.runtime_options["model"] == "gpt-test"
+
+
+def test_canonical_turn_diagnostics_classify_queued_replay(tmp_path: Path) -> None:
+    hub_root = tmp_path / "hub"
+    hub_root.mkdir()
+    _seed_execution(hub_root, execution_id="exec-queued", status="queued")
+    _attach_canonical_payloads(hub_root, execution_id="exec-queued", status="queued")
+
+    diagnostics = collect_canonical_turn_state_diagnostics(hub_root)
+
+    assert diagnostics[0].lifecycle_phase == "queued"
+    assert diagnostics[0].recovery_action == "replay_queued"
+
+
+def test_canonical_turn_diagnostics_detect_duplicate_terminal_writes(
+    tmp_path: Path,
+) -> None:
+    hub_root = tmp_path / "hub"
+    hub_root.mkdir()
+    _seed_execution(hub_root, execution_id="exec-dup", output_chunks=1)
+    _attach_canonical_payloads(hub_root, execution_id="exec-dup", status="completed")
+    with open_orchestration_sqlite(hub_root, durable=False) as conn:
+        with conn:
+            conn.execute(
+                """
+                INSERT INTO orch_event_projections (
+                    event_id, event_family, event_type, target_kind,
+                    target_id, execution_id, repo_id, resource_kind,
+                    resource_id, run_id, timestamp, status, payload_json,
+                    processed
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    "turn-timeline:exec-dup:9999",
+                    "turn.timeline",
+                    "turn_completed",
+                    "thread_target",
+                    "thread-1",
+                    "exec-dup",
+                    "repo-1",
+                    "repo",
+                    "repo-1",
+                    None,
+                    "2026-04-12T00:05:01Z",
+                    "ok",
+                    json.dumps(
+                        {
+                            "event": {
+                                "final_message": "done",
+                                "error_message": "",
+                            }
+                        }
+                    ),
+                    1,
+                ),
+            )
+
+    diag = collect_canonical_turn_state_diagnostics(hub_root)[0]
+
+    assert diag.terminal_status == "completed"
+    assert diag.evidence["duplicate_terminal_writes"] is True
+    assert diag.evidence["conflicting_terminal_writes"] is False
+
+
+def test_canonical_turn_diagnostics_detect_conflicting_terminal_writes(
+    tmp_path: Path,
+) -> None:
+    hub_root = tmp_path / "hub"
+    hub_root.mkdir()
+    _seed_execution(hub_root, execution_id="exec-conflict", output_chunks=1)
+    _attach_canonical_payloads(
+        hub_root, execution_id="exec-conflict", status="completed"
+    )
+    with open_orchestration_sqlite(hub_root, durable=False) as conn:
+        with conn:
+            conn.execute(
+                """
+                INSERT INTO orch_event_projections (
+                    event_id, event_family, event_type, target_kind,
+                    target_id, execution_id, repo_id, resource_kind,
+                    resource_id, run_id, timestamp, status, payload_json,
+                    processed
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    "turn-timeline:exec-conflict:9999",
+                    "turn.timeline",
+                    "turn_failed",
+                    "thread_target",
+                    "thread-1",
+                    "exec-conflict",
+                    "repo-1",
+                    "repo",
+                    "repo-1",
+                    None,
+                    "2026-04-12T00:05:01Z",
+                    "error",
+                    json.dumps({"event": {"error_message": "late failure"}}),
+                    1,
+                ),
+            )
+
+    diag = collect_canonical_turn_state_diagnostics(hub_root)[0]
+
+    assert diag.evidence["duplicate_terminal_writes"] is True
+    assert diag.evidence["conflicting_terminal_writes"] is True
+
+
+def test_canonical_turn_diagnostics_preserve_opencode_first_event_timeout(
+    tmp_path: Path,
+) -> None:
+    hub_root = tmp_path / "hub"
+    hub_root.mkdir()
+    _seed_execution(hub_root, execution_id="exec-opencode", status="failed")
+    _attach_canonical_payloads(
+        hub_root,
+        execution_id="exec-opencode",
+        status="failed",
+        agent="opencode",
+        model="zai-coding-plan/glm-5.1",
+        error_text="opencode_first_event_timeout: no first event",
+    )
+
+    diag = collect_canonical_turn_state_diagnostics(hub_root)[0]
+
+    assert diag.runtime_options["agent"] == "opencode"
+    assert diag.runtime_options["model"] == "zai-coding-plan/glm-5.1"
+    assert diag.terminal_status == "failed"
+    assert diag.evidence["runtime_error_code"] == "opencode_first_event_timeout"
+    assert "opencode_first_event_timeout" in diag.evidence["error_text"]
 
 
 def test_run_diagnostics_full_report(tmp_path: Path) -> None:

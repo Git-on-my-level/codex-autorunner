@@ -64,6 +64,7 @@ from ...core.orchestration.managed_thread_delivery import (
     ManagedThreadDeliveryOutcome,
     ManagedThreadDeliveryRecord,
     ManagedThreadDeliveryTarget,
+    ManagedThreadFailureRecoverySummary,
     build_managed_thread_delivery_id,
     build_managed_thread_delivery_idempotency_key,
 )
@@ -99,6 +100,7 @@ from ...core.orchestration.turn_assistant_output import (
     TurnAssistantOutput,
     TurnAssistantOutputOwnership,
 )
+from ...core.orchestration.turn_execution_contract import TurnExecutionRequest
 from ...core.orchestration.turn_output_reducer import (
     assistant_text_extends_prefix,
     build_assistant_transcript_prefix,
@@ -106,6 +108,7 @@ from ...core.orchestration.turn_output_reducer import (
 )
 from ...core.orchestration.turn_timeline import persist_turn_timeline
 from ...core.pma_transcripts import PmaTranscriptStore
+from ...core.ports.run_event import RunNotice
 from ..github.managed_thread_pr_binding import self_claim_and_arm_pr_binding
 from .execution_event_journal import make_chat_execution_journal_notice
 from .managed_thread_delivery import ManagedThreadDeliveryAdapter
@@ -115,6 +118,7 @@ from .turn_metrics import compose_turn_response_with_footer
 ProgressEventHandler = Callable[[Any], Awaitable[None]]
 RunWithIndicator = Callable[[Callable[[], Awaitable[None]]], Awaitable[None]]
 ManagedThreadStatus = Literal["ok", "error", "interrupted"]
+_FAILURE_RECOVERY_TAIL_CHARS = 1600
 ManagedThreadLifecycleHook = Callable[[RuntimeThreadExecution], object]
 ManagedThreadFinalizationHook = Callable[
     [RuntimeThreadExecution, "ManagedThreadFinalizationResult"], object
@@ -130,7 +134,7 @@ class ManagedThreadExecutionStarter(Protocol):
     async def __call__(
         self,
         orchestration_service: Any,
-        request: MessageRequest,
+        request: MessageRequest | TurnExecutionRequest,
         *,
         client_request_id: Optional[str],
         sandbox_policy: Optional[Any],
@@ -164,6 +168,7 @@ class ManagedThreadFinalizationResult:
     session_notice: Optional[str] = None
     fresh_backend_session_reason: Optional[str] = None
     assistant_output: Optional[TurnAssistantOutput] = None
+    failure_recovery: Optional[ManagedThreadFailureRecoverySummary] = None
 
     def __post_init__(self) -> None:
         assistant_output = self.assistant_output
@@ -684,20 +689,22 @@ def _force_clear_backend_thread_binding(
     thread_target_id: str,
     backend_runtime_instance_id: Optional[str],
 ) -> bool:
-    set_thread_backend_id = getattr(
-        orchestration_service, "set_thread_backend_id", None
+    set_thread_backend_binding = getattr(
+        orchestration_service, "set_thread_backend_binding", None
     )
-    if callable(set_thread_backend_id):
-        set_thread_backend_id(
+    if callable(set_thread_backend_binding):
+        set_thread_backend_binding(
             thread_target_id,
             None,
             backend_runtime_instance_id=backend_runtime_instance_id,
         )
         return True
     thread_store = getattr(orchestration_service, "thread_store", None)
-    store_set_thread_backend_id = getattr(thread_store, "set_thread_backend_id", None)
-    if callable(store_set_thread_backend_id):
-        store_set_thread_backend_id(
+    store_set_thread_backend_binding = getattr(
+        thread_store, "set_thread_backend_binding", None
+    )
+    if callable(store_set_thread_backend_binding):
+        store_set_thread_backend_binding(
             thread_target_id,
             None,
             backend_runtime_instance_id=backend_runtime_instance_id,
@@ -1127,6 +1134,66 @@ def render_managed_thread_response_text(
     )
 
 
+def _tail_text(value: Any, *, limit: int = _FAILURE_RECOVERY_TAIL_CHARS) -> str:
+    text = str(value or "").strip()
+    if len(text) <= limit:
+        return text
+    return text[-limit:].lstrip()
+
+
+def _latest_notice_tail(timeline_events: list[Any]) -> str:
+    for event in reversed(timeline_events):
+        if isinstance(event, RunNotice) and str(event.message or "").strip():
+            return _tail_text(event.message)
+    return ""
+
+
+def _failure_kind_from_detail(
+    *,
+    detail: str,
+    outcome: RuntimeThreadOutcome,
+) -> str:
+    normalized_detail = str(detail or outcome.error or "").strip().lower()
+    if "app-server disconnected" in normalized_detail:
+        return "app_server_disconnected"
+    if outcome.completion_source == "transport_error":
+        return "transport_error"
+    if outcome.completion_source == "timeout":
+        return "runtime_timeout"
+    return "runtime_failed"
+
+
+def _build_failure_recovery_summary(
+    *,
+    detail: str,
+    outcome: RuntimeThreadOutcome,
+    event_state: RuntimeThreadRunEventState,
+    timeline_events: list[Any],
+    managed_turn_id: str,
+    backend_thread_id: Optional[str],
+    backend_turn_id: Optional[str],
+    trace_manifest_id: Optional[str],
+) -> ManagedThreadFailureRecoverySummary:
+    return ManagedThreadFailureRecoverySummary(
+        failure_kind=_failure_kind_from_detail(detail=detail, outcome=outcome),
+        error_text=str(detail or outcome.error or "Runtime thread failed"),
+        recovered_assistant_tail=_tail_text(
+            outcome.assistant_text or event_state.best_assistant_text()
+        ),
+        recovered_notice_tail=_latest_notice_tail(timeline_events),
+        trace_manifest_id=_normalized_optional_text(trace_manifest_id),
+        backend_thread_id=_normalized_optional_text(backend_thread_id),
+        backend_turn_id=_normalized_optional_text(backend_turn_id),
+        managed_turn_id=_normalized_optional_text(managed_turn_id),
+        side_effects_may_have_occurred=True,
+        metadata={
+            "completion_source": outcome.completion_source,
+            "failure_cause": outcome.failure_cause,
+            "last_progress_at": event_state.last_progress_at,
+        },
+    )
+
+
 def render_managed_thread_delivery_record_text(
     record: ManagedThreadDeliveryRecord,
     *,
@@ -1148,6 +1215,47 @@ def render_managed_thread_delivery_record_text(
         elapsed_seconds=None,
         empty_response_text=no_response_fallback,
     )
+
+
+def render_managed_thread_failure_delivery_record_text(
+    record: ManagedThreadDeliveryRecord,
+    *,
+    default_error: str = "execution error",
+) -> str:
+    recovery = record.envelope.failure_recovery
+    error_text = str(record.envelope.error_text or default_error).strip()
+    if recovery is None:
+        return f"Turn failed: {error_text}"
+
+    lines = [f"Turn failed: {recovery.error_text or error_text}"]
+    if recovery.failure_kind:
+        lines.append(f"Failure kind: {recovery.failure_kind}")
+    if recovery.side_effects_may_have_occurred:
+        lines.append("Filesystem changes may already have occurred.")
+
+    ids: list[str] = []
+    if recovery.managed_turn_id:
+        ids.append(f"Execution: {recovery.managed_turn_id}")
+    if recovery.backend_thread_id:
+        ids.append(f"Backend thread: {recovery.backend_thread_id}")
+    if recovery.backend_turn_id:
+        ids.append(f"Backend turn: {recovery.backend_turn_id}")
+    if recovery.trace_manifest_id:
+        ids.append(f"Trace: {recovery.trace_manifest_id}")
+    if ids:
+        lines.extend(["", *ids])
+
+    if recovery.recovered_notice_tail:
+        lines.extend(["", "Latest recovered status:", recovery.recovered_notice_tail])
+    if recovery.recovered_assistant_tail:
+        lines.extend(
+            [
+                "",
+                "Latest recovered assistant output:",
+                recovery.recovered_assistant_tail,
+            ]
+        )
+    return "\n".join(lines)
 
 
 def _render_managed_thread_delivery_text(
@@ -1201,6 +1309,7 @@ def build_managed_thread_delivery_intent(
             dict(finalized.token_usage or {}) if finalized.token_usage else None
         ),
         attachments=tuple(attachments),
+        failure_recovery=finalized.failure_recovery,
         transport_hints=dict(surface.metadata or {}),
         metadata=dict(metadata or {}),
     )
@@ -1504,7 +1613,7 @@ class ManagedThreadTurnCoordinator:
 
     async def submit_execution(
         self,
-        request: MessageRequest,
+        request: MessageRequest | TurnExecutionRequest,
         *,
         client_request_id: Optional[str],
         sandbox_policy: Optional[Any],
@@ -1532,7 +1641,12 @@ class ManagedThreadTurnCoordinator:
         turn_preview = self.turn_preview
         if self.preview_builder is not None:
             try:
-                turn_preview = self.preview_builder(started.request.message_text)
+                request_message = (
+                    getattr(started.request, "message_text", None)
+                    or getattr(started.request, "prompt_text", None)
+                    or ""
+                )
+                turn_preview = self.preview_builder(str(request_message))
             except (
                 RuntimeError,
                 ValueError,
@@ -2138,7 +2252,7 @@ async def _shutdown_progress_pump(
 
 async def submit_managed_thread_execution(
     orchestration_service: Any,
-    request: MessageRequest,
+    request: MessageRequest | TurnExecutionRequest,
     *,
     client_request_id: Optional[str],
     sandbox_policy: Optional[Any],
@@ -3897,6 +4011,16 @@ async def finalize_managed_thread_execution(
         ),
         events=timeline_events[live_timeline_count:],
     )
+    failure_recovery = _build_failure_recovery_summary(
+        detail=detail,
+        outcome=outcome,
+        event_state=event_state,
+        timeline_events=timeline_events,
+        managed_turn_id=managed_turn_id,
+        backend_thread_id=resolved_backend_thread_id,
+        backend_turn_id=outcome.backend_turn_id or started.execution.backend_id,
+        trace_manifest_id=final_trace_manifest_id,
+    )
     log_event(
         logger,
         logging.INFO,
@@ -3911,6 +4035,9 @@ async def finalize_managed_thread_execution(
         status="error",
         completion_source=completion_source,
         detail=detail,
+        failure_recovery_kind=failure_recovery.failure_kind,
+        failure_recovery_assistant_chars=len(failure_recovery.recovered_assistant_tail),
+        failure_recovery_notice_chars=len(failure_recovery.recovered_notice_tail),
         outcome_error=outcome.error,
         event_error=event_state.last_error_message,
         token_usage=event_state.token_usage,
@@ -3929,4 +4056,5 @@ async def finalize_managed_thread_execution(
         token_usage=event_state.token_usage,
         session_notice=session_notice,
         fresh_backend_session_reason=fresh_backend_session_reason,
+        failure_recovery=failure_recovery,
     )

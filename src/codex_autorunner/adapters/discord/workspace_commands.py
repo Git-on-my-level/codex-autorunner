@@ -214,10 +214,25 @@ def _list_bind_workspace_candidates(
     candidates: list[tuple[Optional[str], Optional[str], str]] = []
     manifest_paths: set[str] = set()
 
-    for entry in _list_manifest_workspaces(service):
-        normalized_path = str(canonicalize_path(Path(entry.path)))
-        candidates.append((entry.resource_kind, entry.resource_id, normalized_path))
-        manifest_paths.add(normalized_path)
+    manifest_workspaces = _list_manifest_workspaces(service)
+    if manifest_workspaces:
+        for entry in manifest_workspaces:
+            normalized_path = str(canonicalize_path(Path(entry.path)))
+            candidates.append((entry.resource_kind, entry.resource_id, normalized_path))
+            manifest_paths.add(normalized_path)
+    else:
+        try:
+            manifest_repos = service._list_manifest_repos()
+        except (AttributeError, TypeError, RuntimeError, OSError, ValueError):
+            manifest_repos = []
+        if not isinstance(manifest_repos, list):
+            manifest_repos = []
+        for repo_id, workspace_path in manifest_repos:
+            if not isinstance(repo_id, str) or not repo_id.strip():
+                continue
+            normalized_path = str(canonicalize_path(Path(str(workspace_path))))
+            candidates.append(("repo", repo_id.strip(), normalized_path))
+            manifest_paths.add(normalized_path)
 
     seen_paths: set[str] = set(manifest_paths)
     try:
@@ -247,7 +262,11 @@ def _bind_candidate_value(
     resource_id: Optional[str],
     workspace_path: str,
 ) -> str:
-    if resource_kind == "repo" and isinstance(resource_id, str) and resource_id:
+    if (
+        resource_kind in {"repo", "worktree"}
+        and isinstance(resource_id, str)
+        and resource_id
+    ):
         return repo_autocomplete_value(resource_id)
     return workspace_autocomplete_value(workspace_path)
 
@@ -566,11 +585,14 @@ async def _bind_to_workspace_candidate(
         return
 
     previous_binding = await service._store.get_binding(channel_id=channel_id)
+    selected_repo_id = (
+        selected_resource_id if selected_resource_kind in {"repo", "worktree"} else None
+    )
     await service._store.upsert_binding(
         channel_id=channel_id,
         guild_id=guild_id,
         workspace_path=str(workspace),
-        repo_id=(selected_resource_id if selected_resource_kind == "repo" else None),
+        repo_id=selected_repo_id,
         resource_kind=selected_resource_kind,
         resource_id=selected_resource_id,
     )
@@ -579,7 +601,7 @@ async def _bind_to_workspace_candidate(
         surface_kind="discord",
         surface_key=channel_id,
         workspace_root=str(workspace),
-        repo_id=(selected_resource_id if selected_resource_kind == "repo" else None),
+        repo_id=selected_repo_id,
         resource_kind=selected_resource_kind,
         resource_id=selected_resource_id,
         previous_workspace_root=(

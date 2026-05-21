@@ -8,6 +8,22 @@ from unittest.mock import patch
 import yaml
 
 from codex_autorunner.bootstrap import seed_hub_files
+from codex_autorunner.core.automation import (
+    PMA_SUBSCRIPTION_RULE_PREFIX,
+    PMA_TIMER_RULE_PREFIX,
+    PMA_TIMER_SCHEDULE_PREFIX,
+    AutomationEvent,
+    AutomationJob,
+    AutomationRule,
+    AutomationSchedule,
+    AutomationStore,
+)
+from codex_autorunner.core.automation.models import (
+    EXECUTOR_MANAGED_THREAD_TURN,
+    SCHEDULE_ONE_SHOT,
+    TARGET_POLICY_HUB,
+    TRIGGER_KIND_EVENT,
+)
 from codex_autorunner.core.config import load_hub_config
 from codex_autorunner.core.filebox import save_file
 from codex_autorunner.core.filebox_lifecycle import consume_inbox_file
@@ -646,8 +662,8 @@ def test_format_pma_prompt_includes_hub_snapshot_and_message(tmp_path: Path) -> 
     assert "3+ planned tickets" in result
     assert "car pma thread spawn" in result
     assert "Automation continuity (subscriptions + timers):" in result
-    assert "/hub/pma/subscriptions" in result
-    assert "/hub/pma/timers" in result
+    assert "car automation list/status/run/pause/resume" in result
+    assert "car pma thread subscribe" in result
     assert "active_context.md" in result
     assert "decisions.md" in result
     assert "spec.md" in result
@@ -830,37 +846,78 @@ def test_build_hub_snapshot_includes_automation_summary(hub_env) -> None:
 
     supervisor = _build_supervisor(hub_env.hub_root)
     try:
-        store = supervisor.get_pma_automation_store()
-        store.create_subscription(
-            {
-                "event_types": ["flow_completed"],
-                "repo_id": hub_env.repo_id,
-                "run_id": "run-1",
-                "from_state": "running",
-                "to_state": "completed",
-                "lane_id": "pma:lane-next",
-                "idempotency_key": "snapshot-sub-1",
-            }
+        store = AutomationStore(hub_env.hub_root)
+        store.upsert_rule(
+            AutomationRule.create(
+                rule_id=f"{PMA_SUBSCRIPTION_RULE_PREFIX}snapshot-sub-1",
+                name="Snapshot subscription",
+                trigger_kind=TRIGGER_KIND_EVENT,
+                trigger={"event_types": ["lifecycle.flow_completed"]},
+                filters={
+                    "event.repo_id": hub_env.repo_id,
+                    "event.payload.run_id": "run-1",
+                    "event.payload.from_state": "running",
+                    "event.payload.to_state": "completed",
+                },
+                target_policy=TARGET_POLICY_HUB,
+                executor_kind=EXECUTOR_MANAGED_THREAD_TURN,
+                executor={"lane_id": "pma:lane-next"},
+                system_owned=True,
+                metadata={
+                    "purpose": "managed_thread_lifecycle_subscription",
+                    "legacy_subscription_id": "snapshot-sub-1",
+                    "legacy_idempotency_key": "snapshot-sub-1",
+                },
+            )
         )
-        store.create_timer(
-            {
-                "timer_type": "one_shot",
-                "delay_seconds": 60,
-                "repo_id": hub_env.repo_id,
-                "run_id": "run-1",
-                "reason": "watchdog",
-                "idempotency_key": "snapshot-timer-1",
-            }
+        timer_rule = AutomationRule.create(
+            rule_id=f"{PMA_TIMER_RULE_PREFIX}snapshot-timer-1",
+            name="Snapshot timer",
+            trigger_kind=TRIGGER_KIND_EVENT,
+            trigger={"event_types": ["schedule.fire"]},
+            target_policy=TARGET_POLICY_HUB,
+            executor_kind=EXECUTOR_MANAGED_THREAD_TURN,
+            system_owned=True,
+            metadata={
+                "purpose": "managed_thread_timer",
+                "legacy_timer_id": "snapshot-timer-1",
+            },
         )
-        store.enqueue_wakeup(
-            source="lifecycle_subscription",
-            repo_id=hub_env.repo_id,
-            run_id="run-1",
-            from_state="running",
-            to_state="completed",
-            reason="flow_completed",
-            timestamp="2026-01-01T00:00:00Z",
-            idempotency_key="snapshot-wakeup-1",
+        store.upsert_rule(timer_rule)
+        store.upsert_schedule(
+            AutomationSchedule.create(
+                schedule_id=f"{PMA_TIMER_SCHEDULE_PREFIX}snapshot-timer-1",
+                rule_id=timer_rule.rule_id,
+                schedule_kind=SCHEDULE_ONE_SHOT,
+                next_fire_at="2026-01-01T00:01:00Z",
+                schedule={
+                    "payload": {
+                        "timer_id": "snapshot-timer-1",
+                        "timer_type": "one_shot",
+                        "due_at": "2026-01-01T00:01:00Z",
+                        "repo_id": hub_env.repo_id,
+                        "run_id": "run-1",
+                        "reason": "watchdog",
+                    }
+                },
+            )
+        )
+        store.record_event(
+            AutomationEvent.create(
+                event_id="snapshot-event-1",
+                event_type="lifecycle.flow_completed",
+                repo_id=hub_env.repo_id,
+                payload={"repo_id": hub_env.repo_id, "run_id": "run-1"},
+            )
+        )
+        store.enqueue_job(
+            AutomationJob.create(
+                job_id="snapshot-job-1",
+                rule_id=f"{PMA_SUBSCRIPTION_RULE_PREFIX}snapshot-sub-1",
+                event_id="snapshot-event-1",
+                target={"repo_id": hub_env.repo_id, "run_id": "run-1"},
+                executor={"kind": EXECUTOR_MANAGED_THREAD_TURN},
+            )
         )
 
         snapshot = asyncio.run(
@@ -882,7 +939,7 @@ def test_build_hub_snapshot_includes_automation_summary(hub_env) -> None:
     assert int(wakeups.get("pending_count") or 0) >= 1
 
     rendered = _render_hub_snapshot(snapshot)
-    assert "PMA Automation:" in rendered
+    assert "Automation:" in rendered
     assert "subscriptions_active=" in rendered
 
 
@@ -905,13 +962,38 @@ def test_build_hub_snapshot_includes_action_queue_with_supersession(hub_env) -> 
 
     supervisor = _build_supervisor(hub_env.hub_root)
     try:
-        supervisor.get_pma_automation_store().enqueue_wakeup(
-            source="lifecycle_subscription",
-            repo_id=hub_env.repo_id,
-            run_id=run_id,
-            reason="flow_paused",
-            timestamp="2026-03-16T12:30:00Z",
-            idempotency_key="snapshot-action-queue",
+        store = AutomationStore(hub_env.hub_root)
+        store.upsert_rule(
+            AutomationRule.create(
+                rule_id=f"{PMA_SUBSCRIPTION_RULE_PREFIX}snapshot-action-queue",
+                name="Snapshot action queue subscription",
+                trigger_kind=TRIGGER_KIND_EVENT,
+                trigger={"event_types": ["lifecycle.flow_paused"]},
+                target_policy=TARGET_POLICY_HUB,
+                executor_kind=EXECUTOR_MANAGED_THREAD_TURN,
+                system_owned=True,
+                metadata={
+                    "purpose": "managed_thread_lifecycle_subscription",
+                    "legacy_subscription_id": "snapshot-action-queue",
+                },
+            )
+        )
+        store.record_event(
+            AutomationEvent.create(
+                event_id="snapshot-action-queue-event",
+                event_type="lifecycle.flow_paused",
+                repo_id=hub_env.repo_id,
+                payload={"repo_id": hub_env.repo_id, "run_id": run_id},
+            )
+        )
+        store.enqueue_job(
+            AutomationJob.create(
+                job_id="snapshot-action-queue-job",
+                rule_id=f"{PMA_SUBSCRIPTION_RULE_PREFIX}snapshot-action-queue",
+                event_id="snapshot-action-queue-event",
+                target={"repo_id": hub_env.repo_id, "run_id": run_id},
+                executor={"kind": EXECUTOR_MANAGED_THREAD_TURN},
+            )
         )
         snapshot = asyncio.run(
             build_hub_snapshot(supervisor, hub_root=hub_env.hub_root)

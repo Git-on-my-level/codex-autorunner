@@ -12,6 +12,7 @@ import httpx
 import typer
 import uvicorn
 
+from ....core.automation import PMA_SUBSCRIPTION_RULE_PREFIX, AutomationStore
 from ....core.automation.migration_diagnostics import (
     collect_automation_migration_read_model,
 )
@@ -39,7 +40,7 @@ from ....core.orchestration.execution_history_maintenance import (
     prune_execution_history_retention,
 )
 from ....core.orchestration.sqlite import open_orchestration_sqlite
-from ....core.pma_automation_store import PmaAutomationStore
+from ....core.pma_automation_rule_projection import subscription_row_from_rule
 from ....manifest import Manifest, load_manifest, save_manifest
 from ...web.app import create_hub_app
 from ...web.services.pma.managed_thread_runtime import (
@@ -78,7 +79,7 @@ def register_hub_commands(
 ) -> None:
     subscription_app = typer.Typer(
         add_completion=False,
-        help="Inspect and manage hub PMA lifecycle subscriptions.",
+        help="Inspect and manage managed-thread lifecycle automation subscriptions.",
     )
     hub_app.add_typer(subscription_app, name="subscription")
 
@@ -100,8 +101,8 @@ def register_hub_commands(
             raise_exit(f"Repo id not found in hub manifest: {repo_id}")
         return manifest, repos_by_id, repo
 
-    def _subscription_store(config: HubConfig) -> PmaAutomationStore:
-        return PmaAutomationStore(config.root)
+    def _automation_store(config: HubConfig) -> AutomationStore:
+        return AutomationStore(config.root)
 
     def _normalize_subscription_state_filter(value: str) -> str:
         normalized = str(value or "").strip().lower() or "all"
@@ -117,6 +118,20 @@ def register_hub_commands(
         count_text = str(match_count if match_count is not None else 0)
         max_text = str(max_matches) if max_matches is not None else "-"
         return f"{count_text}/{max_text}"
+
+    def _list_subscription_rows(store: AutomationStore) -> list[dict[str, Any]]:
+        rows: list[dict[str, Any]] = []
+        for rule in store.list_rules():
+            if not rule.rule_id.startswith(PMA_SUBSCRIPTION_RULE_PREFIX) and (
+                rule.metadata.get("purpose")
+                not in {
+                    "managed_thread_lifecycle_subscription",
+                    "pma_lifecycle_subscription",
+                }
+            ):
+                continue
+            rows.append(subscription_row_from_rule(rule, include_rule_id=True))
+        return rows
 
     def _render_subscription_table(subscriptions: list[dict[str, Any]]) -> list[str]:
         columns = [
@@ -276,7 +291,9 @@ def register_hub_commands(
             raise_exit(f"Invalid --env-map value: {value!r}. Expected format KEY=VALUE")
         return key, raw_value
 
-    @subscription_app.command("list", help="List hub PMA lifecycle subscriptions.")
+    @subscription_app.command(
+        "list", help="List managed-thread lifecycle automation subscriptions."
+    )
     def hub_subscription_list(
         state: str = typer.Option(
             "all",
@@ -287,11 +304,9 @@ def register_hub_commands(
         output_json: bool = typer.Option(False, "--json", help="JSON output"),
     ) -> None:
         config = require_hub_config(path)
-        store = _subscription_store(config)
+        store = _automation_store(config)
         state_filter = _normalize_subscription_state_filter(state)
-        subscriptions = store.list_subscriptions(
-            include_inactive=state_filter in {"cancelled", "all"}
-        )
+        subscriptions = _list_subscription_rows(store)
         if state_filter != "all":
             subscriptions = [
                 entry
@@ -302,7 +317,7 @@ def register_hub_commands(
             "subscriptions": subscriptions,
             "count": len(subscriptions),
             "state": state_filter,
-            "store_path": str(store.path),
+            "store": "automation",
         }
         if output_json:
             typer.echo(json.dumps(payload, indent=2))
@@ -315,7 +330,9 @@ def register_hub_commands(
         for line in _render_subscription_table(subscriptions):
             typer.echo(line)
 
-    @subscription_app.command("cancel", help="Cancel a hub PMA lifecycle subscription.")
+    @subscription_app.command(
+        "cancel", help="Cancel a managed-thread lifecycle automation subscription."
+    )
     def hub_subscription_cancel(
         subscription_id: str = typer.Option(
             ...,
@@ -328,11 +345,11 @@ def register_hub_commands(
         ),
     ) -> None:
         config = require_hub_config(path)
-        store = _subscription_store(config)
+        store = _automation_store(config)
         normalized_id = str(subscription_id or "").strip()
         if not normalized_id:
             raise_exit("subscription id is required")
-        subscriptions = store.list_subscriptions(include_inactive=True)
+        subscriptions = _list_subscription_rows(store)
         existing = next(
             (
                 entry
@@ -343,13 +360,19 @@ def register_hub_commands(
         )
         if existing is None:
             raise_exit(f"Subscription not found: {normalized_id}")
-        changed = store.cancel_subscription(normalized_id)
+            raise AssertionError("unreachable")
+        rule_id = str(existing.get("rule_id") or "").strip()
+        if not rule_id:
+            raise_exit(f"Subscription has no backing automation rule: {normalized_id}")
+        updated = store.set_rule_enabled(rule_id, False)
+        changed = updated is not None and not updated.enabled
         payload = {
             "subscription_id": normalized_id,
+            "rule_id": rule_id,
             "changed": changed,
             "state": "cancelled",
             "status": "cancelled" if changed else "already_cancelled",
-            "store_path": str(store.path),
+            "store": "automation",
         }
         if output_json:
             typer.echo(json.dumps(payload, indent=2))
@@ -361,7 +384,7 @@ def register_hub_commands(
 
     @subscription_app.command(
         "purge",
-        help="Purge cancelled hub PMA lifecycle subscriptions from the store.",
+        help="Preview cancelled lifecycle automation subscriptions. Purge is no longer needed on the generalized store.",
     )
     def hub_subscription_purge(
         state: str = typer.Option(
@@ -376,14 +399,20 @@ def register_hub_commands(
         ),
     ) -> None:
         config = require_hub_config(path)
-        store = _subscription_store(config)
+        store = _automation_store(config)
         state_filter = str(state or "").strip().lower() or "cancelled"
         if state_filter != "cancelled":
             raise_exit("Unsupported purge state. Only cancelled is supported.")
-        removed = store.purge_subscriptions(
-            state_filter=state_filter,
-            dry_run=dry_run,
-        )
+        removed = [
+            entry
+            for entry in _list_subscription_rows(store)
+            if str(entry.get("state") or "").strip().lower() == "cancelled"
+        ]
+        if removed and not dry_run:
+            raise_exit(
+                "Cancelled subscriptions are represented as disabled generalized rules; "
+                "rerun with --dry-run to inspect them."
+            )
         payload = {
             "subscriptions": removed,
             "subscription_ids": [
@@ -394,7 +423,7 @@ def register_hub_commands(
             "count": len(removed),
             "state": state_filter,
             "dry_run": dry_run,
-            "store_path": str(store.path),
+            "store": "automation",
         }
         if output_json:
             typer.echo(json.dumps(payload, indent=2))

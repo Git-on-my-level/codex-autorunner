@@ -27,6 +27,7 @@ from ...services.pma import get_pma_request_context
 from ...services.pma.common import normalize_optional_text
 from ..shared import SSE_HEADERS
 from .managed_thread_tail_serializers import (
+    _canonical_turn_request_metadata,
     _derive_active_turn_diagnostics,
     _derive_progress_phase,
     _event_received_at_iso,
@@ -517,6 +518,7 @@ async def _build_managed_thread_tail_snapshot(
         "backend_thread_id": backend_thread_id,
         "backend_turn_id": backend_turn_id,
         "turn_status": turn_status,
+        "canonical_request": _canonical_turn_request_metadata(turn_record),
         "thread_status": getattr(thread, "status", None),
         "thread_lifecycle_status": getattr(thread, "lifecycle_status", None),
         "started_at": started_at,

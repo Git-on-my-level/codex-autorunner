@@ -10,7 +10,10 @@ from fastapi.testclient import TestClient
 
 from codex_autorunner.adapters.chat.channel_directory import ChannelDirectoryStore
 from codex_autorunner.agents.registry import AgentDescriptor
-from codex_autorunner.core.automation import AutomationStore
+from codex_autorunner.core.automation import (
+    PMA_SUBSCRIPTION_RULE_PREFIX,
+    AutomationStore,
+)
 from codex_autorunner.core.config import CONFIG_FILENAME, DEFAULT_HUB_CONFIG
 from codex_autorunner.core.managed_thread_store import ManagedThreadStore
 from codex_autorunner.core.orchestration import (
@@ -44,6 +47,42 @@ def _set_default_terminal_followup(hub_root: Path, enabled: bool) -> None:
     cfg.setdefault("pma", {})
     cfg["pma"]["managed_thread_terminal_followup_default"] = enabled
     write_test_config(hub_root / CONFIG_FILENAME, cfg)
+
+
+def _subscription_rows(
+    hub_root: Path, *, thread_id: str | None = None, include_inactive: bool = False
+) -> list[dict[str, object]]:
+    rows: list[dict[str, object]] = []
+    for rule in AutomationStore(hub_root).list_rules():
+        if not rule.rule_id.startswith(PMA_SUBSCRIPTION_RULE_PREFIX) and (
+            rule.metadata.get("purpose")
+            not in {
+                "managed_thread_lifecycle_subscription",
+                "pma_lifecycle_subscription",
+            }
+        ):
+            continue
+        if not include_inactive and not rule.enabled:
+            continue
+        rule_thread_id = (
+            rule.target.get("thread_id") if isinstance(rule.target, dict) else None
+        ) or (
+            rule.filters.get("event.payload.thread_id")
+            if isinstance(rule.filters, dict)
+            else None
+        )
+        if thread_id is not None and rule_thread_id != thread_id:
+            continue
+        rows.append(
+            {
+                "subscription_id": rule.metadata.get("legacy_subscription_id")
+                or rule.rule_id.removeprefix(PMA_SUBSCRIPTION_RULE_PREFIX),
+                "state": "active" if rule.enabled else "cancelled",
+                "thread_id": rule_thread_id,
+                "match_count": rule.metadata.get("legacy_match_count") or 0,
+            }
+        )
+    return rows
 
 
 def _repo_owner(hub_env) -> dict[str, str]:
@@ -105,10 +144,8 @@ def test_create_managed_thread_with_repo_owner(hub_env) -> None:
     assert stored is not None
     assert stored.get("backend_thread_id") is None
     assert "notification" not in resp.json()
-
-    automation_store = app.state.hub_supervisor.get_pma_automation_store()
-    subscriptions = automation_store.list_subscriptions(
-        thread_id=thread["managed_thread_id"]
+    subscriptions = _subscription_rows(
+        hub_env.hub_root, thread_id=thread["managed_thread_id"]
     )
     assert subscriptions == []
 
@@ -423,9 +460,9 @@ def test_list_managed_threads_uses_active_execution_status(hub_env) -> None:
     assert queued_listed["execution_status"] == "queued"
     assert queued_listed["active_turn_id"] == queued_turn["managed_turn_id"]
     assert queued_listed["queued_count"] == 1
-    assert queued_listed["runtime_status"] == "queued"
-    assert queued_listed["normalized_status"] == "queued"
-    assert queued_listed["status"] == "queued"
+    assert queued_listed["runtime_status"] == "waiting"
+    assert queued_listed["normalized_status"] == "waiting"
+    assert queued_listed["status"] == "waiting"
 
 
 def test_create_managed_thread_with_repo_owner_prefers_fresh_worktree(
@@ -823,7 +860,7 @@ def test_fork_managed_thread_clones_hermes_backend_session(
         source_thread = create_resp.json()["thread"]
 
         store = ManagedThreadStore(hub_env.hub_root)
-        store.set_thread_backend_id(
+        store.set_thread_backend_binding(
             source_thread["managed_thread_id"],
             "hermes-session-source",
             backend_runtime_instance_id="hermes-runtime-1",
@@ -1282,10 +1319,8 @@ def test_create_managed_thread_notify_on_terminal_creates_subscription(hub_env) 
         subscription = notification.get("subscription") or {}
         assert subscription.get("thread_id") == thread["managed_thread_id"]
         assert subscription.get("lane_id") == "pma:lane-next"
-
-    automation_store = app.state.hub_supervisor.get_pma_automation_store()
-    subscriptions = automation_store.list_subscriptions(
-        thread_id=thread["managed_thread_id"]
+    subscriptions = _subscription_rows(
+        hub_env.hub_root, thread_id=thread["managed_thread_id"]
     )
     assert len(subscriptions) == 1
 
@@ -1504,9 +1539,7 @@ def test_create_subscription_warns_when_active_auto_subscription_covers_scope(
     assert payload["subscription"]["subscription_id"] == auto_subscription.get(
         "subscription_id"
     )
-
-    automation_store = app.state.hub_supervisor.get_pma_automation_store()
-    subscriptions = automation_store.list_subscriptions(thread_id=thread_id)
+    subscriptions = _subscription_rows(hub_env.hub_root, thread_id=thread_id)
     assert len(subscriptions) == 1
 
 
@@ -1542,9 +1575,7 @@ def test_create_subscription_confirm_allows_duplicate_over_active_auto_subscript
     assert payload["deduped"] is False
     assert "warning" not in payload
     assert payload["subscription"]["thread_id"] == thread_id
-
-    automation_store = app.state.hub_supervisor.get_pma_automation_store()
-    subscriptions = automation_store.list_subscriptions(thread_id=thread_id)
+    subscriptions = _subscription_rows(hub_env.hub_root, thread_id=thread_id)
     assert len(subscriptions) == 2
 
 
@@ -1650,10 +1681,8 @@ def test_create_managed_thread_terminal_followup_false_opts_out(hub_env) -> None
         payload = create_resp.json()
         thread = payload["thread"]
         assert "notification" not in payload
-
-    automation_store = app.state.hub_supervisor.get_pma_automation_store()
-    subscriptions = automation_store.list_subscriptions(
-        thread_id=thread["managed_thread_id"]
+    subscriptions = _subscription_rows(
+        hub_env.hub_root, thread_id=thread["managed_thread_id"]
     )
     assert subscriptions == []
 
@@ -1673,10 +1702,8 @@ def test_create_managed_thread_respects_config_disabled_default_followup(
         payload = create_resp.json()
         thread = payload["thread"]
         assert "notification" not in payload
-
-    automation_store = app.state.hub_supervisor.get_pma_automation_store()
-    subscriptions = automation_store.list_subscriptions(
-        thread_id=thread["managed_thread_id"]
+    subscriptions = _subscription_rows(
+        hub_env.hub_root, thread_id=thread["managed_thread_id"]
     )
     assert subscriptions == []
 
@@ -1685,12 +1712,6 @@ def test_create_managed_thread_with_explicit_notify_lane_requires_subscription(
     hub_env,
 ) -> None:
     app = create_hub_app(hub_env.hub_root)
-
-    class PartialAutomationStore:
-        def create_subscription(self) -> None:
-            return None
-
-    app.state.hub_supervisor.get_pma_automation_store = lambda: PartialAutomationStore()
 
     with TestClient(app) as client:
         create_resp = client.post(
@@ -1701,42 +1722,40 @@ def test_create_managed_thread_with_explicit_notify_lane_requires_subscription(
                 "notify_lane": "pma:lane-next",
             },
         )
+        payload = create_resp.json()
 
-    assert create_resp.status_code == 503
+    assert create_resp.status_code == 200
+    assert payload["notification"]["mode"] == "terminal"
+    subscriptions = _subscription_rows(
+        hub_env.hub_root, thread_id=payload["thread"]["managed_thread_id"]
+    )
+    assert len(subscriptions) == 1
 
 
-def test_create_managed_thread_default_followup_ignores_partial_automation_store(
+def test_create_managed_thread_default_followup_without_origin_is_inert(
     hub_env,
 ) -> None:
     app = create_hub_app(hub_env.hub_root)
-
-    class PartialAutomationStore:
-        def create_subscription(self) -> None:
-            return None
-
-    app.state.hub_supervisor.get_pma_automation_store = lambda: PartialAutomationStore()
 
     with TestClient(app) as client:
         create_resp = client.post(
             "/hub/pma/threads",
             json={"agent": "codex", **_repo_owner(hub_env)},
         )
+        payload = create_resp.json()
 
     assert create_resp.status_code == 200
-    payload = create_resp.json()
     assert "notification" not in payload
+    subscriptions = _subscription_rows(
+        hub_env.hub_root, thread_id=payload["thread"]["managed_thread_id"]
+    )
+    assert subscriptions == []
 
 
 def test_create_managed_thread_notify_once_only_does_not_opt_in_followup(
     hub_env,
 ) -> None:
     app = create_hub_app(hub_env.hub_root)
-
-    class PartialAutomationStore:
-        def create_subscription(self) -> None:
-            return None
-
-    app.state.hub_supervisor.get_pma_automation_store = lambda: PartialAutomationStore()
 
     with TestClient(app) as client:
         create_resp = client.post(
@@ -1747,10 +1766,14 @@ def test_create_managed_thread_notify_once_only_does_not_opt_in_followup(
                 "notify_once": True,
             },
         )
+        payload = create_resp.json()
 
     assert create_resp.status_code == 200
-    payload = create_resp.json()
     assert "notification" not in payload
+    subscriptions = _subscription_rows(
+        hub_env.hub_root, thread_id=payload["thread"]["managed_thread_id"]
+    )
+    assert subscriptions == []
 
 
 def test_managed_thread_routes_respect_pma_enabled_flag(hub_env) -> None:
@@ -1870,7 +1893,7 @@ def test_resume_managed_thread_starts_fresh_backend_on_next_send(hub_env) -> Non
         get_resp = client.get(f"/hub/pma/threads/{managed_thread_id}")
         assert get_resp.status_code == 200
         thread = get_resp.json()["thread"]
-        assert thread["status"] == "completed"
+        assert thread["status"] == "idle"
         assert thread["operator_status"] == "reusable"
         assert thread["is_reusable"] is True
         assert thread["lifecycle_status"] == "active"

@@ -29,9 +29,11 @@ def test_ticket_chat_route_passes_selected_profile_into_execution(
         profile,
         model=None,
         reasoning=None,
+        turn_request=None,
         on_meta=None,
         on_usage=None,
     ):
+        _ = turn_request
         observed.update(
             {
                 "target": target.target,

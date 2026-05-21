@@ -46,7 +46,7 @@ from .models import (
     SurfaceBindingResponse,
     SurfaceBindingUpsertRequest,
     ThreadActivityRecordRequest,
-    ThreadBackendIdUpdateRequest,
+    ThreadBackendBindingUpdateRequest,
     ThreadCompactSeedUpdateRequest,
     ThreadTargetArchiveRequest,
     ThreadTargetCreateRequest,
@@ -186,8 +186,8 @@ class HubControlPlaneClient(Protocol):
         self, request: ThreadTargetArchiveRequest
     ) -> ThreadTargetResponse: ...
 
-    async def set_thread_backend_id(
-        self, request: ThreadBackendIdUpdateRequest
+    async def set_thread_backend_binding(
+        self, request: ThreadBackendBindingUpdateRequest
     ) -> None: ...
 
     async def record_thread_activity(

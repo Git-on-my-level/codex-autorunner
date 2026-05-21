@@ -454,7 +454,7 @@ def test_pma_automation_cancel_subscription_can_disable_unified_only_rule(
         trigger={"event_types": ["lifecycle.flow_completed"]},
         target_policy="hub",
         target={"thread_id": "thread-unified"},
-        executor_kind="pma_turn",
+        executor_kind="managed_thread_turn",
         executor={"lane_id": "pma:default"},
         metadata={
             "purpose": "pma_lifecycle_subscription",
@@ -525,7 +525,7 @@ def test_pma_automation_cancel_timer_can_cancel_unified_only_schedule(hub_env) -
         trigger={"event_types": ["schedule.fire"]},
         target_policy="hub",
         target={"thread_id": "thread-unified"},
-        executor_kind="pma_turn",
+        executor_kind="managed_thread_turn",
         executor={"lane_id": "pma:default", "wake_up_kind": "pma_timer"},
         metadata={"purpose": "pma_timer", "legacy_timer_id": timer_id},
     )

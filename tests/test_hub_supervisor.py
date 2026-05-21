@@ -28,7 +28,18 @@ from codex_autorunner.adapters.agents.wiring import (
     build_app_server_supervisor_factory,
 )
 from codex_autorunner.bootstrap import seed_repo_files
-from codex_autorunner.core.automation import AutomationStore
+from codex_autorunner.core.automation import (
+    EXECUTOR_MANAGED_THREAD_TURN,
+    AutomationRule,
+    AutomationSchedule,
+    AutomationStore,
+)
+from codex_autorunner.core.automation.models import (
+    APPROVAL_INHERIT_PROFILE,
+    SCHEDULE_ONE_SHOT,
+    TARGET_POLICY_HUB,
+    TRIGGER_KIND_SCHEDULE,
+)
 from codex_autorunner.core.config import (
     CONFIG_FILENAME,
     DEFAULT_HUB_CONFIG,
@@ -48,7 +59,6 @@ from codex_autorunner.core.hub_topology import (
 from codex_autorunner.core.hub_worktree_manager import WorktreeManager
 from codex_autorunner.core.managed_thread_store import ManagedThreadStore
 from codex_autorunner.core.orchestration.bindings import OrchestrationBindingStore
-from codex_autorunner.core.pma_automation_records import PmaAutomationTimer
 from codex_autorunner.core.pma_automation_unified import PmaUnifiedAutomationAdapter
 from codex_autorunner.core.runner_controller import ProcessRunnerController
 from codex_autorunner.core.state import RunnerState, save_state
@@ -1190,6 +1200,50 @@ def test_cleanup_all_archives_all_terminal_flow_statuses(tmp_path: Path) -> None
             / "flow_state"
             / "worker.exit.json"
         ).read_text(encoding="utf-8") == "{}"
+
+
+def test_cleanup_all_archives_orphaned_flow_artifact_dirs(tmp_path: Path) -> None:
+    hub_root = tmp_path / "hub"
+    _write_default_hub_config(hub_root)
+    supervisor = HubSupervisor(
+        load_hub_config(hub_root),
+        backend_factory_builder=build_agent_backend_factory,
+        app_server_supervisor_factory_builder=build_app_server_supervisor_factory,
+        backend_orchestrator_builder=build_backend_orchestrator,
+    )
+    base = supervisor.create_repo("base")
+    _init_git_repo(base.path)
+
+    orphan_run_id = "22222222-2222-2222-2222-222222222222"
+    with FlowStore(base.path / ".codex-autorunner" / "flows.db") as store:
+        store.initialize()
+    flow_dir = base.path / ".codex-autorunner" / "flows" / orphan_run_id / "chat"
+    flow_dir.mkdir(parents=True, exist_ok=True)
+    (flow_dir / "outbound.jsonl").write_text(
+        '{"event_type":"flow_terminal_notice"}\n',
+        encoding="utf-8",
+    )
+
+    dry = supervisor.cleanup_all(dry_run=True)
+    assert dry["flow_runs"]["retired_count"] == 1
+    assert dry["flow_runs"]["by_repo"] == [{"repo_id": base.id, "count": 1}]
+    assert (base.path / ".codex-autorunner" / "flows" / orphan_run_id).exists()
+
+    result = supervisor.cleanup_all(dry_run=False)
+
+    assert result["flow_runs"]["retired_count"] == 1
+    assert result["flow_runs"]["by_repo"] == [{"repo_id": base.id, "count": 1}]
+    assert not (base.path / ".codex-autorunner" / "flows" / orphan_run_id).exists()
+    assert (
+        base.path
+        / ".codex-autorunner"
+        / "archive"
+        / "runs"
+        / orphan_run_id
+        / "flow_state"
+        / "chat"
+        / "outbound.jsonl"
+    ).read_text(encoding="utf-8") == '{"event_type":"flow_terminal_notice"}\n'
 
 
 def test_cleanup_all_skips_worktree_when_binding_lookup_raises_runtime_error(
@@ -3316,24 +3370,13 @@ def test_cleanup_repo_threads_rejects_missing_path(tmp_path: Path) -> None:
         supervisor.cleanup_repo_threads(repo_id="demo")
 
 
-def test_ensure_pma_automation_store_creates_store(tmp_path: Path) -> None:
+def test_legacy_pma_automation_store_accessor_is_removed(tmp_path: Path) -> None:
     hub_root = tmp_path / "hub"
     supervisor = _make_basic_supervisor(hub_root)
     try:
-        store = supervisor.ensure_pma_automation_store()
-        assert store is not None
-        assert supervisor.ensure_pma_automation_store() is store
-    finally:
-        supervisor.shutdown()
-
-
-def test_pma_automation_store_accessor_is_explicit(tmp_path: Path) -> None:
-    hub_root = tmp_path / "hub"
-    supervisor = _make_basic_supervisor(hub_root)
-    try:
-        primary = supervisor.ensure_pma_automation_store()
-        assert supervisor.get_pma_automation_store() is primary
-        assert supervisor.pma_automation_store is primary
+        assert not hasattr(supervisor, "ensure_pma_automation_store")
+        assert not hasattr(supervisor, "get_pma_automation_store")
+        assert not hasattr(supervisor, "pma_automation_store")
         assert not hasattr(supervisor, "get_automation_store")
         assert not hasattr(supervisor, "automation_store")
     finally:
@@ -3405,69 +3448,80 @@ def test_request_pma_lane_worker_start_handles_starter_exception(
         supervisor.shutdown()
 
 
-def test_process_pma_automation_timers_returns_zero_for_bad_limit(
+def test_process_automation_timers_returns_zero_for_bad_limit(
     tmp_path: Path,
 ) -> None:
     hub_root = tmp_path / "hub"
     supervisor = _make_basic_supervisor(hub_root)
     try:
-        assert supervisor.process_pma_automation_timers(limit=0) == 0
-        assert supervisor.process_pma_automation_timers(limit=-1) == 0
+        assert supervisor.process_automation_timers(limit=0) == 0
+        assert supervisor.process_automation_timers(limit=-1) == 0
     finally:
         supervisor.shutdown()
 
 
-def test_process_pma_automation_timers_does_not_call_legacy_dequeue(
+def test_process_automation_timers_does_not_call_legacy_dequeue(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     hub_root = tmp_path / "hub"
     supervisor = _make_basic_supervisor(hub_root)
     try:
-        store = supervisor.ensure_pma_automation_store()
-        timer = PmaAutomationTimer.create(
-            due_at="2000-01-01T00:00:00+00:00",
-            repo_id="demo",
-            lane_id="pma:default",
-            idempotency_key="unified-scheduler-no-legacy-dequeue",
-        )
-        PmaUnifiedAutomationAdapter(AutomationStore(hub_root)).mirror_timer_schedule(
-            timer=timer
-        )
+        _seed_due_managed_thread_schedule(hub_root)
         monkeypatch.setattr(
-            store,
-            "dequeue_due_timers",
-            lambda **_: (_ for _ in ()).throw(
-                AssertionError("legacy timer dequeue should not be called")
+            PmaUnifiedAutomationAdapter,
+            "due_timer_schedules",
+            lambda *_args, **_kwargs: (_ for _ in ()).throw(
+                AssertionError("legacy timer adapter should not be called")
             ),
             raising=False,
         )
-        assert supervisor.process_pma_automation_timers() == 1
+        assert supervisor.process_automation_timers() == 1
     finally:
         supervisor.shutdown()
 
 
-def test_process_pma_automation_timers_processes_due_unified_schedules(
+def test_process_automation_timers_processes_due_unified_schedules(
     tmp_path: Path,
 ) -> None:
     hub_root = tmp_path / "hub"
     supervisor = _make_basic_supervisor(hub_root)
-    started_lanes = []
-    supervisor.set_pma_lane_worker_starter(started_lanes.append)
+    started_threads = []
+    supervisor.set_managed_thread_queue_worker_starter(started_threads.append)
     try:
-        timer = PmaAutomationTimer.create(
-            due_at="2000-01-01T00:00:00+00:00",
-            repo_id="demo",
-            lane_id="pma:default",
-            idempotency_key="unified-scheduler-due-timer",
-        )
-        PmaUnifiedAutomationAdapter(AutomationStore(hub_root)).mirror_timer_schedule(
-            timer=timer
-        )
-        created = supervisor.process_pma_automation_timers()
+        thread_id = _seed_due_managed_thread_schedule(hub_root)
+        created = supervisor.process_automation_timers()
         assert created == 1
-        assert started_lanes == ["pma:default"]
+        assert started_threads == [thread_id]
     finally:
         supervisor.shutdown()
+
+
+def _seed_due_managed_thread_schedule(hub_root: Path) -> str:
+    store = AutomationStore(hub_root)
+    thread = ManagedThreadStore(hub_root).create_thread("codex", hub_root)
+    thread_id = str(thread["managed_thread_id"])
+    store.upsert_rule(
+        AutomationRule.create(
+            rule_id="test:managed-thread-schedule",
+            name="Managed thread schedule",
+            trigger_kind=TRIGGER_KIND_SCHEDULE,
+            trigger={"event_types": ["schedule.fire"]},
+            target_policy=TARGET_POLICY_HUB,
+            target={"thread_target_id": thread_id},
+            executor_kind=EXECUTOR_MANAGED_THREAD_TURN,
+            executor={"message_text": "Scheduled automation turn"},
+            policy={"approval_mode": APPROVAL_INHERIT_PROFILE},
+        )
+    )
+    store.upsert_schedule(
+        AutomationSchedule.create(
+            schedule_id="test-managed-thread-schedule",
+            rule_id="test:managed-thread-schedule",
+            schedule_kind=SCHEDULE_ONE_SHOT,
+            next_fire_at="2000-01-01T00:00:00Z",
+        )
+    )
+    return thread_id
 
 
 def test_ensure_pma_safety_checker_creates_checker(tmp_path: Path) -> None:
@@ -3482,14 +3536,14 @@ def test_ensure_pma_safety_checker_creates_checker(tmp_path: Path) -> None:
         supervisor.shutdown()
 
 
-def test_process_pma_automation_now_advances_unified_automation_only(
+def test_process_automation_now_advances_unified_automation_only(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     hub_root = tmp_path / "hub"
     supervisor = _make_basic_supervisor(hub_root)
     try:
-        monkeypatch.setattr(supervisor, "process_pma_automation_timers", lambda **kw: 3)
-        result = supervisor.process_pma_automation_now()
+        monkeypatch.setattr(supervisor, "process_automation_timers", lambda **kw: 3)
+        result = supervisor.process_automation_now()
         assert result == {
             "timers_processed": 3,
             "automation_processed": 0,
@@ -3499,13 +3553,13 @@ def test_process_pma_automation_now_advances_unified_automation_only(
         supervisor.shutdown()
 
 
-def test_process_pma_automation_now_skips_timers_when_disabled(
+def test_process_automation_now_skips_timers_when_disabled(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     hub_root = tmp_path / "hub"
     supervisor = _make_basic_supervisor(hub_root)
     try:
-        result = supervisor.process_pma_automation_now(include_timers=False)
+        result = supervisor.process_automation_now(include_timers=False)
         assert result == {
             "timers_processed": 0,
             "automation_processed": 0,

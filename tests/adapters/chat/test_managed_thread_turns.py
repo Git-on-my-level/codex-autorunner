@@ -8,6 +8,7 @@ from types import SimpleNamespace
 from typing import Any, Optional
 
 import pytest
+from tests.support.turn_execution import build_test_turn_request
 
 import codex_autorunner.adapters.chat.managed_thread_turns as managed_thread_turns_module
 from codex_autorunner.adapters.chat.managed_thread_surface_kernel import (
@@ -329,21 +330,48 @@ def test_prior_completed_assistant_text_prefix_reads_execution_store_wrapper(
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     thread = store.create_thread_target("hermes", workspace)
-    first = store.create_execution(thread.thread_target_id, prompt="first")
+    first = store.create_execution(
+        thread.thread_target_id,
+        prompt="first",
+        turn_request=build_test_turn_request(
+            managed_thread_id=thread.thread_target_id,
+            workspace_root=str(workspace),
+            agent="hermes",
+            prompt="first",
+        ),
+    )
     store.record_execution_result(
         thread.thread_target_id,
         first.execution_id,
         status="ok",
         assistant_text="first answer",
     )
-    second = store.create_execution(thread.thread_target_id, prompt="second")
+    second = store.create_execution(
+        thread.thread_target_id,
+        prompt="second",
+        turn_request=build_test_turn_request(
+            managed_thread_id=thread.thread_target_id,
+            workspace_root=str(workspace),
+            agent="hermes",
+            prompt="second",
+        ),
+    )
     store.record_execution_result(
         thread.thread_target_id,
         second.execution_id,
         status="ok",
         assistant_text="first answersecond answer",
     )
-    current = store.create_execution(thread.thread_target_id, prompt="third")
+    current = store.create_execution(
+        thread.thread_target_id,
+        prompt="third",
+        turn_request=build_test_turn_request(
+            managed_thread_id=thread.thread_target_id,
+            workspace_root=str(workspace),
+            agent="hermes",
+            prompt="third",
+        ),
+    )
 
     prefix = managed_thread_turns_module._prior_completed_assistant_text_prefix(
         SimpleNamespace(thread_store=store),
@@ -445,6 +473,55 @@ def test_render_managed_thread_delivery_record_text_includes_token_usage_footer(
     assert "Recovered answer" in rendered
     assert "Token usage: total 71173 input 400 output 245" in rendered
     assert "ctx 65%" in rendered
+
+
+def test_render_managed_thread_failure_delivery_record_text_includes_recovery_context() -> (
+    None
+):
+    record = managed_thread_turns_module.ManagedThreadDeliveryRecord(
+        delivery_id="delivery-1",
+        managed_thread_id="thread-1",
+        managed_turn_id="turn-1",
+        idempotency_key="idem-1",
+        target=managed_thread_turns_module.ManagedThreadDeliveryTarget(
+            surface_kind="discord",
+            adapter_key="discord",
+            surface_key="channel-1",
+        ),
+        envelope=managed_thread_turns_module.ManagedThreadDeliveryEnvelope(
+            envelope_version="managed_thread_delivery.v1",
+            final_status="error",
+            assistant_text="",
+            error_text="App-server disconnected",
+            failure_recovery=managed_thread_turns_module.ManagedThreadFailureRecoverySummary(
+                failure_kind="app_server_disconnected",
+                error_text="App-server disconnected",
+                recovered_assistant_tail="partial assistant output",
+                recovered_notice_tail="latest status notice",
+                trace_manifest_id="trace-1",
+                backend_thread_id="backend-thread-1",
+                backend_turn_id="backend-turn-1",
+                managed_turn_id="turn-1",
+            ),
+        ),
+        state=ManagedThreadDeliveryState.PENDING,
+    )
+
+    rendered = (
+        managed_thread_turns_module.render_managed_thread_failure_delivery_record_text(
+            record
+        )
+    )
+
+    assert "Turn failed: App-server disconnected" in rendered
+    assert "Failure kind: app_server_disconnected" in rendered
+    assert "Filesystem changes may already have occurred." in rendered
+    assert "Execution: turn-1" in rendered
+    assert "Backend thread: backend-thread-1" in rendered
+    assert "Backend turn: backend-turn-1" in rendered
+    assert "Trace: trace-1" in rendered
+    assert "latest status notice" in rendered
+    assert "partial assistant output" in rendered
 
 
 @pytest.mark.anyio
@@ -1458,7 +1535,7 @@ def test_resolve_managed_thread_target_clears_stale_backend_for_fresh_pma_sessio
             assert thread_target_id == "thread-1"
             return thread
 
-        def set_thread_backend_id(
+        def set_thread_backend_binding(
             self,
             thread_target_id: str,
             backend_thread_id: Optional[str],
@@ -1554,7 +1631,7 @@ def test_resolve_managed_thread_target_keeps_backend_for_repo_resume_without_reb
             assert thread_target_id == "thread-1"
             return thread
 
-        def set_thread_backend_id(
+        def set_thread_backend_binding(
             self,
             thread_target_id: str,
             backend_thread_id: Optional[str],
@@ -4167,8 +4244,8 @@ class TestFinalizationSideEffectsCharacterization:
         async def _err_outcome(*args: Any, **kwargs: Any) -> RuntimeThreadOutcome:
             return RuntimeThreadOutcome(
                 status="error",
-                assistant_text="",
-                error="broke",
+                assistant_text="partial output before disconnect",
+                error="App-server disconnected",
                 backend_thread_id="session-1",
                 backend_turn_id="turn-1",
             )
@@ -4188,7 +4265,7 @@ class TestFinalizationSideEffectsCharacterization:
             ),
             record_execution_result=lambda *args, **kwargs: SimpleNamespace(
                 status="error",
-                error="broke",
+                error="App-server disconnected",
             ),
         )
 
@@ -4213,6 +4290,15 @@ class TestFinalizationSideEffectsCharacterization:
         )
 
         assert result.status == "error"
+        assert result.assistant_text == ""
+        assert result.failure_recovery is not None
+        assert result.failure_recovery.failure_kind == "app_server_disconnected"
+        assert result.failure_recovery.recovered_assistant_tail == (
+            "partial output before disconnect"
+        )
+        assert result.failure_recovery.trace_manifest_id == "trace-1"
+        assert result.failure_recovery.backend_thread_id == "session-1"
+        assert result.failure_recovery.backend_turn_id == "turn-1"
         assert len(fake_hub_client.activity_requests) == 0
 
 

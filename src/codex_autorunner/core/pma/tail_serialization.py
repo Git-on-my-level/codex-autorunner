@@ -72,6 +72,48 @@ def _redact_nested(value: Any) -> Any:
     return value
 
 
+def _canonical_turn_request_metadata(turn_record: Any) -> dict[str, Any] | None:
+    record = coerce_dict(turn_record)
+    request = coerce_dict(record.get("turn_request"))
+    if not request:
+        request = coerce_dict(record.get("canonical_request"))
+    if not request:
+        request = coerce_dict(record.get("request"))
+    if not request:
+        return None
+    origin = coerce_dict(request.get("origin"))
+    return {
+        "request_id": normalize_optional_text(request.get("request_id")),
+        "request_kind": normalize_optional_text(request.get("request_kind")),
+        "busy_policy": normalize_optional_text(request.get("busy_policy")),
+        "target_id": normalize_optional_text(request.get("target_id")),
+        "target_kind": normalize_optional_text(request.get("target_kind")),
+        "workspace_root": normalize_optional_text(request.get("workspace_root")),
+        "origin": {
+            "kind": normalize_optional_text(origin.get("kind")),
+            "source_id": normalize_optional_text(origin.get("source_id")),
+            "surface_kind": normalize_optional_text(origin.get("surface_kind")),
+            "surface_key": normalize_optional_text(origin.get("surface_key")),
+            "automation_rule_id": normalize_optional_text(
+                origin.get("automation_rule_id")
+            ),
+            "publish_operation_id": normalize_optional_text(
+                origin.get("publish_operation_id")
+            ),
+        },
+        "runtime_options": {
+            "agent": normalize_optional_text(request.get("agent")),
+            "profile": normalize_optional_text(request.get("profile")),
+            "model": normalize_optional_text(request.get("model")),
+            "model_payload": coerce_dict(request.get("model_payload")),
+            "reasoning": normalize_optional_text(request.get("reasoning")),
+            "approval_policy": normalize_optional_text(request.get("approval_policy")),
+            "approval_mode": normalize_optional_text(request.get("approval_mode")),
+            "sandbox_policy": request.get("sandbox_policy"),
+        },
+    }
+
+
 _NO_STREAM_AVAILABLE_IDLE_SECONDS = 15
 _LIKELY_HUNG_IDLE_SECONDS = 90
 _STALL_IDLE_SECONDS = 30
@@ -1083,6 +1125,7 @@ def build_managed_thread_status_response(
         "turn": {
             "managed_turn_id": snapshot.get("managed_turn_id"),
             "status": snapshot.get("turn_status"),
+            "canonical_request": snapshot.get("canonical_request"),
             "activity": snapshot.get("activity"),
             "live_activity": live_activity,
             "phase": snapshot.get("phase"),
@@ -1103,6 +1146,7 @@ def build_managed_thread_status_response(
             {
                 "managed_turn_id": item.get("managed_turn_id"),
                 "request_kind": item.get("request_kind"),
+                "canonical_request": _canonical_turn_request_metadata(item),
                 "state": item.get("state"),
                 "enqueued_at": item.get("enqueued_at"),
                 "prompt_preview": truncate_text(item.get("prompt") or "", 120),
@@ -1135,6 +1179,7 @@ __all__ = [
     "parse_iso_datetime",
     "truncate_text",
     "_derive_active_turn_diagnostics",
+    "_canonical_turn_request_metadata",
     "_derive_last_tool",
     "_derive_progress_phase",
     "_event_received_at_iso",

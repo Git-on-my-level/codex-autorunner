@@ -16,7 +16,7 @@ from codex_autorunner.agents.registry import AgentDescriptor
 from codex_autorunner.agents.types import TerminalTurnResult
 from codex_autorunner.core.automation import AutomationRule, AutomationStore
 from codex_autorunner.core.automation.models import (
-    EXECUTOR_PMA_TURN,
+    EXECUTOR_MANAGED_THREAD_TURN,
     TARGET_POLICY_HUB,
     TRIGGER_KIND_EVENT,
 )
@@ -31,9 +31,13 @@ from codex_autorunner.core.orchestration import (
     OrchestrationBindingStore,
     PausedFlowTarget,
     SurfaceThreadMessageRequest,
+    TurnExecutionOrigin,
+    TurnExecutionRequest,
 )
 from codex_autorunner.core.orchestration.models import FlowTarget
 from codex_autorunner.core.orchestration.runtime_bindings import (
+    BACKEND_BINDING_INVALID,
+    BACKEND_BINDING_SUSPECT,
     clear_runtime_thread_binding,
 )
 from codex_autorunner.core.orchestration.service import (
@@ -46,6 +50,28 @@ from codex_autorunner.core.orchestration.transcript_mirror import TranscriptMirr
 from codex_autorunner.core.pma_automation_store import PmaAutomationStore
 
 FIXTURE_PATH = Path(__file__).resolve().parents[2] / "fixtures" / "fake_acp_server.py"
+
+
+def _test_turn_request(
+    *,
+    request_id: str,
+    thread_target_id: str,
+    workspace_root: Path,
+    prompt: str,
+) -> TurnExecutionRequest:
+    return TurnExecutionRequest(
+        request_id=request_id,
+        target_id=thread_target_id,
+        target_kind="thread",
+        workspace_root=str(workspace_root),
+        request_kind="message",
+        busy_policy="reject",
+        prompt_text=prompt,
+        agent="codex",
+        approval_policy="never",
+        sandbox_policy="dangerFullAccess",
+        origin=TurnExecutionOrigin(kind="system", source_id="test"),
+    )
 
 
 @dataclass
@@ -1180,7 +1206,7 @@ async def test_record_execution_result_routes_pma_notification_through_unified_j
             filters={"thread_id": thread.thread_target_id},
             target_policy=TARGET_POLICY_HUB,
             target={"thread_id": "{{ event.payload.thread_id }}"},
-            executor_kind=EXECUTOR_PMA_TURN,
+            executor_kind=EXECUTOR_MANAGED_THREAD_TURN,
             executor={"lane_id": "pma:default"},
             policy={"dedupe_key": "{{ metadata.lifecycle_event_id }}"},
             metadata={"purpose": "pma_lifecycle_subscription"},
@@ -1210,10 +1236,10 @@ async def test_record_execution_result_routes_pma_notification_through_unified_j
     assert PmaAutomationStore(hub_root).list_pending_wakeups(limit=10) == []
 
 
-async def test_send_message_rehydrates_from_transcripts_after_runtime_binding_restart(
+async def test_send_message_resumes_durable_backend_after_runtime_binding_restart(
     tmp_path: Path,
 ) -> None:
-    harness = _FakeHarness(next_conversation_id="backend-fresh-2")
+    harness = _FakeHarness()
     service = _build_service(tmp_path, harness)
     workspace_root = tmp_path / "workspace"
     workspace_root.mkdir()
@@ -1232,6 +1258,7 @@ async def test_send_message_rehydrates_from_transcripts_after_runtime_binding_re
         assistant_text="first answer",
         transcript_turn_id=execution.execution_id,
     )
+    harness.next_conversation_id = "backend-fresh-2"
     TranscriptMirrorStore(tmp_path / "hub").write_mirror(
         turn_id=execution.execution_id,
         metadata={
@@ -1258,25 +1285,18 @@ async def test_send_message_rehydrates_from_transcripts_after_runtime_binding_re
 
     prompt = harness.start_turn_calls[0]["prompt"]
     assert next_execution.status == "running"
-    assert harness.resume_conversation_calls == []
-    assert harness.new_conversation_calls == [(workspace_root, "first question")]
-    assert "Recovered durable conversation state" in prompt
-    assert "first question" in prompt
-    assert "first answer" in prompt
+    assert harness.resume_conversation_calls == [
+        (workspace_root, "backend-conversation-1")
+    ]
+    assert harness.new_conversation_calls == []
     assert "second question" in prompt
-    assert request.metadata["fresh_backend_session_started"] is True
-    assert request.metadata["fresh_backend_session_reason"] == "missing_backend_binding"
-    assert (
-        request.metadata["fresh_backend_session_notice"]
-        == "Notice: I started a new live session for this conversation and "
-        "recovered context from durable history."
-    )
+    assert "fresh_backend_session_started" not in request.metadata
 
 
-async def test_start_next_queued_execution_starts_fresh_after_runtime_binding_restart(
+async def test_start_next_queued_execution_resumes_durable_backend_after_runtime_binding_restart(
     tmp_path: Path,
 ) -> None:
-    harness = _FakeHarness(next_conversation_id="backend-fresh-2")
+    harness = _FakeHarness()
     service = _build_service(tmp_path, harness)
     workspace_root = tmp_path / "workspace"
     workspace_root.mkdir()
@@ -1302,6 +1322,7 @@ async def test_start_next_queued_execution_starts_fresh_after_runtime_binding_re
         status="ok",
         assistant_text="done",
     )
+    harness.next_conversation_id = "backend-fresh-2"
 
     clear_runtime_thread_binding(tmp_path / "hub", thread.thread_target_id)
     harness.new_conversation_calls.clear()
@@ -1317,9 +1338,11 @@ async def test_start_next_queued_execution_starts_fresh_after_runtime_binding_re
     assert queued.status == "queued"
     assert next_execution is not None
     assert next_execution.status == "running"
-    assert harness.resume_conversation_calls == []
-    assert harness.new_conversation_calls == [(workspace_root, "second")]
-    assert harness.start_turn_calls[0]["conversation_id"] == "backend-fresh-2"
+    assert harness.resume_conversation_calls == [
+        (workspace_root, "backend-conversation-1")
+    ]
+    assert harness.new_conversation_calls == []
+    assert harness.start_turn_calls[0]["conversation_id"] == "backend-conversation-1"
 
 
 async def test_claim_next_queued_execution_context_preserves_typed_request_payload(
@@ -1344,6 +1367,8 @@ async def test_claim_next_queued_execution_context_preserves_typed_request_paylo
             target_kind="thread",
             message_text="second",
             approval_mode="never",
+            model="gpt-5.4",
+            reasoning="high",
             input_items=[
                 {"type": "text", "text": "second"},
                 {"type": "image", "image_url": "https://example.com/diagram.png"},
@@ -1357,6 +1382,20 @@ async def test_claim_next_queued_execution_context_preserves_typed_request_paylo
         client_request_id="client-2",
         sandbox_policy={"mode": "workspace-write"},
     )
+    stored_request = service.thread_store.get_turn_execution_request(
+        thread.thread_target_id,
+        queued.execution_id,
+    )
+    assert stored_request is not None
+    assert stored_request.request_id == queued.execution_id
+    assert stored_request.request_kind == "message"
+    assert stored_request.busy_policy == "queue"
+    assert stored_request.client_request_id == "client-2"
+    assert stored_request.model == "gpt-5.4"
+    assert stored_request.reasoning == "high"
+    assert stored_request.approval_mode == "never"
+    assert stored_request.approval_policy == "never"
+    assert stored_request.sandbox_policy == {"mode": "workspace-write"}
     service.record_execution_result(
         thread.thread_target_id,
         running.execution_id,
@@ -1370,7 +1409,24 @@ async def test_claim_next_queued_execution_context_preserves_typed_request_paylo
     assert claimed is not None
     assert claimed.thread.thread_target_id == thread.thread_target_id
     assert claimed.execution.execution_id == queued.execution_id
+    assert claimed.turn_request is not None
+    assert claimed.turn_request.request_id == queued.execution_id
+    assert claimed.turn_request.request_kind == "message"
+    assert claimed.turn_request.busy_policy == "queue"
+    assert claimed.turn_request.client_request_id == "client-2"
+    assert claimed.turn_request.model == "gpt-5.4"
+    assert claimed.turn_request.reasoning == "high"
+    assert claimed.turn_request.approval_mode == "never"
+    assert claimed.turn_request.approval_policy == "never"
+    assert claimed.turn_request.sandbox_policy == {"mode": "workspace-write"}
+    assert claimed.turn_request.input_items == (
+        {"type": "text", "text": "second"},
+        {"type": "image", "image_url": "https://example.com/diagram.png"},
+    )
+    assert claimed.turn_request.context_profile == "car_core"
     assert claimed.request.message_text == "second"
+    assert claimed.request.model == "gpt-5.4"
+    assert claimed.request.reasoning == "high"
     assert claimed.request.approval_mode == "never"
     assert claimed.request.input_items == [
         {"type": "text", "text": "second"},
@@ -1390,6 +1446,14 @@ async def test_claim_next_queued_execution_context_preserves_typed_request_paylo
     assert claimed.request.metadata["capsule_refs"] == []
     assert claimed.client_request_id == "client-2"
     assert claimed.sandbox_policy == {"mode": "workspace-write"}
+    stored_record = service.thread_store.get_turn_execution_record(
+        thread.thread_target_id,
+        queued.execution_id,
+    )
+    assert stored_record is not None
+    assert stored_record.status == "running"
+    assert stored_record.request.request_id == queued.execution_id
+    assert stored_record.claimed_at is not None
 
 
 async def test_send_message_queues_when_thread_is_busy_by_default(
@@ -1457,7 +1521,7 @@ async def test_send_review_preserves_request_kind_through_queue_claim_and_result
     assert queued.status == "queued"
     assert queued.request_kind == "review"
 
-    claimed = service.claim_next_queued_execution_request(thread.thread_target_id)
+    claimed = service.claim_next_queued_execution_context(thread.thread_target_id)
     assert claimed is None
 
     completed = service.record_execution_result(
@@ -1470,26 +1534,19 @@ async def test_send_review_preserves_request_kind_through_queue_claim_and_result
     assert completed.request_kind == "message"
 
     harness.next_turn_id = "backend-review-2"
-    claimed = service.claim_next_queued_execution_request(thread.thread_target_id)
+    claimed = service.claim_next_queued_execution_context(thread.thread_target_id)
     assert claimed is not None
-    (
-        claimed_thread,
-        claimed_execution,
-        claimed_request,
-        client_request_id,
-        sandbox_policy,
-    ) = claimed
-    assert claimed_thread.thread_target_id == thread.thread_target_id
-    assert claimed_execution.request_kind == "review"
-    assert claimed_request.kind == "review"
-    assert client_request_id is None
-    assert sandbox_policy is None
+    assert claimed.thread.thread_target_id == thread.thread_target_id
+    assert claimed.execution.request_kind == "review"
+    assert claimed.request.kind == "review"
+    assert claimed.client_request_id is None
+    assert claimed.sandbox_policy is None
 
     harness.provisional_backend_assert = (service, thread.thread_target_id)
     started = await service._start_execution(
-        claimed_thread,
-        claimed_request,
-        claimed_execution,
+        claimed.thread,
+        claimed.request,
+        claimed.execution,
         harness=harness,
         workspace_root=workspace_root,
         sandbox_policy=None,
@@ -1792,7 +1849,9 @@ async def test_stop_thread_recovers_lost_backend_when_stale_runtime_interrupt_fa
     assert outcome.execution.execution_id == execution.execution_id
     assert outcome.execution.status == "interrupted"
     binding = _thread_runtime_binding(service, thread.thread_target_id)
-    assert binding is None
+    assert binding is not None
+    assert binding.backend_thread_id == "backend-conversation-1"
+    assert binding.binding_state == BACKEND_BINDING_INVALID
 
 
 async def test_stop_thread_marks_interrupted_when_runtime_binding_is_lost_after_restart(
@@ -1851,7 +1910,118 @@ async def test_recover_running_execution_after_restart_marks_codex_error_without
     assert recovered.execution_id == execution.execution_id
     assert recovered.status == "error"
     assert recovered.error == "Running execution could not be reattached after restart"
-    assert _thread_runtime_binding(restarted_service, thread.thread_target_id) is None
+    binding = _thread_runtime_binding(restarted_service, thread.thread_target_id)
+    assert binding is not None
+    assert binding.backend_thread_id == "backend-conversation-1"
+    assert binding.binding_state == BACKEND_BINDING_SUSPECT
+
+
+async def test_recover_running_execution_after_restart_preserves_suspect_backend_binding(
+    tmp_path: Path,
+) -> None:
+    harness = _FakeHarness()
+    service = _build_service(tmp_path, harness)
+    workspace_root = tmp_path / "workspace"
+    workspace_root.mkdir()
+    thread = service.create_thread_target("codex", workspace_root)
+    execution = await service.send_message(
+        MessageRequest(
+            target_id=thread.thread_target_id,
+            target_kind="thread",
+            message_text="Need an answer",
+        )
+    )
+
+    clear_runtime_thread_binding(tmp_path / "hub", thread.thread_target_id)
+    restarted_service = _build_service(tmp_path, harness)
+    recovered = restarted_service.recover_running_execution_after_restart(
+        thread.thread_target_id
+    )
+
+    binding = _thread_runtime_binding(restarted_service, thread.thread_target_id)
+    assert recovered is not None
+    assert recovered.execution_id == execution.execution_id
+    assert recovered.status == "error"
+    assert binding is not None
+    assert binding.backend_thread_id == "backend-conversation-1"
+    assert binding.binding_state == BACKEND_BINDING_SUSPECT
+    assert binding.state_reason == "startup_lost_backend_binding"
+
+
+async def test_next_message_after_restart_recovery_resumes_suspect_backend_binding(
+    tmp_path: Path,
+) -> None:
+    harness = _FakeHarness()
+    service = _build_service(tmp_path, harness)
+    workspace_root = tmp_path / "workspace"
+    workspace_root.mkdir()
+    thread = service.create_thread_target("codex", workspace_root)
+    running = await service.send_message(
+        MessageRequest(
+            target_id=thread.thread_target_id,
+            target_kind="thread",
+            message_text="Need an answer",
+        )
+    )
+
+    clear_runtime_thread_binding(tmp_path / "hub", thread.thread_target_id)
+    restarted_service = _build_service(tmp_path, harness)
+    restarted_service.recover_running_execution_after_restart(thread.thread_target_id)
+    harness.resume_conversation_calls.clear()
+    harness.new_conversation_calls.clear()
+    harness.start_turn_calls.clear()
+
+    next_execution = await restarted_service.send_message(
+        MessageRequest(
+            target_id=thread.thread_target_id,
+            target_kind="thread",
+            message_text="continue",
+        )
+    )
+
+    assert running.execution_id != next_execution.execution_id
+    assert next_execution.status == "running"
+    assert harness.resume_conversation_calls == [
+        (workspace_root, "backend-conversation-1")
+    ]
+    assert harness.new_conversation_calls == []
+    assert harness.start_turn_calls[0]["conversation_id"] == "backend-conversation-1"
+    binding = _thread_runtime_binding(restarted_service, thread.thread_target_id)
+    assert binding is not None
+    assert binding.backend_thread_id == "backend-conversation-1"
+    assert binding.binding_state == "bound"
+
+
+async def test_invalid_backend_binding_starts_fresh_without_retrying_old_conversation(
+    tmp_path: Path,
+) -> None:
+    harness = _FakeHarness(next_conversation_id="backend-fresh-2")
+    service = _build_service(tmp_path, harness)
+    workspace_root = tmp_path / "workspace"
+    workspace_root.mkdir()
+    thread = service.create_thread_target(
+        "codex",
+        workspace_root,
+        backend_thread_id="backend-invalid-1",
+    )
+    service.thread_store.mark_thread_runtime_binding_state(
+        thread.thread_target_id,
+        binding_state=BACKEND_BINDING_INVALID,
+        state_reason="resume_recoverable_error",
+    )
+
+    execution = await service.send_message(
+        MessageRequest(
+            target_id=thread.thread_target_id,
+            target_kind="thread",
+            message_text="continue",
+        )
+    )
+
+    assert execution.status == "running"
+    assert harness.resume_conversation_calls == []
+    assert harness.new_conversation_calls == [(workspace_root, None)]
+    assert harness.start_turn_calls[0]["conversation_id"] == "backend-fresh-2"
 
 
 async def test_recover_running_execution_after_restart_defers_codex_with_live_binding(
@@ -1902,7 +2072,7 @@ async def test_recover_running_execution_after_restart_without_binding_stays_res
     )
 
     clear_runtime_thread_binding(tmp_path / "hub", thread.thread_target_id)
-    service.thread_store.set_thread_backend_id(thread.thread_target_id, None)
+    service.thread_store.set_thread_backend_binding(thread.thread_target_id, None)
     service.thread_store.set_execution_backend_id(execution.execution_id, None)
     restarted_service = _build_service(tmp_path, harness)
 
@@ -2512,7 +2682,14 @@ def test_service_exposes_binding_queries_when_binding_store_is_configured(
         service.get_binding(surface_kind="telegram", surface_key="123:root") is not None
     )
     turn = ManagedThreadStore(hub_root).create_turn(
-        thread.thread_target_id, prompt="busy"
+        thread.thread_target_id,
+        prompt="busy",
+        turn_request=_test_turn_request(
+            request_id="busy-turn",
+            thread_target_id=thread.thread_target_id,
+            workspace_root=workspace_root,
+            prompt="busy",
+        ),
     )
     summaries = service.list_active_work_summaries(repo_id="repo-1")
     assert len(summaries) == 1

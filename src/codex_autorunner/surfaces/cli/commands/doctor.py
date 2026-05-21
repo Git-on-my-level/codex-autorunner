@@ -738,6 +738,24 @@ def register_doctor_commands(
                     f"  {entry['execution_id']}: {entry['cold_trace_bytes']} bytes"
                 )
 
+        if report.canonical_turns:
+            typer.echo(f"canonical turns: {len(report.canonical_turns)}")
+            for canonical_entry in report.canonical_turns[:top_n]:
+                typer.echo(
+                    "  {execution_id}: request={request_id} phase={phase} "
+                    "terminal={terminal} action={action} origin={origin} "
+                    "target={target} model={model}".format(
+                        execution_id=canonical_entry.execution_id,
+                        request_id=canonical_entry.request_id,
+                        phase=canonical_entry.lifecycle_phase,
+                        terminal=canonical_entry.terminal_status or "-",
+                        action=canonical_entry.recovery_action,
+                        origin=canonical_entry.surface_origin or "-",
+                        target=canonical_entry.target.get("target_id") or "-",
+                        model=canonical_entry.runtime_options.get("model") or "-",
+                    )
+                )
+
         if report.threshold_breaches:
             typer.echo(f"threshold breaches: {len(report.threshold_breaches)}")
             for breach in report.threshold_breaches:

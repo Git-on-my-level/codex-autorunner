@@ -86,18 +86,21 @@ First-turn routine:
     - Only ask the user "which file first?" or "which repo?" when routing is truly ambiguous.
 5) BRANCH D - Automation continuity (subscriptions + timers):
     - If work should continue without manual polling, use the unified automation plane.
-    - PMA subscription and timer endpoints are compatibility adapters backed by automation rules, schedules, jobs, and attempts.
+    - Generalized automation rules, schedules, events, jobs, and attempts are the source of truth.
+    - Use `car automation list/status/run/pause/resume --path <hub_root>` for scheduled automations; `car pma automation ...` is only an alias.
     - Subscriptions:
-      - Create/list/delete via `/hub/pma/subscriptions`.
+      - Prefer `car pma thread spawn/send --notify-on terminal` for terminal follow-up.
+      - Use `car pma thread subscribe --id <managed_thread_id> --path <hub_root>` for thread-scoped subscriptions.
+      - List/cancel with `car hub subscription list|cancel --path <hub_root>`.
       - Common event_types:
         - ticket flow: `flow_paused`, `flow_completed`, `flow_failed`, `flow_stopped`
         - managed thread: `managed_thread_completed`, `managed_thread_failed`
     - Timers:
       - one-shot (`timer_type=one_shot`, `delay_seconds`)
       - watchdog (`timer_type=watchdog`, `idle_seconds`; touch/cancel as progress changes)
-      - Endpoints: `/hub/pma/timers`, `/hub/pma/timers/{timer_id}/touch`, `/hub/pma/timers/{timer_id}/cancel`
-    - Prefer idempotency keys and lane-specific routing (`lane_id`) for chainable plans.
-    - Consult the hub-scoped PMA operations guide section "PMA automation wake-ups" for adapter recipes and migration notes.
+      - Legacy `/hub/pma/timers` route names remain compatibility aliases but write generalized automation rows.
+    - Prefer idempotency keys and explicit delivery routing for chainable plans.
+    - Consult the hub-scoped PMA operations guide section "Managed-thread automation wake-ups" for recipes and migration notes.
 6) If the request is new work (not inbox/file processing):
     - Identify the target managed resource(s): repo(s) and/or agent workspace(s).
     - Prefer hub-owned worktrees for changes.
@@ -170,8 +173,8 @@ def render_pma_discoverability_preamble(
             f"Hub PMA working context: `{pma_docs_dir / 'active_context.md'}`.\n"
             f"Hub PMA history: `{pma_docs_dir / 'context_log.md'}`.\n"
             f"Docs discovery: `car docs list --path {resolved_hub}` and `car docs search <query> --path {resolved_hub}`.\n"
-            "Automation quickstart: unified automation plane via `/hub/pma/subscriptions` (event triggers) and `/hub/pma/timers` (one-shot/watchdog) compatibility adapters.\n"
-            f'Automation recipes and migration notes: `{pma_docs_dir / "ABOUT_CAR.md"}` -> "PMA automation wake-ups".\n'
+            "Automation quickstart: use `car automation ...` for scheduled automations, `car pma thread ... --notify-on terminal` for terminal follow-up, and `car pma thread subscribe` for thread-scoped lifecycle subscriptions.\n"
+            f'Automation recipes and migration notes: `{pma_docs_dir / "ABOUT_CAR.md"}` -> "Managed-thread automation wake-ups".\n'
             "Ticket templates: pass `--repo <path>` (a git worktree) for every `car templates` subcommand; add `--path <hub_root>` when the shell cwd is not inside the hub tree. Examples: `car templates list --repo <path>`, `car templates search <query> --repo <path>`, `car templates show <id> --repo <path>`, `car templates apply <id> --repo <path>`.\n"
             "To send a file to the user, use `car artifacts send <file> --to current` when an artifact delivery target is active.\n"
             f"User uploaded files are in `{resolved_hub / '.codex-autorunner' / 'filebox' / 'inbox'}`.\n\n"
@@ -185,8 +188,8 @@ def render_pma_discoverability_preamble(
             "Hub PMA working context: `<hub_root>/.codex-autorunner/pma/docs/active_context.md`.\n"
             "Hub PMA history: `<hub_root>/.codex-autorunner/pma/docs/context_log.md`.\n"
             "Docs discovery: `car docs list --path <hub_root>` and `car docs search <query> --path <hub_root>`.\n"
-            "Automation quickstart: unified automation plane via `/hub/pma/subscriptions` (event triggers) and `/hub/pma/timers` (one-shot/watchdog) compatibility adapters.\n"
-            'Automation recipes and migration notes: `<hub_root>/.codex-autorunner/pma/docs/ABOUT_CAR.md` -> "PMA automation wake-ups".\n'
+            "Automation quickstart: use `car automation ...` for scheduled automations, `car pma thread ... --notify-on terminal` for terminal follow-up, and `car pma thread subscribe` for thread-scoped lifecycle subscriptions.\n"
+            'Automation recipes and migration notes: `<hub_root>/.codex-autorunner/pma/docs/ABOUT_CAR.md` -> "Managed-thread automation wake-ups".\n'
             "Ticket templates: pass `--repo <path>` (a git worktree) for every `car templates` subcommand; add `--path <hub_root>` when the shell cwd is not inside the hub tree. Examples: `car templates list --repo <path>`, `car templates search <query>`, `car templates show <id>`, `car templates apply <id>`.\n"
             "To send a file to the user, use `car artifacts send <file> --to current` when an artifact delivery target is active.\n"
             "User uploaded files are in `<hub_root>/.codex-autorunner/filebox/inbox/`.\n\n"

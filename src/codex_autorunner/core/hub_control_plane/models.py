@@ -91,7 +91,7 @@ from ._surface_bindings import (
 from ._thread_targets import (
     THREAD_TARGET_LIST_LIFECYCLE_STATUSES,
     ThreadActivityRecordRequest,
-    ThreadBackendIdUpdateRequest,
+    ThreadBackendBindingUpdateRequest,
     ThreadCompactSeedUpdateRequest,
     ThreadTargetArchiveRequest,
     ThreadTargetCreateRequest,
@@ -174,7 +174,7 @@ __all__ = [
     "SurfaceBindingResponse",
     "SurfaceBindingUpsertRequest",
     "ThreadActivityRecordRequest",
-    "ThreadBackendIdUpdateRequest",
+    "ThreadBackendBindingUpdateRequest",
     "ThreadCompactSeedUpdateRequest",
     "ThreadTarget",
     "ThreadTargetArchiveRequest",

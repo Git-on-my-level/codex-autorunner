@@ -9,7 +9,7 @@ from codex_autorunner.core.automation import (
     AutomationStore,
 )
 from codex_autorunner.core.automation.models import (
-    EXECUTOR_PMA_TURN,
+    EXECUTOR_MANAGED_THREAD_TURN,
     EXECUTOR_PUBLISH_OPERATION,
     JOB_FAILED,
     JOB_SUCCEEDED,
@@ -44,7 +44,7 @@ def test_hub_automations_create_security_scan_saved_disabled(tmp_path):
     assert response.status_code == 200
     automation = response.json()["automation"]
     assert automation["kind"] == "security_scan_pr"
-    assert automation["executor_kind"] == "pma_turn"
+    assert automation["executor_kind"] == "managed_thread_turn"
     assert automation["enabled"] is False
     assert automation["schedule"]["schedule_kind"] == "daily"
     assert automation["target"]["repo_id"] == "repo-1"
@@ -62,10 +62,10 @@ def test_hub_automations_create_security_scan_saved_disabled(tmp_path):
         "state": "active",
         "summary": automation["schedule_editor"]["summary"],
     }
-    assert automation["message_source"] == "executor.message"
+    assert automation["message_source"] == "executor.message_text"
     assert "Run a security scan" in automation["message_preview"]
     assert automation["target_summary"]["repo_id"] == "repo-1"
-    assert automation["executor_summary"]["kind"] == "pma_turn"
+    assert automation["executor_summary"]["kind"] == "managed_thread_turn"
     assert automation["raw_links"]["control_plane_rule"].endswith(automation["id"])
 
     listing = client.get("/hub/automations")
@@ -74,7 +74,7 @@ def test_hub_automations_create_security_scan_saved_disabled(tmp_path):
     presets = {preset["id"]: preset for preset in listing.json()["presets"]}
     security_preset = presets["security_scan_pr"]
     assert security_preset["schedule"]["kind"] == "daily"
-    assert security_preset["executor_kind"] == "pma_turn"
+    assert security_preset["executor_kind"] == "managed_thread_turn"
     assert security_preset["target_policy"] == "hub"
     assert security_preset["policy"]["max_attempts"] == 3
     assert "{repo_id}" in security_preset["prompt_template"]
@@ -166,7 +166,7 @@ def test_hub_automation_workspace_batches_jobs_and_target_options(
                 trigger={"event_types": ["schedule.fire"]},
                 target_policy=TARGET_POLICY_HUB,
                 target={"repo_id": f"repo-{index}"},
-                executor_kind=EXECUTOR_PMA_TURN,
+                executor_kind=EXECUTOR_MANAGED_THREAD_TURN,
                 executor={"message": f"Run rule {index}"},
             )
         )
@@ -232,7 +232,9 @@ def test_hub_automation_workspace_batches_jobs_and_target_options(
     assert response.status_code == 200
     workspace = response.json()
     assert workspace["summary"]["failed_jobs"] == 1
-    assert len(workspace["automations"][0]["jobs"]) <= 25
+    assert len(workspace["automations"][0]["jobs"]) == 25
+    assert "executor" in workspace["automations"][0]
+    assert "target_options" in workspace
     assert set(workspace["agent_defaults"]) == {
         "default_agent",
         "default_profile",
@@ -240,6 +242,19 @@ def test_hub_automation_workspace_batches_jobs_and_target_options(
         "default_reasoning",
     }
     assert workspace["generated_at"]
+    index = client.get("/hub/read-models/automations/workspace-index")
+    assert index.status_code == 200
+    index_workspace = index.json()
+    assert len(index_workspace["automations"][0]["jobs"]) == 0
+    assert "executor" not in index_workspace["automations"][0]
+    assert "target_options" not in index_workspace
+    assert (
+        client.get(
+            "/hub/read-models/automations/workspace-index?include_target_options=true"
+        ).json()["target_options"]
+        is not None
+    )
+    assert client.get("/hub/read-models/automations/target-options").status_code == 200
 
     context = SimpleNamespace(
         supervisor=SimpleNamespace(
@@ -290,6 +305,35 @@ def test_hub_automations_pause_and_resume(tmp_path):
     assert paused.json()["automation"]["enabled"] is False
     assert resumed.status_code == 200
     assert resumed.json()["automation"]["enabled"] is True
+
+
+def test_hub_automations_delete_requires_paused(tmp_path):
+    hub_root = tmp_path / "hub"
+    seed_hub_files(hub_root, force=True)
+    client = TestClient(create_hub_app(hub_root))
+    created = client.post(
+        "/hub/automations",
+        json={"preset": "security_scan_pr", "repo_id": "repo-1"},
+    )
+    rule_id = created.json()["automation"]["id"]
+
+    # Created as paused by default — delete should succeed.
+    missing = client.delete("/hub/automations/does-not-exist")
+    assert missing.status_code == 404
+
+    client.post(f"/hub/automations/{rule_id}/enabled", json={"enabled": True})
+    blocked = client.delete(f"/hub/automations/{rule_id}")
+    assert blocked.status_code == 400
+    assert blocked.json()["detail"]["code"] == "AUTOMATION_DELETE_REQUIRES_PAUSED"
+
+    client.post(f"/hub/automations/{rule_id}/enabled", json={"enabled": False})
+    deleted = client.delete(f"/hub/automations/{rule_id}")
+    assert deleted.status_code == 200
+    assert deleted.json()["deleted"] == rule_id
+
+    # Subsequent get should 404.
+    after = client.get(f"/hub/automations/{rule_id}")
+    assert after.status_code == 404
 
 
 def test_hub_automations_get_and_update_details(tmp_path):
@@ -394,7 +438,7 @@ def test_hub_automations_project_pma_one_shot_timer(tmp_path):
             trigger={"schedule_kind": SCHEDULE_ONE_SHOT},
             target_policy=TARGET_POLICY_HUB,
             target={"repo_id": "repo-1", "thread_target_id": "thread-1"},
-            executor_kind=EXECUTOR_PMA_TURN,
+            executor_kind=EXECUTOR_MANAGED_THREAD_TURN,
             executor={
                 "lane_id": "pma:default",
                 "source": "timer",
@@ -449,7 +493,7 @@ def test_hub_automations_project_pma_lifecycle_reaction(tmp_path):
             filters={"event.payload.pma_dispatch_action": {"not_in": ["ignore"]}},
             target_policy=TARGET_POLICY_HUB,
             target={"repo_id": "{{ event.repo_id }}"},
-            executor_kind=EXECUTOR_PMA_TURN,
+            executor_kind=EXECUTOR_MANAGED_THREAD_TURN,
             executor={
                 "lane_id": "pma:default",
                 "message": "Lifecycle event received.\ntype: {{ event.event_type }}",

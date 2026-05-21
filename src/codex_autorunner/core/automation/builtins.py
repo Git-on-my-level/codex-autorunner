@@ -3,11 +3,10 @@ from __future__ import annotations
 from typing import Any
 
 from .models import (
-    EXECUTOR_PMA_TURN,
+    EXECUTOR_MANAGED_THREAD_TURN,
     TARGET_POLICY_HUB,
     TRIGGER_KIND_EVENT,
     AutomationRule,
-    AutomationSchedule,
 )
 from .store import AutomationStore
 
@@ -74,10 +73,9 @@ def ensure_builtin_pma_reactive_rule(
             "repo_id": "{{ event.repo_id }}",
             "run_id": "{{ event.payload.run_id }}",
         },
-        executor_kind=EXECUTOR_PMA_TURN,
+        executor_kind=EXECUTOR_MANAGED_THREAD_TURN,
         executor={
-            "lane_id": "pma:default",
-            "message": (
+            "message_text": (
                 "Lifecycle event received.\n"
                 "type: {{ event.event_type }}\n"
                 "repo_id: {{ event.repo_id }}\n"
@@ -104,24 +102,6 @@ def ensure_builtin_pma_reactive_rule(
     return store.upsert_rule(rule)
 
 
-def mirror_pma_timer_schedule(
-    store: AutomationStore, *, timer: Any
-) -> tuple[AutomationRule, AutomationSchedule]:
-    from ..pma_automation_unified import PmaUnifiedAutomationAdapter
-
-    return PmaUnifiedAutomationAdapter(store).mirror_timer_schedule(timer=timer)
-
-
-def mirror_pma_subscription_rule(
-    store: AutomationStore, *, subscription: Any
-) -> AutomationRule:
-    from ..pma_automation_unified import PmaUnifiedAutomationAdapter
-
-    return PmaUnifiedAutomationAdapter(store).mirror_subscription_rule(
-        subscription=subscription
-    )
-
-
 def _normalize_reactive_event_types(raw: Any) -> list[str]:
     if not raw:
         return list(_DEFAULT_REACTIVE_EVENTS)
@@ -140,6 +120,4 @@ __all__ = [
     "PMA_TIMER_SCHEDULE_PREFIX",
     "PMA_SUBSCRIPTION_RULE_PREFIX",
     "ensure_builtin_pma_reactive_rule",
-    "mirror_pma_subscription_rule",
-    "mirror_pma_timer_schedule",
 ]

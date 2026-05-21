@@ -1693,8 +1693,8 @@ def managed_thread_subscribe(
 ):
     """Create a thread-scoped wake-up subscription without raw curl.
 
-    This command always targets one managed thread via `thread_id`. For repo- or
-    run-scoped automation, use the lower-level `/hub/pma/subscriptions` API.
+    This command always targets one managed thread via `thread_id`. For scheduled
+    product automations, use the generalized `car automation ...` commands.
     """
     hub_root = _resolve_hub_path(path)
     normalized_event_types = [

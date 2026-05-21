@@ -8,6 +8,14 @@ from typing import Any, AsyncIterator, Dict, Optional
 
 from fastapi import HTTPException, Request
 
+from ....agents.runtime_options import AgentRuntimeOptionsError
+from ....core.orchestration import (
+    TurnExecutionContractError,
+    TurnExecutionRecord,
+    TurnExecutionRequest,
+)
+from ....core.orchestration.turn_execution_contract import TurnExecutionStatus
+from ....core.time_utils import now_iso
 from ..routes.file_chat_routes.drafts import (
     apply_file_patch as apply_draft_patch,
 )
@@ -18,10 +26,12 @@ from ..routes.file_chat_routes.drafts import (
     pending_file_patch as pending_draft_patch,
 )
 from ..routes.file_chat_routes.execution import (
-    execute_file_chat as execute_file_chat_agent_turn,
+    FileChatAgentSelection,
+    build_file_chat_turn_request,
+    resolve_file_chat_agent_selection,
 )
 from ..routes.file_chat_routes.execution import (
-    resolve_file_chat_agent_selection,
+    execute_file_chat as execute_file_chat_agent_turn,
 )
 from ..routes.file_chat_routes.execution_agents import FileChatError
 from ..routes.file_chat_routes.runtime import (
@@ -83,6 +93,15 @@ class FileChatThreadResetResult:
     cleared: bool
 
 
+@dataclass(frozen=True)
+class FileChatPreparedTurn:
+    repo_root: Path
+    target: FileChatTarget
+    turn_request: TurnExecutionRequest
+    turn_record: TurnExecutionRecord
+    selection: FileChatAgentSelection
+
+
 def resolve_target(request: Request, target_raw: str) -> FileChatTarget:
     return parse_target(resolve_repo_root(request), target_raw)
 
@@ -108,6 +127,8 @@ async def _claim_turn(
     target: FileChatTarget,
     *,
     client_turn_id: Optional[str],
+    turn_request: TurnExecutionRequest,
+    turn_record: TurnExecutionRecord,
     already_running_detail: str,
 ) -> None:
     state = get_state(request)
@@ -116,13 +137,19 @@ async def _claim_turn(
         if existing is not None and not existing.is_set():
             raise HTTPException(status_code=409, detail=already_running_detail)
         state.active_chats[target.state_key] = asyncio.Event()
-    await begin_turn_state(request, target, client_turn_id)
+    await begin_turn_state(
+        request,
+        target,
+        client_turn_id,
+        turn_request=turn_request,
+        turn_record=turn_record,
+    )
 
 
 async def prepare_turn(
     request: Request,
     payload: FileChatTurnRequest,
-) -> tuple[Path, FileChatTarget, str, Optional[str]]:
+) -> FileChatPreparedTurn:
     message = (payload.message or "").strip()
     if not message:
         raise HTTPException(status_code=400, detail="message is required")
@@ -132,33 +159,88 @@ async def prepare_turn(
     if target.kind == "contextspace":
         target.path.parent.mkdir(parents=True, exist_ok=True)
 
-    selection = resolve_file_chat_agent_selection(
-        request,
-        target,
-        agent=payload.agent,
-        profile=payload.profile,
+    try:
+        canonical = build_file_chat_turn_request(
+            request,
+            repo_root,
+            target,
+            message,
+            agent=payload.agent,
+            profile=payload.profile,
+            model=payload.model,
+            reasoning=payload.reasoning,
+            client_turn_id=payload.client_turn_id,
+        )
+    except (AgentRuntimeOptionsError, TurnExecutionContractError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    turn_record = TurnExecutionRecord(
+        request=canonical.request,
+        execution_id=canonical.request.request_id,
+        status="claiming",
+        queued_at=now_iso(),
+        metadata={"surface": "file_chat"},
     )
     await _claim_turn(
         request,
         target,
         client_turn_id=payload.client_turn_id,
+        turn_request=canonical.request,
+        turn_record=turn_record,
         already_running_detail=payload.already_running_detail,
     )
-    return repo_root, target, selection.agent_id, selection.profile
+    return FileChatPreparedTurn(
+        repo_root=repo_root,
+        target=target,
+        turn_request=canonical.request,
+        turn_record=turn_record,
+        selection=canonical.selection,
+    )
+
+
+def _terminal_record_for_result(
+    prepared: FileChatPreparedTurn,
+    result: Dict[str, Any],
+) -> TurnExecutionRecord:
+    status = str(result.get("status") or "").strip().lower()
+    record_status: TurnExecutionStatus
+    if status == "ok":
+        record_status = "completed"
+    elif status == "interrupted":
+        record_status = "interrupted"
+    else:
+        record_status = "failed"
+    final_request = prepared.turn_request
+    raw_turn_request = result.get("turn_request")
+    if isinstance(raw_turn_request, dict):
+        try:
+            final_request = TurnExecutionRequest.from_mapping(raw_turn_request)
+        except TurnExecutionContractError:
+            final_request = prepared.turn_request
+    return TurnExecutionRecord(
+        request=final_request,
+        execution_id=prepared.turn_record.execution_id,
+        status=record_status,
+        queued_at=prepared.turn_record.queued_at,
+        claimed_at=prepared.turn_record.claimed_at,
+        started_at=prepared.turn_record.started_at,
+        terminal_at=now_iso(),
+        backend_conversation_id=result.get("thread_id"),
+        backend_turn_id=result.get("turn_id"),
+        assistant_text=result.get("message") or result.get("agent_message"),
+        error_text=result.get("detail") if record_status == "failed" else None,
+        metadata={"surface": "file_chat"},
+    )
 
 
 async def _execute_turn_lifecycle(
     request: Request,
-    repo_root: Path,
-    target: FileChatTarget,
+    prepared: FileChatPreparedTurn,
     message: str,
     *,
-    agent: str,
-    profile: Optional[str],
-    model: Optional[str],
-    reasoning: Optional[str],
     client_turn_id: Optional[str],
 ) -> Dict[str, Any]:
+    repo_root = prepared.repo_root
+    target = prepared.target
     try:
 
         async def _on_meta(agent_id: str, thread_id: str, turn_id: str) -> None:
@@ -176,10 +258,11 @@ async def _execute_turn_lifecycle(
                 repo_root,
                 target,
                 message,
-                agent=agent,
-                profile=profile,
-                model=model,
-                reasoning=reasoning,
+                agent=prepared.turn_request.agent,
+                profile=prepared.turn_request.profile,
+                model=prepared.turn_request.model,
+                reasoning=prepared.turn_request.reasoning,
+                turn_request=prepared.turn_request,
                 on_meta=_on_meta,
             )
         except (
@@ -192,11 +275,24 @@ async def _execute_turn_lifecycle(
                 "status": "error",
                 "detail": str(exc),
                 "client_turn_id": client_turn_id or "",
+                "execution_id": prepared.turn_record.execution_id,
+                "turn_request": prepared.turn_request.to_dict(),
             }
+            result["turn_record"] = _terminal_record_for_result(
+                prepared,
+                result,
+            ).to_dict()
             await finalize_turn_state(request, target, result)
             raise
         result = dict(result or {})
         result["client_turn_id"] = client_turn_id or ""
+        result["execution_id"] = prepared.turn_record.execution_id
+        if "turn_request" not in result:
+            result["turn_request"] = prepared.turn_request.to_dict()
+        result["turn_record"] = _terminal_record_for_result(
+            prepared,
+            result,
+        ).to_dict()
         await finalize_turn_state(request, target, result)
         return result
     finally:
@@ -207,16 +303,11 @@ async def run_turn(
     request: Request,
     payload: FileChatTurnRequest,
 ) -> Dict[str, Any]:
-    repo_root, target, agent_id, profile = await prepare_turn(request, payload)
+    prepared = await prepare_turn(request, payload)
     return await _execute_turn_lifecycle(
         request,
-        repo_root,
-        target,
+        prepared,
         payload.message.strip(),
-        agent=agent_id,
-        profile=profile,
-        model=payload.model,
-        reasoning=payload.reasoning,
         client_turn_id=payload.client_turn_id,
     )
 
@@ -256,22 +347,14 @@ async def stream_prepared_turn(
     request: Request,
     payload: FileChatTurnRequest,
     *,
-    repo_root: Path,
-    target: FileChatTarget,
-    agent_id: str,
-    profile: Optional[str],
+    prepared: FileChatPreparedTurn,
 ) -> AsyncIterator[FileChatStreamItem]:
     yield FileChatStreamItem("status", {"status": "queued"})
     run_task = asyncio.create_task(
         _execute_turn_lifecycle(
             request,
-            repo_root,
-            target,
+            prepared,
             payload.message.strip(),
-            agent=agent_id,
-            profile=profile,
-            model=payload.model,
-            reasoning=payload.reasoning,
             client_turn_id=payload.client_turn_id,
         )
     )
@@ -293,14 +376,11 @@ async def open_stream_turn(
     request: Request,
     payload: FileChatTurnRequest,
 ) -> AsyncIterator[FileChatStreamItem]:
-    repo_root, target, agent_id, profile = await prepare_turn(request, payload)
+    prepared = await prepare_turn(request, payload)
     return stream_prepared_turn(
         request,
         payload,
-        repo_root=repo_root,
-        target=target,
-        agent_id=agent_id,
-        profile=profile,
+        prepared=prepared,
     )
 
 

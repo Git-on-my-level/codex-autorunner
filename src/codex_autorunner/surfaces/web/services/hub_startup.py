@@ -42,6 +42,7 @@ from ....housekeeping import (
 )
 from ..app_state import HubAppContext
 from .pma.managed_thread_runtime import (
+    ensure_managed_thread_queue_worker,
     recover_orphaned_managed_thread_executions,
     restart_managed_thread_queue_workers,
 )
@@ -177,6 +178,7 @@ class HubStartupService:
         tasks: list[asyncio.Task] = []
         registered_pma_lane_starter = False
         pma_lane_starter_register = None
+        managed_thread_queue_starter_register = None
         exception_hooks = None
         startup_completed = False
         app.state.hub_started = True
@@ -205,6 +207,9 @@ class HubStartupService:
             registered_pma_lane_starter, pma_lane_starter_register = (
                 self._register_pma_lane_starter(app)
             )
+            managed_thread_queue_starter_register = (
+                self._register_managed_thread_queue_starter(app)
+            )
             tasks.append(asyncio.create_task(self._process_monitor_loop(app)))
             startup_completed = True
             try:
@@ -215,6 +220,9 @@ class HubStartupService:
                     tasks,
                     registered_pma_lane_starter=registered_pma_lane_starter,
                     pma_lane_starter_register=pma_lane_starter_register,
+                    managed_thread_queue_starter_register=(
+                        managed_thread_queue_starter_register
+                    ),
                     startup_completed=startup_completed,
                 )
         finally:
@@ -648,6 +656,43 @@ class HubStartupService:
             )
             return False, None
 
+    def _register_managed_thread_queue_starter(self, app: FastAPI) -> object:
+        supervisor = getattr(app.state, "hub_supervisor", None)
+        register_starter = (
+            getattr(supervisor, "set_managed_thread_queue_worker_starter", None)
+            if supervisor is not None
+            else None
+        )
+        if not callable(register_starter):
+            return None
+
+        def _start_queue_worker(thread_id: str) -> None:
+            try:
+                ensure_managed_thread_queue_worker(app, thread_id)
+            except (
+                RuntimeError,
+                TypeError,
+                AttributeError,
+            ) as exc:  # intentional: external callback must not crash
+                safe_log(
+                    app.state.logger,
+                    logging.WARNING,
+                    "Managed-thread queue worker startup failed",
+                    exc,
+                )
+
+        try:
+            register_starter(_start_queue_worker)
+            return register_starter
+        except (RuntimeError, TypeError, AttributeError) as exc:
+            safe_log(
+                app.state.logger,
+                logging.WARNING,
+                "Managed-thread queue worker registration failed",
+                exc,
+            )
+            return None
+
     async def _process_monitor_loop(self, app: FastAPI) -> None:
         await asyncio.sleep(DEFAULT_PROCESS_MONITOR_CADENCE_SECONDS)
         while True:
@@ -678,6 +723,7 @@ class HubStartupService:
         *,
         registered_pma_lane_starter: bool,
         pma_lane_starter_register: object,
+        managed_thread_queue_starter_register: object,
         startup_completed: bool,
     ) -> None:
         for task in tasks:
@@ -700,6 +746,19 @@ class HubStartupService:
                     exc,
                 )
         await self._mount_manager.stop_repo_mounts()
+        if callable(managed_thread_queue_starter_register):
+            try:
+                managed_thread_queue_starter_register(None)
+            except (
+                OSError,
+                RuntimeError,
+            ) as exc:  # intentional: cleanup must not crash
+                safe_log(
+                    app.state.logger,
+                    logging.WARNING,
+                    "Managed-thread queue worker starter cleanup failed",
+                    exc,
+                )
         if registered_pma_lane_starter and callable(pma_lane_starter_register):
             try:
                 pma_lane_starter_register(None)

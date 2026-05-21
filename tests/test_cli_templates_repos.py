@@ -186,7 +186,7 @@ def test_templates_repos_add_duplicate_id(hub_env) -> None:
     )
 
     assert result.exit_code == 1
-    assert "already exists" in result.stdout or "already exists" in str(
+    assert "already exists" in result.output or "already exists" in str(
         result.exception
     )
 
@@ -237,7 +237,7 @@ def test_templates_repos_remove_not_found(hub_env) -> None:
     )
 
     assert result.exit_code == 1
-    assert "not found" in result.stdout or "not found" in str(result.exception)
+    assert "not found" in result.output or "not found" in str(result.exception)
 
 
 def test_templates_repos_trust(hub_env) -> None:
@@ -289,7 +289,7 @@ def test_templates_repos_trust_not_found(hub_env) -> None:
     )
 
     assert result.exit_code == 1
-    assert "not found" in result.stdout or "not found" in str(result.exception)
+    assert "not found" in result.output or "not found" in str(result.exception)
 
 
 def test_templates_repos_untrust(hub_env) -> None:
@@ -357,4 +357,4 @@ def test_templates_repos_add_when_disabled(hub_env) -> None:
     )
 
     assert result.exit_code == 1
-    assert "disabled" in result.stdout or "disabled" in str(result.exception)
+    assert "disabled" in result.output or "disabled" in str(result.exception)

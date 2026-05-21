@@ -124,6 +124,7 @@ from .managed_thread_delivery import (
     ManagedThreadDeliveryRecoverySweepResult,
     ManagedThreadDeliveryState,
     ManagedThreadDeliveryTarget,
+    ManagedThreadFailureRecoverySummary,
     build_managed_thread_delivery_id,
     build_managed_thread_delivery_idempotency_key,
     is_valid_managed_thread_delivery_transition,
@@ -187,6 +188,14 @@ from .ticket_flow_chat_ledger_contract import (
     validate_ticket_flow_thread_metadata,
 )
 from .turn_context import ChatTurnDeliveryTarget, ChatTurnEnvelope, ChatTurnSource
+from .turn_execution_contract import (
+    TURN_EXECUTION_CONTRACT_VERSION,
+    DeliveryIntentRef,
+    TurnExecutionContractError,
+    TurnExecutionOrigin,
+    TurnExecutionRecord,
+    TurnExecutionRequest,
+)
 
 if TYPE_CHECKING:
     from . import runtime_threads as runtime_threads_module
@@ -311,6 +320,7 @@ __all__ = [
     "ManagedThreadDeliveryRecoverySweepResult",
     "ManagedThreadDeliveryState",
     "ManagedThreadDeliveryTarget",
+    "ManagedThreadFailureRecoverySummary",
     "ManagedThreadSideEffectAttemptResult",
     "ManagedThreadSideEffectIntent",
     "ManagedThreadSideEffectOutcome",
@@ -351,6 +361,12 @@ __all__ = [
     "ThreadTarget",
     "TicketFlowLedgerRecord",
     "TicketFlowThreadLink",
+    "TURN_EXECUTION_CONTRACT_VERSION",
+    "DeliveryIntentRef",
+    "TurnExecutionContractError",
+    "TurnExecutionOrigin",
+    "TurnExecutionRecord",
+    "TurnExecutionRequest",
     "WorkspaceRuntimeAcquisition",
     "apply_orchestration_migrations",
     "audit_execution_history",

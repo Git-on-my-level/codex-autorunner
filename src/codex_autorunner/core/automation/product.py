@@ -19,7 +19,6 @@ from .models import (
     EXECUTOR_GITHUB_COMMENT,
     EXECUTOR_GITHUB_REACTION,
     EXECUTOR_MANAGED_THREAD_TURN,
-    EXECUTOR_PMA_TURN,
     EXECUTOR_PUBLISH_CHAT_NOTIFICATION,
     EXECUTOR_PUBLISH_OPERATION,
     EXECUTOR_TICKET_FLOW,
@@ -118,14 +117,14 @@ AUTOMATION_PRESET_DESCRIPTORS: dict[str, AutomationPresetDescriptor] = {
         automation_kind="security_scan_pr",
         description=("Daily PMA security scan that opens a PR when issues are found."),
         schedule_kind=SCHEDULE_DAILY,
-        executor_kind=EXECUTOR_PMA_TURN,
+        executor_kind=EXECUTOR_MANAGED_THREAD_TURN,
         target_policy=TARGET_POLICY_HUB,
         default_timezone="UTC",
         default_hour=9,
         default_minute=0,
         default_weekday=None,
         target_shape={"repo_id": "{repo_id}"},
-        executor_shape={"lane_id": "pma:default", "message": "{prompt}"},
+        executor_shape={"message_text": "{prompt}"},
         policy={
             "approval_mode": "never_require_approval",
             "max_attempts": 3,
@@ -215,10 +214,23 @@ def automation_store(hub_root: Path) -> AutomationStore:
     return AutomationStore(hub_root)
 
 
-def automation_overview(store: AutomationStore, *, limit: int = 100) -> dict[str, Any]:
+def automation_overview(
+    store: AutomationStore,
+    *,
+    limit: int = 100,
+    recent_job_limit: int = 25,
+    include_job_history: bool = True,
+    include_raw: bool = True,
+) -> dict[str, Any]:
     take = max(1, min(int(limit or 100), 500))
     rules = store.list_rules()[:take]
-    rows = automation_rows(store, rules, recent_job_limit=25)
+    rows = automation_rows(
+        store,
+        rules,
+        recent_job_limit=recent_job_limit,
+        include_job_history=include_job_history,
+        include_raw=include_raw,
+    )
     summary = {
         "total": len(rows),
         "active": sum(1 for row in rows if row["enabled"]),
@@ -237,6 +249,8 @@ def automation_rows(
     rules: list[AutomationRule],
     *,
     recent_job_limit: int = 25,
+    include_job_history: bool = True,
+    include_raw: bool = True,
 ) -> list[dict[str, Any]]:
     rule_ids = [rule.rule_id for rule in rules]
     schedules_by_rule = store.schedules_by_rule(rule_ids)
@@ -244,12 +258,14 @@ def automation_rows(
         rule_ids, per_rule_limit=recent_job_limit
     )
     job_counts_by_rule = store.job_counts_by_rule(rule_ids)
-    all_jobs = [
-        job for rule in rules for job in recent_jobs_by_rule.get(rule.rule_id, [])
-    ]
-    execution_snapshots = automation_execution_snapshots_by_job_id(
-        all_jobs, hub_root=store.hub_root
-    )
+    execution_snapshots: Optional[dict[str, AutomationExecutionSnapshot]] = None
+    if include_job_history:
+        all_jobs = [
+            job for rule in rules for job in recent_jobs_by_rule.get(rule.rule_id, [])
+        ]
+        execution_snapshots = automation_execution_snapshots_by_job_id(
+            all_jobs, hub_root=store.hub_root
+        )
     return [
         _automation_row_from_enrichment(
             rule,
@@ -258,6 +274,8 @@ def automation_rows(
             recent_jobs=recent_jobs_by_rule.get(rule.rule_id, []),
             job_count=job_counts_by_rule.get(rule.rule_id, 0),
             execution_snapshots=execution_snapshots,
+            include_job_history=include_job_history,
+            include_raw=include_raw,
         )
         for rule in rules
     ]
@@ -279,6 +297,8 @@ def automation_row(store: AutomationStore, rule: AutomationRule) -> dict[str, An
         schedules=schedules,
         recent_jobs=recent_jobs,
         job_count=job_count,
+        include_job_history=True,
+        include_raw=True,
     )
 
 
@@ -290,41 +310,51 @@ def _automation_row_from_enrichment(
     recent_jobs: list[AutomationJob],
     job_count: int,
     execution_snapshots: Optional[dict[str, AutomationExecutionSnapshot]] = None,
+    include_job_history: bool = True,
+    include_raw: bool = True,
 ) -> dict[str, Any]:
     last_job = recent_jobs[0] if recent_jobs else None
     schedule = schedules[0] if schedules else None
     typed = _typed_product_projection(rule, schedule)
     snapshots = execution_snapshots
-    if snapshots is None and recent_jobs:
+    if include_job_history and snapshots is None and recent_jobs:
         snapshots = automation_execution_snapshots_by_job_id(
             recent_jobs, hub_root=store.hub_root
         )
-    return {
+    row: dict[str, Any] = {
         "id": rule.rule_id,
         "name": rule.name,
         "enabled": rule.enabled,
         "system_owned": rule.system_owned,
         "kind": display_kind(rule),
         "executor_kind": rule.executor_kind,
-        "executor": rule.executor,
         "trigger_kind": rule.trigger_kind,
-        "trigger": rule.trigger,
-        "filters": rule.filters,
         "target_policy": rule.target_policy,
-        "target": rule.target,
-        "policy": rule.policy,
-        "metadata": rule.metadata,
         "schedule": schedule.to_dict() if schedule is not None else None,
         "last_job": last_job.to_dict() if last_job is not None else None,
-        "jobs": [
-            _automation_job_row(job, store=store, execution_snapshots=snapshots)
-            for job in recent_jobs
-        ],
+        "jobs": [],
         "job_count": job_count,
         "created_at": rule.created_at,
         "updated_at": rule.updated_at,
         **typed,
     }
+    if include_raw:
+        row.update(
+            {
+                "executor": rule.executor,
+                "trigger": rule.trigger,
+                "filters": rule.filters,
+                "target": rule.target,
+                "policy": rule.policy,
+                "metadata": rule.metadata,
+            }
+        )
+    if include_job_history:
+        row["jobs"] = [
+            _automation_job_row(job, store=store, execution_snapshots=snapshots)
+            for job in recent_jobs
+        ]
+    return row
 
 
 def _automation_job_row(
@@ -537,7 +567,7 @@ def run_automation_now(
     )
     saved_event = store.record_event(event)
     result = AutomationRuleEngine(store).enqueue_job_for_rule(rule, saved_event)
-    process_now = getattr(supervisor, "process_pma_automation_now", None)
+    process_now = getattr(supervisor, "process_automation_now", None)
     processed: dict[str, Any] = {}
     if callable(process_now):
         processed_result = process_now(include_timers=False)
@@ -574,7 +604,7 @@ def display_kind(rule: AutomationRule) -> str:
         return kind
     if rule.executor_kind == EXECUTOR_TICKET_FLOW:
         return "ticket_flow"
-    if rule.executor_kind == EXECUTOR_PMA_TURN:
+    if rule.executor_kind == EXECUTOR_MANAGED_THREAD_TURN:
         return "pma_prompt"
     return rule.executor_kind
 
@@ -741,6 +771,7 @@ def _trigger_summary(rule: AutomationRule) -> dict[str, Any]:
 def _message_projection(rule: AutomationRule) -> dict[str, Any]:
     executor = rule.executor
     for key, field in (
+        ("message_text", "prompt"),
         ("message", "prompt"),
         ("prompt", "prompt"),
         ("prompt_template", "prompt_template"),
@@ -918,7 +949,6 @@ def _product_diagnostics(
 
 def _executor_label(executor_kind: str) -> str:
     return {
-        EXECUTOR_PMA_TURN: "PMA turn",
         EXECUTOR_TICKET_FLOW: "Ticket flow",
         EXECUTOR_MANAGED_THREAD_TURN: "Managed thread turn",
         EXECUTOR_PUBLISH_OPERATION: "Publish operation",
@@ -1109,10 +1139,8 @@ def _build_security_scan_pr(
         filters={"schedule.rule_id": rule_id},
         target_policy=TARGET_POLICY_HUB,
         target={"repo_id": repo_id},
-        executor_kind=EXECUTOR_PMA_TURN,
-        executor=_executor_with_agent_options(
-            {"lane_id": "pma:default", "message": prompt}, payload
-        ),
+        executor_kind=EXECUTOR_MANAGED_THREAD_TURN,
+        executor=_executor_with_agent_options({"message_text": prompt}, payload),
         enabled=payload.enabled,
         policy=policy,
         metadata={

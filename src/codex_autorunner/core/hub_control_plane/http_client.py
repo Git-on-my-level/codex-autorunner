@@ -53,7 +53,7 @@ from .models import (
     SurfaceBindingResponse,
     SurfaceBindingUpsertRequest,
     ThreadActivityRecordRequest,
-    ThreadBackendIdUpdateRequest,
+    ThreadBackendBindingUpdateRequest,
     ThreadCompactSeedUpdateRequest,
     ThreadTargetArchiveRequest,
     ThreadTargetCreateRequest,
@@ -400,12 +400,12 @@ class HttpHubControlPlaneClient(HubControlPlaneClient):
         )
         return ThreadTargetResponse.from_mapping(payload)
 
-    async def set_thread_backend_id(
-        self, request: ThreadBackendIdUpdateRequest
+    async def set_thread_backend_binding(
+        self, request: ThreadBackendBindingUpdateRequest
     ) -> None:
         await self._request_no_content(
             method="POST",
-            path=f"/hub/api/control-plane/thread-targets/{request.thread_target_id}/backend-id",
+            path=f"/hub/api/control-plane/thread-targets/{request.thread_target_id}/backend-binding",
             json_payload=request.to_dict(),
         )
 

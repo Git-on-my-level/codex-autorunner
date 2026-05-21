@@ -20,9 +20,35 @@ from .managed_turn_lifecycle_contract import (
 from .models import ExecutionRecord, MessageRequestKind, ThreadTarget
 from .runtime_bindings import RuntimeThreadBinding
 from .thread_titles import choose_owned_thread_title
+from .turn_execution_contract import TurnExecutionRecord, TurnExecutionRequest
 
 logger = logging.getLogger(__name__)
+
+
+class _UnsetSentinel:
+    pass
+
+
+_UNSET = _UnsetSentinel()
 _MANAGED_TURN_LIFECYCLE_PHASE_KEY = "managed_turn_lifecycle_phase"
+
+
+def _resolve_optional_patch_value(
+    value: Optional[str] | _UnsetSentinel,
+    current: Optional[str],
+) -> Optional[str]:
+    if isinstance(value, _UnsetSentinel):
+        return current
+    return value
+
+
+def _resolve_binding_state_patch_value(
+    value: Optional[str] | _UnsetSentinel,
+    current: Optional[str],
+) -> str:
+    if isinstance(value, _UnsetSentinel):
+        return current or "bound"
+    return value or "bound"
 
 
 def _notify_pma_lifecycle_automation_transition(
@@ -103,11 +129,25 @@ def _thread_target_from_store_row_with_runtime_binding(
         thread_record["backend_runtime_instance_id"] = (
             runtime_binding.backend_runtime_instance_id
         )
+        thread_record["backend_binding_state"] = runtime_binding.binding_state
+        thread_record["backend_binding_state_reason"] = runtime_binding.state_reason
     return ThreadTarget.from_mapping(thread_record)
 
 
 def _execution_record_from_store_row(record: Mapping[str, Any]) -> ExecutionRecord:
-    return ExecutionRecord.from_mapping(record)
+    metadata = record.get("metadata")
+    if not isinstance(metadata, dict):
+        metadata = {}
+    merged_metadata = dict(metadata)
+    turn_request = record.get("turn_request")
+    if isinstance(turn_request, dict) and turn_request:
+        merged_metadata["turn_request"] = dict(turn_request)
+    turn_record = record.get("turn_record")
+    if isinstance(turn_record, dict) and turn_record:
+        merged_metadata["turn_record"] = dict(turn_record)
+    payload = dict(record)
+    payload["metadata"] = merged_metadata
+    return ExecutionRecord.from_mapping(payload)
 
 
 class ManagedThreadExecutionStore(ThreadExecutionStore):
@@ -206,17 +246,55 @@ class ManagedThreadExecutionStore(ThreadExecutionStore):
         self,
         thread_target_id: str,
         *,
-        backend_thread_id: Optional[str] = None,
-        backend_runtime_instance_id: Optional[str] = None,
+        backend_thread_id: Optional[str] | _UnsetSentinel = _UNSET,
+        backend_runtime_instance_id: Optional[str] | _UnsetSentinel = _UNSET,
+        binding_state: Optional[str] | _UnsetSentinel = _UNSET,
+        state_reason: Optional[str] | _UnsetSentinel = _UNSET,
     ) -> Optional[ThreadTarget]:
         record = self._store.get_thread(thread_target_id)
         if record is None:
             return None
-        if backend_thread_id is not None:
-            self._store.set_thread_backend_id(
+        if (
+            backend_thread_id is not _UNSET
+            or backend_runtime_instance_id is not _UNSET
+            or binding_state is not _UNSET
+            or state_reason is not _UNSET
+        ):
+            current_binding = self._store.get_thread_runtime_binding(thread_target_id)
+            current_backend_thread_id = (
+                current_binding.backend_thread_id
+                if current_binding is not None
+                else None
+            )
+            current_runtime_instance_id = (
+                current_binding.backend_runtime_instance_id
+                if current_binding is not None
+                else None
+            )
+            current_binding_state = (
+                current_binding.binding_state if current_binding is not None else None
+            )
+            current_state_reason = (
+                current_binding.state_reason if current_binding is not None else None
+            )
+            self._store.set_thread_backend_binding(
                 thread_target_id,
-                backend_thread_id,
-                backend_runtime_instance_id=backend_runtime_instance_id,
+                _resolve_optional_patch_value(
+                    backend_thread_id,
+                    current_backend_thread_id,
+                ),
+                backend_runtime_instance_id=_resolve_optional_patch_value(
+                    backend_runtime_instance_id,
+                    current_runtime_instance_id,
+                ),
+                binding_state=_resolve_binding_state_patch_value(
+                    binding_state,
+                    current_binding_state,
+                ),
+                state_reason=_resolve_optional_patch_value(
+                    state_reason,
+                    current_state_reason,
+                ),
             )
         self._store.activate_thread(thread_target_id)
         updated = self._store.get_thread(thread_target_id)
@@ -234,17 +312,34 @@ class ManagedThreadExecutionStore(ThreadExecutionStore):
             return None
         return _thread_target_from_store_row(updated)
 
-    def set_thread_backend_id(
+    def set_thread_backend_binding(
         self,
         thread_target_id: str,
         backend_thread_id: Optional[str],
         *,
         backend_runtime_instance_id: Optional[str] = None,
+        binding_state: str = "bound",
+        state_reason: Optional[str] = None,
     ) -> None:
-        self._store.set_thread_backend_id(
+        self._store.set_thread_backend_binding(
             thread_target_id,
             backend_thread_id,
             backend_runtime_instance_id=backend_runtime_instance_id,
+            binding_state=binding_state,
+            state_reason=state_reason,
+        )
+
+    def mark_thread_runtime_binding_state(
+        self,
+        thread_target_id: str,
+        *,
+        binding_state: str,
+        state_reason: Optional[str] = None,
+    ) -> Optional[RuntimeThreadBinding]:
+        return self._store.mark_thread_runtime_binding_state(
+            thread_target_id,
+            binding_state=binding_state,
+            state_reason=state_reason,
         )
 
     def create_execution(
@@ -259,6 +354,7 @@ class ManagedThreadExecutionStore(ThreadExecutionStore):
         client_request_id: Optional[str] = None,
         metadata: Optional[dict[str, Any]] = None,
         queue_payload: Optional[dict[str, Any]] = None,
+        turn_request: Optional[TurnExecutionRequest] = None,
     ) -> ExecutionRecord:
         metadata_payload = dict(metadata or {})
         initialized_lifecycle_phase = (
@@ -266,6 +362,10 @@ class ManagedThreadExecutionStore(ThreadExecutionStore):
         )
         if initialized_lifecycle_phase:
             metadata_payload[_MANAGED_TURN_LIFECYCLE_PHASE_KEY] = "accepted"
+        if turn_request is None:
+            raise ValueError(
+                "create_execution requires a canonical TurnExecutionRequest"
+            )
         create_kwargs: dict[str, Any] = {
             "prompt": prompt,
             "request_kind": request_kind,
@@ -275,14 +375,9 @@ class ManagedThreadExecutionStore(ThreadExecutionStore):
             "client_turn_id": client_request_id,
             "metadata": metadata_payload,
             "queue_payload": queue_payload,
+            "turn_request": turn_request,
         }
-        try:
-            created = self._store.create_turn(thread_target_id, **create_kwargs)
-        except TypeError as exc:
-            if "metadata" not in str(exc):
-                raise
-            create_kwargs.pop("metadata", None)
-            created = self._store.create_turn(thread_target_id, **create_kwargs)
+        created = self._store.create_turn(thread_target_id, **create_kwargs)
         record = _execution_record_from_store_row(created)
         if initialized_lifecycle_phase:
             self._advance_execution_lifecycle_phase(
@@ -299,6 +394,16 @@ class ManagedThreadExecutionStore(ThreadExecutionStore):
         if record is None:
             return None
         return _execution_record_from_store_row(record)
+
+    def get_turn_execution_request(
+        self, thread_target_id: str, execution_id: str
+    ) -> Optional[TurnExecutionRequest]:
+        return self._store.get_turn_execution_request(thread_target_id, execution_id)
+
+    def get_turn_execution_record(
+        self, thread_target_id: str, execution_id: str
+    ) -> Optional[TurnExecutionRecord]:
+        return self._store.get_turn_execution_record(thread_target_id, execution_id)
 
     def get_previous_completed_execution(
         self,

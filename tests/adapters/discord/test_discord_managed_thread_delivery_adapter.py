@@ -36,6 +36,7 @@ from codex_autorunner.core.orchestration import (
     ManagedThreadDeliveryAttemptResult,
     ManagedThreadDeliveryOutcome,
     ManagedThreadDeliveryState,
+    ManagedThreadFailureRecoverySummary,
     SQLiteManagedThreadDeliveryEngine,
     initialize_orchestration_sqlite,
 )
@@ -187,6 +188,7 @@ def _finalized_error(
     managed_thread_id: str = "thread-1",
     managed_turn_id: str = "turn-1",
     error: str = "Something went wrong",
+    failure_recovery: Any = None,
 ) -> ManagedThreadFinalizationResult:
     return ManagedThreadFinalizationResult(
         status="error",
@@ -195,6 +197,7 @@ def _finalized_error(
         managed_thread_id=managed_thread_id,
         managed_turn_id=managed_turn_id,
         backend_thread_id="backend-1",
+        failure_recovery=failure_recovery,
     )
 
 
@@ -462,6 +465,42 @@ async def test_discord_adapter_handles_error_status(
     assert record.state is ManagedThreadDeliveryState.DELIVERED
     assert len(service.sent_messages) == 1
     assert "Turn failed" in service.sent_messages[0]["payload"]["content"]
+
+
+@pytest.mark.anyio
+async def test_discord_adapter_renders_failed_turn_recovery_summary(
+    tmp_path: Path,
+) -> None:
+    service = _DiscordServiceStub(state_root=tmp_path)
+    delivery = _build_hooks(tmp_path, service=service)
+    finalized = _finalized_error(
+        error="App-server disconnected",
+        failure_recovery=ManagedThreadFailureRecoverySummary(
+            failure_kind="app_server_disconnected",
+            error_text="App-server disconnected",
+            recovered_assistant_tail="partial assistant output",
+            recovered_notice_tail="latest status",
+            trace_manifest_id="trace-1",
+            backend_thread_id="backend-thread-1",
+            backend_turn_id="backend-turn-1",
+            managed_turn_id="turn-1",
+        ),
+    )
+
+    record = await handoff_managed_thread_final_delivery(
+        finalized,
+        delivery=delivery,
+        logger=logging.getLogger("test"),
+    )
+
+    assert record is not None
+    assert record.state is ManagedThreadDeliveryState.DELIVERED
+    content = service.sent_messages[0]["payload"]["content"]
+    assert "Turn failed: App-server disconnected" in content
+    assert "Failure kind: app_server_disconnected" in content
+    assert "Trace: trace-1" in content
+    assert "latest status" in content
+    assert "partial assistant output" in content
 
 
 @pytest.mark.anyio

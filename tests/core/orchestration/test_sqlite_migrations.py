@@ -14,6 +14,7 @@ from codex_autorunner.core.orchestration import (
     apply_orchestration_migrations,
     collect_orchestration_migration_status,
     current_orchestration_schema_version,
+    list_orchestration_table_definitions,
 )
 from codex_autorunner.core.orchestration import migrations as migrations_module
 from codex_autorunner.core.orchestration.legacy_backfill_gate import (
@@ -154,6 +155,407 @@ def test_apply_orchestration_migrations_sets_latest_schema_version(
     assert runs[0]["target_version"] == ORCHESTRATION_SCHEMA_VERSION
     assert len(attempts) == ORCHESTRATION_SCHEMA_VERSION
     assert {row["status"] for row in attempts} == {"completed"}
+
+
+def test_fresh_orchestration_schema_reports_turn_execution_contract(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "orchestration.sqlite3"
+
+    with _connect(db_path) as conn:
+        apply_orchestration_migrations(conn)
+        columns = {
+            row["name"]: row
+            for row in conn.execute("PRAGMA table_info(orch_thread_executions)")
+        }
+        table = next(
+            item
+            for item in list_orchestration_table_definitions()
+            if item.name == "orch_thread_executions"
+        )
+
+    assert columns["turn_contract_version"]["dflt_value"] == "1"
+    assert "turn_request_json" in columns
+    assert "turn_record_json" in columns
+    assert "Canonical turn execution request/record envelopes" in table.description
+
+
+def test_turn_execution_contract_migration_backfills_legacy_thread_rows(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "orchestration.sqlite3"
+
+    with _connect(db_path) as conn:
+        apply_orchestration_migrations(conn)
+        conn.execute(
+            """
+            INSERT INTO orch_thread_targets (
+                thread_target_id, agent_id, backend_thread_id, repo_id,
+                resource_kind, resource_id, workspace_root, scope_urn,
+                surface_urn, backend_binding_json, display_name,
+                lifecycle_status, runtime_status, status_reason, status_turn_id,
+                last_execution_id, last_message_preview, compact_seed,
+                metadata_json, created_at, updated_at, status_updated_at,
+                status_terminal
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "thread-legacy",
+                "codex",
+                "backend-conversation",
+                "repo-1",
+                "repo",
+                "repo-1",
+                str(tmp_path / "workspace"),
+                "repo:repo-1",
+                "discord:guild:channel",
+                "{}",
+                "Legacy",
+                "active",
+                "completed",
+                "done",
+                "turn-terminal",
+                "turn-terminal",
+                "hello",
+                None,
+                json.dumps(
+                    {
+                        "agent_profile": "pro",
+                        "approval_mode": "on-request",
+                        "approval_policy": "on-request",
+                        "sandbox_policy": {"mode": "workspace-write"},
+                    }
+                ),
+                "2026-05-01T00:00:00Z",
+                "2026-05-01T00:00:00Z",
+                "2026-05-01T00:00:00Z",
+                1,
+            ),
+        )
+        conn.execute(
+            """
+            INSERT INTO orch_thread_executions (
+                execution_id, thread_target_id, client_request_id, request_kind,
+                prompt_text, status, backend_turn_id, assistant_text, error_text,
+                model_id, reasoning_level, metadata_json, transcript_mirror_id,
+                started_at, finished_at, created_at, turn_contract_version,
+                turn_request_json, turn_record_json
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "turn-queued",
+                "thread-legacy",
+                "client-queued",
+                "review",
+                "queued prompt",
+                "queued",
+                None,
+                None,
+                None,
+                "gpt-5.4",
+                "high",
+                json.dumps({"correlation_id": "corr-1"}),
+                None,
+                "2026-05-01T00:01:00Z",
+                None,
+                "2026-05-01T00:01:00Z",
+                0,
+                None,
+                None,
+            ),
+        )
+        conn.execute(
+            """
+            INSERT INTO orch_thread_executions (
+                execution_id, thread_target_id, client_request_id, request_kind,
+                prompt_text, status, backend_turn_id, assistant_text, error_text,
+                model_id, reasoning_level, metadata_json, transcript_mirror_id,
+                started_at, finished_at, created_at, turn_contract_version,
+                turn_request_json, turn_record_json
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "turn-terminal",
+                "thread-legacy",
+                "client-terminal",
+                "message",
+                "terminal prompt",
+                "ok",
+                "backend-turn",
+                "terminal output",
+                None,
+                "gpt-5.4",
+                "medium",
+                json.dumps({"terminal": True}),
+                "transcript-turn",
+                "2026-05-01T00:02:00Z",
+                "2026-05-01T00:03:00Z",
+                "2026-05-01T00:02:00Z",
+                0,
+                None,
+                None,
+            ),
+        )
+        conn.execute(
+            """
+            INSERT INTO orch_queue_items (
+                queue_item_id, lane_id, source_kind, source_key, dedupe_key,
+                state, visible_at, claimed_at, completed_at, payload_json,
+                created_at, updated_at, idempotency_key
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "queue-queued",
+                "thread:thread-legacy",
+                "thread_execution",
+                "turn-queued",
+                "client-queued",
+                "queued",
+                "2026-05-01T00:01:00Z",
+                None,
+                None,
+                json.dumps(
+                    {
+                        "request": {
+                            "target_id": "thread-legacy",
+                            "target_kind": "thread",
+                            "message_text": "queued prompt",
+                            "kind": "review",
+                            "busy_policy": "queue",
+                            "agent_profile": "pro",
+                            "model": "gpt-5.4",
+                            "reasoning": "high",
+                            "approval_mode": "on-request",
+                            "input_items": [{"type": "text", "text": "queued prompt"}],
+                            "context_profile": "car_core",
+                            "metadata": {"runtime_prompt": "queued runtime"},
+                        },
+                        "client_request_id": "client-queued",
+                        "sandbox_policy": {"mode": "workspace-write"},
+                    }
+                ),
+                "2026-05-01T00:01:00Z",
+                "2026-05-01T00:01:00Z",
+                "client-queued",
+            ),
+        )
+        conn.execute("DELETE FROM orch_schema_migrations WHERE version >= 37")
+
+        version = apply_orchestration_migrations(conn)
+        rows = {
+            row["execution_id"]: row
+            for row in conn.execute(
+                """
+                SELECT execution_id, turn_contract_version, turn_request_json,
+                       turn_record_json
+                  FROM orch_thread_executions
+                 WHERE thread_target_id = 'thread-legacy'
+                """
+            ).fetchall()
+        }
+
+    assert version == ORCHESTRATION_SCHEMA_VERSION
+    queued_request = json.loads(rows["turn-queued"]["turn_request_json"])
+    queued_record = json.loads(rows["turn-queued"]["turn_record_json"])
+    terminal_record = json.loads(rows["turn-terminal"]["turn_record_json"])
+    assert rows["turn-queued"]["turn_contract_version"] == 1
+    assert queued_request["request_kind"] == "review"
+    assert queued_request["client_request_id"] == "client-queued"
+    assert queued_request["model"] == "gpt-5.4"
+    assert queued_request["reasoning"] == "high"
+    assert queued_request["sandbox_policy"] == {"mode": "workspace-write"}
+    assert queued_request["approval_policy"] == "on-request"
+    assert queued_request["origin"]["surface_kind"] == "discord"
+    assert queued_record["status"] == "queued"
+    assert terminal_record["status"] == "completed"
+    assert terminal_record["backend_conversation_id"] == "backend-conversation"
+    assert terminal_record["backend_turn_id"] == "backend-turn"
+    assert terminal_record["assistant_text"] == "terminal output"
+    assert terminal_record["transcript_ref"] == "transcript-turn"
+
+
+def test_turn_execution_contract_migration_repairs_legacy_opencode_models(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "orchestration.sqlite3"
+
+    with _connect(db_path) as conn:
+        apply_orchestration_migrations(conn)
+        conn.execute(
+            """
+            INSERT INTO orch_thread_targets (
+                thread_target_id, agent_id, backend_thread_id, repo_id,
+                resource_kind, resource_id, workspace_root, scope_urn,
+                surface_urn, backend_binding_json, display_name,
+                lifecycle_status, runtime_status, status_reason, status_turn_id,
+                last_execution_id, last_message_preview, compact_seed,
+                metadata_json, created_at, updated_at, status_updated_at,
+                status_terminal
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "thread-opencode-legacy",
+                "opencode",
+                "backend-opencode",
+                "repo-1",
+                "repo",
+                "repo-1",
+                str(tmp_path / "workspace"),
+                "repo:repo-1",
+                "discord:guild:channel",
+                "{}",
+                "Legacy OpenCode",
+                "active",
+                "completed",
+                "done",
+                "turn-unresolved",
+                "turn-unresolved",
+                "hello",
+                None,
+                "{}",
+                "2026-05-01T00:00:00Z",
+                "2026-05-01T00:00:00Z",
+                "2026-05-01T00:00:00Z",
+                1,
+            ),
+        )
+        conn.execute(
+            """
+            INSERT INTO orch_thread_executions (
+                execution_id, thread_target_id, client_request_id, request_kind,
+                prompt_text, status, backend_turn_id, assistant_text, error_text,
+                model_id, reasoning_level, metadata_json, transcript_mirror_id,
+                started_at, finished_at, created_at, turn_contract_version,
+                turn_request_json, turn_record_json
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "turn-unresolved",
+                "thread-opencode-legacy",
+                "client-unresolved",
+                "message",
+                "legacy prompt",
+                "ok",
+                "backend-turn",
+                "done",
+                None,
+                None,
+                None,
+                "{}",
+                None,
+                "2026-05-01T00:01:00Z",
+                "2026-05-01T00:02:00Z",
+                "2026-05-01T00:01:00Z",
+                0,
+                None,
+                None,
+            ),
+        )
+        conn.execute(
+            """
+            INSERT INTO orch_thread_executions (
+                execution_id, thread_target_id, client_request_id, request_kind,
+                prompt_text, status, backend_turn_id, assistant_text, error_text,
+                model_id, reasoning_level, metadata_json, transcript_mirror_id,
+                started_at, finished_at, created_at, turn_contract_version,
+                turn_request_json, turn_record_json
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "turn-legacy-model",
+                "thread-opencode-legacy",
+                "client-legacy-model",
+                "review",
+                None,
+                "queued",
+                None,
+                None,
+                None,
+                "glm-5.1",
+                "medium",
+                json.dumps(
+                    {
+                        "model_payload": {
+                            "providerID": "stale",
+                            "modelID": "wrong",
+                        }
+                    }
+                ),
+                None,
+                "2026-05-01T00:03:00Z",
+                None,
+                "2026-05-01T00:03:00Z",
+                0,
+                None,
+                None,
+            ),
+        )
+        conn.execute(
+            """
+            INSERT INTO orch_queue_items (
+                queue_item_id, lane_id, source_kind, source_key, dedupe_key,
+                state, visible_at, claimed_at, completed_at, payload_json,
+                created_at, updated_at, idempotency_key
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "queue-legacy-model",
+                "thread:thread-opencode-legacy",
+                "thread_execution",
+                "turn-legacy-model",
+                "client-legacy-model",
+                "queued",
+                "2026-05-01T00:03:00Z",
+                None,
+                None,
+                json.dumps(
+                    {
+                        "turn_request": {
+                            "target_id": "thread-opencode-legacy",
+                            "request_kind": "review",
+                            "busy_policy": "queue",
+                            "prompt_text": "canonical queued prompt",
+                            "profile": "pro",
+                            "reasoning": "medium",
+                        }
+                    }
+                ),
+                "2026-05-01T00:03:00Z",
+                "2026-05-01T00:03:00Z",
+                "client-legacy-model",
+            ),
+        )
+        conn.execute("DELETE FROM orch_schema_migrations WHERE version >= 37")
+
+        version = apply_orchestration_migrations(conn)
+        rows = {
+            row["execution_id"]: row
+            for row in conn.execute(
+                """
+                SELECT execution_id, turn_request_json, turn_record_json
+                  FROM orch_thread_executions
+                 WHERE thread_target_id = 'thread-opencode-legacy'
+                """
+            ).fetchall()
+        }
+
+    assert version == ORCHESTRATION_SCHEMA_VERSION
+    unresolved_request = json.loads(rows["turn-unresolved"]["turn_request_json"])
+    legacy_model_request = json.loads(rows["turn-legacy-model"]["turn_request_json"])
+    legacy_model_record = json.loads(rows["turn-legacy-model"]["turn_record_json"])
+    assert unresolved_request["model"] == "legacy/unresolved"
+    assert unresolved_request["model_payload"] == {
+        "providerID": "legacy",
+        "modelID": "unresolved",
+    }
+    assert legacy_model_request["model"] == "legacy/glm-5.1"
+    assert legacy_model_request["model_payload"] == {
+        "providerID": "legacy",
+        "modelID": "glm-5.1",
+    }
+    assert legacy_model_request["prompt_text"] == "canonical queued prompt"
+    assert legacy_model_request["profile"] == "pro"
+    assert legacy_model_record["status"] == "queued"
 
 
 def test_automation_migration_diagnostics_report_blocked_mirror(

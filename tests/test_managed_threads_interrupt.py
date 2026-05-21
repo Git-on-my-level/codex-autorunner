@@ -5,12 +5,20 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
+from codex_autorunner.core.automation import AutomationStore
 from codex_autorunner.core.managed_thread_store import ManagedThreadStore
 from codex_autorunner.core.orchestration.runtime_bindings import (
     clear_runtime_thread_binding,
 )
 from codex_autorunner.server import create_hub_app
 from tests.pma_support import _enable_pma
+
+
+def _lifecycle_events(hub_root: Path, event_type: str) -> list[dict[str, object]]:
+    return [
+        event.to_dict()
+        for event in AutomationStore(hub_root).list_events(event_type=event_type)
+    ]
 
 
 @pytest.mark.slow
@@ -52,7 +60,7 @@ def test_interrupt_managed_thread_codex_marks_turn_interrupted(hub_env) -> None:
         store = ManagedThreadStore(hub_env.hub_root)
         turn = store.create_turn(managed_thread_id, prompt="running turn")
         managed_turn_id = turn["managed_turn_id"]
-        store.set_thread_backend_id(managed_thread_id, "backend-thread-1")
+        store.set_thread_backend_binding(managed_thread_id, "backend-thread-1")
         store.set_turn_backend_turn_id(managed_turn_id, "backend-turn-1")
         interrupt_resp = client.post(
             f"/hub/pma/threads/{managed_thread_id}/interrupt",
@@ -109,7 +117,7 @@ def test_interrupt_managed_thread_opencode_marks_turn_interrupted(hub_env) -> No
         store = ManagedThreadStore(hub_env.hub_root)
         turn = store.create_turn(managed_thread_id, prompt="running opencode turn")
         managed_turn_id = turn["managed_turn_id"]
-        store.set_thread_backend_id(managed_thread_id, "session-123")
+        store.set_thread_backend_binding(managed_thread_id, "session-123")
         interrupt_resp = client.post(
             f"/hub/pma/threads/{managed_thread_id}/interrupt",
         )
@@ -158,17 +166,12 @@ def test_interrupt_managed_thread_recovers_when_runtime_binding_is_lost_after_re
     _enable_pma(hub_env.hub_root)
     app = create_hub_app(hub_env.hub_root)
 
-    class FakeAutomationStore:
-        def notify_transition(self, payload: dict[str, object]) -> None:
-            _ = payload
-
     class FakeSupervisor:
         async def get_client(self, hub_root: Path):
             _ = hub_root
             raise AssertionError("interrupt client should not be requested")
 
-    app.state.hub_supervisor.get_pma_automation_store = lambda: FakeAutomationStore()
-    app.state.hub_supervisor.process_pma_automation_now = lambda **_kwargs: None
+    app.state.hub_supervisor.process_automation_now = lambda **_kwargs: None
     app.state.app_server_supervisor = FakeSupervisor()
 
     with TestClient(app) as client:
@@ -186,7 +189,7 @@ def test_interrupt_managed_thread_recovers_when_runtime_binding_is_lost_after_re
     store = ManagedThreadStore(hub_env.hub_root)
     turn = store.create_turn(managed_thread_id, prompt="running after restart")
     managed_turn_id = turn["managed_turn_id"]
-    store.set_thread_backend_id(managed_thread_id, "backend-thread-1")
+    store.set_thread_backend_binding(managed_thread_id, "backend-thread-1")
     store.set_turn_backend_turn_id(managed_turn_id, "backend-turn-1")
     clear_runtime_thread_binding(hub_env.hub_root, managed_thread_id)
 
@@ -207,16 +210,9 @@ def test_interrupt_managed_thread_recovers_when_runtime_binding_is_lost_after_re
 
 
 @pytest.mark.slow
-def test_interrupt_managed_thread_notifies_automation_failure(hub_env) -> None:
+def test_interrupt_managed_thread_uses_generalized_automation_path(hub_env) -> None:
     _enable_pma(hub_env.hub_root)
     app = create_hub_app(hub_env.hub_root)
-
-    class FakeAutomationStore:
-        def __init__(self) -> None:
-            self.transitions: list[dict[str, object]] = []
-
-        def notify_transition(self, payload: dict[str, object]) -> None:
-            self.transitions.append(dict(payload))
 
     class FakeClient:
         async def turn_interrupt(
@@ -229,8 +225,6 @@ def test_interrupt_managed_thread_notifies_automation_failure(hub_env) -> None:
             _ = hub_root
             return FakeClient()
 
-    fake_store = FakeAutomationStore()
-    app.state.hub_supervisor.get_pma_automation_store = lambda: fake_store
     app.state.app_server_supervisor = FakeSupervisor()
 
     with TestClient(app) as client:
@@ -247,20 +241,14 @@ def test_interrupt_managed_thread_notifies_automation_failure(hub_env) -> None:
         store = ManagedThreadStore(hub_env.hub_root)
         turn = store.create_turn(managed_thread_id, prompt="running turn")
         managed_turn_id = turn["managed_turn_id"]
-        store.set_thread_backend_id(managed_thread_id, "backend-thread-1")
+        store.set_thread_backend_binding(managed_thread_id, "backend-thread-1")
         store.set_turn_backend_turn_id(managed_turn_id, "backend-turn-1")
         interrupt_resp = client.post(
             f"/hub/pma/threads/{managed_thread_id}/interrupt",
         )
 
     assert interrupt_resp.status_code == 200
-    assert len(fake_store.transitions) == 1
-    transition = fake_store.transitions[0]
-    assert transition["thread_id"] == managed_thread_id
-    assert transition["repo_id"] == hub_env.repo_id
-    assert transition["from_state"] == "running"
-    assert transition["to_state"] == "interrupted"
-    assert transition["reason"] == "managed_turn_interrupted"
+    assert not hasattr(app.state.hub_supervisor, "get_pma_automation_store")
 
 
 @pytest.mark.slow
@@ -270,13 +258,6 @@ def test_interrupt_managed_thread_skips_failed_side_effects_when_turn_already_fi
     _enable_pma(hub_env.hub_root)
     app = create_hub_app(hub_env.hub_root)
 
-    class FakeAutomationStore:
-        def __init__(self) -> None:
-            self.transitions: list[dict[str, object]] = []
-
-        def notify_transition(self, payload: dict[str, object]) -> None:
-            self.transitions.append(dict(payload))
-
     class FakeClient:
         async def turn_interrupt(
             self, turn_id: str, *, thread_id: str | None = None
@@ -288,8 +269,6 @@ def test_interrupt_managed_thread_skips_failed_side_effects_when_turn_already_fi
             _ = hub_root
             return FakeClient()
 
-    fake_store = FakeAutomationStore()
-    app.state.hub_supervisor.get_pma_automation_store = lambda: fake_store
     app.state.app_server_supervisor = FakeSupervisor()
 
     with TestClient(app) as client:
@@ -306,7 +285,7 @@ def test_interrupt_managed_thread_skips_failed_side_effects_when_turn_already_fi
         store = ManagedThreadStore(hub_env.hub_root)
         turn = store.create_turn(managed_thread_id, prompt="running turn")
         managed_turn_id = turn["managed_turn_id"]
-        store.set_thread_backend_id(managed_thread_id, "backend-thread-1")
+        store.set_thread_backend_binding(managed_thread_id, "backend-thread-1")
         store.set_turn_backend_turn_id(managed_turn_id, "backend-turn-1")
 
         original_mark_turn_finished = ManagedThreadStore.mark_turn_finished
@@ -340,7 +319,7 @@ def test_interrupt_managed_thread_skips_failed_side_effects_when_turn_already_fi
     assert payload["status"] == "error"
     assert payload["interrupt_state"] == "failed"
     assert payload["managed_turn_id"] == managed_turn_id
-    assert len(fake_store.transitions) == 0
+    assert _lifecycle_events(hub_env.hub_root, "lifecycle.flow_failed") == []
 
     updated_turn = store.get_turn(managed_thread_id, managed_turn_id)
     assert updated_turn is not None
@@ -381,7 +360,7 @@ def test_interrupt_managed_thread_recovers_stale_backend_thread(hub_env) -> None
         store = ManagedThreadStore(hub_env.hub_root)
         turn = store.create_turn(managed_thread_id, prompt="running")
         managed_turn_id = turn["managed_turn_id"]
-        store.set_thread_backend_id(managed_thread_id, "backend-thread-1")
+        store.set_thread_backend_binding(managed_thread_id, "backend-thread-1")
         store.set_turn_backend_turn_id(managed_turn_id, "backend-turn-1")
         interrupt_resp = client.post(
             f"/hub/pma/threads/{managed_thread_id}/interrupt",
@@ -397,4 +376,7 @@ def test_interrupt_managed_thread_recovers_stale_backend_thread(hub_env) -> None
     assert updated_turn["status"] == "interrupted"
     assert updated_turn["error"] is None
     updated_binding = store.get_thread_runtime_binding(managed_thread_id)
-    assert updated_binding is None
+    assert updated_binding is not None
+    assert updated_binding.backend_thread_id == "backend-thread-1"
+    assert updated_binding.binding_state == "invalid"
+    assert updated_binding.state_reason == "interrupt_thread_not_found"

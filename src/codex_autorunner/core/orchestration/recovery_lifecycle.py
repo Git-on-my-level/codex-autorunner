@@ -4,7 +4,7 @@ import logging
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Callable, Optional
+from typing import Any, Callable, Optional
 
 from ..freshness import parse_iso_datetime
 from ..logging_utils import log_event
@@ -27,6 +27,10 @@ from .models import (
     ThreadStopOutcome,
     ThreadTarget,
 )
+from .runtime_bindings import (
+    mark_thread_store_runtime_binding_invalid,
+    mark_thread_store_runtime_binding_suspect,
+)
 
 LOST_BACKEND_THREAD_ERROR = "Running execution could not be reattached after restart"
 MISSING_BACKEND_THREAD_ERROR = (
@@ -37,6 +41,36 @@ _RESTART_WAIT_AND_SEE_AGENTS = frozenset({"codex"})
 logger = logging.getLogger(__name__)
 
 _TERMINAL_STATUSES = frozenset({"ok", "error", "interrupted"})
+
+
+def _mark_thread_runtime_binding_suspect(
+    thread_store: Any,
+    thread_target_id: str,
+    *,
+    backend_thread_id: Optional[str],
+    state_reason: str,
+) -> None:
+    mark_thread_store_runtime_binding_suspect(
+        thread_store,
+        thread_target_id,
+        backend_thread_id=backend_thread_id,
+        state_reason=state_reason,
+    )
+
+
+def _mark_thread_runtime_binding_invalid(
+    thread_store: Any,
+    thread_target_id: str,
+    *,
+    backend_thread_id: Optional[str],
+    state_reason: str,
+) -> None:
+    mark_thread_store_runtime_binding_invalid(
+        thread_store,
+        thread_target_id,
+        backend_thread_id=backend_thread_id,
+        state_reason=state_reason,
+    )
 
 
 @dataclass(frozen=True)
@@ -51,6 +85,10 @@ class ManagedTurnRecoveryDecision:
     age_seconds: Optional[float]
     current_status: str
     queue_depth: int = 0
+    canonical_request_id: Optional[str] = None
+    surface_origin: Optional[str] = None
+    target: Optional[dict[str, str]] = None
+    resolved_runtime_options: Optional[dict[str, object]] = None
 
 
 @dataclass(frozen=True)
@@ -101,6 +139,41 @@ def _managed_turn_lifecycle_phase(execution: ExecutionRecord) -> str:
     return status or "unknown"
 
 
+def _canonical_recovery_context(execution: ExecutionRecord) -> dict[str, object]:
+    request = execution.metadata.get("turn_request")
+    if not isinstance(request, dict):
+        request = execution.metadata.get("canonical_request")
+    if not isinstance(request, dict):
+        return {}
+    origin_obj = request.get("origin")
+    origin: dict[str, object] = origin_obj if isinstance(origin_obj, dict) else {}
+    surface_kind = str(origin.get("surface_kind") or "").strip()
+    surface_key = str(origin.get("surface_key") or "").strip()
+    surface_origin = (
+        f"{surface_kind}:{surface_key}" if surface_kind and surface_key else None
+    )
+    return {
+        "canonical_request_id": str(request.get("request_id") or "").strip() or None,
+        "surface_origin": surface_origin
+        or str(origin.get("source_id") or "").strip()
+        or None,
+        "target": {
+            "target_id": str(request.get("target_id") or execution.target_id),
+            "target_kind": str(request.get("target_kind") or execution.target_kind),
+        },
+        "resolved_runtime_options": {
+            "agent": request.get("agent"),
+            "profile": request.get("profile"),
+            "model": request.get("model"),
+            "model_payload": request.get("model_payload") or {},
+            "reasoning": request.get("reasoning"),
+            "approval_policy": request.get("approval_policy"),
+            "approval_mode": request.get("approval_mode"),
+            "sandbox_policy": request.get("sandbox_policy"),
+        },
+    }
+
+
 def classify_stale_managed_turn_recovery(
     *,
     managed_thread_id: str,
@@ -117,6 +190,7 @@ def classify_stale_managed_turn_recovery(
         status=status,
         terminal_statuses=_TERMINAL_STATUSES,
     )
+    canonical = _canonical_recovery_context(execution)
     return ManagedTurnRecoveryDecision(
         managed_thread_id=managed_thread_id,
         execution_id=execution.execution_id,
@@ -126,6 +200,10 @@ def classify_stale_managed_turn_recovery(
         age_seconds=age_seconds,
         current_status=status,
         queue_depth=queue_depth,
+        canonical_request_id=canonical.get("canonical_request_id"),  # type: ignore[arg-type]
+        surface_origin=canonical.get("surface_origin"),  # type: ignore[arg-type]
+        target=canonical.get("target"),  # type: ignore[arg-type]
+        resolved_runtime_options=canonical.get("resolved_runtime_options"),  # type: ignore[arg-type]
     )
 
 
@@ -189,6 +267,10 @@ class RecoveryScanner:
             age_seconds=decision.age_seconds,
             current_status=decision.current_status,
             queue_depth=decision.queue_depth,
+            canonical_request_id=decision.canonical_request_id,
+            surface_origin=decision.surface_origin,
+            target=decision.target,
+            resolved_runtime_options=decision.resolved_runtime_options,
         )
         recovered: Optional[ExecutionRecord] = None
         if decision.selected_action == "recover_from_harness":
@@ -360,10 +442,11 @@ class _ThreadRecoveryHelper:
             backend_turn_id=execution.backend_id,
             transcript_turn_id=None,
         )
-        self.thread_store.set_thread_backend_id(
+        _mark_thread_runtime_binding_suspect(
+            self.thread_store,
             thread_target_id,
-            None,
-            backend_runtime_instance_id=None,
+            backend_thread_id=backend_thread_id,
+            state_reason=reason,
         )
         log_event(
             logger,
@@ -389,11 +472,20 @@ class _ThreadRecoveryHelper:
         interrupted = self.thread_store.record_execution_interrupted(
             thread_target_id, execution.execution_id
         )
-        self.thread_store.set_thread_backend_id(
-            thread_target_id,
-            None,
-            backend_runtime_instance_id=None,
-        )
+        if reason == "interrupt_thread_not_found":
+            _mark_thread_runtime_binding_invalid(
+                self.thread_store,
+                thread_target_id,
+                backend_thread_id=backend_thread_id,
+                state_reason=reason,
+            )
+        else:
+            _mark_thread_runtime_binding_suspect(
+                self.thread_store,
+                thread_target_id,
+                backend_thread_id=backend_thread_id,
+                state_reason=reason,
+            )
         log_event(
             logger,
             logging.INFO,

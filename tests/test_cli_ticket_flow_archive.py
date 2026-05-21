@@ -12,7 +12,10 @@ from codex_autorunner.bootstrap import seed_hub_files
 from codex_autorunner.cli import app
 from codex_autorunner.core.apps import install_app
 from codex_autorunner.core.config import CONFIG_FILENAME, load_hub_config
-from codex_autorunner.core.flows.archive_helpers import archive_flow_run_artifacts
+from codex_autorunner.core.flows.archive_helpers import (
+    archive_flow_run_artifacts,
+    archive_terminal_flow_runs,
+)
 from codex_autorunner.core.flows.models import FlowRunStatus
 from codex_autorunner.core.flows.store import FlowStore
 from codex_autorunner.core.force_attestation import FORCE_ATTESTATION_REQUIRED_ERROR
@@ -563,6 +566,39 @@ def test_ticket_flow_archive_cleans_related_terminal_runs(
         store.initialize()
         assert store.get_flow_run(archived_run_id) is None
         assert store.get_flow_run(stale_run_id) is None
+
+
+def test_terminal_flow_archive_cleans_orphaned_flow_artifact_dirs(
+    tmp_path: Path,
+) -> None:
+    repo_root = _setup_repo(tmp_path)
+    orphan_run_id = "99999999-8888-7777-6666-555555555555"
+    orphan_flow_dir = repo_root / ".codex-autorunner" / "flows" / orphan_run_id / "chat"
+    orphan_flow_dir.mkdir(parents=True, exist_ok=True)
+    (orphan_flow_dir / "outbound.jsonl").write_text(
+        '{"event_type":"flow_terminal_notice"}\n',
+        encoding="utf-8",
+    )
+
+    with FlowStore(repo_root / ".codex-autorunner" / "flows.db") as store:
+        store.initialize()
+        payload = archive_terminal_flow_runs(repo_root, store=store)
+
+    assert payload["archived_run_count"] == 0
+    assert payload["deleted_run_count"] == 0
+    assert payload["archived_orphan_flow_state_ids"] == [orphan_run_id]
+    assert payload["archived_orphan_flow_state_count"] == 1
+    assert not (repo_root / ".codex-autorunner" / "flows" / orphan_run_id).exists()
+    assert (
+        repo_root
+        / ".codex-autorunner"
+        / "archive"
+        / "runs"
+        / orphan_run_id
+        / "flow_state"
+        / "chat"
+        / "outbound.jsonl"
+    ).read_text(encoding="utf-8") == '{"event_type":"flow_terminal_notice"}\n'
 
 
 def test_ticket_flow_archive_tolerates_sibling_cleanup_failures(

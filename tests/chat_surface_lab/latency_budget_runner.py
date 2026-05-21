@@ -497,7 +497,7 @@ def _install_inprocess_hub_client_stubs_for_lab() -> None:
             _ = workspace_root, repo_id_hint
             return 0
 
-        def process_pma_automation_now(
+        def process_automation_now(
             self, *, include_timers: bool = True, limit: int = 100
         ) -> dict[str, int]:
             return {
@@ -608,8 +608,8 @@ def _install_inprocess_hub_client_stubs_for_lab() -> None:
         async def archive_thread_target(self, request: Any) -> Any:
             return self._service.archive_thread_target(request)
 
-        async def set_thread_backend_id(self, request: Any) -> None:
-            self._service.set_thread_backend_id(request)
+        async def set_thread_backend_binding(self, request: Any) -> None:
+            self._service.set_thread_backend_binding(request)
 
         async def record_thread_activity(self, request: Any) -> None:
             self._service.record_thread_activity(request)

@@ -15,6 +15,20 @@ from codex_autorunner.adapters.agents.wiring import (
     build_agent_backend_factory,
     build_app_server_supervisor_factory,
 )
+from codex_autorunner.core.automation import (
+    EXECUTOR_MANAGED_THREAD_TURN,
+    PMA_SUBSCRIPTION_RULE_PREFIX,
+    PMA_TIMER_RULE_PREFIX,
+    PMA_TIMER_SCHEDULE_PREFIX,
+    AutomationRule,
+    AutomationSchedule,
+    AutomationStore,
+)
+from codex_autorunner.core.automation.models import (
+    SCHEDULE_ONE_SHOT,
+    TARGET_POLICY_HUB,
+    TRIGGER_KIND_EVENT,
+)
 from codex_autorunner.core.config import (
     CONFIG_FILENAME,
     DEFAULT_HUB_CONFIG,
@@ -26,7 +40,6 @@ from codex_autorunner.core.hub import HubSupervisor
 from codex_autorunner.core.managed_thread_store import ManagedThreadStore
 from codex_autorunner.core.orchestration.bindings import OrchestrationBindingStore
 from codex_autorunner.core.orchestration.sqlite import open_orchestration_sqlite
-from codex_autorunner.core.pma_automation_store import PmaAutomationStore
 from codex_autorunner.core.pma_dispatches import ensure_pma_dispatches_dir
 from codex_autorunner.core.pma_hygiene import (
     apply_pma_hygiene_report,
@@ -46,6 +59,84 @@ def _set_file_mtime(path: Path, when: datetime) -> None:
     timestamp = when.timestamp()
     path.touch()
     os.utime(path, (timestamp, timestamp))
+
+
+def _create_subscription_rule(
+    hub_root: Path,
+    *,
+    subscription_id: str,
+    repo_id: str,
+    event_types: list[str],
+    enabled: bool = True,
+) -> dict[str, Any]:
+    store = AutomationStore(hub_root)
+    rule = store.upsert_rule(
+        AutomationRule.create(
+            rule_id=f"{PMA_SUBSCRIPTION_RULE_PREFIX}{subscription_id}",
+            name=f"Subscription {subscription_id}",
+            enabled=enabled,
+            trigger_kind=TRIGGER_KIND_EVENT,
+            trigger={"event_types": event_types},
+            target_policy=TARGET_POLICY_HUB,
+            target={"repo_id": repo_id},
+            executor_kind=EXECUTOR_MANAGED_THREAD_TURN,
+            executor={"lane_id": "pma:default", "message_text": "Follow up"},
+            metadata={
+                "purpose": "managed_thread_lifecycle_subscription",
+                "legacy_subscription_id": subscription_id,
+            },
+        )
+    )
+    return {"subscription_id": subscription_id, "rule_id": rule.rule_id}
+
+
+def _create_timer_schedule(
+    hub_root: Path,
+    *,
+    timer_id: str,
+    repo_id: str,
+    state: str = "active",
+    next_fire_at: str = "2026-03-29T12:01:00+00:00",
+) -> dict[str, Any]:
+    store = AutomationStore(hub_root)
+    rule = store.upsert_rule(
+        AutomationRule.create(
+            rule_id=f"{PMA_TIMER_RULE_PREFIX}{timer_id}",
+            name=f"Timer {timer_id}",
+            trigger_kind=TRIGGER_KIND_EVENT,
+            trigger={"event_types": ["schedule.fire"]},
+            filters={"schedule.rule_id": f"{PMA_TIMER_RULE_PREFIX}{timer_id}"},
+            target_policy=TARGET_POLICY_HUB,
+            target={"repo_id": repo_id},
+            executor_kind=EXECUTOR_MANAGED_THREAD_TURN,
+            executor={"message_text": "Timer follow up"},
+            metadata={"purpose": "managed_thread_timer", "legacy_timer_id": timer_id},
+        )
+    )
+    schedule = store.upsert_schedule(
+        AutomationSchedule.create(
+            schedule_id=f"{PMA_TIMER_SCHEDULE_PREFIX}{timer_id}",
+            rule_id=rule.rule_id,
+            schedule_kind=SCHEDULE_ONE_SHOT,
+            next_fire_at=next_fire_at if state == "active" else None,
+            state=state,
+            schedule={
+                "legacy_timer_id": timer_id,
+                "timer_kind": "one_shot",
+                "payload": {
+                    "timer_id": timer_id,
+                    "timer_type": "one_shot",
+                    "repo_id": repo_id,
+                    "lane_id": "pma:default",
+                },
+            },
+        )
+    )
+    return {
+        "timer_id": timer_id,
+        "rule_id": rule.rule_id,
+        "schedule_id": schedule.schedule_id,
+    }
 
 
 def _write_dispatch(
@@ -137,36 +228,31 @@ def test_build_pma_hygiene_report_groups_candidates(hub_env) -> None:
         repo_id=hub_env.repo_id,
     )
 
-    automation_store = PmaAutomationStore(hub_root)
-    active_sub = automation_store.create_subscription(
-        {"event_types": ["flow_completed"], "repo_id": hub_env.repo_id}
-    )["subscription"]
-    inactive_sub = automation_store.create_subscription(
-        {"event_types": ["flow_failed"], "repo_id": hub_env.repo_id}
-    )["subscription"]
-    assert automation_store.cancel_subscription(inactive_sub["subscription_id"]) is True
-
-    pending_timer = automation_store.create_timer(
-        {"timer_type": "one_shot", "delay_seconds": 60, "repo_id": hub_env.repo_id}
-    )["timer"]
-    cancelled_timer = automation_store.create_timer(
-        {"timer_type": "one_shot", "delay_seconds": 0, "repo_id": hub_env.repo_id}
-    )["timer"]
-    assert automation_store.cancel_timer(cancelled_timer["timer_id"]) is True
-
-    pending_wakeup, _ = automation_store.enqueue_wakeup(
-        source="transition",
+    active_sub = _create_subscription_rule(
+        hub_root,
+        subscription_id="active-sub",
+        event_types=["flow_completed"],
         repo_id=hub_env.repo_id,
-        reason="pending",
-        timestamp=_iso(stale_at),
     )
-    dispatched_wakeup, _ = automation_store.enqueue_wakeup(
-        source="transition",
+    inactive_sub = _create_subscription_rule(
+        hub_root,
+        subscription_id="inactive-sub",
+        event_types=["flow_failed"],
         repo_id=hub_env.repo_id,
-        reason="done",
-        timestamp=_iso(stale_at),
+        enabled=False,
     )
-    assert automation_store.mark_wakeup_dispatched(dispatched_wakeup.wakeup_id) is True
+    pending_timer = _create_timer_schedule(
+        hub_root,
+        timer_id="pending-timer",
+        repo_id=hub_env.repo_id,
+        state="active",
+    )
+    cancelled_timer = _create_timer_schedule(
+        hub_root,
+        timer_id="cancelled-timer",
+        repo_id=hub_env.repo_id,
+        state="cancelled",
+    )
 
     resolved_dispatch = _write_dispatch(
         hub_root,
@@ -207,19 +293,17 @@ def test_build_pma_hygiene_report_groups_candidates(hub_env) -> None:
 
     assert f"automation:subscription:{inactive_sub['subscription_id']}" in safe_ids
     assert f"automation:timer:{cancelled_timer['timer_id']}" in safe_ids
-    assert f"automation:wakeup:{dispatched_wakeup.wakeup_id}" in safe_ids
     assert "alerts:resolved-alert" in safe_ids
 
     assert f"threads:{bound['managed_thread_id']}" in protected_ids
     assert f"automation:subscription:{active_sub['subscription_id']}" in protected_ids
     assert f"automation:timer:{pending_timer['timer_id']}" in protected_ids
-    assert f"automation:wakeup:{pending_wakeup.wakeup_id}" in protected_ids
     assert "alerts:open-alert" in protected_ids
 
     assert "files:inbox:forgotten.txt" in needs_confirmation_ids
     assert f"threads:{unbound['managed_thread_id']}" in needs_confirmation_ids
     assert resolved_dispatch.exists()
-    assert report["summary"]["safe_apply_count"] >= 4
+    assert report["summary"]["safe_apply_count"] >= 3
 
 
 def test_apply_pma_hygiene_report_only_removes_safe_items(hub_env) -> None:
@@ -232,24 +316,20 @@ def test_apply_pma_hygiene_report_only_removes_safe_items(hub_env) -> None:
     stale_file.write_text("stale", encoding="utf-8")
     _set_file_mtime(stale_file, stale_at)
 
-    automation_store = PmaAutomationStore(hub_root)
-    inactive_sub = automation_store.create_subscription(
-        {"event_types": ["flow_failed"], "repo_id": hub_env.repo_id}
-    )["subscription"]
-    assert automation_store.cancel_subscription(inactive_sub["subscription_id"]) is True
-
-    inactive_timer = automation_store.create_timer(
-        {"timer_type": "one_shot", "delay_seconds": 0, "repo_id": hub_env.repo_id}
-    )["timer"]
-    assert automation_store.cancel_timer(inactive_timer["timer_id"]) is True
-
-    dispatched_wakeup, _ = automation_store.enqueue_wakeup(
-        source="transition",
+    automation_store = AutomationStore(hub_root)
+    inactive_sub = _create_subscription_rule(
+        hub_root,
+        subscription_id="apply-inactive-sub",
+        event_types=["flow_failed"],
         repo_id=hub_env.repo_id,
-        reason="done",
-        timestamp=_iso(stale_at),
+        enabled=False,
     )
-    assert automation_store.mark_wakeup_dispatched(dispatched_wakeup.wakeup_id) is True
+    inactive_timer = _create_timer_schedule(
+        hub_root,
+        timer_id="apply-inactive-timer",
+        repo_id=hub_env.repo_id,
+        state="cancelled",
+    )
 
     resolved_dispatch = _write_dispatch(
         hub_root,
@@ -271,9 +351,10 @@ def test_apply_pma_hygiene_report_only_removes_safe_items(hub_env) -> None:
     assert apply_result["applied"] == apply_result["attempted"]
     assert stale_file.exists()
     assert not resolved_dispatch.exists()
-    assert automation_store.list_subscriptions(include_inactive=True) == []
-    assert automation_store.list_timers(include_inactive=True) == []
-    assert automation_store.list_wakeups() == []
+    assert automation_store.get_rule(inactive_sub["rule_id"]).enabled is False
+    assert automation_store.get_schedule(inactive_timer["schedule_id"]).state == (
+        "cancelled"
+    )
 
 
 def test_apply_pma_hygiene_report_can_include_reviewed_thread_retire(hub_env) -> None:
