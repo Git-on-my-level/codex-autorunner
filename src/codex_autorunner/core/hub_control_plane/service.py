@@ -16,6 +16,7 @@ from ..managed_thread_store import ManagedThreadStore
 from ..orchestration.bindings import OrchestrationBindingStore
 from ..orchestration.cold_trace_store import ColdTraceStore
 from ..orchestration.models import ExecutionRecord, ThreadTarget
+from ..orchestration.runtime_bindings import normalize_backend_binding_state
 from ..orchestration.service import ManagedThreadExecutionStore
 from ..orchestration.sqlite import read_orchestration_compatibility_metadata
 from ..orchestration.turn_timeline import (
@@ -134,6 +135,12 @@ CONTROL_PLANE_CAPABILITIES: tuple[str, ...] = (
     "transcript_writes",
     "workspace_setup_commands",
 )
+
+
+def _resolve_provided_backend_binding_state(value: Optional[str]) -> str:
+    if value is None:
+        raise ValueError("backend_binding_state is required")
+    return normalize_backend_binding_state(value)
 
 
 def _resolve_hub_build_version() -> str:
@@ -447,7 +454,9 @@ class HubSharedStateService:
                     )
                 ),
                 binding_state=(
-                    request.backend_binding_state or "bound"
+                    _resolve_provided_backend_binding_state(
+                        request.backend_binding_state
+                    )
                     if request.backend_binding_state_provided
                     else (
                         current_binding.binding_state
@@ -523,7 +532,9 @@ class HubSharedStateService:
             backend_thread_id,
             backend_runtime_instance_id=runtime_instance_id,
             binding_state=(
-                request.backend_binding_state or "bound"
+                _resolve_provided_backend_binding_state(
+                    request.backend_binding_state
+                )
                 if request.backend_binding_state_provided
                 else (
                     current_binding.binding_state

@@ -129,16 +129,6 @@ def reattach_running_discord_managed_thread_execution(
     execution: Any,
     public_execution_error: str = "Discord PMA turn failed",
 ) -> ManagedThreadStartupReattachResult:
-    workspace_root_raw = getattr(thread, "workspace_root", None)
-    backend_thread_id = str(getattr(thread, "backend_thread_id", "") or "").strip()
-    backend_turn_id = str(getattr(execution, "backend_id", "") or "").strip()
-    if not workspace_root_raw or not backend_thread_id or not backend_turn_id:
-        return ManagedThreadStartupReattachResult("missing_backend_binding")
-
-    harness_for_thread = getattr(orchestration_service, "_harness_for_thread", None)
-    if not callable(harness_for_thread):
-        return ManagedThreadStartupReattachResult("missing_harness_or_unsupported")
-
     started = build_reattached_runtime_thread_execution(
         orchestration_service=orchestration_service,
         managed_thread_id=managed_thread_id,
@@ -146,8 +136,13 @@ def reattach_running_discord_managed_thread_execution(
         execution=execution,
     )
     if started is None:
+        workspace_root_raw = getattr(thread, "workspace_root", None)
+        backend_thread_id = str(getattr(thread, "backend_thread_id", "") or "").strip()
+        backend_turn_id = str(getattr(execution, "backend_id", "") or "").strip()
+        if not workspace_root_raw or not backend_thread_id or not backend_turn_id:
+            return ManagedThreadStartupReattachResult("missing_backend_binding")
         return ManagedThreadStartupReattachResult("missing_harness_or_unsupported")
-    workspace_root = Path(str(workspace_root_raw))
+    workspace_root = started.workspace_root
     coordinator = _build_discord_managed_thread_coordinator(
         service=service,
         orchestration_service=orchestration_service,

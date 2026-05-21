@@ -22,6 +22,7 @@ from .runtime_bindings import RuntimeThreadBinding
 from .thread_titles import choose_owned_thread_title
 
 logger = logging.getLogger(__name__)
+_UNSET = object()
 _MANAGED_TURN_LIFECYCLE_PHASE_KEY = "managed_turn_lifecycle_phase"
 
 
@@ -208,39 +209,59 @@ class ManagedThreadExecutionStore(ThreadExecutionStore):
         self,
         thread_target_id: str,
         *,
-        backend_thread_id: Optional[str] = None,
-        backend_runtime_instance_id: Optional[str] = None,
-        binding_state: Optional[str] = None,
-        state_reason: Optional[str] = None,
+        backend_thread_id: Optional[str] | object = _UNSET,
+        backend_runtime_instance_id: Optional[str] | object = _UNSET,
+        binding_state: Optional[str] | object = _UNSET,
+        state_reason: Optional[str] | object = _UNSET,
     ) -> Optional[ThreadTarget]:
         record = self._store.get_thread(thread_target_id)
         if record is None:
             return None
         if (
-            backend_thread_id is not None
-            or backend_runtime_instance_id is not None
-            or binding_state is not None
-            or state_reason is not None
+            backend_thread_id is not _UNSET
+            or backend_runtime_instance_id is not _UNSET
+            or binding_state is not _UNSET
+            or state_reason is not _UNSET
         ):
             current_binding = self._store.get_thread_runtime_binding(thread_target_id)
             self._store.set_thread_backend_binding(
                 thread_target_id,
-                backend_thread_id
-                or (
-                    current_binding.backend_thread_id
-                    if current_binding is not None
-                    else None
+                (
+                    backend_thread_id
+                    if backend_thread_id is not _UNSET
+                    else (
+                        current_binding.backend_thread_id
+                        if current_binding is not None
+                        else None
+                    )
                 ),
                 backend_runtime_instance_id=(
                     backend_runtime_instance_id
-                    or (
+                    if backend_runtime_instance_id is not _UNSET
+                    else (
                         current_binding.backend_runtime_instance_id
                         if current_binding is not None
                         else None
                     )
                 ),
-                binding_state=binding_state or "bound",
-                state_reason=state_reason,
+                binding_state=(
+                    binding_state or "bound"
+                    if binding_state is not _UNSET
+                    else (
+                        current_binding.binding_state
+                        if current_binding is not None
+                        else "bound"
+                    )
+                ),
+                state_reason=(
+                    state_reason
+                    if state_reason is not _UNSET
+                    else (
+                        current_binding.state_reason
+                        if current_binding is not None
+                        else None
+                    )
+                ),
             )
         self._store.activate_thread(thread_target_id)
         updated = self._store.get_thread(thread_target_id)
