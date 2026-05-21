@@ -1,4 +1,8 @@
-import type { TicketRunGroup } from '$lib/api/readModelContracts';
+import type {
+  ChatFacetTransport,
+  ChatIndexFacets,
+  TicketRunGroup
+} from '$lib/api/readModelContracts';
 import type {
   PmaChatMessage,
   PmaMessageCapsuleRef,
@@ -75,6 +79,38 @@ function messengerSurfaceLabel(slug: string): string {
 function messengerBadgeClass(slug: string): string {
   const safe = slug.replace(/[^a-z0-9-]+/g, '-').replace(/^-+|-+$/g, '') || 'external';
   return `surface-${safe}`;
+}
+
+export function pmaChatFacets(chat: PmaChatSummary | null): ChatIndexFacets | null {
+  const rawFacets = chat?.raw.facets;
+  if (!rawFacets || typeof rawFacets !== 'object' || Array.isArray(rawFacets)) return null;
+  const facets = rawFacets as Partial<ChatIndexFacets>;
+  if (!['regular', 'ticket_run', 'automation', 'system'].includes(String(facets.category))) return null;
+  return {
+    category: facets.category as ChatIndexFacets['category'],
+    turnKinds: Array.isArray(facets.turnKinds) ? facets.turnKinds : [],
+    originKinds: Array.isArray(facets.originKinds) ? facets.originKinds : [],
+    transports: Array.isArray(facets.transports) ? facets.transports : [],
+    scopeKind: facets.scopeKind ?? null,
+    scopeId: facets.scopeId ?? null,
+    agentKind: facets.agentKind ?? null
+  };
+}
+
+export function chatTransportLabel(transport: ChatFacetTransport): string {
+  return transport === 'pma' ? 'PMA' : messengerSurfaceLabel(transport);
+}
+
+export function pmaChatTransportBadges(
+  chat: PmaChatSummary | null
+): { slug: ChatFacetTransport; label: string; badgeClass: string }[] {
+  const facets = pmaChatFacets(chat);
+  if (!facets) return [];
+  return facets.transports.map((transport) => ({
+    slug: transport,
+    label: chatTransportLabel(transport),
+    badgeClass: messengerBadgeClass(transport)
+  }));
 }
 
 /** Badge + filter slug for chats bound to an external messenger surface (Discord, Telegram, …). */
@@ -738,20 +774,7 @@ export function summarizeFilterCounts(
 }
 
 export function pmaChatIsAutomation(chat: PmaChatSummary | null): boolean {
-  if (!chat) return false;
-  const debug = recordValue(chat.raw.debug);
-  const row = recordValue(chat.raw.row);
-  return Boolean(
-    recordValue(debug?.automation) ||
-      stringValue(debug?.automation_job_id) ||
-      stringValue(debug?.automation_rule_id) ||
-      recordValue(row?.automation) ||
-      stringValue(row?.automation_job_id) ||
-      stringValue(row?.automation_rule_id) ||
-      recordValue(chat.raw.automation) ||
-      stringValue(chat.raw.automation_job_id) ||
-      stringValue(chat.raw.automation_rule_id)
-  );
+  return pmaChatFacets(chat)?.category === 'automation';
 }
 
 export function adjustedUnreadFilterCount(

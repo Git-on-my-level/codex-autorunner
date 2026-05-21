@@ -406,11 +406,21 @@ describe('PMA chat view helpers', () => {
     expect(summarizeFilterCounts(chats, lastSeen)).toEqual({ all: 3, active: 1, waiting: 1, unread: 2, archived: 0 });
   });
 
-  it('filters automation-owned chats by backend metadata', () => {
+  it('filters automation-owned chats by typed backend facets', () => {
     const automationChat: PmaChatSummary = {
       ...baseChat,
       id: 'automation-chat',
-      raw: { debug: { automation_job_id: 'job-1' } }
+      raw: {
+        facets: {
+          category: 'automation',
+          turnKinds: ['automation'],
+          originKinds: ['automation'],
+          transports: ['pma'],
+          scopeKind: 'hub',
+          scopeId: 'hub',
+          agentKind: 'coding_agent'
+        }
+      }
     };
     const chats = [baseChat, automationChat];
 
