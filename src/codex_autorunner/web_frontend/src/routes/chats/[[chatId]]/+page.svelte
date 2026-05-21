@@ -153,7 +153,8 @@
     'Summarize the conversation so far into a concise context block I can paste into a new thread. Include goals, constraints, decisions, and current state.';
   type ChatTranscriptListItem =
     | { kind: 'card'; id: string; card: ChatTranscriptCard }
-    | { kind: 'typing'; id: string; title: string };
+    | { kind: 'typing'; id: string; title: string }
+    | { kind: 'shared-files'; id: string };
   let readModelState = $state(readModelEntityStore.snapshot());
   let activeChatId = $state<string | null>(null);
   // Unsent new chats are page-local only: `localDraftChat` drives the composer until
@@ -572,7 +573,10 @@
   });
   const transcriptListItems = $derived<ChatTranscriptListItem[]>([
     ...displayTranscriptCards.map((card) => ({ kind: 'card' as const, id: card.id, card })),
-    ...(showTypingIndicator ? [{ kind: 'typing' as const, id: 'typing-indicator', title: 'Assistant is typing' }] : [])
+    ...(showTypingIndicator ? [{ kind: 'typing' as const, id: 'typing-indicator', title: 'Assistant is typing' }] : []),
+    ...(assistantSharedFiles.length > 0
+      ? [{ kind: 'shared-files' as const, id: 'assistant-shared-files' }]
+      : [])
   ]);
   const srAnnouncement = $derived.by<string>(() => {
     if (displayedProgress?.status !== 'running') return '';
@@ -2296,6 +2300,11 @@
                 cards={[item.card]}
                 assistantLabel={chatAgentDisplayLabel}
                 {streamingMessageId}
+              />
+            {:else if item.kind === 'shared-files'}
+              <ChatTranscriptCards
+                cards={[]}
+                assistantLabel={chatAgentDisplayLabel}
                 sharedFiles={assistantSharedFiles}
               />
             {:else}

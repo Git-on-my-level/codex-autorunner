@@ -890,8 +890,8 @@ class RepoWorktreeReadModelService:
             self._active_chat_binding_counts_by_source
         )
         chat_binding_counts = {
-            repo_id: sum(source_counts.values())
-            for repo_id, source_counts in chat_binding_counts_by_source.items()
+            workspace_id: sum(source_counts.values())
+            for workspace_id, source_counts in chat_binding_counts_by_source.items()
         }
         display_names_by_repo = await asyncio.to_thread(
             self._chat_binding_display_names_by_repo, snapshots
