@@ -12,6 +12,20 @@
     label?: string;
     options: DropdownSelectOption[];
   };
+
+  export function dropdownSearchTerms(query: string): string[] {
+    return query
+      .trim()
+      .toLowerCase()
+      .split(/\s+/)
+      .filter(Boolean);
+  }
+
+  export function dropdownSearchMatches(fields: Array<string | undefined>, terms: string[]): boolean {
+    if (terms.length === 0) return true;
+    const haystack = fields.filter(Boolean).join(' ').toLowerCase();
+    return terms.every((term) => haystack.includes(term));
+  }
 </script>
 
 <script lang="ts">
@@ -63,19 +77,15 @@
   const selectedBadge = $derived(selectedOption?.triggerBadge ?? selectedOption?.badge ?? '');
 
   const visibleGroups = $derived.by<DropdownSelectGroup[]>(() => {
-    const needle = query.trim().toLowerCase();
-    if (!needle) return sourceGroups;
+    const terms = dropdownSearchTerms(query);
+    if (terms.length === 0) return sourceGroups;
     return sourceGroups
       .map((group) => {
-        const groupMatches = (group.label ?? '').toLowerCase().includes(needle);
+        const groupMatches = dropdownSearchMatches([group.label], terms);
         const filtered = groupMatches
           ? group.options
           : group.options.filter((option) =>
-              [option.label, option.detail, option.badge, option.value]
-                .filter(Boolean)
-                .join(' ')
-                .toLowerCase()
-                .includes(needle)
+              dropdownSearchMatches([group.label, option.label, option.detail, option.badge, option.value], terms)
             );
         return { ...group, options: filtered };
       })

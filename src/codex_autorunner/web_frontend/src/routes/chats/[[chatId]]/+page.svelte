@@ -589,9 +589,7 @@
   const activeMessengerSurface = $derived(chatMessengerSurface(activeChat));
   const activeSharedFileCount = $derived(activeSurfaceDeliveries.length);
   const activeRepoIngress = $derived(repoIngressForChat(activeChat));
-  const createChatLabel = $derived(
-    creating ? 'Creating...' : newChatKind === 'agent' && canStartCodingAgentChat ? '+ Coding agent' : '+ PMA'
-  );
+  const createChatLabel = $derived(creating ? 'Creating...' : '+ New');
   const headerScopeLine = $derived(pmaChatHeaderScopeLine(activeChat, repoLabelForRepoId));
   /** Omit connected “Live · …” — redundant with the turn-status pill on the scope row. */
   const showStreamHealthAside = $derived(
@@ -736,7 +734,15 @@
   });
 
   $effect(() => {
-    if (!canStartCodingAgentChat && newChatKind === 'agent') newChatKind = 'pma';
+    if (newChatKind !== 'agent') return;
+    if (canStartCodingAgentChat) return;
+    const scoped = firstScopedScopeOption();
+    if (scoped) {
+      selectedScopeId = scoped.id;
+      selectedScopeSource = 'picker_explicit';
+      return;
+    }
+    newChatKind = 'pma';
   });
 
   $effect(() => {
@@ -1272,6 +1278,23 @@
   function handleScopePickerChange(): void {
     selectedScopeSource = selectedScopeId === 'local' ? 'default_hub' : 'picker_explicit';
     if (newChatKind === 'agent' && selectedScopeId === 'local') newChatKind = 'pma';
+    persistCurrentNewChatPreference();
+  }
+
+  function firstScopedScopeOption(): PmaChatScopeOption | null {
+    return scopeOptions.find((scope) => scope.kind !== 'local') ?? null;
+  }
+
+  function handleModePickerChange(): void {
+    if (newChatKind === 'agent' && selectedScopeId === 'local') {
+      const scoped = firstScopedScopeOption();
+      if (scoped) {
+        selectedScopeId = scoped.id;
+        selectedScopeSource = 'picker_explicit';
+      } else {
+        newChatKind = 'pma';
+      }
+    }
     persistCurrentNewChatPreference();
   }
 
@@ -2267,12 +2290,14 @@
             bind:modelValue={selectedModel}
             bind:reasoningValue={selectedReasoning}
             bind:scopeValue={selectedScopeId}
+            bind:modeValue={newChatKind}
             {models}
             {scopeOptions}
             loading={loadingModels}
             showAgent={showAgentSelector}
             onAgentChange={handleAgentChange}
             onPickerChange={handlePickerChange}
+            onModeChange={handleModePickerChange}
             onScopeChange={handleScopePickerChange}
           />
         </div>

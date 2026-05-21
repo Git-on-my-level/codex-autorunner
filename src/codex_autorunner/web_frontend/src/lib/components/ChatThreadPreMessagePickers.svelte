@@ -17,12 +17,14 @@
     modelValue = $bindable(''),
     reasoningValue = $bindable(''),
     scopeValue = $bindable('local'),
+    modeValue = $bindable<'pma' | 'agent'>('pma'),
     scopeOptions = [],
     loading = false,
     modelCatalogError = null,
     showAgent = undefined,
     onAgentChange = undefined,
     onPickerChange = undefined,
+    onModeChange = undefined,
     onScopeChange = undefined
   }: {
     agents?: PickerRecord[];
@@ -32,6 +34,7 @@
     modelValue?: string;
     reasoningValue?: string;
     scopeValue?: string;
+    modeValue?: 'pma' | 'agent';
     scopeOptions?: PmaChatScopeOption[];
     loading?: boolean;
     modelCatalogError?: string | null;
@@ -39,13 +42,51 @@
     onAgentChange?: (() => void) | undefined;
     /** Fires when agent / profile / model / effort controls change (including programmatic binds). */
     onPickerChange?: (() => void) | undefined;
+    /** Fires only when the user explicitly changes the new-chat mode picker. */
+    onModeChange?: (() => void) | undefined;
     /** Fires only when the user explicitly changes the new-chat scope picker. */
     onScopeChange?: (() => void) | undefined;
   } = $props();
+
+  const scopedOptions = $derived(scopeOptions.filter((scope) => scope.kind !== 'local'));
+  const visibleScopeOptions = $derived(modeValue === 'agent' ? scopedOptions : scopeOptions);
+
+  function selectMode(next: 'pma' | 'agent'): void {
+    if (next === 'agent' && scopedOptions.length === 0) return;
+    if (modeValue === next) return;
+    modeValue = next;
+    onModeChange?.();
+  }
 </script>
 
+<div class="start-picker-row mode-picker-row">
+  <span>mode</span>
+  <div class="mode-segment" role="radiogroup" aria-label="Chat mode">
+    <button
+      type="button"
+      class:active={modeValue === 'pma'}
+      aria-checked={modeValue === 'pma'}
+      role="radio"
+      onclick={() => selectMode('pma')}
+    >
+      PMA
+    </button>
+    <button
+      type="button"
+      class:active={modeValue === 'agent'}
+      aria-checked={modeValue === 'agent'}
+      role="radio"
+      disabled={scopedOptions.length === 0}
+      title={scopedOptions.length === 0 ? 'Add a repo or worktree to start an agent chat' : 'Agent chat'}
+      onclick={() => selectMode('agent')}
+    >
+      Agent
+    </button>
+  </div>
+</div>
+
 {#if scopeOptions.length > 1}
-  <ChatScopePicker {scopeOptions} bind:value={scopeValue} onChange={onScopeChange} />
+  <ChatScopePicker scopeOptions={visibleScopeOptions} bind:value={scopeValue} onChange={onScopeChange} />
 {/if}
 
 <AgentModelReasoningPicker
@@ -64,3 +105,43 @@
   onchange={onPickerChange}
 />
 
+<style>
+  .mode-segment {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 2px;
+    min-width: 0;
+    padding: 2px;
+    border: 1px solid var(--color-border-subtle);
+    border-radius: 7px;
+    background: var(--color-surface);
+  }
+
+  .mode-segment button {
+    min-width: 0;
+    min-height: 26px;
+    padding: 0 var(--space-2);
+    border: none;
+    border-radius: 5px;
+    background: transparent;
+    color: var(--color-ink-muted);
+    font-size: var(--font-size-1);
+    font-weight: 600;
+    cursor: pointer;
+  }
+
+  .mode-segment button.active {
+    background: var(--color-accent-soft);
+    color: var(--color-accent);
+  }
+
+  .mode-segment button:focus-visible {
+    outline: none;
+    box-shadow: var(--shadow-focus);
+  }
+
+  .mode-segment button:disabled {
+    cursor: not-allowed;
+    opacity: 0.45;
+  }
+</style>
