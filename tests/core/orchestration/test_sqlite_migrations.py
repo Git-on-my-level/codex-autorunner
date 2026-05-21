@@ -342,17 +342,12 @@ def test_turn_execution_contract_migration_backfills_legacy_thread_rows(
         conn.execute("DELETE FROM orch_schema_migrations WHERE version >= 37")
 
         version = apply_orchestration_migrations(conn)
-        rows = {
-            row["execution_id"]: row
-            for row in conn.execute(
-                """
+        rows = {row["execution_id"]: row for row in conn.execute("""
                 SELECT execution_id, turn_contract_version, turn_request_json,
                        turn_record_json
                   FROM orch_thread_executions
                  WHERE thread_target_id = 'thread-legacy'
-                """
-            ).fetchall()
-        }
+                """).fetchall()}
 
     assert version == ORCHESTRATION_SCHEMA_VERSION
     queued_request = json.loads(rows["turn-queued"]["turn_request_json"])
@@ -528,16 +523,11 @@ def test_turn_execution_contract_migration_repairs_legacy_opencode_models(
         conn.execute("DELETE FROM orch_schema_migrations WHERE version >= 37")
 
         version = apply_orchestration_migrations(conn)
-        rows = {
-            row["execution_id"]: row
-            for row in conn.execute(
-                """
+        rows = {row["execution_id"]: row for row in conn.execute("""
                 SELECT execution_id, turn_request_json, turn_record_json
                   FROM orch_thread_executions
                  WHERE thread_target_id = 'thread-opencode-legacy'
-                """
-            ).fetchall()
-        }
+                """).fetchall()}
 
     assert version == ORCHESTRATION_SCHEMA_VERSION
     unresolved_request = json.loads(rows["turn-unresolved"]["turn_request_json"])

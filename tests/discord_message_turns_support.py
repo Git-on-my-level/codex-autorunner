@@ -599,7 +599,7 @@ async def _run_interrupt_send_turn_harness(
         service,
         thread_target_id="thread-1",
         source_message_id=progress_source_message_id,
-        acknowledgement="Message received. Switching to it now...",
+        acknowledgement="Switching to your latest message...",
     )
     if pre_run is not None:
         await pre_run(service)
@@ -648,7 +648,7 @@ async def test_orchestrated_turn_interrupt_send_hands_off_progress_message(
     assert rest.edited_channel_messages[-1]["message_id"] == "msg-1"
     assert (
         rest.edited_channel_messages[-1]["payload"]["content"]
-        == "Message received. Switching to it now..."
+        == "Switching to your latest message..."
     )
     assert (
         discord_message_turns_module._claim_discord_reusable_progress_message(
@@ -708,7 +708,7 @@ async def test_orchestrated_turn_interrupt_send_acknowledges_when_progress_messa
     )
 
     assert result.send_final_message is True
-    assert result.final_message == "Message received. Switching to it now..."
+    assert result.final_message == "Switching to your latest message..."
     assert service._discord_turn_progress_reuse_requests == {}
     assert service._discord_reusable_progress_messages == {}
 
@@ -732,7 +732,7 @@ async def test_orchestrated_turn_interrupt_send_falls_back_when_progress_ack_edi
     )
 
     assert result.send_final_message is True
-    assert result.final_message == "Message received. Switching to it now..."
+    assert result.final_message == "Switching to your latest message..."
     assert len(rest.channel_messages) == 1
     assert service._discord_turn_progress_reuse_requests == {}
     assert service._discord_reusable_progress_messages == {}

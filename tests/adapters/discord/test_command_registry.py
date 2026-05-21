@@ -141,7 +141,7 @@ def test_registry_matches_high_risk_component_and_modal_patterns() -> None:
     assert modal_route_for_custom_id("tickets_modal:abc123") is not None
 
 
-def test_interrupt_components_share_ephemeral_scheduler_ack_strategy() -> None:
+def test_interrupt_components_use_expected_scheduler_ack_strategy() -> None:
     assert component_scheduler_ack_strategy("cancel_turn") == "scheduler_ephemeral"
     assert (
         component_scheduler_ack_strategy("cancel_turn:thread-1:turn-1")
@@ -149,11 +149,11 @@ def test_interrupt_components_share_ephemeral_scheduler_ack_strategy() -> None:
     )
     assert (
         component_scheduler_ack_strategy("queue_interrupt_send:message-1")
-        == "scheduler_ephemeral"
+        == "scheduler_component_update"
     )
     assert (
         component_scheduler_ack_strategy("qis:turn-1:message-1")
-        == "scheduler_ephemeral"
+        == "scheduler_component_update"
     )
 
 

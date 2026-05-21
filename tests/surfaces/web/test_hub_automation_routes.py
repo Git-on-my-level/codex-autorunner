@@ -231,9 +231,10 @@ def test_hub_automation_workspace_batches_jobs_and_target_options(
 
     assert response.status_code == 200
     workspace = response.json()
+    workspace_rows = {row["id"]: row for row in workspace["automations"]}
     assert workspace["summary"]["failed_jobs"] == 1
-    assert len(workspace["automations"][0]["jobs"]) == 25
-    assert "executor" in workspace["automations"][0]
+    assert len(workspace_rows["rule-0"]["jobs"]) == 25
+    assert "executor" in workspace_rows["rule-0"]
     assert "target_options" in workspace
     assert set(workspace["agent_defaults"]) == {
         "default_agent",

@@ -621,9 +621,9 @@ CHAT_ACTION_UX_CONTRACT: tuple[ChatActionUxContractEntry, ...] = (
     ),
     _control_entry(
         "queue_interrupt_send",
-        ack_class="defer_ephemeral",
+        ack_class="defer_component_update",
         control_priority="interrupt",
-        anchor_message_reuse="prefer",
+        anchor_message_reuse="require",
         optimistic_ui_allowed=True,
     ),
     _control_entry(

@@ -581,14 +581,12 @@ def collect_canonical_turn_state_diagnostics(
     resolved_now = now or datetime.now(timezone.utc)
     diagnostics: list[CanonicalTurnStateDiagnostic] = []
     with open_orchestration_sqlite(hub_root) as conn:
-        rows = conn.execute(
-            """
+        rows = conn.execute("""
             SELECT execution_id, thread_target_id, status, started_at, finished_at,
                    created_at, turn_request_json, turn_record_json, error_text
               FROM orch_thread_executions
              ORDER BY created_at ASC, execution_id ASC
-            """
-        ).fetchall()
+            """).fetchall()
         for row in rows:
             execution_id = str(row["execution_id"] or "").strip()
             request = _json_loads_object(row["turn_request_json"])

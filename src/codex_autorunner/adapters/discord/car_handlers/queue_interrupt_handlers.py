@@ -25,6 +25,8 @@ from ..queue_status_lifecycle import (
 
 _logger = logging.getLogger(__name__)
 
+SWITCHING_TO_LATEST_MESSAGE_TEXT = "Switching to your latest message..."
+
 
 async def send_interrupt_component_response(
     service: Any,
@@ -212,11 +214,12 @@ async def handle_queued_turn_interrupt_send_button(
         custom_id
     )
     if not execution_id or not source_message_id:
-        await send_interrupt_component_response(
+        await defer_and_update_runtime_component_message(
             service,
             interaction_id,
             interaction_token,
             "Queued request is unavailable.",
+            components=[],
         )
         return
     binding = await service._store.get_binding(channel_id=channel_id)
@@ -226,11 +229,12 @@ async def handle_queued_turn_interrupt_send_button(
         service._get_discord_thread_binding(channel_id=channel_id, mode=mode)
     )
     if current_thread is None:
-        await send_interrupt_component_response(
+        await defer_and_update_runtime_component_message(
             service,
             interaction_id,
             interaction_token,
             "Queued request is unavailable.",
+            components=[],
         )
         return
     promoted = orchestration_service.promote_queued_execution(
@@ -238,11 +242,12 @@ async def handle_queued_turn_interrupt_send_button(
         execution_id,
     )
     if not promoted:
-        await send_interrupt_component_response(
+        await defer_and_update_runtime_component_message(
             service,
             interaction_id,
             interaction_token,
             "Queued request is no longer pending.",
+            components=[],
         )
         return
     get_running_execution = getattr(
@@ -253,29 +258,30 @@ async def handle_queued_turn_interrupt_send_button(
     if callable(get_running_execution):
         running_execution = get_running_execution(current_thread.thread_target_id)
         if running_execution is None:
-            await send_interrupt_component_response(
+            await defer_and_update_runtime_component_message(
                 service,
                 interaction_id,
                 interaction_token,
                 "Queued request moved to the front.",
+                components=[],
             )
             return
     await defer_and_update_runtime_component_message(
         service,
         interaction_id,
         interaction_token,
-        "Message received. Switching to it now...",
+        SWITCHING_TO_LATEST_MESSAGE_TEXT,
         components=[],
     )
     await service._handle_car_interrupt(
         interaction_id,
         interaction_token,
         channel_id=channel_id,
-        active_turn_text="Message received. Switching to it now...",
+        active_turn_text=SWITCHING_TO_LATEST_MESSAGE_TEXT,
         cancel_queued=False,
         allow_promoted_no_active_success=True,
         progress_reuse_source_message_id=source_message_id,
-        progress_reuse_acknowledgement="Message received. Switching to it now...",
+        progress_reuse_acknowledgement=SWITCHING_TO_LATEST_MESSAGE_TEXT,
         source="component",
         source_custom_id=custom_id,
         source_message_id=message_id,
@@ -416,17 +422,17 @@ async def handle_queue_interrupt_send_button(
         service,
         interaction_id,
         interaction_token,
-        "Message received. Switching to it now...",
+        SWITCHING_TO_LATEST_MESSAGE_TEXT,
         components=[],
     )
     await service._handle_car_interrupt(
         interaction_id,
         interaction_token,
         channel_id=channel_id,
-        active_turn_text="Message received. Switching to it now...",
+        active_turn_text=SWITCHING_TO_LATEST_MESSAGE_TEXT,
         allow_promoted_no_active_success=True,
         progress_reuse_source_message_id=action.queued_user_message_id,
-        progress_reuse_acknowledgement="Message received. Switching to it now...",
+        progress_reuse_acknowledgement=SWITCHING_TO_LATEST_MESSAGE_TEXT,
         dispatcher_conversation_id=action.conversation_id,
         source="component",
         source_custom_id=custom_id,

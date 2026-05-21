@@ -1984,12 +1984,10 @@ def _apply_v37(conn: sqlite3.Connection) -> None:
                 request.request_id,
             ),
         )
-    conn.execute(
-        """
+    conn.execute("""
         CREATE INDEX IF NOT EXISTS idx_orch_thread_executions_turn_contract
             ON orch_thread_executions(turn_contract_version, status, created_at)
-        """
-    )
+        """)
 
 
 def _apply_v38(conn: sqlite3.Connection) -> None:
