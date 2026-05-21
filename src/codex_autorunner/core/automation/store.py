@@ -122,6 +122,15 @@ class AutomationStore:
             ).fetchall()
         return [self._row_to_rule(row) for row in rows]
 
+    def delete_rule(self, rule_id: str) -> bool:
+        with open_orchestration_sqlite(self._hub_root, durable=self._durable) as conn:
+            with conn:
+                cursor = conn.execute(
+                    "DELETE FROM orch_automation_rules WHERE rule_id = ?",
+                    (rule_id,),
+                )
+                return cursor.rowcount > 0
+
     def set_rule_enabled(self, rule_id: str, enabled: bool) -> Optional[AutomationRule]:
         with open_orchestration_sqlite(self._hub_root, durable=self._durable) as conn:
             with conn:

@@ -292,6 +292,35 @@ def test_hub_automations_pause_and_resume(tmp_path):
     assert resumed.json()["automation"]["enabled"] is True
 
 
+def test_hub_automations_delete_requires_paused(tmp_path):
+    hub_root = tmp_path / "hub"
+    seed_hub_files(hub_root, force=True)
+    client = TestClient(create_hub_app(hub_root))
+    created = client.post(
+        "/hub/automations",
+        json={"preset": "security_scan_pr", "repo_id": "repo-1"},
+    )
+    rule_id = created.json()["automation"]["id"]
+
+    # Created as paused by default — delete should succeed.
+    missing = client.delete("/hub/automations/does-not-exist")
+    assert missing.status_code == 404
+
+    client.post(f"/hub/automations/{rule_id}/enabled", json={"enabled": True})
+    blocked = client.delete(f"/hub/automations/{rule_id}")
+    assert blocked.status_code == 400
+    assert blocked.json()["detail"]["code"] == "AUTOMATION_DELETE_REQUIRES_PAUSED"
+
+    client.post(f"/hub/automations/{rule_id}/enabled", json={"enabled": False})
+    deleted = client.delete(f"/hub/automations/{rule_id}")
+    assert deleted.status_code == 200
+    assert deleted.json()["deleted"] == rule_id
+
+    # Subsequent get should 404.
+    after = client.get(f"/hub/automations/{rule_id}")
+    assert after.status_code == 404
+
+
 def test_hub_automations_get_and_update_details(tmp_path):
     hub_root = tmp_path / "hub"
     seed_hub_files(hub_root, force=True)

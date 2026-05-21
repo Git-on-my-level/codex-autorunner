@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Literal, Optional
+from typing import Literal, Optional, cast
 
 ManagedTurnLifecyclePhase = Literal[
     "accepted",
@@ -152,7 +152,7 @@ def normalize_managed_turn_lifecycle_phase(
 ) -> Optional[ManagedTurnLifecyclePhase]:
     phase = str(value or "").strip().lower()
     if phase in MANAGED_TURN_LIFECYCLE_PHASES:
-        return phase
+        return cast(ManagedTurnLifecyclePhase, phase)
     return None
 
 

@@ -746,6 +746,8 @@ export class WebApiClient {
       ),
     runAutomation: async (ruleId: string): Promise<ApiResult<JsonRecord>> =>
       this.requestJson<JsonRecord>(`/hub/automations/${encodeURIComponent(ruleId)}/run`, { method: 'POST' }),
+    deleteAutomation: async (ruleId: string): Promise<ApiResult<JsonRecord>> =>
+      this.requestJson<JsonRecord>(`/hub/automations/${encodeURIComponent(ruleId)}`, { method: 'DELETE' }),
     setAutomationEnabled: async (ruleId: string, enabled: boolean): Promise<ApiResult<AutomationSummary>> =>
       mapResult(
         await this.requestJson<JsonRecord>(`/hub/automations/${encodeURIComponent(ruleId)}/enabled`, {

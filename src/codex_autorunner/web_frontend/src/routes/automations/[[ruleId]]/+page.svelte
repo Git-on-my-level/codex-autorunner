@@ -6,6 +6,7 @@
   import MasterDetail from '$lib/components/MasterDetail.svelte';
   import RunHistoryList from '$lib/components/tickets/RunHistoryList.svelte';
   import TicketPackEditor from '$lib/components/tickets/TicketPackEditor.svelte';
+  import { confirmDialog } from '$lib/components/confirmDialog';
   import { withRuntimeBasePath as href } from '$lib/runtime/basePath';
   import { repoAccent, repoInitials } from '$lib/viewModels/repoIdentity';
   import { runHistoryFromAutomationJobs } from '$lib/viewModels/runHistory';
@@ -22,7 +23,7 @@
   import { resolveAgentModelSelection } from '$lib/viewModels/modelPickers';
 
   type PresetId = 'security_scan_pr' | 'weekly_ticket_flow';
-  type SelectionKind = 'automation' | 'preset';
+  type SelectionKind = 'automation' | 'preset' | null;
   type JsonField = 'trigger' | 'filters' | 'target' | 'executor' | 'policy' | 'metadata';
   type TicketPackTicket = { path: string; content: string };
 
@@ -37,9 +38,10 @@
   let actionId = $state<string | null>(null);
   let error = $state<ApiError | null>(null);
   let notice = $state<string | null>(null);
-  let selectedKind = $state<SelectionKind>('preset');
-  let selectedId = $state<string>('security_scan_pr');
+  let selectedKind = $state<SelectionKind>(null);
+  let selectedId = $state<string>('');
   let detailMode = $state<'list' | 'detail'>('list');
+  let deleting = $state(false);
   let saveTimer: number | null = null;
 
   let selectedRepoId = $state('');
@@ -127,6 +129,11 @@
       selectedKind = 'automation';
       selectedId = ruleId;
       detailMode = 'detail';
+    } else if (!ruleId && selectedKind === 'automation') {
+      // The selected automation was deleted or the URL was cleared — drop back to the list.
+      selectedKind = null;
+      selectedId = '';
+      detailMode = 'list';
     } else if (!ruleId) {
       detailMode = selectedKind === 'preset' ? 'detail' : 'list';
     }
@@ -142,7 +149,8 @@
   }
 
   function selectedPreset(): AutomationPresetDescriptor | null {
-    return presets.find((preset) => preset.id === selectedId) ?? presets[0] ?? null;
+    if (selectedKind !== 'preset') return null;
+    return presets.find((preset) => preset.id === selectedId) ?? null;
   }
 
   function renderPresetTemplate(template: string, repoId: string, values: JsonRecord = {}): string {
@@ -370,6 +378,44 @@
     }
     notice = `Queued ${automation.name}`;
     await load();
+  }
+
+  async function deleteAutomation(automation: AutomationSummary): Promise<void> {
+    if (deleting) return;
+    const confirmed = await confirmDialog({
+      title: 'Delete automation',
+      message: `Delete “${automation.name}”? This removes the rule and all of its schedules and run history. This can’t be undone.`,
+      confirmText: 'Delete',
+      cancelText: 'Cancel',
+      danger: true
+    });
+    if (!confirmed) return;
+    deleting = true;
+    notice = null;
+    const result = await webApi.hub.deleteAutomation(automation.id);
+    deleting = false;
+    if (!result.ok) {
+      error = result.error;
+      return;
+    }
+    if (overview) {
+      const nextAutomations = overview.automations.filter((entry) => entry.id !== automation.id);
+      overview = {
+        ...overview,
+        automations: nextAutomations,
+        summary: {
+          total: nextAutomations.length,
+          active: nextAutomations.filter((entry) => entry.enabled).length,
+          paused: nextAutomations.filter((entry) => !entry.enabled).length,
+          failedJobs: nextAutomations.filter((entry) => entry.lastJob?.state === 'failed').length
+        }
+      };
+    }
+    selectedKind = null;
+    selectedId = '';
+    detailMode = 'list';
+    notice = `Deleted ${automation.name}`;
+    if (routeRuleId) await goto(href('/automations'));
   }
 
   async function setEnabled(automation: AutomationSummary, enabled: boolean): Promise<void> {
@@ -713,6 +759,13 @@
     return Boolean(automation?.product.editable.canEnable);
   }
 
+  function canDelete(): boolean {
+    const automation = selectedAutomation();
+    if (!automation) return false;
+    if (isManagedAutomation(automation)) return false;
+    return !automation.enabled;
+  }
+
   function selectedMessagePreview(): string {
     const automation = selectedAutomation();
     if (automation) return automation.product.messagePreview || automation.product.message.preview || 'No product-visible message source is declared.';
@@ -754,8 +807,7 @@
           <span class="status-dot {status.dot}"></span>
           <span>{status.label}</span>
           <span class="meta-dot">·</span>
-          <span>{scheduleLabel(automation)}</span>
-          <span class="meta-dot">·</span>
+          <span class="meta-schedule">{scheduleLabel(automation)}</span>
           <span class="kind-chip">{kindLabel(automation.kind)}</span>
         </span>
       </span>
@@ -770,11 +822,12 @@
 
 <MasterDetail
   label="Automations workspace"
-  selected={true}
+  selected={selectedKind !== null}
   mode={detailMode}
   listLabel="Automations"
   detailLabel="Detail"
   showSwitch={false}
+  hideDetail={selectedKind === null}
   onModeChange={(mode) => {
     detailMode = mode;
     if (mode === 'list' && routeRuleId) void goto(href('/automations'));
@@ -887,6 +940,13 @@
   {/snippet}
 
   {#snippet detail()}
+    {#if selectedKind === null}
+      <section class="automation-detail automation-detail-empty" aria-label="Automation detail">
+        <div class="detail-empty">
+          <p>Pick an automation from the list, or start from a preset.</p>
+        </div>
+      </section>
+    {:else}
     <section class="automation-detail" aria-label="Automation detail">
       {#if error}
         <div class="automation-notice error" role="alert">{error.message}</div>
@@ -915,6 +975,14 @@
               onclick={() => selectedAutomation() && setEnabled(selectedAutomation() as AutomationSummary, !detailEnabled)}
             >{detailEnabled ? 'Pause' : 'Resume'}</button>
             <button type="button" class="ghost-button" onclick={() => openPmaWithDraft(editWithPmaPrompt())}>Edit with PMA</button>
+            {#if canDelete()}
+              <button
+                type="button"
+                class="ghost-button danger-button"
+                disabled={deleting || actionId === selectedAutomation()?.id}
+                onclick={() => selectedAutomation() && void deleteAutomation(selectedAutomation() as AutomationSummary)}
+              >{deleting ? 'Deleting…' : 'Delete'}</button>
+            {/if}
           {:else}
             <button type="button" class="ghost-button" onclick={() => openPmaWithDraft(editWithPmaPrompt())}>Adapt with PMA</button>
             <button
@@ -1156,6 +1224,7 @@
         </div>
       </details>
     </section>
+    {/if}
   {/snippet}
 </MasterDetail>
 
@@ -1402,7 +1471,7 @@
     margin: 0;
     padding: 0;
     display: grid;
-    gap: var(--space-2);
+    gap: 6px;
   }
 
   .automation-card {
@@ -1410,10 +1479,10 @@
     width: 100%;
     display: flex;
     align-items: center;
-    gap: var(--space-3);
-    padding: var(--space-3);
+    gap: var(--space-2);
+    padding: var(--space-2) var(--space-3);
     border: 1px solid var(--color-border-subtle);
-    border-radius: 12px;
+    border-radius: 10px;
     background: var(--color-surface);
     text-align: left;
     cursor: pointer;
@@ -1444,13 +1513,14 @@
 
   .automation-avatar {
     flex: 0 0 auto;
-    width: 36px;
-    height: 36px;
-    border-radius: 10px;
+    width: 28px;
+    height: 28px;
+    border-radius: 7px;
     display: grid;
     place-items: center;
-    font-size: var(--font-size-1);
-    font-weight: 650;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: -0.02em;
     color: var(--accent, var(--color-accent));
     background: color-mix(in srgb, var(--accent, var(--color-accent)) 12%, white);
     box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent, var(--color-accent)) 18%, transparent);
@@ -1458,7 +1528,7 @@
 
   .preset-avatar {
     --accent: var(--color-ink-muted);
-    font-size: var(--font-size-3);
+    font-size: var(--font-size-2);
     font-weight: 500;
   }
 
@@ -1466,25 +1536,35 @@
     flex: 1 1 auto;
     min-width: 0;
     display: grid;
-    gap: 3px;
+    gap: 1px;
   }
 
   .automation-card-title {
-    font-size: var(--font-size-2);
+    font-size: var(--font-size-1);
     font-weight: 600;
     color: var(--color-ink);
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+    line-height: 1.25;
   }
 
   .automation-card-meta {
     display: flex;
     align-items: center;
-    flex-wrap: wrap;
+    flex-wrap: nowrap;
     gap: 5px;
     font-size: var(--font-size-0);
     color: var(--color-ink-muted);
+    overflow: hidden;
+    min-width: 0;
+  }
+
+  .automation-card-meta > .meta-schedule {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   .meta-dot {
@@ -1493,6 +1573,7 @@
   }
 
   .kind-chip {
+    flex: 0 0 auto;
     font-size: 10px;
     font-weight: 600;
     letter-spacing: 0.02em;
@@ -1501,6 +1582,7 @@
     background: var(--color-surface-muted);
     padding: 1px 6px;
     border-radius: 4px;
+    margin-left: auto;
   }
 
   .card-chevron {
@@ -1570,6 +1652,28 @@
     display: flex;
     gap: var(--space-2);
     flex-wrap: wrap;
+  }
+
+  .danger-button {
+    color: var(--color-danger);
+    border-color: color-mix(in srgb, var(--color-danger) 28%, transparent);
+  }
+
+  .danger-button:hover:not(:disabled) {
+    background: var(--color-danger-soft);
+    border-color: var(--color-danger);
+  }
+
+  .automation-detail-empty {
+    display: grid;
+    place-items: center;
+    min-height: 60vh;
+  }
+
+  .detail-empty {
+    text-align: center;
+    color: var(--color-ink-muted);
+    font-size: var(--font-size-1);
   }
 
   .detail-banner {

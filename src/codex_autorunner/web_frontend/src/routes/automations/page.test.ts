@@ -14,7 +14,9 @@ describe('/automations page', () => {
 
     expect(body).toContain('Automations workspace');
     expect(body).toContain('Loading automations');
-    expect(body).toContain('Diagnostic raw inspection');
+    // Detail pane is hidden until an automation or preset is selected — the empty
+    // state shows a hint instead of preselected detail chrome.
+    expect(body).toContain('Pick an automation from the list');
   });
 
   it('uses typed product projections for managed segregation, schedules, messages, and raw diagnostics', () => {

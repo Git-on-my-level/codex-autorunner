@@ -165,6 +165,25 @@ def build_automation_routes(context: HubAppContext) -> APIRouter:
                 status_code=404, detail=f"Automation not found: {rule_id}"
             ) from exc
 
+    @router.delete("/hub/automations/{rule_id}")
+    async def delete_automation(rule_id: str) -> dict[str, Any]:
+        rule_store = store()
+        existing = rule_store.get_rule(rule_id)
+        if existing is None:
+            raise HTTPException(
+                status_code=404, detail=f"Automation not found: {rule_id}"
+            )
+        if existing.enabled:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "code": "AUTOMATION_DELETE_REQUIRES_PAUSED",
+                    "message": "Pause the automation before deleting it.",
+                },
+            )
+        rule_store.delete_rule(rule_id)
+        return {"deleted": rule_id}
+
     @router.post("/hub/automations/{rule_id}/enabled")
     async def set_automation_enabled(
         rule_id: str, payload: AutomationEnabledRequest
