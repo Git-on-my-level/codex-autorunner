@@ -174,7 +174,8 @@ class ManagedThreadStoreLifecycle:
                 e.prompt_text,
                 e.model_id,
                 e.reasoning_level,
-                e.client_request_id
+                e.client_request_id,
+                e.turn_request_json
               FROM orch_queue_items AS q
               JOIN orch_thread_executions AS e
                 ON e.execution_id = q.source_key
