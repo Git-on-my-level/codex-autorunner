@@ -128,6 +128,10 @@ def _dict_value(value: object) -> dict[str, Any]:
     return cast(dict[str, Any], value) if isinstance(value, dict) else {}
 
 
+async def _empty_list() -> list[Any]:
+    return []
+
+
 def _int_value(value: object) -> int:
     if isinstance(value, int):
         return value
@@ -508,8 +512,8 @@ class RepoWorktreeReadModelService:
             self._active_chat_binding_counts_by_source
         )
         chat_binding_counts = {
-            repo_id: sum(source_counts.values())
-            for repo_id, source_counts in chat_binding_counts_by_source.items()
+            workspace_id: sum(source_counts.values())
+            for workspace_id, source_counts in chat_binding_counts_by_source.items()
         }
         display_names_by_repo = await asyncio.to_thread(
             self._chat_binding_display_names_by_repo, snapshots
@@ -878,6 +882,55 @@ class RepoWorktreeReadModelService:
             for kind, content in docs.items()
         ]
 
+    async def _child_worktrees(self, repo_id: str) -> list[dict[str, Any]]:
+        snapshots = await asyncio.to_thread(
+            self._context.supervisor.list_repos, use_cache=True
+        )
+        chat_binding_counts_by_source = await asyncio.to_thread(
+            self._active_chat_binding_counts_by_source
+        )
+        chat_binding_counts = {
+            workspace_id: sum(source_counts.values())
+            for workspace_id, source_counts in chat_binding_counts_by_source.items()
+        }
+        display_names_by_repo = await asyncio.to_thread(
+            self._chat_binding_display_names_by_repo, snapshots
+        )
+        children = [
+            snapshot
+            for snapshot in snapshots
+            if str(getattr(snapshot, "kind", "") or "") == "worktree"
+            and str(getattr(snapshot, "worktree_of", "") or "") == repo_id
+        ]
+        if not children:
+            return []
+        enriched = await asyncio.gather(
+            *[
+                asyncio.to_thread(
+                    self._enricher.enrich_repo,
+                    snapshot,
+                    chat_binding_counts,
+                    chat_binding_counts_by_source,
+                )
+                for snapshot in children
+            ]
+        )
+        out: list[dict[str, Any]] = []
+        for item in enriched:
+            if not isinstance(item, dict):
+                continue
+            item_id = str(item.get("id") or "")
+            sources = _positive_source_counts(
+                chat_binding_counts_by_source.get(item_id, {})
+            )
+            if sources:
+                item["chat_binding_sources"] = sources
+            displays = display_names_by_repo.get(item_id, [])
+            if displays:
+                item["chat_binding_display_names"] = displays
+            out.append(item)
+        return out
+
     async def detail(
         self,
         *,
@@ -900,24 +953,35 @@ class RepoWorktreeReadModelService:
         run_limit = _bounded_limit(run_limit, maximum=100)
         chat_limit = _bounded_limit(chat_limit, maximum=100)
         artifact_limit = _bounded_limit(artifact_limit, maximum=100)
-        tickets = self._scoped_tickets(snapshot_obj, limit=ticket_limit)
-        runs = self._scoped_runs(snapshot_obj.path, limit=run_limit)
-        chats = self._scoped_chats(
-            owner_kind=owner_kind, owner_id=owner_id, limit=chat_limit
+        tickets_task = asyncio.to_thread(
+            self._scoped_tickets, snapshot_obj, limit=ticket_limit
+        )
+        runs_task = asyncio.to_thread(
+            self._scoped_runs, snapshot_obj.path, limit=run_limit
+        )
+        chats_task = asyncio.to_thread(
+            self._scoped_chats,
+            owner_kind=owner_kind,
+            owner_id=owner_id,
+            limit=chat_limit,
+        )
+        contextspace_task = asyncio.to_thread(
+            self._contextspace_summary, snapshot_obj.path
+        )
+        children_task = (
+            self._child_worktrees(owner_id) if owner_kind == "repo" else _empty_list()
+        )
+        tickets, runs, chats, contextspace, children = await asyncio.gather(
+            tickets_task,
+            runs_task,
+            chats_task,
+            contextspace_task,
+            children_task,
         )
         artifacts = list(enriched.get("current_run_artifacts") or [])[:artifact_limit]
-        contextspace = self._contextspace_summary(snapshot_obj.path)
         parent_links: dict[str, Any] = {}
         if owner_kind == "worktree":
             parent_links["repo_id"] = getattr(snapshot_obj, "worktree_of", None)
-        children = []
-        if owner_kind == "repo":
-            children = [
-                item
-                for item in await self._enriched_repos()
-                if str(item.get("kind") or "") == "worktree"
-                and item.get("worktree_of") == owner_id
-            ]
         detail = RepoWorktreeDetailSnapshot(
             cursor=_cursor(f"{owner_kind}.detail"),
             owner_kind=owner_kind,

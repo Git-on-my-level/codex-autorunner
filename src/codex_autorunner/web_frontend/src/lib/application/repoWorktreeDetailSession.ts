@@ -6,11 +6,14 @@ import type {
   RetireWorktreeTarget
 } from '$lib/actions/repoWorktreeActions';
 import {
+  ensureRepoWorktreeIndexLoaded,
   ensureRepoDetailLoaded,
   ensureWorktreeDetailLoaded,
   invalidateReadModelTags,
   readModelEntityStore,
   readModelEntityTags,
+  selectRepoSummaries,
+  selectWorktreeSummaries,
   type ReadModelDependency,
   type ReadModelEntityStore,
   type ReadModelLoaderResult
@@ -47,6 +50,7 @@ export type RepoWorktreeDetailSessionState = {
 
 export type RepoWorktreeDetailSessionDependencies = {
   store?: Pick<ReadModelEntityStore, 'snapshot'>;
+  loadRepoWorktreeIndex?: typeof ensureRepoWorktreeIndexLoaded;
   loadRepoDetail?: typeof ensureRepoDetailLoaded;
   loadWorktreeDetail?: typeof ensureWorktreeDetailLoaded;
   syncRepoMain: (repoId: string) => Promise<{ ok: true } | { ok: false; error: ApiError }>;
@@ -71,9 +75,9 @@ type OwnerRef = {
 
 export class RepoWorktreeDetailSession {
   private readonly dependencies: Required<
-    Pick<RepoWorktreeDetailSessionDependencies, 'loadRepoDetail' | 'loadWorktreeDetail' | 'invalidateTags'>
+    Pick<RepoWorktreeDetailSessionDependencies, 'loadRepoWorktreeIndex' | 'loadRepoDetail' | 'loadWorktreeDetail' | 'invalidateTags'>
   > &
-    Omit<RepoWorktreeDetailSessionDependencies, 'loadRepoDetail' | 'loadWorktreeDetail' | 'invalidateTags'>;
+    Omit<RepoWorktreeDetailSessionDependencies, 'loadRepoWorktreeIndex' | 'loadRepoDetail' | 'loadWorktreeDetail' | 'invalidateTags'>;
   private readonly store: Pick<ReadModelEntityStore, 'snapshot'>;
   private requestVersion = 0;
   private currentLoaderResult: ReadModelLoaderResult | null;
@@ -83,6 +87,7 @@ export class RepoWorktreeDetailSession {
     this.store = options.dependencies.store ?? readModelEntityStore;
     this.dependencies = {
       ...options.dependencies,
+      loadRepoWorktreeIndex: options.dependencies.loadRepoWorktreeIndex ?? ensureRepoWorktreeIndexLoaded,
       loadRepoDetail: options.dependencies.loadRepoDetail ?? ensureRepoDetailLoaded,
       loadWorktreeDetail: options.dependencies.loadWorktreeDetail ?? ensureWorktreeDetailLoaded,
       invalidateTags: options.dependencies.invalidateTags ?? invalidateReadModelTags
@@ -114,10 +119,24 @@ export class RepoWorktreeDetailSession {
 
   async hydrate(): Promise<void> {
     const owner = this.owner();
+    const requestVersion = ++this.requestVersion;
     const cached = this.cachedSnapshot(owner);
     if (cached) {
+      if (!this.isCurrentRequest(requestVersion, owner)) return;
       await this.applySnapshot(owner, cached);
       this.state = { ...this.state, loading: false };
+      return;
+    }
+    let provisional = this.provisionalDetail(owner);
+    if (!provisional) {
+      await this.dependencies.loadRepoWorktreeIndex({ blocking: true });
+      if (!this.isCurrentRequest(requestVersion, owner)) return;
+      provisional = this.provisionalDetail(owner);
+    }
+    if (provisional) {
+      if (!this.isCurrentRequest(requestVersion, owner)) return;
+      this.state = { ...this.state, detail: provisional, loading: false };
+      await this.load(false);
       return;
     }
     await this.load(true);
@@ -189,11 +208,12 @@ export class RepoWorktreeDetailSession {
 
   private initialState(owner: OwnerRef, loaderResult: ReadModelLoaderResult | null): RepoWorktreeDetailSessionState {
     const cached = this.cachedSnapshot(owner);
+    const provisional = cached ? null : this.provisionalDetail(owner);
     return {
       ownerKind: owner.kind,
       ownerId: owner.id,
-      detail: null,
-      loading: loaderResult?.status === 'cold' && !cached,
+      detail: provisional,
+      loading: loaderResult?.status === 'cold' && !cached && !provisional,
       error: loaderResult?.status === 'error' ? loaderResult.error : null,
       sectionIssues: [],
       notice: null,
@@ -209,6 +229,30 @@ export class RepoWorktreeDetailSession {
   private cachedSnapshot(owner: OwnerRef): RepoWorktreeDetailSnapshot | undefined {
     const snapshot = this.store.snapshot();
     return owner.kind === 'repo' ? snapshot.repoDetails[owner.id] : snapshot.worktreeDetails[owner.id];
+  }
+
+  private provisionalDetail(owner: OwnerRef): RepoWorktreeDetailViewModel | null {
+    const snapshot = this.store.snapshot();
+    const repos = selectRepoSummaries(snapshot);
+    const worktrees = selectWorktreeSummaries(snapshot);
+    const found =
+      owner.kind === 'repo'
+        ? repos.some((repo) => repo.id === owner.id)
+        : worktrees.some((worktree) => worktree.id === owner.id);
+    if (!found) return null;
+    return buildRepoWorktreeDetailViewModel(
+      {
+        repos,
+        worktrees,
+        runs: [],
+        chats: [],
+        tickets: [],
+        artifacts: [],
+        ticketsListLoaded: false
+      },
+      owner.kind,
+      owner.id
+    );
   }
 
   private async applySnapshot(owner: OwnerRef, snapshot: RepoWorktreeDetailSnapshot): Promise<boolean> {

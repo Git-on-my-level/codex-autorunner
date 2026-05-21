@@ -80,6 +80,7 @@
     buildPmaLiveActivity,
     buildManagedThreadMessagePayload,
     buildPmaStatusBar,
+    compactChatTranscriptCards,
     countSemanticTicketRunGroups,
     filterChatEntries,
     formatBytes,
@@ -150,6 +151,10 @@
 
   const COMPACT_SUMMARY_PROMPT =
     'Summarize the conversation so far into a concise context block I can paste into a new thread. Include goals, constraints, decisions, and current state.';
+  type ChatTranscriptListItem =
+    | { kind: 'card'; id: string; card: ChatTranscriptCard }
+    | { kind: 'typing'; id: string; title: string }
+    | { kind: 'shared-files'; id: string };
   let readModelState = $state(readModelEntityStore.snapshot());
   let activeChatId = $state<string | null>(null);
   // Unsent new chats are page-local only: `localDraftChat` drives the composer until
@@ -473,6 +478,7 @@
   const displayedProgress = $derived(progressWithLiveElapsed(progress, clockNowMs));
   const liveActivity = $derived(buildPmaLiveActivity(displayedProgress));
   const activeCards = $derived<ChatTranscriptCard[]>(visibleChatDetailTranscriptCards(transcriptCards, queuedTurns));
+  const displayTranscriptCards = $derived<ChatTranscriptCard[]>(compactChatTranscriptCards(activeCards));
   const lastAssistantMessageCard = $derived.by<ChatTranscriptCard | null>(() => {
     for (let i = activeCards.length - 1; i >= 0; i -= 1) {
       const card = activeCards[i];
@@ -565,6 +571,13 @@
     if (!last) return false;
     return last.kind === 'message' && last.message.role === 'user';
   });
+  const transcriptListItems = $derived<ChatTranscriptListItem[]>([
+    ...displayTranscriptCards.map((card) => ({ kind: 'card' as const, id: card.id, card })),
+    ...(showTypingIndicator ? [{ kind: 'typing' as const, id: 'typing-indicator', title: 'Assistant is typing' }] : []),
+    ...(assistantSharedFiles.length > 0
+      ? [{ kind: 'shared-files' as const, id: 'assistant-shared-files' }]
+      : [])
+  ]);
   const srAnnouncement = $derived.by<string>(() => {
     if (displayedProgress?.status !== 'running') return '';
     const card = lastAssistantMessageCard;
@@ -2271,15 +2284,34 @@
           <p>This chat has no visible timeline yet.</p>
         </div>
       {:else}
-        <ChatTranscriptCards
-          cards={activeCards}
-          assistantLabel={chatAgentDisplayLabel}
-          {streamingMessageId}
-          sharedFiles={assistantSharedFiles}
-        />
-        {#if showTypingIndicator}
-          {@render typingDots('Assistant is typing')}
-        {/if}
+        <VirtualList
+          items={transcriptListItems}
+          key={(item) => item.id}
+          estimatedItemSize={220}
+          overscan={6}
+          initialCount={24}
+          ariaLabel="Chat transcript"
+          class="chat-transcript-virtual-list"
+          itemClass="chat-transcript-virtual-item"
+        >
+          {#snippet children(item)}
+            {#if item.kind === 'card'}
+              <ChatTranscriptCards
+                cards={[item.card]}
+                assistantLabel={chatAgentDisplayLabel}
+                {streamingMessageId}
+              />
+            {:else if item.kind === 'shared-files'}
+              <ChatTranscriptCards
+                cards={[]}
+                assistantLabel={chatAgentDisplayLabel}
+                sharedFiles={assistantSharedFiles}
+              />
+            {:else}
+              {@render typingDots(item.title)}
+            {/if}
+          {/snippet}
+        </VirtualList>
       {/if}
     </div>
     <div class="sr-only" aria-live="polite" aria-atomic="false">{srAnnouncement}</div>

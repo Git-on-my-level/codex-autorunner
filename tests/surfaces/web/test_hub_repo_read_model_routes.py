@@ -123,6 +123,47 @@ def test_repo_worktree_topology_surfaces_chat_bound_channel_display(
     assert worktree["chatBindingDisplayNames"] == ["guild:guild-1 / #chan-bound"]
 
 
+def test_repo_detail_child_worktrees_preserve_chat_binding_metadata(
+    hub_env,
+) -> None:
+    worktree_root = _add_workspace(
+        hub_env.hub_root,
+        repo_id="repo-00--detail-discord-chat",
+        kind="worktree",
+        worktree_of=hub_env.repo_id,
+    )
+    write_discord_binding_rows(
+        hub_env.hub_root / ".codex-autorunner" / "discord_state.sqlite3",
+        rows=[
+            {
+                "channel_id": "chan-detail-bound",
+                "guild_id": "guild-1",
+                "workspace_path": str(worktree_root.resolve()),
+                "repo_id": None,
+                "resource_kind": None,
+                "resource_id": None,
+                "pma_enabled": 0,
+                "agent": "codex",
+                "updated_at": "2026-01-01T00:00:01Z",
+            }
+        ],
+    )
+
+    client = TestClient(create_hub_app(hub_env.hub_root))
+    response = client.get(f"/hub/read-models/repos/{hub_env.repo_id}/detail")
+
+    assert response.status_code == 200
+    child = next(
+        item
+        for item in response.json()["topology"]["children"]
+        if item["id"] == "repo-00--detail-discord-chat"
+    )
+    assert child["chat_bound"] is True
+    assert child["chat_bound_thread_count"] == 1
+    assert child["chat_binding_sources"] == {"discord": 1}
+    assert child["chat_binding_display_names"] == ["guild:guild-1 / #chan-detail-bound"]
+
+
 def test_worktree_detail_snapshot_is_scoped_and_does_not_include_global_tickets(
     hub_env,
 ) -> None:

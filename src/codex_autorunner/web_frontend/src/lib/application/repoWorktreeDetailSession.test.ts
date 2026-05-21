@@ -3,7 +3,8 @@ import type { ApiError } from '$lib/api/client';
 import {
   READ_MODEL_CONTRACT_VERSION,
   type ProjectionCursor,
-  type RepoWorktreeDetailSnapshot
+  type RepoWorktreeDetailSnapshot,
+  type RepoWorktreeTopologySnapshot
 } from '$lib/api/readModelContracts';
 import { ReadModelEntityStore } from '$lib/data/readModelStore';
 import {
@@ -172,6 +173,29 @@ describe('repo worktree detail session', () => {
     expect(session.state.ownerId).toBe('repo-2');
     expect(session.state.detail?.id).toBe('repo-2');
   });
+
+  it('ignores stale provisional topology after the route owner changes during hydrate', async () => {
+    const store = new ReadModelEntityStore();
+    const topologyLoad = deferred<{ status: 'fetched'; tags: string[] }>();
+    const session = createSession('repo', 'repo-1', {
+      store,
+      loadRepoWorktreeIndex: vi.fn(() => topologyLoad.promise),
+      loadRepoDetail: vi.fn(async (repoId: string) => {
+        store.applyRepoDetailSnapshot(repoDetailSnapshot(repoId));
+        return { status: 'fetched' as const, tags: [`entity:repo:${repoId}`] };
+      })
+    });
+
+    const staleHydrate = session.hydrate();
+    session.setOwner('repo', 'repo-2', { status: 'cold', tags: ['entity:repo:repo-2'] });
+    await session.load();
+    store.applyRepoWorktreeTopologySnapshot(repoTopologySnapshot('repo-1'));
+    topologyLoad.resolve({ status: 'fetched', tags: ['entity:repo-worktree:index'] });
+    await staleHydrate;
+
+    expect(session.state.ownerId).toBe('repo-2');
+    expect(session.state.detail?.id).toBe('repo-2');
+  });
 });
 
 function createSession(
@@ -185,6 +209,7 @@ function createSession(
     loaderResult: { status: 'cold', tags: [] },
     dependencies: {
       store: new ReadModelEntityStore(),
+      loadRepoWorktreeIndex: vi.fn(async () => ({ status: 'cold' as const, tags: [] })),
       loadRepoDetail: vi.fn(async () => ({ status: 'cold' as const, tags: [] })),
       loadWorktreeDetail: vi.fn(async () => ({ status: 'cold' as const, tags: [] })),
       syncRepoMain: vi.fn(async () => ({ ok: true as const })),
@@ -203,6 +228,38 @@ function repoDetailSnapshot(repoId: string): RepoWorktreeDetailSnapshot {
     identity: { id: repoId, name: `Repo ${repoId}`, path: `/repos/${repoId}`, kind: 'base', worktree_count: 0 },
     topology: { children: [] }
   });
+}
+
+function repoTopologySnapshot(repoId: string): RepoWorktreeTopologySnapshot {
+  return {
+    contractVersion: READ_MODEL_CONTRACT_VERSION,
+    kind: 'repo_worktree.topology.snapshot',
+    cursor: cursor(1, 'repo_worktree.topology'),
+    window: window(),
+    repos: [
+      {
+        repoId,
+        label: `Repo ${repoId}`,
+        path: `/repos/${repoId}`,
+        archived: false,
+        isPinned: false,
+        destinationId: null,
+        childWorktreeIds: [],
+        worktreeSetupCommands: null,
+        chatBound: false,
+        chatBindingCount: 0,
+        chatBindingSources: {},
+        chatBindingDisplayNames: []
+      }
+    ],
+    worktrees: [],
+    repair: {
+      snapshotRoute: '/hub/read-models/repo-worktree/topology',
+      cursorQueryParam: 'after',
+      gapEventType: 'projection.cursor_gap',
+      behavior: 'repair_snapshot_required'
+    }
+  };
 }
 
 function worktreeDetailSnapshot(worktreeId: string, repoId: string | null): RepoWorktreeDetailSnapshot {
