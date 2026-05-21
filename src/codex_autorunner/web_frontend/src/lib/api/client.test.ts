@@ -810,6 +810,37 @@ describe('API client error handling', () => {
     expect(result).toEqual({ ok: true, data: ['screen.png'] });
   });
 
+  it('lists repo artifact deliveries through the hub filebox route', async () => {
+    const fetcher = vi.fn(async () =>
+      Response.json({
+        deliveries: [
+          {
+            delivery_id: 'delivery:abc',
+            artifact_id: 'sha256:abc',
+            state: 'pending',
+            artifact: { filename: 'report.md' },
+            download_url: '/hub/filebox/repo-1/artifacts/deliveries/delivery%3Aabc/download'
+          }
+        ]
+      })
+    ) as unknown as typeof fetch;
+    const client = new WebApiClient(fetcher);
+
+    const result = await client.pma.listArtifactDeliveries('repo-1');
+
+    expect(fetcher).toHaveBeenCalledWith('/hub/filebox/repo-1/artifacts/deliveries', expect.any(Object));
+    expect(result).toEqual({
+      ok: true,
+      data: [
+        expect.objectContaining({
+          deliveryId: 'delivery:abc',
+          filename: 'report.md',
+          downloadUrl: '/hub/filebox/repo-1/artifacts/deliveries/delivery%3Aabc/download'
+        })
+      ]
+    });
+  });
+
   it('maps workspace contextspace responses through pinned standard docs', async () => {
     const fetcher = vi.fn(async () =>
       Response.json({

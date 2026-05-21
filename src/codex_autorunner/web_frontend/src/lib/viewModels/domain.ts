@@ -191,6 +191,28 @@ export type SurfaceArtifact = {
   raw: JsonRecord;
 };
 
+export type ArtifactDeliveryState = 'pending' | 'claimed' | 'sending' | 'sent' | 'failed' | 'cancelled' | string;
+
+export type ArtifactDelivery = {
+  deliveryId: string;
+  artifactId: string;
+  filename: string;
+  state: ArtifactDeliveryState;
+  targetSurface: string | null;
+  targetConversation: string | null;
+  workspaceScope: string | null;
+  attempts: number;
+  size: number | null;
+  mimeType: string | null;
+  downloadUrl: string | null;
+  createdAt: string | null;
+  updatedAt: string | null;
+  sentAt: string | null;
+  failedAt: string | null;
+  lastError: string | null;
+  raw: JsonRecord;
+};
+
 /** Dashboard rollup used by the overview page. */
 export type DashboardSummary = {
   activeRuns: number;
@@ -492,6 +514,35 @@ export function mapSurfaceArtifact(raw: JsonRecord): SurfaceArtifact {
     summary: nullableString(raw.summary ?? raw.description ?? raw.message),
     url: nullableString(raw.url ?? raw.href ?? raw.preview_url),
     createdAt: dateString(raw.created_at ?? raw.modified_at ?? raw.received_at),
+    raw
+  };
+}
+
+export function mapArtifactDelivery(raw: JsonRecord): ArtifactDelivery {
+  const artifact = asRecord(raw.artifact);
+  const deliveryId = stringValue(raw.delivery_id ?? raw.deliveryId, 'delivery');
+  const artifactId = stringValue(raw.artifact_id ?? raw.artifactId ?? artifact.artifact_id, deliveryId);
+  const filename = stringValue(
+    artifact.filename ?? raw.filename ?? asRecord(raw.metadata).filename ?? artifact.name,
+    artifactId
+  );
+  return {
+    deliveryId,
+    artifactId,
+    filename,
+    state: stringValue(raw.state, 'pending'),
+    targetSurface: nullableString(raw.target_surface ?? raw.targetSurface),
+    targetConversation: nullableString(raw.target_conversation_key ?? raw.targetConversationKey ?? raw.targetConversation),
+    workspaceScope: nullableString(raw.workspace_scope ?? raw.workspaceScope),
+    attempts: numberOrNull(raw.attempts) ?? 0,
+    size: numberOrNull(artifact.size ?? raw.size),
+    mimeType: nullableString(artifact.mime_type ?? artifact.mimeType ?? raw.mime_type ?? raw.mimeType),
+    downloadUrl: nullableString(raw.download_url ?? raw.downloadUrl ?? artifact.url ?? artifact.href),
+    createdAt: dateString(raw.created_at ?? raw.createdAt),
+    updatedAt: dateString(raw.updated_at ?? raw.updatedAt),
+    sentAt: dateString(raw.sent_at ?? raw.sentAt),
+    failedAt: dateString(raw.failed_at ?? raw.failedAt),
+    lastError: nullableString(raw.last_error ?? raw.lastError),
     raw
   };
 }

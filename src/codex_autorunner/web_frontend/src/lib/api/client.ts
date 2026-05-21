@@ -7,6 +7,7 @@ import {
 } from '$lib/api/readModelContracts';
 import {
   mapContextspaceDocument,
+  mapArtifactDelivery,
   mapDashboardSummary,
   mapPmaChatMessage,
   mapPmaTimelineItem,
@@ -18,6 +19,7 @@ import {
   mapTicketSummary,
   mapWorktreeSummary,
   type ContextspaceDocument,
+  type ArtifactDelivery,
   type DashboardSummary,
   type PmaChatMessage,
   type PmaChatSummary,
@@ -596,6 +598,14 @@ export class WebApiClient {
       mapResult(await this.getJson<JsonRecord>('/hub/pma/files'), (payload) =>
         [...asArray(payload.inbox), ...asArray(payload.outbox)].map(mapSurfaceArtifact)
       ),
+    listArtifactDeliveries: async (repoId?: string | null): Promise<ApiResult<ArtifactDelivery[]>> => {
+      const route = repoId
+        ? `/hub/filebox/${encodeURIComponent(repoId)}/artifacts/deliveries`
+        : '/api/artifacts/deliveries';
+      return mapResult(await this.getJson<JsonRecord>(route), (payload) =>
+        asArray(payload.deliveries).map(mapArtifactDelivery)
+      );
+    },
     uploadInboxFile: async (file: File): Promise<ApiResult<string[]>> => {
       const form = new FormData();
       form.append('file', file, file.name);

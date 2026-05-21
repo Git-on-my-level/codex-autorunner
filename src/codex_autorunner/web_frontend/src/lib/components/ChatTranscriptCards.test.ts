@@ -310,4 +310,40 @@ describe('ChatTranscriptCards', () => {
     expect(body).toContain('Working on it');
     expect(body).toContain('Reasoning through the request');
   });
+
+  it('renders assistant shared delivery files as downloadable pills', () => {
+    const { body } = render(ChatTranscriptCards, {
+      props: {
+        cards: [],
+        assistantLabel: 'Codex',
+        sharedFiles: [
+          {
+            deliveryId: 'delivery:abc',
+            artifactId: 'sha256:abc',
+            filename: 'spec.md',
+            state: 'sent',
+            targetSurface: 'discord',
+            targetConversation: 'channel:1',
+            workspaceScope: null,
+            attempts: 1,
+            size: 1024,
+            mimeType: 'text/markdown',
+            downloadUrl: '/hub/filebox/repo/artifacts/deliveries/delivery%3Aabc/download',
+            createdAt: '2026-05-21T00:00:00Z',
+            updatedAt: '2026-05-21T00:01:00Z',
+            sentAt: '2026-05-21T00:01:00Z',
+            failedAt: null,
+            lastError: null,
+            raw: {}
+          }
+        ]
+      }
+    });
+
+    expect(body).toContain('class="message assistant shared-files-message"');
+    expect(body).toContain('Codex');
+    expect(body).toContain('spec.md');
+    expect(body).toContain('delivery-sent');
+    expect(body).toContain('/hub/filebox/repo/artifacts/deliveries/delivery%3Aabc/download');
+  });
 });

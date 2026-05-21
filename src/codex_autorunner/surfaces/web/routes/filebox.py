@@ -126,8 +126,21 @@ def build_filebox_routes() -> APIRouter:
     ) -> dict[str, Any]:
         repo_root = _resolve_repo_root(request)
         return service.list_artifact_deliveries(
-            repo_root, state=state, surface=surface, conversation=conversation
+            repo_root,
+            url_scope=_filebox_url_scope(request),
+            state=state,
+            surface=surface,
+            conversation=conversation,
         )
+
+    @router.get("/artifacts/deliveries/{delivery_id}/download")
+    def download_artifact_delivery(delivery_id: str, request: Request):
+        repo_root = _resolve_repo_root(request)
+        try:
+            resource = service.open_delivery_artifact(repo_root, delivery_id)
+        except WorkspaceResourceError as exc:
+            _raise_http(exc)
+        return _file_download_response(resource.entry, resource.handle)
 
     @router.get("/filebox/{box}")
     def list_single_box(box: str, request: Request) -> dict[str, Any]:
@@ -212,11 +225,23 @@ def build_hub_filebox_routes() -> APIRouter:
         repo_root = _resolve_hub_repo_root(request, repo_id)
         return service.list_artifact_deliveries(
             repo_root,
+            url_scope=_filebox_url_scope(request, repo_id),
             state=state,
             surface=surface,
             conversation=conversation,
             repo_id=repo_id,
         )
+
+    @router.get("/{repo_id}/artifacts/deliveries/{delivery_id}/download")
+    def download_repo_artifact_delivery(
+        repo_id: str, delivery_id: str, request: Request
+    ):
+        repo_root = _resolve_hub_repo_root(request, repo_id)
+        try:
+            resource = service.open_delivery_artifact(repo_root, delivery_id)
+        except WorkspaceResourceError as exc:
+            _raise_http(exc)
+        return _file_download_response(resource.entry, resource.handle)
 
     @router.post("/{repo_id}/{box}")
     async def hub_upload(repo_id: str, box: str, request: Request) -> dict[str, Any]:
