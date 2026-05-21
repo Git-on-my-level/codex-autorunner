@@ -1,6 +1,7 @@
 import { mapResult, webApi, type ApiResult, type WebApiClient } from '$lib/api/client';
 import type { TicketSummary } from '$lib/viewModels/domain';
 import {
+  normalizeChatFacetRequest,
   mapReadModelContract,
   type ChatFacetRequest,
   type ChatDetailSnapshot,
@@ -46,7 +47,7 @@ export function createReadModelSnapshotClient(api: WebApiClient = webApi): ReadM
       if (request.surfaceKind) params.set('surface_kind', request.surfaceKind);
       if (request.groupBy) params.set('group_by', request.groupBy);
       if (request.parentGroupId) params.set('parent_group_id', request.parentGroupId);
-      appendChatFacetParams(params, request.facets);
+      appendChatFacetParams(params, normalizeChatFacetRequest(request.facets));
       if (request.cursor) params.set('offset', request.cursor);
       return mapResult(await api.getJson<JsonRecord>(`/hub/read-models/chats?${params.toString()}`), (payload) =>
         mapReadModelContract<ChatIndexSnapshot>(payload)
@@ -73,8 +74,7 @@ export function createReadModelSnapshotClient(api: WebApiClient = webApi): ReadM
 
 export const readModelSnapshotClient = createReadModelSnapshotClient();
 
-function appendChatFacetParams(params: URLSearchParams, facets?: Partial<ChatFacetRequest> | null): void {
-  if (!facets) return;
+function appendChatFacetParams(params: URLSearchParams, facets: ChatFacetRequest): void {
   appendRepeated(params, 'category', facets.categories);
   appendRepeated(params, 'turn_kind', facets.turnKinds);
   appendRepeated(params, 'origin_kind', facets.originKinds);

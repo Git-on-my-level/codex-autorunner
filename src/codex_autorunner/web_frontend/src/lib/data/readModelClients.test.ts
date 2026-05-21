@@ -94,9 +94,23 @@ describe('read model snapshot client', () => {
       readModels: {}
     } as never);
 
-    const result = await client.chatIndex({ filter: 'active', query: 'build', surfaceKind: 'discord', limit: 25 });
+    const result = await client.chatIndex({
+      filter: 'active',
+      query: 'build',
+      surfaceKind: 'discord',
+      facets: {
+        categories: ['automation'],
+        transports: ['discord'],
+        scopeKinds: ['worktree'],
+        scopeIds: ['wt-1'],
+        agentKinds: ['coding_agent']
+      },
+      limit: 25
+    });
 
-    expect(calls).toEqual(['/hub/read-models/chats?filter=active&limit=25&search=build&surface_kind=discord']);
+    expect(calls).toEqual([
+      '/hub/read-models/chats?filter=active&limit=25&search=build&surface_kind=discord&category=automation&transport=discord&scope_kind=worktree&scope_id=wt-1&agent_kind=coding_agent'
+    ]);
     expect(result.ok && result.data.rows[0]).toMatchObject({
       chatId: 'chat-1',
       agent: 'hermes',

@@ -97,7 +97,7 @@ describe('/chats route load', () => {
 
     expect(client.chatIndex).toHaveBeenCalledTimes(4);
     expect(client.chatIndex).toHaveBeenNthCalledWith(1, { limit: 50 });
-    expect(client.chatIndex).toHaveBeenNthCalledWith(2, { filter: 'ticket_runs', groupBy: 'ticket_run', limit: 50 });
+    expect(client.chatIndex).toHaveBeenNthCalledWith(2, { facets: { categories: ['ticket_run'] }, groupBy: 'ticket_run', limit: 50 });
     expect(store.snapshot().chatOrder).toEqual(firstOrder);
     expect(store.snapshot().chatOrder).toEqual(['chat-b', 'chat-a']);
     expect(store.snapshot().chatOrder.map((id) => store.snapshot().chats[id]?.title)).toEqual(firstTitles);

@@ -27,7 +27,7 @@ export async function loadChatRoute(
     }
   );
   const ticketRunGroupsPromise = ensureChatIndexLoaded(
-    { filter: 'ticket_runs', groupBy: 'ticket_run', limit: CHAT_INDEX_WINDOW_LIMIT },
+    { facets: { categories: ['ticket_run'] }, groupBy: 'ticket_run', limit: CHAT_INDEX_WINDOW_LIMIT },
     {
       ...readModelLoaderOptions(options),
       refresh: true

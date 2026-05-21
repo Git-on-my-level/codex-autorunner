@@ -1,4 +1,4 @@
-import type { ChatIndexCounters, ChatIndexGroup, ChatIndexRow, ProjectionCursor, RuntimeProjection, TicketRunGroup } from '$lib/api/readModelContracts';
+import type { ChatIndexCounters, ChatIndexFacets, ChatIndexGroup, ChatIndexRow, ProjectionCursor, RuntimeProjection, TicketRunGroup } from '$lib/api/readModelContracts';
 import {
   buildTicketListViewModel,
   type SurfaceActionManifest,
@@ -65,6 +65,7 @@ export function pmaChatSummaryToChatIndexRow(chat: PmaChatSummary): ChatIndexRow
     ticketPath: stringValue(chat.raw.ticket_path ?? chat.raw.ticketPath),
     ticketDone: chat.ticketDone ?? booleanOrNull(chat.raw.ticket_done ?? chat.raw.ticketDone),
     ticketStatus: ticketStatusValue(chat.raw.ticket_status ?? chat.raw.ticketStatus),
+    facets: chatFacetsValue(chat.raw.facets),
     debug: recordValue(chat.raw.debug)
   };
 }
@@ -117,6 +118,7 @@ export function legacyChatIndexRecordToChatIndexRow(raw: JsonRecord): ChatIndexR
     ticketPath: stringValue(raw.ticket_path ?? raw.ticketPath),
     ticketDone: booleanOrNull(raw.ticket_done ?? raw.ticketDone),
     ticketStatus: ticketStatusValue(raw.ticket_status ?? raw.ticketStatus),
+    facets: chatFacetsValue(raw.facets),
     debug: recordValue(raw.debug)
   };
 }
@@ -152,6 +154,7 @@ export function chatIndexRowToPmaChatSummary(row: ChatIndexRow): PmaChatSummary 
     ticket_status: row.ticketStatus,
     run_id: row.runId,
     flow_type: row.flowType,
+    facets: row.facets,
     unread_count: row.unreadCount,
     agent_id: row.agent,
     agent_profile: row.agentProfile,
@@ -183,13 +186,7 @@ export function chatIndexRowToPmaChatSummary(row: ChatIndexRow): PmaChatSummary 
     runId: row.runId ?? null,
     unreadCount: row.unreadCount,
     flowType: row.flowType ?? null,
-    isTicketFlow: Boolean(
-      row.flowType === 'ticket_flow' ||
-      row.ticketId ||
-        row.runId ||
-        row.groupId?.startsWith('ticket') ||
-        row.groupId?.startsWith('run')
-    ),
+    isTicketFlow: row.facets?.category === 'ticket_run' || row.flowType === 'ticket_flow',
     ticketDone: row.ticketDone ?? null,
     ticketStatus: row.ticketStatus ?? null,
     progressPercent: null,
@@ -440,6 +437,25 @@ function recordValue(value: unknown): Record<string, unknown> | null {
     return value as Record<string, unknown>;
   }
   return null;
+}
+
+function chatFacetsValue(value: unknown): ChatIndexFacets | null {
+  const record = recordValue(value);
+  if (!record) return null;
+  if (!['regular', 'ticket_run', 'automation', 'system'].includes(String(record.category))) return null;
+  return {
+    category: record.category as ChatIndexFacets['category'],
+    turnKinds: stringArray(record.turnKinds) as ChatIndexFacets['turnKinds'],
+    originKinds: stringArray(record.originKinds) as ChatIndexFacets['originKinds'],
+    transports: stringArray(record.transports) as ChatIndexFacets['transports'],
+    scopeKind: typeof record.scopeKind === 'string' ? record.scopeKind as ChatIndexFacets['scopeKind'] : null,
+    scopeId: stringValue(record.scopeId),
+    agentKind: typeof record.agentKind === 'string' ? record.agentKind as ChatIndexFacets['agentKind'] : null
+  };
+}
+
+function stringArray(value: unknown): string[] {
+  return Array.isArray(value) ? value.filter((entry): entry is string => typeof entry === 'string') : [];
 }
 
 function unreadCountFromRaw(raw: JsonRecord): number {

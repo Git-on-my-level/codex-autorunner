@@ -34,6 +34,7 @@ const emptyFacetCounts = {
   scopeKind: {},
   agentKind: {}
 };
+const ticketRunFacetRequest = { facets: { categories: ['ticket_run' as const] }, groupBy: 'ticket_run' as const, limit: 50 };
 
 function projCursor(sequence: number, source: string): ProjectionCursor {
   return { value: `${source}:${sequence}`, sequence, source, issuedAt };
@@ -114,6 +115,15 @@ function ticketFlowRow(
     runId: 'run-1',
     flowType: 'ticket_flow',
     groupId: 'ticket-run:run-1',
+    facets: {
+      category: 'ticket_run',
+      turnKinds: ['message'],
+      originKinds: ['surface'],
+      transports: ['pma'],
+      scopeKind: 'worktree',
+      scopeId: 'wt-1',
+      agentKind: 'coding_agent'
+    },
     ticketDone: status === 'idle',
     ticketStatus: status === 'idle' ? 'done' : status === 'running' ? 'running' : 'unknown'
   };
@@ -370,22 +380,23 @@ describe('chat index session', () => {
     session.start();
     await session.refresh({ filter: 'all', limit: 50 });
     await session.activate({
-      companionRequests: [{ filter: 'ticket_runs', groupBy: 'ticket_run', limit: 50 }]
+      companionRequests: [ticketRunFacetRequest]
     });
 
     expect(streamFactory).toHaveBeenCalledTimes(1);
     expect(client.chatIndex).toHaveBeenCalledTimes(3);
     expect(client.chatIndex).toHaveBeenNthCalledWith(2, { filter: 'all', limit: 50 });
-    expect(client.chatIndex).toHaveBeenNthCalledWith(3, { filter: 'ticket_runs', groupBy: 'ticket_run', limit: 50 });
+    expect(client.chatIndex).toHaveBeenNthCalledWith(3, ticketRunFacetRequest);
   });
 
   it('refreshes companion ticket-run aggregate windows with the primary chat index', async () => {
     const store = new ReadModelEntityStore();
     const client = {
       chatIndex: vi.fn(async (request = {}) => {
-        if (request.filter === 'ticket_runs') {
+        if (request.facets?.categories?.includes('ticket_run')) {
           return ok({
-            ...chatIndexSnapshot('ticket_runs', [ticketFlowRow('ticket-1', 'running')]),
+            ...chatIndexSnapshot('all', [ticketFlowRow('ticket-1', 'running')]),
+            facetRequest: { ...emptyFacetRequest, categories: ['ticket_run'] },
             groups: [ticketRunGroup({ doneCount: 3, runningCount: 2 })],
             counters: { total: 5, waiting: 0, running: 2, unread: 0, archived: 0 }
           });
@@ -395,13 +406,13 @@ describe('chat index session', () => {
     } as unknown as ReadModelSnapshotClient;
     const session = createChatIndexSession({ client, store, streamFactory: mockStreamFactory() });
 
-    session.setCompanionRequests([{ filter: 'ticket_runs', groupBy: 'ticket_run', limit: 50 }]);
+    session.setCompanionRequests([ticketRunFacetRequest]);
     await session.refresh({ filter: 'all', limit: 50 });
 
     expect(client.chatIndex).toHaveBeenCalledTimes(2);
     expect(client.chatIndex).toHaveBeenNthCalledWith(1, { filter: 'all', limit: 50 });
-    expect(client.chatIndex).toHaveBeenNthCalledWith(2, { filter: 'ticket_runs', groupBy: 'ticket_run', limit: 50 });
-    expect(selectChatIndexWindowView(store.snapshot(), { filter: 'ticket_runs', groupBy: 'ticket_run', limit: 50 }).groups[0]).toMatchObject({
+    expect(client.chatIndex).toHaveBeenNthCalledWith(2, ticketRunFacetRequest);
+    expect(selectChatIndexWindowView(store.snapshot(), ticketRunFacetRequest).groups[0]).toMatchObject({
       kind: 'ticket_run_group',
       groupId: 'ticket-run:run-1',
       doneCount: 3,
@@ -424,11 +435,12 @@ describe('chat index session', () => {
     let ticketRunRefreshes = 0;
     const client = {
       chatIndex: vi.fn(async (request = {}) => {
-        if (request.filter === 'ticket_runs') {
+        if (request.facets?.categories?.includes('ticket_run')) {
           ticketRunRefreshes += 1;
           const refreshed = ticketRunRefreshes > 1;
           return ok({
-            ...chatIndexSnapshot('ticket_runs', [ticketFlowRow('ticket-1', refreshed ? 'idle' : 'running')]),
+            ...chatIndexSnapshot('all', [ticketFlowRow('ticket-1', refreshed ? 'idle' : 'running')]),
+            facetRequest: { ...emptyFacetRequest, categories: ['ticket_run'] },
             groups: [ticketRunGroup(refreshed ? { doneCount: 4, runningCount: 1 } : { doneCount: 3, runningCount: 2 })],
             counters: { total: 5, waiting: 0, running: refreshed ? 1 : 2, unread: 0, archived: 0 }
           });
@@ -451,7 +463,7 @@ describe('chat index session', () => {
     } as unknown as ReadModelSnapshotClient & { chatIndex: ReturnType<typeof vi.fn> };
     const session = createChatIndexSession({ client, store, streamFactory });
 
-    session.setCompanionRequests([{ filter: 'ticket_runs', groupBy: 'ticket_run', limit: 50 }]);
+    session.setCompanionRequests([ticketRunFacetRequest]);
     await session.refresh({ filter: 'waiting', limit: 2 });
     session.start();
     const options = streamOptions as unknown as ReadModelStreamOptions<ChatIndexPatchEvent>;
@@ -475,8 +487,8 @@ describe('chat index session', () => {
     }, null);
     await new Promise((resolve) => setTimeout(resolve, 0));
 
-    expect(client.chatIndex.mock.calls.filter(([request]) => request?.filter === 'ticket_runs')).toHaveLength(2);
-    expect(selectChatIndexWindowView(store.snapshot(), { filter: 'ticket_runs', groupBy: 'ticket_run', limit: 50 }).groups[0]).toMatchObject({
+    expect(client.chatIndex.mock.calls.filter(([request]) => request?.facets?.categories?.includes('ticket_run'))).toHaveLength(2);
+    expect(selectChatIndexWindowView(store.snapshot(), ticketRunFacetRequest).groups[0]).toMatchObject({
       doneCount: 4,
       runningCount: 1
     });

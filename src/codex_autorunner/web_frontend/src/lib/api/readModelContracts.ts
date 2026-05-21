@@ -93,6 +93,34 @@ export type ChatFacetRequest = {
   agentKinds: ChatFacetAgentKind[];
 };
 
+export function normalizeChatFacetRequest(request: Partial<ChatFacetRequest> | null | undefined): ChatFacetRequest {
+  return {
+    categories: sortedUniqueFacetValues(request?.categories),
+    turnKinds: sortedUniqueFacetValues(request?.turnKinds),
+    originKinds: sortedUniqueFacetValues(request?.originKinds),
+    transports: sortedUniqueFacetValues(request?.transports),
+    scopeKinds: sortedUniqueFacetValues(request?.scopeKinds),
+    scopeIds: sortedUniqueFacetValues(request?.scopeIds),
+    agentKinds: sortedUniqueFacetValues(request?.agentKinds)
+  };
+}
+
+export function chatFacetRequestIsEmpty(request: ChatFacetRequest): boolean {
+  return (
+    request.categories.length === 0 &&
+    request.turnKinds.length === 0 &&
+    request.originKinds.length === 0 &&
+    request.transports.length === 0 &&
+    request.scopeKinds.length === 0 &&
+    request.scopeIds.length === 0 &&
+    request.agentKinds.length === 0
+  );
+}
+
+function sortedUniqueFacetValues<T extends string>(values: T[] | null | undefined): T[] {
+  return [...new Set((values ?? []).map((value) => value.trim()).filter(Boolean) as T[])].sort();
+}
+
 export type ChatIndexRow = {
   /**
    * Timestamp semantics: lastVisibleMessageAt is the newest user-visible
