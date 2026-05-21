@@ -606,8 +606,20 @@ class AutomationStore:
             raise RuntimeError("failed to revive automation job")
         return self._row_to_job(saved)
 
-    def cancel_job(self, job_id: str, *, now: Optional[str] = None) -> AutomationJob:
-        return self._transition_job(job_id, JOB_CANCELLED, now=now, finished=True)
+    def cancel_job(
+        self,
+        job_id: str,
+        *,
+        execution_refs: Optional[dict[str, Any]] = None,
+        now: Optional[str] = None,
+    ) -> AutomationJob:
+        return self._transition_job(
+            job_id,
+            JOB_CANCELLED,
+            now=now,
+            execution_refs=execution_refs,
+            finished=True,
+        )
 
     def skip_job(
         self, job_id: str, *, result_summary: Optional[str] = None

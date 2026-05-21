@@ -20,6 +20,7 @@ from codex_autorunner.core.automation.child_reconciler import (
 )
 from codex_autorunner.core.automation.execution_graph import (
     automation_execution_snapshot,
+    automation_execution_snapshots_by_job_id,
 )
 from codex_autorunner.core.automation.models import (
     TARGET_POLICY_EXISTING_REPO,
@@ -256,6 +257,8 @@ def test_reconciler_fails_pma_queue_job_when_queue_result_errors(
     assert result.failed == 1
     assert saved.state == JOB_FAILED
     assert saved.error_text == "failed"
+    assert saved.pma_lane_id == "pma:default"
+    assert saved.pma_queue_item_id == item.item_id
 
 
 def test_reconciler_fails_pma_job_when_spawned_thread_fails(
@@ -301,6 +304,87 @@ def test_reconciler_fails_pma_job_when_spawned_thread_fails(
     )
 
 
+def test_reconciler_cancels_pma_job_when_spawned_thread_is_interrupted(
+    tmp_path: Path,
+) -> None:
+    hub = tmp_path / "hub"
+    store = _store_with_running_pma_queue_job(hub)
+    queue = PmaQueue(hub)
+    item = queue.find_active_by_idempotency_key_sync(
+        "pma:default", "automation-job:job-pma"
+    )
+    assert item is not None
+    asyncio.run(
+        queue.complete_item(
+            item,
+            {
+                "status": "ok",
+                "message": "Spawned and dispatched. Thread `29998b57` is running.",
+                "thread_id": "backend-session-1",
+            },
+        )
+    )
+    _insert_thread_execution(
+        hub,
+        thread_id="29998b57-94e9-49a4-8299-0349872e4b70",
+        backend_thread_id="backend-session-1",
+        execution_id="exec-1",
+        status="interrupted",
+        error_text=None,
+    )
+
+    result = AutomationChildRunReconciler(
+        store, resolve_repo_path=lambda _repo_id: None, hub_root=hub
+    ).reconcile_running_jobs()
+
+    saved = store.get_job("job-pma")
+    assert result.cancelled == 1
+    assert saved.state == "cancelled"
+    assert saved.managed_thread_target_id == "29998b57-94e9-49a4-8299-0349872e4b70"
+    assert saved.managed_thread_execution_id == "exec-1"
+
+
+def test_reconciler_uses_managed_thread_refs_when_pma_queue_row_is_missing(
+    tmp_path: Path,
+) -> None:
+    hub = tmp_path / "hub"
+    store = _store_with_running_pma_queue_job(hub)
+    job = store.get_job("job-pma")
+    assert job is not None
+    queue_item_id = str(job.pma_queue_item_id)
+    with open_orchestration_sqlite(hub, durable=True) as conn:
+        with conn:
+            conn.execute(
+                "DELETE FROM orch_queue_items WHERE queue_item_id = ?",
+                (queue_item_id,),
+            )
+    store.update_running_job(
+        "job-pma",
+        execution_refs={
+            "managed_thread_target_id": "29998b57-94e9-49a4-8299-0349872e4b70",
+            "managed_thread_execution_id": "exec-1",
+        },
+    )
+    _insert_thread_execution(
+        hub,
+        thread_id="29998b57-94e9-49a4-8299-0349872e4b70",
+        backend_thread_id="backend-session-1",
+        execution_id="exec-1",
+        status="error",
+        error_text="reattach failed",
+    )
+
+    result = AutomationChildRunReconciler(
+        store, resolve_repo_path=lambda _repo_id: None, hub_root=hub
+    ).reconcile_running_jobs()
+
+    saved = store.get_job("job-pma")
+    assert result.failed == 1
+    assert saved.state == JOB_FAILED
+    assert saved.error_text == "reattach failed"
+    assert saved.pma_queue_item_id == queue_item_id
+
+
 def test_execution_snapshot_links_pma_spawned_thread_prefix(
     tmp_path: Path,
 ) -> None:
@@ -335,6 +419,43 @@ def test_execution_snapshot_links_pma_spawned_thread_prefix(
     snapshot = automation_execution_snapshot(job, hub_root=hub).to_dict()
 
     assert snapshot["primary_child_kind"] == "pma_queue"
+    assert snapshot["chat_href"] == "/chats/29998b57-94e9-49a4-8299-0349872e4b70"
+    assert snapshot["managed_thread"]["latest_execution"]["status"] == "running"
+
+
+def test_execution_snapshots_batch_links_pma_spawned_thread_prefix(
+    tmp_path: Path,
+) -> None:
+    hub = tmp_path / "hub"
+    store = _store_with_running_pma_queue_job(hub)
+    queue = PmaQueue(hub)
+    item = queue.find_active_by_idempotency_key_sync(
+        "pma:default", "automation-job:job-pma"
+    )
+    assert item is not None
+    asyncio.run(
+        queue.complete_item(
+            item,
+            {
+                "status": "ok",
+                "message": "Spawned and dispatched. Thread `29998b57` is running.",
+                "thread_id": "backend-session-1",
+            },
+        )
+    )
+    _insert_thread_execution(
+        hub,
+        thread_id="29998b57-94e9-49a4-8299-0349872e4b70",
+        backend_thread_id="backend-session-1",
+        execution_id="exec-1",
+        status="running",
+        error_text=None,
+    )
+
+    jobs = store.list_jobs(rule_id="rule-pma", limit=25)
+    snapshots = automation_execution_snapshots_by_job_id(jobs, hub_root=hub)
+    snapshot = snapshots["job-pma"].to_dict()
+
     assert snapshot["chat_href"] == "/chats/29998b57-94e9-49a4-8299-0349872e4b70"
     assert snapshot["managed_thread"]["latest_execution"]["status"] == "running"
 

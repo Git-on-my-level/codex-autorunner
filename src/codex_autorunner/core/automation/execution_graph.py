@@ -83,7 +83,9 @@ def automation_execution_snapshots_by_job_id(
     cache = _AutomationExecutionSnapshotCache(hub_root)
     try:
         return {
-            job.job_id: automation_execution_snapshot(job, hub_root=hub_root, cache=cache)
+            job.job_id: automation_execution_snapshot(
+                job, hub_root=hub_root, cache=cache
+            )
             for job in jobs
         }
     finally:
@@ -125,15 +127,19 @@ class _AutomationExecutionSnapshotCache:
             return None
         if normalized in self._pma_items:
             return self._pma_items[normalized]
-        row = self._connection().execute(
-            """
+        row = (
+            self._connection()
+            .execute(
+                """
             SELECT *
               FROM orch_queue_items
              WHERE queue_item_id = ?
              LIMIT 1
             """,
-            (normalized,),
-        ).fetchone()
+                (normalized,),
+            )
+            .fetchone()
+        )
         item = self._repository.row_to_item(row) if row is not None else None
         self._pma_items[normalized] = item
         return item

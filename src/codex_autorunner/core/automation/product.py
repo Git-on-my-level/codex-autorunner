@@ -245,9 +245,7 @@ def automation_rows(
     )
     job_counts_by_rule = store.job_counts_by_rule(rule_ids)
     all_jobs = [
-        job
-        for rule in rules
-        for job in recent_jobs_by_rule.get(rule.rule_id, [])
+        job for rule in rules for job in recent_jobs_by_rule.get(rule.rule_id, [])
     ]
     execution_snapshots = automation_execution_snapshots_by_job_id(
         all_jobs, hub_root=store.hub_root
@@ -336,9 +334,7 @@ def _automation_job_row(
     execution_snapshots: Optional[dict[str, AutomationExecutionSnapshot]] = None,
 ) -> dict[str, Any]:
     snapshot = (
-        execution_snapshots.get(job.job_id)
-        if execution_snapshots is not None
-        else None
+        execution_snapshots.get(job.job_id) if execution_snapshots is not None else None
     )
     if snapshot is None:
         snapshot = automation_execution_snapshot(

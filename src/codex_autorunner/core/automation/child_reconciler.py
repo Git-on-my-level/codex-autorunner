@@ -106,6 +106,9 @@ class AutomationChildRunReconciler:
             return ChildReconcileResult(missing=1)
         item = PmaQueue(Path(self._hub_root)).get_item_sync(str(job.pma_queue_item_id))
         if item is None:
+            child_result = self._reconcile_completed_pma_child(job, None)
+            if child_result.changed or child_result.inspected:
+                return child_result
             self._store.fail_job(
                 job.job_id,
                 error_text=f"pma queue item not found: {job.pma_queue_item_id}",
@@ -134,7 +137,7 @@ class AutomationChildRunReconciler:
             )
             return ChildReconcileResult(completed=1)
         if item.state == QueueItemState.CANCELLED:
-            self._store.cancel_job(job.job_id)
+            self._store.cancel_job(job.job_id, execution_refs=refs)
             return ChildReconcileResult(cancelled=1)
         self._store.fail_job(
             job.job_id,
@@ -144,7 +147,7 @@ class AutomationChildRunReconciler:
         return ChildReconcileResult(failed=1)
 
     def _reconcile_completed_pma_child(
-        self, job: AutomationJob, item: object
+        self, job: AutomationJob, item: object | None
     ) -> ChildReconcileResult:
         snapshot = automation_execution_snapshot(job, hub_root=self._hub_root).to_dict()
         managed_thread = snapshot.get("managed_thread")
@@ -157,8 +160,9 @@ class AutomationChildRunReconciler:
         if status in {"pending", "queued", "running", "starting"}:
             return ChildReconcileResult(inspected=1)
         refs = {
-            "pma_lane_id": getattr(item, "lane_id", None),
-            "pma_queue_item_id": getattr(item, "item_id", None),
+            "pma_lane_id": getattr(item, "lane_id", None) or job.pma_lane_id,
+            "pma_queue_item_id": getattr(item, "item_id", None)
+            or job.pma_queue_item_id,
             "managed_thread_target_id": managed_thread.get("thread_target_id"),
             "managed_thread_execution_id": latest_execution.get("execution_id"),
         }
@@ -172,12 +176,16 @@ class AutomationChildRunReconciler:
         if status in {"completed", "succeeded", "success", "done"}:
             self._store.complete_job(
                 job.job_id,
-                result_summary=_pma_queue_success_summary(item),
+                result_summary=(
+                    _pma_queue_success_summary(item)
+                    if item is not None
+                    else _managed_thread_success_summary(latest_execution)
+                ),
                 execution_refs=refs,
             )
             return ChildReconcileResult(inspected=1, completed=1)
-        if status in {"cancelled", "canceled", "stopped", "archived"}:
-            self._store.cancel_job(job.job_id)
+        if status in {"cancelled", "canceled", "interrupted", "stopped", "archived"}:
+            self._store.cancel_job(job.job_id, execution_refs=refs)
             return ChildReconcileResult(inspected=1, cancelled=1)
         return ChildReconcileResult(inspected=1)
 
@@ -248,7 +256,10 @@ class AutomationChildRunReconciler:
             )
             return ChildReconcileResult(failed=1)
         if status in {FlowRunStatus.STOPPED, FlowRunStatus.SUPERSEDED}:
-            self._store.cancel_job(job.job_id)
+            self._store.cancel_job(
+                job.job_id,
+                execution_refs={"ticket_flow_run_id": record.id},
+            )
             return ChildReconcileResult(cancelled=1)
         return ChildReconcileResult()
 
@@ -292,6 +303,11 @@ def _managed_thread_error_summary(execution: dict[str, object]) -> str:
         return error.strip()[:500]
     execution_id = execution.get("execution_id")
     return f"Managed automation thread failed: {execution_id or 'unknown execution'}"
+
+
+def _managed_thread_success_summary(execution: dict[str, object]) -> str:
+    execution_id = execution.get("execution_id")
+    return f"Managed automation thread completed: {execution_id or 'unknown execution'}"
 
 
 __all__ = [
