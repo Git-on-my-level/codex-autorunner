@@ -205,6 +205,13 @@ def require_choice(value: Any, *, field_name: str, choices: frozenset[str]) -> s
     return normalized
 
 
+def normalize_persisted_choice(value: Any, *, field_name: str) -> str:
+    text = _normalize_text(value)
+    if text is None:
+        raise ValueError(f"{field_name} is required")
+    return text
+
+
 def optional_text(value: Any) -> Optional[str]:
     return _normalize_text(value)
 
@@ -499,6 +506,8 @@ class AutomationRule:
     metadata: dict[str, Any]
     created_at: str
     updated_at: str
+    known_executor: bool = True
+    executable: bool = True
 
     @classmethod
     def create(
@@ -558,6 +567,91 @@ class AutomationRule:
             metadata=normalize_json_object(metadata, field_name="metadata"),
             created_at=stamp,
             updated_at=normalize_timestamp(updated_at, fallback=stamp),
+        )
+
+    @classmethod
+    def hydrate_persisted(
+        cls,
+        *,
+        name: str,
+        trigger_kind: str,
+        trigger: Optional[dict[str, Any]] = None,
+        filters: Optional[dict[str, Any]] = None,
+        target_policy: str = TARGET_POLICY_HUB,
+        target: Optional[dict[str, Any]] = None,
+        executor_kind: str,
+        executor: Optional[dict[str, Any]] = None,
+        policy: Optional[dict[str, Any]] = None,
+        metadata: Optional[dict[str, Any]] = None,
+        rule_id: Optional[str] = None,
+        enabled: bool = True,
+        system_owned: bool = False,
+        created_at: Optional[str] = None,
+        updated_at: Optional[str] = None,
+    ) -> "AutomationRule":
+        normalized_executor_kind = normalize_persisted_choice(
+            executor_kind, field_name="executor_kind"
+        )
+        known_executor_kind = normalized_executor_kind.lower()
+        if known_executor_kind in EXECUTOR_KINDS:
+            return cls.create(
+                rule_id=rule_id,
+                name=name,
+                enabled=enabled,
+                system_owned=system_owned,
+                trigger_kind=trigger_kind,
+                trigger=trigger,
+                filters=filters,
+                target_policy=target_policy,
+                target=target,
+                executor_kind=known_executor_kind,
+                executor=executor,
+                policy=policy,
+                metadata=metadata,
+                created_at=created_at,
+                updated_at=updated_at,
+            )
+
+        normalized_trigger_kind = require_choice(
+            trigger_kind, field_name="trigger_kind", choices=TRIGGER_KINDS
+        )
+        normalized_target_policy = require_choice(
+            target_policy, field_name="target_policy", choices=TARGET_POLICIES
+        )
+        normalized_trigger = validate_trigger_contract(
+            normalized_trigger_kind,
+            normalize_json_object(trigger, field_name="trigger"),
+        )
+        normalized_target = validate_target_contract(
+            normalized_target_policy,
+            normalize_json_object(target, field_name="target"),
+        )
+        normalized_executor = normalize_json_object(executor, field_name="executor")
+        kind = normalized_executor.get("kind")
+        if kind is not None and kind != normalized_executor_kind:
+            raise _contract_error(
+                "AUTOMATION_CONTRACT_EXECUTOR_KIND_MISMATCH",
+                "executor.kind must match executor_kind when present",
+            )
+        stamp = normalize_timestamp(created_at)
+        return cls(
+            rule_id=optional_text(rule_id) or str(uuid.uuid4()),
+            name=optional_text(name) or "Untitled automation",
+            enabled=normalize_bool(enabled, fallback=True),
+            system_owned=normalize_bool(system_owned, fallback=False),
+            trigger_kind=normalized_trigger_kind,
+            trigger=normalized_trigger,
+            filters=normalize_json_object(filters, field_name="filters"),
+            target_policy=normalized_target_policy,
+            target=normalized_target,
+            executor_kind=normalized_executor_kind,
+            executor=normalized_executor,
+            policy=validate_policy(normalize_json_object(policy, field_name="policy")),
+            metadata=normalize_json_object(metadata, field_name="metadata"),
+            created_at=stamp,
+            updated_at=normalize_timestamp(updated_at, fallback=stamp),
+            known_executor=False,
+            executable=False,
         )
 
     def to_dict(self) -> dict[str, Any]:

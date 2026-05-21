@@ -12,6 +12,7 @@ from ..automation import (
     AutomationSchedule,
     AutomationStore,
 )
+from ..automation.engine import AutomationRuleNonExecutableError
 from ..managed_thread_store import ManagedThreadStore
 from ..orchestration.bindings import OrchestrationBindingStore
 from ..orchestration.cold_trace_store import ColdTraceStore
@@ -1038,8 +1039,21 @@ class HubSharedStateService:
             )
         )
         engine = AutomationRuleEngine(self._automation_store)
-        expected_job = engine.job_for_rule(rule, event)
-        result = engine.enqueue_job_for_rule(rule, event)
+        try:
+            expected_job = engine.job_for_rule(rule, event)
+            result = engine.enqueue_job_for_rule(rule, event)
+        except AutomationRuleNonExecutableError as exc:
+            raise HubControlPlaneError(
+                "hub_rejected",
+                str(exc),
+                details={
+                    "code": exc.code,
+                    "rule_id": exc.rule_id,
+                    "executor_kind": exc.executor_kind,
+                    "executable": False,
+                    "known_executor": False,
+                },
+            ) from exc
         job = self._automation_store.get_job_by_dedupe_key(expected_job.dedupe_key)
         if job is None:
             raise HubControlPlaneError(

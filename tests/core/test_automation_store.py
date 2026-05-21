@@ -99,6 +99,38 @@ def test_rule_crud_event_recording_and_json_roundtrip(tmp_path) -> None:
     )
 
 
+def test_persisted_rule_with_unknown_executor_kind_hydrates_without_rewriting(
+    tmp_path,
+) -> None:
+    store = AutomationStore(tmp_path)
+    store.upsert_rule(_rule())
+    with open_orchestration_sqlite(tmp_path) as conn:
+        with conn:
+            conn.execute(
+                """
+                UPDATE orch_automation_rules
+                   SET executor_kind = ?,
+                       executor_json = ?
+                 WHERE rule_id = ?
+                """,
+                (
+                    "agent_task_turn",
+                    json.dumps(
+                        {"kind": "agent_task_turn", "prompt": "Run future task"}
+                    ),
+                    "rule-1",
+                ),
+            )
+
+    loaded = store.get_rule("rule-1")
+    assert loaded is not None
+    assert loaded.executor_kind == "agent_task_turn"
+    assert loaded.executor["kind"] == "agent_task_turn"
+    assert loaded.known_executor is False
+    assert loaded.executable is False
+    assert store.list_rules()[0].executor_kind == "agent_task_turn"
+
+
 def test_record_event_preserves_first_seen_payload_for_duplicate_id(tmp_path) -> None:
     store = AutomationStore(tmp_path)
 
