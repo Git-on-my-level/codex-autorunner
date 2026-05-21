@@ -82,7 +82,7 @@ def _seed_running_managed_thread(
     managed_thread_id = str(thread["managed_thread_id"])
     turn = store.create_turn(managed_thread_id, prompt="tail prompt")
     managed_turn_id = str(turn["managed_turn_id"])
-    store.set_thread_backend_id(managed_thread_id, backend_thread_id)
+    store.set_thread_backend_binding(managed_thread_id, backend_thread_id)
     if isinstance(backend_turn_id, str) and backend_turn_id:
         store.set_turn_backend_turn_id(managed_turn_id, backend_turn_id)
 

@@ -37,7 +37,7 @@ from .models import (
     RunningExecutionLookupRequest,
     RunningThreadTargetIdsRequest,
     ThreadActivityRecordRequest,
-    ThreadBackendIdUpdateRequest,
+    ThreadBackendBindingUpdateRequest,
     ThreadTargetArchiveRequest,
     ThreadTargetCreateRequest,
     ThreadTargetListRequest,
@@ -262,11 +262,19 @@ class RemoteThreadExecutionStore(ThreadExecutionStore):
         backend_runtime_instance_id = str(
             getattr(thread, "backend_runtime_instance_id", "") or ""
         ).strip()
+        backend_binding_state = str(
+            getattr(thread, "backend_binding_state", "") or ""
+        ).strip()
+        backend_binding_state_reason = str(
+            getattr(thread, "backend_binding_state_reason", "") or ""
+        ).strip()
         if not backend_thread_id and not backend_runtime_instance_id:
             return None
         return RuntimeThreadBinding(
             backend_thread_id=backend_thread_id or None,
             backend_runtime_instance_id=backend_runtime_instance_id or None,
+            binding_state=backend_binding_state or "bound",
+            state_reason=backend_binding_state_reason or None,
         )
 
     def list_thread_targets(
@@ -302,6 +310,8 @@ class RemoteThreadExecutionStore(ThreadExecutionStore):
         *,
         backend_thread_id: Optional[str] = None,
         backend_runtime_instance_id: Optional[str] = None,
+        binding_state: Optional[str] = None,
+        state_reason: Optional[str] = None,
     ) -> Optional[ThreadTarget]:
         response = self._run(
             operation="resume_thread_target",
@@ -310,6 +320,8 @@ class RemoteThreadExecutionStore(ThreadExecutionStore):
                     thread_target_id=thread_target_id,
                     backend_thread_id=backend_thread_id,
                     backend_runtime_instance_id=backend_runtime_instance_id,
+                    backend_binding_state=binding_state,
+                    backend_binding_state_reason=state_reason,
                 )
             ),
         )
@@ -324,23 +336,50 @@ class RemoteThreadExecutionStore(ThreadExecutionStore):
         )
         return response.thread
 
-    def set_thread_backend_id(
+    def set_thread_backend_binding(
         self,
         thread_target_id: str,
         backend_thread_id: Optional[str],
         *,
         backend_runtime_instance_id: Optional[str] = None,
+        binding_state: str = "bound",
+        state_reason: Optional[str] = None,
     ) -> None:
         self._run(
-            operation="set_thread_backend_id",
-            action=lambda client: client.set_thread_backend_id(
-                ThreadBackendIdUpdateRequest(
+            operation="set_thread_backend_binding",
+            action=lambda client: client.set_thread_backend_binding(
+                ThreadBackendBindingUpdateRequest(
                     thread_target_id=thread_target_id,
                     backend_thread_id=backend_thread_id,
                     backend_runtime_instance_id=backend_runtime_instance_id,
+                    backend_binding_state=binding_state,
+                    backend_binding_state_reason=state_reason,
+                    backend_thread_id_provided=True,
+                    backend_runtime_instance_id_provided=True,
+                    backend_binding_state_provided=True,
+                    backend_binding_state_reason_provided=True,
                 )
             ),
         )
+
+    def mark_thread_runtime_binding_state(
+        self,
+        thread_target_id: str,
+        *,
+        binding_state: str,
+        state_reason: Optional[str] = None,
+    ) -> Optional[RuntimeThreadBinding]:
+        current = self.get_thread_runtime_binding(thread_target_id)
+        if current is None or current.backend_thread_id is None:
+            return current
+        self.set_thread_backend_binding(
+            thread_target_id,
+            current.backend_thread_id,
+            backend_runtime_instance_id=current.backend_runtime_instance_id,
+            binding_state=binding_state,
+            state_reason=state_reason,
+        )
+        return self.get_thread_runtime_binding(thread_target_id)
 
     def create_execution(
         self,

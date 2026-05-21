@@ -394,7 +394,7 @@ async def _run_recovery_validation(
         managed_thread_id = str(managed_thread["managed_thread_id"])
         pma_turn = store.create_turn(managed_thread_id, prompt="recover pma turn")
         pma_turn_id = str(pma_turn["managed_turn_id"])
-        store.set_thread_backend_id(managed_thread_id, None)
+        store.set_thread_backend_binding(managed_thread_id, None)
         store.set_turn_backend_turn_id(pma_turn_id, None)
         cold_store.save_checkpoint(
             ExecutionCheckpoint(
@@ -417,7 +417,7 @@ async def _run_recovery_validation(
             discord_thread_id, prompt="recover discord turn"
         )
         discord_turn_id = str(discord_turn["managed_turn_id"])
-        store.set_thread_backend_id(discord_thread_id, None)
+        store.set_thread_backend_binding(discord_thread_id, None)
         store.set_turn_backend_turn_id(discord_turn_id, None)
         binding_store.upsert_binding(
             surface_kind="discord",

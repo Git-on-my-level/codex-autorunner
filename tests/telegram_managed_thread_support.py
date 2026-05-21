@@ -372,8 +372,8 @@ class _InProcessHubControlPlaneClient:
     async def archive_thread_target(self, request: Any) -> Any:
         return self._service.archive_thread_target(request)
 
-    async def set_thread_backend_id(self, request: Any) -> None:
-        self._service.set_thread_backend_id(request)
+    async def set_thread_backend_binding(self, request: Any) -> None:
+        self._service.set_thread_backend_binding(request)
 
     async def record_thread_activity(self, request: Any) -> None:
         self._service.record_thread_activity(request)

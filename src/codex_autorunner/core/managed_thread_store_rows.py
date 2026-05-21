@@ -300,6 +300,20 @@ class ManagedThreadRecord:
         )
         if backend_runtime_instance_id is not None:
             backend_binding["backend_runtime_instance_id"] = backend_runtime_instance_id
+        binding_state = coerce_text(
+            record.get("backend_binding_state")
+            or record.get("binding_state")
+            or backend_binding.get("binding_state")
+        )
+        if binding_state is not None:
+            backend_binding["binding_state"] = binding_state
+        state_reason = coerce_text(
+            record.get("backend_binding_state_reason")
+            or record.get("state_reason")
+            or backend_binding.get("state_reason")
+        )
+        if state_reason is not None:
+            backend_binding["state_reason"] = state_reason
         resource_kind, resource_id, repo_id = normalize_resource_owner_fields(
             resource_kind=record.get("resource_kind"),
             resource_id=record.get("resource_id"),
@@ -393,6 +407,18 @@ class ManagedThreadRecord:
         return ThreadTarget(
             thread_target_id=self.managed_thread_id,
             agent_id=self.agent,
+            backend_thread_id=coerce_text(
+                self.backend_binding.get("backend_thread_id")
+            ),
+            backend_runtime_instance_id=coerce_text(
+                self.backend_binding.get("backend_runtime_instance_id")
+            ),
+            backend_binding_state=coerce_text(
+                self.backend_binding.get("binding_state")
+            ),
+            backend_binding_state_reason=coerce_text(
+                self.backend_binding.get("state_reason")
+            ),
             repo_id=self.repo_id,
             resource_kind=self.resource_kind,
             resource_id=self.resource_id,

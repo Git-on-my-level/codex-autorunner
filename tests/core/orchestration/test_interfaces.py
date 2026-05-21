@@ -81,7 +81,7 @@ class _FakeStore:
     def archive_thread_target(self, thread_target_id: str) -> Optional[ThreadTarget]:
         return self.thread
 
-    def set_thread_backend_id(
+    def set_thread_backend_binding(
         self,
         thread_target_id: str,
         backend_thread_id: Optional[str],

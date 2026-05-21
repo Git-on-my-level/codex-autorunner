@@ -873,14 +873,10 @@ class TestSessionRecoveryInvariants:
     """Pin that session recovery notices are emitted when runtime bindings restart."""
 
     @pytest.mark.anyio
-    async def test_repo_turn_emits_recovery_notice_on_binding_restart(
+    async def test_repo_turn_resumes_backend_conversation_on_binding_restart(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """
-        When the runtime thread binding is cleared between turns (simulating a
-        runtime restart), the second turn must emit a session-recovery notice
-        prepended to the response.
-        """
+        """Runtime binding loss alone must not force a fresh backend session."""
         from codex_autorunner.core.orchestration.runtime_bindings import (
             clear_runtime_thread_binding,
         )
@@ -942,13 +938,9 @@ class TestSessionRecoveryInvariants:
             second_message, runtime=support._RuntimeStub()
         )
 
-        recovery_messages = [
-            sent for sent in handler._sent if sent.startswith(_SESSION_NOTICE)
-        ]
-        assert recovery_messages
-        final_recovery = recovery_messages[-1]
-        assert "inv-backend-thread-2" in final_recovery
-        assert record.active_thread_id == "inv-backend-thread-2"
+        assert not any(sent.startswith(_SESSION_NOTICE) for sent in handler._sent)
+        assert harness.start_calls[-1][0] == "inv-backend-thread-1"
+        assert record.active_thread_id == "inv-backend-thread-1"
 
     @pytest.mark.anyio
     async def test_consecutive_turns_without_restart_do_not_emit_recovery_notice(

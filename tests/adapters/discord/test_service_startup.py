@@ -8,6 +8,9 @@ from types import SimpleNamespace
 import pytest
 
 from codex_autorunner.adapters.app_server.event_buffer import AppServerEventBuffer
+from codex_autorunner.adapters.chat import (
+    managed_thread_startup_recovery as chat_startup_recovery_module,
+)
 from codex_autorunner.adapters.discord import (
     managed_thread_startup_recovery as discord_startup_recovery_module,
 )
@@ -355,7 +358,7 @@ async def test_reattach_running_execution_cleans_interrupted_progress_leases(
         _fake_runner_hooks,
     )
     monkeypatch.setattr(
-        discord_startup_recovery_module,
+        chat_startup_recovery_module,
         "handoff_managed_thread_final_delivery",
         _fake_handoff,
     )
@@ -392,7 +395,8 @@ async def test_reattach_running_execution_cleans_interrupted_progress_leases(
         ),
     )
 
-    assert reattached is True
+    assert reattached.kind == "reattached"
+    assert bool(reattached) is True
     assert len(spawned_tasks) == 1
     await spawned_tasks[0]
 
@@ -412,6 +416,38 @@ async def test_reattach_running_execution_cleans_interrupted_progress_leases(
             ),
         }
     ]
+
+
+@pytest.mark.anyio
+async def test_reattach_running_execution_reports_missing_backend_binding(
+    tmp_path: Path,
+) -> None:
+    service = SimpleNamespace(
+        _config=SimpleNamespace(root=tmp_path),
+        _logger=logging.getLogger("test.discord.startup.missing_binding"),
+    )
+    orchestration_service = SimpleNamespace(
+        thread_store=SimpleNamespace(get_running_turn=lambda _thread_id: {}),
+        _harness_for_thread=lambda _thread: object(),
+    )
+
+    result = discord_startup_recovery_module.reattach_running_discord_managed_thread_execution(
+        service,
+        orchestration_service=orchestration_service,
+        surface_key="channel-1",
+        managed_thread_id="thread-1",
+        thread=SimpleNamespace(
+            workspace_root=tmp_path,
+            backend_thread_id="",
+        ),
+        execution=SimpleNamespace(
+            execution_id="turn-1",
+            backend_id="backend-turn-1",
+        ),
+    )
+
+    assert result.kind == "missing_backend_binding"
+    assert bool(result) is False
 
 
 @pytest.mark.anyio

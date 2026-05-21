@@ -66,9 +66,12 @@ from .orchestration.models import (
     owner_fields_from_scope_ref,
 )
 from .orchestration.runtime_bindings import (
+    BACKEND_BINDING_BOUND,
     RuntimeThreadBinding,
     clear_runtime_thread_binding,
     get_runtime_thread_binding,
+    mark_runtime_thread_binding_state,
+    normalize_backend_binding_state,
     set_runtime_thread_binding,
 )
 from .orchestration.thread_titles import (
@@ -323,6 +326,20 @@ class ManagedThreadStore:
     ) -> Optional[RuntimeThreadBinding]:
         return get_runtime_thread_binding(self._hub_root, managed_thread_id)
 
+    def mark_thread_runtime_binding_state(
+        self,
+        managed_thread_id: str,
+        *,
+        binding_state: str,
+        state_reason: Optional[str] = None,
+    ) -> Optional[RuntimeThreadBinding]:
+        return mark_runtime_thread_binding_state(
+            self._hub_root,
+            managed_thread_id,
+            binding_state=binding_state,
+            state_reason=state_reason,
+        )
+
     def _fetch_thread(
         self, conn: Any, managed_thread_id: str
     ) -> Optional[dict[str, Any]]:
@@ -533,6 +550,7 @@ class ManagedThreadStore:
             BackendBinding(
                 backend_thread_id=normalized_backend_thread_id,
                 backend_runtime_instance_id=backend_runtime_instance_id,
+                binding_state=BACKEND_BINDING_BOUND,
             ).to_dict()
         )
 
@@ -606,6 +624,7 @@ class ManagedThreadStore:
                     managed_thread_id,
                     backend_thread_id=normalized_backend_thread_id,
                     backend_runtime_instance_id=backend_runtime_instance_id,
+                    binding_state=BACKEND_BINDING_BOUND,
                 )
             created = self._fetch_thread(conn, managed_thread_id)
         if created is None:
@@ -775,14 +794,18 @@ class ManagedThreadStore:
             counts[repo_id] = int(row["thread_count"] or 0)
         return counts
 
-    def set_thread_backend_id(
+    def set_thread_backend_binding(
         self,
         managed_thread_id: str,
         backend_thread_id: Optional[str],
         *,
         backend_runtime_instance_id: Optional[str] = None,
+        binding_state: str = BACKEND_BINDING_BOUND,
+        state_reason: Optional[str] = None,
     ) -> None:
         normalized_backend_thread_id = _coerce_text(backend_thread_id)
+        normalized_binding_state = normalize_backend_binding_state(binding_state)
+        normalized_state_reason = _coerce_text(state_reason)
         current_binding = get_runtime_thread_binding(self._hub_root, managed_thread_id)
         resolved_runtime_instance_id = _coerce_text(backend_runtime_instance_id)
         if (
@@ -813,6 +836,8 @@ class ManagedThreadStore:
             and current_binding.backend_thread_id == normalized_backend_thread_id
             and current_binding.backend_runtime_instance_id
             == resolved_runtime_instance_id
+            and current_binding.binding_state == normalized_binding_state
+            and current_binding.state_reason == normalized_state_reason
         )
         if (
             row is not None
@@ -841,6 +866,8 @@ class ManagedThreadStore:
                             BackendBinding(
                                 backend_thread_id=normalized_backend_thread_id,
                                 backend_runtime_instance_id=resolved_runtime_instance_id,
+                                binding_state=normalized_binding_state,
+                                state_reason=normalized_state_reason,
                             ).to_dict()
                         ),
                         _json_dumps(metadata),
@@ -853,6 +880,8 @@ class ManagedThreadStore:
             managed_thread_id,
             backend_thread_id=normalized_backend_thread_id,
             backend_runtime_instance_id=resolved_runtime_instance_id,
+            binding_state=normalized_binding_state,
+            state_reason=normalized_state_reason,
         )
 
     def update_thread_metadata(

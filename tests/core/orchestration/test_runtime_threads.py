@@ -373,8 +373,8 @@ class _SerializedHubClient:
             self._store.get_running_execution(request.thread_target_id)
         )
 
-    async def set_thread_backend_id(self, request: Any) -> None:
-        self._store.set_thread_backend_id(
+    async def set_thread_backend_binding(self, request: Any) -> None:
+        self._store.set_thread_backend_binding(
             request.thread_target_id,
             request.backend_thread_id,
             backend_runtime_instance_id=request.backend_runtime_instance_id,

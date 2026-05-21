@@ -1115,7 +1115,7 @@ def test_send_message_reports_interrupt_failure_without_marking_turn_failed(
         managed_thread_id = create_resp.json()["thread"]["managed_thread_id"]
         store = ManagedThreadStore(hub_env.hub_root)
         running_turn = store.create_turn(managed_thread_id, prompt="still running")
-        store.set_thread_backend_id(managed_thread_id, "backend-thread-1")
+        store.set_thread_backend_binding(managed_thread_id, "backend-thread-1")
         store.set_turn_backend_turn_id(
             running_turn["managed_turn_id"],
             "backend-turn-1",

@@ -1,13 +1,18 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import logging
+from dataclasses import dataclass, replace
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any, Callable, Optional
+from typing import Any, Callable, Literal, Optional
 
 from ...core.chat_bindings import backfill_adapter_chat_surface_events
 from ...core.logging_utils import log_event
+from ...core.orchestration.models import MessageRequest
+from ...core.orchestration.runtime_thread_events import RuntimeThreadRunEventState
+from ...core.orchestration.runtime_threads import RuntimeThreadExecution
 from .bound_chat_execution_metadata import (
     bound_chat_origin_matches_surface_from_execution_mapping,
 )
@@ -31,8 +36,27 @@ BuildRecoveryExecutionHooks = Callable[
     Optional[ManagedThreadExecutionHooks],
 ]
 RecoverPendingQueue = Callable[[Any, Any, str, str, Any], object]
-ReattachRunningExecution = Callable[[Any, Any, str, str, Any, Any], object]
+ReattachRunningExecution = Callable[
+    [Any, Any, str, str, Any, Any],
+    "ManagedThreadStartupReattachResult",
+]
 _PENDING_QUEUE_SCAN_LIMIT = 10_000
+
+
+ManagedThreadStartupReattachKind = Literal[
+    "reattached",
+    "already_running",
+    "missing_backend_binding",
+    "missing_harness_or_unsupported",
+]
+
+
+@dataclass(frozen=True, slots=True)
+class ManagedThreadStartupReattachResult:
+    kind: ManagedThreadStartupReattachKind
+
+    def __bool__(self) -> bool:
+        return self.kind in {"reattached", "already_running"}
 
 
 def _normalized_optional_text(value: Any) -> Optional[str]:
@@ -152,6 +176,157 @@ def find_surface_keys_for_pending_queue(
     return tuple(dict.fromkeys(owned_surface_keys))
 
 
+def build_running_execution_request(
+    *,
+    managed_thread_id: str,
+    thread: Any,
+    execution: Any,
+    raw_turn: Any,
+) -> MessageRequest:
+    metadata = getattr(execution, "metadata", None)
+    prompt = ""
+    kind = getattr(execution, "request_kind", None)
+    model = None
+    reasoning = None
+    if isinstance(raw_turn, dict):
+        prompt = str(raw_turn.get("prompt") or raw_turn.get("prompt_text") or "")
+        kind = raw_turn.get("request_kind") or kind
+        model = raw_turn.get("model") or raw_turn.get("model_id")
+        reasoning = raw_turn.get("reasoning") or raw_turn.get("reasoning_level")
+        raw_metadata = raw_turn.get("metadata")
+        if isinstance(raw_metadata, dict):
+            metadata = raw_metadata
+    if not prompt:
+        prompt = str(getattr(thread, "last_message_preview", "") or "")
+    return MessageRequest(
+        target_id=managed_thread_id,
+        target_kind="thread",
+        message_text=prompt,
+        kind="review" if str(kind or "").strip().lower() == "review" else "message",
+        busy_policy="queue",
+        agent_profile=getattr(thread, "agent_profile", None),
+        model=str(model).strip() or None if model is not None else None,
+        reasoning=str(reasoning).strip() or None if reasoning is not None else None,
+        approval_mode=getattr(thread, "approval_mode", None),
+        metadata=dict(metadata) if isinstance(metadata, dict) else {},
+    )
+
+
+def build_reattached_runtime_thread_execution(
+    *,
+    orchestration_service: Any,
+    managed_thread_id: str,
+    thread: Any,
+    execution: Any,
+) -> Optional[RuntimeThreadExecution]:
+    workspace_root_raw = getattr(thread, "workspace_root", None)
+    backend_thread_id = str(getattr(thread, "backend_thread_id", "") or "").strip()
+    backend_turn_id = str(getattr(execution, "backend_id", "") or "").strip()
+    if not workspace_root_raw or not backend_thread_id or not backend_turn_id:
+        return None
+    harness_for_thread = getattr(orchestration_service, "_harness_for_thread", None)
+    if not callable(harness_for_thread):
+        return None
+    try:
+        harness = harness_for_thread(thread)
+    except (KeyError, ValueError, NotImplementedError):
+        return None
+    if harness is None:
+        return None
+    raw_turn = None
+    thread_store = getattr(orchestration_service, "thread_store", None)
+    get_running_turn = getattr(thread_store, "get_running_turn", None)
+    if callable(get_running_turn):
+        raw_turn = get_running_turn(managed_thread_id)
+    return RuntimeThreadExecution(
+        service=orchestration_service,
+        harness=harness,
+        thread=thread,
+        execution=execution,
+        workspace_root=Path(str(workspace_root_raw)),
+        request=build_running_execution_request(
+            managed_thread_id=managed_thread_id,
+            thread=thread,
+            execution=execution,
+            raw_turn=raw_turn,
+        ),
+    )
+
+
+async def _invoke_finalization_callback(
+    hook: Any,
+    started: Any,
+    finalized: Any,
+) -> None:
+    if hook is None:
+        return
+    result = hook(started, finalized)
+    if inspect.isawaitable(result):
+        await result
+
+
+def compose_reattach_execution_hooks(
+    base_hooks: ManagedThreadExecutionHooks,
+    startup_hooks: ManagedThreadExecutionHooks,
+) -> ManagedThreadExecutionHooks:
+    async def _on_execution_finalized(started: Any, finalized: Any) -> None:
+        await _invoke_finalization_callback(
+            base_hooks.on_execution_finalized,
+            started,
+            finalized,
+        )
+        await _invoke_finalization_callback(
+            startup_hooks.on_execution_finalized,
+            started,
+            finalized,
+        )
+
+    return replace(base_hooks, on_execution_finalized=_on_execution_finalized)
+
+
+def start_reattached_managed_thread_delivery_task(
+    *,
+    service: Any,
+    managed_thread_id: str,
+    started: RuntimeThreadExecution,
+    coordinator: Any,
+    runner_hooks: Any,
+    startup_hooks: ManagedThreadExecutionHooks,
+    task_map: dict[str, asyncio.Task[Any]],
+    spawn_task: Callable[[Any], asyncio.Task[Any]],
+    rearm_queue_worker: Callable[[], None],
+) -> ManagedThreadStartupReattachResult:
+    existing = task_map.get(managed_thread_id)
+    if existing is not None and not existing.done():
+        return ManagedThreadStartupReattachResult("already_running")
+
+    execution_hooks = compose_reattach_execution_hooks(
+        runner_hooks.execution_hooks,
+        startup_hooks,
+    )
+
+    async def _reattach_and_deliver() -> None:
+        try:
+            finalized = await coordinator.run_started_execution(
+                started,
+                hooks=execution_hooks,
+                runtime_event_state=RuntimeThreadRunEventState(),
+                record_finalization_failure=True,
+            )
+            await handoff_managed_thread_final_delivery(
+                finalized,
+                delivery=runner_hooks.durable_delivery,
+                logger=service._logger,
+            )
+        finally:
+            if task_map.get(managed_thread_id) is asyncio.current_task():
+                task_map.pop(managed_thread_id, None)
+            rearm_queue_worker()
+
+    task_map[managed_thread_id] = spawn_task(_reattach_and_deliver())
+    return ManagedThreadStartupReattachResult("reattached")
+
+
 def _backfill_adapter_chat_surfaces(service: Any, *, surface_kind: str) -> None:
     config = getattr(service, "_config", None)
     raw_config = getattr(config, "raw", None)
@@ -230,7 +405,7 @@ async def recover_managed_thread_executions_on_startup(
             )
             if recovered_execution is None:
                 if reattach_running_execution is not None:
-                    reattached = reattach_running_execution(
+                    reattach_result = reattach_running_execution(
                         service,
                         orchestration_service,
                         surface_key,
@@ -238,9 +413,9 @@ async def recover_managed_thread_executions_on_startup(
                         thread,
                         execution,
                     )
-                    if asyncio.iscoroutine(reattached):
-                        reattached = await reattached
-                    if reattached:
+                    if asyncio.iscoroutine(reattach_result):
+                        reattach_result = await reattach_result
+                    if reattach_result:
                         recovered += 1
                         continue
                 recovered_execution = (

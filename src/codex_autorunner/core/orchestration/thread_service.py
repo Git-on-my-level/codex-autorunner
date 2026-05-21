@@ -222,11 +222,15 @@ class _ThreadRuntimeAdapter:
         *,
         backend_thread_id: Optional[str] = None,
         backend_runtime_instance_id: Optional[str] = None,
+        binding_state: Optional[str] = None,
+        state_reason: Optional[str] = None,
     ) -> ThreadTarget:
         thread = self.thread_store.resume_thread_target(
             thread_target_id,
             backend_thread_id=backend_thread_id,
             backend_runtime_instance_id=backend_runtime_instance_id,
+            binding_state=binding_state,
+            state_reason=state_reason,
         )
         if thread is None:
             raise KeyError(f"Unknown thread target '{thread_target_id}'")
@@ -560,11 +564,15 @@ class HarnessBackedOrchestrationService(OrchestrationThreadService):
         *,
         backend_thread_id: Optional[str] = None,
         backend_runtime_instance_id: Optional[str] = None,
+        binding_state: Optional[str] = None,
+        state_reason: Optional[str] = None,
     ) -> ThreadTarget:
         return self._runtime_adapter.resume_thread_target(
             thread_target_id,
             backend_thread_id=backend_thread_id,
             backend_runtime_instance_id=backend_runtime_instance_id,
+            binding_state=binding_state,
+            state_reason=state_reason,
         )
 
     async def acquire_workspace_runtime(

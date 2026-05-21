@@ -34,6 +34,8 @@ from codex_autorunner.core.orchestration import (
 )
 from codex_autorunner.core.orchestration.models import FlowTarget
 from codex_autorunner.core.orchestration.runtime_bindings import (
+    BACKEND_BINDING_INVALID,
+    BACKEND_BINDING_SUSPECT,
     clear_runtime_thread_binding,
 )
 from codex_autorunner.core.orchestration.service import (
@@ -1210,10 +1212,10 @@ async def test_record_execution_result_routes_pma_notification_through_unified_j
     assert PmaAutomationStore(hub_root).list_pending_wakeups(limit=10) == []
 
 
-async def test_send_message_rehydrates_from_transcripts_after_runtime_binding_restart(
+async def test_send_message_resumes_durable_backend_after_runtime_binding_restart(
     tmp_path: Path,
 ) -> None:
-    harness = _FakeHarness(next_conversation_id="backend-fresh-2")
+    harness = _FakeHarness()
     service = _build_service(tmp_path, harness)
     workspace_root = tmp_path / "workspace"
     workspace_root.mkdir()
@@ -1232,6 +1234,7 @@ async def test_send_message_rehydrates_from_transcripts_after_runtime_binding_re
         assistant_text="first answer",
         transcript_turn_id=execution.execution_id,
     )
+    harness.next_conversation_id = "backend-fresh-2"
     TranscriptMirrorStore(tmp_path / "hub").write_mirror(
         turn_id=execution.execution_id,
         metadata={
@@ -1258,25 +1261,18 @@ async def test_send_message_rehydrates_from_transcripts_after_runtime_binding_re
 
     prompt = harness.start_turn_calls[0]["prompt"]
     assert next_execution.status == "running"
-    assert harness.resume_conversation_calls == []
-    assert harness.new_conversation_calls == [(workspace_root, "first question")]
-    assert "Recovered durable conversation state" in prompt
-    assert "first question" in prompt
-    assert "first answer" in prompt
+    assert harness.resume_conversation_calls == [
+        (workspace_root, "backend-conversation-1")
+    ]
+    assert harness.new_conversation_calls == []
     assert "second question" in prompt
-    assert request.metadata["fresh_backend_session_started"] is True
-    assert request.metadata["fresh_backend_session_reason"] == "missing_backend_binding"
-    assert (
-        request.metadata["fresh_backend_session_notice"]
-        == "Notice: I started a new live session for this conversation and "
-        "recovered context from durable history."
-    )
+    assert "fresh_backend_session_started" not in request.metadata
 
 
-async def test_start_next_queued_execution_starts_fresh_after_runtime_binding_restart(
+async def test_start_next_queued_execution_resumes_durable_backend_after_runtime_binding_restart(
     tmp_path: Path,
 ) -> None:
-    harness = _FakeHarness(next_conversation_id="backend-fresh-2")
+    harness = _FakeHarness()
     service = _build_service(tmp_path, harness)
     workspace_root = tmp_path / "workspace"
     workspace_root.mkdir()
@@ -1302,6 +1298,7 @@ async def test_start_next_queued_execution_starts_fresh_after_runtime_binding_re
         status="ok",
         assistant_text="done",
     )
+    harness.next_conversation_id = "backend-fresh-2"
 
     clear_runtime_thread_binding(tmp_path / "hub", thread.thread_target_id)
     harness.new_conversation_calls.clear()
@@ -1317,9 +1314,11 @@ async def test_start_next_queued_execution_starts_fresh_after_runtime_binding_re
     assert queued.status == "queued"
     assert next_execution is not None
     assert next_execution.status == "running"
-    assert harness.resume_conversation_calls == []
-    assert harness.new_conversation_calls == [(workspace_root, "second")]
-    assert harness.start_turn_calls[0]["conversation_id"] == "backend-fresh-2"
+    assert harness.resume_conversation_calls == [
+        (workspace_root, "backend-conversation-1")
+    ]
+    assert harness.new_conversation_calls == []
+    assert harness.start_turn_calls[0]["conversation_id"] == "backend-conversation-1"
 
 
 async def test_claim_next_queued_execution_context_preserves_typed_request_payload(
@@ -1792,7 +1791,9 @@ async def test_stop_thread_recovers_lost_backend_when_stale_runtime_interrupt_fa
     assert outcome.execution.execution_id == execution.execution_id
     assert outcome.execution.status == "interrupted"
     binding = _thread_runtime_binding(service, thread.thread_target_id)
-    assert binding is None
+    assert binding is not None
+    assert binding.backend_thread_id == "backend-conversation-1"
+    assert binding.binding_state == BACKEND_BINDING_INVALID
 
 
 async def test_stop_thread_marks_interrupted_when_runtime_binding_is_lost_after_restart(
@@ -1851,7 +1852,118 @@ async def test_recover_running_execution_after_restart_marks_codex_error_without
     assert recovered.execution_id == execution.execution_id
     assert recovered.status == "error"
     assert recovered.error == "Running execution could not be reattached after restart"
-    assert _thread_runtime_binding(restarted_service, thread.thread_target_id) is None
+    binding = _thread_runtime_binding(restarted_service, thread.thread_target_id)
+    assert binding is not None
+    assert binding.backend_thread_id == "backend-conversation-1"
+    assert binding.binding_state == BACKEND_BINDING_SUSPECT
+
+
+async def test_recover_running_execution_after_restart_preserves_suspect_backend_binding(
+    tmp_path: Path,
+) -> None:
+    harness = _FakeHarness()
+    service = _build_service(tmp_path, harness)
+    workspace_root = tmp_path / "workspace"
+    workspace_root.mkdir()
+    thread = service.create_thread_target("codex", workspace_root)
+    execution = await service.send_message(
+        MessageRequest(
+            target_id=thread.thread_target_id,
+            target_kind="thread",
+            message_text="Need an answer",
+        )
+    )
+
+    clear_runtime_thread_binding(tmp_path / "hub", thread.thread_target_id)
+    restarted_service = _build_service(tmp_path, harness)
+    recovered = restarted_service.recover_running_execution_after_restart(
+        thread.thread_target_id
+    )
+
+    binding = _thread_runtime_binding(restarted_service, thread.thread_target_id)
+    assert recovered is not None
+    assert recovered.execution_id == execution.execution_id
+    assert recovered.status == "error"
+    assert binding is not None
+    assert binding.backend_thread_id == "backend-conversation-1"
+    assert binding.binding_state == BACKEND_BINDING_SUSPECT
+    assert binding.state_reason == "startup_lost_backend_binding"
+
+
+async def test_next_message_after_restart_recovery_resumes_suspect_backend_binding(
+    tmp_path: Path,
+) -> None:
+    harness = _FakeHarness()
+    service = _build_service(tmp_path, harness)
+    workspace_root = tmp_path / "workspace"
+    workspace_root.mkdir()
+    thread = service.create_thread_target("codex", workspace_root)
+    running = await service.send_message(
+        MessageRequest(
+            target_id=thread.thread_target_id,
+            target_kind="thread",
+            message_text="Need an answer",
+        )
+    )
+
+    clear_runtime_thread_binding(tmp_path / "hub", thread.thread_target_id)
+    restarted_service = _build_service(tmp_path, harness)
+    restarted_service.recover_running_execution_after_restart(thread.thread_target_id)
+    harness.resume_conversation_calls.clear()
+    harness.new_conversation_calls.clear()
+    harness.start_turn_calls.clear()
+
+    next_execution = await restarted_service.send_message(
+        MessageRequest(
+            target_id=thread.thread_target_id,
+            target_kind="thread",
+            message_text="continue",
+        )
+    )
+
+    assert running.execution_id != next_execution.execution_id
+    assert next_execution.status == "running"
+    assert harness.resume_conversation_calls == [
+        (workspace_root, "backend-conversation-1")
+    ]
+    assert harness.new_conversation_calls == []
+    assert harness.start_turn_calls[0]["conversation_id"] == "backend-conversation-1"
+    binding = _thread_runtime_binding(restarted_service, thread.thread_target_id)
+    assert binding is not None
+    assert binding.backend_thread_id == "backend-conversation-1"
+    assert binding.binding_state == "bound"
+
+
+async def test_invalid_backend_binding_starts_fresh_without_retrying_old_conversation(
+    tmp_path: Path,
+) -> None:
+    harness = _FakeHarness(next_conversation_id="backend-fresh-2")
+    service = _build_service(tmp_path, harness)
+    workspace_root = tmp_path / "workspace"
+    workspace_root.mkdir()
+    thread = service.create_thread_target(
+        "codex",
+        workspace_root,
+        backend_thread_id="backend-invalid-1",
+    )
+    service.thread_store.mark_thread_runtime_binding_state(
+        thread.thread_target_id,
+        binding_state=BACKEND_BINDING_INVALID,
+        state_reason="resume_recoverable_error",
+    )
+
+    execution = await service.send_message(
+        MessageRequest(
+            target_id=thread.thread_target_id,
+            target_kind="thread",
+            message_text="continue",
+        )
+    )
+
+    assert execution.status == "running"
+    assert harness.resume_conversation_calls == []
+    assert harness.new_conversation_calls == [(workspace_root, None)]
+    assert harness.start_turn_calls[0]["conversation_id"] == "backend-fresh-2"
 
 
 async def test_recover_running_execution_after_restart_defers_codex_with_live_binding(
@@ -1902,7 +2014,7 @@ async def test_recover_running_execution_after_restart_without_binding_stays_res
     )
 
     clear_runtime_thread_binding(tmp_path / "hub", thread.thread_target_id)
-    service.thread_store.set_thread_backend_id(thread.thread_target_id, None)
+    service.thread_store.set_thread_backend_binding(thread.thread_target_id, None)
     service.thread_store.set_execution_backend_id(execution.execution_id, None)
     restarted_service = _build_service(tmp_path, harness)
 

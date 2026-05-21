@@ -423,7 +423,7 @@ async def recover_orphaned_executions(
                     restored_backend_thread_id is not None
                     and not normalize_optional_text(thread.backend_thread_id)
                 ):
-                    thread_store.set_thread_backend_id(
+                    thread_store.set_thread_backend_binding(
                         managed_thread_id,
                         restored_backend_thread_id,
                     )

@@ -48,7 +48,7 @@ from ....core.hub_control_plane import (
     SurfaceBindingLookupRequest,
     SurfaceBindingUpsertRequest,
     ThreadActivityRecordRequest,
-    ThreadBackendIdUpdateRequest,
+    ThreadBackendBindingUpdateRequest,
     ThreadCompactSeedUpdateRequest,
     ThreadTargetArchiveRequest,
     ThreadTargetCreateRequest,
@@ -430,19 +430,26 @@ def build_hub_control_plane_routes() -> APIRouter:
             operation=service.archive_thread_target,
         )
 
-    @router.post("/thread-targets/{thread_target_id}/backend-id")
-    async def set_thread_backend_id(
-        request: Request, thread_target_id: str, payload: dict[str, Any]
+    async def _set_thread_backend_binding(
+        service: HubSharedStateService,
+        thread_target_id: str,
+        payload: dict[str, Any],
     ):
-        service = _require_control_plane_service(request)
         request_payload = dict(payload)
         request_payload.setdefault("thread_target_id", thread_target_id)
         return await _run_control_plane_command(
-            request_factory=lambda: ThreadBackendIdUpdateRequest.from_mapping(
+            request_factory=lambda: ThreadBackendBindingUpdateRequest.from_mapping(
                 request_payload
             ),
-            operation=service.set_thread_backend_id,
+            operation=service.set_thread_backend_binding,
         )
+
+    @router.post("/thread-targets/{thread_target_id}/backend-binding")
+    async def set_thread_backend_binding(
+        request: Request, thread_target_id: str, payload: dict[str, Any]
+    ):
+        service = _require_control_plane_service(request)
+        return await _set_thread_backend_binding(service, thread_target_id, payload)
 
     @router.post("/thread-targets/{thread_target_id}/activity")
     async def record_thread_activity(

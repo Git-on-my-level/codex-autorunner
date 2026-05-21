@@ -19,7 +19,14 @@ from .models import (
     QueuedExecutionRequest,
     ThreadTarget,
 )
-from .runtime_bindings import RuntimeThreadBinding, get_runtime_thread_binding
+from .runtime_bindings import (
+    BACKEND_BINDING_BOUND,
+    RuntimeThreadBinding,
+    get_runtime_thread_binding,
+    mark_thread_store_runtime_binding_fresh_required,
+    mark_thread_store_runtime_binding_invalid,
+    runtime_thread_binding_allows_resume,
+)
 from .thread_titles import (
     choose_owned_thread_title,
     provider_title_metadata,
@@ -91,6 +98,56 @@ def _resolve_thread_runtime_binding(
     if isinstance(hub_root, Path):
         return get_runtime_thread_binding(hub_root, thread_target_id)
     return None
+
+
+def _resolve_thread_backend_binding(
+    thread_store: ThreadExecutionStore,
+    thread: ThreadTarget,
+) -> Optional[RuntimeThreadBinding]:
+    runtime_binding = _resolve_thread_runtime_binding(
+        thread_store,
+        thread.thread_target_id,
+    )
+    if runtime_binding is not None:
+        return runtime_binding
+    if not thread.backend_thread_id:
+        return None
+    return RuntimeThreadBinding(
+        backend_thread_id=thread.backend_thread_id,
+        backend_runtime_instance_id=thread.backend_runtime_instance_id,
+        binding_state=thread.backend_binding_state or BACKEND_BINDING_BOUND,
+        state_reason=thread.backend_binding_state_reason,
+    )
+
+
+def _binding_allows_resume(binding: Optional[RuntimeThreadBinding]) -> bool:
+    return runtime_thread_binding_allows_resume(binding)
+
+
+def _mark_runtime_binding_invalid(
+    thread_store: ThreadExecutionStore,
+    thread_target_id: str,
+    *,
+    reason: str,
+) -> None:
+    mark_thread_store_runtime_binding_invalid(
+        thread_store,
+        thread_target_id,
+        state_reason=reason,
+    )
+
+
+def _mark_runtime_binding_fresh_required(
+    thread_store: ThreadExecutionStore,
+    thread_target_id: str,
+    *,
+    reason: str,
+) -> None:
+    mark_thread_store_runtime_binding_fresh_required(
+        thread_store,
+        thread_target_id,
+        state_reason=reason,
+    )
 
 
 def _truncate_rehydration_text(value: str, limit: int = _REHYDRATION_TEXT_LIMIT) -> str:
@@ -330,12 +387,11 @@ class _ThreadExecutionLifecycle:
             runtime_instance_id = await _resolve_harness_runtime_instance_id(
                 harness, workspace_root
             )
-            runtime_binding = _resolve_thread_runtime_binding(
-                self.thread_store, thread.thread_target_id
-            )
+            runtime_binding = _resolve_thread_backend_binding(self.thread_store, thread)
             conversation_id = (
                 runtime_binding.backend_thread_id
                 if runtime_binding is not None
+                and _binding_allows_resume(runtime_binding)
                 else None
             )
             if self._stale_binding_checker is not None:
@@ -378,10 +434,10 @@ class _ThreadExecutionLifecycle:
                             )
                             fresh_backend_session_reason = "resume_recoverable_error"
                             previous_backend_thread_id = conversation_id
-                            self.thread_store.set_thread_backend_id(
+                            _mark_runtime_binding_invalid(
+                                self.thread_store,
                                 thread.thread_target_id,
-                                None,
-                                backend_runtime_instance_id=None,
+                                reason="resume_recoverable_error",
                             )
                             conversation_id = None
                             continue
@@ -392,7 +448,7 @@ class _ThreadExecutionLifecycle:
                             and resumed_conversation_id != conversation_id
                         ):
                             conversation_id = resumed_conversation_id
-                            self.thread_store.set_thread_backend_id(
+                            self.thread_store.set_thread_backend_binding(
                                 thread.thread_target_id,
                                 conversation_id,
                                 backend_runtime_instance_id=runtime_instance_id,
@@ -403,7 +459,16 @@ class _ThreadExecutionLifecycle:
                             and runtime_binding.backend_runtime_instance_id
                             != runtime_instance_id
                         ):
-                            self.thread_store.set_thread_backend_id(
+                            self.thread_store.set_thread_backend_binding(
+                                thread.thread_target_id,
+                                conversation_id,
+                                backend_runtime_instance_id=runtime_instance_id,
+                            )
+                        elif (
+                            runtime_binding
+                            and runtime_binding.binding_state != BACKEND_BINDING_BOUND
+                        ):
+                            self.thread_store.set_thread_backend_binding(
                                 thread.thread_target_id,
                                 conversation_id,
                                 backend_runtime_instance_id=runtime_instance_id,
@@ -457,7 +522,7 @@ class _ThreadExecutionLifecycle:
                             title=thread.display_name,
                         )
                         conversation_id = conversation.id
-                        self.thread_store.set_thread_backend_id(
+                        self.thread_store.set_thread_backend_binding(
                             thread.thread_target_id,
                             conversation_id,
                             backend_runtime_instance_id=runtime_instance_id,
@@ -568,10 +633,10 @@ class _ThreadExecutionLifecycle:
                     )
                     fresh_backend_session_reason = "fresh_conversation_required"
                     previous_backend_thread_id = conversation_id
-                    self.thread_store.set_thread_backend_id(
+                    _mark_runtime_binding_fresh_required(
+                        self.thread_store,
                         thread.thread_target_id,
-                        None,
-                        backend_runtime_instance_id=None,
+                        reason="fresh_conversation_required",
                     )
                     conversation_id = None
                     continue
@@ -605,10 +670,10 @@ class _ThreadExecutionLifecycle:
                     )
                     fresh_backend_session_reason = "start_turn_recoverable_error"
                     previous_backend_thread_id = conversation_id
-                    self.thread_store.set_thread_backend_id(
+                    _mark_runtime_binding_invalid(
+                        self.thread_store,
                         thread.thread_target_id,
-                        None,
-                        backend_runtime_instance_id=None,
+                        reason="start_turn_recoverable_error",
                     )
                     conversation_id = None
                     continue
@@ -693,7 +758,7 @@ class _ThreadExecutionLifecycle:
             and resolved_conversation_id
             and resolved_conversation_id != conversation_id
         ):
-            self.thread_store.set_thread_backend_id(
+            self.thread_store.set_thread_backend_binding(
                 thread.thread_target_id,
                 resolved_conversation_id,
                 backend_runtime_instance_id=runtime_instance_id,

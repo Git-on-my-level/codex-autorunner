@@ -136,6 +136,8 @@ class ThreadTarget:
     agent_profile: Optional[str] = None
     backend_thread_id: Optional[str] = None
     backend_runtime_instance_id: Optional[str] = None
+    backend_binding_state: Optional[str] = None
+    backend_binding_state_reason: Optional[str] = None
     repo_id: Optional[str] = None
     resource_kind: Optional[str] = None
     resource_id: Optional[str] = None
@@ -163,6 +165,14 @@ class ThreadTarget:
         metadata = data.get("metadata")
         if not isinstance(metadata, dict):
             metadata = {}
+        binding_data = data.get("backend_binding")
+        backend_binding = (
+            binding_data
+            if isinstance(binding_data, BackendBinding)
+            else BackendBinding.from_mapping(
+                binding_data if isinstance(binding_data, Mapping) else data
+            )
+        )
         thread_target_id = _normalize_optional_text(
             data.get("managed_thread_id") or data.get("thread_target_id")
         )
@@ -188,11 +198,25 @@ class ThreadTarget:
             agent_profile=_normalize_optional_text(
                 data.get("agent_profile") or metadata.get("agent_profile")
             ),
-            backend_thread_id=_normalize_optional_text(data.get("backend_thread_id")),
+            backend_thread_id=_normalize_optional_text(data.get("backend_thread_id"))
+            or backend_binding.backend_thread_id,
             backend_runtime_instance_id=_normalize_optional_text(
                 data.get("backend_runtime_instance_id")
                 or metadata.get("backend_runtime_instance_id")
-            ),
+            )
+            or backend_binding.backend_runtime_instance_id,
+            backend_binding_state=_normalize_optional_text(
+                data.get("backend_binding_state")
+                or data.get("binding_state")
+                or metadata.get("backend_binding_state")
+            )
+            or backend_binding.binding_state,
+            backend_binding_state_reason=_normalize_optional_text(
+                data.get("backend_binding_state_reason")
+                or data.get("state_reason")
+                or metadata.get("backend_binding_state_reason")
+            )
+            or backend_binding.state_reason,
             repo_id=repo_id,
             resource_kind=resource_kind,
             resource_id=resource_id,
@@ -244,6 +268,8 @@ class ThreadTarget:
             "agent_profile": self.agent_profile,
             "backend_thread_id": self.backend_thread_id,
             "backend_runtime_instance_id": self.backend_runtime_instance_id,
+            "backend_binding_state": self.backend_binding_state,
+            "backend_binding_state_reason": self.backend_binding_state_reason,
             "repo_id": self.repo_id,
             "resource_kind": self.resource_kind,
             "resource_id": self.resource_id,
@@ -276,6 +302,8 @@ class ThreadTarget:
 class BackendBinding:
     backend_thread_id: Optional[str] = None
     backend_runtime_instance_id: Optional[str] = None
+    binding_state: Optional[str] = None
+    state_reason: Optional[str] = None
 
     @classmethod
     def from_mapping(cls, data: Mapping[str, Any]) -> "BackendBinding":
@@ -283,6 +311,12 @@ class BackendBinding:
             backend_thread_id=_normalize_optional_text(data.get("backend_thread_id")),
             backend_runtime_instance_id=_normalize_optional_text(
                 data.get("backend_runtime_instance_id")
+            ),
+            binding_state=_normalize_optional_text(
+                data.get("binding_state") or data.get("backend_binding_state")
+            ),
+            state_reason=_normalize_optional_text(
+                data.get("state_reason") or data.get("backend_binding_state_reason")
             ),
         )
 

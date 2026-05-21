@@ -1152,7 +1152,7 @@ class TestThreadStoreCanonicalVsRuntimeBinding:
         assert len(turns) == 1
         assert turns[0]["managed_turn_id"] == turn_id
 
-    def test_set_thread_backend_id_updates_orchestration_row(
+    def test_set_thread_backend_binding_updates_orchestration_row(
         self, tmp_path: Path
     ) -> None:
         hub_root = tmp_path / "hub"
@@ -1162,7 +1162,7 @@ class TestThreadStoreCanonicalVsRuntimeBinding:
         created = store.create_thread("codex", workspace)
         thread_id = created["managed_thread_id"]
 
-        store.set_thread_backend_id(thread_id, "backend-new")
+        store.set_thread_backend_binding(thread_id, "backend-new")
 
         with open_orchestration_sqlite(hub_root, durable=False) as conn:
             row = conn.execute(

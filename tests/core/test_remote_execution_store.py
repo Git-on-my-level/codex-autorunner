@@ -156,8 +156,8 @@ class _FakeHubClient:
         self.calls.append(("archive_thread_target", request))
         return self.thread_response
 
-    async def set_thread_backend_id(self, request):
-        self.calls.append(("set_thread_backend_id", request))
+    async def set_thread_backend_binding(self, request):
+        self.calls.append(("set_thread_backend_binding", request))
         return None
 
     async def record_thread_activity(self, request):
@@ -268,7 +268,7 @@ def test_remote_execution_store_delegates_to_hub_client_for_thread_and_execution
         backend_runtime_instance_id="runtime-1",
     )
     archived_thread = store.archive_thread_target("thread-1")
-    store.set_thread_backend_id(
+    store.set_thread_backend_binding(
         "thread-1",
         "conversation-3",
         backend_runtime_instance_id="runtime-2",
@@ -348,7 +348,7 @@ def test_remote_execution_store_delegates_to_hub_client_for_thread_and_execution
         "list_thread_targets",
         "resume_thread_target",
         "archive_thread_target",
-        "set_thread_backend_id",
+        "set_thread_backend_binding",
         "create_execution",
         "get_execution",
         "get_running_execution",
@@ -399,6 +399,8 @@ def test_remote_execution_store_delegates_to_hub_client_for_thread_and_execution
         "thread_target_id": "thread-1",
         "backend_thread_id": "conversation-3",
         "backend_runtime_instance_id": "runtime-2",
+        "backend_binding_state": "bound",
+        "backend_binding_state_reason": None,
     }
 
     previous_completed_request = client.calls[11][1]

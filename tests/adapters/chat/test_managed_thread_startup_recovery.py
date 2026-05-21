@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 from pathlib import Path
 from types import SimpleNamespace
@@ -209,10 +210,10 @@ async def test_startup_recovery_reattaches_running_turn_before_marking_lost() ->
         surface_kind="discord",
         build_orchestration_service=lambda _service: FakeOrchestrationService(),
         build_durable_delivery=lambda *_args: object(),
-        reattach_running_execution=lambda _service, _orch, surface_key, thread_id, _thread, execution: reattached.append(
-            (surface_key, thread_id, execution.execution_id)
-        )
-        or True,
+        reattach_running_execution=lambda _service, _orch, surface_key, thread_id, _thread, execution: (
+            reattached.append((surface_key, thread_id, execution.execution_id))
+            or recovery_module.ManagedThreadStartupReattachResult("reattached")
+        ),
         public_execution_error="Discord PMA turn failed",
         failure_event_name="discord.turn.startup_execution_recovery_failed",
         finished_event_name="discord.turn.startup_execution_recovery_finished",
@@ -220,6 +221,40 @@ async def test_startup_recovery_reattaches_running_turn_before_marking_lost() ->
 
     assert reattached == [("channel-1", "thread-1", "turn-1")]
     assert marked_lost == []
+
+
+@pytest.mark.anyio
+async def test_start_reattached_managed_thread_delivery_task_reports_already_running() -> (
+    None
+):
+    task_map: dict[str, asyncio.Task[object]] = {
+        "thread-1": asyncio.create_task(asyncio.sleep(0.05))
+    }
+
+    try:
+        result = recovery_module.start_reattached_managed_thread_delivery_task(
+            service=SimpleNamespace(
+                _logger=logging.getLogger("test.startup_recovery.already_running")
+            ),
+            managed_thread_id="thread-1",
+            started=SimpleNamespace(),
+            coordinator=SimpleNamespace(),
+            runner_hooks=SimpleNamespace(
+                execution_hooks=SimpleNamespace(),
+                durable_delivery=SimpleNamespace(),
+            ),
+            startup_hooks=recovery_module.ManagedThreadExecutionHooks(),
+            task_map=task_map,
+            spawn_task=lambda _coro: pytest.fail("spawn_task should not run"),
+            rearm_queue_worker=lambda: None,
+        )
+
+        assert result.kind == "already_running"
+        assert bool(result) is True
+    finally:
+        task_map["thread-1"].cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task_map["thread-1"]
 
 
 @pytest.mark.anyio
