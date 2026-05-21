@@ -24,6 +24,14 @@ from .models import (
     EXECUTOR_PUBLISH_CHAT_NOTIFICATION,
     EXECUTOR_PUBLISH_OPERATION,
     EXECUTOR_TICKET_FLOW,
+    JOB_CANCELLED,
+    JOB_DEAD_LETTERED,
+    JOB_FAILED,
+    JOB_PAUSED,
+    JOB_RUNNING,
+    JOB_SKIPPED,
+    JOB_SUCCEEDED,
+    JOB_TERMINAL_STATES,
     SCHEDULE_DAILY,
     SCHEDULE_INTERVAL,
     SCHEDULE_ONE_SHOT,
@@ -33,6 +41,7 @@ from .models import (
     TRIGGER_KIND_EVENT,
     TRIGGER_KIND_MANUAL,
     TRIGGER_KIND_SCHEDULE,
+    AutomationChildExecutionEdge,
     AutomationEvent,
     AutomationJob,
     AutomationRule,
@@ -233,7 +242,7 @@ def automation_overview(store: AutomationStore, *, limit: int = 100) -> dict[str
         "failed_jobs": sum(
             1
             for row in rows
-            if str((row.get("last_job") or {}).get("state")) == "failed"
+            if str((row.get("last_job") or {}).get("effective_state")) == JOB_FAILED
         ),
     }
     return {"automations": rows, "summary": summary, "presets": automation_presets()}
@@ -323,7 +332,11 @@ def _automation_row_from_enrichment(
         "policy": rule.policy,
         "metadata": rule.metadata,
         "schedule": schedule.to_dict() if schedule is not None else None,
-        "last_job": last_job.to_dict() if last_job is not None else None,
+        "last_job": (
+            _automation_job_row(last_job, store=store, execution_snapshots=snapshots)
+            if last_job is not None
+            else None
+        ),
         "jobs": [
             _automation_job_row(job, store=store, execution_snapshots=snapshots)
             for job in recent_jobs
@@ -351,9 +364,18 @@ def _automation_job_row(
         )
     child_execution = snapshot.to_dict()
     pma_queue_result = child_execution.get("pma_queue")
+    child_edges = (
+        store.list_child_execution_edges(job.job_id) if store is not None else []
+    )
+    children = [_automation_child_row(edge) for edge in child_edges]
+    effective_state = _effective_job_state(job, child_edges)
+    terminal_reason = _job_terminal_reason(job, child_edges, effective_state)
+    policy_violations = _job_policy_violations(job, child_edges)
     return {
         "job_id": job.job_id,
         "state": job.state,
+        "raw_state": job.state,
+        "effective_state": effective_state,
         "created_at": job.created_at,
         "started_at": job.started_at,
         "finished_at": job.finished_at,
@@ -367,8 +389,154 @@ def _automation_job_row(
         "pma_queue_item_id": job.pma_queue_item_id,
         "pma_queue_result": pma_queue_result,
         "child_execution": child_execution,
+        "children": children,
+        "runtime_contract": _job_runtime_contract(job, child_edges),
+        "terminal_reason": terminal_reason,
+        "policy_violations": policy_violations,
         "ticket_flow_run_id": job.ticket_flow_run_id,
         "ticket_flow_worktree_id": job.ticket_flow_worktree_id,
+    }
+
+
+def _automation_child_row(edge: AutomationChildExecutionEdge) -> dict[str, Any]:
+    return {
+        "edge_id": edge.edge_id,
+        "parent_job_id": edge.parent_job_id,
+        "child_kind": edge.child_kind,
+        "child_id": edge.child_id,
+        "authoritative_for_parent_completion": (
+            edge.authoritative_for_parent_completion
+        ),
+        "requested_runtime": edge.requested_runtime.to_dict(),
+        "actual_runtime": (
+            edge.actual_runtime.to_dict() if edge.actual_runtime is not None else None
+        ),
+        "terminal_mapping": edge.terminal_mapping,
+        "terminal_event_id": edge.terminal_event_id,
+        "terminal_state": edge.terminal_state,
+        "terminal_observed_at": edge.terminal_observed_at,
+        "created_at": edge.created_at,
+        "updated_at": edge.updated_at,
+    }
+
+
+def _effective_job_state(
+    job: AutomationJob, edges: list[AutomationChildExecutionEdge]
+) -> str:
+    authoritative = [edge for edge in edges if edge.authoritative_for_parent_completion]
+    if not authoritative or any(edge.terminal_state is None for edge in authoritative):
+        return job.state
+    mapped = [
+        edge.terminal_mapping.get(str(edge.terminal_state), JOB_FAILED)
+        for edge in authoritative
+    ]
+    if any(state in {JOB_FAILED, JOB_DEAD_LETTERED} for state in mapped):
+        return JOB_FAILED
+    if any(state == JOB_CANCELLED for state in mapped):
+        return JOB_CANCELLED
+    if any(state == JOB_PAUSED for state in mapped):
+        return JOB_PAUSED
+    if all(state in JOB_TERMINAL_STATES or state == JOB_FAILED for state in mapped):
+        return JOB_SUCCEEDED
+    return job.state
+
+
+def _job_terminal_reason(
+    job: AutomationJob, edges: list[AutomationChildExecutionEdge], effective_state: str
+) -> Optional[str]:
+    if job.error_text:
+        return job.error_text
+    if job.result_summary and effective_state in {
+        JOB_SUCCEEDED,
+        JOB_FAILED,
+        JOB_CANCELLED,
+        JOB_SKIPPED,
+        JOB_PAUSED,
+        JOB_DEAD_LETTERED,
+    }:
+        return job.result_summary
+    authoritative = [edge for edge in edges if edge.authoritative_for_parent_completion]
+    if job.state != effective_state and authoritative:
+        child_states = ", ".join(
+            f"{edge.child_kind}:{edge.terminal_state or 'open'}"
+            for edge in authoritative
+        )
+        return f"Derived from authoritative child execution: {child_states}"
+    return None
+
+
+def _job_policy_violations(
+    job: AutomationJob, edges: list[AutomationChildExecutionEdge]
+) -> list[dict[str, Any]]:
+    violations: list[dict[str, Any]] = []
+    if job.state == JOB_RUNNING and _effective_job_state(job, edges) != job.state:
+        violations.append(
+            {
+                "code": "AUTOMATION_PARENT_STATE_STALE",
+                "severity": "warning",
+                "message": (
+                    "Parent job raw state is stale relative to authoritative child "
+                    "execution."
+                ),
+            }
+        )
+    for edge in edges:
+        if edge.terminal_state == "policy_violated":
+            violations.append(
+                {
+                    "code": "AUTOMATION_CHILD_POLICY_VIOLATED",
+                    "severity": "error",
+                    "child_id": edge.child_id,
+                    "message": "Authoritative child execution reported policy_violated.",
+                }
+            )
+        requested = edge.requested_runtime.to_dict()
+        actual = (
+            edge.actual_runtime.to_dict() if edge.actual_runtime is not None else {}
+        )
+        for key in ("agent", "model", "profile", "reasoning"):
+            requested_value = requested.get(key)
+            actual_value = actual.get(key)
+            if requested_value and actual_value and requested_value != actual_value:
+                violations.append(
+                    {
+                        "code": "AUTOMATION_RUNTIME_MISMATCH",
+                        "severity": "error",
+                        "child_id": edge.child_id,
+                        "field": key,
+                        "message": (
+                            f"Requested {key}={requested_value!r} but child ran "
+                            f"{actual_value!r}."
+                        ),
+                    }
+                )
+    return violations
+
+
+def _job_runtime_contract(
+    job: AutomationJob, edges: list[AutomationChildExecutionEdge]
+) -> dict[str, Any]:
+    if edges:
+        requested_edges = [edge.requested_runtime.to_dict() for edge in edges]
+        actual_edges = [
+            edge.actual_runtime.to_dict() if edge.actual_runtime is not None else None
+            for edge in edges
+        ]
+        return {
+            "requested": (
+                requested_edges[0] if len(requested_edges) == 1 else requested_edges
+            ),
+            "actual": actual_edges[0] if len(actual_edges) == 1 else actual_edges,
+        }
+    executor = dict(job.executor)
+    requested = _requested_runtime_from_executor(executor)
+    return {
+        "requested": requested or None,
+        "actual": (
+            executor.get("actual_runtime")
+            if isinstance(executor.get("actual_runtime"), dict)
+            else None
+        ),
     }
 
 
@@ -1166,7 +1334,7 @@ def _format_schedule(schedule: Any) -> str:
 def _format_job(job: Any) -> str:
     if not isinstance(job, dict):
         return "none"
-    state = job.get("state") or "unknown"
+    state = job.get("effective_state") or job.get("state") or "unknown"
     updated_at = job.get("updated_at") or job.get("created_at") or "unknown time"
     return f"{state} at {updated_at}"
 

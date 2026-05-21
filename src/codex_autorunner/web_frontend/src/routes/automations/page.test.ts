@@ -70,4 +70,17 @@ describe('/automations page', () => {
     expect(promptBody).not.toContain('Current prompt or ticket body:');
     expect(promptBody).not.toContain('promptDraft || ticketDraft');
   });
+
+  it('renders explicit runtime and effective run state copy', () => {
+    const source = pageSource();
+
+    expect(source).toContain('<dt>Agent</dt>');
+    expect(source).toContain('<dt>Coordinator</dt>');
+    expect(source).toContain('<dt>Workers</dt>');
+    expect(source).toContain('Run with agent');
+    expect(source).toContain('Run with PMA');
+    expect(source).toContain('lastJob?.effectiveState');
+    expect(source).toContain('raw-state-diagnostic');
+    expect(source).not.toContain('<dt>Runs as</dt>');
+  });
 });

@@ -72,4 +72,24 @@ describe('runHistoryFromAutomationJobs', () => {
 
     expect(row.href).toBe('/chats/thread-target-1');
   });
+
+  it('uses effective state and durable child graph links', () => {
+    const [row] = runHistoryFromAutomationJobs([
+      {
+        job_id: 'job-stale-parent',
+        state: 'running',
+        effective_state: 'succeeded',
+        children: [
+          {
+            child_kind: 'agent_task',
+            child_id: 'thread-target-2',
+            terminal_state: 'succeeded'
+          }
+        ]
+      }
+    ]);
+
+    expect(row.status).toBe('done');
+    expect(row.href).toBe('/chats/thread-target-2');
+  });
 });

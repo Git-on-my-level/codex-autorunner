@@ -4,6 +4,7 @@ from fastapi.testclient import TestClient
 
 from codex_autorunner.bootstrap import seed_hub_files
 from codex_autorunner.core.automation import (
+    AutomationChildExecutionEdge,
     AutomationRule,
     AutomationSchedule,
     AutomationStore,
@@ -349,6 +350,71 @@ def test_hub_automation_workspace_batches_jobs_and_target_options(
             "disabled": True,
         },
     ]
+
+
+def test_hub_automation_jobs_project_effective_state_and_child_runtime(tmp_path):
+    hub_root = tmp_path / "hub"
+    seed_hub_files(hub_root, force=True)
+    store = AutomationStore(hub_root)
+    rule = store.upsert_rule(
+        AutomationRule.create(
+            rule_id="rule-effective",
+            name="Effective state rule",
+            enabled=True,
+            trigger_kind=TRIGGER_KIND_SCHEDULE,
+            trigger={"event_types": ["schedule.fire"]},
+            target_policy=TARGET_POLICY_HUB,
+            target={"repo_id": "repo-1"},
+            executor_kind=EXECUTOR_AGENT_TASK_TURN,
+            executor={
+                "message": "Run direct task",
+                "requested_runtime": {"agent": "codex", "model": "gpt-5.4"},
+                "agent": "codex",
+                "model": "gpt-5.4",
+            },
+        )
+    )
+    event = store.create_event(
+        event_id="event-effective",
+        event_type="schedule.fire",
+        source="test",
+        target={"rule_id": rule.rule_id},
+        payload={},
+    )
+    store.create_job(
+        job_id="job-effective",
+        rule_id=rule.rule_id,
+        event_id=event.event_id,
+        state="running",
+        dedupe_key="dedupe-effective",
+        target=rule.target,
+        executor=rule.executor,
+        created_at="2026-01-01T00:00:00Z",
+    )
+    store.upsert_child_execution_edge(
+        AutomationChildExecutionEdge.create(
+            parent_job_id="job-effective",
+            child_kind="agent_task",
+            child_id="thread-effective",
+            authoritative_for_parent_completion=True,
+            requested_runtime={"agent": "codex", "model": "gpt-5.4"},
+            actual_runtime={"agent": "codex", "model": "gpt-5.4"},
+            terminal_state="succeeded",
+            terminal_observed_at="2026-01-01T00:05:00Z",
+        )
+    )
+    client = TestClient(create_hub_app(hub_root))
+
+    response = client.get(f"/hub/automations/{rule.rule_id}")
+
+    assert response.status_code == 200
+    job = response.json()["automation"]["last_job"]
+    assert job["raw_state"] == "running"
+    assert job["effective_state"] == "succeeded"
+    assert job["terminal_reason"].startswith("Derived from authoritative child")
+    assert job["children"][0]["child_id"] == "thread-effective"
+    assert job["runtime_contract"]["requested"]["agent"] == "codex"
+    assert job["policy_violations"][0]["code"] == "AUTOMATION_PARENT_STATE_STALE"
 
 
 def test_hub_automations_pause_and_resume(tmp_path):

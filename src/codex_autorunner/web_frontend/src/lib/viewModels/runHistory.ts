@@ -15,10 +15,12 @@ export type RunHistoryEntry = {
 export function runHistoryFromAutomationJobs(jobs: JsonRecord[]): RunHistoryEntry[] {
   return jobs.map((job, index) => {
     const id = stringValue(job.jobId ?? job.job_id, `job-${index + 1}`);
-    const state = stringValue(job.state, 'idle');
+    const state = stringValue(job.effectiveState ?? job.effective_state ?? job.state, 'idle');
     const worktreeId = nullableString(job.ticketFlowWorktreeId ?? job.ticket_flow_worktree_id);
     const managedThreadId = nullableString(job.managedThreadTargetId ?? job.managed_thread_target_id);
     const childExecution = recordValue(job.childExecution ?? job.child_execution);
+    const children = arrayValue(job.children);
+    const childHref = children.map(recordValue).map(childHrefValue).find((value): value is string => Boolean(value));
     const spawnedChatId = managedThreadId;
     return {
       id,
@@ -30,6 +32,7 @@ export function runHistoryFromAutomationJobs(jobs: JsonRecord[]): RunHistoryEntr
         nullableString(job.updatedAt ?? job.updated_at) ??
         nullableString(job.createdAt ?? job.created_at),
       href:
+        childHref ??
         nullableString(childExecution?.chat_href ?? childExecution?.target_href) ??
         (spawnedChatId ? `/chats/${encodeURIComponent(spawnedChatId)}` : worktreeId ? worktreeTicketRoute(worktreeId) : null),
       attempts: numberValue(job.attemptCount ?? job.attempt_count, 0)
@@ -66,4 +69,18 @@ function numberValue(value: unknown, fallback: number): number {
 
 function recordValue(value: unknown): JsonRecord | null {
   return value && typeof value === 'object' && !Array.isArray(value) ? (value as JsonRecord) : null;
+}
+
+function arrayValue(value: unknown): unknown[] {
+  return Array.isArray(value) ? value : [];
+}
+
+function childHrefValue(child: JsonRecord | null): string | null {
+  if (!child) return null;
+  const kind = nullableString(child.child_kind ?? child.childKind);
+  const id = nullableString(child.child_id ?? child.childId);
+  if (!kind || !id) return null;
+  if (kind === 'agent_task' || kind === 'pma_operator') return `/chats/${encodeURIComponent(id)}`;
+  if (kind === 'ticket_flow') return worktreeTicketRoute(id);
+  return null;
 }

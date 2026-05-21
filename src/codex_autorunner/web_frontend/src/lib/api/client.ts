@@ -147,6 +147,8 @@ export type AutomationScheduleSummary = {
 export type AutomationJobSummary = {
   jobId: string;
   state: string;
+  rawState: string;
+  effectiveState: string;
   createdAt: string | null;
   startedAt: string | null;
   finishedAt: string | null;
@@ -160,6 +162,10 @@ export type AutomationJobSummary = {
   pmaQueueItemId: string | null;
   pmaQueueResult: JsonRecord | null;
   childExecution: JsonRecord | null;
+  children: JsonRecord[];
+  runtimeContract: JsonRecord | null;
+  terminalReason: string | null;
+  policyViolations: JsonRecord[];
   ticketFlowRunId: string | null;
   ticketFlowWorktreeId: string | null;
   raw: JsonRecord;
@@ -301,6 +307,7 @@ export type AutomationWorkspace = AutomationOverview & {
 
 export type AutomationCreateRequest = {
   preset: 'security_scan_pr' | 'weekly_ticket_flow';
+  execution_mode?: string | null;
   name?: string | null;
   repo_id?: string | null;
   timezone?: string;
@@ -319,6 +326,7 @@ export type AutomationCreateRequest = {
 export type AutomationUpdateRequest = {
   name?: string | null;
   enabled?: boolean;
+  execution_mode?: string | null;
   timezone?: string;
   hour?: number;
   minute?: number;
@@ -1293,6 +1301,8 @@ function mapAutomationJob(raw: JsonRecord): AutomationJobSummary {
   return {
     jobId: stringValue(raw.job_id ?? raw.jobId, ''),
     state: stringValue(raw.state, ''),
+    rawState: stringValue(raw.raw_state ?? raw.rawState ?? raw.state, ''),
+    effectiveState: stringValue(raw.effective_state ?? raw.effectiveState ?? raw.state, ''),
     createdAt: nullableString(raw.created_at ?? raw.createdAt),
     startedAt: nullableString(raw.started_at ?? raw.startedAt),
     finishedAt: nullableString(raw.finished_at ?? raw.finishedAt),
@@ -1310,6 +1320,12 @@ function mapAutomationJob(raw: JsonRecord): AutomationJobSummary {
     childExecution: Object.keys(asRecord(raw.child_execution ?? raw.childExecution)).length
       ? asRecord(raw.child_execution ?? raw.childExecution)
       : null,
+    children: asArray(raw.children).map(asRecord),
+    runtimeContract: Object.keys(asRecord(raw.runtime_contract ?? raw.runtimeContract)).length
+      ? asRecord(raw.runtime_contract ?? raw.runtimeContract)
+      : null,
+    terminalReason: nullableString(raw.terminal_reason ?? raw.terminalReason),
+    policyViolations: asArray(raw.policy_violations ?? raw.policyViolations).map(asRecord),
     ticketFlowRunId: nullableString(raw.ticket_flow_run_id ?? raw.ticketFlowRunId),
     ticketFlowWorktreeId: nullableString(raw.ticket_flow_worktree_id ?? raw.ticketFlowWorktreeId),
     raw

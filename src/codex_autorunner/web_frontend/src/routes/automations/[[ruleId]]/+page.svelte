@@ -49,6 +49,7 @@
   let selectedProfile = $state('');
   let selectedModel = $state('');
   let selectedReasoning = $state('');
+  let detailExecutionMode = $state('agent_task_turn');
   let agentCatalogError = $state<string | null>(null);
   let modelCatalogError = $state<string | null>(null);
   let timezone = $state(Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC');
@@ -182,7 +183,8 @@
       const executorPrompt = stringValue(automation.raw.executor, 'message_text') || stringValue(automation.raw.executor, 'message');
       promptDraft = automation.product.message.field === 'prompt' ? executorPrompt || automation.product.messagePreview : automation.product.messagePreview;
       ticketDraft = firstTicketBody(automation.raw.executor);
-      if (automation.executorKind === 'managed_thread_turn') {
+      detailExecutionMode = automation.executorKind;
+      if (usesRuntimePicker(automation.executorKind)) {
         selectedAgent = stringValue(automation.raw.executor, 'agent') || defaultAgentId || agentIdFallback();
         selectedProfile = stringValue(automation.raw.executor, 'profile') || stringValue(automation.raw.executor, 'agent_profile');
         selectedModel = stringValue(automation.raw.executor, 'model');
@@ -207,7 +209,8 @@
     detailMinute = preset.schedule.minute;
     detailWeekday = preset.schedule.weekday ?? 0;
     timezone = preset.schedule.timezone || timezone;
-    if (preset.executorKind === 'managed_thread_turn') {
+    detailExecutionMode = preset.executorKind;
+    if (usesRuntimePicker(preset.executorKind)) {
       selectedAgent = defaultAgentId || agentIdFallback();
       selectedProfile = selectedAgent === 'hermes' ? defaultProfile : '';
       selectedModel = '';
@@ -250,7 +253,7 @@
         total: nextAutomations.length,
         active: nextAutomations.filter((automation) => automation.enabled).length,
         paused: nextAutomations.filter((automation) => !automation.enabled).length,
-        failedJobs: nextAutomations.filter((automation) => automation.lastJob?.state === 'failed').length
+        failedJobs: nextAutomations.filter((automation) => automation.lastJob?.effectiveState === 'failed').length
       }
     };
   }
@@ -339,10 +342,11 @@
       weekday: Number(detailWeekday),
       prompt: promptDraft || null,
       ticket_body: preset.executorKind === 'ticket_flow' ? ticketDraft || null : null,
-      agent: preset.executorKind === 'managed_thread_turn' ? selectedAgent || null : null,
-      model: preset.executorKind === 'managed_thread_turn' ? selectedModel || null : null,
-      reasoning: preset.executorKind === 'managed_thread_turn' ? selectedReasoning || null : null,
-      profile: preset.executorKind === 'managed_thread_turn' ? selectedProfile || null : null,
+      execution_mode: detailExecutionMode,
+      agent: usesRuntimePicker(detailExecutionMode) ? selectedAgent || null : null,
+      model: usesRuntimePicker(detailExecutionMode) ? selectedModel || null : null,
+      reasoning: usesRuntimePicker(detailExecutionMode) ? selectedReasoning || null : null,
+      profile: usesRuntimePicker(detailExecutionMode) ? selectedProfile || null : null,
       enabled: detailEnabled
     });
     saving = false;
@@ -408,7 +412,7 @@
     const preset = selectedPreset();
     if (!preset) return createNewAutomationPrompt();
     const agentLines =
-      preset.executorKind === 'managed_thread_turn'
+      usesRuntimePicker(detailExecutionMode)
         ? [
             `Agent: ${selectedAgent || '(default)'}`,
             `Model: ${selectedModel || '(default)'}`,
@@ -456,7 +460,7 @@
   }
 
   function selectedExecutorKind(): string {
-    return selectedAutomation()?.executorKind ?? selectedPreset()?.executorKind ?? '';
+    return detailExecutionMode || selectedAutomation()?.executorKind || selectedPreset()?.executorKind || '';
   }
 
   function selectedTargetPolicy(): string {
@@ -563,9 +567,10 @@
 
   function saveAgentModelFields(): void {
     const automation = selectedAutomation();
-    if (selectedExecutorKind() !== 'managed_thread_turn' || (automation && !automation.product.editable.canEditMessage)) return;
+    if (!usesRuntimePicker(selectedExecutorKind()) || (automation && !automation.product.editable.canEditMessage)) return;
     void savePatch(
       {
+        execution_mode: detailExecutionMode,
         agent: selectedAgent || null,
         model: selectedModel || null,
         reasoning: selectedReasoning || null,
@@ -628,6 +633,8 @@
     security_scan_pr: 'Security scan',
     weekly_ticket_flow: 'Weekly ticket flow',
     pma_prompt: 'PMA reaction',
+    agent_task_turn: 'Agent task',
+    pma_operator_turn: 'PMA operator',
     managed_thread_turn: 'Agent turn',
     ticket_flow: 'Ticket flow'
   };
@@ -643,7 +650,7 @@
   }
 
   function automationStatus(automation: AutomationSummary): { key: string; dot: string; label: string } {
-    if (automation.lastJob?.state === 'failed') return { key: 'failed', dot: 'status-failed', label: 'failed' };
+    if (automation.lastJob?.effectiveState === 'failed') return { key: 'failed', dot: 'status-failed', label: 'failed' };
     if (automation.enabled) return { key: 'active', dot: 'status-running', label: 'active' };
     return { key: 'paused', dot: 'status-idle', label: 'paused' };
   }
@@ -652,21 +659,59 @@
     return selectedKind === 'preset' || selectedScheduleKind() !== 'event_driven';
   }
 
-  function runsAsLabel(): string {
+  function usesRuntimePicker(executorKind: string): boolean {
+    return executorKind === 'agent_task_turn' || executorKind === 'pma_operator_turn' || executorKind === 'managed_thread_turn';
+  }
+
+  function runtimeContractLabel(value: unknown, fallback = 'unspecified'): string {
+    const contract = asRecord(value);
+    const agent = String(contract.agent ?? '').trim();
+    const model = String(contract.model ?? '').trim();
+    if (agent && model) return `${agent} / ${model}`;
+    return agent || model || fallback;
+  }
+
+  function agentRuntimeLabel(): string {
     const automation = selectedAutomation();
     if (automation) {
-      const summary = automation.product.executorSummary;
-      const label = String(summary.label ?? kindLabel(automation.executorKind));
-      const agent = String(summary.agent ?? '');
-      const model = String(summary.model ?? '');
-      if (model) return `${agent || 'default'} · ${model}`;
-      return agent || label;
+      const runtimeContract = asRecord(automation.raw.runtime_contract ?? automation.raw.runtimeContract);
+      const contract = asRecord(automation.raw.direct_runtime_contract ?? automation.raw.directRuntimeContract ?? runtimeContract.requested);
+      return runtimeContractLabel(contract, kindLabel(automation.executorKind));
     }
-    if (selectedExecutorKind() === 'managed_thread_turn') {
-      return selectedModel ? `${selectedAgent || 'default'} · ${selectedModel}` : selectedAgent || 'default agent';
-    }
+    if (usesRuntimePicker(selectedExecutorKind())) return selectedModel ? `${selectedAgent || 'default'} / ${selectedModel}` : selectedAgent || 'default agent';
     if (selectedExecutorKind() === 'ticket_flow') return 'Ticket flow';
     return kindLabel(selectedExecutorKind());
+  }
+
+  function coordinatorRuntimeLabel(): string {
+    const automation = selectedAutomation();
+    if (automation) {
+      const contract = asRecord(automation.raw.coordinator_runtime_contract ?? automation.raw.coordinatorRuntimeContract);
+      return runtimeContractLabel(contract, kindLabel(automation.executorKind));
+    }
+    return selectedModel ? `${selectedAgent || 'default'} / ${selectedModel}` : selectedAgent || 'default coordinator';
+  }
+
+  function workerRuntimeLabel(): string {
+    const automation = selectedAutomation();
+    if (!automation) return 'Chosen by PMA';
+    const workers = automation.jobs
+      .flatMap((job) => job.children)
+      .filter((child) => String(child.child_kind ?? child.childKind ?? '') === 'agent_task')
+      .map((child) => runtimeContractLabel(child.actual_runtime ?? child.actualRuntime ?? child.requested_runtime ?? child.requestedRuntime, 'unknown worker'));
+    return [...new Set(workers)].join(', ') || 'Chosen by PMA';
+  }
+
+  function lastRunLabel(automation: AutomationSummary): string {
+    const job = automation.lastJob;
+    if (!job) return 'No runs yet';
+    return job.effectiveState || job.state || 'unknown';
+  }
+
+  function lastRunDiagnostic(automation: AutomationSummary): string {
+    const job = automation.lastJob;
+    if (!job || !job.rawState || job.rawState === job.effectiveState) return '';
+    return `Raw parent: ${job.rawState}`;
   }
 
   function scheduleSummary(): string {
@@ -944,10 +989,21 @@
           <dt>Schedule</dt>
           <dd>{scheduleSummary()}</dd>
         </div>
-        <div class="fact">
-          <dt>Runs as</dt>
-          <dd>{runsAsLabel()}</dd>
-        </div>
+        {#if selectedExecutorKind() === 'pma_operator_turn'}
+          <div class="fact">
+            <dt>Coordinator</dt>
+            <dd>{coordinatorRuntimeLabel()}</dd>
+          </div>
+          <div class="fact">
+            <dt>Workers</dt>
+            <dd>{workerRuntimeLabel()}</dd>
+          </div>
+        {:else}
+          <div class="fact">
+            <dt>Agent</dt>
+            <dd>{agentRuntimeLabel()}</dd>
+          </div>
+        {/if}
         <div class="fact">
           <dt>Target</dt>
           <dd>{targetLabel(selectedAutomation())}</dd>
@@ -959,8 +1015,11 @@
           </div>
           <div class="fact">
             <dt>Last run</dt>
-            <dd class="fact-status fact-{selectedAutomation()?.lastJob?.state ?? 'none'}">
-              {selectedAutomation()?.lastJob?.state ?? 'No runs yet'}
+            <dd class="fact-status fact-{selectedAutomation()?.lastJob?.effectiveState ?? 'none'}">
+              {lastRunLabel(selectedAutomation() as AutomationSummary)}
+              {#if lastRunDiagnostic(selectedAutomation() as AutomationSummary)}
+                <span class="raw-state-diagnostic">{lastRunDiagnostic(selectedAutomation() as AutomationSummary)}</span>
+              {/if}
             </dd>
           </div>
         {/if}
@@ -984,11 +1043,28 @@
                 {/each}
               </select>
             </label>
+            {#if selectedPreset()?.id === 'security_scan_pr'}
+              <label class="field">
+                <span>Execution</span>
+                <select bind:value={detailExecutionMode}>
+                  <option value="agent_task_turn">Run with agent</option>
+                  <option value="pma_operator_turn">Run with PMA</option>
+                </select>
+              </label>
+            {/if}
             <label class="field">
               <span>Start</span>
               <select bind:value={detailEnabled}>
                 <option value={false}>Paused</option>
                 <option value={true}>Active</option>
+              </select>
+            </label>
+          {:else if selectedAutomation()?.kind === 'security_scan_pr' && canEditPrompt()}
+            <label class="field">
+              <span>Execution</span>
+              <select bind:value={detailExecutionMode} onchange={saveAgentModelFields}>
+                <option value="agent_task_turn">Run with agent</option>
+                <option value="pma_operator_turn">Run with PMA</option>
               </select>
             </label>
           {/if}
@@ -1030,7 +1106,7 @@
           {/if}
         </div>
 
-        {#if selectedExecutorKind() === 'managed_thread_turn' && canEditPrompt()}
+        {#if usesRuntimePicker(selectedExecutorKind()) && canEditPrompt()}
           <div class="agent-picker-row">
             {#if loadingAgents}
               <p class="detail-hint">Loading agent controls…</p>
@@ -1625,6 +1701,15 @@
 
   .fact-status {
     text-transform: capitalize;
+  }
+
+  .raw-state-diagnostic {
+    display: block;
+    margin-top: 2px;
+    font-size: 11px;
+    font-weight: 500;
+    text-transform: none;
+    color: var(--color-warning);
   }
 
   .fact-failed { color: var(--color-danger); }
