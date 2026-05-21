@@ -107,6 +107,18 @@ export type ChatIndexWindow = {
   error: string | null;
 };
 
+export type RepoWorktreeIndexWindow = {
+  key: string;
+  kind: 'all' | 'repo' | 'worktree';
+  limit: number;
+  repoIds: string[];
+  worktreeIds: string[];
+  runtimeIds: string[];
+  topologyWindow: PageWindow | null;
+  runtimeWindow: PageWindow | null;
+  lastLoadedAt: string;
+};
+
 export type ReadModelEntityState = {
   cursors: Record<string, ProjectionCursor>;
   chatIndexCursor: ProjectionCursor | null;
@@ -128,6 +140,7 @@ export type ReadModelEntityState = {
   repoOrder: string[];
   worktrees: Record<string, WorktreeTopology>;
   worktreeOrder: string[];
+  repoWorktreeWindows: Record<string, RepoWorktreeIndexWindow>;
   runtime: Record<string, RepoWorktreeRuntimeEntity>;
   tickets: Record<string, TicketProjection>;
   ticketSummaries: Record<string, TicketSummary>;
@@ -191,6 +204,7 @@ export function createInitialReadModelState(): ReadModelEntityState {
     repoOrder: [],
     worktrees: {},
     worktreeOrder: [],
+    repoWorktreeWindows: {},
     runtime: {},
     tickets: {},
     ticketSummaries: {},
@@ -545,6 +559,15 @@ export class ReadModelEntityStore implements Readable<ReadModelEntityState> {
     next.repoOrder = snapshot.repos.map((repo) => repo.repoId);
     next.worktrees = keyed(snapshot.worktrees, (worktree) => worktree.worktreeId);
     next.worktreeOrder = snapshot.worktrees.map((worktree) => worktree.worktreeId);
+    const windowKey = repoWorktreeWindowKey('all', snapshot.window?.limit ?? snapshot.repos.length + snapshot.worktrees.length);
+    const previousWindow = next.repoWorktreeWindows[windowKey] ?? emptyRepoWorktreeIndexWindow(windowKey, snapshot.window?.limit ?? 0);
+    next.repoWorktreeWindows[windowKey] = {
+      ...previousWindow,
+      repoIds: next.repoOrder,
+      worktreeIds: next.worktreeOrder,
+      topologyWindow: snapshot.window ?? null,
+      lastLoadedAt: new Date().toISOString()
+    };
     for (const repo of snapshot.repos) bump(next, 'repo', repo.repoId);
     for (const worktree of snapshot.worktrees) bump(next, 'worktree', worktree.worktreeId);
     rememberCursor(next, 'repo_worktree.topology', snapshot.cursor);
@@ -553,11 +576,21 @@ export class ReadModelEntityStore implements Readable<ReadModelEntityState> {
 
   applyRepoWorktreeRuntimeSnapshot(snapshot: RepoWorktreeRuntimeSnapshot): void {
     const next = cloneState(this.state);
+    const runtimeIds: string[] = [];
     for (const runtime of snapshot.runtime) {
       const id = `${runtime.entityKind}:${runtime.entityId}`;
       next.runtime[id] = { ...runtime, id };
+      runtimeIds.push(id);
       bump(next, runtime.entityKind, runtime.entityId);
     }
+    const windowKey = repoWorktreeWindowKey('all', snapshot.window?.limit ?? snapshot.runtime.length);
+    const previousWindow = next.repoWorktreeWindows[windowKey] ?? emptyRepoWorktreeIndexWindow(windowKey, snapshot.window?.limit ?? 0);
+    next.repoWorktreeWindows[windowKey] = {
+      ...previousWindow,
+      runtimeIds,
+      runtimeWindow: snapshot.window ?? null,
+      lastLoadedAt: new Date().toISOString()
+    };
     rememberCursor(next, 'repo_worktree.runtime', snapshot.cursor);
     this.commit(next);
   }
@@ -857,6 +890,7 @@ function cloneState(state: ReadModelEntityState): ReadModelEntityState {
     repoOrder: [...state.repoOrder],
     worktrees: { ...state.worktrees },
     worktreeOrder: [...state.worktreeOrder],
+    repoWorktreeWindows: Object.fromEntries(Object.entries(state.repoWorktreeWindows).map(([key, window]) => [key, cloneRepoWorktreeIndexWindow(window)])),
     runtime: { ...state.runtime },
     tickets: { ...state.tickets },
     ticketSummaries: { ...state.ticketSummaries },
@@ -890,6 +924,35 @@ function cloneChatDetailProjection(detail: ChatDetailProjection): ChatDetailProj
     thread: detail.thread,
     queue: detail.queue,
     artifactIds: [...detail.artifactIds]
+  };
+}
+
+export function repoWorktreeWindowKey(kind: 'all' | 'repo' | 'worktree' = 'all', limit = 200): string {
+  return `${kind}:limit=${limit}`;
+}
+
+function emptyRepoWorktreeIndexWindow(key: string, limit: number): RepoWorktreeIndexWindow {
+  return {
+    key,
+    kind: 'all',
+    limit,
+    repoIds: [],
+    worktreeIds: [],
+    runtimeIds: [],
+    topologyWindow: null,
+    runtimeWindow: null,
+    lastLoadedAt: new Date().toISOString()
+  };
+}
+
+function cloneRepoWorktreeIndexWindow(window: RepoWorktreeIndexWindow): RepoWorktreeIndexWindow {
+  return {
+    ...window,
+    repoIds: [...window.repoIds],
+    worktreeIds: [...window.worktreeIds],
+    runtimeIds: [...window.runtimeIds],
+    topologyWindow: window.topologyWindow ? { ...window.topologyWindow } : null,
+    runtimeWindow: window.runtimeWindow ? { ...window.runtimeWindow } : null
   };
 }
 

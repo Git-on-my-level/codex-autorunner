@@ -125,6 +125,37 @@ describe('read model loaders', () => {
     expect(client.repoWorktreeRuntime).toHaveBeenCalledWith('all', 50);
   });
 
+  it('does not treat a smaller support window as the full repo-worktree index', async () => {
+    const store = new ReadModelEntityStore();
+    store.applyRepoWorktreeTopologySnapshot(repoWorktreeTopologySnapshot({ limit: 50, totalEstimate: 67 }));
+    store.applyRepoWorktreeRuntimeSnapshot(repoWorktreeRuntimeSnapshot({ limit: 50, totalEstimate: 67 }));
+    const client = mockClient({
+      repoWorktreeTopology: vi.fn().mockResolvedValue(ok(repoWorktreeTopologySnapshot({ limit: 200, totalEstimate: 67 }))),
+      repoWorktreeRuntime: vi.fn().mockResolvedValue(ok(repoWorktreeRuntimeSnapshot({ limit: 200, totalEstimate: 67 })))
+    });
+    const { ensureRepoWorktreeIndexLoaded } = await importLoaders(true);
+
+    const result = await ensureRepoWorktreeIndexLoaded({ store, client, blocking: false });
+
+    expect(result).toEqual({ status: 'cold', tags: ['entity:repo-worktree:index'] });
+    expect(client.repoWorktreeTopology).not.toHaveBeenCalled();
+    expect(client.repoWorktreeRuntime).not.toHaveBeenCalled();
+  });
+
+  it('returns a cache hit for a complete repo-worktree index window', async () => {
+    const store = new ReadModelEntityStore();
+    store.applyRepoWorktreeTopologySnapshot(repoWorktreeTopologySnapshot());
+    store.applyRepoWorktreeRuntimeSnapshot(repoWorktreeRuntimeSnapshot());
+    const client = mockClient();
+    const { ensureRepoWorktreeIndexLoaded } = await importLoaders(true);
+
+    const result = await ensureRepoWorktreeIndexLoaded({ store, client, blocking: false });
+
+    expect(result).toEqual({ status: 'cache-hit', tags: ['entity:repo-worktree:index'] });
+    expect(client.repoWorktreeTopology).not.toHaveBeenCalled();
+    expect(client.repoWorktreeRuntime).not.toHaveBeenCalled();
+  });
+
   it('uses ticket and owner entity tags for scoped ticket details', async () => {
     const store = new ReadModelEntityStore();
     const depends = vi.fn();
@@ -294,24 +325,24 @@ function chatDetailSnapshot(chatId = 'chat-1'): ChatDetailSnapshot {
   };
 }
 
-function repoWorktreeTopologySnapshot(): RepoWorktreeTopologySnapshot {
+function repoWorktreeTopologySnapshot(options: { limit?: number; totalEstimate?: number } = {}): RepoWorktreeTopologySnapshot {
   return {
     contractVersion: READ_MODEL_CONTRACT_VERSION,
     kind: 'repo_worktree.topology.snapshot',
     cursor: cursor(3, 'repo_worktree.topology'),
-    window: { limit: 200, totalEstimate: 2, totalIsExact: true },
+    window: { limit: options.limit ?? 200, totalEstimate: options.totalEstimate ?? 2, totalIsExact: true },
     repos: [{ repoId: 'repo-1', label: 'Repo One', path: '/repo', archived: false, childWorktreeIds: ['worktree-1'] }],
     worktrees: [{ worktreeId: 'worktree-1', repoId: 'repo-1', label: 'Worktree One', path: '/repo/wt', branch: 'main', archived: false }],
     repair: repair('/hub/read-models/repo-worktree/topology')
   };
 }
 
-function repoWorktreeRuntimeSnapshot(): RepoWorktreeRuntimeSnapshot {
+function repoWorktreeRuntimeSnapshot(options: { limit?: number; totalEstimate?: number } = {}): RepoWorktreeRuntimeSnapshot {
   return {
     contractVersion: READ_MODEL_CONTRACT_VERSION,
     kind: 'repo_worktree.runtime.snapshot',
     cursor: cursor(4, 'repo_worktree.runtime'),
-    window: { limit: 200, totalEstimate: 1, totalIsExact: true },
+    window: { limit: options.limit ?? 200, totalEstimate: options.totalEstimate ?? 1, totalIsExact: true },
     runtime: [{
       entityKind: 'repo',
       entityId: 'repo-1',
