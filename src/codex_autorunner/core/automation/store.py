@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import sqlite3
 import uuid
 from pathlib import Path
@@ -34,10 +35,39 @@ def _json_object_from_row(row: sqlite3.Row, column: str) -> dict[str, Any]:
     return _json_loads_object(row[column])
 
 
+_log = logging.getLogger(__name__)
+
+
 class AutomationStore:
     def __init__(self, hub_root: Path, *, durable: bool = True) -> None:
         self._hub_root = Path(hub_root)
         self._durable = durable
+        self._migrate_stale_executor_kinds()
+
+    def _migrate_stale_executor_kinds(self) -> None:
+        try:
+            with open_orchestration_sqlite(
+                self._hub_root, durable=self._durable
+            ) as conn:
+                with conn:
+                    cursor = conn.execute(
+                        """
+                        UPDATE orch_automation_rules
+                           SET executor_kind = 'managed_thread_turn',
+                               updated_at = updated_at
+                         WHERE executor_kind = 'pma_turn'
+                        """
+                    )
+                    migrated = int(cursor.rowcount or 0)
+            if migrated:
+                _log.info(
+                    "migrated %d stale pma_turn executor_kind row(s) to managed_thread_turn",
+                    migrated,
+                )
+        except Exception:
+            _log.debug(
+                "stale executor_kind migration skipped (DB unavailable)", exc_info=True
+            )
 
     def upsert_rule(self, rule: AutomationRule) -> AutomationRule:
         with open_orchestration_sqlite(self._hub_root, durable=self._durable) as conn:
