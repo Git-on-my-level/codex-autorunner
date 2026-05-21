@@ -6968,6 +6968,12 @@ textarea:disabled {
   background: color-mix(in srgb, var(--color-success) 12%, var(--color-surface));
 }
 
+.chat-kind-badge.automation {
+  color: var(--color-warning);
+  border-color: color-mix(in srgb, var(--color-warning) 32%, var(--color-border));
+  background: color-mix(in srgb, var(--color-warning) 12%, var(--color-surface));
+}
+
 .chat-surface-badge {
   display: inline-flex;
   align-items: center;

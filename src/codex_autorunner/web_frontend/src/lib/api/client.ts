@@ -148,6 +148,12 @@ export type AutomationJobSummary = {
   resultSummary: string | null;
   errorText: string | null;
   attemptCount: number;
+  managedThreadTargetId: string | null;
+  managedThreadExecutionId: string | null;
+  pmaLaneId: string | null;
+  pmaQueueItemId: string | null;
+  pmaQueueResult: JsonRecord | null;
+  childExecution: JsonRecord | null;
   ticketFlowRunId: string | null;
   ticketFlowWorktreeId: string | null;
   raw: JsonRecord;
@@ -1267,6 +1273,16 @@ function mapAutomationJob(raw: JsonRecord): AutomationJobSummary {
     resultSummary: nullableString(raw.result_summary ?? raw.resultSummary),
     errorText: nullableString(raw.error_text ?? raw.errorText),
     attemptCount: numberValue(raw.attempt_count ?? raw.attemptCount, 0),
+    managedThreadTargetId: nullableString(raw.managed_thread_target_id ?? raw.managedThreadTargetId),
+    managedThreadExecutionId: nullableString(raw.managed_thread_execution_id ?? raw.managedThreadExecutionId),
+    pmaLaneId: nullableString(raw.pma_lane_id ?? raw.pmaLaneId),
+    pmaQueueItemId: nullableString(raw.pma_queue_item_id ?? raw.pmaQueueItemId),
+    pmaQueueResult: Object.keys(asRecord(raw.pma_queue_result ?? raw.pmaQueueResult)).length
+      ? asRecord(raw.pma_queue_result ?? raw.pmaQueueResult)
+      : null,
+    childExecution: Object.keys(asRecord(raw.child_execution ?? raw.childExecution)).length
+      ? asRecord(raw.child_execution ?? raw.childExecution)
+      : null,
     ticketFlowRunId: nullableString(raw.ticket_flow_run_id ?? raw.ticketFlowRunId),
     ticketFlowWorktreeId: nullableString(raw.ticket_flow_worktree_id ?? raw.ticketFlowWorktreeId),
     raw

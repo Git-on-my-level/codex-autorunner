@@ -359,6 +359,7 @@ class HubLifecycleOrchestrator:
         self._automation_child_reconciler = AutomationChildRunReconciler(
             self._automation_store,
             resolve_repo_path=self._resolve_repo_path_for_automation,
+            hub_root=hub_config.root,
             logger=logger,
         )
         self._automation_executor_registry = (

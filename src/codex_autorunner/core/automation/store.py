@@ -40,6 +40,10 @@ class AutomationStore:
         self._hub_root = Path(hub_root)
         self._durable = durable
 
+    @property
+    def hub_root(self) -> Path:
+        return self._hub_root
+
     def upsert_rule(self, rule: AutomationRule) -> AutomationRule:
         with open_orchestration_sqlite(self._hub_root, durable=self._durable) as conn:
             with conn:
@@ -502,6 +506,7 @@ class AutomationStore:
         *,
         error_text: str,
         dead_letter: bool = False,
+        execution_refs: Optional[dict[str, Any]] = None,
         now: Optional[str] = None,
     ) -> AutomationJob:
         return self._transition_job(
@@ -509,6 +514,7 @@ class AutomationStore:
             JOB_DEAD_LETTERED if dead_letter else JOB_FAILED,
             now=now,
             error_text=error_text,
+            execution_refs=execution_refs,
             finished=True,
         )
 

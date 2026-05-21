@@ -94,6 +94,7 @@
     pmaChatKind,
     pmaChatKindLabel,
     pmaChatHeaderScopeLine,
+    pmaChatIsAutomation,
     chatMessengerSurface,
     pmaChatScopeTagView,
     chatSurfaceFilterOptions,
@@ -669,6 +670,7 @@
 
   function readModelChatIndexFilter(value: ChatFilter): 'all' | 'waiting' | 'active' | 'unread' | 'archived' | 'ticket_runs' | 'external' {
     if (value === 'ticket_runs') return 'ticket_runs';
+    if (value === 'automation') return 'all';
     if (value.startsWith('surface:')) return 'external';
     if (value === 'all' || value === 'waiting' || value === 'active' || value === 'unread' || value === 'archived') return value;
     return 'all';
@@ -696,6 +698,8 @@
       archived: counters.archived
     };
   }
+
+  const automationChatCount = $derived(facetChats.filter(pmaChatIsAutomation).length);
 
   function composerRecipientLabel(chat: PmaChatSummary | null): string {
     if (!chat) return 'Chat';
@@ -1858,6 +1862,17 @@
                 }
               ]
             : []),
+          ...(automationChatCount > 0 || filter === 'automation'
+            ? [
+                {
+                  key: 'automation',
+                  label: 'Automation',
+                  count: automationChatCount,
+                  active: filter === 'automation',
+                  onSelect: () => (filter = 'automation')
+                }
+              ]
+            : []),
           ...surfaceFilterChips
             .filter((surf) => surf.count > 0 || filter === chatSurfaceFilterToken(surf.slug))
             // Suppress the surface chip when it is the only surface available and its
@@ -1967,6 +1982,9 @@
                 {/if}
                 {#if pmaChatKind(chat) === 'coding_agent'}
                   <span class={`chat-kind-badge ${pmaChatKind(chat)}`}>{pmaChatKindLabel(pmaChatKind(chat))}</span>
+                {/if}
+                {#if pmaChatIsAutomation(chat)}
+                  <span class="chat-kind-badge automation">Automation</span>
                 {/if}
                 {#if messengerSurface}
                   <span class={`chat-surface-badge ${messengerSurface.badgeClass}`}>{messengerSurface.label}</span>
@@ -2168,6 +2186,9 @@
           </div>
           <p class="chat-header-subtitle">
             <span class={`chat-kind-badge ${activeChatKind}`}>{activeChatKindLabel}</span>
+            {#if pmaChatIsAutomation(activeChat)}
+              <span class="chat-kind-badge automation">Automation</span>
+            {/if}
             {#if activeMessengerSurface}
               <span class={`chat-surface-badge ${activeMessengerSurface.badgeClass}`}>{activeMessengerSurface.label}</span>
             {/if}
