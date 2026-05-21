@@ -1458,7 +1458,7 @@ def test_resolve_managed_thread_target_clears_stale_backend_for_fresh_pma_sessio
             assert thread_target_id == "thread-1"
             return thread
 
-        def set_thread_backend_id(
+        def set_thread_backend_binding(
             self,
             thread_target_id: str,
             backend_thread_id: Optional[str],
@@ -1554,7 +1554,7 @@ def test_resolve_managed_thread_target_keeps_backend_for_repo_resume_without_reb
             assert thread_target_id == "thread-1"
             return thread
 
-        def set_thread_backend_id(
+        def set_thread_backend_binding(
             self,
             thread_target_id: str,
             backend_thread_id: Optional[str],

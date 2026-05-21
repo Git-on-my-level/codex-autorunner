@@ -464,7 +464,7 @@ def test_create_finish_turn_and_query(tmp_path: Path) -> None:
     assert thread_after["status_terminal"] is True
 
 
-def test_set_thread_backend_id_preserves_runtime_tag_when_omitted(
+def test_set_thread_backend_binding_preserves_runtime_tag_when_omitted(
     tmp_path: Path,
 ) -> None:
     store = ManagedThreadStore(tmp_path / "hub")
@@ -475,7 +475,7 @@ def test_set_thread_backend_id_preserves_runtime_tag_when_omitted(
         metadata={"backend_runtime_instance_id": "runtime-1"},
     )
 
-    store.set_thread_backend_id(thread["managed_thread_id"], "backend-2")
+    store.set_thread_backend_binding(thread["managed_thread_id"], "backend-2")
 
     updated = store.get_thread(thread["managed_thread_id"])
     assert updated is not None
@@ -498,7 +498,7 @@ def test_set_thread_backend_id_preserves_runtime_tag_when_omitted(
     assert row["backend_thread_id"] == "backend-2"
 
 
-def test_set_thread_backend_id_skips_noop_write_when_binding_matches(
+def test_set_thread_backend_binding_skips_noop_write_when_binding_matches(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -515,7 +515,7 @@ def test_set_thread_backend_id_skips_noop_write_when_binding_matches(
 
     monkeypatch.setattr(store, "_write_conn", _fail_write_conn)
 
-    store.set_thread_backend_id(
+    store.set_thread_backend_binding(
         thread["managed_thread_id"],
         "backend-1",
         backend_runtime_instance_id="runtime-1",
@@ -527,7 +527,7 @@ def test_set_thread_backend_id_skips_noop_write_when_binding_matches(
     assert binding.backend_runtime_instance_id == "runtime-1"
 
 
-def test_set_thread_backend_id_skips_noop_write_when_runtime_tag_is_omitted(
+def test_set_thread_backend_binding_skips_noop_write_when_runtime_tag_is_omitted(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -544,7 +544,7 @@ def test_set_thread_backend_id_skips_noop_write_when_runtime_tag_is_omitted(
 
     monkeypatch.setattr(store, "_write_conn", _fail_write_conn)
 
-    store.set_thread_backend_id(thread["managed_thread_id"], "backend-1")
+    store.set_thread_backend_binding(thread["managed_thread_id"], "backend-1")
 
     binding = store.get_thread_runtime_binding(thread["managed_thread_id"])
     assert binding is not None

@@ -4,7 +4,7 @@ import logging
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Callable, Optional
+from typing import Any, Callable, Optional
 
 from ..freshness import parse_iso_datetime
 from ..logging_utils import log_event
@@ -27,6 +27,10 @@ from .models import (
     ThreadStopOutcome,
     ThreadTarget,
 )
+from .runtime_bindings import (
+    mark_thread_store_runtime_binding_invalid,
+    mark_thread_store_runtime_binding_suspect,
+)
 
 LOST_BACKEND_THREAD_ERROR = "Running execution could not be reattached after restart"
 MISSING_BACKEND_THREAD_ERROR = (
@@ -37,6 +41,36 @@ _RESTART_WAIT_AND_SEE_AGENTS = frozenset({"codex"})
 logger = logging.getLogger(__name__)
 
 _TERMINAL_STATUSES = frozenset({"ok", "error", "interrupted"})
+
+
+def _mark_thread_runtime_binding_suspect(
+    thread_store: Any,
+    thread_target_id: str,
+    *,
+    backend_thread_id: Optional[str],
+    state_reason: str,
+) -> None:
+    mark_thread_store_runtime_binding_suspect(
+        thread_store,
+        thread_target_id,
+        backend_thread_id=backend_thread_id,
+        state_reason=state_reason,
+    )
+
+
+def _mark_thread_runtime_binding_invalid(
+    thread_store: Any,
+    thread_target_id: str,
+    *,
+    backend_thread_id: Optional[str],
+    state_reason: str,
+) -> None:
+    mark_thread_store_runtime_binding_invalid(
+        thread_store,
+        thread_target_id,
+        backend_thread_id=backend_thread_id,
+        state_reason=state_reason,
+    )
 
 
 @dataclass(frozen=True)
@@ -360,10 +394,11 @@ class _ThreadRecoveryHelper:
             backend_turn_id=execution.backend_id,
             transcript_turn_id=None,
         )
-        self.thread_store.set_thread_backend_id(
+        _mark_thread_runtime_binding_suspect(
+            self.thread_store,
             thread_target_id,
-            None,
-            backend_runtime_instance_id=None,
+            backend_thread_id=backend_thread_id,
+            state_reason=reason,
         )
         log_event(
             logger,
@@ -389,11 +424,20 @@ class _ThreadRecoveryHelper:
         interrupted = self.thread_store.record_execution_interrupted(
             thread_target_id, execution.execution_id
         )
-        self.thread_store.set_thread_backend_id(
-            thread_target_id,
-            None,
-            backend_runtime_instance_id=None,
-        )
+        if reason == "interrupt_thread_not_found":
+            _mark_thread_runtime_binding_invalid(
+                self.thread_store,
+                thread_target_id,
+                backend_thread_id=backend_thread_id,
+                state_reason=reason,
+            )
+        else:
+            _mark_thread_runtime_binding_suspect(
+                self.thread_store,
+                thread_target_id,
+                backend_thread_id=backend_thread_id,
+                state_reason=reason,
+            )
         log_event(
             logger,
             logging.INFO,

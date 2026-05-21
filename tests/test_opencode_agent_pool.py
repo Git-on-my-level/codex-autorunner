@@ -1132,7 +1132,7 @@ async def test_run_turn_delegates_prompt_variant_selection_to_orchestration(
         )
     )
 
-    pool._thread_store.set_thread_backend_id(first.conversation_id, None)
+    pool._thread_store.set_thread_backend_binding(first.conversation_id, None)
     third = await pool.run_turn(
         AgentTurnRequest(
             agent_id="opencode",

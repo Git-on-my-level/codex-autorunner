@@ -684,20 +684,22 @@ def _force_clear_backend_thread_binding(
     thread_target_id: str,
     backend_runtime_instance_id: Optional[str],
 ) -> bool:
-    set_thread_backend_id = getattr(
-        orchestration_service, "set_thread_backend_id", None
+    set_thread_backend_binding = getattr(
+        orchestration_service, "set_thread_backend_binding", None
     )
-    if callable(set_thread_backend_id):
-        set_thread_backend_id(
+    if callable(set_thread_backend_binding):
+        set_thread_backend_binding(
             thread_target_id,
             None,
             backend_runtime_instance_id=backend_runtime_instance_id,
         )
         return True
     thread_store = getattr(orchestration_service, "thread_store", None)
-    store_set_thread_backend_id = getattr(thread_store, "set_thread_backend_id", None)
-    if callable(store_set_thread_backend_id):
-        store_set_thread_backend_id(
+    store_set_thread_backend_binding = getattr(
+        thread_store, "set_thread_backend_binding", None
+    )
+    if callable(store_set_thread_backend_binding):
+        store_set_thread_backend_binding(
             thread_target_id,
             None,
             backend_runtime_instance_id=backend_runtime_instance_id,

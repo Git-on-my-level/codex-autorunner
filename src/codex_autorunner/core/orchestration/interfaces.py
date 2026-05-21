@@ -184,18 +184,22 @@ class ThreadExecutionStore(Protocol):
         *,
         backend_thread_id: Optional[str] = None,
         backend_runtime_instance_id: Optional[str] = None,
+        binding_state: Optional[str] = None,
+        state_reason: Optional[str] = None,
     ) -> Optional[ThreadTarget]: ...
 
     def archive_thread_target(
         self, thread_target_id: str
     ) -> Optional[ThreadTarget]: ...
 
-    def set_thread_backend_id(
+    def set_thread_backend_binding(
         self,
         thread_target_id: str,
         backend_thread_id: Optional[str],
         *,
         backend_runtime_instance_id: Optional[str] = None,
+        binding_state: str = "bound",
+        state_reason: Optional[str] = None,
     ) -> None: ...
 
     def create_execution(

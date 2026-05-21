@@ -90,7 +90,7 @@ from .models import (
     SurfaceBindingResponse,
     SurfaceBindingUpsertRequest,
     ThreadActivityRecordRequest,
-    ThreadBackendIdUpdateRequest,
+    ThreadBackendBindingUpdateRequest,
     ThreadCompactSeedUpdateRequest,
     ThreadTargetArchiveRequest,
     ThreadTargetCreateRequest,
@@ -183,6 +183,8 @@ def _thread_target_from_store_row(
             payload["backend_runtime_instance_id"] = (
                 runtime_binding.backend_runtime_instance_id
             )
+            payload["backend_binding_state"] = runtime_binding.binding_state
+            payload["backend_binding_state_reason"] = runtime_binding.state_reason
     return ThreadTarget.from_mapping(payload)
 
 
@@ -415,11 +417,54 @@ class HubSharedStateService:
     ) -> ThreadTargetResponse:
         if self._thread_store.get_thread(request.thread_target_id) is None:
             return ThreadTargetResponse(thread=None)
-        self._thread_store.set_thread_backend_id(
-            request.thread_target_id,
-            request.backend_thread_id,
-            backend_runtime_instance_id=request.backend_runtime_instance_id,
-        )
+        if (
+            request.backend_thread_id_provided
+            or request.backend_runtime_instance_id_provided
+            or request.backend_binding_state_provided
+            or request.backend_binding_state_reason_provided
+        ):
+            current_binding = self._thread_store.get_thread_runtime_binding(
+                request.thread_target_id
+            )
+            self._thread_store.set_thread_backend_binding(
+                request.thread_target_id,
+                (
+                    request.backend_thread_id
+                    if request.backend_thread_id_provided
+                    else (
+                        current_binding.backend_thread_id
+                        if current_binding is not None
+                        else None
+                    )
+                ),
+                backend_runtime_instance_id=(
+                    request.backend_runtime_instance_id
+                    if request.backend_runtime_instance_id_provided
+                    else (
+                        current_binding.backend_runtime_instance_id
+                        if current_binding is not None
+                        else None
+                    )
+                ),
+                binding_state=(
+                    request.backend_binding_state or "bound"
+                    if request.backend_binding_state_provided
+                    else (
+                        current_binding.binding_state
+                        if current_binding is not None
+                        else "bound"
+                    )
+                ),
+                state_reason=(
+                    request.backend_binding_state_reason
+                    if request.backend_binding_state_reason_provided
+                    else (
+                        current_binding.state_reason
+                        if current_binding is not None
+                        else None
+                    )
+                ),
+            )
         self._thread_store.activate_thread(request.thread_target_id)
         return ThreadTargetResponse(
             thread=_thread_target_from_store_row(
@@ -441,11 +486,60 @@ class HubSharedStateService:
             )
         )
 
-    def set_thread_backend_id(self, request: ThreadBackendIdUpdateRequest) -> None:
-        self._thread_store.set_thread_backend_id(
+    def set_thread_backend_binding(
+        self, request: ThreadBackendBindingUpdateRequest
+    ) -> None:
+        current_binding = self._thread_store.get_thread_runtime_binding(
+            request.thread_target_id
+        )
+        if (
+            not request.backend_thread_id_provided
+            and not request.backend_runtime_instance_id_provided
+            and current_binding is None
+        ):
+            backend_thread_id = None
+            runtime_instance_id = None
+        else:
+            backend_thread_id = (
+                request.backend_thread_id
+                if request.backend_thread_id_provided
+                else (
+                    current_binding.backend_thread_id
+                    if current_binding is not None
+                    else None
+                )
+            )
+            runtime_instance_id = (
+                request.backend_runtime_instance_id
+                if request.backend_runtime_instance_id_provided
+                else (
+                    current_binding.backend_runtime_instance_id
+                    if current_binding is not None
+                    else None
+                )
+            )
+        self._thread_store.set_thread_backend_binding(
             request.thread_target_id,
-            request.backend_thread_id,
-            backend_runtime_instance_id=request.backend_runtime_instance_id,
+            backend_thread_id,
+            backend_runtime_instance_id=runtime_instance_id,
+            binding_state=(
+                request.backend_binding_state or "bound"
+                if request.backend_binding_state_provided
+                else (
+                    current_binding.binding_state
+                    if current_binding is not None
+                    else "bound"
+                )
+            ),
+            state_reason=(
+                request.backend_binding_state_reason
+                if request.backend_binding_state_reason_provided
+                else (
+                    current_binding.state_reason
+                    if current_binding is not None
+                    else None
+                )
+            ),
         )
 
     def record_thread_activity(self, request: ThreadActivityRecordRequest) -> None:

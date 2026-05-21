@@ -279,7 +279,7 @@ async def test_recover_orphaned_managed_thread_executions_unblocks_restart_queue
     managed_thread_id = str(created["managed_thread_id"])
     running = store.create_turn(managed_thread_id, prompt="running")
     queued = store.create_turn(managed_thread_id, prompt="queued", busy_policy="queue")
-    store.set_thread_backend_id(managed_thread_id, "backend-thread-1")
+    store.set_thread_backend_binding(managed_thread_id, "backend-thread-1")
     clear_runtime_thread_binding(hub_env.hub_root, managed_thread_id)
     with open_orchestration_sqlite(hub_env.hub_root) as conn:
         with conn:
@@ -325,7 +325,7 @@ async def test_recover_orphaned_managed_thread_executions_restores_backend_ids_f
     )
     managed_thread_id = str(created["managed_thread_id"])
     running = store.create_turn(managed_thread_id, prompt="running")
-    store.set_thread_backend_id(managed_thread_id, None)
+    store.set_thread_backend_binding(managed_thread_id, None)
     store.set_turn_backend_turn_id(running["managed_turn_id"], None)
     ColdTraceStore(hub_env.hub_root).save_checkpoint(
         ExecutionCheckpoint(
@@ -389,7 +389,7 @@ async def test_recover_orphaned_managed_thread_executions_skips_chat_bound_threa
         agent_id="codex",
         repo_id=hub_env.repo_id,
     )
-    store.set_thread_backend_id(managed_thread_id, "backend-thread-1")
+    store.set_thread_backend_binding(managed_thread_id, "backend-thread-1")
     clear_runtime_thread_binding(hub_env.hub_root, managed_thread_id)
     with open_orchestration_sqlite(hub_env.hub_root) as conn:
         with conn:
@@ -459,7 +459,7 @@ async def test_recover_orphaned_managed_thread_executions_skips_chat_bound_threa
         agent_id="codex",
         repo_id=hub_env.repo_id,
     )
-    store.set_thread_backend_id(managed_thread_id, "backend-thread-1")
+    store.set_thread_backend_binding(managed_thread_id, "backend-thread-1")
     clear_runtime_thread_binding(hub_env.hub_root, managed_thread_id)
     with open_orchestration_sqlite(hub_env.hub_root) as conn:
         with conn:
@@ -543,7 +543,7 @@ async def test_recover_orphaned_managed_thread_executions_recovers_pma_runs_on_c
         agent_id="codex",
         repo_id=hub_env.repo_id,
     )
-    store.set_thread_backend_id(managed_thread_id, "backend-thread-1")
+    store.set_thread_backend_binding(managed_thread_id, "backend-thread-1")
     clear_runtime_thread_binding(hub_env.hub_root, managed_thread_id)
     with open_orchestration_sqlite(hub_env.hub_root) as conn:
         with conn:
@@ -2289,7 +2289,7 @@ def test_managed_thread_message_route_uses_live_runtime_binding_for_compact_seed
     )
     managed_thread_id = str(created["managed_thread_id"])
     store.set_thread_compact_seed(managed_thread_id, "compact summary")
-    store.set_thread_backend_id(managed_thread_id, "backend-thread-1")
+    store.set_thread_backend_binding(managed_thread_id, "backend-thread-1")
     captured: dict[str, Any] = {}
 
     class FakeService:
@@ -2799,7 +2799,7 @@ def test_managed_thread_interrupt_route_uses_orchestration_service_seam(
     managed_thread_id = str(created["managed_thread_id"])
     turn = store.create_turn(managed_thread_id, prompt="interrupt me")
     managed_turn_id = str(turn["managed_turn_id"])
-    store.set_thread_backend_id(managed_thread_id, "backend-thread-1")
+    store.set_thread_backend_binding(managed_thread_id, "backend-thread-1")
     store.set_turn_backend_turn_id(managed_turn_id, "backend-turn-1")
     calls: list[str] = []
 

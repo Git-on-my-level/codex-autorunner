@@ -103,6 +103,8 @@ def _thread_target_from_store_row_with_runtime_binding(
         thread_record["backend_runtime_instance_id"] = (
             runtime_binding.backend_runtime_instance_id
         )
+        thread_record["backend_binding_state"] = runtime_binding.binding_state
+        thread_record["backend_binding_state_reason"] = runtime_binding.state_reason
     return ThreadTarget.from_mapping(thread_record)
 
 
@@ -208,15 +210,37 @@ class ManagedThreadExecutionStore(ThreadExecutionStore):
         *,
         backend_thread_id: Optional[str] = None,
         backend_runtime_instance_id: Optional[str] = None,
+        binding_state: Optional[str] = None,
+        state_reason: Optional[str] = None,
     ) -> Optional[ThreadTarget]:
         record = self._store.get_thread(thread_target_id)
         if record is None:
             return None
-        if backend_thread_id is not None:
-            self._store.set_thread_backend_id(
+        if (
+            backend_thread_id is not None
+            or backend_runtime_instance_id is not None
+            or binding_state is not None
+            or state_reason is not None
+        ):
+            current_binding = self._store.get_thread_runtime_binding(thread_target_id)
+            self._store.set_thread_backend_binding(
                 thread_target_id,
-                backend_thread_id,
-                backend_runtime_instance_id=backend_runtime_instance_id,
+                backend_thread_id
+                or (
+                    current_binding.backend_thread_id
+                    if current_binding is not None
+                    else None
+                ),
+                backend_runtime_instance_id=(
+                    backend_runtime_instance_id
+                    or (
+                        current_binding.backend_runtime_instance_id
+                        if current_binding is not None
+                        else None
+                    )
+                ),
+                binding_state=binding_state or "bound",
+                state_reason=state_reason,
             )
         self._store.activate_thread(thread_target_id)
         updated = self._store.get_thread(thread_target_id)
@@ -234,17 +258,34 @@ class ManagedThreadExecutionStore(ThreadExecutionStore):
             return None
         return _thread_target_from_store_row(updated)
 
-    def set_thread_backend_id(
+    def set_thread_backend_binding(
         self,
         thread_target_id: str,
         backend_thread_id: Optional[str],
         *,
         backend_runtime_instance_id: Optional[str] = None,
+        binding_state: str = "bound",
+        state_reason: Optional[str] = None,
     ) -> None:
-        self._store.set_thread_backend_id(
+        self._store.set_thread_backend_binding(
             thread_target_id,
             backend_thread_id,
             backend_runtime_instance_id=backend_runtime_instance_id,
+            binding_state=binding_state,
+            state_reason=state_reason,
+        )
+
+    def mark_thread_runtime_binding_state(
+        self,
+        thread_target_id: str,
+        *,
+        binding_state: str,
+        state_reason: Optional[str] = None,
+    ) -> Optional[RuntimeThreadBinding]:
+        return self._store.mark_thread_runtime_binding_state(
+            thread_target_id,
+            binding_state=binding_state,
+            state_reason=state_reason,
         )
 
     def create_execution(

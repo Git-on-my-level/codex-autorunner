@@ -52,7 +52,7 @@ def test_interrupt_managed_thread_codex_marks_turn_interrupted(hub_env) -> None:
         store = ManagedThreadStore(hub_env.hub_root)
         turn = store.create_turn(managed_thread_id, prompt="running turn")
         managed_turn_id = turn["managed_turn_id"]
-        store.set_thread_backend_id(managed_thread_id, "backend-thread-1")
+        store.set_thread_backend_binding(managed_thread_id, "backend-thread-1")
         store.set_turn_backend_turn_id(managed_turn_id, "backend-turn-1")
         interrupt_resp = client.post(
             f"/hub/pma/threads/{managed_thread_id}/interrupt",
@@ -109,7 +109,7 @@ def test_interrupt_managed_thread_opencode_marks_turn_interrupted(hub_env) -> No
         store = ManagedThreadStore(hub_env.hub_root)
         turn = store.create_turn(managed_thread_id, prompt="running opencode turn")
         managed_turn_id = turn["managed_turn_id"]
-        store.set_thread_backend_id(managed_thread_id, "session-123")
+        store.set_thread_backend_binding(managed_thread_id, "session-123")
         interrupt_resp = client.post(
             f"/hub/pma/threads/{managed_thread_id}/interrupt",
         )
@@ -186,7 +186,7 @@ def test_interrupt_managed_thread_recovers_when_runtime_binding_is_lost_after_re
     store = ManagedThreadStore(hub_env.hub_root)
     turn = store.create_turn(managed_thread_id, prompt="running after restart")
     managed_turn_id = turn["managed_turn_id"]
-    store.set_thread_backend_id(managed_thread_id, "backend-thread-1")
+    store.set_thread_backend_binding(managed_thread_id, "backend-thread-1")
     store.set_turn_backend_turn_id(managed_turn_id, "backend-turn-1")
     clear_runtime_thread_binding(hub_env.hub_root, managed_thread_id)
 
@@ -247,7 +247,7 @@ def test_interrupt_managed_thread_notifies_automation_failure(hub_env) -> None:
         store = ManagedThreadStore(hub_env.hub_root)
         turn = store.create_turn(managed_thread_id, prompt="running turn")
         managed_turn_id = turn["managed_turn_id"]
-        store.set_thread_backend_id(managed_thread_id, "backend-thread-1")
+        store.set_thread_backend_binding(managed_thread_id, "backend-thread-1")
         store.set_turn_backend_turn_id(managed_turn_id, "backend-turn-1")
         interrupt_resp = client.post(
             f"/hub/pma/threads/{managed_thread_id}/interrupt",
@@ -306,7 +306,7 @@ def test_interrupt_managed_thread_skips_failed_side_effects_when_turn_already_fi
         store = ManagedThreadStore(hub_env.hub_root)
         turn = store.create_turn(managed_thread_id, prompt="running turn")
         managed_turn_id = turn["managed_turn_id"]
-        store.set_thread_backend_id(managed_thread_id, "backend-thread-1")
+        store.set_thread_backend_binding(managed_thread_id, "backend-thread-1")
         store.set_turn_backend_turn_id(managed_turn_id, "backend-turn-1")
 
         original_mark_turn_finished = ManagedThreadStore.mark_turn_finished
@@ -381,7 +381,7 @@ def test_interrupt_managed_thread_recovers_stale_backend_thread(hub_env) -> None
         store = ManagedThreadStore(hub_env.hub_root)
         turn = store.create_turn(managed_thread_id, prompt="running")
         managed_turn_id = turn["managed_turn_id"]
-        store.set_thread_backend_id(managed_thread_id, "backend-thread-1")
+        store.set_thread_backend_binding(managed_thread_id, "backend-thread-1")
         store.set_turn_backend_turn_id(managed_turn_id, "backend-turn-1")
         interrupt_resp = client.post(
             f"/hub/pma/threads/{managed_thread_id}/interrupt",
@@ -397,4 +397,7 @@ def test_interrupt_managed_thread_recovers_stale_backend_thread(hub_env) -> None
     assert updated_turn["status"] == "interrupted"
     assert updated_turn["error"] is None
     updated_binding = store.get_thread_runtime_binding(managed_thread_id)
-    assert updated_binding is None
+    assert updated_binding is not None
+    assert updated_binding.backend_thread_id == "backend-thread-1"
+    assert updated_binding.binding_state == "invalid"
+    assert updated_binding.state_reason == "interrupt_thread_not_found"

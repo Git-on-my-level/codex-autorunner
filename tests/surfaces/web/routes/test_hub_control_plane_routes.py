@@ -24,7 +24,7 @@ from codex_autorunner.core.hub_control_plane import (
     QueuedExecutionListRequest,
     SurfaceBindingListRequest,
     SurfaceBindingUpsertRequest,
-    ThreadBackendIdUpdateRequest,
+    ThreadBackendBindingUpdateRequest,
     ThreadTargetListRequest,
     ThreadTargetLookupRequest,
     TranscriptWriteRequest,
@@ -474,23 +474,72 @@ async def test_hub_control_plane_http_client_preserves_thread_backend_ids(
             base_url="http://testserver",
             http_client=http_client,
         )
-        await client.set_thread_backend_id(
-            ThreadBackendIdUpdateRequest.from_mapping(
+        await client.set_thread_backend_binding(
+            ThreadBackendBindingUpdateRequest.from_mapping(
                 {
                     "thread_target_id": thread_target_id,
                     "backend_thread_id": "conversation-1",
                     "backend_runtime_instance_id": "runtime-1",
+                    "backend_binding_state": "suspect",
+                    "backend_binding_state_reason": "startup_lost_backend_binding",
                 }
             )
         )
         fetched = await client.get_thread_target(
             ThreadTargetLookupRequest(thread_target_id=thread_target_id)
         )
+        binding_response = await http_client.post(
+            f"/hub/api/control-plane/thread-targets/{thread_target_id}/backend-binding",
+            json={
+                "backend_thread_id": "conversation-2",
+                "backend_runtime_instance_id": "runtime-2",
+                "backend_binding_state": "bound",
+            },
+        )
+        binding_fetched = await client.get_thread_target(
+            ThreadTargetLookupRequest(thread_target_id=thread_target_id)
+        )
+        state_only_response = await http_client.post(
+            f"/hub/api/control-plane/thread-targets/{thread_target_id}/backend-binding",
+            json={
+                "backend_binding_state": "suspect",
+                "backend_binding_state_reason": "startup_lost_backend_binding",
+            },
+        )
+        state_only_fetched = await client.get_thread_target(
+            ThreadTargetLookupRequest(thread_target_id=thread_target_id)
+        )
+        removed_alias_response = await http_client.post(
+            f"/hub/api/control-plane/thread-targets/{thread_target_id}/backend-id",
+            json={"backend_thread_id": "conversation-legacy"},
+        )
+        invalid_state_response = await http_client.post(
+            f"/hub/api/control-plane/thread-targets/{thread_target_id}/backend-binding",
+            json={"backend_binding_state": "definitely-not-a-state"},
+        )
 
     assert fetched.thread is not None
     assert fetched.thread.agent_id == "codex"
     assert fetched.thread.backend_thread_id == "conversation-1"
     assert fetched.thread.backend_runtime_instance_id == "runtime-1"
+    assert fetched.thread.backend_binding_state == "suspect"
+    assert fetched.thread.backend_binding_state_reason == "startup_lost_backend_binding"
+    assert binding_response.status_code == 204
+    assert binding_fetched.thread is not None
+    assert binding_fetched.thread.backend_thread_id == "conversation-2"
+    assert binding_fetched.thread.backend_runtime_instance_id == "runtime-2"
+    assert binding_fetched.thread.backend_binding_state == "bound"
+    assert state_only_response.status_code == 204
+    assert state_only_fetched.thread is not None
+    assert state_only_fetched.thread.backend_thread_id == "conversation-2"
+    assert state_only_fetched.thread.backend_runtime_instance_id == "runtime-2"
+    assert state_only_fetched.thread.backend_binding_state == "suspect"
+    assert (
+        state_only_fetched.thread.backend_binding_state_reason
+        == "startup_lost_backend_binding"
+    )
+    assert removed_alias_response.status_code == 404
+    assert invalid_state_response.status_code == 400
 
 
 @pytest.mark.anyio

@@ -95,9 +95,19 @@ class ThreadTargetResumeRequest:
     thread_target_id: str
     backend_thread_id: Optional[str] = None
     backend_runtime_instance_id: Optional[str] = None
+    backend_binding_state: Optional[str] = None
+    backend_binding_state_reason: Optional[str] = None
+    backend_thread_id_provided: bool = False
+    backend_runtime_instance_id_provided: bool = False
+    backend_binding_state_provided: bool = False
+    backend_binding_state_reason_provided: bool = False
 
     @classmethod
     def from_mapping(cls, data: Mapping[str, Any]) -> "ThreadTargetResumeRequest":
+        has_binding_state = "backend_binding_state" in data or "binding_state" in data
+        has_state_reason = (
+            "backend_binding_state_reason" in data or "state_reason" in data
+        )
         return cls(
             thread_target_id=normalize_required_text(
                 data.get("thread_target_id"),
@@ -107,14 +117,42 @@ class ThreadTargetResumeRequest:
             backend_runtime_instance_id=normalize_optional_text(
                 data.get("backend_runtime_instance_id")
             ),
+            backend_binding_state=normalize_optional_text(
+                data.get("backend_binding_state") or data.get("binding_state")
+            ),
+            backend_binding_state_reason=normalize_optional_text(
+                data.get("backend_binding_state_reason") or data.get("state_reason")
+            ),
+            backend_thread_id_provided="backend_thread_id" in data,
+            backend_runtime_instance_id_provided=(
+                "backend_runtime_instance_id" in data
+            ),
+            backend_binding_state_provided=has_binding_state,
+            backend_binding_state_reason_provided=has_state_reason,
         )
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        payload: dict[str, Any] = {
             "thread_target_id": self.thread_target_id,
-            "backend_thread_id": self.backend_thread_id,
-            "backend_runtime_instance_id": self.backend_runtime_instance_id,
         }
+        if self.backend_thread_id_provided or self.backend_thread_id is not None:
+            payload["backend_thread_id"] = self.backend_thread_id
+        if (
+            self.backend_runtime_instance_id_provided
+            or self.backend_runtime_instance_id is not None
+        ):
+            payload["backend_runtime_instance_id"] = self.backend_runtime_instance_id
+        if (
+            self.backend_binding_state_provided
+            or self.backend_binding_state is not None
+        ):
+            payload["backend_binding_state"] = self.backend_binding_state
+        if (
+            self.backend_binding_state_reason_provided
+            or self.backend_binding_state_reason is not None
+        ):
+            payload["backend_binding_state_reason"] = self.backend_binding_state_reason
+        return payload
 
 
 @dataclass(frozen=True)
@@ -160,13 +198,25 @@ class ThreadCompactSeedUpdateRequest:
 
 
 @dataclass(frozen=True)
-class ThreadBackendIdUpdateRequest:
+class ThreadBackendBindingUpdateRequest:
     thread_target_id: str
     backend_thread_id: Optional[str] = None
     backend_runtime_instance_id: Optional[str] = None
+    backend_binding_state: Optional[str] = None
+    backend_binding_state_reason: Optional[str] = None
+    backend_thread_id_provided: bool = False
+    backend_runtime_instance_id_provided: bool = False
+    backend_binding_state_provided: bool = False
+    backend_binding_state_reason_provided: bool = False
 
     @classmethod
-    def from_mapping(cls, data: Mapping[str, Any]) -> "ThreadBackendIdUpdateRequest":
+    def from_mapping(
+        cls, data: Mapping[str, Any]
+    ) -> "ThreadBackendBindingUpdateRequest":
+        has_binding_state = "backend_binding_state" in data or "binding_state" in data
+        has_state_reason = (
+            "backend_binding_state_reason" in data or "state_reason" in data
+        )
         return cls(
             thread_target_id=normalize_required_text(
                 data.get("thread_target_id"),
@@ -176,14 +226,42 @@ class ThreadBackendIdUpdateRequest:
             backend_runtime_instance_id=normalize_optional_text(
                 data.get("backend_runtime_instance_id")
             ),
+            backend_binding_state=normalize_optional_text(
+                data.get("backend_binding_state") or data.get("binding_state")
+            ),
+            backend_binding_state_reason=normalize_optional_text(
+                data.get("backend_binding_state_reason") or data.get("state_reason")
+            ),
+            backend_thread_id_provided="backend_thread_id" in data,
+            backend_runtime_instance_id_provided=(
+                "backend_runtime_instance_id" in data
+            ),
+            backend_binding_state_provided=has_binding_state,
+            backend_binding_state_reason_provided=has_state_reason,
         )
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        payload: dict[str, Any] = {
             "thread_target_id": self.thread_target_id,
-            "backend_thread_id": self.backend_thread_id,
-            "backend_runtime_instance_id": self.backend_runtime_instance_id,
         }
+        if self.backend_thread_id_provided or self.backend_thread_id is not None:
+            payload["backend_thread_id"] = self.backend_thread_id
+        if (
+            self.backend_runtime_instance_id_provided
+            or self.backend_runtime_instance_id is not None
+        ):
+            payload["backend_runtime_instance_id"] = self.backend_runtime_instance_id
+        if (
+            self.backend_binding_state_provided
+            or self.backend_binding_state is not None
+        ):
+            payload["backend_binding_state"] = self.backend_binding_state
+        if (
+            self.backend_binding_state_reason_provided
+            or self.backend_binding_state_reason is not None
+        ):
+            payload["backend_binding_state_reason"] = self.backend_binding_state_reason
+        return payload
 
 
 @dataclass(frozen=True)
@@ -296,7 +374,7 @@ class ThreadTargetListResponse:
 __all__ = [
     "THREAD_TARGET_LIST_LIFECYCLE_STATUSES",
     "ThreadActivityRecordRequest",
-    "ThreadBackendIdUpdateRequest",
+    "ThreadBackendBindingUpdateRequest",
     "ThreadCompactSeedUpdateRequest",
     "ThreadTargetArchiveRequest",
     "ThreadTargetCreateRequest",

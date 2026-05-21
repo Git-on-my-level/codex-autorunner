@@ -823,7 +823,7 @@ def test_fork_managed_thread_clones_hermes_backend_session(
         source_thread = create_resp.json()["thread"]
 
         store = ManagedThreadStore(hub_env.hub_root)
-        store.set_thread_backend_id(
+        store.set_thread_backend_binding(
             source_thread["managed_thread_id"],
             "hermes-session-source",
             backend_runtime_instance_id="hermes-runtime-1",
