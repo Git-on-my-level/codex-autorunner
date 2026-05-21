@@ -94,6 +94,12 @@ export type PmaBulkRetireResult = {
   errors: JsonRecord[];
 };
 
+export type FileBoxName = 'inbox' | 'outbox';
+
+export type ChatFileBoxScope =
+  | { kind: 'hub' }
+  | { kind: 'repo'; repoId: string };
+
 export type WorktreeRetireRequest = {
   worktreeRepoId: string;
   force?: boolean;
@@ -403,6 +409,11 @@ function readableErrorText(text: string, status: number): string {
   return text.length > 220 ? `${text.slice(0, 217)}...` : text;
 }
 
+function fileBoxRoute(scope: ChatFileBoxScope): string {
+  if (scope.kind === 'repo') return `/hub/filebox/${encodeURIComponent(scope.repoId)}`;
+  return '/hub/pma/files';
+}
+
 export class WebApiClient {
   constructor(
     private readonly fetcher: typeof fetch = fetch,
@@ -467,6 +478,21 @@ export class WebApiClient {
   url(path: string): string {
     return withRuntimeBasePath(path, this.basePath);
   }
+
+  filebox = {
+    listFiles: async (scope: ChatFileBoxScope = { kind: 'hub' }): Promise<ApiResult<SurfaceArtifact[]>> => {
+      const route = fileBoxRoute(scope);
+      return mapResult(await this.getJson<JsonRecord>(route), (payload) =>
+        [...asArray(payload.inbox), ...asArray(payload.outbox)].map(mapSurfaceArtifact)
+      );
+    },
+    deleteFile: async (scope: ChatFileBoxScope, box: FileBoxName, filename: string): Promise<ApiResult<JsonRecord>> =>
+      this.requestJson<JsonRecord>(`${fileBoxRoute(scope)}/${encodeURIComponent(box)}/${encodeURIComponent(filename)}`, {
+        method: 'DELETE'
+      }),
+    deleteBox: async (scope: ChatFileBoxScope, box: FileBoxName): Promise<ApiResult<JsonRecord>> =>
+      this.requestJson<JsonRecord>(`${fileBoxRoute(scope)}/${encodeURIComponent(box)}`, { method: 'DELETE' })
+  };
 
   pma = {
     // Legacy diagnostics/tests only. Screen routes use chat index/detail projections.
@@ -594,10 +620,7 @@ export class WebApiClient {
       ),
     clearQueue: async (chatId: string): Promise<ApiResult<JsonRecord>> =>
       this.requestJson<JsonRecord>(`/hub/pma/threads/${encodeURIComponent(chatId)}/queue/clear`, { method: 'POST' }),
-    listFiles: async (): Promise<ApiResult<SurfaceArtifact[]>> =>
-      mapResult(await this.getJson<JsonRecord>('/hub/pma/files'), (payload) =>
-        [...asArray(payload.inbox), ...asArray(payload.outbox)].map(mapSurfaceArtifact)
-      ),
+    listFiles: async (): Promise<ApiResult<SurfaceArtifact[]>> => this.filebox.listFiles({ kind: 'hub' }),
     listArtifactDeliveries: async (repoId?: string | null): Promise<ApiResult<ArtifactDelivery[]>> => {
       const route = repoId
         ? `/hub/filebox/${encodeURIComponent(repoId)}/artifacts/deliveries`
@@ -613,6 +636,10 @@ export class WebApiClient {
         Array.isArray(payload.saved) ? payload.saved.filter((name): name is string => typeof name === 'string') : []
       );
     },
+    deleteFile: async (box: FileBoxName, filename: string): Promise<ApiResult<JsonRecord>> =>
+      this.filebox.deleteFile({ kind: 'hub' }, box, filename),
+    deleteFileBox: async (box: FileBoxName): Promise<ApiResult<JsonRecord>> =>
+      this.filebox.deleteBox({ kind: 'hub' }, box),
     listAgents: async (): Promise<ApiResult<{ agents: JsonRecord[]; default: string; defaults: JsonRecord }>> =>
       mapResult(await this.getJson<JsonRecord>('/hub/pma/agents'), (payload) => ({
         agents: asArray(payload.agents),

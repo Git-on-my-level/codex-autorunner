@@ -208,7 +208,7 @@ export const WEB_SLASH_COMMANDS: SlashCommandSpec[] = [
     id: 'files',
     name: 'files',
     title: 'Refresh files',
-    description: 'Refresh PMA inbox and outbox artifacts.',
+    description: 'Refresh chat inbox and outbox files.',
     usage: '/files',
     group: 'Chat'
   },

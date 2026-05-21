@@ -68,6 +68,43 @@ def test_hub_filebox_delete_ignores_legacy_duplicates(_filebox_env) -> None:
     assert (legacy_topic_pending / "shared.txt").exists()
 
 
+def test_hub_filebox_bulk_delete_only_clears_requested_box(_filebox_env) -> None:
+    env = _filebox_env
+    filebox.ensure_structure(env.repo_root)
+    filebox.delete_regular_files(filebox.inbox_dir(env.repo_root))
+    filebox.delete_regular_files(filebox.outbox_dir(env.repo_root))
+    (filebox.inbox_dir(env.repo_root) / "upload.txt").write_bytes(b"upload")
+    (filebox.outbox_dir(env.repo_root) / "reply.txt").write_bytes(b"reply")
+
+    resp = env.client.delete(f"/hub/filebox/{env.repo_id}/inbox")
+
+    assert resp.status_code == 200
+    assert resp.json() == {
+        "status": "ok",
+        "deleted": ["upload.txt"],
+        "deleted_count": 1,
+    }
+    assert not (filebox.inbox_dir(env.repo_root) / "upload.txt").exists()
+    assert (filebox.outbox_dir(env.repo_root) / "reply.txt").exists()
+
+
+def test_repo_filebox_bulk_delete_parity_with_hub(_filebox_env) -> None:
+    env = _filebox_env
+    filebox.ensure_structure(env.repo_root)
+    filebox.delete_regular_files(filebox.inbox_dir(env.repo_root))
+    (filebox.inbox_dir(env.repo_root) / "repo-upload.txt").write_bytes(b"upload")
+
+    resp = env.client.delete(f"/repos/{env.repo_id}/api/filebox/inbox")
+
+    assert resp.status_code == 200
+    assert resp.json() == {
+        "status": "ok",
+        "deleted": ["repo-upload.txt"],
+        "deleted_count": 1,
+    }
+    assert not (filebox.inbox_dir(env.repo_root) / "repo-upload.txt").exists()
+
+
 def test_hub_filebox_legacy_only_file_returns_404(_filebox_env) -> None:
     env = _filebox_env
     legacy_topic_pending = (
