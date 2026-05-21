@@ -71,6 +71,7 @@ from .orchestration.runtime_bindings import (
     clear_runtime_thread_binding,
     get_runtime_thread_binding,
     mark_runtime_thread_binding_state,
+    normalize_backend_binding_state,
     set_runtime_thread_binding,
 )
 from .orchestration.thread_titles import (
@@ -803,7 +804,7 @@ class ManagedThreadStore:
         state_reason: Optional[str] = None,
     ) -> None:
         normalized_backend_thread_id = _coerce_text(backend_thread_id)
-        normalized_binding_state = _coerce_text(binding_state) or BACKEND_BINDING_BOUND
+        normalized_binding_state = normalize_backend_binding_state(binding_state)
         normalized_state_reason = _coerce_text(state_reason)
         current_binding = get_runtime_thread_binding(self._hub_root, managed_thread_id)
         resolved_runtime_instance_id = _coerce_text(backend_runtime_instance_id)

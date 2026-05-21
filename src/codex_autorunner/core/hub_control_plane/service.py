@@ -16,7 +16,10 @@ from ..managed_thread_store import ManagedThreadStore
 from ..orchestration.bindings import OrchestrationBindingStore
 from ..orchestration.cold_trace_store import ColdTraceStore
 from ..orchestration.models import ExecutionRecord, ThreadTarget
-from ..orchestration.runtime_bindings import normalize_backend_binding_state
+from ..orchestration.runtime_bindings import (
+    RuntimeThreadBinding,
+    normalize_backend_binding_state,
+)
 from ..orchestration.service import ManagedThreadExecutionStore
 from ..orchestration.sqlite import read_orchestration_compatibility_metadata
 from ..orchestration.turn_timeline import (
@@ -137,12 +140,6 @@ CONTROL_PLANE_CAPABILITIES: tuple[str, ...] = (
 )
 
 
-def _resolve_provided_backend_binding_state(value: Optional[str]) -> str:
-    if value is None:
-        raise ValueError("backend_binding_state is required")
-    return normalize_backend_binding_state(value)
-
-
 def _resolve_hub_build_version() -> str:
     for distribution_name in ("codex-autorunner", "codex_autorunner"):
         try:
@@ -193,6 +190,21 @@ def _thread_target_from_store_row(
             payload["backend_binding_state"] = runtime_binding.binding_state
             payload["backend_binding_state_reason"] = runtime_binding.state_reason
     return ThreadTarget.from_mapping(payload)
+
+
+def _resolve_backend_binding_state(
+    *,
+    provided: bool,
+    value: Optional[str],
+    current_binding: RuntimeThreadBinding | None,
+) -> str:
+    if provided:
+        if value is None or not value.strip():
+            raise ValueError("backend_binding_state must be non-empty when provided")
+        return normalize_backend_binding_state(value)
+    if current_binding is not None:
+        return current_binding.binding_state
+    return "bound"
 
 
 def _execution_from_record(record: ExecutionRecord | None) -> ExecutionRecord | None:
@@ -453,16 +465,10 @@ class HubSharedStateService:
                         else None
                     )
                 ),
-                binding_state=(
-                    _resolve_provided_backend_binding_state(
-                        request.backend_binding_state
-                    )
-                    if request.backend_binding_state_provided
-                    else (
-                        current_binding.binding_state
-                        if current_binding is not None
-                        else "bound"
-                    )
+                binding_state=_resolve_backend_binding_state(
+                    provided=request.backend_binding_state_provided,
+                    value=request.backend_binding_state,
+                    current_binding=current_binding,
                 ),
                 state_reason=(
                     request.backend_binding_state_reason
@@ -531,16 +537,10 @@ class HubSharedStateService:
             request.thread_target_id,
             backend_thread_id,
             backend_runtime_instance_id=runtime_instance_id,
-            binding_state=(
-                _resolve_provided_backend_binding_state(
-                    request.backend_binding_state
-                )
-                if request.backend_binding_state_provided
-                else (
-                    current_binding.binding_state
-                    if current_binding is not None
-                    else "bound"
-                )
+            binding_state=_resolve_backend_binding_state(
+                provided=request.backend_binding_state_provided,
+                value=request.backend_binding_state,
+                current_binding=current_binding,
             ),
             state_reason=(
                 request.backend_binding_state_reason

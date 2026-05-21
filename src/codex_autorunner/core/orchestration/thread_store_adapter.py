@@ -22,8 +22,32 @@ from .runtime_bindings import RuntimeThreadBinding
 from .thread_titles import choose_owned_thread_title
 
 logger = logging.getLogger(__name__)
-_UNSET = object()
+
+
+class _UnsetSentinel:
+    pass
+
+
+_UNSET = _UnsetSentinel()
 _MANAGED_TURN_LIFECYCLE_PHASE_KEY = "managed_turn_lifecycle_phase"
+
+
+def _resolve_optional_patch_value(
+    value: Optional[str] | _UnsetSentinel,
+    current: Optional[str],
+) -> Optional[str]:
+    if isinstance(value, _UnsetSentinel):
+        return current
+    return value
+
+
+def _resolve_binding_state_patch_value(
+    value: Optional[str] | _UnsetSentinel,
+    current: Optional[str],
+) -> str:
+    if isinstance(value, _UnsetSentinel):
+        return current or "bound"
+    return value or "bound"
 
 
 def _notify_pma_lifecycle_automation_transition(
@@ -209,10 +233,10 @@ class ManagedThreadExecutionStore(ThreadExecutionStore):
         self,
         thread_target_id: str,
         *,
-        backend_thread_id: Optional[str] | object = _UNSET,
-        backend_runtime_instance_id: Optional[str] | object = _UNSET,
-        binding_state: Optional[str] | object = _UNSET,
-        state_reason: Optional[str] | object = _UNSET,
+        backend_thread_id: Optional[str] | _UnsetSentinel = _UNSET,
+        backend_runtime_instance_id: Optional[str] | _UnsetSentinel = _UNSET,
+        binding_state: Optional[str] | _UnsetSentinel = _UNSET,
+        state_reason: Optional[str] | _UnsetSentinel = _UNSET,
     ) -> Optional[ThreadTarget]:
         record = self._store.get_thread(thread_target_id)
         if record is None:
@@ -224,43 +248,39 @@ class ManagedThreadExecutionStore(ThreadExecutionStore):
             or state_reason is not _UNSET
         ):
             current_binding = self._store.get_thread_runtime_binding(thread_target_id)
+            current_backend_thread_id = (
+                current_binding.backend_thread_id
+                if current_binding is not None
+                else None
+            )
+            current_runtime_instance_id = (
+                current_binding.backend_runtime_instance_id
+                if current_binding is not None
+                else None
+            )
+            current_binding_state = (
+                current_binding.binding_state if current_binding is not None else None
+            )
+            current_state_reason = (
+                current_binding.state_reason if current_binding is not None else None
+            )
             self._store.set_thread_backend_binding(
                 thread_target_id,
-                (
-                    backend_thread_id
-                    if backend_thread_id is not _UNSET
-                    else (
-                        current_binding.backend_thread_id
-                        if current_binding is not None
-                        else None
-                    )
+                _resolve_optional_patch_value(
+                    backend_thread_id,
+                    current_backend_thread_id,
                 ),
-                backend_runtime_instance_id=(
-                    backend_runtime_instance_id
-                    if backend_runtime_instance_id is not _UNSET
-                    else (
-                        current_binding.backend_runtime_instance_id
-                        if current_binding is not None
-                        else None
-                    )
+                backend_runtime_instance_id=_resolve_optional_patch_value(
+                    backend_runtime_instance_id,
+                    current_runtime_instance_id,
                 ),
-                binding_state=(
-                    binding_state or "bound"
-                    if binding_state is not _UNSET
-                    else (
-                        current_binding.binding_state
-                        if current_binding is not None
-                        else "bound"
-                    )
+                binding_state=_resolve_binding_state_patch_value(
+                    binding_state,
+                    current_binding_state,
                 ),
-                state_reason=(
-                    state_reason
-                    if state_reason is not _UNSET
-                    else (
-                        current_binding.state_reason
-                        if current_binding is not None
-                        else None
-                    )
+                state_reason=_resolve_optional_patch_value(
+                    state_reason,
+                    current_state_reason,
                 ),
             )
         self._store.activate_thread(thread_target_id)

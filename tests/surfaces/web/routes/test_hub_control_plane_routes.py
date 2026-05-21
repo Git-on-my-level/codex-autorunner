@@ -517,6 +517,13 @@ async def test_hub_control_plane_http_client_preserves_thread_backend_ids(
             f"/hub/api/control-plane/thread-targets/{thread_target_id}/backend-binding",
             json={"backend_binding_state": "definitely-not-a-state"},
         )
+        blank_state_response = await http_client.post(
+            f"/hub/api/control-plane/thread-targets/{thread_target_id}/backend-binding",
+            json={"backend_binding_state": ""},
+        )
+        after_invalid_fetched = await client.get_thread_target(
+            ThreadTargetLookupRequest(thread_target_id=thread_target_id)
+        )
 
     assert fetched.thread is not None
     assert fetched.thread.agent_id == "codex"
@@ -540,6 +547,15 @@ async def test_hub_control_plane_http_client_preserves_thread_backend_ids(
     )
     assert removed_alias_response.status_code == 404
     assert invalid_state_response.status_code == 400
+    assert blank_state_response.status_code == 400
+    assert after_invalid_fetched.thread is not None
+    assert after_invalid_fetched.thread.backend_thread_id == "conversation-2"
+    assert after_invalid_fetched.thread.backend_runtime_instance_id == "runtime-2"
+    assert after_invalid_fetched.thread.backend_binding_state == "suspect"
+    assert (
+        after_invalid_fetched.thread.backend_binding_state_reason
+        == "startup_lost_backend_binding"
+    )
 
 
 @pytest.mark.anyio

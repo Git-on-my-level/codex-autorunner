@@ -498,6 +498,56 @@ def test_set_thread_backend_binding_preserves_runtime_tag_when_omitted(
     assert row["backend_thread_id"] == "backend-2"
 
 
+def test_set_thread_backend_binding_rejects_invalid_state_before_writing(
+    tmp_path: Path,
+) -> None:
+    hub_root = tmp_path / "hub"
+    store = ManagedThreadStore(hub_root)
+    thread = store.create_thread(
+        "codex",
+        tmp_path / "workspace",
+        backend_thread_id="backend-1",
+        metadata={"backend_runtime_instance_id": "runtime-1"},
+    )
+    thread_id = thread["managed_thread_id"]
+
+    with open_orchestration_sqlite(hub_root, durable=False) as conn:
+        original_row = conn.execute(
+            """
+            SELECT backend_thread_id, backend_binding_json
+              FROM orch_thread_targets
+             WHERE thread_target_id = ?
+            """,
+            (thread_id,),
+        ).fetchone()
+    original_binding = store.get_thread_runtime_binding(thread_id)
+
+    with pytest.raises(ValueError, match="Invalid backend binding state"):
+        store.set_thread_backend_binding(
+            thread_id,
+            "backend-2",
+            backend_runtime_instance_id="runtime-2",
+            binding_state="definitely-not-a-state",
+        )
+
+    with open_orchestration_sqlite(hub_root, durable=False) as conn:
+        updated_row = conn.execute(
+            """
+            SELECT backend_thread_id, backend_binding_json
+              FROM orch_thread_targets
+             WHERE thread_target_id = ?
+            """,
+            (thread_id,),
+        ).fetchone()
+    updated_binding = store.get_thread_runtime_binding(thread_id)
+
+    assert original_row is not None
+    assert updated_row is not None
+    assert updated_row["backend_thread_id"] == original_row["backend_thread_id"]
+    assert updated_row["backend_binding_json"] == original_row["backend_binding_json"]
+    assert original_binding == updated_binding
+
+
 def test_set_thread_backend_binding_skips_noop_write_when_binding_matches(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
