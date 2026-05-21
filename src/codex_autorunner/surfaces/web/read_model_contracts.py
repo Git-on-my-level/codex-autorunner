@@ -20,6 +20,15 @@ __all__ = [
     "ChatDetailPatch",
     "ChatDetailPatchEvent",
     "ChatDetailSnapshot",
+    "ChatFacetAgentKind",
+    "ChatFacetCategory",
+    "ChatFacetCounts",
+    "ChatFacetOriginKind",
+    "ChatFacetRequest",
+    "ChatFacetScopeKind",
+    "ChatFacetTransport",
+    "ChatFacetTurnKind",
+    "ChatIndexFacets",
     "ChatIndexCounters",
     "ChatIndexGroup",
     "ChatIndexGroupEntry",
@@ -118,6 +127,69 @@ class ReadModelEventEnvelope(ReadModelContract):
     source_revision: Optional[ProjectionRevision] = None
 
 
+ChatFacetCategory = Literal["regular", "ticket_run", "automation", "system"]
+ChatFacetTurnKind = Literal[
+    "message",
+    "review",
+    "automation",
+    "publish",
+    "recovery",
+    "lifecycle",
+]
+ChatFacetOriginKind = Literal["surface", "automation", "publish", "recovery", "system"]
+ChatFacetTransport = Literal["pma", "discord", "telegram", "notification"]
+ChatFacetScopeKind = Literal["hub", "repo", "worktree", "filesystem"]
+ChatFacetAgentKind = Literal["pma", "coding_agent"]
+
+
+class ChatIndexFacets(ReadModelContract):
+    """Backend-owned orthogonal facets for chat-index classification.
+
+    ``category`` is the small primary bucket shown in chat-list UIs. Review,
+    publish, recovery, and lifecycle execution purposes are represented in
+    ``turn_kinds``/``origin_kinds`` instead of becoming primary categories.
+    Delivery transports are canonical user-visible chat transports; runtime
+    entrypoints such as web, cli, file_chat, and app_server are deliberately not
+    transport facet values.
+    """
+
+    category: ChatFacetCategory = "regular"
+    turn_kinds: list[ChatFacetTurnKind] = Field(default_factory=list)
+    origin_kinds: list[ChatFacetOriginKind] = Field(default_factory=list)
+    transports: list[ChatFacetTransport] = Field(default_factory=list)
+    scope_kind: Optional[ChatFacetScopeKind] = None
+    scope_id: Optional[str] = None
+    agent_kind: Optional[ChatFacetAgentKind] = None
+
+
+class ChatFacetCounts(ReadModelContract):
+    """Backend projection counts for the full matching chat-index scope."""
+
+    category: dict[ChatFacetCategory, int] = Field(default_factory=dict)
+    turn_kind: dict[ChatFacetTurnKind, int] = Field(default_factory=dict)
+    origin_kind: dict[ChatFacetOriginKind, int] = Field(default_factory=dict)
+    transport: dict[ChatFacetTransport, int] = Field(default_factory=dict)
+    scope_kind: dict[ChatFacetScopeKind, int] = Field(default_factory=dict)
+    agent_kind: dict[ChatFacetAgentKind, int] = Field(default_factory=dict)
+
+
+class ChatFacetRequest(ReadModelContract):
+    """Compound facet window request, applied conjunctively by the backend.
+
+    Values within one field are ORed, fields are ANDed, and counts are computed
+    from the backend projection state for the same base query rather than from
+    the currently loaded page.
+    """
+
+    categories: list[ChatFacetCategory] = Field(default_factory=list)
+    turn_kinds: list[ChatFacetTurnKind] = Field(default_factory=list)
+    origin_kinds: list[ChatFacetOriginKind] = Field(default_factory=list)
+    transports: list[ChatFacetTransport] = Field(default_factory=list)
+    scope_kinds: list[ChatFacetScopeKind] = Field(default_factory=list)
+    scope_ids: list[str] = Field(default_factory=list)
+    agent_kinds: list[ChatFacetAgentKind] = Field(default_factory=list)
+
+
 class ChatIndexRow(ReadModelContract):
     """Chat row contract shared by snapshots and patch payloads.
 
@@ -166,6 +238,7 @@ class ChatIndexRow(ReadModelContract):
     agent: Optional[str] = None
     agent_profile: Optional[str] = None
     chat_kind: Optional[Literal["pma", "coding_agent"]] = None
+    facets: Optional[ChatIndexFacets] = None
     model: Optional[str] = None
     group_id: Optional[str] = None
     flow_type: Optional[Literal["ticket_flow"]] = None
@@ -256,9 +329,11 @@ class ChatIndexSnapshot(ReadModelContract):
         "all", "waiting", "active", "unread", "archived", "ticket_runs", "external"
     ]
     query: Optional[str] = None
+    facet_request: ChatFacetRequest = Field(default_factory=ChatFacetRequest)
     rows: list[ChatIndexRow]
     groups: list[ChatIndexGroupEntry] = Field(default_factory=list)
     counters: ChatIndexCounters
+    facet_counts: ChatFacetCounts = Field(default_factory=ChatFacetCounts)
     repair: RepairPolicy
 
 
@@ -269,6 +344,7 @@ class ChatIndexPatch(ReadModelContract):
     removed_group_ids: list[str] = Field(default_factory=list)
     order: Optional[list[str]] = None
     counters: Optional[ChatIndexCounters] = None
+    facet_counts: Optional[ChatFacetCounts] = None
 
 
 class ChatIndexPatchEvent(ReadModelContract):

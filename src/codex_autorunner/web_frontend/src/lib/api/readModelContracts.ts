@@ -49,6 +49,50 @@ export type ReadModelEventEnvelope<TEvent extends string = string, TEntityKind e
   sourceRevision?: ProjectionRevision | null;
 };
 
+export type ChatFacetCategory = 'regular' | 'ticket_run' | 'automation' | 'system';
+export type ChatFacetTurnKind = 'message' | 'review' | 'automation' | 'publish' | 'recovery' | 'lifecycle';
+export type ChatFacetOriginKind = 'surface' | 'automation' | 'publish' | 'recovery' | 'system';
+export type ChatFacetTransport = 'pma' | 'discord' | 'telegram' | 'notification';
+export type ChatFacetScopeKind = 'hub' | 'repo' | 'worktree' | 'filesystem';
+export type ChatFacetAgentKind = 'pma' | 'coding_agent';
+
+export type ChatIndexFacets = {
+  /**
+   * Backend-owned orthogonal chat-index facets. category is the small primary
+   * chat-list bucket; review, publish, recovery, and lifecycle stay in
+   * turnKinds/originKinds instead of becoming primary buckets. transports are
+   * canonical chat delivery transports, not runtime entrypoints such as web,
+   * cli, file_chat, or app_server.
+   */
+  category: ChatFacetCategory;
+  turnKinds: ChatFacetTurnKind[];
+  originKinds: ChatFacetOriginKind[];
+  transports: ChatFacetTransport[];
+  scopeKind?: ChatFacetScopeKind | null;
+  scopeId?: string | null;
+  agentKind?: ChatFacetAgentKind | null;
+};
+
+export type ChatFacetCounts = {
+  category: Partial<Record<ChatFacetCategory, number>>;
+  turnKind: Partial<Record<ChatFacetTurnKind, number>>;
+  originKind: Partial<Record<ChatFacetOriginKind, number>>;
+  transport: Partial<Record<ChatFacetTransport, number>>;
+  scopeKind: Partial<Record<ChatFacetScopeKind, number>>;
+  agentKind: Partial<Record<ChatFacetAgentKind, number>>;
+};
+
+export type ChatFacetRequest = {
+  /** Values within one field are ORed, fields are ANDed by the backend. */
+  categories: ChatFacetCategory[];
+  turnKinds: ChatFacetTurnKind[];
+  originKinds: ChatFacetOriginKind[];
+  transports: ChatFacetTransport[];
+  scopeKinds: ChatFacetScopeKind[];
+  scopeIds: string[];
+  agentKinds: ChatFacetAgentKind[];
+};
+
 export type ChatIndexRow = {
   /**
    * Timestamp semantics: lastVisibleMessageAt is the newest user-visible
@@ -92,6 +136,7 @@ export type ChatIndexRow = {
   agent?: string | null;
   agentProfile?: string | null;
   chatKind?: 'pma' | 'coding_agent' | null;
+  facets?: ChatIndexFacets | null;
   model?: string | null;
   groupId?: string | null;
   flowType?: 'ticket_flow' | null;
@@ -159,9 +204,11 @@ export type ChatIndexSnapshot = {
   window: PageWindow;
   filter: 'all' | 'waiting' | 'active' | 'unread' | 'archived' | 'ticket_runs' | 'external';
   query?: string | null;
+  facetRequest: ChatFacetRequest;
   rows: ChatIndexRow[];
   groups: ChatIndexGroup[];
   counters: ChatIndexCounters;
+  facetCounts: ChatFacetCounts;
   repair: RepairPolicy;
 };
 
@@ -172,6 +219,7 @@ export type ChatIndexPatch = {
   removedGroupIds: string[];
   order?: string[] | null;
   counters?: ChatIndexCounters | null;
+  facetCounts?: ChatFacetCounts | null;
 };
 
 export type ChatIndexPatchEvent = {

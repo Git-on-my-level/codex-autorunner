@@ -14,6 +14,23 @@ import type { ReadModelSnapshotClient } from '$lib/data/readModelClients';
 import { importRouteLoader } from '$lib/test/importRouteLoader';
 
 const now = '2026-05-11T12:00:00Z';
+const emptyFacetRequest = {
+  categories: [],
+  turnKinds: [],
+  originKinds: [],
+  transports: [],
+  scopeKinds: [],
+  scopeIds: [],
+  agentKinds: []
+};
+const emptyFacetCounts = {
+  category: {},
+  turnKind: {},
+  originKind: {},
+  transport: {},
+  scopeKind: {},
+  agentKind: {}
+};
 
 describe('/chats route load', () => {
   it('returns cold list-mode data without blocking navigation when no active chat id is present', async () => {
@@ -161,6 +178,7 @@ function chatIndexSnapshot(rows: ChatIndexSnapshot['rows'] = []): ChatIndexSnaps
     window: { limit: 50, totalEstimate: 1, totalIsExact: true },
     filter: 'all',
     query: null,
+    facetRequest: emptyFacetRequest,
     rows,
     groups: [],
     counters: {
@@ -170,6 +188,7 @@ function chatIndexSnapshot(rows: ChatIndexSnapshot['rows'] = []): ChatIndexSnaps
       unread: rows.filter((row) => row.unreadCount > 0).length,
       archived: rows.filter((row) => row.status === 'archived').length
     },
+    facetCounts: emptyFacetCounts,
     repair: repair('/hub/read-models/chats')
   };
 }

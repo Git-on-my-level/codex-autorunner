@@ -2,6 +2,7 @@ import { mapResult, webApi, type ApiResult, type WebApiClient } from '$lib/api/c
 import type { TicketSummary } from '$lib/viewModels/domain';
 import {
   mapReadModelContract,
+  type ChatFacetRequest,
   type ChatDetailSnapshot,
   type ChatIndexSnapshot,
   type RepoWorktreeDetailSnapshot,
@@ -15,6 +16,7 @@ type JsonRecord = Record<string, unknown>;
 export type ChatIndexRequest = {
   filter?: ChatIndexSnapshot['filter'];
   query?: string | null;
+  facets?: Partial<ChatFacetRequest> | null;
   surfaceKind?: string | null;
   groupBy?: 'ticket_run' | null;
   parentGroupId?: string | null;

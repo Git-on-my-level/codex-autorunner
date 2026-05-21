@@ -17,6 +17,23 @@ import type { ChatIndexStreamFactory } from './chatIndexSession';
 import type { ReadModelStreamManager, ReadModelStreamOptions } from './readModelStream';
 
 const issuedAt = '2026-05-12T00:00:00.000Z';
+const emptyFacetRequest = {
+  categories: [],
+  turnKinds: [],
+  originKinds: [],
+  transports: [],
+  scopeKinds: [],
+  scopeIds: [],
+  agentKinds: []
+};
+const emptyFacetCounts = {
+  category: {},
+  turnKind: {},
+  originKind: {},
+  transport: {},
+  scopeKind: {},
+  agentKind: {}
+};
 
 function projCursor(sequence: number, source: string): ProjectionCursor {
   return { value: `${source}:${sequence}`, sequence, source, issuedAt };
@@ -46,9 +63,11 @@ function chatIndexSnapshot(
     },
     filter,
     query: null,
+    facetRequest: emptyFacetRequest,
     rows,
     groups: [],
     counters,
+    facetCounts: emptyFacetCounts,
     repair: {
       snapshotRoute: '/hub/read-models/chats',
       cursorQueryParam: 'after',

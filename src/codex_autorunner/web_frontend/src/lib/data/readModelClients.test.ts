@@ -8,6 +8,23 @@ import {
 import { createReadModelSnapshotClient } from './readModelClients';
 
 const issuedAt = '2026-05-11T12:00:00.000Z';
+const emptyFacetRequest = {
+  categories: [],
+  turnKinds: [],
+  originKinds: [],
+  transports: [],
+  scopeKinds: [],
+  scopeIds: [],
+  agentKinds: []
+};
+const emptyFacetCounts = {
+  category: {},
+  turnKind: {},
+  originKind: {},
+  transport: {},
+  scopeKind: {},
+  agentKind: {}
+};
 
 function projCursor(sequence: number, source: string): ProjectionCursor {
   return { value: `${source}:${sequence}`, sequence, source, issuedAt };
@@ -29,6 +46,7 @@ describe('read model snapshot client', () => {
       },
       filter: 'active',
       query: null,
+      facetRequest: emptyFacetRequest,
       rows: [
         {
           chatId: 'chat-1',
@@ -56,6 +74,7 @@ describe('read model snapshot client', () => {
         unread: 0,
         archived: 0
       },
+      facetCounts: emptyFacetCounts,
       repair: {
         snapshotRoute: '/hub/read-models/chats',
         cursorQueryParam: 'after',
