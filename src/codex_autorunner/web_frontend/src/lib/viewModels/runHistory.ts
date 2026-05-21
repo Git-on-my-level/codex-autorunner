@@ -20,7 +20,12 @@ export function runHistoryFromAutomationJobs(jobs: JsonRecord[]): RunHistoryEntr
     const managedThreadId = nullableString(job.managedThreadTargetId ?? job.managed_thread_target_id);
     const childExecution = recordValue(job.childExecution ?? job.child_execution);
     const children = arrayValue(job.children);
-    const childHref = children.map(recordValue).map(childHrefValue).find((value): value is string => Boolean(value));
+    const snapshotHref =
+      nullableString(childExecution?.chat_href) ?? nullableString(childExecution?.target_href);
+    const edgeHref = children
+      .map(recordValue)
+      .map(child => childEdgeHrefFromRuntime(child, job))
+      .find((value): value is string => Boolean(value));
     const spawnedChatId = managedThreadId;
     return {
       id,
@@ -32,8 +37,8 @@ export function runHistoryFromAutomationJobs(jobs: JsonRecord[]): RunHistoryEntr
         nullableString(job.updatedAt ?? job.updated_at) ??
         nullableString(job.createdAt ?? job.created_at),
       href:
-        childHref ??
-        nullableString(childExecution?.chat_href ?? childExecution?.target_href) ??
+        snapshotHref ??
+        edgeHref ??
         (spawnedChatId ? `/chats/${encodeURIComponent(spawnedChatId)}` : worktreeId ? worktreeTicketRoute(worktreeId) : null),
       attempts: numberValue(job.attemptCount ?? job.attempt_count, 0)
     };
@@ -75,12 +80,24 @@ function arrayValue(value: unknown): unknown[] {
   return Array.isArray(value) ? value : [];
 }
 
-function childHrefValue(child: JsonRecord | null): string | null {
+function childEdgeHrefFromRuntime(child: JsonRecord | null, job: JsonRecord): string | null {
   if (!child) return null;
-  const kind = nullableString(child.child_kind ?? child.childKind);
-  const id = nullableString(child.child_id ?? child.childId);
-  if (!kind || !id) return null;
-  if (kind === 'agent_task' || kind === 'pma_operator') return `/chats/${encodeURIComponent(id)}`;
-  if (kind === 'ticket_flow') return worktreeTicketRoute(id);
+  const kind = nullableString(child.child_kind ?? child.childKind)?.toLowerCase();
+  const requested = recordValue(child.requested_runtime ?? child.requestedRuntime);
+  const scope = recordValue(requested?.workspace_scope ?? requested?.workspaceScope);
+  const targetKind = nullableString(scope?.target_kind ?? scope?.targetKind)?.toLowerCase();
+  const targetId = nullableString(scope?.target_id ?? scope?.targetId);
+  if (targetKind === 'thread' && targetId) {
+    return `/chats/${encodeURIComponent(targetId)}`;
+  }
+  if (kind === 'ticket_flow') {
+    const wt =
+      nullableString(job.ticketFlowWorktreeId ?? job.ticket_flow_worktree_id) ??
+      nullableString(scope?.worktree_id ?? scope?.worktreeId);
+    const repoId = nullableString(scope?.repo_id ?? scope?.repoId);
+    if (wt) {
+      return worktreeTicketRoute(wt, repoId);
+    }
+  }
   return null;
 }

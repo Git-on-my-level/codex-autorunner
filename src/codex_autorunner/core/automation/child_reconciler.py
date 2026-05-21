@@ -408,7 +408,9 @@ def _terminal_result_counts(terminal_state: str) -> ChildReconcileResult:
     if terminal_state == "cancelled":
         return ChildReconcileResult(inspected=1, cancelled=1)
     if terminal_state == "interrupted":
-        return ChildReconcileResult(inspected=1)
+        # Ticket-flow "interrupted" maps to JOB_PAUSED; count paused here so we
+        # do not also treat it as cancelled (legacy mapping used both).
+        return ChildReconcileResult(inspected=1, paused=1)
     return ChildReconcileResult(inspected=1, failed=1)
 
 

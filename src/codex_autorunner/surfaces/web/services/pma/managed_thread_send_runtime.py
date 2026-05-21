@@ -4,7 +4,7 @@ import asyncio
 import logging
 import uuid
 from dataclasses import dataclass
-from typing import Any, Awaitable, Callable, Optional
+from typing import Any, Awaitable, Callable, NamedTuple, Optional
 
 from fastapi import HTTPException, Request
 from fastapi.responses import JSONResponse
@@ -87,16 +87,22 @@ def _queue_depth(service: Any, managed_thread_id: str) -> int:
     return int(resolver(managed_thread_id))
 
 
-def _record_automation_child_edge_for_send(
+class _AutomationChildSendPlan(NamedTuple):
+    parent_job_id: str
+    requested_runtime: dict[str, Any]
+    authoritative: bool
+
+
+def _prepare_automation_child_for_managed_send(
     hub_root: Any,
     automation_child: Optional[dict[str, Any]],
     *,
-    managed_turn_id: str,
     turn_request: TurnExecutionRequest,
     thread: Any,
-) -> None:
+) -> Optional[_AutomationChildSendPlan]:
+    """Validate automation parent + payload before a managed turn is launched."""
     if not isinstance(automation_child, dict):
-        return
+        return None
     parent_job_id = normalize_optional_text(automation_child.get("parent_job_id"))
     if parent_job_id is None:
         raise HTTPException(
@@ -128,15 +134,53 @@ def _record_automation_child_edge_for_send(
             status_code=400,
             detail="automation_child.authoritative_for_parent_completion must be boolean",
         )
+    return _AutomationChildSendPlan(
+        parent_job_id=parent_job_id,
+        requested_runtime=requested_runtime,
+        authoritative=authoritative,
+    )
+
+
+def _upsert_automation_child_edge_for_send(
+    hub_root: Any,
+    plan: _AutomationChildSendPlan,
+    *,
+    managed_turn_id: str,
+) -> None:
+    automation_store = AutomationStore(hub_root)
     automation_store.upsert_child_execution_edge(
         AutomationChildExecutionEdge.create(
-            parent_job_id=parent_job_id,
+            parent_job_id=plan.parent_job_id,
             child_kind=AUTOMATION_CHILD_KIND_AGENT_TASK,
             child_id=managed_turn_id,
-            requested_runtime=requested_runtime,
+            requested_runtime=plan.requested_runtime,
             actual_runtime=None,
-            authoritative_for_parent_completion=authoritative,
+            authoritative_for_parent_completion=plan.authoritative,
         )
+    )
+
+
+def _record_automation_child_edge_for_send(
+    hub_root: Any,
+    automation_child: Optional[dict[str, Any]],
+    *,
+    managed_turn_id: str,
+    turn_request: TurnExecutionRequest,
+    thread: Any,
+) -> None:
+    """Test helper / single-shot path: validate then persist the child edge."""
+    if not isinstance(automation_child, dict):
+        return
+    plan = _prepare_automation_child_for_managed_send(
+        hub_root,
+        automation_child,
+        turn_request=turn_request,
+        thread=thread,
+    )
+    if plan is None:
+        return
+    _upsert_automation_child_edge_for_send(
+        hub_root, plan, managed_turn_id=managed_turn_id
     )
 
 
@@ -220,6 +264,7 @@ async def run_managed_thread_message_send(
         )
 
     prepared_execution = None
+    automation_child_plan: Optional[_AutomationChildSendPlan] = None
     try:
         progress_targets = ports.resolve_surface_targets(
             service=service,
@@ -273,6 +318,12 @@ async def run_managed_thread_message_send(
             profile=options.agent_profile,
             client_request_id=client_turn_id,
         )
+        automation_child_plan = _prepare_automation_child_for_managed_send(
+            hub_root,
+            payload.automation_child,
+            turn_request=canonical_request,
+            thread=thread,
+        )
         if payload.wait_for_confirmation:
             started_execution = await ports.begin_execution(
                 service,
@@ -319,6 +370,8 @@ async def run_managed_thread_message_send(
                 delivery_payload=options.delivery_payload,
             ),
         )
+    except HTTPException:
+        raise
     except Exception:
         logger.exception(
             "Managed thread execution setup failed (managed_thread_id=%s)",
@@ -340,13 +393,10 @@ async def run_managed_thread_message_send(
     managed_turn_id = execution.execution_id
     if not managed_turn_id:
         raise HTTPException(status_code=500, detail="Failed to create managed turn")
-    _record_automation_child_edge_for_send(
-        hub_root,
-        payload.automation_child,
-        managed_turn_id=managed_turn_id,
-        turn_request=canonical_request,
-        thread=thread_after_send,
-    )
+    if automation_child_plan is not None:
+        _upsert_automation_child_edge_for_send(
+            hub_root, automation_child_plan, managed_turn_id=managed_turn_id
+        )
     backend_thread_id = (
         normalize_optional_text(thread_after_send.backend_thread_id)
         or options.live_backend_thread_id
