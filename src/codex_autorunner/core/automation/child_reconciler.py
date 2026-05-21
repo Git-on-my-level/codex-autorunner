@@ -142,18 +142,6 @@ class AutomationChildRunReconciler:
                 )
             )
             edges.append(edge)
-        if job.pma_queue_item_id:
-            edge = self._store.upsert_child_execution_edge(
-                AutomationChildExecutionEdge.create(
-                    parent_job_id=job.job_id,
-                    child_kind=AUTOMATION_CHILD_KIND_PMA_OPERATOR,
-                    child_id=job.pma_queue_item_id,
-                    requested_runtime=runtime,
-                    actual_runtime=runtime,
-                    authoritative_for_parent_completion=True,
-                )
-            )
-            edges.append(edge)
         return edges
 
     def _reconcile_child_edges(

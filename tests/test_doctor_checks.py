@@ -19,6 +19,26 @@ from codex_autorunner.adapters.telegram.doctor import (
 )
 from codex_autorunner.bootstrap import seed_hub_files
 from codex_autorunner.core.agent_config import AgentConfig
+from codex_autorunner.core.automation.migration_diagnostics import (
+    AUTOMATION_MIGRATION_LEGACY_JOB_AMBIGUOUS,
+    migrate_legacy_automation_executor_shapes,
+)
+from codex_autorunner.core.automation.models import (
+    EXECUTOR_AGENT_TASK_TURN,
+    EXECUTOR_MANAGED_THREAD_TURN,
+    EXECUTOR_PMA_OPERATOR_TURN,
+    JOB_RUNNING,
+    LEGACY_EXECUTOR_PMA_TURN,
+    SCHEDULE_DAILY,
+    TARGET_POLICY_HUB,
+    TRIGGER_KIND_EVENT,
+    TRIGGER_KIND_SCHEDULE,
+    AutomationEvent,
+    AutomationJob,
+    AutomationRule,
+    AutomationSchedule,
+)
+from codex_autorunner.core.automation.store import AutomationStore
 from codex_autorunner.core.config import load_hub_config
 from codex_autorunner.core.destinations import DockerReadiness
 from codex_autorunner.core.diagnostics.automation import (
@@ -539,6 +559,143 @@ def test_automation_migration_doctor_reports_blockers(tmp_path: Path) -> None:
     assert (
         "PMA_LEGACY_AUTOMATION_MALFORMED_JSON" in by_id["automation.migration"].message
     )
+
+
+def test_legacy_executor_migration_maps_scheduled_work_to_agent_task(
+    tmp_path: Path,
+) -> None:
+    hub_root = tmp_path / "hub"
+    store = AutomationStore(hub_root)
+    store.upsert_rule(
+        AutomationRule.create(
+            rule_id="daily-security",
+            name="Daily Security Scan",
+            trigger_kind=TRIGGER_KIND_SCHEDULE,
+            trigger={"event_types": ["schedule.fire"]},
+            target_policy=TARGET_POLICY_HUB,
+            target={"repo_id": "repo-1"},
+            executor_kind=EXECUTOR_MANAGED_THREAD_TURN,
+            executor={
+                "message_text": "scan",
+                "agent": "opencode",
+                "model": "zai-coding-plan/glm-5.1",
+            },
+            metadata={"automation_kind": "security_scan_pr"},
+        )
+    )
+    store.upsert_schedule(
+        AutomationSchedule.create(
+            schedule_id="sched-security",
+            rule_id="daily-security",
+            schedule_kind=SCHEDULE_DAILY,
+            next_fire_at="2026-01-01T09:00:00Z",
+            schedule={"hour": 9, "minute": 0},
+        )
+    )
+
+    result = migrate_legacy_automation_executor_shapes(hub_root)
+
+    migrated = store.get_rule("daily-security")
+    assert result.rules_migrated == 1
+    assert result.diagnostics == ()
+    assert migrated.executor_kind == EXECUTOR_AGENT_TASK_TURN
+    assert migrated.executor["requested_runtime"]["agent"] == "opencode"
+    assert migrated.executor["requested_runtime"]["model"] == "zai-coding-plan/glm-5.1"
+
+
+def test_legacy_executor_migration_maps_pma_timer_to_operator(tmp_path: Path) -> None:
+    hub_root = tmp_path / "hub"
+    store = AutomationStore(hub_root)
+    store.upsert_rule(
+        AutomationRule.create(
+            rule_id="pma-timer",
+            name="PMA timer",
+            trigger_kind=TRIGGER_KIND_EVENT,
+            trigger={"event_types": ["manual.run"]},
+            target_policy=TARGET_POLICY_HUB,
+            executor_kind=LEGACY_EXECUTOR_PMA_TURN,
+            executor={"message_text": "wake", "wake_up_kind": "pma_timer"},
+            metadata={"purpose": "pma_timer"},
+            system_owned=True,
+        )
+    )
+
+    result = migrate_legacy_automation_executor_shapes(hub_root)
+
+    migrated = store.get_rule("pma-timer")
+    assert result.rules_migrated == 1
+    assert migrated.executor_kind == EXECUTOR_PMA_OPERATOR_TURN
+    assert migrated.executor["kind"] == EXECUTOR_PMA_OPERATOR_TURN
+
+
+def test_legacy_executor_migration_reports_queue_only_prose_hint(
+    tmp_path: Path,
+) -> None:
+    hub_root = tmp_path / "hub"
+    store = AutomationStore(hub_root)
+    store.upsert_rule(
+        AutomationRule.create(
+            rule_id="daily-security",
+            name="Daily Security Scan",
+            trigger_kind=TRIGGER_KIND_SCHEDULE,
+            trigger={"event_types": ["schedule.fire"]},
+            target_policy=TARGET_POLICY_HUB,
+            target={"repo_id": "repo-1"},
+            executor_kind=EXECUTOR_MANAGED_THREAD_TURN,
+            executor={"message_text": "scan", "agent": "opencode"},
+            metadata={"automation_kind": "security_scan_pr"},
+        )
+    )
+    store.record_event(
+        AutomationEvent.create(event_id="event-1", event_type="manual.run")
+    )
+    store.enqueue_job(
+        AutomationJob.create(
+            job_id="job-queue-only",
+            rule_id="daily-security",
+            event_id="event-1",
+            state=JOB_RUNNING,
+            target={"repo_id": "repo-1"},
+            executor={"kind": EXECUTOR_MANAGED_THREAD_TURN, "agent": "opencode"},
+            dedupe_key="job-queue-only",
+            available_at="2026-01-01T00:00:00Z",
+            created_at="2026-01-01T00:00:00Z",
+        )
+    )
+    store.update_running_job(
+        "job-queue-only",
+        execution_refs={"pma_lane_id": "pma:default", "pma_queue_item_id": "queue-1"},
+    )
+    with open_orchestration_sqlite(hub_root, durable=True) as conn:
+        with conn:
+            conn.execute(
+                """
+                INSERT INTO orch_queue_items (
+                    queue_item_id, lane_id, source_kind, source_key, dedupe_key,
+                    state, visible_at, payload_json, result_json, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    "queue-1",
+                    "pma:default",
+                    "test",
+                    "queue-1",
+                    "queue-1",
+                    "completed",
+                    "2026-01-01T00:00:00Z",
+                    "{}",
+                    '{"message": "Thread `8919fd62` completed"}',
+                    "2026-01-01T00:00:00Z",
+                    "2026-01-01T00:00:00Z",
+                ),
+            )
+
+    result = migrate_legacy_automation_executor_shapes(hub_root)
+
+    assert result.jobs_migrated == 1
+    assert result.child_edges_created == 0
+    assert result.diagnostics[0].code == AUTOMATION_MIGRATION_LEGACY_JOB_AMBIGUOUS
+    assert store.list_child_execution_edges("job-queue-only") == []
 
 
 def test_summarize_opencode_lifecycle_dedupes_pid_records_and_reports_handle_modes(

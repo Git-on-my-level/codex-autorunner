@@ -295,23 +295,18 @@ def _managed_thread_id_from_pma_item(
     hub_root: Optional[Path],
     cache: Optional[_AutomationExecutionSnapshotCache] = None,
 ) -> Optional[str]:
+    _ = hub_root, cache
     explicit = (
         _pma_result_string(item, "managed_thread_id")
         or _pma_result_string(item, "managedThreadId")
         or _pma_result_string(item, "thread_target_id")
         or _pma_result_string(item, "threadTargetId")
     )
-    if explicit:
-        return explicit
-    prefix = _thread_prefix_from_pma_result(item)
-    if not prefix or hub_root is None:
-        return prefix
-    if cache is not None:
-        return cache.resolve_thread_prefix(prefix) or prefix
-    return _resolve_thread_prefix(Path(hub_root), prefix) or prefix
+    return explicit
 
 
 def _thread_prefix_from_pma_result(item: Optional[PmaQueueItem]) -> Optional[str]:
+    """Diagnostic-only hint extraction; lifecycle code must use durable ids."""
     result = item.result if item is not None and isinstance(item.result, dict) else {}
     message = result.get("message")
     if isinstance(message, str):
