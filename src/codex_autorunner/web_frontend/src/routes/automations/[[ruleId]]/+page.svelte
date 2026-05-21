@@ -175,6 +175,7 @@
     if (selectedKind !== 'automation' || selectedId !== ruleId) return;
     if (!result.ok) {
       detailError = result.error;
+      if (!hydratedDetailIds.includes(ruleId)) hydratedDetailIds = [...hydratedDetailIds, ruleId];
       return;
     }
     replaceAutomation(result.data);
