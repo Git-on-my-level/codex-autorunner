@@ -13,10 +13,9 @@ describe('/automations page', () => {
     const { body } = render(Page);
 
     expect(body).toContain('Automations workspace');
-    expect(body).toContain('Loading automations');
-    // Detail pane is hidden until an automation or preset is selected — the empty
-    // state shows a hint instead of preselected detail chrome.
-    expect(body).toContain('Pick an automation from the list');
+    expect(body).toContain('skeleton-chat-list');
+    expect(body).toContain('skeleton-detail-hero');
+    expect(body).not.toContain('This is a template');
   });
 
   it('uses typed product projections for managed segregation, schedules, messages, and raw diagnostics', () => {
@@ -47,11 +46,12 @@ describe('/automations page', () => {
     expect(source).not.toContain('const PRESETS');
   });
 
-  it('loads the workspace read model before hydrating repo and agent controls', () => {
+  it('loads the workspace index before hydrating detail, repo, and agent controls', () => {
     const source = pageSource();
 
-    expect(source).toContain('webApi.hub.getAutomationWorkspace()');
-    expect(source).toContain('targetOptions = automationResult.data.targetOptions');
+    expect(source).toContain('webApi.hub.getAutomationWorkspaceIndex()');
+    expect(source).toContain('webApi.hub.getAutomation(ruleId)');
+    expect(source).toContain('webApi.hub.getAutomationTargetOptions()');
     expect(source).toContain("const presetTargetOptions = $derived(targetOptions.filter((option) => option.kind === 'repo'))");
     expect(source).toContain('{#each presetTargetOptions as repo}');
     expect(source).toContain('void hydrateAgentCatalog()');

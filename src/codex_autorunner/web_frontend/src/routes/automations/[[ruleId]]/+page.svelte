@@ -3,6 +3,7 @@
   import { page } from '$app/state';
   import { onMount } from 'svelte';
   import AgentModelReasoningPicker from '$lib/components/AgentModelReasoningPicker.svelte';
+  import ContentSkeleton from '$lib/components/ContentSkeleton.svelte';
   import MasterDetail from '$lib/components/MasterDetail.svelte';
   import RunHistoryList from '$lib/components/tickets/RunHistoryList.svelte';
   import TicketPackEditor from '$lib/components/tickets/TicketPackEditor.svelte';
@@ -32,11 +33,15 @@
   let agents = $state<JsonRecord[]>([]);
   let models = $state<JsonRecord[]>([]);
   let loading = $state(true);
+  let loadingTargetOptions = $state(false);
   let loadingAgents = $state(false);
   let loadingModels = $state(false);
+  let detailLoadingId = $state<string | null>(null);
+  let modelCatalogAgentId = $state('');
   let saving = $state(false);
   let actionId = $state<string | null>(null);
   let error = $state<ApiError | null>(null);
+  let detailError = $state<ApiError | null>(null);
   let notice = $state<string | null>(null);
   let selectedKind = $state<SelectionKind>(null);
   let selectedId = $state<string>('');
@@ -68,6 +73,8 @@
   let policyDraft = $state('');
   let metadataDraft = $state('');
   let syncedSelectionKey = '';
+  let hydratedDetailIds = $state<string[]>([]);
+  let agentsHydrated = $state(false);
 
   const automations = $derived(overview?.automations ?? []);
   const presets = $derived(overview?.presets ?? []);
@@ -77,6 +84,15 @@
   const presetTargetOptions = $derived(targetOptions.filter((option) => option.kind === 'repo'));
   const selectedRepo = $derived(targetOptions.find((repo) => repo.id === selectedRepoId) ?? null);
   const scheduleTimeValue = $derived(`${pad(detailHour)}:${pad(detailMinute)}`);
+  const selectionResolved = $derived(
+    selectedKind === null || selectedAutomation() !== null || selectedPreset() !== null
+  );
+  const selectedAutomationHydrated = $derived(
+    selectedKind !== 'automation' || hydratedDetailIds.includes(selectedId)
+  );
+  const routeAutomationMissing = $derived(
+    Boolean(routeRuleId && overview && !loading && !automations.some((automation) => automation.id === routeRuleId))
+  );
 
   onMount(() => {
     void load();
@@ -88,10 +104,9 @@
   async function load(): Promise<void> {
     loading = true;
     error = null;
-    const automationResult = await webApi.hub.getAutomationWorkspace();
+    const automationResult = await webApi.hub.getAutomationWorkspaceIndex();
     if (automationResult.ok) {
-      overview = automationResult.data;
-      targetOptions = automationResult.data.targetOptions;
+      overview = mergeAutomationOverview(automationResult.data);
       if (!selectedRepoId) {
         selectedRepoId = presetTargetOptions.find((option) => !option.disabled)?.id ?? presetTargetOptions[0]?.id ?? '';
       }
@@ -103,10 +118,12 @@
     else error = automationResult.error;
     loading = false;
     syncDraftsForSelection(true);
-    void hydrateAgentCatalog();
+    if (selectedKind === 'automation' && selectedId) void hydrateAutomationDetail(selectedId, { force: true });
+    void hydrateTargetOptions();
   }
 
   async function hydrateAgentCatalog(): Promise<void> {
+    if (agentsHydrated || loadingAgents) return;
     loadingAgents = true;
     agentCatalogError = null;
     const agentResult = await webApi.pma.listAgents();
@@ -115,10 +132,54 @@
       agents = agentResult.data.agents;
       defaultAgentId = agentResult.data.default;
       defaultProfile = String(agentResult.data.defaults.profile ?? '');
+      agentsHydrated = true;
       syncDraftsForSelection(true);
+      if (selectedExecutorKind() === 'managed_thread_turn') void loadModels(selectedAgent, selectedModel, { keepReasoning: selectedKind === 'automation' });
     } else {
       agentCatalogError = agentResult.error.message;
     }
+  }
+
+  async function hydrateTargetOptions(): Promise<void> {
+    if (targetOptions.length || loadingTargetOptions) return;
+    loadingTargetOptions = true;
+    const result = await webApi.hub.getAutomationTargetOptions();
+    loadingTargetOptions = false;
+    if (result.ok) {
+      targetOptions = result.data;
+      if (!selectedRepoId) {
+        selectedRepoId = result.data.find((option) => option.kind === 'repo' && !option.disabled)?.id ?? result.data.find((option) => option.kind === 'repo')?.id ?? '';
+        syncDraftsForSelection(true);
+      }
+    }
+  }
+
+  function mergeAutomationOverview(next: AutomationOverview): AutomationOverview {
+    if (!overview || hydratedDetailIds.length === 0) return next;
+    const currentById = new Map(overview.automations.map((automation) => [automation.id, automation]));
+    return {
+      ...next,
+      automations: next.automations.map((automation) => {
+        const current = currentById.get(automation.id);
+        return current && hydratedDetailIds.includes(automation.id) ? current : automation;
+      })
+    };
+  }
+
+  async function hydrateAutomationDetail(ruleId: string, options: { force?: boolean } = {}): Promise<void> {
+    if (!ruleId || (!options.force && hydratedDetailIds.includes(ruleId)) || detailLoadingId === ruleId) return;
+    detailLoadingId = ruleId;
+    detailError = null;
+    const result = await webApi.hub.getAutomation(ruleId);
+    if (detailLoadingId === ruleId) detailLoadingId = null;
+    if (selectedKind !== 'automation' || selectedId !== ruleId) return;
+    if (!result.ok) {
+      detailError = result.error;
+      return;
+    }
+    replaceAutomation(result.data);
+    if (!hydratedDetailIds.includes(ruleId)) hydratedDetailIds = [...hydratedDetailIds, ruleId];
+    syncDraftsForSelection(true);
   }
 
   // The URL is the source of truth for which automation is open. Presets have no
@@ -126,6 +187,11 @@
   $effect(() => {
     const ruleId = routeRuleId;
     if (ruleId && automations.some((automation) => automation.id === ruleId)) {
+      selectedKind = 'automation';
+      selectedId = ruleId;
+      detailMode = 'detail';
+      void hydrateAutomationDetail(ruleId);
+    } else if (ruleId && overview && !loading) {
       selectedKind = 'automation';
       selectedId = ruleId;
       detailMode = 'detail';
@@ -138,6 +204,19 @@
       detailMode = selectedKind === 'preset' ? 'detail' : 'list';
     }
     syncDraftsForSelection(false);
+  });
+
+  $effect(() => {
+    if (!selectionResolved || !selectedAutomationHydrated) return;
+    if (selectedExecutorKind() === 'managed_thread_turn' && canEditPrompt()) void hydrateAgentCatalog();
+  });
+
+  $effect(() => {
+    if (!agentsHydrated || loadingModels) return;
+    if (selectedExecutorKind() !== 'managed_thread_turn' || !canEditPrompt()) return;
+    if (selectedAgent && modelCatalogAgentId !== selectedAgent) {
+      void loadModels(selectedAgent, selectedModel, { keepReasoning: selectedKind === 'automation' });
+    }
   });
 
   function automationRoute(ruleId: string): string {
@@ -171,10 +250,11 @@
   }
 
   function selectionKey(): string {
-    return `${selectedKind}:${selectedId}:${selectedAutomation()?.updatedAt ?? ''}:${selectedKind === 'preset' ? selectedRepoId : ''}`;
+    return `${selectedKind}:${selectedId}:${selectedAutomation()?.updatedAt ?? ''}:${selectedKind === 'preset' ? selectedRepoId : ''}:${selectedAutomationHydrated}`;
   }
 
   function syncDraftsForSelection(force: boolean): void {
+    if (selectedKind === 'automation' && !selectedAutomationHydrated) return;
     const key = selectionKey();
     if (!force && key === syncedSelectionKey) return;
     syncedSelectionKey = key;
@@ -195,7 +275,6 @@
         selectedProfile = stringValue(automation.raw.executor, 'profile') || stringValue(automation.raw.executor, 'agent_profile');
         selectedModel = stringValue(automation.raw.executor, 'model');
         selectedReasoning = stringValue(automation.raw.executor, 'reasoning');
-        void loadModels(selectedAgent, selectedModel, { keepReasoning: true });
       } else {
         clearAgentModelSelection();
       }
@@ -220,7 +299,6 @@
       selectedProfile = selectedAgent === 'hermes' ? defaultProfile : '';
       selectedModel = '';
       selectedReasoning = '';
-      void loadModels(selectedAgent, '', { keepReasoning: false });
     } else {
       clearAgentModelSelection();
     }
@@ -560,6 +638,7 @@
     selectedReasoning = '';
     models = [];
     loadingModels = false;
+    modelCatalogAgentId = '';
     modelCatalogError = null;
   }
 
@@ -575,6 +654,7 @@
     }
     loadingModels = true;
     models = [];
+    modelCatalogAgentId = agentId;
     const currentReasoning = selectedReasoning;
     const result = await webApi.pma.listAgentModels(agentId);
     loadingModels = false;
@@ -853,6 +933,9 @@
         <button type="button" class="primary-button list-create" onclick={() => openPmaWithDraft(createNewAutomationPrompt())}>
           Create with PMA
         </button>
+        {#if loading && overview}
+          <span class="refresh-chip">Refreshing</span>
+        {/if}
         {#if overview}
           <dl class="list-stats">
             <div class:active={overview.summary.active > 0}>
@@ -872,8 +955,8 @@
       </header>
 
       <div class="list-scroll">
-        {#if loading}
-          <div class="state-panel loading-state"><p>Loading automations…</p></div>
+        {#if loading && !overview}
+          <ContentSkeleton variant="chat-list" rows={4} />
         {:else}
           <div class="list-group">
             <div class="list-group-head">
@@ -940,7 +1023,22 @@
   {/snippet}
 
   {#snippet detail()}
-    {#if selectedKind === null}
+    {#if loading && !overview}
+      <section class="automation-detail automation-detail-empty" aria-label="Automation detail">
+        <ContentSkeleton variant="detail" rows={4} />
+      </section>
+    {:else if routeAutomationMissing}
+      <section class="automation-detail automation-detail-empty" aria-label="Automation detail">
+        <div class="detail-empty">
+          <p>Automation not found.</p>
+          <a class="ghost-button" href={href('/automations')}>Back to automations</a>
+        </div>
+      </section>
+    {:else if selectedKind === 'automation' && !selectedAutomationHydrated}
+      <section class="automation-detail automation-detail-empty" aria-label="Automation detail">
+        <ContentSkeleton variant="detail" rows={4} />
+      </section>
+    {:else if selectedKind === null || !selectionResolved}
       <section class="automation-detail automation-detail-empty" aria-label="Automation detail">
         <div class="detail-empty">
           <p>Pick an automation from the list, or start from a preset.</p>
@@ -950,6 +1048,9 @@
     <section class="automation-detail" aria-label="Automation detail">
       {#if error}
         <div class="automation-notice error" role="alert">{error.message}</div>
+      {/if}
+      {#if detailError}
+        <div class="automation-notice error" role="alert">{detailError.message}</div>
       {/if}
       {#if notice}
         <div class="automation-notice success" role="status">{notice}</div>
@@ -1320,6 +1421,18 @@
     width: 100%;
   }
 
+  .refresh-chip {
+    align-self: flex-start;
+    padding: 2px var(--space-2);
+    border: 1px solid var(--color-border-subtle);
+    border-radius: var(--radius-2);
+    color: var(--color-ink-muted);
+    background: var(--color-surface-sunken);
+    font-size: 10px;
+    font-weight: 650;
+    text-transform: uppercase;
+  }
+
   .list-stats {
     margin: 0;
     display: grid;
@@ -1671,6 +1784,9 @@
   }
 
   .detail-empty {
+    display: grid;
+    justify-items: center;
+    gap: var(--space-3);
     text-align: center;
     color: var(--color-ink-muted);
     font-size: var(--font-size-1);

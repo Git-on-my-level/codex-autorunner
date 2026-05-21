@@ -232,7 +232,9 @@ def test_hub_automation_workspace_batches_jobs_and_target_options(
     assert response.status_code == 200
     workspace = response.json()
     assert workspace["summary"]["failed_jobs"] == 1
-    assert len(workspace["automations"][0]["jobs"]) <= 25
+    assert len(workspace["automations"][0]["jobs"]) == 25
+    assert "executor" in workspace["automations"][0]
+    assert "target_options" in workspace
     assert set(workspace["agent_defaults"]) == {
         "default_agent",
         "default_profile",
@@ -240,6 +242,19 @@ def test_hub_automation_workspace_batches_jobs_and_target_options(
         "default_reasoning",
     }
     assert workspace["generated_at"]
+    index = client.get("/hub/read-models/automations/workspace-index")
+    assert index.status_code == 200
+    index_workspace = index.json()
+    assert len(index_workspace["automations"][0]["jobs"]) == 0
+    assert "executor" not in index_workspace["automations"][0]
+    assert "target_options" not in index_workspace
+    assert (
+        client.get(
+            "/hub/read-models/automations/workspace-index?include_target_options=true"
+        ).json()["target_options"]
+        is not None
+    )
+    assert client.get("/hub/read-models/automations/target-options").status_code == 200
 
     context = SimpleNamespace(
         supervisor=SimpleNamespace(
