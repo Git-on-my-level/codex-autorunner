@@ -34,6 +34,7 @@ DEFAULT_CHAT_SURFACE_EVENT_LIMIT = 100
 MAX_CHAT_SURFACE_EVENT_LIMIT = 1000
 DEFAULT_CHAT_INDEX_LIMIT = 50
 MAX_CHAT_INDEX_LIMIT = 200
+CHAT_INDEX_PROJECTION_SCHEMA_VERSION = "chat.index.projection.facets.v1"
 DEFAULT_CHAT_TIMELINE_LIMIT = 50
 MAX_CHAT_TIMELINE_LIMIT = 200
 MAX_CHAT_TIMELINE_PAGE_SOURCE_LIMIT = 1000
@@ -727,6 +728,8 @@ class ChatSurfaceReadService:
                 return {
                     "source_signature": source_signature,
                     "stored_source_signature": None,
+                    "projection_schema_version": CHAT_INDEX_PROJECTION_SCHEMA_VERSION,
+                    "stored_projection_schema_version": None,
                     "projection_revision": 0,
                     "row_count": 0,
                     "needs_rebuild": True,
@@ -737,7 +740,7 @@ class ChatSurfaceReadService:
                     """
                     SELECT key, value
                       FROM orch_chat_index_projection_meta
-                     WHERE key IN ('source_signature', 'projection_revision')
+                     WHERE key IN ('source_signature', 'projection_revision', 'projection_schema_version')
                     """
                 ).fetchall()
             }
@@ -745,14 +748,18 @@ class ChatSurfaceReadService:
                 "SELECT COUNT(*) AS row_count FROM orch_chat_index_projection"
             ).fetchone()
         stored_signature = meta.get("source_signature")
+        stored_projection_schema_version = meta.get("projection_schema_version")
         return {
             "source_signature": source_signature,
             "stored_source_signature": stored_signature,
+            "projection_schema_version": CHAT_INDEX_PROJECTION_SCHEMA_VERSION,
+            "stored_projection_schema_version": stored_projection_schema_version,
             "projection_revision": max(
                 0, _safe_int(meta.get("projection_revision"), 0)
             ),
             "row_count": int(row["row_count"] or 0) if row is not None else 0,
-            "needs_rebuild": stored_signature != source_signature,
+            "needs_rebuild": stored_signature != source_signature
+            or stored_projection_schema_version != CHAT_INDEX_PROJECTION_SCHEMA_VERSION,
         }
 
     def repair_stale_bound_surface_archive_state(
@@ -920,11 +927,15 @@ class ChatSurfaceReadService:
                         """
                         SELECT key, value
                           FROM orch_chat_index_projection_meta
-                         WHERE key IN ('source_signature', 'projection_revision')
+                         WHERE key IN ('source_signature', 'projection_revision', 'projection_schema_version')
                         """
                     ).fetchall()
                 }
-                if existing_meta.get("source_signature") == source_signature:
+                if (
+                    existing_meta.get("source_signature") == source_signature
+                    and existing_meta.get("projection_schema_version")
+                    == CHAT_INDEX_PROJECTION_SCHEMA_VERSION
+                ):
                     projection_revision = max(
                         1, _safe_int(existing_meta.get("projection_revision"), 1)
                     )
@@ -1005,6 +1016,16 @@ class ChatSurfaceReadService:
                     """,
                     (str(projection_revision), rebuilt_at),
                 )
+                conn.execute(
+                    """
+                    INSERT OR REPLACE INTO orch_chat_index_projection_meta (
+                        key,
+                        value,
+                        updated_at
+                    ) VALUES ('projection_schema_version', ?, ?)
+                    """,
+                    (CHAT_INDEX_PROJECTION_SCHEMA_VERSION, rebuilt_at),
+                )
         return {
             "rebuilt": True,
             "row_count": len(rows),
@@ -1013,6 +1034,12 @@ class ChatSurfaceReadService:
             "source_signature": source_signature,
             "previous_source_signature": before.get("stored_source_signature"),
             "source_changed": before.get("stored_source_signature") != source_signature,
+            "projection_schema_version": CHAT_INDEX_PROJECTION_SCHEMA_VERSION,
+            "previous_projection_schema_version": before.get(
+                "stored_projection_schema_version"
+            ),
+            "projection_schema_changed": before.get("stored_projection_schema_version")
+            != CHAT_INDEX_PROJECTION_SCHEMA_VERSION,
             "rebuilt_at": rebuilt_at,
         }
 
@@ -1026,14 +1053,19 @@ class ChatSurfaceReadService:
             ) or not _table_exists(conn, "orch_chat_index_projection_meta"):
                 needs_rebuild = True
             else:
-                row = conn.execute(
+                rows = conn.execute(
                     """
-                    SELECT value
+                    SELECT key, value
                       FROM orch_chat_index_projection_meta
-                     WHERE key = 'source_signature'
+                     WHERE key IN ('source_signature', 'projection_schema_version')
                     """
-                ).fetchone()
-                needs_rebuild = row is None or row["value"] != source_signature
+                ).fetchall()
+                meta = {str(row["key"]): str(row["value"]) for row in rows}
+                needs_rebuild = (
+                    meta.get("source_signature") != source_signature
+                    or meta.get("projection_schema_version")
+                    != CHAT_INDEX_PROJECTION_SCHEMA_VERSION
+                )
         if needs_rebuild:
             self.rebuild_chat_index_projection()
 

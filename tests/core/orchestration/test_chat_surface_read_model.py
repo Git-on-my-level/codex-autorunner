@@ -525,6 +525,52 @@ def test_chat_index_projects_backend_facets_counts_and_filters(tmp_path: Path) -
     assert "automation" in automation["rows"][0]["facets"]["origin_kinds"]
 
 
+def test_chat_index_rebuilds_projection_when_facet_schema_marker_is_missing(
+    tmp_path: Path,
+) -> None:
+    hub_root = tmp_path / "hub"
+    _seed_thread(
+        hub_root,
+        thread_id="automation-upgrade",
+        metadata={"automation_job_id": "job-1", "automation_rule_id": "rule-1"},
+    )
+    service = ChatSurfaceReadService(hub_root, durable=False)
+    service.rebuild_chat_index_projection()
+
+    with open_orchestration_sqlite(hub_root, durable=False, migrate=True) as conn:
+        conn.execute(
+            """
+            UPDATE orch_chat_index_projection
+               SET facet_category = NULL,
+                   facet_turn_kind_list = '',
+                   facet_origin_kind_list = '',
+                   facet_transport_list = '',
+                   facet_scope_kind = NULL,
+                   facet_scope_id = NULL,
+                   facet_agent_kind = NULL
+            """
+        )
+        conn.execute(
+            """
+            DELETE FROM orch_chat_index_projection_meta
+             WHERE key = 'projection_schema_version'
+            """
+        )
+
+    assert service.chat_index_projection_status()["needs_rebuild"] is True
+    automation = service.chat_index_snapshot(
+        view="all",
+        facets={"categories": ["automation"]},
+        limit=10,
+    )
+
+    assert [row["managed_thread_id"] for row in automation["rows"]] == [
+        "automation-upgrade"
+    ]
+    assert automation["rows"][0]["facets"]["category"] == "automation"
+    assert service.chat_index_projection_status()["needs_rebuild"] is False
+
+
 def test_chat_index_regular_category_excludes_ticket_automation_and_system(
     tmp_path: Path,
 ) -> None:
