@@ -1823,6 +1823,7 @@
       <FilterRow
         rootClass="chat-filter-chips-row"
         ariaLabel="Chat filters"
+        maxRows={1}
         items={[
           ...CHAT_FILTER_ORDER.filter(
             (item) => item !== 'unread' || filterCounts.unread > 0 || filter === 'unread'

@@ -66,9 +66,8 @@
   });
 
   $effect(() => {
-    // Re-measure when item set changes.
-    items.length;
-    items.map((i) => i.key).join('|');
+    // Re-measure when visible chip content changes.
+    items.map((i) => `${i.key}:${i.label}:${i.count ?? ''}`).join('|');
     queueMicrotask(recompute);
   });
 
@@ -95,7 +94,7 @@
 </script>
 
 <div class="filter-row-container" bind:this={containerEl}>
-  <div class="filter-row filter-row-measure" bind:this={measureEl} aria-hidden="true">
+  <div class="{rowClass} filter-row-measure" bind:this={measureEl} aria-hidden="true">
     {#each items as item (item.key)}
       <button class="chip" type="button" tabindex="-1" data-filter-chip>
         {item.label}
@@ -174,6 +173,7 @@
 <style>
   .filter-row-container {
     position: relative;
+    min-width: 0;
   }
 
   .filter-row-measure {
