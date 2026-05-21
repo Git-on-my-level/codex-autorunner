@@ -30,8 +30,7 @@ def select_execution_rows(
             tuple(execution_ids),
         ).fetchall()
         return cast(list[Any], rows)
-    rows = conn.execute(
-        """
+    rows = conn.execute("""
         SELECT e.*,
                t.backend_thread_id,
                t.repo_id,
@@ -41,8 +40,7 @@ def select_execution_rows(
           JOIN orch_thread_targets AS t
             ON t.thread_target_id = e.thread_target_id
          ORDER BY e.created_at ASC
-        """
-    ).fetchall()
+        """).fetchall()
     return cast(list[Any], rows)
 
 

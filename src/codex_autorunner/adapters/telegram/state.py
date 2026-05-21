@@ -300,17 +300,14 @@ class TelegramStateStore:
 
     def _ensure_schema(self, conn: sqlite3.Connection) -> None:
         with conn:
-            conn.execute(
-                """
+            conn.execute("""
                 CREATE TABLE IF NOT EXISTS telegram_meta (
                     key TEXT PRIMARY KEY,
                     value TEXT NOT NULL,
                     updated_at TEXT NOT NULL
                 )
-                """
-            )
-            conn.execute(
-                """
+                """)
+            conn.execute("""
                 CREATE TABLE IF NOT EXISTS telegram_topic_scopes (
                     chat_id INTEGER NOT NULL,
                     thread_id INTEGER,
@@ -318,25 +315,19 @@ class TelegramStateStore:
                     updated_at TEXT NOT NULL,
                     PRIMARY KEY (chat_id, thread_id)
                 )
-                """
-            )
+                """)
             self._dedupe_topic_scopes(conn)
-            conn.execute(
-                """
+            conn.execute("""
                 CREATE UNIQUE INDEX IF NOT EXISTS idx_tg_scopes_root
                     ON telegram_topic_scopes(chat_id)
                     WHERE thread_id IS NULL
-                """
-            )
-            conn.execute(
-                """
+                """)
+            conn.execute("""
                 CREATE UNIQUE INDEX IF NOT EXISTS idx_tg_scopes_thread
                     ON telegram_topic_scopes(chat_id, thread_id)
                     WHERE thread_id IS NOT NULL
-                """
-            )
-            conn.execute(
-                """
+                """)
+            conn.execute("""
                 CREATE TABLE IF NOT EXISTS telegram_topics (
                     topic_key TEXT PRIMARY KEY,
                     chat_id INTEGER NOT NULL,
@@ -352,28 +343,20 @@ class TelegramStateStore:
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL
                 )
-                """
-            )
-            conn.execute(
-                """
+                """)
+            conn.execute("""
                 CREATE INDEX IF NOT EXISTS idx_tg_topics_chat_thread
                     ON telegram_topics(chat_id, thread_id)
-                """
-            )
-            conn.execute(
-                """
+                """)
+            conn.execute("""
                 CREATE INDEX IF NOT EXISTS idx_tg_topics_workspace
                     ON telegram_topics(workspace_path)
-                """
-            )
-            conn.execute(
-                """
+                """)
+            conn.execute("""
                 CREATE INDEX IF NOT EXISTS idx_tg_topics_last_active
                     ON telegram_topics(last_active_at)
-                """
-            )
-            conn.execute(
-                """
+                """)
+            conn.execute("""
                 CREATE TABLE IF NOT EXISTS telegram_pending_approvals (
                     request_id TEXT PRIMARY KEY,
                     topic_key TEXT,
@@ -383,22 +366,16 @@ class TelegramStateStore:
                     expires_at TEXT,
                     payload_json TEXT NOT NULL
                 )
-                """
-            )
-            conn.execute(
-                """
+                """)
+            conn.execute("""
                 CREATE INDEX IF NOT EXISTS idx_tg_approvals_topic
                     ON telegram_pending_approvals(topic_key)
-                """
-            )
-            conn.execute(
-                """
+                """)
+            conn.execute("""
                 CREATE INDEX IF NOT EXISTS idx_tg_approvals_expires
                     ON telegram_pending_approvals(expires_at)
-                """
-            )
-            conn.execute(
-                """
+                """)
+            conn.execute("""
                 CREATE TABLE IF NOT EXISTS telegram_outbox (
                     record_id TEXT PRIMARY KEY,
                     chat_id INTEGER NOT NULL,
@@ -411,16 +388,12 @@ class TelegramStateStore:
                     outbox_key TEXT,
                     payload_json TEXT NOT NULL
                 )
-                """
-            )
-            conn.execute(
-                """
+                """)
+            conn.execute("""
                 CREATE INDEX IF NOT EXISTS idx_tg_outbox_created
                     ON telegram_outbox(created_at)
-                """
-            )
-            conn.execute(
-                """
+                """)
+            conn.execute("""
                 CREATE TABLE IF NOT EXISTS telegram_pending_voice (
                     record_id TEXT PRIMARY KEY,
                     chat_id INTEGER NOT NULL,
@@ -430,14 +403,11 @@ class TelegramStateStore:
                     next_attempt_at TEXT,
                     payload_json TEXT NOT NULL
                 )
-                """
-            )
-            conn.execute(
-                """
+                """)
+            conn.execute("""
                 CREATE INDEX IF NOT EXISTS idx_tg_voice_next_attempt
                     ON telegram_pending_voice(next_attempt_at)
-                """
-            )
+                """)
             if read_schema_version(conn) is None:
                 legacy_version = self._legacy_schema_version(conn)
                 if legacy_version is not None:
@@ -454,13 +424,11 @@ class TelegramStateStore:
                     ),
                 ),
             )
-            conn.execute(
-                """
+            conn.execute("""
                 CREATE INDEX IF NOT EXISTS idx_tg_outbox_key
                     ON telegram_outbox(outbox_key)
                     WHERE outbox_key IS NOT NULL
-                """
-            )
+                """)
             now = now_iso()
             self._set_meta(conn, "schema_version", str(TELEGRAM_SCHEMA_VERSION), now)
             self._set_meta(conn, "state_version", str(STATE_VERSION), now)
@@ -487,8 +455,7 @@ class TelegramStateStore:
         )
 
     def _dedupe_topic_scopes(self, conn: sqlite3.Connection) -> None:
-        conn.execute(
-            """
+        conn.execute("""
             DELETE FROM telegram_topic_scopes
              WHERE thread_id IS NULL
                AND EXISTS (
@@ -504,10 +471,8 @@ class TelegramStateStore:
                     )
                    )
                )
-            """
-        )
-        conn.execute(
-            """
+            """)
+        conn.execute("""
             DELETE FROM telegram_topic_scopes
              WHERE thread_id IS NOT NULL
                AND EXISTS (
@@ -524,8 +489,7 @@ class TelegramStateStore:
                     )
                    )
                )
-            """
-        )
+            """)
 
     def _has_persisted_rows(self, conn: sqlite3.Connection) -> bool:
         for table in (

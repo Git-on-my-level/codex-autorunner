@@ -1036,12 +1036,10 @@ class PublishJournalStore:
 
     @staticmethod
     def _ensure_known_operation_states(conn: sqlite3.Connection) -> None:
-        rows = conn.execute(
-            """
+        rows = conn.execute("""
             SELECT DISTINCT state
               FROM orch_publish_operations
-            """
-        ).fetchall()
+            """).fetchall()
         for row in rows:
             _required_operation_state(str(row["state"]))
 

@@ -535,8 +535,7 @@ class TerminalSessionStore:
 
 def _ensure_state_schema(conn: sqlite3.Connection) -> None:
     with conn:
-        conn.execute(
-            """
+        conn.execute("""
             CREATE TABLE IF NOT EXISTS runner_state (
                 id INTEGER PRIMARY KEY CHECK (id = 1),
                 last_run_id INTEGER,
@@ -548,10 +547,8 @@ def _ensure_state_schema(conn: sqlite3.Connection) -> None:
                 overrides_json TEXT,
                 updated_at TEXT NOT NULL
             )
-            """
-        )
-        conn.execute(
-            """
+            """)
+        conn.execute("""
             CREATE TABLE IF NOT EXISTS sessions (
                 session_id TEXT PRIMARY KEY,
                 repo_path TEXT NOT NULL,
@@ -560,16 +557,13 @@ def _ensure_state_schema(conn: sqlite3.Connection) -> None:
                 status TEXT NOT NULL,
                 agent TEXT NOT NULL
             )
-            """
-        )
-        conn.execute(
-            """
+            """)
+        conn.execute("""
             CREATE TABLE IF NOT EXISTS repo_to_session (
                 repo_key TEXT PRIMARY KEY,
                 session_id TEXT NOT NULL
             )
-            """
-        )
+            """)
         conn.execute(
             "INSERT OR IGNORE INTO runner_state (id, status, updated_at) VALUES (1, ?, ?)",
             (RunnerLifecycleStatus.IDLE.value, now_iso()),
@@ -674,8 +668,7 @@ def _apply_overrides(state: RunnerState, raw: Optional[str]) -> None:
 def load_state(state_path: Path, durable: bool = False) -> RunnerState:
     with open_sqlite(state_path, durable=durable) as conn:
         _ensure_state_schema(conn)
-        row = conn.execute(
-            """
+        row = conn.execute("""
             SELECT last_run_id,
                    status,
                    last_exit_code,
@@ -685,8 +678,7 @@ def load_state(state_path: Path, durable: bool = False) -> RunnerState:
                    overrides_json
               FROM runner_state
              WHERE id = 1
-            """
-        ).fetchone()
+            """).fetchone()
         if row is None:
             raise StateLifecycleError("Missing runner_state row at load_state")
         state = RunnerState(
@@ -699,8 +691,7 @@ def load_state(state_path: Path, durable: bool = False) -> RunnerState:
         )
         _apply_overrides(state, row["overrides_json"])
         sessions: dict[str, SessionRecord] = {}
-        for record in conn.execute(
-            """
+        for record in conn.execute("""
             SELECT session_id,
                    repo_path,
                    created_at,
@@ -708,8 +699,7 @@ def load_state(state_path: Path, durable: bool = False) -> RunnerState:
                    status,
                    agent
               FROM sessions
-            """
-        ):
+            """):
             parsed = SessionRecord(
                 repo_path=record["repo_path"],
                 created_at=record["created_at"],

@@ -212,8 +212,7 @@ async def test_enqueue_sync_dedupes_after_sqlite_idempotency_conflict(
 
 def test_v27_migration_dedupes_existing_active_queue_rows() -> None:
     conn = sqlite3.connect(":memory:")
-    conn.execute(
-        """
+    conn.execute("""
         CREATE TABLE orch_queue_items (
             queue_item_id TEXT PRIMARY KEY,
             lane_id TEXT NOT NULL,
@@ -232,8 +231,7 @@ def test_v27_migration_dedupes_existing_active_queue_rows() -> None:
             dedupe_reason TEXT,
             result_json TEXT NOT NULL DEFAULT '{}'
         )
-        """
-    )
+        """)
     conn.executemany(
         """
         INSERT INTO orch_queue_items (
@@ -252,14 +250,12 @@ def test_v27_migration_dedupes_existing_active_queue_rows() -> None:
     assert rows[0] == ("first", "pending", None)
     assert rows[1] == ("second", "deduped", "duplicate_of_first")
     with pytest.raises(sqlite3.IntegrityError):
-        conn.execute(
-            """
+        conn.execute("""
             INSERT INTO orch_queue_items (
                 queue_item_id, lane_id, source_kind, state, created_at, updated_at,
                 idempotency_key
             ) VALUES ('third', 'pma:default', 'pma_lane', 'running', 't', 't', 'same')
-            """
-        )
+            """)
 
 
 @pytest.mark.anyio

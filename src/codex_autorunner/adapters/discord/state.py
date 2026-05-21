@@ -717,8 +717,7 @@ class DiscordStateStore:
 
     def _ensure_schema(self, conn: sqlite3.Connection) -> None:
         with conn:
-            conn.execute(
-                """
+            conn.execute("""
                 CREATE TABLE IF NOT EXISTS channel_bindings (
                     channel_id TEXT PRIMARY KEY,
                     guild_id TEXT,
@@ -730,10 +729,8 @@ class DiscordStateStore:
                     last_pause_dispatch_seq TEXT,
                     updated_at TEXT NOT NULL
                 )
-                """
-            )
-            conn.execute(
-                """
+                """)
+            conn.execute("""
                 CREATE TABLE IF NOT EXISTS outbox (
                     record_id TEXT PRIMARY KEY,
                     channel_id TEXT NOT NULL,
@@ -746,22 +743,16 @@ class DiscordStateStore:
                     last_error TEXT,
                     operation_id TEXT
                 )
-                """
-            )
-            conn.execute(
-                """
+                """)
+            conn.execute("""
                 CREATE INDEX IF NOT EXISTS idx_discord_outbox_next_attempt
                     ON outbox(next_attempt_at)
-                """
-            )
-            conn.execute(
-                """
+                """)
+            conn.execute("""
                 CREATE INDEX IF NOT EXISTS idx_discord_outbox_created
                     ON outbox(created_at)
-                """
-            )
-            conn.execute(
-                """
+                """)
+            conn.execute("""
                 CREATE TABLE IF NOT EXISTS turn_progress_leases (
                     lease_id TEXT PRIMARY KEY,
                     managed_thread_id TEXT NOT NULL,
@@ -774,10 +765,8 @@ class DiscordStateStore:
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL
                 )
-                """
-            )
-            conn.execute(
-                """
+                """)
+            conn.execute("""
                 CREATE TABLE IF NOT EXISTS interaction_ledger (
                     interaction_id TEXT PRIMARY KEY,
                     interaction_token TEXT NOT NULL,
@@ -808,32 +797,23 @@ class DiscordStateStore:
                     updated_at TEXT NOT NULL,
                     last_seen_at TEXT NOT NULL
                 )
-                """
-            )
-            conn.execute(
-                """
+                """)
+            conn.execute("""
                 CREATE INDEX IF NOT EXISTS idx_discord_turn_progress_thread_exec
                     ON turn_progress_leases(managed_thread_id, execution_id, updated_at)
-                """
-            )
-            conn.execute(
-                """
+                """)
+            conn.execute("""
                 CREATE INDEX IF NOT EXISTS idx_discord_turn_progress_channel_message
                     ON turn_progress_leases(channel_id, message_id, updated_at)
-                """
-            )
-            conn.execute(
-                """
+                """)
+            conn.execute("""
                 CREATE INDEX IF NOT EXISTS idx_discord_interaction_ledger_last_seen
                     ON interaction_ledger(last_seen_at)
-                """
-            )
-            conn.execute(
-                """
+                """)
+            conn.execute("""
                 CREATE INDEX IF NOT EXISTS idx_discord_interaction_ledger_execution_status
                     ON interaction_ledger(execution_status)
-                """
-            )
+                """)
             if read_schema_version(conn) is None:
                 write_schema_version(conn, 0)
             apply_versioned_schema(
@@ -916,12 +896,10 @@ class DiscordStateStore:
                     ),
                 ),
             )
-            conn.execute(
-                """
+            conn.execute("""
                 CREATE INDEX IF NOT EXISTS idx_discord_interaction_ledger_scheduler_state
                     ON interaction_ledger(scheduler_state)
-                """
-            )
+                """)
 
     def _migration_v2(self, conn: sqlite3.Connection) -> None:
         ensure_columns(conn, "outbox", (("operation_id", "operation_id TEXT"),))

@@ -27,8 +27,7 @@ async def test_discord_state_store_migrates_legacy_schema(tmp_path):
     try:
         conn.execute("CREATE TABLE schema_info (version INTEGER NOT NULL)")
         conn.execute("INSERT INTO schema_info(version) VALUES (1)")
-        conn.execute(
-            """
+        conn.execute("""
             CREATE TABLE channel_bindings (
                 channel_id TEXT PRIMARY KEY,
                 guild_id TEXT,
@@ -36,10 +35,8 @@ async def test_discord_state_store_migrates_legacy_schema(tmp_path):
                 repo_id TEXT,
                 updated_at TEXT NOT NULL
             )
-            """
-        )
-        conn.execute(
-            """
+            """)
+        conn.execute("""
             CREATE TABLE outbox (
                 record_id TEXT PRIMARY KEY,
                 channel_id TEXT NOT NULL,
@@ -51,10 +48,8 @@ async def test_discord_state_store_migrates_legacy_schema(tmp_path):
                 created_at TEXT NOT NULL,
                 last_error TEXT
             )
-            """
-        )
-        conn.execute(
-            """
+            """)
+        conn.execute("""
             CREATE TABLE interaction_ledger (
                 interaction_id TEXT PRIMARY KEY,
                 interaction_token TEXT NOT NULL,
@@ -72,8 +67,7 @@ async def test_discord_state_store_migrates_legacy_schema(tmp_path):
                 updated_at TEXT NOT NULL,
                 last_seen_at TEXT NOT NULL
             )
-            """
-        )
+            """)
         conn.commit()
     finally:
         conn.close()
@@ -91,14 +85,12 @@ async def test_discord_state_store_migrates_legacy_schema(tmp_path):
         assert "original_response_message_id" in _column_names(
             conn, "interaction_ledger"
         )
-        run_row = conn.execute(
-            """
+        run_row = conn.execute("""
             SELECT status
               FROM car_migration_runs
              ORDER BY started_at DESC
              LIMIT 1
-            """
-        ).fetchone()
+            """).fetchone()
         assert run_row is not None
         assert str(run_row["status"]) == "completed"
     finally:
@@ -110,23 +102,18 @@ async def test_telegram_state_store_migrates_legacy_outbox_columns(tmp_path):
     db_path = tmp_path / "telegram_state.sqlite3"
     conn = sqlite3.connect(db_path)
     try:
-        conn.execute(
-            """
+        conn.execute("""
             CREATE TABLE telegram_meta (
                 key TEXT PRIMARY KEY,
                 value TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             )
-            """
-        )
-        conn.execute(
-            """
+            """)
+        conn.execute("""
             INSERT INTO telegram_meta (key, value, updated_at)
             VALUES ('schema_version', '0', '2025-01-01T00:00:00Z')
-            """
-        )
-        conn.execute(
-            """
+            """)
+        conn.execute("""
             CREATE TABLE telegram_outbox (
                 record_id TEXT PRIMARY KEY,
                 chat_id INTEGER NOT NULL,
@@ -135,8 +122,7 @@ async def test_telegram_state_store_migrates_legacy_outbox_columns(tmp_path):
                 updated_at TEXT NOT NULL,
                 payload_json TEXT NOT NULL
             )
-            """
-        )
+            """)
         conn.commit()
     finally:
         conn.close()
@@ -151,14 +137,12 @@ async def test_telegram_state_store_migrates_legacy_outbox_columns(tmp_path):
         assert read_schema_version(conn) == TELEGRAM_SCHEMA_VERSION
         columns = _column_names(conn, "telegram_outbox")
         assert {"next_attempt_at", "operation", "message_id", "outbox_key"} <= columns
-        run_row = conn.execute(
-            """
+        run_row = conn.execute("""
             SELECT status
               FROM car_migration_runs
              ORDER BY started_at DESC
              LIMIT 1
-            """
-        ).fetchone()
+            """).fetchone()
         assert run_row is not None
         assert str(run_row["status"]) == "completed"
     finally:

@@ -797,15 +797,13 @@ def archive_workspace_managed_threads(
     if skip_chat_bound:
         try:
             with open_orchestration_sqlite(resolved_hub_root) as conn:
-                rows = conn.execute(
-                    """
+                rows = conn.execute("""
                     SELECT DISTINCT target_id
                       FROM orch_bindings
                      WHERE disabled_at IS NULL
                        AND target_kind = 'thread'
                        AND TRIM(COALESCE(target_id, '')) != ''
-                    """
-                ).fetchall()
+                    """).fetchall()
         except sqlite3.OperationalError as exc:
             if "no such table" not in str(exc).lower():
                 raise

@@ -352,25 +352,21 @@ class GitHubCliBroker:
                 self._release_lease(lease_key, owner=lease_owner)
 
     def _ensure_schema(self, conn) -> None:
-        conn.execute(
-            """
+        conn.execute("""
             CREATE TABLE IF NOT EXISTS github_cli_broker_state (
                 state_key TEXT PRIMARY KEY,
                 value_json TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             )
-            """
-        )
-        conn.execute(
-            """
+            """)
+        conn.execute("""
             CREATE TABLE IF NOT EXISTS github_cli_broker_leases (
                 lease_key TEXT PRIMARY KEY,
                 owner TEXT NOT NULL,
                 expires_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             )
-            """
-        )
+            """)
 
     def _load_state(self, key: str) -> Optional[_BrokerStateRecord]:
         with open_sqlite(
