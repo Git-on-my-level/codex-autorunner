@@ -4,7 +4,9 @@ from typer.testing import CliRunner
 
 from codex_autorunner.cli import app
 from codex_autorunner.core.automation import (
+    EXECUTOR_AGENT_TASK_TURN,
     EXECUTOR_MANAGED_THREAD_TURN,
+    EXECUTOR_PMA_OPERATOR_TURN,
     PMA_SUBSCRIPTION_RULE_PREFIX,
     AutomationRule,
     AutomationStore,
@@ -190,3 +192,55 @@ def test_hub_subscription_purge_previews_disabled_rules_without_deleting(
     assert "disabled generalized rules" in apply_result.output
     assert store.get_rule(active["rule_id"]) is not None
     assert store.get_rule(cancelled["rule_id"]) is not None
+
+
+def test_pma_automation_security_scan_cli_shows_direct_execution_mode(hub_env) -> None:
+    result = runner.invoke(
+        app,
+        [
+            "pma",
+            "automation",
+            "security-scan",
+            "repo-1",
+            "--path",
+            str(hub_env.hub_root),
+            "--agent",
+            "codex",
+            "--model",
+            "gpt-5.4",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "Execution mode: agent_task_turn" in result.output
+    assert "Runtime: direct codex / gpt-5.4" in result.output
+
+    rule = AutomationStore(hub_env.hub_root).list_rules()[0]
+    assert rule.executor_kind == EXECUTOR_AGENT_TASK_TURN
+    assert rule.executor["requested_runtime"]["agent"] == "codex"
+
+
+def test_pma_automation_security_scan_cli_can_create_pma_operator(hub_env) -> None:
+    result = runner.invoke(
+        app,
+        [
+            "pma",
+            "automation",
+            "security-scan",
+            "repo-1",
+            "--path",
+            str(hub_env.hub_root),
+            "--execution-mode",
+            "pma_operator_turn",
+            "--agent",
+            "codex",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "Execution mode: pma_operator_turn" in result.output
+    assert "Runtime: coordinator codex" in result.output
+
+    rule = AutomationStore(hub_env.hub_root).list_rules()[0]
+    assert rule.executor_kind == EXECUTOR_PMA_OPERATOR_TURN
+    assert rule.executor["requested_runtime"]["agent"] == "codex"

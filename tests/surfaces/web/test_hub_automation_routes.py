@@ -11,6 +11,7 @@ from codex_autorunner.core.automation import (
 from codex_autorunner.core.automation.models import (
     EXECUTOR_AGENT_TASK_TURN,
     EXECUTOR_MANAGED_THREAD_TURN,
+    EXECUTOR_PMA_OPERATOR_TURN,
     EXECUTOR_PUBLISH_OPERATION,
     JOB_FAILED,
     JOB_SUCCEEDED,
@@ -33,6 +34,7 @@ def test_hub_automations_create_security_scan_saved_disabled(tmp_path):
         "/hub/automations",
         json={
             "preset": "security_scan_pr",
+            "execution_mode": EXECUTOR_AGENT_TASK_TURN,
             "repo_id": "repo-1",
             "timezone": "UTC",
             "hour": 8,
@@ -45,6 +47,7 @@ def test_hub_automations_create_security_scan_saved_disabled(tmp_path):
     assert response.status_code == 200
     automation = response.json()["automation"]
     assert automation["kind"] == "security_scan_pr"
+    assert automation["execution_mode"] == EXECUTOR_AGENT_TASK_TURN
     assert automation["executor_kind"] == EXECUTOR_AGENT_TASK_TURN
     assert automation["enabled"] is False
     assert automation["schedule"]["schedule_kind"] == "daily"
@@ -52,6 +55,9 @@ def test_hub_automations_create_security_scan_saved_disabled(tmp_path):
     assert automation["executor"]["agent"] == "codex"
     assert automation["executor"]["model"] == "gpt-5.4"
     assert automation["executor"]["reasoning"] == "medium"
+    assert automation["direct_runtime_contract"]["agent"] == "codex"
+    assert automation["direct_runtime_contract"]["model"] == "gpt-5.4"
+    assert automation["coordinator_runtime_contract"] is None
     assert automation["product_api_version"] == 1
     assert automation["schedule_editor"] == {
         "kind": "daily",
@@ -148,6 +154,77 @@ def test_hub_automations_create_weekly_ticket_flow_and_run_now(tmp_path):
     assert weekly_preset["executor_kind"] == "ticket_flow"
     assert weekly_preset["target_policy"] == "new_automation_worktree"
     assert "{ticket_id}" in weekly_preset["ticket_body_template"]
+
+
+def test_hub_automations_create_pma_operator_security_scan_and_run_now(tmp_path):
+    hub_root = tmp_path / "hub"
+    seed_hub_files(hub_root, force=True)
+    client = TestClient(create_hub_app(hub_root))
+
+    created = client.post(
+        "/hub/automations",
+        json={
+            "preset": "security_scan_pr",
+            "execution_mode": EXECUTOR_PMA_OPERATOR_TURN,
+            "repo_id": "repo-1",
+            "agent": "codex",
+            "model": "gpt-5.5",
+            "worker_child_policy": {"default_authoritative": True},
+        },
+    )
+
+    assert created.status_code == 200
+    automation = created.json()["automation"]
+    assert automation["execution_mode"] == EXECUTOR_PMA_OPERATOR_TURN
+    assert automation["executor_kind"] == EXECUTOR_PMA_OPERATOR_TURN
+    assert automation["coordinator_runtime_contract"]["agent"] == "codex"
+    assert automation["coordinator_runtime_contract"]["model"] == "gpt-5.5"
+    assert automation["direct_runtime_contract"] is None
+    assert automation["worker_child_policy"] == {"default_authoritative": True}
+
+    rule_id = automation["id"]
+    run = client.post(f"/hub/automations/{rule_id}/run")
+
+    assert run.status_code == 200
+    assert run.json()["jobs_created"] == 1
+    jobs = AutomationStore(hub_root).list_jobs(rule_id=rule_id)
+    assert jobs[0].executor["kind"] == EXECUTOR_PMA_OPERATOR_TURN
+
+
+def test_hub_automations_reject_invalid_product_runtime_combinations(tmp_path):
+    hub_root = tmp_path / "hub"
+    seed_hub_files(hub_root, force=True)
+    client = TestClient(create_hub_app(hub_root))
+
+    missing_agent = client.post(
+        "/hub/automations",
+        json={"preset": "security_scan_pr", "repo_id": "repo-1"},
+    )
+    wrong_model_runtime = client.post(
+        "/hub/automations",
+        json={
+            "preset": "security_scan_pr",
+            "repo_id": "repo-1",
+            "agent": "codex",
+            "model": "zai-coding-plan/glm-5.1",
+        },
+    )
+    worker_policy_without_pma = client.post(
+        "/hub/automations",
+        json={
+            "preset": "security_scan_pr",
+            "repo_id": "repo-1",
+            "agent": "codex",
+            "worker_child_policy": {"default_authoritative": True},
+        },
+    )
+
+    assert missing_agent.status_code == 400
+    assert "requires requested_runtime.agent" in missing_agent.json()["detail"]
+    assert wrong_model_runtime.status_code == 400
+    assert "OpenCode provider/model" in wrong_model_runtime.json()["detail"]
+    assert worker_policy_without_pma.status_code == 400
+    assert "worker_child_policy" in worker_policy_without_pma.json()["detail"]
 
 
 def test_hub_automation_workspace_batches_jobs_and_target_options(
@@ -280,7 +357,7 @@ def test_hub_automations_pause_and_resume(tmp_path):
     client = TestClient(create_hub_app(hub_root))
     created = client.post(
         "/hub/automations",
-        json={"preset": "security_scan_pr", "repo_id": "repo-1"},
+        json={"preset": "security_scan_pr", "repo_id": "repo-1", "agent": "codex"},
     )
     rule_id = created.json()["automation"]["id"]
 
@@ -299,7 +376,12 @@ def test_hub_automations_get_and_update_details(tmp_path):
     client = TestClient(create_hub_app(hub_root))
     created = client.post(
         "/hub/automations",
-        json={"preset": "security_scan_pr", "repo_id": "repo-1", "hour": 9},
+        json={
+            "preset": "security_scan_pr",
+            "repo_id": "repo-1",
+            "hour": 9,
+            "agent": "codex",
+        },
     )
     rule_id = created.json()["automation"]["id"]
 
@@ -313,7 +395,7 @@ def test_hub_automations_get_and_update_details(tmp_path):
             "hour": 6,
             "minute": 30,
             "agent": "opencode",
-            "model": "claude-sonnet-4",
+            "model": "anthropic/claude-sonnet-4",
             "reasoning": "high",
             "metadata": {"description": "Updated from detail view"},
         },
@@ -328,8 +410,10 @@ def test_hub_automations_get_and_update_details(tmp_path):
         automation["executor"]["message"] == "Run the focused morning security check."
     )
     assert automation["executor"]["agent"] == "opencode"
-    assert automation["executor"]["model"] == "claude-sonnet-4"
+    assert automation["executor"]["model"] == "anthropic/claude-sonnet-4"
     assert automation["executor"]["reasoning"] == "high"
+    assert automation["direct_runtime_contract"]["agent"] == "opencode"
+    assert automation["direct_runtime_contract"]["model"] == "anthropic/claude-sonnet-4"
     assert automation["metadata"]["description"] == "Updated from detail view"
     assert automation["schedule"]["schedule"]["hour"] == 6
     assert automation["schedule"]["schedule"]["minute"] == 30
@@ -366,7 +450,7 @@ def test_hub_automations_reject_raw_product_updates(tmp_path):
     client = TestClient(create_hub_app(hub_root))
     created = client.post(
         "/hub/automations",
-        json={"preset": "security_scan_pr", "repo_id": "repo-1"},
+        json={"preset": "security_scan_pr", "repo_id": "repo-1", "agent": "codex"},
     )
     rule_id = created.json()["automation"]["id"]
 
@@ -450,9 +534,10 @@ def test_hub_automations_project_pma_lifecycle_reaction(tmp_path):
             filters={"event.payload.pma_dispatch_action": {"not_in": ["ignore"]}},
             target_policy=TARGET_POLICY_HUB,
             target={"repo_id": "{{ event.repo_id }}"},
-            executor_kind=EXECUTOR_MANAGED_THREAD_TURN,
+            executor_kind=EXECUTOR_PMA_OPERATOR_TURN,
             executor={
                 "lane_id": "pma:default",
+                "requested_runtime": {"agent": "codex", "model": "gpt-5.5"},
                 "message": "Lifecycle event received.\ntype: {{ event.event_type }}",
             },
             metadata={"builtin": True, "purpose": "pma_reactive_lifecycle"},
@@ -465,6 +550,8 @@ def test_hub_automations_project_pma_lifecycle_reaction(tmp_path):
     assert response.status_code == 200
     automation = response.json()["automation"]
     assert automation["trigger_summary"]["event_types"] == ["lifecycle.flow_failed"]
+    assert automation["execution_mode"] == EXECUTOR_PMA_OPERATOR_TURN
+    assert automation["coordinator_runtime_contract"]["agent"] == "codex"
     assert automation["message_source"] == "executor.message"
     assert automation["message"]["template"] is True
     assert automation["managed"]["reason"] == (
