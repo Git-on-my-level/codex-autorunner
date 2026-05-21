@@ -3171,15 +3171,18 @@ async def test_component_interaction_queue_interrupt_send_promotes_and_interrupt
             (
                 "queue_interrupt_send:m-2",
                 "channel-1",
-                "Message received. Switching to it now...",
+                "Switching to your latest message...",
                 "m-2",
                 conversation_id,
             )
         ]
+        assert len(rest.interaction_responses) == 1
+        assert rest.interaction_responses[0]["payload"]["type"] == 6
+        assert rest.followup_messages == []
         assert len(rest.edited_original_interaction_responses) == 1
         assert (
             rest.edited_original_interaction_responses[0]["payload"]["content"]
-            == "Message received. Switching to it now..."
+            == "Switching to your latest message..."
         )
         assert (
             rest.edited_original_interaction_responses[0]["payload"]["components"] == []
@@ -3373,15 +3376,18 @@ async def test_component_interaction_queued_turn_interrupt_send_promotes_and_int
             (
                 "qis:turn-2:m-2",
                 "channel-1",
-                "Message received. Switching to it now...",
+                "Switching to your latest message...",
                 "m-2",
                 False,
             )
         ]
+        assert len(rest.interaction_responses) == 1
+        assert rest.interaction_responses[0]["payload"]["type"] == 6
+        assert rest.followup_messages == []
         assert len(rest.edited_original_interaction_responses) == 1
         assert (
             rest.edited_original_interaction_responses[0]["payload"]["content"]
-            == "Message received. Switching to it now..."
+            == "Switching to your latest message..."
         )
         assert (
             rest.edited_original_interaction_responses[0]["payload"]["components"] == []
@@ -7553,7 +7559,7 @@ async def test_car_interrupt_recovers_missing_backend_thread(tmp_path: Path) -> 
         service,
         thread_target_id="thread-1",
         source_message_id="m-2",
-        acknowledgement="Message received. Switching to it now...",
+        acknowledgement="Switching to your latest message...",
     )
     discord_message_turns._stash_discord_reusable_progress_message(
         service,
@@ -7574,7 +7580,7 @@ async def test_car_interrupt_recovers_missing_backend_thread(tmp_path: Path) -> 
             channel_id="channel-1",
             source_message_id="preview-1",
             progress_reuse_source_message_id="m-2",
-            progress_reuse_acknowledgement="Message received. Switching to it now...",
+            progress_reuse_acknowledgement="Switching to your latest message...",
         )
         assert len(rest.interaction_responses) == 1
         assert rest.interaction_responses[0]["payload"]["type"] == 5
@@ -7656,13 +7662,13 @@ async def test_car_interrupt_treats_promoted_no_active_as_success(
             "interaction-1",
             "token-1",
             channel_id="channel-1",
-            active_turn_text="Message received. Switching to it now...",
+            active_turn_text="Switching to your latest message...",
             cancel_queued=False,
             allow_promoted_no_active_success=True,
             dispatcher_conversation_id="conversation-1",
             source_message_id="preview-1",
             progress_reuse_source_message_id="m-2",
-            progress_reuse_acknowledgement="Message received. Switching to it now...",
+            progress_reuse_acknowledgement="Switching to your latest message...",
         )
         assert len(rest.interaction_responses) == 1
         assert rest.interaction_responses[0]["payload"]["type"] == 5
@@ -8071,7 +8077,7 @@ async def test_reset_discord_thread_binding_archives_after_lost_backend_recovery
         service,
         thread_target_id="thread-1",
         source_message_id="m-2",
-        acknowledgement="Message received. Switching to it now...",
+        acknowledgement="Switching to your latest message...",
     )
     discord_message_turns._stash_discord_reusable_progress_message(
         service,

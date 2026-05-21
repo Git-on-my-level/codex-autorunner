@@ -25,6 +25,8 @@ from ..queue_status_lifecycle import (
 
 _logger = logging.getLogger(__name__)
 
+SWITCHING_TO_LATEST_MESSAGE_TEXT = "Switching to your latest message..."
+
 
 async def send_interrupt_component_response(
     service: Any,
@@ -264,18 +266,18 @@ async def handle_queued_turn_interrupt_send_button(
         service,
         interaction_id,
         interaction_token,
-        "Message received. Switching to it now...",
+        SWITCHING_TO_LATEST_MESSAGE_TEXT,
         components=[],
     )
     await service._handle_car_interrupt(
         interaction_id,
         interaction_token,
         channel_id=channel_id,
-        active_turn_text="Message received. Switching to it now...",
+        active_turn_text=SWITCHING_TO_LATEST_MESSAGE_TEXT,
         cancel_queued=False,
         allow_promoted_no_active_success=True,
         progress_reuse_source_message_id=source_message_id,
-        progress_reuse_acknowledgement="Message received. Switching to it now...",
+        progress_reuse_acknowledgement=SWITCHING_TO_LATEST_MESSAGE_TEXT,
         source="component",
         source_custom_id=custom_id,
         source_message_id=message_id,
@@ -416,17 +418,17 @@ async def handle_queue_interrupt_send_button(
         service,
         interaction_id,
         interaction_token,
-        "Message received. Switching to it now...",
+        SWITCHING_TO_LATEST_MESSAGE_TEXT,
         components=[],
     )
     await service._handle_car_interrupt(
         interaction_id,
         interaction_token,
         channel_id=channel_id,
-        active_turn_text="Message received. Switching to it now...",
+        active_turn_text=SWITCHING_TO_LATEST_MESSAGE_TEXT,
         allow_promoted_no_active_success=True,
         progress_reuse_source_message_id=action.queued_user_message_id,
-        progress_reuse_acknowledgement="Message received. Switching to it now...",
+        progress_reuse_acknowledgement=SWITCHING_TO_LATEST_MESSAGE_TEXT,
         dispatcher_conversation_id=action.conversation_id,
         source="component",
         source_custom_id=custom_id,

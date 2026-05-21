@@ -51,14 +51,12 @@ class AutomationStore:
                 self._hub_root, durable=self._durable
             ) as conn:
                 with conn:
-                    cursor = conn.execute(
-                        """
+                    cursor = conn.execute("""
                         UPDATE orch_automation_rules
                            SET executor_kind = 'managed_thread_turn',
                                updated_at = updated_at
                          WHERE executor_kind = 'pma_turn'
-                        """
-                    )
+                        """)
                     migrated = int(cursor.rowcount or 0)
             if migrated:
                 _log.info(

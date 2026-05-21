@@ -579,7 +579,7 @@ async def test_deliver_result_reconciles_stale_siblings_without_final_message(
             dispatch,
             workspace_root=workspace,
             turn_result=support.DiscordMessageTurnResult(
-                final_message="Message received. Switching to it now...",
+                final_message="Switching to your latest message...",
                 execution_id="exec-2",
                 send_final_message=False,
             ),
@@ -1045,7 +1045,7 @@ async def test_orchestrated_turn_interrupt_send_falls_back_when_progress_ack_edi
         service,
         thread_target_id="thread-1",
         source_message_id="m-2",
-        acknowledgement="Message received. Switching to it now...",
+        acknowledgement="Switching to your latest message...",
     )
 
     result = await support.discord_message_turns_module._run_discord_orchestrated_turn_for_message(
@@ -1073,7 +1073,7 @@ async def test_orchestrated_turn_interrupt_send_falls_back_when_progress_ack_edi
     )
 
     assert result.send_final_message is True
-    assert result.final_message == "Message received. Switching to it now..."
+    assert result.final_message == "Switching to your latest message..."
     assert len(rest.channel_messages) == 1
     assert service._discord_turn_progress_reuse_requests == {}
     assert service._discord_reusable_progress_messages == {}
