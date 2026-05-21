@@ -82,6 +82,13 @@ from .chat_surface_read_model import (
     serialize_chat_surface_event,
 )
 from .cold_trace_store import ColdTraceStore
+from .compatibility import (
+    CompatibilityEvaluation,
+    CompatibilityRegistry,
+    ProcessCompatibilityDeclaration,
+    SchemaCompatibilityError,
+    evaluate_schema_compatibility,
+)
 from .context_capsule_ledger import SQLiteContextCapsuleLedger
 from .discord_interaction_lifecycle import (
     DiscordInteractionExecutionStatus,
@@ -170,6 +177,8 @@ from .models import (
 )
 from .sqlite import (
     ORCHESTRATION_DB_FILENAME,
+    assert_current_orchestration_compatible,
+    evaluate_current_orchestration_compatibility,
     initialize_orchestration_sqlite,
     resolve_orchestration_sqlite_path,
 )
@@ -299,6 +308,8 @@ __all__ = [
     "ChatSurfaceProjection",
     "ChatSurfaceReadService",
     "ChatSurfaceResourceOwner",
+    "CompatibilityEvaluation",
+    "CompatibilityRegistry",
     "CHAT_ARCHITECTURE_GOAL_CRITERIA",
     "CURRENT_CHAT_ARCHITECTURE_SIGNALS",
     "CHAT_SURFACE_EVENT_TYPES",
@@ -337,8 +348,10 @@ __all__ = [
     "OrchestrationFlowService",
     "OrchestrationThreadService",
     "PausedFlowTarget",
+    "ProcessCompatibilityDeclaration",
     "ManagedThreadExecutionStore",
     "RuntimeThreadHarness",
+    "SchemaCompatibilityError",
     "SQLiteChatOperationLedger",
     "SQLiteChatSurfaceEventJournal",
     "SQLiteContextCapsuleLedger",
@@ -369,6 +382,7 @@ __all__ = [
     "TurnExecutionRequest",
     "WorkspaceRuntimeAcquisition",
     "apply_orchestration_migrations",
+    "assert_current_orchestration_compatible",
     "audit_execution_history",
     "backfill_legacy_execution_history",
     "build_agent_definition",
@@ -392,6 +406,8 @@ __all__ = [
     "emit_binding_event",
     "emit_chat_surface_event",
     "evaluate_chat_architecture_goal",
+    "evaluate_current_orchestration_compatibility",
+    "evaluate_schema_compatibility",
     "get_agent_definition",
     "get_surface_orchestration_ingress",
     "initialize_orchestration_sqlite",
