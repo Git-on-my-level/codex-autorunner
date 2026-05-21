@@ -203,7 +203,7 @@
   let search = $state('');
   const currentChatIndexRequest = $derived<ChatIndexWindowRequest>(chatIndexRequestForCurrentFilters());
   const ticketRunGroupRequest = $derived<ChatIndexWindowRequest>({
-    filter: 'ticket_runs',
+    facets: { categories: ['ticket_run'] },
     groupBy: 'ticket_run',
     limit: 50
   });

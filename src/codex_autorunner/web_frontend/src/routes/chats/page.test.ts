@@ -253,7 +253,7 @@ describe('/chats page', () => {
         groups: [ticketRunGroup()],
         counters: { total: 5, waiting: 0, running: 2, unread: 0, archived: 0 }
       },
-      { filter: 'ticket_runs', groupBy: 'ticket_run', limit: 50 }
+      { facets: { categories: ['ticket_run'] }, groupBy: 'ticket_run', limit: 50 }
     );
 
     const { body } = render(Page);
@@ -297,7 +297,7 @@ describe('/chats page', () => {
         groups: [],
         counters: { total: 2, waiting: 0, running: 1, unread: 0, archived: 0 }
       },
-      { filter: 'ticket_runs', groupBy: 'ticket_run', limit: 50 }
+      { facets: { categories: ['ticket_run'] }, groupBy: 'ticket_run', limit: 50 }
     );
 
     const { body } = render(Page);

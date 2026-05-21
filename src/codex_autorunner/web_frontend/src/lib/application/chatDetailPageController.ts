@@ -114,7 +114,7 @@ export class ChatDetailPageController {
   private readonly timers: ControllerTimers;
   private route: ChatDetailPageRoute | null = null;
   private currentRequest: ChatIndexWindowRequest = { filter: 'all', limit: 50 };
-  private ticketRunGroupRequest: ChatIndexWindowRequest = { filter: 'ticket_runs', groupBy: 'ticket_run', limit: 50 };
+  private ticketRunGroupRequest: ChatIndexWindowRequest = { facets: { categories: ['ticket_run'] }, groupBy: 'ticket_run', limit: 50 };
   private readModelState: ReadModelEntityState;
   private unsubscribeReadModels: (() => void) | null = null;
   private unsubscribeChatIndexSession: (() => void) | null = null;
