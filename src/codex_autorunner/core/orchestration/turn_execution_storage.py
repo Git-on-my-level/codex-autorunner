@@ -16,6 +16,8 @@ from .turn_execution_contract import (
 TURN_EXECUTION_REQUEST_COLUMN = "turn_request_json"
 TURN_EXECUTION_RECORD_COLUMN = "turn_record_json"
 TURN_EXECUTION_CONTRACT_VERSION_COLUMN = "turn_contract_version"
+LEGACY_OPENCODE_PROVIDER_ID = "legacy"
+LEGACY_OPENCODE_MODEL_ID = "unresolved"
 
 
 def _mapping(value: Any) -> dict[str, Any]:
@@ -31,6 +33,8 @@ def _metadata(row: Mapping[str, Any]) -> dict[str, Any]:
 
 def _request_data(queue_payload: Mapping[str, Any]) -> dict[str, Any]:
     request = queue_payload.get("request")
+    if not isinstance(request, Mapping):
+        request = queue_payload.get("turn_request")
     return dict(request) if isinstance(request, Mapping) else {}
 
 
@@ -82,14 +86,31 @@ def _model_and_payload(
 ) -> tuple[Optional[str], dict[str, Any]]:
     resolved_model = _normalize_optional_text(model)
     payload = _mapping(metadata_payload)
-    if agent != "opencode" or payload or resolved_model is None:
+    if agent != "opencode":
         return resolved_model, payload
-    if "/" not in resolved_model:
-        return resolved_model, payload
-    provider_id, model_id = (part.strip() for part in resolved_model.split("/", 1))
+    if resolved_model is None:
+        return (
+            f"{LEGACY_OPENCODE_PROVIDER_ID}/{LEGACY_OPENCODE_MODEL_ID}",
+            {
+                "providerID": LEGACY_OPENCODE_PROVIDER_ID,
+                "modelID": LEGACY_OPENCODE_MODEL_ID,
+            },
+        )
+    if "/" in resolved_model:
+        provider_id, model_id = (part.strip() for part in resolved_model.split("/", 1))
+    else:
+        provider_id = LEGACY_OPENCODE_PROVIDER_ID
+        model_id = resolved_model
+        resolved_model = f"{provider_id}/{model_id}"
     if provider_id and model_id:
         return resolved_model, {"providerID": provider_id, "modelID": model_id}
-    return resolved_model, payload
+    return (
+        f"{LEGACY_OPENCODE_PROVIDER_ID}/{LEGACY_OPENCODE_MODEL_ID}",
+        {
+            "providerID": LEGACY_OPENCODE_PROVIDER_ID,
+            "modelID": LEGACY_OPENCODE_MODEL_ID,
+        },
+    )
 
 
 def _origin_from_thread(thread: Mapping[str, Any]) -> TurnExecutionOrigin:
@@ -149,7 +170,9 @@ def build_turn_execution_request_from_storage(
             or execution_metadata.get("model")
             or thread_metadata.get("model")
         ),
-        metadata_payload=execution_metadata.get("model_payload"),
+        metadata_payload=(
+            request_data.get("model_payload") or execution_metadata.get("model_payload")
+        ),
     )
     return TurnExecutionRequest(
         request_id=str(
@@ -170,7 +193,9 @@ def build_turn_execution_request_from_storage(
             or _normalize_optional_text(thread.get("workspace_root"))
         ),
         request_kind=_request_kind(
-            execution.get("request_kind") or request_data.get("kind")
+            execution.get("request_kind")
+            or request_data.get("kind")
+            or request_data.get("request_kind")
         ),
         busy_policy=_busy_policy(
             request_data.get("busy_policy"), status=execution.get("status")
@@ -178,6 +203,7 @@ def build_turn_execution_request_from_storage(
         prompt_text=(
             _normalize_optional_text(execution.get("prompt_text"))
             or _normalize_optional_text(request_data.get("message_text"))
+            or _normalize_optional_text(request_data.get("prompt_text"))
             or "[legacy request prompt unavailable]"
         ),
         input_items=_input_items(request_data.get("input_items")),
@@ -189,6 +215,7 @@ def build_turn_execution_request_from_storage(
         agent=agent,
         profile=(
             request_data.get("agent_profile")
+            or request_data.get("profile")
             or thread_metadata.get("agent_profile")
             or execution_metadata.get("agent_profile")
         ),
