@@ -169,12 +169,7 @@ def _canonicalize_usage_bucket(raw: Any) -> Optional[dict[str, Any]]:
     if total_tokens is None:
         parts = [
             value
-            for value in (
-                shape.input_tokens,
-                shape.cached_tokens,
-                shape.output_tokens,
-                shape.reasoning_tokens,
-            )
+            for value in (shape.input_tokens, shape.output_tokens)
             if isinstance(value, int)
         ]
         if parts:

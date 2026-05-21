@@ -155,7 +155,7 @@ class TestCanonicalizeTokenUsage:
                 "reasoning_tokens": 2,
             }
         ) == {
-            "totalTokens": 20,
+            "totalTokens": 13,
             "inputTokens": 10,
             "cachedInputTokens": 5,
             "outputTokens": 3,
