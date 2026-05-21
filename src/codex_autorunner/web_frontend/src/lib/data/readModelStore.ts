@@ -1248,7 +1248,7 @@ function chatIndexRowMatchesFilter(row: ChatIndexRow, filter: ChatIndexSnapshot[
   if (filter === 'active') return row.status === 'running';
   if (filter === 'unread') return row.unreadCount > 0;
   if (filter === 'archived') return row.status === 'archived';
-  if (filter === 'ticket_runs') return row.flowType === 'ticket_flow';
+  if (filter === 'ticket_runs') return row.facets?.category === 'ticket_run';
   if (filter === 'external') return row.surface !== 'pma';
   return true;
 }

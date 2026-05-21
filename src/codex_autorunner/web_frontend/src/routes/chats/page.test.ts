@@ -354,6 +354,15 @@ function ticketFlowRow(
     worktreeId: 'wt-1',
     flowType: 'ticket_flow',
     groupId,
+    facets: {
+      category: 'ticket_run',
+      turnKinds: ['message'],
+      originKinds: ['surface'],
+      transports: ['pma'],
+      scopeKind: 'worktree',
+      scopeId: 'wt-1',
+      agentKind: 'coding_agent'
+    },
     ticketDone: status === 'idle' ? null : false,
     ticketStatus: status === 'running' ? 'running' : status === 'waiting' ? 'waiting' : 'unknown',
     ...overrides

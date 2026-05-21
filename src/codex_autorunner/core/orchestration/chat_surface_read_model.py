@@ -2748,10 +2748,7 @@ def _chat_index_facets(row: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def _chat_row_facet_category(row: Mapping[str, Any]) -> str:
-    if (
-        _normalize_text(row.get("group_id")) is not None
-        or _normalize_kind(row.get("flow_type")) == "ticket_flow"
-    ):
+    if _normalize_kind(row.get("flow_type")) == "ticket_flow":
         return "ticket_run"
     if _chat_row_has_automation_facts(row):
         return "automation"
@@ -2895,7 +2892,7 @@ def _chat_index_projection_where(
         clauses.append("surface_kind_list != ''")
         clauses.append("surface_kind_list != '|pma|'")
     elif normalized_view == "ticket_run":
-        clauses.append("group_id IS NOT NULL")
+        clauses.append("facet_category = 'ticket_run'")
     elif normalized_view != "all":
         clauses.append("0 = 1")
     if normalized_view != "archived" and not (
@@ -3039,18 +3036,6 @@ def _chat_ticket_group_id(row: Mapping[str, Any]) -> Optional[str]:
     run_id = _normalize_text(row.get("run_id"))
     if _normalize_kind(row.get("flow_type")) == "ticket_flow" and run_id is not None:
         return f"run:{run_id}"
-    ticket_id = _normalize_text(row.get("ticket_id") or row.get("current_ticket_id"))
-    if ticket_id is not None:
-        return f"ticket:{ticket_id}"
-    if run_id is not None:
-        return f"run:{run_id}"
-    kind = _normalize_kind(row.get("resource_kind"))
-    identifier = _normalize_text(row.get("resource_id"))
-    if kind in {"ticket", "ticket_run", "run"} and identifier is not None:
-        return f"{kind}:{identifier}"
-    thread_id = _normalize_text(row.get("managed_thread_id"))
-    if thread_id and thread_id.startswith("ticket-run:"):
-        return ":".join(thread_id.split(":", 2)[:2])
     return None
 
 

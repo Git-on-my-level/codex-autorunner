@@ -85,6 +85,15 @@ describe('read model view-model selectors', () => {
       status: 'running',
       unreadCount: 0,
       lastActivityAt: now,
+      facets: {
+        category: 'regular',
+        turnKinds: ['message'],
+        originKinds: ['surface'],
+        transports: ['discord'],
+        scopeKind: 'repo',
+        scopeId: 'repo-1',
+        agentKind: 'coding_agent'
+      },
       primarySurface: {
         surface_kind: 'pma',
         lifecycle: 'running'

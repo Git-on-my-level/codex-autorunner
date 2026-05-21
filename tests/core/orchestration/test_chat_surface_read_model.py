@@ -1163,9 +1163,7 @@ def test_chat_index_ticket_run_group_ignores_generic_completed_ticket_chat(
         limit=20,
     )
 
-    assert grouped["rows"][0]["group_id"] == "ticket:TICKET-999"
-    assert grouped["rows"][0]["done_count"] == 0
-    assert grouped["rows"][0]["status"] == "idle"
+    assert grouped["rows"] == []
 
 
 def test_chat_index_ticket_file_frontmatter_wins_over_thread_state(

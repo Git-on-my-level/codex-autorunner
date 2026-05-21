@@ -212,6 +212,10 @@ Facet scope and agent fields are orthogonal:
 
 The same row can therefore be both `automation` and `discord`, or `ticket_run`
 and `worktree`, without the frontend re-deriving those facts from raw metadata.
+New chat-list facets should be added in the backend projection first
+(`core/orchestration/chat_surface_read_model.py`, the web read-model contracts,
+and route contract tests), then rendered from `ChatIndexRow.facets` and
+`ChatIndexSnapshot.facetCounts`; raw/debug payloads are for diagnostics only.
 
 ## Pagination Semantics
 

@@ -754,9 +754,7 @@ def hub_group_dict_to_contract(raw: Mapping[str, Any]) -> ChatIndexGroupEntry:
     last_activity_iso = (
         last_sort_iso or _str_or_none(raw.get("last_activity_at")) or last_visible_iso
     )
-    if raw_kind == "ticket_run_group" or group_id.startswith(
-        ("ticket:", "run:", "ticket-run:")
-    ):
+    if raw_kind == "ticket_run_group":
         updated_at_raw = _str_or_none(raw.get("updated_at"))
         updated_at = parse_iso_optional(updated_at_raw) if updated_at_raw else None
         return TicketRunGroup(

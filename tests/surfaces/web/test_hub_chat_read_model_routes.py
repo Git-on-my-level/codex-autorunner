@@ -299,9 +299,7 @@ def test_chat_index_snapshot_filters_groups_and_bounds_large_windows(hub_env) ->
         "/hub/chat/index",
         params={"group_by": "ticket_run", "view": "ticket_run", "limit": 10},
     ).json()
-    assert grouped["rows"][0]["row_type"] == "group"
-    assert grouped["rows"][0]["group_id"] == "ticket:TICKET-900"
-    assert grouped["rows"][0]["child_count"] == 11
+    assert grouped["rows"] == []
 
     children = client.get(
         "/hub/chat/index",
@@ -311,14 +309,14 @@ def test_chat_index_snapshot_filters_groups_and_bounds_large_windows(hub_env) ->
             "limit": 5,
         },
     ).json()
-    assert children["window"]["returned"] == 5
-    assert children["window"]["has_more"] is True
-    assert {row["group_id"] for row in children["rows"]} == {"ticket:TICKET-900"}
+    assert children["window"]["returned"] == 0
+    assert children["rows"] == []
 
 
-def test_chat_index_group_contract_accepts_legacy_ticket_run_prefix() -> None:
+def test_chat_index_group_contract_uses_explicit_ticket_run_group_kind() -> None:
     group = hub_group_dict_to_contract(
         {
+            "kind": "ticket_run_group",
             "group_id": "ticket-run:run-1",
             "title": "Legacy ticket run",
             "child_count": 3,

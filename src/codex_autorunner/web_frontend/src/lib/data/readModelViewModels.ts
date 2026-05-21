@@ -186,7 +186,7 @@ export function chatIndexRowToPmaChatSummary(row: ChatIndexRow): PmaChatSummary 
     runId: row.runId ?? null,
     unreadCount: row.unreadCount,
     flowType: row.flowType ?? null,
-    isTicketFlow: row.facets?.category === 'ticket_run' || row.flowType === 'ticket_flow',
+    isTicketFlow: row.facets?.category === 'ticket_run',
     ticketDone: row.ticketDone ?? null,
     ticketStatus: row.ticketStatus ?? null,
     progressPercent: null,
