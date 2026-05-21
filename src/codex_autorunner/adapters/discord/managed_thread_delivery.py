@@ -11,6 +11,7 @@ from ...adapters.chat.managed_thread_surface_kernel import (
 from ...adapters.chat.managed_thread_turns import (
     ManagedThreadSurfaceInfo,
     render_managed_thread_delivery_record_text,
+    render_managed_thread_failure_delivery_record_text,
 )
 from ...core.orchestration import (
     ManagedThreadDeliveryAttemptResult,
@@ -91,23 +92,36 @@ async def deliver_discord_managed_thread_record(
     async def _send_failure(
         _context: ManagedThreadDeliveryCleanupContext,
     ) -> ManagedThreadDeliverySendResult:
-        delivered = await service._send_channel_message_safe(
-            target_channel_id,
-            {
-                "content": (
-                    f"Turn failed: {record.envelope.error_text or default_execution_error}"
-                )
-            },
-            record_id=(
+        failure_text = render_managed_thread_failure_delivery_record_text(
+            record,
+            default_error=default_execution_error,
+        )
+        chunks = chunk_discord_message(
+            failure_text,
+            max_len=DISCORD_MAX_MESSAGE_LENGTH,
+            with_numbering=False,
+        )
+        if not chunks:
+            chunks = [failure_text]
+        for chunk_index, chunk in enumerate(chunks, start=1):
+            record_id = (
                 managed_thread_terminal_delivery_send_key(
+                    record, suffix=f"{error_record_label}:chunk:{chunk_index}"
+                )
+                if len(chunks) > 1
+                else managed_thread_terminal_delivery_send_key(
                     record, suffix=error_record_label
                 )
-            ),
-        )
-        if not delivered:
-            return ManagedThreadDeliverySendResult(
-                error="discord_error_notice_deferred",
             )
+            delivered = await service._send_channel_message_safe(
+                target_channel_id,
+                {"content": chunk},
+                record_id=record_id,
+            )
+            if not delivered:
+                return ManagedThreadDeliverySendResult(
+                    error="discord_error_notice_deferred",
+                )
         return ManagedThreadDeliverySendResult()
 
     async def _cleanup(context: ManagedThreadDeliveryCleanupContext) -> None:
@@ -220,23 +234,36 @@ def build_discord_managed_thread_durable_delivery_hooks(
         _context: ManagedThreadDeliveryCleanupContext,
     ) -> ManagedThreadDeliverySendResult:
         target_channel_id = _resolve_delivery_channel_id(record, fallback=channel_id)
-        delivered = await service._send_channel_message_safe(
-            target_channel_id,
-            {
-                "content": (
-                    f"Turn failed: {record.envelope.error_text or public_execution_error}"
-                )
-            },
-            record_id=(
+        failure_text = render_managed_thread_failure_delivery_record_text(
+            record,
+            default_error=public_execution_error,
+        )
+        chunks = chunk_discord_message(
+            failure_text,
+            max_len=DISCORD_MAX_MESSAGE_LENGTH,
+            with_numbering=False,
+        )
+        if not chunks:
+            chunks = [failure_text]
+        for chunk_index, chunk in enumerate(chunks, start=1):
+            record_id = (
                 managed_thread_terminal_delivery_send_key(
+                    record, suffix=f"discord-queued-error:chunk:{chunk_index}"
+                )
+                if len(chunks) > 1
+                else managed_thread_terminal_delivery_send_key(
                     record, suffix="discord-queued-error"
                 )
-            ),
-        )
-        if not delivered:
-            return ManagedThreadDeliverySendResult(
-                error="discord_error_notice_deferred",
             )
+            delivered = await service._send_channel_message_safe(
+                target_channel_id,
+                {"content": chunk},
+                record_id=record_id,
+            )
+            if not delivered:
+                return ManagedThreadDeliverySendResult(
+                    error="discord_error_notice_deferred",
+                )
         return ManagedThreadDeliverySendResult()
 
     async def _cleanup(

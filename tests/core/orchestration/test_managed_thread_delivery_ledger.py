@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -14,6 +15,7 @@ from codex_autorunner.core.orchestration import (
     ManagedThreadDeliveryRecoveryAction,
     ManagedThreadDeliveryState,
     ManagedThreadDeliveryTarget,
+    ManagedThreadFailureRecoverySummary,
     SQLiteChatSurfaceEventJournal,
     build_managed_thread_delivery_idempotency_key,
     initialize_orchestration_sqlite,
@@ -120,6 +122,44 @@ class TestLedgerRegisterIntent:
         record = ledger.get_delivery_by_idempotency_key(intent.idempotency_key)
         assert record is not None
         assert record.delivery_id == "delivery-1"
+
+    def test_persists_failure_recovery_summary(self, tmp_path: Path) -> None:
+        ledger = _ledger(tmp_path)
+        intent = _intent()
+        intent = replace(
+            intent,
+            envelope=ManagedThreadDeliveryEnvelope(
+                envelope_version="managed_thread_delivery.v1",
+                final_status="error",
+                assistant_text="",
+                error_text="App-server disconnected",
+                failure_recovery=ManagedThreadFailureRecoverySummary(
+                    failure_kind="app_server_disconnected",
+                    error_text="App-server disconnected",
+                    recovered_assistant_tail="partial output",
+                    recovered_notice_tail="latest status",
+                    trace_manifest_id="trace-1",
+                    backend_thread_id="backend-thread-1",
+                    backend_turn_id="backend-turn-1",
+                    managed_turn_id="turn-1",
+                ),
+                metadata={"source": "test"},
+            ),
+        )
+
+        ledger.register_intent(intent)
+        record = ledger.get_delivery("delivery-1")
+
+        assert record is not None
+        assert record.envelope.metadata == {"source": "test"}
+        assert record.envelope.failure_recovery is not None
+        assert record.envelope.failure_recovery.failure_kind == (
+            "app_server_disconnected"
+        )
+        assert record.envelope.failure_recovery.recovered_assistant_tail == (
+            "partial output"
+        )
+        assert record.envelope.failure_recovery.trace_manifest_id == "trace-1"
 
     def test_get_missing_delivery_returns_none(self, tmp_path: Path) -> None:
         ledger = _ledger(tmp_path)

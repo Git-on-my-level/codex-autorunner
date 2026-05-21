@@ -17,7 +17,7 @@ from .turn_execution_storage import (
     build_turn_execution_request_from_storage,
 )
 
-ORCHESTRATION_SCHEMA_VERSION = 37
+ORCHESTRATION_SCHEMA_VERSION = 38
 
 
 @dataclass(frozen=True)
@@ -1310,6 +1310,7 @@ def _apply_v22(conn: sqlite3.Connection) -> None:
             backend_thread_id TEXT,
             token_usage_json TEXT,
             attachments_json TEXT NOT NULL DEFAULT '[]',
+            failure_recovery_json TEXT,
             transport_hints_json TEXT NOT NULL DEFAULT '{}',
             envelope_metadata_json TEXT NOT NULL DEFAULT '{}',
             source TEXT NOT NULL DEFAULT 'managed_thread.finalization',
@@ -2269,6 +2270,15 @@ def _apply_v37(conn: sqlite3.Connection) -> None:
     )
 
 
+def _apply_v38(conn: sqlite3.Connection) -> None:
+    _ensure_column(
+        conn,
+        "orch_managed_thread_deliveries",
+        "failure_recovery_json",
+        "failure_recovery_json TEXT",
+    )
+
+
 _MIGRATIONS = (
     _MigrationStep(1, "create_core_orchestration_schema", _apply_v1),
     _MigrationStep(2, "add_binding_and_flow_projection_scaffolding", _apply_v2),
@@ -2350,6 +2360,11 @@ _MIGRATIONS = (
         37,
         "add_canonical_turn_execution_envelopes",
         _apply_v37,
+    ),
+    _MigrationStep(
+        38,
+        "add_managed_thread_failure_recovery_payload",
+        _apply_v38,
     ),
 )
 

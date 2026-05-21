@@ -339,7 +339,7 @@ def test_turn_execution_contract_migration_backfills_legacy_thread_rows(
                 "client-queued",
             ),
         )
-        conn.execute("DELETE FROM orch_schema_migrations WHERE version = 37")
+        conn.execute("DELETE FROM orch_schema_migrations WHERE version >= 37")
 
         version = apply_orchestration_migrations(conn)
         rows = {
