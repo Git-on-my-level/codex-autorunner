@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -16,7 +17,6 @@ from codex_autorunner.core.apps import (
 )
 from codex_autorunner.core.config import CONFIG_FILENAME, load_hub_config
 from codex_autorunner.core.git_utils import run_git
-from codex_autorunner.core.ticket_linter_cli import LINTER_REL_PATH
 from codex_autorunner.tickets.frontmatter import parse_markdown_frontmatter
 
 
@@ -110,11 +110,27 @@ Secondary body.
 
 
 def _run_ticket_linter(repo_root: Path) -> subprocess.CompletedProcess[str]:
+    env = os.environ.copy()
+    src_dir = Path(__file__).resolve().parents[3] / "src"
+    env["PYTHONPATH"] = (
+        str(src_dir)
+        if not env.get("PYTHONPATH")
+        else f"{src_dir}{os.pathsep}{env['PYTHONPATH']}"
+    )
     return subprocess.run(
-        [sys.executable, str(repo_root / LINTER_REL_PATH)],
+        [
+            sys.executable,
+            "-m",
+            "codex_autorunner.cli",
+            "tickets",
+            "lint",
+            "--repo",
+            str(repo_root),
+        ],
         cwd=repo_root,
         text=True,
         capture_output=True,
+        env=env,
     )
 
 

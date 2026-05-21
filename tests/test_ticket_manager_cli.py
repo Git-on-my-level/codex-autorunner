@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import re
 import subprocess
 import sys
@@ -12,6 +13,31 @@ def _run(repo: Path, *args: str) -> subprocess.CompletedProcess[str]:
     tool = repo / MANAGER_REL_PATH
     return subprocess.run(
         [sys.executable, str(tool), *args], cwd=repo, text=True, capture_output=True
+    )
+
+
+def _run_lint(repo: Path) -> subprocess.CompletedProcess[str]:
+    env = os.environ.copy()
+    src_dir = Path(__file__).resolve().parents[1] / "src"
+    env["PYTHONPATH"] = (
+        str(src_dir)
+        if not env.get("PYTHONPATH")
+        else f"{src_dir}{os.pathsep}{env['PYTHONPATH']}"
+    )
+    return subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "codex_autorunner.cli",
+            "tickets",
+            "lint",
+            "--repo",
+            str(repo),
+        ],
+        cwd=repo,
+        text=True,
+        capture_output=True,
+        env=env,
     )
 
 
@@ -40,7 +66,7 @@ def test_list_and_create_and_move(repo: Path) -> None:
     res = _run(repo, "move", "--start", "2", "--to", "1")
     assert res.returncode == 0
 
-    res = _run(repo, "lint")
+    res = _run_lint(repo)
     assert res.returncode == 0
 
 
@@ -56,7 +82,7 @@ def test_create_quotes_special_title_and_normalizes_agent(repo: Path) -> None:
     assert "Fix #123: timing" in content
     assert 'agent: "codex"' in content
 
-    res = _run(repo, "lint")
+    res = _run_lint(repo)
     assert res.returncode == 0
 
 
@@ -70,7 +96,7 @@ def test_create_emits_valid_ticket_id(repo: Path) -> None:
     content = (tickets / "TICKET-001.md").read_text(encoding="utf-8")
     assert re.search(r'^ticket_id: "tkt_[A-Za-z0-9]{32}"$', content, re.MULTILINE)
 
-    res = _run(repo, "lint")
+    res = _run_lint(repo)
     assert res.returncode == 0
 
 
@@ -163,18 +189,18 @@ def test_insert_rejects_title_with_count_gt_one(repo: Path) -> None:
     assert "--title is only supported with --count 1" in res.stderr
 
 
-def test_tool_lint_ignores_ingest_receipt_file(repo: Path) -> None:
+def test_car_lint_ignores_ingest_receipt_file(repo: Path) -> None:
     tickets = repo / ".codex-autorunner" / "tickets"
     tickets.mkdir(parents=True, exist_ok=True)
     _run(repo, "create", "--title", "Only", "--agent", "codex")
     (tickets / "ingest_state.json").write_text("{}", encoding="utf-8")
 
-    res = _run(repo, "lint")
+    res = _run_lint(repo)
     assert res.returncode == 0
     assert "Invalid ticket filename" not in res.stderr
 
 
-def test_tool_lint_rejects_unknown_agent(repo: Path) -> None:
+def test_car_lint_rejects_unknown_agent(repo: Path) -> None:
     tickets = repo / ".codex-autorunner" / "tickets"
     tickets.mkdir(parents=True, exist_ok=True)
     (tickets / "TICKET-001.md").write_text(
@@ -182,13 +208,13 @@ def test_tool_lint_rejects_unknown_agent(repo: Path) -> None:
         encoding="utf-8",
     )
 
-    res = _run(repo, "lint")
+    res = _run_lint(repo)
     assert res.returncode == 1
     assert "frontmatter.agent is invalid" in res.stderr
     assert "qa-bot" in res.stderr
 
 
-def test_tool_lint_allows_runtime_valid_extra_frontmatter(repo: Path) -> None:
+def test_car_lint_allows_runtime_valid_extra_frontmatter(repo: Path) -> None:
     tickets = repo / ".codex-autorunner" / "tickets"
     tickets.mkdir(parents=True, exist_ok=True)
     (tickets / "TICKET-001.md").write_text(
@@ -203,6 +229,6 @@ def test_tool_lint_allows_runtime_valid_extra_frontmatter(repo: Path) -> None:
         encoding="utf-8",
     )
 
-    res = _run(repo, "lint")
+    res = _run_lint(repo)
     assert res.returncode == 0
     assert "OK" in res.stdout

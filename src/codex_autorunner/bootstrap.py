@@ -22,7 +22,6 @@ from .core.generated_hub_config import (
 )
 from .core.state import RunnerState, save_state
 from .core.state_roots import resolve_repo_runner_state_db_path
-from .core.ticket_linter_cli import ensure_ticket_linter
 from .core.ticket_manager_cli import ensure_ticket_manager
 from .core.utils import atomic_write
 from .manifest import load_manifest
@@ -210,7 +209,6 @@ def seed_repo_files(
     ensure_ticket_flow_quickstart_file_for_repo(repo_root, force=force)
     ensure_destination_quickstart_file_for_repo(repo_root, force=force)
     ensure_tickets_agents_file_for_repo(repo_root, force=force)
-    ensure_ticket_linter(repo_root, force=force)
     ensure_ticket_manager(repo_root, force=force)
 
 

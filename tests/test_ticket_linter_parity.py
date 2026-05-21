@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import io
-import sys
 from pathlib import Path
 
 from codex_autorunner.core.ticket_manager_cli import (
@@ -16,7 +14,7 @@ _REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
 def _exec_linter_namespace():
-    """Exec the shared portable linter source (same module as lint_tickets.py delegates to)."""
+    """Exec the shared portable linter source."""
     ns: dict = {}
     exec(Path(_portable_lint_module.__file__).read_text(encoding="utf-8"), ns)
     return ns
@@ -128,61 +126,6 @@ def test_ticket_paths_no_duplicates(tmp_path: Path) -> None:
     assert manager_errors == []
 
 
-def test_cmd_lint_detects_duplicate_ticket_ids_across_all_files(tmp_path: Path) -> None:
-    manager_ns = _exec_manager_namespace()
-    ticket_dir = _make_ticket_dir(tmp_path)
-
-    _write_ticket(
-        ticket_dir,
-        "TICKET-001.md",
-        "---\nagent: codex\ndone: false\nticket_id: tkt_shared123\n---",
-    )
-    _write_ticket(
-        ticket_dir,
-        "TICKET-002.md",
-        "---\nagent: opencode\ndone: true\nticket_id: tkt_shared123\n---",
-    )
-
-    old_stderr = sys.stderr
-    sys.stderr = io.StringIO()
-    try:
-        rc = manager_ns["cmd_lint"](ticket_dir, fix_ticket_ids=False)
-    finally:
-        captured = sys.stderr.getvalue()
-        sys.stderr = old_stderr
-
-    assert rc != 0
-    assert "Duplicate ticket_id" in captured
-    assert "tkt_shared123" in captured
-
-
-def test_cmd_lint_clean_tickets(tmp_path: Path) -> None:
-    manager_ns = _exec_manager_namespace()
-    ticket_dir = _make_ticket_dir(tmp_path)
-
-    _write_ticket(
-        ticket_dir,
-        "TICKET-001.md",
-        "---\nagent: codex\ndone: false\nticket_id: tkt_one123456\n---\n## Goal\n",
-    )
-    _write_ticket(
-        ticket_dir,
-        "TICKET-002.md",
-        "---\nagent: opencode\ndone: true\nticket_id: tkt_two123456\n---\n## Goal\n",
-    )
-
-    old_stdout = sys.stdout
-    sys.stdout = io.StringIO()
-    try:
-        rc = manager_ns["cmd_lint"](ticket_dir, fix_ticket_ids=False)
-    finally:
-        captured = sys.stdout.getvalue()
-        sys.stdout = old_stdout
-
-    assert rc == 0
-    assert "2 ticket(s) linted" in captured
-
-
 def test_read_ticket_id_both_agree(tmp_path: Path) -> None:
     linter_ns = _exec_linter_namespace()
     manager_ns = _exec_manager_namespace()
@@ -208,33 +151,3 @@ def test_read_ticket_id_returns_none_on_parse_error(tmp_path: Path) -> None:
 
     assert linter_ns["_read_ticket_id"](path) is None
     assert manager_ns["_read_ticket_id"](path) is None
-
-
-def test_cmd_lint_detects_duplicate_ticket_ids_even_with_other_errors(
-    tmp_path: Path,
-) -> None:
-    manager_ns = _exec_manager_namespace()
-    ticket_dir = _make_ticket_dir(tmp_path)
-
-    _write_ticket(
-        ticket_dir,
-        "TICKET-001.md",
-        "---\nagent: codex\ndone: false\nticket_id: tkt_dup_shared\n---",
-    )
-    _write_ticket(
-        ticket_dir,
-        "TICKET-002.md",
-        "---\nagent: invalid_agent\ndone: false\nticket_id: tkt_dup_shared\n---",
-    )
-
-    old_stderr = sys.stderr
-    sys.stderr = io.StringIO()
-    try:
-        rc = manager_ns["cmd_lint"](ticket_dir, fix_ticket_ids=False)
-    finally:
-        captured = sys.stderr.getvalue()
-        sys.stderr = old_stderr
-
-    assert rc != 0
-    assert "Duplicate ticket_id" in captured
-    assert "tkt_dup_shared" in captured
