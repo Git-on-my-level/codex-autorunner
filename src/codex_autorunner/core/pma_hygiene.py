@@ -16,6 +16,14 @@ from pathlib import Path
 from typing import Any, Callable, Iterable, Optional, Sequence
 
 from ..manifest import load_manifest
+from .automation import (
+    PMA_SUBSCRIPTION_RULE_PREFIX,
+    PMA_TIMER_RULE_PREFIX,
+    PMA_TIMER_SCHEDULE_PREFIX,
+    AutomationRule,
+    AutomationSchedule,
+    AutomationStore,
+)
 from .chat_bindings import repo_has_active_non_pma_chat_binding
 from .config import load_hub_config
 from .filebox import delete_file, list_filebox
@@ -24,7 +32,6 @@ from .git_utils import git_available, git_is_clean
 from .hub_worktree_manager import worktree_non_metadata_child_names
 from .managed_thread_store import ManagedThreadStore
 from .orchestration.bindings import OrchestrationBindingStore
-from .pma_automation_store import PmaAutomationStore
 from .pma_dispatches import list_pma_dispatches
 from .pma_thread_classification import (
     classify_thread_followup,
@@ -408,22 +415,23 @@ def _build_thread_candidates(
 
 def _build_automation_candidates(hub_root: Path) -> list[dict[str, Any]]:
     try:
-        store = PmaAutomationStore(hub_root)
+        store = AutomationStore(hub_root)
     except (OSError, ValueError):
         return []
 
     candidates: list[dict[str, Any]] = []
 
-    for entry in store.list_subscriptions(include_inactive=True):
-        subscription_id = str(entry.get("subscription_id") or "").strip()
+    for rule in _automation_subscription_rules(store):
+        subscription = _automation_subscription_row(rule)
+        subscription_id = str(subscription.get("subscription_id") or "").strip()
         if not subscription_id:
             continue
-        state = str(entry.get("state") or "active").strip().lower()
+        state = str(subscription.get("state") or "active").strip().lower()
         group = "protected" if state == "active" else "safe"
         reason = (
-            "Active automation subscription is still watching for transitions."
+            "Active automation subscription rule is still watching for transitions."
             if group == "protected"
-            else "Inactive automation subscription is safe to purge."
+            else "Inactive automation subscription rule is already disabled."
         )
         candidates.append(
             _build_candidate(
@@ -431,33 +439,41 @@ def _build_automation_candidates(hub_root: Path) -> list[dict[str, Any]]:
                 category="automation",
                 candidate_id=f"automation:subscription:{subscription_id}",
                 label=f"subscription/{subscription_id}",
-                action="purge_subscription",
+                action="disable_subscription",
                 reason=reason,
                 evidence={
                     "state": state,
-                    "event_types": entry.get("event_types"),
-                    "updated_at": entry.get("updated_at"),
-                    "repo_id": entry.get("repo_id"),
-                    "run_id": entry.get("run_id"),
-                    "thread_id": entry.get("thread_id"),
-                    "lane_id": entry.get("lane_id"),
-                    "match_count": entry.get("match_count"),
-                    "max_matches": entry.get("max_matches"),
+                    "event_types": subscription.get("event_types"),
+                    "updated_at": subscription.get("updated_at"),
+                    "repo_id": subscription.get("repo_id"),
+                    "run_id": subscription.get("run_id"),
+                    "thread_id": subscription.get("thread_id"),
+                    "lane_id": subscription.get("lane_id"),
+                    "match_count": subscription.get("match_count"),
+                    "max_matches": subscription.get("max_matches"),
+                    "rule_id": rule.rule_id,
                 },
-                target={"subscription_id": subscription_id},
+                target={"subscription_id": subscription_id, "rule_id": rule.rule_id},
             )
         )
 
-    for entry in store.list_timers(include_inactive=True):
-        timer_id = str(entry.get("timer_id") or "").strip()
+    timer_rules = {
+        rule.rule_id: rule for rule in store.list_rules() if _is_timer_rule(rule)
+    }
+    for schedule in store.list_schedules():
+        timer_rule = timer_rules.get(schedule.rule_id)
+        if timer_rule is None:
+            continue
+        timer = _automation_timer_row(timer_rule, schedule)
+        timer_id = str(timer.get("timer_id") or "").strip()
         if not timer_id:
             continue
-        state = str(entry.get("state") or "pending").strip().lower()
+        state = str(timer.get("state") or "pending").strip().lower()
         group = "protected" if state == "pending" else "safe"
         reason = (
             "Pending automation timer may still fire and should not be removed implicitly."
             if group == "protected"
-            else "Inactive automation timer is safe to purge."
+            else "Inactive automation timer schedule is already cancelled or completed."
         )
         candidates.append(
             _build_candidate(
@@ -465,56 +481,89 @@ def _build_automation_candidates(hub_root: Path) -> list[dict[str, Any]]:
                 category="automation",
                 candidate_id=f"automation:timer:{timer_id}",
                 label=f"timer/{timer_id}",
-                action="purge_timer",
+                action="cancel_timer",
                 reason=reason,
                 evidence={
                     "state": state,
-                    "timer_type": entry.get("timer_type"),
-                    "due_at": entry.get("due_at"),
-                    "updated_at": entry.get("updated_at"),
-                    "repo_id": entry.get("repo_id"),
-                    "run_id": entry.get("run_id"),
-                    "thread_id": entry.get("thread_id"),
-                    "lane_id": entry.get("lane_id"),
+                    "timer_type": timer.get("timer_type"),
+                    "due_at": timer.get("due_at"),
+                    "updated_at": timer.get("updated_at"),
+                    "repo_id": timer.get("repo_id"),
+                    "run_id": timer.get("run_id"),
+                    "thread_id": timer.get("thread_id"),
+                    "lane_id": timer.get("lane_id"),
+                    "rule_id": timer_rule.rule_id,
+                    "schedule_id": schedule.schedule_id,
                 },
-                target={"timer_id": timer_id},
-            )
-        )
-
-    for entry in store.list_wakeups():
-        wakeup_id = str(entry.get("wakeup_id") or "").strip()
-        if not wakeup_id:
-            continue
-        state = str(entry.get("state") or "pending").strip().lower()
-        group = "protected" if state in {"pending", "queued"} else "safe"
-        reason = (
-            "Pending or queued automation wakeup still represents follow-up work."
-            if group == "protected"
-            else "Delivered automation wakeup is safe to purge."
-        )
-        candidates.append(
-            _build_candidate(
-                group=group,
-                category="automation",
-                candidate_id=f"automation:wakeup:{wakeup_id}",
-                label=f"wakeup/{wakeup_id}",
-                action="purge_wakeup",
-                reason=reason,
-                evidence={
-                    "state": state,
-                    "source": entry.get("source"),
-                    "event_type": entry.get("event_type"),
-                    "timestamp": entry.get("timestamp"),
-                    "updated_at": entry.get("updated_at"),
-                    "repo_id": entry.get("repo_id"),
-                    "run_id": entry.get("run_id"),
-                    "thread_id": entry.get("thread_id"),
-                    "lane_id": entry.get("lane_id"),
-                },
-                target={"wakeup_id": wakeup_id},
+                target={"timer_id": timer_id, "schedule_id": schedule.schedule_id},
             )
         )
     return candidates
+
+
+def _is_subscription_rule(rule: AutomationRule) -> bool:
+    return rule.rule_id.startswith(PMA_SUBSCRIPTION_RULE_PREFIX) or rule.metadata.get(
+        "purpose"
+    ) in {"managed_thread_lifecycle_subscription", "pma_lifecycle_subscription"}
+
+
+def _is_timer_rule(rule: AutomationRule) -> bool:
+    return rule.rule_id.startswith(PMA_TIMER_RULE_PREFIX) or rule.metadata.get(
+        "purpose"
+    ) in {"managed_thread_timer", "pma_timer"}
+
+
+def _automation_subscription_rules(store: AutomationStore) -> list[AutomationRule]:
+    return [rule for rule in store.list_rules() if _is_subscription_rule(rule)]
+
+
+def _automation_subscription_row(rule: AutomationRule) -> dict[str, Any]:
+    executor = rule.executor if isinstance(rule.executor, dict) else {}
+    target = rule.target if isinstance(rule.target, dict) else {}
+    filters = rule.filters if isinstance(rule.filters, dict) else {}
+    return {
+        "subscription_id": rule.metadata.get("legacy_subscription_id")
+        or rule.rule_id.removeprefix(PMA_SUBSCRIPTION_RULE_PREFIX),
+        "rule_id": rule.rule_id,
+        "created_at": rule.created_at,
+        "updated_at": rule.updated_at,
+        "state": "active" if rule.enabled else "cancelled",
+        "event_types": list(rule.trigger.get("event_types") or []),
+        "repo_id": target.get("repo_id") or filters.get("event.repo_id"),
+        "run_id": target.get("run_id") or filters.get("event.payload.run_id"),
+        "thread_id": target.get("thread_id") or filters.get("event.payload.thread_id"),
+        "lane_id": executor.get("lane_id") or "pma:default",
+        "match_count": rule.metadata.get("legacy_match_count") or 0,
+        "max_matches": rule.metadata.get("legacy_max_matches"),
+    }
+
+
+def _automation_timer_row(
+    rule: AutomationRule, schedule: AutomationSchedule
+) -> dict[str, Any]:
+    schedule_config = schedule.schedule if isinstance(schedule.schedule, dict) else {}
+    payload = schedule_config.get("payload")
+    payload = payload if isinstance(payload, dict) else {}
+    timer_id = (
+        payload.get("timer_id")
+        or rule.metadata.get("legacy_timer_id")
+        or schedule.schedule_id.removeprefix(PMA_TIMER_SCHEDULE_PREFIX)
+    )
+    return {
+        "timer_id": timer_id,
+        "due_at": schedule.next_fire_at,
+        "created_at": schedule.created_at,
+        "updated_at": schedule.updated_at,
+        "state": "pending" if schedule.state == "active" else schedule.state,
+        "fired_at": schedule.last_fire_at,
+        "timer_type": payload.get("timer_type")
+        or schedule_config.get("timer_kind")
+        or "one_shot",
+        "repo_id": payload.get("repo_id"),
+        "run_id": payload.get("run_id"),
+        "thread_id": payload.get("thread_id"),
+        "lane_id": payload.get("lane_id") or "pma:default",
+    }
 
 
 def _build_alert_candidates(
@@ -747,7 +796,7 @@ def apply_pma_hygiene_report(
     selected_items = _collect_hygiene_apply_items(
         report, include_needs_confirmation=include_needs_confirmation
     )
-    automation_store: Optional[PmaAutomationStore] = None
+    automation_store: Optional[AutomationStore] = None
     binding_store: Optional[OrchestrationBindingStore] = None
     thread_store: Optional[ManagedThreadStore] = None
     results: list[dict[str, Any]] = []
@@ -775,24 +824,35 @@ def apply_pma_hygiene_report(
                     str(target.get("box") or ""),
                     str(target.get("filename") or ""),
                 )
-            elif action == "purge_subscription":
-                automation_store = automation_store or PmaAutomationStore(hub_root)
-                ok = automation_store.purge_subscription(
-                    str(target.get("subscription_id") or ""),
-                    require_inactive=True,
+            elif action == "disable_subscription":
+                automation_store = automation_store or AutomationStore(hub_root)
+                rule = automation_store.get_rule(str(target.get("rule_id") or ""))
+                if rule is None:
+                    ok = False
+                    error = "subscription rule not found"
+                elif rule.enabled:
+                    ok = False
+                    error = "active subscription rule requires explicit cancellation"
+                else:
+                    updated = automation_store.set_rule_enabled(rule.rule_id, False)
+                    ok = updated is not None and updated.enabled is False
+            elif action == "cancel_timer":
+                automation_store = automation_store or AutomationStore(hub_root)
+                schedule = automation_store.get_schedule(
+                    str(target.get("schedule_id") or "")
                 )
-            elif action == "purge_timer":
-                automation_store = automation_store or PmaAutomationStore(hub_root)
-                ok = automation_store.purge_timer(
-                    str(target.get("timer_id") or ""),
-                    require_inactive=True,
-                )
-            elif action == "purge_wakeup":
-                automation_store = automation_store or PmaAutomationStore(hub_root)
-                ok = automation_store.purge_wakeup(
-                    str(target.get("wakeup_id") or ""),
-                    require_inactive=True,
-                )
+                if schedule is None:
+                    ok = False
+                    error = "timer schedule not found"
+                elif str(schedule.state).strip().lower() == "active":
+                    ok = False
+                    error = "pending timer schedule requires explicit cancellation"
+                else:
+                    cancelled = automation_store.cancel_schedule(schedule.schedule_id)
+                    ok = (
+                        cancelled is not None
+                        and str(cancelled.state).lower() != "active"
+                    )
             elif action == "delete_pma_dispatch":
                 dispatch_path = Path(str(target.get("dispatch_path") or ""))
                 if dispatch_path.is_file():

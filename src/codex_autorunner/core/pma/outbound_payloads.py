@@ -110,7 +110,7 @@ def build_running_turn_exists_payload(
         "detail": f"Managed thread {managed_thread_id} already has a running turn",
         "next_step": (
             "Wait for the running turn to finish or let the default terminal "
-            "wakeup fire; use --watch only for foreground babysitting."
+            "automation job fire; use --watch only for foreground babysitting."
         ),
         "managed_thread_id": managed_thread_id,
         "managed_turn_id": str((running_turn or {}).get("managed_turn_id") or "")

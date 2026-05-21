@@ -748,13 +748,15 @@ def _render_wakeup_sample(
     sample = wakeups.get("pending_sample") or []
     if not sample:
         return
-    lines.append("- pending_wakeups_sample:")
+    lines.append("- pending_automation_jobs_sample:")
     for item in list(sample)[: max(0, max_automation_items)]:
         if not isinstance(item, dict):
             continue
         wakeup_id = _field(item, "wakeup_id", max_field_chars)
-        source = _field(item, "source", max_field_chars)
+        job_id = _field(item, "job_id", max_field_chars)
+        rule_id = _field(item, "rule_id", max_field_chars)
         event_type = _field(item, "event_type", max_field_chars)
+        event_id = _field(item, "event_id", max_field_chars)
         timer_id = _truncate(str(item.get("timer_id") or "-"), max_field_chars)
         subscription_id = _truncate(
             str(item.get("subscription_id") or "-"), max_field_chars
@@ -762,11 +764,18 @@ def _render_wakeup_sample(
         lane_id = _field(item, "lane_id", max_field_chars)
         to_state = _truncate(str(item.get("to_state") or "-"), max_field_chars)
         reason = _truncate(str(item.get("reason") or "-"), max_field_chars)
-        lines.append(
-            f"  - id={wakeup_id} source={source} event_type={event_type} "
-            f"subscription_id={subscription_id} timer_id={timer_id} "
-            f"lane_id={lane_id} to={to_state} reason={reason}"
-        )
+        if item.get("job_id"):
+            lines.append(
+                f"  - job_id={job_id} rule_id={rule_id} event_id={event_id} "
+                f"subscription_id={subscription_id} timer_id={timer_id} "
+                f"lane_id={lane_id} to={to_state} reason={reason}"
+            )
+        else:
+            lines.append(
+                f"  - id={wakeup_id} event_type={event_type} "
+                f"subscription_id={subscription_id} timer_id={timer_id} "
+                f"lane_id={lane_id} to={to_state} reason={reason}"
+            )
 
 
 def _render_automation_section(
@@ -786,7 +795,7 @@ def _render_automation_section(
     timers_pending = int(timers.get("pending_count") or 0)
     wakeups_pending = int(wakeups.get("pending_count") or 0)
     wakeups_dispatched = int(wakeups.get("dispatched_recent_count") or 0)
-    lines.append("PMA Automation:")
+    lines.append("Automation:")
     lines.append(
         f"- subscriptions_active={subscriptions_active} timers_pending={timers_pending} "
         f"wakeups_pending={wakeups_pending} wakeups_dispatched_recent={wakeups_dispatched}"
@@ -816,8 +825,8 @@ def _render_automation_section(
     )
     if not has_samples:
         lines.append(
-            "- no automation configured; create rules via "
-            "/hub/pma/subscriptions and /hub/pma/timers"
+            "- no automation configured; use `car automation ...` for scheduled "
+            "automations or `car pma thread subscribe ...` for terminal follow-up"
         )
     lines.append("")
 

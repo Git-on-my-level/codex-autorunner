@@ -101,7 +101,7 @@ automation_app = typer.Typer(
     add_completion=False,
     rich_markup_mode=None,
     name="automation",
-    help="Create, list, monitor, and run scheduled PMA automations.",
+    help="Create, list, monitor, and run generalized automations.",
 )
 
 register_docs_commands(docs_app)
@@ -157,7 +157,7 @@ def pma_automation_list(
     output_json: bool = typer.Option(False, "--json", help="Emit JSON output"),
     path: Optional[Path] = hub_root_path_option(),
 ):
-    """List scheduled PMA automations."""
+    """List scheduled automations."""
     hub_root = resolve_hub_path(path)
     store = automation_store(hub_root)
     overview = automation_overview(store, limit=limit)
@@ -173,7 +173,7 @@ def pma_automation_status(
     output_json: bool = typer.Option(False, "--json", help="Emit JSON output"),
     path: Optional[Path] = hub_root_path_option(),
 ):
-    """Show one scheduled PMA automation."""
+    """Show one scheduled automation."""
     hub_root = resolve_hub_path(path)
     store = automation_store(hub_root)
     rule = _resolve_automation_rule(store, automation_id)
@@ -189,7 +189,7 @@ def pma_automation_migration_status(
     output_json: bool = typer.Option(False, "--json", help="Emit JSON output"),
     path: Optional[Path] = hub_root_path_option(),
 ):
-    """Report PMA automation migration blockers and mirror health."""
+    """Report legacy automation migration blockers and mirror health."""
     hub_root = resolve_hub_path(path)
     report = collect_automation_migration_read_model(hub_root)
     payload = report.to_dict()
@@ -220,7 +220,7 @@ def pma_automation_run(
     output_json: bool = typer.Option(False, "--json", help="Emit JSON output"),
     path: Optional[Path] = hub_root_path_option(),
 ):
-    """Queue one scheduled PMA automation immediately."""
+    """Queue one scheduled automation immediately."""
     hub_root = resolve_hub_path(path)
     store = automation_store(hub_root)
     rule = _resolve_automation_rule(store, automation_id)
@@ -244,7 +244,7 @@ def pma_automation_pause(
     output_json: bool = typer.Option(False, "--json", help="Emit JSON output"),
     path: Optional[Path] = hub_root_path_option(),
 ):
-    """Pause one scheduled PMA automation."""
+    """Pause one scheduled automation."""
     _set_pma_automation_enabled(
         automation_id,
         enabled=False,
@@ -259,7 +259,7 @@ def pma_automation_resume(
     output_json: bool = typer.Option(False, "--json", help="Emit JSON output"),
     path: Optional[Path] = hub_root_path_option(),
 ):
-    """Resume one scheduled PMA automation."""
+    """Resume one scheduled automation."""
     _set_pma_automation_enabled(
         automation_id,
         enabled=True,

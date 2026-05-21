@@ -5,7 +5,6 @@ from types import SimpleNamespace
 import pytest
 from fastapi import HTTPException
 
-from codex_autorunner.core.pma_automation_store import PmaAutomationThreadNotFoundError
 from codex_autorunner.surfaces.web.schemas import (
     ManagedThreadCreateRequest,
     PmaAutomationSubscriptionCreateRequest,
@@ -206,19 +205,18 @@ async def test_managed_thread_automation_client_preserves_required_store_http_er
     request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace()))
     client = ManagedThreadAutomationClient(request, lambda: None)
 
-    async def _fake_get_store(_request, _runtime_state, *, required):
-        assert required is True
-        return object()
+    def _fake_context(_request):
+        return SimpleNamespace(hub_root="/tmp/hub")
 
-    async def _fake_create(_store, _method_names, _payload):
+    def _fake_create(_store, _payload):
         raise HTTPException(status_code=409, detail="lane already subscribed")
 
     monkeypatch.setattr(
-        "codex_autorunner.surfaces.web.services.pma.managed_thread_followup.get_pma_automation_store",
-        _fake_get_store,
+        "codex_autorunner.surfaces.web.services.pma.managed_thread_followup.get_pma_request_context",
+        _fake_context,
     )
     monkeypatch.setattr(
-        "codex_autorunner.surfaces.web.services.pma.managed_thread_followup.call_store_create_with_payload",
+        "codex_autorunner.surfaces.web.services.pma.managed_thread_followup._create_terminal_followup_rule",
         _fake_create,
     )
 
@@ -242,13 +240,12 @@ async def test_managed_thread_automation_client_normalizes_required_unavailable_
     request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace()))
     client = ManagedThreadAutomationClient(request, lambda: None)
 
-    async def _fake_get_store(_request, _runtime_state, *, required):
-        assert required is True
+    def _fake_context(_request):
         raise HTTPException(status_code=503, detail="Automation action unavailable")
 
     monkeypatch.setattr(
-        "codex_autorunner.surfaces.web.services.pma.managed_thread_followup.get_pma_automation_store",
-        _fake_get_store,
+        "codex_autorunner.surfaces.web.services.pma.managed_thread_followup.get_pma_request_context",
+        _fake_context,
     )
 
     with pytest.raises(ManagedThreadAutomationUnavailable):
@@ -268,20 +265,12 @@ async def test_managed_thread_automation_client_downgrades_optional_missing_thre
     request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace()))
     client = ManagedThreadAutomationClient(request, lambda: None)
 
-    async def _fake_get_store(_request, _runtime_state, *, required):
-        assert required is False
-        return object()
-
-    async def _fake_create(_store, _method_names, _payload):
-        raise PmaAutomationThreadNotFoundError("thread-1")
+    def _fake_context(_request):
+        return SimpleNamespace(hub_root="/tmp/hub")
 
     monkeypatch.setattr(
-        "codex_autorunner.surfaces.web.services.pma.managed_thread_followup.get_pma_automation_store",
-        _fake_get_store,
-    )
-    monkeypatch.setattr(
-        "codex_autorunner.surfaces.web.services.pma.managed_thread_followup.call_store_create_with_payload",
-        _fake_create,
+        "codex_autorunner.surfaces.web.services.pma.managed_thread_followup.get_pma_request_context",
+        _fake_context,
     )
 
     created = await client.create_terminal_followup(
@@ -302,12 +291,12 @@ async def test_managed_thread_automation_client_skips_optional_without_pma_origi
     request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace()))
     client = ManagedThreadAutomationClient(request, lambda: None)
 
-    async def _unexpected_get_store(*_args, **_kwargs):
+    def _unexpected_context(*_args, **_kwargs):
         raise AssertionError("optional terminal follow-up without PMA origin is inert")
 
     monkeypatch.setattr(
-        "codex_autorunner.surfaces.web.services.pma.managed_thread_followup.get_pma_automation_store",
-        _unexpected_get_store,
+        "codex_autorunner.surfaces.web.services.pma.managed_thread_followup.get_pma_request_context",
+        _unexpected_context,
     )
 
     created = await client.create_terminal_followup(
@@ -339,21 +328,19 @@ async def test_managed_thread_automation_client_forwards_origin_thread_context(
     client = ManagedThreadAutomationClient(request, lambda: runtime_state)
     captured: dict[str, object] = {}
 
-    async def _fake_get_store(_request, _runtime_state, *, required):
-        assert required is False
-        assert _runtime_state is runtime_state
-        return object()
+    def _fake_context(_request):
+        return SimpleNamespace(hub_root="/tmp/hub")
 
-    async def _fake_create(_store, _method_names, payload):
+    def _fake_create(_store, payload):
         captured.update(payload)
-        return {"subscription": {"subscription_id": "sub-1"}}
+        return {"subscription_id": "sub-1"}
 
     monkeypatch.setattr(
-        "codex_autorunner.surfaces.web.services.pma.managed_thread_followup.get_pma_automation_store",
-        _fake_get_store,
+        "codex_autorunner.surfaces.web.services.pma.managed_thread_followup.get_pma_request_context",
+        _fake_context,
     )
     monkeypatch.setattr(
-        "codex_autorunner.surfaces.web.services.pma.managed_thread_followup.call_store_create_with_payload",
+        "codex_autorunner.surfaces.web.services.pma.managed_thread_followup._create_terminal_followup_rule",
         _fake_create,
     )
 
@@ -368,6 +355,7 @@ async def test_managed_thread_automation_client_forwards_origin_thread_context(
     assert created == {
         "mode": "terminal",
         "subscription": {"subscription_id": "sub-1"},
+        "deduped": False,
     }
     assert captured["origin_thread_id"] == "pma-thread-1"
     assert captured["origin_lane_id"] == "discord"
@@ -397,12 +385,12 @@ async def test_managed_thread_automation_client_ignores_stale_last_result_origin
     )
     client = ManagedThreadAutomationClient(request, lambda: runtime_state)
 
-    async def _unexpected_get_store(*_args, **_kwargs):
+    def _unexpected_context(*_args, **_kwargs):
         raise AssertionError("stale last-result origin must not create follow-up")
 
     monkeypatch.setattr(
-        "codex_autorunner.surfaces.web.services.pma.managed_thread_followup.get_pma_automation_store",
-        _unexpected_get_store,
+        "codex_autorunner.surfaces.web.services.pma.managed_thread_followup.get_pma_request_context",
+        _unexpected_context,
     )
 
     created = await client.create_terminal_followup(

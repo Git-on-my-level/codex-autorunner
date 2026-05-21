@@ -57,7 +57,7 @@ describe('runHistoryFromAutomationJobs', () => {
     expect(row.href).toBeNull();
   });
 
-  it('links PMA automation runs to spawned chats', () => {
+  it('links managed-thread automation runs to spawned chats', () => {
     const [row] = runHistoryFromAutomationJobs([
       {
         job_id: 'job-pma',
@@ -65,11 +65,6 @@ describe('runHistoryFromAutomationJobs', () => {
         child_execution: {
           chat_href: '/chats/thread-target-1',
           target_href: '/worktrees/wt-ignored/tickets'
-        },
-        pma_queue_result: {
-          result: {
-            thread_id: 'thread-1'
-          }
         },
         ticket_flow_worktree_id: 'wt-ignored'
       }

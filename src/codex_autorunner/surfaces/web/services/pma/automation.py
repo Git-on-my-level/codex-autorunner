@@ -4,10 +4,9 @@ import asyncio
 import logging
 from typing import Any, Optional
 
-from fastapi import HTTPException, Request
+from fastapi import Request
 
 from .....core.lifecycle_events import LifecycleEvent, LifecycleEventType
-from .....core.pma_automation_store import PmaAutomationStore
 from .....core.time_utils import now_iso
 from ...services.pma import get_pma_request_context
 from ...services.pma.common import normalize_optional_text
@@ -35,145 +34,6 @@ async def await_if_needed(value: Any) -> Any:
     if asyncio.iscoroutine(value):
         return await value
     return value
-
-
-async def call_with_fallbacks(
-    method: Any, attempts: list[tuple[tuple[Any, ...], dict[str, Any]]]
-) -> Any:
-    last_type_error: Optional[TypeError] = None
-    for args, kwargs in attempts:
-        try:
-            return await await_if_needed(method(*args, **kwargs))
-        except TypeError as exc:
-            last_type_error = exc
-            continue
-    if last_type_error is not None:
-        raise last_type_error
-    raise RuntimeError("No automation method call attempts were provided")
-
-
-def first_callable(target: Any, names: tuple[str, ...]) -> Optional[Any]:
-    for name in names:
-        candidate = getattr(target, name, None)
-        if callable(candidate):
-            return candidate
-    return None
-
-
-async def call_store_create_with_payload(
-    store: Any, method_names: tuple[str, ...], payload: dict[str, Any]
-) -> Any:
-    method = first_callable(store, method_names)
-    if method is None:
-        raise HTTPException(status_code=503, detail="Automation action unavailable")
-    return await call_with_fallbacks(
-        method,
-        [
-            ((payload,), {}),
-            ((), {"payload": payload}),
-            ((), dict(payload)),
-        ],
-    )
-
-
-async def call_store_list(
-    store: Any, method_names: tuple[str, ...], filters: dict[str, Any]
-) -> Any:
-    method = first_callable(store, method_names)
-    if method is None:
-        raise HTTPException(status_code=503, detail="Automation action unavailable")
-    return await call_with_fallbacks(
-        method,
-        [
-            ((), dict(filters)),
-            ((dict(filters),), {}),
-            ((), {}),
-        ],
-    )
-
-
-async def call_store_action_with_id(
-    store: Any,
-    method_names: tuple[str, ...],
-    item_id: str,
-    payload: dict[str, Any],
-    *,
-    id_aliases: tuple[str, ...],
-) -> Any:
-    method = first_callable(store, method_names)
-    if method is None:
-        raise HTTPException(status_code=503, detail="Automation action unavailable")
-    item_kwargs: dict[str, Any] = {}
-    for alias in id_aliases:
-        item_kwargs[alias] = item_id
-    merged_with_id = dict(payload)
-    if id_aliases:
-        merged_with_id[id_aliases[0]] = item_id
-    return await call_with_fallbacks(
-        method,
-        [
-            ((item_id, dict(payload)), {}),
-            ((item_id,), dict(payload)),
-            ((item_id,), {"payload": dict(payload)}),
-            ((), item_kwargs),
-            ((), merged_with_id),
-            ((item_id,), {}),
-        ],
-    )
-
-
-async def get_pma_automation_store(
-    request: Request,
-    runtime_state: Any,
-    *,
-    required: bool = True,
-) -> Optional[Any]:
-    pma_automation_store = (
-        getattr(runtime_state, "pma_automation_store", None)
-        if runtime_state is not None
-        else None
-    )
-    pma_automation_root = (
-        getattr(runtime_state, "pma_automation_root", None)
-        if runtime_state is not None
-        else None
-    )
-
-    context = get_pma_request_context(request)
-    hub_root = context.hub_root
-    supervisor = context.hub_supervisor
-    if supervisor is not None:
-        accessor = getattr(supervisor, "get_pma_automation_store", None)
-        if callable(accessor):
-            try:
-                store = await await_if_needed(accessor())
-            except (RuntimeError, OSError, ValueError):
-                logger.exception("Failed to resolve PMA automation store")
-            else:
-                if store is not None:
-                    return store
-        store = getattr(supervisor, "pma_automation_store", None)
-        if store is not None:
-            return store
-
-    if pma_automation_store is not None and pma_automation_root == hub_root:
-        return pma_automation_store
-
-    try:
-        store = PmaAutomationStore(hub_root)
-    except (RuntimeError, OSError, ValueError):
-        logger.exception("Failed to initialize PMA automation store")
-    else:
-        if runtime_state is not None:
-            runtime_state.pma_automation_store = store
-            runtime_state.pma_automation_root = hub_root
-        return store
-
-    if required:
-        raise HTTPException(
-            status_code=503, detail="Hub PMA automation adapter unavailable"
-        )
-    return None
 
 
 async def notify_hub_automation_transition(
@@ -215,19 +75,6 @@ async def notify_hub_automation_transition(
     if isinstance(extra, dict):
         payload.update(extra)
 
-    store = await get_pma_automation_store(request, runtime_state, required=False)
-    notify_transition = getattr(store, "notify_transition", None)
-    if callable(notify_transition):
-        try:
-            await await_if_needed(notify_transition(dict(payload)))
-        except (
-            RuntimeError,
-            OSError,
-            TypeError,
-            ValueError,
-        ):  # notification must not disrupt caller
-            logger.exception("Failed to notify PMA automation transition store")
-
     supervisor = get_pma_request_context(request).hub_supervisor
     if supervisor is None:
         return
@@ -247,11 +94,7 @@ async def notify_hub_automation_transition(
         logger.exception("Failed to notify hub automation transition")
         return
 
-    process_now = (
-        getattr(supervisor, "process_pma_automation_now", None)
-        if supervisor is not None
-        else None
-    )
+    process_now = getattr(supervisor, "process_automation_now", None)
     if not callable(process_now):
         return
     try:
@@ -260,9 +103,9 @@ async def notify_hub_automation_transition(
         try:
             await await_if_needed(process_now())
         except (RuntimeError, OSError, ValueError):
-            logger.exception("Failed immediate PMA automation processing")
+            logger.exception("Failed immediate automation processing")
     except (RuntimeError, OSError, ValueError):
-        logger.exception("Failed immediate PMA automation processing")
+        logger.exception("Failed immediate automation processing")
 
 
 def _lifecycle_event_from_transition_payload(payload: dict[str, Any]) -> LifecycleEvent:

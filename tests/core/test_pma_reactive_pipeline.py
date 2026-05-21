@@ -1,24 +1,19 @@
 from __future__ import annotations
 
-import asyncio
 import json
 from pathlib import Path
 
 import pytest
 
 from codex_autorunner.adapters.telegram.state import TelegramStateStore
+from codex_autorunner.core.automation import AutomationStore
 from codex_autorunner.core.config import (
     CONFIG_FILENAME,
     DEFAULT_HUB_CONFIG,
     load_hub_config,
 )
 from codex_autorunner.core.hub import HubSupervisor
-from codex_autorunner.core.pma_lane_worker import PmaLaneWorker
-from codex_autorunner.core.pma_queue import PmaQueue, QueueItemState
-from codex_autorunner.core.pma_transcripts import PmaTranscriptStore
 from codex_autorunner.manifest import load_manifest, save_manifest
-
-_LANE_WORKER_TEST_TIMEOUT_SECONDS = 5.0
 
 
 def _write_hub_config(hub_root: Path) -> None:
@@ -41,41 +36,10 @@ def _register_repo(hub_root: Path, repo_root: Path, repo_id: str) -> None:
     save_manifest(manifest_path, manifest, hub_root)
 
 
-async def _process_one_item(
-    hub_root: Path,
-    *,
-    queue: PmaQueue,
-    assistant_text: str = "ok",
-) -> None:
-    processed = asyncio.Event()
-
-    async def executor(item) -> dict:
-        lifecycle_event = item.payload.get("lifecycle_event") or {}
-        turn_id = f"turn-{item.item_id}"
-        store = PmaTranscriptStore(hub_root)
-        store.write_transcript(
-            turn_id=turn_id,
-            metadata={
-                "trigger": "lifecycle_event",
-                "event_id": lifecycle_event.get("event_id"),
-                "event_type": lifecycle_event.get("event_type"),
-            },
-            assistant_text=assistant_text,
-        )
-        processed.set()
-        return {"status": "ok", "turn_id": turn_id, "message": assistant_text}
-
-    worker = PmaLaneWorker("pma:default", queue, executor)
-    await worker.start()
-    await asyncio.wait_for(
-        processed.wait(),
-        timeout=_LANE_WORKER_TEST_TIMEOUT_SECONDS,
-    )
-    await worker.stop()
-
-
 @pytest.mark.anyio
-async def test_reactive_flow_failed_writes_transcript_web_sink(tmp_path: Path) -> None:
+async def test_reactive_flow_failed_creates_paused_automation_job(
+    tmp_path: Path,
+) -> None:
     hub_root = tmp_path / "hub"
     _write_hub_config(hub_root)
     supervisor = HubSupervisor(load_hub_config(hub_root), start_lifecycle_worker=False)
@@ -84,21 +48,13 @@ async def test_reactive_flow_failed_writes_transcript_web_sink(tmp_path: Path) -
         supervisor.lifecycle_emitter.emit_flow_failed(
             "repo-1", "run-1", origin="runner"
         )
-        await asyncio.to_thread(supervisor.process_lifecycle_events)
+        supervisor.process_lifecycle_events()
 
-        queue = PmaQueue(hub_root)
-        await _process_one_item(
-            hub_root,
-            queue=queue,
-        )
-
-        items = await queue.list_items("pma:default")
-        assert items
-        assert items[0].state in (QueueItemState.COMPLETED, QueueItemState.FAILED)
-
-        transcript_store = PmaTranscriptStore(hub_root)
-        transcripts = transcript_store.list_recent(limit=1)
-        assert transcripts, "expected a transcript entry"
+        jobs = AutomationStore(hub_root).list_jobs()
+        assert len(jobs) == 1
+        assert jobs[0].state == "paused"
+        assert jobs[0].executor.get("kind") == "managed_thread_turn"
+        assert "Lifecycle event received" in str(jobs[0].executor.get("message_text"))
 
         telegram_store = TelegramStateStore(hub_root / "telegram_state.sqlite3")
         outbox = await telegram_store.list_outbox()
@@ -123,13 +79,11 @@ async def test_reactive_dispatch_created_does_not_enqueue_telegram_outbox(
         supervisor.lifecycle_emitter.emit_dispatch_created(
             "repo-1", "run-1", origin="runner"
         )
-        await asyncio.to_thread(supervisor.process_lifecycle_events)
+        supervisor.process_lifecycle_events()
 
-        queue = PmaQueue(hub_root)
-        await _process_one_item(
-            hub_root,
-            queue=queue,
-        )
+        jobs = AutomationStore(hub_root).list_jobs()
+        assert len(jobs) == 1
+        assert jobs[0].state == "paused"
 
         telegram_store = TelegramStateStore(hub_root / "telegram_state.sqlite3")
         outbox = await telegram_store.list_outbox()

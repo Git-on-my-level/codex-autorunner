@@ -16,7 +16,7 @@ from codex_autorunner.agents.registry import AgentDescriptor
 from codex_autorunner.agents.types import TerminalTurnResult
 from codex_autorunner.core.automation import AutomationRule, AutomationStore
 from codex_autorunner.core.automation.models import (
-    EXECUTOR_PMA_TURN,
+    EXECUTOR_MANAGED_THREAD_TURN,
     TARGET_POLICY_HUB,
     TRIGGER_KIND_EVENT,
 )
@@ -1180,7 +1180,7 @@ async def test_record_execution_result_routes_pma_notification_through_unified_j
             filters={"thread_id": thread.thread_target_id},
             target_policy=TARGET_POLICY_HUB,
             target={"thread_id": "{{ event.payload.thread_id }}"},
-            executor_kind=EXECUTOR_PMA_TURN,
+            executor_kind=EXECUTOR_MANAGED_THREAD_TURN,
             executor={"lane_id": "pma:default"},
             policy={"dedupe_key": "{{ metadata.lifecycle_event_id }}"},
             metadata={"purpose": "pma_lifecycle_subscription"},

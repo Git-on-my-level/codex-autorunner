@@ -13,7 +13,7 @@ from .automation.builtins import (
     _normalize_reactive_event_types,
 )
 from .automation.models import (
-    EXECUTOR_PMA_TURN,
+    EXECUTOR_MANAGED_THREAD_TURN,
     JOB_PENDING,
     JOB_SUCCEEDED,
     SCHEDULE_ONE_SHOT,
@@ -161,9 +161,8 @@ class PmaUnifiedAutomationAdapter:
                 "run_id": getattr(subscription, "run_id", None),
                 "thread_id": getattr(subscription, "thread_id", None),
             },
-            executor_kind=EXECUTOR_PMA_TURN,
+            executor_kind=EXECUTOR_MANAGED_THREAD_TURN,
             executor={
-                "lane_id": getattr(subscription, "lane_id", None) or "pma:default",
                 "wake_up_kind": "pma_subscription",
                 "source": "transition",
                 "subscription_id": subscription_id,
@@ -175,7 +174,7 @@ class PmaUnifiedAutomationAdapter:
                 "to_state": "{{ event.payload.to_state }}",
                 "reason": "{{ event.payload.reason }}",
                 "timestamp": "{{ event.raw_payload.timestamp }}",
-                "message": (
+                "message_text": (
                     "Automation wake-up received.\n"
                     "source: transition\n"
                     "event_type: {{ event.payload.event_type }}\n"
@@ -188,7 +187,7 @@ class PmaUnifiedAutomationAdapter:
                     "reason: {{ event.payload.reason }}\n"
                     "timestamp: {{ event.raw_payload.timestamp }}\n"
                     "suggested_next_action: inspect the transition and adjust "
-                    "/hub/pma/subscriptions or /hub/pma/timers as needed."
+                    "the generalized automation rule or schedule as needed."
                 ),
                 **_subscription_executor_metadata(subscription),
             },
@@ -234,18 +233,17 @@ class PmaUnifiedAutomationAdapter:
                 "run_id": getattr(timer, "run_id", None),
                 "thread_id": getattr(timer, "thread_id", None),
             },
-            executor_kind=EXECUTOR_PMA_TURN,
+            executor_kind=EXECUTOR_MANAGED_THREAD_TURN,
             executor={
-                "lane_id": getattr(timer, "lane_id", None) or "pma:default",
-                "message": (
+                "message_text": (
                     "Automation wake-up received.\n"
                     "source: timer\n"
                     f"timer_id: {timer_id}\n"
                     "repo_id: {{ schedule.payload.repo_id }}\n"
                     "run_id: {{ schedule.payload.run_id }}\n"
                     "thread_id: {{ schedule.payload.thread_id }}\n"
-                    "suggested_next_action: verify progress, then use "
-                    "/hub/pma/timers/{timer_id}/touch or /hub/pma/timers/{timer_id}/cancel."
+                    "suggested_next_action: verify progress, then inspect or pause "
+                    "the generalized automation schedule as needed."
                 ),
                 "wake_up_kind": "pma_timer",
             },
@@ -339,9 +337,8 @@ class PmaUnifiedAutomationAdapter:
                 "repo_id": getattr(wakeup, "repo_id", None),
                 "thread_id": getattr(wakeup, "thread_id", None),
             },
-            executor_kind=EXECUTOR_PMA_TURN,
+            executor_kind=EXECUTOR_MANAGED_THREAD_TURN,
             executor={
-                "lane_id": getattr(wakeup, "lane_id", None) or "pma:default",
                 "wake_up_kind": "pma_legacy_wakeup",
             },
             metadata={
@@ -367,8 +364,7 @@ class PmaUnifiedAutomationAdapter:
                 "thread_id": getattr(wakeup, "thread_id", None),
             },
             executor={
-                "kind": EXECUTOR_PMA_TURN,
-                "lane_id": getattr(wakeup, "lane_id", None) or "pma:default",
+                "kind": EXECUTOR_MANAGED_THREAD_TURN,
                 "wake_up_kind": "pma_legacy_wakeup",
             },
             policy={
@@ -381,7 +377,6 @@ class PmaUnifiedAutomationAdapter:
             payload=dict(event.payload),
             created_at=getattr(wakeup, "created_at", None),
         )
-        job.pma_lane_id = getattr(wakeup, "lane_id", None) or "pma:default"
         job.result_summary = getattr(wakeup, "reason", None)
         return job
 
@@ -521,12 +516,11 @@ class PmaLegacyAutomationMigration:
                 "run_id": row["run_id"],
                 "thread_id": row["thread_target_id"],
             },
-            executor_kind=EXECUTOR_PMA_TURN,
+            executor_kind=EXECUTOR_MANAGED_THREAD_TURN,
             executor={
-                "lane_id": row["lane_id"] or "pma:default",
                 "wake_up_kind": "pma_subscription",
                 "source": "transition",
-                "message": (
+                "message_text": (
                     "Automation wake-up received.\n"
                     "source: transition\n"
                     f"subscription_id: {row['subscription_id']}\n"
@@ -569,13 +563,11 @@ class PmaLegacyAutomationMigration:
                 "repo_id": row["repo_id"],
                 "thread_target_id": row["thread_target_id"],
             },
-            executor_kind=EXECUTOR_PMA_TURN,
+            executor_kind=EXECUTOR_MANAGED_THREAD_TURN,
             executor={
-                "lane_id": _json_object_from_row(row, "payload_json").get("lane_id")
-                or "pma:default",
                 "source": "timer",
                 "wake_up_kind": "pma_timer",
-                "message": (
+                "message_text": (
                     "Automation wake-up received.\n"
                     "source: timer\n"
                     f"timer_id: {row['timer_id']}"
@@ -655,9 +647,8 @@ class PmaLegacyAutomationMigration:
                 "repo_id": row["repo_id"],
                 "thread_target_id": row["thread_target_id"],
             },
-            executor_kind=EXECUTOR_PMA_TURN,
+            executor_kind=EXECUTOR_MANAGED_THREAD_TURN,
             executor={
-                "lane_id": row["lane_id"],
                 "wake_up_kind": "pma_legacy_wakeup",
             },
             metadata={
@@ -683,8 +674,7 @@ class PmaLegacyAutomationMigration:
                 "thread_target_id": row["thread_target_id"],
             },
             executor={
-                "kind": EXECUTOR_PMA_TURN,
-                "lane_id": row["lane_id"],
+                "kind": EXECUTOR_MANAGED_THREAD_TURN,
                 "wake_up_kind": "pma_legacy_wakeup",
             },
             policy={
@@ -698,7 +688,6 @@ class PmaLegacyAutomationMigration:
             created_at=row["created_at"],
         )
         job.state = JOB_SUCCEEDED if row["completed_at"] else JOB_PENDING
-        job.pma_lane_id = row["lane_id"]
         job.result_summary = row["reason_text"]
         return job
 

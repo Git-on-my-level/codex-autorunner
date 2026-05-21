@@ -19,7 +19,6 @@ from .models import (
     EXECUTOR_GITHUB_COMMENT,
     EXECUTOR_GITHUB_REACTION,
     EXECUTOR_MANAGED_THREAD_TURN,
-    EXECUTOR_PMA_TURN,
     EXECUTOR_PUBLISH_CHAT_NOTIFICATION,
     EXECUTOR_PUBLISH_OPERATION,
     EXECUTOR_TICKET_FLOW,
@@ -118,14 +117,14 @@ AUTOMATION_PRESET_DESCRIPTORS: dict[str, AutomationPresetDescriptor] = {
         automation_kind="security_scan_pr",
         description=("Daily PMA security scan that opens a PR when issues are found."),
         schedule_kind=SCHEDULE_DAILY,
-        executor_kind=EXECUTOR_PMA_TURN,
+        executor_kind=EXECUTOR_MANAGED_THREAD_TURN,
         target_policy=TARGET_POLICY_HUB,
         default_timezone="UTC",
         default_hour=9,
         default_minute=0,
         default_weekday=None,
         target_shape={"repo_id": "{repo_id}"},
-        executor_shape={"lane_id": "pma:default", "message": "{prompt}"},
+        executor_shape={"message_text": "{prompt}"},
         policy={
             "approval_mode": "never_require_approval",
             "max_attempts": 3,
@@ -537,7 +536,7 @@ def run_automation_now(
     )
     saved_event = store.record_event(event)
     result = AutomationRuleEngine(store).enqueue_job_for_rule(rule, saved_event)
-    process_now = getattr(supervisor, "process_pma_automation_now", None)
+    process_now = getattr(supervisor, "process_automation_now", None)
     processed: dict[str, Any] = {}
     if callable(process_now):
         processed_result = process_now(include_timers=False)
@@ -574,7 +573,7 @@ def display_kind(rule: AutomationRule) -> str:
         return kind
     if rule.executor_kind == EXECUTOR_TICKET_FLOW:
         return "ticket_flow"
-    if rule.executor_kind == EXECUTOR_PMA_TURN:
+    if rule.executor_kind == EXECUTOR_MANAGED_THREAD_TURN:
         return "pma_prompt"
     return rule.executor_kind
 
@@ -741,6 +740,7 @@ def _trigger_summary(rule: AutomationRule) -> dict[str, Any]:
 def _message_projection(rule: AutomationRule) -> dict[str, Any]:
     executor = rule.executor
     for key, field in (
+        ("message_text", "prompt"),
         ("message", "prompt"),
         ("prompt", "prompt"),
         ("prompt_template", "prompt_template"),
@@ -918,7 +918,6 @@ def _product_diagnostics(
 
 def _executor_label(executor_kind: str) -> str:
     return {
-        EXECUTOR_PMA_TURN: "PMA turn",
         EXECUTOR_TICKET_FLOW: "Ticket flow",
         EXECUTOR_MANAGED_THREAD_TURN: "Managed thread turn",
         EXECUTOR_PUBLISH_OPERATION: "Publish operation",
@@ -1109,10 +1108,8 @@ def _build_security_scan_pr(
         filters={"schedule.rule_id": rule_id},
         target_policy=TARGET_POLICY_HUB,
         target={"repo_id": repo_id},
-        executor_kind=EXECUTOR_PMA_TURN,
-        executor=_executor_with_agent_options(
-            {"lane_id": "pma:default", "message": prompt}, payload
-        ),
+        executor_kind=EXECUTOR_MANAGED_THREAD_TURN,
+        executor=_executor_with_agent_options({"message_text": prompt}, payload),
         enabled=payload.enabled,
         policy=policy,
         metadata={

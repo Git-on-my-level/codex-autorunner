@@ -179,7 +179,7 @@ def test_route_event_flow_completed_records_unified_event_and_job(
     assert saved_event is not None
     assert saved_event.event_type == "lifecycle.flow_completed"
     job = automation_store.list_jobs()[0]
-    assert job.executor["kind"] == "pma_turn"
+    assert job.executor["kind"] == "managed_thread_turn"
     assert job.dedupe_key == f"lifecycle:{event.event_id}"
     assert job.policy["reactive_debounce_key"].endswith(":repo-1:run-1")
 

@@ -1032,7 +1032,7 @@ class HubSharedStateService:
             field_name="limit",
             default=100,
         )
-        result = self._supervisor.process_pma_automation_now(
+        result = self._supervisor.process_automation_now(
             include_timers=include_timers,
             limit=limit,
         )

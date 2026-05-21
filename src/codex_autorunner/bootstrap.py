@@ -319,24 +319,25 @@ You are an **abstraction layer, not an executor**. Coordinate tickets and flows 
 ## Automation primitives (event-driven continuity)
 
 - Use automation when a lane should continue without manual polling.
-- PMA subscription and timer endpoints are compatibility adapters backed by
-  unified `AutomationRule`, `AutomationSchedule`, and `AutomationJob` rows.
-- Subscriptions: run/thread transition triggers enqueue PMA automation jobs.
-  - `POST /hub/pma/subscriptions`
-  - `GET /hub/pma/subscriptions`
-  - `DELETE /hub/pma/subscriptions/{subscription_id}`
-- Timers:
-  - one-shot (`timer_type=one_shot`, `delay_seconds`)
-  - watchdog (`timer_type=watchdog`, `idle_seconds`, optional `touch`)
-  - `POST /hub/pma/timers`, `GET /hub/pma/timers`
-  - `POST /hub/pma/timers/{timer_id}/touch`
-  - `POST /hub/pma/timers/{timer_id}/cancel`
+- Generalized automation is the canonical path: behavior is stored as
+  `AutomationRule`, `AutomationSchedule`, `AutomationEvent`, and
+  `AutomationJob` rows in hub orchestration state.
+- Use `car automation list/status/run/pause/resume --path <hub_root>` for
+  scheduled automations. `car pma automation ...` is only an alias.
+- Managed-thread terminal follow-up should be requested at spawn/send time:
+  `--notify-on terminal`, optional `--notify-lane`, and
+  `--notify-once/--no-notify-once`.
+- Thread-scoped subscriptions can be created without raw API calls:
+  `car pma thread subscribe --id <managed_thread_id> --path <hub_root>`.
+- `car hub subscription list/cancel --path <hub_root>` inspects/cancels the
+  managed-thread lifecycle subscription rules in the generalized store.
 - Typical event_types:
   - ticket flow: `flow_paused`, `flow_completed`, `flow_failed`, `flow_stopped`
   - managed thread: `managed_thread_completed`, `managed_thread_failed`
-- Canonical durable state is stored in hub `orchestration.sqlite3`; the
-  `.codex-autorunner/pma/automation_store.json` file is a compatibility mirror.
-- Practical recipes are in the hub-scoped PMA operations guide under “PMA automation wake-ups”.
+- Legacy `/hub/pma/subscriptions` and `/hub/pma/timers` route names remain as
+  compatibility aliases, but they write generalized automation rows directly.
+- Practical recipes are in the hub-scoped PMA operations guide under
+  “Managed-thread automation wake-ups”.
 
 ## Destinations (execution runtime)
 
@@ -541,17 +542,22 @@ Do NOT copy `.codex-autorunner/` between worktrees:
 - Initial hygiene categories cover stale PMA inbox files, dormant managed-thread
   followups, automation artifacts, and PMA dispatch alerts.
 
-## PMA automation wake-ups (subscriptions + timers)
+## Managed-thread automation wake-ups
 
 Use automation to keep multi-lane work moving without explicit polling.
-These PMA endpoints are compatibility adapters over the unified automation
-plane: built-in and user-created behavior is represented as rules, schedules,
-events, jobs, and attempts in hub orchestration state.
+Built-in and user-created behavior is represented as rules, schedules, events,
+jobs, and attempts in hub orchestration state.
 
 What to configure:
 - Subscriptions:
-  - trigger on lifecycle transitions and enqueue PMA automation jobs.
-  - create/list/delete:
+  - trigger on lifecycle transitions and enqueue generalized automation jobs.
+  - preferred CLI:
+    - `car pma thread spawn ... --notify-on terminal --path <hub_root>`
+    - `car pma thread send ... --notify-on terminal --path <hub_root>`
+    - `car pma thread subscribe --id <managed_thread_id> --path <hub_root>`
+    - `car hub subscription list --path <hub_root>`
+    - `car hub subscription cancel --id <subscription_id> --path <hub_root>`
+  - PMA route aliases:
     - `POST /hub/pma/subscriptions`
     - `GET /hub/pma/subscriptions`
     - `DELETE /hub/pma/subscriptions/{subscription_id}`
@@ -561,11 +567,13 @@ What to configure:
 - Timers:
   - one-shot (`timer_type=one_shot`, `delay_seconds`)
   - watchdog (`timer_type=watchdog`, `idle_seconds`)
-  - create/list/touch/cancel:
+  - create/list/touch/cancel through PMA route aliases:
     - `POST /hub/pma/timers`
     - `GET /hub/pma/timers`
     - `POST /hub/pma/timers/{timer_id}/touch`
     - `POST /hub/pma/timers/{timer_id}/cancel`
+  - scheduled product automations should use `car automation ...`, not PMA
+    timer records.
 
 Example payloads:
 ```json
@@ -596,7 +604,6 @@ Notes:
 - Wake-up payloads include `repo_id`, `run_id`/`thread_id`, `from_state`, `to_state`, `reason`, `timestamp`, and `lane_id`.
 - Handlers should be idempotent; duplicate events can occur by design.
 - Canonical durable storage: hub `orchestration.sqlite3` automation tables.
-- Compatibility mirror: `.codex-autorunner/pma/automation_store.json`.
 """
     )
 

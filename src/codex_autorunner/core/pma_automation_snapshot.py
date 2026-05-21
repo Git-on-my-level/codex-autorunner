@@ -3,7 +3,11 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from .automation import AutomationStore
+from .automation import (
+    PMA_SUBSCRIPTION_RULE_PREFIX,
+    PMA_TIMER_RULE_PREFIX,
+    AutomationStore,
+)
 from .hub import HubSupervisor
 
 _logger = logging.getLogger(__name__)
@@ -24,90 +28,40 @@ def empty_automation_snapshot() -> dict[str, Any]:
     }
 
 
-def _coerce_automation_items(payload: Any, *, key: str) -> list[dict[str, Any]]:
-    if isinstance(payload, list):
-        return [entry for entry in payload if isinstance(entry, dict)]
-    if isinstance(payload, dict):
-        candidate = payload.get(key)
-        if isinstance(candidate, list):
-            return [entry for entry in candidate if isinstance(entry, dict)]
-    return []
-
-
-def _call_automation_list(
-    method: Any, *, key: str, **kwargs: Any
-) -> list[dict[str, Any]]:
-    if not callable(method):
-        return []
-    try:
-        result = method(**kwargs)
-    except TypeError:
-        try:
-            result = method()
-        except (TypeError, RuntimeError, ValueError):
-            return []
-    except (RuntimeError, ValueError):
-        return []
-    return _coerce_automation_items(result, key=key)
-
-
-def _wakeup_sort_key(entry: dict[str, Any]) -> tuple[str, str, str]:
-    timestamp = str(entry.get("timestamp") or "").strip()
-    updated_at = str(entry.get("updated_at") or "").strip()
-    wakeup_id = str(entry.get("wakeup_id") or "").strip()
-    return (timestamp, updated_at, wakeup_id)
-
-
 def snapshot_pma_automation(
     supervisor: HubSupervisor, *, max_items: int = 10
 ) -> dict[str, Any]:
     out = empty_automation_snapshot()
+    hub_root = getattr(getattr(supervisor, "hub_config", None), "root", None)
+    if hub_root is None:
+        return out
     try:
-        store = supervisor.pma_automation_store
-    except (AttributeError, RuntimeError, TypeError):
+        store = AutomationStore(hub_root)
+        rules = store.list_rules()
+        schedules = store.list_schedules()
+        pending_jobs = store.list_jobs(state="pending", limit=max_items)
+    except (RuntimeError, OSError, ValueError, TypeError):
+        _logger.exception("Failed to read automation snapshot")
         return out
 
-    subscriptions = _call_automation_list(
-        getattr(store, "list_subscriptions", None), key="subscriptions"
-    )
-    subscriptions_sample = _call_automation_list(
-        getattr(store, "list_subscriptions", None),
-        key="subscriptions",
-        limit=max_items,
-    )
-    timers = _call_automation_list(getattr(store, "list_timers", None), key="timers")
-    timers_sample = _call_automation_list(
-        getattr(store, "list_timers", None),
-        key="timers",
-        limit=max_items,
-    )
-    pending_wakeups = _call_automation_list(
-        getattr(store, "list_wakeups", None), key="wakeups", state_filter="pending"
-    )
-    queued_wakeups = _call_automation_list(
-        getattr(store, "list_wakeups", None), key="wakeups", state_filter="queued"
-    )
-    pending_wakeups = [*pending_wakeups, *queued_wakeups]
-    if not pending_wakeups:
-        pending_wakeups = _call_automation_list(
-            getattr(store, "list_pending_wakeups", None), key="wakeups"
-        )
-    pending_wakeups_sample = sorted(
-        pending_wakeups,
-        key=_wakeup_sort_key,
-        reverse=True,
-    )[:max_items]
-    dispatched_wakeups = _call_automation_list(
-        getattr(store, "list_wakeups", None),
-        key="wakeups",
-        state_filter="dispatched",
-    )
-    worker_started_wakeups = _call_automation_list(
-        getattr(store, "list_wakeups", None),
-        key="wakeups",
-        state_filter="worker_started",
-    )
-    dispatched_wakeups = [*dispatched_wakeups, *worker_started_wakeups]
+    subscription_rules = [
+        rule
+        for rule in rules
+        if rule.rule_id.startswith(PMA_SUBSCRIPTION_RULE_PREFIX)
+        or rule.metadata.get("purpose")
+        in {"managed_thread_lifecycle_subscription", "pma_lifecycle_subscription"}
+    ]
+    timer_rules = {
+        rule.rule_id: rule
+        for rule in rules
+        if rule.rule_id.startswith(PMA_TIMER_RULE_PREFIX)
+        or rule.metadata.get("purpose") in {"managed_thread_timer", "pma_timer"}
+    }
+    timer_schedules = [
+        schedule
+        for schedule in schedules
+        if schedule.rule_id in timer_rules and schedule.state == "active"
+    ]
 
     def _pick(entry: dict[str, Any], fields: tuple[str, ...]) -> dict[str, Any]:
         picked: dict[str, Any] = {}
@@ -121,10 +75,10 @@ def snapshot_pma_automation(
         return picked
 
     out["subscriptions"] = {
-        "active_count": len(subscriptions),
+        "active_count": sum(1 for rule in subscription_rules if rule.enabled),
         "sample": [
             _pick(
-                entry,
+                _subscription_row_from_rule(rule),
                 (
                     "subscription_id",
                     "event_types",
@@ -137,11 +91,12 @@ def snapshot_pma_automation(
                     "reason",
                 ),
             )
-            for entry in subscriptions_sample[:max_items]
+            for rule in subscription_rules[:max_items]
         ],
     }
+    timer_rows = _timer_rows_from_rules_and_schedules(timer_rules, timer_schedules)
     out["timers"] = {
-        "pending_count": len(timers),
+        "pending_count": len(timer_rows),
         "sample": [
             _pick(
                 entry,
@@ -157,32 +112,35 @@ def snapshot_pma_automation(
                     "reason",
                 ),
             )
-            for entry in timers_sample[:max_items]
+            for entry in timer_rows[:max_items]
         ],
     }
     out["wakeups"] = {
-        "pending_count": len(pending_wakeups),
-        "dispatched_recent_count": len(dispatched_wakeups),
+        "pending_count": len(pending_jobs),
+        "dispatched_recent_count": 0,
         "pending_sample": [
             _pick(
-                entry,
+                {
+                    **job.to_dict(),
+                    **(
+                        job.target
+                        if isinstance(getattr(job, "target", None), dict)
+                        else {}
+                    ),
+                },
                 (
-                    "wakeup_id",
-                    "source",
-                    "event_type",
-                    "subscription_id",
-                    "timer_id",
+                    "job_id",
+                    "rule_id",
+                    "event_id",
+                    "state",
+                    "available_at",
                     "repo_id",
                     "run_id",
                     "thread_id",
-                    "lane_id",
-                    "from_state",
-                    "to_state",
-                    "reason",
-                    "timestamp",
+                    "result_summary",
                 ),
             )
-            for entry in pending_wakeups_sample[:max_items]
+            for job in pending_jobs[:max_items]
         ],
     }
     _attach_unified_automation_snapshot(supervisor, out, max_items=max_items)
@@ -273,3 +231,54 @@ def _attach_unified_automation_snapshot(
             for job in recent_jobs[:max_items]
         ],
     }
+
+
+def _subscription_row_from_rule(rule: Any) -> dict[str, Any]:
+    executor = rule.executor if isinstance(rule.executor, dict) else {}
+    target = rule.target if isinstance(rule.target, dict) else {}
+    filters = rule.filters if isinstance(rule.filters, dict) else {}
+    return {
+        "subscription_id": rule.metadata.get("legacy_subscription_id")
+        or rule.rule_id.removeprefix(PMA_SUBSCRIPTION_RULE_PREFIX),
+        "event_types": list(rule.trigger.get("event_types") or []),
+        "repo_id": target.get("repo_id") or filters.get("event.repo_id"),
+        "run_id": target.get("run_id") or filters.get("event.payload.run_id"),
+        "thread_id": target.get("thread_id") or filters.get("event.payload.thread_id"),
+        "lane_id": executor.get("lane_id") or "pma:default",
+        "from_state": filters.get("event.payload.from_state"),
+        "to_state": filters.get("event.payload.to_state"),
+        "reason": rule.metadata.get("legacy_reason"),
+    }
+
+
+def _timer_rows_from_rules_and_schedules(
+    rules: dict[str, Any], schedules: list[Any]
+) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for schedule in schedules:
+        rule = rules.get(schedule.rule_id)
+        if rule is None:
+            continue
+        schedule_config = (
+            schedule.schedule if isinstance(schedule.schedule, dict) else {}
+        )
+        payload = schedule_config.get("payload")
+        payload = payload if isinstance(payload, dict) else {}
+        rows.append(
+            {
+                "timer_id": payload.get("timer_id")
+                or rule.metadata.get("legacy_timer_id")
+                or schedule.schedule_id.removeprefix("pma-timer:"),
+                "timer_type": payload.get("timer_type")
+                or schedule_config.get("timer_kind")
+                or "one_shot",
+                "due_at": schedule.next_fire_at,
+                "idle_seconds": payload.get("idle_seconds"),
+                "repo_id": payload.get("repo_id"),
+                "run_id": payload.get("run_id"),
+                "thread_id": payload.get("thread_id"),
+                "lane_id": payload.get("lane_id") or "pma:default",
+                "reason": payload.get("reason"),
+            }
+        )
+    return rows

@@ -497,7 +497,7 @@ def _install_inprocess_hub_client_stubs_for_lab() -> None:
             _ = workspace_root, repo_id_hint
             return 0
 
-        def process_pma_automation_now(
+        def process_automation_now(
             self, *, include_timers: bool = True, limit: int = 100
         ) -> dict[str, int]:
             return {

@@ -9,7 +9,6 @@ from codex_autorunner.core.automation import (
 )
 from codex_autorunner.core.automation.models import (
     EXECUTOR_MANAGED_THREAD_TURN,
-    EXECUTOR_PMA_TURN,
     EXECUTOR_PUBLISH_OPERATION,
     EXECUTOR_TICKET_FLOW,
     SCHEDULE_DAILY,
@@ -34,11 +33,11 @@ def test_canonical_automation_contracts_cover_supported_rule_shapes() -> None:
         executor={"prompt_template": "Review {{ event.repo_id }}"},
     )
     manual_rule = AutomationRule.create(
-        name="Manual PMA turn",
+        name="Manual managed thread turn",
         trigger_kind=TRIGGER_KIND_MANUAL,
         trigger={"event_types": ["manual.run"]},
         target_policy=TARGET_POLICY_HUB,
-        executor_kind=EXECUTOR_PMA_TURN,
+        executor_kind=EXECUTOR_MANAGED_THREAD_TURN,
         executor={"message": "Wake {{ event.payload.prompt }}"},
     )
     ticket_flow_rule = AutomationRule.create(
@@ -107,7 +106,7 @@ def test_canonical_schedule_contracts_cover_supported_schedule_shapes() -> None:
                 "trigger_kind": TRIGGER_KIND_EVENT,
                 "trigger": {"event_type": "manual.run"},
                 "target_policy": TARGET_POLICY_HUB,
-                "executor_kind": EXECUTOR_PMA_TURN,
+                "executor_kind": EXECUTOR_MANAGED_THREAD_TURN,
             },
             "AUTOMATION_CONTRACT_LEGACY_TRIGGER",
         ),
@@ -116,7 +115,7 @@ def test_canonical_schedule_contracts_cover_supported_schedule_shapes() -> None:
                 "trigger_kind": TRIGGER_KIND_EVENT,
                 "trigger": {"event_types": []},
                 "target_policy": TARGET_POLICY_HUB,
-                "executor_kind": EXECUTOR_PMA_TURN,
+                "executor_kind": EXECUTOR_MANAGED_THREAD_TURN,
             },
             "AUTOMATION_CONTRACT_INVALID_LIST",
         ),

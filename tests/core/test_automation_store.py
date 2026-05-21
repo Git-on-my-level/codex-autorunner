@@ -14,7 +14,6 @@ from codex_autorunner.core.automation import (
 )
 from codex_autorunner.core.automation.models import (
     EXECUTOR_MANAGED_THREAD_TURN,
-    EXECUTOR_PMA_TURN,
     JOB_CLAIMED,
     JOB_DEAD_LETTERED,
     JOB_FAILED,
@@ -381,7 +380,7 @@ def test_schedule_crud(tmp_path) -> None:
         trigger_kind=TRIGGER_KIND_SCHEDULE,
         trigger={"schedule_kind": SCHEDULE_DAILY},
         target_policy=TARGET_POLICY_HUB,
-        executor_kind=EXECUTOR_PMA_TURN,
+        executor_kind=EXECUTOR_MANAGED_THREAD_TURN,
     )
     store.upsert_rule(rule)
 
@@ -512,7 +511,7 @@ def test_explicit_legacy_pma_migration_creates_unified_rows(tmp_path) -> None:
         for rule in store.list_rules()
     )
     assert store.list_events()[0].event_type == "lifecycle.flow_failed"
-    assert store.list_jobs()[0].pma_lane_id == "pma:default"
+    assert store.list_jobs()[0].executor["kind"] == EXECUTOR_MANAGED_THREAD_TURN
     assert (
         store.list_attempts("legacy-pma-wakeup:wakeup-legacy")[0].status == "succeeded"
     )

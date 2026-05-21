@@ -63,7 +63,7 @@ class _SupervisorStub:
         self.setup_calls.append((workspace_root, repo_id_hint))
         return 2
 
-    def process_pma_automation_now(
+    def process_automation_now(
         self, *, include_timers: bool = True, limit: int = 100
     ) -> dict[str, int]:
         self.automation_calls.append((include_timers, limit))
@@ -599,7 +599,7 @@ def test_shared_state_service_automation_rule_crud_and_manual_run(
                     "trigger": {"schedule_kind": "daily"},
                     "target_policy": "hub",
                     "target": {"repo_id": "repo-1"},
-                    "executor_kind": "pma_turn",
+                    "executor_kind": "managed_thread_turn",
                     "executor": {
                         "lane_id": "pma:default",
                         "api_token": "secret-value",
@@ -684,7 +684,7 @@ def test_shared_state_service_automation_job_cancel_retry_and_detail(
                     "event_types": ["scm.github.pull_request.opened"],
                 },
                 "target_policy": "hub",
-                "executor_kind": "pma_turn",
+                "executor_kind": "managed_thread_turn",
             }
         )
     )
