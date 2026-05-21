@@ -2513,8 +2513,7 @@ const ORPHAN_SCOPE_GROUP_KEY = '__orphan__';
  * single trailing "Other worktrees" group.
  */
 export function groupPmaChatScopeOptions(options: PmaChatScopeOption[]): PmaChatScopeGroupView {
-  // The local-hub option is a static constant; `buildPmaChatScopeOptions` always prepends it.
-  const local: PmaChatScopeLocalOption = localPmaChatScopeOption();
+  const local = options.find((opt): opt is PmaChatScopeLocalOption => opt.kind === 'local') ?? null;
   const groups: PmaChatScopeGroup[] = [];
   const byKey = new Map<string, PmaChatScopeGroup>();
 
