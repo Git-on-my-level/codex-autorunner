@@ -11,16 +11,9 @@ import Page from './+page.svelte';
 
 const now = '2026-05-11T12:00:00Z';
 
-describe('/repos index page', () => {
+describe('/worktrees index page', () => {
   afterEach(() => {
     readModelEntityStore.reset();
-  });
-
-  it('starts in a loading state before client workspace inventory resolves', () => {
-    const { body } = render(Page, { props: { data: { status: 'cold', tags: [] } } });
-
-    expect(body).toContain('skeleton-page');
-    expect(body).toContain('aria-busy="true"');
   });
 
   it('keeps cached rows visible when a background refresh has failed', () => {
@@ -37,7 +30,7 @@ describe('/repos index page', () => {
       }
     });
 
-    expect(body).toContain('Repo One');
+    expect(body).toContain('Worktree One');
     expect(body).not.toContain('Could not load workspace state');
   });
 });

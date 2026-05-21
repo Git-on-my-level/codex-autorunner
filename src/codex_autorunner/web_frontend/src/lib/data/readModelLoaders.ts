@@ -2,6 +2,7 @@ import { browser } from '$app/environment';
 import type { ApiError } from '$lib/api/client';
 import {
   readModelEntityStore,
+  repoWorktreeWindowKey,
   type ReadModelEntityState,
   type ReadModelEntityStore
 } from './readModelStore';
@@ -92,14 +93,15 @@ export async function ensureRepoWorktreeIndexLoaded(
   options: ReadModelLoaderOptions & { limit?: number } = {}
 ): Promise<ReadModelLoaderResult> {
   const tags = [readModelEntityTags.repoWorktreeIndex];
+  const limit = options.limit ?? 200;
   return ensureSnapshotLoaded({
     tags,
     options,
-    isCached: (state) => Boolean(state.cursors['repo_worktree.topology'] && state.cursors['repo_worktree.runtime']),
+    isCached: (state) => isRepoWorktreeIndexWindowCached(state, limit),
     fetchAndApply: async (client, store) => {
       const [topology, runtime] = await Promise.all([
-        client.repoWorktreeTopology('all', options.limit ?? 200),
-        client.repoWorktreeRuntime('all', options.limit ?? 200)
+        client.repoWorktreeTopology('all', limit),
+        client.repoWorktreeRuntime('all', limit)
       ]);
       if (!topology.ok) return topology;
       if (!runtime.ok) return runtime;
@@ -108,6 +110,30 @@ export async function ensureRepoWorktreeIndexLoaded(
       return runtime;
     }
   });
+}
+
+export function isRepoWorktreeIndexWindowCached(
+  state: ReadModelEntityState,
+  limit = 200
+): boolean {
+  const window = state.repoWorktreeWindows[repoWorktreeWindowKey('all', limit)];
+  if (!window?.topologyWindow || !window.runtimeWindow) return false;
+  const topologyLoaded = window.repoIds.length + window.worktreeIds.length;
+  const runtimeLoaded = window.runtimeIds.length;
+  return (
+    windowCompletesRequest(window.topologyWindow, topologyLoaded, limit) &&
+    windowCompletesRequest(window.runtimeWindow, runtimeLoaded, limit)
+  );
+}
+
+function windowCompletesRequest(
+  window: { limit: number; totalEstimate?: number | null; totalIsExact: boolean },
+  loaded: number,
+  requestedLimit: number
+): boolean {
+  if (window.limit < requestedLimit) return false;
+  if (!window.totalIsExact || window.totalEstimate == null) return loaded >= requestedLimit;
+  return loaded >= Math.min(window.totalEstimate, requestedLimit);
 }
 
 export async function ensureTicketDetailLoaded(

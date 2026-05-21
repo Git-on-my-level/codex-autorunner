@@ -27,26 +27,27 @@
       'worktree'
     )
   );
+  const hasCachedRows = $derived(Boolean(index && index.rows.length > 0));
   let refreshing = $state<boolean>(false);
   let coldHydrating = $state<boolean>(true);
   let refreshError = $state<ApiError | null>(null);
-  const loading = $derived((data.status === 'cold' && coldHydrating) || refreshing);
-  const error = $derived(refreshError ?? (data.status === 'error' ? data.error : null));
+  const loading = $derived((data.status === 'cold' && coldHydrating && !hasCachedRows) || (refreshing && !hasCachedRows));
+  const error = $derived(!hasCachedRows ? refreshError ?? (data.status === 'error' ? data.error : null) : null);
   let notice = $state<ActionNotice | null>(null);
 
   onMount(() => {
     unsubscribeReadModels = readModelEntityStore.subscribe((state) => {
       readModelState = state;
     });
-    if (data.status === 'cold') void loadWorktrees();
+    void loadWorktrees({ showLoading: data.status === 'cold' && !hasCachedRows });
   });
 
   onDestroy(() => {
     unsubscribeReadModels?.();
   });
 
-  async function loadWorktrees(): Promise<void> {
-    refreshing = true;
+  async function loadWorktrees(options: { showLoading?: boolean } = {}): Promise<void> {
+    if (options.showLoading !== false) refreshing = true;
     refreshError = null;
     try {
       const result = await ensureRepoWorktreeIndexLoaded({ refresh: true });
