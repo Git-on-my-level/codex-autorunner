@@ -121,6 +121,7 @@ class AutomationChildRunReconciler:
                 self._store.fail_job(
                     job.job_id,
                     error_text=_pma_queue_error_summary(item),
+                    execution_refs=refs,
                 )
                 return ChildReconcileResult(failed=1)
             child_result = self._reconcile_completed_pma_child(job, item)
@@ -138,6 +139,7 @@ class AutomationChildRunReconciler:
         self._store.fail_job(
             job.job_id,
             error_text=_pma_queue_error_summary(item),
+            execution_refs=refs,
         )
         return ChildReconcileResult(failed=1)
 

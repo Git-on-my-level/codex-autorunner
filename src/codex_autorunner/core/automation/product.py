@@ -10,7 +10,11 @@ from zoneinfo import ZoneInfo
 
 from ..time_utils import now_iso
 from .engine import AutomationRuleEngine
-from .execution_graph import automation_execution_snapshot
+from .execution_graph import (
+    AutomationExecutionSnapshot,
+    automation_execution_snapshot,
+    automation_execution_snapshots_by_job_id,
+)
 from .models import (
     EXECUTOR_GITHUB_COMMENT,
     EXECUTOR_GITHUB_REACTION,
@@ -240,6 +244,14 @@ def automation_rows(
         rule_ids, per_rule_limit=recent_job_limit
     )
     job_counts_by_rule = store.job_counts_by_rule(rule_ids)
+    all_jobs = [
+        job
+        for rule in rules
+        for job in recent_jobs_by_rule.get(rule.rule_id, [])
+    ]
+    execution_snapshots = automation_execution_snapshots_by_job_id(
+        all_jobs, hub_root=store.hub_root
+    )
     return [
         _automation_row_from_enrichment(
             rule,
@@ -247,6 +259,7 @@ def automation_rows(
             schedules=schedules_by_rule.get(rule.rule_id, []),
             recent_jobs=recent_jobs_by_rule.get(rule.rule_id, []),
             job_count=job_counts_by_rule.get(rule.rule_id, 0),
+            execution_snapshots=execution_snapshots,
         )
         for rule in rules
     ]
@@ -278,10 +291,16 @@ def _automation_row_from_enrichment(
     schedules: list[AutomationSchedule],
     recent_jobs: list[AutomationJob],
     job_count: int,
+    execution_snapshots: Optional[dict[str, AutomationExecutionSnapshot]] = None,
 ) -> dict[str, Any]:
     last_job = recent_jobs[0] if recent_jobs else None
     schedule = schedules[0] if schedules else None
     typed = _typed_product_projection(rule, schedule)
+    snapshots = execution_snapshots
+    if snapshots is None and recent_jobs:
+        snapshots = automation_execution_snapshots_by_job_id(
+            recent_jobs, hub_root=store.hub_root
+        )
     return {
         "id": rule.rule_id,
         "name": rule.name,
@@ -299,7 +318,10 @@ def _automation_row_from_enrichment(
         "metadata": rule.metadata,
         "schedule": schedule.to_dict() if schedule is not None else None,
         "last_job": last_job.to_dict() if last_job is not None else None,
-        "jobs": [_automation_job_row(job, store=store) for job in recent_jobs],
+        "jobs": [
+            _automation_job_row(job, store=store, execution_snapshots=snapshots)
+            for job in recent_jobs
+        ],
         "job_count": job_count,
         "created_at": rule.created_at,
         "updated_at": rule.updated_at,
@@ -308,12 +330,22 @@ def _automation_row_from_enrichment(
 
 
 def _automation_job_row(
-    job: AutomationJob, *, store: Optional[AutomationStore] = None
+    job: AutomationJob,
+    *,
+    store: Optional[AutomationStore] = None,
+    execution_snapshots: Optional[dict[str, AutomationExecutionSnapshot]] = None,
 ) -> dict[str, Any]:
-    child_execution = automation_execution_snapshot(
-        job,
-        hub_root=store.hub_root if store is not None else None,
-    ).to_dict()
+    snapshot = (
+        execution_snapshots.get(job.job_id)
+        if execution_snapshots is not None
+        else None
+    )
+    if snapshot is None:
+        snapshot = automation_execution_snapshot(
+            job,
+            hub_root=store.hub_root if store is not None else None,
+        )
+    child_execution = snapshot.to_dict()
     pma_queue_result = child_execution.get("pma_queue")
     return {
         "job_id": job.job_id,
