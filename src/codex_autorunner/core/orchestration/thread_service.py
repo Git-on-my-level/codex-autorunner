@@ -40,6 +40,7 @@ from .recovery_lifecycle import (
 )
 from .runtime_bindings import RuntimeThreadBinding
 from .turn_context import turn_assembly_from_request_metadata
+from .turn_execution_contract import TurnExecutionRequest
 
 MessagePreviewLimit = 120
 logger = logging.getLogger("codex_autorunner.core.orchestration.service")
@@ -287,6 +288,32 @@ class _ThreadQueueRequestAdapter:
             sandbox_policy=sandbox_policy,
         ).to_payload()
 
+    def queued_request_from_turn_request(
+        self, request: TurnExecutionRequest
+    ) -> QueuedExecutionRequest:
+        return QueuedExecutionRequest(
+            request=MessageRequest(
+                target_id=request.target_id,
+                target_kind="thread",
+                message_text=request.prompt_text or "",
+                kind="review" if request.request_kind == "review" else "message",
+                busy_policy="queue",
+                agent_profile=request.profile,
+                model=request.model,
+                reasoning=request.reasoning,
+                approval_mode=request.approval_mode,
+                input_items=[dict(item) for item in request.input_items] or None,
+                context_profile=request.context_profile,
+                metadata=dict(request.metadata),
+            ),
+            client_request_id=request.client_request_id,
+            sandbox_policy=(
+                None
+                if request.sandbox_policy == "dangerFullAccess"
+                else request.sandbox_policy
+            ),
+        )
+
     def claim_next_queued_execution(
         self, thread_target_id: str
     ) -> Optional[_ClaimedThreadExecutionRequest]:
@@ -299,10 +326,15 @@ class _ThreadQueueRequestAdapter:
             raise KeyError(f"Unknown thread target '{thread_target_id}'")
         if not thread.workspace_root:
             raise RuntimeError("Thread target is missing workspace_root")
-        queued_request = QueuedExecutionRequest.from_payload(
-            payload,
-            thread_target_id=thread_target_id,
-        )
+        request_loader = getattr(self.thread_store, "get_turn_execution_request", None)
+        if not callable(request_loader):
+            raise RuntimeError("Thread store cannot load canonical turn requests")
+        turn_request = request_loader(thread_target_id, execution.execution_id)
+        if not isinstance(turn_request, TurnExecutionRequest):
+            raise RuntimeError(
+                f"Execution '{execution.execution_id}' is missing canonical turn request"
+            )
+        queued_request = self.queued_request_from_turn_request(turn_request)
         return _ClaimedThreadExecutionRequest(
             thread=thread,
             execution=execution,

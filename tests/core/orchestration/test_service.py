@@ -1356,6 +1356,19 @@ async def test_claim_next_queued_execution_context_preserves_typed_request_paylo
         client_request_id="client-2",
         sandbox_policy={"mode": "workspace-write"},
     )
+    stored_request = service.thread_store.get_turn_execution_request(
+        thread.thread_target_id,
+        queued.execution_id,
+    )
+    assert stored_request is not None
+    assert stored_request.request_id == queued.execution_id
+    assert stored_request.request_kind == "message"
+    assert stored_request.client_request_id == "client-2"
+    assert stored_request.model is None
+    assert stored_request.reasoning is None
+    assert stored_request.approval_mode == "never"
+    assert stored_request.approval_policy == "never"
+    assert stored_request.sandbox_policy == {"mode": "workspace-write"}
     service.record_execution_result(
         thread.thread_target_id,
         running.execution_id,
@@ -1389,6 +1402,14 @@ async def test_claim_next_queued_execution_context_preserves_typed_request_paylo
     assert claimed.request.metadata["capsule_refs"] == []
     assert claimed.client_request_id == "client-2"
     assert claimed.sandbox_policy == {"mode": "workspace-write"}
+    stored_record = service.thread_store.get_turn_execution_record(
+        thread.thread_target_id,
+        queued.execution_id,
+    )
+    assert stored_record is not None
+    assert stored_record.status == "running"
+    assert stored_record.request.request_id == queued.execution_id
+    assert stored_record.claimed_at is not None
 
 
 async def test_send_message_queues_when_thread_is_busy_by_default(

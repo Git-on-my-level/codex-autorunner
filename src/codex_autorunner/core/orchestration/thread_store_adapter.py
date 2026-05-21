@@ -20,6 +20,7 @@ from .managed_turn_lifecycle_contract import (
 from .models import ExecutionRecord, MessageRequestKind, ThreadTarget
 from .runtime_bindings import RuntimeThreadBinding
 from .thread_titles import choose_owned_thread_title
+from .turn_execution_contract import TurnExecutionRecord, TurnExecutionRequest
 
 logger = logging.getLogger(__name__)
 
@@ -381,6 +382,16 @@ class ManagedThreadExecutionStore(ThreadExecutionStore):
         if record is None:
             return None
         return _execution_record_from_store_row(record)
+
+    def get_turn_execution_request(
+        self, thread_target_id: str, execution_id: str
+    ) -> Optional[TurnExecutionRequest]:
+        return self._store.get_turn_execution_request(thread_target_id, execution_id)
+
+    def get_turn_execution_record(
+        self, thread_target_id: str, execution_id: str
+    ) -> Optional[TurnExecutionRecord]:
+        return self._store.get_turn_execution_record(thread_target_id, execution_id)
 
     def get_previous_completed_execution(
         self,
