@@ -7,6 +7,7 @@ from .builtins import (
 )
 from .engine import AutomationRuleEngine, RuleEvaluationResult, render_template
 from .executors import (
+    AgentTaskTurnAutomationExecutor,
     ManagedThreadTurnAutomationExecutor,
     PublishOperationAutomationExecutor,
 )
@@ -93,6 +94,7 @@ __all__ = [
     "AutomationJob",
     "AutomationJobAttempt",
     "AutomationJobWorker",
+    "AgentTaskTurnAutomationExecutor",
     "AutomationRule",
     "AutomationRuntimeContract",
     "AutomationRuleEngine",

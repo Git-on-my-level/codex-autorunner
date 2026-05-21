@@ -10,12 +10,14 @@ from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple
 from ..discovery import discover_and_init
 from ..manifest import Manifest
 from .automation import (
+    EXECUTOR_AGENT_TASK_TURN,
     EXECUTOR_GITHUB_COMMENT,
     EXECUTOR_GITHUB_REACTION,
     EXECUTOR_MANAGED_THREAD_TURN,
     EXECUTOR_PUBLISH_CHAT_NOTIFICATION,
     EXECUTOR_PUBLISH_OPERATION,
     EXECUTOR_TICKET_FLOW,
+    AgentTaskTurnAutomationExecutor,
     AutomationExecutorRegistry,
     ManagedThreadTurnAutomationExecutor,
     PublishOperationAutomationExecutor,
@@ -271,6 +273,16 @@ class HubSupervisor:
             ),
         )
         automation_executor_registry.register(
+            EXECUTOR_AGENT_TASK_TURN,
+            AgentTaskTurnAutomationExecutor(
+                hub_root=hub_config.root,
+                automation_store=AutomationStore(hub_config.root),
+                safety_checker_fn=lambda: self.ensure_pma_safety_checker(),
+                queue_worker_starter_fn=self._request_managed_thread_queue_worker_start,
+                queue_worker_available_fn=(self._managed_thread_queue_worker_available),
+            ),
+        )
+        automation_executor_registry.register(
             EXECUTOR_MANAGED_THREAD_TURN,
             ManagedThreadTurnAutomationExecutor(
                 hub_root=hub_config.root,
@@ -309,8 +321,8 @@ class HubSupervisor:
             automation_executor_registry=automation_executor_registry,
             logger=logger,
         )
-        self._lifecycle_orchestrator._process_event_fn = (
-            lambda event: self._process_lifecycle_event(event)
+        self._lifecycle_orchestrator._process_event_fn = lambda event: (
+            self._process_lifecycle_event(event)
         )
         self._repo_manager = RepoManager(
             hub_config,

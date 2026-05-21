@@ -19,6 +19,7 @@ from .models import (
     JOB_RUNNING,
     JOB_SKIPPED,
     JOB_SUCCEEDED,
+    AutomationChildExecutionEdge,
     AutomationEvent,
     AutomationJob,
     AutomationJobAttempt,
@@ -703,6 +704,100 @@ class AutomationStore:
             ).fetchall()
         return [self._row_to_attempt(row) for row in rows]
 
+    def upsert_child_execution_edge(
+        self, edge: AutomationChildExecutionEdge
+    ) -> AutomationChildExecutionEdge:
+        with open_orchestration_sqlite(self._hub_root, durable=self._durable) as conn:
+            with conn:
+                conn.execute(
+                    """
+                    INSERT INTO orch_automation_child_execution_edges (
+                        edge_id, parent_job_id, child_kind, child_id,
+                        authoritative_for_parent_completion,
+                        requested_runtime_json, actual_runtime_json,
+                        terminal_mapping_json, created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(parent_job_id, child_kind, child_id) DO UPDATE SET
+                        authoritative_for_parent_completion =
+                            excluded.authoritative_for_parent_completion,
+                        requested_runtime_json = excluded.requested_runtime_json,
+                        actual_runtime_json = excluded.actual_runtime_json,
+                        terminal_mapping_json = excluded.terminal_mapping_json,
+                        updated_at = excluded.updated_at
+                    """,
+                    (
+                        edge.edge_id,
+                        edge.parent_job_id,
+                        edge.child_kind,
+                        edge.child_id,
+                        1 if edge.authoritative_for_parent_completion else 0,
+                        _json_dumps(edge.requested_runtime.to_dict()),
+                        (
+                            _json_dumps(edge.actual_runtime.to_dict())
+                            if edge.actual_runtime is not None
+                            else None
+                        ),
+                        _json_dumps(edge.terminal_mapping),
+                        edge.created_at,
+                        edge.updated_at,
+                    ),
+                )
+        saved = self.get_child_execution_edge(edge.edge_id)
+        if saved is None:
+            saved = self.get_child_execution_edge_by_child(
+                parent_job_id=edge.parent_job_id,
+                child_kind=edge.child_kind,
+                child_id=edge.child_id,
+            )
+        if saved is None:
+            raise RuntimeError("failed to persist automation child execution edge")
+        return saved
+
+    def get_child_execution_edge(
+        self, edge_id: str
+    ) -> Optional[AutomationChildExecutionEdge]:
+        with open_orchestration_sqlite(self._hub_root, durable=self._durable) as conn:
+            row = conn.execute(
+                """
+                SELECT *
+                  FROM orch_automation_child_execution_edges
+                 WHERE edge_id = ?
+                """,
+                (edge_id,),
+            ).fetchone()
+        return self._row_to_child_execution_edge(row) if row is not None else None
+
+    def get_child_execution_edge_by_child(
+        self, *, parent_job_id: str, child_kind: str, child_id: str
+    ) -> Optional[AutomationChildExecutionEdge]:
+        with open_orchestration_sqlite(self._hub_root, durable=self._durable) as conn:
+            row = conn.execute(
+                """
+                SELECT *
+                  FROM orch_automation_child_execution_edges
+                 WHERE parent_job_id = ?
+                   AND child_kind = ?
+                   AND child_id = ?
+                """,
+                (parent_job_id, child_kind, child_id),
+            ).fetchone()
+        return self._row_to_child_execution_edge(row) if row is not None else None
+
+    def list_child_execution_edges(
+        self, parent_job_id: str
+    ) -> list[AutomationChildExecutionEdge]:
+        with open_orchestration_sqlite(self._hub_root, durable=self._durable) as conn:
+            rows = conn.execute(
+                """
+                SELECT *
+                  FROM orch_automation_child_execution_edges
+                 WHERE parent_job_id = ?
+                 ORDER BY created_at ASC, edge_id ASC
+                """,
+                (parent_job_id,),
+            ).fetchall()
+        return [self._row_to_child_execution_edge(row) for row in rows]
+
     def upsert_schedule(self, schedule: AutomationSchedule) -> AutomationSchedule:
         with open_orchestration_sqlite(self._hub_root, durable=self._durable) as conn:
             with conn:
@@ -1184,6 +1279,28 @@ class AutomationStore:
             error_text=row["error_text"],
             executor_result=_json_object_from_row(row, "executor_result_json"),
             execution_refs=_json_object_from_row(row, "execution_refs_json"),
+        )
+
+    def _row_to_child_execution_edge(
+        self, row: sqlite3.Row
+    ) -> AutomationChildExecutionEdge:
+        return AutomationChildExecutionEdge.create(
+            edge_id=row["edge_id"],
+            parent_job_id=row["parent_job_id"],
+            child_kind=row["child_kind"],
+            child_id=row["child_id"],
+            authoritative_for_parent_completion=normalize_bool(
+                row["authoritative_for_parent_completion"]
+            ),
+            requested_runtime=_json_loads_object(row["requested_runtime_json"]),
+            actual_runtime=(
+                _json_loads_object(row["actual_runtime_json"])
+                if row["actual_runtime_json"] is not None
+                else None
+            ),
+            terminal_mapping=_json_loads_object(row["terminal_mapping_json"]),
+            created_at=row["created_at"],
+            updated_at=row["updated_at"],
         )
 
     def _row_to_schedule(self, row: sqlite3.Row) -> AutomationSchedule:

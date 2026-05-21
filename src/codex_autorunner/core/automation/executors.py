@@ -22,6 +22,7 @@ from .models import (
     APPROVAL_INHERIT_PROFILE,
     APPROVAL_NEVER_REQUIRE_APPROVAL,
     APPROVAL_PAUSE_AND_REQUEST_USER,
+    AUTOMATION_CHILD_KIND_AGENT_TASK,
     EXECUTOR_GITHUB_COMMENT,
     EXECUTOR_GITHUB_REACTION,
     EXECUTOR_PUBLISH_CHAT_NOTIFICATION,
@@ -32,7 +33,9 @@ from .models import (
     JOB_RUNNING,
     JOB_SKIPPED,
     JOB_SUCCEEDED,
+    AutomationChildExecutionEdge,
     AutomationJob,
+    AutomationRuntimeContract,
 )
 from .store import AutomationStore
 from .worker import AutomationExecutorResult
@@ -75,6 +78,8 @@ class ManagedThreadTurnAutomationExecutor:
         queue_worker_starter_fn: Optional[Callable[[str], None]] = None,
         queue_worker_available_fn: Optional[Callable[[], bool]] = None,
         unattended: bool = True,
+        child_kind: Optional[str] = None,
+        strict_runtime_contract: bool = False,
     ) -> None:
         self._hub_root = hub_root
         self._store = automation_store
@@ -83,6 +88,8 @@ class ManagedThreadTurnAutomationExecutor:
         self._queue_worker_starter_fn = queue_worker_starter_fn
         self._queue_worker_available_fn = queue_worker_available_fn
         self._unattended = unattended
+        self._child_kind = child_kind
+        self._strict_runtime_contract = strict_runtime_contract
 
     def execute(self, job: AutomationJob) -> AutomationExecutorResult:
         if job.policy.get("requires_pma_safety"):
@@ -122,7 +129,15 @@ class ManagedThreadTurnAutomationExecutor:
                 data={"approval_mode": approval},
             )
 
-        request = self._request_config(job)
+        try:
+            request = self._request_config(job)
+        except ValueError as exc:
+            return AutomationExecutorResult(status=JOB_FAILED, summary=str(exc))
+        if self._child_kind is not None and self._store is None:
+            return AutomationExecutorResult(
+                status=JOB_FAILED,
+                summary="agent task automation requires automation store for child edge",
+            )
         thread_id = self._resolve_thread_id(job, request)
         prompt = _require_text(
             request.get("message_text")
@@ -151,13 +166,13 @@ class ManagedThreadTurnAutomationExecutor:
             or job.executor.get("client_turn_id")
             or job.executor.get("client_request_id")
         ) or _stable_client_turn_id(job)
-        existing = self._thread_store.get_turn_by_client_turn_id(
+        existing_without_edge = self._thread_store.get_turn_by_client_turn_id(
             thread_id, client_turn_id
         )
-        if existing is not None:
+        if existing_without_edge is not None and self._child_kind is None:
             return _managed_turn_result(
                 thread_id=thread_id,
-                turn=existing,
+                turn=existing_without_edge,
                 client_turn_id=client_turn_id,
                 deduped=True,
             )
@@ -188,13 +203,19 @@ class ManagedThreadTurnAutomationExecutor:
         elif approval == APPROVAL_INHERIT_PROFILE:
             metadata["automation"]["approval_override"] = "inherit_profile"
 
-        agent = _require_text(
-            request.get("agent")
-            or thread.get("agent_id")
-            or thread.get("agent")
-            or "codex",
-            "agent",
-        )
+        try:
+            agent = _require_text(
+                request.get("agent")
+                or thread.get("agent_id")
+                or thread.get("agent")
+                or (None if self._strict_runtime_contract else "codex"),
+                "agent",
+            )
+            self._validate_requested_thread_runtime(
+                request=request, thread=thread, agent=agent
+            )
+        except ValueError as exc:
+            return AutomationExecutorResult(status=JOB_FAILED, summary=str(exc))
         model = _normalize_text(request.get("model"))
         approval_mode = (
             _normalize_text(request.get("approval_mode"))
@@ -253,6 +274,27 @@ class ManagedThreadTurnAutomationExecutor:
         except TurnExecutionContractError as exc:
             return AutomationExecutorResult(status=JOB_FAILED, summary=str(exc))
 
+        existing = existing_without_edge
+        if existing is not None:
+            try:
+                edge_id = self._record_child_edge(
+                    job=job,
+                    child_id=_require_text(
+                        existing.get("managed_turn_id"), "managed_turn_id"
+                    ),
+                    turn_request=turn_request,
+                    thread=thread,
+                )
+            except (RuntimeError, ValueError) as exc:
+                return AutomationExecutorResult(status=JOB_FAILED, summary=str(exc))
+            return _managed_turn_result(
+                thread_id=thread_id,
+                turn=existing,
+                client_turn_id=client_turn_id,
+                deduped=True,
+                child_edge_id=edge_id,
+            )
+
         turn = self._thread_store.create_turn(
             thread_id,
             prompt=prompt,
@@ -267,19 +309,149 @@ class ManagedThreadTurnAutomationExecutor:
             turn_request=turn_request,
             force_queue=True,
         )
+        try:
+            edge_id = self._record_child_edge(
+                job=job,
+                child_id=_require_text(turn.get("managed_turn_id"), "managed_turn_id"),
+                turn_request=turn_request,
+                thread=thread,
+            )
+        except (RuntimeError, ValueError) as exc:
+            return AutomationExecutorResult(status=JOB_FAILED, summary=str(exc))
+        if edge_id is not None:
+            store = self._store
+            if store is None:
+                return AutomationExecutorResult(
+                    status=JOB_FAILED,
+                    summary="agent task automation requires automation store for child edge",
+                )
+            persisted = store.get_child_execution_edge(edge_id)
+            if persisted is None:
+                return AutomationExecutorResult(
+                    status=JOB_FAILED,
+                    summary="agent task automation child edge was not durable",
+                )
         self._request_queue_worker_start(thread_id)
         return _managed_turn_result(
             thread_id=thread_id,
             turn=turn,
             client_turn_id=client_turn_id,
             deduped=False,
+            child_edge_id=edge_id,
         )
+
+    def _record_child_edge(
+        self,
+        *,
+        job: AutomationJob,
+        child_id: str,
+        turn_request: TurnExecutionRequest,
+        thread: dict[str, Any],
+    ) -> Optional[str]:
+        if self._child_kind is None:
+            return None
+        if self._store is None:
+            raise RuntimeError(
+                "agent task automation requires automation store for child edge"
+            )
+        edge = self._store.upsert_child_execution_edge(
+            AutomationChildExecutionEdge.create(
+                parent_job_id=job.job_id,
+                child_kind=self._child_kind,
+                child_id=child_id,
+                requested_runtime=_runtime_contract_from_request(
+                    turn_request, thread=thread
+                ),
+                actual_runtime=_runtime_contract_from_request(
+                    turn_request, thread=thread
+                ),
+                authoritative_for_parent_completion=True,
+            )
+        )
+        return edge.edge_id
 
     def _request_config(self, job: AutomationJob) -> dict[str, Any]:
         request = job.executor.get("request")
         if isinstance(request, dict):
-            return {**job.executor, **request}
-        return dict(job.executor)
+            config = {**job.executor, **request}
+        else:
+            config = dict(job.executor)
+        runtime = config.get("requested_runtime")
+        if isinstance(runtime, dict):
+            for runtime_key, request_key in (
+                ("agent", "agent"),
+                ("model", "model"),
+                ("profile", "profile"),
+                ("reasoning", "reasoning"),
+                ("approval_policy", "approval_policy"),
+                ("sandbox_policy", "sandbox_policy"),
+            ):
+                runtime_value = _normalize_text(runtime.get(runtime_key))
+                if runtime_value is None:
+                    continue
+                existing = _normalize_text(config.get(request_key))
+                alternate = (
+                    _normalize_text(config.get("agent_profile"))
+                    if request_key == "profile"
+                    else None
+                )
+                if existing is not None and existing != runtime_value:
+                    raise ValueError(
+                        f"requested_runtime.{runtime_key} conflicts with executor.{request_key}"
+                    )
+                if alternate is not None and alternate != runtime_value:
+                    raise ValueError(
+                        "requested_runtime.profile conflicts with executor.agent_profile"
+                    )
+                config[request_key] = runtime_value
+        if (
+            self._strict_runtime_contract
+            and _normalize_text(config.get("agent")) is None
+        ):
+            raise ValueError("agent_task_turn requires requested_runtime.agent")
+        return config
+
+    def _validate_requested_thread_runtime(
+        self, *, request: dict[str, Any], thread: dict[str, Any], agent: str
+    ) -> None:
+        requested_agent = _normalize_text(request.get("agent"))
+        actual_agent = _normalize_text(thread.get("agent") or thread.get("agent_id"))
+        if self._strict_runtime_contract and requested_agent is None:
+            raise ValueError("agent_task_turn requires requested_runtime.agent")
+        if (
+            self._strict_runtime_contract
+            and requested_agent is not None
+            and actual_agent is not None
+            and actual_agent != requested_agent
+        ):
+            raise ValueError(
+                f"requested agent {requested_agent!r} does not match thread agent {actual_agent!r}"
+            )
+        if (
+            self._strict_runtime_contract
+            and actual_agent is not None
+            and actual_agent != agent
+        ):
+            raise ValueError(
+                f"resolved agent {agent!r} does not match thread agent {actual_agent!r}"
+            )
+        requested_profile = _normalize_text(
+            request.get("profile") or request.get("agent_profile")
+        )
+        raw_metadata = thread.get("metadata")
+        metadata: dict[str, Any] = (
+            cast(dict[str, Any], raw_metadata) if isinstance(raw_metadata, dict) else {}
+        )
+        actual_profile = _normalize_text(metadata.get("agent_profile"))
+        if (
+            self._strict_runtime_contract
+            and requested_profile is not None
+            and actual_profile is not None
+            and actual_profile != requested_profile
+        ):
+            raise ValueError(
+                f"requested profile {requested_profile!r} does not match thread profile {actual_profile!r}"
+            )
 
     def _resolve_thread_id(self, job: AutomationJob, request: dict[str, Any]) -> str:
         explicit = _normalize_text(
@@ -358,6 +530,15 @@ class ManagedThreadTurnAutomationExecutor:
             return False
 
 
+class AgentTaskTurnAutomationExecutor(ManagedThreadTurnAutomationExecutor):
+    def __init__(self, **kwargs: Any) -> None:
+        super().__init__(
+            **kwargs,
+            child_kind=AUTOMATION_CHILD_KIND_AGENT_TASK,
+            strict_runtime_contract=True,
+        )
+
+
 class PublishOperationAutomationExecutor:
     def __init__(
         self,
@@ -425,8 +606,15 @@ def _managed_turn_result(
     turn: dict[str, Any],
     client_turn_id: str,
     deduped: bool,
+    child_edge_id: Optional[str] = None,
 ) -> AutomationExecutorResult:
     turn_id = _require_text(turn.get("managed_turn_id"), "managed_turn_id")
+    refs = {
+        "managed_thread_target_id": thread_id,
+        "managed_thread_execution_id": turn_id,
+    }
+    if child_edge_id is not None:
+        refs["automation_child_edge_id"] = child_edge_id
     return AutomationExecutorResult(
         status=JOB_RUNNING,
         summary=f"managed thread turn {turn.get('status') or 'created'}",
@@ -438,12 +626,55 @@ def _managed_turn_result(
             "managed_turn_id": turn_id,
             "client_turn_id": client_turn_id,
             "deduped": deduped,
+            "automation_child_edge_id": child_edge_id,
             "turn": turn,
         },
-        execution_refs={
-            "managed_thread_target_id": thread_id,
-            "managed_thread_execution_id": turn_id,
+        execution_refs=refs,
+    )
+
+
+def _runtime_contract_from_request(
+    request: TurnExecutionRequest, *, thread: dict[str, Any]
+) -> AutomationRuntimeContract:
+    raw_metadata = thread.get("metadata")
+    metadata: dict[str, Any] = (
+        cast(dict[str, Any], raw_metadata) if isinstance(raw_metadata, dict) else {}
+    )
+    raw_backend_binding = thread.get("backend_binding")
+    backend_binding: dict[str, Any] = (
+        cast(dict[str, Any], raw_backend_binding)
+        if isinstance(raw_backend_binding, dict)
+        else {}
+    )
+    return AutomationRuntimeContract(
+        agent=request.agent,
+        model=request.model,
+        profile=request.profile or _normalize_text(metadata.get("agent_profile")),
+        reasoning=request.reasoning,
+        approval_policy=request.approval_policy,
+        sandbox_policy=(
+            request.sandbox_policy
+            if isinstance(request.sandbox_policy, str)
+            else str(request.sandbox_policy)
+        ),
+        prompt_ref={
+            "kind": "turn_execution_request",
+            "request_id": request.request_id,
         },
+        input_ref={
+            "kind": "automation_job",
+            "job_id": request.origin.source_id,
+            "event_id": request.origin.metadata.get("event_id"),
+        },
+        workspace_scope={
+            "target_kind": request.target_kind,
+            "target_id": request.target_id,
+            "workspace_root": request.workspace_root,
+        },
+        backend_runtime_id=_normalize_text(
+            backend_binding.get("backend_runtime_instance_id")
+        ),
+        provider_payload=dict(request.model_payload) or None,
     )
 
 
@@ -503,6 +734,7 @@ def _nested(value: Any, *path: str) -> Any:
 
 
 __all__ = [
+    "AgentTaskTurnAutomationExecutor",
     "ManagedThreadTurnAutomationExecutor",
     "PublishOperationAutomationExecutor",
 ]
