@@ -218,9 +218,7 @@ def _unified_pma_automation_read_model(
     purpose_set = (
         _SUBSCRIPTION_PURPOSES
         if purpose in _SUBSCRIPTION_PURPOSES
-        else _TIMER_PURPOSES
-        if purpose in _TIMER_PURPOSES
-        else {purpose}
+        else _TIMER_PURPOSES if purpose in _TIMER_PURPOSES else {purpose}
     )
     try:
         store = AutomationStore(context.hub_root)
@@ -382,8 +380,7 @@ def _create_unified_pma_subscription(
         },
         policy={
             "dedupe_key": (
-                f"managed-thread-subscription:{subscription_id}:"
-                "{{ event.event_id }}"
+                f"managed-thread-subscription:{subscription_id}:" "{{ event.event_id }}"
             ),
             "approval_mode": "pause_and_request_user",
             "max_attempts": 3,
@@ -812,9 +809,7 @@ def _find_pma_rule_by_idempotency(
     purpose_set = (
         _SUBSCRIPTION_PURPOSES
         if purpose in _SUBSCRIPTION_PURPOSES
-        else _TIMER_PURPOSES
-        if purpose in _TIMER_PURPOSES
-        else {purpose}
+        else _TIMER_PURPOSES if purpose in _TIMER_PURPOSES else {purpose}
     )
     for rule in store.list_rules():
         if rule.metadata.get("purpose") not in purpose_set:
