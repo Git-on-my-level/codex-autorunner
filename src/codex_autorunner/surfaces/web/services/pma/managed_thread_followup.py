@@ -7,7 +7,7 @@ from typing import Any, Literal, Optional
 from fastapi import HTTPException, Request
 
 from .....core.automation import (
-    EXECUTOR_MANAGED_THREAD_TURN,
+    EXECUTOR_PMA_OPERATOR_TURN,
     PMA_SUBSCRIPTION_RULE_PREFIX,
     AutomationRule,
     AutomationStore,
@@ -222,7 +222,7 @@ def _create_terminal_followup_rule(
         filters={"event.payload.thread_id": thread_id} if thread_id else {},
         target_policy=TARGET_POLICY_HUB,
         target={"thread_id": thread_id},
-        executor_kind=EXECUTOR_MANAGED_THREAD_TURN,
+        executor_kind=EXECUTOR_PMA_OPERATOR_TURN,
         executor={
             "wake_up_kind": "managed_thread_subscription",
             "source": "transition",

@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from .models import (
-    EXECUTOR_MANAGED_THREAD_TURN,
+    EXECUTOR_PMA_OPERATOR_TURN,
     TARGET_POLICY_HUB,
     TRIGGER_KIND_EVENT,
     AutomationRule,
@@ -73,7 +73,7 @@ def ensure_builtin_pma_reactive_rule(
             "repo_id": "{{ event.repo_id }}",
             "run_id": "{{ event.payload.run_id }}",
         },
-        executor_kind=EXECUTOR_MANAGED_THREAD_TURN,
+        executor_kind=EXECUTOR_PMA_OPERATOR_TURN,
         executor={
             "message_text": (
                 "Lifecycle event received.\n"

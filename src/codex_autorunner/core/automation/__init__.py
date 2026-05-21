@@ -9,6 +9,7 @@ from .engine import AutomationRuleEngine, RuleEvaluationResult, render_template
 from .executors import (
     AgentTaskTurnAutomationExecutor,
     ManagedThreadTurnAutomationExecutor,
+    PmaOperatorTurnAutomationExecutor,
     PublishOperationAutomationExecutor,
 )
 from .models import (
@@ -124,6 +125,7 @@ __all__ = [
     "LEGACY_EXECUTOR_MANAGED_THREAD_TURN",
     "LEGACY_EXECUTOR_PMA_TURN",
     "ManagedThreadTurnAutomationExecutor",
+    "PmaOperatorTurnAutomationExecutor",
     "PublishOperationAutomationExecutor",
     "RuleEvaluationResult",
     "SCHEDULE_KINDS",

@@ -12,6 +12,8 @@ from ..orchestration.turn_execution_contract import (
     TurnExecutionRequest,
     TurnExecutionRequestKind,
 )
+from ..pma_automation_types import DEFAULT_PMA_LANE_ID
+from ..pma_queue import PmaQueue
 from ..pma_reactive import PmaReactiveStore
 from ..publish_executor import PublishExecutorRegistry, drain_pending_publish_operations
 from ..publish_journal import PublishJournalStore
@@ -23,8 +25,10 @@ from .models import (
     APPROVAL_NEVER_REQUIRE_APPROVAL,
     APPROVAL_PAUSE_AND_REQUEST_USER,
     AUTOMATION_CHILD_KIND_AGENT_TASK,
+    AUTOMATION_CHILD_KIND_PMA_OPERATOR,
     EXECUTOR_GITHUB_COMMENT,
     EXECUTOR_GITHUB_REACTION,
+    EXECUTOR_PMA_OPERATOR_TURN,
     EXECUTOR_PUBLISH_CHAT_NOTIFICATION,
     EXECUTOR_PUBLISH_OPERATION,
     JOB_DEAD_LETTERED,
@@ -539,6 +543,275 @@ class AgentTaskTurnAutomationExecutor(ManagedThreadTurnAutomationExecutor):
         )
 
 
+class PmaOperatorTurnAutomationExecutor:
+    def __init__(
+        self,
+        *,
+        hub_root: Path,
+        automation_store: AutomationStore,
+        pma_queue: Optional[PmaQueue] = None,
+        safety_checker_fn: Optional[Callable[[], Any]] = None,
+        lane_worker_starter_fn: Optional[Callable[[str], Any]] = None,
+        unattended: bool = True,
+    ) -> None:
+        self._hub_root = hub_root
+        self._store = automation_store
+        self._queue = pma_queue or PmaQueue(hub_root)
+        self._safety_checker_fn = safety_checker_fn
+        self._lane_worker_starter_fn = lane_worker_starter_fn
+        self._unattended = unattended
+
+    def execute(self, job: AutomationJob) -> AutomationExecutorResult:
+        blocked = _check_reactive_safety(
+            job,
+            hub_root=self._hub_root,
+            safety_checker_fn=self._safety_checker_fn,
+        )
+        if blocked is not None:
+            return blocked
+        approval = str(
+            job.policy.get("approval_mode") or APPROVAL_PAUSE_AND_REQUEST_USER
+        ).strip()
+        if self._unattended and approval == APPROVAL_PAUSE_AND_REQUEST_USER:
+            return AutomationExecutorResult(
+                status=JOB_PAUSED,
+                summary="PMA operator automation requires user approval",
+                data={"approval_mode": approval},
+            )
+        if self._unattended and approval == APPROVAL_AUTO_DECLINE:
+            return AutomationExecutorResult(
+                status=JOB_FAILED,
+                summary="PMA operator automation auto-declined by approval policy",
+                data={"approval_mode": approval},
+            )
+
+        try:
+            request = self._request_config(job)
+            lane_id = _normalize_text(request.get("lane_id")) or DEFAULT_PMA_LANE_ID
+            prompt = self._render_prompt(job, request)
+            client_turn_id = _normalize_text(
+                request.get("client_turn_id")
+                or request.get("client_request_id")
+                or job.executor.get("client_turn_id")
+                or job.executor.get("client_request_id")
+            ) or _stable_client_turn_id(job)
+            coordinator_request = self._turn_request(
+                job=job,
+                request=request,
+                lane_id=lane_id,
+                prompt=prompt,
+                client_turn_id=client_turn_id,
+                approval=approval,
+            )
+        except (TurnExecutionContractError, ValueError) as exc:
+            return AutomationExecutorResult(status=JOB_FAILED, summary=str(exc))
+
+        idempotency_key = _normalize_text(
+            request.get("idempotency_key")
+        ) or _stable_pma_idempotency_key(
+            job,
+            lane_id=lane_id,
+            client_turn_id=client_turn_id,
+        )
+        item, dupe_reason = self._queue.enqueue_sync(
+            lane_id,
+            idempotency_key,
+            {"turn_request": coordinator_request.to_dict()},
+        )
+        try:
+            edge = self._store.upsert_child_execution_edge(
+                AutomationChildExecutionEdge.create(
+                    parent_job_id=job.job_id,
+                    child_kind=AUTOMATION_CHILD_KIND_PMA_OPERATOR,
+                    child_id=item.item_id,
+                    requested_runtime=_runtime_contract_from_request(
+                        coordinator_request
+                    ),
+                    actual_runtime=_runtime_contract_from_request(coordinator_request),
+                    authoritative_for_parent_completion=bool(
+                        request.get("coordinator_authoritative", True)
+                    ),
+                )
+            )
+        except (RuntimeError, ValueError) as exc:
+            return AutomationExecutorResult(status=JOB_FAILED, summary=str(exc))
+        if self._store.get_child_execution_edge(edge.edge_id) is None:
+            return AutomationExecutorResult(
+                status=JOB_FAILED,
+                summary="PMA operator automation child edge was not durable",
+            )
+        worker_edge_ids = _record_declared_worker_child_edges(
+            self._store, job=job, request=request
+        )
+
+        starter_result = self._request_lane_worker_start(lane_id)
+        if starter_result is False:
+            return AutomationExecutorResult(
+                status=JOB_DEAD_LETTERED,
+                summary="PMA operator automation lane worker starter failed",
+            )
+        refs = {
+            "pma_lane_id": lane_id,
+            "pma_queue_item_id": item.item_id,
+            "automation_child_edge_id": edge.edge_id,
+        }
+        return AutomationExecutorResult(
+            status=JOB_RUNNING,
+            summary="PMA operator turn queued",
+            data={
+                "execution_phase": "waiting",
+                "lane_id": lane_id,
+                "pma_queue_item_id": item.item_id,
+                "client_turn_id": client_turn_id,
+                "deduped": bool(dupe_reason),
+                "automation_child_edge_id": edge.edge_id,
+                "worker_child_edge_ids": worker_edge_ids,
+            },
+            execution_refs=refs,
+        )
+
+    def _request_config(self, job: AutomationJob) -> dict[str, Any]:
+        request = job.executor.get("request")
+        config = (
+            {**job.executor, **request}
+            if isinstance(request, dict)
+            else dict(job.executor)
+        )
+        runtime = config.get("requested_runtime")
+        if isinstance(runtime, dict):
+            for runtime_key, request_key in (
+                ("agent", "agent"),
+                ("model", "model"),
+                ("profile", "profile"),
+                ("reasoning", "reasoning"),
+                ("approval_policy", "approval_policy"),
+                ("sandbox_policy", "sandbox_policy"),
+            ):
+                runtime_value = _normalize_text(runtime.get(runtime_key))
+                if runtime_value is None:
+                    continue
+                existing = _normalize_text(config.get(request_key))
+                if existing is not None and existing != runtime_value:
+                    raise ValueError(
+                        f"requested_runtime.{runtime_key} conflicts with executor.{request_key}"
+                    )
+                config[request_key] = runtime_value
+        return config
+
+    def _render_prompt(self, job: AutomationJob, request: dict[str, Any]) -> str:
+        prompt = _require_text(
+            request.get("message_text")
+            or request.get("message")
+            or request.get("prompt")
+            or request.get("body"),
+            "message_text",
+        )
+        event = self._store.get_event(job.event_id)
+        return str(
+            render_template(
+                prompt,
+                {
+                    "event": event.to_dict() if event is not None else {},
+                    "target": job.target,
+                    "job": job.to_dict(),
+                    "metadata": job.payload.get("metadata", {}),
+                    "repo": job.target,
+                    "pr": _nested(job.payload, "event", "payload", "pr") or {},
+                },
+            )
+        )
+
+    def _turn_request(
+        self,
+        *,
+        job: AutomationJob,
+        request: dict[str, Any],
+        lane_id: str,
+        prompt: str,
+        client_turn_id: str,
+        approval: str,
+    ) -> TurnExecutionRequest:
+        agent = _require_text(request.get("agent") or "codex", "agent")
+        model = _normalize_text(request.get("model"))
+        approval_mode = (
+            _normalize_text(request.get("approval_mode"))
+            if approval == APPROVAL_INHERIT_PROFILE
+            else None
+        )
+        metadata = request.get("metadata")
+        if not isinstance(metadata, dict):
+            metadata = {}
+        metadata = {
+            **metadata,
+            "automation": {
+                "job_id": job.job_id,
+                "rule_id": job.rule_id,
+                "event_id": job.event_id,
+                "approval_mode": approval,
+                "executor_kind": EXECUTOR_PMA_OPERATOR_TURN,
+            },
+        }
+        return TurnExecutionRequest(
+            request_id=client_turn_id,
+            target_id=lane_id,
+            target_kind="thread",
+            workspace_root=str(self._hub_root),
+            request_kind=_turn_request_kind(
+                request.get("request_kind") or "automation"
+            ),
+            busy_policy=request.get("busy_policy") or "queue",
+            prompt_text=prompt,
+            input_items=(
+                tuple(
+                    dict(item)
+                    for item in request.get("input_items", ())
+                    if isinstance(item, dict)
+                )
+                if isinstance(request.get("input_items"), (list, tuple))
+                else ()
+            ),
+            context_profile=request.get("context_profile"),
+            agent=agent,
+            profile=request.get("agent_profile") or request.get("profile"),
+            model=model,
+            model_payload=_opencode_model_payload(model) if agent == "opencode" else {},
+            reasoning=_normalize_text(request.get("reasoning")),
+            approval_policy=(
+                _normalize_text(request.get("approval_policy"))
+                or approval_mode
+                or approval
+            ),
+            approval_mode=approval_mode,
+            sandbox_policy=request.get("sandbox_policy") or "dangerFullAccess",
+            client_request_id=client_turn_id,
+            idempotency_key=client_turn_id,
+            correlation_id=_normalize_text(
+                request.get("correlation_id") or job.payload.get("correlation_id")
+            )
+            or job.job_id,
+            origin=TurnExecutionOrigin(
+                kind="automation",
+                source_id=job.job_id,
+                automation_rule_id=job.rule_id,
+                metadata={"event_id": job.event_id},
+            ),
+            metadata=metadata,
+        )
+
+    def _request_lane_worker_start(self, lane_id: str) -> Optional[bool]:
+        starter = self._lane_worker_starter_fn
+        if starter is None:
+            return None
+        try:
+            result = starter(lane_id)
+        except (RuntimeError, OSError, ValueError, TypeError):
+            return False
+        accepted = getattr(result, "accepted", None)
+        if accepted is not None:
+            return bool(accepted)
+        return None
+
+
 class PublishOperationAutomationExecutor:
     def __init__(
         self,
@@ -634,8 +907,9 @@ def _managed_turn_result(
 
 
 def _runtime_contract_from_request(
-    request: TurnExecutionRequest, *, thread: dict[str, Any]
+    request: TurnExecutionRequest, *, thread: Optional[dict[str, Any]] = None
 ) -> AutomationRuntimeContract:
+    thread = thread or {}
     raw_metadata = thread.get("metadata")
     metadata: dict[str, Any] = (
         cast(dict[str, Any], raw_metadata) if isinstance(raw_metadata, dict) else {}
@@ -717,6 +991,84 @@ def _stable_client_turn_id(job: AutomationJob) -> str:
     return f"automation-turn:{digest[:24]}"
 
 
+def _stable_pma_idempotency_key(
+    job: AutomationJob, *, lane_id: str, client_turn_id: str
+) -> str:
+    digest = hashlib.sha256(
+        f"{job.rule_id}:{job.event_id}:{job.job_id}:{lane_id}:{client_turn_id}".encode()
+    ).hexdigest()
+    return f"automation-pma:{digest[:32]}"
+
+
+def _check_reactive_safety(
+    job: AutomationJob,
+    *,
+    hub_root: Path,
+    safety_checker_fn: Optional[Callable[[], Any]],
+) -> Optional[AutomationExecutorResult]:
+    if not job.policy.get("requires_pma_safety"):
+        return None
+    safety_checker = safety_checker_fn() if safety_checker_fn else None
+    if safety_checker is not None:
+        safety_check = safety_checker.check_reactive_turn()
+        if not safety_check.allowed:
+            return AutomationExecutorResult(
+                status=JOB_SKIPPED,
+                summary=safety_check.reason or "reactive_blocked",
+            )
+    debounce_seconds = int(job.policy.get("reactive_debounce_seconds") or 0)
+    debounce_key = str(job.policy.get("reactive_debounce_key") or "").strip()
+    if debounce_seconds > 0 and debounce_key:
+        if not PmaReactiveStore(hub_root).check_and_update(
+            debounce_key, debounce_seconds
+        ):
+            return AutomationExecutorResult(
+                status=JOB_SKIPPED,
+                summary="reactive_debounced",
+            )
+    return None
+
+
+def _record_declared_worker_child_edges(
+    store: AutomationStore, *, job: AutomationJob, request: dict[str, Any]
+) -> list[str]:
+    worker_children = request.get("worker_children")
+    if worker_children is None:
+        worker_child = request.get("worker_child")
+        worker_children = [worker_child] if isinstance(worker_child, dict) else []
+    if not isinstance(worker_children, list):
+        return []
+    edge_ids: list[str] = []
+    for raw_child in worker_children:
+        if not isinstance(raw_child, dict):
+            continue
+        child_id = _normalize_text(
+            raw_child.get("child_id")
+            or raw_child.get("managed_turn_id")
+            or raw_child.get("execution_id")
+        )
+        requested_runtime = raw_child.get("requested_runtime")
+        if child_id is None or not isinstance(requested_runtime, dict):
+            continue
+        actual_runtime = raw_child.get("actual_runtime")
+        edge = store.upsert_child_execution_edge(
+            AutomationChildExecutionEdge.create(
+                parent_job_id=job.job_id,
+                child_kind=AUTOMATION_CHILD_KIND_AGENT_TASK,
+                child_id=child_id,
+                requested_runtime=requested_runtime,
+                actual_runtime=(
+                    actual_runtime if isinstance(actual_runtime, dict) else None
+                ),
+                authoritative_for_parent_completion=bool(
+                    raw_child.get("authoritative_for_parent_completion", True)
+                ),
+            )
+        )
+        edge_ids.append(edge.edge_id)
+    return edge_ids
+
+
 def _require_text(value: Any, field_name: str) -> str:
     text = _normalize_text(value)
     if text is None:
@@ -736,5 +1088,6 @@ def _nested(value: Any, *path: str) -> Any:
 __all__ = [
     "AgentTaskTurnAutomationExecutor",
     "ManagedThreadTurnAutomationExecutor",
+    "PmaOperatorTurnAutomationExecutor",
     "PublishOperationAutomationExecutor",
 ]

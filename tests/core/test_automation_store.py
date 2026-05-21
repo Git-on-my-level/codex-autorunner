@@ -14,6 +14,7 @@ from codex_autorunner.core.automation import (
 )
 from codex_autorunner.core.automation.models import (
     EXECUTOR_MANAGED_THREAD_TURN,
+    EXECUTOR_PMA_OPERATOR_TURN,
     JOB_CLAIMED,
     JOB_DEAD_LETTERED,
     JOB_FAILED,
@@ -511,7 +512,7 @@ def test_explicit_legacy_pma_migration_creates_unified_rows(tmp_path) -> None:
         for rule in store.list_rules()
     )
     assert store.list_events()[0].event_type == "lifecycle.flow_failed"
-    assert store.list_jobs()[0].executor["kind"] == EXECUTOR_MANAGED_THREAD_TURN
+    assert store.list_jobs()[0].executor["kind"] == EXECUTOR_PMA_OPERATOR_TURN
     assert (
         store.list_attempts("legacy-pma-wakeup:wakeup-legacy")[0].status == "succeeded"
     )
