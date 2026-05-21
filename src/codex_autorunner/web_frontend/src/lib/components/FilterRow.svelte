@@ -94,7 +94,7 @@
 </script>
 
 <div class="filter-row-container" bind:this={containerEl}>
-  <div class="filter-row filter-row-measure" bind:this={measureEl} aria-hidden="true">
+  <div class="{rowClass} filter-row-measure" bind:this={measureEl} aria-hidden="true">
     {#each items as item (item.key)}
       <button class="chip" type="button" tabindex="-1" data-filter-chip>
         {item.label}
