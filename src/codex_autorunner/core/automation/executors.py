@@ -47,6 +47,7 @@ class ManagedThreadTurnAutomationExecutor:
         thread_store: Optional[ManagedThreadStore] = None,
         safety_checker_fn: Optional[Callable[[], Any]] = None,
         queue_worker_starter_fn: Optional[Callable[[str], None]] = None,
+        queue_worker_available_fn: Optional[Callable[[], bool]] = None,
         unattended: bool = True,
     ) -> None:
         self._hub_root = hub_root
@@ -54,6 +55,7 @@ class ManagedThreadTurnAutomationExecutor:
         self._thread_store = thread_store or ManagedThreadStore(hub_root)
         self._safety_checker_fn = safety_checker_fn
         self._queue_worker_starter_fn = queue_worker_starter_fn
+        self._queue_worker_available_fn = queue_worker_available_fn
         self._unattended = unattended
 
     def execute(self, job: AutomationJob) -> AutomationExecutorResult:
@@ -132,6 +134,14 @@ class ManagedThreadTurnAutomationExecutor:
                 turn=existing,
                 client_turn_id=client_turn_id,
                 deduped=True,
+            )
+        if not self._queue_worker_can_start():
+            return AutomationExecutorResult(
+                status=JOB_DEAD_LETTERED,
+                summary=(
+                    "managed thread automation requires a registered queue worker "
+                    "starter"
+                ),
             )
 
         metadata = request.get("metadata")
@@ -263,9 +273,20 @@ class ManagedThreadTurnAutomationExecutor:
         return _require_text(created.get("managed_thread_id"), "managed_thread_id")
 
     def _request_queue_worker_start(self, thread_id: str) -> None:
-        if self._queue_worker_starter_fn is None:
+        starter = self._queue_worker_starter_fn
+        if starter is None:
             return
-        self._queue_worker_starter_fn(thread_id)
+        starter(thread_id)
+
+    def _queue_worker_can_start(self) -> bool:
+        if self._queue_worker_starter_fn is None:
+            return False
+        if self._queue_worker_available_fn is None:
+            return True
+        try:
+            return bool(self._queue_worker_available_fn())
+        except (RuntimeError, OSError, ValueError, TypeError):
+            return False
 
 
 class PublishOperationAutomationExecutor:

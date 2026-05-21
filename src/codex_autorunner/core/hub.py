@@ -277,6 +277,7 @@ class HubSupervisor:
                 automation_store=AutomationStore(hub_config.root),
                 safety_checker_fn=lambda: self.ensure_pma_safety_checker(),
                 queue_worker_starter_fn=self._request_managed_thread_queue_worker_start,
+                queue_worker_available_fn=(self._managed_thread_queue_worker_available),
             ),
         )
         publish_registry = PublishExecutorRegistry(
@@ -754,6 +755,9 @@ class HubSupervisor:
                 "Failed requesting managed-thread queue worker startup for thread_id=%s",
                 thread_id,
             )
+
+    def _managed_thread_queue_worker_available(self) -> bool:
+        return self._managed_thread_queue_worker_starter is not None
 
     def _request_pma_lane_worker_start(
         self, lane_id: Optional[str]

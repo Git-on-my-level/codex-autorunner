@@ -107,6 +107,7 @@ def test_managed_thread_turn_creates_automation_thread_when_target_is_repo(
     tmp_path: Path,
 ) -> None:
     store, threads, _thread_id = _store_rule_event(tmp_path)
+    started_workers: list[str] = []
     store.enqueue_job(
         _job(
             "",
@@ -128,6 +129,7 @@ def test_managed_thread_turn_creates_automation_thread_when_target_is_repo(
             hub_root=tmp_path / "hub",
             automation_store=store,
             thread_store=threads,
+            queue_worker_starter_fn=started_workers.append,
         ),
     )
 
@@ -145,6 +147,59 @@ def test_managed_thread_turn_creates_automation_thread_when_target_is_repo(
         str(saved.managed_thread_target_id), str(saved.managed_thread_execution_id)
     )
     assert turn["prompt"] == "Inspect repo-1"
+    assert started_workers == [str(saved.managed_thread_target_id)]
+
+
+def test_managed_thread_turn_dead_letters_without_queue_worker_starter(
+    tmp_path: Path,
+) -> None:
+    store, threads, thread_id = _store_rule_event(tmp_path)
+    store.enqueue_job(_job(thread_id, policy={"approval_mode": "inherit_profile"}))
+    registry = AutomationExecutorRegistry()
+    registry.register(
+        EXECUTOR_MANAGED_THREAD_TURN,
+        ManagedThreadTurnAutomationExecutor(
+            hub_root=tmp_path / "hub",
+            automation_store=store,
+            thread_store=threads,
+        ),
+    )
+
+    result = AutomationJobWorker(store, registry).process_once(
+        now="2026-01-01T00:00:00Z"
+    )
+
+    assert result.dead_lettered == 1
+    assert store.get_job("job-1").state == JOB_DEAD_LETTERED
+    assert threads.list_turns(thread_id) == []
+
+
+def test_managed_thread_turn_dead_letters_when_queue_worker_unavailable(
+    tmp_path: Path,
+) -> None:
+    store, threads, thread_id = _store_rule_event(tmp_path)
+    started_workers: list[str] = []
+    store.enqueue_job(_job(thread_id, policy={"approval_mode": "inherit_profile"}))
+    registry = AutomationExecutorRegistry()
+    registry.register(
+        EXECUTOR_MANAGED_THREAD_TURN,
+        ManagedThreadTurnAutomationExecutor(
+            hub_root=tmp_path / "hub",
+            automation_store=store,
+            thread_store=threads,
+            queue_worker_starter_fn=started_workers.append,
+            queue_worker_available_fn=lambda: False,
+        ),
+    )
+
+    result = AutomationJobWorker(store, registry).process_once(
+        now="2026-01-01T00:00:00Z"
+    )
+
+    assert result.dead_lettered == 1
+    assert store.get_job("job-1").state == JOB_DEAD_LETTERED
+    assert threads.list_turns(thread_id) == []
+    assert started_workers == []
 
 
 def test_managed_thread_default_approval_pauses_unattended_job(tmp_path: Path) -> None:

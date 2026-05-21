@@ -179,7 +179,8 @@
       detailHour = numberFromRecord(scheduleFields, 'hour', detailHour);
       detailMinute = numberFromRecord(scheduleFields, 'minute', detailMinute);
       detailWeekday = numberFromRecord(scheduleFields, 'weekday', detailWeekday);
-      promptDraft = automation.product.message.field === 'prompt' ? stringValue(automation.raw.executor, 'message') : automation.product.messagePreview;
+      const executorPrompt = stringValue(automation.raw.executor, 'message_text') || stringValue(automation.raw.executor, 'message');
+      promptDraft = automation.product.message.field === 'prompt' ? executorPrompt || automation.product.messagePreview : automation.product.messagePreview;
       ticketDraft = firstTicketBody(automation.raw.executor);
       if (automation.executorKind === 'managed_thread_turn') {
         selectedAgent = stringValue(automation.raw.executor, 'agent') || defaultAgentId || agentIdFallback();
