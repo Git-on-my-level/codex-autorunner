@@ -9,13 +9,19 @@
     type ChatToolCallCard
   } from '$lib/viewModels/pmaChat';
   import type { PmaMessageCapsuleRef } from '$lib/viewModels/domain';
-  import type { SurfaceArtifact } from '$lib/viewModels/domain';
+  import type { ArtifactDelivery, SurfaceArtifact } from '$lib/viewModels/domain';
 
   let {
     cards,
     assistantLabel = 'Assistant',
     streamingMessageId = null,
-  }: { cards: ChatTranscriptCard[]; assistantLabel?: string; streamingMessageId?: string | null } = $props();
+    sharedFiles = []
+  }: {
+    cards: ChatTranscriptCard[];
+    assistantLabel?: string;
+    streamingMessageId?: string | null;
+    sharedFiles?: ArtifactDelivery[];
+  } = $props();
 
   const MAX_RENDERED_TOOL_GROUP_ITEMS = 80;
   const MAX_RENDERED_TURN_SUMMARY_CARDS = 80;
@@ -35,6 +41,23 @@
     const size = raw.size_label ?? raw.sizeLabel ?? raw.size;
     if (typeof size === 'string' && size.trim()) return size;
     return null;
+  }
+
+  function deliveryStateLabel(state: string): string {
+    const normalized = state.trim().toLowerCase();
+    if (normalized === 'sent') return 'sent';
+    if (normalized === 'failed') return 'failed';
+    if (normalized === 'cancelled') return 'cancelled';
+    if (normalized === 'sending' || normalized === 'claimed') return 'sending';
+    return 'pending';
+  }
+
+  function deliveryMeta(delivery: ArtifactDelivery): string | null {
+    const parts = [
+      delivery.targetSurface ? `to ${delivery.targetSurface}` : null,
+      delivery.size !== null ? `${Math.round(delivery.size / 1024)} KB` : null
+    ].filter((part): part is string => Boolean(part));
+    return parts.length ? parts.join(' · ') : null;
   }
 
   function isThinkingTrace(card: Extract<ChatTranscriptCard, { kind: 'intermediate' }>): boolean {
@@ -400,3 +423,27 @@
     <SurfaceArtifactCard artifact={card.artifact} />
   {/if}
 {/each}
+
+{#if sharedFiles.length > 0}
+  <article class="message assistant shared-files-message">
+    <span>{assistantLabel}</span>
+    <ul class="message-attachments assistant-attachments" aria-label="Files shared by assistant">
+      {#each sharedFiles as file (file.deliveryId)}
+        {@const stateLabel = deliveryStateLabel(file.state)}
+        {@const meta = deliveryMeta(file)}
+        <li class={`message-attachment-pill delivery-${stateLabel}`}>
+          <span class="attachment-kind">file</span>
+          {#if file.downloadUrl}
+            <a href={href(file.downloadUrl)} target="_blank" rel="noopener" title={file.filename}><strong>{file.filename}</strong></a>
+          {:else}
+            <strong title={file.filename}>{file.filename}</strong>
+          {/if}
+          <em>{stateLabel}</em>
+          {#if meta}
+            <em>{meta}</em>
+          {/if}
+        </li>
+      {/each}
+    </ul>
+  </article>
+{/if}

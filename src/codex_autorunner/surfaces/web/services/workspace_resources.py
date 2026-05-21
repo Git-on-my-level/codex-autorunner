@@ -354,6 +354,37 @@ class FileBoxResourceService:
         entry, handle = result
         return FileBoxDownloadResource(entry=entry, handle=handle)
 
+    def open_delivery_artifact(
+        self, repo_root: Path, delivery_id: str
+    ) -> FileBoxDownloadResource:
+        result = ArtifactDeliveryService(repo_root).inspect_with_artifact(delivery_id)
+        if result is None or result[1] is None:
+            raise WorkspaceResourceError(404, "Delivery artifact not found")
+        _intent, artifact_or_none = result
+        artifact = artifact_or_none
+        assert artifact is not None
+        try:
+            path = artifact.storage_path
+            stat_result = path.stat()
+            handle = path.open("rb")
+        except FileNotFoundError as exc:
+            raise WorkspaceResourceError(
+                404, "Delivery artifact file not found"
+            ) from exc
+        except OSError as exc:
+            raise WorkspaceResourceError(
+                500, "Failed to open delivery artifact"
+            ) from exc
+        entry = FileBoxEntry(
+            name=artifact.filename,
+            box="outbox",
+            size=stat_result.st_size,
+            modified_at=artifact.updated_at,
+            source="artifact_delivery",
+            path=path,
+        )
+        return FileBoxDownloadResource(entry=entry, handle=handle)
+
     def delete_file(self, repo_root: Path, box: str, filename: str) -> dict[str, Any]:
         self.validate_box(box)
         try:
@@ -372,6 +403,7 @@ class FileBoxResourceService:
         self,
         repo_root: Path,
         *,
+        url_scope: FileBoxUrlScope,
         state: str | None = None,
         surface: str | None = None,
         conversation: str | None = None,
@@ -387,9 +419,12 @@ class FileBoxResourceService:
         payload = {
             "root": str(repo_root),
             "deliveries": [
-                serialize_delivery(
-                    intent,
-                    artifact=service.store.get_artifact(intent.artifact_id),
+                add_delivery_download_url(
+                    serialize_delivery(
+                        intent,
+                        artifact=service.store.get_artifact(intent.artifact_id),
+                    ),
+                    url_scope=url_scope,
                 )
                 for intent in deliveries
             ],
@@ -436,6 +471,32 @@ def serialize_filebox_entry(
     return payload
 
 
+def add_delivery_download_url(
+    delivery: dict[str, Any], *, url_scope: FileBoxUrlScope
+) -> dict[str, Any]:
+    delivery_id = delivery.get("delivery_id")
+    artifact = delivery.get("artifact")
+    if not isinstance(delivery_id, str) or not delivery_id:
+        return delivery
+    if not isinstance(artifact, dict) or not artifact:
+        return delivery
+    root_path = url_scope.root_path or ""
+    if url_scope.repo_id:
+        download = (
+            f"{root_path}/hub/filebox/{quote(url_scope.repo_id, safe='')}/"
+            f"artifacts/deliveries/{quote(delivery_id, safe='')}/download"
+        )
+    else:
+        download = (
+            f"{root_path}/api/artifacts/deliveries/"
+            f"{quote(delivery_id, safe='')}/download"
+        )
+    artifact["url"] = download
+    artifact["href"] = download
+    delivery["download_url"] = download
+    return delivery
+
+
 def normalize_delivery_states(state: str | None) -> tuple[DeliveryState, ...] | None:
     values = tuple(item.strip() for item in (state or "").split(",") if item.strip())
     return values or None  # type: ignore[return-value]
@@ -477,6 +538,7 @@ __all__ = [
     "normalize_delivery_states",
     "read_upload_limited",
     "resolve_max_upload_bytes",
+    "add_delivery_download_url",
     "serialize_filebox_entry",
     "serialize_filebox_listing",
 ]

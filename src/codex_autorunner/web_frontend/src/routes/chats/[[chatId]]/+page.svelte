@@ -69,6 +69,7 @@
   import type {
     PmaChatSummary,
     PmaRunProgress,
+    ArtifactDelivery,
     SurfaceArtifact
   } from '$lib/viewModels/domain';
   import {
@@ -116,6 +117,7 @@
     type ChatLastSeenMap
   } from '$lib/viewModels/unread';
   import { repoAccent, repoInitials } from '$lib/viewModels/repoIdentity';
+  import { surfaceRefFromThreadRaw } from '$lib/viewModels/thread';
   import {
     agentProfileEntriesForRecord,
     agentCanListModels,
@@ -162,7 +164,12 @@
   let configuredDefaultAgentId = $state<string | undefined>(undefined);
   let configuredDefaultProfile = $state('');
   let linkDialogOpen = $state(false);
+  let fileDrawerOpen = $state(false);
   let linkDraft = $state('');
+  let artifactDeliveries = $state<ArtifactDelivery[]>([]);
+  let loadingArtifactDeliveries = $state(false);
+  let artifactDeliveryError = $state<ApiError | null>(null);
+  let artifactDeliveryLoadKey = '';
   let selectedAgent = $state('codex');
   let selectedModel = $state('');
   let selectedReasoning = $state('');
@@ -208,6 +215,7 @@
   const transcriptCards = $derived<ChatTranscriptCard[]>(selectChatTranscript(readModelState, activeChatId));
   const progress = $derived<PmaRunProgress | null>(selectPmaProgress(readModelState, activeChatId));
   const artifacts = $derived<SurfaceArtifact[]>(selectPmaArtifacts(readModelState, activeChatId));
+  const inboxArtifacts = $derived(artifacts.filter((artifact) => String(artifact.raw.box ?? '').toLowerCase() === 'inbox'));
   const queuedTurns = $derived<PmaQueuedTurn[]>(selectPmaQueue(readModelState, activeChatId));
   const lastSeenMap = $derived<ChatLastSeenMap>(selectReadMarkers(readModelState) as ChatLastSeenMap);
   let draft = $state('');
@@ -396,6 +404,8 @@
   let messageStackResizeObserver: ResizeObserver | null = null;
 
   const activeChat = $derived(activeChatId ? chatSummaryForId(activeChatId) : null);
+  const activeSurfaceDeliveries = $derived<ArtifactDelivery[]>(artifactDeliveriesForActiveSurface(activeChat, artifactDeliveries));
+  const assistantSharedFiles = $derived<ArtifactDelivery[]>(activeSurfaceDeliveries.slice(0, 4));
   let expandedRunGroups = $state<Record<string, boolean>>({});
   let pinnedChatIds = $state<Record<string, true>>({});
   const chatListEntries = $derived(
@@ -564,6 +574,7 @@
     return text.length > 120 ? text.slice(text.length - 120) : text;
   });
   const activeMessengerSurface = $derived(chatMessengerSurface(activeChat));
+  const activeSharedFileCount = $derived(activeSurfaceDeliveries.length);
   const activeRepoIngress = $derived(repoIngressForChat(activeChat));
   const createChatLabel = $derived(
     creating ? 'Creating...' : newChatKind === 'agent' && canStartCodingAgentChat ? '+ Coding agent' : '+ PMA'
@@ -741,6 +752,20 @@
     const next = markActiveSummaryRead(lastSeenMap, activeChat);
     if (next === lastSeenMap) return;
     readModelEntityStore.optimisticReadMarkers(next, `read-active:${activeChat.id}:${Date.now()}`);
+  });
+
+  $effect(() => {
+    const chat = activeChat;
+    if (!chat || isLocalDraftChatId(chat.id)) {
+      artifactDeliveries = [];
+      artifactDeliveryError = null;
+      artifactDeliveryLoadKey = '';
+      return;
+    }
+    const key = `${chat.id}|${chat.repoId ?? ''}`;
+    if (key === artifactDeliveryLoadKey) return;
+    artifactDeliveryLoadKey = key;
+    void refreshArtifactDeliveries(chat.repoId ?? null, key, { quiet: true });
   });
 
   onDestroy(() => {
@@ -1086,6 +1111,73 @@
 
   async function refreshActive(chatId: string, options: { quiet?: boolean } = {}): Promise<void> {
     await pageController.refreshActive(chatId, options);
+  }
+
+  async function refreshArtifactDeliveries(
+    repoId: string | null,
+    key = `${activeChatId ?? ''}|${repoId ?? ''}`,
+    options: { quiet?: boolean } = {}
+  ): Promise<void> {
+    if (!options.quiet) loadingArtifactDeliveries = true;
+    const result = await webApi.pma.listArtifactDeliveries(repoId);
+    if (key !== artifactDeliveryLoadKey) return;
+    loadingArtifactDeliveries = false;
+    if (result.ok) {
+      artifactDeliveryError = null;
+      artifactDeliveries = [...result.data].sort(compareArtifactDeliveries);
+    } else {
+      artifactDeliveryError = result.error;
+    }
+  }
+
+  function compareArtifactDeliveries(left: ArtifactDelivery, right: ArtifactDelivery): number {
+    return deliveryTimeValue(right) - deliveryTimeValue(left);
+  }
+
+  function deliveryTimeValue(delivery: ArtifactDelivery): number {
+    const value = delivery.updatedAt ?? delivery.createdAt ?? delivery.sentAt ?? delivery.failedAt;
+    const timestamp = value ? Date.parse(value) : 0;
+    return Number.isFinite(timestamp) ? timestamp : 0;
+  }
+
+  function artifactDeliveryStateLabel(delivery: ArtifactDelivery): string {
+    const state = delivery.state.trim().toLowerCase();
+    if (state === 'claimed' || state === 'sending') return 'sending';
+    return state || 'pending';
+  }
+
+  function artifactDeliveryMeta(delivery: ArtifactDelivery): string {
+    const parts = [
+      delivery.targetSurface ? `to ${delivery.targetSurface}` : null,
+      delivery.size !== null ? formatBytes(delivery.size) : null,
+      delivery.updatedAt ? formatRelativeTime(delivery.updatedAt) : null
+    ].filter((part): part is string => Boolean(part));
+    return parts.join(' · ');
+  }
+
+  function artifactDeliveriesForActiveSurface(
+    chat: PmaChatSummary | null,
+    deliveries: ArtifactDelivery[]
+  ): ArtifactDelivery[] {
+    if (!chat) return [];
+    const ref = surfaceRefFromThreadRaw(chat.raw as Record<string, unknown>);
+    if (!ref) return [];
+    const targetKeys = new Set([ref.key, `${ref.kind}:${ref.key}`].map((value) => value.toLowerCase()));
+    const surface = ref.kind.toLowerCase();
+    return deliveries.filter((delivery) => {
+      const deliverySurface = delivery.targetSurface?.toLowerCase() ?? '';
+      const deliveryTarget = delivery.targetConversation?.toLowerCase() ?? '';
+      return (!deliverySurface || deliverySurface === surface) && targetKeys.has(deliveryTarget);
+    });
+  }
+
+  async function openFileDrawer(): Promise<void> {
+    fileDrawerOpen = true;
+    if (activeChat && !isLocalDraftChatId(activeChat.id)) {
+      const key = `${activeChat.id}|${activeChat.repoId ?? ''}`;
+      artifactDeliveryLoadKey = key;
+      await refreshArtifactDeliveries(activeChat.repoId ?? null, key);
+    }
   }
 
   function closeStream(): void {
@@ -1545,6 +1637,11 @@
       if (!result.ok) composeError = result.error;
       else {
         readModelEntityStore.setPmaArtifacts(activeChatId ?? '__global__', result.data);
+        if (activeChat && !isLocalDraftChatId(activeChat.id)) {
+          const key = `${activeChat.id}|${activeChat.repoId ?? ''}`;
+          artifactDeliveryLoadKey = key;
+          await refreshArtifactDeliveries(activeChat.repoId ?? null, key, { quiet: true });
+        }
         showCommandNotice(result.data.length ? `Files refreshed (${result.data.length}).` : 'No PMA files yet.');
         clearSlashDraft();
       }
@@ -2086,8 +2183,16 @@
           </p>
         {/if}
       </div>
-      {#if activeChat && (showStreamHealthAside || !isPmaChatArchived(activeChat))}
+      {#if activeChat && (showStreamHealthAside || !isPmaChatArchived(activeChat) || activeSharedFileCount > 0 || inboxArtifacts.length > 0)}
         <div class="chat-header-tools">
+          <button
+            class="chat-header-action files-action"
+            type="button"
+            onclick={() => void openFileDrawer()}
+            aria-label="Open chat files"
+          >
+            Files{activeSharedFileCount > 0 ? ` ${activeSharedFileCount}` : ''}
+          </button>
           {#if !isPmaChatArchived(activeChat) && !isLocalDraftChatId(activeChat.id)}
             <button
               class="chat-header-action"
@@ -2165,7 +2270,12 @@
           <p>This chat has no visible timeline yet.</p>
         </div>
       {:else}
-        <ChatTranscriptCards cards={activeCards} assistantLabel={chatAgentDisplayLabel} {streamingMessageId} />
+        <ChatTranscriptCards
+          cards={activeCards}
+          assistantLabel={chatAgentDisplayLabel}
+          {streamingMessageId}
+          sharedFiles={assistantSharedFiles}
+        />
         {#if showTypingIndicator}
           {@render typingDots('Assistant is typing')}
         {/if}
@@ -2219,6 +2329,86 @@
           </span>
         {/if}
       </div>
+    {/if}
+
+    {#if fileDrawerOpen}
+      <section class="chat-files-drawer" aria-label="Chat files">
+        <div class="chat-files-drawer-head">
+          <div>
+            <span class="artifact-type">Files</span>
+            <h2>Shared files</h2>
+          </div>
+          <div class="chat-files-drawer-actions">
+            <button
+              type="button"
+              class="chat-header-action"
+              disabled={!activeChat || loadingArtifactDeliveries}
+              onclick={() => activeChat && void refreshArtifactDeliveries(activeChat.repoId ?? null)}
+            >
+              {loadingArtifactDeliveries ? 'Refreshing...' : 'Refresh'}
+            </button>
+            <button
+              type="button"
+              class="icon-button"
+              aria-label="Close files"
+              title="Close files"
+              onclick={() => (fileDrawerOpen = false)}
+            >
+              x
+            </button>
+          </div>
+        </div>
+        <div class="chat-files-sections">
+          <section class="chat-files-section" aria-label="Files from you">
+            <h3>From you</h3>
+            {#if inboxArtifacts.length === 0}
+              <p class="chat-files-empty">No uploaded files for this chat.</p>
+            {:else}
+              <ul class="chat-files-list">
+                {#each inboxArtifacts as artifact (artifact.id)}
+                  <li>
+                    <span class="attachment-kind">{artifact.kind}</span>
+                    {#if artifact.url}
+                      <a href={href(artifact.url)} target="_blank" rel="noopener"><strong>{artifact.title}</strong></a>
+                    {:else}
+                      <strong>{artifact.title}</strong>
+                    {/if}
+                    {#if artifact.summary}
+                      <em>{artifact.summary}</em>
+                    {/if}
+                  </li>
+                {/each}
+              </ul>
+            {/if}
+          </section>
+          <section class="chat-files-section" aria-label="Files from assistant">
+            <h3>From agent</h3>
+            {#if artifactDeliveryError}
+              <p class="chat-files-empty error">{artifactDeliveryError.message}</p>
+            {:else if activeSurfaceDeliveries.length === 0}
+              <p class="chat-files-empty">No agent-shared files yet.</p>
+            {:else}
+              <ul class="chat-files-list delivery-list">
+                {#each activeSurfaceDeliveries as delivery (delivery.deliveryId)}
+                  {@const stateLabel = artifactDeliveryStateLabel(delivery)}
+                  <li class={`delivery-${stateLabel}`}>
+                    <span class="attachment-kind">{stateLabel}</span>
+                    {#if delivery.downloadUrl}
+                      <a href={href(delivery.downloadUrl)} target="_blank" rel="noopener"><strong>{delivery.filename}</strong></a>
+                    {:else}
+                      <strong>{delivery.filename}</strong>
+                    {/if}
+                    <em>{artifactDeliveryMeta(delivery)}</em>
+                    {#if delivery.lastError}
+                      <small>{delivery.lastError}</small>
+                    {/if}
+                  </li>
+                {/each}
+              </ul>
+            {/if}
+          </section>
+        </div>
+      </section>
     {/if}
 
     <form

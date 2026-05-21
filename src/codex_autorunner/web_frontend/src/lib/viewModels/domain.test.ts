@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   mapContextspaceDocument,
+  mapArtifactDelivery,
   mapDashboardSummary,
   mapPmaChatSummary,
   mapPmaRunProgress,
@@ -340,6 +341,35 @@ describe('view model mappers', () => {
     expect(mapSurfaceArtifact({ name: 'Preview URL', url: 'http://localhost:4173' }).kind).toBe('preview_url');
     expect(mapSurfaceArtifact({ kind: 'link', title: 'Fixture preview', url: 'https://example.test' }).kind).toBe('link');
     expect(mapSurfaceArtifact({ name: 'pull request', url: 'https://github.com/org/repo/pull/1' }).kind).toBe('link');
+  });
+
+  it('maps artifact delivery records with download metadata', () => {
+    const delivery = mapArtifactDelivery({
+      delivery_id: 'delivery:abc',
+      artifact_id: 'sha256:abc',
+      state: 'sent',
+      target_surface: 'discord',
+      target_conversation_key: 'channel:1',
+      attempts: 1,
+      download_url: '/hub/filebox/repo/artifacts/deliveries/delivery%3Aabc/download',
+      artifact: {
+        filename: 'spec.md',
+        mime_type: 'text/markdown',
+        size: 42
+      },
+      created_at: '2026-05-21T00:00:00Z',
+      updated_at: '2026-05-21T00:01:00Z'
+    });
+
+    expect(delivery).toMatchObject({
+      deliveryId: 'delivery:abc',
+      filename: 'spec.md',
+      state: 'sent',
+      targetSurface: 'discord',
+      targetConversation: 'channel:1',
+      size: 42,
+      downloadUrl: '/hub/filebox/repo/artifacts/deliveries/delivery%3Aabc/download'
+    });
   });
 
   it('maps ticket dispatch history attachments into ticket details', () => {
