@@ -29,6 +29,7 @@ from ...agents.opencode.turn_runtime import (
 )
 from ...agents.opencode.usage_decoder import extract_usage
 from ...core.logging_utils import log_event
+from ...core.orchestration.runtime_payload_shapes import canonicalize_token_usage
 from ...core.ports.agent_backend import (
     AgentBackend,
     AgentEvent,
@@ -480,6 +481,8 @@ class OpenCodeBackend(AgentBackend):
 
             canonical_usage = output_result.usage or latest_usage_snapshot
             if isinstance(canonical_usage, dict):
+                canonical_usage = canonicalize_token_usage(canonical_usage)
+            if isinstance(canonical_usage, dict):
                 persist_opencode_usage_snapshot(
                     workspace_root,
                     session_id=self._session_id,
@@ -593,7 +596,11 @@ class OpenCodeBackend(AgentBackend):
             if usage is None:
                 usage = extract_usage(payload)
             if isinstance(usage, dict):
-                events.append(TokenUsage(timestamp=now_iso(), usage=dict(usage)))
+                canonical_usage = canonicalize_token_usage(usage)
+                if canonical_usage:
+                    events.append(
+                        TokenUsage(timestamp=now_iso(), usage=canonical_usage)
+                    )
 
         elif payload_type == "messageEnd":
             final_message = parse_message_response(payload).text or payload.get(

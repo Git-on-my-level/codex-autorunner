@@ -30,6 +30,7 @@ from .codex_item_normalizers import (
     extract_codex_usage,
     is_commentary_agent_message,
 )
+from .runtime_payload_shapes import canonicalize_token_usage
 
 RuntimeStateEventStatus = Literal["ok", "error", "interrupted"]
 
@@ -119,7 +120,9 @@ def normalize_runtime_state_events(raw_event: Any) -> list[RuntimeStateEvent]:
     if not usage and lifecycle.usage:
         usage = dict(lifecycle.usage)
     if usage:
-        events.append(TokenUsage(usage=dict(usage), source=method))
+        canonical_usage = canonicalize_token_usage(usage)
+        if canonical_usage:
+            events.append(TokenUsage(usage=canonical_usage, source=method))
 
     assistant_message_text = None
     assistant_stream_text = None

@@ -368,7 +368,7 @@ def test_codex_notification_parser_golden_transcript() -> None:
     )
     usage = [event for event in events if isinstance(event, TokenUsage)]
     assert len(usage) == 1
-    assert usage[0].usage["total_tokens"] == 20
+    assert usage[0].usage["totalTokens"] == 20
     assert isinstance(events[-1], Failed)
     assert "permission denied" in events[-1].error_message
 
@@ -459,7 +459,9 @@ def test_codex_notification_parser_supports_outputdelta_reasoning_and_item_compl
     assert events[6].delta_type == "assistant_message"
 
     assert isinstance(events[7], TokenUsage)
-    assert events[7].usage["input_tokens"] == 10
+    assert events[7].usage["inputTokens"] == 10
+    assert events[7].usage["outputTokens"] == 5
+    assert events[7].usage["totalTokens"] == 15
 
 
 def test_codex_notification_parser_accumulates_reasoning_deltas_per_item() -> None:
@@ -526,7 +528,7 @@ def test_opencode_sse_parser_golden_transcript() -> None:
     )
     usage = [event for event in events if isinstance(event, TokenUsage)]
     assert len(usage) == 1
-    assert usage[0].usage["total_tokens"] == 20
+    assert usage[0].usage["totalTokens"] == 20
     assert isinstance(events[-1], Failed)
     assert "permission denied" in events[-1].error_message
 

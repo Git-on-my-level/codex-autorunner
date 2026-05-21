@@ -283,7 +283,11 @@ def test_runtime_turn_terminal_state_machine_builds_compact_checkpoint() -> None
     assert checkpoint.backend_turn_id == "turn-1"
     assert checkpoint.status == "running"
     assert checkpoint.last_runtime_method == "turn/completed"
-    assert checkpoint.token_usage == {"input": 12, "output": 7}
+    assert checkpoint.token_usage == {
+        "totalTokens": 19,
+        "inputTokens": 12,
+        "outputTokens": 7,
+    }
     assert checkpoint.assistant_text_preview == "hello world"
     assert checkpoint.assistant_char_count == len("hello world")
     assert checkpoint.raw_event_count == 2

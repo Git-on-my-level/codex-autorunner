@@ -104,6 +104,15 @@ def extract_usage(payload: Mapping[str, Any]) -> dict[str, Any]:
     token_usage = payload.get("tokenUsage")
     if isinstance(token_usage, Mapping):
         return dict(token_usage)
+    size = payload.get("size")
+    used = payload.get("used")
+    if isinstance(size, int) or isinstance(used, int):
+        result: dict[str, Any] = {}
+        if isinstance(used, int):
+            result["totalTokens"] = used
+        if isinstance(size, int):
+            result["modelContextWindow"] = size
+        return result
     return {}
 
 
