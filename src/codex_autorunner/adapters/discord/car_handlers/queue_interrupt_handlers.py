@@ -214,11 +214,12 @@ async def handle_queued_turn_interrupt_send_button(
         custom_id
     )
     if not execution_id or not source_message_id:
-        await send_interrupt_component_response(
+        await defer_and_update_runtime_component_message(
             service,
             interaction_id,
             interaction_token,
             "Queued request is unavailable.",
+            components=[],
         )
         return
     binding = await service._store.get_binding(channel_id=channel_id)
@@ -228,11 +229,12 @@ async def handle_queued_turn_interrupt_send_button(
         service._get_discord_thread_binding(channel_id=channel_id, mode=mode)
     )
     if current_thread is None:
-        await send_interrupt_component_response(
+        await defer_and_update_runtime_component_message(
             service,
             interaction_id,
             interaction_token,
             "Queued request is unavailable.",
+            components=[],
         )
         return
     promoted = orchestration_service.promote_queued_execution(
@@ -240,11 +242,12 @@ async def handle_queued_turn_interrupt_send_button(
         execution_id,
     )
     if not promoted:
-        await send_interrupt_component_response(
+        await defer_and_update_runtime_component_message(
             service,
             interaction_id,
             interaction_token,
             "Queued request is no longer pending.",
+            components=[],
         )
         return
     get_running_execution = getattr(
@@ -255,11 +258,12 @@ async def handle_queued_turn_interrupt_send_button(
     if callable(get_running_execution):
         running_execution = get_running_execution(current_thread.thread_target_id)
         if running_execution is None:
-            await send_interrupt_component_response(
+            await defer_and_update_runtime_component_message(
                 service,
                 interaction_id,
                 interaction_token,
                 "Queued request moved to the front.",
+                components=[],
             )
             return
     await defer_and_update_runtime_component_message(

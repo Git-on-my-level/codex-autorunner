@@ -3438,15 +3438,18 @@ async def test_component_interaction_queued_turn_interrupt_send_acknowledges_whe
         )
 
         assert interrupt_called is False
-        assert rest.followup_messages[-1]["payload"]["content"] == (
-            "Queued request moved to the front."
+        assert rest.followup_messages == []
+        assert len(rest.edited_original_interaction_responses) == 1
+        assert (
+            rest.edited_original_interaction_responses[0]["payload"]["content"]
+            == "Queued request moved to the front."
         )
     finally:
         await store.close()
 
 
 @pytest.mark.anyio
-async def test_queued_turn_interrupt_send_uses_followup_after_predefer(
+async def test_queued_turn_interrupt_send_updates_original_after_predefer(
     tmp_path: Path,
 ) -> None:
     service, rest, store = await _build_service(tmp_path, init_store=True)
@@ -3468,7 +3471,7 @@ async def test_queued_turn_interrupt_send_uses_followup_after_predefer(
             SimpleNamespace(thread_target_id="thread-1"),
         )
 
-        await service.defer_ephemeral(
+        await service.defer_component_update(
             interaction_id="interaction-1",
             interaction_token="token-1",
         )
@@ -3481,9 +3484,10 @@ async def test_queued_turn_interrupt_send_uses_followup_after_predefer(
             message_id="progress-2",
         )
 
-        assert len(rest.followup_messages) == 1
+        assert rest.followup_messages == []
+        assert len(rest.edited_original_interaction_responses) == 1
         assert (
-            rest.followup_messages[0]["payload"]["content"]
+            rest.edited_original_interaction_responses[0]["payload"]["content"]
             == "Queued request moved to the front."
         )
     finally:
