@@ -1187,6 +1187,9 @@ class OpenCodeHarness(AgentHarness):
                 stall_timeout_seconds_value,
             )
 
+            def _command_is_active() -> bool:
+                return command_task is not None and not command_task.done()
+
             collect_task = asyncio.create_task(
                 collect_opencode_output_from_events(
                     None,
@@ -1207,6 +1210,7 @@ class OpenCodeHarness(AgentHarness):
                     respond_permission=_respond_permission,
                     reply_question=_reply_question,
                     reject_question=_reject_question,
+                    turn_activity_fetcher=_command_is_active,
                     event_stream_factory=_event_stream,
                     session_fetcher=_fetch_session,
                     provider_fetcher=_fetch_providers,

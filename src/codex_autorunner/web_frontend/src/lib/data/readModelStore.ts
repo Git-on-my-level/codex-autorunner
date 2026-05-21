@@ -89,6 +89,13 @@ export type ChatIndexWindowRequest = {
   limit?: number;
 };
 
+/** Shared companion window for backend ticket-run groups; must match route preload. */
+export const CHAT_TICKET_RUN_GROUP_WINDOW_REQUEST = {
+  facets: { categories: ['ticket_run'] as const },
+  groupBy: 'ticket_run' as const,
+  limit: 50
+} satisfies ChatIndexWindowRequest;
+
 export type ChatIndexWindowStatus = 'idle' | 'loading' | 'ready' | 'interrupted';
 
 export type ChatIndexWindow = {

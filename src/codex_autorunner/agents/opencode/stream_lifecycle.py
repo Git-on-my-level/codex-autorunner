@@ -9,6 +9,7 @@ to reconnect, poll session state, or fail a stalled stream.
 from __future__ import annotations
 
 import asyncio
+import inspect
 import logging
 import time
 from contextlib import suppress
@@ -37,6 +38,7 @@ _OPENCODE_POST_STALL_IDLE_WAIT_SECONDS = 30.0
 _OPENCODE_POST_STALL_IDLE_POLL_SECONDS = 5.0
 
 StatusEventHandler = Callable[[str, dict[str, Any], Optional[str]], Awaitable[None]]
+TurnActivityFetcher = Callable[[], bool | Awaitable[bool]]
 
 
 class LifecycleAction(Enum):
@@ -76,11 +78,13 @@ class StreamLifecycleController:
         stall_timeout_seconds: Optional[float],
         first_event_timeout_seconds: Optional[float],
         status_event_handler: Optional[StatusEventHandler],
+        turn_activity_fetcher: Optional[TurnActivityFetcher] = None,
         logger: Optional[logging.Logger] = None,
     ):
         self._session_id = session_id
         self._event_stream_factory = event_stream_factory
         self._session_fetcher = session_fetcher
+        self._turn_activity_fetcher = turn_activity_fetcher
         self._stall_timeout_seconds = stall_timeout_seconds
         self._first_event_timeout_seconds = first_event_timeout_seconds
         self._status_event_handler = status_event_handler
@@ -181,10 +185,7 @@ class StreamLifecycleController:
             and self._first_event_timeout_seconds is not None
         ):
             if now - self._stream_started_at >= self._first_event_timeout_seconds:
-                status_type = await self._poll_session_status_quiet()
-                if status_type and not status_is_idle(status_type):
-                    return await self._handle_stall_recovery(now=now)
-                return await self._fail_first_event_timeout(now=now)
+                return await self._handle_first_event_silence(now=now)
             return LifecycleDecision(action=LifecycleAction.CONTINUE)
 
         return await self._handle_stall_recovery(now=now)
@@ -204,10 +205,7 @@ class StreamLifecycleController:
             and self._first_event_timeout_seconds is not None
         ):
             if now - self._stream_started_at >= self._first_event_timeout_seconds:
-                status_type = await self._poll_session_status_quiet()
-                if status_type and not status_is_idle(status_type):
-                    return await self._handle_stall_recovery(now=now)
-                return await self._fail_first_event_timeout(now=now)
+                return await self._handle_first_event_silence(now=now)
             return LifecycleDecision(action=LifecycleAction.CONTINUE)
 
         if (
@@ -266,6 +264,18 @@ class StreamLifecycleController:
             )
             return None
 
+    async def _handle_first_event_silence(self, *, now: float) -> LifecycleDecision:
+        status_type = await self._poll_session_status_quiet()
+        if status_type and not status_is_idle(status_type):
+            return await self._handle_stall_recovery(now=now)
+        if await self._turn_is_active():
+            return await self._continue_silent_active_turn(
+                now=now,
+                timeout_kind="first_event",
+                status_type=status_type,
+            )
+        return await self._fail_first_event_timeout(now=now)
+
     async def _poll_session_status_quiet(self) -> Optional[str]:
         if self._session_fetcher is None:
             return None
@@ -277,6 +287,54 @@ class StreamLifecycleController:
                 "session fetch during timeout check failed", exc_info=True
             )
             return None
+
+    async def _turn_is_active(self) -> bool:
+        if self._turn_activity_fetcher is None:
+            return False
+        try:
+            active = self._turn_activity_fetcher()
+            if inspect.isawaitable(active):
+                active = await active
+            return bool(active)
+        except Exception:
+            self._logger.debug("turn activity check failed", exc_info=True)
+            return False
+
+    async def _continue_silent_active_turn(
+        self,
+        *,
+        now: float,
+        timeout_kind: str,
+        status_type: Optional[str],
+    ) -> LifecycleDecision:
+        idle_seconds = now - self._last_relevant_event_at
+        log_event(
+            self._logger,
+            logging.WARNING,
+            "opencode.stream.silent_while_turn_active",
+            session_id=self._session_id,
+            idle_seconds=idle_seconds,
+            timeout_kind=timeout_kind,
+            status_type=status_type,
+            reconnect_attempts=self._reconnect_attempts,
+        )
+        await self._emit_status(
+            {
+                "type": "stream_silent_turn_active",
+                "idleSeconds": idle_seconds,
+                "timeoutKind": timeout_kind,
+                "status": status_type,
+                "attempts": self._reconnect_attempts,
+            }
+        )
+        if self._stream_iter is not None:
+            await _close_stream(self._stream_iter)
+        if self._event_stream_factory is not None:
+            self._stream_iter = self._event_stream_factory().__aiter__()
+        if not self._received_any_event:
+            self._stream_started_at = now
+        self._last_relevant_event_at = now
+        return LifecycleDecision(action=LifecycleAction.CONTINUE)
 
     async def _fail_first_event_timeout(self, *, now: float) -> LifecycleDecision:
         timeout_seconds = self._first_event_timeout_seconds
@@ -428,6 +486,12 @@ class StreamLifecycleController:
         )
 
         if not reconnected:
+            if await self._turn_is_active():
+                return await self._continue_silent_active_turn(
+                    now=now,
+                    timeout_kind="stall",
+                    status_type=status_type,
+                )
             if status_type and not status_is_idle(status_type):
                 idle_wait_started_at = time.monotonic()
                 last_status_type = status_type

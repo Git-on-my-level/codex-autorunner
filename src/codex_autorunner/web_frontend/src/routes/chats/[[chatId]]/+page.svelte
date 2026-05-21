@@ -20,6 +20,7 @@
     type PmaQueuedTurn
   } from '$lib/api/client';
   import {
+    CHAT_TICKET_RUN_GROUP_WINDOW_REQUEST,
     invalidateReadModelTags,
     readModelEntityStore,
     readModelEntityTags,
@@ -202,11 +203,7 @@
   let detailMode = $state<'list' | 'detail'>('list');
   let search = $state('');
   const currentChatIndexRequest = $derived<ChatIndexWindowRequest>(chatIndexRequestForCurrentFilters());
-  const ticketRunGroupRequest = $derived<ChatIndexWindowRequest>({
-    facets: { categories: ['ticket_run'] },
-    groupBy: 'ticket_run',
-    limit: 50
-  });
+  const ticketRunGroupRequest = $derived<ChatIndexWindowRequest>(CHAT_TICKET_RUN_GROUP_WINDOW_REQUEST);
   const persistedChats = $derived<PmaChatSummary[]>(selectPmaChats(readModelState, currentChatIndexRequest));
   const facetPersistedChats = $derived<PmaChatSummary[]>(selectPmaChats(readModelState, { filter: 'all', limit: 50 }));
   const backendTicketRunGroups = $derived(selectTicketRunGroups(readModelState, ticketRunGroupRequest));

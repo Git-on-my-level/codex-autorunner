@@ -1,4 +1,5 @@
 import {
+  CHAT_TICKET_RUN_GROUP_WINDOW_REQUEST,
   ensureChatDetailLoaded,
   ensureChatIndexLoaded,
   type ReadModelLoaderResult
@@ -27,7 +28,7 @@ export async function loadChatRoute(
     }
   );
   const ticketRunGroupsPromise = ensureChatIndexLoaded(
-    { facets: { categories: ['ticket_run'] }, groupBy: 'ticket_run', limit: CHAT_INDEX_WINDOW_LIMIT },
+    { ...CHAT_TICKET_RUN_GROUP_WINDOW_REQUEST, limit: CHAT_INDEX_WINDOW_LIMIT },
     {
       ...readModelLoaderOptions(options),
       refresh: true

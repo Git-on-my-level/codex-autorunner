@@ -721,6 +721,12 @@ export class WebApiClient {
       ),
     getAutomationWorkspace: async (): Promise<ApiResult<AutomationWorkspace>> =>
       mapResult(await this.getJson<JsonRecord>('/hub/read-models/automations/workspace'), mapAutomationWorkspace),
+    getAutomationWorkspaceIndex: async (): Promise<ApiResult<AutomationWorkspace>> =>
+      mapResult(await this.getJson<JsonRecord>('/hub/read-models/automations/workspace-index'), mapAutomationWorkspace),
+    getAutomationTargetOptions: async (): Promise<ApiResult<AutomationTargetOption[]>> =>
+      mapResult(await this.getJson<JsonRecord>('/hub/read-models/automations/target-options'), (payload) =>
+        asArray(payload.target_options ?? payload.targetOptions).map(mapAutomationTargetOption)
+      ),
     listAutomations: async (): Promise<ApiResult<AutomationOverview>> =>
       mapResult(await this.getJson<JsonRecord>('/hub/automations'), mapAutomationOverview),
     getAutomation: async (ruleId: string): Promise<ApiResult<AutomationSummary>> =>
@@ -746,6 +752,8 @@ export class WebApiClient {
       ),
     runAutomation: async (ruleId: string): Promise<ApiResult<JsonRecord>> =>
       this.requestJson<JsonRecord>(`/hub/automations/${encodeURIComponent(ruleId)}/run`, { method: 'POST' }),
+    deleteAutomation: async (ruleId: string): Promise<ApiResult<JsonRecord>> =>
+      this.requestJson<JsonRecord>(`/hub/automations/${encodeURIComponent(ruleId)}`, { method: 'DELETE' }),
     setAutomationEnabled: async (ruleId: string, enabled: boolean): Promise<ApiResult<AutomationSummary>> =>
       mapResult(
         await this.requestJson<JsonRecord>(`/hub/automations/${encodeURIComponent(ruleId)}/enabled`, {

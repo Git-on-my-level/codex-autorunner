@@ -71,31 +71,65 @@
     <div class="ticket-pack-list" role="list" aria-label="Ticket pack">
       {#each tickets as ticket, index (ticket.path + index)}
         {@const row = ticketPackListRow(ticket.path, ticket.content, index)}
-        <article class="ticket-pack-row" class:expanded={expandedIndex === index} role="listitem">
-          <button
-            type="button"
-            class="ticket-card ticket-pack-card"
-            aria-expanded={expandedIndex === index}
-            onclick={() => (expandedIndex = expandedIndex === index ? null : index)}
-          >
-            <span class="ticket-card-num" aria-hidden="true">{row.numberLabel}</span>
-            <div class="ticket-card-main">
-              <div class="ticket-card-title-row">
-                <strong class="ticket-card-title">{row.title}</strong>
+        {@const isExpanded = expandedIndex === index}
+        <article class="ticket-pack-row" class:expanded={isExpanded} role="listitem">
+          {#if !isExpanded}
+            <button
+              type="button"
+              class="ticket-card ticket-pack-card"
+              aria-expanded={isExpanded}
+              onclick={() => (expandedIndex = index)}
+            >
+              <span class="ticket-card-num" aria-hidden="true">{row.numberLabel}</span>
+              <div class="ticket-card-main">
+                <div class="ticket-card-title-row">
+                  <strong class="ticket-card-title">{row.title}</strong>
+                </div>
+                <div class="ticket-card-meta">
+                  {#if row.bodyPreview}<span class="ticket-card-preview">{row.bodyPreview}</span>{/if}
+                  <span class="ticket-card-path">{row.pathLabel}</span>
+                </div>
               </div>
-              <div class="ticket-card-meta">
-                {#if row.bodyPreview}<span class="ticket-card-preview">{row.bodyPreview}</span>{/if}
-                <span class="ticket-card-path">{row.pathLabel}</span>
-              </div>
+              {#if row.agentLabel || row.modelLabel}
+                <div class="ticket-card-side" aria-label="Agent and model">
+                  <span class="ticket-card-agent">{row.agentLabel}</span>
+                  {#if row.modelLabel}<span class="ticket-card-model">{row.modelLabel}</span>{/if}
+                </div>
+              {/if}
+              <span class="ticket-card-chevron" aria-hidden="true">›</span>
+            </button>
+          {:else}
+            <div class="ticket-pack-expanded-head">
+              <button
+                type="button"
+                class="ticket-pack-collapse"
+                onclick={() => (expandedIndex = null)}
+                aria-label="Collapse ticket {row.numberLabel}"
+                title="Collapse"
+              >
+                <span class="ticket-card-num" aria-hidden="true">{row.numberLabel}</span>
+                <span class="ticket-pack-collapse-text">Collapse</span>
+              </button>
+              {#if tickets.length > 1}
+                <nav class="ticket-pack-pager" aria-label="Ticket navigation">
+                  <button
+                    type="button"
+                    class="pager-button"
+                    disabled={index === 0}
+                    onclick={() => (expandedIndex = Math.max(0, index - 1))}
+                    aria-label="Previous ticket"
+                  >‹</button>
+                  <span class="pager-position">{index + 1} of {tickets.length}</span>
+                  <button
+                    type="button"
+                    class="pager-button"
+                    disabled={index === tickets.length - 1}
+                    onclick={() => (expandedIndex = Math.min(tickets.length - 1, index + 1))}
+                    aria-label="Next ticket"
+                  >›</button>
+                </nav>
+              {/if}
             </div>
-            {#if row.agentLabel || row.modelLabel}
-              <div class="ticket-card-side" aria-label="Agent and model">
-                <span class="ticket-card-agent">{row.agentLabel}</span>
-                {#if row.modelLabel}<span class="ticket-card-model">{row.modelLabel}</span>{/if}
-              </div>
-            {/if}
-          </button>
-          {#if expandedIndex === index}
             <TicketPackTicketEditor
               {ticket}
               {index}
@@ -212,5 +246,98 @@
 
   .ticket-pack-add {
     justify-self: start;
+  }
+
+  .ticket-pack-card {
+    transition: border-color var(--transition-fast), background var(--transition-fast);
+  }
+
+  .ticket-pack-card:hover {
+    border-color: var(--color-border-strong);
+    background: var(--color-surface);
+  }
+
+  .ticket-card-chevron {
+    color: var(--color-ink-faint);
+    font-size: var(--font-size-3);
+    line-height: 1;
+    flex-shrink: 0;
+  }
+
+  .ticket-pack-row.expanded {
+    border: 1px solid var(--color-accent);
+    border-radius: 10px;
+    background: color-mix(in srgb, var(--color-accent) 4%, var(--color-surface));
+    padding: var(--space-2);
+    gap: var(--space-2);
+  }
+
+  .ticket-pack-expanded-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-2);
+    padding: 0 var(--space-1);
+  }
+
+  .ticket-pack-collapse {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-2);
+    background: transparent;
+    border: none;
+    color: var(--color-ink-muted);
+    cursor: pointer;
+    padding: 4px 6px;
+    border-radius: 6px;
+    font: inherit;
+    font-size: var(--font-size-0);
+  }
+
+  .ticket-pack-collapse:hover {
+    background: var(--color-surface-muted);
+    color: var(--color-ink);
+  }
+
+  .ticket-pack-collapse-text {
+    font-weight: 500;
+  }
+
+  .ticket-pack-pager {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-1);
+    font-size: var(--font-size-0);
+    color: var(--color-ink-muted);
+  }
+
+  .pager-button {
+    width: 26px;
+    height: 26px;
+    display: grid;
+    place-items: center;
+    border: 1px solid var(--color-border-subtle);
+    background: var(--color-surface);
+    color: var(--color-ink-soft);
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: var(--font-size-2);
+    line-height: 1;
+    padding: 0;
+  }
+
+  .pager-button:hover:not(:disabled) {
+    border-color: var(--color-border-strong);
+    color: var(--color-ink);
+  }
+
+  .pager-button:disabled {
+    opacity: 0.4;
+    cursor: default;
+  }
+
+  .pager-position {
+    font-variant-numeric: tabular-nums;
+    padding: 0 4px;
   }
 </style>

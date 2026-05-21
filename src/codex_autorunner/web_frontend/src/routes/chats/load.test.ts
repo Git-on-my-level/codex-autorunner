@@ -9,7 +9,7 @@ import {
   type TicketDetailSnapshot
 } from '$lib/api/readModelContracts';
 import type { ApiError, ApiResult } from '$lib/api/client';
-import { ReadModelEntityStore, selectChatDetailView } from '$lib/data/readModelStore';
+import { CHAT_TICKET_RUN_GROUP_WINDOW_REQUEST, ReadModelEntityStore, selectChatDetailView } from '$lib/data/readModelStore';
 import type { ReadModelSnapshotClient } from '$lib/data/readModelClients';
 import { importRouteLoader } from '$lib/test/importRouteLoader';
 
@@ -97,7 +97,7 @@ describe('/chats route load', () => {
 
     expect(client.chatIndex).toHaveBeenCalledTimes(4);
     expect(client.chatIndex).toHaveBeenNthCalledWith(1, { limit: 50 });
-    expect(client.chatIndex).toHaveBeenNthCalledWith(2, { facets: { categories: ['ticket_run'] }, groupBy: 'ticket_run', limit: 50 });
+    expect(client.chatIndex).toHaveBeenNthCalledWith(2, CHAT_TICKET_RUN_GROUP_WINDOW_REQUEST);
     expect(store.snapshot().chatOrder).toEqual(firstOrder);
     expect(store.snapshot().chatOrder).toEqual(['chat-b', 'chat-a']);
     expect(store.snapshot().chatOrder.map((id) => store.snapshot().chats[id]?.title)).toEqual(firstTitles);

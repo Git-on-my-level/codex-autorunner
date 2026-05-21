@@ -57,7 +57,7 @@ def _ensure_runtime_bindings_table(hub_root: Path) -> None:
                     state_reason TEXT,
                     updated_at TEXT NOT NULL
                 )
-                """
+            """
             )
             columns = {
                 str(row["name"])

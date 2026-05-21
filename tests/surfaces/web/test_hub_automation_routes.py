@@ -231,8 +231,11 @@ def test_hub_automation_workspace_batches_jobs_and_target_options(
 
     assert response.status_code == 200
     workspace = response.json()
+    workspace_rows = {row["id"]: row for row in workspace["automations"]}
     assert workspace["summary"]["failed_jobs"] == 1
-    assert len(workspace["automations"][0]["jobs"]) <= 25
+    assert len(workspace_rows["rule-0"]["jobs"]) == 25
+    assert "executor" in workspace_rows["rule-0"]
+    assert "target_options" in workspace
     assert set(workspace["agent_defaults"]) == {
         "default_agent",
         "default_profile",
@@ -240,6 +243,20 @@ def test_hub_automation_workspace_batches_jobs_and_target_options(
         "default_reasoning",
     }
     assert workspace["generated_at"]
+    index = client.get("/hub/read-models/automations/workspace-index")
+    assert index.status_code == 200
+    index_workspace = index.json()
+    index_rows = {row["id"]: row for row in index_workspace["automations"]}
+    assert len(index_rows["rule-0"]["jobs"]) == 0
+    assert "executor" not in index_rows["rule-0"]
+    assert "target_options" not in index_workspace
+    assert (
+        client.get(
+            "/hub/read-models/automations/workspace-index?include_target_options=true"
+        ).json()["target_options"]
+        is not None
+    )
+    assert client.get("/hub/read-models/automations/target-options").status_code == 200
 
     context = SimpleNamespace(
         supervisor=SimpleNamespace(
@@ -290,6 +307,35 @@ def test_hub_automations_pause_and_resume(tmp_path):
     assert paused.json()["automation"]["enabled"] is False
     assert resumed.status_code == 200
     assert resumed.json()["automation"]["enabled"] is True
+
+
+def test_hub_automations_delete_requires_paused(tmp_path):
+    hub_root = tmp_path / "hub"
+    seed_hub_files(hub_root, force=True)
+    client = TestClient(create_hub_app(hub_root))
+    created = client.post(
+        "/hub/automations",
+        json={"preset": "security_scan_pr", "repo_id": "repo-1"},
+    )
+    rule_id = created.json()["automation"]["id"]
+
+    # Created as paused by default — delete should succeed.
+    missing = client.delete("/hub/automations/does-not-exist")
+    assert missing.status_code == 404
+
+    client.post(f"/hub/automations/{rule_id}/enabled", json={"enabled": True})
+    blocked = client.delete(f"/hub/automations/{rule_id}")
+    assert blocked.status_code == 400
+    assert blocked.json()["detail"]["code"] == "AUTOMATION_DELETE_REQUIRES_PAUSED"
+
+    client.post(f"/hub/automations/{rule_id}/enabled", json={"enabled": False})
+    deleted = client.delete(f"/hub/automations/{rule_id}")
+    assert deleted.status_code == 200
+    assert deleted.json()["deleted"] == rule_id
+
+    # Subsequent get should 404.
+    after = client.get(f"/hub/automations/{rule_id}")
+    assert after.status_code == 404
 
 
 def test_hub_automations_get_and_update_details(tmp_path):

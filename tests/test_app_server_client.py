@@ -112,6 +112,8 @@ async def test_startup_timeout_terminates_hung_initialize_and_allows_fresh_start
         assert client._initialized is False
 
         client._command = fixture_command("basic")
+        # Recovery start needs a real budget; 0.2s is only for the hang case above.
+        client._startup_timeout_seconds = 5.0
         await client.start()
 
         assert client._process is not None
