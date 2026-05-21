@@ -23,7 +23,7 @@ from .automation import (
     ManagedThreadTurnAutomationExecutor,
     PublishOperationAutomationExecutor,
 )
-from .automation.models import JOB_SKIPPED
+from .automation.models import JOB_RUNNING, JOB_SKIPPED
 from .automation.ticket_flow_executor import TicketFlowAutomationExecutor
 from .config import (
     HubConfig,
@@ -189,6 +189,7 @@ class _PmaTurnAutomationExecutor:
                 },
             )
         return AutomationExecutorResult(
+            status=JOB_RUNNING,
             summary="queued PMA automation turn",
             data={"created_queue_item": created},
             execution_refs={"pma_lane_id": lane_id, "pma_queue_item_id": item.item_id},
@@ -1154,7 +1155,7 @@ class HubSupervisor:
         worker = self._lifecycle_orchestrator._automation_job_worker
         scheduler.process_due(limit=take)
         worker_result = worker.process_once(limit=take)
-        return worker_result.succeeded + worker_result.skipped
+        return worker_result.running + worker_result.succeeded + worker_result.skipped
 
     def ensure_pma_safety_checker(self) -> PmaSafetyChecker:
         if self._pma_safety_checker is not None:

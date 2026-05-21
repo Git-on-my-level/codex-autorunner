@@ -10,6 +10,11 @@ from zoneinfo import ZoneInfo
 
 from ..time_utils import now_iso
 from .engine import AutomationRuleEngine
+from .execution_graph import (
+    AutomationExecutionSnapshot,
+    automation_execution_snapshot,
+    automation_execution_snapshots_by_job_id,
+)
 from .models import (
     EXECUTOR_GITHUB_COMMENT,
     EXECUTOR_GITHUB_REACTION,
@@ -239,12 +244,20 @@ def automation_rows(
         rule_ids, per_rule_limit=recent_job_limit
     )
     job_counts_by_rule = store.job_counts_by_rule(rule_ids)
+    all_jobs = [
+        job for rule in rules for job in recent_jobs_by_rule.get(rule.rule_id, [])
+    ]
+    execution_snapshots = automation_execution_snapshots_by_job_id(
+        all_jobs, hub_root=store.hub_root
+    )
     return [
         _automation_row_from_enrichment(
             rule,
+            store=store,
             schedules=schedules_by_rule.get(rule.rule_id, []),
             recent_jobs=recent_jobs_by_rule.get(rule.rule_id, []),
             job_count=job_counts_by_rule.get(rule.rule_id, 0),
+            execution_snapshots=execution_snapshots,
         )
         for rule in rules
     ]
@@ -261,20 +274,31 @@ def automation_row(store: AutomationStore, rule: AutomationRule) -> dict[str, An
     recent_jobs = store.list_jobs(rule_id=rule.rule_id, limit=25, order="newest")
     job_count = store.count_jobs(rule_id=rule.rule_id)
     return _automation_row_from_enrichment(
-        rule, schedules=schedules, recent_jobs=recent_jobs, job_count=job_count
+        rule,
+        store=store,
+        schedules=schedules,
+        recent_jobs=recent_jobs,
+        job_count=job_count,
     )
 
 
 def _automation_row_from_enrichment(
     rule: AutomationRule,
     *,
+    store: AutomationStore,
     schedules: list[AutomationSchedule],
     recent_jobs: list[AutomationJob],
     job_count: int,
+    execution_snapshots: Optional[dict[str, AutomationExecutionSnapshot]] = None,
 ) -> dict[str, Any]:
     last_job = recent_jobs[0] if recent_jobs else None
     schedule = schedules[0] if schedules else None
     typed = _typed_product_projection(rule, schedule)
+    snapshots = execution_snapshots
+    if snapshots is None and recent_jobs:
+        snapshots = automation_execution_snapshots_by_job_id(
+            recent_jobs, hub_root=store.hub_root
+        )
     return {
         "id": rule.rule_id,
         "name": rule.name,
@@ -292,7 +316,10 @@ def _automation_row_from_enrichment(
         "metadata": rule.metadata,
         "schedule": schedule.to_dict() if schedule is not None else None,
         "last_job": last_job.to_dict() if last_job is not None else None,
-        "jobs": [_automation_job_row(job) for job in recent_jobs],
+        "jobs": [
+            _automation_job_row(job, store=store, execution_snapshots=snapshots)
+            for job in recent_jobs
+        ],
         "job_count": job_count,
         "created_at": rule.created_at,
         "updated_at": rule.updated_at,
@@ -300,7 +327,22 @@ def _automation_row_from_enrichment(
     }
 
 
-def _automation_job_row(job: AutomationJob) -> dict[str, Any]:
+def _automation_job_row(
+    job: AutomationJob,
+    *,
+    store: Optional[AutomationStore] = None,
+    execution_snapshots: Optional[dict[str, AutomationExecutionSnapshot]] = None,
+) -> dict[str, Any]:
+    snapshot = (
+        execution_snapshots.get(job.job_id) if execution_snapshots is not None else None
+    )
+    if snapshot is None:
+        snapshot = automation_execution_snapshot(
+            job,
+            hub_root=store.hub_root if store is not None else None,
+        )
+    child_execution = snapshot.to_dict()
+    pma_queue_result = child_execution.get("pma_queue")
     return {
         "job_id": job.job_id,
         "state": job.state,
@@ -311,6 +353,12 @@ def _automation_job_row(job: AutomationJob) -> dict[str, Any]:
         "result_summary": job.result_summary,
         "error_text": job.error_text,
         "attempt_count": job.attempt_count,
+        "managed_thread_target_id": job.managed_thread_target_id,
+        "managed_thread_execution_id": job.managed_thread_execution_id,
+        "pma_lane_id": job.pma_lane_id,
+        "pma_queue_item_id": job.pma_queue_item_id,
+        "pma_queue_result": pma_queue_result,
+        "child_execution": child_execution,
         "ticket_flow_run_id": job.ticket_flow_run_id,
         "ticket_flow_worktree_id": job.ticket_flow_worktree_id,
     }

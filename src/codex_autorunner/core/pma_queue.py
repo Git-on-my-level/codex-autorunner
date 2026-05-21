@@ -531,6 +531,22 @@ class PmaQueue:
                 conn, lane_id, idempotency_key
             )
 
+    def get_item_sync(self, item_id: str) -> Optional[PmaQueueItem]:
+        normalized = str(item_id or "").strip()
+        if not normalized:
+            return None
+        with open_orchestration_sqlite(self._hub_root, durable=True) as conn:
+            row = conn.execute(
+                """
+                SELECT *
+                  FROM orch_queue_items
+                 WHERE queue_item_id = ?
+                 LIMIT 1
+                """,
+                (normalized,),
+            ).fetchone()
+        return self._repository.row_to_item(row) if row is not None else None
+
     def ensure_active_item_sync(
         self,
         lane_id: str,

@@ -56,4 +56,25 @@ describe('runHistoryFromAutomationJobs', () => {
     expect(row.timestamp).toBe('2026-05-17T09:03:00Z');
     expect(row.href).toBeNull();
   });
+
+  it('links PMA automation runs to spawned chats', () => {
+    const [row] = runHistoryFromAutomationJobs([
+      {
+        job_id: 'job-pma',
+        state: 'running',
+        child_execution: {
+          chat_href: '/chats/thread-target-1',
+          target_href: '/worktrees/wt-ignored/tickets'
+        },
+        pma_queue_result: {
+          result: {
+            thread_id: 'thread-1'
+          }
+        },
+        ticket_flow_worktree_id: 'wt-ignored'
+      }
+    ]);
+
+    expect(row.href).toBe('/chats/thread-target-1');
+  });
 });

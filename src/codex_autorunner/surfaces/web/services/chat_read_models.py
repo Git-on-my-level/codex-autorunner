@@ -588,6 +588,21 @@ def hub_chat_row_to_chat_index_row(raw: Mapping[str, Any]) -> ChatIndexRow:
         binding_display_names[0] if binding_display_names else None
     )
 
+    debug_payload = (
+        dict(cast(Mapping[str, Any], raw.get("debug")))
+        if isinstance(raw.get("debug"), Mapping)
+        else {}
+    )
+    automation_payload = raw.get("automation")
+    if isinstance(automation_payload, Mapping):
+        debug_payload["automation"] = dict(cast(Mapping[str, Any], automation_payload))
+    automation_job_id = _str_or_none(raw.get("automation_job_id"))
+    automation_rule_id = _str_or_none(raw.get("automation_rule_id"))
+    if automation_job_id:
+        debug_payload["automation_job_id"] = automation_job_id
+    if automation_rule_id:
+        debug_payload["automation_rule_id"] = automation_rule_id
+
     return ChatIndexRow(
         chat_id=chat_id,
         surface=surface_from_hub_row(raw),
@@ -650,11 +665,7 @@ def hub_chat_row_to_chat_index_row(raw: Mapping[str, Any]) -> ChatIndexRow:
         ticket_status=(
             _ticket_status_from_raw(raw, normalized_status) if is_ticket_flow else None
         ),
-        debug=(
-            dict(cast(Mapping[str, Any], raw.get("debug")))
-            if isinstance(raw.get("debug"), Mapping)
-            else None
-        ),
+        debug=debug_payload or None,
     )
 
 
@@ -894,6 +905,9 @@ def _detail_thread_as_index_shape(thread: Mapping[str, Any]) -> dict[str, Any]:
         "model": thread.get("model") or meta.get("model"),
         "chat_kind": meta.get("chat_kind") or meta.get("thread_kind"),
         "thread_kind": meta.get("thread_kind"),
+        "automation": meta.get("automation"),
+        "automation_job_id": meta.get("automation_job_id"),
+        "automation_rule_id": meta.get("automation_rule_id"),
         "surface_kinds": surface_kinds,
         "surface": first_surface_dict,
         "unread_count": thread.get("unread_count", 0),

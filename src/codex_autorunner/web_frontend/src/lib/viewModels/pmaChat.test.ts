@@ -39,6 +39,7 @@ import {
   pmaChatKind,
   pmaChatKindLabel,
   pmaChatHeaderScopeLine,
+  pmaChatIsAutomation,
   chatRunGroupSummaryParts,
   chatMessengerSurface,
   pmaChatScopeLabelFromChat,
@@ -403,6 +404,18 @@ describe('PMA chat view helpers', () => {
       'chat-3'
     ]);
     expect(summarizeFilterCounts(chats, lastSeen)).toEqual({ all: 3, active: 1, waiting: 1, unread: 2, archived: 0 });
+  });
+
+  it('filters automation-owned chats by backend metadata', () => {
+    const automationChat: PmaChatSummary = {
+      ...baseChat,
+      id: 'automation-chat',
+      raw: { debug: { automation_job_id: 'job-1' } }
+    };
+    const chats = [baseChat, automationChat];
+
+    expect(pmaChatIsAutomation(automationChat)).toBe(true);
+    expect(filterPmaChats(chats, 'automation', '').map((chat) => chat.id)).toEqual(['automation-chat']);
   });
 
   it('keeps archived chats out of the working filters and exposes them through archived', () => {

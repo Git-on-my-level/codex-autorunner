@@ -17,6 +17,16 @@ export function runHistoryFromAutomationJobs(jobs: JsonRecord[]): RunHistoryEntr
     const id = stringValue(job.jobId ?? job.job_id, `job-${index + 1}`);
     const state = stringValue(job.state, 'idle');
     const worktreeId = nullableString(job.ticketFlowWorktreeId ?? job.ticket_flow_worktree_id);
+    const managedThreadId = nullableString(job.managedThreadTargetId ?? job.managed_thread_target_id);
+    const childExecution = recordValue(job.childExecution ?? job.child_execution);
+    const queueResult = recordValue(job.pmaQueueResult ?? job.pma_queue_result);
+    const queuePayloadResult = recordValue(queueResult?.result);
+    const spawnedChatId = managedThreadId ?? nullableString(
+      queuePayloadResult?.managed_thread_id ??
+        queuePayloadResult?.managedThreadId ??
+        queuePayloadResult?.thread_id ??
+        queuePayloadResult?.threadId
+    );
     return {
       id,
       title: `Run ${shortId(id)}`,
@@ -26,7 +36,9 @@ export function runHistoryFromAutomationJobs(jobs: JsonRecord[]): RunHistoryEntr
         nullableString(job.finishedAt ?? job.finished_at) ??
         nullableString(job.updatedAt ?? job.updated_at) ??
         nullableString(job.createdAt ?? job.created_at),
-      href: worktreeId ? worktreeTicketRoute(worktreeId) : null,
+      href:
+        nullableString(childExecution?.chat_href ?? childExecution?.target_href) ??
+        (spawnedChatId ? `/chats/${encodeURIComponent(spawnedChatId)}` : worktreeId ? worktreeTicketRoute(worktreeId) : null),
       attempts: numberValue(job.attemptCount ?? job.attempt_count, 0)
     };
   });
@@ -57,4 +69,8 @@ function nullableString(value: unknown): string | null {
 function numberValue(value: unknown, fallback: number): number {
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+function recordValue(value: unknown): JsonRecord | null {
+  return value && typeof value === 'object' && !Array.isArray(value) ? (value as JsonRecord) : null;
 }

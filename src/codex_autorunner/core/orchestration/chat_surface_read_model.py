@@ -1396,6 +1396,7 @@ class ChatSurfaceReadService:
             projection = _projection(projections, "pma", thread_id)
             lifecycle_status = _normalize_text(row["lifecycle_status"]) or "active"
             metadata = _json_object(_row_get(row, "metadata_json"))
+            automation_metadata = metadata.get("automation")
             chat_kind = _normalize_text(metadata.get("chat_kind"))
             run_id = _normalize_text(metadata.get("run_id"))
             visible_execution = visible_execution_by_thread.get(thread_id)
@@ -1459,6 +1460,17 @@ class ChatSurfaceReadService:
                     ),
                     "model": _normalize_text(metadata.get("model")),
                     "thread_kind": _normalize_text(metadata.get("thread_kind")),
+                    "automation": (
+                        dict(automation_metadata)
+                        if isinstance(automation_metadata, Mapping)
+                        else None
+                    ),
+                    "automation_job_id": _normalize_text(
+                        metadata.get("automation_job_id")
+                    ),
+                    "automation_rule_id": _normalize_text(
+                        metadata.get("automation_rule_id")
+                    ),
                     "provider_conversation_title": _normalize_text(
                         metadata.get("provider_conversation_title")
                     ),

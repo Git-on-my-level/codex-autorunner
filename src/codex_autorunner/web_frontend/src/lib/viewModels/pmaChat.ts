@@ -17,8 +17,8 @@ import { isChatUnread } from './unread';
 /** Status chips (All / Waiting / …) on the chat list. */
 export type ChatStatusFilter = 'all' | 'active' | 'waiting' | 'unread' | 'archived';
 
-/** Full list filter: status chips, grouped ticket runs, or `surface:<slug>` messenger filters. */
-export type ChatFilter = ChatStatusFilter | 'ticket_runs' | `surface:${string}`;
+/** Full list filter: status chips, grouped ticket runs, automation chats, or `surface:<slug>` messenger filters. */
+export type ChatFilter = ChatStatusFilter | 'ticket_runs' | 'automation' | `surface:${string}`;
 
 /** Token for the chats sidebar filter that lists only ticket-flow run groups (collapsed headers). */
 export const CHAT_TICKET_RUNS_FILTER = 'ticket_runs' as const satisfies ChatFilter;
@@ -661,6 +661,7 @@ export function filterPmaChats(
         return chatMessengerSurface(chat)?.slug === slug;
       }
       if (filter === 'ticket_runs') return chatRunGroupKey(chat) !== null;
+      if (filter === 'automation') return pmaChatIsAutomation(chat);
       if (filter === 'active') return activeStatuses.includes(chat.status);
       if (filter === 'waiting') return waitingStatuses.includes(chat.status);
       if (filter === 'unread') {
@@ -734,6 +735,23 @@ export function summarizeFilterCounts(
     unread: activeChats.filter((chat) => isUnread(chat, lastSeen)).length,
     archived: chats.filter(isPmaChatArchived).length
   };
+}
+
+export function pmaChatIsAutomation(chat: PmaChatSummary | null): boolean {
+  if (!chat) return false;
+  const debug = recordValue(chat.raw.debug);
+  const row = recordValue(chat.raw.row);
+  return Boolean(
+    recordValue(debug?.automation) ||
+      stringValue(debug?.automation_job_id) ||
+      stringValue(debug?.automation_rule_id) ||
+      recordValue(row?.automation) ||
+      stringValue(row?.automation_job_id) ||
+      stringValue(row?.automation_rule_id) ||
+      recordValue(chat.raw.automation) ||
+      stringValue(chat.raw.automation_job_id) ||
+      stringValue(chat.raw.automation_rule_id)
+  );
 }
 
 export function adjustedUnreadFilterCount(
