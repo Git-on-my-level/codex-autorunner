@@ -183,7 +183,7 @@ def _stub_surface_startup_handshakes_for_non_handshake_tests(
             _ = workspace_root, repo_id_hint
             return 0
 
-        def process_pma_automation_now(
+        def process_automation_now(
             self, *, include_timers: bool = True, limit: int = 100
         ) -> dict[str, int]:
             return {

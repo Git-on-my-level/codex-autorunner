@@ -179,9 +179,10 @@
       detailHour = numberFromRecord(scheduleFields, 'hour', detailHour);
       detailMinute = numberFromRecord(scheduleFields, 'minute', detailMinute);
       detailWeekday = numberFromRecord(scheduleFields, 'weekday', detailWeekday);
-      promptDraft = automation.product.message.field === 'prompt' ? stringValue(automation.raw.executor, 'message') : automation.product.messagePreview;
+      const executorPrompt = stringValue(automation.raw.executor, 'message_text') || stringValue(automation.raw.executor, 'message');
+      promptDraft = automation.product.message.field === 'prompt' ? executorPrompt || automation.product.messagePreview : automation.product.messagePreview;
       ticketDraft = firstTicketBody(automation.raw.executor);
-      if (automation.executorKind === 'pma_turn') {
+      if (automation.executorKind === 'managed_thread_turn') {
         selectedAgent = stringValue(automation.raw.executor, 'agent') || defaultAgentId || agentIdFallback();
         selectedProfile = stringValue(automation.raw.executor, 'profile') || stringValue(automation.raw.executor, 'agent_profile');
         selectedModel = stringValue(automation.raw.executor, 'model');
@@ -206,7 +207,7 @@
     detailMinute = preset.schedule.minute;
     detailWeekday = preset.schedule.weekday ?? 0;
     timezone = preset.schedule.timezone || timezone;
-    if (preset.executorKind === 'pma_turn') {
+    if (preset.executorKind === 'managed_thread_turn') {
       selectedAgent = defaultAgentId || agentIdFallback();
       selectedProfile = selectedAgent === 'hermes' ? defaultProfile : '';
       selectedModel = '';
@@ -338,10 +339,10 @@
       weekday: Number(detailWeekday),
       prompt: promptDraft || null,
       ticket_body: preset.executorKind === 'ticket_flow' ? ticketDraft || null : null,
-      agent: preset.executorKind === 'pma_turn' ? selectedAgent || null : null,
-      model: preset.executorKind === 'pma_turn' ? selectedModel || null : null,
-      reasoning: preset.executorKind === 'pma_turn' ? selectedReasoning || null : null,
-      profile: preset.executorKind === 'pma_turn' ? selectedProfile || null : null,
+      agent: preset.executorKind === 'managed_thread_turn' ? selectedAgent || null : null,
+      model: preset.executorKind === 'managed_thread_turn' ? selectedModel || null : null,
+      reasoning: preset.executorKind === 'managed_thread_turn' ? selectedReasoning || null : null,
+      profile: preset.executorKind === 'managed_thread_turn' ? selectedProfile || null : null,
       enabled: detailEnabled
     });
     saving = false;
@@ -407,7 +408,7 @@
     const preset = selectedPreset();
     if (!preset) return createNewAutomationPrompt();
     const agentLines =
-      preset.executorKind === 'pma_turn'
+      preset.executorKind === 'managed_thread_turn'
         ? [
             `Agent: ${selectedAgent || '(default)'}`,
             `Model: ${selectedModel || '(default)'}`,
@@ -562,7 +563,7 @@
 
   function saveAgentModelFields(): void {
     const automation = selectedAutomation();
-    if (selectedExecutorKind() !== 'pma_turn' || (automation && !automation.product.editable.canEditMessage)) return;
+    if (selectedExecutorKind() !== 'managed_thread_turn' || (automation && !automation.product.editable.canEditMessage)) return;
     void savePatch(
       {
         agent: selectedAgent || null,
@@ -627,7 +628,7 @@
     security_scan_pr: 'Security scan',
     weekly_ticket_flow: 'Weekly ticket flow',
     pma_prompt: 'PMA reaction',
-    pma_turn: 'PMA turn',
+    managed_thread_turn: 'Agent turn',
     ticket_flow: 'Ticket flow'
   };
 
@@ -661,7 +662,7 @@
       if (model) return `${agent || 'default'} · ${model}`;
       return agent || label;
     }
-    if (selectedExecutorKind() === 'pma_turn') {
+    if (selectedExecutorKind() === 'managed_thread_turn') {
       return selectedModel ? `${selectedAgent || 'default'} · ${selectedModel}` : selectedAgent || 'default agent';
     }
     if (selectedExecutorKind() === 'ticket_flow') return 'Ticket flow';
@@ -1029,7 +1030,7 @@
           {/if}
         </div>
 
-        {#if selectedExecutorKind() === 'pma_turn' && canEditPrompt()}
+        {#if selectedExecutorKind() === 'managed_thread_turn' && canEditPrompt()}
           <div class="agent-picker-row">
             {#if loadingAgents}
               <p class="detail-hint">Loading agent controls…</p>

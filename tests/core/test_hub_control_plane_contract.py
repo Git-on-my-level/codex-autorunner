@@ -229,7 +229,7 @@ def test_automation_rule_request_models_and_redaction() -> None:
         {
             "name": "Daily check",
             "trigger_kind": "schedule",
-            "executor_kind": "pma_turn",
+            "executor_kind": "managed_thread_turn",
             "executor": {"api_token": "secret-token", "lane_id": "pma:default"},
             "schedule": {
                 "schedule_kind": "daily",

@@ -392,7 +392,7 @@ class ExecutionResultCoordinator:
                 break
             except (OSError, RuntimeError, TypeError, ValueError) as exc:
                 self.logger.warning(
-                    "Failed to notify PMA automation for terminal managed-thread "
+                    "Failed to notify automation for terminal managed-thread "
                     "transition; retrying if budget remains "
                     "(thread_target_id=%s, execution_id=%s, event_type=%s, "
                     "subscription_id=%s, attempt=%s, attempts=%s, error=%s)",
@@ -415,7 +415,7 @@ class ExecutionResultCoordinator:
             created = 0
         if created > 0:
             self.logger.info(
-                "Managed-thread PMA transition enqueued wakeups "
+                "Managed-thread transition enqueued automation jobs "
                 "(thread_target_id=%s, execution_id=%s, event_type=%s, created=%s)",
                 thread_target_id,
                 execution_id,

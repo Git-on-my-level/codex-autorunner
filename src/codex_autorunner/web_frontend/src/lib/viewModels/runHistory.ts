@@ -19,14 +19,7 @@ export function runHistoryFromAutomationJobs(jobs: JsonRecord[]): RunHistoryEntr
     const worktreeId = nullableString(job.ticketFlowWorktreeId ?? job.ticket_flow_worktree_id);
     const managedThreadId = nullableString(job.managedThreadTargetId ?? job.managed_thread_target_id);
     const childExecution = recordValue(job.childExecution ?? job.child_execution);
-    const queueResult = recordValue(job.pmaQueueResult ?? job.pma_queue_result);
-    const queuePayloadResult = recordValue(queueResult?.result);
-    const spawnedChatId = managedThreadId ?? nullableString(
-      queuePayloadResult?.managed_thread_id ??
-        queuePayloadResult?.managedThreadId ??
-        queuePayloadResult?.thread_id ??
-        queuePayloadResult?.threadId
-    );
+    const spawnedChatId = managedThreadId;
     return {
       id,
       title: `Run ${shortId(id)}`,

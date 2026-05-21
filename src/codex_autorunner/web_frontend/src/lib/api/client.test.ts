@@ -8,7 +8,7 @@ function automationFixture(id: string, overrides: Record<string, unknown> = {}):
     enabled: true,
     system_owned: false,
     kind: 'security_scan_pr',
-    executor_kind: 'pma_turn',
+    executor_kind: 'managed_thread_turn',
     target_policy: 'hub',
     target: { repo_id: 'repo-1' },
     product_api_version: 1,
@@ -26,9 +26,9 @@ function automationFixture(id: string, overrides: Record<string, unknown> = {}):
     trigger_summary: { kind: 'schedule', label: 'schedule.fire', event_types: [] },
     message_source: 'executor.message',
     message_preview: 'Run automation.',
-    action_preview: { kind: 'pma_turn' },
+    action_preview: { kind: 'managed_thread_turn' },
     target_summary: { repo_id: 'repo-1', label: 'hub / repo-1' },
-    executor_summary: { kind: 'pma_turn', label: 'PMA turn' },
+    executor_summary: { kind: 'managed_thread_turn', label: 'managed thread turn' },
     policy_summary: { approval_mode: 'never_require_approval' },
     raw_links: { control_plane_rule: `/hub/api/control-plane/automations/rules/${id}` },
     diagnostics: [],
@@ -132,7 +132,7 @@ describe('API client error handling', () => {
             name: 'Daily scan',
             enabled: true,
             kind: 'security_scan_pr',
-            executor_kind: 'pma_turn',
+            executor_kind: 'managed_thread_turn',
             target_policy: 'hub',
             target: { repo_id: 'repo-1' },
             product_api_version: 1,
@@ -141,9 +141,9 @@ describe('API client error handling', () => {
             trigger_summary: { kind: 'schedule', label: 'schedule.fire' },
             message_source: 'executor.message',
             message_preview: 'Run a security scan',
-            action_preview: { kind: 'pma_turn' },
+            action_preview: { kind: 'managed_thread_turn' },
             target_summary: { repo_id: 'repo-1', label: 'hub / repo-1' },
-            executor_summary: { kind: 'pma_turn' },
+            executor_summary: { kind: 'managed_thread_turn' },
             policy_summary: { approval_mode: 'never_require_approval' },
             raw_links: { control_plane_rule: '/hub/api/control-plane/automations/rules/rule-1' },
             schedule: {
@@ -171,7 +171,7 @@ describe('API client error handling', () => {
       expect(result.data.automations[0]).toMatchObject({
         id: 'rule-1',
         kind: 'security_scan_pr',
-        executorKind: 'pma_turn',
+        executorKind: 'managed_thread_turn',
         target: { repo_id: 'repo-1' },
         product: {
           productApiVersion: 1,
@@ -192,7 +192,7 @@ describe('API client error handling', () => {
           automationFixture('pma-timer', {
             system_owned: true,
             kind: 'pma_prompt',
-            executor_kind: 'pma_turn',
+            executor_kind: 'managed_thread_turn',
             editable: { can_edit_schedule: false, can_edit_message: false, can_edit_ticket_body: false, can_run_now: true, can_enable: true },
             managed: { managed: true, system_owned: true, legacy: true, legacy_source: 'legacy_timer_id', reason: 'System-managed automation: pma_timer' },
             schedule_editor: { kind: 'one_shot', fields: { due_at: '2026-01-02T00:00:00Z' }, summary: 'Once at 2026-01-02T00:00:00Z' },
@@ -213,7 +213,7 @@ describe('API client error handling', () => {
           }),
           automationFixture('daily-user', {
             kind: 'security_scan_pr',
-            executor_kind: 'pma_turn',
+            executor_kind: 'managed_thread_turn',
             editable: { can_edit_schedule: true, can_edit_message: true, can_edit_ticket_body: false, can_run_now: true, can_enable: true },
             managed: { managed: false, system_owned: false, legacy: false },
             schedule_editor: { kind: 'daily', editable: true, fields: { timezone: 'UTC', hour: 9, minute: 0 }, summary: 'Daily 09:00 UTC' },
@@ -271,7 +271,7 @@ describe('API client error handling', () => {
             name: 'Updated scan',
             enabled: false,
             kind: 'security_scan_pr',
-            executor_kind: 'pma_turn',
+            executor_kind: 'managed_thread_turn',
             target_policy: 'hub',
             target: { repo_id: 'repo-1' },
             executor: { message: 'Updated prompt' }
@@ -284,7 +284,7 @@ describe('API client error handling', () => {
           name: 'Daily scan',
           enabled: true,
           kind: 'security_scan_pr',
-          executor_kind: 'pma_turn',
+          executor_kind: 'managed_thread_turn',
           target_policy: 'hub',
           target: { repo_id: 'repo-1' }
         }

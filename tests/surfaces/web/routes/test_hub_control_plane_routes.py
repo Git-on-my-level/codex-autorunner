@@ -53,7 +53,7 @@ class _SupervisorStub:
     ) -> int:
         return 3 if repo_id_hint == "repo-1" else 1
 
-    def process_pma_automation_now(
+    def process_automation_now(
         self, *, include_timers: bool = True, limit: int = 100
     ) -> dict[str, int]:
         return {
@@ -151,7 +151,7 @@ def test_hub_control_plane_automation_routes_create_run_and_cancel(
                 "name": "Manual PMA",
                 "trigger_kind": "manual",
                 "target_policy": "hub",
-                "executor_kind": "pma_turn",
+                "executor_kind": "managed_thread_turn",
                 "executor": {"api_token": "secret-value"},
             },
         )

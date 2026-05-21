@@ -259,6 +259,7 @@ def _build_hub_messages_app(hub_root: Path, monkeypatch) -> object:
         web_app_module,
         "reap_managed_processes",
         lambda _root: SimpleNamespace(killed=0, signaled=0, removed=0, skipped=0),
+        raising=False,
     )
     monkeypatch.setattr(
         web_app_state_module,
@@ -1314,19 +1315,6 @@ class TestIssue975CharacterizationHubMessageFreshness:
             repo_id=hub_env.repo_id,
             name="queue-metadata-thread",
         )
-
-        supervisor = HubSupervisor.from_path(hub_env.hub_root)
-        try:
-            supervisor.get_pma_automation_store().enqueue_wakeup(
-                source="lifecycle_subscription",
-                repo_id=hub_env.repo_id,
-                run_id=run_id,
-                reason="flow_paused",
-                timestamp="2026-03-16T12:30:00Z",
-                idempotency_key="hub-message-queue-metadata",
-            )
-        finally:
-            supervisor.shutdown()
 
         app = _build_hub_messages_app(hub_env.hub_root, monkeypatch)
         with TestClient(app) as client:

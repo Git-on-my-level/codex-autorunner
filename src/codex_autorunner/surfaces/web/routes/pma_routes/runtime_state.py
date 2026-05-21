@@ -46,8 +46,6 @@ class PmaRuntimeState:
     pma_audit_log: Optional[PmaAuditLog] = field(default=None, repr=False)
     pma_queue: Optional[PmaQueue] = field(default=None, repr=False)
     pma_queue_root: Optional[Path] = None
-    pma_automation_store: Optional[Any] = field(default=None, repr=False)
-    pma_automation_root: Optional[Path] = None
     lane_workers: dict[str, PmaLaneWorker] = field(default_factory=dict)
     item_futures: dict[str, asyncio.Future[dict[str, Any]]] = field(
         default_factory=dict

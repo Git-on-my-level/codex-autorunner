@@ -87,6 +87,7 @@ from .commands.utils import (
 )
 from .commands.worktree import register_worktree_commands
 from .hub_control_plane_client import resolve_hub_path as _resolve_pma_hub_path
+from .pma_cli import automation_app as automation_cli_app
 from .pma_cli import pma_app as pma_cli_app
 
 logger = logging.getLogger("codex_autorunner.cli")
@@ -297,6 +298,7 @@ protocol_app = typer.Typer(
 app.add_typer(protocol_app, name="protocol")
 register_protocol_commands(protocol_app)
 app.add_typer(flow_app, name="flow")
+app.add_typer(automation_cli_app, name="automation")
 app.add_typer(
     ticket_flow_app,
     name="ticket-flow",

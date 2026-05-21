@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import hashlib
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
+from ..domain.refs import AgentRef, ScopeRef
 from ..managed_thread_store import ManagedThreadStore
+from ..pma_reactive import PmaReactiveStore
 from ..publish_executor import PublishExecutorRegistry, drain_pending_publish_operations
 from ..publish_journal import PublishJournalStore
 from ..text_utils import _normalize_text
@@ -22,6 +24,7 @@ from .models import (
     JOB_FAILED,
     JOB_PAUSED,
     JOB_RUNNING,
+    JOB_SKIPPED,
     JOB_SUCCEEDED,
     AutomationJob,
 )
@@ -42,13 +45,41 @@ class ManagedThreadTurnAutomationExecutor:
         hub_root: Path,
         automation_store: Optional[AutomationStore] = None,
         thread_store: Optional[ManagedThreadStore] = None,
+        safety_checker_fn: Optional[Callable[[], Any]] = None,
+        queue_worker_starter_fn: Optional[Callable[[str], None]] = None,
+        queue_worker_available_fn: Optional[Callable[[], bool]] = None,
         unattended: bool = True,
     ) -> None:
+        self._hub_root = hub_root
         self._store = automation_store
         self._thread_store = thread_store or ManagedThreadStore(hub_root)
+        self._safety_checker_fn = safety_checker_fn
+        self._queue_worker_starter_fn = queue_worker_starter_fn
+        self._queue_worker_available_fn = queue_worker_available_fn
         self._unattended = unattended
 
     def execute(self, job: AutomationJob) -> AutomationExecutorResult:
+        if job.policy.get("requires_pma_safety"):
+            safety_checker = (
+                self._safety_checker_fn() if self._safety_checker_fn else None
+            )
+            if safety_checker is not None:
+                safety_check = safety_checker.check_reactive_turn()
+                if not safety_check.allowed:
+                    return AutomationExecutorResult(
+                        status=JOB_SKIPPED,
+                        summary=safety_check.reason or "reactive_blocked",
+                    )
+            debounce_seconds = int(job.policy.get("reactive_debounce_seconds") or 0)
+            debounce_key = str(job.policy.get("reactive_debounce_key") or "").strip()
+            if debounce_seconds > 0 and debounce_key:
+                if not PmaReactiveStore(self._hub_root).check_and_update(
+                    debounce_key, debounce_seconds
+                ):
+                    return AutomationExecutorResult(
+                        status=JOB_SKIPPED,
+                        summary="reactive_debounced",
+                    )
         approval = str(
             job.policy.get("approval_mode") or APPROVAL_PAUSE_AND_REQUEST_USER
         ).strip()
@@ -66,15 +97,12 @@ class ManagedThreadTurnAutomationExecutor:
             )
 
         request = self._request_config(job)
-        thread_id = _require_text(
-            request.get("thread_target_id")
-            or request.get("managed_thread_id")
-            or job.target.get("thread_target_id")
-            or job.target.get("managed_thread_id"),
-            "thread_target_id",
-        )
+        thread_id = self._resolve_thread_id(job, request)
         prompt = _require_text(
-            request.get("message_text") or request.get("prompt") or request.get("body"),
+            request.get("message_text")
+            or request.get("message")
+            or request.get("prompt")
+            or request.get("body"),
             "message_text",
         )
         event = self._store.get_event(job.event_id) if self._store is not None else None
@@ -106,6 +134,14 @@ class ManagedThreadTurnAutomationExecutor:
                 turn=existing,
                 client_turn_id=client_turn_id,
                 deduped=True,
+            )
+        if not self._queue_worker_can_start():
+            return AutomationExecutorResult(
+                status=JOB_DEAD_LETTERED,
+                summary=(
+                    "managed thread automation requires a registered queue worker "
+                    "starter"
+                ),
             )
 
         metadata = request.get("metadata")
@@ -160,8 +196,9 @@ class ManagedThreadTurnAutomationExecutor:
             client_turn_id=client_turn_id,
             metadata=metadata,
             queue_payload=queue_payload,
-            force_queue=bool(request.get("force_queue")),
+            force_queue=True,
         )
+        self._request_queue_worker_start(thread_id)
         return _managed_turn_result(
             thread_id=thread_id,
             turn=turn,
@@ -174,6 +211,82 @@ class ManagedThreadTurnAutomationExecutor:
         if isinstance(request, dict):
             return {**job.executor, **request}
         return dict(job.executor)
+
+    def _resolve_thread_id(self, job: AutomationJob, request: dict[str, Any]) -> str:
+        explicit = _normalize_text(
+            request.get("thread_target_id")
+            or request.get("managed_thread_id")
+            or request.get("thread_id")
+            or job.target.get("thread_target_id")
+            or job.target.get("managed_thread_id")
+            or job.target.get("thread_id")
+        )
+        if explicit:
+            return explicit
+        return self._create_automation_thread(job, request)
+
+    def _create_automation_thread(
+        self, job: AutomationJob, request: dict[str, Any]
+    ) -> str:
+        agent_id = _normalize_text(request.get("agent")) or "codex"
+        profile = _normalize_text(
+            request.get("profile") or request.get("agent_profile")
+        )
+        repo_id = _normalize_text(
+            job.target.get("repo_id")
+            or job.target.get("base_repo_id")
+            or job.payload.get("repo_id")
+        )
+        resource_kind = _normalize_text(job.target.get("resource_kind"))
+        resource_id = _normalize_text(
+            job.target.get("resource_id")
+            or job.target.get("worktree_id")
+            or job.target.get("run_id")
+        )
+        if resource_kind is None and resource_id is not None:
+            resource_kind = "worktree" if job.target.get("worktree_id") else "run"
+        scope = (
+            ScopeRef(kind="repo", id=repo_id)
+            if repo_id and resource_kind is None and resource_id is None
+            else None
+        )
+        metadata = {
+            "automation": {
+                "job_id": job.job_id,
+                "rule_id": job.rule_id,
+                "event_id": job.event_id,
+            },
+            "automation_job_id": job.job_id,
+            "automation_rule_id": job.rule_id,
+        }
+        created = self._thread_store.create_thread(
+            AgentRef(agent_id=agent_id, profile=profile),
+            self._hub_root,
+            scope=scope,
+            repo_id=repo_id if scope is None else None,
+            resource_kind=resource_kind,
+            resource_id=resource_id,
+            name=_normalize_text(request.get("thread_name"))
+            or f"Automation {job.rule_id}",
+            metadata=metadata,
+        )
+        return _require_text(created.get("managed_thread_id"), "managed_thread_id")
+
+    def _request_queue_worker_start(self, thread_id: str) -> None:
+        starter = self._queue_worker_starter_fn
+        if starter is None:
+            return
+        starter(thread_id)
+
+    def _queue_worker_can_start(self) -> bool:
+        if self._queue_worker_starter_fn is None:
+            return False
+        if self._queue_worker_available_fn is None:
+            return True
+        try:
+            return bool(self._queue_worker_available_fn())
+        except (RuntimeError, OSError, ValueError, TypeError):
+            return False
 
 
 class PublishOperationAutomationExecutor:

@@ -267,9 +267,6 @@ def _primary_child_kind(
     ticket_flow: Optional[dict[str, Any]],
     publish_operation: Optional[dict[str, Any]],
 ) -> str:
-    kind = str(job.executor.get("kind") or "").strip()
-    if kind == "pma_turn" and pma_queue is not None:
-        return "pma_queue"
     if managed_thread is not None:
         return "managed_thread"
     if ticket_flow is not None:
@@ -397,6 +394,27 @@ def _latest_thread_execution_with_conn(
 ) -> Optional[dict[str, Any]]:
     if not (thread_id or execution_id or backend_thread_id):
         return None
+    if execution_id:
+        row = conn.execute(
+            """
+            SELECT execution_id,
+                   thread_target_id,
+                   status,
+                   backend_turn_id,
+                   error_text,
+                   assistant_text,
+                   model_id,
+                   started_at,
+                   finished_at,
+                   created_at
+              FROM orch_thread_executions
+             WHERE execution_id = ?
+             LIMIT 1
+            """,
+            (execution_id,),
+        ).fetchone()
+        if row is not None:
+            return _thread_execution_row_to_dict(row)
     row = conn.execute(
         """
         SELECT execution_id,
@@ -427,6 +445,10 @@ def _latest_thread_execution_with_conn(
     ).fetchone()
     if row is None:
         return None
+    return _thread_execution_row_to_dict(row)
+
+
+def _thread_execution_row_to_dict(row: Any) -> dict[str, Any]:
     return {
         "execution_id": row["execution_id"],
         "thread_target_id": row["thread_target_id"],

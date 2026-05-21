@@ -4,8 +4,6 @@ from .builtins import (
     PMA_TIMER_RULE_PREFIX,
     PMA_TIMER_SCHEDULE_PREFIX,
     ensure_builtin_pma_reactive_rule,
-    mirror_pma_subscription_rule,
-    mirror_pma_timer_schedule,
 )
 from .engine import AutomationRuleEngine, RuleEvaluationResult, render_template
 from .executors import (
@@ -18,7 +16,6 @@ from .models import (
     EXECUTOR_GITHUB_REACTION,
     EXECUTOR_KINDS,
     EXECUTOR_MANAGED_THREAD_TURN,
-    EXECUTOR_PMA_TURN,
     EXECUTOR_PUBLISH_CHAT_NOTIFICATION,
     EXECUTOR_PUBLISH_OPERATION,
     EXECUTOR_TICKET_FLOW,
@@ -84,7 +81,6 @@ __all__ = [
     "EXECUTOR_GITHUB_REACTION",
     "EXECUTOR_KINDS",
     "EXECUTOR_MANAGED_THREAD_TURN",
-    "EXECUTOR_PMA_TURN",
     "EXECUTOR_PUBLISH_CHAT_NOTIFICATION",
     "EXECUTOR_PUBLISH_OPERATION",
     "EXECUTOR_TICKET_FLOW",
@@ -107,8 +103,6 @@ __all__ = [
     "WorkerProcessResult",
     "calculate_next_fire_at",
     "ensure_builtin_pma_reactive_rule",
-    "mirror_pma_subscription_rule",
-    "mirror_pma_timer_schedule",
     "render_template",
     "validate_job_transition",
     "validate_policy",

@@ -4,6 +4,7 @@ import asyncio
 import json
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any
 
 import anyio
 import httpx
@@ -13,6 +14,10 @@ from fastapi.testclient import TestClient
 from codex_autorunner.adapters.discord.state import DiscordStateStore
 from codex_autorunner.adapters.telegram.state import TelegramStateStore
 from codex_autorunner.bootstrap import seed_repo_files
+from codex_autorunner.core.automation import (
+    PMA_SUBSCRIPTION_RULE_PREFIX,
+    AutomationStore,
+)
 from codex_autorunner.core.config import (
     CONFIG_FILENAME,
     DEFAULT_HUB_CONFIG,
@@ -38,13 +43,55 @@ from tests.pma_support import (
     _repo_owner,
 )
 from tests.pma_support.managed_threads import (
-    FakeAutomationStore,
     FakeClient,
     FakeSupervisor,
     install_fake_supervisor,
 )
 
 pytestmark = pytest.mark.slow
+
+
+def _lifecycle_events(hub_root: Path, event_type: str) -> list[dict[str, Any]]:
+    return [
+        event.to_dict()
+        for event in AutomationStore(hub_root).list_events(event_type=event_type)
+    ]
+
+
+def _subscription_rows(
+    hub_root: Path, *, thread_id: str | None = None, include_inactive: bool = False
+) -> list[dict[str, object]]:
+    rows: list[dict[str, object]] = []
+    for rule in AutomationStore(hub_root).list_rules():
+        if not rule.rule_id.startswith(PMA_SUBSCRIPTION_RULE_PREFIX) and (
+            rule.metadata.get("purpose")
+            not in {
+                "managed_thread_lifecycle_subscription",
+                "pma_lifecycle_subscription",
+            }
+        ):
+            continue
+        if not include_inactive and not rule.enabled:
+            continue
+        rule_thread_id = (
+            rule.target.get("thread_id") if isinstance(rule.target, dict) else None
+        ) or (
+            rule.filters.get("event.payload.thread_id")
+            if isinstance(rule.filters, dict)
+            else None
+        )
+        if thread_id is not None and rule_thread_id != thread_id:
+            continue
+        rows.append(
+            {
+                "subscription_id": rule.metadata.get("legacy_subscription_id")
+                or rule.rule_id.removeprefix(PMA_SUBSCRIPTION_RULE_PREFIX),
+                "state": "active" if rule.enabled else "cancelled",
+                "thread_id": rule_thread_id,
+                "match_count": rule.metadata.get("legacy_match_count") or 0,
+            }
+        )
+    return rows
 
 
 def _seed_manifest_worktree(hub_env, worktree_id: str) -> Path:
@@ -191,7 +238,7 @@ def test_start_thread_message_commits_agent_selection_without_empty_thread(
 ) -> None:
     _enable_pma(
         hub_env.hub_root,
-        model="model-default",
+        model="zai-coding-plan/glm-5.1",
         reactive_enabled=False,
         managed_thread_terminal_followup_default=False,
     )
@@ -206,7 +253,7 @@ def test_start_thread_message_commits_agent_selection_without_empty_thread(
             json={
                 "message": "run with the selected agent",
                 "agent": "opencode",
-                "model": "zai/glm",
+                "model": "zai-coding-plan/glm-5.1",
                 "defer_execution": True,
                 "wait_for_confirmation": False,
                 **_repo_owner(hub_env),
@@ -219,11 +266,11 @@ def test_start_thread_message_commits_agent_selection_without_empty_thread(
     thread = store.get_thread(managed_thread_id)
     assert thread is not None
     assert thread["agent"] == "opencode"
-    assert thread["metadata"]["model"] == "zai/glm"
+    assert thread["metadata"]["model"] == "zai-coding-plan/glm-5.1"
     turns = store.list_turns(managed_thread_id, limit=5)
     assert len(turns) == 1
     assert turns[0]["prompt"] == "run with the selected agent"
-    assert turns[0]["model"] == "zai/glm"
+    assert turns[0]["model"] == "zai-coding-plan/glm-5.1"
 
 
 def test_start_thread_message_persists_genesis_metadata(hub_env) -> None:
@@ -1358,9 +1405,7 @@ def test_send_message_notifies_automation_on_completion(hub_env) -> None:
     _enable_pma(hub_env.hub_root)
     app = create_hub_app(hub_env.hub_root)
 
-    fake_store = FakeAutomationStore()
     install_fake_supervisor(app)
-    app.state.hub_supervisor.get_pma_automation_store = lambda: fake_store
 
     with TestClient(app) as client:
         create_resp = client.post(
@@ -1377,28 +1422,27 @@ def test_send_message_notifies_automation_on_completion(hub_env) -> None:
         assert message_resp.status_code == 200
         assert message_resp.json()["status"] == "ok"
 
-    assert len(fake_store.transitions) == 1
-    transition = fake_store.transitions[0]
-    assert transition["thread_id"] == managed_thread_id
-    assert transition["repo_id"] == hub_env.repo_id
-    assert transition["resource_kind"] == "repo"
-    assert transition["resource_id"] == hub_env.repo_id
-    assert transition["from_state"] == "running"
-    assert transition["to_state"] == "completed"
-    assert transition["reason"] == "managed_turn_completed"
-    assert isinstance(transition.get("timestamp"), str)
-    assert str(transition.get("timestamp"))
+    events = _lifecycle_events(hub_env.hub_root, "lifecycle.flow_completed")
+    assert len(events) == 1
+    payload = events[0]["payload"]
+    assert payload["thread_id"] == managed_thread_id
+    assert payload["repo_id"] == hub_env.repo_id
+    assert payload["resource_kind"] == "repo"
+    assert payload["resource_id"] == hub_env.repo_id
+    assert payload["from_state"] == "running"
+    assert payload["to_state"] == "completed"
+    assert payload["reason"] == "managed_turn_completed"
+    assert isinstance(payload.get("timestamp"), str)
+    assert str(payload.get("timestamp"))
 
 
 def test_send_message_notifies_automation_on_failure(hub_env) -> None:
     _enable_pma(hub_env.hub_root)
     app = create_hub_app(hub_env.hub_root)
 
-    fake_store = FakeAutomationStore()
     install_fake_supervisor(
         app, client=FakeClient(turn_error=RuntimeError("sensitive-backend-message"))
     )
-    app.state.hub_supervisor.get_pma_automation_store = lambda: fake_store
 
     with TestClient(app) as client:
         create_resp = client.post(
@@ -1415,20 +1459,21 @@ def test_send_message_notifies_automation_on_failure(hub_env) -> None:
         assert message_resp.status_code == 200
         assert message_resp.json()["status"] == "error"
 
-    assert len(fake_store.transitions) == 1
-    transition = fake_store.transitions[0]
-    assert transition["thread_id"] == managed_thread_id
-    assert transition["repo_id"] == hub_env.repo_id
-    assert transition["resource_kind"] == "repo"
-    assert transition["resource_id"] == hub_env.repo_id
-    assert transition["from_state"] == "running"
-    assert transition["to_state"] == "failed"
-    assert transition["reason"] == "Managed thread execution failed"
-    assert isinstance(transition.get("timestamp"), str)
-    assert str(transition.get("timestamp"))
+    events = _lifecycle_events(hub_env.hub_root, "lifecycle.flow_failed")
+    assert len(events) == 1
+    payload = events[0]["payload"]
+    assert payload["thread_id"] == managed_thread_id
+    assert payload["repo_id"] == hub_env.repo_id
+    assert payload["resource_kind"] == "repo"
+    assert payload["resource_id"] == hub_env.repo_id
+    assert payload["from_state"] == "running"
+    assert payload["to_state"] == "failed"
+    assert payload["reason"] == "Managed thread execution failed"
+    assert isinstance(payload.get("timestamp"), str)
+    assert str(payload.get("timestamp"))
 
 
-def test_managed_thread_completion_subscription_enqueues_wakeup(hub_env) -> None:
+def test_managed_thread_completion_subscription_uses_generalized_event(hub_env) -> None:
     _enable_pma(hub_env.hub_root)
     app = create_hub_app(hub_env.hub_root)
     install_fake_supervisor(app)
@@ -1461,33 +1506,11 @@ def test_managed_thread_completion_subscription_enqueues_wakeup(hub_env) -> None
         assert message_resp.status_code == 200
         assert message_resp.json()["status"] == "ok"
 
-    automation_store = app.state.hub_supervisor.get_pma_automation_store()
-    assert automation_store.list_pending_wakeups(limit=10) == []
-    worker_started = automation_store.list_wakeups(state_filter="worker_started")
-    assert any(entry.get("thread_id") == managed_thread_id for entry in worker_started)
-
-    queue_path = (
-        hub_env.hub_root
-        / ".codex-autorunner"
-        / "pma"
-        / "queue"
-        / "pma__COLON__lane-next.jsonl"
-    )
-    assert queue_path.exists()
-    lines = [
-        line.strip()
-        for line in queue_path.read_text(encoding="utf-8").splitlines()
-        if line.strip()
-    ]
-    assert lines
-    wake_ups = [
-        (json.loads(line).get("payload") or {}).get("wake_up") or {} for line in lines
-    ]
+    automation_store = AutomationStore(hub_env.hub_root)
+    assert _lifecycle_events(hub_env.hub_root, "lifecycle.flow_completed")
     assert any(
-        wake_up.get("thread_id") == managed_thread_id
-        and wake_up.get("to_state") == "completed"
-        and wake_up.get("lane_id") == "pma:lane-next"
-        for wake_up in wake_ups
+        rule.rule_id.startswith(PMA_SUBSCRIPTION_RULE_PREFIX)
+        for rule in automation_store.list_rules()
     )
 
 
@@ -1522,15 +1545,15 @@ def test_send_message_notify_on_terminal_auto_subscribes_once(hub_env) -> None:
         assert subscription.get("thread_id") == managed_thread_id
         assert subscription.get("lane_id") == "pma:auto-lane"
 
-    automation_store = app.state.hub_supervisor.get_pma_automation_store()
-    active_subs = automation_store.list_subscriptions(thread_id=managed_thread_id)
-    assert active_subs == []
-    all_subs = automation_store.list_subscriptions(
-        include_inactive=True, thread_id=managed_thread_id
+    active_subs = _subscription_rows(hub_env.hub_root, thread_id=managed_thread_id)
+    assert len(active_subs) == 1
+    assert active_subs[0].get("match_count") == 0
+    all_subs = _subscription_rows(
+        hub_env.hub_root, include_inactive=True, thread_id=managed_thread_id
     )
     assert all_subs
-    assert all_subs[0].get("state") == "cancelled"
-    assert all_subs[0].get("match_count") == 1
+    assert all_subs[0].get("state") == "active"
+    assert all_subs[0].get("match_count") == 0
 
 
 def test_send_message_default_terminal_followup_without_origin_is_inert(
@@ -1560,11 +1583,10 @@ def test_send_message_default_terminal_followup_without_origin_is_inert(
         assert payload["send_state"] == "accepted"
         assert "notification" not in payload
 
-    automation_store = app.state.hub_supervisor.get_pma_automation_store()
-    active_subs = automation_store.list_subscriptions(thread_id=managed_thread_id)
+    active_subs = _subscription_rows(hub_env.hub_root, thread_id=managed_thread_id)
     assert active_subs == []
-    all_subs = automation_store.list_subscriptions(
-        include_inactive=True, thread_id=managed_thread_id
+    all_subs = _subscription_rows(
+        hub_env.hub_root, include_inactive=True, thread_id=managed_thread_id
     )
     assert all_subs == []
 
