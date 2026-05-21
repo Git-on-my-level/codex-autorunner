@@ -8,7 +8,7 @@ authors = [{name = "Codex"}]
 requires-python = ">=3.10"
 dependencies = [
   "typer>=0.9",
-  "click<8.2",
+  "click<8.5",
   "pyyaml>=6.0",
   "fastapi>=0.111",
   "pydantic>=2.0",
