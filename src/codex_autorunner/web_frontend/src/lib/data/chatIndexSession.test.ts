@@ -186,6 +186,44 @@ describe('chat index session', () => {
     expect(store.snapshot().chatOrder).toEqual(['chat-active']);
   });
 
+  it('loads the next backend window into the same filtered search result', async () => {
+    const store = new ReadModelEntityStore();
+    const client = {
+      chatIndex: vi.fn(async (request = {}) => {
+        const pageTwo = request.cursor === '2';
+        return ok({
+          ...chatIndexSnapshot('archived', [
+            pageTwo
+              ? indexRow('chat-archived-2', 'Needle archived page 2', 'archived')
+              : indexRow('chat-archived-1', 'Needle archived page 1', 'archived')
+          ]),
+          query: 'needle',
+          window: {
+            limit: 1,
+            nextCursor: pageTwo ? null : '2',
+            previousCursor: pageTwo ? '0' : null,
+            totalEstimate: 2,
+            totalIsExact: true
+          },
+          counters: { total: 2, waiting: 0, running: 0, unread: 0, archived: 2 }
+        });
+      })
+    } as unknown as ReadModelSnapshotClient & { chatIndex: ReturnType<typeof vi.fn> };
+    const session = createChatIndexSession({ client, store, streamFactory: mockStreamFactory() });
+    const request = { filter: 'archived' as const, query: 'needle', limit: 1 };
+
+    await session.refresh(request);
+    await session.loadMore(request);
+
+    expect(client.chatIndex).toHaveBeenNthCalledWith(1, request);
+    expect(client.chatIndex).toHaveBeenNthCalledWith(2, { ...request, cursor: '2' });
+    expect(selectChatIndexWindowView(store.snapshot(), request).rows.map((row) => row.chatId)).toEqual([
+      'chat-archived-1',
+      'chat-archived-2'
+    ]);
+    expect(selectChatIndexWindowView(store.snapshot(), request).window?.window?.nextCursor).toBeNull();
+  });
+
   it('queues a follow-up snapshot when refresh parameters change during an in-flight request', async () => {
     const store = new ReadModelEntityStore();
     const firstResponse = deferred<ApiResult<ChatIndexSnapshot>>();

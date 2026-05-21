@@ -106,6 +106,13 @@ describe('/chats page', () => {
     expect(body).toContain('Attach files');
   });
 
+  it('does not re-apply chat search locally after requesting a backend search window', () => {
+    const pageSource = chatDetailPageSource();
+
+    expect(pageSource).toContain('query: search.trim() || null');
+    expect(pageSource).toContain("filterChatEntries(chatListEntries, filter, '', lastSeenMap)");
+  });
+
   it('renders cached chat rows instead of the skeleton while the index cursor is still missing', () => {
     readModelEntityStore.upsertChatIndexRows([chatIndexRow()]);
 

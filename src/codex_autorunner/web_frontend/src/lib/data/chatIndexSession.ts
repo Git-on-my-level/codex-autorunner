@@ -1,6 +1,6 @@
 import { writable, type Readable } from 'svelte/store';
 import type { ApiError } from '$lib/api/client';
-import { mapReadModelContract, type ChatIndexPatchEvent } from '$lib/api/readModelContracts';
+import { mapReadModelContract, type ChatIndexPatchEvent, type ChatIndexSnapshot } from '$lib/api/readModelContracts';
 import type { SseEvent } from '$lib/api/streaming';
 import {
   createDocumentStreamVisibilityPolicy,
@@ -11,6 +11,7 @@ import {
   type ChatIndexRequest,
   type ReadModelSnapshotClient
 } from './readModelClients';
+import { createPaginatedWindowSession } from './paginatedWindowSession';
 import { canonicalChatIndexWindowKey, readModelEntityStore, type ReadModelEntityStore } from './readModelStore';
 import { openReadModelStream, type CursorStorage, type ReadModelStreamManager, type ReadModelStreamOptions } from './readModelStream';
 
@@ -27,6 +28,7 @@ export type ChatIndexSession = {
   start: () => void;
   stop: () => void;
   refresh: (request?: ChatIndexRequest) => Promise<void>;
+  loadMore: (request?: ChatIndexRequest) => Promise<void>;
   setCompanionRequests: (requests: ChatIndexRequest[]) => void;
   isStarted: () => boolean;
 };
@@ -62,6 +64,19 @@ export function createChatIndexSession(deps: ChatIndexSessionDeps = {}): ChatInd
   let inFlightRequest: ChatIndexRequest | null = null;
   let inFlightCompanionRequests: ChatIndexRequest[] = [];
   let refreshAgain = false;
+  const paginatedWindows = createPaginatedWindowSession<ChatIndexRequest, ChatIndexSnapshot>({
+    key: canonicalChatIndexWindowKey,
+    normalize: normalizedChatIndexRequest,
+    nextCursor: (request) => store.snapshot().chatWindows[canonicalChatIndexWindowKey(request)]?.window?.nextCursor,
+    fetchPage: async (request) => {
+      const result = await client.chatIndex(request);
+      if (!result.ok) throw result.error;
+      return result.data;
+    },
+    appendPage: (snapshot, request) => {
+      store.applyChatIndexSnapshot(snapshot, request, { append: true });
+    }
+  });
 
   async function activate(activation: ChatIndexSessionActivation): Promise<void> {
     const nextPrimary = activation.primaryRequest ? normalizedChatIndexRequest(activation.primaryRequest) : activeRequest;
@@ -121,6 +136,10 @@ export function createChatIndexSession(deps: ChatIndexSessionDeps = {}): ChatInd
         refreshPromise = null;
       });
     return refreshPromise;
+  }
+
+  async function loadMore(request: ChatIndexRequest = activeRequest): Promise<void> {
+    await paginatedWindows.loadMore(request);
   }
 
   async function refreshChatListUntilSettled(): Promise<void> {
@@ -194,6 +213,7 @@ export function createChatIndexSession(deps: ChatIndexSessionDeps = {}): ChatInd
     start,
     stop,
     refresh,
+    loadMore,
     setCompanionRequests,
     isStarted: () => started
   };

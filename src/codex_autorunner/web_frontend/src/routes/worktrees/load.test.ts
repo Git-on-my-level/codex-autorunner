@@ -18,7 +18,7 @@ describe('/worktrees index route load', () => {
     store.applyRepoWorktreeRuntimeSnapshot(runtimeSnapshot());
     const client = mockClient();
     const depends = vi.fn();
-    vi.doMock('$lib/data/readModelStore', () => ({ readModelEntityStore: store, repoWorktreeWindowKey }));
+    vi.doMock('$lib/data/readModelStore', () => ({ readModelEntityStore: store, repoWorktreeWindowKey, canonicalChatIndexWindowKey }));
     vi.doMock('$lib/data/readModelClients', () => ({ readModelSnapshotClient: client, createReadModelSnapshotClient: () => client }));
     const { load } = await importPageLoad(true);
 
@@ -33,7 +33,7 @@ describe('/worktrees index route load', () => {
   it('returns cold when the store is empty so navigation can commit immediately', async () => {
     const store = new ReadModelEntityStore();
     const client = mockClient();
-    vi.doMock('$lib/data/readModelStore', () => ({ readModelEntityStore: store, repoWorktreeWindowKey }));
+    vi.doMock('$lib/data/readModelStore', () => ({ readModelEntityStore: store, repoWorktreeWindowKey, canonicalChatIndexWindowKey }));
     vi.doMock('$lib/data/readModelClients', () => ({ readModelSnapshotClient: client, createReadModelSnapshotClient: () => client }));
     const { load } = await importPageLoad(true);
 
@@ -94,6 +94,10 @@ function repair(snapshotRoute: string) {
 
 function repoWorktreeWindowKey(kind: 'all' | 'repo' | 'worktree' = 'all', limit = 200): string {
   return `${kind}:limit=${limit}`;
+}
+
+function canonicalChatIndexWindowKey(request: { filter?: string; limit?: number } = {}): string {
+  return `${request.filter ?? 'all'}:limit=${request.limit ?? 50}`;
 }
 
 function topologySnapshot(): RepoWorktreeTopologySnapshot {

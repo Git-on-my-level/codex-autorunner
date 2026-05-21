@@ -11,7 +11,8 @@
     ariaLabel = 'Virtualized list',
     class: className = '',
     itemClass = '',
-    scrollable = true
+    scrollable = true,
+    onEndReached
   }: {
     items: T[];
     children: Snippet<[T, number]>;
@@ -23,6 +24,7 @@
     class?: string;
     itemClass?: string;
     scrollable?: boolean;
+    onEndReached?: () => void;
   } = $props();
 
   let viewport: HTMLDivElement | null = $state(null);
@@ -89,6 +91,9 @@
 
   function handleScroll(): void {
     updateMeasurements();
+    if (!onEndReached || !viewport || !scrollable) return;
+    const distanceFromBottom = viewport.scrollHeight - viewport.scrollTop - viewport.clientHeight;
+    if (distanceFromBottom <= safeItemSize * 4) onEndReached();
   }
 
   function measureItem(node: HTMLElement, itemKey: string) {

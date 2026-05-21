@@ -45,6 +45,7 @@ export type ChatDetailPageIndexSession = {
   start: () => void;
   stop: () => void;
   refresh: (request?: ChatIndexWindowRequest) => Promise<void>;
+  loadMore: (request?: ChatIndexWindowRequest) => Promise<void>;
   setCompanionRequests: (requests: ChatIndexWindowRequest[]) => void;
 };
 
@@ -216,6 +217,10 @@ export class ChatDetailPageController {
 
   async refreshIndex(request?: ChatIndexWindowRequest): Promise<void> {
     await this.deps.chatIndexSession.refresh(request);
+  }
+
+  async loadMoreIndex(request?: ChatIndexWindowRequest): Promise<void> {
+    await this.deps.chatIndexSession.loadMore(request ?? this.currentRequest);
   }
 
   destroy(): void {
