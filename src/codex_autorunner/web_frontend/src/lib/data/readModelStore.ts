@@ -49,7 +49,7 @@ export type OptimisticMutationStatus = 'pending' | 'reconciled' | 'failed' | 're
 
 export type OptimisticMutation = {
   reconciliationId: string;
-  kind: 'send' | 'retire' | 'queue' | 'read-marker';
+  kind: 'send' | 'retire' | 'queue' | 'read-marker' | 'repo-pin';
   entityKind: EntityKind;
   entityId: string;
   status: OptimisticMutationStatus;
@@ -786,6 +786,32 @@ export class ReadModelEntityStore implements Readable<ReadModelEntityState> {
     this.commit(next);
   }
 
+  optimisticRepoPin(repoId: string, pinned: boolean, reconciliationId: string): void {
+    const previous = this.state.repos[repoId];
+    if (!previous) return;
+    const next = cloneState(this.state);
+    next.repos[repoId] = { ...previous, isPinned: pinned };
+    next.optimistic[reconciliationId] = {
+      reconciliationId,
+      kind: 'repo-pin',
+      entityKind: 'repo',
+      entityId: repoId,
+      status: 'pending',
+      createdAt: new Date().toISOString(),
+      previousValue: previous
+    };
+    bump(next, 'repo', repoId);
+    this.commit(next);
+  }
+
+  reconcileOptimisticMutation(reconciliationId: string): void {
+    const mutation = this.state.optimistic[reconciliationId];
+    if (!mutation) return;
+    const next = cloneState(this.state);
+    next.optimistic[reconciliationId] = { ...mutation, status: 'reconciled' };
+    this.commit(next);
+  }
+
   revertOptimisticMutation(reconciliationId: string): void {
     const mutation = this.state.optimistic[reconciliationId];
     if (!mutation) return;
@@ -793,6 +819,10 @@ export class ReadModelEntityStore implements Readable<ReadModelEntityState> {
     if (mutation.kind === 'retire' && mutation.entityKind === 'chat' && mutation.previousValue) {
       next.chats[mutation.entityId] = mutation.previousValue as ChatIndexRow;
       bump(next, 'chat', mutation.entityId);
+    }
+    if (mutation.kind === 'repo-pin' && mutation.entityKind === 'repo' && mutation.previousValue) {
+      next.repos[mutation.entityId] = mutation.previousValue as RepoTopology;
+      bump(next, 'repo', mutation.entityId);
     }
     if (mutation.kind === 'send' && mutation.entityKind === 'timeline') {
       const itemId = (mutation.previousValue as { itemId?: string } | undefined)?.itemId;

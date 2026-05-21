@@ -11,6 +11,7 @@ import {
   selectWorktreeSummaries
 } from './readModelViewModels';
 import { chatSurfaceFilterToken, filterPmaChats } from '$lib/viewModels/pmaChat';
+import { buildRepoWorktreeIndexViewModel } from '$lib/viewModels/repoWorktree';
 
 const now = '2026-05-11T12:00:00Z';
 const cursor = { value: 'c:1', sequence: 1, source: 'test', issuedAt: now };
@@ -266,6 +267,45 @@ describe('read model view-model selectors', () => {
     expect(selectRepoSummaries(store.snapshot())[0].raw.worktree_setup_commands).toEqual(['make setup']);
     expect(selectRepoSummaries(store.snapshot())[0].raw.is_pinned).toBe(true);
     expect(selectWorktreeSummaries(store.snapshot())[0].repoId).toBe('repo-1');
+  });
+
+  it('projects optimistic repo pins immediately and rolls them back by reconciliation id', () => {
+    const store = new ReadModelEntityStore();
+    store.applyRepoWorktreeTopologySnapshot({
+      contractVersion: 'web-read-models.v1',
+      kind: 'repo_worktree.topology.snapshot',
+      cursor,
+      window: { limit: 50, totalIsExact: true },
+      repos: [
+        { repoId: 'repo-a', label: 'Repo A', path: '/repo-a', archived: false, childWorktreeIds: [] },
+        { repoId: 'repo-b', label: 'Repo B', path: '/repo-b', archived: false, childWorktreeIds: [] }
+      ],
+      worktrees: [],
+      repair: {
+        snapshotRoute: '/hub/read-models/repo-worktree/topology',
+        cursorQueryParam: 'after',
+        gapEventType: 'projection.cursor_gap',
+        behavior: 'repair_snapshot_required'
+      }
+    } satisfies RepoWorktreeTopologySnapshot);
+
+    store.optimisticRepoPin('repo-b', true, 'pin-repo-b');
+    const pinnedIndex = buildRepoWorktreeIndexViewModel({
+      repos: selectRepoSummaries(store.snapshot()),
+      worktrees: selectWorktreeSummaries(store.snapshot()),
+      runs: [],
+      chats: [],
+      tickets: [],
+      artifacts: [],
+      ticketsListLoaded: false
+    });
+
+    expect(pinnedIndex.rows.map((row) => row.id)).toEqual(['repo-b', 'repo-a']);
+    expect(pinnedIndex.rows[0].isPinned).toBe(true);
+
+    store.revertOptimisticMutation('pin-repo-b');
+    const reverted = selectRepoSummaries(store.snapshot()).find((repo) => repo.id === 'repo-b');
+    expect(reverted?.raw.is_pinned).toBe(false);
   });
 
   it('preserves backend ticket-flow fields and ticket-run groups', () => {
