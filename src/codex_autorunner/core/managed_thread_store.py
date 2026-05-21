@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import uuid
 from contextlib import contextmanager
+from dataclasses import replace
 from pathlib import Path
 from typing import Any, Iterator, Optional
 
@@ -81,13 +82,13 @@ from .orchestration.thread_titles import (
     normalize_thread_title,
 )
 from .orchestration.turn_execution_contract import (
+    TurnExecutionOrigin,
     TurnExecutionRecord,
     TurnExecutionRequest,
 )
 from .orchestration.turn_execution_storage import (
     TURN_EXECUTION_CONTRACT_VERSION,
     build_turn_execution_record_from_storage,
-    build_turn_execution_request_from_storage,
 )
 from .ports.thread_store import ThreadRecord, ThreadStatus
 from .text_utils import _json_dumps, _json_loads_object
@@ -130,6 +131,60 @@ def _resolve_stale_running_threshold_seconds(
         )
     except Exception:
         return resolve_stale_threshold_seconds(None)
+
+
+def _opencode_model_payload(model: Optional[str]) -> dict[str, str]:
+    if model is None or "/" not in model:
+        return {}
+    provider_id, model_id = (part.strip() for part in model.split("/", 1))
+    if not provider_id or not model_id:
+        return {}
+    return {"providerID": provider_id, "modelID": model_id}
+
+
+def _turn_request_for_direct_create(
+    *,
+    managed_turn_id: str,
+    managed_thread_id: str,
+    thread: dict[str, Any],
+    prompt: str,
+    request_kind: str,
+    busy_policy: str,
+    model: Optional[str],
+    reasoning: Optional[str],
+    client_turn_id: Optional[str],
+    metadata: dict[str, Any],
+) -> TurnExecutionRequest:
+    agent = str(thread.get("agent_id") or thread.get("agent") or "codex")
+    resolved_model = model
+    if agent == "opencode" and resolved_model is None:
+        resolved_model = "openai/gpt-5"
+    return TurnExecutionRequest(
+        request_id=managed_turn_id,
+        target_id=managed_thread_id,
+        target_kind="thread",
+        workspace_root=_coerce_text(thread.get("workspace_root")),
+        request_kind=request_kind,  # type: ignore[arg-type]
+        busy_policy=busy_policy,  # type: ignore[arg-type]
+        prompt_text=prompt,
+        agent=agent,
+        model=resolved_model,
+        model_payload=(
+            _opencode_model_payload(resolved_model) if agent == "opencode" else {}
+        ),
+        reasoning=reasoning,
+        approval_policy=str(metadata.get("approval_policy") or "never"),
+        approval_mode=_coerce_text(metadata.get("approval_mode")),
+        sandbox_policy=metadata.get("sandbox_policy") or "dangerFullAccess",
+        client_request_id=client_turn_id,
+        idempotency_key=client_turn_id or managed_turn_id,
+        origin=TurnExecutionOrigin(
+            kind="system",
+            source_id="managed-thread-store",
+            metadata={"source": "direct_create_turn"},
+        ),
+        metadata=dict(metadata),
+    )
 
 
 def _thread_row_to_record(row: Any) -> dict[str, Any]:
@@ -771,14 +826,11 @@ class ManagedThreadStore:
         if thread is None:
             return
         existing_request = _coerce_text(execution.get("turn_request_json"))
-        if existing_request is not None:
-            request = TurnExecutionRequest.from_json(existing_request)
-        else:
-            request = build_turn_execution_request_from_storage(
-                execution=execution,
-                thread=thread,
-                queue_payload=self._queue_payload_for_execution(conn, managed_turn_id),
+        if existing_request is None:
+            raise RuntimeError(
+                f"Managed turn '{managed_turn_id}' is missing canonical turn request"
             )
+        request = TurnExecutionRequest.from_json(existing_request)
         record = build_turn_execution_record_from_storage(
             execution=execution,
             thread=thread,
@@ -1412,12 +1464,19 @@ class ManagedThreadStore:
                     "created_at": started_at,
                 }
                 if turn_request is None:
-                    turn_request = build_turn_execution_request_from_storage(
-                        execution=execution_mapping,
+                    turn_request = _turn_request_for_direct_create(
+                        managed_turn_id=managed_turn_id,
+                        managed_thread_id=managed_thread_id,
                         thread=thread_row,
-                        queue_payload=queue_payload or {},
+                        prompt=prompt,
+                        request_kind=normalized_request_kind,
+                        busy_policy=busy_policy,
+                        model=model,
+                        reasoning=reasoning,
+                        client_turn_id=client_turn_id,
+                        metadata=dict(metadata or {}),
                     )
-                elif turn_request.target_id != managed_thread_id:
+                if turn_request.target_id != managed_thread_id:
                     raise ValueError(
                         "canonical turn request target_id must match managed_thread_id"
                     )
@@ -2077,11 +2136,17 @@ class ManagedThreadStore:
                 thread = self._fetch_thread(conn, managed_thread_id)
                 if thread is None:
                     return None
-                turn_request = build_turn_execution_request_from_storage(
-                    execution=execution,
-                    thread=thread,
-                    queue_payload=queue_payload,
-                )
+                requested_turn = queue_payload.get("turn_request")
+                if not isinstance(requested_turn, dict):
+                    raise ValueError(
+                        "Queued turn update requires canonical turn_request"
+                    )
+                turn_request = TurnExecutionRequest.from_mapping(requested_turn)
+                if turn_request.target_id != managed_thread_id:
+                    raise ValueError(
+                        "canonical turn request target_id must match managed_thread_id"
+                    )
+                turn_request = replace(turn_request, prompt_text=prompt)
                 canonical_queue_payload = {
                     "turn_request": turn_request.to_dict(),
                 }

@@ -365,6 +365,7 @@ class _SerializedHubClient:
                 reasoning=request.reasoning,
                 client_request_id=request.client_request_id,
                 queue_payload=request.queue_payload,
+                turn_request=request.turn_request,
             )
         )
 

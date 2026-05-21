@@ -23,7 +23,6 @@ from ..orchestration.turn_execution_contract import (
 )
 from ..orchestration.turn_execution_storage import (
     build_turn_execution_record_from_storage,
-    build_turn_execution_request_from_storage,
 )
 from .background_runner import BackgroundRunnerSaturated, BoundedBackgroundRunner
 from .client import HubControlPlaneClient
@@ -417,6 +416,10 @@ class RemoteThreadExecutionStore(ThreadExecutionStore):
         queue_payload: Optional[dict[str, Any]] = None,
         turn_request: Optional[TurnExecutionRequest] = None,
     ) -> ExecutionRecord:
+        if turn_request is None:
+            raise RuntimeError(
+                "remote execution creation requires a canonical TurnExecutionRequest"
+            )
         response = self._run(
             operation="create_execution",
             action=lambda client: client.create_execution(
@@ -442,11 +445,7 @@ class RemoteThreadExecutionStore(ThreadExecutionStore):
         if thread is None:
             thread = self.get_thread_target(thread_target_id)
         if thread is not None:
-            request = turn_request or build_turn_execution_request_from_storage(
-                execution=execution.to_dict(),
-                thread=thread.to_dict(),
-                queue_payload=dict(queue_payload or {}),
-            )
+            request = turn_request
             record = build_turn_execution_record_from_storage(
                 execution=execution.to_dict(),
                 thread=thread.to_dict(),

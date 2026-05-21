@@ -245,17 +245,6 @@ class _ClaimedThreadExecutionRequest:
     def sandbox_policy(self) -> Optional[Any]:
         return self.queued_request.sandbox_policy
 
-    def as_legacy_tuple(
-        self,
-    ) -> tuple[ThreadTarget, ExecutionRecord, MessageRequest, Optional[str], Any]:
-        return (
-            self.thread,
-            self.execution,
-            self.request,
-            self.client_request_id,
-            self.sandbox_policy,
-        )
-
 
 def _message_request_from_turn_request(
     request: TurnExecutionRequest,

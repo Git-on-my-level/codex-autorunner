@@ -31,6 +31,8 @@ from codex_autorunner.core.orchestration import (
     OrchestrationBindingStore,
     PausedFlowTarget,
     SurfaceThreadMessageRequest,
+    TurnExecutionOrigin,
+    TurnExecutionRequest,
 )
 from codex_autorunner.core.orchestration.models import FlowTarget
 from codex_autorunner.core.orchestration.runtime_bindings import (
@@ -48,6 +50,28 @@ from codex_autorunner.core.orchestration.transcript_mirror import TranscriptMirr
 from codex_autorunner.core.pma_automation_store import PmaAutomationStore
 
 FIXTURE_PATH = Path(__file__).resolve().parents[2] / "fixtures" / "fake_acp_server.py"
+
+
+def _test_turn_request(
+    *,
+    request_id: str,
+    thread_target_id: str,
+    workspace_root: Path,
+    prompt: str,
+) -> TurnExecutionRequest:
+    return TurnExecutionRequest(
+        request_id=request_id,
+        target_id=thread_target_id,
+        target_kind="thread",
+        workspace_root=str(workspace_root),
+        request_kind="message",
+        busy_policy="reject",
+        prompt_text=prompt,
+        agent="codex",
+        approval_policy="never",
+        sandbox_policy="dangerFullAccess",
+        origin=TurnExecutionOrigin(kind="system", source_id="test"),
+    )
 
 
 @dataclass
@@ -1497,7 +1521,7 @@ async def test_send_review_preserves_request_kind_through_queue_claim_and_result
     assert queued.status == "queued"
     assert queued.request_kind == "review"
 
-    claimed = service.claim_next_queued_execution_request(thread.thread_target_id)
+    claimed = service.claim_next_queued_execution_context(thread.thread_target_id)
     assert claimed is None
 
     completed = service.record_execution_result(
@@ -1510,26 +1534,19 @@ async def test_send_review_preserves_request_kind_through_queue_claim_and_result
     assert completed.request_kind == "message"
 
     harness.next_turn_id = "backend-review-2"
-    claimed = service.claim_next_queued_execution_request(thread.thread_target_id)
+    claimed = service.claim_next_queued_execution_context(thread.thread_target_id)
     assert claimed is not None
-    (
-        claimed_thread,
-        claimed_execution,
-        claimed_request,
-        client_request_id,
-        sandbox_policy,
-    ) = claimed
-    assert claimed_thread.thread_target_id == thread.thread_target_id
-    assert claimed_execution.request_kind == "review"
-    assert claimed_request.kind == "review"
-    assert client_request_id is None
-    assert sandbox_policy is None
+    assert claimed.thread.thread_target_id == thread.thread_target_id
+    assert claimed.execution.request_kind == "review"
+    assert claimed.request.kind == "review"
+    assert claimed.client_request_id is None
+    assert claimed.sandbox_policy is None
 
     harness.provisional_backend_assert = (service, thread.thread_target_id)
     started = await service._start_execution(
-        claimed_thread,
-        claimed_request,
-        claimed_execution,
+        claimed.thread,
+        claimed.request,
+        claimed.execution,
         harness=harness,
         workspace_root=workspace_root,
         sandbox_policy=None,
@@ -2665,7 +2682,14 @@ def test_service_exposes_binding_queries_when_binding_store_is_configured(
         service.get_binding(surface_kind="telegram", surface_key="123:root") is not None
     )
     turn = ManagedThreadStore(hub_root).create_turn(
-        thread.thread_target_id, prompt="busy"
+        thread.thread_target_id,
+        prompt="busy",
+        turn_request=_test_turn_request(
+            request_id="busy-turn",
+            thread_target_id=thread.thread_target_id,
+            workspace_root=workspace_root,
+            prompt="busy",
+        ),
     )
     summaries = service.list_active_work_summaries(repo_id="repo-1")
     assert len(summaries) == 1

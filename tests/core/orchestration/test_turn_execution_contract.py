@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import pytest
 
+from codex_autorunner.core.hub_control_plane import ExecutionCreateRequest
+from codex_autorunner.core.orchestration.models import QueuedExecutionRequest
 from codex_autorunner.core.orchestration.turn_execution_contract import (
     TURN_EXECUTION_CONTRACT_VERSION,
     DeliveryIntentRef,
@@ -194,3 +196,51 @@ def test_opencode_request_accepts_explicit_resolved_provider_model_payload() -> 
 def test_contract_rejects_non_json_safe_metadata() -> None:
     with pytest.raises(TurnExecutionContractError, match="JSON-safe"):
         _request(metadata={"bad": object()})
+
+
+def test_live_execution_create_request_rejects_legacy_partial_shape() -> None:
+    with pytest.raises(ValueError, match="turn_request is required"):
+        ExecutionCreateRequest.from_mapping(
+            {
+                "thread_target_id": "thread-1",
+                "prompt": "hello",
+                "request_kind": "message",
+            }
+        )
+
+
+def test_queued_execution_payload_rejects_legacy_request_shape() -> None:
+    legacy_payload = {
+        "request": {
+            "target_id": "thread-1",
+            "message_text": "hello",
+        },
+        "client_request_id": "client-1",
+    }
+
+    with pytest.raises(ValueError, match="canonical turn_request"):
+        QueuedExecutionRequest.from_payload(
+            legacy_payload,
+            thread_target_id="thread-1",
+        )
+
+
+def test_queued_execution_payload_uses_canonical_turn_request_fields() -> None:
+    request = _request(target_id="thread-1")
+
+    queued = QueuedExecutionRequest.from_payload(
+        {
+            "turn_request": request.to_dict(),
+            "client_request_id": "client-1",
+        },
+        thread_target_id="thread-1",
+    )
+
+    assert queued.request.model == "zai-coding-plan/glm-5.1"
+    assert queued.request.reasoning == "high"
+    assert queued.request.approval_mode == "strict"
+    assert queued.sandbox_policy == {
+        "type": "workspaceWrite",
+        "writableRoots": ["/repo"],
+        "networkAccess": False,
+    }

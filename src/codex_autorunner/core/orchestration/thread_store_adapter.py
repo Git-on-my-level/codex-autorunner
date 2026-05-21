@@ -350,6 +350,10 @@ class ManagedThreadExecutionStore(ThreadExecutionStore):
         )
         if initialized_lifecycle_phase:
             metadata_payload[_MANAGED_TURN_LIFECYCLE_PHASE_KEY] = "accepted"
+        if turn_request is None:
+            raise ValueError(
+                "create_execution requires a canonical TurnExecutionRequest"
+            )
         create_kwargs: dict[str, Any] = {
             "prompt": prompt,
             "request_kind": request_kind,
@@ -361,16 +365,7 @@ class ManagedThreadExecutionStore(ThreadExecutionStore):
             "queue_payload": queue_payload,
             "turn_request": turn_request,
         }
-        try:
-            created = self._store.create_turn(thread_target_id, **create_kwargs)
-        except TypeError as exc:
-            if "turn_request" in str(exc):
-                create_kwargs.pop("turn_request", None)
-            elif "metadata" in str(exc):
-                create_kwargs.pop("metadata", None)
-            else:
-                raise
-            created = self._store.create_turn(thread_target_id, **create_kwargs)
+        created = self._store.create_turn(thread_target_id, **create_kwargs)
         record = _execution_record_from_store_row(created)
         if initialized_lifecycle_phase:
             self._advance_execution_lifecycle_phase(

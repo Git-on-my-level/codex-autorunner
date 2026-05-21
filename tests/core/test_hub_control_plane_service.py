@@ -53,6 +53,7 @@ from codex_autorunner.core.orchestration.sqlite import prepare_orchestration_sql
 from codex_autorunner.core.pma_notification_store import PmaNotificationStore
 from codex_autorunner.core.pma_transcripts import PmaTranscriptStore
 from codex_autorunner.core.ports.run_event import Completed, Started
+from tests.support.turn_execution import build_test_turn_request
 
 
 class _SupervisorStub:
@@ -102,6 +103,23 @@ def _build_service(tmp_path: Path) -> tuple[HubSharedStateService, str]:
     )
     thread_target_id = str(thread["managed_thread_id"])
     return service, thread_target_id
+
+
+def _test_turn_request(
+    tmp_path: Path,
+    thread_target_id: str,
+    *,
+    prompt: str,
+    busy_policy: str = "reject",
+    client_turn_id: str | None = None,
+) -> dict[str, object]:
+    return build_test_turn_request(
+        managed_thread_id=thread_target_id,
+        workspace_root=str(tmp_path / "hub" / "repos" / "repo-1"),
+        prompt=prompt,
+        busy_policy=busy_policy,
+        client_turn_id=client_turn_id,
+    ).to_dict()
 
 
 def test_shared_state_service_handshake_and_listing(tmp_path: Path) -> None:
@@ -414,6 +432,12 @@ def test_shared_state_service_execution_lifecycle_delegates_to_thread_store(
                 "thread_target_id": thread_target_id,
                 "prompt": "First turn",
                 "client_request_id": "client-1",
+                "turn_request": _test_turn_request(
+                    tmp_path,
+                    thread_target_id,
+                    prompt="First turn",
+                    client_turn_id="client-1",
+                ),
             }
         )
     )
@@ -425,6 +449,13 @@ def test_shared_state_service_execution_lifecycle_delegates_to_thread_store(
                 "busy_policy": "queue",
                 "client_request_id": "client-2",
                 "queue_payload": {"priority": "normal"},
+                "turn_request": _test_turn_request(
+                    tmp_path,
+                    thread_target_id,
+                    prompt="Second turn",
+                    busy_policy="queue",
+                    client_turn_id="client-2",
+                ),
             }
         )
     )
@@ -536,6 +567,11 @@ def test_shared_state_service_execution_queue_controls_delegate_to_thread_store(
             {
                 "thread_target_id": thread_target_id,
                 "prompt": "Running turn",
+                "turn_request": _test_turn_request(
+                    tmp_path,
+                    thread_target_id,
+                    prompt="Running turn",
+                ),
             }
         )
     )
@@ -545,6 +581,12 @@ def test_shared_state_service_execution_queue_controls_delegate_to_thread_store(
                 "thread_target_id": thread_target_id,
                 "prompt": "Queued one",
                 "busy_policy": "queue",
+                "turn_request": _test_turn_request(
+                    tmp_path,
+                    thread_target_id,
+                    prompt="Queued one",
+                    busy_policy="queue",
+                ),
             }
         )
     )
@@ -554,6 +596,12 @@ def test_shared_state_service_execution_queue_controls_delegate_to_thread_store(
                 "thread_target_id": thread_target_id,
                 "prompt": "Queued two",
                 "busy_policy": "queue",
+                "turn_request": _test_turn_request(
+                    tmp_path,
+                    thread_target_id,
+                    prompt="Queued two",
+                    busy_policy="queue",
+                ),
             }
         )
     )

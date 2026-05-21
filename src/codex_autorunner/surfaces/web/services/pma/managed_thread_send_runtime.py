@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import uuid
 from dataclasses import dataclass
 from typing import Any, Awaitable, Callable, Optional
 
@@ -11,6 +12,7 @@ from fastapi.responses import JSONResponse
 from .....adapters.chat.bound_chat_execution_metadata import (
     merge_bound_chat_execution_metadata,
 )
+from .....adapters.chat.canonical_turns import build_surface_turn_execution_request
 from .....adapters.chat.managed_thread_turns import (
     ManagedThreadCoordinatorHooks,
     build_managed_thread_input_items,
@@ -90,7 +92,9 @@ async def run_managed_thread_message_send(
     get_runtime_state: Any,
     ports: ManagedThreadSendRuntimePorts,
 ) -> Any:
-    client_turn_id = normalize_optional_text(payload.client_turn_id)
+    client_turn_id = normalize_optional_text(payload.client_turn_id) or str(
+        uuid.uuid4()
+    )
 
     if payload.profile_explicit:
         meta = thread.get("metadata")
@@ -159,16 +163,29 @@ async def run_managed_thread_message_send(
                 progress_targets=progress_targets,
             ),
         )
+        canonical_request = build_surface_turn_execution_request(
+            message_request,
+            request_id=client_turn_id,
+            workspace_root=normalize_optional_text(thread.get("workspace_root")) or "",
+            surface_kind="web",
+            surface_key=managed_thread_id,
+            agent=normalize_optional_text(thread.get("agent_id") or thread.get("agent"))
+            or "codex",
+            approval_policy=options.approval_policy or "never",
+            sandbox_policy=options.sandbox_policy or "dangerFullAccess",
+            profile=options.agent_profile,
+            client_request_id=client_turn_id,
+        )
         if payload.wait_for_confirmation:
             started_execution = await ports.begin_execution(
                 service,
-                message_request,
+                canonical_request,
                 client_request_id=client_turn_id,
                 sandbox_policy=options.sandbox_policy,
             )
         else:
             prepared_execution = await service.prepare_thread_execution(
-                message_request,
+                canonical_request,
                 client_request_id=client_turn_id,
                 sandbox_policy=options.sandbox_policy,
             )

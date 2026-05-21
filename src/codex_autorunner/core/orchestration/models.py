@@ -501,12 +501,9 @@ class MessageRequest:
         cls,
         data: Mapping[str, Any],
         *,
-        default_target_id: Optional[str] = None,
         busy_policy: Optional[BusyThreadPolicy] = None,
     ) -> "MessageRequest":
-        target_id = _normalize_optional_text(
-            data.get("target_id")
-        ) or _normalize_optional_text(default_target_id)
+        target_id = _normalize_optional_text(data.get("target_id"))
         if target_id is None:
             raise ValueError("MessageRequest requires a target_id")
         message_text = _normalize_optional_text(data.get("message_text"))
@@ -560,20 +557,25 @@ class QueuedExecutionRequest:
         *,
         thread_target_id: str,
     ) -> "QueuedExecutionRequest":
-        request_data = payload.get("request")
+        from .execution_lifecycle import _message_request_from_turn_request
+        from .turn_execution_contract import TurnExecutionRequest
+
+        request_data = payload.get("turn_request")
         if not isinstance(request_data, Mapping):
-            raise ValueError("Queued execution payload is missing request data")
-        request = MessageRequest.from_mapping(
-            request_data,
-            default_target_id=thread_target_id,
-            busy_policy="queue",
-        )
+            raise ValueError(
+                "Queued execution payload is missing canonical turn_request"
+            )
+        turn_request = TurnExecutionRequest.from_mapping(request_data)
+        if turn_request.target_id != thread_target_id:
+            raise ValueError(
+                "Queued execution turn_request target_id does not match thread_target_id"
+            )
+        request = _message_request_from_turn_request(turn_request)
         return cls(
             request=request,
-            client_request_id=_normalize_optional_text(
-                payload.get("client_request_id")
-            ),
-            sandbox_policy=payload.get("sandbox_policy"),
+            client_request_id=_normalize_optional_text(payload.get("client_request_id"))
+            or turn_request.client_request_id,
+            sandbox_policy=payload.get("sandbox_policy", turn_request.sandbox_policy),
         )
 
     def to_payload(self) -> dict[str, Any]:

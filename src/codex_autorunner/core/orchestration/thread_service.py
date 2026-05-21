@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import uuid
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Callable, Optional
@@ -41,7 +42,11 @@ from .recovery_lifecycle import (
 )
 from .runtime_bindings import RuntimeThreadBinding
 from .turn_context import turn_assembly_from_request_metadata
-from .turn_execution_contract import TurnExecutionRecord, TurnExecutionRequest
+from .turn_execution_contract import (
+    TurnExecutionOrigin,
+    TurnExecutionRecord,
+    TurnExecutionRequest,
+)
 
 MessagePreviewLimit = 120
 logger = logging.getLogger("codex_autorunner.core.orchestration.service")
@@ -282,16 +287,16 @@ class _ThreadQueueRequestAdapter:
 
     def payload_for_request(
         self,
-        request: MessageRequest,
+        request: TurnExecutionRequest,
         *,
         client_request_id: Optional[str],
         sandbox_policy: Optional[Any],
     ) -> dict[str, Any]:
-        return QueuedExecutionRequest(
-            request=request,
-            client_request_id=client_request_id,
-            sandbox_policy=sandbox_policy,
-        ).to_payload()
+        return {
+            "turn_request": request.to_dict(),
+            "client_request_id": client_request_id,
+            "sandbox_policy": sandbox_policy,
+        }
 
     def queued_request_from_turn_request(
         self, request: TurnExecutionRequest
@@ -340,6 +345,57 @@ class _ThreadQueueRequestAdapter:
             turn_request=turn_request,
             turn_record=turn_record,
         )
+
+
+def _canonical_request_from_message_request(
+    request: MessageRequest,
+    *,
+    request_id: str,
+    thread: ThreadTarget,
+    workspace_root: Path,
+    client_request_id: Optional[str],
+    sandbox_policy: Any,
+) -> TurnExecutionRequest:
+    model_payload = (
+        _opencode_model_payload(request.model) if thread.agent_id == "opencode" else {}
+    )
+    approval_policy = request.approval_mode or "never"
+    return TurnExecutionRequest(
+        request_id=request_id,
+        target_id=request.target_id,
+        target_kind=request.target_kind,
+        workspace_root=str(workspace_root),
+        request_kind=request.kind,
+        busy_policy=request.busy_policy,
+        prompt_text=request.message_text,
+        input_items=tuple(dict(item) for item in request.input_items or ()),
+        context_profile=request.context_profile,
+        agent=thread.agent_id,
+        profile=request.agent_profile,
+        model=request.model,
+        model_payload=model_payload,
+        reasoning=request.reasoning,
+        approval_policy=approval_policy,
+        approval_mode=request.approval_mode,
+        sandbox_policy=sandbox_policy,
+        client_request_id=client_request_id,
+        idempotency_key=client_request_id or request_id,
+        correlation_id=client_request_id or request_id,
+        origin=TurnExecutionOrigin(
+            kind="system",
+            source_id="orchestration-thread-service",
+        ),
+        metadata=dict(request.metadata),
+    )
+
+
+def _opencode_model_payload(model: Optional[str]) -> dict[str, str]:
+    if model is None or "/" not in model:
+        return {}
+    provider_id, model_id = (part.strip() for part in model.split("/", 1))
+    if not provider_id or not model_id:
+        return {}
+    return {"providerID": provider_id, "modelID": model_id}
 
 
 @dataclass
@@ -693,15 +749,11 @@ class HarnessBackedOrchestrationService(OrchestrationThreadService):
         sandbox_policy: Optional[Any] = None,
         harness: Optional[RuntimeThreadHarness] = None,
     ) -> PreparedThreadExecution:
+        canonical_request: Optional[TurnExecutionRequest]
+        message_request: MessageRequest
         if isinstance(request, TurnExecutionRequest):
             canonical_request = request
-            client_request_id = client_request_id or canonical_request.client_request_id
-            sandbox_policy = (
-                sandbox_policy
-                if sandbox_policy is not None
-                else canonical_request.sandbox_policy
-            )
-            message_request = _message_request_from_turn_request(canonical_request)
+            message_request = _message_request_from_turn_request(request)
         else:
             canonical_request = None
             message_request = request
@@ -723,6 +775,25 @@ class HarnessBackedOrchestrationService(OrchestrationThreadService):
             raise KeyError(f"Unknown agent definition '{thread.agent_id}'")
 
         workspace_root = Path(thread.workspace_root)
+        if canonical_request is not None:
+            client_request_id = client_request_id or canonical_request.client_request_id
+            sandbox_policy = (
+                sandbox_policy
+                if sandbox_policy is not None
+                else canonical_request.sandbox_policy
+            )
+        else:
+            sandbox_policy = (
+                sandbox_policy if sandbox_policy is not None else "dangerFullAccess"
+            )
+            canonical_request = _canonical_request_from_message_request(
+                message_request,
+                request_id=client_request_id or str(uuid.uuid4()),
+                thread=thread,
+                workspace_root=workspace_root,
+                client_request_id=client_request_id,
+                sandbox_policy=sandbox_policy,
+            )
         turn_assembly = turn_assembly_from_request_metadata(
             message_text=message_request.message_text,
             metadata=message_request.metadata,
@@ -735,7 +806,7 @@ class HarnessBackedOrchestrationService(OrchestrationThreadService):
         message_request.metadata.clear()
         message_request.metadata.update(request_metadata)
         queue_payload = self._queue_adapter.payload_for_request(
-            message_request,
+            canonical_request,
             client_request_id=client_request_id,
             sandbox_policy=sandbox_policy,
         )
@@ -901,14 +972,6 @@ class HarnessBackedOrchestrationService(OrchestrationThreadService):
             harness=harness,
             workspace_root=workspace_root,
         )
-
-    def claim_next_queued_execution_request(
-        self, thread_target_id: str
-    ) -> Optional[
-        tuple[ThreadTarget, ExecutionRecord, MessageRequest, Optional[str], Any]
-    ]:
-        claimed = self.claim_next_queued_execution_context(thread_target_id)
-        return None if claimed is None else claimed.as_legacy_tuple()
 
     async def start_next_queued_execution(
         self,

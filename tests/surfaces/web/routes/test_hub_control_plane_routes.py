@@ -6,6 +6,7 @@ import httpx
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from tests.support.turn_execution import build_test_turn_request
 
 from codex_autorunner.core.hub_control_plane import (
     AutomationRequest,
@@ -105,6 +106,21 @@ def _build_test_app(tmp_path: Path) -> tuple[FastAPI, str]:
     app.state.hub_control_plane_service = service
     app.include_router(build_hub_control_plane_routes())
     return app, str(thread["managed_thread_id"])
+
+
+def _test_turn_request(
+    tmp_path: Path,
+    thread_target_id: str,
+    *,
+    prompt: str,
+    busy_policy: str = "reject",
+) -> dict[str, object]:
+    return build_test_turn_request(
+        managed_thread_id=thread_target_id,
+        workspace_root=str(tmp_path / "hub" / "repos" / "repo-1"),
+        prompt=prompt,
+        busy_policy=busy_policy,
+    ).to_dict()
 
 
 def test_hub_control_plane_routes_return_typed_validation_errors(
@@ -323,6 +339,11 @@ async def test_hub_control_plane_http_client_round_trip(tmp_path: Path) -> None:
                 {
                     "thread_target_id": thread_target_id,
                     "prompt": "First remote turn",
+                    "turn_request": _test_turn_request(
+                        tmp_path,
+                        thread_target_id,
+                        prompt="First remote turn",
+                    ),
                 }
             )
         )
@@ -333,6 +354,12 @@ async def test_hub_control_plane_http_client_round_trip(tmp_path: Path) -> None:
                     "prompt": "Queued remote turn",
                     "busy_policy": "queue",
                     "queue_payload": {"source": "test"},
+                    "turn_request": _test_turn_request(
+                        tmp_path,
+                        thread_target_id,
+                        prompt="Queued remote turn",
+                        busy_policy="queue",
+                    ),
                 }
             )
         )

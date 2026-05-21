@@ -21,6 +21,7 @@ from ._normalizers import (
 class ExecutionCreateRequest:
     thread_target_id: str
     prompt: str
+    turn_request: TurnExecutionRequest
     request_kind: MessageRequestKind = "message"
     busy_policy: BusyThreadPolicy = "reject"
     model: Optional[str] = None
@@ -28,7 +29,6 @@ class ExecutionCreateRequest:
     client_request_id: Optional[str] = None
     metadata: dict[str, Any] = field(default_factory=dict)
     queue_payload: dict[str, Any] = field(default_factory=dict)
-    turn_request: Optional[TurnExecutionRequest] = None
 
     @classmethod
     def from_mapping(cls, data: Mapping[str, Any]) -> "ExecutionCreateRequest":
@@ -48,10 +48,8 @@ class ExecutionCreateRequest:
             client_request_id=normalize_optional_text(data.get("client_request_id")),
             metadata=copy_mapping(data.get("metadata")),
             queue_payload=copy_mapping(data.get("queue_payload")),
-            turn_request=(
-                TurnExecutionRequest.from_mapping(data["turn_request"])
-                if isinstance(data.get("turn_request"), Mapping)
-                else None
+            turn_request=TurnExecutionRequest.from_mapping(
+                _required_mapping(data.get("turn_request"), field_name="turn_request")
             ),
         )
 
@@ -68,9 +66,14 @@ class ExecutionCreateRequest:
         }
         if self.metadata:
             payload["metadata"] = dict(self.metadata)
-        if self.turn_request is not None:
-            payload["turn_request"] = self.turn_request.to_dict()
+        payload["turn_request"] = self.turn_request.to_dict()
         return payload
+
+
+def _required_mapping(value: Any, *, field_name: str) -> dict[str, Any]:
+    if not isinstance(value, Mapping):
+        raise ValueError(f"{field_name} is required")
+    return dict(value)
 
 
 @dataclass(frozen=True)
