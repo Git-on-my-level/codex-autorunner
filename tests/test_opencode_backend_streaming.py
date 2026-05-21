@@ -1,3 +1,4 @@
+import asyncio
 import json
 from pathlib import Path
 from typing import Optional
@@ -45,6 +46,10 @@ class _FakeOpenCodeClient:
 
     async def prompt_async(self, *args, **kwargs):
         return {}
+
+    async def list_messages(self, session_id: str, **kwargs):
+        _ = session_id, kwargs
+        return []
 
     async def send_command(self, *args, **kwargs):
         return None
@@ -220,5 +225,56 @@ async def test_opencode_backend_passes_first_event_timeout_to_collector(
     assert captured["first_event_timeout_seconds"] == expected_first_event_timeout
     assert any(
         isinstance(event, Completed) and event.final_message == "ok"
+        for event in run_events
+    )
+
+
+@pytest.mark.anyio
+async def test_opencode_backend_does_not_fail_first_event_timeout_while_prompt_runs(
+    tmp_path: Path,
+) -> None:
+    class _SilentActiveClient(_FakeOpenCodeClient):
+        async def stream_events(
+            self, *, directory=None, ready_event=None, paths=None, session_id=None
+        ):
+            _ = directory, paths, session_id
+            if ready_event is not None:
+                ready_event.set()
+            while True:
+                await asyncio.sleep(3600)
+                yield SSEEvent(event="server.heartbeat", data="")
+
+        async def session_status(self, directory=None):
+            _ = directory
+            return {}
+
+        async def prompt_async(self, *args, **kwargs):
+            _ = args, kwargs
+            await asyncio.sleep(0.01)
+            return {}
+
+        async def list_messages(self, session_id: str, **kwargs):
+            _ = session_id, kwargs
+            return {
+                "data": [
+                    {
+                        "info": {"id": "assistant-1", "role": "assistant"},
+                        "parts": [{"type": "text", "text": "finished despite silence"}],
+                    }
+                ]
+            }
+
+    backend = OpenCodeBackend(
+        workspace_root=tmp_path,
+        supervisor=None,
+        session_stall_timeout_seconds=0.001,
+    )
+    backend._client = _SilentActiveClient([])  # type: ignore
+
+    run_events = [event async for event in backend.run_turn_events("s-silent", "Ping")]
+
+    assert any(
+        isinstance(event, Completed)
+        and event.final_message == "finished despite silence"
         for event in run_events
     )
