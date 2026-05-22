@@ -10,13 +10,13 @@ from codex_autorunner.core.automation import (
     AutomationStore,
 )
 from codex_autorunner.core.automation.models import (
-    EXECUTOR_MANAGED_THREAD_TURN,
     JOB_CLAIMED,
     JOB_DEAD_LETTERED,
     JOB_FAILED,
     JOB_PENDING,
     JOB_RUNNING,
     JOB_SUCCEEDED,
+    LEGACY_EXECUTOR_MANAGED_THREAD_TURN,
     TARGET_POLICY_HUB,
     TRIGGER_KIND_EVENT,
 )
@@ -56,13 +56,13 @@ class _FailOnceExecutor:
 def _store_with_rule_and_event(tmp_path) -> AutomationStore:
     store = AutomationStore(tmp_path)
     store.upsert_rule(
-        AutomationRule.create(
+        AutomationRule.hydrate_persisted(
             rule_id="rule-1",
             name="Worker rule",
             trigger_kind=TRIGGER_KIND_EVENT,
             trigger={"event_types": ["manual.run"]},
             target_policy=TARGET_POLICY_HUB,
-            executor_kind=EXECUTOR_MANAGED_THREAD_TURN,
+            executor_kind=LEGACY_EXECUTOR_MANAGED_THREAD_TURN,
         )
     )
     store.record_event(
@@ -77,7 +77,7 @@ def _job(job_id: str, **kwargs) -> AutomationJob:
         "rule_id": "rule-1",
         "event_id": "event-1",
         "target": {"repo_id": "repo-1"},
-        "executor": {"kind": EXECUTOR_MANAGED_THREAD_TURN},
+        "executor": {"kind": LEGACY_EXECUTOR_MANAGED_THREAD_TURN},
         "available_at": "2026-01-01T00:00:00Z",
     }
     args.update(kwargs)
@@ -88,7 +88,7 @@ def test_worker_claims_records_attempt_and_completes_job(tmp_path) -> None:
     store = _store_with_rule_and_event(tmp_path)
     store.enqueue_job(_job("job-1"))
     registry = AutomationExecutorRegistry()
-    registry.register(EXECUTOR_MANAGED_THREAD_TURN, _SuccessExecutor())
+    registry.register(LEGACY_EXECUTOR_MANAGED_THREAD_TURN, _SuccessExecutor())
 
     result = AutomationJobWorker(store, registry).process_once(
         now="2026-01-01T00:00:00Z"
@@ -106,7 +106,7 @@ def test_worker_persists_running_executor_result_without_success(tmp_path) -> No
     store = _store_with_rule_and_event(tmp_path)
     store.enqueue_job(_job("job-1"))
     registry = AutomationExecutorRegistry()
-    registry.register(EXECUTOR_MANAGED_THREAD_TURN, _RunningExecutor())
+    registry.register(LEGACY_EXECUTOR_MANAGED_THREAD_TURN, _RunningExecutor())
 
     result = AutomationJobWorker(store, registry).process_once(
         now="2026-01-01T00:00:00Z"
@@ -136,7 +136,7 @@ def test_worker_retries_then_succeeds_and_records_attempts(tmp_path) -> None:
     )
     executor = _FailOnceExecutor()
     registry = AutomationExecutorRegistry()
-    registry.register(EXECUTOR_MANAGED_THREAD_TURN, executor)
+    registry.register(LEGACY_EXECUTOR_MANAGED_THREAD_TURN, executor)
     worker = AutomationJobWorker(store, registry)
 
     first = worker.process_once(now="2026-01-01T00:00:00Z")
@@ -157,7 +157,7 @@ def test_worker_dead_letters_after_max_attempts(tmp_path) -> None:
     store.enqueue_job(_job("job-1", policy={"max_attempts": 1}, max_attempts=1))
     registry = AutomationExecutorRegistry()
     registry.register(
-        EXECUTOR_MANAGED_THREAD_TURN,
+        LEGACY_EXECUTOR_MANAGED_THREAD_TURN,
         type(
             "AlwaysFail",
             (),
@@ -233,7 +233,7 @@ def test_worker_recovers_stale_claim_and_respects_running_concurrency(tmp_path) 
     assert store.get_job(stale.job_id).state == JOB_CLAIMED
 
     registry = AutomationExecutorRegistry()
-    registry.register(EXECUTOR_MANAGED_THREAD_TURN, _SuccessExecutor())
+    registry.register(LEGACY_EXECUTOR_MANAGED_THREAD_TURN, _SuccessExecutor())
     result = AutomationJobWorker(store, registry, claim_lease_seconds=60).process_once(
         now="2026-01-01T00:10:00Z"
     )

@@ -16,11 +16,11 @@ from codex_autorunner.core.automation import (
 )
 from codex_autorunner.core.automation.models import (
     EXECUTOR_AGENT_TASK_TURN,
-    EXECUTOR_MANAGED_THREAD_TURN,
     EXECUTOR_PMA_OPERATOR_TURN,
     EXECUTOR_PUBLISH_OPERATION,
     JOB_FAILED,
     JOB_SUCCEEDED,
+    LEGACY_EXECUTOR_MANAGED_THREAD_TURN,
     SCHEDULE_ONE_SHOT,
     TARGET_POLICY_HUB,
     TRIGGER_KIND_EVENT,
@@ -364,7 +364,7 @@ def test_hub_automation_workspace_batches_jobs_and_target_options(
     rule_ids: list[str] = []
     for index in range(2):
         rule = store.upsert_rule(
-            AutomationRule.create(
+            AutomationRule.hydrate_persisted(
                 rule_id=f"rule-{index}",
                 name=f"Rule {index}",
                 enabled=index == 0,
@@ -372,7 +372,7 @@ def test_hub_automation_workspace_batches_jobs_and_target_options(
                 trigger={"event_types": ["schedule.fire"]},
                 target_policy=TARGET_POLICY_HUB,
                 target={"repo_id": f"repo-{index}"},
-                executor_kind=EXECUTOR_MANAGED_THREAD_TURN,
+                executor_kind=LEGACY_EXECUTOR_MANAGED_THREAD_TURN,
                 executor={"message": f"Run rule {index}"},
             )
         )
@@ -655,14 +655,14 @@ def test_hub_automation_workspace_tolerates_unknown_executor_kind(tmp_path):
     seed_hub_files(hub_root, force=True)
     store = AutomationStore(hub_root)
     store.upsert_rule(
-        AutomationRule.create(
+        AutomationRule.hydrate_persisted(
             rule_id="rule-future",
             name="Future executor",
             enabled=True,
             trigger_kind=TRIGGER_KIND_EVENT,
             trigger={"event_types": ["manual.run"]},
             target_policy=TARGET_POLICY_HUB,
-            executor_kind=EXECUTOR_MANAGED_THREAD_TURN,
+            executor_kind=LEGACY_EXECUTOR_MANAGED_THREAD_TURN,
             executor={"message": "Known before upgrade"},
         )
     )
@@ -855,7 +855,7 @@ def test_hub_automations_project_pma_one_shot_timer(tmp_path):
     seed_hub_files(hub_root, force=True)
     store = AutomationStore(hub_root)
     rule = store.upsert_rule(
-        AutomationRule.create(
+        AutomationRule.hydrate_persisted(
             rule_id="builtin:pma:timer:timer-1",
             name="PMA timer timer-1",
             enabled=True,
@@ -864,7 +864,7 @@ def test_hub_automations_project_pma_one_shot_timer(tmp_path):
             trigger={"schedule_kind": SCHEDULE_ONE_SHOT},
             target_policy=TARGET_POLICY_HUB,
             target={"repo_id": "repo-1", "thread_target_id": "thread-1"},
-            executor_kind=EXECUTOR_MANAGED_THREAD_TURN,
+            executor_kind=LEGACY_EXECUTOR_MANAGED_THREAD_TURN,
             executor={
                 "lane_id": "pma:default",
                 "source": "timer",

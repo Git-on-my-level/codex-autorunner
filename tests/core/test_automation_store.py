@@ -13,7 +13,6 @@ from codex_autorunner.core.automation import (
     AutomationStore,
 )
 from codex_autorunner.core.automation.models import (
-    EXECUTOR_MANAGED_THREAD_TURN,
     EXECUTOR_PMA_OPERATOR_TURN,
     JOB_CLAIMED,
     JOB_DEAD_LETTERED,
@@ -21,6 +20,7 @@ from codex_autorunner.core.automation.models import (
     JOB_PENDING,
     JOB_RUNNING,
     JOB_SUCCEEDED,
+    LEGACY_EXECUTOR_MANAGED_THREAD_TURN,
     SCHEDULE_DAILY,
     TARGET_POLICY_AUTO_WORKTREE,
     TARGET_POLICY_HUB,
@@ -34,7 +34,7 @@ from codex_autorunner.core.pma_automation_unified import (
 
 
 def _rule() -> AutomationRule:
-    return AutomationRule.create(
+    return AutomationRule.hydrate_persisted(
         rule_id="rule-1",
         name="PR review follow-up",
         trigger_kind=TRIGGER_KIND_EVENT,
@@ -200,7 +200,7 @@ def test_job_enqueue_dedupe_claim_complete_fail_and_attempts(tmp_path) -> None:
         dedupe_key="dedupe-1",
         available_at="2026-01-01T00:00:00Z",
         target={"repo_id": "repo-1"},
-        executor={"kind": EXECUTOR_MANAGED_THREAD_TURN},
+        executor={"kind": LEGACY_EXECUTOR_MANAGED_THREAD_TURN},
         payload={"work": "review"},
     )
     saved, deduped = store.enqueue_job(job)
@@ -215,7 +215,7 @@ def test_job_enqueue_dedupe_claim_complete_fail_and_attempts(tmp_path) -> None:
             dedupe_key="dedupe-1",
             available_at="2026-01-01T00:00:00Z",
             target={"repo_id": "repo-1"},
-            executor={"kind": EXECUTOR_MANAGED_THREAD_TURN},
+            executor={"kind": LEGACY_EXECUTOR_MANAGED_THREAD_TURN},
         )
     )
     assert deduped is True
@@ -267,7 +267,7 @@ def test_failed_job_can_be_requeued_explicitly(tmp_path) -> None:
         rule_id="rule-1",
         event_id="event-1",
         target={"repo_id": "repo-1"},
-        executor={"kind": EXECUTOR_MANAGED_THREAD_TURN},
+        executor={"kind": LEGACY_EXECUTOR_MANAGED_THREAD_TURN},
         available_at="2026-01-01T00:00:00Z",
     )
     store.claim_next_job(now="2026-01-01T00:00:00Z")
@@ -288,7 +288,7 @@ def test_dead_lettered_job_requires_explicit_revive(tmp_path) -> None:
         rule_id="rule-1",
         event_id="event-1",
         target={"repo_id": "repo-1"},
-        executor={"kind": EXECUTOR_MANAGED_THREAD_TURN},
+        executor={"kind": LEGACY_EXECUTOR_MANAGED_THREAD_TURN},
         available_at="2026-01-01T00:00:00Z",
     )
     store.claim_next_job(now="2026-01-01T00:00:00Z")
@@ -328,7 +328,7 @@ def test_claim_next_job_counts_claimed_jobs_against_concurrency(tmp_path) -> Non
             dedupe_key="dedupe-1",
             available_at="2026-01-01T00:00:00Z",
             target={"repo_id": "repo-1"},
-            executor={"kind": EXECUTOR_MANAGED_THREAD_TURN},
+            executor={"kind": LEGACY_EXECUTOR_MANAGED_THREAD_TURN},
             policy=policy,
         )
     )
@@ -340,7 +340,7 @@ def test_claim_next_job_counts_claimed_jobs_against_concurrency(tmp_path) -> Non
             dedupe_key="dedupe-2",
             available_at="2026-01-01T00:00:00Z",
             target={"repo_id": "repo-1"},
-            executor={"kind": EXECUTOR_MANAGED_THREAD_TURN},
+            executor={"kind": LEGACY_EXECUTOR_MANAGED_THREAD_TURN},
             policy=policy,
         )
     )
@@ -368,7 +368,7 @@ def test_release_stale_claims_recovers_claimed_and_running_jobs(tmp_path) -> Non
             dedupe_key="dedupe-claimed",
             available_at="2026-01-01T00:00:00Z",
             target={"repo_id": "repo-1", "job": "claimed"},
-            executor={"kind": EXECUTOR_MANAGED_THREAD_TURN},
+            executor={"kind": LEGACY_EXECUTOR_MANAGED_THREAD_TURN},
             policy={"max_concurrent_per_rule": 2, "max_concurrent_per_target": 1},
         )
     )
@@ -380,7 +380,7 @@ def test_release_stale_claims_recovers_claimed_and_running_jobs(tmp_path) -> Non
             dedupe_key="dedupe-running",
             available_at="2026-01-01T00:00:00Z",
             target={"repo_id": "repo-1", "job": "running"},
-            executor={"kind": EXECUTOR_MANAGED_THREAD_TURN},
+            executor={"kind": LEGACY_EXECUTOR_MANAGED_THREAD_TURN},
             policy={"max_concurrent_per_rule": 2, "max_concurrent_per_target": 1},
         )
     )
@@ -407,13 +407,13 @@ def test_release_stale_claims_recovers_claimed_and_running_jobs(tmp_path) -> Non
 
 def test_schedule_crud(tmp_path) -> None:
     store = AutomationStore(tmp_path)
-    rule = AutomationRule.create(
+    rule = AutomationRule.hydrate_persisted(
         rule_id="daily-rule",
         name="Daily automation",
         trigger_kind=TRIGGER_KIND_SCHEDULE,
         trigger={"schedule_kind": SCHEDULE_DAILY},
         target_policy=TARGET_POLICY_HUB,
-        executor_kind=EXECUTOR_MANAGED_THREAD_TURN,
+        executor_kind=LEGACY_EXECUTOR_MANAGED_THREAD_TURN,
     )
     store.upsert_rule(rule)
 

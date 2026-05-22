@@ -135,7 +135,7 @@
       defaultProfile = String(agentResult.data.defaults.profile ?? '');
       agentsHydrated = true;
       syncDraftsForSelection(true);
-      if (selectedExecutorKind() === 'managed_thread_turn') void loadModels(selectedAgent, selectedModel, { keepReasoning: selectedKind === 'automation' });
+      if (selectedExecutorKind() === 'agent_task_turn') void loadModels(selectedAgent, selectedModel, { keepReasoning: selectedKind === 'automation' });
     } else {
       agentCatalogError = agentResult.error.message;
     }
@@ -210,12 +210,12 @@
 
   $effect(() => {
     if (!selectionResolved || !selectedAutomationHydrated) return;
-    if (selectedExecutorKind() === 'managed_thread_turn' && canEditPrompt()) void hydrateAgentCatalog();
+    if (selectedExecutorKind() === 'agent_task_turn' && canEditPrompt()) void hydrateAgentCatalog();
   });
 
   $effect(() => {
     if (!agentsHydrated || loadingModels) return;
-    if (selectedExecutorKind() !== 'managed_thread_turn' || !canEditPrompt()) return;
+    if (selectedExecutorKind() !== 'agent_task_turn' || !canEditPrompt()) return;
     if (selectedAgent && modelCatalogAgentId !== selectedAgent) {
       void loadModels(selectedAgent, selectedModel, { keepReasoning: selectedKind === 'automation' });
     }
@@ -762,7 +762,6 @@
     pma_prompt: 'PMA reaction',
     agent_task_turn: 'Agent task',
     pma_operator_turn: 'PMA operator',
-    managed_thread_turn: 'Agent turn',
     ticket_flow: 'Ticket flow'
   };
 
@@ -787,7 +786,7 @@
   }
 
   function usesRuntimePicker(executorKind: string): boolean {
-    return executorKind === 'agent_task_turn' || executorKind === 'pma_operator_turn' || executorKind === 'managed_thread_turn';
+    return executorKind === 'agent_task_turn' || executorKind === 'pma_operator_turn';
   }
 
   function runtimeContractLabel(value: unknown, fallback = 'unspecified'): string {

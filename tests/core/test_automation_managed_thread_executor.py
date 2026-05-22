@@ -17,12 +17,12 @@ from codex_autorunner.core.automation.models import (
     AUTOMATION_CHILD_KIND_AGENT_TASK,
     AUTOMATION_CHILD_KIND_PMA_OPERATOR,
     EXECUTOR_AGENT_TASK_TURN,
-    EXECUTOR_MANAGED_THREAD_TURN,
     EXECUTOR_PMA_OPERATOR_TURN,
     JOB_DEAD_LETTERED,
     JOB_FAILED,
     JOB_RUNNING,
     JOB_SUCCEEDED,
+    LEGACY_EXECUTOR_MANAGED_THREAD_TURN,
     TARGET_POLICY_HUB,
     TRIGGER_KIND_EVENT,
 )
@@ -39,13 +39,13 @@ def _store_rule_event(
     thread = threads.create_thread("codex", tmp_path)
     thread_id = str(thread["managed_thread_id"])
     store.upsert_rule(
-        AutomationRule.create(
+        AutomationRule.hydrate_persisted(
             rule_id="rule-1",
             name="Managed turn",
             trigger_kind=TRIGGER_KIND_EVENT,
             trigger={"event_types": ["manual.run"]},
             target_policy=TARGET_POLICY_HUB,
-            executor_kind=EXECUTOR_MANAGED_THREAD_TURN,
+            executor_kind=LEGACY_EXECUTOR_MANAGED_THREAD_TURN,
         )
     )
     store.record_event(
@@ -65,7 +65,7 @@ def _job(thread_id: str, **kwargs) -> AutomationJob:
         "event_id": "event-1",
         "target": {"thread_target_id": thread_id},
         "executor": {
-            "kind": EXECUTOR_MANAGED_THREAD_TURN,
+            "kind": LEGACY_EXECUTOR_MANAGED_THREAD_TURN,
             "prompt": "Say hi to {{ event.payload.name }}",
             "client_turn_id": "client-1",
             "model": "gpt-test",
@@ -83,7 +83,7 @@ def test_managed_thread_turn_creates_turn_and_refs(tmp_path: Path) -> None:
     store.enqueue_job(_job(thread_id, policy={"approval_mode": "inherit_profile"}))
     registry = AutomationExecutorRegistry()
     registry.register(
-        EXECUTOR_MANAGED_THREAD_TURN,
+        LEGACY_EXECUTOR_MANAGED_THREAD_TURN,
         ManagedThreadTurnAutomationExecutor(
             hub_root=tmp_path / "hub",
             automation_store=store,
@@ -122,7 +122,7 @@ def test_managed_thread_turn_creates_automation_thread_when_target_is_repo(
             "",
             target={"repo_id": "repo-1"},
             executor={
-                "kind": EXECUTOR_MANAGED_THREAD_TURN,
+                "kind": LEGACY_EXECUTOR_MANAGED_THREAD_TURN,
                 "message_text": "Inspect {{ target.repo_id }}",
                 "agent": "codex",
                 "profile": "automation",
@@ -133,7 +133,7 @@ def test_managed_thread_turn_creates_automation_thread_when_target_is_repo(
     )
     registry = AutomationExecutorRegistry()
     registry.register(
-        EXECUTOR_MANAGED_THREAD_TURN,
+        LEGACY_EXECUTOR_MANAGED_THREAD_TURN,
         ManagedThreadTurnAutomationExecutor(
             hub_root=tmp_path / "hub",
             automation_store=store,
@@ -165,7 +165,7 @@ def test_managed_thread_turn_dead_letters_without_queue_worker_starter(
     store.enqueue_job(_job(thread_id, policy={"approval_mode": "inherit_profile"}))
     registry = AutomationExecutorRegistry()
     registry.register(
-        EXECUTOR_MANAGED_THREAD_TURN,
+        LEGACY_EXECUTOR_MANAGED_THREAD_TURN,
         ManagedThreadTurnAutomationExecutor(
             hub_root=tmp_path / "hub",
             automation_store=store,
@@ -190,7 +190,7 @@ def test_managed_thread_turn_dead_letters_when_queue_worker_unavailable(
     store.enqueue_job(_job(thread_id, policy={"approval_mode": "inherit_profile"}))
     registry = AutomationExecutorRegistry()
     registry.register(
-        EXECUTOR_MANAGED_THREAD_TURN,
+        LEGACY_EXECUTOR_MANAGED_THREAD_TURN,
         ManagedThreadTurnAutomationExecutor(
             hub_root=tmp_path / "hub",
             automation_store=store,
@@ -219,7 +219,7 @@ def test_managed_thread_turn_materializes_opencode_model_in_canonical_record(
         _job(
             thread_id,
             executor={
-                "kind": EXECUTOR_MANAGED_THREAD_TURN,
+                "kind": LEGACY_EXECUTOR_MANAGED_THREAD_TURN,
                 "prompt": "Say hi to {{ event.payload.name }}",
                 "client_turn_id": "client-opencode-1",
                 "agent": "opencode",
@@ -231,7 +231,7 @@ def test_managed_thread_turn_materializes_opencode_model_in_canonical_record(
     )
     registry = AutomationExecutorRegistry()
     registry.register(
-        EXECUTOR_MANAGED_THREAD_TURN,
+        LEGACY_EXECUTOR_MANAGED_THREAD_TURN,
         ManagedThreadTurnAutomationExecutor(
             hub_root=tmp_path / "hub",
             automation_store=store,
@@ -273,7 +273,7 @@ def test_managed_thread_default_approval_pauses_unattended_job(tmp_path: Path) -
     store.enqueue_job(_job(thread_id))
     registry = AutomationExecutorRegistry()
     registry.register(
-        EXECUTOR_MANAGED_THREAD_TURN,
+        LEGACY_EXECUTOR_MANAGED_THREAD_TURN,
         ManagedThreadTurnAutomationExecutor(
             hub_root=tmp_path / "hub",
             automation_store=store,
@@ -639,7 +639,7 @@ def test_managed_thread_auto_decline_dead_letters_and_escalates(tmp_path: Path) 
                 "approval_mode": "auto_decline",
                 "on_failure": {
                     "executor": {
-                        "kind": EXECUTOR_MANAGED_THREAD_TURN,
+                        "kind": LEGACY_EXECUTOR_MANAGED_THREAD_TURN,
                         "message_text": "Escalate failed automation",
                     },
                     "target": {"thread_target_id": thread_id},
@@ -650,7 +650,7 @@ def test_managed_thread_auto_decline_dead_letters_and_escalates(tmp_path: Path) 
     )
     registry = AutomationExecutorRegistry()
     registry.register(
-        EXECUTOR_MANAGED_THREAD_TURN,
+        LEGACY_EXECUTOR_MANAGED_THREAD_TURN,
         ManagedThreadTurnAutomationExecutor(
             hub_root=tmp_path / "hub",
             automation_store=store,
@@ -667,4 +667,4 @@ def test_managed_thread_auto_decline_dead_letters_and_escalates(tmp_path: Path) 
     assert store.get_job("job-1").state == JOB_DEAD_LETTERED
     escalations = [job for job in store.list_jobs() if job.job_id != "job-1"]
     assert len(escalations) == 1
-    assert escalations[0].executor["kind"] == EXECUTOR_MANAGED_THREAD_TURN
+    assert escalations[0].executor["kind"] == LEGACY_EXECUTOR_MANAGED_THREAD_TURN

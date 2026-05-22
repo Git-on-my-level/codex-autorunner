@@ -21,7 +21,6 @@ from .models import (
     EXECUTOR_GITHUB_COMMENT,
     EXECUTOR_GITHUB_REACTION,
     EXECUTOR_KINDS,
-    EXECUTOR_MANAGED_THREAD_TURN,
     EXECUTOR_PMA_OPERATOR_TURN,
     EXECUTOR_PUBLISH_CHAT_NOTIFICATION,
     EXECUTOR_PUBLISH_OPERATION,
@@ -821,8 +820,6 @@ def display_kind(rule: AutomationRule) -> str:
         return "agent_task"
     if rule.executor_kind == EXECUTOR_PMA_OPERATOR_TURN:
         return "pma_operator"
-    if rule.executor_kind == EXECUTOR_MANAGED_THREAD_TURN:
-        return "legacy_managed_thread_turn"
     return rule.executor_kind
 
 
@@ -1238,7 +1235,6 @@ def _executor_label(executor_kind: str) -> str:
         EXECUTOR_AGENT_TASK_TURN: "Agent task turn",
         EXECUTOR_PMA_OPERATOR_TURN: "PMA operator turn",
         EXECUTOR_TICKET_FLOW: "Ticket flow",
-        EXECUTOR_MANAGED_THREAD_TURN: "Legacy managed thread turn",
         EXECUTOR_PUBLISH_OPERATION: "Publish operation",
         EXECUTOR_PUBLISH_CHAT_NOTIFICATION: "Chat notification",
         EXECUTOR_GITHUB_REACTION: "GitHub reaction",
@@ -1800,7 +1796,7 @@ def _requested_runtime_from_executor(executor: dict[str, Any]) -> dict[str, Any]
 def _validate_product_executor_mode(
     executor_kind: str, executor: dict[str, Any]
 ) -> None:
-    if executor_kind in {EXECUTOR_MANAGED_THREAD_TURN, "pma_turn"}:
+    if executor_kind in {"managed_thread_turn", "pma_turn"}:
         raise ValueError(
             "legacy automation execution modes are not accepted by the product API; "
             "use agent_task_turn, pma_operator_turn, or ticket_flow"

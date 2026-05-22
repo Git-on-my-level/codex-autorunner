@@ -16,7 +16,7 @@ from codex_autorunner.adapters.agents.wiring import (
     build_app_server_supervisor_factory,
 )
 from codex_autorunner.core.automation import (
-    EXECUTOR_MANAGED_THREAD_TURN,
+    LEGACY_EXECUTOR_MANAGED_THREAD_TURN,
     PMA_SUBSCRIPTION_RULE_PREFIX,
     PMA_TIMER_RULE_PREFIX,
     PMA_TIMER_SCHEDULE_PREFIX,
@@ -71,7 +71,7 @@ def _create_subscription_rule(
 ) -> dict[str, Any]:
     store = AutomationStore(hub_root)
     rule = store.upsert_rule(
-        AutomationRule.create(
+        AutomationRule.hydrate_persisted(
             rule_id=f"{PMA_SUBSCRIPTION_RULE_PREFIX}{subscription_id}",
             name=f"Subscription {subscription_id}",
             enabled=enabled,
@@ -79,7 +79,7 @@ def _create_subscription_rule(
             trigger={"event_types": event_types},
             target_policy=TARGET_POLICY_HUB,
             target={"repo_id": repo_id},
-            executor_kind=EXECUTOR_MANAGED_THREAD_TURN,
+            executor_kind=LEGACY_EXECUTOR_MANAGED_THREAD_TURN,
             executor={"lane_id": "pma:default", "message_text": "Follow up"},
             metadata={
                 "purpose": "managed_thread_lifecycle_subscription",
@@ -100,7 +100,7 @@ def _create_timer_schedule(
 ) -> dict[str, Any]:
     store = AutomationStore(hub_root)
     rule = store.upsert_rule(
-        AutomationRule.create(
+        AutomationRule.hydrate_persisted(
             rule_id=f"{PMA_TIMER_RULE_PREFIX}{timer_id}",
             name=f"Timer {timer_id}",
             trigger_kind=TRIGGER_KIND_EVENT,
@@ -108,7 +108,7 @@ def _create_timer_schedule(
             filters={"schedule.rule_id": f"{PMA_TIMER_RULE_PREFIX}{timer_id}"},
             target_policy=TARGET_POLICY_HUB,
             target={"repo_id": repo_id},
-            executor_kind=EXECUTOR_MANAGED_THREAD_TURN,
+            executor_kind=LEGACY_EXECUTOR_MANAGED_THREAD_TURN,
             executor={"message_text": "Timer follow up"},
             metadata={"purpose": "managed_thread_timer", "legacy_timer_id": timer_id},
         )

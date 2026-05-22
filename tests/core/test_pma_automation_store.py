@@ -124,7 +124,7 @@ def test_legacy_timer_store_does_not_auto_create_unified_schedule(tmp_path) -> N
 def test_unified_schedule_cancel_validates_lifecycle_state(tmp_path) -> None:
     automation_store = AutomationStore(tmp_path)
     automation_store.upsert_rule(
-        AutomationRule.create(
+        AutomationRule.hydrate_persisted(
             rule_id="rule-lifecycle",
             name="Lifecycle schedule",
             trigger_kind="schedule",

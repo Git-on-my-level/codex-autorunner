@@ -25,9 +25,9 @@ from codex_autorunner.core.automation.migration_diagnostics import (
 )
 from codex_autorunner.core.automation.models import (
     EXECUTOR_AGENT_TASK_TURN,
-    EXECUTOR_MANAGED_THREAD_TURN,
     EXECUTOR_PMA_OPERATOR_TURN,
     JOB_RUNNING,
+    LEGACY_EXECUTOR_MANAGED_THREAD_TURN,
     LEGACY_EXECUTOR_PMA_TURN,
     SCHEDULE_DAILY,
     TARGET_POLICY_HUB,
@@ -567,14 +567,14 @@ def test_legacy_executor_migration_maps_scheduled_work_to_agent_task(
     hub_root = tmp_path / "hub"
     store = AutomationStore(hub_root)
     store.upsert_rule(
-        AutomationRule.create(
+        AutomationRule.hydrate_persisted(
             rule_id="daily-security",
             name="Daily Security Scan",
             trigger_kind=TRIGGER_KIND_SCHEDULE,
             trigger={"event_types": ["schedule.fire"]},
             target_policy=TARGET_POLICY_HUB,
             target={"repo_id": "repo-1"},
-            executor_kind=EXECUTOR_MANAGED_THREAD_TURN,
+            executor_kind=LEGACY_EXECUTOR_MANAGED_THREAD_TURN,
             executor={
                 "message_text": "scan",
                 "agent": "opencode",
@@ -607,7 +607,7 @@ def test_legacy_executor_migration_maps_pma_timer_to_operator(tmp_path: Path) ->
     hub_root = tmp_path / "hub"
     store = AutomationStore(hub_root)
     store.upsert_rule(
-        AutomationRule.create(
+        AutomationRule.hydrate_persisted(
             rule_id="pma-timer",
             name="PMA timer",
             trigger_kind=TRIGGER_KIND_EVENT,
@@ -634,14 +634,14 @@ def test_legacy_executor_migration_reports_queue_only_prose_hint(
     hub_root = tmp_path / "hub"
     store = AutomationStore(hub_root)
     store.upsert_rule(
-        AutomationRule.create(
+        AutomationRule.hydrate_persisted(
             rule_id="daily-security",
             name="Daily Security Scan",
             trigger_kind=TRIGGER_KIND_SCHEDULE,
             trigger={"event_types": ["schedule.fire"]},
             target_policy=TARGET_POLICY_HUB,
             target={"repo_id": "repo-1"},
-            executor_kind=EXECUTOR_MANAGED_THREAD_TURN,
+            executor_kind=LEGACY_EXECUTOR_MANAGED_THREAD_TURN,
             executor={"message_text": "scan", "agent": "opencode"},
             metadata={"automation_kind": "security_scan_pr"},
         )
@@ -656,7 +656,7 @@ def test_legacy_executor_migration_reports_queue_only_prose_hint(
             event_id="event-1",
             state=JOB_RUNNING,
             target={"repo_id": "repo-1"},
-            executor={"kind": EXECUTOR_MANAGED_THREAD_TURN, "agent": "opencode"},
+            executor={"kind": LEGACY_EXECUTOR_MANAGED_THREAD_TURN, "agent": "opencode"},
             dedupe_key="job-queue-only",
             available_at="2026-01-01T00:00:00Z",
             created_at="2026-01-01T00:00:00Z",

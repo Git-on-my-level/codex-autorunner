@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import logging
 import sqlite3
 import uuid
 from pathlib import Path
@@ -57,8 +56,6 @@ def _agent_task_runtime_mismatch(edge: AutomationChildExecutionEdge) -> bool:
     return False
 
 
-_log = logging.getLogger(__name__)
-
 _LEGACY_JOB_CHILD_COLUMNS = (
     "managed_thread_" + "target_id",
     "managed_thread_" + "execution_id",
@@ -75,30 +72,6 @@ class AutomationStore:
     def __init__(self, hub_root: Path, *, durable: bool = True) -> None:
         self._hub_root = Path(hub_root)
         self._durable = durable
-        self._migrate_stale_executor_kinds()
-
-    def _migrate_stale_executor_kinds(self) -> None:
-        try:
-            with open_orchestration_sqlite(
-                self._hub_root, durable=self._durable
-            ) as conn:
-                with conn:
-                    cursor = conn.execute("""
-                        UPDATE orch_automation_rules
-                           SET executor_kind = 'managed_thread_turn',
-                               updated_at = updated_at
-                         WHERE executor_kind = 'pma_turn'
-                        """)
-                    migrated = int(cursor.rowcount or 0)
-            if migrated:
-                _log.info(
-                    "migrated %d stale pma_turn executor_kind row(s) to managed_thread_turn",
-                    migrated,
-                )
-        except Exception:
-            _log.debug(
-                "stale executor_kind migration skipped (DB unavailable)", exc_info=True
-            )
 
     @property
     def hub_root(self) -> Path:

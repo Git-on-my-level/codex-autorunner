@@ -5,8 +5,8 @@ from typer.testing import CliRunner
 from codex_autorunner.cli import app
 from codex_autorunner.core.automation import (
     EXECUTOR_AGENT_TASK_TURN,
-    EXECUTOR_MANAGED_THREAD_TURN,
     EXECUTOR_PMA_OPERATOR_TURN,
+    LEGACY_EXECUTOR_MANAGED_THREAD_TURN,
     PMA_SUBSCRIPTION_RULE_PREFIX,
     AutomationRule,
     AutomationStore,
@@ -29,14 +29,14 @@ def _seed_subscription(
     store = AutomationStore(hub_root)
     subscription_id = f"sub-{thread_id}"
     rule = store.upsert_rule(
-        AutomationRule.create(
+        AutomationRule.hydrate_persisted(
             rule_id=f"{PMA_SUBSCRIPTION_RULE_PREFIX}{subscription_id}",
             name=f"Subscription {thread_id}",
             trigger_kind=TRIGGER_KIND_EVENT,
             trigger={"kind": "lifecycle_event", "event_types": event_types},
             target_policy=TARGET_POLICY_HUB,
             target={"thread_id": thread_id},
-            executor_kind=EXECUTOR_MANAGED_THREAD_TURN,
+            executor_kind=LEGACY_EXECUTOR_MANAGED_THREAD_TURN,
             executor={"lane_id": lane_id, "message_text": "Follow up"},
             metadata={
                 "purpose": "managed_thread_lifecycle_subscription",
