@@ -112,6 +112,7 @@ from ...core.ports.run_event import RunNotice
 from ..github.managed_thread_pr_binding import self_claim_and_arm_pr_binding
 from .execution_event_journal import make_chat_execution_journal_notice
 from .managed_thread_delivery import ManagedThreadDeliveryAdapter
+from .managed_thread_delivery_support import managed_thread_delivery_success_text
 from .runtime_thread_errors import resolve_runtime_thread_error_detail
 from .turn_metrics import compose_turn_response_with_footer
 
@@ -1202,7 +1203,7 @@ def render_managed_thread_delivery_record_text(
     no_response_fallback: str = "(No response text returned.)",
 ) -> str:
     response_text = _render_managed_thread_delivery_text(
-        assistant_text=str(record.envelope.assistant_text or "").strip(),
+        assistant_text=managed_thread_delivery_success_text(record).strip(),
         session_notice=str(record.envelope.session_notice or "").strip(),
         no_response_fallback=no_response_fallback,
     )

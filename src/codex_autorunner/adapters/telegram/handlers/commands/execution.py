@@ -38,6 +38,7 @@ from .....adapters.chat.execution_event_journal import (
 from .....adapters.chat.managed_thread_delivery_support import (
     ManagedThreadDeliveryCleanupContext,
     ManagedThreadDeliverySendResult,
+    managed_thread_delivery_output_metadata,
     managed_thread_terminal_delivery_send_key,
 )
 from .....adapters.chat.managed_thread_direct_delivery import (
@@ -981,6 +982,11 @@ async def _send_telegram_terminal_message_with_outbox(
                 "managed_thread_id": record.managed_thread_id,
                 "managed_turn_id": record.managed_turn_id,
                 "terminal_status": status,
+                **(
+                    managed_thread_delivery_output_metadata(record)
+                    if status == "ok"
+                    else {}
+                ),
             },
         )
     except TypeError as exc:

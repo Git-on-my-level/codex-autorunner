@@ -27,11 +27,17 @@ from codex_autorunner.adapters.telegram.handlers.commands.execution import (
 )
 from codex_autorunner.core.orchestration import (
     ManagedThreadDeliveryAttemptResult,
+    ManagedThreadDeliveryEnvelope,
     ManagedThreadDeliveryOutcome,
+    ManagedThreadDeliveryRecord,
     ManagedThreadDeliveryState,
+    ManagedThreadDeliveryTarget,
     ManagedThreadFailureRecoverySummary,
     SQLiteManagedThreadDeliveryEngine,
     initialize_orchestration_sqlite,
+)
+from codex_autorunner.core.orchestration.turn_assistant_output import (
+    TurnAssistantOutput,
 )
 
 
@@ -232,6 +238,54 @@ async def test_telegram_adapter_initial_delivery_marks_delivered(
     assert handlers.sent_messages[0]["chat_id"] == 12345
     assert "Hello from the agent" in handlers.sent_messages[0]["text"]
     assert len(handlers.flushed_outbox) == 1
+
+
+@pytest.mark.anyio
+async def test_telegram_adapter_success_delivery_uses_sealed_output_text(
+    tmp_path: Path,
+) -> None:
+    handlers = _TelegramHandlersStub(state_root=tmp_path)
+    delivery = _build_hooks(tmp_path, handlers=handlers)
+    record = ManagedThreadDeliveryRecord(
+        delivery_id="delivery-1",
+        managed_thread_id="thread-1",
+        managed_turn_id="turn-1",
+        idempotency_key="idem-1",
+        target=ManagedThreadDeliveryTarget(
+            surface_kind="telegram",
+            adapter_key="telegram",
+            surface_key="test-topic",
+            transport_target={"chat_id": 12345, "thread_id": 99},
+        ),
+        envelope=ManagedThreadDeliveryEnvelope(
+            envelope_version="managed_thread_delivery.v1",
+            final_status="ok",
+            assistant_text="User: q1\nAssistant: stale transcript",
+            assistant_output=TurnAssistantOutput(
+                managed_thread_id="thread-1",
+                managed_turn_id="turn-1",
+                backend_thread_id="backend-1",
+                backend_turn_id="backend-turn-1",
+                text="Current turn answer",
+                ownership="trimmed_from_cumulative",
+                source="reducer",
+            ),
+        ),
+        state=ManagedThreadDeliveryState.CLAIMED,
+    )
+
+    result = await delivery.adapter.deliver_managed_thread_record(
+        record,
+        claim=SimpleNamespace(),
+    )
+
+    assert result.outcome is ManagedThreadDeliveryOutcome.DELIVERED
+    assert len(handlers.sent_messages) == 1
+    assert "Current turn answer" in handlers.sent_messages[0]["text"]
+    assert "stale transcript" not in handlers.sent_messages[0]["text"]
+    metadata = handlers.outbox_messages[0]["delivery_metadata"]
+    assert metadata["turn_output_ownership"] == "trimmed_from_cumulative"
+    assert metadata["turn_output_source"] == "reducer"
 
 
 @pytest.mark.anyio

@@ -32,6 +32,9 @@ from codex_autorunner.core.orchestration.runtime_threads import (
     RuntimeThreadOutcome,
 )
 from codex_autorunner.core.orchestration.service import ManagedThreadExecutionStore
+from codex_autorunner.core.orchestration.turn_assistant_output import (
+    TurnAssistantOutput,
+)
 from codex_autorunner.core.orchestration.turn_context import (
     ChatTurnDeliveryTarget,
     ChatTurnEnvelope,
@@ -457,6 +460,15 @@ def test_render_managed_thread_delivery_record_text_includes_token_usage_footer(
                 envelope_version="managed_thread_delivery.v1",
                 final_status="ok",
                 assistant_text="Recovered answer",
+                assistant_output=TurnAssistantOutput(
+                    managed_thread_id="thread-1",
+                    managed_turn_id="turn-1",
+                    backend_thread_id="backend-1",
+                    backend_turn_id="backend-turn-1",
+                    text="Recovered answer",
+                    ownership="current_turn",
+                    source="runtime_final",
+                ),
                 token_usage={
                     "last": {
                         "totalTokens": 71173,
@@ -473,6 +485,40 @@ def test_render_managed_thread_delivery_record_text_includes_token_usage_footer(
     assert "Recovered answer" in rendered
     assert "Token usage: total 71173 input 400 output 245" in rendered
     assert "ctx 65%" in rendered
+
+
+def test_render_managed_thread_delivery_record_text_uses_sealed_output_text() -> None:
+    rendered = managed_thread_turns_module.render_managed_thread_delivery_record_text(
+        managed_thread_turns_module.ManagedThreadDeliveryRecord(
+            delivery_id="delivery-1",
+            managed_thread_id="thread-1",
+            managed_turn_id="turn-1",
+            idempotency_key="idem-1",
+            target=managed_thread_turns_module.ManagedThreadDeliveryTarget(
+                surface_kind="discord",
+                adapter_key="discord",
+                surface_key="channel-1",
+            ),
+            envelope=managed_thread_turns_module.ManagedThreadDeliveryEnvelope(
+                envelope_version="managed_thread_delivery.v1",
+                final_status="ok",
+                assistant_text="User: old\nAssistant: stale transcript",
+                assistant_output=TurnAssistantOutput(
+                    managed_thread_id="thread-1",
+                    managed_turn_id="turn-1",
+                    backend_thread_id="backend-1",
+                    backend_turn_id="backend-turn-1",
+                    text="Current turn answer",
+                    ownership="trimmed_from_cumulative",
+                    source="reducer",
+                ),
+            ),
+            state=ManagedThreadDeliveryState.PENDING,
+        )
+    )
+
+    assert "Current turn answer" in rendered
+    assert "stale transcript" not in rendered
 
 
 def test_render_managed_thread_failure_delivery_record_text_includes_recovery_context() -> (

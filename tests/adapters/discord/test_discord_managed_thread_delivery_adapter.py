@@ -29,16 +29,25 @@ from codex_autorunner.adapters.chat.managed_thread_turns import (
     handoff_managed_thread_final_delivery,
 )
 from codex_autorunner.adapters.discord import message_turns as discord_message_turns
+from codex_autorunner.adapters.discord.managed_thread_delivery import (
+    deliver_discord_managed_thread_record,
+)
 from codex_autorunner.adapters.discord.service import DiscordBotService
 from codex_autorunner.adapters.discord.state import DiscordStateStore
 from codex_autorunner.core.filebox import outbox_dir, outbox_sent_dir
 from codex_autorunner.core.orchestration import (
     ManagedThreadDeliveryAttemptResult,
+    ManagedThreadDeliveryEnvelope,
     ManagedThreadDeliveryOutcome,
+    ManagedThreadDeliveryRecord,
     ManagedThreadDeliveryState,
+    ManagedThreadDeliveryTarget,
     ManagedThreadFailureRecoverySummary,
     SQLiteManagedThreadDeliveryEngine,
     initialize_orchestration_sqlite,
+)
+from codex_autorunner.core.orchestration.turn_assistant_output import (
+    TurnAssistantOutput,
 )
 
 
@@ -239,6 +248,56 @@ async def test_discord_adapter_initial_delivery_marks_delivered(
     assert service.flushed_outboxes == [
         {"workspace_root": tmp_path, "channel_id": "channel-1"}
     ]
+
+
+@pytest.mark.anyio
+async def test_discord_adapter_success_delivery_uses_sealed_output_text(
+    tmp_path: Path,
+) -> None:
+    service = _DiscordServiceStub(state_root=tmp_path)
+    record = ManagedThreadDeliveryRecord(
+        delivery_id="delivery-1",
+        managed_thread_id="thread-1",
+        managed_turn_id="turn-1",
+        idempotency_key="idem-1",
+        target=ManagedThreadDeliveryTarget(
+            surface_kind="discord",
+            adapter_key="discord",
+            surface_key="channel-1",
+            transport_target={"channel_id": "channel-1"},
+        ),
+        envelope=ManagedThreadDeliveryEnvelope(
+            envelope_version="managed_thread_delivery.v1",
+            final_status="ok",
+            assistant_text="User: q1\nAssistant: stale transcript",
+            assistant_output=TurnAssistantOutput(
+                managed_thread_id="thread-1",
+                managed_turn_id="turn-1",
+                backend_thread_id="backend-1",
+                backend_turn_id="backend-turn-1",
+                text="Current turn answer",
+                ownership="trimmed_from_cumulative",
+                source="reducer",
+            ),
+        ),
+        state=ManagedThreadDeliveryState.CLAIMED,
+    )
+
+    result = await deliver_discord_managed_thread_record(
+        service,
+        record,
+        claim=SimpleNamespace(),
+        channel_id_fallback=None,
+        base_record_label="discord-queued",
+        error_record_label="discord-queued-error",
+        default_execution_error="Turn failed",
+    )
+
+    assert result.outcome is ManagedThreadDeliveryOutcome.DELIVERED
+    assert len(service.sent_messages) == 1
+    content = service.sent_messages[0]["payload"]["content"]
+    assert "Current turn answer" in content
+    assert "stale transcript" not in content
 
 
 @pytest.mark.anyio
