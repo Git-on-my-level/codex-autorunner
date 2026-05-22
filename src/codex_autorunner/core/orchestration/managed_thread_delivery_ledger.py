@@ -44,6 +44,7 @@ from .managed_thread_delivery import (
     record_from_intent,
 )
 from .sqlite import open_orchestration_sqlite
+from .turn_assistant_output import TurnAssistantOutput
 
 _UNSET = object()
 _DEFAULT_CLAIM_TTL = timedelta(minutes=5)
@@ -321,6 +322,7 @@ class SQLiteManagedThreadDeliveryLedger:
                         envelope_version,
                         final_status,
                         assistant_text,
+                        turn_assistant_output_json,
                         session_notice,
                         error_text,
                         backend_thread_id,
@@ -343,7 +345,7 @@ class SQLiteManagedThreadDeliveryLedger:
                         record_metadata_json,
                         created_at,
                         updated_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     ON CONFLICT(delivery_id) DO UPDATE SET
                         managed_thread_id = excluded.managed_thread_id,
                         managed_turn_id = excluded.managed_turn_id,
@@ -355,6 +357,7 @@ class SQLiteManagedThreadDeliveryLedger:
                         envelope_version = excluded.envelope_version,
                         final_status = excluded.final_status,
                         assistant_text = excluded.assistant_text,
+                        turn_assistant_output_json = excluded.turn_assistant_output_json,
                         session_notice = excluded.session_notice,
                         error_text = excluded.error_text,
                         backend_thread_id = excluded.backend_thread_id,
@@ -927,6 +930,11 @@ def _record_to_row_values(record: ManagedThreadDeliveryRecord) -> tuple[Any, ...
         envelope.envelope_version,
         envelope.final_status,
         envelope.assistant_text,
+        (
+            json.dumps(envelope.assistant_output.to_durable_dict(), sort_keys=True)
+            if envelope.assistant_output is not None
+            else None
+        ),
         envelope.session_notice,
         envelope.error_text,
         envelope.backend_thread_id,
@@ -979,6 +987,9 @@ def _record_from_row(row: Any) -> ManagedThreadDeliveryRecord:
         envelope_version=str(row["envelope_version"]),
         final_status=str(row["final_status"]),
         assistant_text=str(row["assistant_text"]),
+        assistant_output=_turn_assistant_output_from_json(
+            row["turn_assistant_output_json"]
+        ),
         session_notice=_optional_text(row["session_notice"]),
         error_text=_optional_text(row["error_text"]),
         backend_thread_id=_optional_text(row["backend_thread_id"]),
@@ -1042,6 +1053,13 @@ def _failure_recovery_from_json(
     if not isinstance(payload, Mapping):
         return None
     return ManagedThreadFailureRecoverySummary.from_mapping(payload)
+
+
+def _turn_assistant_output_from_json(raw: Any) -> Optional[TurnAssistantOutput]:
+    payload = _decode_json(raw, default=None)
+    if not isinstance(payload, Mapping):
+        return None
+    return TurnAssistantOutput.from_mapping(dict(payload))
 
 
 def _decode_json(raw: Any, default: Any = None) -> Any:

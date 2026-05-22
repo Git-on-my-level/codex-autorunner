@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any, Mapping, Optional, cast
 
 from ..text_utils import _json_loads_object, _normalize_optional_text
+from .turn_assistant_output import TurnAssistantOutput
 from .turn_execution_contract import (
     TURN_EXECUTION_CONTRACT_VERSION,
     TurnExecutionBusyPolicy,
@@ -244,6 +245,21 @@ def build_turn_execution_record_from_storage(
 ) -> TurnExecutionRecord:
     queue = _mapping(queue_item)
     status = _record_status(execution.get("status"))
+    raw_assistant_output = execution.get("turn_assistant_output")
+    if raw_assistant_output is None:
+        raw_assistant_output = execution.get("turn_assistant_output_json")
+    assistant_output = None
+    if isinstance(raw_assistant_output, dict):
+        assistant_output = TurnAssistantOutput.from_mapping(raw_assistant_output)
+    elif isinstance(raw_assistant_output, str) and raw_assistant_output.strip():
+        try:
+            import json
+
+            loaded = json.loads(raw_assistant_output)
+            if isinstance(loaded, dict):
+                assistant_output = TurnAssistantOutput.from_mapping(loaded)
+        except (TypeError, ValueError):
+            assistant_output = None
     return TurnExecutionRecord(
         request=request,
         execution_id=str(
@@ -266,6 +282,7 @@ def build_turn_execution_record_from_storage(
         ),
         backend_turn_id=_normalize_optional_text(execution.get("backend_turn_id")),
         assistant_text=_normalize_optional_text(execution.get("assistant_text")),
+        assistant_output=assistant_output,
         error_text=_normalize_optional_text(execution.get("error_text")),
         transcript_ref=_normalize_optional_text(execution.get("transcript_mirror_id")),
         metadata=_metadata(execution),

@@ -471,6 +471,7 @@ class PmaExecutionRecord:
     prompt: str
     status: str
     assistant_text: Optional[str]
+    assistant_output: dict[str, Any]
     transcript_turn_id: Optional[str]
     model: Optional[str]
     reasoning: Optional[str]
@@ -497,6 +498,11 @@ class PmaExecutionRecord:
             prompt=str(row["prompt_text"]),
             status=str(row["status"]),
             assistant_text=coerce_text(row["assistant_text"]),
+            assistant_output=(
+                _json_loads_object(row["turn_assistant_output_json"])
+                if "turn_assistant_output_json" in row.keys()
+                else {}
+            ),
             transcript_turn_id=coerce_text(row["transcript_mirror_id"]),
             model=coerce_text(row["model_id"]),
             reasoning=coerce_text(row["reasoning_level"]),

@@ -743,6 +743,7 @@ class HubSharedStateService:
                 request.execution_id,
                 status=request.status,
                 assistant_text=request.assistant_text,
+                assistant_output=request.assistant_output,
                 error=request.error,
                 backend_turn_id=request.backend_turn_id,
                 transcript_turn_id=request.transcript_turn_id,

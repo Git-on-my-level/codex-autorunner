@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import sqlite3
 import uuid
 from dataclasses import dataclass
@@ -9,6 +10,7 @@ from ..sqlite_utils import table_columns, table_exists
 from ..time_utils import now_iso
 from .compatibility import SchemaCompatibilityError, evaluate_schema_compatibility
 from .models import OrchestrationTableDefinition
+from .turn_execution_contract import TurnExecutionRequest
 from .turn_execution_storage import (
     TURN_EXECUTION_CONTRACT_VERSION,
     TURN_EXECUTION_CONTRACT_VERSION_COLUMN,
@@ -18,7 +20,7 @@ from .turn_execution_storage import (
     build_turn_execution_request_from_storage,
 )
 
-ORCHESTRATION_SCHEMA_VERSION = 41
+ORCHESTRATION_SCHEMA_VERSION = 42
 
 
 @dataclass(frozen=True)
@@ -137,6 +139,7 @@ def _apply_v1(conn: sqlite3.Connection) -> None:
             status TEXT NOT NULL,
             backend_turn_id TEXT,
             assistant_text TEXT,
+            turn_assistant_output_json TEXT,
             error_text TEXT,
             model_id TEXT,
             reasoning_level TEXT,
@@ -1139,6 +1142,7 @@ def _apply_v22(conn: sqlite3.Connection) -> None:
             envelope_version TEXT NOT NULL,
             final_status TEXT NOT NULL,
             assistant_text TEXT NOT NULL DEFAULT '',
+            turn_assistant_output_json TEXT,
             session_notice TEXT,
             error_text TEXT,
             backend_thread_id TEXT,
@@ -2112,6 +2116,155 @@ def _apply_v41(conn: sqlite3.Connection) -> None:
         """)
 
 
+def _apply_v42(conn: sqlite3.Connection) -> None:
+    _ensure_column(
+        conn,
+        "orch_thread_executions",
+        "turn_assistant_output_json",
+        "turn_assistant_output_json TEXT",
+    )
+    _ensure_column(
+        conn,
+        "orch_managed_thread_deliveries",
+        "turn_assistant_output_json",
+        "turn_assistant_output_json TEXT",
+    )
+    if table_exists(conn, "orch_thread_executions"):
+        execution_columns = _table_columns(conn, "orch_thread_executions")
+        backend_turn_expr = (
+            "backend_turn_id" if "backend_turn_id" in execution_columns else "NULL"
+        )
+        assistant_text_expr = (
+            "assistant_text" if "assistant_text" in execution_columns else "''"
+        )
+        rows = conn.execute(f"""
+            SELECT execution_id, thread_target_id,
+                   {backend_turn_expr} AS backend_turn_id,
+                   {assistant_text_expr} AS assistant_text,
+                   status
+              FROM orch_thread_executions
+             WHERE turn_assistant_output_json IS NULL
+            """).fetchall()
+        for row in rows:
+            assistant_text = str(row["assistant_text"] or "")
+            payload = {
+                "managed_thread_id": str(row["thread_target_id"] or ""),
+                "managed_turn_id": str(row["execution_id"] or ""),
+                "backend_thread_id": None,
+                "backend_turn_id": row["backend_turn_id"],
+                "text": assistant_text,
+                "ownership": (
+                    "current_turn"
+                    if str(row["status"] or "") == "ok" and assistant_text
+                    else "empty"
+                ),
+                "source": "none",
+                "provenance": {
+                    "compatibility_source": "migration_v42_assistant_text_projection"
+                },
+            }
+            conn.execute(
+                """
+                UPDATE orch_thread_executions
+                   SET turn_assistant_output_json = ?
+                 WHERE execution_id = ?
+                """,
+                (json.dumps(payload, sort_keys=True), row["execution_id"]),
+            )
+    if table_exists(conn, "orch_managed_thread_deliveries"):
+        delivery_columns = _table_columns(conn, "orch_managed_thread_deliveries")
+        backend_thread_expr = (
+            "backend_thread_id" if "backend_thread_id" in delivery_columns else "NULL"
+        )
+        rows = conn.execute(f"""
+            SELECT delivery_id, managed_thread_id, managed_turn_id,
+                   {backend_thread_expr} AS backend_thread_id,
+                   assistant_text, final_status
+              FROM orch_managed_thread_deliveries
+             WHERE turn_assistant_output_json IS NULL
+            """).fetchall()
+        for row in rows:
+            assistant_text = str(row["assistant_text"] or "")
+            payload = {
+                "managed_thread_id": str(row["managed_thread_id"] or ""),
+                "managed_turn_id": str(row["managed_turn_id"] or ""),
+                "backend_thread_id": row["backend_thread_id"],
+                "backend_turn_id": None,
+                "text": assistant_text,
+                "ownership": (
+                    "current_turn"
+                    if str(row["final_status"] or "") == "ok" and assistant_text
+                    else "empty"
+                ),
+                "source": "none",
+                "provenance": {
+                    "compatibility_source": "migration_v42_delivery_projection"
+                },
+            }
+            conn.execute(
+                """
+                UPDATE orch_managed_thread_deliveries
+                   SET turn_assistant_output_json = ?
+                 WHERE delivery_id = ?
+                """,
+                (json.dumps(payload, sort_keys=True), row["delivery_id"]),
+            )
+    if table_exists(conn, "orch_thread_executions") and table_exists(
+        conn, "orch_thread_targets"
+    ):
+        execution_columns = _table_columns(conn, "orch_thread_executions")
+        if "turn_request_json" not in execution_columns:
+            return
+        rows = conn.execute("""
+            SELECT e.*, t.*, e.execution_id AS execution_id,
+                   e.thread_target_id AS thread_target_id,
+                   e.created_at AS execution_created_at
+              FROM orch_thread_executions AS e
+              JOIN orch_thread_targets AS t
+                ON t.thread_target_id = e.thread_target_id
+             WHERE e.turn_request_json IS NOT NULL
+            """).fetchall()
+        for row in rows:
+            row_map = {key: row[key] for key in row.keys()}
+            execution = dict(row_map)
+            execution["created_at"] = row_map.get("execution_created_at")
+            thread = {
+                key: row_map.get(key)
+                for key in (
+                    "thread_target_id",
+                    "agent_id",
+                    "backend_thread_id",
+                    "repo_id",
+                    "resource_kind",
+                    "resource_id",
+                    "workspace_root",
+                    "scope_urn",
+                    "surface_urn",
+                    "metadata_json",
+                )
+            }
+            try:
+                request = TurnExecutionRequest.from_json(
+                    str(row_map.get("turn_request_json") or "")
+                )
+                record = build_turn_execution_record_from_storage(
+                    execution=execution,
+                    thread=thread,
+                    request=request,
+                    queue_item={},
+                )
+            except Exception:
+                continue
+            conn.execute(
+                """
+                UPDATE orch_thread_executions
+                   SET turn_record_json = ?
+                 WHERE execution_id = ?
+                """,
+                (record.to_json(), row_map.get("execution_id")),
+            )
+
+
 _MIGRATIONS = (
     _MigrationStep(1, "create_core_orchestration_schema", _apply_v1),
     _MigrationStep(2, "add_binding_and_flow_projection_scaffolding", _apply_v2),
@@ -2213,6 +2366,11 @@ _MIGRATIONS = (
         41,
         "add_automation_blocking_reason",
         _apply_v41,
+    ),
+    _MigrationStep(
+        42,
+        "add_durable_turn_assistant_output_payloads",
+        _apply_v42,
     ),
 )
 

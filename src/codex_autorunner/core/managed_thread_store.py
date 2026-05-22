@@ -81,6 +81,7 @@ from .orchestration.thread_titles import (
     is_generic_thread_title,
     normalize_thread_title,
 )
+from .orchestration.turn_assistant_output import TurnAssistantOutput
 from .orchestration.turn_execution_contract import (
     TurnExecutionOrigin,
     TurnExecutionRecord,
@@ -1606,11 +1607,20 @@ class ManagedThreadStore:
         *,
         status: str,
         assistant_text: Optional[str] = None,
+        assistant_output: Optional[Any] = None,
         error: Optional[str] = None,
         backend_turn_id: Optional[str] = None,
         transcript_turn_id: Optional[str] = None,
     ) -> bool:
         finished_at = now_iso()
+        if isinstance(assistant_output, dict):
+            assistant_output = TurnAssistantOutput.from_mapping(assistant_output)
+        turn_output_payload = (
+            assistant_output.to_durable_dict() if assistant_output is not None else None
+        )
+        projected_assistant_text = (
+            assistant_output.text if assistant_output is not None else assistant_text
+        )
         reason = (
             ManagedThreadStatusReason.MANAGED_TURN_COMPLETED
             if status == "ok"
@@ -1634,6 +1644,7 @@ class ManagedThreadStore:
                     UPDATE orch_thread_executions
                        SET status = ?,
                            assistant_text = ?,
+                           turn_assistant_output_json = ?,
                            error_text = ?,
                            backend_turn_id = ?,
                            transcript_mirror_id = ?,
@@ -1643,7 +1654,12 @@ class ManagedThreadStore:
                     """,
                     (
                         status,
-                        assistant_text,
+                        projected_assistant_text,
+                        (
+                            _json_dumps(turn_output_payload)
+                            if turn_output_payload is not None
+                            else None
+                        ),
                         error,
                         backend_turn_id,
                         transcript_turn_id,
@@ -1663,7 +1679,8 @@ class ManagedThreadStore:
                 result_json=_json_dumps(
                     {
                         "status": status,
-                        "assistant_text": assistant_text or "",
+                        "assistant_text": projected_assistant_text or "",
+                        "turn_assistant_output": turn_output_payload or {},
                         "backend_turn_id": backend_turn_id or "",
                         "transcript_turn_id": transcript_turn_id or "",
                         "error": error or "",
@@ -1688,7 +1705,8 @@ class ManagedThreadStore:
             source_id=managed_turn_id,
             payload={
                 "managed_turn_id": managed_turn_id,
-                "assistant_text": assistant_text or "",
+                "assistant_text": projected_assistant_text or "",
+                "turn_assistant_output": turn_output_payload or {},
                 "error": error or "",
                 "backend_turn_id": backend_turn_id or "",
                 "transcript_turn_id": transcript_turn_id or "",

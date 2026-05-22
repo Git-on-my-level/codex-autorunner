@@ -4,6 +4,9 @@ import pytest
 
 from codex_autorunner.core.hub_control_plane import ExecutionCreateRequest
 from codex_autorunner.core.orchestration.models import QueuedExecutionRequest
+from codex_autorunner.core.orchestration.turn_assistant_output import (
+    TurnAssistantOutput,
+)
 from codex_autorunner.core.orchestration.turn_execution_contract import (
     TURN_EXECUTION_CONTRACT_VERSION,
     DeliveryIntentRef,
@@ -102,6 +105,19 @@ def test_turn_execution_request_round_trips_without_dropping_runtime_fields() ->
 
 
 def test_turn_execution_record_round_trips_with_terminal_references() -> None:
+    assistant_output = TurnAssistantOutput(
+        managed_thread_id="thread-1",
+        managed_turn_id="exec-1",
+        backend_thread_id="conversation-1",
+        backend_turn_id="turn-1",
+        text="done",
+        ownership="trimmed_from_cumulative",
+        source="reducer",
+        provenance={
+            "reducer_scope": "cumulative_transcript_trimmed",
+            "matched_prior_text": "previous sensitive output",
+        },
+    )
     record = TurnExecutionRecord(
         request=_request(),
         execution_id="exec-1",
@@ -113,6 +129,7 @@ def test_turn_execution_record_round_trips_with_terminal_references() -> None:
         backend_conversation_id="conversation-1",
         backend_turn_id="turn-1",
         assistant_text="done",
+        assistant_output=assistant_output,
         transcript_ref="transcript://exec-1",
         timeline_ref="timeline://exec-1",
         cold_trace_ref="cold-trace://exec-1",
@@ -128,6 +145,14 @@ def test_turn_execution_record_round_trips_with_terminal_references() -> None:
     assert restored.backend_conversation_id == "conversation-1"
     assert restored.backend_turn_id == "turn-1"
     assert restored.assistant_text == "done"
+    assert restored.assistant_output is not None
+    assert restored.assistant_output.text == "done"
+    assert restored.assistant_output.ownership == "trimmed_from_cumulative"
+    assert restored.assistant_output.provenance == {
+        "reducer_scope": "cumulative_transcript_trimmed",
+        "matched_prior_chars": len("previous sensitive output"),
+    }
+    assert "previous sensitive output" not in record.to_json()
     assert restored.conflict_evidence == {"duplicate_terminal": False}
 
 

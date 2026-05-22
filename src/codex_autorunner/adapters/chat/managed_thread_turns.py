@@ -291,6 +291,7 @@ class TerminalTurnRecorder:
         backend_thread_id: Optional[str],
         backend_turn_id: Optional[str],
         transcript_turn_id: Optional[str] = None,
+        assistant_output: Optional[TurnAssistantOutput] = None,
         trace_fields: Optional[dict[str, Any]] = None,
     ) -> Any:
         fields = _managed_thread_trace_fields(
@@ -324,6 +325,7 @@ class TerminalTurnRecorder:
                     managed_turn_id,
                     status=status,
                     assistant_text=assistant_text,
+                    assistant_output=assistant_output,
                     error=error,
                     backend_turn_id=backend_turn_id,
                     transcript_turn_id=transcript_turn_id,
@@ -1302,6 +1304,7 @@ def build_managed_thread_delivery_intent(
         envelope_version="managed_thread_delivery.v1",
         final_status=finalized.status,
         assistant_text=finalized.turn_assistant_text,
+        assistant_output=finalized.assistant_output,
         session_notice=_normalized_optional_text(finalized.session_notice),
         error_text=_normalized_optional_text(finalized.error),
         backend_thread_id=_normalized_optional_text(finalized.backend_thread_id),
@@ -3573,6 +3576,7 @@ async def finalize_managed_thread_execution(
             backend_thread_id=resolved_backend_thread_id,
             backend_turn_id=outcome.backend_turn_id or started.execution.backend_id,
             transcript_turn_id=None,
+            assistant_output=outcome.assistant_output,
             trace_fields=runtime_trace_fields(event_state)
             | terminal_evidence_trace_fields(outcome),
         )

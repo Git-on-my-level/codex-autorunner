@@ -6,6 +6,7 @@ from typing import Any, Literal, Mapping, Optional
 
 from ..car_context import CarContextProfile, normalize_car_context_profile
 from ..text_utils import _normalize_optional_text
+from .turn_assistant_output import TurnAssistantOutput
 
 TURN_EXECUTION_CONTRACT_VERSION = 1
 
@@ -471,6 +472,7 @@ class TurnExecutionRecord:
     backend_conversation_id: Optional[str] = None
     backend_turn_id: Optional[str] = None
     assistant_text: Optional[str] = None
+    assistant_output: Optional[TurnAssistantOutput] = None
     error_text: Optional[str] = None
     transcript_ref: Optional[str] = None
     timeline_ref: Optional[str] = None
@@ -515,6 +517,18 @@ class TurnExecutionRecord:
             object.__setattr__(
                 self, field_name, _optional_text(getattr(self, field_name))
             )
+        assistant_output = self.assistant_output
+        if isinstance(assistant_output, Mapping):
+            assistant_output = TurnAssistantOutput.from_mapping(dict(assistant_output))
+        if assistant_output is not None and not isinstance(
+            assistant_output, TurnAssistantOutput
+        ):
+            raise TurnExecutionContractError(
+                "record.assistant_output must be a TurnAssistantOutput"
+            )
+        if assistant_output is not None:
+            object.__setattr__(self, "assistant_output", assistant_output)
+            object.__setattr__(self, "assistant_text", assistant_output.text)
         object.__setattr__(
             self,
             "conflict_evidence",
@@ -549,6 +563,11 @@ class TurnExecutionRecord:
             backend_conversation_id=data.get("backend_conversation_id"),
             backend_turn_id=data.get("backend_turn_id"),
             assistant_text=data.get("assistant_text"),
+            assistant_output=(
+                TurnAssistantOutput.from_mapping(dict(data["assistant_output"]))
+                if isinstance(data.get("assistant_output"), Mapping)
+                else None
+            ),
             error_text=data.get("error_text"),
             transcript_ref=data.get("transcript_ref"),
             timeline_ref=data.get("timeline_ref"),
@@ -572,6 +591,11 @@ class TurnExecutionRecord:
             "backend_conversation_id": self.backend_conversation_id,
             "backend_turn_id": self.backend_turn_id,
             "assistant_text": self.assistant_text,
+            "assistant_output": (
+                self.assistant_output.to_durable_dict()
+                if self.assistant_output is not None
+                else None
+            ),
             "error_text": self.error_text,
             "transcript_ref": self.transcript_ref,
             "timeline_ref": self.timeline_ref,

@@ -2222,6 +2222,10 @@ async def test_finalize_managed_thread_execution_trims_cumulative_terminal_outpu
 
     assert result.assistant_text == new_answer
     assert recorded_results[-1]["assistant_text"] == new_answer
+    assert recorded_results[-1]["assistant_output"].text == new_answer
+    assert recorded_results[-1]["assistant_output"].ownership == (
+        "trimmed_from_cumulative"
+    )
     assert fake_hub_client.transcript_requests[-1].assistant_text == new_answer
 
 

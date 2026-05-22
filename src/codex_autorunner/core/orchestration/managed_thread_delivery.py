@@ -24,6 +24,7 @@ from enum import Enum
 from typing import Any, Mapping, Optional, Protocol, runtime_checkable
 
 from ..time_utils import now_iso
+from .turn_assistant_output import TurnAssistantOutput
 
 _UNSET = object()
 _DEFAULT_CLAIM_TTL = timedelta(minutes=5)
@@ -207,6 +208,7 @@ class ManagedThreadDeliveryEnvelope:
     envelope_version: str
     final_status: str
     assistant_text: str
+    assistant_output: Optional[TurnAssistantOutput] = None
     session_notice: Optional[str] = None
     error_text: Optional[str] = None
     backend_thread_id: Optional[str] = None
