@@ -422,26 +422,6 @@ def test_build_assistant_transcript_prefix_collapses_legacy_cumulative_rows() ->
     assert prefix == (first + second + third).strip() + fourth
 
 
-@pytest.mark.anyio
-async def test_assistant_transcript_text_from_hub_requests_unbounded_history() -> None:
-    requests: list[Any] = []
-
-    class _Hub:
-        async def get_transcript_history(self, request: Any) -> Any:
-            requests.append(request)
-            return SimpleNamespace(entries=())
-
-    text = await managed_thread_turns_module._assistant_transcript_text_from_hub(
-        _Hub(),
-        managed_thread_id="thread-1",
-        managed_turn_id="turn-2",
-    )
-
-    assert text == ""
-    assert requests[-1].limit == 0
-    assert requests[-1].target_kind == "thread_target"
-
-
 def test_render_managed_thread_delivery_record_text_includes_token_usage_footer() -> (
     None
 ):
@@ -2471,6 +2451,23 @@ async def test_finalize_managed_thread_execution_trims_short_cumulative_history_
         get_thread_runtime_binding=lambda managed_thread_id: SimpleNamespace(
             backend_thread_id="session-1"
         ),
+        list_turns=lambda managed_thread_id, *, limit: [
+            {
+                "execution_id": "exec-1",
+                "status": "running",
+                "assistant_text": "",
+            },
+            {
+                "execution_id": "previous-2",
+                "status": "ok",
+                "assistant_text": "ABCZYX",
+            },
+            {
+                "execution_id": "previous-1",
+                "status": "ok",
+                "assistant_text": "ABC",
+            },
+        ],
         get_previous_completed_execution=(
             lambda managed_thread_id, *, exclude_execution_id=None: None
         ),
@@ -2504,7 +2501,7 @@ async def test_finalize_managed_thread_execution_trims_short_cumulative_history_
     assert result.assistant_text == "123"
     assert recorded_results[-1]["assistant_text"] == "123"
     assert fake_hub_client.transcript_requests[-1].assistant_text == "123"
-    assert fake_hub_client.transcript_history_requests[-1].limit == 0
+    assert fake_hub_client.transcript_history_requests == []
 
 
 @pytest.mark.anyio
@@ -2564,6 +2561,18 @@ async def test_finalize_managed_thread_execution_rejects_exact_prior_assistant_t
         get_thread_runtime_binding=lambda managed_thread_id: SimpleNamespace(
             backend_thread_id="session-1"
         ),
+        list_turns=lambda managed_thread_id, *, limit: [
+            {
+                "execution_id": "exec-1",
+                "status": "running",
+                "assistant_text": "",
+            },
+            {
+                "execution_id": "previous-1",
+                "status": "ok",
+                "assistant_text": "first answer",
+            },
+        ],
         get_previous_completed_execution=(
             lambda managed_thread_id, *, exclude_execution_id=None: None
         ),
@@ -2604,6 +2613,7 @@ async def test_finalize_managed_thread_execution_rejects_exact_prior_assistant_t
     assert "chat.managed_thread.stale_prior_assistant_output_rejected" in caplog.text
     assert recorded_results[-1]["assistant_text"] == ""
     assert fake_hub_client.transcript_requests[-1].assistant_text == ""
+    assert fake_hub_client.transcript_history_requests == []
     completed_events = [
         event for event in progress_events if isinstance(event, Completed)
     ]

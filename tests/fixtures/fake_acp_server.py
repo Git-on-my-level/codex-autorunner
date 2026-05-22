@@ -340,16 +340,28 @@ class FakeACPServer:
             if prompt_count == 1:
                 reply_text = "first answer"
             elif self._scenario == "official_hermes_transcript_session_update":
-                reply_text = (
-                    "User:\nfirst\n\n"
-                    "Assistant:\nfirst answer\n\n"
-                    "User:\nsecond\n\n"
-                    "Assistant:\nsecond answer"
-                )
+                if prompt_count == 2:
+                    reply_text = (
+                        "User:\nfirst\n\n"
+                        "Assistant:\nfirst answer\n\n"
+                        "User:\nsecond\n\n"
+                        "Assistant:\nsecond answer"
+                    )
+                else:
+                    reply_text = (
+                        "User:\nfirst\n\n"
+                        "Assistant:\nfirst answer\n\n"
+                        "User:\nsecond\n\n"
+                        "Assistant:\nsecond answer\n\n"
+                        "User:\nthird\n\n"
+                        "Assistant:\nthird answer"
+                    )
             elif self._scenario == "official_hermes_stale_session_update":
                 reply_text = "User:\nfirst\n\nAssistant:\nfirst answer"
-            else:
+            elif prompt_count == 2:
                 reply_text = "first answer\n\nsecond answer"
+            else:
+                reply_text = "first answer\n\nsecond answer\n\nthird answer"
             reply_content = {"type": "text", "text": reply_text}
         if self._scenario == "official_second_prompt_hang_with_persisted_completion":
             # Match persisted session-store text so streaming chunks and recovery agree.

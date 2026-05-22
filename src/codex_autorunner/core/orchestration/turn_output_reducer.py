@@ -176,6 +176,12 @@ def trim_cumulative_assistant_text(
             if trimmed
             else ("", "stale_prior_output")
         )
+    if len(previous_stripped) >= 8:
+        infix_start = current.find(previous_stripped)
+        if infix_start > 0:
+            trimmed = current[infix_start + len(previous_stripped) :].lstrip()
+            if trimmed:
+                return trimmed, "cumulative_transcript_trimmed"
     prefix_end = _whitespace_insensitive_prefix_end(current, previous)
     if prefix_end is None:
         prefix_end = _near_prefix_end(current, previous)

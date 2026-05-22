@@ -7178,11 +7178,13 @@ async def test_discord_managed_thread_coordinator_prefers_started_execution_erro
             error: Optional[str],
             backend_turn_id: Optional[str],
             transcript_turn_id: Optional[str],
+            assistant_output: Optional[Any] = None,
         ) -> Any:
             _ = (
                 managed_thread_id,
                 managed_turn_id,
                 assistant_text,
+                assistant_output,
                 backend_turn_id,
                 transcript_turn_id,
             )

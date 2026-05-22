@@ -50,7 +50,6 @@ from ...core.hub_control_plane import (
     ExecutionColdTraceFinalizeRequest,
     ExecutionTimelinePersistRequest,
     ThreadActivityRecordRequest,
-    TranscriptHistoryRequest,
     TranscriptWriteRequest,
     serialize_run_event,
 )
@@ -103,7 +102,6 @@ from ...core.orchestration.turn_assistant_output import (
 from ...core.orchestration.turn_execution_contract import TurnExecutionRequest
 from ...core.orchestration.turn_output_reducer import (
     assistant_text_extends_prefix,
-    build_assistant_transcript_prefix,
     reduce_turn_output,
 )
 from ...core.orchestration.turn_timeline import persist_turn_timeline
@@ -1054,58 +1052,13 @@ def _prior_completed_assistant_text_prefix(
     return ""
 
 
-async def _assistant_transcript_text_from_hub(
-    hub_client: Any | None,
-    *,
-    managed_thread_id: str,
-    managed_turn_id: str,
-) -> str:
-    if hub_client is None:
-        return ""
-    getter = getattr(hub_client, "get_transcript_history", None)
-    if not callable(getter):
-        return ""
-    try:
-        response = await getter(
-            TranscriptHistoryRequest(
-                target_kind="thread_target",
-                target_id=managed_thread_id,
-                limit=0,
-            )
-        )
-    except (RuntimeError, TypeError, ValueError, AttributeError, OSError):
-        return ""
-    entries = getattr(response, "entries", ())
-    if not isinstance(entries, (list, tuple)):
-        return ""
-    transcript_entries: list[Mapping[str, Any]] = []
-    for entry in reversed(entries):
-        if not isinstance(entry, Mapping):
-            continue
-        entry_turn_id = str(
-            entry.get("managed_turn_id") or entry.get("turn_id") or ""
-        ).strip()
-        if entry_turn_id == managed_turn_id:
-            continue
-        transcript_entries.append(entry)
-    return build_assistant_transcript_prefix(transcript_entries)
-
-
 async def _prior_assistant_text_candidates(
     orchestration_service: Any,
     *,
-    hub_client: Any | None,
     managed_thread_id: str,
     managed_turn_id: str,
 ) -> list[str]:
     candidates: list[str] = []
-    transcript_text = await _assistant_transcript_text_from_hub(
-        hub_client,
-        managed_thread_id=managed_thread_id,
-        managed_turn_id=managed_turn_id,
-    )
-    if transcript_text:
-        candidates.append(transcript_text)
     prior_prefix = _prior_completed_assistant_text_prefix(
         orchestration_service,
         managed_thread_id=managed_thread_id,
@@ -3442,7 +3395,6 @@ async def finalize_managed_thread_execution(
     if outcome.status == "ok":
         prior_assistant_candidates = await _prior_assistant_text_candidates(
             orchestration_service,
-            hub_client=resolved_hub_client,
             managed_thread_id=managed_thread_id,
             managed_turn_id=managed_turn_id,
         )
