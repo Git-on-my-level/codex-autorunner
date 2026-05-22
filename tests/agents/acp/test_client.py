@@ -390,6 +390,62 @@ async def test_client_merges_cumulative_stream_chunks_without_duplication(
 
 
 @pytest.mark.asyncio
+async def test_client_identifies_hermes_cumulative_session_update_source(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    client = ACPClient(
+        fixture_command("official_hermes_cumulative_session_update"),
+        cwd=tmp_path,
+    )
+    try:
+        caplog.set_level("INFO")
+        created = await client.create_session(cwd=str(tmp_path))
+        first = await client.start_prompt(created.session_id, "first")
+        first_result = await asyncio.wait_for(first.wait(), timeout=0.4)
+
+        second = await client.start_prompt(created.session_id, "second")
+        second_result = await asyncio.wait_for(second.wait(), timeout=0.4)
+        second_events = second.snapshot_events()
+        payloads = [json.loads(record.getMessage()) for record in caplog.records]
+
+        # Root-cause conclusion: the cumulative text enters CAR as an official
+        # session/update agent_message_chunk, then prompt_return seals the
+        # accumulated text. CAR is not extracting progress text as final output.
+        assert first_result.final_output == "first answer"
+        assert second_result.final_output == "first answer\n\nsecond answer"
+        assert [
+            getattr(event, "delta", None)
+            for event in second_events
+            if event.kind == "output_delta"
+        ] == ["first answer\n\nsecond answer"]
+        assert any(
+            payload.get("event") == "acp.prompt.session_update"
+            and payload.get("session_update") == "agent_message_chunk"
+            and payload.get("content_kind") == "dict"
+            and payload.get("text_length") == len("first answer\n\nsecond answer")
+            and payload.get("turn_id_fallback_used") is True
+            and payload.get("output_normalized") is False
+            and "text_excerpt" not in payload
+            for payload in payloads
+        )
+        assert any(
+            payload.get("event") == "acp.prompt.terminal_recorded"
+            and payload.get("completion_source") == "prompt_return"
+            and payload.get("last_runtime_method") == "prompt/completed"
+            and payload.get("last_session_update_kind") == "agent_message_chunk"
+            and payload.get("last_session_update_text_length")
+            == len("first answer\n\nsecond answer")
+            and payload.get("turn_id_fallback_used") is True
+            and payload.get("output_normalized") is False
+            and "last_session_update_excerpt" not in payload
+            for payload in payloads
+        )
+    finally:
+        await client.close()
+
+
+@pytest.mark.asyncio
 async def test_client_can_recover_official_prompt_hang_with_synthetic_completion(
     tmp_path: Path,
 ) -> None:

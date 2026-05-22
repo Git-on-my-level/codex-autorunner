@@ -167,6 +167,31 @@ def test_normalize_notification_maps_session_update_message_chunk() -> None:
     assert event.delta == "hello"
 
 
+def test_normalize_notification_preserves_hermes_cumulative_message_chunk() -> None:
+    raw = {
+        "method": "session/update",
+        "params": {
+            "sessionId": "session-1",
+            "update": {
+                "sessionUpdate": "agent_message_chunk",
+                "content": {
+                    "type": "text",
+                    "text": "first answer\n\nsecond answer",
+                },
+            },
+        },
+    }
+
+    event = normalize_notification(raw)
+
+    # Root-cause conclusion: this shape is not CAR reading a progress field as
+    # output; Hermes-style ACP sends cumulative text in the official assistant
+    # message chunk payload.
+    assert isinstance(event, ACPOutputDeltaEvent)
+    assert event.delta == "first answer\n\nsecond answer"
+    assert event.payload["update"]["sessionUpdate"] == "agent_message_chunk"
+
+
 def test_normalize_notification_maps_session_update_message_chunk_with_content_parts() -> (
     None
 ):

@@ -143,6 +143,7 @@ class _PromptState:
     last_session_update_part_types: tuple[str, ...] = ()
     last_session_update_text_length: Optional[int] = None
     last_session_update_at: Optional[float] = None
+    last_output_normalized: bool = False
     session_update_counts: Counter[str] = field(default_factory=Counter)
     missing_turn_id_fallback_counts: Counter[str] = field(default_factory=Counter)
     _assistant_text: AssistantOutputState = field(
@@ -155,16 +156,27 @@ class _PromptState:
         self._assistant_text = AssistantOutputState(stream_text=self.final_output)
 
     def note_output_delta(self, text: str, *, merge_snapshot: bool = False) -> None:
+        previous = self.final_output
         if merge_snapshot:
             self._assistant_text.note_stream_snapshot(text)
         else:
             self._assistant_text.note_stream_delta(text)
         self.final_output = self._assistant_text.text
+        self.last_output_normalized = self.last_output_normalized or bool(
+            merge_snapshot
+            and text
+            and previous
+            and self.final_output != f"{previous}{text}"
+        )
 
     def note_assistant_message(self, text: str) -> None:
         if isinstance(text, str) and text:
+            previous = self.final_output
             self._assistant_text.note_final_message(text)
             self.final_output = self._assistant_text.text
+            self.last_output_normalized = self.last_output_normalized or bool(
+                previous and self.final_output != text
+            )
 
 
 def _text_excerpt(value: Any, *, limit: int = 120) -> Optional[str]:
@@ -1445,13 +1457,14 @@ class ACPClient:
         return {
             "last_runtime_method": state.last_runtime_method,
             "last_session_update_kind": state.last_session_update_kind,
-            "last_session_update_excerpt": state.last_session_update_excerpt,
             "last_session_update_content_kind": state.last_session_update_content_kind,
             "last_session_update_part_types": state.last_session_update_part_types,
             "last_session_update_text_length": state.last_session_update_text_length,
             "last_session_update_elapsed_ms": self._elapsed_ms(
                 state.last_session_update_at
             ),
+            "turn_id_fallback_used": bool(state.missing_turn_id_fallback_counts),
+            "output_normalized": state.last_output_normalized,
         }
 
     def _note_prompt_trace_event(self, state: _PromptState, event: ACPEvent) -> None:
@@ -1485,10 +1498,11 @@ class ACPClient:
                 session_id=state.session_id,
                 turn_id=state.turn_id,
                 session_update=state.last_session_update_kind,
-                text_excerpt=state.last_session_update_excerpt,
                 content_kind=state.last_session_update_content_kind,
                 content_part_types=state.last_session_update_part_types,
                 text_length=state.last_session_update_text_length,
+                turn_id_fallback_used=bool(state.missing_turn_id_fallback_counts),
+                output_normalized=state.last_output_normalized,
             )
         if (
             state.last_session_update_kind

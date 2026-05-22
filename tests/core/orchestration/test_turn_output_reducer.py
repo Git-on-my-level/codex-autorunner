@@ -36,6 +36,32 @@ def test_reduce_turn_output_trims_cumulative_transcript_prefix() -> None:
     assert envelope.provenance["candidate_source"] == "outcome"
 
 
+def test_reduce_turn_output_uses_last_assistant_section_from_transcript_shaped_output() -> (
+    None
+):
+    state = RuntimeThreadRunEventState()
+
+    envelope = reduce_turn_output(
+        managed_thread_id="thread-1",
+        managed_turn_id="turn-2",
+        backend_thread_id="session-1",
+        backend_turn_id="turn-2",
+        outcome=_outcome(
+            "User:\nfirst question\n\n"
+            "Assistant:\nfirst answer\n\n"
+            "User:\nsecond question\n\n"
+            "Assistant:\nsecond answer"
+        ),
+        event_state=state,
+        prior_assistant_texts=["first answer"],
+    )
+
+    assert envelope.text == "second answer"
+    assert envelope.ownership == "current_turn"
+    assert envelope.source == "reducer"
+    assert envelope.provenance["candidate_source"] == "outcome"
+
+
 def test_reduce_turn_output_trims_mutated_cumulative_transcript_prefix() -> None:
     state = RuntimeThreadRunEventState()
     previous = "\n".join(

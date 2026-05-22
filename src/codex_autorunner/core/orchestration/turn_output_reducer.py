@@ -193,7 +193,7 @@ def _normalize_candidate(
     text: str,
     prior_assistant_texts: Sequence[str],
 ) -> tuple[str, TurnOutputScope, str]:
-    current = str(text or "")
+    current = assistant_text_from_transcript_content(str(text or ""))
     if not current.strip():
         return "", "empty", ""
     for prior in prior_assistant_texts:

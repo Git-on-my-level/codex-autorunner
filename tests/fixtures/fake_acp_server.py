@@ -330,6 +330,13 @@ class FakeACPServer:
         cancel_event = self._session_cancel_events[session_id]
         thought_content: Any = {"type": "text", "text": "thinking"}
         reply_content: Any = {"type": "text", "text": "fixture reply"}
+        if self._scenario == "official_hermes_cumulative_session_update":
+            prompt_count = self._official_prompt_counts.get(session_id, 0) + 1
+            self._official_prompt_counts[session_id] = prompt_count
+            reply_text = (
+                "first answer" if prompt_count == 1 else "first answer\n\nsecond answer"
+            )
+            reply_content = {"type": "text", "text": reply_text}
         if self._scenario == "official_second_prompt_hang_with_persisted_completion":
             # Match persisted session-store text so streaming chunks and recovery agree.
             reply_content = {"type": "text", "text": "identical fixture output"}
