@@ -296,13 +296,16 @@ def _make_descriptor(
     name: str = "Codex",
     capabilities: Optional[frozenset[str]] = None,
 ) -> AgentDescriptor:
+    default_capabilities = {"durable_threads", "message_turns", "review"}
+    if agent_id in {"codex", "opencode"}:
+        default_capabilities.add("model_listing")
     return AgentDescriptor(
         id=agent_id,
         name=name,
         capabilities=(
             capabilities
             if capabilities is not None
-            else frozenset(["durable_threads", "message_turns", "review"])
+            else frozenset(default_capabilities)
         ),
         make_harness=lambda _ctx: None,  # type: ignore[return-value]
     )

@@ -244,17 +244,17 @@ def _build_descriptor(
     *,
     capabilities: Optional[frozenset[RuntimeCapability]] = None,
 ) -> AgentDescriptor:
+    default_capabilities = {
+        RuntimeCapability("durable_threads"),
+        RuntimeCapability("message_turns"),
+        RuntimeCapability("event_streaming"),
+    }
+    if agent_id in {"codex", "opencode"}:
+        default_capabilities.add(RuntimeCapability("model_listing"))
     return AgentDescriptor(
         id=agent_id,
         name=agent_id.title(),
-        capabilities=capabilities
-        or frozenset(
-            {
-                RuntimeCapability("durable_threads"),
-                RuntimeCapability("message_turns"),
-                RuntimeCapability("event_streaming"),
-            }
-        ),
+        capabilities=capabilities or frozenset(default_capabilities),
         make_harness=lambda ctx: ctx.fake_harness,
     )
 
@@ -266,17 +266,17 @@ def _build_contextual_descriptor(
     runtime_kind: Optional[str] = None,
     capabilities: Optional[frozenset[RuntimeCapability]] = None,
 ) -> AgentDescriptor:
+    default_capabilities = {
+        RuntimeCapability("durable_threads"),
+        RuntimeCapability("message_turns"),
+        RuntimeCapability("event_streaming"),
+    }
+    if agent_id in {"codex", "opencode"}:
+        default_capabilities.add(RuntimeCapability("model_listing"))
     return AgentDescriptor(
         id=agent_id,
         name=agent_id.title(),
-        capabilities=capabilities
-        or frozenset(
-            {
-                RuntimeCapability("durable_threads"),
-                RuntimeCapability("message_turns"),
-                RuntimeCapability("event_streaming"),
-            }
-        ),
+        capabilities=capabilities or frozenset(default_capabilities),
         make_harness=factory.make_harness,
         runtime_kind=runtime_kind,
     )

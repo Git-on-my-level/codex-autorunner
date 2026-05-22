@@ -93,16 +93,17 @@ class _FakeHarness:
 
 
 def _descriptor(agent_id: str = "codex", name: str = "Codex") -> AgentDescriptor:
+    capabilities = {
+        RuntimeCapability("durable_threads"),
+        RuntimeCapability("message_turns"),
+        RuntimeCapability("approvals"),
+    }
+    if agent_id in {"codex", "opencode"}:
+        capabilities.add(RuntimeCapability("model_listing"))
     return AgentDescriptor(
         id=agent_id,
         name=name,
-        capabilities=frozenset(
-            {
-                RuntimeCapability("durable_threads"),
-                RuntimeCapability("message_turns"),
-                RuntimeCapability("approvals"),
-            }
-        ),
+        capabilities=frozenset(capabilities),
         make_harness=lambda ctx: ctx.fake_harness,
     )
 
