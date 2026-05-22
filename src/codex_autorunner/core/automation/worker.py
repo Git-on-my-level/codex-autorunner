@@ -106,9 +106,14 @@ class AutomationJobWorker:
             if latest is None or latest.state == JOB_CANCELLED:
                 cancelled += 1
                 continue
-            if self._blocked_by_concurrency(latest):
-                self._store.retry_job(
-                    latest.job_id, available_at=_add_seconds(stamp, 5)
+            blocker = self._store.concurrency_blocker_for_job(latest, now=stamp)
+            if blocker is not None:
+                self._store.defer_job_for_concurrency(
+                    latest.job_id,
+                    blocked_by_job_id=blocker.job_id,
+                    blocked_reason=blocker.reason,
+                    available_at=_add_seconds(stamp, 5),
+                    now=stamp,
                 )
                 skipped += 1
                 continue
@@ -237,21 +242,6 @@ class AutomationJobWorker:
             paused=paused,
             escalated=escalated,
         )
-
-    def _blocked_by_concurrency(self, job: AutomationJob) -> bool:
-        per_rule = int(job.policy.get("max_concurrent_per_rule") or 1)
-        per_target = int(job.policy.get("max_concurrent_per_target") or 1)
-        if (
-            per_rule > 0
-            and self._store.count_running_jobs(rule_id=job.rule_id) >= per_rule
-        ):
-            return True
-        if (
-            per_target > 0
-            and self._store.count_running_jobs(target=job.target) >= per_target
-        ):
-            return True
-        return False
 
     def _handle_failure(self, job: AutomationJob, error: str, now: str) -> bool:
         if job.attempt_count >= job.max_attempts:

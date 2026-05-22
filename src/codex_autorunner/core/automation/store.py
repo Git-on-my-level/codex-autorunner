@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-import logging
 import sqlite3
 import uuid
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal, Optional
 
@@ -57,37 +57,28 @@ def _agent_task_runtime_mismatch(edge: AutomationChildExecutionEdge) -> bool:
     return False
 
 
-_log = logging.getLogger(__name__)
+_LEGACY_JOB_CHILD_COLUMNS = (
+    "managed_thread_" + "target_id",
+    "managed_thread_" + "execution_id",
+    "pma_lane_id",
+    "pma_queue_" + "item_id",
+    "ticket_flow_repo_id",
+    "ticket_flow_" + "run_id",
+    "ticket_flow_worktree_id",
+    "publish_operation_" + "id",
+)
+
+
+@dataclass(frozen=True)
+class ActiveAutomationBlocker:
+    job_id: str
+    reason: str
 
 
 class AutomationStore:
     def __init__(self, hub_root: Path, *, durable: bool = True) -> None:
         self._hub_root = Path(hub_root)
         self._durable = durable
-        self._migrate_stale_executor_kinds()
-
-    def _migrate_stale_executor_kinds(self) -> None:
-        try:
-            with open_orchestration_sqlite(
-                self._hub_root, durable=self._durable
-            ) as conn:
-                with conn:
-                    cursor = conn.execute("""
-                        UPDATE orch_automation_rules
-                           SET executor_kind = 'managed_thread_turn',
-                               updated_at = updated_at
-                         WHERE executor_kind = 'pma_turn'
-                        """)
-                    migrated = int(cursor.rowcount or 0)
-            if migrated:
-                _log.info(
-                    "migrated %d stale pma_turn executor_kind row(s) to managed_thread_turn",
-                    migrated,
-                )
-        except Exception:
-            _log.debug(
-                "stale executor_kind migration skipped (DB unavailable)", exc_info=True
-            )
 
     @property
     def hub_root(self) -> Path:
@@ -291,17 +282,15 @@ class AutomationStore:
                 ).fetchone()
                 if existing is not None:
                     return self._row_to_job(existing), True
+                legacy_columns_sql = ", ".join(_LEGACY_JOB_CHILD_COLUMNS)
                 conn.execute(
-                    """
+                    f"""
                     INSERT INTO orch_automation_jobs (
                         job_id, rule_id, event_id, state, dedupe_key, batch_key,
                         lock_key, available_at, claimed_at, started_at, finished_at,
                         updated_at, attempt_count, max_attempts, next_attempt_at,
                         retry_backoff_seconds, created_at, target_json, executor_json,
-                        policy_json, payload_json, managed_thread_target_id,
-                        managed_thread_execution_id, pma_lane_id, pma_queue_item_id,
-                        ticket_flow_repo_id, ticket_flow_run_id,
-                        ticket_flow_worktree_id, publish_operation_id, result_summary,
+                        policy_json, payload_json, {legacy_columns_sql}, result_summary,
                         error_text
                     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
@@ -465,9 +454,6 @@ class AutomationStore:
                     (JOB_PENDING, stamp),
                 ).fetchall()
                 for row in rows:
-                    candidate = self._row_to_job(row)
-                    if self._job_concurrency_saturated(conn, candidate):
-                        continue
                     validate_job_transition(str(row["state"]), JOB_CLAIMED)
                     cursor = conn.execute(
                         """
@@ -475,6 +461,9 @@ class AutomationStore:
                            SET state = ?,
                                lock_key = COALESCE(?, lock_key),
                                claimed_at = ?,
+                               blocked_by_job_id = NULL,
+                               blocked_reason = NULL,
+                               blocked_at = NULL,
                                updated_at = ?
                          WHERE job_id = ? AND state = ?
                         """,
@@ -501,13 +490,15 @@ class AutomationStore:
         return self._row_to_job(claimed) if claimed is not None else None
 
     def start_job(self, job_id: str, *, now: Optional[str] = None) -> AutomationJob:
-        return self._transition_job(
+        job = self._transition_job(
             job_id,
             JOB_RUNNING,
             now=now,
             increment_attempt=True,
             started=True,
         )
+        self.clear_job_blocking(job_id, now=now)
+        return self.get_job(job_id) or job
 
     def complete_job(
         self,
@@ -621,6 +612,83 @@ class AutomationStore:
         if saved is None:
             raise RuntimeError("failed to retry automation job")
         return self._row_to_job(saved)
+
+    def defer_job_for_concurrency(
+        self,
+        job_id: str,
+        *,
+        blocked_by_job_id: str,
+        blocked_reason: str,
+        available_at: str,
+        now: Optional[str] = None,
+    ) -> AutomationJob:
+        stamp = normalize_timestamp(now, fallback=available_at)
+        next_available = normalize_timestamp(available_at)
+        with open_orchestration_sqlite(self._hub_root, durable=self._durable) as conn:
+            with conn:
+                row = conn.execute(
+                    "SELECT * FROM orch_automation_jobs WHERE job_id = ?",
+                    (job_id,),
+                ).fetchone()
+                if row is None:
+                    raise ValueError(f"Unknown automation job: {job_id}")
+                validate_job_transition(str(row["state"]), JOB_PENDING)
+                conn.execute(
+                    """
+                    UPDATE orch_automation_jobs
+                       SET state = ?,
+                           available_at = ?,
+                           next_attempt_at = ?,
+                           lock_key = NULL,
+                           claimed_at = NULL,
+                           blocked_by_job_id = ?,
+                           blocked_reason = ?,
+                           blocked_at = ?,
+                           updated_at = ?
+                     WHERE job_id = ?
+                    """,
+                    (
+                        JOB_PENDING,
+                        next_available,
+                        next_available,
+                        blocked_by_job_id,
+                        blocked_reason,
+                        stamp,
+                        stamp,
+                        job_id,
+                    ),
+                )
+                saved = conn.execute(
+                    "SELECT * FROM orch_automation_jobs WHERE job_id = ?",
+                    (job_id,),
+                ).fetchone()
+        if saved is None:
+            raise RuntimeError("failed to defer automation job for concurrency")
+        return self._row_to_job(saved)
+
+    def clear_job_blocking(
+        self, job_id: str, *, now: Optional[str] = None
+    ) -> Optional[AutomationJob]:
+        stamp = normalize_timestamp(now)
+        with open_orchestration_sqlite(self._hub_root, durable=self._durable) as conn:
+            with conn:
+                conn.execute(
+                    """
+                    UPDATE orch_automation_jobs
+                       SET blocked_by_job_id = NULL,
+                           blocked_reason = NULL,
+                           blocked_at = NULL,
+                           updated_at = ?
+                     WHERE job_id = ?
+                       AND (
+                           blocked_by_job_id IS NOT NULL
+                           OR blocked_reason IS NOT NULL
+                           OR blocked_at IS NOT NULL
+                       )
+                    """,
+                    (stamp, job_id),
+                )
+        return self.get_job(job_id)
 
     def revive_dead_lettered_job(
         self,
@@ -1166,15 +1234,17 @@ class AutomationStore:
                            updated_at = ?
                      WHERE state IN (?, ?)
                        AND (
-                           (claimed_at IS NOT NULL AND claimed_at <= ?)
+                           (state = ? AND claimed_at IS NOT NULL AND claimed_at <= ?)
                            OR (
                                state = ?
                                AND started_at IS NOT NULL
                                AND started_at <= ?
-                               AND managed_thread_execution_id IS NULL
-                               AND pma_queue_item_id IS NULL
-                               AND ticket_flow_run_id IS NULL
-                               AND publish_operation_id IS NULL
+                               AND NOT EXISTS (
+                                   SELECT 1
+                                     FROM orch_automation_child_execution_edges edge
+                                    WHERE edge.parent_job_id = orch_automation_jobs.job_id
+                                      AND edge.authoritative_for_parent_completion = 1
+                               )
                            )
                        )
                     """,
@@ -1188,6 +1258,7 @@ class AutomationStore:
                         stamp,
                         JOB_CLAIMED,
                         JOB_RUNNING,
+                        JOB_CLAIMED,
                         threshold,
                         JOB_RUNNING,
                         threshold,
@@ -1221,9 +1292,84 @@ class AutomationStore:
         *,
         rule_id: Optional[str] = None,
         target: Optional[dict[str, Any]] = None,
+        exclude_job_id: Optional[str] = None,
     ) -> int:
         with open_orchestration_sqlite(self._hub_root, durable=self._durable) as conn:
-            return self._count_active_jobs(conn, rule_id=rule_id, target=target)
+            return self._count_active_jobs(
+                conn,
+                rule_id=rule_id,
+                target=target,
+                exclude_job_id=exclude_job_id,
+            )
+
+    def concurrency_blocker_for_job(
+        self, job: AutomationJob, *, now: Optional[str] = None
+    ) -> Optional[ActiveAutomationBlocker]:
+        self.reconcile_concurrency_blockers(job, now=now)
+        per_rule = int(job.policy.get("max_concurrent_per_rule") or 1)
+        per_target = int(job.policy.get("max_concurrent_per_target") or 1)
+        if per_rule > 0:
+            blocker = self._first_active_blocker(
+                rule_id=job.rule_id,
+                exclude_job_id=job.job_id,
+            )
+            if (
+                blocker is not None
+                and self.count_active_jobs(
+                    rule_id=job.rule_id,
+                    exclude_job_id=job.job_id,
+                )
+                >= per_rule
+            ):
+                return ActiveAutomationBlocker(
+                    job_id=blocker.job_id,
+                    reason=f"max_concurrent_per_rule:{job.rule_id}",
+                )
+        if per_target > 0:
+            blocker = self._first_active_blocker(
+                target=job.target,
+                exclude_job_id=job.job_id,
+            )
+            if (
+                blocker is not None
+                and self.count_active_jobs(
+                    target=job.target,
+                    exclude_job_id=job.job_id,
+                )
+                >= per_target
+            ):
+                return ActiveAutomationBlocker(
+                    job_id=blocker.job_id,
+                    reason="max_concurrent_per_target",
+                )
+        return None
+
+    def reconcile_concurrency_blockers(
+        self, job: AutomationJob, *, now: Optional[str] = None
+    ) -> int:
+        stamp = normalize_timestamp(now)
+        changed = 0
+        with open_orchestration_sqlite(self._hub_root, durable=self._durable) as conn:
+            rows = conn.execute(
+                """
+                SELECT DISTINCT jobs.*
+                  FROM orch_automation_jobs AS jobs
+                 WHERE jobs.job_id != ?
+                   AND jobs.state = ?
+                   AND (
+                       jobs.rule_id = ?
+                       OR jobs.target_json = ?
+                   )
+                 ORDER BY jobs.started_at ASC, jobs.updated_at ASC, jobs.job_id ASC
+                """,
+                (job.job_id, JOB_RUNNING, job.rule_id, _json_dumps(job.target)),
+            ).fetchall()
+        for row in rows:
+            blocker = self._row_to_job(row)
+            reduced = self.reduce_parent_job_from_children(blocker.job_id, now=stamp)
+            if reduced is not None and reduced.state != blocker.state:
+                changed += 1
+        return changed
 
     def has_recent_job_for_rule(self, rule_id: str, *, since: str) -> bool:
         return self.count_jobs_for_rule_since(rule_id, since=since) > 0
@@ -1277,26 +1423,7 @@ class AutomationStore:
                 if row is None:
                     raise ValueError(f"Unknown automation job: {job_id}")
                 validate_job_transition(str(row["state"]), to_state)
-                refs = dict(execution_refs or {})
-                updates = {
-                    "managed_thread_target_id": refs.get("managed_thread_target_id")
-                    or row["managed_thread_target_id"],
-                    "managed_thread_execution_id": refs.get(
-                        "managed_thread_execution_id"
-                    )
-                    or row["managed_thread_execution_id"],
-                    "pma_lane_id": refs.get("pma_lane_id") or row["pma_lane_id"],
-                    "pma_queue_item_id": refs.get("pma_queue_item_id")
-                    or row["pma_queue_item_id"],
-                    "ticket_flow_repo_id": refs.get("ticket_flow_repo_id")
-                    or row["ticket_flow_repo_id"],
-                    "ticket_flow_run_id": refs.get("ticket_flow_run_id")
-                    or row["ticket_flow_run_id"],
-                    "ticket_flow_worktree_id": refs.get("ticket_flow_worktree_id")
-                    or row["ticket_flow_worktree_id"],
-                    "publish_operation_id": refs.get("publish_operation_id")
-                    or row["publish_operation_id"],
-                }
+                _ = execution_refs
                 conn.execute(
                     """
                     UPDATE orch_automation_jobs
@@ -1306,15 +1433,7 @@ class AutomationStore:
                            updated_at = ?,
                            attempt_count = attempt_count + ?,
                            result_summary = COALESCE(?, result_summary),
-                           error_text = COALESCE(?, error_text),
-                           managed_thread_target_id = ?,
-                           managed_thread_execution_id = ?,
-                           pma_lane_id = ?,
-                           pma_queue_item_id = ?,
-                           ticket_flow_repo_id = ?,
-                           ticket_flow_run_id = ?,
-                           ticket_flow_worktree_id = ?,
-                           publish_operation_id = ?
+                           error_text = COALESCE(?, error_text)
                      WHERE job_id = ?
                     """,
                     (
@@ -1327,14 +1446,6 @@ class AutomationStore:
                         1 if increment_attempt else 0,
                         result_summary,
                         error_text,
-                        updates["managed_thread_target_id"],
-                        updates["managed_thread_execution_id"],
-                        updates["pma_lane_id"],
-                        updates["pma_queue_item_id"],
-                        updates["ticket_flow_repo_id"],
-                        updates["ticket_flow_run_id"],
-                        updates["ticket_flow_worktree_id"],
-                        updates["publish_operation_id"],
                         job_id,
                     ),
                 )
@@ -1367,29 +1478,13 @@ class AutomationStore:
             ),
         )
 
-    def _job_concurrency_saturated(
-        self, conn: sqlite3.Connection, job: AutomationJob
-    ) -> bool:
-        per_rule = int(job.policy.get("max_concurrent_per_rule") or 1)
-        per_target = int(job.policy.get("max_concurrent_per_target") or 1)
-        if (
-            per_rule > 0
-            and self._count_active_jobs(conn, rule_id=job.rule_id) >= per_rule
-        ):
-            return True
-        if (
-            per_target > 0
-            and self._count_active_jobs(conn, target=job.target) >= per_target
-        ):
-            return True
-        return False
-
     def _count_active_jobs(
         self,
         conn: sqlite3.Connection,
         *,
         rule_id: Optional[str] = None,
         target: Optional[dict[str, Any]] = None,
+        exclude_job_id: Optional[str] = None,
     ) -> int:
         clauses = ["state IN (?, ?)"]
         params: list[Any] = [JOB_CLAIMED, JOB_RUNNING]
@@ -1399,11 +1494,45 @@ class AutomationStore:
         if target is not None:
             clauses.append("target_json = ?")
             params.append(_json_dumps(target))
+        if exclude_job_id is not None:
+            clauses.append("job_id != ?")
+            params.append(exclude_job_id)
         row = conn.execute(
             f"SELECT COUNT(*) AS c FROM orch_automation_jobs WHERE {' AND '.join(clauses)}",
             tuple(params),
         ).fetchone()
         return int(row["c"] if row is not None else 0)
+
+    def _first_active_blocker(
+        self,
+        *,
+        rule_id: Optional[str] = None,
+        target: Optional[dict[str, Any]] = None,
+        exclude_job_id: Optional[str] = None,
+    ) -> Optional[AutomationJob]:
+        clauses = ["state IN (?, ?)"]
+        params: list[Any] = [JOB_CLAIMED, JOB_RUNNING]
+        if rule_id is not None:
+            clauses.append("rule_id = ?")
+            params.append(rule_id)
+        if target is not None:
+            clauses.append("target_json = ?")
+            params.append(_json_dumps(target))
+        if exclude_job_id is not None:
+            clauses.append("job_id != ?")
+            params.append(exclude_job_id)
+        with open_orchestration_sqlite(self._hub_root, durable=self._durable) as conn:
+            row = conn.execute(
+                f"""
+                SELECT *
+                  FROM orch_automation_jobs
+                 WHERE {' AND '.join(clauses)}
+                 ORDER BY claimed_at ASC, started_at ASC, updated_at ASC, job_id ASC
+                 LIMIT 1
+                """,
+                tuple(params),
+            ).fetchone()
+        return self._row_to_job(row) if row is not None else None
 
     def _row_to_rule(self, row: sqlite3.Row) -> AutomationRule:
         return AutomationRule.hydrate_persisted(
@@ -1463,16 +1592,11 @@ class AutomationStore:
         job.retry_backoff_seconds = normalize_non_negative_int(
             row["retry_backoff_seconds"]
         )
-        job.managed_thread_target_id = row["managed_thread_target_id"]
-        job.managed_thread_execution_id = row["managed_thread_execution_id"]
-        job.pma_lane_id = row["pma_lane_id"]
-        job.pma_queue_item_id = row["pma_queue_item_id"]
-        job.ticket_flow_repo_id = row["ticket_flow_repo_id"]
-        job.ticket_flow_run_id = row["ticket_flow_run_id"]
-        job.ticket_flow_worktree_id = row["ticket_flow_worktree_id"]
-        job.publish_operation_id = row["publish_operation_id"]
         job.result_summary = row["result_summary"]
         job.error_text = row["error_text"]
+        job.blocked_by_job_id = row["blocked_by_job_id"]
+        job.blocked_reason = row["blocked_reason"]
+        job.blocked_at = row["blocked_at"]
         return job
 
     def _row_to_attempt(self, row: sqlite3.Row) -> AutomationJobAttempt:
@@ -1570,17 +1694,17 @@ class AutomationStore:
             _json_dumps(job.executor),
             _json_dumps(job.policy),
             _json_dumps(job.payload),
-            job.managed_thread_target_id,
-            job.managed_thread_execution_id,
-            job.pma_lane_id,
-            job.pma_queue_item_id,
-            job.ticket_flow_repo_id,
-            job.ticket_flow_run_id,
-            job.ticket_flow_worktree_id,
-            job.publish_operation_id,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
             job.result_summary,
             job.error_text,
         )
 
 
-__all__ = ["AutomationStore"]
+__all__ = ["ActiveAutomationBlocker", "AutomationStore"]

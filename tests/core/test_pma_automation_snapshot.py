@@ -11,7 +11,7 @@ from codex_autorunner.core.automation import (
     AutomationStore,
 )
 from codex_autorunner.core.automation.models import (
-    EXECUTOR_MANAGED_THREAD_TURN,
+    LEGACY_EXECUTOR_MANAGED_THREAD_TURN,
     SCHEDULE_ONE_SHOT,
     TARGET_POLICY_HUB,
     TRIGGER_KIND_EVENT,
@@ -23,13 +23,13 @@ from codex_autorunner.core.pma_automation_snapshot import snapshot_pma_automatio
 def test_snapshot_pma_automation_samples_pending_automation_jobs(tmp_path) -> None:
     store = AutomationStore(tmp_path)
     store.upsert_rule(
-        AutomationRule.create(
+        AutomationRule.hydrate_persisted(
             rule_id="rule-1",
             name="Managed thread follow-up",
             trigger_kind=TRIGGER_KIND_EVENT,
             trigger={"event_types": ["lifecycle.flow_completed"]},
             target_policy=TARGET_POLICY_HUB,
-            executor_kind=EXECUTOR_MANAGED_THREAD_TURN,
+            executor_kind=LEGACY_EXECUTOR_MANAGED_THREAD_TURN,
             system_owned=True,
         )
     )
@@ -44,7 +44,7 @@ def test_snapshot_pma_automation_samples_pending_automation_jobs(tmp_path) -> No
             rule_id="rule-1",
             event_id="event-1",
             target={},
-            executor={"kind": EXECUTOR_MANAGED_THREAD_TURN},
+            executor={"kind": LEGACY_EXECUTOR_MANAGED_THREAD_TURN},
         )
     )
     supervisor = SimpleNamespace(hub_config=SimpleNamespace(root=tmp_path))
@@ -58,13 +58,13 @@ def test_snapshot_pma_automation_samples_pending_automation_jobs(tmp_path) -> No
 def test_snapshot_pma_automation_includes_unified_read_model(tmp_path) -> None:
     store = AutomationStore(tmp_path)
     store.upsert_rule(
-        AutomationRule.create(
+        AutomationRule.hydrate_persisted(
             rule_id="rule-1",
             name="PMA timer",
             trigger_kind=TRIGGER_KIND_EVENT,
             trigger={"event_types": ["schedule.fire"]},
             target_policy=TARGET_POLICY_HUB,
-            executor_kind=EXECUTOR_MANAGED_THREAD_TURN,
+            executor_kind=LEGACY_EXECUTOR_MANAGED_THREAD_TURN,
             system_owned=True,
         )
     )
@@ -85,7 +85,7 @@ def test_snapshot_pma_automation_includes_unified_read_model(tmp_path) -> None:
             rule_id="rule-1",
             event_id="event-1",
             target={},
-            executor={"kind": EXECUTOR_MANAGED_THREAD_TURN},
+            executor={"kind": LEGACY_EXECUTOR_MANAGED_THREAD_TURN},
         )
     )
     supervisor = SimpleNamespace(hub_config=SimpleNamespace(root=tmp_path))
@@ -103,13 +103,13 @@ def test_snapshot_pma_automation_includes_unified_read_model(tmp_path) -> None:
 def test_snapshot_pma_automation_tolerates_unknown_executor_kind(tmp_path) -> None:
     store = AutomationStore(tmp_path)
     store.upsert_rule(
-        AutomationRule.create(
+        AutomationRule.hydrate_persisted(
             rule_id="rule-unknown",
             name="Future automation",
             trigger_kind=TRIGGER_KIND_EVENT,
             trigger={"event_types": ["lifecycle.flow_completed"]},
             target_policy=TARGET_POLICY_HUB,
-            executor_kind=EXECUTOR_MANAGED_THREAD_TURN,
+            executor_kind=LEGACY_EXECUTOR_MANAGED_THREAD_TURN,
         )
     )
     with open_orchestration_sqlite(tmp_path) as conn:

@@ -15,9 +15,7 @@ from .models import (
     AUTOMATION_CHILD_KIND_AGENT_TASK,
     AUTOMATION_CHILD_KIND_PMA_OPERATOR,
     AUTOMATION_CHILD_KIND_TICKET_FLOW,
-    EXECUTOR_PMA_OPERATOR_TURN,
     JOB_RUNNING,
-    LEGACY_EXECUTOR_PMA_TURN,
     AutomationChildExecutionEdge,
     AutomationJob,
 )
@@ -88,42 +86,20 @@ class AutomationChildRunReconciler:
         )
 
     def _running_child_jobs(self, *, limit: int) -> list[AutomationJob]:
-        jobs = self._store.list_jobs(state=JOB_RUNNING, limit=max(0, int(limit)))
-        return [
-            job
-            for job in jobs
-            if self._store.list_child_execution_edges(job.job_id)
-            or job.ticket_flow_run_id
-            or job.managed_thread_execution_id
-            or job.pma_queue_item_id
-        ]
+        return self._store.list_jobs(state=JOB_RUNNING, limit=max(0, int(limit)))
 
     def _reconcile_child_job(self, job: AutomationJob) -> ChildReconcileResult:
         edges = self._store.list_child_execution_edges(job.job_id)
         if edges:
             return self._reconcile_child_edges(job, edges)
-        kind = str(job.executor.get("kind") or "").strip()
-        if (
-            job.managed_thread_execution_id
-            or job.ticket_flow_run_id
-            or job.pma_queue_item_id
-            or kind
-            in {
-                "managed_thread_turn",
-                EXECUTOR_PMA_OPERATOR_TURN,
-                LEGACY_EXECUTOR_PMA_TURN,
-            }
-        ):
-            self._store.fail_job(
-                job.job_id,
-                error_text=(
-                    "automation job references child execution state without a "
-                    "durable automation child edge; run explicit automation "
-                    "executor migration"
-                ),
-            )
-            return ChildReconcileResult(inspected=1, failed=1)
-        return ChildReconcileResult(inspected=1)
+        self._store.fail_job(
+            job.job_id,
+            error_text=(
+                "running automation job has no durable authoritative child edge; "
+                "run explicit automation executor migration"
+            ),
+        )
+        return ChildReconcileResult(inspected=1, failed=1)
 
     def _reconcile_child_edges(
         self, job: AutomationJob, edges: list[AutomationChildExecutionEdge]
@@ -188,7 +164,7 @@ class AutomationChildRunReconciler:
     ) -> ChildReconcileResult:
         latest_execution = _latest_thread_execution(
             hub_root=self._hub_root,
-            thread_id=job.managed_thread_target_id,
+            thread_id=_edge_thread_target_id(edge),
             execution_id=edge.child_id,
             backend_thread_id=None,
         )
@@ -208,7 +184,7 @@ class AutomationChildRunReconciler:
                 **_actual_runtime_from_thread(
                     self._hub_root,
                     latest_execution.get("thread_target_id")
-                    or job.managed_thread_target_id,
+                    or _edge_thread_target_id(edge),
                     fallback=edge.requested_runtime.to_dict(),
                 ),
                 "model": _actual_model_from_transcript(
@@ -219,20 +195,12 @@ class AutomationChildRunReconciler:
                 "backend_runtime_id": latest_execution.get("backend_turn_id"),
             },
         )
-        refs = {
-            "managed_thread_target_id": latest_execution.get("thread_target_id")
-            or job.managed_thread_target_id,
-            "managed_thread_execution_id": latest_execution.get("execution_id")
-            or edge.child_id,
-        }
-        reduce_hints["execution_refs"] = refs
         if terminal_state == "succeeded":
             reduce_hints["result_summary"] = _managed_thread_success_summary(
                 latest_execution
             )
         elif terminal_state == "failed":
             reduce_hints["error_text"] = _managed_thread_error_summary(latest_execution)
-        self._store.update_running_job(job.job_id, execution_refs=refs)
         return _terminal_result_counts(terminal_state)
 
     def _reconcile_ticket_flow_edge(
@@ -256,12 +224,6 @@ class AutomationChildRunReconciler:
             terminal_state=terminal_state,
             terminal_event_id=record.id,
         )
-        refs = {"ticket_flow_run_id": record.id}
-        if job.ticket_flow_repo_id:
-            refs["ticket_flow_repo_id"] = job.ticket_flow_repo_id
-        if job.ticket_flow_worktree_id:
-            refs["ticket_flow_worktree_id"] = job.ticket_flow_worktree_id
-        reduce_hints["execution_refs"] = refs
         if terminal_state == "succeeded":
             reduce_hints["result_summary"] = _ticket_flow_success_summary(
                 repo_path, record
@@ -272,7 +234,6 @@ class AutomationChildRunReconciler:
             )
         elif terminal_state == "interrupted":
             reduce_hints["result_summary"] = f"ticket-flow run paused: {record.id}"
-        self._store.update_running_job(job.job_id, execution_refs=refs)
         return _terminal_result_counts(terminal_state)
 
     def _ticket_flow_record_for_edge(
@@ -283,11 +244,7 @@ class AutomationChildRunReconciler:
             if edge.actual_runtime is not None
             else edge.requested_runtime.workspace_scope
         ) or {}
-        repo_id = (
-            job.ticket_flow_worktree_id
-            or job.ticket_flow_repo_id
-            or str(scope.get("repo_id") or "").strip()
-        )
+        repo_id = str(scope.get("repo_id") or "").strip()
         if not repo_id:
             self._store.mark_child_execution_terminal(
                 edge.edge_id,
@@ -350,17 +307,6 @@ class AutomationChildRunReconciler:
             terminal_state=terminal_state,
             terminal_event_id=item.item_id,
         )
-        self._store.update_running_job(
-            job.job_id,
-            execution_refs={
-                "pma_lane_id": item.lane_id,
-                "pma_queue_item_id": item.item_id,
-            },
-        )
-        reduce_hints["execution_refs"] = {
-            "pma_lane_id": item.lane_id,
-            "pma_queue_item_id": item.item_id,
-        }
         if terminal_state == "succeeded":
             reduce_hints["result_summary"] = f"PMA operator completed: {item.item_id}"
         elif terminal_state == "failed":
@@ -368,6 +314,15 @@ class AutomationChildRunReconciler:
                 item.error or f"PMA operator failed: {item.item_id}"
             )
         return _terminal_result_counts(terminal_state)
+
+
+def _edge_thread_target_id(edge: AutomationChildExecutionEdge) -> Optional[str]:
+    runtime = edge.actual_runtime or edge.requested_runtime
+    scope = runtime.workspace_scope or {}
+    value = scope.get("thread_target_id") or scope.get("thread_id")
+    if value is None:
+        return None
+    return str(value).strip() or None
 
 
 def _ticket_flow_success_summary(repo_path: Path, record: FlowRunRecord) -> str:

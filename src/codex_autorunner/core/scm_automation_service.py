@@ -23,11 +23,14 @@ from .automation import (
     AutomationStore,
 )
 from .automation.models import (
+    AUTOMATION_CHILD_KIND_PUBLISH_OPERATION,
     EXECUTOR_PUBLISH_OPERATION,
     JOB_SKIPPED,
     JOB_SUCCEEDED,
     TARGET_POLICY_PR_WORKTREE,
     TRIGGER_KIND_EVENT,
+    AutomationChildExecutionEdge,
+    AutomationRuntimeContract,
 )
 from .chat_bindings import active_chat_binding_metadata_by_thread
 from .config import load_hub_config
@@ -514,17 +517,12 @@ class ScmCompatibilityPublishBridgeExecutor:
             operation = _matching_publish_operation_for_job(
                 job, self._publish_operations
             )
-        refs = (
-            {"publish_operation_id": operation.operation_id}
-            if operation is not None
-            else {}
-        )
         status = JOB_SKIPPED if operation is None else JOB_SUCCEEDED
         return AutomationExecutorResult(
             status=status,
             summary=_operation_result_summary(operation),
             data=_operation_attempt_result(operation),
-            execution_refs=refs,
+            execution_refs={},
         )
 
 
@@ -1836,6 +1834,33 @@ class ScmAutomationService:
                 continue
             started = self._automation_store.start_job(job.job_id)
             result = executor.execute(started)
+            execution_refs = dict(result.execution_refs)
+            operation_id = _normalize_text(result.data.get("publish_operation_id"))
+            if operation_id is not None:
+                edge = self._automation_store.upsert_child_execution_edge(
+                    AutomationChildExecutionEdge.create(
+                        parent_job_id=started.job_id,
+                        child_kind=AUTOMATION_CHILD_KIND_PUBLISH_OPERATION,
+                        child_id=operation_id,
+                        requested_runtime=AutomationRuntimeContract(
+                            input_ref={
+                                "kind": "automation_job",
+                                "job_id": started.job_id,
+                            },
+                            workspace_scope={"kind": "publish_operation"},
+                        ),
+                        actual_runtime=AutomationRuntimeContract(
+                            input_ref={
+                                "kind": "automation_job",
+                                "job_id": started.job_id,
+                            },
+                            workspace_scope={"kind": "publish_operation"},
+                        ),
+                        authoritative_for_parent_completion=True,
+                        terminal_state="succeeded",
+                    )
+                )
+                execution_refs["automation_child_edge_id"] = edge.edge_id
             if result.status == JOB_SKIPPED:
                 completed = self._automation_store.skip_job(
                     started.job_id,
@@ -1845,7 +1870,7 @@ class ScmAutomationService:
                 completed = self._automation_store.complete_job(
                     started.job_id,
                     result_summary=result.summary,
-                    execution_refs=result.execution_refs,
+                    execution_refs=execution_refs,
                 )
             self._automation_store.record_attempt(
                 AutomationJobAttempt.create(
@@ -1855,7 +1880,7 @@ class ScmAutomationService:
                     started_at=completed.started_at,
                     finished_at=completed.finished_at,
                     executor_result=result.data,
-                    execution_refs=result.execution_refs,
+                    execution_refs=execution_refs,
                 )
             )
             updated_jobs.append(completed)

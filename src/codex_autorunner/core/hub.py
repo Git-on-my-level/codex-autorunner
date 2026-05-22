@@ -13,14 +13,12 @@ from .automation import (
     EXECUTOR_AGENT_TASK_TURN,
     EXECUTOR_GITHUB_COMMENT,
     EXECUTOR_GITHUB_REACTION,
-    EXECUTOR_MANAGED_THREAD_TURN,
     EXECUTOR_PMA_OPERATOR_TURN,
     EXECUTOR_PUBLISH_CHAT_NOTIFICATION,
     EXECUTOR_PUBLISH_OPERATION,
     EXECUTOR_TICKET_FLOW,
     AgentTaskTurnAutomationExecutor,
     AutomationExecutorRegistry,
-    ManagedThreadTurnAutomationExecutor,
     PmaOperatorTurnAutomationExecutor,
     PublishOperationAutomationExecutor,
 )
@@ -292,16 +290,6 @@ class HubSupervisor:
                 automation_store=AutomationStore(hub_config.root),
                 safety_checker_fn=lambda: self.ensure_pma_safety_checker(),
                 lane_worker_starter_fn=self._request_pma_lane_worker_start,
-            ),
-        )
-        automation_executor_registry.register(
-            EXECUTOR_MANAGED_THREAD_TURN,
-            ManagedThreadTurnAutomationExecutor(
-                hub_root=hub_config.root,
-                automation_store=AutomationStore(hub_config.root),
-                safety_checker_fn=lambda: self.ensure_pma_safety_checker(),
-                queue_worker_starter_fn=self._request_managed_thread_queue_worker_start,
-                queue_worker_available_fn=(self._managed_thread_queue_worker_available),
             ),
         )
         publish_registry = PublishExecutorRegistry(

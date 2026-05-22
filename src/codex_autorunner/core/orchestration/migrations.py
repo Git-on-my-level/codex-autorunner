@@ -18,7 +18,7 @@ from .turn_execution_storage import (
     build_turn_execution_request_from_storage,
 )
 
-ORCHESTRATION_SCHEMA_VERSION = 40
+ORCHESTRATION_SCHEMA_VERSION = 41
 
 
 @dataclass(frozen=True)
@@ -1683,6 +1683,9 @@ def _apply_v34(conn: sqlite3.Connection) -> None:
             publish_operation_id TEXT,
             result_summary TEXT,
             error_text TEXT,
+            blocked_by_job_id TEXT,
+            blocked_reason TEXT,
+            blocked_at TEXT,
             FOREIGN KEY (rule_id) REFERENCES orch_automation_rules(rule_id)
                 ON DELETE CASCADE,
             FOREIGN KEY (event_id) REFERENCES orch_automation_events(event_id)
@@ -2084,6 +2087,31 @@ def _apply_v40(conn: sqlite3.Connection) -> None:
         """)
 
 
+def _apply_v41(conn: sqlite3.Connection) -> None:
+    _ensure_column(
+        conn,
+        "orch_automation_jobs",
+        "blocked_by_job_id",
+        "blocked_by_job_id TEXT",
+    )
+    _ensure_column(
+        conn,
+        "orch_automation_jobs",
+        "blocked_reason",
+        "blocked_reason TEXT",
+    )
+    _ensure_column(
+        conn,
+        "orch_automation_jobs",
+        "blocked_at",
+        "blocked_at TEXT",
+    )
+    conn.execute("""
+        CREATE INDEX IF NOT EXISTS idx_orch_automation_jobs_blocked
+            ON orch_automation_jobs(blocked_by_job_id, blocked_at)
+        """)
+
+
 _MIGRATIONS = (
     _MigrationStep(1, "create_core_orchestration_schema", _apply_v1),
     _MigrationStep(2, "add_binding_and_flow_projection_scaffolding", _apply_v2),
@@ -2180,6 +2208,11 @@ _MIGRATIONS = (
         40,
         "add_automation_child_execution_edges",
         _apply_v40,
+    ),
+    _MigrationStep(
+        41,
+        "add_automation_blocking_reason",
+        _apply_v41,
     ),
 )
 

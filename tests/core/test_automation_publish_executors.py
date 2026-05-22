@@ -10,6 +10,7 @@ from codex_autorunner.core.automation import (
     PublishOperationAutomationExecutor,
 )
 from codex_autorunner.core.automation.models import (
+    AUTOMATION_CHILD_KIND_PUBLISH_OPERATION,
     EXECUTOR_PUBLISH_CHAT_NOTIFICATION,
     EXECUTOR_PUBLISH_OPERATION,
     JOB_DEAD_LETTERED,
@@ -78,6 +79,7 @@ def test_publish_operation_job_uses_journal_and_refs(tmp_path) -> None:
         PublishOperationAutomationExecutor(
             hub_root=tmp_path,
             journal_store=journal,
+            automation_store=store,
             executor_registry=PublishExecutorRegistry({"notify_chat": publish}),
         ),
     )
@@ -87,10 +89,11 @@ def test_publish_operation_job_uses_journal_and_refs(tmp_path) -> None:
     )
 
     saved = store.get_job("job-1")
+    edge = store.list_child_execution_edges("job-1")[0]
     assert result.succeeded == 1
     assert saved.state == JOB_SUCCEEDED
-    assert saved.publish_operation_id is not None
-    assert journal.get_operation(saved.publish_operation_id).state == "succeeded"
+    assert edge.child_kind == AUTOMATION_CHILD_KIND_PUBLISH_OPERATION
+    assert journal.get_operation(edge.child_id).state == "succeeded"
     assert len(calls) == 1
 
     duplicate, deduped = journal.create_operation(
@@ -99,7 +102,7 @@ def test_publish_operation_job_uses_journal_and_refs(tmp_path) -> None:
         payload={"message": "changed"},
     )
     assert deduped is True
-    assert duplicate.operation_id == saved.publish_operation_id
+    assert duplicate.operation_id == edge.child_id
 
 
 def test_publish_operation_retry_then_dead_letter(tmp_path) -> None:
@@ -121,6 +124,7 @@ def test_publish_operation_retry_then_dead_letter(tmp_path) -> None:
         PublishOperationAutomationExecutor(
             hub_root=tmp_path,
             journal_store=journal,
+            automation_store=store,
             executor_registry=PublishExecutorRegistry({"notify_chat": publish}),
         ),
     )
@@ -154,6 +158,7 @@ def test_publish_chat_notification_maps_to_notify_chat(tmp_path) -> None:
         PublishOperationAutomationExecutor(
             hub_root=tmp_path,
             journal_store=journal,
+            automation_store=store,
             executor_registry=PublishExecutorRegistry(
                 {"notify_chat": lambda _operation: {"published": 0}}
             ),
@@ -164,6 +169,7 @@ def test_publish_chat_notification_maps_to_notify_chat(tmp_path) -> None:
         now="2026-01-01T00:00:00Z"
     )
 
-    operation = journal.get_operation(store.get_job("job-1").publish_operation_id)
+    edge = store.list_child_execution_edges("job-1")[0]
+    operation = journal.get_operation(edge.child_id)
     assert result.succeeded == 1
     assert operation.operation_kind == "notify_chat"

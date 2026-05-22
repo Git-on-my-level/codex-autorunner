@@ -42,7 +42,6 @@ EXECUTOR_GITHUB_COMMENT = "github_comment"
 EXECUTOR_PUBLISH_OPERATION = "publish_operation"
 LEGACY_EXECUTOR_MANAGED_THREAD_TURN = "managed_thread_turn"
 LEGACY_EXECUTOR_PMA_TURN = "pma_turn"
-EXECUTOR_MANAGED_THREAD_TURN = LEGACY_EXECUTOR_MANAGED_THREAD_TURN
 EXECUTOR_KINDS = frozenset(
     {
         EXECUTOR_AGENT_TASK_TURN,
@@ -57,7 +56,7 @@ EXECUTOR_KINDS = frozenset(
 LEGACY_EXECUTOR_KINDS = frozenset(
     {LEGACY_EXECUTOR_MANAGED_THREAD_TURN, LEGACY_EXECUTOR_PMA_TURN}
 )
-EXECUTOR_INPUT_KINDS = EXECUTOR_KINDS | LEGACY_EXECUTOR_KINDS
+EXECUTOR_INPUT_KINDS = EXECUTOR_KINDS
 
 AUTOMATION_CHILD_KIND_AGENT_TASK = "agent_task"
 AUTOMATION_CHILD_KIND_PMA_OPERATOR = "pma_operator"
@@ -392,8 +391,6 @@ def validate_executor_contract(
             "AUTOMATION_CONTRACT_EXECUTOR_KIND_MISMATCH",
             "executor.kind must match executor_kind when present",
         )
-    if executor_kind in LEGACY_EXECUTOR_KINDS:
-        normalized["legacy_executor_kind"] = executor_kind
     for key in ("message", "prompt", "prompt_template", "operation_kind"):
         value = normalized.get(key)
         if value is not None and not isinstance(value, str):
@@ -770,8 +767,17 @@ class AutomationRule:
         normalized_target_policy = require_choice(
             target_policy, field_name="target_policy", choices=TARGET_POLICIES
         )
+        raw_executor_kind = optional_text(executor_kind)
+        if raw_executor_kind in LEGACY_EXECUTOR_KINDS:
+            raise _contract_error(
+                "AUTOMATION_CONTRACT_LEGACY_EXECUTOR_KIND",
+                (
+                    "legacy automation executor modes are not accepted; use "
+                    "agent_task_turn, pma_operator_turn, or ticket_flow"
+                ),
+            )
         normalized_executor_kind = require_choice(
-            executor_kind, field_name="executor_kind", choices=EXECUTOR_INPUT_KINDS
+            executor_kind, field_name="executor_kind", choices=EXECUTOR_KINDS
         )
         normalized_trigger = validate_trigger_contract(
             normalized_trigger_kind,
@@ -961,16 +967,11 @@ class AutomationJob:
     executor: dict[str, Any]
     policy: dict[str, Any]
     payload: dict[str, Any]
-    managed_thread_target_id: Optional[str] = None
-    managed_thread_execution_id: Optional[str] = None
-    pma_lane_id: Optional[str] = None
-    pma_queue_item_id: Optional[str] = None
-    ticket_flow_repo_id: Optional[str] = None
-    ticket_flow_run_id: Optional[str] = None
-    ticket_flow_worktree_id: Optional[str] = None
-    publish_operation_id: Optional[str] = None
     result_summary: Optional[str] = None
     error_text: Optional[str] = None
+    blocked_by_job_id: Optional[str] = None
+    blocked_reason: Optional[str] = None
+    blocked_at: Optional[str] = None
 
     @classmethod
     def create(

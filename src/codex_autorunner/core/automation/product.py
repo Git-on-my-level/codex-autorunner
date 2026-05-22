@@ -21,7 +21,6 @@ from .models import (
     EXECUTOR_GITHUB_COMMENT,
     EXECUTOR_GITHUB_REACTION,
     EXECUTOR_KINDS,
-    EXECUTOR_MANAGED_THREAD_TURN,
     EXECUTOR_PMA_OPERATOR_TURN,
     EXECUTOR_PUBLISH_CHAT_NOTIFICATION,
     EXECUTOR_PUBLISH_OPERATION,
@@ -393,16 +392,17 @@ def _automation_job_row(
     snapshot = (
         execution_snapshots.get(job.job_id) if execution_snapshots is not None else None
     )
+    child_edges = (
+        store.list_child_execution_edges(job.job_id) if store is not None else []
+    )
     if snapshot is None:
         snapshot = automation_execution_snapshot(
             job,
             hub_root=store.hub_root if store is not None else None,
+            child_edges=child_edges,
         )
     child_execution = snapshot.to_dict()
     pma_queue_result = child_execution.get("pma_queue")
-    child_edges = (
-        store.list_child_execution_edges(job.job_id) if store is not None else []
-    )
     children = [_automation_child_row(edge) for edge in child_edges]
     effective_state = _effective_job_state(job, child_edges)
     terminal_reason = _job_terminal_reason(job, child_edges, effective_state)
@@ -419,18 +419,15 @@ def _automation_job_row(
         "result_summary": job.result_summary,
         "error_text": job.error_text,
         "attempt_count": job.attempt_count,
-        "managed_thread_target_id": job.managed_thread_target_id,
-        "managed_thread_execution_id": job.managed_thread_execution_id,
-        "pma_lane_id": job.pma_lane_id,
-        "pma_queue_item_id": job.pma_queue_item_id,
+        "blocked_by_job_id": job.blocked_by_job_id,
+        "blocked_reason": job.blocked_reason,
+        "blocked_at": job.blocked_at,
         "pma_queue_result": pma_queue_result,
         "child_execution": child_execution,
         "children": children,
         "runtime_contract": _job_runtime_contract(job, child_edges),
         "terminal_reason": terminal_reason,
         "policy_violations": policy_violations,
-        "ticket_flow_run_id": job.ticket_flow_run_id,
-        "ticket_flow_worktree_id": job.ticket_flow_worktree_id,
     }
 
 
@@ -826,8 +823,6 @@ def display_kind(rule: AutomationRule) -> str:
         return "agent_task"
     if rule.executor_kind == EXECUTOR_PMA_OPERATOR_TURN:
         return "pma_operator"
-    if rule.executor_kind == EXECUTOR_MANAGED_THREAD_TURN:
-        return "legacy_managed_thread_turn"
     return rule.executor_kind
 
 
@@ -1243,7 +1238,6 @@ def _executor_label(executor_kind: str) -> str:
         EXECUTOR_AGENT_TASK_TURN: "Agent task turn",
         EXECUTOR_PMA_OPERATOR_TURN: "PMA operator turn",
         EXECUTOR_TICKET_FLOW: "Ticket flow",
-        EXECUTOR_MANAGED_THREAD_TURN: "Legacy managed thread turn",
         EXECUTOR_PUBLISH_OPERATION: "Publish operation",
         EXECUTOR_PUBLISH_CHAT_NOTIFICATION: "Chat notification",
         EXECUTOR_GITHUB_REACTION: "GitHub reaction",
@@ -1419,7 +1413,23 @@ def _format_job(job: Any) -> str:
         return "none"
     state = job.get("effective_state") or job.get("state") or "unknown"
     updated_at = job.get("updated_at") or job.get("created_at") or "unknown time"
-    return f"{state} at {updated_at}"
+    details: list[str] = []
+    blocked_reason = job.get("blocked_reason")
+    if blocked_reason:
+        details.append(f"blocked: {blocked_reason}")
+    blocked_by_job_id = job.get("blocked_by_job_id")
+    if blocked_by_job_id:
+        details.append(f"blocked by {blocked_by_job_id}")
+    raw_state = job.get("raw_state") or job.get("state")
+    if raw_state and raw_state != state:
+        details.append(f"raw parent {raw_state}")
+    violations = job.get("policy_violations")
+    if isinstance(violations, list) and violations:
+        first = violations[0] if isinstance(violations[0], dict) else {}
+        code = first.get("code") or "policy violation"
+        details.append(str(code))
+    suffix = f" ({'; '.join(details)})" if details else ""
+    return f"{state} at {updated_at}{suffix}"
 
 
 def _format_target(row: dict[str, Any]) -> str:
@@ -1805,7 +1815,7 @@ def _requested_runtime_from_executor(executor: dict[str, Any]) -> dict[str, Any]
 def _validate_product_executor_mode(
     executor_kind: str, executor: dict[str, Any]
 ) -> None:
-    if executor_kind in {EXECUTOR_MANAGED_THREAD_TURN, "pma_turn"}:
+    if executor_kind in {"managed_thread_turn", "pma_turn"}:
         raise ValueError(
             "legacy automation execution modes are not accepted by the product API; "
             "use agent_task_turn, pma_operator_turn, or ticket_flow"

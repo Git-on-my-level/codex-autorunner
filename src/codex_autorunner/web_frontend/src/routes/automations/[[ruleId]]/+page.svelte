@@ -135,7 +135,7 @@
       defaultProfile = String(agentResult.data.defaults.profile ?? '');
       agentsHydrated = true;
       syncDraftsForSelection(true);
-      if (selectedExecutorKind() === 'managed_thread_turn') void loadModels(selectedAgent, selectedModel, { keepReasoning: selectedKind === 'automation' });
+      if (selectedExecutorKind() === 'agent_task_turn') void loadModels(selectedAgent, selectedModel, { keepReasoning: selectedKind === 'automation' });
     } else {
       agentCatalogError = agentResult.error.message;
     }
@@ -210,12 +210,12 @@
 
   $effect(() => {
     if (!selectionResolved || !selectedAutomationHydrated) return;
-    if (selectedExecutorKind() === 'managed_thread_turn' && canEditPrompt()) void hydrateAgentCatalog();
+    if (selectedExecutorKind() === 'agent_task_turn' && canEditPrompt()) void hydrateAgentCatalog();
   });
 
   $effect(() => {
     if (!agentsHydrated || loadingModels) return;
-    if (selectedExecutorKind() !== 'managed_thread_turn' || !canEditPrompt()) return;
+    if (selectedExecutorKind() !== 'agent_task_turn' || !canEditPrompt()) return;
     if (selectedAgent && modelCatalogAgentId !== selectedAgent) {
       void loadModels(selectedAgent, selectedModel, { keepReasoning: selectedKind === 'automation' });
     }
@@ -762,7 +762,6 @@
     pma_prompt: 'PMA reaction',
     agent_task_turn: 'Agent task',
     pma_operator_turn: 'PMA operator',
-    managed_thread_turn: 'Agent turn',
     ticket_flow: 'Ticket flow'
   };
 
@@ -787,7 +786,7 @@
   }
 
   function usesRuntimePicker(executorKind: string): boolean {
-    return executorKind === 'agent_task_turn' || executorKind === 'pma_operator_turn' || executorKind === 'managed_thread_turn';
+    return executorKind === 'agent_task_turn' || executorKind === 'pma_operator_turn';
   }
 
   function runtimeContractLabel(value: unknown, fallback = 'unspecified'): string {
@@ -839,6 +838,20 @@
     const job = automation.lastJob;
     if (!job || !job.rawState || job.rawState === job.effectiveState) return '';
     return `Raw parent: ${job.rawState}`;
+  }
+
+  function lastRunBlocking(automation: AutomationSummary): string {
+    const job = automation.lastJob;
+    if (!job) return '';
+    const reason = job.blockedReason || '';
+    const blocker = job.blockedByJobId ? `blocked by ${job.blockedByJobId}` : '';
+    return [reason, blocker].filter(Boolean).join(' · ');
+  }
+
+  function lastRunPolicyViolation(automation: AutomationSummary): string {
+    const violation = automation.lastJob?.policyViolations?.[0];
+    if (!violation) return '';
+    return String(violation.message ?? violation.code ?? '');
   }
 
   function scheduleSummary(): string {
@@ -1189,6 +1202,12 @@
               {lastRunLabel(selectedAutomation() as AutomationSummary)}
               {#if lastRunDiagnostic(selectedAutomation() as AutomationSummary)}
                 <span class="raw-state-diagnostic">{lastRunDiagnostic(selectedAutomation() as AutomationSummary)}</span>
+              {/if}
+              {#if lastRunBlocking(selectedAutomation() as AutomationSummary)}
+                <span class="blocked-state-diagnostic">{lastRunBlocking(selectedAutomation() as AutomationSummary)}</span>
+              {/if}
+              {#if lastRunPolicyViolation(selectedAutomation() as AutomationSummary)}
+                <span class="policy-state-diagnostic">{lastRunPolicyViolation(selectedAutomation() as AutomationSummary)}</span>
               {/if}
             </dd>
           </div>
@@ -1924,13 +1943,23 @@
     text-transform: capitalize;
   }
 
-  .raw-state-diagnostic {
+  .raw-state-diagnostic,
+  .blocked-state-diagnostic,
+  .policy-state-diagnostic {
     display: block;
     margin-top: 2px;
     font-size: 11px;
     font-weight: 500;
     text-transform: none;
+  }
+
+  .raw-state-diagnostic {
     color: var(--color-warning);
+  }
+
+  .blocked-state-diagnostic,
+  .policy-state-diagnostic {
+    color: var(--color-danger);
   }
 
   .fact-failed { color: var(--color-danger); }

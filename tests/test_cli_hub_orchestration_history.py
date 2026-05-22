@@ -224,7 +224,7 @@ def test_hub_orchestration_status_reports_automation_migration(
 
     assert result.exit_code == 0
     payload = json.loads(result.output)
-    assert payload["automation_migration"]["status"] == "ok"
+    assert payload["automation_migration"]["status"] == "complete"
     assert payload["automation_migration"]["mirror_health"]["status"] == "ok"
 
 

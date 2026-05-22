@@ -4,12 +4,12 @@ from pathlib import Path
 
 from codex_autorunner.core.automation import (
     EXECUTOR_AGENT_TASK_TURN,
-    EXECUTOR_MANAGED_THREAD_TURN,
     EXECUTOR_TICKET_FLOW,
     JOB_FAILED,
     JOB_PAUSED,
     JOB_RUNNING,
     JOB_SUCCEEDED,
+    LEGACY_EXECUTOR_MANAGED_THREAD_TURN,
     AutomationEvent,
     AutomationJob,
     AutomationRule,
@@ -49,7 +49,7 @@ def _store_with_running_ticket_flow_job(
 ) -> AutomationStore:
     store = AutomationStore(hub)
     store.upsert_rule(
-        AutomationRule.create(
+        AutomationRule.hydrate_persisted(
             rule_id="rule-1",
             name="Ticket flow",
             trigger_kind=TRIGGER_KIND_EVENT,
@@ -239,7 +239,7 @@ def test_reconciler_closes_parent_from_durable_managed_thread_edge(
     edges = store.list_child_execution_edges("job-pma")
     assert result.completed == 1
     assert saved.state == JOB_SUCCEEDED
-    assert saved.managed_thread_execution_id == "exec-1"
+    assert not hasattr(saved, "managed_thread_execution_id")
     assert edges[0].terminal_state == "succeeded"
     assert edges[0].actual_runtime.model == "zai-coding-plan/glm-5.1"
 
@@ -250,7 +250,7 @@ def test_reducer_fails_authoritative_agent_task_runtime_mismatch(
     hub = tmp_path / "hub"
     store = AutomationStore(hub)
     store.upsert_rule(
-        AutomationRule.create(
+        AutomationRule.hydrate_persisted(
             rule_id="rule-agent-task",
             name="Direct agent task",
             trigger_kind=TRIGGER_KIND_EVENT,
@@ -313,7 +313,7 @@ def test_reducer_fails_terminal_agent_task_without_actual_runtime(
     hub = tmp_path / "hub"
     store = AutomationStore(hub)
     store.upsert_rule(
-        AutomationRule.create(
+        AutomationRule.hydrate_persisted(
             rule_id="rule-agent-task-missing-actual",
             name="Agent task missing actual",
             trigger_kind=TRIGGER_KIND_EVENT,
@@ -371,7 +371,7 @@ def test_automation_architecture_diagnostics_cover_graph_invariants(
     hub = tmp_path / "hub"
     store = AutomationStore(hub)
     store.upsert_rule(
-        AutomationRule.create(
+        AutomationRule.hydrate_persisted(
             rule_id="rule-diagnostics",
             name="Diagnostics",
             trigger_kind=TRIGGER_KIND_EVENT,
@@ -479,7 +479,7 @@ def test_reconciler_closes_authoritative_pma_operator_without_worker_child(
     hub = tmp_path / "hub"
     store = AutomationStore(hub)
     store.upsert_rule(
-        AutomationRule.create(
+        AutomationRule.hydrate_persisted(
             rule_id="rule-pma-operator",
             name="PMA operator",
             trigger_kind=TRIGGER_KIND_EVENT,
@@ -543,7 +543,7 @@ def test_reconciler_rejects_pma_queue_without_durable_child_edge(
     hub = tmp_path / "hub"
     store = AutomationStore(hub)
     store.upsert_rule(
-        AutomationRule.create(
+        AutomationRule.hydrate_persisted(
             rule_id="rule-legacy-pma",
             name="Legacy PMA",
             trigger_kind=TRIGGER_KIND_EVENT,
@@ -596,13 +596,13 @@ def test_reconciler_rejects_pma_queue_without_durable_child_edge(
 def _store_with_running_managed_thread_job(hub: Path) -> AutomationStore:
     store = AutomationStore(hub)
     store.upsert_rule(
-        AutomationRule.create(
+        AutomationRule.hydrate_persisted(
             rule_id="rule-pma",
             name="managed thread turn",
             trigger_kind=TRIGGER_KIND_EVENT,
             trigger={"event_types": ["manual.run"]},
             target_policy=TARGET_POLICY_EXISTING_REPO,
-            executor_kind=EXECUTOR_MANAGED_THREAD_TURN,
+            executor_kind=LEGACY_EXECUTOR_MANAGED_THREAD_TURN,
         )
     )
     store.record_event(
@@ -615,7 +615,7 @@ def _store_with_running_managed_thread_job(hub: Path) -> AutomationStore:
             event_id="event-pma",
             state=JOB_RUNNING,
             target={"policy": TARGET_POLICY_EXISTING_REPO, "repo_id": "repo-1"},
-            executor={"kind": EXECUTOR_MANAGED_THREAD_TURN},
+            executor={"kind": LEGACY_EXECUTOR_MANAGED_THREAD_TURN},
             available_at="2026-01-01T00:00:00Z",
             created_at="2026-01-01T00:00:00Z",
             dedupe_key="job-pma",
@@ -725,7 +725,7 @@ def test_reconciler_uses_exact_managed_thread_execution_id(
     assert result.completed == 1
     assert result.failed == 0
     assert saved.state == JOB_SUCCEEDED
-    assert saved.managed_thread_execution_id == "exec-1"
+    assert store.list_child_execution_edges("job-pma")[0].child_id == "exec-1"
 
 
 def test_reconciler_fails_managed_thread_job_when_turn_fails(
@@ -771,10 +771,11 @@ def test_reconciler_fails_managed_thread_job_when_child_thread_fails(
     ).reconcile_running_jobs()
 
     saved = store.get_job("job-pma")
+    edge = store.list_child_execution_edges("job-pma")[0]
     assert result.failed == 1
     assert saved.state == JOB_FAILED
-    assert saved.managed_thread_target_id == "29998b57-94e9-49a4-8299-0349872e4b70"
-    assert saved.managed_thread_execution_id == "exec-1"
+    assert edge.child_id == "exec-1"
+    assert edge.terminal_event_id == "exec-1"
     assert saved.error_text == (
         "opencode_first_event_timeout: no relevant events received within 60.0s"
     )
@@ -799,10 +800,11 @@ def test_reconciler_cancels_managed_thread_job_when_child_thread_is_interrupted(
     ).reconcile_running_jobs()
 
     saved = store.get_job("job-pma")
+    edge = store.list_child_execution_edges("job-pma")[0]
     assert result.cancelled == 1
     assert saved.state == "cancelled"
-    assert saved.managed_thread_target_id == "29998b57-94e9-49a4-8299-0349872e4b70"
-    assert saved.managed_thread_execution_id == "exec-1"
+    assert edge.child_id == "exec-1"
+    assert edge.terminal_event_id == "exec-1"
 
 
 def test_reconciler_uses_managed_thread_refs_without_transport_state(

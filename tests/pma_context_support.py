@@ -19,7 +19,7 @@ from codex_autorunner.core.automation import (
     AutomationStore,
 )
 from codex_autorunner.core.automation.models import (
-    EXECUTOR_MANAGED_THREAD_TURN,
+    LEGACY_EXECUTOR_MANAGED_THREAD_TURN,
     SCHEDULE_ONE_SHOT,
     TARGET_POLICY_HUB,
     TRIGGER_KIND_EVENT,
@@ -848,7 +848,7 @@ def test_build_hub_snapshot_includes_automation_summary(hub_env) -> None:
     try:
         store = AutomationStore(hub_env.hub_root)
         store.upsert_rule(
-            AutomationRule.create(
+            AutomationRule.hydrate_persisted(
                 rule_id=f"{PMA_SUBSCRIPTION_RULE_PREFIX}snapshot-sub-1",
                 name="Snapshot subscription",
                 trigger_kind=TRIGGER_KIND_EVENT,
@@ -860,7 +860,7 @@ def test_build_hub_snapshot_includes_automation_summary(hub_env) -> None:
                     "event.payload.to_state": "completed",
                 },
                 target_policy=TARGET_POLICY_HUB,
-                executor_kind=EXECUTOR_MANAGED_THREAD_TURN,
+                executor_kind=LEGACY_EXECUTOR_MANAGED_THREAD_TURN,
                 executor={"lane_id": "pma:lane-next"},
                 system_owned=True,
                 metadata={
@@ -870,13 +870,13 @@ def test_build_hub_snapshot_includes_automation_summary(hub_env) -> None:
                 },
             )
         )
-        timer_rule = AutomationRule.create(
+        timer_rule = AutomationRule.hydrate_persisted(
             rule_id=f"{PMA_TIMER_RULE_PREFIX}snapshot-timer-1",
             name="Snapshot timer",
             trigger_kind=TRIGGER_KIND_EVENT,
             trigger={"event_types": ["schedule.fire"]},
             target_policy=TARGET_POLICY_HUB,
-            executor_kind=EXECUTOR_MANAGED_THREAD_TURN,
+            executor_kind=LEGACY_EXECUTOR_MANAGED_THREAD_TURN,
             system_owned=True,
             metadata={
                 "purpose": "managed_thread_timer",
@@ -916,7 +916,7 @@ def test_build_hub_snapshot_includes_automation_summary(hub_env) -> None:
                 rule_id=f"{PMA_SUBSCRIPTION_RULE_PREFIX}snapshot-sub-1",
                 event_id="snapshot-event-1",
                 target={"repo_id": hub_env.repo_id, "run_id": "run-1"},
-                executor={"kind": EXECUTOR_MANAGED_THREAD_TURN},
+                executor={"kind": LEGACY_EXECUTOR_MANAGED_THREAD_TURN},
             )
         )
 
@@ -964,13 +964,13 @@ def test_build_hub_snapshot_includes_action_queue_with_supersession(hub_env) -> 
     try:
         store = AutomationStore(hub_env.hub_root)
         store.upsert_rule(
-            AutomationRule.create(
+            AutomationRule.hydrate_persisted(
                 rule_id=f"{PMA_SUBSCRIPTION_RULE_PREFIX}snapshot-action-queue",
                 name="Snapshot action queue subscription",
                 trigger_kind=TRIGGER_KIND_EVENT,
                 trigger={"event_types": ["lifecycle.flow_paused"]},
                 target_policy=TARGET_POLICY_HUB,
-                executor_kind=EXECUTOR_MANAGED_THREAD_TURN,
+                executor_kind=LEGACY_EXECUTOR_MANAGED_THREAD_TURN,
                 system_owned=True,
                 metadata={
                     "purpose": "managed_thread_lifecycle_subscription",
@@ -992,7 +992,7 @@ def test_build_hub_snapshot_includes_action_queue_with_supersession(hub_env) -> 
                 rule_id=f"{PMA_SUBSCRIPTION_RULE_PREFIX}snapshot-action-queue",
                 event_id="snapshot-action-queue-event",
                 target={"repo_id": hub_env.repo_id, "run_id": run_id},
-                executor={"kind": EXECUTOR_MANAGED_THREAD_TURN},
+                executor={"kind": LEGACY_EXECUTOR_MANAGED_THREAD_TURN},
             )
         )
         snapshot = asyncio.run(

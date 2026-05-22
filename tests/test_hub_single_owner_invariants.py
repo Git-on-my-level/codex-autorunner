@@ -137,6 +137,42 @@ def test_hub_control_plane_error_from_info_round_trip() -> None:
     assert err.info == info
 
 
+def test_automation_final_state_source_invariants() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    scanned_roots = (
+        repo_root / "src/codex_autorunner/core/automation",
+        repo_root / "src/codex_autorunner/core/diagnostics",
+    )
+    allowed_runtime_pattern_files = {
+        Path("src/codex_autorunner/core/automation/migration_diagnostics.py"),
+        Path("src/codex_autorunner/core/automation/models.py"),
+        Path("src/codex_autorunner/core/automation/product.py"),
+        Path("src/codex_autorunner/core/diagnostics/automation.py"),
+    }
+    banned_runtime_patterns = (
+        "managed_thread_turn",
+        "pma_turn",
+        "managed_thread_execution_id",
+        "pma_queue_item_id",
+        "ticket_flow_run_id",
+        "publish_operation_id",
+    )
+    violations: list[str] = []
+    for root in scanned_roots:
+        for path in root.rglob("*.py"):
+            rel_path = path.relative_to(repo_root)
+            text = path.read_text(encoding="utf-8")
+            if "Thread `" in text:
+                violations.append(f"{rel_path}: parses assistant/PMA prose")
+            if rel_path in allowed_runtime_pattern_files:
+                continue
+            for pattern in banned_runtime_patterns:
+                if pattern in text:
+                    violations.append(f"{rel_path}: uses {pattern}")
+
+    assert violations == []
+
+
 # ---------------------------------------------------------------------------
 # 2. Remote store fallback characterization
 # ---------------------------------------------------------------------------

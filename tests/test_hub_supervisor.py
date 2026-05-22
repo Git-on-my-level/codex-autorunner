@@ -29,13 +29,13 @@ from codex_autorunner.adapters.agents.wiring import (
 )
 from codex_autorunner.bootstrap import seed_repo_files
 from codex_autorunner.core.automation import (
-    EXECUTOR_MANAGED_THREAD_TURN,
     AutomationRule,
     AutomationSchedule,
     AutomationStore,
 )
 from codex_autorunner.core.automation.models import (
     APPROVAL_INHERIT_PROFILE,
+    EXECUTOR_AGENT_TASK_TURN,
     SCHEDULE_ONE_SHOT,
     TARGET_POLICY_HUB,
     TRIGGER_KIND_SCHEDULE,
@@ -3466,6 +3466,7 @@ def test_process_automation_timers_does_not_call_legacy_dequeue(
     hub_root = tmp_path / "hub"
     supervisor = _make_basic_supervisor(hub_root)
     try:
+        supervisor.set_managed_thread_queue_worker_starter(lambda _thread_id: None)
         _seed_due_managed_thread_schedule(hub_root)
         monkeypatch.setattr(
             PmaUnifiedAutomationAdapter,
@@ -3508,8 +3509,11 @@ def _seed_due_managed_thread_schedule(hub_root: Path) -> str:
             trigger={"event_types": ["schedule.fire"]},
             target_policy=TARGET_POLICY_HUB,
             target={"thread_target_id": thread_id},
-            executor_kind=EXECUTOR_MANAGED_THREAD_TURN,
-            executor={"message_text": "Scheduled automation turn"},
+            executor_kind=EXECUTOR_AGENT_TASK_TURN,
+            executor={
+                "message_text": "Scheduled automation turn",
+                "requested_runtime": {"agent": "codex"},
+            },
             policy={"approval_mode": APPROVAL_INHERIT_PROFILE},
         )
     )

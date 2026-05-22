@@ -12,11 +12,11 @@ from codex_autorunner.core.automation.models import (
     EXECUTOR_AGENT_TASK_TURN,
     EXECUTOR_INPUT_KINDS,
     EXECUTOR_KINDS,
-    EXECUTOR_MANAGED_THREAD_TURN,
     EXECUTOR_PMA_OPERATOR_TURN,
     EXECUTOR_PUBLISH_OPERATION,
     EXECUTOR_TICKET_FLOW,
     LEGACY_EXECUTOR_KINDS,
+    LEGACY_EXECUTOR_MANAGED_THREAD_TURN,
     SCHEDULE_DAILY,
     SCHEDULE_INTERVAL,
     SCHEDULE_ONE_SHOT,
@@ -92,9 +92,9 @@ def test_executor_kind_sets_separate_product_modes_from_legacy_inputs() -> None:
     assert EXECUTOR_PMA_OPERATOR_TURN in EXECUTOR_KINDS
     assert EXECUTOR_TICKET_FLOW in EXECUTOR_KINDS
     assert EXECUTOR_PUBLISH_OPERATION in EXECUTOR_KINDS
-    assert EXECUTOR_MANAGED_THREAD_TURN not in EXECUTOR_KINDS
-    assert EXECUTOR_MANAGED_THREAD_TURN in LEGACY_EXECUTOR_KINDS
-    assert EXECUTOR_MANAGED_THREAD_TURN in EXECUTOR_INPUT_KINDS
+    assert LEGACY_EXECUTOR_MANAGED_THREAD_TURN not in EXECUTOR_KINDS
+    assert LEGACY_EXECUTOR_MANAGED_THREAD_TURN in LEGACY_EXECUTOR_KINDS
+    assert LEGACY_EXECUTOR_MANAGED_THREAD_TURN not in EXECUTOR_INPUT_KINDS
 
 
 def test_runtime_contract_and_child_edge_serialize_canonical_shape() -> None:
@@ -200,18 +200,18 @@ def test_canonical_schedule_contracts_cover_supported_schedule_shapes() -> None:
                 "trigger_kind": TRIGGER_KIND_EVENT,
                 "trigger": {"event_type": "manual.run"},
                 "target_policy": TARGET_POLICY_HUB,
-                "executor_kind": EXECUTOR_MANAGED_THREAD_TURN,
+                "executor_kind": LEGACY_EXECUTOR_MANAGED_THREAD_TURN,
             },
-            "AUTOMATION_CONTRACT_LEGACY_TRIGGER",
+            "AUTOMATION_CONTRACT_LEGACY_EXECUTOR_KIND",
         ),
         (
             {
                 "trigger_kind": TRIGGER_KIND_EVENT,
                 "trigger": {"event_types": []},
                 "target_policy": TARGET_POLICY_HUB,
-                "executor_kind": EXECUTOR_MANAGED_THREAD_TURN,
+                "executor_kind": LEGACY_EXECUTOR_MANAGED_THREAD_TURN,
             },
-            "AUTOMATION_CONTRACT_INVALID_LIST",
+            "AUTOMATION_CONTRACT_LEGACY_EXECUTOR_KIND",
         ),
         (
             {
