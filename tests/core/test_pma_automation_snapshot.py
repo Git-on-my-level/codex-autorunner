@@ -122,8 +122,8 @@ def test_snapshot_pma_automation_tolerates_unknown_executor_kind(tmp_path) -> No
                  WHERE rule_id = ?
                 """,
                 (
-                    "pma_operator_turn",
-                    json.dumps({"kind": "pma_operator_turn", "prompt": "Future"}),
+                    "future_executor_turn",
+                    json.dumps({"kind": "future_executor_turn", "prompt": "Future"}),
                     "rule-unknown",
                 ),
             )
@@ -132,6 +132,6 @@ def test_snapshot_pma_automation_tolerates_unknown_executor_kind(tmp_path) -> No
     snapshot = snapshot_pma_automation(supervisor, max_items=10)
 
     assert snapshot["rules"]["enabled_count"] == 1
-    assert snapshot["rules"]["sample"][0]["executor_kind"] == "pma_operator_turn"
+    assert snapshot["rules"]["sample"][0]["executor_kind"] == "future_executor_turn"
     assert snapshot["rules"]["sample"][0]["known_executor"] is False
     assert snapshot["rules"]["sample"][0]["executable"] is False

@@ -657,7 +657,7 @@ def test_shared_state_service_automation_rule_crud_and_manual_run(
                     "trigger": {"schedule_kind": "daily"},
                     "target_policy": "hub",
                     "target": {"repo_id": "repo-1"},
-                    "executor_kind": "managed_thread_turn",
+                    "executor_kind": "pma_operator_turn",
                     "executor": {
                         "lane_id": "pma:default",
                         "api_token": "secret-value",
@@ -740,7 +740,7 @@ def test_shared_state_service_lists_unknown_executor_but_rejects_manual_run(
                 "trigger_kind": "event",
                 "trigger": {"event_types": ["manual.run"]},
                 "target_policy": "hub",
-                "executor_kind": "managed_thread_turn",
+                "executor_kind": "pma_operator_turn",
             }
         )
     )
@@ -754,8 +754,8 @@ def test_shared_state_service_lists_unknown_executor_but_rejects_manual_run(
                  WHERE rule_id = ?
                 """,
                 (
-                    "pma_operator_turn",
-                    json.dumps({"kind": "pma_operator_turn", "prompt": "Future"}),
+                    "future_executor_turn",
+                    json.dumps({"kind": "future_executor_turn", "prompt": "Future"}),
                     "rule-future",
                 ),
             )
@@ -763,7 +763,7 @@ def test_shared_state_service_lists_unknown_executor_but_rejects_manual_run(
     listed = service.list_automation_rules(AutomationRuleListRequest.from_mapping({}))
 
     rules = {rule["rule_id"]: rule for rule in listed.rules}
-    assert rules["rule-future"]["executor_kind"] == "pma_operator_turn"
+    assert rules["rule-future"]["executor_kind"] == "future_executor_turn"
     assert rules["rule-future"]["known_executor"] is False
     assert rules["rule-future"]["executable"] is False
     try:
@@ -792,7 +792,7 @@ def test_shared_state_service_automation_job_cancel_retry_and_detail(
                     "event_types": ["scm.github.pull_request.opened"],
                 },
                 "target_policy": "hub",
-                "executor_kind": "managed_thread_turn",
+                "executor_kind": "pma_operator_turn",
             }
         )
     )

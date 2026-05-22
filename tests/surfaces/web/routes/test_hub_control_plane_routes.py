@@ -203,7 +203,7 @@ def test_hub_control_plane_automation_routes_create_run_and_cancel(
                 "name": "Manual PMA",
                 "trigger_kind": "manual",
                 "target_policy": "hub",
-                "executor_kind": "managed_thread_turn",
+                "executor_kind": "pma_operator_turn",
                 "executor": {"api_token": "secret-value"},
             },
         )

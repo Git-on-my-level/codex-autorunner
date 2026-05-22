@@ -128,11 +128,7 @@ def test_rule_engine_reports_unknown_executor_skip_reason(tmp_path) -> None:
                        executor_json = ?
                  WHERE rule_id = ?
                 """,
-                (
-                    "agent_task_turn",
-                    '{"kind":"agent_task_turn"}',
-                    "rule-1",
-                ),
+                ("future_executor_turn", '{"kind":"future_executor_turn"}', "rule-1"),
             )
 
     result = AutomationRuleEngine(
@@ -145,7 +141,7 @@ def test_rule_engine_reports_unknown_executor_skip_reason(tmp_path) -> None:
         {
             "code": "AUTOMATION_EXECUTOR_KIND_UNSUPPORTED",
             "rule_id": "rule-1",
-            "executor_kind": "agent_task_turn",
+            "executor_kind": "future_executor_turn",
             "known_executor": False,
             "executable": False,
         },
