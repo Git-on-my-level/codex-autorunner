@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 
 from codex_autorunner.adapters.telegram.state import TelegramStateStore
-from codex_autorunner.core.automation import AutomationStore
+from codex_autorunner.core.automation import EXECUTOR_PMA_OPERATOR_TURN, AutomationStore
 from codex_autorunner.core.config import (
     CONFIG_FILENAME,
     DEFAULT_HUB_CONFIG,
@@ -53,7 +53,7 @@ async def test_reactive_flow_failed_creates_paused_automation_job(
         jobs = AutomationStore(hub_root).list_jobs()
         assert len(jobs) == 1
         assert jobs[0].state == "paused"
-        assert jobs[0].executor.get("kind") == "managed_thread_turn"
+        assert jobs[0].executor.get("kind") == EXECUTOR_PMA_OPERATOR_TURN
         assert "Lifecycle event received" in str(jobs[0].executor.get("message_text"))
 
         telegram_store = TelegramStateStore(hub_root / "telegram_state.sqlite3")

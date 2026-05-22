@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from codex_autorunner.core.automation import (
+    AgentTaskTurnAutomationExecutor,
     AutomationEvent,
     AutomationExecutorRegistry,
     AutomationJob,
@@ -10,16 +11,23 @@ from codex_autorunner.core.automation import (
     AutomationRule,
     AutomationStore,
     ManagedThreadTurnAutomationExecutor,
+    PmaOperatorTurnAutomationExecutor,
 )
 from codex_autorunner.core.automation.models import (
+    AUTOMATION_CHILD_KIND_AGENT_TASK,
+    AUTOMATION_CHILD_KIND_PMA_OPERATOR,
+    EXECUTOR_AGENT_TASK_TURN,
     EXECUTOR_MANAGED_THREAD_TURN,
+    EXECUTOR_PMA_OPERATOR_TURN,
     JOB_DEAD_LETTERED,
-    JOB_PAUSED,
+    JOB_FAILED,
     JOB_RUNNING,
+    JOB_SUCCEEDED,
     TARGET_POLICY_HUB,
     TRIGGER_KIND_EVENT,
 )
 from codex_autorunner.core.managed_thread_store import ManagedThreadStore
+from codex_autorunner.core.pma_queue import PmaQueue, QueueItemState
 
 
 def _store_rule_event(
@@ -278,8 +286,353 @@ def test_managed_thread_default_approval_pauses_unattended_job(tmp_path: Path) -
     )
 
     assert result.paused == 1
-    assert store.get_job("job-1").state == JOB_PAUSED
+
+
+def test_agent_task_turn_launches_direct_codex_task_and_records_runtime_edge(
+    tmp_path: Path,
+) -> None:
+    store, threads, _thread_id = _store_rule_event(tmp_path)
+    started_workers: list[str] = []
+    store.enqueue_job(
+        _job(
+            "",
+            target={"repo_id": "repo-1"},
+            executor={
+                "kind": EXECUTOR_AGENT_TASK_TURN,
+                "message_text": "Inspect {{ target.repo_id }}",
+                "client_turn_id": "client-direct-codex",
+                "requested_runtime": {
+                    "agent": "codex",
+                    "model": "gpt-5.5",
+                    "profile": "security",
+                    "reasoning": "medium",
+                    "approval_policy": "never_require_approval",
+                    "sandbox_policy": "dangerFullAccess",
+                },
+            },
+            policy={"approval_mode": "never_require_approval"},
+        )
+    )
+    registry = AutomationExecutorRegistry()
+    registry.register(
+        EXECUTOR_AGENT_TASK_TURN,
+        AgentTaskTurnAutomationExecutor(
+            hub_root=tmp_path / "hub",
+            automation_store=store,
+            thread_store=threads,
+            queue_worker_starter_fn=started_workers.append,
+        ),
+    )
+
+    result = AutomationJobWorker(store, registry).process_once(
+        now="2026-01-01T00:00:00Z"
+    )
+
+    saved = store.get_job("job-1")
+    assert result.running == 1
+    assert saved.state == JOB_RUNNING
+    assert saved.pma_queue_item_id is None
+    assert saved.pma_lane_id is None
+    assert saved.managed_thread_target_id
+    assert saved.managed_thread_execution_id
+    assert started_workers == [str(saved.managed_thread_target_id)]
+    request = threads.get_turn_execution_request(
+        str(saved.managed_thread_target_id),
+        str(saved.managed_thread_execution_id),
+    )
+    assert request.agent == "codex"
+    assert request.model == "gpt-5.5"
+    assert request.profile == "security"
+    edge = store.list_child_execution_edges("job-1")[0]
+    assert edge.child_kind == AUTOMATION_CHILD_KIND_AGENT_TASK
+    assert edge.child_id == saved.managed_thread_execution_id
+    assert edge.requested_runtime.agent == "codex"
+    assert edge.requested_runtime.model == "gpt-5.5"
+    assert edge.actual_runtime is None
+
+
+def test_agent_task_turn_launches_direct_opencode_task_with_model_payload(
+    tmp_path: Path,
+) -> None:
+    store, threads, _thread_id = _store_rule_event(tmp_path)
+    started_workers: list[str] = []
+    store.enqueue_job(
+        _job(
+            "",
+            target={"repo_id": "repo-1"},
+            executor={
+                "kind": EXECUTOR_AGENT_TASK_TURN,
+                "message_text": "Scan {{ target.repo_id }}",
+                "client_turn_id": "client-direct-opencode",
+                "requested_runtime": {
+                    "agent": "opencode",
+                    "model": "zai-coding-plan/glm-5.1",
+                    "profile": "security",
+                    "reasoning": "high",
+                    "approval_policy": "never_require_approval",
+                    "sandbox_policy": "dangerFullAccess",
+                },
+            },
+            policy={"approval_mode": "never_require_approval"},
+        )
+    )
+    registry = AutomationExecutorRegistry()
+    registry.register(
+        EXECUTOR_AGENT_TASK_TURN,
+        AgentTaskTurnAutomationExecutor(
+            hub_root=tmp_path / "hub",
+            automation_store=store,
+            thread_store=threads,
+            queue_worker_starter_fn=started_workers.append,
+        ),
+    )
+
+    result = AutomationJobWorker(store, registry).process_once(
+        now="2026-01-01T00:00:00Z"
+    )
+
+    saved = store.get_job("job-1")
+    assert result.running == 1
+    request = threads.get_turn_execution_request(
+        str(saved.managed_thread_target_id),
+        str(saved.managed_thread_execution_id),
+    )
+    assert request.agent == "opencode"
+    assert request.model == "zai-coding-plan/glm-5.1"
+    assert request.model_payload == {
+        "providerID": "zai-coding-plan",
+        "modelID": "glm-5.1",
+    }
+    edge = store.list_child_execution_edges("job-1")[0]
+    assert edge.requested_runtime.provider_payload == {
+        "providerID": "zai-coding-plan",
+        "modelID": "glm-5.1",
+    }
+    assert edge.actual_runtime is None
+    assert started_workers == [str(saved.managed_thread_target_id)]
+
+
+def test_agent_task_turn_runtime_mismatch_fails_without_fallback(
+    tmp_path: Path,
+) -> None:
+    store, threads, thread_id = _store_rule_event(tmp_path)
+    store.enqueue_job(
+        _job(
+            thread_id,
+            executor={
+                "kind": EXECUTOR_AGENT_TASK_TURN,
+                "message_text": "Scan",
+                "client_turn_id": "client-mismatch",
+                "requested_runtime": {
+                    "agent": "opencode",
+                    "model": "zai-coding-plan/glm-5.1",
+                },
+            },
+            policy={"approval_mode": "never_require_approval", "max_attempts": 1},
+            max_attempts=1,
+        )
+    )
+    registry = AutomationExecutorRegistry()
+    registry.register(
+        EXECUTOR_AGENT_TASK_TURN,
+        AgentTaskTurnAutomationExecutor(
+            hub_root=tmp_path / "hub",
+            automation_store=store,
+            thread_store=threads,
+            queue_worker_starter_fn=lambda _thread_id: None,
+        ),
+    )
+
+    result = AutomationJobWorker(store, registry).process_once(
+        now="2026-01-01T00:00:00Z"
+    )
+
+    saved = store.get_job("job-1")
+    assert result.dead_lettered == 1
+    assert saved.state == JOB_DEAD_LETTERED
+    assert "requested agent 'opencode' does not match thread agent 'codex'" in (
+        saved.error_text or ""
+    )
     assert threads.list_turns(thread_id) == []
+    assert store.list_child_execution_edges("job-1") == []
+
+
+def test_pma_operator_turn_queues_coordinator_and_records_runtime_edge(
+    tmp_path: Path,
+) -> None:
+    store, threads, _thread_id = _store_rule_event(tmp_path)
+    started_lanes: list[str] = []
+    store.enqueue_job(
+        _job(
+            "",
+            target={"repo_id": "repo-1"},
+            executor={
+                "kind": EXECUTOR_PMA_OPERATOR_TURN,
+                "message_text": "Decide what to do with {{ target.repo_id }}",
+                "client_turn_id": "client-pma-operator",
+                "lane_id": "pma:default",
+                "requested_runtime": {
+                    "agent": "codex",
+                    "model": "gpt-5.5",
+                    "profile": "operator",
+                    "reasoning": "medium",
+                    "approval_policy": "never_require_approval",
+                    "sandbox_policy": "dangerFullAccess",
+                },
+            },
+            policy={"approval_mode": "never_require_approval"},
+        )
+    )
+    registry = AutomationExecutorRegistry()
+    registry.register(
+        EXECUTOR_PMA_OPERATOR_TURN,
+        PmaOperatorTurnAutomationExecutor(
+            hub_root=tmp_path / "hub",
+            automation_store=store,
+            pma_queue=PmaQueue(tmp_path / "hub"),
+            lane_worker_starter_fn=started_lanes.append,
+        ),
+    )
+
+    result = AutomationJobWorker(store, registry).process_once(
+        now="2026-01-01T00:00:00Z"
+    )
+
+    saved = store.get_job("job-1")
+    assert result.running == 1
+    assert saved.state == JOB_RUNNING
+    assert saved.pma_lane_id == "pma:default"
+    assert saved.pma_queue_item_id
+    assert saved.managed_thread_target_id is None
+    assert saved.managed_thread_execution_id is None
+    assert started_lanes == ["pma:default"]
+    item = PmaQueue(tmp_path / "hub").get_item_sync(str(saved.pma_queue_item_id))
+    assert item is not None
+    assert item.state == QueueItemState.PENDING
+    turn_request = item.payload["turn_request"]
+    assert turn_request["agent"] == "codex"
+    assert turn_request["model"] == "gpt-5.5"
+    edges = sorted(
+        store.list_child_execution_edges("job-1"),
+        key=lambda edge: (
+            0 if edge.child_kind == AUTOMATION_CHILD_KIND_PMA_OPERATOR else 1
+        ),
+    )
+    assert len(edges) == 1
+    assert edges[0].child_kind == AUTOMATION_CHILD_KIND_PMA_OPERATOR
+    assert edges[0].child_id == saved.pma_queue_item_id
+    assert edges[0].authoritative_for_parent_completion is True
+    assert edges[0].requested_runtime.agent == "codex"
+    assert edges[0].actual_runtime is None
+
+
+def test_pma_operator_turn_records_separate_declared_worker_child_edge(
+    tmp_path: Path,
+) -> None:
+    store, _threads, _thread_id = _store_rule_event(tmp_path)
+    store.enqueue_job(
+        _job(
+            "",
+            executor={
+                "kind": EXECUTOR_PMA_OPERATOR_TURN,
+                "message_text": "Coordinate work",
+                "client_turn_id": "client-pma-worker",
+                "requested_runtime": {"agent": "codex", "model": "gpt-5.5"},
+                "coordinator_authoritative": False,
+                "worker_child": {
+                    "child_id": "worker-turn-1",
+                    "authoritative_for_parent_completion": True,
+                    "requested_runtime": {
+                        "agent": "opencode",
+                        "model": "zai-coding-plan/glm-5.1",
+                    },
+                    "actual_runtime": {
+                        "agent": "opencode",
+                        "model": "zai-coding-plan/glm-5.1",
+                    },
+                },
+            },
+            policy={"approval_mode": "never_require_approval"},
+        )
+    )
+    registry = AutomationExecutorRegistry()
+    registry.register(
+        EXECUTOR_PMA_OPERATOR_TURN,
+        PmaOperatorTurnAutomationExecutor(
+            hub_root=tmp_path / "hub",
+            automation_store=store,
+            pma_queue=PmaQueue(tmp_path / "hub"),
+            lane_worker_starter_fn=lambda _lane: None,
+        ),
+    )
+
+    result = AutomationJobWorker(store, registry).process_once(
+        now="2026-01-01T00:00:00Z"
+    )
+
+    assert result.running == 1
+    edges = sorted(
+        store.list_child_execution_edges("job-1"),
+        key=lambda edge: (
+            0 if edge.child_kind == AUTOMATION_CHILD_KIND_PMA_OPERATOR else 1
+        ),
+    )
+    assert [edge.child_kind for edge in edges] == [
+        AUTOMATION_CHILD_KIND_PMA_OPERATOR,
+        AUTOMATION_CHILD_KIND_AGENT_TASK,
+    ]
+    assert edges[0].authoritative_for_parent_completion is False
+    assert edges[0].requested_runtime.agent == "codex"
+    assert edges[1].child_id == "worker-turn-1"
+    assert edges[1].authoritative_for_parent_completion is True
+    assert edges[1].requested_runtime.agent == "opencode"
+    assert edges[1].actual_runtime.agent == "opencode"
+
+
+def test_pma_operator_turn_coordinator_success_worker_failure_policy_is_visible(
+    tmp_path: Path,
+) -> None:
+    store, _threads, _thread_id = _store_rule_event(tmp_path)
+    job = _job(
+        "",
+        executor={
+            "kind": EXECUTOR_PMA_OPERATOR_TURN,
+            "message_text": "Coordinate work",
+            "client_turn_id": "client-policy",
+            "requested_runtime": {"agent": "codex", "model": "gpt-5.5"},
+            "coordinator_authoritative": False,
+            "worker_child": {
+                "child_id": "worker-turn-1",
+                "authoritative_for_parent_completion": True,
+                "requested_runtime": {"agent": "opencode", "model": "glm-5.1"},
+                "actual_runtime": {"agent": "opencode", "model": "glm-5.1"},
+            },
+        },
+        policy={"approval_mode": "never_require_approval"},
+    )
+    store.enqueue_job(job)
+    registry = AutomationExecutorRegistry()
+    registry.register(
+        EXECUTOR_PMA_OPERATOR_TURN,
+        PmaOperatorTurnAutomationExecutor(
+            hub_root=tmp_path / "hub",
+            automation_store=store,
+            pma_queue=PmaQueue(tmp_path / "hub"),
+            lane_worker_starter_fn=lambda _lane: None,
+        ),
+    )
+    AutomationJobWorker(store, registry).process_once(now="2026-01-01T00:00:00Z")
+
+    edges = store.list_child_execution_edges("job-1")
+    authoritative = [edge for edge in edges if edge.authoritative_for_parent_completion]
+    non_authoritative = [
+        edge for edge in edges if not edge.authoritative_for_parent_completion
+    ]
+    assert len(authoritative) == 1
+    assert authoritative[0].child_kind == AUTOMATION_CHILD_KIND_AGENT_TASK
+    assert authoritative[0].terminal_mapping["failed"] == JOB_FAILED
+    assert non_authoritative[0].child_kind == AUTOMATION_CHILD_KIND_PMA_OPERATOR
+    assert non_authoritative[0].terminal_mapping["succeeded"] == JOB_SUCCEEDED
 
 
 def test_managed_thread_auto_decline_dead_letters_and_escalates(tmp_path: Path) -> None:

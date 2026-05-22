@@ -47,6 +47,7 @@ def run_automation_for_chat(
     )
     return (
         f"Queued automation: {rule.name}\n"
+        f"Execution mode: {rule.executor_kind}\n"
         f"Jobs created: {result.get('jobs_created', 0)} "
         f"(deduped: {result.get('jobs_deduped', 0)})"
     )

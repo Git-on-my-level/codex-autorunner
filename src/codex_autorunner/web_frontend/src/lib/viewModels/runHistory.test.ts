@@ -72,4 +72,30 @@ describe('runHistoryFromAutomationJobs', () => {
 
     expect(row.href).toBe('/chats/thread-target-1');
   });
+
+  it('uses effective state and durable child graph links from workspace scope', () => {
+    const [row] = runHistoryFromAutomationJobs([
+      {
+        job_id: 'job-stale-parent',
+        state: 'running',
+        effective_state: 'succeeded',
+        children: [
+          {
+            child_kind: 'agent_task',
+            child_id: 'exec-turn-wrong-id',
+            terminal_state: 'succeeded',
+            requested_runtime: {
+              workspace_scope: {
+                target_kind: 'thread',
+                target_id: 'thread-target-2'
+              }
+            }
+          }
+        ]
+      }
+    ]);
+
+    expect(row.status).toBe('done');
+    expect(row.href).toBe('/chats/thread-target-2');
+  });
 });

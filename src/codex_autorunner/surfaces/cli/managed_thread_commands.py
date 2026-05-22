@@ -676,8 +676,7 @@ def _interrupt_conflict_message(managed_thread_id: str, thread_data: Any) -> str
     lifecycle_status = _normalized_thread_lifecycle_status(thread_data)
     if lifecycle_status:
         return (
-            "Cannot interrupt: thread is not running "
-            f"(lifecycle: {lifecycle_status})"
+            f"Cannot interrupt: thread is not running (lifecycle: {lifecycle_status})"
         )
     return f"Cannot interrupt: thread {managed_thread_id} is not running"
 
@@ -1244,6 +1243,16 @@ def managed_thread_send(
         "--notify-once/--no-notify-once",
         help="Auto-cancel notification after first fire",
     ),
+    automation_parent_job_id: Optional[str] = typer.Option(
+        None,
+        "--automation-parent-job-id",
+        help="Attach this turn as an automation child edge for the parent job id",
+    ),
+    automation_child_authoritative: bool = typer.Option(
+        True,
+        "--automation-child-authoritative/--automation-child-non-authoritative",
+        help="Whether the attached automation child controls parent completion",
+    ),
     output_json: bool = typer.Option(False, "--json", help="Emit JSON output"),
     path: Optional[Path] = hub_root_path_option(),
 ):
@@ -1289,6 +1298,14 @@ def managed_thread_send(
             notify_on=normalized_notify_on,
             notify_lane=notify_lane,
             notify_once=notify_once,
+            automation_child=(
+                {
+                    "parent_job_id": automation_parent_job_id,
+                    "authoritative_for_parent_completion": automation_child_authoritative,
+                }
+                if automation_parent_job_id
+                else None
+            ),
         )
         status_code, data = _request_json_with_status(
             "POST",

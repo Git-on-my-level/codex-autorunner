@@ -12,6 +12,7 @@ import typer
 from ...adapters.chat.automation_surface import _resolve_rule
 from ...core.automation.migration_diagnostics import (
     collect_automation_migration_read_model,
+    migrate_legacy_automation_executor_shapes,
 )
 from ...core.automation.product import (
     AUTOMATION_PRESET_DESCRIPTORS,
@@ -214,13 +215,42 @@ def pma_automation_migration_status(
         typer.echo(f"  next: {step}")
 
 
+@automation_app.command("migrate-legacy-executors")
+def pma_automation_migrate_legacy_executors(
+    output_json: bool = typer.Option(False, "--json", help="Emit JSON output"),
+    path: Optional[Path] = hub_root_path_option(),
+):
+    """Rewrite unambiguous legacy automation executor modes."""
+    hub_root = resolve_hub_path(path)
+    result = migrate_legacy_automation_executor_shapes(hub_root)
+    payload = result.to_dict()
+    if output_json:
+        echo_json(payload)
+        return
+    typer.echo(
+        "legacy executor migration: "
+        f"rules={payload['rules_migrated']} "
+        f"jobs={payload['jobs_migrated']} "
+        f"child_edges={payload['child_edges_created']} "
+        f"diagnostics={len(payload['diagnostics'])}"
+    )
+    for diagnostic in payload.get("diagnostics") or []:
+        typer.echo(
+            "  {severity}: {code} - {message}".format(
+                severity=diagnostic.get("severity", "error"),
+                code=diagnostic.get("code"),
+                message=diagnostic.get("message"),
+            )
+        )
+
+
 @automation_app.command("run")
 def pma_automation_run(
     automation_id: str = typer.Argument(..., help="Automation id or unique fragment"),
     output_json: bool = typer.Option(False, "--json", help="Emit JSON output"),
     path: Optional[Path] = hub_root_path_option(),
 ):
-    """Queue one scheduled automation immediately."""
+    """Queue one scheduled automation immediately using its explicit execution mode."""
     hub_root = resolve_hub_path(path)
     store = automation_store(hub_root)
     rule = _resolve_automation_rule(store, automation_id)
@@ -233,6 +263,7 @@ def pma_automation_run(
         return
     typer.echo(
         f"Queued automation: {rule.name}\n"
+        f"Execution mode: {rule.executor_kind}\n"
         f"Jobs created: {result.get('jobs_created', 0)} "
         f"(deduped: {result.get('jobs_deduped', 0)})"
     )
@@ -271,6 +302,21 @@ def pma_automation_resume(
 @automation_app.command("security-scan")
 def pma_automation_security_scan(
     repo: str = typer.Argument(..., help="Hub repo id to scan"),
+    execution_mode: str = typer.Option(
+        SECURITY_SCAN_PRESET.executor_kind,
+        "--execution-mode",
+        help="Execution mode: agent_task_turn or pma_operator_turn",
+    ),
+    agent: str = typer.Option(
+        "codex",
+        "--agent",
+        help="Runtime agent for the direct task or PMA coordinator",
+    ),
+    model: Optional[str] = typer.Option(None, "--model", help="Runtime model override"),
+    reasoning: Optional[str] = typer.Option(
+        None, "--reasoning", help="Runtime reasoning effort override"
+    ),
+    profile: Optional[str] = typer.Option(None, "--profile", help="Agent profile"),
     hour: int = typer.Option(
         SECURITY_SCAN_PRESET.default_hour,
         "--hour",
@@ -301,11 +347,16 @@ def pma_automation_security_scan(
     _create_pma_automation(
         AutomationPresetRequest(
             preset="security_scan_pr",
+            execution_mode=execution_mode,
             repo_id=repo,
             name=name,
             timezone=timezone,
             hour=hour,
             minute=minute,
+            agent=agent,
+            model=model,
+            reasoning=reasoning,
+            profile=profile,
             enabled=enabled,
         ),
         output_json=output_json,

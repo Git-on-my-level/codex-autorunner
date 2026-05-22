@@ -14,6 +14,8 @@ from ..hub_topology import HubTopologyRepository
 from ..hub_worktree_manager import WorktreeManager
 from ..utils import is_within
 from .models import (
+    AUTOMATION_CHILD_KIND_TICKET_FLOW,
+    JOB_PAUSED,
     JOB_RUNNING,
     TARGET_POLICY_AUTO_WORKTREE,
     TARGET_POLICY_EXISTING_REPO,
@@ -21,8 +23,11 @@ from .models import (
     TARGET_POLICY_HUB,
     TARGET_POLICY_NEW_AUTOMATION_WORKTREE,
     TARGET_POLICY_PR_WORKTREE,
+    AutomationChildExecutionEdge,
     AutomationJob,
+    AutomationRuntimeContract,
 )
+from .store import AutomationStore
 from .worker import AutomationExecutorResult
 
 TicketFlowStarter = Callable[..., Awaitable[Any]]
@@ -49,12 +54,14 @@ class TicketFlowAutomationExecutor:
         hub_root: Path,
         topology_repository: HubTopologyRepository,
         worktree_manager: WorktreeManager,
+        automation_store: Optional[AutomationStore] = None,
         start_flow_run_fn: Optional[TicketFlowStarter] = None,
         run_coroutine_fn: Optional[RunCoroutine] = None,
     ) -> None:
         self._hub_root = hub_root.resolve()
         self._topology_repository = topology_repository
         self._worktree_manager = worktree_manager
+        self._store = automation_store
         self._start_flow_run_fn = start_flow_run_fn or _default_start_ticket_flow_run
         self._run_coroutine_fn = run_coroutine_fn or _run_coroutine
 
@@ -78,6 +85,14 @@ class TicketFlowAutomationExecutor:
             )
         )
         run_id = str(getattr(record, "id", "") or "")
+        edge_id = self._record_child_edge(job, resolved=resolved, run_id=run_id)
+        execution_refs = {
+            "ticket_flow_repo_id": resolved.repo_id,
+            "ticket_flow_worktree_id": resolved.repo_id,
+            "ticket_flow_run_id": run_id,
+        }
+        if edge_id is not None:
+            execution_refs["automation_child_edge_id"] = edge_id
         return AutomationExecutorResult(
             status=JOB_RUNNING,
             summary="started ticket-flow automation run",
@@ -92,13 +107,46 @@ class TicketFlowAutomationExecutor:
                 },
                 "materialized": materialized,
                 "run_id": run_id,
+                "automation_child_edge_id": edge_id,
             },
-            execution_refs={
-                "ticket_flow_repo_id": resolved.repo_id,
-                "ticket_flow_worktree_id": resolved.repo_id,
-                "ticket_flow_run_id": run_id,
-            },
+            execution_refs=execution_refs,
         )
+
+    def _record_child_edge(
+        self,
+        job: AutomationJob,
+        *,
+        resolved: ResolvedAutomationWorktree,
+        run_id: str,
+    ) -> Optional[str]:
+        if self._store is None or not run_id:
+            return None
+        runtime = AutomationRuntimeContract(
+            workspace_scope={
+                "kind": "ticket_flow",
+                "repo_id": resolved.repo_id,
+                "base_repo_id": resolved.base_repo_id,
+                "workspace_root": str(resolved.path),
+            },
+            input_ref={"kind": "automation_job", "job_id": job.job_id},
+        )
+        edge = self._store.upsert_child_execution_edge(
+            AutomationChildExecutionEdge.create(
+                parent_job_id=job.job_id,
+                child_kind=AUTOMATION_CHILD_KIND_TICKET_FLOW,
+                child_id=run_id,
+                requested_runtime=runtime,
+                actual_runtime=runtime,
+                authoritative_for_parent_completion=True,
+                terminal_mapping={
+                    "succeeded": "succeeded",
+                    "failed": "failed",
+                    "interrupted": JOB_PAUSED,
+                    "cancelled": "cancelled",
+                },
+            )
+        )
+        return edge.edge_id
 
     def resolve_worktree(self, job: AutomationJob) -> ResolvedAutomationWorktree:
         target = dict(job.target or {})

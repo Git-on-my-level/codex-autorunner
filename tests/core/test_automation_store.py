@@ -14,6 +14,7 @@ from codex_autorunner.core.automation import (
 )
 from codex_autorunner.core.automation.models import (
     EXECUTOR_MANAGED_THREAD_TURN,
+    EXECUTOR_PMA_OPERATOR_TURN,
     JOB_CLAIMED,
     JOB_DEAD_LETTERED,
     JOB_FAILED,
@@ -41,7 +42,7 @@ def _rule() -> AutomationRule:
         filters={"repo_id": "repo-1"},
         target_policy=TARGET_POLICY_AUTO_WORKTREE,
         target={"repo_id": "repo-1"},
-        executor_kind=EXECUTOR_MANAGED_THREAD_TURN,
+        executor_kind=EXECUTOR_PMA_OPERATOR_TURN,
         executor={"prompt_template": "Handle {{ pr.number }}"},
         policy={"max_attempts": 2, "approval_mode": "pause_and_request_user"},
         metadata={"label": "review"},
@@ -114,9 +115,9 @@ def test_persisted_rule_with_unknown_executor_kind_hydrates_without_rewriting(
                  WHERE rule_id = ?
                 """,
                 (
-                    "agent_task_turn",
+                    "future_executor_turn",
                     json.dumps(
-                        {"kind": "agent_task_turn", "prompt": "Run future task"}
+                        {"kind": "future_executor_turn", "prompt": "Run future task"}
                     ),
                     "rule-1",
                 ),
@@ -124,11 +125,11 @@ def test_persisted_rule_with_unknown_executor_kind_hydrates_without_rewriting(
 
     loaded = store.get_rule("rule-1")
     assert loaded is not None
-    assert loaded.executor_kind == "agent_task_turn"
-    assert loaded.executor["kind"] == "agent_task_turn"
+    assert loaded.executor_kind == "future_executor_turn"
+    assert loaded.executor["kind"] == "future_executor_turn"
     assert loaded.known_executor is False
     assert loaded.executable is False
-    assert store.list_rules()[0].executor_kind == "agent_task_turn"
+    assert store.list_rules()[0].executor_kind == "future_executor_turn"
 
 
 def test_record_event_preserves_first_seen_payload_for_duplicate_id(tmp_path) -> None:
@@ -543,7 +544,7 @@ def test_explicit_legacy_pma_migration_creates_unified_rows(tmp_path) -> None:
         for rule in store.list_rules()
     )
     assert store.list_events()[0].event_type == "lifecycle.flow_failed"
-    assert store.list_jobs()[0].executor["kind"] == EXECUTOR_MANAGED_THREAD_TURN
+    assert store.list_jobs()[0].executor["kind"] == EXECUTOR_PMA_OPERATOR_TURN
     assert (
         store.list_attempts("legacy-pma-wakeup:wakeup-legacy")[0].status == "succeeded"
     )

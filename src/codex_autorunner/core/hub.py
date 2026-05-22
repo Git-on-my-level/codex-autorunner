@@ -10,14 +10,18 @@ from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple
 from ..discovery import discover_and_init
 from ..manifest import Manifest
 from .automation import (
+    EXECUTOR_AGENT_TASK_TURN,
     EXECUTOR_GITHUB_COMMENT,
     EXECUTOR_GITHUB_REACTION,
     EXECUTOR_MANAGED_THREAD_TURN,
+    EXECUTOR_PMA_OPERATOR_TURN,
     EXECUTOR_PUBLISH_CHAT_NOTIFICATION,
     EXECUTOR_PUBLISH_OPERATION,
     EXECUTOR_TICKET_FLOW,
+    AgentTaskTurnAutomationExecutor,
     AutomationExecutorRegistry,
     ManagedThreadTurnAutomationExecutor,
+    PmaOperatorTurnAutomationExecutor,
     PublishOperationAutomationExecutor,
 )
 from .automation.store import AutomationStore
@@ -267,7 +271,27 @@ class HubSupervisor:
                 hub_root=hub_config.root,
                 topology_repository=self._topology_repository,
                 worktree_manager=self._worktree_manager,
+                automation_store=AutomationStore(hub_config.root),
                 run_coroutine_fn=self._run_coroutine,
+            ),
+        )
+        automation_executor_registry.register(
+            EXECUTOR_AGENT_TASK_TURN,
+            AgentTaskTurnAutomationExecutor(
+                hub_root=hub_config.root,
+                automation_store=AutomationStore(hub_config.root),
+                safety_checker_fn=lambda: self.ensure_pma_safety_checker(),
+                queue_worker_starter_fn=self._request_managed_thread_queue_worker_start,
+                queue_worker_available_fn=(self._managed_thread_queue_worker_available),
+            ),
+        )
+        automation_executor_registry.register(
+            EXECUTOR_PMA_OPERATOR_TURN,
+            PmaOperatorTurnAutomationExecutor(
+                hub_root=hub_config.root,
+                automation_store=AutomationStore(hub_config.root),
+                safety_checker_fn=lambda: self.ensure_pma_safety_checker(),
+                lane_worker_starter_fn=self._request_pma_lane_worker_start,
             ),
         )
         automation_executor_registry.register(
@@ -292,6 +316,7 @@ class HubSupervisor:
         publish_executor = PublishOperationAutomationExecutor(
             hub_root=hub_config.root,
             executor_registry=publish_registry,
+            automation_store=AutomationStore(hub_config.root),
         )
         for executor_kind in (
             EXECUTOR_PUBLISH_OPERATION,
@@ -309,8 +334,8 @@ class HubSupervisor:
             automation_executor_registry=automation_executor_registry,
             logger=logger,
         )
-        self._lifecycle_orchestrator._process_event_fn = (
-            lambda event: self._process_lifecycle_event(event)
+        self._lifecycle_orchestrator._process_event_fn = lambda event: (
+            self._process_lifecycle_event(event)
         )
         self._repo_manager = RepoManager(
             hub_config,

@@ -16,7 +16,7 @@ from .....agents.registry import (
     wrap_requested_agent_context,
 )
 from .....core.automation import (
-    EXECUTOR_MANAGED_THREAD_TURN,
+    EXECUTOR_PMA_OPERATOR_TURN,
     PMA_SUBSCRIPTION_RULE_PREFIX,
     PMA_TIMER_RULE_PREFIX,
     PMA_TIMER_SCHEDULE_PREFIX,
@@ -348,7 +348,7 @@ def _create_unified_pma_subscription(
             "run_id": normalized_run_id,
             "thread_id": normalized_thread_id,
         },
-        executor_kind=EXECUTOR_MANAGED_THREAD_TURN,
+        executor_kind=EXECUTOR_PMA_OPERATOR_TURN,
         executor={
             "wake_up_kind": "managed_thread_subscription",
             "source": "transition",
@@ -678,7 +678,7 @@ def _create_unified_pma_timer(
             "run_id": run_id,
             "thread_id": thread_id,
         },
-        executor_kind=EXECUTOR_MANAGED_THREAD_TURN,
+        executor_kind=EXECUTOR_PMA_OPERATOR_TURN,
         executor={
             "message_text": (
                 "Automation wake-up received.\n"

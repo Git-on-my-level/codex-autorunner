@@ -29,6 +29,7 @@ class AutomationCreateRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     preset: str
+    execution_mode: Optional[str] = None
     name: Optional[str] = None
     repo_id: Optional[str] = None
     timezone: Optional[str] = None
@@ -41,6 +42,7 @@ class AutomationCreateRequest(BaseModel):
     model: Optional[str] = None
     reasoning: Optional[str] = None
     profile: Optional[str] = None
+    worker_child_policy: Optional[dict[str, Any]] = None
     enabled: bool = False
 
 
@@ -55,6 +57,7 @@ class AutomationUpdatePayload(BaseModel):
 
     name: Optional[str] = None
     enabled: Optional[bool] = None
+    execution_mode: Optional[str] = None
     timezone: Optional[str] = None
     hour: Optional[int] = None
     minute: Optional[int] = None
@@ -65,6 +68,7 @@ class AutomationUpdatePayload(BaseModel):
     model: Optional[str] = None
     reasoning: Optional[str] = None
     profile: Optional[str] = None
+    worker_child_policy: Optional[dict[str, Any]] = None
     metadata: Optional[dict[str, Any]] = None
 
 
@@ -130,6 +134,7 @@ def build_automation_routes(context: HubAppContext) -> APIRouter:
                 store(),
                 AutomationPresetRequest(
                     preset=payload.preset,
+                    execution_mode=payload.execution_mode,
                     name=payload.name,
                     repo_id=payload.repo_id,
                     timezone=payload.timezone,
@@ -142,6 +147,7 @@ def build_automation_routes(context: HubAppContext) -> APIRouter:
                     model=payload.model,
                     reasoning=payload.reasoning,
                     profile=payload.profile,
+                    worker_child_policy=payload.worker_child_policy,
                     enabled=payload.enabled,
                 ),
             )

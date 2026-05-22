@@ -9,7 +9,7 @@ from codex_autorunner.core.automation import (
     calculate_next_fire_at,
 )
 from codex_autorunner.core.automation.models import (
-    EXECUTOR_MANAGED_THREAD_TURN,
+    EXECUTOR_PMA_OPERATOR_TURN,
     SCHEDULE_DAILY,
     SCHEDULE_INTERVAL,
     SCHEDULE_ONE_SHOT,
@@ -24,12 +24,12 @@ from codex_autorunner.core.orchestration.sqlite import open_orchestration_sqlite
 def _schedule_rule(rule_id="rule-1") -> AutomationRule:
     return AutomationRule.create(
         rule_id=rule_id,
-        name="Scheduled managed thread turn",
+        name="Scheduled PMA operator turn",
         trigger_kind=TRIGGER_KIND_EVENT,
         trigger={"event_types": ["schedule.fire"]},
         filters={"schedule.rule_id": rule_id},
         target_policy=TARGET_POLICY_HUB,
-        executor_kind=EXECUTOR_MANAGED_THREAD_TURN,
+        executor_kind=EXECUTOR_PMA_OPERATOR_TURN,
         executor={"lane_id": "pma:default"},
         policy={"dedupe_key": "{{ event.event_id }}"},
     )
@@ -63,12 +63,12 @@ def test_due_schedule_rule_uses_schedule_fire_event_path(tmp_path) -> None:
     store.upsert_rule(
         AutomationRule.create(
             rule_id="daily-rule",
-            name="Daily managed thread turn",
+            name="Daily PMA operator turn",
             trigger_kind=TRIGGER_KIND_SCHEDULE,
             trigger={"schedule_kind": SCHEDULE_DAILY},
             target_policy=TARGET_POLICY_HUB,
             target={"repo_id": "{{ schedule.payload.repo_id }}"},
-            executor_kind=EXECUTOR_MANAGED_THREAD_TURN,
+            executor_kind=EXECUTOR_PMA_OPERATOR_TURN,
             executor={"message": "Fire {{ schedule.rule_id }}"},
             policy={"dedupe_key": "{{ event.event_id }}"},
         )
@@ -114,11 +114,7 @@ def test_due_schedule_reports_unknown_executor_skip_reason(tmp_path) -> None:
                        executor_json = ?
                  WHERE rule_id = ?
                 """,
-                (
-                    "pma_operator_turn",
-                    '{"kind":"pma_operator_turn"}',
-                    "rule-1",
-                ),
+                ("future_executor_turn", '{"kind":"future_executor_turn"}', "rule-1"),
             )
 
     result = AutomationScheduler(
@@ -130,7 +126,7 @@ def test_due_schedule_reports_unknown_executor_skip_reason(tmp_path) -> None:
     assert result.jobs_created == 0
     assert result.jobs_skipped == 1
     assert result.skipped_reasons[0]["code"] == "AUTOMATION_EXECUTOR_KIND_UNSUPPORTED"
-    assert result.skipped_reasons[0]["executor_kind"] == "pma_operator_turn"
+    assert result.skipped_reasons[0]["executor_kind"] == "future_executor_turn"
 
 
 def test_interval_daily_and_weekly_next_fire_calculation() -> None:

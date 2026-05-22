@@ -347,6 +347,7 @@ class ManagedThreadSendRequest:
     notify_on: Optional[str] = None
     notify_lane: Optional[str] = None
     notify_once: bool = True
+    automation_child: Optional[dict[str, Any]] = None
 
     def to_payload(self) -> dict[str, Any]:
         payload: dict[str, Any] = {
@@ -363,6 +364,8 @@ class ManagedThreadSendRequest:
             payload["notify_on"] = self.notify_on
             payload["notify_lane"] = self.notify_lane
             payload["notify_once"] = self.notify_once
+        if self.automation_child:
+            payload["automation_child"] = dict(self.automation_child)
         return payload
 
 

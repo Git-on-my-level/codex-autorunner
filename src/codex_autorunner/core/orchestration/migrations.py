@@ -18,7 +18,7 @@ from .turn_execution_storage import (
     build_turn_execution_request_from_storage,
 )
 
-ORCHESTRATION_SCHEMA_VERSION = 39
+ORCHESTRATION_SCHEMA_VERSION = 40
 
 
 @dataclass(frozen=True)
@@ -2049,6 +2049,41 @@ def _apply_v39(conn: sqlite3.Connection) -> None:
         """)
 
 
+def _apply_v40(conn: sqlite3.Connection) -> None:
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS orch_automation_child_execution_edges (
+            edge_id TEXT PRIMARY KEY,
+            parent_job_id TEXT NOT NULL,
+            child_kind TEXT NOT NULL,
+            child_id TEXT NOT NULL,
+            authoritative_for_parent_completion INTEGER NOT NULL DEFAULT 1,
+            requested_runtime_json TEXT NOT NULL DEFAULT '{}',
+            actual_runtime_json TEXT,
+            terminal_mapping_json TEXT NOT NULL DEFAULT '{}',
+            terminal_event_id TEXT,
+            terminal_state TEXT,
+            terminal_observed_at TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            UNIQUE(parent_job_id, child_kind, child_id),
+            FOREIGN KEY (parent_job_id) REFERENCES orch_automation_jobs(job_id)
+                ON DELETE CASCADE
+        )
+        """)
+    conn.execute("""
+        CREATE INDEX IF NOT EXISTS idx_orch_automation_child_edges_parent
+            ON orch_automation_child_execution_edges(
+                parent_job_id,
+                authoritative_for_parent_completion,
+                terminal_state
+            )
+        """)
+    conn.execute("""
+        CREATE INDEX IF NOT EXISTS idx_orch_automation_child_edges_child
+            ON orch_automation_child_execution_edges(child_kind, child_id)
+        """)
+
+
 _MIGRATIONS = (
     _MigrationStep(1, "create_core_orchestration_schema", _apply_v1),
     _MigrationStep(2, "add_binding_and_flow_projection_scaffolding", _apply_v2),
@@ -2140,6 +2175,11 @@ _MIGRATIONS = (
         39,
         "add_chat_index_facet_projection_columns",
         _apply_v39,
+    ),
+    _MigrationStep(
+        40,
+        "add_automation_child_execution_edges",
+        _apply_v40,
     ),
 )
 
@@ -2284,6 +2324,11 @@ _TABLE_DEFINITIONS = (
         name="orch_automation_job_attempts",
         role="authoritative",
         description="Per-attempt automation executor outcomes and execution references.",
+    ),
+    OrchestrationTableDefinition(
+        name="orch_automation_child_execution_edges",
+        role="authoritative",
+        description="First-class parent automation job to child execution graph edges, including requested/actual runtime contracts and terminal-to-parent lifecycle mapping.",
     ),
     OrchestrationTableDefinition(
         name="orch_automation_schedules",

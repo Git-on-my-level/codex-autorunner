@@ -13,7 +13,7 @@ from .automation.builtins import (
     _normalize_reactive_event_types,
 )
 from .automation.models import (
-    EXECUTOR_MANAGED_THREAD_TURN,
+    EXECUTOR_PMA_OPERATOR_TURN,
     JOB_PENDING,
     JOB_SUCCEEDED,
     SCHEDULE_ONE_SHOT,
@@ -161,7 +161,7 @@ class PmaUnifiedAutomationAdapter:
                 "run_id": getattr(subscription, "run_id", None),
                 "thread_id": getattr(subscription, "thread_id", None),
             },
-            executor_kind=EXECUTOR_MANAGED_THREAD_TURN,
+            executor_kind=EXECUTOR_PMA_OPERATOR_TURN,
             executor={
                 "wake_up_kind": "pma_subscription",
                 "source": "transition",
@@ -233,7 +233,7 @@ class PmaUnifiedAutomationAdapter:
                 "run_id": getattr(timer, "run_id", None),
                 "thread_id": getattr(timer, "thread_id", None),
             },
-            executor_kind=EXECUTOR_MANAGED_THREAD_TURN,
+            executor_kind=EXECUTOR_PMA_OPERATOR_TURN,
             executor={
                 "message_text": (
                     "Automation wake-up received.\n"
@@ -337,7 +337,7 @@ class PmaUnifiedAutomationAdapter:
                 "repo_id": getattr(wakeup, "repo_id", None),
                 "thread_id": getattr(wakeup, "thread_id", None),
             },
-            executor_kind=EXECUTOR_MANAGED_THREAD_TURN,
+            executor_kind=EXECUTOR_PMA_OPERATOR_TURN,
             executor={
                 "wake_up_kind": "pma_legacy_wakeup",
             },
@@ -364,7 +364,7 @@ class PmaUnifiedAutomationAdapter:
                 "thread_id": getattr(wakeup, "thread_id", None),
             },
             executor={
-                "kind": EXECUTOR_MANAGED_THREAD_TURN,
+                "kind": EXECUTOR_PMA_OPERATOR_TURN,
                 "wake_up_kind": "pma_legacy_wakeup",
             },
             policy={
@@ -516,7 +516,7 @@ class PmaLegacyAutomationMigration:
                 "run_id": row["run_id"],
                 "thread_id": row["thread_target_id"],
             },
-            executor_kind=EXECUTOR_MANAGED_THREAD_TURN,
+            executor_kind=EXECUTOR_PMA_OPERATOR_TURN,
             executor={
                 "wake_up_kind": "pma_subscription",
                 "source": "transition",
@@ -563,7 +563,7 @@ class PmaLegacyAutomationMigration:
                 "repo_id": row["repo_id"],
                 "thread_target_id": row["thread_target_id"],
             },
-            executor_kind=EXECUTOR_MANAGED_THREAD_TURN,
+            executor_kind=EXECUTOR_PMA_OPERATOR_TURN,
             executor={
                 "source": "timer",
                 "wake_up_kind": "pma_timer",
@@ -647,7 +647,7 @@ class PmaLegacyAutomationMigration:
                 "repo_id": row["repo_id"],
                 "thread_target_id": row["thread_target_id"],
             },
-            executor_kind=EXECUTOR_MANAGED_THREAD_TURN,
+            executor_kind=EXECUTOR_PMA_OPERATOR_TURN,
             executor={
                 "wake_up_kind": "pma_legacy_wakeup",
             },
@@ -674,7 +674,7 @@ class PmaLegacyAutomationMigration:
                 "thread_target_id": row["thread_target_id"],
             },
             executor={
-                "kind": EXECUTOR_MANAGED_THREAD_TURN,
+                "kind": EXECUTOR_PMA_OPERATOR_TURN,
                 "wake_up_kind": "pma_legacy_wakeup",
             },
             policy={

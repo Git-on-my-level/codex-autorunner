@@ -921,6 +921,10 @@ class ManagedThreadMessageRequest(Payload):
 
     message: str
     attachments: list[dict[str, Any]] = Field(default_factory=list)
+    automation_child: Optional[Dict[str, Any]] = Field(
+        default=None,
+        validation_alias=AliasChoices("automation_child", "automationChild"),
+    )
     busy_policy: Optional[Literal["queue", "interrupt", "reject"]] = Field(
         default=None, validation_alias=AliasChoices("busy_policy", "busyPolicy")
     )

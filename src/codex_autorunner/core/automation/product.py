@@ -16,13 +16,24 @@ from .execution_graph import (
     automation_execution_snapshots_by_job_id,
 )
 from .models import (
+    AUTOMATION_CHILD_KIND_AGENT_TASK,
+    EXECUTOR_AGENT_TASK_TURN,
     EXECUTOR_GITHUB_COMMENT,
     EXECUTOR_GITHUB_REACTION,
     EXECUTOR_KINDS,
     EXECUTOR_MANAGED_THREAD_TURN,
+    EXECUTOR_PMA_OPERATOR_TURN,
     EXECUTOR_PUBLISH_CHAT_NOTIFICATION,
     EXECUTOR_PUBLISH_OPERATION,
     EXECUTOR_TICKET_FLOW,
+    JOB_CANCELLED,
+    JOB_DEAD_LETTERED,
+    JOB_FAILED,
+    JOB_PAUSED,
+    JOB_RUNNING,
+    JOB_SKIPPED,
+    JOB_SUCCEEDED,
+    JOB_TERMINAL_STATES,
     SCHEDULE_DAILY,
     SCHEDULE_INTERVAL,
     SCHEDULE_ONE_SHOT,
@@ -32,6 +43,7 @@ from .models import (
     TRIGGER_KIND_EVENT,
     TRIGGER_KIND_MANUAL,
     TRIGGER_KIND_SCHEDULE,
+    AutomationChildExecutionEdge,
     AutomationEvent,
     AutomationJob,
     AutomationRule,
@@ -116,9 +128,11 @@ AUTOMATION_PRESET_DESCRIPTORS: dict[str, AutomationPresetDescriptor] = {
         id="security_scan_pr",
         name="Daily Security Scan",
         automation_kind="security_scan_pr",
-        description=("Daily PMA security scan that opens a PR when issues are found."),
+        description=(
+            "Daily agent security scan that opens a PR when issues are found."
+        ),
         schedule_kind=SCHEDULE_DAILY,
-        executor_kind=EXECUTOR_MANAGED_THREAD_TURN,
+        executor_kind=EXECUTOR_AGENT_TASK_TURN,
         target_policy=TARGET_POLICY_HUB,
         default_timezone="UTC",
         default_hour=9,
@@ -171,6 +185,7 @@ AUTOMATION_PRESET_DESCRIPTORS: dict[str, AutomationPresetDescriptor] = {
 @dataclass(frozen=True)
 class AutomationPresetRequest:
     preset: str
+    execution_mode: Optional[str] = None
     name: Optional[str] = None
     repo_id: Optional[str] = None
     timezone: Optional[str] = None
@@ -183,6 +198,7 @@ class AutomationPresetRequest:
     model: Optional[str] = None
     reasoning: Optional[str] = None
     profile: Optional[str] = None
+    worker_child_policy: Optional[dict[str, Any]] = None
     enabled: bool = False
 
 
@@ -190,6 +206,7 @@ class AutomationPresetRequest:
 class AutomationUpdateRequest:
     name: Optional[str] = None
     enabled: Optional[bool] = None
+    execution_mode: Optional[str] = None
     timezone: Optional[str] = None
     hour: Optional[int] = None
     minute: Optional[int] = None
@@ -200,6 +217,7 @@ class AutomationUpdateRequest:
     model: Optional[str] = None
     reasoning: Optional[str] = None
     profile: Optional[str] = None
+    worker_child_policy: Optional[dict[str, Any]] = None
     trigger_kind: Optional[str] = None
     trigger: Optional[dict[str, Any]] = None
     filters: Optional[dict[str, Any]] = None
@@ -239,7 +257,7 @@ def automation_overview(
         "failed_jobs": sum(
             1
             for row in rows
-            if str((row.get("last_job") or {}).get("state")) == "failed"
+            if str((row.get("last_job") or {}).get("effective_state")) == JOB_FAILED
         ),
     }
     return {"automations": rows, "summary": summary, "presets": automation_presets()}
@@ -328,13 +346,14 @@ def _automation_row_from_enrichment(
         "enabled": rule.enabled,
         "system_owned": rule.system_owned,
         "kind": display_kind(rule),
+        "execution_mode": rule.executor_kind,
         "executor_kind": rule.executor_kind,
         "known_executor": rule.known_executor,
         "executable": rule.executable,
         "trigger_kind": rule.trigger_kind,
         "target_policy": rule.target_policy,
         "schedule": schedule.to_dict() if schedule is not None else None,
-        "last_job": last_job.to_dict() if last_job is not None else None,
+        "last_job": None,
         "jobs": [],
         "job_count": job_count,
         "created_at": rule.created_at,
@@ -353,6 +372,11 @@ def _automation_row_from_enrichment(
             }
         )
     if include_job_history:
+        row["last_job"] = (
+            _automation_job_row(last_job, store=store, execution_snapshots=snapshots)
+            if last_job is not None
+            else None
+        )
         row["jobs"] = [
             _automation_job_row(job, store=store, execution_snapshots=snapshots)
             for job in recent_jobs
@@ -376,9 +400,18 @@ def _automation_job_row(
         )
     child_execution = snapshot.to_dict()
     pma_queue_result = child_execution.get("pma_queue")
+    child_edges = (
+        store.list_child_execution_edges(job.job_id) if store is not None else []
+    )
+    children = [_automation_child_row(edge) for edge in child_edges]
+    effective_state = _effective_job_state(job, child_edges)
+    terminal_reason = _job_terminal_reason(job, child_edges, effective_state)
+    policy_violations = _job_policy_violations(job, child_edges)
     return {
         "job_id": job.job_id,
         "state": job.state,
+        "raw_state": job.state,
+        "effective_state": effective_state,
         "created_at": job.created_at,
         "started_at": job.started_at,
         "finished_at": job.finished_at,
@@ -392,8 +425,175 @@ def _automation_job_row(
         "pma_queue_item_id": job.pma_queue_item_id,
         "pma_queue_result": pma_queue_result,
         "child_execution": child_execution,
+        "children": children,
+        "runtime_contract": _job_runtime_contract(job, child_edges),
+        "terminal_reason": terminal_reason,
+        "policy_violations": policy_violations,
         "ticket_flow_run_id": job.ticket_flow_run_id,
         "ticket_flow_worktree_id": job.ticket_flow_worktree_id,
+    }
+
+
+def _automation_child_row(edge: AutomationChildExecutionEdge) -> dict[str, Any]:
+    return {
+        "edge_id": edge.edge_id,
+        "parent_job_id": edge.parent_job_id,
+        "child_kind": edge.child_kind,
+        "child_id": edge.child_id,
+        "authoritative_for_parent_completion": (
+            edge.authoritative_for_parent_completion
+        ),
+        "requested_runtime": edge.requested_runtime.to_dict(),
+        "actual_runtime": (
+            edge.actual_runtime.to_dict() if edge.actual_runtime is not None else None
+        ),
+        "terminal_mapping": edge.terminal_mapping,
+        "terminal_event_id": edge.terminal_event_id,
+        "terminal_state": edge.terminal_state,
+        "terminal_observed_at": edge.terminal_observed_at,
+        "created_at": edge.created_at,
+        "updated_at": edge.updated_at,
+    }
+
+
+def _effective_job_state(
+    job: AutomationJob, edges: list[AutomationChildExecutionEdge]
+) -> str:
+    authoritative = [edge for edge in edges if edge.authoritative_for_parent_completion]
+    if not authoritative or any(edge.terminal_state is None for edge in authoritative):
+        return job.state
+    if any(_agent_task_runtime_mismatch(edge) for edge in authoritative):
+        return JOB_FAILED
+    mapped = [
+        edge.terminal_mapping.get(str(edge.terminal_state), JOB_FAILED)
+        for edge in authoritative
+    ]
+    if any(state in {JOB_FAILED, JOB_DEAD_LETTERED} for state in mapped):
+        return JOB_FAILED
+    if any(state == JOB_CANCELLED for state in mapped):
+        return JOB_CANCELLED
+    if any(state == JOB_PAUSED for state in mapped):
+        return JOB_PAUSED
+    if all(state in JOB_TERMINAL_STATES or state == JOB_FAILED for state in mapped):
+        return JOB_SUCCEEDED
+    return job.state
+
+
+def _job_terminal_reason(
+    job: AutomationJob, edges: list[AutomationChildExecutionEdge], effective_state: str
+) -> Optional[str]:
+    if job.error_text:
+        return job.error_text
+    if job.result_summary and effective_state in {
+        JOB_SUCCEEDED,
+        JOB_FAILED,
+        JOB_CANCELLED,
+        JOB_SKIPPED,
+        JOB_PAUSED,
+        JOB_DEAD_LETTERED,
+    }:
+        return job.result_summary
+    authoritative = [edge for edge in edges if edge.authoritative_for_parent_completion]
+    if job.state != effective_state and authoritative:
+        child_states = ", ".join(
+            f"{edge.child_kind}:{edge.terminal_state or 'open'}"
+            for edge in authoritative
+        )
+        return f"Derived from authoritative child execution: {child_states}"
+    return None
+
+
+def _job_policy_violations(
+    job: AutomationJob, edges: list[AutomationChildExecutionEdge]
+) -> list[dict[str, Any]]:
+    violations: list[dict[str, Any]] = []
+    if job.state == JOB_RUNNING and _effective_job_state(job, edges) != job.state:
+        violations.append(
+            {
+                "code": "AUTOMATION_PARENT_STATE_STALE",
+                "severity": "warning",
+                "message": (
+                    "Parent job raw state is stale relative to authoritative child "
+                    "execution."
+                ),
+            }
+        )
+    for edge in edges:
+        if edge.terminal_state == "policy_violated":
+            violations.append(
+                {
+                    "code": "AUTOMATION_CHILD_POLICY_VIOLATED",
+                    "severity": "error",
+                    "child_id": edge.child_id,
+                    "message": "Authoritative child execution reported policy_violated.",
+                }
+            )
+        requested = edge.requested_runtime.to_dict()
+        actual = (
+            edge.actual_runtime.to_dict() if edge.actual_runtime is not None else {}
+        )
+        for key in _runtime_mismatch_fields(edge):
+            requested_value = requested.get(key)
+            actual_value = actual.get(key)
+            violations.append(
+                {
+                    "code": "AUTOMATION_RUNTIME_MISMATCH",
+                    "severity": "error",
+                    "child_id": edge.child_id,
+                    "field": key,
+                    "message": (
+                        f"Requested {key}={requested_value!r} but child ran "
+                        f"{actual_value!r}."
+                    ),
+                }
+            )
+    return violations
+
+
+def _agent_task_runtime_mismatch(edge: AutomationChildExecutionEdge) -> bool:
+    return bool(_runtime_mismatch_fields(edge))
+
+
+def _runtime_mismatch_fields(edge: AutomationChildExecutionEdge) -> list[str]:
+    if edge.child_kind != AUTOMATION_CHILD_KIND_AGENT_TASK:
+        return []
+    if edge.terminal_state is None:
+        return []
+    requested = edge.requested_runtime.to_dict()
+    actual = edge.actual_runtime.to_dict() if edge.actual_runtime is not None else {}
+    fields: list[str] = []
+    for key in ("agent", "model", "profile", "reasoning"):
+        requested_value = requested.get(key)
+        actual_value = actual.get(key)
+        if requested_value and requested_value != actual_value:
+            fields.append(key)
+    return fields
+
+
+def _job_runtime_contract(
+    job: AutomationJob, edges: list[AutomationChildExecutionEdge]
+) -> dict[str, Any]:
+    if edges:
+        requested_edges = [edge.requested_runtime.to_dict() for edge in edges]
+        actual_edges = [
+            edge.actual_runtime.to_dict() if edge.actual_runtime is not None else None
+            for edge in edges
+        ]
+        return {
+            "requested": (
+                requested_edges[0] if len(requested_edges) == 1 else requested_edges
+            ),
+            "actual": actual_edges[0] if len(actual_edges) == 1 else actual_edges,
+        }
+    executor = dict(job.executor)
+    requested = _requested_runtime_from_executor(executor)
+    return {
+        "requested": requested or None,
+        "actual": (
+            executor.get("actual_runtime")
+            if isinstance(executor.get("actual_runtime"), dict)
+            else None
+        ),
     }
 
 
@@ -434,6 +634,9 @@ def update_automation(
     if existing is None:
         raise KeyError(rule_id)
 
+    executor_kind = (
+        payload.execution_mode or payload.executor_kind or existing.executor_kind
+    )
     executor = (
         dict(payload.executor)
         if payload.executor is not None
@@ -457,6 +660,17 @@ def update_automation(
     _apply_executor_option(executor, "reasoning", payload.reasoning)
     _apply_executor_option(executor, "profile", payload.profile)
     _apply_executor_option(executor, "agent_profile", payload.profile)
+    if payload.worker_child_policy is not None:
+        executor["worker_child_policy"] = dict(payload.worker_child_policy)
+    _materialize_product_runtime_contract(
+        executor_kind=executor_kind,
+        executor=executor,
+        agent=payload.agent,
+        model=payload.model,
+        reasoning=payload.reasoning,
+        profile=payload.profile,
+    )
+    _validate_product_executor_mode(executor_kind, executor)
 
     updated_rule = AutomationRule.create(
         rule_id=existing.rule_id,
@@ -468,7 +682,7 @@ def update_automation(
         filters=payload.filters if payload.filters is not None else existing.filters,
         target_policy=payload.target_policy or existing.target_policy,
         target=payload.target if payload.target is not None else existing.target,
-        executor_kind=payload.executor_kind or existing.executor_kind,
+        executor_kind=executor_kind,
         executor=executor,
         policy=payload.policy if payload.policy is not None else existing.policy,
         metadata=(
@@ -556,6 +770,7 @@ def run_automation_now(
     rule = store.get_rule(rule_id)
     if rule is None:
         raise KeyError(rule_id)
+    _validate_product_executor_mode(rule.executor_kind, dict(rule.executor))
     schedule = store.list_schedules(rule_id=rule_id)
     schedule_payload = schedule[0].to_dict() if schedule else {"rule_id": rule_id}
     manual_run_id = f"manual:{uuid.uuid4().hex}"
@@ -607,8 +822,12 @@ def display_kind(rule: AutomationRule) -> str:
         return kind
     if rule.executor_kind == EXECUTOR_TICKET_FLOW:
         return "ticket_flow"
+    if rule.executor_kind == EXECUTOR_AGENT_TASK_TURN:
+        return "agent_task"
+    if rule.executor_kind == EXECUTOR_PMA_OPERATOR_TURN:
+        return "pma_operator"
     if rule.executor_kind == EXECUTOR_MANAGED_THREAD_TURN:
-        return "pma_prompt"
+        return "legacy_managed_thread_turn"
     return rule.executor_kind
 
 
@@ -619,9 +838,27 @@ def _typed_product_projection(
     message = _message_projection(rule)
     action = _action_projection(rule)
     managed = _managed_projection(rule)
+    runtime = _runtime_projection(rule)
     diagnostics = _product_diagnostics(rule, schedule, message)
     return {
         "product_api_version": 1,
+        "execution_mode": rule.executor_kind,
+        "runtime_contract": runtime,
+        "direct_runtime_contract": (
+            runtime["requested"]
+            if rule.executor_kind == EXECUTOR_AGENT_TASK_TURN
+            else None
+        ),
+        "coordinator_runtime_contract": (
+            runtime["requested"]
+            if rule.executor_kind == EXECUTOR_PMA_OPERATOR_TURN
+            else None
+        ),
+        "worker_child_policy": (
+            runtime["worker_child_policy"]
+            if rule.executor_kind == EXECUTOR_PMA_OPERATOR_TURN
+            else None
+        ),
         "editable": _editable_projection(rule, schedule, message),
         "managed": managed,
         "managed_status": managed,
@@ -900,6 +1137,7 @@ def _executor_summary(
     executor = dict(rule.executor)
     return {
         "kind": rule.executor_kind,
+        "execution_mode": rule.executor_kind,
         "label": _executor_label(rule.executor_kind),
         "known_executor": rule.known_executor,
         "executable": rule.executable,
@@ -911,6 +1149,30 @@ def _executor_summary(
         "lane_id": _optional_text(executor.get("lane_id")),
         "message_source": message["source"],
         "action_kind": action["kind"],
+    }
+
+
+def _runtime_projection(rule: AutomationRule) -> dict[str, Any]:
+    executor = dict(rule.executor)
+    requested = _requested_runtime_from_executor(executor)
+    return {
+        "mode": rule.executor_kind,
+        "requested": requested,
+        "actual": (
+            executor.get("actual_runtime")
+            if isinstance(executor.get("actual_runtime"), dict)
+            else None
+        ),
+        "coordinator_authoritative": (
+            bool(executor.get("coordinator_authoritative", True))
+            if rule.executor_kind == EXECUTOR_PMA_OPERATOR_TURN
+            else None
+        ),
+        "worker_child_policy": (
+            executor.get("worker_child_policy")
+            if isinstance(executor.get("worker_child_policy"), dict)
+            else None
+        ),
     }
 
 
@@ -978,8 +1240,10 @@ def _known_executable_rule(rule: AutomationRule) -> bool:
 
 def _executor_label(executor_kind: str) -> str:
     return {
+        EXECUTOR_AGENT_TASK_TURN: "Agent task turn",
+        EXECUTOR_PMA_OPERATOR_TURN: "PMA operator turn",
         EXECUTOR_TICKET_FLOW: "Ticket flow",
-        EXECUTOR_MANAGED_THREAD_TURN: "Managed thread turn",
+        EXECUTOR_MANAGED_THREAD_TURN: "Legacy managed thread turn",
         EXECUTOR_PUBLISH_OPERATION: "Publish operation",
         EXECUTOR_PUBLISH_CHAT_NOTIFICATION: "Chat notification",
         EXECUTOR_GITHUB_REACTION: "GitHub reaction",
@@ -1091,6 +1355,8 @@ def format_automation_status(row: dict[str, Any]) -> str:
         f"ID: {row.get('id')}",
         f"State: {'active' if row.get('enabled') else 'paused'}",
         f"Kind: {row.get('kind') or row.get('executor_kind') or 'unknown'}",
+        f"Execution mode: {row.get('execution_mode') or row.get('executor_kind') or 'unknown'}",
+        f"Runtime: {_format_runtime(row)}",
         f"Schedule: {_format_schedule(row.get('schedule'))}",
         f"Target: {_format_target(row)}",
         f"Last job: {_format_job(row.get('last_job'))}",
@@ -1104,9 +1370,39 @@ def _format_automation_brief(row: dict[str, Any]) -> str:
     return (
         f"- {row.get('name') or row.get('id')} [{state}, {kind}]\n"
         f"  id: {row.get('id')}\n"
+        f"  execution mode: {row.get('execution_mode') or row.get('executor_kind') or 'unknown'}\n"
+        f"  runtime: {_format_runtime(row)}\n"
         f"  schedule: {_format_schedule(row.get('schedule'))}\n"
         f"  last job: {_format_job(row.get('last_job'))}"
     )
+
+
+def _format_runtime(row: dict[str, Any]) -> str:
+    mode = row.get("execution_mode") or row.get("executor_kind")
+    if mode == EXECUTOR_AGENT_TASK_TURN:
+        contract = row.get("direct_runtime_contract")
+        label = "direct"
+    elif mode == EXECUTOR_PMA_OPERATOR_TURN:
+        contract = row.get("coordinator_runtime_contract")
+        label = "coordinator"
+    else:
+        contract = (
+            row.get("runtime_contract", {}).get("requested")
+            if isinstance(row.get("runtime_contract"), dict)
+            else None
+        )
+        label = "runtime"
+    if not isinstance(contract, dict) or not contract:
+        return "none"
+    agent = contract.get("agent") or "unspecified-agent"
+    model = contract.get("model")
+    profile = contract.get("profile")
+    parts = [f"{label} {agent}"]
+    if model:
+        parts.append(str(model))
+    if profile:
+        parts.append(f"profile={profile}")
+    return " / ".join(parts)
 
 
 def _format_schedule(schedule: Any) -> str:
@@ -1121,7 +1417,7 @@ def _format_schedule(schedule: Any) -> str:
 def _format_job(job: Any) -> str:
     if not isinstance(job, dict):
         return "none"
-    state = job.get("state") or "unknown"
+    state = job.get("effective_state") or job.get("state") or "unknown"
     updated_at = job.get("updated_at") or job.get("created_at") or "unknown time"
     return f"{state} at {updated_at}"
 
@@ -1144,6 +1440,11 @@ def _build_security_scan_pr(
     payload: AutomationPresetRequest,
 ) -> tuple[AutomationRule, AutomationSchedule]:
     descriptor = _preset_descriptor("security_scan_pr")
+    execution_mode = _resolve_preset_execution_mode(
+        payload.execution_mode,
+        default=EXECUTOR_AGENT_TASK_TURN,
+        allowed={EXECUTOR_AGENT_TASK_TURN, EXECUTOR_PMA_OPERATOR_TURN},
+    )
     repo_id = _required_text(payload.repo_id, "repo_id")
     name = _optional_text(payload.name) or f"Daily security scan for {repo_id}"
     prompt = _optional_text(payload.prompt) or _render_preset_template(
@@ -1168,8 +1469,12 @@ def _build_security_scan_pr(
         filters={"schedule.rule_id": rule_id},
         target_policy=TARGET_POLICY_HUB,
         target={"repo_id": repo_id},
-        executor_kind=EXECUTOR_MANAGED_THREAD_TURN,
-        executor=_executor_with_agent_options({"message_text": prompt}, payload),
+        executor_kind=execution_mode,
+        executor=_executor_for_product_mode(
+            execution_mode,
+            base={"message_text": prompt},
+            payload=payload,
+        ),
         enabled=payload.enabled,
         policy=policy,
         metadata={
@@ -1187,6 +1492,11 @@ def _build_weekly_ticket_flow(
     payload: AutomationPresetRequest,
 ) -> tuple[AutomationRule, AutomationSchedule]:
     descriptor = _preset_descriptor("weekly_ticket_flow")
+    _resolve_preset_execution_mode(
+        payload.execution_mode,
+        default=EXECUTOR_TICKET_FLOW,
+        allowed={EXECUTOR_TICKET_FLOW},
+    )
     repo_id = _required_text(payload.repo_id, "repo_id")
     name = _optional_text(payload.name) or f"Weekly ticket flow for {repo_id}"
     rule_id = _rule_id(name)
@@ -1396,6 +1706,126 @@ def _executor_with_agent_options(
     _apply_executor_option(configured, "profile", payload.profile)
     _apply_executor_option(configured, "agent_profile", payload.profile)
     return configured
+
+
+def _executor_for_product_mode(
+    execution_mode: str,
+    *,
+    base: dict[str, Any],
+    payload: AutomationPresetRequest,
+) -> dict[str, Any]:
+    executor = _executor_with_agent_options(base, payload)
+    if payload.worker_child_policy is not None:
+        executor["worker_child_policy"] = dict(payload.worker_child_policy)
+    _materialize_product_runtime_contract(
+        executor_kind=execution_mode,
+        executor=executor,
+        agent=payload.agent,
+        model=payload.model,
+        reasoning=payload.reasoning,
+        profile=payload.profile,
+    )
+    _validate_product_executor_mode(execution_mode, executor)
+    return executor
+
+
+def _resolve_preset_execution_mode(
+    value: Optional[str],
+    *,
+    default: str,
+    allowed: set[str],
+) -> str:
+    mode = _optional_text(value) or default
+    if mode not in allowed:
+        choices = ", ".join(sorted(allowed))
+        raise ValueError(f"execution_mode must be one of: {choices}")
+    return mode
+
+
+def _materialize_product_runtime_contract(
+    *,
+    executor_kind: str,
+    executor: dict[str, Any],
+    agent: Optional[str],
+    model: Optional[str],
+    reasoning: Optional[str],
+    profile: Optional[str],
+) -> None:
+    if executor_kind not in {EXECUTOR_AGENT_TASK_TURN, EXECUTOR_PMA_OPERATOR_TURN}:
+        return
+    runtime = executor.get("requested_runtime")
+    requested = dict(runtime) if isinstance(runtime, dict) else {}
+    for key, value in (
+        ("agent", agent or executor.get("agent")),
+        ("model", model or executor.get("model")),
+        ("reasoning", reasoning or executor.get("reasoning")),
+        (
+            "profile",
+            profile or executor.get("profile") or executor.get("agent_profile"),
+        ),
+    ):
+        text = _optional_text(value)
+        if text is not None:
+            requested[key] = text
+    for key in ("approval_policy", "sandbox_policy"):
+        text = _optional_text(executor.get(key))
+        if text is not None:
+            requested[key] = text
+    executor["requested_runtime"] = requested
+    for key in ("agent", "model", "reasoning", "profile"):
+        text = _optional_text(requested.get(key))
+        if text is not None:
+            executor[key] = text
+    profile_text = _optional_text(requested.get("profile"))
+    if profile_text is not None:
+        executor["agent_profile"] = profile_text
+
+
+def _requested_runtime_from_executor(executor: dict[str, Any]) -> dict[str, Any]:
+    runtime = executor.get("requested_runtime")
+    requested = dict(runtime) if isinstance(runtime, dict) else {}
+    for key, executor_keys in (
+        ("agent", ("agent",)),
+        ("model", ("model",)),
+        ("reasoning", ("reasoning",)),
+        ("profile", ("profile", "agent_profile")),
+        ("approval_policy", ("approval_policy",)),
+        ("sandbox_policy", ("sandbox_policy",)),
+    ):
+        if _optional_text(requested.get(key)) is not None:
+            continue
+        for executor_key in executor_keys:
+            text = _optional_text(executor.get(executor_key))
+            if text is not None:
+                requested[key] = text
+                break
+    return requested
+
+
+def _validate_product_executor_mode(
+    executor_kind: str, executor: dict[str, Any]
+) -> None:
+    if executor_kind in {EXECUTOR_MANAGED_THREAD_TURN, "pma_turn"}:
+        raise ValueError(
+            "legacy automation execution modes are not accepted by the product API; "
+            "use agent_task_turn, pma_operator_turn, or ticket_flow"
+        )
+    worker_policy = executor.get("worker_child_policy")
+    if worker_policy is not None and executor_kind != EXECUTOR_PMA_OPERATOR_TURN:
+        raise ValueError("worker_child_policy is only valid for pma_operator_turn")
+    if executor_kind not in {EXECUTOR_AGENT_TASK_TURN, EXECUTOR_PMA_OPERATOR_TURN}:
+        return
+    requested = _requested_runtime_from_executor(executor)
+    agent = _optional_text(requested.get("agent"))
+    model = _optional_text(requested.get("model"))
+    if agent is None:
+        raise ValueError(f"{executor_kind} requires requested_runtime.agent")
+    if model is not None and "/" in model and agent != "opencode":
+        raise ValueError(
+            "OpenCode provider/model values require requested_runtime.agent=opencode"
+        )
+    if agent == "opencode" and model is not None and "/" not in model:
+        raise ValueError("OpenCode model must be in provider/model format")
 
 
 __all__ = [
