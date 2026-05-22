@@ -1195,7 +1195,15 @@
   }
 
   async function syncCommittedDetailUrl(detailId: string): Promise<void> {
-    await syncDetailUrl(detailId);
+    try {
+      await syncDetailUrl(detailId);
+    } catch (error) {
+      if (pendingCommittedDetailUrlChatId === detailId) {
+        pendingCommittedDetailUrlChatId = null;
+        pageController.setRoute(currentRouteSnapshot());
+      }
+      throw error;
+    }
   }
 
   async function refreshActive(chatId: string, options: { quiet?: boolean } = {}): Promise<void> {

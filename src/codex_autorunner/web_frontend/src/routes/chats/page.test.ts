@@ -52,6 +52,19 @@ describe('/chats page', () => {
     expect(pageSource).not.toContain('openChatTranscriptEventSource');
   });
 
+  it('clears the committed chat URL guard when committed detail navigation fails', () => {
+    const source = chatDetailPageSource();
+    const syncCommittedBody = source.match(
+      /async function syncCommittedDetailUrl[\s\S]*?\n  async function refreshActive/
+    )?.[0];
+
+    expect(syncCommittedBody).toContain('catch (error)');
+    expect(syncCommittedBody).toContain('pendingCommittedDetailUrlChatId = null;');
+    expect(syncCommittedBody).toContain('pageController.setRoute(currentRouteSnapshot());');
+    expect(syncCommittedBody).toContain('throw error;');
+    expect(syncCommittedBody).not.toContain('finally');
+  });
+
   it('keeps migrated PMA transcript, stream, queue, send, and normalization calls out of the page', () => {
     const pageSource = chatDetailPageSource();
     const forbiddenTokens = [
