@@ -471,15 +471,13 @@ def refresh_orchestration_process_heartbeat(
 
 
 def _read_orchestration_schema_version_if_present(conn: sqlite3.Connection) -> int:
-    row = conn.execute(
-        """
+    row = conn.execute("""
         SELECT name
           FROM sqlite_master
          WHERE type = 'table'
            AND name = 'orch_schema_migrations'
          LIMIT 1
-        """
-    ).fetchone()
+        """).fetchone()
     if row is None:
         return 0
     version_row = conn.execute(
@@ -502,7 +500,7 @@ def open_orchestration_sqlite(
 ) -> Iterator[sqlite3.Connection]:
     """Open the canonical orchestration SQLite database."""
     db_path = resolve_orchestration_sqlite_path(hub_root)
-    mode = migration_mode or ("worker" if migrate else "worker")
+    mode = migration_mode or ("hub" if process_role == "hub" else "worker")
     role = process_role or mode
     if migrate:
         build_id, _unknown_reason = resolve_build_identity()
