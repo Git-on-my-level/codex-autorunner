@@ -32,6 +32,9 @@ from codex_autorunner.core.orchestration.runtime_threads import (
     RuntimeThreadOutcome,
 )
 from codex_autorunner.core.orchestration.service import ManagedThreadExecutionStore
+from codex_autorunner.core.orchestration.turn_assistant_output import (
+    TurnAssistantOutput,
+)
 from codex_autorunner.core.orchestration.turn_context import (
     ChatTurnDeliveryTarget,
     ChatTurnEnvelope,
@@ -263,6 +266,26 @@ def test_trim_cumulative_assistant_text_keeps_unrelated_text() -> None:
     assert trim_cumulative_assistant_text(current, previous)[0] == current
 
 
+def test_trim_cumulative_assistant_text_keeps_prior_quoted_infix() -> None:
+    previous = "first answer"
+    current = "To revisit first answer in context, here is the update."
+
+    assert trim_cumulative_assistant_text(current, previous) == (
+        current,
+        "current_turn_final",
+    )
+
+
+def test_trim_cumulative_assistant_text_trims_prior_at_transcript_section() -> None:
+    previous = "second answer"
+    current = "first answer\n\nsecond answer\n\nthird answer"
+
+    assert trim_cumulative_assistant_text(current, previous) == (
+        "third answer",
+        "cumulative_transcript_trimmed",
+    )
+
+
 def test_trim_cumulative_assistant_text_from_candidates_uses_full_transcript_prefix() -> (
     None
 ):
@@ -419,26 +442,6 @@ def test_build_assistant_transcript_prefix_collapses_legacy_cumulative_rows() ->
     assert prefix == (first + second + third).strip() + fourth
 
 
-@pytest.mark.anyio
-async def test_assistant_transcript_text_from_hub_requests_unbounded_history() -> None:
-    requests: list[Any] = []
-
-    class _Hub:
-        async def get_transcript_history(self, request: Any) -> Any:
-            requests.append(request)
-            return SimpleNamespace(entries=())
-
-    text = await managed_thread_turns_module._assistant_transcript_text_from_hub(
-        _Hub(),
-        managed_thread_id="thread-1",
-        managed_turn_id="turn-2",
-    )
-
-    assert text == ""
-    assert requests[-1].limit == 0
-    assert requests[-1].target_kind == "thread_target"
-
-
 def test_render_managed_thread_delivery_record_text_includes_token_usage_footer() -> (
     None
 ):
@@ -457,6 +460,15 @@ def test_render_managed_thread_delivery_record_text_includes_token_usage_footer(
                 envelope_version="managed_thread_delivery.v1",
                 final_status="ok",
                 assistant_text="Recovered answer",
+                assistant_output=TurnAssistantOutput(
+                    managed_thread_id="thread-1",
+                    managed_turn_id="turn-1",
+                    backend_thread_id="backend-1",
+                    backend_turn_id="backend-turn-1",
+                    text="Recovered answer",
+                    ownership="current_turn",
+                    source="runtime_final",
+                ),
                 token_usage={
                     "last": {
                         "totalTokens": 71173,
@@ -473,6 +485,40 @@ def test_render_managed_thread_delivery_record_text_includes_token_usage_footer(
     assert "Recovered answer" in rendered
     assert "Token usage: total 71173 input 400 output 245" in rendered
     assert "ctx 65%" in rendered
+
+
+def test_render_managed_thread_delivery_record_text_uses_sealed_output_text() -> None:
+    rendered = managed_thread_turns_module.render_managed_thread_delivery_record_text(
+        managed_thread_turns_module.ManagedThreadDeliveryRecord(
+            delivery_id="delivery-1",
+            managed_thread_id="thread-1",
+            managed_turn_id="turn-1",
+            idempotency_key="idem-1",
+            target=managed_thread_turns_module.ManagedThreadDeliveryTarget(
+                surface_kind="discord",
+                adapter_key="discord",
+                surface_key="channel-1",
+            ),
+            envelope=managed_thread_turns_module.ManagedThreadDeliveryEnvelope(
+                envelope_version="managed_thread_delivery.v1",
+                final_status="ok",
+                assistant_text="User: old\nAssistant: stale transcript",
+                assistant_output=TurnAssistantOutput(
+                    managed_thread_id="thread-1",
+                    managed_turn_id="turn-1",
+                    backend_thread_id="backend-1",
+                    backend_turn_id="backend-turn-1",
+                    text="Current turn answer",
+                    ownership="trimmed_from_cumulative",
+                    source="reducer",
+                ),
+            ),
+            state=ManagedThreadDeliveryState.PENDING,
+        )
+    )
+
+    assert "Current turn answer" in rendered
+    assert "stale transcript" not in rendered
 
 
 def test_render_managed_thread_failure_delivery_record_text_includes_recovery_context() -> (
@@ -2222,6 +2268,10 @@ async def test_finalize_managed_thread_execution_trims_cumulative_terminal_outpu
 
     assert result.assistant_text == new_answer
     assert recorded_results[-1]["assistant_text"] == new_answer
+    assert recorded_results[-1]["assistant_output"].text == new_answer
+    assert recorded_results[-1]["assistant_output"].ownership == (
+        "trimmed_from_cumulative"
+    )
     assert fake_hub_client.transcript_requests[-1].assistant_text == new_answer
 
 
@@ -2421,6 +2471,23 @@ async def test_finalize_managed_thread_execution_trims_short_cumulative_history_
         get_thread_runtime_binding=lambda managed_thread_id: SimpleNamespace(
             backend_thread_id="session-1"
         ),
+        list_turns=lambda managed_thread_id, *, limit: [
+            {
+                "execution_id": "exec-1",
+                "status": "running",
+                "assistant_text": "",
+            },
+            {
+                "execution_id": "previous-2",
+                "status": "ok",
+                "assistant_text": "ABCZYX",
+            },
+            {
+                "execution_id": "previous-1",
+                "status": "ok",
+                "assistant_text": "ABC",
+            },
+        ],
         get_previous_completed_execution=(
             lambda managed_thread_id, *, exclude_execution_id=None: None
         ),
@@ -2454,7 +2521,7 @@ async def test_finalize_managed_thread_execution_trims_short_cumulative_history_
     assert result.assistant_text == "123"
     assert recorded_results[-1]["assistant_text"] == "123"
     assert fake_hub_client.transcript_requests[-1].assistant_text == "123"
-    assert fake_hub_client.transcript_history_requests[-1].limit == 0
+    assert fake_hub_client.transcript_history_requests == []
 
 
 @pytest.mark.anyio
@@ -2514,6 +2581,18 @@ async def test_finalize_managed_thread_execution_rejects_exact_prior_assistant_t
         get_thread_runtime_binding=lambda managed_thread_id: SimpleNamespace(
             backend_thread_id="session-1"
         ),
+        list_turns=lambda managed_thread_id, *, limit: [
+            {
+                "execution_id": "exec-1",
+                "status": "running",
+                "assistant_text": "",
+            },
+            {
+                "execution_id": "previous-1",
+                "status": "ok",
+                "assistant_text": "first answer",
+            },
+        ],
         get_previous_completed_execution=(
             lambda managed_thread_id, *, exclude_execution_id=None: None
         ),
@@ -2554,6 +2633,7 @@ async def test_finalize_managed_thread_execution_rejects_exact_prior_assistant_t
     assert "chat.managed_thread.stale_prior_assistant_output_rejected" in caplog.text
     assert recorded_results[-1]["assistant_text"] == ""
     assert fake_hub_client.transcript_requests[-1].assistant_text == ""
+    assert fake_hub_client.transcript_history_requests == []
     completed_events = [
         event for event in progress_events if isinstance(event, Completed)
     ]

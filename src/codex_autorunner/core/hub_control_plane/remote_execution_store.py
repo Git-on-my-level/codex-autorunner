@@ -17,6 +17,7 @@ from ..orchestration.models import (
     owner_fields_from_scope_ref,
 )
 from ..orchestration.runtime_bindings import RuntimeThreadBinding
+from ..orchestration.turn_assistant_output import TurnAssistantOutput
 from ..orchestration.turn_execution_contract import (
     TurnExecutionRecord,
     TurnExecutionRequest,
@@ -61,6 +62,14 @@ _BACKGROUND_RUNNER = BoundedBackgroundRunner(
     saturation_wait_seconds=0.05,
     thread_name_prefix="hub-execution",
 )
+
+
+def _assistant_output_payload(value: Any) -> Optional[dict[str, Any]]:
+    if isinstance(value, TurnAssistantOutput):
+        return value.to_durable_dict()
+    if isinstance(value, dict):
+        return dict(value)
+    return None
 
 
 class RemoteThreadExecutionStore(ThreadExecutionStore):
@@ -615,6 +624,7 @@ class RemoteThreadExecutionStore(ThreadExecutionStore):
         *,
         status: str,
         assistant_text: Optional[str] = None,
+        assistant_output: Optional[Any] = None,
         error: Optional[str] = None,
         backend_turn_id: Optional[str] = None,
         transcript_turn_id: Optional[str] = None,
@@ -628,6 +638,7 @@ class RemoteThreadExecutionStore(ThreadExecutionStore):
                     execution_id=execution_id,
                     status=status,
                     assistant_text=assistant_text,
+                    assistant_output=_assistant_output_payload(assistant_output),
                     error=error,
                     backend_turn_id=backend_turn_id,
                     transcript_turn_id=transcript_turn_id,

@@ -10,10 +10,128 @@ from .harness import (
     FakeTelegramBot,
     HermesFixtureRuntime,
     TelegramSurfaceHarness,
+    build_discord_message_create,
     patch_hermes_runtime,
 )
 
 pytestmark = pytest.mark.integration
+
+
+def _latest_execution_text(
+    harness: DiscordSurfaceHarness | TelegramSurfaceHarness,
+) -> str:
+    surface_client = getattr(harness, "rest", None) or getattr(harness, "bot", None)
+    thread_id = str(getattr(surface_client, "thread_target_id", "") or "")
+    service = harness.orchestration_service()
+    row = service.get_latest_execution(thread_id)
+    return str(
+        getattr(row, "output_text", None) or getattr(row, "assistant_text", None) or ""
+    )
+
+
+def _discord_final_texts(rest: FakeDiscordRest) -> list[str]:
+    return [
+        str(op["payload"].get("content") or "")
+        for op in rest.message_ops
+        if op.get("op") == "send"
+        and str(op["payload"].get("content") or "") != "Received. Preparing turn..."
+    ]
+
+
+def _telegram_final_texts(bot: FakeTelegramBot) -> list[str]:
+    return [
+        str(item.get("text") or "")
+        for item in bot.messages
+        if str(item.get("text") or "") != "Working..."
+    ]
+
+
+@pytest.mark.anyio
+async def test_discord_hermes_pma_delivers_three_turn_cumulative_outputs_once(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime = HermesFixtureRuntime("official_hermes_cumulative_session_update")
+    patch_hermes_runtime(monkeypatch, runtime)
+    harness = DiscordSurfaceHarness(tmp_path / "discord")
+    await harness.setup(agent="hermes")
+    rest = FakeDiscordRest()
+    persisted_texts: list[str] = []
+    try:
+        for index, prompt in enumerate(("first", "second", "third"), start=1):
+            await harness.run_gateway_events(
+                [
+                    (
+                        "MESSAGE_CREATE",
+                        build_discord_message_create(prompt, message_id=f"m-{index}"),
+                    )
+                ],
+                rest_client=rest,
+            )
+            persisted_texts.append(_latest_execution_text(harness))
+
+        expected = ["first answer", "second answer", "third answer"]
+        assert persisted_texts == expected
+        assert _discord_final_texts(rest)[-3:] == expected
+    finally:
+        await harness.close()
+        await runtime.close()
+
+
+@pytest.mark.anyio
+async def test_telegram_hermes_pma_delivers_three_turn_cumulative_outputs_once(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime = HermesFixtureRuntime("official_hermes_cumulative_session_update")
+    patch_hermes_runtime(monkeypatch, runtime)
+    harness = TelegramSurfaceHarness(tmp_path / "telegram", timeout_seconds=5.0)
+    await harness.setup(agent="hermes")
+    persisted_texts: list[str] = []
+    try:
+        for prompt in ("first", "second", "third"):
+            await harness.run_message(prompt)
+            persisted_texts.append(_latest_execution_text(harness))
+
+        expected = ["first answer", "second answer", "third answer"]
+        assert persisted_texts == expected
+        assert harness.bot is not None
+        assert _telegram_final_texts(harness.bot)[-3:] == expected
+    finally:
+        await harness.close()
+        await runtime.close()
+
+
+@pytest.mark.anyio
+async def test_discord_hermes_pma_delivers_current_segment_from_transcript_output(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime = HermesFixtureRuntime("official_hermes_transcript_session_update")
+    patch_hermes_runtime(monkeypatch, runtime)
+    harness = DiscordSurfaceHarness(tmp_path / "discord")
+    await harness.setup(agent="hermes")
+    rest = FakeDiscordRest()
+    persisted_texts: list[str] = []
+    try:
+        for index, prompt in enumerate(("first", "second", "third"), start=1):
+            await harness.run_gateway_events(
+                [
+                    (
+                        "MESSAGE_CREATE",
+                        build_discord_message_create(prompt, message_id=f"tx-{index}"),
+                    )
+                ],
+                rest_client=rest,
+            )
+            persisted_texts.append(_latest_execution_text(harness))
+
+        expected = ["first answer", "second answer", "third answer"]
+        assert persisted_texts == expected
+        assert _discord_final_texts(rest)[-3:] == expected
+    finally:
+        await harness.close()
+        await runtime.close()
 
 
 @pytest.mark.anyio

@@ -27,6 +27,9 @@ from codex_autorunner.core.orchestration.managed_thread_delivery_ledger import (
     SQLiteManagedThreadDeliveryEngine,
     SQLiteManagedThreadDeliveryLedger,
 )
+from codex_autorunner.core.orchestration.turn_assistant_output import (
+    TurnAssistantOutput,
+)
 
 
 def _hub_root(tmp_path: Path) -> Path:
@@ -96,6 +99,37 @@ class TestLedgerRegisterIntent:
         assert reg.record.envelope.assistant_text == "hello"
         assert reg.record.created_at is not None
         assert reg.record.updated_at is not None
+
+    def test_persists_typed_turn_assistant_output(self, tmp_path: Path) -> None:
+        ledger = _ledger(tmp_path)
+        output = TurnAssistantOutput(
+            managed_thread_id="thread-1",
+            managed_turn_id="turn-1",
+            backend_thread_id="backend-thread-1",
+            backend_turn_id="backend-turn-1",
+            text="current answer",
+            ownership="current_turn_stream",
+            source="runtime_stream",
+            provenance={"reducer_scope": "current_turn_stream"},
+        )
+        intent = replace(
+            _intent(assistant_text="legacy projection"),
+            envelope=ManagedThreadDeliveryEnvelope(
+                envelope_version="managed_thread_delivery.v1",
+                final_status="ok",
+                assistant_text=output.text,
+                assistant_output=output,
+            ),
+        )
+
+        reg = ledger.register_intent(intent)
+        fetched = ledger.get_delivery(reg.record.delivery_id)
+
+        assert fetched is not None
+        assert fetched.envelope.assistant_text == "current answer"
+        assert fetched.envelope.assistant_output is not None
+        assert fetched.envelope.assistant_output.text == "current answer"
+        assert fetched.envelope.assistant_output.ownership == "current_turn_stream"
 
     def test_idempotency_deduplication(self, tmp_path: Path) -> None:
         ledger = _ledger(tmp_path)

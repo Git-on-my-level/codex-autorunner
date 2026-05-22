@@ -6,7 +6,7 @@ import logging
 import re
 import time
 from collections import Counter, defaultdict, deque
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, AsyncIterator, Awaitable, Callable, Optional, Sequence
 
@@ -58,6 +58,7 @@ from .events import (
     ACPTurnTerminalEvent,
     normalize_notification,
 )
+from .output_normalizer import ACPIngressNormalizedOutput, normalize_acp_ingress_output
 from .protocol import (
     ACPAdvertisedCommand,
     ACPInitializeResult,
@@ -131,6 +132,7 @@ class _PromptState:
     future: asyncio.Future[ACPPromptResult] = field(default_factory=asyncio.Future)
     events: list[ACPEvent] = field(default_factory=list)
     final_output: str = ""
+    prior_assistant_texts: tuple[str, ...] = ()
     closed: bool = False
     replay_task: Optional[asyncio.Task[None]] = None
     request_task: Optional[asyncio.Task[Any]] = None
@@ -143,6 +145,7 @@ class _PromptState:
     last_session_update_part_types: tuple[str, ...] = ()
     last_session_update_text_length: Optional[int] = None
     last_session_update_at: Optional[float] = None
+    last_output_normalized: bool = False
     session_update_counts: Counter[str] = field(default_factory=Counter)
     missing_turn_id_fallback_counts: Counter[str] = field(default_factory=Counter)
     _assistant_text: AssistantOutputState = field(
@@ -154,17 +157,55 @@ class _PromptState:
     def __post_init__(self) -> None:
         self._assistant_text = AssistantOutputState(stream_text=self.final_output)
 
-    def note_output_delta(self, text: str, *, merge_snapshot: bool = False) -> None:
+    def note_output_delta(
+        self, text: str, *, merge_snapshot: bool = False
+    ) -> ACPIngressNormalizedOutput:
+        previous = self.final_output
+        normalized = normalize_acp_ingress_output(
+            text,
+            input_kind=(
+                "current_turn_snapshot" if merge_snapshot else "current_turn_delta"
+            ),
+            prior_assistant_texts=self.prior_assistant_texts,
+        )
+        if normalized.classification == "invalid_stale_output":
+            self.last_output_normalized = True
+            return normalized
         if merge_snapshot:
-            self._assistant_text.note_stream_snapshot(text)
+            self._assistant_text.note_stream_snapshot(normalized.text)
         else:
-            self._assistant_text.note_stream_delta(text)
+            self._assistant_text.note_stream_delta(normalized.text)
         self.final_output = self._assistant_text.text
+        self.last_output_normalized = self.last_output_normalized or bool(
+            normalized.trimmed
+            or (
+                merge_snapshot
+                and normalized.text
+                and previous
+                and self.final_output != f"{previous}{normalized.text}"
+            )
+        )
+        return normalized
 
-    def note_assistant_message(self, text: str) -> None:
+    def note_assistant_message(self, text: str) -> ACPIngressNormalizedOutput | None:
         if isinstance(text, str) and text:
-            self._assistant_text.note_final_message(text)
+            previous = self.final_output
+            normalized = normalize_acp_ingress_output(
+                text,
+                input_kind="final_message",
+                prior_assistant_texts=self.prior_assistant_texts,
+            )
+            if normalized.classification == "invalid_stale_output":
+                self.last_output_normalized = True
+                return normalized
+            self._assistant_text.note_final_message(normalized.text)
             self.final_output = self._assistant_text.text
+            self.last_output_normalized = self.last_output_normalized or bool(
+                normalized.trimmed
+                or (previous and self.final_output != normalized.text)
+            )
+            return normalized
+        return None
 
 
 def _text_excerpt(value: Any, *, limit: int = 120) -> Optional[str]:
@@ -345,6 +386,9 @@ class ACPClient:
         self._closing = False
         self._turn_counter = 0
         self._session_active_turns: dict[str, str] = {}
+        self._session_assistant_history: dict[str, deque[str]] = defaultdict(
+            lambda: deque(maxlen=20)
+        )
         self._background_tasks: set[asyncio.Task[Any]] = set()
         self._trace_enabled = False
 
@@ -831,7 +875,6 @@ class ACPClient:
         if not method:
             raise ACPProtocolError("ACP message is missing a method name")
         event = normalize_notification(message)
-        await self._notifications.put(event)
         if (
             isinstance(event, ACPPermissionRequestEvent)
             and self._permission_handler is not None
@@ -842,27 +885,28 @@ class ACPClient:
                     self._respond_to_permission_notification(event, decision)
                 )
                 task.add_done_callback(self._log_background_task_result)
-        if self._notification_handler is not None:
-            await self._notification_handler(event)
         if event.turn_id:
             state = await self._resolve_prompt_state_for_event(event)
             if state is None:
                 self._orphan_events[event.turn_id].append(event)
             else:
-                await self._record_prompt_event_in_order(state, event)
+                event = await self._record_prompt_event_in_order(state, event)
+        await self._notifications.put(event)
+        if self._notification_handler is not None:
+            await self._notification_handler(event)
 
     async def _handle_server_request(
         self, message: dict[str, Any], *, request_id: str
     ) -> None:
         method = _normalize_optional_text(message.get("method")) or ""
         event = normalize_notification(message)
-        await self._notifications.put(event)
         if event.turn_id:
             state = await self._resolve_prompt_state_for_event(event)
             if state is None:
                 self._orphan_events[event.turn_id].append(event)
             else:
-                await self._record_prompt_event_in_order(state, event)
+                event = await self._record_prompt_event_in_order(state, event)
+        await self._notifications.put(event)
         if self._notification_handler is not None:
             await self._notification_handler(event)
 
@@ -920,7 +964,13 @@ class ACPClient:
     def _ensure_prompt_state(self, session_id: str, turn_id: str) -> _PromptState:
         state = self._prompts.get(turn_id)
         if state is None:
-            state = _PromptState(session_id=session_id, turn_id=turn_id)
+            state = _PromptState(
+                session_id=session_id,
+                turn_id=turn_id,
+                prior_assistant_texts=tuple(
+                    self._session_assistant_history.get(session_id, ())
+                ),
+            )
             state.future = asyncio.get_running_loop().create_future()
             self._prompts[turn_id] = state
             orphan_events = self._orphan_events.pop(turn_id, [])
@@ -1035,7 +1085,7 @@ class ACPClient:
         self,
         state: _PromptState,
         event: ACPEvent,
-    ) -> None:
+    ) -> ACPEvent:
         replay_task = state.replay_task
         current_task = asyncio.current_task()
         if (
@@ -1044,7 +1094,7 @@ class ACPClient:
             and not replay_task.done()
         ):
             await asyncio.shield(replay_task)
-        await self._record_prompt_event(state, event)
+        return await self._record_prompt_event(state, event)
 
     async def _finalize_prompt_with_event(
         self,
@@ -1085,7 +1135,15 @@ class ACPClient:
                 ),
             )
         if not state.future.done():
-            final_output = event.final_output or state.final_output
+            final_output = state.final_output
+            if (
+                event.final_output
+                and event.final_output.strip() != final_output.strip()
+            ):
+                normalized = state.note_assistant_message(event.final_output)
+                if normalized is not None:
+                    self._log_ingress_normalization(state, normalized)
+                final_output = state.final_output
             state.future.set_result(
                 ACPPromptResult(
                     session_id=state.session_id,
@@ -1096,6 +1154,8 @@ class ACPClient:
                     events=tuple(state.events),
                 )
             )
+            if final_output.strip() and event.status == "completed":
+                self._session_assistant_history[state.session_id].append(final_output)
         await state.queue.put(_QUEUE_SENTINEL)
 
     def _log_background_task_result(self, task: asyncio.Task[Any]) -> None:
@@ -1127,22 +1187,30 @@ class ACPClient:
             return ()
         return tuple(state.events)
 
-    async def _record_prompt_event(self, state: _PromptState, event: ACPEvent) -> None:
+    async def _record_prompt_event(
+        self, state: _PromptState, event: ACPEvent
+    ) -> ACPEvent:
         if state.closed:
-            return
+            return event
         self._note_prompt_trace_event(state, event)
-        state.events.append(event)
         if isinstance(event, ACPOutputDeltaEvent):
-            state.note_output_delta(
+            normalized_delta = state.note_output_delta(
                 event.delta,
                 merge_snapshot=event.method == "session/update",
             )
+            self._log_ingress_normalization(state, normalized_delta)
+            event = replace(event, delta=normalized_delta.text)
         elif isinstance(event, ACPMessageEvent) and event.message:
-            state.note_assistant_message(event.message)
+            normalized_message = state.note_assistant_message(event.message)
+            if normalized_message is not None:
+                self._log_ingress_normalization(state, normalized_message)
+                event = replace(event, message=normalized_message.text)
+        state.events.append(event)
         await state.queue.put(event)
         if not isinstance(event, ACPTurnTerminalEvent):
-            return
+            return event
         await self._finalize_prompt_with_event(state, event)
+        return event
 
     async def _record_prompt_terminal_event(
         self,
@@ -1155,8 +1223,6 @@ class ACPClient:
             return
         self._note_prompt_trace_event(state, event)
         state.events.append(event)
-        if event.final_output:
-            state.note_assistant_message(event.final_output)
         await state.queue.put(event)
         await self._finalize_prompt_with_event(
             state,
@@ -1441,17 +1507,40 @@ class ACPClient:
             return
         log_event(self._logger, logging.INFO, event, **fields)
 
+    def _log_ingress_normalization(
+        self,
+        state: _PromptState,
+        normalized: ACPIngressNormalizedOutput,
+    ) -> None:
+        if not (
+            normalized.trimmed
+            or normalized.classification
+            in {"transcript_projection", "invalid_stale_output"}
+        ):
+            return
+        self._log_trace_event(
+            "acp.prompt.output_normalized",
+            session_id=state.session_id,
+            turn_id=state.turn_id,
+            classification=normalized.classification,
+            input_kind=normalized.input_kind,
+            output_chars=len(normalized.text),
+            matched_prior_chars=normalized.matched_prior_chars,
+            output_normalized=state.last_output_normalized,
+        )
+
     def _prompt_trace_fields(self, state: _PromptState) -> dict[str, Any]:
         return {
             "last_runtime_method": state.last_runtime_method,
             "last_session_update_kind": state.last_session_update_kind,
-            "last_session_update_excerpt": state.last_session_update_excerpt,
             "last_session_update_content_kind": state.last_session_update_content_kind,
             "last_session_update_part_types": state.last_session_update_part_types,
             "last_session_update_text_length": state.last_session_update_text_length,
             "last_session_update_elapsed_ms": self._elapsed_ms(
                 state.last_session_update_at
             ),
+            "turn_id_fallback_used": bool(state.missing_turn_id_fallback_counts),
+            "output_normalized": state.last_output_normalized,
         }
 
     def _note_prompt_trace_event(self, state: _PromptState, event: ACPEvent) -> None:
@@ -1485,10 +1574,11 @@ class ACPClient:
                 session_id=state.session_id,
                 turn_id=state.turn_id,
                 session_update=state.last_session_update_kind,
-                text_excerpt=state.last_session_update_excerpt,
                 content_kind=state.last_session_update_content_kind,
                 content_part_types=state.last_session_update_part_types,
                 text_length=state.last_session_update_text_length,
+                turn_id_fallback_used=bool(state.missing_turn_id_fallback_counts),
+                output_normalized=state.last_output_normalized,
             )
         if (
             state.last_session_update_kind

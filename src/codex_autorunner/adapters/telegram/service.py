@@ -87,6 +87,7 @@ from ..chat.managed_thread_delivery_support import (
     ManagedThreadDeliveryCleanupContext,
     ManagedThreadDeliverySendResult,
     deliver_managed_thread_terminal_record,
+    managed_thread_delivery_output_metadata,
     managed_thread_terminal_delivery_send_key,
 )
 from ..chat.managed_thread_delivery_worker import (
@@ -606,6 +607,7 @@ class TelegramBotService(
                                 "managed_thread_id": record.managed_thread_id,
                                 "managed_turn_id": record.managed_turn_id,
                                 "terminal_status": "ok",
+                                **managed_thread_delivery_output_metadata(record),
                             },
                         )
                         if not delivered:

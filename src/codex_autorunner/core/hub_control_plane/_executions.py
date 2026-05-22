@@ -54,7 +54,7 @@ class ExecutionCreateRequest:
         )
 
     def to_dict(self) -> dict[str, Any]:
-        payload = {
+        payload: dict[str, Any] = {
             "thread_target_id": self.thread_target_id,
             "prompt": self.prompt,
             "request_kind": self.request_kind,
@@ -293,6 +293,7 @@ class ExecutionResultRecordRequest:
     execution_id: str
     status: str
     assistant_text: Optional[str] = None
+    assistant_output: Optional[dict[str, Any]] = None
     error: Optional[str] = None
     backend_turn_id: Optional[str] = None
     transcript_turn_id: Optional[str] = None
@@ -313,13 +314,18 @@ class ExecutionResultRecordRequest:
                 field_name="status",
             ),
             assistant_text=normalize_optional_text(data.get("assistant_text")),
+            assistant_output=(
+                dict(data["assistant_output"])
+                if isinstance(data.get("assistant_output"), Mapping)
+                else None
+            ),
             error=normalize_optional_text(data.get("error")),
             backend_turn_id=normalize_optional_text(data.get("backend_turn_id")),
             transcript_turn_id=normalize_optional_text(data.get("transcript_turn_id")),
         )
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        payload: dict[str, Any] = {
             "thread_target_id": self.thread_target_id,
             "execution_id": self.execution_id,
             "status": self.status,
@@ -328,6 +334,9 @@ class ExecutionResultRecordRequest:
             "backend_turn_id": self.backend_turn_id,
             "transcript_turn_id": self.transcript_turn_id,
         }
+        if self.assistant_output is not None:
+            payload["assistant_output"] = self.assistant_output
+        return payload
 
 
 @dataclass(frozen=True)

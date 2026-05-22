@@ -50,7 +50,6 @@ from ...core.hub_control_plane import (
     ExecutionColdTraceFinalizeRequest,
     ExecutionTimelinePersistRequest,
     ThreadActivityRecordRequest,
-    TranscriptHistoryRequest,
     TranscriptWriteRequest,
     serialize_run_event,
 )
@@ -103,7 +102,6 @@ from ...core.orchestration.turn_assistant_output import (
 from ...core.orchestration.turn_execution_contract import TurnExecutionRequest
 from ...core.orchestration.turn_output_reducer import (
     assistant_text_extends_prefix,
-    build_assistant_transcript_prefix,
     reduce_turn_output,
 )
 from ...core.orchestration.turn_timeline import persist_turn_timeline
@@ -112,6 +110,7 @@ from ...core.ports.run_event import RunNotice
 from ..github.managed_thread_pr_binding import self_claim_and_arm_pr_binding
 from .execution_event_journal import make_chat_execution_journal_notice
 from .managed_thread_delivery import ManagedThreadDeliveryAdapter
+from .managed_thread_delivery_support import managed_thread_delivery_success_text
 from .runtime_thread_errors import resolve_runtime_thread_error_detail
 from .turn_metrics import compose_turn_response_with_footer
 
@@ -291,6 +290,7 @@ class TerminalTurnRecorder:
         backend_thread_id: Optional[str],
         backend_turn_id: Optional[str],
         transcript_turn_id: Optional[str] = None,
+        assistant_output: Optional[TurnAssistantOutput] = None,
         trace_fields: Optional[dict[str, Any]] = None,
     ) -> Any:
         fields = _managed_thread_trace_fields(
@@ -324,6 +324,7 @@ class TerminalTurnRecorder:
                     managed_turn_id,
                     status=status,
                     assistant_text=assistant_text,
+                    assistant_output=assistant_output,
                     error=error,
                     backend_turn_id=backend_turn_id,
                     transcript_turn_id=transcript_turn_id,
@@ -1051,58 +1052,13 @@ def _prior_completed_assistant_text_prefix(
     return ""
 
 
-async def _assistant_transcript_text_from_hub(
-    hub_client: Any | None,
-    *,
-    managed_thread_id: str,
-    managed_turn_id: str,
-) -> str:
-    if hub_client is None:
-        return ""
-    getter = getattr(hub_client, "get_transcript_history", None)
-    if not callable(getter):
-        return ""
-    try:
-        response = await getter(
-            TranscriptHistoryRequest(
-                target_kind="thread_target",
-                target_id=managed_thread_id,
-                limit=0,
-            )
-        )
-    except (RuntimeError, TypeError, ValueError, AttributeError, OSError):
-        return ""
-    entries = getattr(response, "entries", ())
-    if not isinstance(entries, (list, tuple)):
-        return ""
-    transcript_entries: list[Mapping[str, Any]] = []
-    for entry in reversed(entries):
-        if not isinstance(entry, Mapping):
-            continue
-        entry_turn_id = str(
-            entry.get("managed_turn_id") or entry.get("turn_id") or ""
-        ).strip()
-        if entry_turn_id == managed_turn_id:
-            continue
-        transcript_entries.append(entry)
-    return build_assistant_transcript_prefix(transcript_entries)
-
-
 async def _prior_assistant_text_candidates(
     orchestration_service: Any,
     *,
-    hub_client: Any | None,
     managed_thread_id: str,
     managed_turn_id: str,
 ) -> list[str]:
     candidates: list[str] = []
-    transcript_text = await _assistant_transcript_text_from_hub(
-        hub_client,
-        managed_thread_id=managed_thread_id,
-        managed_turn_id=managed_turn_id,
-    )
-    if transcript_text:
-        candidates.append(transcript_text)
     prior_prefix = _prior_completed_assistant_text_prefix(
         orchestration_service,
         managed_thread_id=managed_thread_id,
@@ -1200,7 +1156,7 @@ def render_managed_thread_delivery_record_text(
     no_response_fallback: str = "(No response text returned.)",
 ) -> str:
     response_text = _render_managed_thread_delivery_text(
-        assistant_text=str(record.envelope.assistant_text or "").strip(),
+        assistant_text=managed_thread_delivery_success_text(record).strip(),
         session_notice=str(record.envelope.session_notice or "").strip(),
         no_response_fallback=no_response_fallback,
     )
@@ -1302,6 +1258,7 @@ def build_managed_thread_delivery_intent(
         envelope_version="managed_thread_delivery.v1",
         final_status=finalized.status,
         assistant_text=finalized.turn_assistant_text,
+        assistant_output=finalized.assistant_output,
         session_notice=_normalized_optional_text(finalized.session_notice),
         error_text=_normalized_optional_text(finalized.error),
         backend_thread_id=_normalized_optional_text(finalized.backend_thread_id),
@@ -3438,7 +3395,6 @@ async def finalize_managed_thread_execution(
     if outcome.status == "ok":
         prior_assistant_candidates = await _prior_assistant_text_candidates(
             orchestration_service,
-            hub_client=resolved_hub_client,
             managed_thread_id=managed_thread_id,
             managed_turn_id=managed_turn_id,
         )
@@ -3573,6 +3529,7 @@ async def finalize_managed_thread_execution(
             backend_thread_id=resolved_backend_thread_id,
             backend_turn_id=outcome.backend_turn_id or started.execution.backend_id,
             transcript_turn_id=None,
+            assistant_output=outcome.assistant_output,
             trace_fields=runtime_trace_fields(event_state)
             | terminal_evidence_trace_fields(outcome),
         )

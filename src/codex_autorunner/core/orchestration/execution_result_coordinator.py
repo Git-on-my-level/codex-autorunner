@@ -13,6 +13,7 @@ from .managed_turn_lifecycle_contract import (
     classify_terminal_recording,
 )
 from .models import ExecutionRecord, ThreadTarget
+from .turn_assistant_output import TurnAssistantOutput
 
 logger = logging.getLogger(__name__)
 
@@ -151,6 +152,7 @@ class ExecutionResultCoordinator:
         *,
         status: str,
         assistant_text: Optional[str] = None,
+        assistant_output: Optional[TurnAssistantOutput] = None,
         error: Optional[str] = None,
         backend_turn_id: Optional[str] = None,
         transcript_turn_id: Optional[str] = None,
@@ -209,14 +211,16 @@ class ExecutionResultCoordinator:
                 to_phase="terminal_recording",
                 terminal_status=proposed_outcome.status,
             )
-        updated = self.mark_turn_finished(
-            execution_id,
-            status=status,
-            assistant_text=assistant_text,
-            error=error,
-            backend_turn_id=backend_turn_id,
-            transcript_turn_id=transcript_turn_id,
-        )
+        finish_kwargs: dict[str, Any] = {
+            "status": status,
+            "assistant_text": assistant_text,
+            "error": error,
+            "backend_turn_id": backend_turn_id,
+            "transcript_turn_id": transcript_turn_id,
+        }
+        if assistant_output is not None:
+            finish_kwargs["assistant_output"] = assistant_output
+        updated = self.mark_turn_finished(execution_id, **finish_kwargs)
         if not updated:
             raise KeyError(f"Execution '{execution_id}' was not running")
         execution = self.get_execution(thread_target_id, execution_id)

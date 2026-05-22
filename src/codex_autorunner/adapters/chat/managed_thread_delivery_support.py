@@ -5,6 +5,7 @@ import logging
 from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable, Mapping, Optional
 
+from ...core.logging_utils import log_event
 from ...core.orchestration import (
     ManagedThreadDeliveryAttemptResult,
     ManagedThreadDeliveryOutcome,
@@ -33,9 +34,7 @@ class ManagedThreadDeliveryCleanupContext:
             final_status=_normalize_terminal_status(
                 getattr(getattr(record, "envelope", None), "final_status", "")
             ),
-            assistant_text=str(
-                getattr(getattr(record, "envelope", None), "assistant_text", "") or ""
-            ),
+            assistant_text=managed_thread_delivery_success_text(record),
             error_text=(
                 str(getattr(getattr(record, "envelope", None), "error_text", "") or "")
                 or None
@@ -83,6 +82,44 @@ def managed_thread_terminal_delivery_send_key(
     return f"{base}:{normalized_suffix}" if normalized_suffix else base
 
 
+def managed_thread_delivery_success_text(record: Any) -> str:
+    envelope = getattr(record, "envelope", None)
+    output = getattr(envelope, "assistant_output", None)
+    if output is not None:
+        return str(getattr(output, "text", "") or "")
+    return str(getattr(envelope, "assistant_text", "") or "")
+
+
+def managed_thread_delivery_output_metadata(record: Any) -> dict[str, Any]:
+    output = getattr(getattr(record, "envelope", None), "assistant_output", None)
+    if output is None:
+        return {
+            "turn_output_present": False,
+            "turn_output_chars": 0,
+        }
+    metadata = {
+        "turn_output_present": True,
+        "turn_output_ownership": str(getattr(output, "ownership", "") or ""),
+        "turn_output_source": str(getattr(output, "source", "") or ""),
+        "turn_output_chars": len(str(getattr(output, "text", "") or "")),
+        "turn_output_backend_thread_id": (
+            str(getattr(output, "backend_thread_id", "") or "") or None
+        ),
+        "turn_output_backend_turn_id": (
+            str(getattr(output, "backend_turn_id", "") or "") or None
+        ),
+    }
+    provenance = getattr(output, "provenance", None)
+    if isinstance(provenance, Mapping) and provenance:
+        safe_provenance = dict(provenance)
+        matched_prior = str(safe_provenance.pop("matched_prior_text", "") or "")
+        if matched_prior:
+            safe_provenance["matched_prior_chars"] = len(matched_prior)
+        if safe_provenance:
+            metadata["turn_output_provenance"] = safe_provenance
+    return metadata
+
+
 async def deliver_managed_thread_terminal_record(
     record: Any,
     *,
@@ -104,10 +141,31 @@ async def deliver_managed_thread_terminal_record(
         if send_result is None:
             send_result = ManagedThreadDeliverySendResult()
         if send_result.error:
+            log_event(
+                _LOGGER,
+                logging.INFO,
+                "chat.managed_thread.delivery.terminal_send_failed",
+                delivery_id=context.delivery_id,
+                managed_thread_id=context.managed_thread_id,
+                managed_turn_id=context.managed_turn_id,
+                final_status=status,
+                error=send_result.error,
+                **managed_thread_delivery_output_metadata(record),
+            )
             return ManagedThreadDeliveryAttemptResult(
                 outcome=ManagedThreadDeliveryOutcome.FAILED,
                 error=send_result.error,
             )
+        log_event(
+            _LOGGER,
+            logging.INFO,
+            "chat.managed_thread.delivery.terminal_send_succeeded",
+            delivery_id=context.delivery_id,
+            managed_thread_id=context.managed_thread_id,
+            managed_turn_id=context.managed_turn_id,
+            final_status=status,
+            **managed_thread_delivery_output_metadata(record),
+        )
         if cleanup is not None and status in cleanup_statuses:
             try:
                 await cleanup(context)
@@ -154,5 +212,7 @@ __all__ = [
     "ManagedThreadDeliverySendFn",
     "ManagedThreadDeliverySendResult",
     "deliver_managed_thread_terminal_record",
+    "managed_thread_delivery_output_metadata",
+    "managed_thread_delivery_success_text",
     "managed_thread_terminal_delivery_send_key",
 ]

@@ -330,6 +330,39 @@ class FakeACPServer:
         cancel_event = self._session_cancel_events[session_id]
         thought_content: Any = {"type": "text", "text": "thinking"}
         reply_content: Any = {"type": "text", "text": "fixture reply"}
+        if self._scenario in {
+            "official_hermes_cumulative_session_update",
+            "official_hermes_transcript_session_update",
+            "official_hermes_stale_session_update",
+        }:
+            prompt_count = self._official_prompt_counts.get(session_id, 0) + 1
+            self._official_prompt_counts[session_id] = prompt_count
+            if prompt_count == 1:
+                reply_text = "first answer"
+            elif self._scenario == "official_hermes_transcript_session_update":
+                if prompt_count == 2:
+                    reply_text = (
+                        "User:\nfirst\n\n"
+                        "Assistant:\nfirst answer\n\n"
+                        "User:\nsecond\n\n"
+                        "Assistant:\nsecond answer"
+                    )
+                else:
+                    reply_text = (
+                        "User:\nfirst\n\n"
+                        "Assistant:\nfirst answer\n\n"
+                        "User:\nsecond\n\n"
+                        "Assistant:\nsecond answer\n\n"
+                        "User:\nthird\n\n"
+                        "Assistant:\nthird answer"
+                    )
+            elif self._scenario == "official_hermes_stale_session_update":
+                reply_text = "User:\nfirst\n\nAssistant:\nfirst answer"
+            elif prompt_count == 2:
+                reply_text = "first answer\n\nsecond answer"
+            else:
+                reply_text = "first answer\n\nsecond answer\n\nthird answer"
+            reply_content = {"type": "text", "text": reply_text}
         if self._scenario == "official_second_prompt_hang_with_persisted_completion":
             # Match persisted session-store text so streaming chunks and recovery agree.
             reply_content = {"type": "text", "text": "identical fixture output"}
