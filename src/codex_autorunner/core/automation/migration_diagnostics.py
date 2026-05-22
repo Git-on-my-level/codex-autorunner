@@ -163,7 +163,7 @@ def collect_automation_migration_read_model(
 
     if not database_exists and not legacy_file_present:
         return AutomationMigrationReadModel(
-            status="ok",
+            status="complete",
             schema_version=schema_version,
             target_schema_version=target_schema_version,
             pending_migration_versions=pending_versions,
@@ -238,7 +238,9 @@ def collect_automation_migration_read_model(
 
     next_steps = _dedupe(item.next_step for item in diagnostics)
     status = (
-        "blocked" if any(item.severity == "error" for item in diagnostics) else "ok"
+        "blocked"
+        if any(item.severity == "error" for item in diagnostics)
+        else "complete"
     )
     return AutomationMigrationReadModel(
         status=status,

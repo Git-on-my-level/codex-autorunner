@@ -575,7 +575,7 @@ def test_automation_migration_diagnostics_report_clean_mirror(
 
     payload = collect_automation_migration_read_model(hub_root).to_dict()
 
-    assert payload["status"] == "ok"
+    assert payload["status"] == "complete"
     assert payload["mirror_health"]["status"] == "ok"
     assert payload["mirror_health"]["missing"] == {
         "subscriptions": [],

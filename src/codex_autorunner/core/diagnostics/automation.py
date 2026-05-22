@@ -17,12 +17,26 @@ from ..automation.models import (
 )
 from ..automation.store import AutomationStore
 from ..config import HubConfig
+from ..orchestration.sqlite import open_orchestration_sqlite
+from ..sqlite_utils import table_exists
 from .types import DoctorCheck
 
 AUTOMATION_PARENT_STATE_STALE = "AUTOMATION_PARENT_STATE_STALE"
 AUTOMATION_RUNTIME_MISMATCH = "AUTOMATION_RUNTIME_MISMATCH"
 AUTOMATION_LEGACY_EXECUTOR_SHAPE = "AUTOMATION_LEGACY_EXECUTOR_SHAPE"
 AUTOMATION_CHILD_EDGE_MISSING = "AUTOMATION_CHILD_EDGE_MISSING"
+AUTOMATION_LEGACY_CHILD_COLUMN_POPULATED = "AUTOMATION_LEGACY_CHILD_COLUMN_POPULATED"
+
+_LEGACY_JOB_CHILD_COLUMNS = (
+    "managed_thread_target_id",
+    "managed_thread_execution_id",
+    "pma_lane_id",
+    "pma_queue_item_id",
+    "ticket_flow_repo_id",
+    "ticket_flow_run_id",
+    "ticket_flow_worktree_id",
+    "publish_operation_id",
+)
 
 
 @dataclass(frozen=True)
@@ -60,7 +74,7 @@ def automation_migration_doctor_checks(
     _ = repo_root
     report = collect_automation_migration_read_model(hub_config.root)
     architecture_checks = automation_architecture_doctor_checks(hub_config)
-    if report.status == "ok":
+    if report.status == "complete":
         return [
             DoctorCheck(
                 name="Automation migration",
@@ -125,6 +139,8 @@ def collect_automation_architecture_diagnostics(
     diagnostics: list[AutomationArchitectureDiagnostic] = []
     rules_by_id = {rule.rule_id: rule for rule in store.list_rules()}
 
+    diagnostics.extend(_legacy_child_column_diagnostics(hub_root, durable=durable))
+
     for rule in rules_by_id.values():
         if rule.executor_kind in LEGACY_EXECUTOR_KINDS:
             diagnostics.append(
@@ -169,19 +185,18 @@ def collect_automation_architecture_diagnostics(
                 )
             )
 
-        if (
-            job.state == JOB_RUNNING
-            and authoritative
-            and all(edge.terminal_state is not None for edge in authoritative)
-        ):
+        nonterminal_authoritative = [
+            edge for edge in authoritative if edge.terminal_state is None
+        ]
+        if job.state == JOB_RUNNING and not nonterminal_authoritative:
             diagnostics.append(
                 AutomationArchitectureDiagnostic(
                     code=AUTOMATION_PARENT_STATE_STALE,
                     job_id=job.job_id,
                     rule_id=job.rule_id,
                     message=(
-                        f"Running job {job.job_id} has all authoritative children "
-                        "terminal after reducer input is available."
+                        f"Running job {job.job_id} has no nonterminal authoritative "
+                        "child edge after reducer input is available."
                     ),
                 )
             )
@@ -209,8 +224,6 @@ def collect_automation_architecture_diagnostics(
 def _runtime_mismatch_fields(edge: AutomationChildExecutionEdge) -> list[str]:
     if edge.child_kind != AUTOMATION_CHILD_KIND_AGENT_TASK:
         return []
-    if edge.terminal_state is None:
-        return []
     requested = edge.requested_runtime.to_dict()
     actual = edge.actual_runtime.to_dict() if edge.actual_runtime is not None else {}
     return [
@@ -224,8 +237,55 @@ def _launched_child_work(job: Any) -> bool:
     return getattr(job, "state", None) == JOB_RUNNING
 
 
+def _legacy_child_column_diagnostics(
+    hub_root: Path, *, durable: bool
+) -> tuple[AutomationArchitectureDiagnostic, ...]:
+    try:
+        with open_orchestration_sqlite(
+            hub_root, durable=durable, migrate=False
+        ) as conn:
+            if not table_exists(conn, "orch_automation_jobs"):
+                return ()
+            predicates = " OR ".join(
+                f"{column} IS NOT NULL" for column in _LEGACY_JOB_CHILD_COLUMNS
+            )
+            rows = conn.execute(f"""
+                SELECT job_id, rule_id, {", ".join(_LEGACY_JOB_CHILD_COLUMNS)}
+                  FROM orch_automation_jobs
+                 WHERE {predicates}
+                 ORDER BY updated_at DESC, job_id ASC
+                """).fetchall()
+    except Exception as exc:
+        return (
+            AutomationArchitectureDiagnostic(
+                code=AUTOMATION_LEGACY_CHILD_COLUMN_POPULATED,
+                message=f"Legacy automation child column inspection failed: {exc}",
+            ),
+        )
+
+    diagnostics: list[AutomationArchitectureDiagnostic] = []
+    for row in rows:
+        for column in _LEGACY_JOB_CHILD_COLUMNS:
+            if row[column] is None:
+                continue
+            diagnostics.append(
+                AutomationArchitectureDiagnostic(
+                    code=AUTOMATION_LEGACY_CHILD_COLUMN_POPULATED,
+                    job_id=str(row["job_id"]),
+                    rule_id=str(row["rule_id"]),
+                    field=column,
+                    message=(
+                        f"Job {row['job_id']} still populates legacy child column "
+                        f"{column}; child lifecycle must live only in graph edges."
+                    ),
+                )
+            )
+    return tuple(diagnostics)
+
+
 __all__ = [
     "AUTOMATION_CHILD_EDGE_MISSING",
+    "AUTOMATION_LEGACY_CHILD_COLUMN_POPULATED",
     "AUTOMATION_LEGACY_EXECUTOR_SHAPE",
     "AUTOMATION_PARENT_STATE_STALE",
     "AUTOMATION_RUNTIME_MISMATCH",

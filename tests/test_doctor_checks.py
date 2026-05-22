@@ -21,9 +21,11 @@ from codex_autorunner.bootstrap import seed_hub_files
 from codex_autorunner.core.agent_config import AgentConfig
 from codex_autorunner.core.automation.migration_diagnostics import (
     AUTOMATION_MIGRATION_LEGACY_JOB_AMBIGUOUS,
+    collect_automation_migration_read_model,
     migrate_legacy_automation_executor_shapes,
 )
 from codex_autorunner.core.automation.models import (
+    AUTOMATION_CHILD_KIND_AGENT_TASK,
     EXECUTOR_AGENT_TASK_TURN,
     EXECUTOR_PMA_OPERATOR_TURN,
     JOB_RUNNING,
@@ -33,16 +35,22 @@ from codex_autorunner.core.automation.models import (
     TARGET_POLICY_HUB,
     TRIGGER_KIND_EVENT,
     TRIGGER_KIND_SCHEDULE,
+    AutomationChildExecutionEdge,
     AutomationEvent,
     AutomationJob,
     AutomationRule,
+    AutomationRuntimeContract,
     AutomationSchedule,
 )
 from codex_autorunner.core.automation.store import AutomationStore
 from codex_autorunner.core.config import load_hub_config
 from codex_autorunner.core.destinations import DockerReadiness
 from codex_autorunner.core.diagnostics.automation import (
+    AUTOMATION_LEGACY_CHILD_COLUMN_POPULATED,
+    AUTOMATION_PARENT_STATE_STALE,
+    AUTOMATION_RUNTIME_MISMATCH,
     automation_migration_doctor_checks,
+    collect_automation_architecture_diagnostics,
 )
 from codex_autorunner.core.diagnostics.hermes import hermes_doctor_checks
 from codex_autorunner.core.diagnostics.hub import (
@@ -559,6 +567,165 @@ def test_automation_migration_doctor_reports_blockers(tmp_path: Path) -> None:
     assert (
         "PMA_LEGACY_AUTOMATION_MALFORMED_JSON" in by_id["automation.migration"].message
     )
+
+
+def test_automation_migration_status_is_complete_only_without_final_blockers(
+    tmp_path: Path,
+) -> None:
+    hub_root = tmp_path / "hub"
+    seed_hub_files(hub_root, force=True)
+
+    report = collect_automation_migration_read_model(hub_root)
+
+    assert report.status == "complete"
+    assert report.pending_migration_versions == ()
+    assert report.diagnostics == ()
+
+
+def test_automation_architecture_doctor_reports_populated_legacy_child_columns(
+    tmp_path: Path,
+) -> None:
+    hub_root = tmp_path / "hub"
+    store = AutomationStore(hub_root)
+    store.upsert_rule(
+        AutomationRule.create(
+            rule_id="rule-legacy-child-column",
+            name="Legacy child column",
+            trigger_kind=TRIGGER_KIND_EVENT,
+            trigger={"event_types": ["manual.run"]},
+            target_policy=TARGET_POLICY_HUB,
+            executor_kind=EXECUTOR_AGENT_TASK_TURN,
+            executor={"kind": EXECUTOR_AGENT_TASK_TURN},
+        )
+    )
+    store.record_event(
+        AutomationEvent.create(
+            event_id="event-legacy-child-column", event_type="manual.run"
+        )
+    )
+    store.enqueue_job(
+        AutomationJob.create(
+            job_id="job-legacy-child-column",
+            rule_id="rule-legacy-child-column",
+            event_id="event-legacy-child-column",
+            state=JOB_RUNNING,
+            target={"repo_id": "repo-1"},
+            executor={"kind": EXECUTOR_AGENT_TASK_TURN},
+            dedupe_key="job-legacy-child-column",
+            available_at="2026-01-01T00:00:00Z",
+            created_at="2026-01-01T00:00:00Z",
+        )
+    )
+    with open_orchestration_sqlite(hub_root, durable=True) as conn:
+        with conn:
+            conn.execute(
+                """
+                UPDATE orch_automation_jobs
+                   SET managed_thread_execution_id = ?
+                 WHERE job_id = ?
+                """,
+                ("exec-legacy", "job-legacy-child-column"),
+            )
+
+    diagnostics = collect_automation_architecture_diagnostics(hub_root)
+
+    legacy_column_diagnostics = [
+        item
+        for item in diagnostics
+        if item.code == AUTOMATION_LEGACY_CHILD_COLUMN_POPULATED
+    ]
+    assert legacy_column_diagnostics
+    assert legacy_column_diagnostics[0].field == "managed_thread_execution_id"
+
+
+def test_automation_architecture_doctor_reports_running_parent_without_live_child(
+    tmp_path: Path,
+) -> None:
+    hub_root = tmp_path / "hub"
+    store = AutomationStore(hub_root)
+    store.upsert_rule(
+        AutomationRule.create(
+            rule_id="rule-stale-parent",
+            name="Stale parent",
+            trigger_kind=TRIGGER_KIND_EVENT,
+            trigger={"event_types": ["manual.run"]},
+            target_policy=TARGET_POLICY_HUB,
+            executor_kind=EXECUTOR_AGENT_TASK_TURN,
+            executor={"kind": EXECUTOR_AGENT_TASK_TURN},
+        )
+    )
+    store.record_event(
+        AutomationEvent.create(event_id="event-stale-parent", event_type="manual.run")
+    )
+    store.enqueue_job(
+        AutomationJob.create(
+            job_id="job-stale-parent",
+            rule_id="rule-stale-parent",
+            event_id="event-stale-parent",
+            state=JOB_RUNNING,
+            target={"repo_id": "repo-1"},
+            executor={"kind": EXECUTOR_AGENT_TASK_TURN},
+            dedupe_key="job-stale-parent",
+            available_at="2026-01-01T00:00:00Z",
+            created_at="2026-01-01T00:00:00Z",
+        )
+    )
+
+    diagnostics = collect_automation_architecture_diagnostics(hub_root)
+
+    assert AUTOMATION_PARENT_STATE_STALE in {item.code for item in diagnostics}
+
+
+def test_automation_architecture_doctor_reports_nonterminal_runtime_mismatch(
+    tmp_path: Path,
+) -> None:
+    hub_root = tmp_path / "hub"
+    store = AutomationStore(hub_root)
+    store.upsert_rule(
+        AutomationRule.create(
+            rule_id="rule-runtime-mismatch",
+            name="Runtime mismatch",
+            trigger_kind=TRIGGER_KIND_EVENT,
+            trigger={"event_types": ["manual.run"]},
+            target_policy=TARGET_POLICY_HUB,
+            executor_kind=EXECUTOR_AGENT_TASK_TURN,
+            executor={
+                "kind": EXECUTOR_AGENT_TASK_TURN,
+                "requested_runtime": {"agent": "codex", "model": "gpt-5.4"},
+            },
+        )
+    )
+    store.record_event(
+        AutomationEvent.create(
+            event_id="event-runtime-mismatch", event_type="manual.run"
+        )
+    )
+    store.enqueue_job(
+        AutomationJob.create(
+            job_id="job-runtime-mismatch",
+            rule_id="rule-runtime-mismatch",
+            event_id="event-runtime-mismatch",
+            state=JOB_RUNNING,
+            target={"repo_id": "repo-1"},
+            executor={"kind": EXECUTOR_AGENT_TASK_TURN},
+            dedupe_key="job-runtime-mismatch",
+            available_at="2026-01-01T00:00:00Z",
+            created_at="2026-01-01T00:00:00Z",
+        )
+    )
+    store.upsert_child_execution_edge(
+        AutomationChildExecutionEdge.create(
+            parent_job_id="job-runtime-mismatch",
+            child_kind=AUTOMATION_CHILD_KIND_AGENT_TASK,
+            child_id="exec-runtime-mismatch",
+            requested_runtime=AutomationRuntimeContract(agent="codex", model="gpt-5.4"),
+            actual_runtime=AutomationRuntimeContract(agent="opencode", model="gpt-5.4"),
+        )
+    )
+
+    diagnostics = collect_automation_architecture_diagnostics(hub_root)
+
+    assert AUTOMATION_RUNTIME_MISMATCH in {item.code for item in diagnostics}
 
 
 def test_legacy_executor_migration_maps_scheduled_work_to_agent_task(
