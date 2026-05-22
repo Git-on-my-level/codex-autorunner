@@ -390,7 +390,7 @@ async def test_client_merges_cumulative_stream_chunks_without_duplication(
 
 
 @pytest.mark.asyncio
-async def test_client_identifies_hermes_cumulative_session_update_source(
+async def test_client_normalizes_hermes_cumulative_session_update_at_ingress(
     tmp_path: Path,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
@@ -409,23 +409,27 @@ async def test_client_identifies_hermes_cumulative_session_update_source(
         second_events = second.snapshot_events()
         payloads = [json.loads(record.getMessage()) for record in caplog.records]
 
-        # Root-cause conclusion: the cumulative text enters CAR as an official
-        # session/update agent_message_chunk, then prompt_return seals the
-        # accumulated text. CAR is not extracting progress text as final output.
         assert first_result.final_output == "first answer"
-        assert second_result.final_output == "first answer\n\nsecond answer"
+        assert second_result.final_output == "second answer"
         assert [
             getattr(event, "delta", None)
             for event in second_events
             if event.kind == "output_delta"
         ] == ["first answer\n\nsecond answer"]
         assert any(
+            payload.get("event") == "acp.prompt.output_normalized"
+            and payload.get("classification") == "transcript_projection"
+            and payload.get("input_kind") == "current_turn_snapshot"
+            and payload.get("output_chars") == len("second answer")
+            and payload.get("matched_prior_chars") == len("first answer")
+            for payload in payloads
+        )
+        assert any(
             payload.get("event") == "acp.prompt.session_update"
             and payload.get("session_update") == "agent_message_chunk"
             and payload.get("content_kind") == "dict"
             and payload.get("text_length") == len("first answer\n\nsecond answer")
             and payload.get("turn_id_fallback_used") is True
-            and payload.get("output_normalized") is False
             and "text_excerpt" not in payload
             for payload in payloads
         )
@@ -437,8 +441,61 @@ async def test_client_identifies_hermes_cumulative_session_update_source(
             and payload.get("last_session_update_text_length")
             == len("first answer\n\nsecond answer")
             and payload.get("turn_id_fallback_used") is True
-            and payload.get("output_normalized") is False
+            and payload.get("output_normalized") is True
             and "last_session_update_excerpt" not in payload
+            for payload in payloads
+        )
+    finally:
+        await client.close()
+
+
+@pytest.mark.asyncio
+async def test_client_normalizes_hermes_transcript_session_update_at_ingress(
+    tmp_path: Path,
+) -> None:
+    client = ACPClient(
+        fixture_command("official_hermes_transcript_session_update"),
+        cwd=tmp_path,
+    )
+    try:
+        created = await client.create_session(cwd=str(tmp_path))
+        first = await client.start_prompt(created.session_id, "first")
+        first_result = await asyncio.wait_for(first.wait(), timeout=0.4)
+
+        second = await client.start_prompt(created.session_id, "second")
+        second_result = await asyncio.wait_for(second.wait(), timeout=0.4)
+
+        assert first_result.final_output == "first answer"
+        assert second_result.final_output == "second answer"
+    finally:
+        await client.close()
+
+
+@pytest.mark.asyncio
+async def test_client_rejects_exact_prior_session_update_without_new_evidence(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    client = ACPClient(
+        fixture_command("official_hermes_stale_session_update"),
+        cwd=tmp_path,
+    )
+    try:
+        caplog.set_level("INFO")
+        created = await client.create_session(cwd=str(tmp_path))
+        first = await client.start_prompt(created.session_id, "first")
+        first_result = await asyncio.wait_for(first.wait(), timeout=0.4)
+
+        second = await client.start_prompt(created.session_id, "second")
+        second_result = await asyncio.wait_for(second.wait(), timeout=0.4)
+        payloads = [json.loads(record.getMessage()) for record in caplog.records]
+
+        assert first_result.final_output == "first answer"
+        assert second_result.final_output == ""
+        assert any(
+            payload.get("event") == "acp.prompt.output_normalized"
+            and payload.get("classification") == "invalid_stale_output"
+            and payload.get("input_kind") == "current_turn_snapshot"
             for payload in payloads
         )
     finally:

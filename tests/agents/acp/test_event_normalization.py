@@ -10,6 +10,7 @@ from codex_autorunner.agents.acp import (
     ACPTurnTerminalEvent,
     normalize_notification,
 )
+from codex_autorunner.agents.acp.output_normalizer import normalize_acp_ingress_output
 
 
 @pytest.mark.parametrize(
@@ -60,6 +61,50 @@ def test_normalize_notification_maps_output_delta() -> None:
     assert event.session_id == "session-1"
     assert event.turn_id == "turn-1"
     assert event.delta == "hello"
+
+
+def test_normalize_acp_ingress_output_trims_transcript_projection() -> None:
+    normalized = normalize_acp_ingress_output(
+        "User:\nq1\n\nAssistant:\nA\n\nUser:\nq2\n\nAssistant:\nB",
+        input_kind="current_turn_snapshot",
+        prior_assistant_texts=("A",),
+    )
+
+    assert normalized.text == "B"
+    assert normalized.classification == "transcript_projection"
+
+
+def test_normalize_acp_ingress_output_keeps_within_turn_snapshot() -> None:
+    normalized = normalize_acp_ingress_output(
+        "Hello",
+        input_kind="current_turn_snapshot",
+        prior_assistant_texts=(),
+    )
+
+    assert normalized.text == "Hello"
+    assert normalized.classification == "current_turn_snapshot"
+
+
+def test_normalize_acp_ingress_output_rejects_prior_transcript_projection() -> None:
+    normalized = normalize_acp_ingress_output(
+        "User:\nq1\n\nAssistant:\nA",
+        input_kind="current_turn_snapshot",
+        prior_assistant_texts=("A",),
+    )
+
+    assert normalized.text == ""
+    assert normalized.classification == "invalid_stale_output"
+
+
+def test_normalize_acp_ingress_output_keeps_exact_prior_current_turn_snapshot() -> None:
+    normalized = normalize_acp_ingress_output(
+        "A",
+        input_kind="current_turn_snapshot",
+        prior_assistant_texts=("A",),
+    )
+
+    assert normalized.text == "A"
+    assert normalized.classification == "current_turn_snapshot"
 
 
 def test_normalize_notification_maps_permission_request_and_preserves_raw() -> None:
