@@ -33,7 +33,8 @@ from codex_autorunner.core.orchestration.turn_execution_contract import (
 from codex_autorunner.server import create_hub_app
 from codex_autorunner.surfaces.web.routes.automations import _automation_target_options
 from codex_autorunner.surfaces.web.services.pma.managed_thread_send_runtime import (
-    _record_automation_child_edge_for_send,
+    _prepare_automation_child_for_managed_send,
+    _upsert_automation_child_edge_for_send,
 )
 
 
@@ -255,15 +256,18 @@ def test_managed_thread_send_records_canonical_automation_child_edge(tmp_path):
         ),
     )
 
-    _record_automation_child_edge_for_send(
+    plan = _prepare_automation_child_for_managed_send(
         hub_root,
         {
             "parent_job_id": "job-pma-parent",
             "authoritative_for_parent_completion": True,
         },
-        managed_turn_id="turn-worker",
         turn_request=request,
         thread=SimpleNamespace(backend_runtime_instance_id="runtime-1"),
+    )
+    assert plan is not None
+    _upsert_automation_child_edge_for_send(
+        hub_root, plan, managed_turn_id="turn-worker"
     )
 
     edge = store.list_child_execution_edges("job-pma-parent")[0]
@@ -302,10 +306,9 @@ def test_managed_thread_send_rejects_orphan_automation_child_edge(tmp_path):
     )
 
     with pytest.raises(HTTPException) as exc_info:
-        _record_automation_child_edge_for_send(
+        _prepare_automation_child_for_managed_send(
             hub_root,
             {"parent_job_id": "missing-job"},
-            managed_turn_id="turn-worker",
             turn_request=request,
             thread=SimpleNamespace(backend_runtime_instance_id="runtime-1"),
         )
@@ -670,7 +673,7 @@ def test_hub_automations_delete_requires_paused(tmp_path):
     client = TestClient(create_hub_app(hub_root))
     created = client.post(
         "/hub/automations",
-        json={"preset": "security_scan_pr", "repo_id": "repo-1"},
+        json={"preset": "security_scan_pr", "repo_id": "repo-1", "agent": "codex"},
     )
     rule_id = created.json()["automation"]["id"]
 

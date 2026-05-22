@@ -160,30 +160,6 @@ def _upsert_automation_child_edge_for_send(
     )
 
 
-def _record_automation_child_edge_for_send(
-    hub_root: Any,
-    automation_child: Optional[dict[str, Any]],
-    *,
-    managed_turn_id: str,
-    turn_request: TurnExecutionRequest,
-    thread: Any,
-) -> None:
-    """Test helper / single-shot path: validate then persist the child edge."""
-    if not isinstance(automation_child, dict):
-        return
-    plan = _prepare_automation_child_for_managed_send(
-        hub_root,
-        automation_child,
-        turn_request=turn_request,
-        thread=thread,
-    )
-    if plan is None:
-        return
-    _upsert_automation_child_edge_for_send(
-        hub_root, plan, managed_turn_id=managed_turn_id
-    )
-
-
 def _runtime_contract_from_turn_request(
     request: TurnExecutionRequest, *, parent_job_id: str, thread: Any
 ) -> dict[str, Any]:
