@@ -213,7 +213,7 @@ def _pma_item_for_edges(
     hub_root: Optional[Path],
     cache: Optional[_AutomationExecutionSnapshotCache] = None,
 ) -> Optional[PmaQueueItem]:
-    edge = _first_child_edge(edges, AUTOMATION_CHILD_KIND_PMA_OPERATOR)
+    edge = _latest_child_edge_for_kind(edges, AUTOMATION_CHILD_KIND_PMA_OPERATOR)
     if edge is None:
         return None
     item_id = str(edge.child_id)
@@ -245,7 +245,7 @@ def _managed_thread_snapshot(
     hub_root: Optional[Path],
     cache: Optional[_AutomationExecutionSnapshotCache] = None,
 ) -> Optional[dict[str, Any]]:
-    edge = _first_child_edge(edges, AUTOMATION_CHILD_KIND_AGENT_TASK)
+    edge = _latest_child_edge_for_kind(edges, AUTOMATION_CHILD_KIND_AGENT_TASK)
     thread_id = _edge_scope_string(
         edge, "thread_target_id"
     ) or _managed_thread_id_from_pma_item(pma_item, hub_root=hub_root, cache=cache)
@@ -281,7 +281,7 @@ def _managed_thread_snapshot(
 def _ticket_flow_snapshot(
     edges: list[AutomationChildExecutionEdge],
 ) -> Optional[dict[str, Any]]:
-    edge = _first_child_edge(edges, AUTOMATION_CHILD_KIND_TICKET_FLOW)
+    edge = _latest_child_edge_for_kind(edges, AUTOMATION_CHILD_KIND_TICKET_FLOW)
     if edge is None:
         return None
     scope = _edge_scope(edge)
@@ -295,7 +295,7 @@ def _ticket_flow_snapshot(
 def _publish_operation_snapshot(
     edges: list[AutomationChildExecutionEdge],
 ) -> Optional[dict[str, Any]]:
-    edge = _first_child_edge(edges, AUTOMATION_CHILD_KIND_PUBLISH_OPERATION)
+    edge = _latest_child_edge_for_kind(edges, AUTOMATION_CHILD_KIND_PUBLISH_OPERATION)
     if edge is None:
         return None
     return {"operation_id": edge.child_id}
@@ -320,10 +320,15 @@ def _primary_child_kind(
     return "none"
 
 
-def _first_child_edge(
+def _latest_child_edge_for_kind(
     edges: list[AutomationChildExecutionEdge], child_kind: str
 ) -> Optional[AutomationChildExecutionEdge]:
-    return next((edge for edge in edges if edge.child_kind == child_kind), None)
+    """Latest edge for ``child_kind`` when ``edges`` is oldest-first (DB order)."""
+    latest: Optional[AutomationChildExecutionEdge] = None
+    for edge in edges:
+        if edge.child_kind == child_kind:
+            latest = edge
+    return latest
 
 
 def _edge_scope(edge: AutomationChildExecutionEdge) -> dict[str, Any]:
