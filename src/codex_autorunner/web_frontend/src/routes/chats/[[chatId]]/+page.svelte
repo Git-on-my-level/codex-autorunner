@@ -1197,10 +1197,12 @@
   async function syncCommittedDetailUrl(detailId: string): Promise<void> {
     try {
       await syncDetailUrl(detailId);
-    } finally {
+    } catch (error) {
       if (pendingCommittedDetailUrlChatId === detailId) {
         pendingCommittedDetailUrlChatId = null;
+        pageController.setRoute(currentRouteSnapshot());
       }
+      throw error;
     }
   }
 

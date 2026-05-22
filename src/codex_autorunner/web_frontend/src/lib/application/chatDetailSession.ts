@@ -148,6 +148,12 @@ export function activateChatDetailFromUrl(
       syncSelectors: false
     };
   }
+  if (detailId === state.activeChatId && state.pendingCommittedDetailUrlChatId === detailId) {
+    return noDetailCommand({
+      ...state,
+      pendingCommittedDetailUrlChatId: null
+    });
+  }
   if (detailId === state.activeChatId) return noDetailCommand(state);
   if (isLocalDraftChatId(state.activeChatId)) return noDetailCommand(state);
   if (state.localDraftChat && detailId === state.localDraftChat.id) {
