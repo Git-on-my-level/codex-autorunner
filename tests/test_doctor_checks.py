@@ -869,6 +869,100 @@ def test_legacy_executor_migration_reports_queue_only_prose_hint(
     assert store.list_child_execution_edges("job-queue-only") == []
 
 
+def test_legacy_executor_migration_keeps_explicit_child_ids_on_edge(
+    tmp_path: Path,
+) -> None:
+    hub_root = tmp_path / "hub"
+    store = AutomationStore(hub_root)
+    store.upsert_rule(
+        AutomationRule.hydrate_persisted(
+            rule_id="daily-security",
+            name="Daily Security Scan",
+            trigger_kind=TRIGGER_KIND_SCHEDULE,
+            trigger={"event_types": ["schedule.fire"]},
+            target_policy=TARGET_POLICY_HUB,
+            target={"repo_id": "repo-1"},
+            executor_kind=LEGACY_EXECUTOR_MANAGED_THREAD_TURN,
+            executor={"message_text": "scan", "agent": "opencode"},
+            metadata={"automation_kind": "security_scan_pr"},
+        )
+    )
+    store.record_event(
+        AutomationEvent.create(event_id="event-1", event_type="manual.run")
+    )
+    store.enqueue_job(
+        AutomationJob.create(
+            job_id="job-explicit-child",
+            rule_id="daily-security",
+            event_id="event-1",
+            state=JOB_RUNNING,
+            target={"repo_id": "repo-1"},
+            executor={"kind": LEGACY_EXECUTOR_MANAGED_THREAD_TURN, "agent": "opencode"},
+            dedupe_key="job-explicit-child",
+            available_at="2026-01-01T00:00:00Z",
+            created_at="2026-01-01T00:00:00Z",
+        )
+    )
+    with open_orchestration_sqlite(hub_root, durable=True) as conn:
+        with conn:
+            conn.execute(
+                """
+                UPDATE orch_automation_jobs
+                   SET pma_lane_id = ?, pma_queue_item_id = ?
+                 WHERE job_id = ?
+                """,
+                ("pma:default", "queue-1", "job-explicit-child"),
+            )
+            conn.execute(
+                """
+                INSERT INTO orch_queue_items (
+                    queue_item_id, lane_id, source_kind, source_key, dedupe_key,
+                    state, visible_at, payload_json, result_json, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    "queue-1",
+                    "pma:default",
+                    "test",
+                    "queue-1",
+                    "queue-1",
+                    "completed",
+                    "2026-01-01T00:00:00Z",
+                    "{}",
+                    (
+                        '{"managed_thread_id": "thread-1", '
+                        '"managed_thread_execution_id": "exec-1"}'
+                    ),
+                    "2026-01-01T00:00:00Z",
+                    "2026-01-01T00:00:00Z",
+                ),
+            )
+
+    result = migrate_legacy_automation_executor_shapes(hub_root)
+
+    edges = store.list_child_execution_edges("job-explicit-child")
+    assert result.jobs_migrated == 1
+    assert result.child_edges_created == 1
+    assert len(edges) == 1
+    assert edges[0].child_kind == AUTOMATION_CHILD_KIND_AGENT_TASK
+    assert edges[0].child_id == "exec-1"
+    assert edges[0].requested_runtime.workspace_scope == {
+        "repo_id": "repo-1",
+        "thread_target_id": "thread-1",
+    }
+    with open_orchestration_sqlite(hub_root, durable=True) as conn:
+        row = conn.execute(
+            """
+            SELECT managed_thread_target_id, managed_thread_execution_id
+              FROM orch_automation_jobs
+             WHERE job_id = ?
+            """,
+            ("job-explicit-child",),
+        ).fetchone()
+    assert row["managed_thread_target_id"] is None
+    assert row["managed_thread_execution_id"] is None
+
+
 def test_summarize_opencode_lifecycle_dedupes_pid_records_and_reports_handle_modes(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

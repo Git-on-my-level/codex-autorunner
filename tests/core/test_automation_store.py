@@ -13,6 +13,7 @@ from codex_autorunner.core.automation import (
     AutomationStore,
 )
 from codex_autorunner.core.automation.models import (
+    AUTOMATION_CHILD_KIND_AGENT_TASK,
     EXECUTOR_PMA_OPERATOR_TURN,
     JOB_CLAIMED,
     JOB_DEAD_LETTERED,
@@ -26,6 +27,8 @@ from codex_autorunner.core.automation.models import (
     TARGET_POLICY_HUB,
     TRIGGER_KIND_EVENT,
     TRIGGER_KIND_SCHEDULE,
+    AutomationChildExecutionEdge,
+    AutomationRuntimeContract,
 )
 from codex_autorunner.core.orchestration.sqlite import open_orchestration_sqlite
 from codex_autorunner.core.pma_automation_unified import (
@@ -404,6 +407,46 @@ def test_release_stale_claims_recovers_claimed_and_running_jobs(tmp_path) -> Non
     assert running.claimed_at is None
     assert running.started_at is None
     assert running.attempt_count == 1
+
+
+def test_release_stale_claims_preserves_running_job_with_terminal_child_edge(
+    tmp_path,
+) -> None:
+    store = AutomationStore(tmp_path)
+    store.upsert_rule(_rule())
+    store.record_event(_event())
+    store.enqueue_job(
+        AutomationJob.create(
+            job_id="running-parent",
+            rule_id="rule-1",
+            event_id="event-1",
+            dedupe_key="dedupe-running-parent",
+            available_at="2026-01-01T00:00:00Z",
+            target={"repo_id": "repo-1"},
+            executor={"kind": LEGACY_EXECUTOR_MANAGED_THREAD_TURN},
+        )
+    )
+    store.claim_next_job(lock_key="old", now="2026-01-01T00:00:00Z")
+    store.start_job("running-parent", now="2026-01-01T00:00:01Z")
+    store.upsert_child_execution_edge(
+        AutomationChildExecutionEdge.create(
+            parent_job_id="running-parent",
+            child_kind=AUTOMATION_CHILD_KIND_AGENT_TASK,
+            child_id="child-1",
+            requested_runtime=AutomationRuntimeContract(agent="opencode"),
+            terminal_state=JOB_SUCCEEDED,
+            terminal_observed_at="2026-01-01T00:01:00Z",
+        )
+    )
+
+    released = store.release_stale_claims(
+        stale_before="2026-01-01T00:05:00Z", now="2026-01-01T00:10:00Z"
+    )
+
+    running = store.get_job("running-parent")
+    assert released == 0
+    assert running.state == JOB_RUNNING
+    assert running.started_at == "2026-01-01T00:00:01Z"
 
 
 def test_schedule_crud(tmp_path) -> None:

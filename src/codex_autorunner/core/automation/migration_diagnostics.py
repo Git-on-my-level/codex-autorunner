@@ -662,19 +662,21 @@ def _migrate_legacy_job_edge(
             hub_root, durable=durable, item_id=str(row["pma_queue_item_id"])
         )
         if explicit is not None:
-            _update_job_execution_refs(
-                hub_root,
-                durable=durable,
-                job_id=job_id,
-                managed_thread_target_id=explicit.get("thread_target_id"),
-                managed_thread_execution_id=explicit.get("execution_id"),
+            requested_runtime = AutomationRuntimeContract.from_dict(
+                {
+                    **runtime.to_dict(),
+                    "workspace_scope": {
+                        **(runtime.workspace_scope or {}),
+                        "thread_target_id": explicit["thread_target_id"],
+                    },
+                }
             )
             store.upsert_child_execution_edge(
                 AutomationChildExecutionEdge.create(
                     parent_job_id=job_id,
                     child_kind=AUTOMATION_CHILD_KIND_AGENT_TASK,
                     child_id=str(explicit["execution_id"]),
-                    requested_runtime=runtime,
+                    requested_runtime=requested_runtime,
                     actual_runtime=None,
                     authoritative_for_parent_completion=True,
                 )
@@ -731,28 +733,6 @@ def _update_job_executor(
                  WHERE job_id = ?
                 """,
                 (_json_dumps(executor), job_id),
-            )
-
-
-def _update_job_execution_refs(
-    hub_root: Path,
-    *,
-    durable: bool,
-    job_id: str,
-    managed_thread_target_id: str | None,
-    managed_thread_execution_id: str | None,
-) -> None:
-    with open_orchestration_sqlite(hub_root, durable=durable) as conn:
-        with conn:
-            conn.execute(
-                """
-                UPDATE orch_automation_jobs
-                   SET managed_thread_target_id = COALESCE(?, managed_thread_target_id),
-                       managed_thread_execution_id = COALESCE(?, managed_thread_execution_id),
-                       updated_at = CURRENT_TIMESTAMP
-                 WHERE job_id = ?
-                """,
-                (managed_thread_target_id, managed_thread_execution_id, job_id),
             )
 
 

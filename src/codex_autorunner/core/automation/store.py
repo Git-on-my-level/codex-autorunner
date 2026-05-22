@@ -1234,7 +1234,7 @@ class AutomationStore:
                            updated_at = ?
                      WHERE state IN (?, ?)
                        AND (
-                           (claimed_at IS NOT NULL AND claimed_at <= ?)
+                           (state = ? AND claimed_at IS NOT NULL AND claimed_at <= ?)
                            OR (
                                state = ?
                                AND started_at IS NOT NULL
@@ -1244,7 +1244,6 @@ class AutomationStore:
                                      FROM orch_automation_child_execution_edges edge
                                     WHERE edge.parent_job_id = orch_automation_jobs.job_id
                                       AND edge.authoritative_for_parent_completion = 1
-                                      AND edge.terminal_state IS NULL
                                )
                            )
                        )
@@ -1259,6 +1258,7 @@ class AutomationStore:
                         stamp,
                         JOB_CLAIMED,
                         JOB_RUNNING,
+                        JOB_CLAIMED,
                         threshold,
                         JOB_RUNNING,
                         threshold,
