@@ -4,7 +4,10 @@ import re
 from dataclasses import dataclass
 from typing import Literal, Sequence
 
-from ...core.orchestration.turn_output_reducer import trim_cumulative_assistant_text
+from ...core.orchestration.turn_output_reducer import (
+    prior_assistant_text_candidates,
+    trim_cumulative_assistant_text,
+)
 
 ACPIngressInputKind = Literal[
     "current_turn_delta",
@@ -73,7 +76,7 @@ def normalize_acp_ingress_output(
             input_kind=input_kind,
         )
 
-    for prior in prior_assistant_texts:
+    for prior in prior_assistant_text_candidates(prior_assistant_texts):
         normalized, scope = trim_cumulative_assistant_text(candidate, prior)
         if scope == "current_turn_final":
             continue

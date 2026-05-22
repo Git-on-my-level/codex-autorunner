@@ -415,7 +415,7 @@ async def test_client_normalizes_hermes_cumulative_session_update_at_ingress(
             getattr(event, "delta", None)
             for event in second_events
             if event.kind == "output_delta"
-        ] == ["first answer\n\nsecond answer"]
+        ] == ["second answer"]
         assert any(
             payload.get("event") == "acp.prompt.output_normalized"
             and payload.get("classification") == "transcript_projection"
@@ -443,6 +443,54 @@ async def test_client_normalizes_hermes_cumulative_session_update_at_ingress(
             and payload.get("turn_id_fallback_used") is True
             and payload.get("output_normalized") is True
             and "last_session_update_excerpt" not in payload
+            for payload in payloads
+        )
+    finally:
+        await client.close()
+
+
+@pytest.mark.asyncio
+async def test_client_normalizes_third_hermes_cumulative_session_update_at_ingress(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    client = ACPClient(
+        fixture_command("official_hermes_cumulative_session_update"),
+        cwd=tmp_path,
+    )
+    try:
+        caplog.set_level("INFO")
+        created = await client.create_session(cwd=str(tmp_path))
+        results = []
+        handles = []
+        for prompt in ("first", "second", "third"):
+            handle = await client.start_prompt(created.session_id, prompt)
+            handles.append(handle)
+            results.append(await asyncio.wait_for(handle.wait(), timeout=0.4))
+        third_events = handles[-1].snapshot_events()
+        payloads = [json.loads(record.getMessage()) for record in caplog.records]
+
+        assert [result.final_output for result in results] == [
+            "first answer",
+            "second answer",
+            "third answer",
+        ]
+        assert [
+            getattr(event, "delta", None)
+            for event in third_events
+            if event.kind == "output_delta"
+        ] == ["third answer"]
+        assert [
+            getattr(event, "final_output", None)
+            for event in third_events
+            if event.kind == "turn_terminal"
+        ] == ["third answer"]
+        assert any(
+            payload.get("event") == "acp.prompt.output_normalized"
+            and payload.get("classification") == "transcript_projection"
+            and payload.get("input_kind") == "current_turn_snapshot"
+            and payload.get("output_chars") == len("third answer")
+            and payload.get("matched_prior_chars") == len("first answersecond answer")
             for payload in payloads
         )
     finally:

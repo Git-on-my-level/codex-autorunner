@@ -156,6 +156,50 @@ async def test_hermes_supervisor_session_roundtrip_and_turn_streaming(
 
 @pytest.mark.slow
 @pytest.mark.asyncio
+async def test_hermes_supervisor_buffers_normalized_cumulative_turn_events(
+    tmp_path: Path,
+) -> None:
+    supervisor = HermesSupervisor(
+        fixture_command("official_hermes_cumulative_session_update")
+    )
+    try:
+        await supervisor.ensure_ready(tmp_path)
+        session = await supervisor.create_session(tmp_path, title="Cumulative")
+        results = []
+        event_texts: list[str] = []
+        for prompt in ("first", "second", "third"):
+            turn_id = await supervisor.start_turn(tmp_path, session.session_id, prompt)
+            stream_task = asyncio.create_task(
+                _collect_events(supervisor, tmp_path, session.session_id, turn_id)
+            )
+            result = await supervisor.wait_for_turn(
+                tmp_path,
+                session.session_id,
+                turn_id,
+            )
+            events = await stream_task
+            results.append(result.assistant_text)
+            for event in events:
+                if event.get("method") != "session/update":
+                    continue
+                update = event.get("params", {}).get("update", {})
+                if (
+                    not isinstance(update, dict)
+                    or update.get("sessionUpdate") != "agent_message_chunk"
+                ):
+                    continue
+                content = update.get("content", {}) if isinstance(update, dict) else {}
+                if isinstance(content, dict) and content.get("text"):
+                    event_texts.append(str(content["text"]))
+
+        assert results == ["first answer", "second answer", "third answer"]
+        assert event_texts[-3:] == ["first answer", "second answer", "third answer"]
+    finally:
+        await supervisor.close_all()
+
+
+@pytest.mark.slow
+@pytest.mark.asyncio
 async def test_hermes_supervisor_maps_session_scoped_updates_to_active_turn(
     tmp_path: Path,
 ) -> None:

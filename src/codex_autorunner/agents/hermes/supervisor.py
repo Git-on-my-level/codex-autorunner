@@ -28,10 +28,13 @@ from ...core.utils import resolve_executable
 from ...workspace import canonical_workspace_root
 from ..acp import (
     ACPAdvertisedCommand,
+    ACPMessageEvent,
+    ACPOutputDeltaEvent,
     ACPPermissionRequestEvent,
     ACPPromptHandle,
     ACPSessionCapabilities,
     ACPSubprocessSupervisor,
+    ACPTurnTerminalEvent,
 )
 from ..types import TerminalTurnResult
 
@@ -120,6 +123,41 @@ async def _assistant_text_from_turn_events(
     for raw_event in raw_events:
         await normalize_runtime_progress_event(dict(raw_event), state)
     return state.assistant_stream_text.strip()
+
+
+def _replace_session_update_content_text(content: Any, text: str) -> Any:
+    if isinstance(content, dict):
+        updated = dict(content)
+        updated["text"] = text
+        return updated
+    return {"type": "text", "text": text}
+
+
+def _canonical_acp_notification(event: Any) -> Optional[dict[str, Any]]:
+    raw_notification = getattr(event, "raw_notification", None)
+    if not isinstance(raw_notification, dict):
+        return None
+    payload = dict(raw_notification)
+    params = dict(payload.get("params") or {})
+    payload["params"] = params
+    method = str(payload.get("method") or "").strip()
+    if isinstance(event, ACPOutputDeltaEvent):
+        if method == "session/update":
+            update = dict(params.get("update") or {})
+            update["content"] = _replace_session_update_content_text(
+                update.get("content"),
+                event.delta,
+            )
+            params["update"] = update
+        else:
+            params["delta"] = event.delta
+            params["text"] = event.delta
+    elif isinstance(event, ACPMessageEvent):
+        params["message"] = event.message
+        params["text"] = event.message
+    elif isinstance(event, ACPTurnTerminalEvent):
+        params["finalOutput"] = event.final_output
+    return payload
 
 
 class HermesSupervisorError(RuntimeError):
@@ -486,11 +524,11 @@ class HermesSupervisor:
         for event in await self._acp.prompt_events_snapshot(
             workspace_root, handle.turn_id
         ):
-            raw_notification = getattr(event, "raw_notification", None)
-            if isinstance(raw_notification, dict):
+            payload = _canonical_acp_notification(event)
+            if payload is not None:
                 await self._append_raw_event(
                     state,
-                    dict(raw_notification),
+                    payload,
                     terminal=_should_close_turn_buffer(event),
                 )
         log_event(
@@ -803,10 +841,9 @@ class HermesSupervisor:
             workspace_root, state.turn_id
         )
         for event in prompt_events:
-            raw_notification = getattr(event, "raw_notification", None)
-            if not isinstance(raw_notification, dict):
+            payload = _canonical_acp_notification(event)
+            if payload is None:
                 continue
-            payload = dict(raw_notification)
             if payload in existing_events:
                 continue
             await self._append_raw_event(
@@ -845,15 +882,15 @@ class HermesSupervisor:
         turn_id = _normalize_optional_text(getattr(event, "turn_id", None))
         if turn_id is None:
             return
-        raw_notification = getattr(event, "raw_notification", None)
-        if not isinstance(raw_notification, dict):
+        payload = _canonical_acp_notification(event)
+        if payload is None:
             return
         state = await self._wait_for_turn_state(workspace_root, turn_id)
         if state is None:
             return
         await self._append_raw_event(
             state,
-            dict(raw_notification),
+            payload,
             terminal=_should_close_turn_buffer(event),
         )
 

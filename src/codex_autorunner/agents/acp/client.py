@@ -6,7 +6,7 @@ import logging
 import re
 import time
 from collections import Counter, defaultdict, deque
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, AsyncIterator, Awaitable, Callable, Optional, Sequence
 
@@ -875,7 +875,6 @@ class ACPClient:
         if not method:
             raise ACPProtocolError("ACP message is missing a method name")
         event = normalize_notification(message)
-        await self._notifications.put(event)
         if (
             isinstance(event, ACPPermissionRequestEvent)
             and self._permission_handler is not None
@@ -886,27 +885,28 @@ class ACPClient:
                     self._respond_to_permission_notification(event, decision)
                 )
                 task.add_done_callback(self._log_background_task_result)
-        if self._notification_handler is not None:
-            await self._notification_handler(event)
         if event.turn_id:
             state = await self._resolve_prompt_state_for_event(event)
             if state is None:
                 self._orphan_events[event.turn_id].append(event)
             else:
-                await self._record_prompt_event_in_order(state, event)
+                event = await self._record_prompt_event_in_order(state, event)
+        await self._notifications.put(event)
+        if self._notification_handler is not None:
+            await self._notification_handler(event)
 
     async def _handle_server_request(
         self, message: dict[str, Any], *, request_id: str
     ) -> None:
         method = _normalize_optional_text(message.get("method")) or ""
         event = normalize_notification(message)
-        await self._notifications.put(event)
         if event.turn_id:
             state = await self._resolve_prompt_state_for_event(event)
             if state is None:
                 self._orphan_events[event.turn_id].append(event)
             else:
-                await self._record_prompt_event_in_order(state, event)
+                event = await self._record_prompt_event_in_order(state, event)
+        await self._notifications.put(event)
         if self._notification_handler is not None:
             await self._notification_handler(event)
 
@@ -1085,7 +1085,7 @@ class ACPClient:
         self,
         state: _PromptState,
         event: ACPEvent,
-    ) -> None:
+    ) -> ACPEvent:
         replay_task = state.replay_task
         current_task = asyncio.current_task()
         if (
@@ -1094,7 +1094,7 @@ class ACPClient:
             and not replay_task.done()
         ):
             await asyncio.shield(replay_task)
-        await self._record_prompt_event(state, event)
+        return await self._record_prompt_event(state, event)
 
     async def _finalize_prompt_with_event(
         self,
@@ -1184,25 +1184,30 @@ class ACPClient:
             return ()
         return tuple(state.events)
 
-    async def _record_prompt_event(self, state: _PromptState, event: ACPEvent) -> None:
+    async def _record_prompt_event(
+        self, state: _PromptState, event: ACPEvent
+    ) -> ACPEvent:
         if state.closed:
-            return
+            return event
         self._note_prompt_trace_event(state, event)
-        state.events.append(event)
         if isinstance(event, ACPOutputDeltaEvent):
             normalized_delta = state.note_output_delta(
                 event.delta,
                 merge_snapshot=event.method == "session/update",
             )
             self._log_ingress_normalization(state, normalized_delta)
+            event = replace(event, delta=normalized_delta.text)
         elif isinstance(event, ACPMessageEvent) and event.message:
             normalized_message = state.note_assistant_message(event.message)
             if normalized_message is not None:
                 self._log_ingress_normalization(state, normalized_message)
+                event = replace(event, message=normalized_message.text)
+        state.events.append(event)
         await state.queue.put(event)
         if not isinstance(event, ACPTurnTerminalEvent):
-            return
+            return event
         await self._finalize_prompt_with_event(state, event)
+        return event
 
     async def _record_prompt_terminal_event(
         self,
@@ -1214,11 +1219,12 @@ class ACPClient:
         if state.closed:
             return
         self._note_prompt_trace_event(state, event)
-        state.events.append(event)
         if event.final_output:
             normalized = state.note_assistant_message(event.final_output)
             if normalized is not None:
                 self._log_ingress_normalization(state, normalized)
+                event = replace(event, final_output=normalized.text)
+        state.events.append(event)
         await state.queue.put(event)
         await self._finalize_prompt_with_event(
             state,

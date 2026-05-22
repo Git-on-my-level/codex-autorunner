@@ -195,6 +195,29 @@ def trim_cumulative_assistant_text(
     )
 
 
+def prior_assistant_text_candidates(prior_assistant_texts: Sequence[str]) -> list[str]:
+    candidates: list[str] = []
+    prefix = ""
+    for text in prior_assistant_texts:
+        current = str(text or "")
+        if not current.strip():
+            continue
+        if assistant_text_extends_prefix(current, prefix):
+            prefix = current
+        else:
+            prefix += current
+    if prefix.strip():
+        candidates.append(prefix)
+    for text in sorted(
+        (str(item or "") for item in prior_assistant_texts if str(item or "").strip()),
+        key=len,
+        reverse=True,
+    ):
+        if text not in candidates:
+            candidates.append(text)
+    return candidates
+
+
 def _normalize_candidate(
     text: str,
     prior_assistant_texts: Sequence[str],
@@ -202,7 +225,7 @@ def _normalize_candidate(
     current = assistant_text_from_transcript_content(str(text or ""))
     if not current.strip():
         return "", "empty", ""
-    for prior in prior_assistant_texts:
+    for prior in prior_assistant_text_candidates(prior_assistant_texts):
         normalized, scope = trim_cumulative_assistant_text(current, prior)
         if scope != "current_turn_final":
             return normalized, scope, prior
@@ -309,6 +332,7 @@ __all__ = [
     "assistant_text_extends_prefix",
     "assistant_text_from_transcript_content",
     "build_assistant_transcript_prefix",
+    "prior_assistant_text_candidates",
     "reduce_turn_output",
     "trim_cumulative_assistant_text",
 ]

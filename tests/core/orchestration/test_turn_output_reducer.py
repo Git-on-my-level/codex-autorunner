@@ -54,6 +54,24 @@ def test_reduce_turn_output_trims_after_latest_prior_segment() -> None:
     assert envelope.source == "reducer"
 
 
+def test_reduce_turn_output_reconstructs_prior_prefix_before_trimming() -> None:
+    state = RuntimeThreadRunEventState()
+
+    envelope = reduce_turn_output(
+        managed_thread_id="thread-1",
+        managed_turn_id="turn-3",
+        backend_thread_id="session-1",
+        backend_turn_id="turn-3",
+        outcome=_outcome("first answer\n\nsecond answer\n\nthird answer"),
+        event_state=state,
+        prior_assistant_texts=["first answer", "second answer"],
+    )
+
+    assert envelope.text == "third answer"
+    assert envelope.ownership == "trimmed_from_cumulative"
+    assert envelope.matched_prior_text == "first answersecond answer"
+
+
 def test_reduce_turn_output_uses_last_assistant_section_from_transcript_shaped_output() -> (
     None
 ):

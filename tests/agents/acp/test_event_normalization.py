@@ -85,6 +85,18 @@ def test_normalize_acp_ingress_output_keeps_within_turn_snapshot() -> None:
     assert normalized.classification == "current_turn_snapshot"
 
 
+def test_normalize_acp_ingress_output_trims_three_turn_cumulative_snapshot() -> None:
+    normalized = normalize_acp_ingress_output(
+        "first answer\n\nsecond answer\n\nthird answer",
+        input_kind="current_turn_snapshot",
+        prior_assistant_texts=("first answer", "second answer"),
+    )
+
+    assert normalized.text == "third answer"
+    assert normalized.classification == "transcript_projection"
+    assert normalized.matched_prior_chars == len("first answersecond answer")
+
+
 def test_normalize_acp_ingress_output_rejects_prior_transcript_projection() -> None:
     normalized = normalize_acp_ingress_output(
         "User:\nq1\n\nAssistant:\nA",
