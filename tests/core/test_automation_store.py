@@ -252,7 +252,7 @@ def test_job_enqueue_dedupe_claim_complete_fail_and_attempts(tmp_path) -> None:
     )
     assert completed.state == JOB_SUCCEEDED
     assert completed.result_summary == "done"
-    assert completed.managed_thread_execution_id == "exec-1"
+    assert not hasattr(completed, "managed_thread_execution_id")
 
     with pytest.raises(ValueError, match="terminal"):
         store.fail_job("job-1", error_text="too late")

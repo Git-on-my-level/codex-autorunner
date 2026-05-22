@@ -662,12 +662,16 @@ def test_legacy_executor_migration_reports_queue_only_prose_hint(
             created_at="2026-01-01T00:00:00Z",
         )
     )
-    store.update_running_job(
-        "job-queue-only",
-        execution_refs={"pma_lane_id": "pma:default", "pma_queue_item_id": "queue-1"},
-    )
     with open_orchestration_sqlite(hub_root, durable=True) as conn:
         with conn:
+            conn.execute(
+                """
+                UPDATE orch_automation_jobs
+                   SET pma_lane_id = ?, pma_queue_item_id = ?
+                 WHERE job_id = ?
+                """,
+                ("pma:default", "queue-1", "job-queue-only"),
+            )
             conn.execute(
                 """
                 INSERT INTO orch_queue_items (

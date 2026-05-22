@@ -95,10 +95,11 @@ def test_worker_claims_records_attempt_and_completes_job(tmp_path) -> None:
     )
 
     saved = store.get_job("job-1")
+    attempt = store.list_attempts("job-1")[0]
     assert result.succeeded == 1
     assert saved.state == JOB_SUCCEEDED
-    assert saved.pma_lane_id == "pma:default"
-    assert store.list_attempts("job-1")[0].status == JOB_SUCCEEDED
+    assert attempt.execution_refs == {"pma_lane_id": "pma:default"}
+    assert attempt.status == JOB_SUCCEEDED
 
 
 def test_worker_persists_running_executor_result_without_success(tmp_path) -> None:
@@ -116,11 +117,11 @@ def test_worker_persists_running_executor_result_without_success(tmp_path) -> No
     assert result.running == 1
     assert result.succeeded == 0
     assert saved.state == JOB_RUNNING
-    assert saved.pma_lane_id == "pma:default"
     assert saved.lock_key is None
     assert saved.claimed_at is None
     assert saved.finished_at is None
     assert attempt.status == JOB_RUNNING
+    assert attempt.execution_refs == {"pma_lane_id": "pma:default"}
     assert attempt.executor_result["execution_phase"] == "running"
 
 

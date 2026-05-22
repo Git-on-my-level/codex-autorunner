@@ -221,16 +221,7 @@ def _runtime_mismatch_fields(edge: AutomationChildExecutionEdge) -> list[str]:
 
 
 def _launched_child_work(job: Any) -> bool:
-    return any(
-        getattr(job, field, None)
-        for field in (
-            "managed_thread_target_id",
-            "managed_thread_execution_id",
-            "pma_queue_item_id",
-            "ticket_flow_run_id",
-            "publish_operation_id",
-        )
-    )
+    return getattr(job, "state", None) == JOB_RUNNING
 
 
 __all__ = [

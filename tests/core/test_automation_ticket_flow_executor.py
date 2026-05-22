@@ -17,6 +17,7 @@ from codex_autorunner.core.automation import (
     AutomationStore,
 )
 from codex_autorunner.core.automation.models import (
+    AUTOMATION_CHILD_KIND_TICKET_FLOW,
     JOB_RUNNING,
     TARGET_POLICY_AUTO_WORKTREE,
     TARGET_POLICY_EXISTING_REPO,
@@ -142,7 +143,10 @@ def _load_manifest(hub_root: Path) -> Manifest:
 
 
 def _executor(
-    hub_root: Path, fake_wm: _FakeWorktreeManager
+    hub_root: Path,
+    fake_wm: _FakeWorktreeManager,
+    *,
+    store: AutomationStore | None = None,
 ) -> TicketFlowAutomationExecutor:
     return TicketFlowAutomationExecutor(
         hub_root=hub_root,
@@ -151,6 +155,7 @@ def _executor(
             manifest_path=hub_root / ".codex-autorunner" / "manifest.yml",
         ),
         worktree_manager=fake_wm,  # type: ignore[arg-type]
+        automation_store=store,
         start_flow_run_fn=_fake_start,
         run_coroutine_fn=_run,
     )
@@ -194,7 +199,9 @@ def test_ticket_flow_executor_creates_isolated_worktree_for_base_targets(
 
     assert result.status == JOB_RUNNING
     assert result.data["execution_phase"] == "running"
-    assert result.execution_refs["ticket_flow_repo_id"].startswith("base--automation-")
+    assert result.execution_refs["automation_worktree_id"].startswith(
+        "base--automation-"
+    )
     worktree = Path(result.data["worktree"]["path"])
     assert (worktree / ".codex-autorunner" / "tickets" / "TICKET-001.md").exists()
     assert not (hub / "repos" / "base" / ".codex-autorunner" / "tickets").exists()
@@ -377,9 +384,7 @@ def test_ticket_flow_executor_supports_repo_relative_pack_path(hub: Path) -> Non
     assert (worktree / ".codex-autorunner" / "tickets" / "TICKET-001.md").exists()
     assert (worktree / ".codex-autorunner" / "contextspace" / "spec.md").exists()
     assert result.execution_refs == {
-        "ticket_flow_repo_id": result.data["worktree"]["repo_id"],
-        "ticket_flow_worktree_id": result.data["worktree"]["repo_id"],
-        "ticket_flow_run_id": "run-1",
+        "automation_worktree_id": result.data["worktree"]["repo_id"],
     }
 
 
@@ -418,7 +423,7 @@ def test_ticket_flow_worker_keeps_job_running_after_child_run_start(
     )
     fake_wm = _FakeWorktreeManager(hub)
     registry = AutomationExecutorRegistry()
-    registry.register(EXECUTOR_TICKET_FLOW, _executor(hub, fake_wm))
+    registry.register(EXECUTOR_TICKET_FLOW, _executor(hub, fake_wm, store=store))
 
     result = AutomationJobWorker(store, registry).process_once(
         now="2026-01-01T00:00:00Z"
@@ -426,14 +431,18 @@ def test_ticket_flow_worker_keeps_job_running_after_child_run_start(
 
     saved = store.get_job("job-1")
     attempt = store.list_attempts("job-1")[0]
+    edge = store.list_child_execution_edges("job-1")[0]
     assert result.running == 1
     assert result.succeeded == 0
     assert saved.state == JOB_RUNNING
     assert saved.lock_key is None
     assert saved.claimed_at is None
     assert saved.finished_at is None
-    assert saved.ticket_flow_run_id == "run-1"
-    assert saved.ticket_flow_repo_id == saved.ticket_flow_worktree_id
+    assert edge.child_kind == AUTOMATION_CHILD_KIND_TICKET_FLOW
+    assert edge.child_id == "run-1"
+    assert edge.requested_runtime.workspace_scope["repo_id"].startswith(
+        "base--automation-"
+    )
     assert attempt.status == JOB_RUNNING
     assert attempt.executor_result["execution_phase"] == "running"
 

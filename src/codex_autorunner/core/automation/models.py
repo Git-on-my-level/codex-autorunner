@@ -961,14 +961,6 @@ class AutomationJob:
     executor: dict[str, Any]
     policy: dict[str, Any]
     payload: dict[str, Any]
-    managed_thread_target_id: Optional[str] = None
-    managed_thread_execution_id: Optional[str] = None
-    pma_lane_id: Optional[str] = None
-    pma_queue_item_id: Optional[str] = None
-    ticket_flow_repo_id: Optional[str] = None
-    ticket_flow_run_id: Optional[str] = None
-    ticket_flow_worktree_id: Optional[str] = None
-    publish_operation_id: Optional[str] = None
     result_summary: Optional[str] = None
     error_text: Optional[str] = None
 

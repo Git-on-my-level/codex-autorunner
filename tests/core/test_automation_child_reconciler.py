@@ -239,7 +239,7 @@ def test_reconciler_closes_parent_from_durable_managed_thread_edge(
     edges = store.list_child_execution_edges("job-pma")
     assert result.completed == 1
     assert saved.state == JOB_SUCCEEDED
-    assert saved.managed_thread_execution_id == "exec-1"
+    assert not hasattr(saved, "managed_thread_execution_id")
     assert edges[0].terminal_state == "succeeded"
     assert edges[0].actual_runtime.model == "zai-coding-plan/glm-5.1"
 
@@ -725,7 +725,7 @@ def test_reconciler_uses_exact_managed_thread_execution_id(
     assert result.completed == 1
     assert result.failed == 0
     assert saved.state == JOB_SUCCEEDED
-    assert saved.managed_thread_execution_id == "exec-1"
+    assert store.list_child_execution_edges("job-pma")[0].child_id == "exec-1"
 
 
 def test_reconciler_fails_managed_thread_job_when_turn_fails(
@@ -771,10 +771,11 @@ def test_reconciler_fails_managed_thread_job_when_child_thread_fails(
     ).reconcile_running_jobs()
 
     saved = store.get_job("job-pma")
+    edge = store.list_child_execution_edges("job-pma")[0]
     assert result.failed == 1
     assert saved.state == JOB_FAILED
-    assert saved.managed_thread_target_id == "29998b57-94e9-49a4-8299-0349872e4b70"
-    assert saved.managed_thread_execution_id == "exec-1"
+    assert edge.child_id == "exec-1"
+    assert edge.terminal_event_id == "exec-1"
     assert saved.error_text == (
         "opencode_first_event_timeout: no relevant events received within 60.0s"
     )
@@ -799,10 +800,11 @@ def test_reconciler_cancels_managed_thread_job_when_child_thread_is_interrupted(
     ).reconcile_running_jobs()
 
     saved = store.get_job("job-pma")
+    edge = store.list_child_execution_edges("job-pma")[0]
     assert result.cancelled == 1
     assert saved.state == "cancelled"
-    assert saved.managed_thread_target_id == "29998b57-94e9-49a4-8299-0349872e4b70"
-    assert saved.managed_thread_execution_id == "exec-1"
+    assert edge.child_id == "exec-1"
+    assert edge.terminal_event_id == "exec-1"
 
 
 def test_reconciler_uses_managed_thread_refs_without_transport_state(

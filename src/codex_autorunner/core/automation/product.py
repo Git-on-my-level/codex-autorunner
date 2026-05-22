@@ -393,16 +393,17 @@ def _automation_job_row(
     snapshot = (
         execution_snapshots.get(job.job_id) if execution_snapshots is not None else None
     )
+    child_edges = (
+        store.list_child_execution_edges(job.job_id) if store is not None else []
+    )
     if snapshot is None:
         snapshot = automation_execution_snapshot(
             job,
             hub_root=store.hub_root if store is not None else None,
+            child_edges=child_edges,
         )
     child_execution = snapshot.to_dict()
     pma_queue_result = child_execution.get("pma_queue")
-    child_edges = (
-        store.list_child_execution_edges(job.job_id) if store is not None else []
-    )
     children = [_automation_child_row(edge) for edge in child_edges]
     effective_state = _effective_job_state(job, child_edges)
     terminal_reason = _job_terminal_reason(job, child_edges, effective_state)
@@ -419,18 +420,12 @@ def _automation_job_row(
         "result_summary": job.result_summary,
         "error_text": job.error_text,
         "attempt_count": job.attempt_count,
-        "managed_thread_target_id": job.managed_thread_target_id,
-        "managed_thread_execution_id": job.managed_thread_execution_id,
-        "pma_lane_id": job.pma_lane_id,
-        "pma_queue_item_id": job.pma_queue_item_id,
         "pma_queue_result": pma_queue_result,
         "child_execution": child_execution,
         "children": children,
         "runtime_contract": _job_runtime_contract(job, child_edges),
         "terminal_reason": terminal_reason,
         "policy_violations": policy_violations,
-        "ticket_flow_run_id": job.ticket_flow_run_id,
-        "ticket_flow_worktree_id": job.ticket_flow_worktree_id,
     }
 
 

@@ -6,7 +6,16 @@ from typing import Any, Optional
 
 from ..orchestration.sqlite import open_orchestration_sqlite
 from ..pma_queue import PmaQueue, PmaQueueItem, PmaQueueRepository
-from .models import AutomationJob
+from ..text_utils import _json_loads_object
+from .models import (
+    AUTOMATION_CHILD_KIND_AGENT_TASK,
+    AUTOMATION_CHILD_KIND_PMA_OPERATOR,
+    AUTOMATION_CHILD_KIND_PUBLISH_OPERATION,
+    AUTOMATION_CHILD_KIND_TICKET_FLOW,
+    AutomationChildExecutionEdge,
+    AutomationJob,
+    normalize_bool,
+)
 
 
 @dataclass(frozen=True)
@@ -40,14 +49,24 @@ def automation_execution_snapshot(
     *,
     hub_root: Optional[Path] = None,
     cache: Optional["_AutomationExecutionSnapshotCache"] = None,
+    child_edges: Optional[list[AutomationChildExecutionEdge]] = None,
 ) -> AutomationExecutionSnapshot:
-    pma_item = _pma_item_for_job(job, hub_root=hub_root, cache=cache)
+    edges = (
+        child_edges
+        if child_edges is not None
+        else (
+            cache.child_edges(job.job_id)
+            if cache is not None
+            else _load_child_edges(hub_root, job.job_id)
+        )
+    )
+    pma_item = _pma_item_for_edges(edges, hub_root=hub_root, cache=cache)
     pma_queue = _pma_queue_snapshot(pma_item)
     managed_thread = _managed_thread_snapshot(
-        job, pma_item=pma_item, hub_root=hub_root, cache=cache
+        edges, pma_item=pma_item, hub_root=hub_root, cache=cache
     )
-    ticket_flow = _ticket_flow_snapshot(job)
-    publish_operation = _publish_operation_snapshot(job)
+    ticket_flow = _ticket_flow_snapshot(edges)
+    publish_operation = _publish_operation_snapshot(edges)
     primary_child_kind = _primary_child_kind(
         job,
         pma_queue=pma_queue,
@@ -98,6 +117,9 @@ class _AutomationExecutionSnapshotCache:
     _conn: Any = field(default=None, init=False, repr=False)
     _conn_cm: Any = field(default=None, init=False, repr=False)
     _pma_items: dict[str, Optional[PmaQueueItem]] = field(default_factory=dict)
+    _child_edges: dict[str, list[AutomationChildExecutionEdge]] = field(
+        default_factory=dict
+    )
     _latest_executions: dict[
         tuple[Optional[str], Optional[str], Optional[str]], Optional[dict[str, Any]]
     ] = field(default_factory=dict)
@@ -142,6 +164,29 @@ class _AutomationExecutionSnapshotCache:
         self._pma_items[normalized] = item
         return item
 
+    def child_edges(self, job_id: str) -> list[AutomationChildExecutionEdge]:
+        normalized = str(job_id or "").strip()
+        if not normalized:
+            return []
+        if normalized in self._child_edges:
+            return self._child_edges[normalized]
+        rows = (
+            self._connection()
+            .execute(
+                """
+            SELECT *
+              FROM orch_automation_child_execution_edges
+             WHERE parent_job_id = ?
+             ORDER BY created_at ASC, edge_id ASC
+            """,
+                (normalized,),
+            )
+            .fetchall()
+        )
+        edges = [_row_to_child_execution_edge(row) for row in rows]
+        self._child_edges[normalized] = edges
+        return edges
+
     def latest_thread_execution(
         self,
         *,
@@ -162,15 +207,16 @@ class _AutomationExecutionSnapshotCache:
         return latest
 
 
-def _pma_item_for_job(
-    job: AutomationJob,
+def _pma_item_for_edges(
+    edges: list[AutomationChildExecutionEdge],
     *,
     hub_root: Optional[Path],
     cache: Optional[_AutomationExecutionSnapshotCache] = None,
 ) -> Optional[PmaQueueItem]:
-    if not job.pma_queue_item_id:
+    edge = _first_child_edge(edges, AUTOMATION_CHILD_KIND_PMA_OPERATOR)
+    if edge is None:
         return None
-    item_id = str(job.pma_queue_item_id)
+    item_id = str(edge.child_id)
     if cache is not None:
         return cache.pma_item(item_id)
     if hub_root is None:
@@ -193,16 +239,17 @@ def _pma_queue_snapshot(item: Optional[PmaQueueItem]) -> Optional[dict[str, Any]
 
 
 def _managed_thread_snapshot(
-    job: AutomationJob,
+    edges: list[AutomationChildExecutionEdge],
     *,
     pma_item: Optional[PmaQueueItem],
     hub_root: Optional[Path],
     cache: Optional[_AutomationExecutionSnapshotCache] = None,
 ) -> Optional[dict[str, Any]]:
-    thread_id = job.managed_thread_target_id or _managed_thread_id_from_pma_item(
-        pma_item, hub_root=hub_root, cache=cache
-    )
-    execution_id = job.managed_thread_execution_id
+    edge = _first_child_edge(edges, AUTOMATION_CHILD_KIND_AGENT_TASK)
+    thread_id = _edge_scope_string(
+        edge, "thread_target_id"
+    ) or _managed_thread_id_from_pma_item(pma_item, hub_root=hub_root, cache=cache)
+    execution_id = edge.child_id if edge is not None else None
     backend_thread_id = _pma_result_string(
         pma_item, "backend_thread_id"
     ) or _pma_result_string(pma_item, "thread_id")
@@ -221,6 +268,8 @@ def _managed_thread_snapshot(
             execution_id=execution_id,
             backend_thread_id=backend_thread_id,
         )
+    if latest_execution is not None:
+        thread_id = thread_id or latest_execution.get("thread_target_id")
     return {
         "thread_target_id": thread_id,
         "execution_id": execution_id,
@@ -229,22 +278,27 @@ def _managed_thread_snapshot(
     }
 
 
-def _ticket_flow_snapshot(job: AutomationJob) -> Optional[dict[str, Any]]:
-    if not (
-        job.ticket_flow_run_id or job.ticket_flow_worktree_id or job.ticket_flow_repo_id
-    ):
+def _ticket_flow_snapshot(
+    edges: list[AutomationChildExecutionEdge],
+) -> Optional[dict[str, Any]]:
+    edge = _first_child_edge(edges, AUTOMATION_CHILD_KIND_TICKET_FLOW)
+    if edge is None:
         return None
+    scope = _edge_scope(edge)
     return {
-        "repo_id": job.ticket_flow_repo_id,
-        "run_id": job.ticket_flow_run_id,
-        "worktree_id": job.ticket_flow_worktree_id,
+        "repo_id": scope.get("base_repo_id"),
+        "run_id": edge.child_id,
+        "worktree_id": scope.get("repo_id"),
     }
 
 
-def _publish_operation_snapshot(job: AutomationJob) -> Optional[dict[str, Any]]:
-    if not job.publish_operation_id:
+def _publish_operation_snapshot(
+    edges: list[AutomationChildExecutionEdge],
+) -> Optional[dict[str, Any]]:
+    edge = _first_child_edge(edges, AUTOMATION_CHILD_KIND_PUBLISH_OPERATION)
+    if edge is None:
         return None
-    return {"operation_id": job.publish_operation_id}
+    return {"operation_id": edge.child_id}
 
 
 def _primary_child_kind(
@@ -264,6 +318,51 @@ def _primary_child_kind(
     if pma_queue is not None:
         return "pma_queue"
     return "none"
+
+
+def _first_child_edge(
+    edges: list[AutomationChildExecutionEdge], child_kind: str
+) -> Optional[AutomationChildExecutionEdge]:
+    return next((edge for edge in edges if edge.child_kind == child_kind), None)
+
+
+def _edge_scope(edge: AutomationChildExecutionEdge) -> dict[str, Any]:
+    runtime = edge.actual_runtime or edge.requested_runtime
+    return runtime.workspace_scope or {}
+
+
+def _edge_scope_string(
+    edge: Optional[AutomationChildExecutionEdge], key: str
+) -> Optional[str]:
+    if edge is None:
+        return None
+    value = _edge_scope(edge).get(key)
+    if value is None:
+        return None
+    return str(value).strip() or None
+
+
+def _load_child_edges(
+    hub_root: Optional[Path], job_id: str
+) -> list[AutomationChildExecutionEdge]:
+    if hub_root is None:
+        return []
+    try:
+        with open_orchestration_sqlite(
+            Path(hub_root), durable=True, migrate=False
+        ) as conn:
+            rows = conn.execute(
+                """
+                SELECT *
+                  FROM orch_automation_child_execution_edges
+                 WHERE parent_job_id = ?
+                 ORDER BY created_at ASC, edge_id ASC
+                """,
+                (job_id,),
+            ).fetchall()
+    except Exception:
+        return []
+    return [_row_to_child_execution_edge(row) for row in rows]
 
 
 def _target_href(
@@ -395,6 +494,30 @@ def _thread_execution_row_to_dict(row: Any) -> dict[str, Any]:
         "finished_at": row["finished_at"],
         "created_at": row["created_at"],
     }
+
+
+def _row_to_child_execution_edge(row: Any) -> AutomationChildExecutionEdge:
+    return AutomationChildExecutionEdge.create(
+        edge_id=row["edge_id"],
+        parent_job_id=row["parent_job_id"],
+        child_kind=row["child_kind"],
+        child_id=row["child_id"],
+        authoritative_for_parent_completion=normalize_bool(
+            row["authoritative_for_parent_completion"]
+        ),
+        requested_runtime=_json_loads_object(row["requested_runtime_json"]),
+        actual_runtime=(
+            _json_loads_object(row["actual_runtime_json"])
+            if row["actual_runtime_json"] is not None
+            else None
+        ),
+        terminal_mapping=_json_loads_object(row["terminal_mapping_json"]),
+        terminal_event_id=row["terminal_event_id"],
+        terminal_state=row["terminal_state"],
+        terminal_observed_at=row["terminal_observed_at"],
+        created_at=row["created_at"],
+        updated_at=row["updated_at"],
+    )
 
 
 def _pma_result_string(item: Optional[PmaQueueItem], key: str) -> Optional[str]:

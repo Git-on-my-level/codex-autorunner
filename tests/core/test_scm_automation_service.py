@@ -7,6 +7,9 @@ from typing import Optional
 import pytest
 
 from codex_autorunner.core.automation import AutomationStore
+from codex_autorunner.core.automation.models import (
+    AUTOMATION_CHILD_KIND_PUBLISH_OPERATION,
+)
 from codex_autorunner.core.pr_bindings import PrBinding
 from codex_autorunner.core.publish_journal import PublishOperation
 from codex_autorunner.core.scm_automation_service import ScmAutomationService
@@ -658,10 +661,11 @@ def test_ingest_event_records_normalized_automation_event_and_builtin_rule_job(
     )
     assert job.executor["message_descriptor"]["builder"] == "build_reaction_message"
     assert "reaction_intents" not in job.executor
-    assert job.state == "succeeded"
-    assert job.publish_operation_id == result.publish_operations[0].operation_id
-
     store = AutomationStore(tmp_path)
+    edges = store.list_child_execution_edges(job.job_id)
+    assert job.state == "succeeded"
+    assert edges[0].child_kind == AUTOMATION_CHILD_KIND_PUBLISH_OPERATION
+    assert edges[0].child_id == result.publish_operations[0].operation_id
     rules = {rule.rule_id: rule for rule in store.list_rules()}
     assert {
         "builtin:scm:github:ci_failed",
@@ -673,9 +677,7 @@ def test_ingest_event_records_normalized_automation_event_and_builtin_rule_job(
     assert store.get_event("scm:github:event-1") is not None
     attempts = store.list_attempts(job.job_id)
     assert len(attempts) == 1
-    assert attempts[0].execution_refs == {
-        "publish_operation_id": result.publish_operations[0].operation_id
-    }
+    assert attempts[0].execution_refs["automation_child_edge_id"] == edges[0].edge_id
     assert attempts[0].executor_result["outcome"] == "published"
 
 
@@ -763,8 +765,11 @@ def test_builtin_scm_rules_create_completed_automation_jobs_for_each_reaction_ki
     job = result.automation_jobs[0]
     assert job.rule_id == f"builtin:scm:github:{reaction_kind}"
     assert job.state == "succeeded"
-    assert job.publish_operation_id is not None
-    attempts = AutomationStore(tmp_path).list_attempts(job.job_id)
+    store = AutomationStore(tmp_path)
+    assert store.list_child_execution_edges(job.job_id)[0].child_kind == (
+        AUTOMATION_CHILD_KIND_PUBLISH_OPERATION
+    )
+    attempts = store.list_attempts(job.job_id)
     assert len(attempts) == 1
     assert attempts[0].status == "succeeded"
 
@@ -839,7 +844,12 @@ def test_ingest_event_suppresses_repeated_semantic_reaction_conditions_using_dur
     assert second.publish_operations == ()
     assert len(second.automation_jobs) == 1
     assert second.automation_jobs[0].state == "skipped"
-    assert second.automation_jobs[0].publish_operation_id is None
+    assert (
+        AutomationStore(tmp_path).list_child_execution_edges(
+            second.automation_jobs[0].job_id
+        )
+        == []
+    )
     attempts = AutomationStore(tmp_path).list_attempts(second.automation_jobs[0].job_id)
     assert len(attempts) == 1
     assert attempts[0].status == "skipped"

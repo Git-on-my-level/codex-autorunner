@@ -650,8 +650,6 @@ class PmaOperatorTurnAutomationExecutor:
                 summary="PMA operator automation lane worker starter failed",
             )
         refs = {
-            "pma_lane_id": lane_id,
-            "pma_queue_item_id": item.item_id,
             "automation_child_edge_id": edge.edge_id,
         }
         return AutomationExecutorResult(
@@ -660,7 +658,7 @@ class PmaOperatorTurnAutomationExecutor:
             data={
                 "execution_phase": "waiting",
                 "lane_id": lane_id,
-                "pma_queue_item_id": item.item_id,
+                "pma_operator_child_id": item.item_id,
                 "client_turn_id": client_turn_id,
                 "deduped": bool(dupe_reason),
                 "automation_child_edge_id": edge.edge_id,
@@ -854,7 +852,7 @@ class PublishOperationAutomationExecutor:
                 ),
                 self._journal.get_operation(operation.operation_id) or operation,
             )
-        refs = {"publish_operation_id": operation.operation_id}
+        refs: dict[str, Any] = {}
         edge_id = self._record_child_edge(
             job,
             operation_id=operation.operation_id,
@@ -923,7 +921,6 @@ def _managed_turn_result(
     turn_id = _require_text(turn.get("managed_turn_id"), "managed_turn_id")
     refs = {
         "managed_thread_target_id": thread_id,
-        "managed_thread_execution_id": turn_id,
     }
     if child_edge_id is not None:
         refs["automation_child_edge_id"] = child_edge_id

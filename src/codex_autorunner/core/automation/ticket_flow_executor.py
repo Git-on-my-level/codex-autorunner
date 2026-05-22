@@ -87,9 +87,7 @@ class TicketFlowAutomationExecutor:
         run_id = str(getattr(record, "id", "") or "")
         edge_id = self._record_child_edge(job, resolved=resolved, run_id=run_id)
         execution_refs = {
-            "ticket_flow_repo_id": resolved.repo_id,
-            "ticket_flow_worktree_id": resolved.repo_id,
-            "ticket_flow_run_id": run_id,
+            "automation_worktree_id": resolved.repo_id,
         }
         if edge_id is not None:
             execution_refs["automation_child_edge_id"] = edge_id

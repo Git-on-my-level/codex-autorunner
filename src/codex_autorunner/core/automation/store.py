@@ -59,6 +59,17 @@ def _agent_task_runtime_mismatch(edge: AutomationChildExecutionEdge) -> bool:
 
 _log = logging.getLogger(__name__)
 
+_LEGACY_JOB_CHILD_COLUMNS = (
+    "managed_thread_" + "target_id",
+    "managed_thread_" + "execution_id",
+    "pma_lane_id",
+    "pma_queue_" + "item_id",
+    "ticket_flow_repo_id",
+    "ticket_flow_" + "run_id",
+    "ticket_flow_worktree_id",
+    "publish_operation_" + "id",
+)
+
 
 class AutomationStore:
     def __init__(self, hub_root: Path, *, durable: bool = True) -> None:
@@ -291,17 +302,15 @@ class AutomationStore:
                 ).fetchone()
                 if existing is not None:
                     return self._row_to_job(existing), True
+                legacy_columns_sql = ", ".join(_LEGACY_JOB_CHILD_COLUMNS)
                 conn.execute(
-                    """
+                    f"""
                     INSERT INTO orch_automation_jobs (
                         job_id, rule_id, event_id, state, dedupe_key, batch_key,
                         lock_key, available_at, claimed_at, started_at, finished_at,
                         updated_at, attempt_count, max_attempts, next_attempt_at,
                         retry_backoff_seconds, created_at, target_json, executor_json,
-                        policy_json, payload_json, managed_thread_target_id,
-                        managed_thread_execution_id, pma_lane_id, pma_queue_item_id,
-                        ticket_flow_repo_id, ticket_flow_run_id,
-                        ticket_flow_worktree_id, publish_operation_id, result_summary,
+                        policy_json, payload_json, {legacy_columns_sql}, result_summary,
                         error_text
                     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
@@ -1171,10 +1180,13 @@ class AutomationStore:
                                state = ?
                                AND started_at IS NOT NULL
                                AND started_at <= ?
-                               AND managed_thread_execution_id IS NULL
-                               AND pma_queue_item_id IS NULL
-                               AND ticket_flow_run_id IS NULL
-                               AND publish_operation_id IS NULL
+                               AND NOT EXISTS (
+                                   SELECT 1
+                                     FROM orch_automation_child_execution_edges edge
+                                    WHERE edge.parent_job_id = orch_automation_jobs.job_id
+                                      AND edge.authoritative_for_parent_completion = 1
+                                      AND edge.terminal_state IS NULL
+                               )
                            )
                        )
                     """,
@@ -1277,26 +1289,7 @@ class AutomationStore:
                 if row is None:
                     raise ValueError(f"Unknown automation job: {job_id}")
                 validate_job_transition(str(row["state"]), to_state)
-                refs = dict(execution_refs or {})
-                updates = {
-                    "managed_thread_target_id": refs.get("managed_thread_target_id")
-                    or row["managed_thread_target_id"],
-                    "managed_thread_execution_id": refs.get(
-                        "managed_thread_execution_id"
-                    )
-                    or row["managed_thread_execution_id"],
-                    "pma_lane_id": refs.get("pma_lane_id") or row["pma_lane_id"],
-                    "pma_queue_item_id": refs.get("pma_queue_item_id")
-                    or row["pma_queue_item_id"],
-                    "ticket_flow_repo_id": refs.get("ticket_flow_repo_id")
-                    or row["ticket_flow_repo_id"],
-                    "ticket_flow_run_id": refs.get("ticket_flow_run_id")
-                    or row["ticket_flow_run_id"],
-                    "ticket_flow_worktree_id": refs.get("ticket_flow_worktree_id")
-                    or row["ticket_flow_worktree_id"],
-                    "publish_operation_id": refs.get("publish_operation_id")
-                    or row["publish_operation_id"],
-                }
+                _ = execution_refs
                 conn.execute(
                     """
                     UPDATE orch_automation_jobs
@@ -1306,15 +1299,7 @@ class AutomationStore:
                            updated_at = ?,
                            attempt_count = attempt_count + ?,
                            result_summary = COALESCE(?, result_summary),
-                           error_text = COALESCE(?, error_text),
-                           managed_thread_target_id = ?,
-                           managed_thread_execution_id = ?,
-                           pma_lane_id = ?,
-                           pma_queue_item_id = ?,
-                           ticket_flow_repo_id = ?,
-                           ticket_flow_run_id = ?,
-                           ticket_flow_worktree_id = ?,
-                           publish_operation_id = ?
+                           error_text = COALESCE(?, error_text)
                      WHERE job_id = ?
                     """,
                     (
@@ -1327,14 +1312,6 @@ class AutomationStore:
                         1 if increment_attempt else 0,
                         result_summary,
                         error_text,
-                        updates["managed_thread_target_id"],
-                        updates["managed_thread_execution_id"],
-                        updates["pma_lane_id"],
-                        updates["pma_queue_item_id"],
-                        updates["ticket_flow_repo_id"],
-                        updates["ticket_flow_run_id"],
-                        updates["ticket_flow_worktree_id"],
-                        updates["publish_operation_id"],
                         job_id,
                     ),
                 )
@@ -1463,14 +1440,6 @@ class AutomationStore:
         job.retry_backoff_seconds = normalize_non_negative_int(
             row["retry_backoff_seconds"]
         )
-        job.managed_thread_target_id = row["managed_thread_target_id"]
-        job.managed_thread_execution_id = row["managed_thread_execution_id"]
-        job.pma_lane_id = row["pma_lane_id"]
-        job.pma_queue_item_id = row["pma_queue_item_id"]
-        job.ticket_flow_repo_id = row["ticket_flow_repo_id"]
-        job.ticket_flow_run_id = row["ticket_flow_run_id"]
-        job.ticket_flow_worktree_id = row["ticket_flow_worktree_id"]
-        job.publish_operation_id = row["publish_operation_id"]
         job.result_summary = row["result_summary"]
         job.error_text = row["error_text"]
         return job
@@ -1570,14 +1539,14 @@ class AutomationStore:
             _json_dumps(job.executor),
             _json_dumps(job.policy),
             _json_dumps(job.payload),
-            job.managed_thread_target_id,
-            job.managed_thread_execution_id,
-            job.pma_lane_id,
-            job.pma_queue_item_id,
-            job.ticket_flow_repo_id,
-            job.ticket_flow_run_id,
-            job.ticket_flow_worktree_id,
-            job.publish_operation_id,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
             job.result_summary,
             job.error_text,
         )
