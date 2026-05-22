@@ -243,10 +243,16 @@ def build_process_declaration(
     max_supported_schema_generation: int,
     observed_schema_generation: int,
     ttl_seconds: int = 120,
+    existing: ProcessCompatibilityDeclaration | None = None,
 ) -> ProcessCompatibilityDeclaration:
     build_id, unknown_reason = resolve_build_identity()
     pid = os.getpid()
-    process_id = f"{role}:{pid}:{uuid.uuid4()}"
+    if existing is not None and existing.role == role and existing.pid == pid:
+        process_id = existing.process_id
+        process_start_time = existing.process_start_time
+    else:
+        process_id = f"{role}:{pid}:{uuid.uuid4()}"
+        process_start_time = time.time()
     heartbeat_at = now_iso()
     expires_at = datetime.fromtimestamp(
         time.time() + max(1, int(ttl_seconds)), tz=timezone.utc
@@ -255,7 +261,7 @@ def build_process_declaration(
         process_id=process_id,
         role=role,
         pid=pid,
-        process_start_time=time.time(),
+        process_start_time=process_start_time,
         build_id=build_id,
         unknown_build_reason=unknown_reason,
         writer_identity=f"{socket.gethostname()}:{pid}:{process_id}",

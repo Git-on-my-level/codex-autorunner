@@ -154,6 +154,20 @@ def _registry_with_stale_declarations_pruned(
     )
 
 
+def _current_process_declaration(
+    registry: CompatibilityRegistry,
+    *,
+    process_role: str,
+) -> ProcessCompatibilityDeclaration | None:
+    import os
+
+    pid = os.getpid()
+    for declaration in registry.declarations:
+        if declaration.role == process_role and declaration.pid == pid:
+            return declaration
+    return None
+
+
 def _write_orchestration_compatibility_metadata(
     hub_root: Path,
     *,
@@ -337,23 +351,48 @@ def prepare_orchestration_sqlite(
     process_role: str = "hub",
     control_plane_api_version: str = "1.0.0",
     heartbeat_ttl_seconds: int = 120,
+    migration_mode: OrchestrationMigrationMode | None = None,
 ) -> OrchestrationCompatibilityMetadata:
     """Explicitly prepare orchestration shared state for hub-owned startup."""
     db_path = resolve_orchestration_sqlite_path(hub_root)
+    mode: OrchestrationMigrationMode = migration_mode or (
+        "hub" if process_role == "hub" else "worker"
+    )
     with file_lock(resolve_orchestration_migration_lock_path(hub_root)):
         with open_sqlite(
             db_path,
             durable=durable,
             busy_timeout_ms=orchestration_sqlite_busy_timeout_ms(),
         ) as conn:
-            apply_orchestration_migrations(conn)
+            current_version = _read_orchestration_schema_version_if_present(conn)
+            build_id, _unknown_reason = resolve_build_identity()
+            _assert_migration_permitted(
+                hub_root,
+                current_schema=current_version,
+                target_schema=ORCHESTRATION_SCHEMA_VERSION,
+                migration_mode=mode,
+                process_role=process_role,
+                build_id=build_id,
+            )
+            if current_version < ORCHESTRATION_SCHEMA_VERSION:
+                apply_orchestration_migrations(conn)
             schema_generation = current_orchestration_schema_version(conn)
+        existing_metadata = read_orchestration_compatibility_metadata(hub_root)
+        existing_declaration = (
+            _current_process_declaration(
+                existing_metadata.registry,
+                process_role=process_role,
+            )
+            if existing_metadata is not None
+            else None
+        )
         declaration = build_process_declaration(
             role=process_role,
             supported_control_plane_api_version=control_plane_api_version,
             max_supported_schema_generation=ORCHESTRATION_SCHEMA_VERSION,
             observed_schema_generation=schema_generation,
             ttl_seconds=heartbeat_ttl_seconds,
+            existing=existing_declaration,
         )
         return _write_orchestration_compatibility_metadata(
             hub_root,
@@ -411,12 +450,18 @@ def refresh_orchestration_process_heartbeat(
     control_plane_api_version: str = "1.0.0",
     heartbeat_ttl_seconds: int = 120,
 ) -> OrchestrationCompatibilityMetadata:
+    previous = read_orchestration_compatibility_metadata(hub_root)
+    registry = previous.registry if previous is not None else CompatibilityRegistry()
     declaration = build_process_declaration(
         role=process_role,
         supported_control_plane_api_version=control_plane_api_version,
         max_supported_schema_generation=ORCHESTRATION_SCHEMA_VERSION,
         observed_schema_generation=observed_schema_generation,
         ttl_seconds=heartbeat_ttl_seconds,
+        existing=_current_process_declaration(
+            registry,
+            process_role=process_role,
+        ),
     )
     return _write_orchestration_compatibility_metadata(
         hub_root,

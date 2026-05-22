@@ -133,3 +133,5 @@ def test_snapshot_pma_automation_tolerates_unknown_executor_kind(tmp_path) -> No
 
     assert snapshot["rules"]["enabled_count"] == 1
     assert snapshot["rules"]["sample"][0]["executor_kind"] == "pma_operator_turn"
+    assert snapshot["rules"]["sample"][0]["known_executor"] is False
+    assert snapshot["rules"]["sample"][0]["executable"] is False

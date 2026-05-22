@@ -217,7 +217,12 @@ class ManagedThreadIdentityStore:
         return datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
 
     def _prepare(self) -> None:
-        prepare_orchestration_sqlite(self._hub_root, durable=self._durable)
+        prepare_orchestration_sqlite(
+            self._hub_root,
+            durable=self._durable,
+            process_role="worker",
+            migration_mode="worker",
+        )
 
     def _import_marker_present(self, conn: Any) -> bool:
         row = conn.execute(

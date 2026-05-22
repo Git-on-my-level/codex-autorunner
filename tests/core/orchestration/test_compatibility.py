@@ -9,6 +9,7 @@ from codex_autorunner.core.orchestration.compatibility import (
 from codex_autorunner.core.orchestration.sqlite import (
     prepare_orchestration_sqlite,
     read_orchestration_compatibility_metadata,
+    refresh_orchestration_process_heartbeat,
 )
 
 
@@ -50,6 +51,32 @@ def test_prepare_orchestration_sqlite_records_process_declaration(tmp_path) -> N
     assert declaration.observed_schema_generation == metadata.schema_generation
     assert declaration.heartbeat_at
     assert declaration.expires_at
+
+
+def test_refresh_orchestration_process_heartbeat_preserves_process_id(
+    tmp_path,
+) -> None:
+    hub_root = tmp_path / "hub"
+    prepared = prepare_orchestration_sqlite(
+        hub_root,
+        durable=False,
+        process_role="hub",
+        heartbeat_ttl_seconds=1,
+    )
+    first = prepared.registry.declarations[0]
+
+    refreshed = refresh_orchestration_process_heartbeat(
+        hub_root,
+        process_role="hub",
+        observed_schema_generation=prepared.schema_generation,
+        heartbeat_ttl_seconds=120,
+    )
+
+    second = refreshed.registry.declarations[0]
+    assert second.process_id == first.process_id
+    assert second.pid == first.pid
+    assert second.ttl_seconds == 120
+    assert second.expires_at >= first.expires_at
 
 
 def test_registry_declarations_classify_stale_and_pid_reuse() -> None:

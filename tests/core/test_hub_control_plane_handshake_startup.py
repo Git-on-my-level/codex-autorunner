@@ -79,3 +79,46 @@ async def test_startup_handshake_retries_with_jittered_info_logging(
         and record.levelno == logging.INFO
         for record in caplog.records
     )
+
+
+@pytest.mark.anyio
+async def test_startup_handshake_preserves_typed_hub_incompatible_details() -> None:
+    class _IncompatibleHubClient:
+        async def handshake(self, request: Any) -> Any:
+            _ = request
+            raise HubControlPlaneError(
+                "hub_incompatible",
+                "hub restart required",
+                retryable=False,
+                details={
+                    "compatibility": {
+                        "status": "incompatible_schema",
+                        "observed_schema": ORCHESTRATION_SCHEMA_VERSION + 1,
+                        "supported_schema": ORCHESTRATION_SCHEMA_VERSION,
+                        "process_role": "hub",
+                        "build_id": "old-build",
+                        "restart_required": True,
+                        "reason": "observed schema generation is newer",
+                    }
+                },
+            )
+
+    ok, compatibility = await perform_startup_hub_handshake(
+        hub_client=_IncompatibleHubClient(),
+        log_event_name_prefix="test",
+        handshake_client_name="test-client",
+        hub_root_str="/tmp/hub",
+        startup_monotonic=0.0,
+        retry_window_seconds=1.0,
+        retry_delay_seconds=0.5,
+        retry_max_delay_seconds=2.0,
+        client_api_version="1.0.0",
+        logger=logging.getLogger("test.handshake_startup.incompatible"),
+    )
+
+    assert ok is False
+    assert compatibility is not None
+    assert compatibility.state == "incompatible"
+    assert compatibility.server_schema_generation == ORCHESTRATION_SCHEMA_VERSION + 1
+    assert compatibility.expected_schema_generation == ORCHESTRATION_SCHEMA_VERSION
+    assert "observed schema generation" in (compatibility.reason or "")

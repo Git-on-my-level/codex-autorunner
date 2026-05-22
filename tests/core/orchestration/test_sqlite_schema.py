@@ -22,6 +22,7 @@ from codex_autorunner.core.orchestration.sqlite import (
     OrchestrationCompatibilityMetadata,
     OrchestrationMigrationRefused,
     open_orchestration_sqlite,
+    prepare_orchestration_sqlite,
     read_orchestration_compatibility_metadata,
     resolve_orchestration_compatibility_metadata_path,
 )
@@ -325,6 +326,29 @@ def test_worker_migration_refuses_to_advance_past_live_hub_schema(
     assert raised.value.refusal.target_schema == ORCHESTRATION_SCHEMA_VERSION
     assert raised.value.refusal.hub_supported_schema == old_schema
     assert raised.value.evaluation.status == "restart_required"
+
+
+def test_worker_prepare_refuses_to_advance_past_live_hub_schema(
+    tmp_path: Path,
+) -> None:
+    hub_root = tmp_path / "hub"
+    old_schema = ORCHESTRATION_SCHEMA_VERSION - 1
+    _mark_db_at_previous_generation(hub_root)
+    _write_metadata(
+        hub_root,
+        schema_generation=old_schema,
+        declarations=(_hub_declaration(supported_schema=old_schema),),
+    )
+
+    with pytest.raises(OrchestrationMigrationRefused):
+        prepare_orchestration_sqlite(
+            hub_root,
+            durable=False,
+            process_role="worker",
+            migration_mode="worker",
+        )
+
+    assert _schema_generation(hub_root) == old_schema
 
 
 def test_hub_migration_can_advance_under_owned_mode(tmp_path: Path) -> None:

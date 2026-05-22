@@ -191,6 +191,8 @@ def _attach_unified_automation_snapshot(
                     "trigger_kind",
                     "target_policy",
                     "executor_kind",
+                    "known_executor",
+                    "executable",
                     "metadata",
                 ),
             )

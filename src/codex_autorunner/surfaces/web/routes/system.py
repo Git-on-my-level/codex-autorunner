@@ -11,7 +11,10 @@ from ....core.constants import DEFAULT_UPDATE_REPO_REF, DEFAULT_UPDATE_REPO_URL
 from ....core.orchestration.execution_history_maintenance import (
     collect_execution_history_database_health,
 )
-from ....core.orchestration.sqlite import evaluate_current_orchestration_compatibility
+from ....core.orchestration.sqlite import (
+    evaluate_current_orchestration_compatibility,
+    refresh_orchestration_process_heartbeat,
+)
 from ....core.self_describe import collect_describe_data
 from ....core.update import (
     UpdateInProgressError,
@@ -91,6 +94,13 @@ def build_system_routes() -> APIRouter:
             )
             compatibility_ok = compatibility.compatible
             compatibility_payload = compatibility.to_dict()
+            if compatibility_ok:
+                await asyncio.to_thread(
+                    refresh_orchestration_process_heartbeat,
+                    config.root,
+                    process_role="hub",
+                    observed_schema_generation=compatibility.observed_schema,
+                )
             database_health = (
                 await asyncio.to_thread(
                     collect_execution_history_database_health,

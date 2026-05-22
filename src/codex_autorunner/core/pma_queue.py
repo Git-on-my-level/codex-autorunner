@@ -96,7 +96,12 @@ class PmaQueueRepository:
 
     def __init__(self, hub_root: Path) -> None:
         self._hub_root = hub_root
-        prepare_orchestration_sqlite(self._hub_root, durable=True)
+        prepare_orchestration_sqlite(
+            self._hub_root,
+            durable=True,
+            process_role="worker",
+            migration_mode="worker",
+        )
 
     def insert_or_update_item(
         self, conn: sqlite3.Connection, item: PmaQueueItem
@@ -430,7 +435,12 @@ class PmaQueue:
         self._initialize_canonical_state()
 
     def _initialize_canonical_state(self) -> None:
-        prepare_orchestration_sqlite(self._hub_root, durable=True)
+        prepare_orchestration_sqlite(
+            self._hub_root,
+            durable=True,
+            process_role="worker",
+            migration_mode="worker",
+        )
 
     def _lane_queue_path(self, lane_id: str) -> Path:
         return self._mirror.lane_queue_path(lane_id)
