@@ -222,7 +222,7 @@ if TYPE_CHECKING:
         build_surface_orchestration_ingress,
         get_surface_orchestration_ingress,
     )
-    from .thread_service import HarnessBackedOrchestrationService
+    from .thread_service import ForeignModelError, HarnessBackedOrchestrationService
     from .thread_store_adapter import (
         ManagedThreadExecutionStore,
     )
@@ -232,6 +232,10 @@ _LAZY_EXPORTS = {
     "FlowBackedOrchestrationService": (
         ".flow_service",
         "FlowBackedOrchestrationService",
+    ),
+    "ForeignModelError": (
+        ".thread_service",
+        "ForeignModelError",
     ),
     "HarnessBackedOrchestrationService": (
         ".thread_service",
@@ -323,6 +327,7 @@ __all__ = [
     "ExecutionRecord",
     "FlowBackedOrchestrationService",
     "FlowTarget",
+    "ForeignModelError",
     "FreshConversationRequiredError",
     "HarnessBackedOrchestrationService",
     "ManagedThreadDeliveryAttemptResult",
