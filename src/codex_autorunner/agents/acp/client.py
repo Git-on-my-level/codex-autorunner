@@ -1219,11 +1219,6 @@ class ACPClient:
         if state.closed:
             return
         self._note_prompt_trace_event(state, event)
-        if event.final_output:
-            normalized = state.note_assistant_message(event.final_output)
-            if normalized is not None:
-                self._log_ingress_normalization(state, normalized)
-                event = replace(event, final_output=normalized.text)
         state.events.append(event)
         await state.queue.put(event)
         await self._finalize_prompt_with_event(

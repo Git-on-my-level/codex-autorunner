@@ -83,10 +83,11 @@ def managed_thread_terminal_delivery_send_key(
 
 
 def managed_thread_delivery_success_text(record: Any) -> str:
-    output = getattr(getattr(record, "envelope", None), "assistant_output", None)
-    if output is None:
-        return ""
-    return str(getattr(output, "text", "") or "")
+    envelope = getattr(record, "envelope", None)
+    output = getattr(envelope, "assistant_output", None)
+    if output is not None:
+        return str(getattr(output, "text", "") or "")
+    return str(getattr(envelope, "assistant_text", "") or "")
 
 
 def managed_thread_delivery_output_metadata(record: Any) -> dict[str, Any]:
