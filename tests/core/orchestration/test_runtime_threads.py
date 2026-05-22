@@ -19,6 +19,7 @@ from codex_autorunner.core.hub_control_plane import (
 )
 from codex_autorunner.core.managed_thread_store import ManagedThreadStore
 from codex_autorunner.core.orchestration import (
+    ForeignModelError,
     HarnessBackedOrchestrationService,
     ManagedThreadExecutionStore,
     MappingAgentDefinitionCatalog,
@@ -290,12 +291,19 @@ class _HarnessWithStream:
 
 
 def _make_descriptor(
-    agent_id: str = "codex", *, name: str = "Codex"
+    agent_id: str = "codex",
+    *,
+    name: str = "Codex",
+    capabilities: Optional[frozenset[str]] = None,
 ) -> AgentDescriptor:
     return AgentDescriptor(
         id=agent_id,
         name=name,
-        capabilities=frozenset(["durable_threads", "message_turns", "review"]),
+        capabilities=(
+            capabilities
+            if capabilities is not None
+            else frozenset(["durable_threads", "message_turns", "review"])
+        ),
         make_harness=lambda _ctx: None,  # type: ignore[return-value]
     )
 
@@ -306,8 +314,11 @@ def _build_service(
     *,
     agent_id: str = "codex",
     name: str = "Codex",
+    capabilities: Optional[frozenset[str]] = None,
 ) -> HarnessBackedOrchestrationService:
-    descriptors = {agent_id: _make_descriptor(agent_id, name=name)}
+    descriptors = {
+        agent_id: _make_descriptor(agent_id, name=name, capabilities=capabilities)
+    }
     return HarnessBackedOrchestrationService(
         definition_catalog=MappingAgentDefinitionCatalog(descriptors),
         thread_store=ManagedThreadExecutionStore(ManagedThreadStore(tmp_path / "hub")),
@@ -440,7 +451,15 @@ async def test_runtime_threads_use_wait_for_turn_contract_for_session_runtimes(
     tmp_path: Path,
 ) -> None:
     harness = _HarnessWithStream()
-    service = _build_service(tmp_path, harness, agent_id="opencode", name="OpenCode")
+    service = _build_service(
+        tmp_path,
+        harness,
+        agent_id="opencode",
+        name="OpenCode",
+        capabilities=frozenset(
+            ["durable_threads", "message_turns", "review", "model_listing"]
+        ),
+    )
     workspace_root = tmp_path / "workspace"
     workspace_root.mkdir()
     thread = service.create_thread_target("opencode", workspace_root)
@@ -480,7 +499,15 @@ async def test_opencode_runtime_thread_requires_resolved_model_before_start(
     tmp_path: Path,
 ) -> None:
     harness = _HarnessWithStream()
-    service = _build_service(tmp_path, harness, agent_id="opencode", name="OpenCode")
+    service = _build_service(
+        tmp_path,
+        harness,
+        agent_id="opencode",
+        name="OpenCode",
+        capabilities=frozenset(
+            ["durable_threads", "message_turns", "review", "model_listing"]
+        ),
+    )
     workspace_root = tmp_path / "workspace"
     workspace_root.mkdir()
     thread = service.create_thread_target("opencode", workspace_root)
@@ -701,6 +728,73 @@ async def test_runtime_threads_stream_events_support_hermes_harness(
     assert started.thread.backend_thread_id == "session-1"
     assert events
     assert "message.completed" in events[-1]
+
+
+async def test_prepare_rejects_foreign_model_for_non_model_listing_agent(
+    tmp_path: Path,
+) -> None:
+    # Hermes has no `model_listing` capability, so a caller-specified model is
+    # foreign. The turn must be rejected before dispatch (#1854): the foreign
+    # model never reaches the agent session and no execution row is created.
+    harness = _HarnessWithWait()
+    service = _build_service(tmp_path, harness, agent_id="hermes", name="Hermes")
+    workspace_root = tmp_path / "workspace"
+    workspace_root.mkdir()
+    thread = service.create_thread_target("hermes", workspace_root)
+
+    with pytest.raises(ForeignModelError) as excinfo:
+        await begin_runtime_thread_execution(
+            service,
+            MessageRequest(
+                target_id=thread.thread_target_id,
+                target_kind="thread",
+                message_text="hello hermes",
+                model="gpt-5.4-mini",
+            ),
+        )
+
+    assert excinfo.value.agent_id == "hermes"
+    assert excinfo.value.model == "gpt-5.4-mini"
+    # Never dispatched, and no execution row was created.
+    assert harness.start_turn_calls == []
+    assert service.get_running_execution(thread.thread_target_id) is None
+
+
+async def test_prepare_allows_model_for_model_listing_agent(
+    tmp_path: Path,
+) -> None:
+    # An agent that supports `model_listing` (codex/opencode in production) may
+    # receive a caller-specified model; the guard must not fire.
+    harness = _HarnessWithWait()
+    service = _build_service(
+        tmp_path,
+        harness,
+        capabilities=frozenset(
+            ["durable_threads", "message_turns", "review", "model_listing"]
+        ),
+    )
+    workspace_root = tmp_path / "workspace"
+    workspace_root.mkdir()
+    thread = service.create_thread_target("codex", workspace_root)
+
+    started = await begin_runtime_thread_execution(
+        service,
+        MessageRequest(
+            target_id=thread.thread_target_id,
+            target_kind="thread",
+            message_text="hello codex",
+            model="gpt-5.4-mini",
+        ),
+    )
+    outcome = await await_runtime_thread_outcome(
+        started,
+        interrupt_event=asyncio.Event(),
+        timeout_seconds=5,
+        execution_error_message="Managed thread execution failed",
+    )
+
+    assert outcome.status == "ok"
+    assert harness.start_turn_calls[0]["model"] == "gpt-5.4-mini"
 
 
 async def test_runtime_threads_allow_wait_results_without_raw_events(
@@ -1153,7 +1247,15 @@ async def test_stream_runtime_thread_events_proxies_harness_stream(
     tmp_path: Path,
 ) -> None:
     harness = _HarnessWithStream()
-    service = _build_service(tmp_path, harness, agent_id="opencode", name="OpenCode")
+    service = _build_service(
+        tmp_path,
+        harness,
+        agent_id="opencode",
+        name="OpenCode",
+        capabilities=frozenset(
+            ["durable_threads", "message_turns", "review", "model_listing"]
+        ),
+    )
     workspace_root = tmp_path / "workspace"
     workspace_root.mkdir()
     thread = service.create_thread_target("opencode", workspace_root)

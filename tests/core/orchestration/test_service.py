@@ -277,7 +277,15 @@ def _make_descriptor(
         capabilities=(
             capabilities
             if capabilities is not None
-            else frozenset(["durable_threads", "message_turns", "review", "approvals"])
+            else frozenset(
+                [
+                    "durable_threads",
+                    "message_turns",
+                    "review",
+                    "approvals",
+                    "model_listing",
+                ]
+            )
         ),
         make_harness=lambda _ctx: None,  # type: ignore[return-value]
     )
