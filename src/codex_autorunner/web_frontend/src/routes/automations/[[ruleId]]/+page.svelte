@@ -840,6 +840,20 @@
     return `Raw parent: ${job.rawState}`;
   }
 
+  function lastRunBlocking(automation: AutomationSummary): string {
+    const job = automation.lastJob;
+    if (!job) return '';
+    const reason = job.blockedReason || '';
+    const blocker = job.blockedByJobId ? `blocked by ${job.blockedByJobId}` : '';
+    return [reason, blocker].filter(Boolean).join(' · ');
+  }
+
+  function lastRunPolicyViolation(automation: AutomationSummary): string {
+    const violation = automation.lastJob?.policyViolations?.[0];
+    if (!violation) return '';
+    return String(violation.message ?? violation.code ?? '');
+  }
+
   function scheduleSummary(): string {
     const automation = selectedAutomation();
     if (automation) return automation.product.scheduleEditor.summary || scheduleLabel(automation);
@@ -1188,6 +1202,12 @@
               {lastRunLabel(selectedAutomation() as AutomationSummary)}
               {#if lastRunDiagnostic(selectedAutomation() as AutomationSummary)}
                 <span class="raw-state-diagnostic">{lastRunDiagnostic(selectedAutomation() as AutomationSummary)}</span>
+              {/if}
+              {#if lastRunBlocking(selectedAutomation() as AutomationSummary)}
+                <span class="blocked-state-diagnostic">{lastRunBlocking(selectedAutomation() as AutomationSummary)}</span>
+              {/if}
+              {#if lastRunPolicyViolation(selectedAutomation() as AutomationSummary)}
+                <span class="policy-state-diagnostic">{lastRunPolicyViolation(selectedAutomation() as AutomationSummary)}</span>
               {/if}
             </dd>
           </div>
@@ -1923,13 +1943,23 @@
     text-transform: capitalize;
   }
 
-  .raw-state-diagnostic {
+  .raw-state-diagnostic,
+  .blocked-state-diagnostic,
+  .policy-state-diagnostic {
     display: block;
     margin-top: 2px;
     font-size: 11px;
     font-weight: 500;
     text-transform: none;
+  }
+
+  .raw-state-diagnostic {
     color: var(--color-warning);
+  }
+
+  .blocked-state-diagnostic,
+  .policy-state-diagnostic {
+    color: var(--color-danger);
   }
 
   .fact-failed { color: var(--color-danger); }

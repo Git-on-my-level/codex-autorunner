@@ -16,30 +16,24 @@ export function runHistoryFromAutomationJobs(jobs: JsonRecord[]): RunHistoryEntr
   return jobs.map((job, index) => {
     const id = stringValue(job.jobId ?? job.job_id, `job-${index + 1}`);
     const state = stringValue(job.effectiveState ?? job.effective_state ?? job.state, 'idle');
-    const worktreeId = nullableString(job.ticketFlowWorktreeId ?? job.ticket_flow_worktree_id);
-    const managedThreadId = nullableString(job.managedThreadTargetId ?? job.managed_thread_target_id);
     const childExecution = recordValue(job.childExecution ?? job.child_execution);
     const children = arrayValue(job.children);
     const snapshotHref =
       nullableString(childExecution?.chat_href) ?? nullableString(childExecution?.target_href);
     const edgeHref = children
       .map(recordValue)
-      .map(child => childEdgeHrefFromRuntime(child, job))
+      .map(child => childEdgeHrefFromRuntime(child))
       .find((value): value is string => Boolean(value));
-    const spawnedChatId = managedThreadId;
     return {
       id,
       title: `Run ${shortId(id)}`,
       status: statusFromJobState(state),
-      summary: nullableString(job.resultSummary ?? job.result_summary) ?? nullableString(job.errorText ?? job.error_text),
+      summary: summaryFromJob(job),
       timestamp:
         nullableString(job.finishedAt ?? job.finished_at) ??
         nullableString(job.updatedAt ?? job.updated_at) ??
         nullableString(job.createdAt ?? job.created_at),
-      href:
-        snapshotHref ??
-        edgeHref ??
-        (spawnedChatId ? `/chats/${encodeURIComponent(spawnedChatId)}` : worktreeId ? worktreeTicketRoute(worktreeId) : null),
+      href: snapshotHref ?? edgeHref ?? null,
       attempts: numberValue(job.attemptCount ?? job.attempt_count, 0)
     };
   });
@@ -49,8 +43,10 @@ export function statusFromJobState(state: string): WorkStatus {
   const normalized = state.trim().toLowerCase();
   if (normalized === 'succeeded' || normalized === 'done') return 'done';
   if (normalized === 'failed') return 'failed';
+  if (normalized === 'blocked') return 'blocked';
   if (normalized === 'running') return 'running';
   if (normalized === 'pending' || normalized === 'waiting') return 'waiting';
+  if (normalized === 'cancelled' || normalized === 'skipped' || normalized === 'paused') return 'idle';
   return 'idle';
 }
 
@@ -80,20 +76,48 @@ function arrayValue(value: unknown): unknown[] {
   return Array.isArray(value) ? value : [];
 }
 
-function childEdgeHrefFromRuntime(child: JsonRecord | null, job: JsonRecord): string | null {
+function summaryFromJob(job: JsonRecord): string | null {
+  const rawState = nullableString(job.rawState ?? job.raw_state ?? job.state);
+  const effectiveState = nullableString(job.effectiveState ?? job.effective_state);
+  const blockedReason = nullableString(job.blockedReason ?? job.blocked_reason);
+  const blockedByJobId = nullableString(job.blockedByJobId ?? job.blocked_by_job_id);
+  const terminalReason = nullableString(job.terminalReason ?? job.terminal_reason);
+  const policyViolation = firstPolicyViolation(job.policyViolations ?? job.policy_violations);
+  const base =
+    blockedReason ??
+    terminalReason ??
+    policyViolation ??
+    nullableString(job.resultSummary ?? job.result_summary) ??
+    nullableString(job.errorText ?? job.error_text);
+  const diagnostics: string[] = [];
+  if (blockedByJobId) diagnostics.push(`blocked by ${blockedByJobId}`);
+  if (rawState && effectiveState && rawState !== effectiveState) diagnostics.push(`raw parent ${rawState}`);
+  if (!diagnostics.length) return base;
+  return [base, diagnostics.join('; ')].filter(Boolean).join(' · ');
+}
+
+function firstPolicyViolation(value: unknown): string | null {
+  return arrayValue(value)
+    .map(recordValue)
+    .map((item) => nullableString(item?.message) ?? nullableString(item?.code))
+    .find((item): item is string => Boolean(item)) ?? null;
+}
+
+function childEdgeHrefFromRuntime(child: JsonRecord | null): string | null {
   if (!child) return null;
   const kind = nullableString(child.child_kind ?? child.childKind)?.toLowerCase();
   const requested = recordValue(child.requested_runtime ?? child.requestedRuntime);
-  const scope = recordValue(requested?.workspace_scope ?? requested?.workspaceScope);
+  const actual = recordValue(child.actual_runtime ?? child.actualRuntime);
+  const scope =
+    recordValue(actual?.workspace_scope ?? actual?.workspaceScope) ??
+    recordValue(requested?.workspace_scope ?? requested?.workspaceScope);
   const targetKind = nullableString(scope?.target_kind ?? scope?.targetKind)?.toLowerCase();
   const targetId = nullableString(scope?.target_id ?? scope?.targetId);
   if (targetKind === 'thread' && targetId) {
     return `/chats/${encodeURIComponent(targetId)}`;
   }
   if (kind === 'ticket_flow') {
-    const wt =
-      nullableString(job.ticketFlowWorktreeId ?? job.ticket_flow_worktree_id) ??
-      nullableString(scope?.worktree_id ?? scope?.worktreeId);
+    const wt = nullableString(scope?.worktree_id ?? scope?.worktreeId ?? scope?.target_id ?? scope?.targetId);
     const repoId = nullableString(scope?.repo_id ?? scope?.repoId);
     if (wt) {
       return worktreeTicketRoute(wt, repoId);

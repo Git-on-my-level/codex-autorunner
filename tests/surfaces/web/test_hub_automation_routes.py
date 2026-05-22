@@ -155,6 +155,16 @@ def test_hub_automations_create_weekly_ticket_flow_and_run_now(tmp_path):
     assert detail.json()["automation"]["last_job"]["job_id"] == job_rows[0]["job_id"]
     assert "executor" not in job_rows[0]
     assert "payload" not in job_rows[0]
+    for legacy_field in (
+        "managed_thread_target_id",
+        "managed_thread_execution_id",
+        "pma_lane_id",
+        "pma_queue_item_id",
+        "ticket_flow_run_id",
+        "ticket_flow_worktree_id",
+        "publish_operation_id",
+    ):
+        assert legacy_field not in job_rows[0]
 
     listing = client.get("/hub/automations")
     presets = {preset["id"]: preset for preset in listing.json()["presets"]}
@@ -561,6 +571,89 @@ def test_hub_automation_jobs_project_effective_state_and_child_runtime(tmp_path)
     assert job["policy_violations"][0]["code"] == "AUTOMATION_PARENT_STATE_STALE"
 
 
+def test_hub_automation_jobs_project_blocking_and_runtime_policy_violation(tmp_path):
+    hub_root = tmp_path / "hub"
+    seed_hub_files(hub_root, force=True)
+    store = AutomationStore(hub_root)
+    rule = store.upsert_rule(
+        AutomationRule.create(
+            rule_id="rule-blocked",
+            name="Blocked rule",
+            enabled=True,
+            trigger_kind=TRIGGER_KIND_SCHEDULE,
+            trigger={"event_types": ["schedule.fire"]},
+            target_policy=TARGET_POLICY_HUB,
+            target={"repo_id": "repo-1"},
+            executor_kind=EXECUTOR_AGENT_TASK_TURN,
+            executor={
+                "message": "Run direct task",
+                "requested_runtime": {"agent": "codex", "model": "gpt-5.4"},
+                "agent": "codex",
+                "model": "gpt-5.4",
+            },
+        )
+    )
+    event = store.create_event(
+        event_id="event-blocked",
+        event_type="schedule.fire",
+        source="test",
+        target={"rule_id": rule.rule_id},
+        payload={},
+    )
+    store.create_job(
+        job_id="job-blocked",
+        rule_id=rule.rule_id,
+        event_id=event.event_id,
+        state="pending",
+        dedupe_key="dedupe-blocked",
+        target=rule.target,
+        executor=rule.executor,
+        created_at="2026-01-01T00:00:00Z",
+    )
+    store.defer_job_for_concurrency(
+        "job-blocked",
+        blocked_by_job_id="job-running",
+        blocked_reason="max_concurrent_per_target",
+        available_at="2026-01-01T00:02:00Z",
+        now="2026-01-01T00:00:30Z",
+    )
+    store.create_job(
+        job_id="job-policy",
+        rule_id=rule.rule_id,
+        event_id=event.event_id,
+        state="running",
+        dedupe_key="dedupe-policy",
+        target=rule.target,
+        executor=rule.executor,
+        created_at="2026-01-01T00:01:00Z",
+    )
+    store.upsert_child_execution_edge(
+        AutomationChildExecutionEdge.create(
+            parent_job_id="job-policy",
+            child_kind="agent_task",
+            child_id="thread-policy",
+            authoritative_for_parent_completion=True,
+            requested_runtime={"agent": "codex", "model": "gpt-5.4"},
+            actual_runtime={"agent": "opencode", "model": "gpt-5.4"},
+            terminal_state="succeeded",
+            terminal_observed_at="2026-01-01T00:05:00Z",
+        )
+    )
+    client = TestClient(create_hub_app(hub_root))
+
+    response = client.get(f"/hub/automations/{rule.rule_id}")
+
+    assert response.status_code == 200
+    jobs = {job["job_id"]: job for job in response.json()["automation"]["jobs"]}
+    assert jobs["job-blocked"]["blocked_by_job_id"] == "job-running"
+    assert jobs["job-blocked"]["blocked_reason"] == "max_concurrent_per_target"
+    assert jobs["job-blocked"]["effective_state"] == "pending"
+    assert jobs["job-policy"]["effective_state"] == JOB_FAILED
+    assert {
+        violation["code"] for violation in jobs["job-policy"]["policy_violations"]
+    } >= {"AUTOMATION_PARENT_STATE_STALE", "AUTOMATION_RUNTIME_MISMATCH"}
+
+
 def test_hub_automation_jobs_project_pma_coordinator_and_worker_runtime(tmp_path):
     hub_root = tmp_path / "hub"
     seed_hub_files(hub_root, force=True)
@@ -848,6 +941,37 @@ def test_hub_automations_reject_raw_product_updates(tmp_path):
     detail = response.json()["detail"]
     assert detail["code"] == "AUTOMATION_PRODUCT_UNSUPPORTED_RAW_FIELDS"
     assert detail["fields"] == ["executor", "policy"]
+
+
+def test_hub_automations_reject_legacy_product_fields(tmp_path):
+    hub_root = tmp_path / "hub"
+    seed_hub_files(hub_root, force=True)
+    client = TestClient(create_hub_app(hub_root))
+    created = client.post(
+        "/hub/automations",
+        json={"preset": "security_scan_pr", "repo_id": "repo-1", "agent": "codex"},
+    )
+    rule_id = created.json()["automation"]["id"]
+
+    create_response = client.post(
+        "/hub/automations",
+        json={
+            "preset": "security_scan_pr",
+            "repo_id": "repo-1",
+            "agent": "codex",
+            "pma_queue_item_id": "legacy-queue-item",
+        },
+    )
+    update_response = client.patch(
+        f"/hub/automations/{rule_id}",
+        json={"managed_thread_target_id": "legacy-thread"},
+    )
+
+    assert create_response.status_code == 422
+    assert update_response.status_code == 400
+    detail = update_response.json()["detail"]
+    assert detail["code"] == "AUTOMATION_PRODUCT_UNSUPPORTED_RAW_FIELDS"
+    assert detail["fields"] == ["managed_thread_target_id"]
 
 
 def test_hub_automations_project_pma_one_shot_timer(tmp_path):

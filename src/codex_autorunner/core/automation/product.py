@@ -1413,7 +1413,23 @@ def _format_job(job: Any) -> str:
         return "none"
     state = job.get("effective_state") or job.get("state") or "unknown"
     updated_at = job.get("updated_at") or job.get("created_at") or "unknown time"
-    return f"{state} at {updated_at}"
+    details: list[str] = []
+    blocked_reason = job.get("blocked_reason")
+    if blocked_reason:
+        details.append(f"blocked: {blocked_reason}")
+    blocked_by_job_id = job.get("blocked_by_job_id")
+    if blocked_by_job_id:
+        details.append(f"blocked by {blocked_by_job_id}")
+    raw_state = job.get("raw_state") or job.get("state")
+    if raw_state and raw_state != state:
+        details.append(f"raw parent {raw_state}")
+    violations = job.get("policy_violations")
+    if isinstance(violations, list) and violations:
+        first = violations[0] if isinstance(violations[0], dict) else {}
+        code = first.get("code") or "policy violation"
+        details.append(str(code))
+    suffix = f" ({'; '.join(details)})" if details else ""
+    return f"{state} at {updated_at}{suffix}"
 
 
 def _format_target(row: dict[str, Any]) -> str:

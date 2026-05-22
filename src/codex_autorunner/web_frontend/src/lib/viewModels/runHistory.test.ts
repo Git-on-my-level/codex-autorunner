@@ -24,7 +24,17 @@ describe('runHistoryFromAutomationJobs', () => {
         finished_at: '2026-05-17T09:05:00Z',
         error_text: 'Scan failed',
         attempt_count: 2,
-        ticket_flow_worktree_id: 'wt-1'
+        children: [
+          {
+            child_kind: 'ticket_flow',
+            child_id: 'flow-1',
+            requested_runtime: {
+              workspace_scope: {
+                worktree_id: 'wt-1'
+              }
+            }
+          }
+        ]
       }
     ]);
 
@@ -65,8 +75,7 @@ describe('runHistoryFromAutomationJobs', () => {
         child_execution: {
           chat_href: '/chats/thread-target-1',
           target_href: '/worktrees/wt-ignored/tickets'
-        },
-        ticket_flow_worktree_id: 'wt-ignored'
+        }
       }
     ]);
 
@@ -97,5 +106,42 @@ describe('runHistoryFromAutomationJobs', () => {
 
     expect(row.status).toBe('done');
     expect(row.href).toBe('/chats/thread-target-2');
+  });
+
+  it('surfaces durable blocking and raw/effective mismatch diagnostics', () => {
+    const [row] = runHistoryFromAutomationJobs([
+      {
+        job_id: 'job-blocked',
+        state: 'pending',
+        effective_state: 'waiting',
+        raw_state: 'pending',
+        blocked_by_job_id: 'job-running',
+        blocked_reason: 'max_concurrent_per_target',
+        updated_at: '2026-05-17T09:03:00Z'
+      }
+    ]);
+
+    expect(row.status).toBe('waiting');
+    expect(row.summary).toBe('max_concurrent_per_target · blocked by job-running; raw parent pending');
+  });
+
+  it('summarizes policy violations before generic job text', () => {
+    const [row] = runHistoryFromAutomationJobs([
+      {
+        job_id: 'job-policy',
+        state: 'running',
+        effective_state: 'failed',
+        result_summary: 'parent summary',
+        policy_violations: [
+          {
+            code: 'AUTOMATION_RUNTIME_MISMATCH',
+            message: 'Requested agent=codex but child ran opencode.'
+          }
+        ]
+      }
+    ]);
+
+    expect(row.status).toBe('failed');
+    expect(row.summary).toBe('Requested agent=codex but child ran opencode. · raw parent running');
   });
 });

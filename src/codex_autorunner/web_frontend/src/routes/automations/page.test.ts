@@ -83,6 +83,8 @@ describe('/automations page', () => {
     expect(source).toContain('Run with PMA');
     expect(source).toContain('lastJob?.effectiveState');
     expect(source).toContain('raw-state-diagnostic');
+    expect(source).toContain('blocked-state-diagnostic');
+    expect(source).toContain('policy-state-diagnostic');
     expect(source).not.toContain('<dt>Runs as</dt>');
   });
 });
