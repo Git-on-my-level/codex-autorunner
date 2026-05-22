@@ -16,10 +16,15 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Optional
 
 from ...core.logging_utils import log_event
+from ...core.orchestration.compatibility import (
+    CompatibilityEvaluation,
+    SchemaCompatibilityError,
+)
 from ...core.orchestration.managed_thread_delivery import (
     ManagedThreadDeliveryAttemptResult,
     ManagedThreadDeliveryEngine,
@@ -43,6 +48,8 @@ class ManagedThreadDeliveryWorkerStats:
     recovery_sweeps: int = 0
     last_recovery_result: Optional[ManagedThreadDeliveryRecoverySweepResult] = None
     errors: int = 0
+    incompatible_runtime_detected: bool = False
+    last_compatibility: Optional[CompatibilityEvaluation] = None
 
 
 @dataclass
@@ -62,13 +69,16 @@ class ManagedThreadDeliveryWorker:
         adapter: ManagedThreadDeliveryAdapter,
         logger: logging.Logger,
         config: Optional[ManagedThreadDeliveryWorkerConfig] = None,
+        engine_factory: Optional[Callable[[], ManagedThreadDeliveryEngine]] = None,
     ) -> None:
         self._engine = engine
+        self._engine_factory = engine_factory
         self._adapter = adapter
         self._logger = logger
         self._config = config or ManagedThreadDeliveryWorkerConfig()
         self._stats = ManagedThreadDeliveryWorkerStats()
         self._tick_count: int = 0
+        self._parked_for_incompatible_runtime = False
 
     @property
     def stats(self) -> ManagedThreadDeliveryWorkerStats:
@@ -80,10 +90,15 @@ class ManagedThreadDeliveryWorker:
 
     async def run_once(self) -> None:
         """Execute one claim-deliver-record cycle, plus recovery if due."""
+        if self._parked_for_incompatible_runtime:
+            return
         self._tick_count += 1
-        if self._tick_count % self._config.recovery_interval_ticks == 0:
-            await self._run_recovery_sweep()
-        await self._claim_and_deliver_one()
+        try:
+            if self._tick_count % self._config.recovery_interval_ticks == 0:
+                await self._run_recovery_sweep()
+            await self._claim_and_deliver_one()
+        except SchemaCompatibilityError as exc:
+            self._park_incompatible_runtime(exc.evaluation)
 
     async def run_loop(self) -> None:
         """Run the worker loop until cancelled."""
@@ -96,9 +111,11 @@ class ManagedThreadDeliveryWorker:
             recovery_interval_ticks=self._config.recovery_interval_ticks,
         )
         try:
-            while True:
+            while not self._parked_for_incompatible_runtime:
                 try:
                     await self.run_once()
+                    if self._parked_for_incompatible_runtime:
+                        break
                 except asyncio.CancelledError:
                     raise
                 except Exception as exc:
@@ -123,10 +140,12 @@ class ManagedThreadDeliveryWorker:
                 deliveries_retried=self._stats.deliveries_retried,
                 deliveries_abandoned=self._stats.deliveries_abandoned,
                 errors=self._stats.errors,
+                incompatible_runtime_detected=self._stats.incompatible_runtime_detected,
             )
 
     async def _claim_and_deliver_one(self) -> None:
-        claim = self._engine.claim_next_delivery(adapter_key=self._adapter.adapter_key)
+        engine = self._current_engine()
+        claim = engine.claim_next_delivery(adapter_key=self._adapter.adapter_key)
         if claim is None:
             return
         self._stats.claims_processed += 1
@@ -154,7 +173,7 @@ class ManagedThreadDeliveryWorker:
                 )
         except asyncio.CancelledError:
             _record_attempt_safely(
-                self._engine,
+                engine,
                 record.delivery_id,
                 claim.claim_token,
                 ManagedThreadDeliveryAttemptResult(
@@ -165,6 +184,8 @@ class ManagedThreadDeliveryWorker:
                 adapter_key=self._adapter.adapter_key,
             )
             raise
+        except SchemaCompatibilityError:
+            raise
         except Exception as exc:
             result = ManagedThreadDeliveryAttemptResult(
                 outcome=ManagedThreadDeliveryOutcome.FAILED,
@@ -172,7 +193,7 @@ class ManagedThreadDeliveryWorker:
             )
 
         _record_attempt_safely(
-            self._engine,
+            self._current_engine(),
             record.delivery_id,
             claim.claim_token,
             result,
@@ -183,9 +204,11 @@ class ManagedThreadDeliveryWorker:
 
     async def _run_recovery_sweep(self) -> None:
         try:
-            sweep_result = self._engine.recovery_sweep(
+            sweep_result = self._current_engine().recovery_sweep(
                 adapter_key=self._adapter.adapter_key
             )
+        except SchemaCompatibilityError:
+            raise
         except Exception as exc:
             self._stats.errors += 1
             log_event(
@@ -227,6 +250,32 @@ class ManagedThreadDeliveryWorker:
         elif outcome == ManagedThreadDeliveryOutcome.ABANDONED:
             self._stats.deliveries_abandoned += 1
 
+    def _current_engine(self) -> ManagedThreadDeliveryEngine:
+        if self._engine_factory is not None:
+            return self._engine_factory()
+        return self._engine
+
+    def _park_incompatible_runtime(
+        self, compatibility: CompatibilityEvaluation
+    ) -> None:
+        if self._parked_for_incompatible_runtime:
+            return
+        self._parked_for_incompatible_runtime = True
+        self._stats.incompatible_runtime_detected = True
+        self._stats.last_compatibility = compatibility
+        log_event(
+            self._logger,
+            logging.ERROR,
+            "chat.managed_thread.delivery_worker.incompatible_runtime",
+            adapter_key=self._adapter.adapter_key,
+            compatibility=compatibility.to_dict(),
+            observed_schema=compatibility.observed_schema,
+            supported_schema=compatibility.supported_schema,
+            process_role=compatibility.process_role,
+            build_id=compatibility.build_id,
+            restart_required=compatibility.restart_required,
+        )
+
 
 def _record_attempt_safely(
     engine: ManagedThreadDeliveryEngine,
@@ -241,6 +290,8 @@ def _record_attempt_safely(
         engine.record_attempt_result(
             delivery_id, claim_token=claim_token, result=result
         )
+    except SchemaCompatibilityError:
+        raise
     except Exception as exc:
         log_event(
             logger,

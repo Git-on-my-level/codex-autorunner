@@ -1052,9 +1052,13 @@ class DiscordBotService(DiscordInteractionResponseMixin):
                     default_execution_error="execution error",
                 )
 
-        engine = SQLiteManagedThreadDeliveryEngine(self._config.root)
+        def _build_engine() -> SQLiteManagedThreadDeliveryEngine:
+            return SQLiteManagedThreadDeliveryEngine(self._config.root)
+
+        engine = _build_engine()
         return ManagedThreadDeliveryWorker(
             engine=engine,
+            engine_factory=_build_engine,
             adapter=_DiscordDeliveryAdapter(),
             logger=self._logger,
         )
