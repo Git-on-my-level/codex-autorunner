@@ -266,6 +266,26 @@ def test_trim_cumulative_assistant_text_keeps_unrelated_text() -> None:
     assert trim_cumulative_assistant_text(current, previous)[0] == current
 
 
+def test_trim_cumulative_assistant_text_keeps_prior_quoted_infix() -> None:
+    previous = "first answer"
+    current = "To revisit first answer in context, here is the update."
+
+    assert trim_cumulative_assistant_text(current, previous) == (
+        current,
+        "current_turn_final",
+    )
+
+
+def test_trim_cumulative_assistant_text_trims_prior_at_transcript_section() -> None:
+    previous = "second answer"
+    current = "first answer\n\nsecond answer\n\nthird answer"
+
+    assert trim_cumulative_assistant_text(current, previous) == (
+        "third answer",
+        "cumulative_transcript_trimmed",
+    )
+
+
 def test_trim_cumulative_assistant_text_from_candidates_uses_full_transcript_prefix() -> (
     None
 ):

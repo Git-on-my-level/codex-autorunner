@@ -1136,7 +1136,7 @@ class ACPClient:
             )
         if not state.future.done():
             final_output = state.final_output
-            if event.final_output:
+            if event.final_output and event.final_output.strip() != final_output.strip():
                 normalized = state.note_assistant_message(event.final_output)
                 if normalized is not None:
                     self._log_ingress_normalization(state, normalized)

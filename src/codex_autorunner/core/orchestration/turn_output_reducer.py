@@ -120,6 +120,32 @@ def _near_prefix_end(value: str, prefix: str) -> int | None:
     return min(max(block.b + block.size for block in blocks), nominal_prefix_end)
 
 
+def _trim_at_transcript_bounded_prior(
+    current: str,
+    previous_stripped: str,
+) -> tuple[str, TurnOutputScope] | None:
+    """Trim only when prior text appears after a transcript section break.
+
+    Avoids treating mid-sentence quotations of earlier answers as cumulative
+    provider prefixes.
+    """
+
+    if len(previous_stripped) < 8:
+        return None
+    search_start = 1
+    while search_start < len(current):
+        infix_start = current.find(previous_stripped, search_start)
+        if infix_start <= 0:
+            return None
+        prefix = current[:infix_start]
+        if prefix.endswith("\n\n") or not prefix.strip():
+            trimmed = current[infix_start + len(previous_stripped) :].lstrip()
+            if trimmed:
+                return trimmed, "cumulative_transcript_trimmed"
+        search_start = infix_start + 1
+    return None
+
+
 def assistant_text_extends_prefix(assistant_text: str, prefix: str) -> bool:
     current = str(assistant_text or "")
     previous = str(prefix or "")
@@ -176,12 +202,9 @@ def trim_cumulative_assistant_text(
             if trimmed
             else ("", "stale_prior_output")
         )
-    if len(previous_stripped) >= 8:
-        infix_start = current.find(previous_stripped)
-        if infix_start > 0:
-            trimmed = current[infix_start + len(previous_stripped) :].lstrip()
-            if trimmed:
-                return trimmed, "cumulative_transcript_trimmed"
+    bounded = _trim_at_transcript_bounded_prior(current, previous_stripped)
+    if bounded is not None:
+        return bounded
     prefix_end = _whitespace_insensitive_prefix_end(current, previous)
     if prefix_end is None:
         prefix_end = _near_prefix_end(current, previous)
