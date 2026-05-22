@@ -114,6 +114,47 @@ describe('chat detail session', () => {
     expect(clearCommittedDraftPlaceholderIfPersisted(committed, [chat({ id: 'managed-thread-1' })]).committedDraftChat).toBeNull();
   });
 
+  it('keeps a committed draft selected while the detail URL is still catching up', () => {
+    const state = {
+      ...initialChatDetailSessionState(),
+      activeChatId: 'managed-thread-1',
+      detailMode: 'detail' as const,
+      pendingCommittedDetailUrlChatId: 'managed-thread-1'
+    };
+
+    const command = activateChatDetailFromUrl(state, {
+      detailId: null,
+      chats: [chat({ id: 'other' })],
+      hasCachedDetail: () => false,
+      activeDetailLoadResult: () => null
+    });
+
+    expect(command.state.activeChatId).toBe('managed-thread-1');
+    expect(command.state.detailMode).toBe('detail');
+    expect(command.state.pendingCommittedDetailUrlChatId).toBe('managed-thread-1');
+    expect(command.runtime).toBeNull();
+  });
+
+  it('clears the committed draft URL guard once the committed detail route is visible', () => {
+    const state = {
+      ...initialChatDetailSessionState(),
+      activeChatId: 'managed-thread-1',
+      detailMode: 'detail' as const,
+      pendingCommittedDetailUrlChatId: 'managed-thread-1'
+    };
+
+    const command = activateChatDetailFromUrl(state, {
+      detailId: 'managed-thread-1',
+      chats: [chat({ id: 'managed-thread-1' })],
+      hasCachedDetail: () => true,
+      activeDetailLoadResult: () => ({ status: 'cache-hit', tags: [] })
+    });
+
+    expect(command.state.activeChatId).toBe('managed-thread-1');
+    expect(command.state.pendingCommittedDetailUrlChatId).toBeNull();
+    expect(command.runtime).toBeNull();
+  });
+
   it('persists read markers through an injected adapter', () => {
     const saved: Array<Record<string, string>> = [];
     const next = markSessionChatRead(

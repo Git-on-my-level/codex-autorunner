@@ -1195,13 +1195,7 @@
   }
 
   async function syncCommittedDetailUrl(detailId: string): Promise<void> {
-    try {
-      await syncDetailUrl(detailId);
-    } finally {
-      if (pendingCommittedDetailUrlChatId === detailId) {
-        pendingCommittedDetailUrlChatId = null;
-      }
-    }
+    await syncDetailUrl(detailId);
   }
 
   async function refreshActive(chatId: string, options: { quiet?: boolean } = {}): Promise<void> {
