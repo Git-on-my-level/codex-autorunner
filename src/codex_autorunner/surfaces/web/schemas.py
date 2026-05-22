@@ -800,6 +800,7 @@ class SystemHealthResponse(ResponseModel):
     hub_startup_phase: Optional[str] = None
     hub_deferred_startup_complete: Optional[bool] = None
     orchestration: Optional[OrchestrationHealthPayload] = None
+    compatibility: Optional[Dict[str, Any]] = None
 
 
 class SystemUpdateResponse(ResponseModel):

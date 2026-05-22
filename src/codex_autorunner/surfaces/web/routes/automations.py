@@ -191,6 +191,8 @@ def build_automation_routes(context: HubAppContext) -> APIRouter:
             raise HTTPException(
                 status_code=404, detail=f"Automation not found: {rule_id}"
             ) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     @router.delete("/hub/automations/{rule_id}")
     async def delete_automation(rule_id: str) -> dict[str, Any]:

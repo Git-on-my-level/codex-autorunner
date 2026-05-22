@@ -27,6 +27,10 @@ from codex_autorunner.core.orchestration import (
     SQLiteManagedThreadDeliveryEngine,
     initialize_orchestration_sqlite,
 )
+from codex_autorunner.core.orchestration.compatibility import (
+    CompatibilityEvaluation,
+    SchemaCompatibilityError,
+)
 from codex_autorunner.core.orchestration.managed_thread_delivery import (
     ManagedThreadDeliveryEnvelope,
     ManagedThreadDeliveryIntent,
@@ -144,6 +148,41 @@ class _RecordingAdapter:
         )
         self._call_index += 1
         return ManagedThreadDeliveryAttemptResult(outcome=outcome)
+
+
+class _IncompatibleEngine:
+    def __init__(self) -> None:
+        self.claim_calls = 0
+        self.evaluation = CompatibilityEvaluation(
+            status="incompatible_schema",
+            observed_schema=999,
+            supported_schema=1,
+            process_role="discord",
+            build_id="test-build",
+            restart_required=True,
+            reason="test schema mismatch",
+        )
+
+    def claim_next_delivery(self, *, adapter_key: str, now: Any = None) -> None:
+        _ = adapter_key, now
+        self.claim_calls += 1
+        raise SchemaCompatibilityError(self.evaluation)
+
+    def recovery_sweep(self, *, adapter_key: str, now: Any = None) -> None:
+        _ = adapter_key, now
+        raise SchemaCompatibilityError(self.evaluation)
+
+
+class _IncompatibleAdapter(_RecordingAdapter):
+    def __init__(self, evaluation: CompatibilityEvaluation) -> None:
+        super().__init__()
+        self._evaluation = evaluation
+
+    async def deliver_managed_thread_record(
+        self, record: Any, *, claim: Any
+    ) -> ManagedThreadDeliveryAttemptResult:
+        _ = record, claim
+        raise SchemaCompatibilityError(self._evaluation)
 
 
 @pytest.mark.anyio
@@ -328,6 +367,73 @@ async def test_worker_loop_cancels_cleanly(tmp_path: Path) -> None:
         await task
 
     assert worker.stats.errors == 0
+
+
+@pytest.mark.anyio
+async def test_worker_parks_on_incompatible_schema(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    engine = _IncompatibleEngine()
+    adapter = _RecordingAdapter()
+    events: list[dict[str, Any]] = []
+
+    def _capture_log_event(logger: Any, level: int, event: str, **fields: Any) -> None:
+        _ = logger, level
+        events.append({"event": event, **fields})
+
+    monkeypatch.setattr(
+        "codex_autorunner.adapters.chat.managed_thread_delivery_worker.log_event",
+        _capture_log_event,
+    )
+    worker = ManagedThreadDeliveryWorker(
+        engine=engine,
+        adapter=adapter,
+        logger=logging.getLogger("test"),
+    )
+
+    await worker.run_once()
+    await worker.run_once()
+
+    assert worker.stats.incompatible_runtime_detected is True
+    assert worker.stats.last_compatibility == engine.evaluation
+    assert worker.stats.errors == 0
+    assert engine.claim_calls == 1
+    incompatible_events = [
+        event
+        for event in events
+        if event["event"] == "chat.managed_thread.delivery_worker.incompatible_runtime"
+    ]
+    assert len(incompatible_events) == 1
+    assert incompatible_events[0]["observed_schema"] == 999
+    assert incompatible_events[0]["supported_schema"] == 1
+
+
+@pytest.mark.anyio
+async def test_worker_parks_when_adapter_hits_incompatible_schema(
+    tmp_path: Path,
+) -> None:
+    engine = _make_engine(tmp_path)
+    _register_pending(engine)
+    evaluation = CompatibilityEvaluation(
+        status="incompatible_schema",
+        observed_schema=7,
+        supported_schema=6,
+        process_role="telegram",
+        build_id="test-build",
+        restart_required=True,
+    )
+    worker = ManagedThreadDeliveryWorker(
+        engine=engine,
+        adapter=_IncompatibleAdapter(evaluation),
+        logger=logging.getLogger("test"),
+    )
+
+    await worker.run_once()
+
+    assert worker.stats.incompatible_runtime_detected is True
+    assert worker.stats.last_compatibility == evaluation
+    assert worker.stats.deliveries_failed == 0
+    assert worker.stats.deliveries_retried == 0
 
 
 @pytest.mark.anyio

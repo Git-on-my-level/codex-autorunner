@@ -1,7 +1,11 @@
 from __future__ import annotations
 
+import json
 import sqlite3
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+
+import pytest
 
 from codex_autorunner.core.orchestration import (
     ORCHESTRATION_DB_FILENAME,
@@ -10,9 +14,17 @@ from codex_autorunner.core.orchestration import (
     list_orchestration_table_definitions,
     resolve_orchestration_sqlite_path,
 )
+from codex_autorunner.core.orchestration.compatibility import (
+    CompatibilityRegistry,
+    ProcessCompatibilityDeclaration,
+)
 from codex_autorunner.core.orchestration.sqlite import (
+    OrchestrationCompatibilityMetadata,
+    OrchestrationMigrationRefused,
     open_orchestration_sqlite,
+    prepare_orchestration_sqlite,
     read_orchestration_compatibility_metadata,
+    resolve_orchestration_compatibility_metadata_path,
 )
 from codex_autorunner.core.state_roots import (
     resolve_hub_orchestration_db_path,
@@ -30,6 +42,81 @@ def _table_names(conn: sqlite3.Connection) -> set[str]:
 def _column_names(conn: sqlite3.Connection, table_name: str) -> set[str]:
     rows = conn.execute(f"PRAGMA table_info({table_name})").fetchall()
     return {str(row["name"]) for row in rows}
+
+
+def _write_metadata(
+    hub_root: Path,
+    *,
+    schema_generation: int,
+    declarations: tuple[ProcessCompatibilityDeclaration, ...],
+) -> None:
+    path = resolve_orchestration_compatibility_metadata_path(hub_root)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    metadata = OrchestrationCompatibilityMetadata(
+        schema_generation=schema_generation,
+        prepared_at="2026-05-22T00:00:00Z",
+        db_path=str(resolve_orchestration_sqlite_path(hub_root)),
+        registry=CompatibilityRegistry(
+            declarations=declarations,
+            updated_at="2026-05-22T00:00:00Z",
+        ),
+    )
+    path.write_text(json.dumps(metadata.to_dict(), indent=2) + "\n", encoding="utf-8")
+
+
+def _hub_declaration(
+    *,
+    process_id: str = "hub-old",
+    pid: int = 100,
+    supported_schema: int = ORCHESTRATION_SCHEMA_VERSION - 1,
+    expires_at: str = "2999-01-01T00:00:00Z",
+) -> ProcessCompatibilityDeclaration:
+    return ProcessCompatibilityDeclaration(
+        process_id=process_id,
+        role="hub",
+        pid=pid,
+        process_start_time=10.0,
+        build_id="old-hub",
+        unknown_build_reason=None,
+        writer_identity="host:100:hub-old",
+        supported_control_plane_api_version="1.0.0",
+        max_supported_schema_generation=supported_schema,
+        observed_schema_generation=supported_schema,
+        heartbeat_at="2026-05-22T00:00:00Z",
+        expires_at=expires_at,
+        ttl_seconds=120,
+    )
+
+
+def _mark_db_at_previous_generation(hub_root: Path) -> None:
+    initialize_orchestration_sqlite(hub_root, durable=False)
+    with sqlite3.connect(resolve_orchestration_sqlite_path(hub_root)) as conn:
+        conn.execute(
+            "DELETE FROM orch_schema_migrations WHERE version = ?",
+            (ORCHESTRATION_SCHEMA_VERSION,),
+        )
+
+
+def _schema_generation(hub_root: Path) -> int:
+    with sqlite3.connect(resolve_orchestration_sqlite_path(hub_root)) as conn:
+        row = conn.execute(
+            "SELECT COALESCE(MAX(version), 0) FROM orch_schema_migrations"
+        ).fetchone()
+    return int(row[0] or 0)
+
+
+def _migration_run_count(hub_root: Path) -> int:
+    with sqlite3.connect(resolve_orchestration_sqlite_path(hub_root)) as conn:
+        row = conn.execute(
+            """
+            SELECT COUNT(*)
+              FROM orch_migration_runs
+             WHERE from_version = ?
+               AND target_version = ?
+            """,
+            (ORCHESTRATION_SCHEMA_VERSION - 1, ORCHESTRATION_SCHEMA_VERSION),
+        ).fetchone()
+    return int(row[0] or 0)
 
 
 def test_orchestration_sqlite_path_uses_hub_state_root(tmp_path: Path) -> None:
@@ -209,6 +296,128 @@ def test_open_without_migrate_does_not_prepare_schema(tmp_path: Path) -> None:
 
     assert "orch_schema_migrations" not in names
     assert read_orchestration_compatibility_metadata(hub_root) is None
+
+
+def test_worker_migration_refuses_to_advance_past_live_hub_schema(
+    tmp_path: Path,
+) -> None:
+    hub_root = tmp_path / "hub"
+    old_schema = ORCHESTRATION_SCHEMA_VERSION - 1
+    _mark_db_at_previous_generation(hub_root)
+    _write_metadata(
+        hub_root,
+        schema_generation=old_schema,
+        declarations=(_hub_declaration(supported_schema=old_schema),),
+    )
+
+    with pytest.raises(OrchestrationMigrationRefused) as raised:
+        with open_orchestration_sqlite(
+            hub_root,
+            durable=False,
+            migrate=True,
+            migration_mode="worker",
+            process_role="worker",
+            pid_start_time_matches=lambda _pid, _start: True,
+        ):
+            pass
+
+    assert _schema_generation(hub_root) == old_schema
+    assert raised.value.refusal.current_schema == old_schema
+    assert raised.value.refusal.target_schema == ORCHESTRATION_SCHEMA_VERSION
+    assert raised.value.refusal.hub_supported_schema == old_schema
+    assert raised.value.evaluation.status == "restart_required"
+
+
+def test_worker_prepare_refuses_to_advance_past_live_hub_schema(
+    tmp_path: Path,
+) -> None:
+    hub_root = tmp_path / "hub"
+    old_schema = ORCHESTRATION_SCHEMA_VERSION - 1
+    _mark_db_at_previous_generation(hub_root)
+    _write_metadata(
+        hub_root,
+        schema_generation=old_schema,
+        declarations=(_hub_declaration(supported_schema=old_schema),),
+    )
+
+    with pytest.raises(OrchestrationMigrationRefused):
+        prepare_orchestration_sqlite(
+            hub_root,
+            durable=False,
+            process_role="worker",
+            migration_mode="worker",
+        )
+
+    assert _schema_generation(hub_root) == old_schema
+
+
+def test_hub_migration_can_advance_under_owned_mode(tmp_path: Path) -> None:
+    hub_root = tmp_path / "hub"
+    _mark_db_at_previous_generation(hub_root)
+
+    with open_orchestration_sqlite(
+        hub_root,
+        durable=False,
+        migrate=True,
+        migration_mode="hub",
+        process_role="hub",
+    ) as conn:
+        assert _table_names(conn)
+
+    assert _schema_generation(hub_root) == ORCHESTRATION_SCHEMA_VERSION
+
+
+def test_worker_bootstrap_ignores_stale_or_reused_hub_declarations(
+    tmp_path: Path,
+) -> None:
+    hub_root = tmp_path / "hub"
+    _write_metadata(
+        hub_root,
+        schema_generation=0,
+        declarations=(
+            _hub_declaration(process_id="expired", expires_at="2020-01-01T00:00:00Z"),
+            _hub_declaration(process_id="reused", pid=200),
+        ),
+    )
+
+    with open_orchestration_sqlite(
+        hub_root,
+        durable=False,
+        migrate=True,
+        migration_mode="worker",
+        process_role="worker",
+        pid_start_time_matches=lambda pid, _start: pid != 200,
+    ) as conn:
+        assert "orch_schema_migrations" in _table_names(conn)
+
+    assert _schema_generation(hub_root) == ORCHESTRATION_SCHEMA_VERSION
+
+
+def test_concurrent_hub_migrate_callers_serialize_schema_advancement(
+    tmp_path: Path,
+) -> None:
+    hub_root = tmp_path / "hub"
+    _mark_db_at_previous_generation(hub_root)
+
+    def migrate() -> int:
+        with open_orchestration_sqlite(
+            hub_root,
+            durable=False,
+            migrate=True,
+            migration_mode="hub",
+            process_role="hub",
+        ):
+            return _schema_generation(hub_root)
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = tuple(pool.map(lambda _: migrate(), range(2)))
+
+    assert results == (
+        ORCHESTRATION_SCHEMA_VERSION,
+        ORCHESTRATION_SCHEMA_VERSION,
+    )
+    assert _schema_generation(hub_root) == ORCHESTRATION_SCHEMA_VERSION
+    assert _migration_run_count(hub_root) == 1
 
 
 def test_table_definition_roles_cover_authoritative_mirror_projection_and_ops() -> None:

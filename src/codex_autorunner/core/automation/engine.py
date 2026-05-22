@@ -8,6 +8,7 @@ from typing import Any, Mapping, Optional
 from ..text_utils import _json_dumps
 from ..time_utils import now_iso
 from .models import (
+    EXECUTOR_KINDS,
     TRIGGER_KIND_EVENT,
     TRIGGER_KIND_SCHEDULE,
     AutomationEvent,
@@ -22,6 +23,7 @@ _TEMPLATE_RE = re.compile(r"{{\s*([A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z0-9_]+)*)\s*
 _ALLOWED_TEMPLATE_ROOTS = frozenset(
     {"event", "repo", "target", "pr", "schedule", "job", "metadata"}
 )
+_NON_EXECUTABLE_ERROR_CODE = "AUTOMATION_EXECUTOR_KIND_UNSUPPORTED"
 
 
 @dataclass(frozen=True)
@@ -31,6 +33,32 @@ class RuleEvaluationResult:
     jobs_created: int
     jobs_deduped: int
     jobs_skipped: int = 0
+    skipped_reasons: tuple[dict[str, Any], ...] = ()
+
+
+class AutomationRuleNonExecutableError(ValueError):
+    def __init__(self, rule: AutomationRule) -> None:
+        self.code = _NON_EXECUTABLE_ERROR_CODE
+        self.rule_id = rule.rule_id
+        self.executor_kind = rule.executor_kind
+        super().__init__(
+            f"{self.code}: automation rule {rule.rule_id} uses unsupported "
+            f"executor_kind: {rule.executor_kind}"
+        )
+
+
+def automation_rule_executable(rule: AutomationRule) -> bool:
+    return bool(rule.executable) and rule.executor_kind in EXECUTOR_KINDS
+
+
+def _non_executable_reason(rule: AutomationRule) -> dict[str, Any]:
+    return {
+        "code": _NON_EXECUTABLE_ERROR_CODE,
+        "rule_id": rule.rule_id,
+        "executor_kind": rule.executor_kind,
+        "known_executor": bool(rule.known_executor),
+        "executable": False,
+    }
 
 
 def _dig(context: Mapping[str, Any], path: str) -> Any:
@@ -80,25 +108,34 @@ class AutomationRuleEngine:
         created = 0
         deduped = 0
         skipped = 0
+        skipped_reasons: list[dict[str, Any]] = []
         for rule in self._store.list_rules(enabled=True):
             if not self.matches_event(rule, event):
                 continue
             matched += 1
+            if not automation_rule_executable(rule):
+                skipped += 1
+                skipped_reasons.append(_non_executable_reason(rule))
+                continue
             rule_result = self.enqueue_job_for_rule(rule, event)
             created += rule_result.jobs_created
             deduped += rule_result.jobs_deduped
             skipped += rule_result.jobs_skipped
+            skipped_reasons.extend(rule_result.skipped_reasons)
         return RuleEvaluationResult(
             event=event,
             matched_rules=matched,
             jobs_created=created,
             jobs_deduped=deduped,
             jobs_skipped=skipped,
+            skipped_reasons=tuple(skipped_reasons),
         )
 
     def enqueue_job_for_rule(
         self, rule: AutomationRule, event: AutomationEvent
     ) -> RuleEvaluationResult:
+        if not automation_rule_executable(rule):
+            raise AutomationRuleNonExecutableError(rule)
         job = self._job_for_rule(rule, event)
         if self._blocked_by_policy(rule, event, job):
             return RuleEvaluationResult(
@@ -120,6 +157,8 @@ class AutomationRuleEngine:
     def job_for_rule(
         self, rule: AutomationRule, event: AutomationEvent
     ) -> AutomationJob:
+        if not automation_rule_executable(rule):
+            raise AutomationRuleNonExecutableError(rule)
         return self._job_for_rule(rule, event)
 
     def matches_event(self, rule: AutomationRule, event: AutomationEvent) -> bool:

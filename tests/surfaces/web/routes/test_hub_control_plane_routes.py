@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sqlite3
 from pathlib import Path
 
 import httpx
@@ -38,7 +39,11 @@ from codex_autorunner.core.managed_thread_store import (
     prepare_managed_thread_store,
 )
 from codex_autorunner.core.orchestration import TurnExecutionRequest
-from codex_autorunner.core.orchestration.sqlite import prepare_orchestration_sqlite
+from codex_autorunner.core.orchestration.migrations import ORCHESTRATION_SCHEMA_VERSION
+from codex_autorunner.core.orchestration.sqlite import (
+    prepare_orchestration_sqlite,
+    resolve_orchestration_sqlite_path,
+)
 from codex_autorunner.core.pma_notification_store import PmaNotificationStore
 from codex_autorunner.core.ports.run_event import Completed, Started
 from codex_autorunner.surfaces.web.routes.hub_control_plane import (
@@ -137,6 +142,36 @@ def test_hub_control_plane_routes_return_typed_validation_errors(
     assert response.status_code == 400
     assert response.json()["error"]["code"] == "hub_rejected"
     assert "client_name is required" in response.json()["error"]["message"]
+
+
+def test_hub_control_plane_routes_return_typed_compatibility_error(
+    tmp_path: Path,
+) -> None:
+    app, _thread_target_id = _build_test_app(tmp_path)
+    hub_root = tmp_path / "hub"
+    with sqlite3.connect(resolve_orchestration_sqlite_path(hub_root)) as conn:
+        conn.execute(
+            "INSERT OR REPLACE INTO orch_schema_migrations(version, name, applied_at) VALUES (?, ?, ?)",
+            (ORCHESTRATION_SCHEMA_VERSION + 1, "future", "2026-05-22T00:00:00Z"),
+        )
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/hub/api/control-plane/handshake",
+            json={"client_name": "discord", "client_api_version": "1.0.0"},
+        )
+
+    payload = response.json()
+    assert response.status_code == 409
+    assert payload["error"]["code"] == "hub_incompatible"
+    assert payload["compatibility"]["status"] == "incompatible_schema"
+    assert payload["compatibility"]["observed_schema"] == (
+        ORCHESTRATION_SCHEMA_VERSION + 1
+    )
+    assert payload["compatibility"]["supported_schema"] == ORCHESTRATION_SCHEMA_VERSION
+    assert payload["compatibility"]["process_role"] == "hub"
+    assert payload["compatibility"]["build_id"]
+    assert payload["compatibility"]["restart_required"] is True
 
 
 def test_hub_control_plane_list_surface_bindings_route_validates_limit(

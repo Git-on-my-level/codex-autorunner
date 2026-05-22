@@ -395,7 +395,7 @@ class TestScmPollingWatchShape:
         )
         assert reactivated.state.value == "active"
 
-    def test_watch_upsert_rejects_terminal_reactivation(self, tmp_path: Path) -> None:
+    def test_watch_upsert_repairs_expired_watch(self, tmp_path: Path) -> None:
         store = ScmPollingWatchStore(tmp_path)
         binding = PrBindingStore(tmp_path).upsert_binding(
             provider="github",
@@ -414,17 +414,25 @@ class TestScmPollingWatchShape:
             expires_at="2026-04-01T11:00:00Z",
         )
         store.close_watch(watch_id=first.watch_id, state="expired")
-        with pytest.raises(RuntimeError, match="invalid SCM polling watch"):
-            store.upsert_watch(
-                provider="github",
-                binding_id=binding.binding_id,
-                repo_slug="acme/widgets",
-                pr_number=17,
-                workspace_root=str(tmp_path / "repo"),
-                poll_interval_seconds=60,
-                next_poll_at="2026-04-01T10:02:00Z",
-                expires_at="2026-04-01T12:00:00Z",
-            )
+        repaired = store.upsert_watch(
+            provider="github",
+            binding_id=binding.binding_id,
+            repo_slug="acme/widgets",
+            pr_number=17,
+            workspace_root=str(tmp_path / "repo"),
+            poll_interval_seconds=60,
+            next_poll_at="2026-04-01T10:02:00Z",
+            expires_at="2026-04-01T12:00:00Z",
+        )
+
+        assert repaired.watch_id != first.watch_id
+        assert repaired.state == "active"
+        assert repaired.poll_interval_seconds == 60
+        assert repaired.last_error_text == "recreated expired SCM polling watch"
+        assert repaired.snapshot["watch_repair"]["action"] == (
+            "recreated_expired_watch"
+        )
+        assert repaired.snapshot["watch_repair"]["previous_watch_id"] == first.watch_id
 
     def test_watch_terminal_state_rejects_different_close_transition(
         self, tmp_path: Path

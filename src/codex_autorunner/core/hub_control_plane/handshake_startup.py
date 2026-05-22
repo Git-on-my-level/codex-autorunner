@@ -19,6 +19,31 @@ from .models import (
 _STARTUP_RETRY_JITTER_RATIO = 0.1
 
 
+def _compatibility_from_hub_incompatible_error(
+    exc: HubControlPlaneError,
+    *,
+    client_api_version: str,
+    expected_schema_generation: int,
+) -> HandshakeCompatibility | None:
+    payload = exc.details.get("compatibility")
+    if not isinstance(payload, dict):
+        return None
+    observed_schema = payload.get("observed_schema")
+    try:
+        server_schema_generation = (
+            int(observed_schema) if observed_schema is not None else None
+        )
+    except (TypeError, ValueError):
+        server_schema_generation = None
+    return HandshakeCompatibility(
+        state="incompatible",
+        reason=str(payload.get("reason") or str(exc)),
+        client_api_version=client_api_version,
+        server_schema_generation=server_schema_generation,
+        expected_schema_generation=expected_schema_generation,
+    )
+
+
 def _jittered_retry_delay(delay_seconds: float) -> float:
     normalized_delay = max(delay_seconds, 0.0)
     if normalized_delay == 0.0:
@@ -93,6 +118,36 @@ async def perform_startup_hub_handshake(
             )
             return False, compatibility
         except HubControlPlaneError as exc:
+            if exc.code == "hub_incompatible":
+                error_compatibility = _compatibility_from_hub_incompatible_error(
+                    exc,
+                    client_api_version=client_api_version,
+                    expected_schema_generation=expected_schema_generation,
+                )
+                log_event(
+                    logger,
+                    logging.ERROR,
+                    f"{log_event_name_prefix}.hub_control_plane.handshake_incompatible",
+                    hub_root=hub_root_str,
+                    reason=(
+                        error_compatibility.reason
+                        if error_compatibility is not None
+                        else str(exc)
+                    ),
+                    server_api_version=(
+                        error_compatibility.server_api_version
+                        if error_compatibility is not None
+                        else None
+                    ),
+                    client_api_version=client_api_version,
+                    server_schema_generation=(
+                        error_compatibility.server_schema_generation
+                        if error_compatibility is not None
+                        else None
+                    ),
+                    expected_schema_generation=expected_schema_generation,
+                )
+                return False, error_compatibility
             should_retry = (
                 startup_retry_deadline is not None
                 and exc.retryable

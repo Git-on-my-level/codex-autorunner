@@ -18,6 +18,7 @@ from codex_autorunner.core.automation.models import (
     TRIGGER_KIND_EVENT,
     TRIGGER_KIND_SCHEDULE,
 )
+from codex_autorunner.core.orchestration.sqlite import open_orchestration_sqlite
 
 
 def _schedule_rule(rule_id="rule-1") -> AutomationRule:
@@ -91,6 +92,45 @@ def test_due_schedule_rule_uses_schedule_fire_event_path(tmp_path) -> None:
     assert job.event_id.startswith("schedule.fire:schedule-1:")
     assert job.target["repo_id"] == "repo-1"
     assert job.executor["message"] == "Fire daily-rule"
+
+
+def test_due_schedule_reports_unknown_executor_skip_reason(tmp_path) -> None:
+    store = AutomationStore(tmp_path)
+    store.upsert_rule(_schedule_rule())
+    store.upsert_schedule(
+        AutomationSchedule.create(
+            schedule_id="schedule-1",
+            rule_id="rule-1",
+            schedule_kind=SCHEDULE_ONE_SHOT,
+            next_fire_at="2026-01-01T00:00:00Z",
+        )
+    )
+    with open_orchestration_sqlite(tmp_path) as conn:
+        with conn:
+            conn.execute(
+                """
+                UPDATE orch_automation_rules
+                   SET executor_kind = ?,
+                       executor_json = ?
+                 WHERE rule_id = ?
+                """,
+                (
+                    "pma_operator_turn",
+                    '{"kind":"pma_operator_turn"}',
+                    "rule-1",
+                ),
+            )
+
+    result = AutomationScheduler(
+        AutomationStore(tmp_path),
+        AutomationRuleEngine(AutomationStore(tmp_path)),
+    ).process_due(now="2026-01-01T00:00:00Z")
+
+    assert result.schedules_fired == 1
+    assert result.jobs_created == 0
+    assert result.jobs_skipped == 1
+    assert result.skipped_reasons[0]["code"] == "AUTOMATION_EXECUTOR_KIND_UNSUPPORTED"
+    assert result.skipped_reasons[0]["executor_kind"] == "pma_operator_turn"
 
 
 def test_interval_daily_and_weekly_next_fire_calculation() -> None:

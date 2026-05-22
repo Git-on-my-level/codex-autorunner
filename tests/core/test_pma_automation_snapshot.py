@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from types import SimpleNamespace
 
 from codex_autorunner.core.automation import (
@@ -15,6 +16,7 @@ from codex_autorunner.core.automation.models import (
     TARGET_POLICY_HUB,
     TRIGGER_KIND_EVENT,
 )
+from codex_autorunner.core.orchestration.sqlite import open_orchestration_sqlite
 from codex_autorunner.core.pma_automation_snapshot import snapshot_pma_automation
 
 
@@ -96,3 +98,40 @@ def test_snapshot_pma_automation_includes_unified_read_model(tmp_path) -> None:
     assert snapshot["schedules"]["sample"][0]["schedule_id"] == "schedule-1"
     assert snapshot["jobs"]["pending_count"] == 1
     assert snapshot["jobs"]["recent_sample"][0]["job_id"] == "job-1"
+
+
+def test_snapshot_pma_automation_tolerates_unknown_executor_kind(tmp_path) -> None:
+    store = AutomationStore(tmp_path)
+    store.upsert_rule(
+        AutomationRule.create(
+            rule_id="rule-unknown",
+            name="Future automation",
+            trigger_kind=TRIGGER_KIND_EVENT,
+            trigger={"event_types": ["lifecycle.flow_completed"]},
+            target_policy=TARGET_POLICY_HUB,
+            executor_kind=EXECUTOR_MANAGED_THREAD_TURN,
+        )
+    )
+    with open_orchestration_sqlite(tmp_path) as conn:
+        with conn:
+            conn.execute(
+                """
+                UPDATE orch_automation_rules
+                   SET executor_kind = ?,
+                       executor_json = ?
+                 WHERE rule_id = ?
+                """,
+                (
+                    "pma_operator_turn",
+                    json.dumps({"kind": "pma_operator_turn", "prompt": "Future"}),
+                    "rule-unknown",
+                ),
+            )
+    supervisor = SimpleNamespace(hub_config=SimpleNamespace(root=tmp_path))
+
+    snapshot = snapshot_pma_automation(supervisor, max_items=10)
+
+    assert snapshot["rules"]["enabled_count"] == 1
+    assert snapshot["rules"]["sample"][0]["executor_kind"] == "pma_operator_turn"
+    assert snapshot["rules"]["sample"][0]["known_executor"] is False
+    assert snapshot["rules"]["sample"][0]["executable"] is False

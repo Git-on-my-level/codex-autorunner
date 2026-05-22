@@ -33,6 +33,15 @@ class AutomationExecutor(Protocol):
     def execute(self, job: AutomationJob) -> AutomationExecutorResult: ...
 
 
+class AutomationExecutorUnavailableError(RuntimeError):
+    def __init__(self, kind: str) -> None:
+        self.code = "AUTOMATION_EXECUTOR_KIND_UNSUPPORTED"
+        self.executor_kind = str(kind or "").strip()
+        super().__init__(
+            f"{self.code}: automation executor is not registered: {self.executor_kind}"
+        )
+
+
 class AutomationExecutorRegistry:
     def __init__(self) -> None:
         self._executors: dict[str, AutomationExecutor] = {}
@@ -46,7 +55,7 @@ class AutomationExecutorRegistry:
     def get(self, kind: str) -> AutomationExecutor:
         text = str(kind or "").strip()
         if text not in self._executors:
-            raise KeyError(f"automation executor is not registered: {text}")
+            raise AutomationExecutorUnavailableError(text)
         return self._executors[text]
 
 
@@ -171,6 +180,28 @@ class AutomationJobWorker:
                         error_text=result.summary if status == JOB_FAILED else None,
                         executor_result=result.data,
                         execution_refs=result.execution_refs,
+                    )
+                )
+            except AutomationExecutorUnavailableError as exc:
+                error = str(exc)
+                self._store.fail_job(
+                    running.job_id, error_text=error, dead_letter=True, now=stamp
+                )
+                failed += 1
+                dead += 1
+                self._store.record_attempt(
+                    AutomationJobAttempt.create(
+                        job_id=running.job_id,
+                        attempt_number=running.attempt_count,
+                        status=JOB_DEAD_LETTERED,
+                        started_at=attempt_started_at,
+                        finished_at=stamp,
+                        error_text=error,
+                        executor_result={
+                            "code": exc.code,
+                            "executor_kind": exc.executor_kind,
+                            "executable": False,
+                        },
                     )
                 )
             except Exception as exc:
