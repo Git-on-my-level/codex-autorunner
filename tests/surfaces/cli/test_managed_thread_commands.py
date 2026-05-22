@@ -3215,5 +3215,5 @@ def test_pma_cli_thread_spawn_rejects_invalid_context_profile(
 
     assert result.exit_code == 1
     assert "--context-profile must be one of: car_core, car_ambient, none" in (
-        result.stdout
+        result.output
     )

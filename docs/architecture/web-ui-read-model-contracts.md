@@ -170,6 +170,53 @@ new Web Hub code should consume the contract routes and `mapReadModelContract`.
 Live PMA streaming still flows through **`/hub/chat/events`** and **`/hub/chat/patches`**
 until a read-model SSE family ships.
 
+## Chat Facet Contract
+
+Chat-index classification is backend-owned. `ChatIndexRow.facets` carries the
+canonical row-level facets, `ChatIndexSnapshot.facetCounts` carries backend
+projection counts for the full matching query scope, and `ChatFacetRequest`
+describes compound facet windows. Within one request field, selected values are
+ORed; across fields they are ANDed. Counts must be computed from backend
+projection state, not from the first loaded page of `rows`.
+
+Primary chat categories are intentionally small:
+
+- `regular`: ordinary user-owned chats without a more specific primary bucket.
+- `ticket_run`: ticket-flow chats and grouped run children.
+- `automation`: chats created or driven by automation rules/jobs.
+- `system`: system/recovery/lifecycle operational chats that should not look
+  like user conversation threads.
+
+Execution purpose is represented by `facets.turnKinds`, using canonical
+`TurnExecutionRequestKind` values: `message`, `review`, `automation`,
+`publish`, `recovery`, and `lifecycle`. Execution origin is represented by
+`facets.originKinds`, using canonical `TurnExecutionOrigin.kind` values:
+`surface`, `automation`, `publish`, `recovery`, and `system`. This is why
+`review`, `publish`, `recovery`, and `lifecycle` are facets rather than primary
+chat-list buckets.
+
+Canonical user-visible chat transports are `pma`, `discord`, `telegram`, and
+`notification`. `notification` is a durable reply-context pseudo-surface and is
+counted as a transport facet when it is the visible delivery context. Runtime
+entrypoints and implementation mechanisms are not peer chat transports:
+`web`, `cli`, `file_chat`, and `app_server` identify how work entered or moved
+inside CAR rather than where the user receives chat. `diagnostic` is also not a
+chat purpose; diagnostic data remains under `debug` and must not drive primary
+classification.
+
+Facet scope and agent fields are orthogonal:
+
+- `scopeKind`: `hub`, `repo`, `worktree`, or `filesystem`, with `scopeId` when
+  a stable identifier exists.
+- `agentKind`: `pma` or `coding_agent`.
+
+The same row can therefore be both `automation` and `discord`, or `ticket_run`
+and `worktree`, without the frontend re-deriving those facts from raw metadata.
+New chat-list facets should be added in the backend projection first
+(`core/orchestration/chat_surface_read_model.py`, the web read-model contracts,
+and route contract tests), then rendered from `ChatIndexRow.facets` and
+`ChatIndexSnapshot.facetCounts`; raw/debug payloads are for diagnostics only.
+
 ## Pagination Semantics
 
 Every unbounded list is represented by `PageWindow`:

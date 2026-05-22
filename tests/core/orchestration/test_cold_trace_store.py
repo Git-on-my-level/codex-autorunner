@@ -451,14 +451,12 @@ class TestExecutionCheckpoint:
         )
         with open_orchestration_sqlite(store._hub_root) as conn:
             with conn:
-                conn.execute(
-                    """
+                conn.execute("""
                     UPDATE orch_execution_checkpoints
                        SET updated_at = '2026-04-12T00:00:00Z',
                            created_at = '2026-04-12T00:00:00Z'
                      WHERE thread_target_id = 'thread-tie'
-                    """
-                )
+                    """)
 
         loaded = store.load_latest_checkpoint_for_thread("thread-tie")
         assert loaded is not None

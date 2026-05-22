@@ -1,7 +1,9 @@
 import { mapResult, webApi, type ApiResult, type WebApiClient } from '$lib/api/client';
 import type { TicketSummary } from '$lib/viewModels/domain';
 import {
+  normalizeChatFacetRequest,
   mapReadModelContract,
+  type ChatFacetRequest,
   type ChatDetailSnapshot,
   type ChatIndexSnapshot,
   type RepoWorktreeDetailSnapshot,
@@ -15,6 +17,7 @@ type JsonRecord = Record<string, unknown>;
 export type ChatIndexRequest = {
   filter?: ChatIndexSnapshot['filter'];
   query?: string | null;
+  facets?: Partial<ChatFacetRequest> | null;
   surfaceKind?: string | null;
   groupBy?: 'ticket_run' | null;
   parentGroupId?: string | null;
@@ -44,6 +47,7 @@ export function createReadModelSnapshotClient(api: WebApiClient = webApi): ReadM
       if (request.surfaceKind) params.set('surface_kind', request.surfaceKind);
       if (request.groupBy) params.set('group_by', request.groupBy);
       if (request.parentGroupId) params.set('parent_group_id', request.parentGroupId);
+      appendChatFacetParams(params, normalizeChatFacetRequest(request.facets));
       if (request.cursor) params.set('offset', request.cursor);
       return mapResult(await api.getJson<JsonRecord>(`/hub/read-models/chats?${params.toString()}`), (payload) =>
         mapReadModelContract<ChatIndexSnapshot>(payload)
@@ -69,3 +73,19 @@ export function createReadModelSnapshotClient(api: WebApiClient = webApi): ReadM
 }
 
 export const readModelSnapshotClient = createReadModelSnapshotClient();
+
+function appendChatFacetParams(params: URLSearchParams, facets: ChatFacetRequest): void {
+  appendRepeated(params, 'category', facets.categories);
+  appendRepeated(params, 'turn_kind', facets.turnKinds);
+  appendRepeated(params, 'origin_kind', facets.originKinds);
+  appendRepeated(params, 'transport', facets.transports);
+  appendRepeated(params, 'scope_kind', facets.scopeKinds);
+  appendRepeated(params, 'scope_id', facets.scopeIds);
+  appendRepeated(params, 'agent_kind', facets.agentKinds);
+}
+
+function appendRepeated(params: URLSearchParams, key: string, values?: string[] | null): void {
+  for (const value of values ?? []) {
+    if (value) params.append(key, value);
+  }
+}

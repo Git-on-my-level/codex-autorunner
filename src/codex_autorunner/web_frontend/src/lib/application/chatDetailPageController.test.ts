@@ -8,7 +8,7 @@ import {
   type RepoWorktreeRuntimeSnapshot,
   type RepoWorktreeTopologySnapshot
 } from '$lib/api/readModelContracts';
-import { ReadModelEntityStore, type ChatIndexWindowRequest } from '$lib/data';
+import { CHAT_TICKET_RUN_GROUP_WINDOW_REQUEST, ReadModelEntityStore, type ChatIndexWindowRequest } from '$lib/data';
 import type { SurfaceArtifact } from '$lib/viewModels/domain';
 import { initialChatDetailSessionState, type ChatDetailSessionState } from './chatDetailSession';
 import {
@@ -31,14 +31,14 @@ describe('ChatDetailPageController', () => {
     harness.controller.mount({
       route: route(),
       currentRequest: { filter: 'all', limit: 50 },
-      ticketRunGroupRequest: { filter: 'ticket_runs', groupBy: 'ticket_run', limit: 50 }
+      ticketRunGroupRequest: CHAT_TICKET_RUN_GROUP_WINDOW_REQUEST
     });
     await Promise.resolve();
     await Promise.resolve();
 
     expect(harness.session.activate).toHaveBeenCalledWith({
       primaryRequest: { filter: 'all', limit: 50 },
-      companionRequests: [{ filter: 'ticket_runs', groupBy: 'ticket_run', limit: 50 }],
+      companionRequests: [CHAT_TICKET_RUN_GROUP_WINDOW_REQUEST],
       refresh: false
     });
     expect(harness.session.start).toHaveBeenCalledTimes(1);
@@ -62,7 +62,7 @@ describe('ChatDetailPageController', () => {
     harness.controller.mount({
       route: { ...route(), searchParams: new URLSearchParams('draft=hello') },
       currentRequest: { filter: 'all', limit: 50 },
-      ticketRunGroupRequest: { filter: 'ticket_runs', groupBy: 'ticket_run', limit: 50 }
+      ticketRunGroupRequest: CHAT_TICKET_RUN_GROUP_WINDOW_REQUEST
     });
     await Promise.resolve();
     await Promise.resolve();
@@ -102,7 +102,7 @@ describe('ChatDetailPageController', () => {
     harness.controller.mount({
       route: route(),
       currentRequest: { filter: 'all', limit: 50 },
-      ticketRunGroupRequest: { filter: 'ticket_runs', groupBy: 'ticket_run', limit: 50 }
+      ticketRunGroupRequest: CHAT_TICKET_RUN_GROUP_WINDOW_REQUEST
     });
     harness.store.applyChatIndexSnapshot(chatIndexSnapshot([
       chatIndexRow('active', { primarySurface: { surface_kind: 'managed_thread', surface_key: 'scope-1' } })

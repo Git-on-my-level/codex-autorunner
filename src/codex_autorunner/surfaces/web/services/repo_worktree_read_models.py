@@ -817,14 +817,12 @@ class RepoWorktreeReadModelService:
             with open_orchestration_sqlite(
                 self._context.config.root, durable=True, migrate=True
             ) as conn:
-                rows = conn.execute(
-                    """
+                rows = conn.execute("""
                     SELECT thread_target_id, repo_id, resource_kind, resource_id,
                            workspace_root
                     FROM orch_thread_targets
                     WHERE resource_kind = 'repo'
-                    """
-                ).fetchall()
+                    """).fetchall()
                 for row in rows:
                     resolution = scope_index.resolve(
                         raw_repo_id=row["repo_id"],

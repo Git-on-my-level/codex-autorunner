@@ -1113,6 +1113,96 @@ async def test_collect_output_times_out_waiting_for_first_relevant_event() -> No
 
 
 @pytest.mark.anyio
+async def test_collect_output_keeps_waiting_when_command_active_without_events() -> (
+    None
+):
+    active_checks_remaining = 2
+    progress_events: list[dict[str, object]] = []
+
+    async def _status_fetcher():
+        if active_checks_remaining <= 0:
+            return {"status": {"type": "idle"}}
+        return {"status": None}
+
+    async def _messages_fetcher():
+        return {
+            "data": [
+                {
+                    "info": {"id": "assistant-1", "role": "assistant"},
+                    "parts": [{"type": "text", "text": "completed from snapshot"}],
+                }
+            ]
+        }
+
+    async def _part_handler(part_type: str, part: dict[str, object], delta_text):
+        if part_type == "status":
+            progress_events.append(part)
+        return None
+
+    def _turn_active() -> bool:
+        nonlocal active_checks_remaining
+        if active_checks_remaining <= 0:
+            return False
+        active_checks_remaining -= 1
+        return True
+
+    async def _silent_event_stream():
+        while True:
+            await asyncio.sleep(3600)
+            yield SSEEvent(event="server.heartbeat", data="")
+
+    output = await collect_opencode_output_from_events(
+        None,
+        session_id="s1",
+        event_stream_factory=lambda: _silent_event_stream(),
+        session_fetcher=_status_fetcher,
+        messages_fetcher=_messages_fetcher,
+        part_handler=_part_handler,
+        turn_activity_fetcher=_turn_active,
+        stall_timeout_seconds=0.001,
+        first_event_timeout_seconds=0.001,
+    )
+
+    assert output.error is None
+    assert output.text == "completed from snapshot"
+    assert output.output_source == "messages_snapshot"
+    assert any(
+        event.get("type") == "stream_silent_turn_active" for event in progress_events
+    )
+
+
+@pytest.mark.anyio
+async def test_collect_output_idle_inactive_first_event_silence_fails_without_snapshot() -> (
+    None
+):
+    async def _status_fetcher():
+        return {"status": {"type": "idle"}}
+
+    async def _messages_fetcher():
+        return {"data": []}
+
+    async def _silent_event_stream():
+        while True:
+            await asyncio.sleep(3600)
+            yield SSEEvent(event="server.heartbeat", data="")
+
+    output = await collect_opencode_output_from_events(
+        None,
+        session_id="missing-session",
+        event_stream_factory=lambda: _silent_event_stream(),
+        session_fetcher=_status_fetcher,
+        messages_fetcher=_messages_fetcher,
+        turn_activity_fetcher=lambda: False,
+        stall_timeout_seconds=0.001,
+        first_event_timeout_seconds=0.001,
+    )
+
+    assert output.text == ""
+    assert output.error is not None
+    assert "opencode_first_event_timeout" in output.error
+
+
+@pytest.mark.anyio
 async def test_collect_output_bounds_stall_reconnect_loop_if_session_missing(
     monkeypatch,
 ) -> None:

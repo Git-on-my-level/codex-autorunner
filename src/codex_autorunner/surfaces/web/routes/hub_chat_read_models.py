@@ -43,6 +43,27 @@ def _sse_frame(event: str, payload: dict[str, Any], *, event_id: Optional[str]) 
     )
 
 
+def _chat_facet_query(
+    *,
+    categories: Optional[list[str]],
+    turn_kinds: Optional[list[str]],
+    origin_kinds: Optional[list[str]],
+    transports: Optional[list[str]],
+    scope_kinds: Optional[list[str]],
+    scope_ids: Optional[list[str]],
+    agent_kinds: Optional[list[str]],
+) -> dict[str, list[str]]:
+    return {
+        "categories": categories or [],
+        "turn_kinds": turn_kinds or [],
+        "origin_kinds": origin_kinds or [],
+        "transports": transports or [],
+        "scope_kinds": scope_kinds or [],
+        "scope_ids": scope_ids or [],
+        "agent_kinds": agent_kinds or [],
+    }
+
+
 def _advance_chat_detail_stream_cursor(last_cursor: int, batch_cursor: int) -> int:
     return max(last_cursor, batch_cursor)
 
@@ -61,9 +82,25 @@ def build_hub_chat_read_model_router(context: HubAppContext) -> APIRouter:
         surface_kind: Annotated[Optional[str], Query()] = None,
         group_by: Annotated[Optional[str], Query()] = None,
         parent_group_id: Annotated[Optional[str], Query()] = None,
+        category: Annotated[Optional[list[str]], Query()] = None,
+        turn_kind: Annotated[Optional[list[str]], Query()] = None,
+        origin_kind: Annotated[Optional[list[str]], Query()] = None,
+        transport: Annotated[Optional[list[str]], Query()] = None,
+        scope_kind: Annotated[Optional[list[str]], Query()] = None,
+        scope_id: Annotated[Optional[list[str]], Query()] = None,
+        agent_kind: Annotated[Optional[list[str]], Query()] = None,
         cursor: Annotated[Optional[str], Query()] = None,
     ):
         bounded_offset = _resolve_offset(cursor, offset)
+        facets = _chat_facet_query(
+            categories=category,
+            turn_kinds=turn_kind,
+            origin_kinds=origin_kind,
+            transports=transport,
+            scope_kinds=scope_kind,
+            scope_ids=scope_id,
+            agent_kinds=agent_kind,
+        )
         return dump_read_model_contract(
             service.chat_index_contract(
                 filter_param=filter_param,
@@ -73,6 +110,7 @@ def build_hub_chat_read_model_router(context: HubAppContext) -> APIRouter:
                 parent_group_id=parent_group_id,
                 offset=bounded_offset,
                 limit=limit,
+                facets=facets,
             )
         )
 
@@ -84,6 +122,13 @@ def build_hub_chat_read_model_router(context: HubAppContext) -> APIRouter:
         surface_kind: Annotated[Optional[str], Query()] = None,
         group_by: Annotated[Optional[str], Query()] = None,
         parent_group_id: Annotated[Optional[str], Query()] = None,
+        category: Annotated[Optional[list[str]], Query()] = None,
+        turn_kind: Annotated[Optional[list[str]], Query()] = None,
+        origin_kind: Annotated[Optional[list[str]], Query()] = None,
+        transport: Annotated[Optional[list[str]], Query()] = None,
+        scope_kind: Annotated[Optional[list[str]], Query()] = None,
+        scope_id: Annotated[Optional[list[str]], Query()] = None,
+        agent_kind: Annotated[Optional[list[str]], Query()] = None,
         cursor: Annotated[Optional[str], Query()] = None,
         event_limit: Annotated[int, Query(ge=1, le=1000)] = 100,
         window_limit: Annotated[int, Query(ge=1, le=200)] = 200,
@@ -95,6 +140,15 @@ def build_hub_chat_read_model_router(context: HubAppContext) -> APIRouter:
             parsed_cursor = _parse_chat_index_cursor(raw_cursor)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+        facets = _chat_facet_query(
+            categories=category,
+            turn_kinds=turn_kind,
+            origin_kinds=origin_kind,
+            transports=transport,
+            scope_kinds=scope_kind,
+            scope_ids=scope_id,
+            agent_kinds=agent_kind,
+        )
 
         async def _stream() -> Any:
             last_cursor = parsed_cursor
@@ -109,6 +163,7 @@ def build_hub_chat_read_model_router(context: HubAppContext) -> APIRouter:
                     parent_group_id=parent_group_id,
                     event_limit=event_limit,
                     window_limit=window_limit,
+                    facets=facets,
                 )
                 events = batch["events"]
                 batch_cursor = _int_fallback(batch.get("cursor"), last_cursor)

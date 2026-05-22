@@ -627,8 +627,7 @@ async def test_pause_bridge_skips_when_telegram_binding_is_preferred(
     conn = sqlite3.connect(telegram_db)
     try:
         with conn:
-            conn.execute(
-                """
+            conn.execute("""
                 CREATE TABLE telegram_topics (
                     topic_key TEXT PRIMARY KEY,
                     chat_id INTEGER NOT NULL,
@@ -640,10 +639,8 @@ async def test_pause_bridge_skips_when_telegram_binding_is_preferred(
                     last_active_at TEXT,
                     updated_at TEXT NOT NULL
                 )
-                """
-            )
-            conn.execute(
-                """
+                """)
+            conn.execute("""
                 CREATE TABLE telegram_topic_scopes (
                     chat_id INTEGER NOT NULL,
                     thread_id INTEGER,
@@ -651,8 +648,7 @@ async def test_pause_bridge_skips_when_telegram_binding_is_preferred(
                     updated_at TEXT NOT NULL,
                     PRIMARY KEY (chat_id, thread_id)
                 )
-                """
-            )
+                """)
             conn.execute(
                 """
                 INSERT INTO telegram_topics (

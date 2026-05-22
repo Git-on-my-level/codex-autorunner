@@ -20,8 +20,7 @@ def portable_known_agent_ids() -> tuple[str, ...]:
 
 def portable_ticket_validation_source() -> str:
     known_agents = portable_known_agent_ids()
-    return dedent(
-        f"""\
+    return dedent(f"""\
         _TICKET_ID_RE = re.compile(r"{PORTABLE_TICKET_ID_PATTERN}")
         _KNOWN_AGENT_IDS = {known_agents!r}
         _IGNORED_NON_TICKET_FILENAMES = {{"AGENTS.md", "ingest_state.json"}}
@@ -206,5 +205,4 @@ def portable_ticket_validation_source() -> str:
                 errors.append("{PORTABLE_TICKET_DONE_ERROR}")
 
             return errors
-        """
-    )
+        """)

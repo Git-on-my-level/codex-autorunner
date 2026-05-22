@@ -16,7 +16,10 @@ from ..read_model_contracts import (
     ChatDetailPatch,
     ChatDetailPatchEvent,
     ChatDetailSnapshot,
+    ChatFacetCounts,
+    ChatFacetRequest,
     ChatIndexCounters,
+    ChatIndexFacets,
     ChatIndexGroup,
     ChatIndexGroupEntry,
     ChatIndexPatch,
@@ -65,11 +68,13 @@ class ChatReadModelService:
         parent_group_id: Optional[str],
         offset: int,
         limit: int,
+        facets: Optional[Mapping[str, Any]] = None,
     ) -> ChatIndexSnapshot:
         hub_view = _contract_filter_to_hub_view(filter_param)
         payload = self._surface.chat_index_snapshot(
             view=hub_view,
             query=query,
+            facets=facets,
             surface_kind=surface_kind,
             group_by=group_by,
             parent_group_id=parent_group_id,
@@ -113,6 +118,12 @@ class ChatReadModelService:
             _int_fallback(payload.get("cursor"), 0)
         )
         counters = counters_from_hub_payload(payload.get("counters"), rows, total)
+        facet_request = _chat_facet_request_from_raw(
+            payload.get("query", {}).get("facets")
+            if isinstance(payload.get("query"), Mapping)
+            else facets
+        )
+        facet_counts = _chat_facet_counts_from_raw(payload.get("facet_counts"))
 
         return ChatIndexSnapshot(
             cursor=proj_cursor,
@@ -131,9 +142,11 @@ class ChatReadModelService:
             ),
             filter=filter_param,
             query=query,
+            facet_request=facet_request,
             rows=rows,
             groups=groups_contract,
             counters=counters,
+            facet_counts=facet_counts,
             repair=RepairPolicy(snapshot_route=SNAPSHOT_CHAT_INDEX_ROUTE),
         )
 
@@ -148,12 +161,14 @@ class ChatReadModelService:
         parent_group_id: Optional[str],
         event_limit: int,
         window_limit: int,
+        facets: Optional[Mapping[str, Any]] = None,
     ) -> dict[str, Any]:
         hub_view = _contract_filter_to_hub_view(filter_param)
         batch = self._surface.chat_index_patch_batch(
             cursor,
             view=hub_view,
             query=query,
+            facets=facets,
             surface_kind=surface_kind,
             group_by=group_by,
             parent_group_id=parent_group_id,
@@ -201,6 +216,11 @@ class ChatReadModelService:
             if isinstance(group, Mapping)
         ]
         counters = _chat_index_counters_from_raw(patch_map.get("counters"), rows)
+        facet_counts = (
+            _chat_facet_counts_from_raw(patch_map.get("facet_counts"))
+            if patch_map.get("facet_counts") is not None
+            else None
+        )
         repair = None
         repair_raw = raw.get("repair")
         if isinstance(repair_raw, Mapping):
@@ -243,6 +263,7 @@ class ChatReadModelService:
                     else None
                 ),
                 counters=counters,
+                facet_counts=facet_counts,
             ),
             repair=repair,
         )
@@ -459,6 +480,41 @@ def _chat_index_counters_from_raw(
     )
 
 
+def _chat_facet_request_from_raw(raw: Any) -> ChatFacetRequest:
+    raw_map = raw if isinstance(raw, Mapping) else {}
+    return ChatFacetRequest(
+        categories=cast(Any, _str_list(raw_map.get("categories"))),
+        turn_kinds=cast(Any, _str_list(raw_map.get("turn_kinds"))),
+        origin_kinds=cast(Any, _str_list(raw_map.get("origin_kinds"))),
+        transports=cast(Any, _str_list(raw_map.get("transports"))),
+        scope_kinds=cast(Any, _str_list(raw_map.get("scope_kinds"))),
+        scope_ids=_str_list(raw_map.get("scope_ids")),
+        agent_kinds=cast(Any, _str_list(raw_map.get("agent_kinds"))),
+    )
+
+
+def _chat_facet_counts_from_raw(raw: Any) -> ChatFacetCounts:
+    raw_map = raw if isinstance(raw, Mapping) else {}
+    return ChatFacetCounts(
+        category=cast(Any, _count_map(raw_map.get("category"))),
+        turn_kind=cast(Any, _count_map(raw_map.get("turn_kind"))),
+        origin_kind=cast(Any, _count_map(raw_map.get("origin_kind"))),
+        transport=cast(Any, _count_map(raw_map.get("transport"))),
+        scope_kind=cast(Any, _count_map(raw_map.get("scope_kind"))),
+        agent_kind=cast(Any, _count_map(raw_map.get("agent_kind"))),
+    )
+
+
+def _count_map(raw: Any) -> dict[str, int]:
+    if not isinstance(raw, Mapping):
+        return {}
+    return {
+        str(key): max(0, _int_fallback(value, 0))
+        for key, value in raw.items()
+        if str(key).strip()
+    }
+
+
 def parse_iso_optional(raw: str) -> Optional[datetime]:
     stripped = raw.strip()
     try:
@@ -602,6 +658,20 @@ def hub_chat_row_to_chat_index_row(raw: Mapping[str, Any]) -> ChatIndexRow:
         debug_payload["automation_job_id"] = automation_job_id
     if automation_rule_id:
         debug_payload["automation_rule_id"] = automation_rule_id
+    facets_raw = raw.get("facets")
+    facets = (
+        ChatIndexFacets(
+            category=cast(Any, str(facets_raw.get("category") or "regular")),
+            turn_kinds=cast(Any, _str_list(facets_raw.get("turn_kinds"))),
+            origin_kinds=cast(Any, _str_list(facets_raw.get("origin_kinds"))),
+            transports=cast(Any, _str_list(facets_raw.get("transports"))),
+            scope_kind=cast(Any, _str_or_none(facets_raw.get("scope_kind"))),
+            scope_id=_str_or_none(facets_raw.get("scope_id")),
+            agent_kind=cast(Any, _str_or_none(facets_raw.get("agent_kind"))),
+        )
+        if isinstance(facets_raw, Mapping)
+        else None
+    )
 
     return ChatIndexRow(
         chat_id=chat_id,
@@ -657,6 +727,7 @@ def hub_chat_row_to_chat_index_row(raw: Mapping[str, Any]) -> ChatIndexRow:
         agent=_str_or_none(raw.get("agent") or raw.get("agent_id")),
         agent_profile=_str_or_none(raw.get("agent_profile")),
         chat_kind=ck_type,
+        facets=facets,
         model=_str_or_none(raw.get("model")),
         group_id=_str_or_none(raw.get("group_id")),
         flow_type="ticket_flow" if is_ticket_flow else None,
@@ -683,9 +754,7 @@ def hub_group_dict_to_contract(raw: Mapping[str, Any]) -> ChatIndexGroupEntry:
     last_activity_iso = (
         last_sort_iso or _str_or_none(raw.get("last_activity_at")) or last_visible_iso
     )
-    if raw_kind == "ticket_run_group" or group_id.startswith(
-        ("ticket:", "run:", "ticket-run:")
-    ):
+    if raw_kind == "ticket_run_group":
         updated_at_raw = _str_or_none(raw.get("updated_at"))
         updated_at = parse_iso_optional(updated_at_raw) if updated_at_raw else None
         return TicketRunGroup(

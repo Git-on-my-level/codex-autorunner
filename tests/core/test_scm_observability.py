@@ -17,13 +17,11 @@ from codex_autorunner.core.scm_reaction_types import ReactionIntent
 
 def _audit_rows(hub_root: Path) -> list[dict[str, object]]:
     with open_orchestration_sqlite(hub_root) as conn:
-        rows = conn.execute(
-            """
+        rows = conn.execute("""
             SELECT action_type, target_kind, target_id, payload_json
               FROM orch_audit_entries
              ORDER BY created_at ASC, audit_id ASC
-            """
-        ).fetchall()
+            """).fetchall()
     return [dict(row) for row in rows]
 
 

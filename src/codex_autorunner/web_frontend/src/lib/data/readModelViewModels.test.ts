@@ -47,7 +47,16 @@ describe('read model view-model selectors', () => {
       agentProfile: 'm4-pma',
       chatKind: 'coding_agent',
       model: 'gpt-5.5',
-      groupId: 'ticket:TICKET-005'
+      groupId: 'ticket:TICKET-005',
+      facets: {
+        category: 'ticket_run',
+        turnKinds: ['message'],
+        originKinds: ['surface'],
+        transports: ['discord'],
+        scopeKind: 'repo',
+        scopeId: 'repo-1',
+        agentKind: 'coding_agent'
+      }
     };
 
     const summary = chatIndexRowToPmaChatSummary(row);
@@ -62,6 +71,7 @@ describe('read model view-model selectors', () => {
     expect(pmaChatSummaryToChatIndexRow(summary).agentProfile).toBe('m4-pma');
     expect(pmaChatSummaryToChatIndexRow(summary).chatId).toBe('chat-1');
     expect(pmaChatSummaryToChatIndexRow(summary).unreadCount).toBe(2);
+    expect(pmaChatSummaryToChatIndexRow(summary).facets?.category).toBe('ticket_run');
   });
 
   it('keeps active rebound chat-index rows visible despite stale raw surface archive fields', () => {
@@ -75,6 +85,15 @@ describe('read model view-model selectors', () => {
       status: 'running',
       unreadCount: 0,
       lastActivityAt: now,
+      facets: {
+        category: 'regular',
+        turnKinds: ['message'],
+        originKinds: ['surface'],
+        transports: ['discord'],
+        scopeKind: 'repo',
+        scopeId: 'repo-1',
+        agentKind: 'coding_agent'
+      },
       primarySurface: {
         surface_kind: 'pma',
         lifecycle: 'running'
@@ -139,7 +158,16 @@ describe('read model view-model selectors', () => {
       lastActivityAt: now,
       repoId: 'repo-1',
       worktreeId: 'repo-1--ticket-flow',
-      groupId: 'ticket:chat-ticket-flow'
+      groupId: 'ticket:chat-ticket-flow',
+      facets: {
+        category: 'ticket_run',
+        turnKinds: ['message'],
+        originKinds: ['surface'],
+        transports: ['pma'],
+        scopeKind: 'worktree',
+        scopeId: 'repo-1--ticket-flow',
+        agentKind: 'coding_agent'
+      }
     });
 
     expect(summary.isTicketFlow).toBe(true);
@@ -310,7 +338,7 @@ describe('read model view-model selectors', () => {
 
   it('preserves backend ticket-flow fields and ticket-run groups', () => {
     const store = new ReadModelEntityStore();
-    const request = { filter: 'ticket_runs' as const, groupBy: 'ticket_run' as const, limit: 50 };
+    const request = { facets: { categories: ['ticket_run' as const] }, groupBy: 'ticket_run' as const, limit: 50 };
     store.applyChatIndexSnapshot({
       cursor,
       rows: [
@@ -330,7 +358,16 @@ describe('read model view-model selectors', () => {
           ticketStatus: 'done',
           runId: 'run-1',
           groupId: 'run:run-1',
-          flowType: 'ticket_flow'
+          flowType: 'ticket_flow',
+          facets: {
+            category: 'ticket_run',
+            turnKinds: ['message'],
+            originKinds: ['surface'],
+            transports: ['pma'],
+            scopeKind: 'worktree',
+            scopeId: 'wt-1',
+            agentKind: 'coding_agent'
+          }
         }
       ],
       groups: [
@@ -352,7 +389,7 @@ describe('read model view-model selectors', () => {
         }
       ],
       counters: { total: 5, waiting: 0, running: 2, unread: 0, archived: 0 },
-      filter: 'ticket_runs',
+      facetRequest: { categories: ['ticket_run'], turnKinds: [], originKinds: [], transports: [], scopeKinds: [], scopeIds: [], agentKinds: [] },
       window: { limit: 50, totalIsExact: true }
     }, request);
 

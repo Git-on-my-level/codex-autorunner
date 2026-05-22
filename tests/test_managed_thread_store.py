@@ -113,13 +113,11 @@ def test_prepare_runs_legacy_backfill_before_marking_prepared(
         assert hub_root == tmp_path / "hub"
         assert durable is False
         with open_orchestration_sqlite(hub_root, durable=False, migrate=False) as conn:
-            row = conn.execute(
-                """
+            row = conn.execute("""
                 SELECT 1
                   FROM orch_operation_flags
                  WHERE flag_key = 'managed_thread_store_prepare_v1'
-                """
-            ).fetchone()
+                """).fetchone()
         assert row is None
         calls.append("backfill")
 

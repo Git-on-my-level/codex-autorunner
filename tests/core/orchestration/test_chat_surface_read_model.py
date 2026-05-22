@@ -66,6 +66,7 @@ def _seed_thread(
     display_name: str | None = None,
     last_message_preview: str | None = None,
     metadata: dict[str, object] | None = None,
+    updated_at: str = "2026-05-11T00:00:10Z",
 ) -> None:
     with open_orchestration_sqlite(hub_root, durable=False, migrate=True) as conn:
         conn.execute(
@@ -97,7 +98,7 @@ def _seed_thread(
                 last_message_preview,
                 json.dumps(metadata or {}),
                 "2026-05-11T00:00:00Z",
-                "2026-05-11T00:00:10Z",
+                updated_at,
             ),
         )
 
@@ -487,6 +488,195 @@ def test_chat_index_uses_managed_lifecycle_after_telegram_surface_rebind(
     assert [row["managed_thread_id"] for row in archived["rows"]] == [
         "telegram-thread-a"
     ]
+
+
+def test_chat_index_projects_backend_facets_counts_and_filters(tmp_path: Path) -> None:
+    hub_root = tmp_path / "hub"
+    for index in range(60):
+        _seed_thread(
+            hub_root,
+            thread_id=f"regular-{index:02d}",
+            updated_at=f"2026-05-11T01:{index % 60:02d}:00Z",
+        )
+    _seed_thread(
+        hub_root,
+        thread_id="zzz-automation-old",
+        metadata={"automation_job_id": "job-1", "automation_rule_id": "rule-1"},
+        updated_at="2026-05-10T00:00:00Z",
+    )
+
+    service = ChatSurfaceReadService(hub_root, durable=False)
+    first_page = service.chat_index_snapshot(view="all", limit=10)
+    assert "zzz-automation-old" not in {
+        row["managed_thread_id"] for row in first_page["rows"]
+    }
+    assert first_page["facet_counts"]["category"]["automation"] == 1
+
+    automation = service.chat_index_snapshot(
+        view="all",
+        facets={"categories": ["automation"]},
+        limit=10,
+    )
+    assert [row["managed_thread_id"] for row in automation["rows"]] == [
+        "zzz-automation-old"
+    ]
+    assert automation["rows"][0]["facets"]["category"] == "automation"
+    assert "automation" in automation["rows"][0]["facets"]["turn_kinds"]
+    assert "automation" in automation["rows"][0]["facets"]["origin_kinds"]
+
+
+def test_chat_index_rebuilds_projection_when_facet_schema_marker_is_missing(
+    tmp_path: Path,
+) -> None:
+    hub_root = tmp_path / "hub"
+    _seed_thread(
+        hub_root,
+        thread_id="automation-upgrade",
+        metadata={"automation_job_id": "job-1", "automation_rule_id": "rule-1"},
+    )
+    service = ChatSurfaceReadService(hub_root, durable=False)
+    service.rebuild_chat_index_projection()
+
+    with open_orchestration_sqlite(hub_root, durable=False, migrate=True) as conn:
+        conn.execute("""
+            UPDATE orch_chat_index_projection
+               SET facet_category = NULL,
+                   facet_turn_kind_list = '',
+                   facet_origin_kind_list = '',
+                   facet_transport_list = '',
+                   facet_scope_kind = NULL,
+                   facet_scope_id = NULL,
+                   facet_agent_kind = NULL
+            """)
+        conn.execute("""
+            DELETE FROM orch_chat_index_projection_meta
+             WHERE key = 'projection_schema_version'
+            """)
+
+    assert service.chat_index_projection_status()["needs_rebuild"] is True
+    automation = service.chat_index_snapshot(
+        view="all",
+        facets={"categories": ["automation"]},
+        limit=10,
+    )
+
+    assert [row["managed_thread_id"] for row in automation["rows"]] == [
+        "automation-upgrade"
+    ]
+    assert automation["rows"][0]["facets"]["category"] == "automation"
+    assert service.chat_index_projection_status()["needs_rebuild"] is False
+
+
+def test_chat_index_regular_category_excludes_ticket_automation_and_system(
+    tmp_path: Path,
+) -> None:
+    hub_root = tmp_path / "hub"
+    _seed_thread(hub_root, thread_id="regular")
+    _seed_thread(
+        hub_root,
+        thread_id="ticket",
+        metadata=ticket_flow_thread_metadata(
+            flow_run_id="run-1",
+            ticket_id="TICKET-001",
+            workspace_root=str(tmp_path / "repo"),
+        ),
+    )
+    _seed_thread(
+        hub_root,
+        thread_id="automation",
+        metadata={"automation_job_id": "job-1"},
+    )
+    _seed_thread(hub_root, thread_id="system")
+    _seed_execution(
+        hub_root,
+        thread_id="system",
+        status="completed",
+        metadata={},
+    )
+    with open_orchestration_sqlite(hub_root, durable=False, migrate=True) as conn:
+        conn.execute(
+            """
+            UPDATE orch_thread_executions
+               SET request_kind = 'recovery',
+                   turn_request_json = ?
+             WHERE thread_target_id = 'system'
+            """,
+            (
+                json.dumps(
+                    {
+                        "request_id": "req-system",
+                        "target_kind": "thread",
+                        "target_id": "system",
+                        "request_kind": "recovery",
+                        "prompt": "recover",
+                        "origin": {"kind": "system", "source_id": "test"},
+                    }
+                ),
+            ),
+        )
+
+    service = ChatSurfaceReadService(hub_root, durable=False)
+    regular = service.chat_index_snapshot(
+        view="all",
+        facets={"categories": ["regular"]},
+        limit=20,
+    )
+    assert [row["managed_thread_id"] for row in regular["rows"]] == ["regular"]
+
+    all_rows = {
+        row["managed_thread_id"]: row
+        for row in service.chat_index_snapshot(view="all", limit=20)["rows"]
+    }
+    assert all_rows["ticket"]["facets"]["category"] == "ticket_run"
+    assert all_rows["automation"]["facets"]["category"] == "automation"
+    assert all_rows["system"]["facets"]["category"] == "system"
+
+
+def test_chat_index_transport_facets_and_counts(tmp_path: Path) -> None:
+    hub_root = tmp_path / "hub"
+    _seed_thread(hub_root, thread_id="pma-thread")
+    _seed_thread(hub_root, thread_id="discord-thread")
+    _seed_thread(hub_root, thread_id="telegram-thread")
+    bindings = OrchestrationBindingStore(hub_root, durable=False)
+    bindings.upsert_binding(
+        surface_kind="discord",
+        surface_key="guild:channel",
+        thread_target_id="discord-thread",
+        repo_id="repo-1",
+        resource_kind="repo",
+        resource_id="repo-1",
+    )
+    bindings.upsert_binding(
+        surface_kind="telegram",
+        surface_key="-1001:77",
+        thread_target_id="telegram-thread",
+        repo_id="repo-1",
+        resource_kind="repo",
+        resource_id="repo-1",
+    )
+    PmaNotificationStore(hub_root).record_notification(
+        correlation_id="notif-corr",
+        source_kind="pma",
+        delivery_mode="direct",
+        surface_kind="discord",
+        surface_key="guild:channel",
+        delivery_record_id="delivery-1",
+        repo_id="repo-1",
+        managed_thread_id="discord-thread",
+        notification_id="notif-1",
+    )
+
+    snapshot = ChatSurfaceReadService(hub_root, durable=False).chat_index_snapshot(
+        view="all",
+        limit=20,
+    )
+
+    assert snapshot["facet_counts"]["transport"]["pma"] == 3
+    assert snapshot["facet_counts"]["transport"]["discord"] == 1
+    assert snapshot["facet_counts"]["transport"]["telegram"] == 1
+    assert snapshot["facet_counts"]["transport"]["notification"] == 1
+    rows = {row["managed_thread_id"]: row for row in snapshot["rows"]}
+    assert "notification" in rows["discord-thread"]["facets"]["transports"]
 
 
 def test_chat_index_visible_chrome_uses_user_visible_prompt_metadata_not_delimiter_stripping(
@@ -1015,9 +1205,7 @@ def test_chat_index_ticket_run_group_ignores_generic_completed_ticket_chat(
         limit=20,
     )
 
-    assert grouped["rows"][0]["group_id"] == "ticket:TICKET-999"
-    assert grouped["rows"][0]["done_count"] == 0
-    assert grouped["rows"][0]["status"] == "idle"
+    assert grouped["rows"] == []
 
 
 def test_chat_index_ticket_file_frontmatter_wins_over_thread_state(

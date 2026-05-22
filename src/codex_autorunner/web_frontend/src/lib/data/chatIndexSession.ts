@@ -1,6 +1,12 @@
 import { writable, type Readable } from 'svelte/store';
 import type { ApiError } from '$lib/api/client';
-import { mapReadModelContract, type ChatIndexPatchEvent, type ChatIndexSnapshot } from '$lib/api/readModelContracts';
+import {
+  chatFacetRequestIsEmpty,
+  mapReadModelContract,
+  normalizeChatFacetRequest,
+  type ChatIndexPatchEvent,
+  type ChatIndexSnapshot
+} from '$lib/api/readModelContracts';
 import type { SseEvent } from '$lib/api/streaming';
 import {
   createDocumentStreamVisibilityPolicy,
@@ -12,7 +18,11 @@ import {
   type ReadModelSnapshotClient
 } from './readModelClients';
 import { createPaginatedWindowSession } from './paginatedWindowSession';
-import { canonicalChatIndexWindowKey, readModelEntityStore, type ReadModelEntityStore } from './readModelStore';
+import {
+  canonicalChatIndexWindowKey,
+  readModelEntityStore,
+  type ReadModelEntityStore
+} from './readModelStore';
 import { openReadModelStream, type CursorStorage, type ReadModelStreamManager, type ReadModelStreamOptions } from './readModelStream';
 
 export type ChatIndexSessionStatus = 'idle' | 'loading' | 'connected' | 'interrupted' | 'closed';
@@ -229,6 +239,7 @@ function chatIndexPatchPath(request: ChatIndexRequest): string {
   if (request.surfaceKind) params.set('surface_kind', request.surfaceKind);
   if (request.groupBy) params.set('group_by', request.groupBy);
   if (request.parentGroupId) params.set('parent_group_id', request.parentGroupId);
+  appendChatFacetParams(params, normalizeChatFacetRequest(request.facets));
   return `/hub/read-models/chats/patches?${params.toString()}`;
 }
 
@@ -272,14 +283,7 @@ function parseChatIndexPatchEvent(event: SseEvent<unknown>): ChatIndexPatchEvent
 
 function sameChatIndexRequest(left: ChatIndexRequest | null, right: ChatIndexRequest | null): boolean {
   if (!left || !right) return left === right;
-  return (
-    (left.filter ?? 'all') === (right.filter ?? 'all') &&
-    (left.limit ?? 50) === (right.limit ?? 50) &&
-    (left.query ?? '') === (right.query ?? '') &&
-    (left.surfaceKind ?? '') === (right.surfaceKind ?? '') &&
-    (left.groupBy ?? '') === (right.groupBy ?? '') &&
-    (left.parentGroupId ?? '') === (right.parentGroupId ?? '')
-  );
+  return canonicalChatIndexWindowKey(left) === canonicalChatIndexWindowKey(right);
 }
 
 function sameChatIndexRequestList(left: ChatIndexRequest[], right: ChatIndexRequest[]): boolean {
@@ -292,6 +296,7 @@ function sameChatIndexStreamRequest(left: ChatIndexRequest | null, right: ChatIn
   return (
     (left.filter ?? 'all') === (right.filter ?? 'all') &&
     (left.query ?? '') === (right.query ?? '') &&
+    sameChatFacetRequest(left, right) &&
     (left.surfaceKind ?? '') === (right.surfaceKind ?? '') &&
     (left.groupBy ?? '') === (right.groupBy ?? '') &&
     (left.parentGroupId ?? '') === (right.parentGroupId ?? '')
@@ -304,11 +309,33 @@ function normalizedChatIndexRequest(request: ChatIndexRequest): ChatIndexRequest
     limit: request.limit ?? 50
   };
   if (request.query) normalized.query = request.query;
+  const facets = normalizeChatFacetRequest(request.facets);
+  if (!chatFacetRequestIsEmpty(facets)) normalized.facets = facets;
   if (request.surfaceKind) normalized.surfaceKind = request.surfaceKind;
   if (request.groupBy) normalized.groupBy = request.groupBy;
   if (request.parentGroupId) normalized.parentGroupId = request.parentGroupId;
   if (request.cursor) normalized.cursor = request.cursor;
   return normalized;
+}
+
+function sameChatFacetRequest(left: ChatIndexRequest, right: ChatIndexRequest): boolean {
+  const leftFacets = normalizeChatFacetRequest(left.facets);
+  const rightFacets = normalizeChatFacetRequest(right.facets);
+  return JSON.stringify(leftFacets) === JSON.stringify(rightFacets);
+}
+
+function appendChatFacetParams(params: URLSearchParams, facets: ReturnType<typeof normalizeChatFacetRequest>): void {
+  appendRepeated(params, 'category', facets.categories);
+  appendRepeated(params, 'turn_kind', facets.turnKinds);
+  appendRepeated(params, 'origin_kind', facets.originKinds);
+  appendRepeated(params, 'transport', facets.transports);
+  appendRepeated(params, 'scope_kind', facets.scopeKinds);
+  appendRepeated(params, 'scope_id', facets.scopeIds);
+  appendRepeated(params, 'agent_kind', facets.agentKinds);
+}
+
+function appendRepeated(params: URLSearchParams, key: string, values: string[]): void {
+  for (const value of values) params.append(key, value);
 }
 
 function uniqueChatIndexRequests(requests: ChatIndexRequest[]): ChatIndexRequest[] {

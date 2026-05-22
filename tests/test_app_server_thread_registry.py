@@ -69,13 +69,11 @@ def test_thread_registry_imports_legacy_file_into_canonical_store(
     assert registry.get_thread_id("pma") == "thread-123"
 
     with open_orchestration_sqlite(tmp_path, durable=False) as conn:
-        row = conn.execute(
-            """
+        row = conn.execute("""
             SELECT thread_id
               FROM orch_thread_identity_bindings
              WHERE feature_key = 'pma'
-            """
-        ).fetchone()
+            """).fetchone()
     assert row is not None
     assert row["thread_id"] == "thread-123"
 

@@ -6,6 +6,23 @@ import type { ReadModelSnapshotClient } from './readModelClients';
 import type { TicketSummary } from '$lib/viewModels/domain';
 
 const now = '2026-05-11T12:00:00Z';
+const emptyFacetRequest = {
+  categories: [],
+  turnKinds: [],
+  originKinds: [],
+  transports: [],
+  scopeKinds: [],
+  scopeIds: [],
+  agentKinds: []
+};
+const emptyFacetCounts = {
+  category: {},
+  turnKind: {},
+  originKind: {},
+  transport: {},
+  scopeKind: {},
+  agentKind: {}
+};
 
 describe('read model loaders', () => {
   it('returns a cache hit and calls depends when the chat index is already in the store', async () => {
@@ -259,6 +276,7 @@ function chatIndexSnapshot(): ChatIndexSnapshot {
     window: { limit: 50, totalEstimate: 1, totalIsExact: true },
     filter: 'all',
     query: null,
+    facetRequest: emptyFacetRequest,
     rows: [{
       chatId: 'chat-1',
       surface: 'pma',
@@ -277,6 +295,7 @@ function chatIndexSnapshot(): ChatIndexSnapshot {
     }],
     groups: [],
     counters: { total: 1, waiting: 0, running: 0, unread: 0, archived: 0 },
+    facetCounts: emptyFacetCounts,
     repair: repair('/hub/read-models/chats')
   };
 }

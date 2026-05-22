@@ -395,13 +395,11 @@ class _OrchestrationLifecycleEventStore:
         safe_keep_last = max(0, int(keep_last))
         with open_orchestration_sqlite(self._hub_root) as conn:
             if safe_keep_last == 0:
-                conn.execute(
-                    """
+                conn.execute("""
                     DELETE FROM orch_event_projections
                      WHERE event_family = 'lifecycle'
                        AND processed = 1
-                    """
-                )
+                    """)
                 return
             conn.execute(
                 """
@@ -422,13 +420,11 @@ class _OrchestrationLifecycleEventStore:
 
     def count(self) -> int:
         with open_orchestration_sqlite(self._hub_root) as conn:
-            row = conn.execute(
-                """
+            row = conn.execute("""
                 SELECT COUNT(*) AS c
                   FROM orch_event_projections
                  WHERE event_family = 'lifecycle'
-                """
-            ).fetchone()
+                """).fetchone()
         if row is None:
             return 0
         return int(row["c"] or 0)
@@ -479,23 +475,19 @@ def _load_legacy_lifecycle_sqlite_events(hub_root: Path) -> list[LifecycleEvent]
     conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
     try:
-        table = conn.execute(
-            """
+        table = conn.execute("""
             SELECT name
               FROM sqlite_master
              WHERE type = 'table'
                AND name = 'lifecycle_events'
-            """
-        ).fetchone()
+            """).fetchone()
         if table is None:
             return []
-        rows = conn.execute(
-            """
+        rows = conn.execute("""
             SELECT event_id, event_type, repo_id, run_id, data_json, origin, timestamp, processed
               FROM lifecycle_events
              ORDER BY seq ASC
-            """
-        ).fetchall()
+            """).fetchall()
     finally:
         conn.close()
     events: list[LifecycleEvent] = []

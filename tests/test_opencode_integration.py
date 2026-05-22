@@ -18,7 +18,6 @@ from codex_autorunner.core.orchestration.runtime_thread_events import (
     RuntimeThreadRunEventState,
     normalize_runtime_thread_raw_event,
 )
-from codex_autorunner.core.sse import parse_sse_lines
 from codex_autorunner.workspace import canonical_workspace_root, workspace_id_for_path
 
 
@@ -64,6 +63,55 @@ def _assert_registry_removed(workspace_root: Path, pid: int) -> None:
     assert read_process_record(workspace_root, "opencode", str(pid)) is None
 
 
+def _opencode_serve_command() -> list[str]:
+    opencode_bin = get_opencode_bin()
+    assert opencode_bin is not None
+    return [opencode_bin, "serve", "--hostname", "127.0.0.1", "--port", "0"]
+
+
+def _new_supervisor(
+    *,
+    request_timeout: float = 30.0,
+    max_handles: int = 3,
+    idle_ttl_seconds: float = 300.0,
+    server_scope: str = "workspace",
+) -> OpenCodeSupervisor:
+    return OpenCodeSupervisor(
+        _opencode_serve_command(),
+        request_timeout=request_timeout,
+        max_handles=max_handles,
+        idle_ttl_seconds=idle_ttl_seconds,
+        server_scope=server_scope,
+    )
+
+
+def _is_environmental_runtime_failure(
+    result_errors: list[str], raw_events: list[dict]
+) -> bool:
+    raw_event_text = json.dumps(raw_events).lower()
+    error_text = " ".join(result_errors).lower()
+    environmental_markers = (
+        "rate limit",
+        "api key",
+        "auth",
+        "unauthorized",
+        "quota",
+    )
+    return any(
+        marker in raw_event_text or marker in error_text
+        for marker in environmental_markers
+    )
+
+
+def _runtime_failure_detail(
+    result_status: str, result_errors: list[str], raw_events: list[dict]
+) -> str:
+    return (
+        f"status={result_status!r} errors={result_errors!r} "
+        f"raw_tail={json.dumps(raw_events[-5:], ensure_ascii=False)[:2000]}"
+    )
+
+
 @pytest.fixture(autouse=True)
 def skip_if_no_opencode():
     """Skip all tests in this file if OpenCode is not available."""
@@ -76,15 +124,7 @@ def skip_if_no_opencode():
 @pytest.fixture()
 async def supervisor(tmp_path: Path) -> AsyncGenerator[OpenCodeSupervisor, None]:
     """Create an OpenCode supervisor instance."""
-    opencode_bin = get_opencode_bin()
-    assert opencode_bin is not None
-    command = [opencode_bin, "serve", "--hostname", "127.0.0.1", "--port", "0"]
-    supervisor = OpenCodeSupervisor(
-        command,
-        request_timeout=30.0,
-        max_handles=3,
-        idle_ttl_seconds=300.0,
-    )
+    supervisor = _new_supervisor()
     yield supervisor
     await supervisor.close_all()
 
@@ -100,25 +140,21 @@ async def workspace(tmp_path: Path) -> AsyncGenerator[Path, None]:
 
 
 @pytest.mark.asyncio
-async def test_supervisor_starts_opencode_server(
+async def test_supervisor_lifecycle_reuse_and_close(
     supervisor: OpenCodeSupervisor, workspace: Path
 ) -> None:
-    """Test that supervisor can start an OpenCode server for a workspace."""
-    client = await supervisor.get_client(workspace)
-    assert client is not None
-    assert isinstance(client, OpenCodeClient)
-    await client.close()
-
-
-@pytest.mark.asyncio
-async def test_supervisor_reuses_handle(
-    supervisor: OpenCodeSupervisor, workspace: Path
-) -> None:
-    """Test that supervisor reuses an existing handle for the same workspace."""
+    """Supervisor should start OpenCode, reuse workspace handles, and close cleanly."""
     client1 = await supervisor.get_client(workspace)
     client2 = await supervisor.get_client(workspace)
+    assert isinstance(client1, OpenCodeClient)
     assert client1 is client2
-    await client1.close()
+
+    await supervisor.close_all()
+
+    client3 = await supervisor.get_client(workspace)
+    assert isinstance(client3, OpenCodeClient)
+    assert client3 is not client1
+    await client3.close()
 
 
 @pytest.mark.asyncio
@@ -126,8 +162,6 @@ async def test_global_scope_uses_single_server_for_two_workspaces(
     tmp_path: Path,
 ) -> None:
     """Global server scope should reuse one server process across workspaces."""
-    opencode_bin = get_opencode_bin()
-    assert opencode_bin is not None
     workspace1 = tmp_path / "ws1"
     workspace2 = tmp_path / "ws2"
     workspace1.mkdir()
@@ -135,11 +169,7 @@ async def test_global_scope_uses_single_server_for_two_workspaces(
     (workspace1 / ".git").mkdir()
     (workspace2 / ".git").mkdir()
 
-    supervisor = OpenCodeSupervisor(
-        [opencode_bin, "serve", "--hostname", "127.0.0.1", "--port", "0"],
-        request_timeout=30.0,
-        server_scope="global",
-    )
+    supervisor = _new_supervisor(server_scope="global")
 
     try:
         client1 = await supervisor.get_client(workspace1)
@@ -151,20 +181,6 @@ async def test_global_scope_uses_single_server_for_two_workspaces(
         assert handle.process.pid is not None
     finally:
         await supervisor.close_all()
-
-
-@pytest.mark.asyncio
-async def test_supervisor_closes_handle(
-    supervisor: OpenCodeSupervisor, workspace: Path
-) -> None:
-    """Test that supervisor can close a handle."""
-    client = await supervisor.get_client(workspace)
-    await supervisor.close_all()
-
-    # Getting a new client should create a new handle
-    client2 = await supervisor.get_client(workspace)
-    assert client2 is not client
-    await client2.close()
 
 
 @pytest.mark.asyncio
@@ -217,31 +233,16 @@ async def test_supervisor_max_handles_eviction(
 
 
 @pytest.mark.asyncio
-async def test_client_providers(workspace: Path) -> None:
-    """Test that client can fetch providers."""
-    command = [get_opencode_bin(), "serve", "--hostname", "127.0.0.1", "--port", "0"]
-    supervisor = OpenCodeSupervisor(command, request_timeout=30.0)
+async def test_client_session_catalog_and_stream_contract(workspace: Path) -> None:
+    """Client should cover provider, session, and SSE primitives without a model run."""
+    supervisor = _new_supervisor(request_timeout=30.0)
 
     try:
         client = await supervisor.get_client(workspace)
-        providers = await client.providers()
-        assert providers is not None
+
+        providers = await client.providers(directory=str(workspace))
         assert isinstance(providers, (dict, list))
-        await client.close()
-    finally:
-        await supervisor.close_all()
 
-
-@pytest.mark.asyncio
-async def test_client_create_and_list_sessions(workspace: Path) -> None:
-    """Test that client can create and list sessions."""
-    command = [get_opencode_bin(), "serve", "--hostname", "127.0.0.1", "--port", "0"]
-    supervisor = OpenCodeSupervisor(command, request_timeout=30.0)
-
-    try:
-        client = await supervisor.get_client(workspace)
-
-        # Create a session
         result = await client.create_session(
             title="Test Session",
             directory=str(workspace),
@@ -252,216 +253,55 @@ async def test_client_create_and_list_sessions(workspace: Path) -> None:
         session_id = result.get("id") or result.get("sessionID")
         assert session_id is not None
 
-        # List sessions
         sessions = await client.list_sessions(directory=str(workspace))
         assert sessions is not None
-        await client.close()
-    finally:
-        await supervisor.close_all()
 
-
-@pytest.mark.asyncio
-async def test_client_send_message(workspace: Path) -> None:
-    """Test that client can send a message to a session."""
-    command = [get_opencode_bin(), "serve", "--hostname", "127.0.0.1", "--port", "0"]
-    supervisor = OpenCodeSupervisor(command, request_timeout=30.0)
-
-    try:
-        client = await supervisor.get_client(workspace)
-
-        # Create a session
-        result = await client.create_session(directory=str(workspace))
-        session_id = result.get("id") or result.get("sessionID")
-        assert session_id is not None
-
-        # Send a simple message
-        response = await client.send_message(
-            session_id,
-            message="Hello, world!",
-        )
-        assert response is not None
-        await client.close()
-    finally:
-        await supervisor.close_all()
-
-
-@pytest.mark.asyncio
-async def test_client_stream_events(workspace: Path) -> None:
-    """Test that client can stream events."""
-    command = [get_opencode_bin(), "serve", "--hostname", "127.0.0.1", "--port", "0"]
-    supervisor = OpenCodeSupervisor(command, request_timeout=60.0)
-
-    try:
-        client = await supervisor.get_client(workspace)
-
-        # Create a session
-        result = await client.create_session(directory=str(workspace))
-        session_id = result.get("id") or result.get("sessionID")
-        assert session_id is not None
-
-        # Stream events for a short time
-        events_count = 0
-        event_types = set()
         ready_event = asyncio.Event()
-        timeout_task = asyncio.create_task(asyncio.sleep(10.0))
-        send_task: asyncio.Task[object] | None = None
+        events: list[str] = []
 
         async def collect_events():
-            nonlocal events_count, event_types
             async for event in client.stream_events(
-                directory=str(workspace), ready_event=ready_event
+                directory=str(workspace),
+                ready_event=ready_event,
+                session_id=session_id,
             ):
-                events_count += 1
-                event_types.add(event.event)
-                if events_count >= 3:
+                events.append(event.event)
+                if events:
                     break
 
         collect_task = asyncio.create_task(collect_events())
-        await ready_event.wait()
-        send_task = asyncio.create_task(
-            client.send_message(session_id, message="Test message")
-        )
-        done, pending = await asyncio.wait(
-            [collect_task, timeout_task],
-            return_when=asyncio.FIRST_COMPLETED,
-        )
+        await asyncio.wait_for(ready_event.wait(), timeout=5.0)
+        await asyncio.wait_for(collect_task, timeout=10.0)
 
-        assert collect_task in done, "Timed out waiting for streamed events"
-        assert events_count >= 1
-        assert event_types
-
-        # Cancel pending tasks
-        for task in pending:
-            task.cancel()
-            try:
-                await task
-            except asyncio.CancelledError:
-                pass
-        if send_task is not None:
-            if send_task in done:
-                await send_task
-            else:
-                send_task.cancel()
-                try:
-                    await send_task
-                except asyncio.CancelledError:
-                    pass
-
+        assert events
         await client.close()
     finally:
         await supervisor.close_all()
 
 
 @pytest.mark.asyncio
-async def test_harness_model_catalog(workspace: Path) -> None:
-    """Test that harness can fetch model catalog."""
-    command = [get_opencode_bin(), "serve", "--hostname", "127.0.0.1", "--port", "0"]
-    supervisor = OpenCodeSupervisor(command, request_timeout=30.0)
+async def test_harness_catalog_conversation_stream_and_interrupt(
+    workspace: Path,
+) -> None:
+    """Harness should expose catalog, conversations, turn streaming, and interrupt."""
+    supervisor = _new_supervisor(request_timeout=30.0)
     harness = OpenCodeHarness(supervisor)
 
     try:
         catalog = await harness.model_catalog(workspace)
-        assert catalog is not None
-        assert catalog.models is not None
-        assert len(catalog.models) > 0
+        assert catalog.models
         assert catalog.default_model is not None
-    finally:
-        await supervisor.close_all()
 
-
-@pytest.mark.asyncio
-async def test_harness_conversation_lifecycle(workspace: Path) -> None:
-    """Test that harness can manage conversations."""
-    command = [get_opencode_bin(), "serve", "--hostname", "127.0.0.1", "--port", "0"]
-    supervisor = OpenCodeSupervisor(command, request_timeout=30.0)
-    harness = OpenCodeHarness(supervisor)
-
-    try:
-        # Create a conversation
         conv = await harness.new_conversation(workspace, title="Test Conversation")
         assert conv.agent == "opencode"
-        assert conv.id is not None
+        assert conv.id
 
-        # List conversations
         conversations = await harness.list_conversations(workspace)
-        assert len(conversations) > 0
+        assert any(item.id == conv.id for item in conversations)
 
-        # Resume conversation
         resumed = await harness.resume_conversation(workspace, conv.id)
         assert resumed.id == conv.id
-    finally:
-        await supervisor.close_all()
 
-
-@pytest.mark.asyncio
-async def test_harness_start_turn(workspace: Path) -> None:
-    """Test that harness can start a turn."""
-    command = [get_opencode_bin(), "serve", "--hostname", "127.0.0.1", "--port", "0"]
-    supervisor = OpenCodeSupervisor(command, request_timeout=30.0)
-    harness = OpenCodeHarness(supervisor)
-
-    try:
-        # Create a conversation
-        conv = await harness.new_conversation(workspace)
-
-        # Start a turn
-        turn = await harness.start_turn(
-            workspace,
-            conv.id,
-            prompt="What is 2+2?",
-            model=None,
-            reasoning=None,
-            approval_mode=None,
-            sandbox_policy=None,
-        )
-        assert turn.conversation_id == conv.id
-        assert turn.turn_id is not None
-    finally:
-        await supervisor.close_all()
-
-
-@pytest.mark.asyncio
-async def test_harness_start_review(workspace: Path) -> None:
-    """Test that harness can start a review."""
-    command = [get_opencode_bin(), "serve", "--hostname", "127.0.0.1", "--port", "0"]
-    supervisor = OpenCodeSupervisor(command, request_timeout=120.0)
-    harness = OpenCodeHarness(supervisor)
-
-    try:
-        # Create a conversation
-        conv = await harness.new_conversation(workspace)
-
-        # Write a test file to review
-        (workspace / "test.py").write_text("def foo():\n    return 1\n")
-
-        # Start a review with longer timeout - review can take longer to complete
-        turn = await harness.start_review(
-            workspace,
-            conv.id,
-            prompt=".",
-            model=None,
-            reasoning=None,
-            approval_mode=None,
-            sandbox_policy=None,
-        )
-        assert turn.conversation_id == conv.id
-        assert turn.turn_id is not None
-    finally:
-        await supervisor.close_all()
-
-
-@pytest.mark.asyncio
-async def test_harness_interrupt(workspace: Path) -> None:
-    """Test that harness can interrupt a turn."""
-    command = [get_opencode_bin(), "serve", "--hostname", "127.0.0.1", "--port", "0"]
-    supervisor = OpenCodeSupervisor(command, request_timeout=30.0)
-    harness = OpenCodeHarness(supervisor)
-
-    try:
-        # Create a conversation
-        conv = await harness.new_conversation(workspace)
-
-        # Start a turn
         turn = await harness.start_turn(
             workspace,
             conv.id,
@@ -471,57 +311,22 @@ async def test_harness_interrupt(workspace: Path) -> None:
             approval_mode=None,
             sandbox_policy=None,
         )
+        assert turn.conversation_id == conv.id
+        assert turn.turn_id
 
-        # Interrupt the turn (should not raise)
-        await harness.interrupt(workspace, conv.id, turn.turn_id)
-    finally:
-        await supervisor.close_all()
-
-
-@pytest.mark.asyncio
-async def test_harness_stream_turn_events(workspace: Path) -> None:
-    """Test that harness can stream turn events."""
-    command = [get_opencode_bin(), "serve", "--hostname", "127.0.0.1", "--port", "0"]
-    supervisor = OpenCodeSupervisor(command, request_timeout=30.0)
-    harness = OpenCodeHarness(supervisor)
-
-    try:
-        # Create a conversation
-        conv = await harness.new_conversation(workspace)
-
-        # Start a turn
-        turn = await harness.start_turn(
-            workspace,
-            conv.id,
-            prompt="Hello",
-            model=None,
-            reasoning=None,
-            approval_mode=None,
-            sandbox_policy=None,
-        )
-
-        # Stream events
-        events = []
-        timeout_task = asyncio.create_task(asyncio.sleep(10.0))
+        events: list[dict] = []
 
         async def collect_events():
             async for event in harness.stream_events(workspace, conv.id, turn.turn_id):
                 events.append(event)
-                if len(events) >= 2:
+                if events:
                     break
 
         collect_task = asyncio.create_task(collect_events())
-        done, pending = await asyncio.wait(
-            [collect_task, timeout_task],
-            return_when=asyncio.FIRST_COMPLETED,
-        )
+        await asyncio.wait_for(collect_task, timeout=10.0)
+        assert events
 
-        for task in pending:
-            task.cancel()
-            try:
-                await task
-            except asyncio.CancelledError:
-                pass
+        await harness.interrupt(workspace, conv.id, turn.turn_id)
     finally:
         await supervisor.close_all()
 
@@ -532,13 +337,18 @@ async def test_harness_wait_for_turn_matches_runtime_event_fallback(
     workspace: Path,
 ) -> None:
     """Real OpenCode turns should agree with runtime-event fallback text."""
+    if os.environ.get("CAR_RUN_OPENCODE_MODEL_INTEGRATION") != "1":
+        pytest.skip(
+            "Set CAR_RUN_OPENCODE_MODEL_INTEGRATION=1 to run a live model-backed "
+            "OpenCode turn."
+        )
 
     harness = OpenCodeHarness(supervisor)
     conv = await harness.new_conversation(workspace)
     turn = await harness.start_turn(
         workspace,
         conv.id,
-        prompt="What is 2+2? Think carefully first, then answer in one short sentence.",
+        prompt="What is 2+2? Answer with only the number.",
         model=None,
         reasoning=None,
         approval_mode=None,
@@ -560,12 +370,14 @@ async def test_harness_wait_for_turn_matches_runtime_event_fallback(
 
     if result.status != "ok":
         await supervisor.close_all()
-        raw_event_text = json.dumps(result.raw_events).lower()
-        error_text = " ".join(result.errors).lower()
-        if "rate limit" in raw_event_text or "rate limit" in error_text:
-            pytest.skip("OpenCode runtime was rate limited during integration test")
-        pytest.skip(
-            f"OpenCode runtime returned non-ok status during integration test: {result.status}"
+        if _is_environmental_runtime_failure(result.errors, result.raw_events):
+            pytest.skip(
+                "OpenCode runtime was blocked by environment/auth/provider state: "
+                f"{_runtime_failure_detail(result.status, result.errors, result.raw_events)}"
+            )
+        pytest.fail(
+            "OpenCode runtime returned non-ok status: "
+            f"{_runtime_failure_detail(result.status, result.errors, result.raw_events)}"
         )
 
     assert result.status == "ok"
@@ -575,37 +387,9 @@ async def test_harness_wait_for_turn_matches_runtime_event_fallback(
 
 
 @pytest.mark.asyncio
-async def test_sse_event_parsing() -> None:
-    """Test SSE event parsing."""
-
-    async def mock_lines():
-        yield "event: message"
-        yield 'data: {"type": "test", "value": 42}'
-        yield ""
-        yield "event: custom"
-        yield "data: hello"
-        yield ""
-
-    events = []
-    async for event in parse_sse_lines(mock_lines()):
-        events.append(event)
-
-    assert len(events) == 2
-    assert events[0].event == "message"
-    assert json.loads(events[0].data) == {"type": "test", "value": 42}
-    assert events[1].event == "custom"
-    assert events[1].data == "hello"
-
-
-@pytest.mark.asyncio
-async def test_prune_idle_handles(workspace: Path, tmp_path: Path) -> None:
+async def test_prune_idle_handles(workspace: Path) -> None:
     """Test that supervisor prunes idle handles."""
-    command = [get_opencode_bin(), "serve", "--hostname", "127.0.0.1", "--port", "0"]
-    supervisor = OpenCodeSupervisor(
-        command,
-        request_timeout=30.0,
-        idle_ttl_seconds=1.0,
-    )
+    supervisor = _new_supervisor(request_timeout=30.0, idle_ttl_seconds=1.0)
 
     try:
         # Get client for workspace

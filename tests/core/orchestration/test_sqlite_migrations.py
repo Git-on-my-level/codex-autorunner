@@ -342,17 +342,12 @@ def test_turn_execution_contract_migration_backfills_legacy_thread_rows(
         conn.execute("DELETE FROM orch_schema_migrations WHERE version >= 37")
 
         version = apply_orchestration_migrations(conn)
-        rows = {
-            row["execution_id"]: row
-            for row in conn.execute(
-                """
+        rows = {row["execution_id"]: row for row in conn.execute("""
                 SELECT execution_id, turn_contract_version, turn_request_json,
                        turn_record_json
                   FROM orch_thread_executions
                  WHERE thread_target_id = 'thread-legacy'
-                """
-            ).fetchall()
-        }
+                """).fetchall()}
 
     assert version == ORCHESTRATION_SCHEMA_VERSION
     queued_request = json.loads(rows["turn-queued"]["turn_request_json"])
@@ -528,16 +523,11 @@ def test_turn_execution_contract_migration_repairs_legacy_opencode_models(
         conn.execute("DELETE FROM orch_schema_migrations WHERE version >= 37")
 
         version = apply_orchestration_migrations(conn)
-        rows = {
-            row["execution_id"]: row
-            for row in conn.execute(
-                """
+        rows = {row["execution_id"]: row for row in conn.execute("""
                 SELECT execution_id, turn_request_json, turn_record_json
                   FROM orch_thread_executions
                  WHERE thread_target_id = 'thread-opencode-legacy'
-                """
-            ).fetchall()
-        }
+                """).fetchall()}
 
     assert version == ORCHESTRATION_SCHEMA_VERSION
     unresolved_request = json.loads(rows["turn-unresolved"]["turn_request_json"])
@@ -671,13 +661,11 @@ def test_legacy_transcript_backfill_uses_shared_importer_shape(
     with _connect(hub_root / ".codex-autorunner" / "orchestration.sqlite3") as conn:
         apply_orchestration_migrations(conn)
         result = backfill_legacy_transcript_mirrors(hub_root, conn)
-        row = conn.execute(
-            """
+        row = conn.execute("""
             SELECT target_kind, target_id, text_content, text_preview, metadata_json
               FROM orch_transcript_mirrors
              WHERE transcript_mirror_id = 'legacy-turn'
-            """
-        ).fetchone()
+            """).fetchone()
 
     assert result == {
         "transcripts": 1,
@@ -698,17 +686,14 @@ def test_apply_orchestration_migrations_copies_legacy_backfill_flags_into_operat
     db_path = tmp_path / "orchestration.sqlite3"
 
     with _connect(db_path) as conn:
-        conn.execute(
-            """
+        conn.execute("""
             CREATE TABLE orch_schema_migrations (
                 version INTEGER PRIMARY KEY,
                 name TEXT NOT NULL,
                 applied_at TEXT NOT NULL
             )
-            """
-        )
-        conn.execute(
-            """
+            """)
+        conn.execute("""
             CREATE TABLE orch_migration_runs (
                 run_id TEXT PRIMARY KEY,
                 started_at TEXT NOT NULL,
@@ -718,37 +703,28 @@ def test_apply_orchestration_migrations_copies_legacy_backfill_flags_into_operat
                 status TEXT NOT NULL,
                 error_text TEXT
             )
-            """
-        )
-        conn.execute(
-            """
+            """)
+        conn.execute("""
             CREATE TABLE orch_legacy_backfill_flags (
                 backfill_key TEXT PRIMARY KEY,
                 completed_at TEXT NOT NULL
             )
-            """
-        )
-        conn.execute(
-            """
+            """)
+        conn.execute("""
             INSERT INTO orch_legacy_backfill_flags (backfill_key, completed_at)
             VALUES ('legacy-flag', '2026-04-06T00:00:00Z')
-            """
-        )
-        conn.execute(
-            """
+            """)
+        conn.execute("""
             INSERT INTO orch_schema_migrations (version, name, applied_at)
             VALUES (25, 'extend_publish_dedupe_index_for_effect_applied', '2026-04-06T00:00:00Z')
-            """
-        )
+            """)
 
         version_after = apply_orchestration_migrations(conn)
-        row = conn.execute(
-            """
+        row = conn.execute("""
             SELECT completed_at
               FROM orch_operation_flags
              WHERE flag_key = 'legacy-flag'
-            """
-        ).fetchone()
+            """).fetchone()
 
     assert version_after == ORCHESTRATION_SCHEMA_VERSION
     assert row is not None
@@ -760,17 +736,14 @@ def test_apply_orchestration_migrations_upgrades_v1_database_to_latest(
 ) -> None:
     db_path = tmp_path / "orchestration.sqlite3"
     with _connect(db_path) as conn:
-        conn.execute(
-            """
+        conn.execute("""
             CREATE TABLE orch_schema_migrations (
                 version INTEGER PRIMARY KEY,
                 name TEXT NOT NULL,
                 applied_at TEXT NOT NULL
             )
-            """
-        )
-        conn.execute(
-            """
+            """)
+        conn.execute("""
             CREATE TABLE orch_migration_runs (
                 run_id TEXT PRIMARY KEY,
                 from_version INTEGER NOT NULL,
@@ -780,43 +753,34 @@ def test_apply_orchestration_migrations_upgrades_v1_database_to_latest(
                 status TEXT NOT NULL,
                 error_text TEXT
             )
-            """
-        )
-        conn.execute(
-            """
+            """)
+        conn.execute("""
             CREATE TABLE orch_thread_targets (
                 thread_target_id TEXT PRIMARY KEY,
                 agent_id TEXT NOT NULL,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             )
-            """
-        )
-        conn.execute(
-            """
+            """)
+        conn.execute("""
             INSERT INTO orch_schema_migrations (version, name, applied_at)
             VALUES (1, 'create_core_orchestration_schema', '2026-03-13T00:00:00Z')
-            """
-        )
+            """)
 
         version_before = current_orchestration_schema_version(conn)
         version_after = apply_orchestration_migrations(conn)
-        binding_table = conn.execute(
-            """
+        binding_table = conn.execute("""
             SELECT name
               FROM sqlite_master
              WHERE type = 'table'
                AND name = 'orch_bindings'
-            """
-        ).fetchone()
-        flow_projection_table = conn.execute(
-            """
+            """).fetchone()
+        flow_projection_table = conn.execute("""
             SELECT name
               FROM sqlite_master
              WHERE type = 'table'
                AND name = 'orch_flow_run_projections'
-            """
-        ).fetchone()
+            """).fetchone()
 
     assert version_before == 1
     assert version_after == ORCHESTRATION_SCHEMA_VERSION
@@ -889,17 +853,14 @@ def test_apply_orchestration_migrations_backfills_thread_projection_columns(
     db_path = tmp_path / "orchestration.sqlite3"
 
     with _connect(db_path) as conn:
-        conn.execute(
-            """
+        conn.execute("""
             CREATE TABLE orch_schema_migrations (
                 version INTEGER PRIMARY KEY,
                 name TEXT NOT NULL,
                 applied_at TEXT NOT NULL
             )
-            """
-        )
-        conn.execute(
-            """
+            """)
+        conn.execute("""
             CREATE TABLE orch_migration_runs (
                 run_id TEXT PRIMARY KEY,
                 from_version INTEGER NOT NULL,
@@ -909,10 +870,8 @@ def test_apply_orchestration_migrations_backfills_thread_projection_columns(
                 status TEXT NOT NULL,
                 error_text TEXT
             )
-            """
-        )
-        conn.execute(
-            """
+            """)
+        conn.execute("""
             CREATE TABLE orch_thread_targets (
                 thread_target_id TEXT PRIMARY KEY,
                 agent_id TEXT NOT NULL,
@@ -935,10 +894,8 @@ def test_apply_orchestration_migrations_backfills_thread_projection_columns(
                 status_updated_at TEXT,
                 status_terminal INTEGER NOT NULL DEFAULT 0
             )
-            """
-        )
-        conn.execute(
-            """
+            """)
+        conn.execute("""
             CREATE TABLE orch_bindings (
                 binding_id TEXT PRIMARY KEY,
                 surface_kind TEXT NOT NULL,
@@ -955,10 +912,8 @@ def test_apply_orchestration_migrations_backfills_thread_projection_columns(
                 updated_at TEXT NOT NULL,
                 disabled_at TEXT
             )
-            """
-        )
-        conn.execute(
-            """
+            """)
+        conn.execute("""
             INSERT INTO orch_thread_targets (
                 thread_target_id, agent_id, backend_thread_id, repo_id,
                 resource_kind, resource_id, workspace_root, created_at, updated_at
@@ -967,10 +922,8 @@ def test_apply_orchestration_migrations_backfills_thread_projection_columns(
                 'repo', 'repo-1', '/tmp/repo', '2026-04-06T00:00:00Z',
                 '2026-04-06T00:00:00Z'
             )
-            """
-        )
-        conn.execute(
-            """
+            """)
+        conn.execute("""
             INSERT INTO orch_bindings (
                 binding_id, surface_kind, surface_key, target_kind, target_id,
                 created_at, updated_at
@@ -978,23 +931,18 @@ def test_apply_orchestration_migrations_backfills_thread_projection_columns(
                 'binding-1', 'discord', 'guild:channel:thread', 'thread',
                 'thread-1', '2026-04-06T00:00:00Z', '2026-04-06T00:00:00Z'
             )
-            """
-        )
-        conn.execute(
-            """
+            """)
+        conn.execute("""
             INSERT INTO orch_schema_migrations (version, name, applied_at)
             VALUES (27, 'enforce_active_queue_item_idempotency', '2026-04-06T00:00:00Z')
-            """
-        )
+            """)
 
         version_after = apply_orchestration_migrations(conn)
-        row = conn.execute(
-            """
+        row = conn.execute("""
             SELECT scope_urn, surface_urn, backend_binding_json
               FROM orch_thread_targets
              WHERE thread_target_id = 'thread-1'
-            """
-        ).fetchone()
+            """).fetchone()
 
     assert version_after == ORCHESTRATION_SCHEMA_VERSION
     assert row is not None
@@ -1009,17 +957,14 @@ def test_apply_orchestration_migrations_backfills_thread_scope_variants(
     db_path = tmp_path / "orchestration.sqlite3"
 
     with _connect(db_path) as conn:
-        conn.execute(
-            """
+        conn.execute("""
             CREATE TABLE orch_schema_migrations (
                 version INTEGER PRIMARY KEY,
                 name TEXT NOT NULL,
                 applied_at TEXT NOT NULL
             )
-            """
-        )
-        conn.execute(
-            """
+            """)
+        conn.execute("""
             CREATE TABLE orch_migration_runs (
                 run_id TEXT PRIMARY KEY,
                 from_version INTEGER NOT NULL,
@@ -1029,10 +974,8 @@ def test_apply_orchestration_migrations_backfills_thread_scope_variants(
                 status TEXT NOT NULL,
                 error_text TEXT
             )
-            """
-        )
-        conn.execute(
-            """
+            """)
+        conn.execute("""
             CREATE TABLE orch_thread_targets (
                 thread_target_id TEXT PRIMARY KEY,
                 agent_id TEXT NOT NULL,
@@ -1056,8 +999,7 @@ def test_apply_orchestration_migrations_backfills_thread_scope_variants(
                 status_updated_at TEXT,
                 status_terminal INTEGER NOT NULL DEFAULT 0
             )
-            """
-        )
+            """)
         rows = [
             (
                 "repo-legacy",
@@ -1101,29 +1043,23 @@ def test_apply_orchestration_migrations_backfills_thread_scope_variants(
             """,
             rows,
         )
-        conn.execute(
-            """
+        conn.execute("""
             INSERT INTO orch_schema_migrations (version, name, applied_at)
             VALUES (27, 'enforce_active_queue_item_idempotency', '2026-04-06T00:00:00Z')
-            """
-        )
+            """)
 
         version_after = apply_orchestration_migrations(conn)
-        scope_rows = conn.execute(
-            """
+        scope_rows = conn.execute("""
             SELECT thread_target_id, repo_id, resource_kind, resource_id, scope_urn
               FROM orch_thread_targets
              ORDER BY thread_target_id
-            """
-        ).fetchall()
+            """).fetchall()
         second_version_after = apply_orchestration_migrations(conn)
-        second_scope_rows = conn.execute(
-            """
+        second_scope_rows = conn.execute("""
             SELECT thread_target_id, repo_id, resource_kind, resource_id, scope_urn
               FROM orch_thread_targets
              ORDER BY thread_target_id
-            """
-        ).fetchall()
+            """).fetchall()
 
     assert version_after == ORCHESTRATION_SCHEMA_VERSION
     assert second_version_after == ORCHESTRATION_SCHEMA_VERSION
@@ -1163,17 +1099,14 @@ def test_apply_orchestration_migrations_adds_publish_journal_tables_from_v7(
     db_path = tmp_path / "orchestration.sqlite3"
 
     with _connect(db_path) as conn:
-        conn.execute(
-            """
+        conn.execute("""
             CREATE TABLE orch_schema_migrations (
                 version INTEGER PRIMARY KEY,
                 name TEXT NOT NULL,
                 applied_at TEXT NOT NULL
             )
-            """
-        )
-        conn.execute(
-            """
+            """)
+        conn.execute("""
             CREATE TABLE orch_migration_runs (
                 run_id TEXT PRIMARY KEY,
                 from_version INTEGER NOT NULL,
@@ -1183,32 +1116,25 @@ def test_apply_orchestration_migrations_adds_publish_journal_tables_from_v7(
                 status TEXT NOT NULL,
                 error_text TEXT
             )
-            """
-        )
-        conn.execute(
-            """
+            """)
+        conn.execute("""
             INSERT INTO orch_schema_migrations (version, name, applied_at)
             VALUES (7, 'backfill_thread_target_metadata_and_resource_ownership', '2026-03-14T00:00:00Z')
-            """
-        )
+            """)
 
         version_after = apply_orchestration_migrations(conn)
-        operation_table = conn.execute(
-            """
+        operation_table = conn.execute("""
             SELECT name
               FROM sqlite_master
              WHERE type = 'table'
                AND name = 'orch_publish_operations'
-            """
-        ).fetchone()
-        attempt_table = conn.execute(
-            """
+            """).fetchone()
+        attempt_table = conn.execute("""
             SELECT name
               FROM sqlite_master
              WHERE type = 'table'
                AND name = 'orch_publish_attempts'
-            """
-        ).fetchone()
+            """).fetchone()
 
     assert version_after == ORCHESTRATION_SCHEMA_VERSION
     assert operation_table is not None
@@ -1221,17 +1147,14 @@ def test_apply_orchestration_migrations_adds_scm_event_table_from_v8(
     db_path = tmp_path / "orchestration.sqlite3"
 
     with _connect(db_path) as conn:
-        conn.execute(
-            """
+        conn.execute("""
             CREATE TABLE orch_schema_migrations (
                 version INTEGER PRIMARY KEY,
                 name TEXT NOT NULL,
                 applied_at TEXT NOT NULL
             )
-            """
-        )
-        conn.execute(
-            """
+            """)
+        conn.execute("""
             CREATE TABLE orch_migration_runs (
                 run_id TEXT PRIMARY KEY,
                 from_version INTEGER NOT NULL,
@@ -1241,24 +1164,19 @@ def test_apply_orchestration_migrations_adds_scm_event_table_from_v8(
                 status TEXT NOT NULL,
                 error_text TEXT
             )
-            """
-        )
-        conn.execute(
-            """
+            """)
+        conn.execute("""
             INSERT INTO orch_schema_migrations (version, name, applied_at)
             VALUES (8, 'add_publish_journal_tables', '2026-03-25T00:00:00Z')
-            """
-        )
+            """)
 
         version_after = apply_orchestration_migrations(conn)
-        scm_event_table = conn.execute(
-            """
+        scm_event_table = conn.execute("""
             SELECT name
               FROM sqlite_master
              WHERE type = 'table'
                AND name = 'orch_scm_events'
-            """
-        ).fetchone()
+            """).fetchone()
 
     assert version_after == ORCHESTRATION_SCHEMA_VERSION
     assert scm_event_table is not None
@@ -1270,17 +1188,14 @@ def test_apply_orchestration_migrations_adds_chat_operation_ledger_from_v20(
     db_path = tmp_path / "orchestration.sqlite3"
 
     with _connect(db_path) as conn:
-        conn.execute(
-            """
+        conn.execute("""
             CREATE TABLE orch_schema_migrations (
                 version INTEGER PRIMARY KEY,
                 name TEXT NOT NULL,
                 applied_at TEXT NOT NULL
             )
-            """
-        )
-        conn.execute(
-            """
+            """)
+        conn.execute("""
             CREATE TABLE orch_migration_runs (
                 run_id TEXT PRIMARY KEY,
                 from_version INTEGER NOT NULL,
@@ -1290,24 +1205,19 @@ def test_apply_orchestration_migrations_adds_chat_operation_ledger_from_v20(
                 status TEXT NOT NULL,
                 error_text TEXT
             )
-            """
-        )
-        conn.execute(
-            """
+            """)
+        conn.execute("""
             INSERT INTO orch_schema_migrations (version, name, applied_at)
             VALUES (20, 'refine_event_projection_execution_indexes', '2026-04-15T00:00:00Z')
-            """
-        )
+            """)
 
         version_after = apply_orchestration_migrations(conn)
-        table = conn.execute(
-            """
+        table = conn.execute("""
             SELECT name
               FROM sqlite_master
              WHERE type = 'table'
                AND name = 'orch_chat_operations'
-            """
-        ).fetchone()
+            """).fetchone()
 
     assert version_after == ORCHESTRATION_SCHEMA_VERSION
     assert table is not None
@@ -1319,17 +1229,14 @@ def test_apply_orchestration_migrations_adds_chat_surface_event_journal_from_v29
     db_path = tmp_path / "orchestration.sqlite3"
 
     with _connect(db_path) as conn:
-        conn.execute(
-            """
+        conn.execute("""
             CREATE TABLE orch_schema_migrations (
                 version INTEGER PRIMARY KEY,
                 name TEXT NOT NULL,
                 applied_at TEXT NOT NULL
             )
-            """
-        )
-        conn.execute(
-            """
+            """)
+        conn.execute("""
             CREATE TABLE orch_migration_runs (
                 run_id TEXT PRIMARY KEY,
                 from_version INTEGER NOT NULL,
@@ -1339,32 +1246,25 @@ def test_apply_orchestration_migrations_adds_chat_surface_event_journal_from_v29
                 status TEXT NOT NULL,
                 error_text TEXT
             )
-            """
-        )
-        conn.execute(
-            """
+            """)
+        conn.execute("""
             INSERT INTO orch_schema_migrations (version, name, applied_at)
             VALUES (29, 'purge_removed_workspace_scope_threads_and_bindings', '2026-04-15T00:00:00Z')
-            """
-        )
+            """)
 
         version_after = apply_orchestration_migrations(conn)
-        table = conn.execute(
-            """
+        table = conn.execute("""
             SELECT name
               FROM sqlite_master
              WHERE type = 'table'
                AND name = 'orch_chat_surface_events'
-            """
-        ).fetchone()
-        unique_index = conn.execute(
-            """
+            """).fetchone()
+        unique_index = conn.execute("""
             SELECT name
               FROM sqlite_master
              WHERE type = 'index'
                AND name = 'sqlite_autoindex_orch_chat_surface_events_1'
-            """
-        ).fetchone()
+            """).fetchone()
 
     assert version_after == ORCHESTRATION_SCHEMA_VERSION
     assert table is not None
@@ -1377,17 +1277,14 @@ def test_apply_orchestration_migrations_reconciles_stale_running_executions_from
     db_path = tmp_path / "orchestration.sqlite3"
 
     with _connect(db_path) as conn:
-        conn.execute(
-            """
+        conn.execute("""
             CREATE TABLE orch_schema_migrations (
                 version INTEGER PRIMARY KEY,
                 name TEXT NOT NULL,
                 applied_at TEXT NOT NULL
             )
-            """
-        )
-        conn.execute(
-            """
+            """)
+        conn.execute("""
             CREATE TABLE orch_migration_runs (
                 run_id TEXT PRIMARY KEY,
                 from_version INTEGER NOT NULL,
@@ -1397,10 +1294,8 @@ def test_apply_orchestration_migrations_reconciles_stale_running_executions_from
                 status TEXT NOT NULL,
                 error_text TEXT
             )
-            """
-        )
-        conn.execute(
-            """
+            """)
+        conn.execute("""
             CREATE TABLE orch_thread_targets (
                 thread_target_id TEXT PRIMARY KEY,
                 lifecycle_status TEXT,
@@ -1408,10 +1303,8 @@ def test_apply_orchestration_migrations_reconciles_stale_running_executions_from
                 status_updated_at TEXT,
                 updated_at TEXT
             )
-            """
-        )
-        conn.execute(
-            """
+            """)
+        conn.execute("""
             CREATE TABLE orch_thread_executions (
                 execution_id TEXT PRIMARY KEY,
                 thread_target_id TEXT NOT NULL,
@@ -1421,14 +1314,11 @@ def test_apply_orchestration_migrations_reconciles_stale_running_executions_from
                 finished_at TEXT,
                 created_at TEXT NOT NULL
             )
-            """
-        )
-        conn.execute(
-            """
+            """)
+        conn.execute("""
             INSERT INTO orch_schema_migrations (version, name, applied_at)
             VALUES (30, 'add_chat_surface_event_journal', '2026-05-11T00:00:00Z')
-            """
-        )
+            """)
         conn.executemany(
             """
             INSERT INTO orch_thread_targets (
@@ -1481,23 +1371,16 @@ def test_apply_orchestration_migrations_reconciles_stale_running_executions_from
         )
 
         version_after = apply_orchestration_migrations(conn)
-        rows = {
-            row["execution_id"]: row
-            for row in conn.execute(
-                """
+        rows = {row["execution_id"]: row for row in conn.execute("""
                 SELECT execution_id, status, error_text, finished_at
                   FROM orch_thread_executions
-                """
-            ).fetchall()
-        }
-        unique_index = conn.execute(
-            """
+                """).fetchall()}
+        unique_index = conn.execute("""
             SELECT name
               FROM sqlite_master
              WHERE type = 'index'
                AND name = 'idx_orch_thread_executions_one_running'
-            """
-        ).fetchone()
+            """).fetchone()
 
     assert version_after == ORCHESTRATION_SCHEMA_VERSION
     assert rows["stale-running"]["status"] == "interrupted"
@@ -1517,17 +1400,14 @@ def test_apply_orchestration_migrations_adds_pr_binding_table_from_v9(
     db_path = tmp_path / "orchestration.sqlite3"
 
     with _connect(db_path) as conn:
-        conn.execute(
-            """
+        conn.execute("""
             CREATE TABLE orch_schema_migrations (
                 version INTEGER PRIMARY KEY,
                 name TEXT NOT NULL,
                 applied_at TEXT NOT NULL
             )
-            """
-        )
-        conn.execute(
-            """
+            """)
+        conn.execute("""
             CREATE TABLE orch_migration_runs (
                 run_id TEXT PRIMARY KEY,
                 from_version INTEGER NOT NULL,
@@ -1537,24 +1417,19 @@ def test_apply_orchestration_migrations_adds_pr_binding_table_from_v9(
                 status TEXT NOT NULL,
                 error_text TEXT
             )
-            """
-        )
-        conn.execute(
-            """
+            """)
+        conn.execute("""
             INSERT INTO orch_schema_migrations (version, name, applied_at)
             VALUES (9, 'add_scm_event_store', '2026-03-25T00:00:00Z')
-            """
-        )
+            """)
 
         version_after = apply_orchestration_migrations(conn)
-        pr_binding_table = conn.execute(
-            """
+        pr_binding_table = conn.execute("""
             SELECT name
               FROM sqlite_master
              WHERE type = 'table'
                AND name = 'orch_pr_bindings'
-            """
-        ).fetchone()
+            """).fetchone()
 
     assert version_after == ORCHESTRATION_SCHEMA_VERSION
     assert pr_binding_table is not None
@@ -1566,17 +1441,14 @@ def test_apply_orchestration_migrations_adds_reaction_state_table_from_v10(
     db_path = tmp_path / "orchestration.sqlite3"
 
     with _connect(db_path) as conn:
-        conn.execute(
-            """
+        conn.execute("""
             CREATE TABLE orch_schema_migrations (
                 version INTEGER PRIMARY KEY,
                 name TEXT NOT NULL,
                 applied_at TEXT NOT NULL
             )
-            """
-        )
-        conn.execute(
-            """
+            """)
+        conn.execute("""
             CREATE TABLE orch_migration_runs (
                 run_id TEXT PRIMARY KEY,
                 from_version INTEGER NOT NULL,
@@ -1586,24 +1458,19 @@ def test_apply_orchestration_migrations_adds_reaction_state_table_from_v10(
                 status TEXT NOT NULL,
                 error_text TEXT
             )
-            """
-        )
-        conn.execute(
-            """
+            """)
+        conn.execute("""
             INSERT INTO orch_schema_migrations (version, name, applied_at)
             VALUES (10, 'add_pr_binding_store', '2026-03-25T00:00:00Z')
-            """
-        )
+            """)
 
         version_after = apply_orchestration_migrations(conn)
-        reaction_state_table = conn.execute(
-            """
+        reaction_state_table = conn.execute("""
             SELECT name
               FROM sqlite_master
              WHERE type = 'table'
                AND name = 'orch_reaction_state'
-            """
-        ).fetchone()
+            """).fetchone()
 
     assert version_after == ORCHESTRATION_SCHEMA_VERSION
     assert reaction_state_table is not None
@@ -1615,17 +1482,14 @@ def test_apply_orchestration_migrations_adds_reaction_escalation_column_from_v11
     db_path = tmp_path / "orchestration.sqlite3"
 
     with _connect(db_path) as conn:
-        conn.execute(
-            """
+        conn.execute("""
             CREATE TABLE orch_schema_migrations (
                 version INTEGER PRIMARY KEY,
                 name TEXT NOT NULL,
                 applied_at TEXT NOT NULL
             )
-            """
-        )
-        conn.execute(
-            """
+            """)
+        conn.execute("""
             CREATE TABLE orch_migration_runs (
                 run_id TEXT PRIMARY KEY,
                 from_version INTEGER NOT NULL,
@@ -1635,10 +1499,8 @@ def test_apply_orchestration_migrations_adds_reaction_escalation_column_from_v11
                 status TEXT NOT NULL,
                 error_text TEXT
             )
-            """
-        )
-        conn.execute(
-            """
+            """)
+        conn.execute("""
             CREATE TABLE orch_reaction_state (
                 binding_id TEXT NOT NULL,
                 reaction_kind TEXT NOT NULL,
@@ -1659,14 +1521,11 @@ def test_apply_orchestration_migrations_adds_reaction_escalation_column_from_v11
                 metadata_json TEXT NOT NULL DEFAULT '{}',
                 PRIMARY KEY (binding_id, reaction_kind, fingerprint)
             )
-            """
-        )
-        conn.execute(
-            """
+            """)
+        conn.execute("""
             INSERT INTO orch_schema_migrations (version, name, applied_at)
             VALUES (11, 'add_scm_reaction_state_store', '2026-03-25T00:00:00Z')
-            """
-        )
+            """)
 
         version_after = apply_orchestration_migrations(conn)
         columns = {
@@ -1684,17 +1543,14 @@ def test_apply_orchestration_migrations_adds_feedback_report_table_from_v13(
     db_path = tmp_path / "orchestration.sqlite3"
 
     with _connect(db_path) as conn:
-        conn.execute(
-            """
+        conn.execute("""
             CREATE TABLE orch_schema_migrations (
                 version INTEGER PRIMARY KEY,
                 name TEXT NOT NULL,
                 applied_at TEXT NOT NULL
             )
-            """
-        )
-        conn.execute(
-            """
+            """)
+        conn.execute("""
             CREATE TABLE orch_migration_runs (
                 run_id TEXT PRIMARY KEY,
                 from_version INTEGER NOT NULL,
@@ -1704,24 +1560,19 @@ def test_apply_orchestration_migrations_adds_feedback_report_table_from_v13(
                 status TEXT NOT NULL,
                 error_text TEXT
             )
-            """
-        )
-        conn.execute(
-            """
+            """)
+        conn.execute("""
             INSERT INTO orch_schema_migrations (version, name, applied_at)
             VALUES (13, 'add_scm_event_correlation_ids', '2026-03-26T00:00:00Z')
-            """
-        )
+            """)
 
         version_after = apply_orchestration_migrations(conn)
-        feedback_report_table = conn.execute(
-            """
+        feedback_report_table = conn.execute("""
             SELECT name
               FROM sqlite_master
              WHERE type = 'table'
                AND name = 'orch_feedback_reports'
-            """
-        ).fetchone()
+            """).fetchone()
 
     assert version_after == ORCHESTRATION_SCHEMA_VERSION
     assert feedback_report_table is not None
@@ -1733,17 +1584,14 @@ def test_apply_orchestration_migrations_backfills_resource_owner_columns(
     db_path = tmp_path / "orchestration.sqlite3"
 
     with _connect(db_path) as conn:
-        conn.execute(
-            """
+        conn.execute("""
             CREATE TABLE orch_schema_migrations (
                 version INTEGER PRIMARY KEY,
                 name TEXT NOT NULL,
                 applied_at TEXT NOT NULL
             )
-            """
-        )
-        conn.execute(
-            """
+            """)
+        conn.execute("""
             CREATE TABLE orch_migration_runs (
                 run_id TEXT PRIMARY KEY,
                 from_version INTEGER NOT NULL,
@@ -1753,10 +1601,8 @@ def test_apply_orchestration_migrations_backfills_resource_owner_columns(
                 status TEXT NOT NULL,
                 error_text TEXT
             )
-            """
-        )
-        conn.execute(
-            """
+            """)
+        conn.execute("""
             CREATE TABLE orch_thread_targets (
                 thread_target_id TEXT PRIMARY KEY,
                 agent_id TEXT NOT NULL,
@@ -1776,10 +1622,8 @@ def test_apply_orchestration_migrations_backfills_resource_owner_columns(
                 status_updated_at TEXT,
                 status_terminal INTEGER NOT NULL DEFAULT 0
             )
-            """
-        )
-        conn.execute(
-            """
+            """)
+        conn.execute("""
             CREATE TABLE orch_bindings (
                 binding_id TEXT PRIMARY KEY,
                 surface_kind TEXT NOT NULL,
@@ -1794,10 +1638,8 @@ def test_apply_orchestration_migrations_backfills_resource_owner_columns(
                 updated_at TEXT NOT NULL,
                 disabled_at TEXT
             )
-            """
-        )
-        conn.execute(
-            """
+            """)
+        conn.execute("""
             INSERT INTO orch_thread_targets (
                 thread_target_id,
                 agent_id,
@@ -1806,10 +1648,8 @@ def test_apply_orchestration_migrations_backfills_resource_owner_columns(
                 created_at,
                 updated_at
             ) VALUES ('thread-1', 'codex', 'repo-1', '/tmp/repo-1', '2026-03-14T00:00:00Z', '2026-03-14T00:00:00Z')
-            """
-        )
-        conn.execute(
-            """
+            """)
+        conn.execute("""
             INSERT INTO orch_bindings (
                 binding_id,
                 surface_kind,
@@ -1824,30 +1664,23 @@ def test_apply_orchestration_migrations_backfills_resource_owner_columns(
                 updated_at,
                 disabled_at
             ) VALUES ('binding-1', 'discord', 'chan-1', 'thread', 'thread-1', 'codex', 'repo-1', 'reuse', '{}', '2026-03-14T00:00:00Z', '2026-03-14T00:00:00Z', NULL)
-            """
-        )
-        conn.execute(
-            """
+            """)
+        conn.execute("""
             INSERT INTO orch_schema_migrations (version, name, applied_at)
             VALUES (5, 'enforce_active_binding_uniqueness', '2026-03-14T00:00:00Z')
-            """
-        )
+            """)
 
         version_after = apply_orchestration_migrations(conn)
-        thread_row = conn.execute(
-            """
+        thread_row = conn.execute("""
             SELECT repo_id, resource_kind, resource_id
               FROM orch_thread_targets
              WHERE thread_target_id = 'thread-1'
-            """
-        ).fetchone()
-        binding_row = conn.execute(
-            """
+            """).fetchone()
+        binding_row = conn.execute("""
             SELECT repo_id, resource_kind, resource_id
               FROM orch_bindings
              WHERE binding_id = 'binding-1'
-            """
-        ).fetchone()
+            """).fetchone()
 
     assert version_after == ORCHESTRATION_SCHEMA_VERSION
     assert thread_row is not None
@@ -1867,25 +1700,20 @@ def test_apply_v29_purges_removed_workspace_owner_threads_and_bindings(
     _rk = "agent_" + "workspace"
 
     with _connect(db_path) as conn:
-        conn.execute(
-            """
+        conn.execute("""
             CREATE TABLE orch_thread_targets (
                 thread_target_id TEXT PRIMARY KEY,
                 scope_urn TEXT,
                 resource_kind TEXT
             )
-            """
-        )
-        conn.execute(
-            """
+            """)
+        conn.execute("""
             CREATE TABLE orch_bindings (
                 binding_id TEXT PRIMARY KEY,
                 target_kind TEXT NOT NULL
             )
-            """
-        )
-        conn.execute(
-            f"""
+            """)
+        conn.execute(f"""
             INSERT INTO orch_thread_targets (
                 thread_target_id,
                 scope_urn,
@@ -1894,15 +1722,12 @@ def test_apply_v29_purges_removed_workspace_owner_threads_and_bindings(
                 ('ws-scope', '{_rk}:zc-main', 'repo'),
                 ('ws-kind', NULL, '{_rk}'),
                 ('repo-scope', 'repo:foo', 'repo')
-            """
-        )
-        conn.execute(
-            f"""
+            """)
+        conn.execute(f"""
             INSERT INTO orch_bindings (binding_id, target_kind) VALUES
                 ('b-ws', '{_rk}'),
                 ('b-thread', 'thread')
-            """
-        )
+            """)
         migrations_module._apply_v29(conn)
         thread_ids = {
             str(row["thread_target_id"])

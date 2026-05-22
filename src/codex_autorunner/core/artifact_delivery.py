@@ -492,8 +492,7 @@ class ArtifactDeliveryStore:
 
     def _ensure_schema(self) -> None:
         with open_sqlite(self.db_path) as conn:
-            conn.execute(
-                """
+            conn.execute("""
                 CREATE TABLE IF NOT EXISTS artifacts (
                     artifact_id TEXT PRIMARY KEY,
                     filename TEXT NOT NULL,
@@ -505,10 +504,8 @@ class ArtifactDeliveryStore:
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL
                 )
-                """
-            )
-            conn.execute(
-                """
+                """)
+            conn.execute("""
                 CREATE TABLE IF NOT EXISTS delivery_intents (
                     delivery_id TEXT PRIMARY KEY,
                     artifact_id TEXT NOT NULL REFERENCES artifacts(artifact_id),
@@ -530,20 +527,15 @@ class ArtifactDeliveryStore:
                     failed_at TEXT,
                     cancelled_at TEXT
                 )
-                """
-            )
-            conn.execute(
-                """
+                """)
+            conn.execute("""
                 CREATE INDEX IF NOT EXISTS idx_delivery_claim
                     ON delivery_intents(state, next_attempt_at, created_at)
-                """
-            )
-            conn.execute(
-                """
+                """)
+            conn.execute("""
                 CREATE INDEX IF NOT EXISTS idx_delivery_target
                     ON delivery_intents(target_surface, target_conversation_key)
-                """
-            )
+                """)
 
 
 class ArtifactDeliveryService:

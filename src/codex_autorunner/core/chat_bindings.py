@@ -288,12 +288,10 @@ def _read_current_telegram_repo_counts(
         return {}
     try:
         with open_sqlite(db_path) as conn:
-            rows = conn.execute(
-                """
+            rows = conn.execute("""
                 SELECT topic_key, chat_id, thread_id, scope, workspace_path, repo_id
                   FROM telegram_topics
-                """
-            ).fetchall()
+                """).fetchall()
             scope_map = _read_telegram_current_scope_map(conn)
     except sqlite3.OperationalError as exc:
         if "no such table" in str(exc).lower():
@@ -454,12 +452,10 @@ def _latest_discord_binding_timestamps_by_workspace(db_path: Path) -> dict[str, 
                 or "updated_at" not in columns
             ):
                 return {}
-            rows = conn.execute(
-                """
+            rows = conn.execute("""
                 SELECT workspace_path, updated_at
                   FROM channel_bindings
-                """
-            ).fetchall()
+                """).fetchall()
     except sqlite3.OperationalError as exc:
         if "no such table" in str(exc).lower():
             return {}
@@ -626,8 +622,7 @@ def _read_orchestration_binding_rows(
         return []
     try:
         with open_orchestration_sqlite(hub_root, durable=False, migrate=False) as conn:
-            rows = conn.execute(
-                """
+            rows = conn.execute("""
                 SELECT
                     b.surface_kind,
                     b.surface_key,
@@ -640,8 +635,7 @@ def _read_orchestration_binding_rows(
                     ON t.thread_target_id = b.target_id
                  WHERE b.disabled_at IS NULL
                    AND b.target_kind = 'thread'
-                """
-            ).fetchall()
+                """).fetchall()
     except sqlite3.OperationalError as exc:
         if "no such table" in str(exc).lower():
             return []
@@ -697,8 +691,7 @@ def active_chat_binding_metadata_by_thread(
 
     try:
         with open_orchestration_sqlite(hub_root, durable=False, migrate=False) as conn:
-            rows = conn.execute(
-                """
+            rows = conn.execute("""
                 SELECT
                     target_id,
                     surface_kind,
@@ -709,8 +702,7 @@ def active_chat_binding_metadata_by_thread(
                    AND target_kind = 'thread'
                    AND surface_kind IN ('discord', 'telegram')
                    AND TRIM(COALESCE(target_id, '')) != ''
-                """
-            ).fetchall()
+                """).fetchall()
     except sqlite3.OperationalError as exc:
         if "no such table" in str(exc).lower():
             return {}
@@ -868,14 +860,12 @@ def _active_managed_thread_counts(
         counts[repo_id] += count
     try:
         with open_orchestration_sqlite(hub_root, durable=False) as conn:
-            rows = conn.execute(
-                """
+            rows = conn.execute("""
                 SELECT workspace_root
                   FROM orch_thread_targets
                  WHERE lifecycle_status = 'active'
                    AND (repo_id IS NULL OR TRIM(repo_id) = '')
-                """
-            ).fetchall()
+                """).fetchall()
     except sqlite3.OperationalError:
         return dict(counts)
 

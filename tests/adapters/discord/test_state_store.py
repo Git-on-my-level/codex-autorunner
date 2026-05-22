@@ -475,8 +475,7 @@ async def test_interaction_ledger_schema_migrates_from_v9(tmp_path: Path) -> Non
     try:
         conn.execute("CREATE TABLE schema_info (version INTEGER NOT NULL)")
         conn.execute("INSERT INTO schema_info(version) VALUES (9)")
-        conn.execute(
-            """
+        conn.execute("""
             CREATE TABLE channel_bindings (
                 channel_id TEXT PRIMARY KEY,
                 guild_id TEXT,
@@ -484,10 +483,8 @@ async def test_interaction_ledger_schema_migrates_from_v9(tmp_path: Path) -> Non
                 repo_id TEXT,
                 updated_at TEXT NOT NULL
             )
-            """
-        )
-        conn.execute(
-            """
+            """)
+        conn.execute("""
             CREATE TABLE outbox (
                 record_id TEXT PRIMARY KEY,
                 channel_id TEXT NOT NULL,
@@ -499,8 +496,7 @@ async def test_interaction_ledger_schema_migrates_from_v9(tmp_path: Path) -> Non
                 created_at TEXT NOT NULL,
                 last_error TEXT
             )
-            """
-        )
+            """)
         conn.commit()
     finally:
         conn.close()
@@ -564,14 +560,12 @@ async def test_interaction_ledger_prunes_stale_records_on_initialize(
 
     conn = sqlite3.connect(db_path)
     try:
-        conn.execute(
-            """
+        conn.execute("""
             UPDATE interaction_ledger
             SET last_seen_at = '2000-01-01T00:00:00Z',
                 updated_at = '2000-01-01T00:00:00Z'
             WHERE interaction_id = 'stale-1'
-            """
-        )
+            """)
         conn.commit()
     finally:
         conn.close()

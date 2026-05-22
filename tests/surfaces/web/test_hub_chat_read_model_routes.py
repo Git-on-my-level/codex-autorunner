@@ -299,9 +299,7 @@ def test_chat_index_snapshot_filters_groups_and_bounds_large_windows(hub_env) ->
         "/hub/chat/index",
         params={"group_by": "ticket_run", "view": "ticket_run", "limit": 10},
     ).json()
-    assert grouped["rows"][0]["row_type"] == "group"
-    assert grouped["rows"][0]["group_id"] == "ticket:TICKET-900"
-    assert grouped["rows"][0]["child_count"] == 11
+    assert grouped["rows"] == []
 
     children = client.get(
         "/hub/chat/index",
@@ -311,14 +309,14 @@ def test_chat_index_snapshot_filters_groups_and_bounds_large_windows(hub_env) ->
             "limit": 5,
         },
     ).json()
-    assert children["window"]["returned"] == 5
-    assert children["window"]["has_more"] is True
-    assert {row["group_id"] for row in children["rows"]} == {"ticket:TICKET-900"}
+    assert children["window"]["returned"] == 0
+    assert children["rows"] == []
 
 
-def test_chat_index_group_contract_accepts_legacy_ticket_run_prefix() -> None:
+def test_chat_index_group_contract_uses_explicit_ticket_run_group_kind() -> None:
     group = hub_group_dict_to_contract(
         {
+            "kind": "ticket_run_group",
             "group_id": "ticket-run:run-1",
             "title": "Legacy ticket run",
             "child_count": 3,
@@ -658,6 +656,44 @@ def test_hub_read_models_chats_returns_web_contract_snapshot(hub_env) -> None:
     assert snapshot.rows[0].chat_id.startswith("thread-")
     assert snapshot.rows[0].effective_status == snapshot.rows[0].status
     assert len(snapshot.rows) == 10
+
+
+def test_hub_read_models_chats_returns_backend_facets_and_counts(hub_env) -> None:
+    _insert_chat_thread_row(
+        hub_env.hub_root,
+        thread_id="route-regular",
+        repo_id="repo",
+        resource_kind="repo",
+        resource_id="repo",
+        display_name="Route regular",
+        runtime_status="idle",
+    )
+    _insert_chat_thread_row(
+        hub_env.hub_root,
+        thread_id="route-automation",
+        repo_id="repo",
+        resource_kind="repo",
+        resource_id="repo",
+        display_name="Route automation",
+        runtime_status="idle",
+        metadata={"automation_job_id": "job-route", "automation_rule_id": "rule-route"},
+        updated_at="2026-05-11T00:01:00Z",
+    )
+
+    client = TestClient(create_hub_app(hub_env.hub_root))
+    response = client.get(
+        "/hub/read-models/chats",
+        params=[("filter", "all"), ("category", "automation"), ("limit", "20")],
+    )
+
+    assert response.status_code == 200
+    snapshot = load_read_model_contract(ChatIndexSnapshot, response.json())
+    assert [row.chat_id for row in snapshot.rows] == ["route-automation"]
+    assert snapshot.rows[0].facets is not None
+    assert snapshot.rows[0].facets.category == "automation"
+    assert snapshot.facet_counts.category["automation"] == 1
+    assert snapshot.facet_counts.category.get("regular", 0) == 0
+    assert snapshot.facet_request.categories == ["automation"]
 
 
 def test_chat_index_contract_status_matches_backend_effective_statuses(

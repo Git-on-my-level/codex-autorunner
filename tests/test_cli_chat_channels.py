@@ -284,8 +284,7 @@ def test_chat_resolve_from_notifications_uses_recent_targets(tmp_path: Path) -> 
     db_path = tmp_path / ".codex-autorunner" / "orchestration.sqlite3"
     conn = sqlite3.connect(db_path)
     try:
-        conn.execute(
-            """
+        conn.execute("""
             CREATE TABLE IF NOT EXISTS orch_notification_conversations (
                 notification_id TEXT PRIMARY KEY,
                 correlation_id TEXT NOT NULL DEFAULT 'test',
@@ -304,8 +303,7 @@ def test_chat_resolve_from_notifications_uses_recent_targets(tmp_path: Path) -> 
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             )
-            """
-        )
+            """)
         conn.executemany(
             """
             INSERT INTO orch_notification_conversations (

@@ -87,8 +87,7 @@ def list_telegram_chat_bindings(hub_root: Path) -> list[TelegramChatBinding]:
         thread_columns = table_columns(conn, "orch_thread_targets")
         if not binding_columns:
             return []
-        rows = conn.execute(
-            f"""
+        rows = conn.execute(f"""
             SELECT
                 b.binding_id,
                 b.surface_key AS chat_key,
@@ -105,8 +104,7 @@ def list_telegram_chat_bindings(hub_root: Path) -> list[TelegramChatBinding]:
                 ON t.thread_target_id = b.target_id
              WHERE b.surface_kind = 'telegram'
           ORDER BY b.updated_at DESC, b.created_at DESC
-            """
-        ).fetchall()
+            """).fetchall()
     bindings: list[TelegramChatBinding] = []
     for row in rows:
         chat_key = _normalize_text(row["chat_key"])

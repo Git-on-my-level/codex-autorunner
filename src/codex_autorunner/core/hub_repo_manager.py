@@ -504,15 +504,13 @@ class RepoManager:
     def _bound_thread_target_ids(self) -> set[str]:
         try:
             with open_orchestration_sqlite(self._hub_config.root) as conn:
-                rows = conn.execute(
-                    """
+                rows = conn.execute("""
                     SELECT DISTINCT target_id
                       FROM orch_bindings
                      WHERE disabled_at IS NULL
                        AND target_kind = 'thread'
                        AND TRIM(COALESCE(target_id, '')) != ''
-                    """
-                ).fetchall()
+                    """).fetchall()
         except sqlite3.OperationalError as exc:
             if "no such table" in str(exc).lower():
                 return set()

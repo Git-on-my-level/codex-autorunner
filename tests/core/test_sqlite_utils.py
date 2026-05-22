@@ -60,25 +60,21 @@ def test_apply_versioned_schema_records_history_and_run_status(tmp_path):
             )
 
         assert read_schema_version(conn) == 2
-        migration_rows = conn.execute(
-            """
+        migration_rows = conn.execute("""
             SELECT version, name
               FROM car_schema_migrations
              ORDER BY version ASC
-            """
-        ).fetchall()
+            """).fetchall()
         assert [(int(row["version"]), str(row["name"])) for row in migration_rows] == [
             (1, "add_name"),
             (2, "add_created_at"),
         ]
-        run_row = conn.execute(
-            """
+        run_row = conn.execute("""
             SELECT from_version, target_version, status
               FROM car_migration_runs
              ORDER BY started_at DESC
              LIMIT 1
-            """
-        ).fetchone()
+            """).fetchone()
         assert run_row is not None
         assert int(run_row["from_version"]) == 0
         assert int(run_row["target_version"]) == 2

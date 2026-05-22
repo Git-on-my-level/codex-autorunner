@@ -34,6 +34,7 @@ DEFAULT_CHAT_SURFACE_EVENT_LIMIT = 100
 MAX_CHAT_SURFACE_EVENT_LIMIT = 1000
 DEFAULT_CHAT_INDEX_LIMIT = 50
 MAX_CHAT_INDEX_LIMIT = 200
+CHAT_INDEX_PROJECTION_SCHEMA_VERSION = "chat.index.projection.facets.v1"
 DEFAULT_CHAT_TIMELINE_LIMIT = 50
 MAX_CHAT_TIMELINE_LIMIT = 200
 MAX_CHAT_TIMELINE_PAGE_SOURCE_LIMIT = 1000
@@ -280,6 +281,7 @@ class ChatSurfaceReadService:
         *,
         view: str = "all",
         query: Optional[str] = None,
+        facets: Optional[Mapping[str, Any]] = None,
         surface_kind: Optional[str] = None,
         group_by: Optional[str] = None,
         parent_group_id: Optional[str] = None,
@@ -297,6 +299,7 @@ class ChatSurfaceReadService:
         projection = self._query_chat_index_projection(
             view=view,
             query=query,
+            facets=facets,
             surface_kind=surface_kind,
             group_by=group_by,
             parent_group_id=parent_group_id,
@@ -319,6 +322,7 @@ class ChatSurfaceReadService:
                     "cursor": cursor,
                     "view": view,
                     "query": query,
+                    "facets": _normalize_chat_facet_request(facets),
                     "surface_kind": surface_kind,
                     "group_by": group_by,
                     "parent_group_id": parent_group_id,
@@ -341,10 +345,12 @@ class ChatSurfaceReadService:
                 "surface_kind": surface_kind,
                 "group_by": group_by,
                 "parent_group_id": parent_group_id,
+                "facets": _normalize_chat_facet_request(facets),
             },
             "rows": window,
             "groups": groups if group_by == "ticket_run" else [],
             "counters": counters,
+            "facet_counts": projection["facet_counts"],
         }
         _log_read_model_metric(
             "snapshot_query_latency",
@@ -362,6 +368,7 @@ class ChatSurfaceReadService:
         *,
         view: str = "all",
         query: Optional[str] = None,
+        facets: Optional[Mapping[str, Any]] = None,
         surface_kind: Optional[str] = None,
         group_by: Optional[str] = None,
         parent_group_id: Optional[str] = None,
@@ -402,6 +409,7 @@ class ChatSurfaceReadService:
             snapshot = self.chat_index_snapshot(
                 view=view,
                 query=query,
+                facets=facets,
                 surface_kind=surface_kind,
                 group_by=group_by,
                 parent_group_id=parent_group_id,
@@ -463,19 +471,14 @@ class ChatSurfaceReadService:
         with open_orchestration_sqlite(
             self._hub_root, durable=self._durable, migrate=True
         ) as conn:
-            rows = [
-                _chat_index_row_from_projection(row)
-                for row in conn.execute(
-                    f"""
+            rows = [_chat_index_row_from_projection(row) for row in conn.execute(f"""
                     SELECT row_json, effective_status
                       FROM orch_chat_index_projection
                      WHERE {where_sql}
                      ORDER BY sort_unread_priority DESC,
                               sort_last_activity_desc ASC,
                               row_id ASC
-                    """
-                ).fetchall()
-            ]
+                    """).fetchall()]
         return [row for row in rows if row]
 
     def chat_detail_snapshot(
@@ -693,13 +696,11 @@ class ChatSurfaceReadService:
         with open_orchestration_sqlite(
             self._hub_root, durable=self._durable, migrate=True
         ) as conn:
-            row = conn.execute(
-                """
+            row = conn.execute("""
                 SELECT value
                   FROM orch_chat_index_projection_meta
                  WHERE key = 'projection_revision'
-                """
-            ).fetchone()
+                """).fetchone()
         if row is None:
             return 0
         try:
@@ -720,32 +721,33 @@ class ChatSurfaceReadService:
                 return {
                     "source_signature": source_signature,
                     "stored_source_signature": None,
+                    "projection_schema_version": CHAT_INDEX_PROJECTION_SCHEMA_VERSION,
+                    "stored_projection_schema_version": None,
                     "projection_revision": 0,
                     "row_count": 0,
                     "needs_rebuild": True,
                 }
-            meta = {
-                str(row["key"]): str(row["value"])
-                for row in conn.execute(
-                    """
+            meta = {str(row["key"]): str(row["value"]) for row in conn.execute("""
                     SELECT key, value
                       FROM orch_chat_index_projection_meta
-                     WHERE key IN ('source_signature', 'projection_revision')
-                    """
-                ).fetchall()
-            }
+                     WHERE key IN ('source_signature', 'projection_revision', 'projection_schema_version')
+                    """).fetchall()}
             row = conn.execute(
                 "SELECT COUNT(*) AS row_count FROM orch_chat_index_projection"
             ).fetchone()
         stored_signature = meta.get("source_signature")
+        stored_projection_schema_version = meta.get("projection_schema_version")
         return {
             "source_signature": source_signature,
             "stored_source_signature": stored_signature,
+            "projection_schema_version": CHAT_INDEX_PROJECTION_SCHEMA_VERSION,
+            "stored_projection_schema_version": stored_projection_schema_version,
             "projection_revision": max(
                 0, _safe_int(meta.get("projection_revision"), 0)
             ),
             "row_count": int(row["row_count"] or 0) if row is not None else 0,
-            "needs_rebuild": stored_signature != source_signature,
+            "needs_rebuild": stored_signature != source_signature
+            or stored_projection_schema_version != CHAT_INDEX_PROJECTION_SCHEMA_VERSION,
         }
 
     def repair_stale_bound_surface_archive_state(
@@ -764,8 +766,7 @@ class ChatSurfaceReadService:
         with open_orchestration_sqlite(
             self._hub_root, durable=self._durable, migrate=True
         ) as conn:
-            binding_rows = conn.execute(
-                """
+            binding_rows = conn.execute("""
                 SELECT b.binding_id,
                        b.surface_kind,
                        b.surface_key,
@@ -787,8 +788,7 @@ class ChatSurfaceReadService:
                    AND lower(b.surface_kind) IN ('discord', 'telegram')
                    AND COALESCE(t.lifecycle_status, 'active') != 'archived'
                  ORDER BY b.surface_kind ASC, b.surface_key ASC, b.binding_id ASC
-                """
-            ).fetchall()
+                """).fetchall()
 
         candidates: list[dict[str, Any]] = []
         for row in binding_rows:
@@ -908,16 +908,17 @@ class ChatSurfaceReadService:
         ) as conn:
             with conn:
                 existing_meta = {
-                    str(row["key"]): str(row["value"])
-                    for row in conn.execute(
-                        """
+                    str(row["key"]): str(row["value"]) for row in conn.execute("""
                         SELECT key, value
                           FROM orch_chat_index_projection_meta
-                         WHERE key IN ('source_signature', 'projection_revision')
-                        """
-                    ).fetchall()
+                         WHERE key IN ('source_signature', 'projection_revision', 'projection_schema_version')
+                        """).fetchall()
                 }
-                if existing_meta.get("source_signature") == source_signature:
+                if (
+                    existing_meta.get("source_signature") == source_signature
+                    and existing_meta.get("projection_schema_version")
+                    == CHAT_INDEX_PROJECTION_SCHEMA_VERSION
+                ):
                     projection_revision = max(
                         1, _safe_int(existing_meta.get("projection_revision"), 1)
                     )
@@ -954,13 +955,20 @@ class ChatSurfaceReadService:
                         ticket_id,
                         run_id,
                         group_id,
+                        facet_category,
+                        facet_turn_kind_list,
+                        facet_origin_kind_list,
+                        facet_transport_list,
+                        facet_scope_kind,
+                        facet_scope_id,
+                        facet_agent_kind,
                         search_text,
                         sort_unread_priority,
                         sort_last_activity_desc,
                         row_json,
                         source_signature,
                         rebuilt_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     [
                         _chat_index_projection_params(
@@ -991,6 +999,16 @@ class ChatSurfaceReadService:
                     """,
                     (str(projection_revision), rebuilt_at),
                 )
+                conn.execute(
+                    """
+                    INSERT OR REPLACE INTO orch_chat_index_projection_meta (
+                        key,
+                        value,
+                        updated_at
+                    ) VALUES ('projection_schema_version', ?, ?)
+                    """,
+                    (CHAT_INDEX_PROJECTION_SCHEMA_VERSION, rebuilt_at),
+                )
         return {
             "rebuilt": True,
             "row_count": len(rows),
@@ -999,6 +1017,12 @@ class ChatSurfaceReadService:
             "source_signature": source_signature,
             "previous_source_signature": before.get("stored_source_signature"),
             "source_changed": before.get("stored_source_signature") != source_signature,
+            "projection_schema_version": CHAT_INDEX_PROJECTION_SCHEMA_VERSION,
+            "previous_projection_schema_version": before.get(
+                "stored_projection_schema_version"
+            ),
+            "projection_schema_changed": before.get("stored_projection_schema_version")
+            != CHAT_INDEX_PROJECTION_SCHEMA_VERSION,
             "rebuilt_at": rebuilt_at,
         }
 
@@ -1012,14 +1036,17 @@ class ChatSurfaceReadService:
             ) or not _table_exists(conn, "orch_chat_index_projection_meta"):
                 needs_rebuild = True
             else:
-                row = conn.execute(
-                    """
-                    SELECT value
+                rows = conn.execute("""
+                    SELECT key, value
                       FROM orch_chat_index_projection_meta
-                     WHERE key = 'source_signature'
-                    """
-                ).fetchone()
-                needs_rebuild = row is None or row["value"] != source_signature
+                     WHERE key IN ('source_signature', 'projection_schema_version')
+                    """).fetchall()
+                meta = {str(row["key"]): str(row["value"]) for row in rows}
+                needs_rebuild = (
+                    meta.get("source_signature") != source_signature
+                    or meta.get("projection_schema_version")
+                    != CHAT_INDEX_PROJECTION_SCHEMA_VERSION
+                )
         if needs_rebuild:
             self.rebuild_chat_index_projection()
 
@@ -1049,15 +1076,13 @@ class ChatSurfaceReadService:
                     "max_updated": row["max_updated"],
                 }
             if _table_exists(conn, "orch_thread_targets"):
-                row = conn.execute(
-                    """
+                row = conn.execute("""
                     SELECT COUNT(*) AS count,
                            MAX(COALESCE(updated_at, created_at)) AS max_updated
                       FROM orch_thread_targets
                      WHERE json_extract(metadata_json, '$.flow_type') = 'ticket_flow'
                        AND json_extract(metadata_json, '$.ticket_flow_link_key') IS NOT NULL
-                    """
-                ).fetchone()
+                    """).fetchone()
                 facts["ticket_flow_thread_links"] = {
                     "count": int(row["count"] or 0),
                     "max_updated": row["max_updated"],
@@ -1066,14 +1091,12 @@ class ChatSurfaceReadService:
                 facts["ticket_flow_thread_links"] = None
             facts["ticket_flow_ticket_files"] = _ticket_flow_ticket_file_signature(conn)
             if _table_exists(conn, "orch_flow_run_projections"):
-                row = conn.execute(
-                    """
+                row = conn.execute("""
                     SELECT COUNT(*) AS count,
                            MAX(updated_at) AS max_updated
                       FROM orch_flow_run_projections
                      WHERE flow_type = 'ticket_flow'
-                    """
-                ).fetchone()
+                    """).fetchone()
                 facts["ticket_flow_flow_projections"] = {
                     "count": int(row["count"] or 0),
                     "max_updated": row["max_updated"],
@@ -1099,6 +1122,7 @@ class ChatSurfaceReadService:
         *,
         view: str,
         query: Optional[str],
+        facets: Optional[Mapping[str, Any]],
         surface_kind: Optional[str],
         group_by: Optional[str],
         parent_group_id: Optional[str],
@@ -1111,6 +1135,7 @@ class ChatSurfaceReadService:
         where_sql, params = _chat_index_projection_where(
             view=view,
             query=query,
+            facets=facets,
             surface_kind=surface_kind,
             parent_group_id=parent_group_id,
         )
@@ -1119,6 +1144,7 @@ class ChatSurfaceReadService:
             where_counters_sql, counters_params = _chat_index_projection_where(
                 view=view,
                 query=query,
+                facets=facets,
                 surface_kind=surface_kind,
                 parent_group_id=parent_group_id,
                 include_archived_rows=True,
@@ -1157,6 +1183,9 @@ class ChatSurfaceReadService:
                 "unread": int(counters_row["unread"] or 0),
                 "archived": int(counters_row["archived"] or 0),
             }
+            facet_counts = _chat_index_facet_counts(
+                conn, where_counters_sql, counters_params
+            )
             if group_by == "ticket_run" and parent_group_id is None:
                 all_rows = [
                     _chat_index_row_from_projection(row)
@@ -1221,6 +1250,7 @@ class ChatSurfaceReadService:
             "rows": window_rows,
             "groups": groups,
             "counters": counters,
+            "facet_counts": facet_counts,
             "total_count": total_count,
             "window": window_rows,
         }
@@ -1289,24 +1319,24 @@ class ChatSurfaceReadService:
                  ORDER BY updated_at DESC, created_at DESC, thread_target_id ASC
                 """,
             ).fetchall()
-            execution_rows = conn.execute(
-                """
+            execution_rows = conn.execute("""
                 SELECT thread_target_id,
                        execution_id,
+                       request_kind,
                        status,
                        prompt_text,
                        metadata_json,
+                       turn_request_json,
+                       turn_record_json,
                        created_at,
                        started_at,
                        finished_at,
                        error_text
                   FROM orch_thread_executions
                  ORDER BY created_at ASC, execution_id ASC
-                """
-            ).fetchall()
+                """).fetchall()
             delivery_rows = (
-                conn.execute(
-                    """
+                conn.execute("""
                     SELECT managed_thread_id,
                            surface_kind,
                            surface_key,
@@ -1317,8 +1347,7 @@ class ChatSurfaceReadService:
                            created_at
                       FROM orch_managed_thread_deliveries
                      ORDER BY updated_at ASC, created_at ASC, delivery_id ASC
-                    """
-                ).fetchall()
+                    """).fetchall()
                 if _table_exists(conn, "orch_managed_thread_deliveries")
                 else []
             )
@@ -1342,8 +1371,7 @@ class ChatSurfaceReadService:
                 else []
             )
             flow_projection_rows = (
-                conn.execute(
-                    """
+                conn.execute("""
                     SELECT flow_run_id,
                            repo_id,
                            status,
@@ -1351,8 +1379,7 @@ class ChatSurfaceReadService:
                            updated_at
                       FROM orch_flow_run_projections
                      WHERE flow_type = 'ticket_flow'
-                    """
-                ).fetchall()
+                    """).fetchall()
                 if _table_exists(conn, "orch_flow_run_projections")
                 else []
             )
@@ -1361,6 +1388,7 @@ class ChatSurfaceReadService:
         visible_execution_by_thread = _latest_visible_execution_by_thread(
             execution_rows
         )
+        execution_facets_by_thread = _execution_facets_by_thread(execution_rows)
         queue_depth_by_thread = _queue_depth_by_thread(execution_rows)
         delivery_by_surface = _latest_delivery_by_surface(delivery_rows)
         delivery_by_thread = _latest_delivery_by_thread(delivery_rows)
@@ -1400,6 +1428,7 @@ class ChatSurfaceReadService:
             chat_kind = _normalize_text(metadata.get("chat_kind"))
             run_id = _normalize_text(metadata.get("run_id"))
             visible_execution = visible_execution_by_thread.get(thread_id)
+            execution_facets = execution_facets_by_thread.get(thread_id, {})
             last_visible_message_at = (
                 _normalize_text(_row_get(visible_execution, "created_at"))
                 if visible_execution is not None
@@ -1474,6 +1503,8 @@ class ChatSurfaceReadService:
                     "provider_conversation_title": _normalize_text(
                         metadata.get("provider_conversation_title")
                     ),
+                    "turn_kinds": execution_facets.get("turn_kinds") or ["message"],
+                    "origin_kinds": execution_facets.get("origin_kinds") or ["surface"],
                     "last_visible_message_at": last_visible_message_at,
                     "last_lifecycle_update_at": last_lifecycle_update_at,
                     "last_internal_update_at": last_internal_update_at,
@@ -1716,15 +1747,13 @@ def _stable_revision(payload: Mapping[str, Any]) -> str:
 def _ticket_flow_ticket_file_signature(conn: Any) -> list[dict[str, Any]]:
     if not _table_exists(conn, "orch_thread_targets"):
         return []
-    rows = conn.execute(
-        """
+    rows = conn.execute("""
         SELECT json_extract(metadata_json, '$.workspace_root') AS workspace_root,
                json_extract(metadata_json, '$.ticket_path') AS ticket_path
           FROM orch_thread_targets
          WHERE json_extract(metadata_json, '$.flow_type') = 'ticket_flow'
            AND json_extract(metadata_json, '$.ticket_path') IS NOT NULL
-        """
-    ).fetchall()
+        """).fetchall()
     facts: list[dict[str, Any]] = []
     seen: set[tuple[str, str]] = set()
     for row in rows:
@@ -2089,6 +2118,11 @@ def _chat_index_rows_from_surfaces(
                 "provider_conversation_title": metadata_map.get(
                     "provider_conversation_title"
                 ),
+                "automation": metadata_map.get("automation"),
+                "automation_job_id": metadata_map.get("automation_job_id"),
+                "automation_rule_id": metadata_map.get("automation_rule_id"),
+                "turn_kinds": metadata_map.get("turn_kinds"),
+                "origin_kinds": metadata_map.get("origin_kinds"),
             }
             by_thread[managed_thread_id] = row
         row["surfaces"].append(base_surface)
@@ -2160,6 +2194,11 @@ def _chat_index_rows_from_surfaces(
                 "ticket_flow_projection",
                 "run_id",
                 "provider_conversation_title",
+                "automation",
+                "automation_job_id",
+                "automation_rule_id",
+                "turn_kinds",
+                "origin_kinds",
             ):
                 if metadata_map.get(key) is not None:
                     row["agent" if key == "agent_id" else key] = metadata_map.get(key)
@@ -2234,6 +2273,7 @@ def _chat_index_rows_from_surfaces(
                 if surface.get("surface_kind") is not None
             }
         )
+        row["facets"] = _chat_index_facets(row)
         row["search_text"] = _chat_row_search_text(row)
         row["debug"] = _chat_row_debug_info(row)
     return rows
@@ -2657,6 +2697,13 @@ def _chat_index_projection_params(
         _normalize_text(row.get("ticket_id")),
         _normalize_text(row.get("run_id")),
         _normalize_text(row.get("group_id")),
+        _chat_row_facet_category(row),
+        _pipe_list(_chat_row_facet_turn_kinds(row)),
+        _pipe_list(_chat_row_facet_origin_kinds(row)),
+        _pipe_list(_chat_row_facet_transports(row)),
+        _chat_row_facet_scope(row).get("scope_kind"),
+        _chat_row_facet_scope(row).get("scope_id"),
+        _chat_row_facet_agent_kind(row),
         str(row.get("search_text") or ""),
         int(sort_key.get("unread_priority") or 0),
         last_activity_desc,
@@ -2688,6 +2735,123 @@ def _chat_index_row_from_projection(row: Mapping[str, Any]) -> dict[str, Any]:
     return parsed
 
 
+def _chat_index_facets(row: Mapping[str, Any]) -> dict[str, Any]:
+    scope = _chat_row_facet_scope(row)
+    return {
+        "category": _chat_row_facet_category(row),
+        "turn_kinds": _chat_row_facet_turn_kinds(row),
+        "origin_kinds": _chat_row_facet_origin_kinds(row),
+        "transports": _chat_row_facet_transports(row),
+        "scope_kind": scope.get("scope_kind"),
+        "scope_id": scope.get("scope_id"),
+        "agent_kind": _chat_row_facet_agent_kind(row),
+    }
+
+
+def _chat_row_facet_category(row: Mapping[str, Any]) -> str:
+    if _normalize_kind(row.get("flow_type")) == "ticket_flow":
+        return "ticket_run"
+    if _chat_row_has_automation_facts(row):
+        return "automation"
+    turn_kinds = set(_chat_row_facet_turn_kinds(row))
+    origin_kinds = set(_chat_row_facet_origin_kinds(row))
+    if turn_kinds & {"publish", "recovery", "lifecycle"}:
+        return "system"
+    if origin_kinds & {"publish", "recovery", "system"}:
+        return "system"
+    return "regular"
+
+
+def _chat_row_has_automation_facts(row: Mapping[str, Any]) -> bool:
+    if isinstance(row.get("automation"), Mapping):
+        return True
+    if _normalize_text(row.get("automation_job_id")) is not None:
+        return True
+    if _normalize_text(row.get("automation_rule_id")) is not None:
+        return True
+    return "automation" in set(_chat_row_facet_turn_kinds(row)) or "automation" in set(
+        _chat_row_facet_origin_kinds(row)
+    )
+
+
+def _chat_row_facet_turn_kinds(row: Mapping[str, Any]) -> list[str]:
+    values = _facet_list(row.get("turn_kinds"), _CHAT_FACET_TURN_KINDS)
+    if _chat_row_has_explicit_automation_metadata(row):
+        _append_unique(values, "automation")
+    return values or ["message"]
+
+
+def _chat_row_has_explicit_automation_metadata(row: Mapping[str, Any]) -> bool:
+    return (
+        isinstance(row.get("automation"), Mapping)
+        or _normalize_text(row.get("automation_job_id")) is not None
+        or _normalize_text(row.get("automation_rule_id")) is not None
+    )
+
+
+def _chat_row_facet_origin_kinds(row: Mapping[str, Any]) -> list[str]:
+    values = _facet_list(row.get("origin_kinds"), _CHAT_FACET_ORIGIN_KINDS)
+    if _chat_row_has_explicit_automation_metadata(row):
+        _append_unique(values, "automation")
+    return values or ["surface"]
+
+
+def _chat_row_facet_transports(row: Mapping[str, Any]) -> list[str]:
+    transports: list[str] = []
+    for kind in row.get("surface_kinds") or []:
+        normalized = _normalize_kind(kind)
+        if normalized in {"pma", "discord", "telegram", "notification"}:
+            _append_unique(transports, normalized)
+    primary = row.get("surface")
+    if isinstance(primary, Mapping):
+        normalized = _normalize_kind(primary.get("surface_kind"))
+        if normalized in {"pma", "discord", "telegram", "notification"}:
+            _append_unique(transports, normalized)
+    return transports
+
+
+def _chat_row_facet_scope(row: Mapping[str, Any]) -> dict[str, Optional[str]]:
+    worktree_id = _normalize_text(row.get("worktree_id"))
+    if worktree_id is not None:
+        return {"scope_kind": "worktree", "scope_id": worktree_id}
+    repo_id = _normalize_text(row.get("repo_id"))
+    if repo_id is not None:
+        return {"scope_kind": "repo", "scope_id": repo_id}
+    workspace_root = _normalize_text(row.get("workspace_root"))
+    if workspace_root is not None:
+        return {"scope_kind": "filesystem", "scope_id": workspace_root}
+    return {"scope_kind": "hub", "scope_id": None}
+
+
+def _chat_row_facet_agent_kind(row: Mapping[str, Any]) -> Optional[str]:
+    chat_kind = _normalize_kind(row.get("chat_kind") or row.get("thread_kind"))
+    if chat_kind in {"pma", "coding_agent"}:
+        return chat_kind
+    agent_profile = _normalize_kind(row.get("agent_profile"))
+    if agent_profile in {"m4-pma", "pma"}:
+        return "pma"
+    if _normalize_text(row.get("agent")) is not None:
+        return "coding_agent"
+    return None
+
+
+def _facet_list(raw: Any, allowed: frozenset[str]) -> list[str]:
+    result: list[str] = []
+    raw_values = (
+        raw if isinstance(raw, Sequence) and not isinstance(raw, str) else [raw]
+    )
+    for item in raw_values:
+        normalized = _normalize_kind(item)
+        if normalized in allowed:
+            _append_unique(result, normalized)
+    return result
+
+
+def _pipe_list(values: Iterable[str]) -> str:
+    normalized = sorted({str(value) for value in values if str(value).strip()})
+    return "|" + "|".join(normalized) + "|" if normalized else ""
+
+
 _CHAT_INDEX_NON_ARCHIVED_SQL = (
     "(lifecycle_status IS NULL OR lifecycle_status != 'archived') "
     "AND effective_status != 'archived'"
@@ -2698,6 +2862,7 @@ def _chat_index_projection_where(
     *,
     view: str,
     query: Optional[str],
+    facets: Optional[Mapping[str, Any]],
     surface_kind: Optional[str],
     parent_group_id: Optional[str],
     include_archived_rows: bool = False,
@@ -2728,7 +2893,7 @@ def _chat_index_projection_where(
         clauses.append("surface_kind_list != ''")
         clauses.append("surface_kind_list != '|pma|'")
     elif normalized_view == "ticket_run":
-        clauses.append("group_id IS NOT NULL")
+        clauses.append("facet_category = 'ticket_run'")
     elif normalized_view != "all":
         clauses.append("0 = 1")
     if normalized_view != "archived" and not (
@@ -2738,7 +2903,122 @@ def _chat_index_projection_where(
     if normalized_query is not None:
         clauses.append("search_text LIKE ?")
         params.append(f"%{normalized_query}%")
+    facet_request = _normalize_chat_facet_request(facets)
+    _extend_chat_facet_where(clauses, params, facet_request)
     return " AND ".join(clauses), params
+
+
+_CHAT_FACET_REQUEST_FIELDS = {
+    "categories": ("facet_category", "equals"),
+    "turn_kinds": ("facet_turn_kind_list", "contains"),
+    "origin_kinds": ("facet_origin_kind_list", "contains"),
+    "transports": ("facet_transport_list", "contains"),
+    "scope_kinds": ("facet_scope_kind", "equals"),
+    "scope_ids": ("facet_scope_id", "equals"),
+    "agent_kinds": ("facet_agent_kind", "equals"),
+}
+
+
+def _normalize_chat_facet_request(
+    raw: Optional[Mapping[str, Any]],
+) -> dict[str, list[str]]:
+    allowed = {
+        "categories": {"regular", "ticket_run", "automation", "system"},
+        "turn_kinds": set(_CHAT_FACET_TURN_KINDS),
+        "origin_kinds": set(_CHAT_FACET_ORIGIN_KINDS),
+        "transports": {"pma", "discord", "telegram", "notification"},
+        "scope_kinds": {"hub", "repo", "worktree", "filesystem"},
+        "scope_ids": None,
+        "agent_kinds": {"pma", "coding_agent"},
+    }
+    normalized: dict[str, list[str]] = {key: [] for key in allowed}
+    if not isinstance(raw, Mapping):
+        return normalized
+    for key, allowed_values in allowed.items():
+        values = raw.get(key)
+        if values is None:
+            continue
+        iterable = (
+            values
+            if isinstance(values, Sequence) and not isinstance(values, str)
+            else [values]
+        )
+        for value in iterable:
+            text = (
+                _normalize_kind(value) if key != "scope_ids" else _normalize_text(value)
+            )
+            if text is None:
+                continue
+            if allowed_values is not None and text not in allowed_values:
+                continue
+            if text not in normalized[key]:
+                normalized[key].append(text)
+    return normalized
+
+
+def _extend_chat_facet_where(
+    clauses: list[str], params: list[Any], facet_request: Mapping[str, list[str]]
+) -> None:
+    for facet_field, values in facet_request.items():
+        if not values:
+            continue
+        column, mode = _CHAT_FACET_REQUEST_FIELDS[facet_field]
+        if mode == "contains":
+            clauses.append("(" + " OR ".join(f"{column} LIKE ?" for _ in values) + ")")
+            params.extend(f"%|{value}|%" for value in values)
+        else:
+            clauses.append("(" + " OR ".join(f"{column} = ?" for _ in values) + ")")
+            params.extend(values)
+
+
+def _chat_index_facet_counts(
+    conn: sqlite3.Connection, where_sql: str, params: Sequence[Any]
+) -> dict[str, dict[str, int]]:
+    counts: dict[str, dict[str, int]] = {
+        "category": {},
+        "turn_kind": {},
+        "origin_kind": {},
+        "transport": {},
+        "scope_kind": {},
+        "agent_kind": {},
+    }
+    rows = conn.execute(
+        f"""
+        SELECT facet_category,
+               facet_turn_kind_list,
+               facet_origin_kind_list,
+               facet_transport_list,
+               facet_scope_kind,
+               facet_agent_kind
+          FROM orch_chat_index_projection
+         WHERE {where_sql}
+        """,
+        list(params),
+    ).fetchall()
+    for row in rows:
+        _increment_count(counts["category"], _normalize_text(row["facet_category"]))
+        for value in _values_from_pipe_list(row["facet_turn_kind_list"]):
+            _increment_count(counts["turn_kind"], value)
+        for value in _values_from_pipe_list(row["facet_origin_kind_list"]):
+            _increment_count(counts["origin_kind"], value)
+        for value in _values_from_pipe_list(row["facet_transport_list"]):
+            _increment_count(counts["transport"], value)
+        _increment_count(counts["scope_kind"], _normalize_text(row["facet_scope_kind"]))
+        _increment_count(counts["agent_kind"], _normalize_text(row["facet_agent_kind"]))
+    return counts
+
+
+def _increment_count(target: dict[str, int], value: Optional[str]) -> None:
+    if value is None:
+        return
+    target[value] = target.get(value, 0) + 1
+
+
+def _values_from_pipe_list(raw: Any) -> list[str]:
+    text = _normalize_text(raw)
+    if text is None:
+        return []
+    return [part for part in text.split("|") if part]
 
 
 def _chat_index_sort_key_parts(row: Mapping[str, Any]) -> dict[str, Any]:
@@ -2757,18 +3037,6 @@ def _chat_ticket_group_id(row: Mapping[str, Any]) -> Optional[str]:
     run_id = _normalize_text(row.get("run_id"))
     if _normalize_kind(row.get("flow_type")) == "ticket_flow" and run_id is not None:
         return f"run:{run_id}"
-    ticket_id = _normalize_text(row.get("ticket_id") or row.get("current_ticket_id"))
-    if ticket_id is not None:
-        return f"ticket:{ticket_id}"
-    if run_id is not None:
-        return f"run:{run_id}"
-    kind = _normalize_kind(row.get("resource_kind"))
-    identifier = _normalize_text(row.get("resource_id"))
-    if kind in {"ticket", "ticket_run", "run"} and identifier is not None:
-        return f"{kind}:{identifier}"
-    thread_id = _normalize_text(row.get("managed_thread_id"))
-    if thread_id and thread_id.startswith("ticket-run:"):
-        return ":".join(thread_id.split(":", 2)[:2])
     return None
 
 
@@ -3351,6 +3619,7 @@ def _chat_index_projection_invalidated_event(
             "removed_group_ids": [],
             "order": None,
             "counters": _chat_index_patch_counters(snapshot, rows),
+            "facet_counts": snapshot.get("facet_counts"),
         },
         "repair": {
             "requested_cursor": requested_cursor,
@@ -3627,6 +3896,61 @@ def _queue_depth_by_thread(rows: Iterable[Mapping[str, Any]]) -> dict[str, int]:
         if _normalize_kind(row["status"]) in _QUEUED_STATUSES:
             result[thread_id] = result.get(thread_id, 0) + 1
     return result
+
+
+_CHAT_FACET_TURN_KINDS = frozenset(
+    {"message", "review", "automation", "publish", "recovery", "lifecycle"}
+)
+_CHAT_FACET_ORIGIN_KINDS = frozenset(
+    {"surface", "automation", "publish", "recovery", "system"}
+)
+
+
+def _execution_facets_by_thread(
+    rows: Iterable[Mapping[str, Any]],
+) -> dict[str, dict[str, list[str]]]:
+    result: dict[str, dict[str, list[str]]] = {}
+    for row in rows:
+        thread_id = _normalize_text(row["thread_target_id"])
+        if thread_id is None:
+            continue
+        facet_state = result.setdefault(
+            thread_id, {"turn_kinds": [], "origin_kinds": []}
+        )
+        turn_kind = _normalize_kind(_row_get(row, "request_kind"))
+        if turn_kind in _CHAT_FACET_TURN_KINDS:
+            _append_unique(facet_state["turn_kinds"], turn_kind)
+
+        origin_kind = _turn_origin_kind(row)
+        if origin_kind in _CHAT_FACET_ORIGIN_KINDS:
+            _append_unique(facet_state["origin_kinds"], origin_kind)
+    return result
+
+
+def _turn_origin_kind(row: Mapping[str, Any]) -> Optional[str]:
+    for column in ("turn_request_json", "turn_record_json"):
+        payload = _json_object(_row_get(row, column))
+        origin = payload.get("origin")
+        if not isinstance(origin, Mapping):
+            request = payload.get("request")
+            if isinstance(request, Mapping):
+                origin = request.get("origin")
+        if isinstance(origin, Mapping):
+            kind = _normalize_kind(origin.get("kind"))
+            if kind is not None:
+                return kind
+    metadata = _json_object(_row_get(row, "metadata_json"))
+    origin = metadata.get("origin")
+    if isinstance(origin, Mapping):
+        return _normalize_kind(origin.get("kind"))
+    if _normalize_text(metadata.get("automation_job_id")) is not None:
+        return "automation"
+    return None
+
+
+def _append_unique(values: list[str], value: str) -> None:
+    if value not in values:
+        values.append(value)
 
 
 def _latest_delivery_by_surface(

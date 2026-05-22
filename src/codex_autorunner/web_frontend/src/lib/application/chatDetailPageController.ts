@@ -2,6 +2,7 @@ import type { Readable } from 'svelte/store';
 import type { ApiError, ApiResult, JsonRecord } from '$lib/api/client';
 import {
   type ChatIndexWindowRequest,
+  CHAT_TICKET_RUN_GROUP_WINDOW_REQUEST,
   canonicalChatIndexWindowKey,
   selectPmaChats,
   selectRepoSummaries,
@@ -114,7 +115,7 @@ export class ChatDetailPageController {
   private readonly timers: ControllerTimers;
   private route: ChatDetailPageRoute | null = null;
   private currentRequest: ChatIndexWindowRequest = { filter: 'all', limit: 50 };
-  private ticketRunGroupRequest: ChatIndexWindowRequest = { filter: 'ticket_runs', groupBy: 'ticket_run', limit: 50 };
+  private ticketRunGroupRequest: ChatIndexWindowRequest = CHAT_TICKET_RUN_GROUP_WINDOW_REQUEST;
   private readModelState: ReadModelEntityState;
   private unsubscribeReadModels: (() => void) | null = null;
   private unsubscribeChatIndexSession: (() => void) | null = null;

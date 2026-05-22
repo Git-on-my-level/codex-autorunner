@@ -232,10 +232,23 @@ def automation_store(hub_root: Path) -> AutomationStore:
     return AutomationStore(hub_root)
 
 
-def automation_overview(store: AutomationStore, *, limit: int = 100) -> dict[str, Any]:
+def automation_overview(
+    store: AutomationStore,
+    *,
+    limit: int = 100,
+    recent_job_limit: int = 25,
+    include_job_history: bool = True,
+    include_raw: bool = True,
+) -> dict[str, Any]:
     take = max(1, min(int(limit or 100), 500))
     rules = store.list_rules()[:take]
-    rows = automation_rows(store, rules, recent_job_limit=25)
+    rows = automation_rows(
+        store,
+        rules,
+        recent_job_limit=recent_job_limit,
+        include_job_history=include_job_history,
+        include_raw=include_raw,
+    )
     summary = {
         "total": len(rows),
         "active": sum(1 for row in rows if row["enabled"]),
@@ -254,6 +267,8 @@ def automation_rows(
     rules: list[AutomationRule],
     *,
     recent_job_limit: int = 25,
+    include_job_history: bool = True,
+    include_raw: bool = True,
 ) -> list[dict[str, Any]]:
     rule_ids = [rule.rule_id for rule in rules]
     schedules_by_rule = store.schedules_by_rule(rule_ids)
@@ -261,12 +276,14 @@ def automation_rows(
         rule_ids, per_rule_limit=recent_job_limit
     )
     job_counts_by_rule = store.job_counts_by_rule(rule_ids)
-    all_jobs = [
-        job for rule in rules for job in recent_jobs_by_rule.get(rule.rule_id, [])
-    ]
-    execution_snapshots = automation_execution_snapshots_by_job_id(
-        all_jobs, hub_root=store.hub_root
-    )
+    execution_snapshots: Optional[dict[str, AutomationExecutionSnapshot]] = None
+    if include_job_history:
+        all_jobs = [
+            job for rule in rules for job in recent_jobs_by_rule.get(rule.rule_id, [])
+        ]
+        execution_snapshots = automation_execution_snapshots_by_job_id(
+            all_jobs, hub_root=store.hub_root
+        )
     return [
         _automation_row_from_enrichment(
             rule,
@@ -275,6 +292,8 @@ def automation_rows(
             recent_jobs=recent_jobs_by_rule.get(rule.rule_id, []),
             job_count=job_counts_by_rule.get(rule.rule_id, 0),
             execution_snapshots=execution_snapshots,
+            include_job_history=include_job_history,
+            include_raw=include_raw,
         )
         for rule in rules
     ]
@@ -296,6 +315,8 @@ def automation_row(store: AutomationStore, rule: AutomationRule) -> dict[str, An
         schedules=schedules,
         recent_jobs=recent_jobs,
         job_count=job_count,
+        include_job_history=True,
+        include_raw=True,
     )
 
 
@@ -307,16 +328,18 @@ def _automation_row_from_enrichment(
     recent_jobs: list[AutomationJob],
     job_count: int,
     execution_snapshots: Optional[dict[str, AutomationExecutionSnapshot]] = None,
+    include_job_history: bool = True,
+    include_raw: bool = True,
 ) -> dict[str, Any]:
     last_job = recent_jobs[0] if recent_jobs else None
     schedule = schedules[0] if schedules else None
     typed = _typed_product_projection(rule, schedule)
     snapshots = execution_snapshots
-    if snapshots is None and recent_jobs:
+    if include_job_history and snapshots is None and recent_jobs:
         snapshots = automation_execution_snapshots_by_job_id(
             recent_jobs, hub_root=store.hub_root
         )
-    return {
+    row: dict[str, Any] = {
         "id": rule.rule_id,
         "name": rule.name,
         "enabled": rule.enabled,
@@ -324,29 +347,38 @@ def _automation_row_from_enrichment(
         "kind": display_kind(rule),
         "execution_mode": rule.executor_kind,
         "executor_kind": rule.executor_kind,
-        "executor": rule.executor,
         "trigger_kind": rule.trigger_kind,
-        "trigger": rule.trigger,
-        "filters": rule.filters,
         "target_policy": rule.target_policy,
-        "target": rule.target,
-        "policy": rule.policy,
-        "metadata": rule.metadata,
         "schedule": schedule.to_dict() if schedule is not None else None,
-        "last_job": (
-            _automation_job_row(last_job, store=store, execution_snapshots=snapshots)
-            if last_job is not None
-            else None
-        ),
-        "jobs": [
-            _automation_job_row(job, store=store, execution_snapshots=snapshots)
-            for job in recent_jobs
-        ],
+        "last_job": None,
+        "jobs": [],
         "job_count": job_count,
         "created_at": rule.created_at,
         "updated_at": rule.updated_at,
         **typed,
     }
+    if include_raw:
+        row.update(
+            {
+                "executor": rule.executor,
+                "trigger": rule.trigger,
+                "filters": rule.filters,
+                "target": rule.target,
+                "policy": rule.policy,
+                "metadata": rule.metadata,
+            }
+        )
+    if include_job_history:
+        row["last_job"] = (
+            _automation_job_row(last_job, store=store, execution_snapshots=snapshots)
+            if last_job is not None
+            else None
+        )
+        row["jobs"] = [
+            _automation_job_row(job, store=store, execution_snapshots=snapshots)
+            for job in recent_jobs
+        ]
+    return row
 
 
 def _automation_job_row(
