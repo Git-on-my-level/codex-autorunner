@@ -969,6 +969,9 @@ class AutomationJob:
     payload: dict[str, Any]
     result_summary: Optional[str] = None
     error_text: Optional[str] = None
+    blocked_by_job_id: Optional[str] = None
+    blocked_reason: Optional[str] = None
+    blocked_at: Optional[str] = None
 
     @classmethod
     def create(

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import sqlite3
 import uuid
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal, Optional
 
@@ -66,6 +67,12 @@ _LEGACY_JOB_CHILD_COLUMNS = (
     "ticket_flow_worktree_id",
     "publish_operation_" + "id",
 )
+
+
+@dataclass(frozen=True)
+class ActiveAutomationBlocker:
+    job_id: str
+    reason: str
 
 
 class AutomationStore:
@@ -447,9 +454,6 @@ class AutomationStore:
                     (JOB_PENDING, stamp),
                 ).fetchall()
                 for row in rows:
-                    candidate = self._row_to_job(row)
-                    if self._job_concurrency_saturated(conn, candidate):
-                        continue
                     validate_job_transition(str(row["state"]), JOB_CLAIMED)
                     cursor = conn.execute(
                         """
@@ -457,6 +461,9 @@ class AutomationStore:
                            SET state = ?,
                                lock_key = COALESCE(?, lock_key),
                                claimed_at = ?,
+                               blocked_by_job_id = NULL,
+                               blocked_reason = NULL,
+                               blocked_at = NULL,
                                updated_at = ?
                          WHERE job_id = ? AND state = ?
                         """,
@@ -483,13 +490,15 @@ class AutomationStore:
         return self._row_to_job(claimed) if claimed is not None else None
 
     def start_job(self, job_id: str, *, now: Optional[str] = None) -> AutomationJob:
-        return self._transition_job(
+        job = self._transition_job(
             job_id,
             JOB_RUNNING,
             now=now,
             increment_attempt=True,
             started=True,
         )
+        self.clear_job_blocking(job_id, now=now)
+        return self.get_job(job_id) or job
 
     def complete_job(
         self,
@@ -603,6 +612,83 @@ class AutomationStore:
         if saved is None:
             raise RuntimeError("failed to retry automation job")
         return self._row_to_job(saved)
+
+    def defer_job_for_concurrency(
+        self,
+        job_id: str,
+        *,
+        blocked_by_job_id: str,
+        blocked_reason: str,
+        available_at: str,
+        now: Optional[str] = None,
+    ) -> AutomationJob:
+        stamp = normalize_timestamp(now, fallback=available_at)
+        next_available = normalize_timestamp(available_at)
+        with open_orchestration_sqlite(self._hub_root, durable=self._durable) as conn:
+            with conn:
+                row = conn.execute(
+                    "SELECT * FROM orch_automation_jobs WHERE job_id = ?",
+                    (job_id,),
+                ).fetchone()
+                if row is None:
+                    raise ValueError(f"Unknown automation job: {job_id}")
+                validate_job_transition(str(row["state"]), JOB_PENDING)
+                conn.execute(
+                    """
+                    UPDATE orch_automation_jobs
+                       SET state = ?,
+                           available_at = ?,
+                           next_attempt_at = ?,
+                           lock_key = NULL,
+                           claimed_at = NULL,
+                           blocked_by_job_id = ?,
+                           blocked_reason = ?,
+                           blocked_at = ?,
+                           updated_at = ?
+                     WHERE job_id = ?
+                    """,
+                    (
+                        JOB_PENDING,
+                        next_available,
+                        next_available,
+                        blocked_by_job_id,
+                        blocked_reason,
+                        stamp,
+                        stamp,
+                        job_id,
+                    ),
+                )
+                saved = conn.execute(
+                    "SELECT * FROM orch_automation_jobs WHERE job_id = ?",
+                    (job_id,),
+                ).fetchone()
+        if saved is None:
+            raise RuntimeError("failed to defer automation job for concurrency")
+        return self._row_to_job(saved)
+
+    def clear_job_blocking(
+        self, job_id: str, *, now: Optional[str] = None
+    ) -> Optional[AutomationJob]:
+        stamp = normalize_timestamp(now)
+        with open_orchestration_sqlite(self._hub_root, durable=self._durable) as conn:
+            with conn:
+                conn.execute(
+                    """
+                    UPDATE orch_automation_jobs
+                       SET blocked_by_job_id = NULL,
+                           blocked_reason = NULL,
+                           blocked_at = NULL,
+                           updated_at = ?
+                     WHERE job_id = ?
+                       AND (
+                           blocked_by_job_id IS NOT NULL
+                           OR blocked_reason IS NOT NULL
+                           OR blocked_at IS NOT NULL
+                       )
+                    """,
+                    (stamp, job_id),
+                )
+        return self.get_job(job_id)
 
     def revive_dead_lettered_job(
         self,
@@ -1206,9 +1292,84 @@ class AutomationStore:
         *,
         rule_id: Optional[str] = None,
         target: Optional[dict[str, Any]] = None,
+        exclude_job_id: Optional[str] = None,
     ) -> int:
         with open_orchestration_sqlite(self._hub_root, durable=self._durable) as conn:
-            return self._count_active_jobs(conn, rule_id=rule_id, target=target)
+            return self._count_active_jobs(
+                conn,
+                rule_id=rule_id,
+                target=target,
+                exclude_job_id=exclude_job_id,
+            )
+
+    def concurrency_blocker_for_job(
+        self, job: AutomationJob, *, now: Optional[str] = None
+    ) -> Optional[ActiveAutomationBlocker]:
+        self.reconcile_concurrency_blockers(job, now=now)
+        per_rule = int(job.policy.get("max_concurrent_per_rule") or 1)
+        per_target = int(job.policy.get("max_concurrent_per_target") or 1)
+        if per_rule > 0:
+            blocker = self._first_active_blocker(
+                rule_id=job.rule_id,
+                exclude_job_id=job.job_id,
+            )
+            if (
+                blocker is not None
+                and self.count_active_jobs(
+                    rule_id=job.rule_id,
+                    exclude_job_id=job.job_id,
+                )
+                >= per_rule
+            ):
+                return ActiveAutomationBlocker(
+                    job_id=blocker.job_id,
+                    reason=f"max_concurrent_per_rule:{job.rule_id}",
+                )
+        if per_target > 0:
+            blocker = self._first_active_blocker(
+                target=job.target,
+                exclude_job_id=job.job_id,
+            )
+            if (
+                blocker is not None
+                and self.count_active_jobs(
+                    target=job.target,
+                    exclude_job_id=job.job_id,
+                )
+                >= per_target
+            ):
+                return ActiveAutomationBlocker(
+                    job_id=blocker.job_id,
+                    reason="max_concurrent_per_target",
+                )
+        return None
+
+    def reconcile_concurrency_blockers(
+        self, job: AutomationJob, *, now: Optional[str] = None
+    ) -> int:
+        stamp = normalize_timestamp(now)
+        changed = 0
+        with open_orchestration_sqlite(self._hub_root, durable=self._durable) as conn:
+            rows = conn.execute(
+                """
+                SELECT DISTINCT jobs.*
+                  FROM orch_automation_jobs AS jobs
+                 WHERE jobs.job_id != ?
+                   AND jobs.state = ?
+                   AND (
+                       jobs.rule_id = ?
+                       OR jobs.target_json = ?
+                   )
+                 ORDER BY jobs.started_at ASC, jobs.updated_at ASC, jobs.job_id ASC
+                """,
+                (job.job_id, JOB_RUNNING, job.rule_id, _json_dumps(job.target)),
+            ).fetchall()
+        for row in rows:
+            blocker = self._row_to_job(row)
+            reduced = self.reduce_parent_job_from_children(blocker.job_id, now=stamp)
+            if reduced is not None and reduced.state != blocker.state:
+                changed += 1
+        return changed
 
     def has_recent_job_for_rule(self, rule_id: str, *, since: str) -> bool:
         return self.count_jobs_for_rule_since(rule_id, since=since) > 0
@@ -1317,31 +1478,27 @@ class AutomationStore:
             ),
         )
 
-    def _job_concurrency_saturated(
-        self, conn: sqlite3.Connection, job: AutomationJob
-    ) -> bool:
-        per_rule = int(job.policy.get("max_concurrent_per_rule") or 1)
-        per_target = int(job.policy.get("max_concurrent_per_target") or 1)
-        if (
-            per_rule > 0
-            and self._count_active_jobs(conn, rule_id=job.rule_id) >= per_rule
-        ):
-            return True
-        if (
-            per_target > 0
-            and self._count_active_jobs(conn, target=job.target) >= per_target
-        ):
-            return True
-        return False
-
     def _count_active_jobs(
         self,
         conn: sqlite3.Connection,
         *,
         rule_id: Optional[str] = None,
         target: Optional[dict[str, Any]] = None,
+        exclude_job_id: Optional[str] = None,
     ) -> int:
-        clauses = ["state IN (?, ?)"]
+        clauses = ["""(
+                state = ?
+                OR (
+                    state = ?
+                    AND EXISTS (
+                        SELECT 1
+                          FROM orch_automation_child_execution_edges edge
+                         WHERE edge.parent_job_id = orch_automation_jobs.job_id
+                           AND edge.authoritative_for_parent_completion = 1
+                           AND edge.terminal_state IS NULL
+                    )
+                )
+            )"""]
         params: list[Any] = [JOB_CLAIMED, JOB_RUNNING]
         if rule_id is not None:
             clauses.append("rule_id = ?")
@@ -1349,11 +1506,57 @@ class AutomationStore:
         if target is not None:
             clauses.append("target_json = ?")
             params.append(_json_dumps(target))
+        if exclude_job_id is not None:
+            clauses.append("job_id != ?")
+            params.append(exclude_job_id)
         row = conn.execute(
             f"SELECT COUNT(*) AS c FROM orch_automation_jobs WHERE {' AND '.join(clauses)}",
             tuple(params),
         ).fetchone()
         return int(row["c"] if row is not None else 0)
+
+    def _first_active_blocker(
+        self,
+        *,
+        rule_id: Optional[str] = None,
+        target: Optional[dict[str, Any]] = None,
+        exclude_job_id: Optional[str] = None,
+    ) -> Optional[AutomationJob]:
+        clauses = ["""(
+                state = ?
+                OR (
+                    state = ?
+                    AND EXISTS (
+                        SELECT 1
+                          FROM orch_automation_child_execution_edges edge
+                         WHERE edge.parent_job_id = orch_automation_jobs.job_id
+                           AND edge.authoritative_for_parent_completion = 1
+                           AND edge.terminal_state IS NULL
+                    )
+                )
+            )"""]
+        params: list[Any] = [JOB_CLAIMED, JOB_RUNNING]
+        if rule_id is not None:
+            clauses.append("rule_id = ?")
+            params.append(rule_id)
+        if target is not None:
+            clauses.append("target_json = ?")
+            params.append(_json_dumps(target))
+        if exclude_job_id is not None:
+            clauses.append("job_id != ?")
+            params.append(exclude_job_id)
+        with open_orchestration_sqlite(self._hub_root, durable=self._durable) as conn:
+            row = conn.execute(
+                f"""
+                SELECT *
+                  FROM orch_automation_jobs
+                 WHERE {' AND '.join(clauses)}
+                 ORDER BY claimed_at ASC, started_at ASC, updated_at ASC, job_id ASC
+                 LIMIT 1
+                """,
+                tuple(params),
+            ).fetchone()
+        return self._row_to_job(row) if row is not None else None
 
     def _row_to_rule(self, row: sqlite3.Row) -> AutomationRule:
         return AutomationRule.hydrate_persisted(
@@ -1415,6 +1618,9 @@ class AutomationStore:
         )
         job.result_summary = row["result_summary"]
         job.error_text = row["error_text"]
+        job.blocked_by_job_id = row["blocked_by_job_id"]
+        job.blocked_reason = row["blocked_reason"]
+        job.blocked_at = row["blocked_at"]
         return job
 
     def _row_to_attempt(self, row: sqlite3.Row) -> AutomationJobAttempt:
@@ -1525,4 +1731,4 @@ class AutomationStore:
         )
 
 
-__all__ = ["AutomationStore"]
+__all__ = ["ActiveAutomationBlocker", "AutomationStore"]

@@ -315,7 +315,7 @@ def test_dead_lettered_job_requires_explicit_revive(tmp_path) -> None:
     assert revived.finished_at is None
 
 
-def test_claim_next_job_counts_claimed_jobs_against_concurrency(tmp_path) -> None:
+def test_claim_next_job_leaves_concurrency_to_worker(tmp_path) -> None:
     store = AutomationStore(tmp_path)
     store.upsert_rule(_rule())
     store.record_event(_event())
@@ -350,10 +350,11 @@ def test_claim_next_job_counts_claimed_jobs_against_concurrency(tmp_path) -> Non
 
     assert first is not None
     assert first.job_id == "job-1"
-    assert second is None
+    assert second is not None
+    assert second.job_id == "job-2"
     assert store.get_job("job-1").state == JOB_CLAIMED
-    assert store.get_job("job-2").state == JOB_PENDING
-    assert store.count_active_jobs(rule_id="rule-1") == 1
+    assert store.get_job("job-2").state == JOB_CLAIMED
+    assert store.count_active_jobs(rule_id="rule-1") == 2
 
 
 def test_release_stale_claims_recovers_claimed_and_running_jobs(tmp_path) -> None:
