@@ -1486,19 +1486,7 @@ class AutomationStore:
         target: Optional[dict[str, Any]] = None,
         exclude_job_id: Optional[str] = None,
     ) -> int:
-        clauses = ["""(
-                state = ?
-                OR (
-                    state = ?
-                    AND EXISTS (
-                        SELECT 1
-                          FROM orch_automation_child_execution_edges edge
-                         WHERE edge.parent_job_id = orch_automation_jobs.job_id
-                           AND edge.authoritative_for_parent_completion = 1
-                           AND edge.terminal_state IS NULL
-                    )
-                )
-            )"""]
+        clauses = ["state IN (?, ?)"]
         params: list[Any] = [JOB_CLAIMED, JOB_RUNNING]
         if rule_id is not None:
             clauses.append("rule_id = ?")
@@ -1522,19 +1510,7 @@ class AutomationStore:
         target: Optional[dict[str, Any]] = None,
         exclude_job_id: Optional[str] = None,
     ) -> Optional[AutomationJob]:
-        clauses = ["""(
-                state = ?
-                OR (
-                    state = ?
-                    AND EXISTS (
-                        SELECT 1
-                          FROM orch_automation_child_execution_edges edge
-                         WHERE edge.parent_job_id = orch_automation_jobs.job_id
-                           AND edge.authoritative_for_parent_completion = 1
-                           AND edge.terminal_state IS NULL
-                    )
-                )
-            )"""]
+        clauses = ["state IN (?, ?)"]
         params: list[Any] = [JOB_CLAIMED, JOB_RUNNING]
         if rule_id is not None:
             clauses.append("rule_id = ?")
