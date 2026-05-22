@@ -17,6 +17,7 @@ from ..domain.workspace_scope import (
 )
 from ..hub_topology import load_hub_state
 from ..injected_context import strip_legacy_injected_context_transport_blocks
+from ..sqlite_utils import ensure_columns, table_columns
 from ..state_roots import resolve_repo_flows_db_path
 from ..text_utils import _normalize_optional_text, _parse_iso_timestamp
 from .chat_surface_events import ChatSurfaceEvent, SQLiteChatSurfaceEventJournal
@@ -38,6 +39,15 @@ CHAT_INDEX_PROJECTION_SCHEMA_VERSION = "chat.index.projection.facets.v1"
 DEFAULT_CHAT_TIMELINE_LIMIT = 50
 MAX_CHAT_TIMELINE_LIMIT = 200
 MAX_CHAT_TIMELINE_PAGE_SOURCE_LIMIT = 1000
+_CHAT_INDEX_PROJECTION_FACET_COLUMNS = (
+    ("facet_category", "facet_category TEXT"),
+    ("facet_turn_kind_list", "facet_turn_kind_list TEXT NOT NULL DEFAULT ''"),
+    ("facet_origin_kind_list", "facet_origin_kind_list TEXT NOT NULL DEFAULT ''"),
+    ("facet_transport_list", "facet_transport_list TEXT NOT NULL DEFAULT ''"),
+    ("facet_scope_kind", "facet_scope_kind TEXT"),
+    ("facet_scope_id", "facet_scope_id TEXT"),
+    ("facet_agent_kind", "facet_agent_kind TEXT"),
+)
 
 _TERMINAL_SUCCESS_STATUSES = {
     "completed",
@@ -907,6 +917,7 @@ class ChatSurfaceReadService:
             self._hub_root, durable=self._durable, migrate=True
         ) as conn:
             with conn:
+                _ensure_chat_index_projection_facet_schema(conn)
                 existing_meta = {
                     str(row["key"]): str(row["value"]) for row in conn.execute("""
                         SELECT key, value
@@ -1036,6 +1047,7 @@ class ChatSurfaceReadService:
             ) or not _table_exists(conn, "orch_chat_index_projection_meta"):
                 needs_rebuild = True
             else:
+                storage_repaired = _ensure_chat_index_projection_facet_schema(conn)
                 rows = conn.execute("""
                     SELECT key, value
                       FROM orch_chat_index_projection_meta
@@ -1043,7 +1055,8 @@ class ChatSurfaceReadService:
                     """).fetchall()
                 meta = {str(row["key"]): str(row["value"]) for row in rows}
                 needs_rebuild = (
-                    meta.get("source_signature") != source_signature
+                    storage_repaired
+                    or meta.get("source_signature") != source_signature
                     or meta.get("projection_schema_version")
                     != CHAT_INDEX_PROJECTION_SCHEMA_VERSION
                 )
@@ -4237,6 +4250,24 @@ def _row_get(row: Optional[Mapping[str, Any]], key: str) -> Any:
         return row[key]
     except (KeyError, IndexError):
         return None
+
+
+def _ensure_chat_index_projection_facet_schema(conn: Any) -> bool:
+    if not _table_exists(conn, "orch_chat_index_projection"):
+        return False
+    columns = table_columns(conn, "orch_chat_index_projection")
+    repaired = any(
+        column_name not in columns
+        for column_name, _ddl in _CHAT_INDEX_PROJECTION_FACET_COLUMNS
+    )
+    ensure_columns(
+        conn, "orch_chat_index_projection", _CHAT_INDEX_PROJECTION_FACET_COLUMNS
+    )
+    conn.execute("""
+        CREATE INDEX IF NOT EXISTS idx_orch_chat_index_projection_facets
+            ON orch_chat_index_projection(facet_category, facet_scope_kind, facet_agent_kind)
+        """)
+    return repaired
 
 
 def _table_exists(conn: Any, table_name: str) -> bool:
