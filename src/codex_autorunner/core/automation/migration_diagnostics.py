@@ -451,15 +451,13 @@ def migrate_legacy_automation_executor_shapes(
         rules_migrated += 1
 
     with open_orchestration_sqlite(hub_root, durable=durable) as conn:
-        rows = conn.execute(
-            """
+        rows = conn.execute("""
             SELECT jobs.*, rules.executor_kind AS rule_executor_kind
               FROM orch_automation_jobs AS jobs
               LEFT JOIN orch_automation_rules AS rules
                 ON rules.rule_id = jobs.rule_id
              ORDER BY jobs.created_at ASC, jobs.job_id ASC
-            """
-        ).fetchall()
+            """).fetchall()
 
     for row in rows:
         executor = _json_object(row["executor_json"])
