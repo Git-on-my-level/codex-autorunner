@@ -1406,7 +1406,7 @@ class AutomationStore:
         return int(row["c"] if row is not None else 0)
 
     def _row_to_rule(self, row: sqlite3.Row) -> AutomationRule:
-        return AutomationRule.create(
+        return AutomationRule.hydrate_persisted(
             rule_id=row["rule_id"],
             name=row["name"],
             enabled=normalize_bool(row["enabled"]),

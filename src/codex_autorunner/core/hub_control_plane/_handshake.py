@@ -120,6 +120,7 @@ class HandshakeResponse:
     capabilities: tuple[str, ...]
     hub_build_version: Optional[str] = None
     hub_asset_version: Optional[str] = None
+    compatibility: dict[str, Any] = field(default_factory=dict)
 
     @classmethod
     def from_mapping(cls, data: Mapping[str, Any]) -> "HandshakeResponse":
@@ -147,10 +148,17 @@ class HandshakeResponse:
             capabilities=normalize_string_set(data.get("capabilities")),
             hub_build_version=normalize_optional_text(data.get("hub_build_version")),
             hub_asset_version=normalize_optional_text(data.get("hub_asset_version")),
+            compatibility=(
+                dict(compatibility_payload)
+                if isinstance(
+                    compatibility_payload := data.get("compatibility"), Mapping
+                )
+                else {}
+            ),
         )
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        payload = {
             "api_version": self.api_version,
             "minimum_client_api_version": self.minimum_client_api_version,
             "schema_generation": self.schema_generation,
@@ -158,6 +166,9 @@ class HandshakeResponse:
             "hub_build_version": self.hub_build_version,
             "hub_asset_version": self.hub_asset_version,
         }
+        if self.compatibility:
+            payload["compatibility"] = dict(self.compatibility)
+        return payload
 
 
 @dataclass(frozen=True)

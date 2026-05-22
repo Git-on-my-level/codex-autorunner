@@ -74,7 +74,12 @@ class ManagedThreadStoreBootstrap:
 
     def prepare(self) -> None:
         with managed_threads_db_lock(self._db_path):
-            prepare_orchestration_sqlite(self._hub_root, durable=self._durable)
+            prepare_orchestration_sqlite(
+                self._hub_root,
+                durable=self._durable,
+                process_role="worker",
+                migration_mode="worker",
+            )
             ensure_legacy_orchestration_backfill(
                 self._hub_root,
                 durable=self._durable,

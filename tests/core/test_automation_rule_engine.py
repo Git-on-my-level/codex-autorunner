@@ -13,6 +13,7 @@ from codex_autorunner.core.automation.models import (
     TRIGGER_KIND_EVENT,
     TRIGGER_KIND_MANUAL,
 )
+from codex_autorunner.core.orchestration.sqlite import open_orchestration_sqlite
 
 
 def _rule(**overrides):
@@ -113,6 +114,42 @@ def test_rule_engine_dedupe_survives_store_restart(tmp_path) -> None:
     assert first.jobs_created == 1
     assert duplicate.jobs_deduped == 1
     assert [job.dedupe_key for job in restarted_store.list_jobs()] == ["stable"]
+
+
+def test_rule_engine_reports_unknown_executor_skip_reason(tmp_path) -> None:
+    store = AutomationStore(tmp_path)
+    store.upsert_rule(_rule())
+    with open_orchestration_sqlite(tmp_path) as conn:
+        with conn:
+            conn.execute(
+                """
+                UPDATE orch_automation_rules
+                   SET executor_kind = ?,
+                       executor_json = ?
+                 WHERE rule_id = ?
+                """,
+                (
+                    "agent_task_turn",
+                    '{"kind":"agent_task_turn"}',
+                    "rule-1",
+                ),
+            )
+
+    result = AutomationRuleEngine(
+        AutomationStore(tmp_path)
+    ).record_event_and_enqueue_jobs(_event())
+
+    assert result.jobs_created == 0
+    assert result.jobs_skipped == 1
+    assert result.skipped_reasons == (
+        {
+            "code": "AUTOMATION_EXECUTOR_KIND_UNSUPPORTED",
+            "rule_id": "rule-1",
+            "executor_kind": "agent_task_turn",
+            "known_executor": False,
+            "executable": False,
+        },
+    )
 
 
 def test_rule_engine_records_event_but_does_not_enqueue_disabled_rule(tmp_path) -> None:

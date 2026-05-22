@@ -87,11 +87,30 @@ def _status_code_for_error(exc: HubControlPlaneError) -> int:
     return 500
 
 
+def _compatibility_payload(exc: HubControlPlaneError) -> dict[str, Any] | None:
+    payload = exc.details.get("compatibility")
+    return dict(payload) if isinstance(payload, Mapping) else None
+
+
 def _error_response(exc: HubControlPlaneError) -> JSONResponse:
+    content: dict[str, Any] = {"error": exc.info.to_dict()}
+    compatibility = _compatibility_payload(exc)
+    if compatibility is not None:
+        content["compatibility"] = compatibility
     return JSONResponse(
         status_code=_status_code_for_error(exc),
-        content={"error": exc.info.to_dict()},
+        content=content,
     )
+
+
+def _check_bound_service_compatibility(operation: Callable[[Any], Any]) -> None:
+    service = getattr(operation, "__self__", None)
+    ensure_compatible = getattr(service, "_ensure_compatible", None)
+    if (
+        callable(ensure_compatible)
+        and getattr(operation, "__name__", "") != "handshake"
+    ):
+        ensure_compatible()
 
 
 async def _run_control_plane_call(
@@ -104,6 +123,7 @@ async def _run_control_plane_call(
     except ValueError as exc:
         return _error_response(HubControlPlaneError("hub_rejected", str(exc)))
     try:
+        _check_bound_service_compatibility(operation)
         response_model = await asyncio.to_thread(operation, request_model)
     except HubControlPlaneError as exc:
         return _error_response(exc)
@@ -122,6 +142,7 @@ async def _run_control_plane_command(
     except ValueError as exc:
         return _error_response(HubControlPlaneError("hub_rejected", str(exc)))
     try:
+        _check_bound_service_compatibility(operation)
         await asyncio.to_thread(operation, request_model)
     except HubControlPlaneError as exc:
         return _error_response(exc)

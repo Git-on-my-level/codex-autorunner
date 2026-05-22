@@ -12,16 +12,21 @@ from ..automation import (
     AutomationSchedule,
     AutomationStore,
 )
+from ..automation.engine import AutomationRuleNonExecutableError
 from ..managed_thread_store import ManagedThreadStore
 from ..orchestration.bindings import OrchestrationBindingStore
 from ..orchestration.cold_trace_store import ColdTraceStore
+from ..orchestration.compatibility import SchemaCompatibilityError
 from ..orchestration.models import ExecutionRecord, ThreadTarget
 from ..orchestration.runtime_bindings import (
     RuntimeThreadBinding,
     normalize_backend_binding_state,
 )
 from ..orchestration.service import ManagedThreadExecutionStore
-from ..orchestration.sqlite import read_orchestration_compatibility_metadata
+from ..orchestration.sqlite import (
+    assert_current_orchestration_compatible,
+    read_orchestration_compatibility_metadata,
+)
 from ..orchestration.turn_timeline import (
     append_turn_events_to_cold_trace,
     persist_turn_timeline,
@@ -269,6 +274,19 @@ class HubSharedStateService:
         return CONTROL_PLANE_CAPABILITIES
 
     def handshake(self, request: HandshakeRequest) -> HandshakeResponse:
+        try:
+            evaluation = assert_current_orchestration_compatible(
+                self._hub_root,
+                process_role="hub",
+                durable=self._durable_writes,
+            )
+        except SchemaCompatibilityError as exc:
+            raise HubControlPlaneError(
+                "hub_incompatible",
+                "Hub restart required: orchestration schema is newer than this build supports",
+                retryable=False,
+                details={"compatibility": exc.evaluation.to_dict()},
+            ) from exc
         metadata = read_orchestration_compatibility_metadata(self._hub_root)
         if metadata is None:
             raise HubControlPlaneError(
@@ -283,7 +301,23 @@ class HubSharedStateService:
             capabilities=self.capabilities,
             hub_build_version=self._hub_build_version,
             hub_asset_version=self._hub_asset_version,
+            compatibility=evaluation.to_dict(),
         )
+
+    def _ensure_compatible(self) -> None:
+        try:
+            assert_current_orchestration_compatible(
+                self._hub_root,
+                process_role="hub",
+                durable=self._durable_writes,
+            )
+        except SchemaCompatibilityError as exc:
+            raise HubControlPlaneError(
+                "hub_incompatible",
+                "Hub restart required: orchestration schema is newer than this build supports",
+                retryable=False,
+                details={"compatibility": exc.evaluation.to_dict()},
+            ) from exc
 
     def get_notification_record(
         self, request: NotificationLookupRequest
@@ -1005,8 +1039,21 @@ class HubSharedStateService:
             )
         )
         engine = AutomationRuleEngine(self._automation_store)
-        expected_job = engine.job_for_rule(rule, event)
-        result = engine.enqueue_job_for_rule(rule, event)
+        try:
+            expected_job = engine.job_for_rule(rule, event)
+            result = engine.enqueue_job_for_rule(rule, event)
+        except AutomationRuleNonExecutableError as exc:
+            raise HubControlPlaneError(
+                "hub_rejected",
+                str(exc),
+                details={
+                    "code": exc.code,
+                    "rule_id": exc.rule_id,
+                    "executor_kind": exc.executor_kind,
+                    "executable": False,
+                    "known_executor": False,
+                },
+            ) from exc
         job = self._automation_store.get_job_by_dedupe_key(expected_job.dedupe_key)
         if job is None:
             raise HubControlPlaneError(

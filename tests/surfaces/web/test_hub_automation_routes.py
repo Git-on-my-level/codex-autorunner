@@ -1,3 +1,4 @@
+import json
 from types import SimpleNamespace
 
 import pytest
@@ -26,6 +27,7 @@ from codex_autorunner.core.automation.models import (
     TRIGGER_KIND_SCHEDULE,
 )
 from codex_autorunner.core.automation.product import automation_overview
+from codex_autorunner.core.orchestration.sqlite import open_orchestration_sqlite
 from codex_autorunner.core.orchestration.turn_execution_contract import (
     TurnExecutionOrigin,
     TurnExecutionRequest,
@@ -646,6 +648,63 @@ def test_hub_automation_jobs_project_pma_coordinator_and_worker_runtime(tmp_path
     assert children["pma-item-runtime"]["requested_runtime"]["agent"] == "codex"
     assert children["worker-runtime"]["child_kind"] == "agent_task"
     assert children["worker-runtime"]["requested_runtime"]["agent"] == "opencode"
+
+
+def test_hub_automation_workspace_tolerates_unknown_executor_kind(tmp_path):
+    hub_root = tmp_path / "hub"
+    seed_hub_files(hub_root, force=True)
+    store = AutomationStore(hub_root)
+    store.upsert_rule(
+        AutomationRule.create(
+            rule_id="rule-future",
+            name="Future executor",
+            enabled=True,
+            trigger_kind=TRIGGER_KIND_EVENT,
+            trigger={"event_types": ["manual.run"]},
+            target_policy=TARGET_POLICY_HUB,
+            executor_kind=EXECUTOR_MANAGED_THREAD_TURN,
+            executor={"message": "Known before upgrade"},
+        )
+    )
+    with open_orchestration_sqlite(hub_root) as conn:
+        with conn:
+            conn.execute(
+                """
+                UPDATE orch_automation_rules
+                   SET executor_kind = ?,
+                       executor_json = ?
+                 WHERE rule_id = ?
+                """,
+                (
+                    "hypothetical_future_executor",
+                    json.dumps(
+                        {
+                            "kind": "hypothetical_future_executor",
+                            "prompt": "Future task",
+                        }
+                    ),
+                    "rule-future",
+                ),
+            )
+
+    client = TestClient(create_hub_app(hub_root))
+    response = client.get("/hub/read-models/automations/workspace")
+    run = client.post("/hub/automations/rule-future/run")
+
+    assert response.status_code == 200
+    rows = {row["id"]: row for row in response.json()["automations"]}
+    row = rows["rule-future"]
+    assert row["executor_kind"] == "hypothetical_future_executor"
+    assert row["executor"]["kind"] == "hypothetical_future_executor"
+    assert row["known_executor"] is False
+    assert row["executable"] is False
+    assert row["editable"]["can_run_now"] is False
+    assert row["executor_summary"]["known_executor"] is False
+    assert {item["code"] for item in row["diagnostics"]} >= {
+        "AUTOMATION_EXECUTOR_KIND_UNSUPPORTED"
+    }
+    assert run.status_code == 400
+    assert "AUTOMATION_EXECUTOR_KIND_UNSUPPORTED" in run.json()["detail"]
 
 
 def test_hub_automations_pause_and_resume(tmp_path):

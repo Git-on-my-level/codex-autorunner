@@ -689,10 +689,15 @@ class TelegramBotService(
                     cleanup=_cleanup,
                 )
 
-        state_root = Path(self._hub_root or self._config.root)
-        engine = SQLiteManagedThreadDeliveryEngine(state_root)
+        def _build_engine() -> SQLiteManagedThreadDeliveryEngine:
+            return SQLiteManagedThreadDeliveryEngine(
+                Path(self._hub_root or self._config.root)
+            )
+
+        engine = _build_engine()
         return ManagedThreadDeliveryWorker(
             engine=engine,
+            engine_factory=_build_engine,
             adapter=_TelegramDeliveryAdapter(),
             logger=self._logger,
         )

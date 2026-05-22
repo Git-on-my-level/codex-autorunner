@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 from codex_autorunner.core.hub_control_plane import (
@@ -49,7 +50,10 @@ from codex_autorunner.core.orchestration import (
     TurnExecutionRequest,
 )
 from codex_autorunner.core.orchestration.cold_trace_store import ColdTraceStore
-from codex_autorunner.core.orchestration.sqlite import prepare_orchestration_sqlite
+from codex_autorunner.core.orchestration.sqlite import (
+    open_orchestration_sqlite,
+    prepare_orchestration_sqlite,
+)
 from codex_autorunner.core.pma_notification_store import PmaNotificationStore
 from codex_autorunner.core.pma_transcripts import PmaTranscriptStore
 from codex_autorunner.core.ports.run_event import Completed, Started
@@ -722,6 +726,56 @@ def test_shared_state_service_automation_rule_crud_and_manual_run(
     assert [job["job_id"] for job in jobs.jobs] == [run.job["job_id"]]
     assert len(events.events) == 1
     assert events.events[0]["raw_payload"]["secret"] == "[redacted]"
+
+
+def test_shared_state_service_lists_unknown_executor_but_rejects_manual_run(
+    tmp_path: Path,
+) -> None:
+    service, _thread_target_id = _build_service(tmp_path)
+    service.upsert_automation_rule(
+        AutomationRuleUpsertRequest.from_mapping(
+            {
+                "rule_id": "rule-future",
+                "name": "Future rule",
+                "trigger_kind": "event",
+                "trigger": {"event_types": ["manual.run"]},
+                "target_policy": "hub",
+                "executor_kind": "managed_thread_turn",
+            }
+        )
+    )
+    with open_orchestration_sqlite(tmp_path / "hub", durable=False) as conn:
+        with conn:
+            conn.execute(
+                """
+                UPDATE orch_automation_rules
+                   SET executor_kind = ?,
+                       executor_json = ?
+                 WHERE rule_id = ?
+                """,
+                (
+                    "pma_operator_turn",
+                    json.dumps({"kind": "pma_operator_turn", "prompt": "Future"}),
+                    "rule-future",
+                ),
+            )
+
+    listed = service.list_automation_rules(AutomationRuleListRequest.from_mapping({}))
+
+    rules = {rule["rule_id"]: rule for rule in listed.rules}
+    assert rules["rule-future"]["executor_kind"] == "pma_operator_turn"
+    assert rules["rule-future"]["known_executor"] is False
+    assert rules["rule-future"]["executable"] is False
+    try:
+        service.run_automation_rule(
+            AutomationRuleRunRequest.from_mapping({"rule_id": "rule-future"})
+        )
+    except Exception as exc:
+        assert getattr(exc, "details", {})["code"] == (
+            "AUTOMATION_EXECUTOR_KIND_UNSUPPORTED"
+        )
+    else:
+        raise AssertionError("unknown executor kind should not be manually runnable")
 
 
 def test_shared_state_service_automation_job_cancel_retry_and_detail(

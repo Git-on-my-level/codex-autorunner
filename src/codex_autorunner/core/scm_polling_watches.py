@@ -364,48 +364,113 @@ class ScmPollingWatchStore:
                     ),
                 )
             else:
-                reactivation_plan = plan_polling_watch_lifecycle_transition(
-                    ScmPollingWatchLifecycleTransition.REACTIVATE,
-                    current_state=row["state"],
-                )
-                conn.execute(
-                    """
-                    UPDATE orch_scm_polling_watches
-                       SET repo_slug = ?,
-                           repo_id = COALESCE(?, repo_id),
-                           pr_number = ?,
-                           workspace_root = ?,
-                           thread_target_id = CASE
-                               WHEN ? IS NULL THEN thread_target_id
-                               ELSE ?
-                           END,
-                           poll_interval_seconds = ?,
-                           state = ?,
-                           updated_at = ?,
-                           expires_at = ?,
-                           next_poll_at = ?,
-                           last_error_text = NULL,
-                           reaction_config_json = ?,
-                           snapshot_json = ?
-                     WHERE watch_id = ?
-                    """,
-                    (
-                        normalized_repo_slug,
-                        normalized_repo_id,
-                        normalized_pr_number,
-                        normalized_workspace_root,
-                        normalized_thread_target_id,
-                        normalized_thread_target_id,
-                        normalized_poll_interval,
-                        reactivation_plan.state.value,
-                        timestamp,
-                        normalized_expires_at,
-                        normalized_next_poll_at,
-                        _json_dumps(reaction_config_object),
-                        _json_dumps(snapshot_object),
-                        str(row["watch_id"]),
-                    ),
-                )
+                current_state = _watch_lifecycle_state(row["state"])
+                if current_state is ScmPollingWatchLifecycleState.EXPIRED:
+                    previous_watch_id = str(row["watch_id"])
+                    repaired_snapshot = dict(snapshot_object)
+                    repaired_snapshot["watch_repair"] = {
+                        "action": "recreated_expired_watch",
+                        "previous_watch_id": previous_watch_id,
+                        "repaired_at": timestamp,
+                    }
+                    watch_id = uuid.uuid4().hex
+                    create_plan = plan_polling_watch_lifecycle_transition(
+                        ScmPollingWatchLifecycleTransition.CREATE,
+                        current_state=None,
+                    )
+                    conn.execute(
+                        """
+                        DELETE FROM orch_scm_polling_watches
+                         WHERE watch_id = ?
+                        """,
+                        (previous_watch_id,),
+                    )
+                    conn.execute(
+                        """
+                        INSERT INTO orch_scm_polling_watches (
+                            watch_id,
+                            provider,
+                            binding_id,
+                            repo_slug,
+                            repo_id,
+                            pr_number,
+                            workspace_root,
+                            thread_target_id,
+                            poll_interval_seconds,
+                            state,
+                            started_at,
+                            updated_at,
+                            expires_at,
+                            next_poll_at,
+                            last_polled_at,
+                            last_error_text,
+                            reaction_config_json,
+                            snapshot_json
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?)
+                        """,
+                        (
+                            watch_id,
+                            normalized_provider,
+                            normalized_binding_id,
+                            normalized_repo_slug,
+                            normalized_repo_id,
+                            normalized_pr_number,
+                            normalized_workspace_root,
+                            normalized_thread_target_id,
+                            normalized_poll_interval,
+                            create_plan.state.value,
+                            timestamp,
+                            timestamp,
+                            normalized_expires_at,
+                            normalized_next_poll_at,
+                            "recreated expired SCM polling watch",
+                            _json_dumps(reaction_config_object),
+                            _json_dumps(repaired_snapshot),
+                        ),
+                    )
+                else:
+                    reactivation_plan = plan_polling_watch_lifecycle_transition(
+                        ScmPollingWatchLifecycleTransition.REACTIVATE,
+                        current_state=current_state,
+                    )
+                    conn.execute(
+                        """
+                        UPDATE orch_scm_polling_watches
+                           SET repo_slug = ?,
+                               repo_id = COALESCE(?, repo_id),
+                               pr_number = ?,
+                               workspace_root = ?,
+                               thread_target_id = CASE
+                                   WHEN ? IS NULL THEN thread_target_id
+                                   ELSE ?
+                               END,
+                               poll_interval_seconds = ?,
+                               state = ?,
+                               updated_at = ?,
+                               expires_at = ?,
+                               next_poll_at = ?,
+                               last_error_text = NULL,
+                               reaction_config_json = ?,
+                               snapshot_json = ?
+                         WHERE watch_id = ?
+                        """,
+                        (
+                            normalized_repo_slug,
+                            normalized_repo_id,
+                            normalized_pr_number,
+                            normalized_workspace_root,
+                            normalized_thread_target_id,
+                            normalized_thread_target_id,
+                            normalized_poll_interval,
+                            reactivation_plan.state.value,
+                            timestamp,
+                            normalized_expires_at,
+                            normalized_next_poll_at,
+                            _json_dumps(reaction_config_object),
+                            _json_dumps(snapshot_object),
+                            str(row["watch_id"]),
+                        ),
+                    )
             refreshed = self._load_watch_row(
                 conn,
                 provider=normalized_provider,

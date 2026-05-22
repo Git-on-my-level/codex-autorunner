@@ -20,6 +20,7 @@ from .models import (
     EXECUTOR_AGENT_TASK_TURN,
     EXECUTOR_GITHUB_COMMENT,
     EXECUTOR_GITHUB_REACTION,
+    EXECUTOR_KINDS,
     EXECUTOR_MANAGED_THREAD_TURN,
     EXECUTOR_PMA_OPERATOR_TURN,
     EXECUTOR_PUBLISH_CHAT_NOTIFICATION,
@@ -347,6 +348,8 @@ def _automation_row_from_enrichment(
         "kind": display_kind(rule),
         "execution_mode": rule.executor_kind,
         "executor_kind": rule.executor_kind,
+        "known_executor": rule.known_executor,
+        "executable": rule.executable,
         "trigger_kind": rule.trigger_kind,
         "target_policy": rule.target_policy,
         "schedule": schedule.to_dict() if schedule is not None else None,
@@ -889,14 +892,20 @@ def _editable_projection(
     schedule_kind = schedule.schedule_kind if schedule is not None else None
     system_reason = _system_reason(rule)
     raw_editable = not rule.system_owned
+    executable = _known_executable_rule(rule)
     return {
-        "can_enable": True,
+        "can_enable": executable,
         "can_rename": raw_editable,
         "can_edit_schedule": raw_editable
+        and executable
         and schedule_kind in {SCHEDULE_DAILY, SCHEDULE_WEEKLY},
-        "can_edit_message": raw_editable and message["field"] == "prompt",
-        "can_edit_ticket_body": raw_editable and message["field"] == "ticket_body",
-        "can_run_now": True,
+        "can_edit_message": raw_editable
+        and executable
+        and message["field"] == "prompt",
+        "can_edit_ticket_body": raw_editable
+        and executable
+        and message["field"] == "ticket_body",
+        "can_run_now": executable,
         "can_edit_raw": False,
         "raw_edit_blocked_reason": (
             "Raw rule edits are available through the control-plane API."
@@ -1130,6 +1139,8 @@ def _executor_summary(
         "kind": rule.executor_kind,
         "execution_mode": rule.executor_kind,
         "label": _executor_label(rule.executor_kind),
+        "known_executor": rule.known_executor,
+        "executable": rule.executable,
         "agent": _optional_text(executor.get("agent")),
         "model": _optional_text(executor.get("model")),
         "reasoning": _optional_text(executor.get("reasoning")),
@@ -1182,6 +1193,16 @@ def _product_diagnostics(
     message: dict[str, Any],
 ) -> list[dict[str, str]]:
     diagnostics: list[dict[str, str]] = []
+    if not _known_executable_rule(rule):
+        diagnostics.append(
+            {
+                "code": "AUTOMATION_EXECUTOR_KIND_UNSUPPORTED",
+                "severity": "error",
+                "message": (
+                    "This automation uses an executor kind that this build cannot run."
+                ),
+            }
+        )
     if _legacy_source(rule) is not None:
         diagnostics.append(
             {
@@ -1207,6 +1228,14 @@ def _product_diagnostics(
             }
         )
     return diagnostics
+
+
+def _known_executable_rule(rule: AutomationRule) -> bool:
+    return (
+        bool(rule.known_executor)
+        and bool(rule.executable)
+        and rule.executor_kind in EXECUTOR_KINDS
+    )
 
 
 def _executor_label(executor_kind: str) -> str:

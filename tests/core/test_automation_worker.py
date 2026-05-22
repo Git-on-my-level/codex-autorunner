@@ -173,6 +173,37 @@ def test_worker_dead_letters_after_max_attempts(tmp_path) -> None:
     assert store.list_attempts("job-1")[0].status == JOB_DEAD_LETTERED
 
 
+def test_worker_dead_letters_unknown_executor_without_retrying(tmp_path) -> None:
+    store = _store_with_rule_and_event(tmp_path)
+    store.enqueue_job(
+        _job(
+            "job-unknown",
+            executor={"kind": "agent_task_turn"},
+            policy={"max_attempts": 3},
+            max_attempts=3,
+        )
+    )
+    registry = AutomationExecutorRegistry()
+
+    result = AutomationJobWorker(store, registry).process_once(
+        now="2026-01-01T00:00:00Z"
+    )
+
+    saved = store.get_job("job-unknown")
+    attempt = store.list_attempts("job-unknown")[0]
+    assert result.failed == 1
+    assert result.retried == 0
+    assert result.dead_lettered == 1
+    assert saved.state == JOB_DEAD_LETTERED
+    assert "AUTOMATION_EXECUTOR_KIND_UNSUPPORTED" in saved.error_text
+    assert attempt.status == JOB_DEAD_LETTERED
+    assert attempt.executor_result == {
+        "code": "AUTOMATION_EXECUTOR_KIND_UNSUPPORTED",
+        "executor_kind": "agent_task_turn",
+        "executable": False,
+    }
+
+
 def test_worker_recovers_stale_claim_and_respects_running_concurrency(tmp_path) -> None:
     store = _store_with_rule_and_event(tmp_path)
     running, _ = store.enqueue_job(_job("running-job", dedupe_key="running"))

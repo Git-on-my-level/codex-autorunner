@@ -7,6 +7,7 @@ from typing import Callable
 
 from ..sqlite_utils import table_columns, table_exists
 from ..time_utils import now_iso
+from .compatibility import SchemaCompatibilityError, evaluate_schema_compatibility
 from .models import OrchestrationTableDefinition
 from .turn_execution_storage import (
     TURN_EXECUTION_CONTRACT_VERSION,
@@ -2463,8 +2464,13 @@ def apply_orchestration_migrations(conn: sqlite3.Connection) -> int:
     _ensure_migration_tables(conn)
     current_version = current_orchestration_schema_version(conn)
     if current_version > ORCHESTRATION_SCHEMA_VERSION:
-        raise RuntimeError(
-            "orchestration.sqlite3 schema is newer than this build supports"
+        raise SchemaCompatibilityError(
+            evaluate_schema_compatibility(
+                observed_schema=current_version,
+                supported_schema=ORCHESTRATION_SCHEMA_VERSION,
+                process_role="unknown",
+                build_id="unknown",
+            )
         )
     if current_version == ORCHESTRATION_SCHEMA_VERSION:
         return current_version

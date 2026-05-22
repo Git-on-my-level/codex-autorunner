@@ -24,6 +24,8 @@ class SchedulerProcessResult:
     events_created: int = 0
     jobs_created: int = 0
     jobs_deduped: int = 0
+    jobs_skipped: int = 0
+    skipped_reasons: tuple[dict[str, Any], ...] = ()
 
 
 class AutomationScheduler:
@@ -40,6 +42,8 @@ class AutomationScheduler:
         events = 0
         jobs = 0
         deduped = 0
+        skipped = 0
+        skipped_reasons: list[dict[str, Any]] = []
         for schedule in due:
             if schedule.next_fire_at is None:
                 continue
@@ -69,11 +73,15 @@ class AutomationScheduler:
             events += 1
             jobs += result.jobs_created
             deduped += result.jobs_deduped
+            skipped += result.jobs_skipped
+            skipped_reasons.extend(result.skipped_reasons)
         return SchedulerProcessResult(
             schedules_fired=fired,
             events_created=events,
             jobs_created=jobs,
             jobs_deduped=deduped,
+            jobs_skipped=skipped,
+            skipped_reasons=tuple(skipped_reasons),
         )
 
 

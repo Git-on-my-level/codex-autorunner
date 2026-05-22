@@ -3,12 +3,17 @@ import logging
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Request
+from fastapi.responses import JSONResponse
 
 from ....core import update as update_core
 from ....core.config import HubConfig
 from ....core.constants import DEFAULT_UPDATE_REPO_REF, DEFAULT_UPDATE_REPO_URL
 from ....core.orchestration.execution_history_maintenance import (
     collect_execution_history_database_health,
+)
+from ....core.orchestration.sqlite import (
+    evaluate_current_orchestration_compatibility,
+    refresh_orchestration_process_heartbeat,
 )
 from ....core.self_describe import collect_describe_data
 from ....core.update import (
@@ -78,10 +83,31 @@ def build_system_routes() -> APIRouter:
         base_path = getattr(request.app.state, "base_path", "")
         asset_version = getattr(request.app.state, "asset_version", None)
         orchestration_health = None
+        compatibility_payload = None
+        compatibility_ok = True
         if isinstance(config, HubConfig):
-            database_health = await asyncio.to_thread(
-                collect_execution_history_database_health,
+            compatibility = await asyncio.to_thread(
+                evaluate_current_orchestration_compatibility,
                 config.root,
+                process_role="hub",
+                durable=bool(getattr(config, "durable_writes", False)),
+            )
+            compatibility_ok = compatibility.compatible
+            compatibility_payload = compatibility.to_dict()
+            if compatibility_ok:
+                await asyncio.to_thread(
+                    refresh_orchestration_process_heartbeat,
+                    config.root,
+                    process_role="hub",
+                    observed_schema_generation=compatibility.observed_schema,
+                )
+            database_health = (
+                await asyncio.to_thread(
+                    collect_execution_history_database_health,
+                    config.root,
+                )
+                if compatibility.compatible
+                else None
             )
             last_housekeeping = getattr(
                 getattr(request.app, "state", None),
@@ -95,12 +121,14 @@ def build_system_routes() -> APIRouter:
                 ),
             )
         response: dict = {
-            "status": "ok",
+            "status": "ok" if compatibility_ok else "restart_required",
             "mode": mode,
             "base_path": base_path,
             "asset_version": asset_version,
             "orchestration": orchestration_health,
         }
+        if compatibility_payload is not None:
+            response["compatibility"] = compatibility_payload
         if mode == "hub":
             supervisor = getattr(request.app.state, "hub_supervisor", None)
             if supervisor is not None:
@@ -112,6 +140,8 @@ def build_system_routes() -> APIRouter:
             )
             if deferred_done is not None:
                 response["hub_deferred_startup_complete"] = deferred_done
+        if isinstance(config, HubConfig) and not compatibility_ok:
+            return JSONResponse(status_code=503, content=response)
         return response
 
     @router.get("/system/update/check", response_model=SystemUpdateCheckResponse)
