@@ -1714,6 +1714,48 @@ def test_chat_index_snapshot_reads_rebuilt_sql_projection_without_reprojecting(
     assert archived["rows"][0]["effective_status"] == "archived"
 
 
+def test_chat_index_snapshot_repairs_missing_facet_projection_columns(
+    tmp_path: Path,
+) -> None:
+    hub_root = tmp_path / "hub"
+    _seed_thread(hub_root, thread_id="thread-idle")
+    service = ChatSurfaceReadService(hub_root, durable=False)
+    service.rebuild_chat_index_projection()
+    facet_columns = (
+        "facet_category",
+        "facet_turn_kind_list",
+        "facet_origin_kind_list",
+        "facet_transport_list",
+        "facet_scope_kind",
+        "facet_scope_id",
+        "facet_agent_kind",
+    )
+
+    with open_orchestration_sqlite(hub_root, durable=False, migrate=True) as conn:
+        conn.execute("DROP INDEX IF EXISTS idx_orch_chat_index_projection_facets")
+        for column_name in facet_columns:
+            conn.execute(
+                f"ALTER TABLE orch_chat_index_projection DROP COLUMN {column_name}"
+            )
+
+    index = service.chat_index_snapshot(limit=20)
+
+    assert [row["managed_thread_id"] for row in index["rows"]] == ["thread-idle"]
+    with open_orchestration_sqlite(hub_root, durable=False, migrate=True) as conn:
+        columns = {
+            str(row["name"])
+            for row in conn.execute("PRAGMA table_info(orch_chat_index_projection)")
+        }
+        stored_schema_version = conn.execute("""
+            SELECT value
+              FROM orch_chat_index_projection_meta
+             WHERE key = 'projection_schema_version'
+            """).fetchone()["value"]
+
+    assert set(facet_columns).issubset(columns)
+    assert stored_schema_version == "chat.index.projection.facets.v1"
+
+
 def test_chat_index_rebuild_repairs_stale_archived_bound_surface_projection(
     tmp_path: Path,
 ) -> None:

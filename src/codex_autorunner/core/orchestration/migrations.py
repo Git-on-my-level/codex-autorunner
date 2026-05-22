@@ -1570,6 +1570,13 @@ def _apply_v33(conn: sqlite3.Connection) -> None:
             ticket_id TEXT,
             run_id TEXT,
             group_id TEXT,
+            facet_category TEXT,
+            facet_turn_kind_list TEXT NOT NULL DEFAULT '',
+            facet_origin_kind_list TEXT NOT NULL DEFAULT '',
+            facet_transport_list TEXT NOT NULL DEFAULT '',
+            facet_scope_kind TEXT,
+            facet_scope_id TEXT,
+            facet_agent_kind TEXT,
             search_text TEXT NOT NULL DEFAULT '',
             sort_unread_priority INTEGER NOT NULL DEFAULT 0,
             sort_last_activity_desc REAL,
@@ -1608,6 +1615,10 @@ def _apply_v33(conn: sqlite3.Connection) -> None:
     conn.execute("""
         CREATE INDEX IF NOT EXISTS idx_orch_chat_index_projection_search
             ON orch_chat_index_projection(search_text)
+        """)
+    conn.execute("""
+        CREATE INDEX IF NOT EXISTS idx_orch_chat_index_projection_facets
+            ON orch_chat_index_projection(facet_category, facet_scope_kind, facet_agent_kind)
         """)
 
 
