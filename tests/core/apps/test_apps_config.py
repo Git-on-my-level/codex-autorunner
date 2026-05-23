@@ -11,6 +11,11 @@ from codex_autorunner.core.config import (
     load_hub_config,
     load_repo_config,
 )
+from codex_autorunner.core.config_defaults import (
+    BLESSED_APP_REPO_ID,
+    BLESSED_APP_REPO_REF,
+    BLESSED_APP_REPO_URL,
+)
 from codex_autorunner.core.config_parsers import (
     _parse_apps_config,
     _parse_templates_config,
@@ -109,11 +114,10 @@ def test_default_loaded_config_exposes_apps_shape(tmp_path: Path) -> None:
     repo_config = load_repo_config(repo_root, hub_path=hub_root)
 
     assert hub_config.apps.enabled is True
-    assert hub_config.apps.repos
-    assert hub_config.apps.repos[0].id == "blessed"
-    assert hub_config.apps.repos[0].url == (
-        "https://github.com/Git-on-my-level/blessed-car-apps"
-    )
+    assert len(hub_config.apps.repos) == 1
+    assert hub_config.apps.repos[0].id == BLESSED_APP_REPO_ID
+    assert hub_config.apps.repos[0].url == BLESSED_APP_REPO_URL
+    assert hub_config.apps.repos[0].default_ref == BLESSED_APP_REPO_REF
     assert repo_config.apps.enabled is True
     assert repo_config.apps.repos == hub_config.apps.repos
 
@@ -124,7 +128,12 @@ def test_default_hub_config_keeps_template_and_app_catalogs_separate() -> None:
         "https://github.com/Git-on-my-level/car-ticket-templates"
     )
 
-    assert DEFAULT_HUB_CONFIG["apps"]["repos"][0]["id"] == "blessed"
-    assert DEFAULT_HUB_CONFIG["apps"]["repos"][0]["url"] == (
-        "https://github.com/Git-on-my-level/blessed-car-apps"
-    )
+    app_repos = DEFAULT_HUB_CONFIG["apps"]["repos"]
+    assert app_repos == [
+        {
+            "id": BLESSED_APP_REPO_ID,
+            "url": BLESSED_APP_REPO_URL,
+            "trusted": True,
+            "default_ref": BLESSED_APP_REPO_REF,
+        }
+    ]

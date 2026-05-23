@@ -11,6 +11,9 @@ from .report_retention import (
 TWELVE_HOUR_SECONDS = 12 * 60 * 60
 PMA_DEFAULT_MAX_TEXT_CHARS = 10_000
 PMA_DEFAULT_TURN_IDLE_TIMEOUT_SECONDS = 1800
+BLESSED_APP_REPO_ID = "blessed"
+BLESSED_APP_REPO_URL = "https://github.com/Git-on-my-level/blessed-car-apps"
+BLESSED_APP_REPO_REF = "main"
 
 
 def _default_agents_section() -> Dict[str, Any]:
@@ -345,10 +348,10 @@ def _default_apps_section() -> Dict[str, Any]:
         "enabled": True,
         "repos": [
             {
-                "id": "blessed",
-                "url": "https://github.com/Git-on-my-level/blessed-car-apps",
+                "id": BLESSED_APP_REPO_ID,
+                "url": BLESSED_APP_REPO_URL,
                 "trusted": True,
-                "default_ref": "main",
+                "default_ref": BLESSED_APP_REPO_REF,
             }
         ],
     }
