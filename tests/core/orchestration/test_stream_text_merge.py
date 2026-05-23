@@ -27,6 +27,12 @@ def test_merge_assistant_stream_text_concatenates_when_no_overlap() -> None:
     assert merge_assistant_stream_text("alpha", "beta") == "alphabeta"
 
 
+def test_append_assistant_stream_text_readably_keeps_subword_splits_glued() -> None:
+    assert append_assistant_stream_text_readably("inter", "national") == "international"
+    assert append_assistant_stream_text_readably("non", "sense") == "nonsense"
+    assert append_assistant_stream_text_readably("re", "do") == "redo"
+
+
 def test_append_assistant_stream_text_readably_preserves_word_boundaries() -> None:
     text = ""
     for chunk in (
@@ -47,6 +53,13 @@ def test_append_assistant_stream_text_readably_preserves_word_boundaries() -> No
         text
         == "Confirmed: **`/car/hub/read-models/chats` returns 500** everything else is healthy."
     )
+
+
+def test_assistant_text_accumulator_subword_snapshots_avoid_spurious_spaces() -> None:
+    accumulator = AssistantTextAccumulator()
+    accumulator.merge_snapshot("inter", preserve_word_boundaries=True)
+    accumulator.merge_snapshot("national", preserve_word_boundaries=True)
+    assert accumulator.text == "international"
 
 
 def test_assistant_text_accumulator_records_strict_deltas() -> None:

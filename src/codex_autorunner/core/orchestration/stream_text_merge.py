@@ -5,6 +5,70 @@ from dataclasses import dataclass
 _NO_SPACE_BEFORE = frozenset(",.;:!?)]}")
 _NO_SPACE_AFTER = frozenset("([{")
 
+# Latin subword prefixes where Hermes-style token streams may split one word
+# across chunks (for example ``inter`` + ``national`` -> ``international``).
+_SUBWORD_PREFIXES_2 = frozenset({"de", "ex", "im", "in", "re", "un"})
+_SUBWORD_PREFIXES_3_PLUS = frozenset(
+    {
+        "anti",
+        "counter",
+        "dis",
+        "extra",
+        "hyper",
+        "inter",
+        "macro",
+        "mega",
+        "meta",
+        "micro",
+        "mis",
+        "mono",
+        "multi",
+        "non",
+        "over",
+        "post",
+        "pre",
+        "pseudo",
+        "semi",
+        "sub",
+        "super",
+        "trans",
+        "under",
+    }
+)
+
+# Short compounds that stay glued when split across tiny trailing chunks.
+_SHORT_COMPOUND_MERGES = frozenset(
+    {
+        "redo",
+        "undo",
+        "preset",
+        "reapply",
+        "reopen",
+        "retest",
+        "reedit",
+    }
+)
+
+
+def _likely_subword_prefix_continuation(current: str, incoming: str) -> bool:
+    """True when ``current + incoming`` is probably one word split for streaming."""
+    if not current or not incoming:
+        return False
+    merged = f"{current}{incoming}"
+    if merged.lower() in _SHORT_COMPOUND_MERGES:
+        return True
+    if not merged.isascii() or not merged.isalpha() or not merged.islower():
+        return False
+    if incoming in _SUBWORD_PREFIXES_2 | _SUBWORD_PREFIXES_3_PLUS:
+        return False
+    if len(incoming) < 4:
+        return False
+    if current in _SUBWORD_PREFIXES_3_PLUS:
+        return True
+    if len(current) == 2 and current in _SUBWORD_PREFIXES_2:
+        return len(merged) >= 7
+    return False
+
 
 def _needs_readable_boundary(current: str, incoming: str) -> bool:
     if not current or not incoming:
@@ -20,6 +84,9 @@ def _needs_readable_boundary(current: str, incoming: str) -> bool:
     if incoming and all(char == "*" for char in incoming):
         return previous in {".", ":", ";", "!", "?"}
     if previous.isalnum() and (next_char.isalnum() or next_char in {"`", "*"}):
+        if previous.isalpha() and next_char.isalpha():
+            if _likely_subword_prefix_continuation(current, incoming):
+                return False
         return True
     if previous in {"`", "*"} and next_char.isalnum():
         return True
