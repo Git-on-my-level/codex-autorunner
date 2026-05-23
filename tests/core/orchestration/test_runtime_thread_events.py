@@ -769,6 +769,48 @@ async def test_normalize_runtime_thread_raw_event_handles_official_session_updat
     assert output[0].content == "hello world"
 
 
+async def test_normalize_runtime_thread_raw_event_preserves_hermes_token_boundaries() -> (
+    None
+):
+    state = RuntimeThreadRunEventState()
+
+    for chunk in (
+        "Confirmed:",
+        "**",
+        "`/car/hub/read-models/chats`",
+        "returns",
+        "500",
+        "**",
+        "everything",
+        "else",
+        "is",
+        "healthy.",
+    ):
+        events = await normalize_runtime_thread_raw_event(
+            {
+                "message": {
+                    "method": "session/update",
+                    "params": {
+                        "sessionId": "session-1",
+                        "turnId": "turn-1",
+                        "update": {
+                            "sessionUpdate": "agent_message_chunk",
+                            "content": {"type": "text", "text": chunk},
+                        },
+                    },
+                }
+            },
+            state,
+        )
+        assert len(events) == 1
+        assert isinstance(events[0], OutputDelta)
+
+    assert (
+        state.best_assistant_text()
+        == "Confirmed: **`/car/hub/read-models/chats` returns 500** everything else is healthy."
+    )
+
+
 async def test_normalize_runtime_thread_raw_event_maps_official_commentary_update_to_notice() -> (
     None
 ):

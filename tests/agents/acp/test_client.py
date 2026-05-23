@@ -70,6 +70,33 @@ def test_prompt_state_session_update_snapshots_merge_without_duplication() -> No
     assert state.final_output == "fixture reply"
 
 
+def test_prompt_state_session_update_chunks_preserve_word_boundaries() -> None:
+    state = _PromptState(session_id="session-1", turn_id="turn-1")
+
+    for chunk in (
+        "Confirmed:",
+        "**",
+        "`/car/hub/read-models/chats`",
+        "returns",
+        "500",
+        "**",
+        "everything",
+        "else",
+        "is",
+        "healthy.",
+    ):
+        state.note_output_delta(
+            chunk,
+            merge_snapshot=True,
+            preserve_word_boundaries=True,
+        )
+
+    assert (
+        state.final_output
+        == "Confirmed: **`/car/hub/read-models/chats` returns 500** everything else is healthy."
+    )
+
+
 @pytest.mark.parametrize(("method"), ("session/update", "session/request_permission"))
 @pytest.mark.asyncio
 async def test_client_maps_session_scoped_official_events_without_turn_id(

@@ -315,6 +315,7 @@ def _assistant_stream_events(
     *,
     timestamp: Optional[str] = None,
     stream_mode: str = RUN_EVENT_STREAM_MODE_SNAPSHOT,
+    preserve_word_boundaries: bool = False,
 ) -> list[RunEvent]:
     phase = str(params.get("phase") or "").strip().lower()
     if phase == "commentary":
@@ -335,6 +336,7 @@ def _assistant_stream_events(
     state.note_stream_text(
         content,
         merge_snapshot=stream_mode == RUN_EVENT_STREAM_MODE_SNAPSHOT,
+        preserve_word_boundaries=preserve_word_boundaries,
     )
     return [
         OutputDelta(
@@ -1077,6 +1079,7 @@ class SessionUpdateDecoder(MessageDecoder):
                 state,
                 timestamp=ts,
                 stream_mode=RUN_EVENT_STREAM_MODE_SNAPSHOT,
+                preserve_word_boundaries=True,
             )
         if update_kind == "agent_thought_chunk":
             progress_message = _extract_session_update_text(update)
