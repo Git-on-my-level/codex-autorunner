@@ -158,7 +158,11 @@ class _PromptState:
         self._assistant_text = AssistantOutputState(stream_text=self.final_output)
 
     def note_output_delta(
-        self, text: str, *, merge_snapshot: bool = False
+        self,
+        text: str,
+        *,
+        merge_snapshot: bool = False,
+        preserve_word_boundaries: bool = False,
     ) -> ACPIngressNormalizedOutput:
         previous = self.final_output
         normalized = normalize_acp_ingress_output(
@@ -172,9 +176,13 @@ class _PromptState:
             self.last_output_normalized = True
             return normalized
         if merge_snapshot:
-            self._assistant_text.note_stream_snapshot(normalized.text)
+            self._assistant_text.note_stream_snapshot(
+                normalized.text, preserve_word_boundaries=preserve_word_boundaries
+            )
         else:
-            self._assistant_text.note_stream_delta(normalized.text)
+            self._assistant_text.note_stream_delta(
+                normalized.text, preserve_word_boundaries=preserve_word_boundaries
+            )
         self.final_output = self._assistant_text.text
         self.last_output_normalized = self.last_output_normalized or bool(
             normalized.trimmed
@@ -1197,6 +1205,7 @@ class ACPClient:
             normalized_delta = state.note_output_delta(
                 event.delta,
                 merge_snapshot=event.method == "session/update",
+                preserve_word_boundaries=event.method == "session/update",
             )
             self._log_ingress_normalization(state, normalized_delta)
             event = replace(event, delta=normalized_delta.text)

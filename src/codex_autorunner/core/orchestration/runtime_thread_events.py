@@ -386,11 +386,21 @@ class RuntimeThreadRunEventState:
             final_text=self.assistant_message_text,
         )
 
-    def note_stream_text(self, text: str, *, merge_snapshot: bool = True) -> None:
+    def note_stream_text(
+        self,
+        text: str,
+        *,
+        merge_snapshot: bool = True,
+        preserve_word_boundaries: bool = False,
+    ) -> None:
         if merge_snapshot:
-            self._assistant_text.note_stream_snapshot(text)
+            self._assistant_text.note_stream_snapshot(
+                text, preserve_word_boundaries=preserve_word_boundaries
+            )
         else:
-            self._assistant_text.note_stream_delta(text)
+            self._assistant_text.note_stream_delta(
+                text, preserve_word_boundaries=preserve_word_boundaries
+            )
         self.assistant_stream_text = self._assistant_text.stream_text
 
     def note_message_text(self, text: str) -> None:
