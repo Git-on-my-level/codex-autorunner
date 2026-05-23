@@ -11,7 +11,12 @@ from .core.about_car import (
     ensure_tickets_agents_file_for_repo,
 )
 from .core.config_contract import ConfigError
-from .core.config_defaults import DEFAULT_HUB_CONFIG
+from .core.config_defaults import (
+    BLESSED_APP_REPO_ID,
+    BLESSED_APP_REPO_REF,
+    BLESSED_APP_REPO_URL,
+    DEFAULT_HUB_CONFIG,
+)
 from .core.config_generated import (
     GENERATED_CONFIG_HEADER as CORE_GENERATED_CONFIG_HEADER,
 )
@@ -33,6 +38,9 @@ HUB_CAR_SHIM_REL_PATH = Path(".codex-autorunner/bin/car")
 HUB_CAR_SHIM_ROOT_BASENAME = "car"
 PMA_DOCS_GENERATED_MARKER = "<!-- CAR:PMA_DOCS_GENERATED -->"
 PMA_ALWAYS_REFRESH_DOCS = frozenset({"prompt.md", "ABOUT_CAR.md"})
+DEFAULT_AUTOOPTIMIZE_APP_REF = (
+    f"{BLESSED_APP_REPO_ID}:apps/autooptimize@{BLESSED_APP_REPO_REF}"
+)
 
 
 def sample_todo() -> str:
@@ -57,6 +65,12 @@ def _write_doc_if_changed(path: Path, content: str) -> None:
     if existing == content:
         return
     atomic_write(path, content)
+
+
+def _render_app_doc_placeholders(content: str) -> str:
+    return content.replace(
+        "__DEFAULT_AUTOOPTIMIZE_APP_REF__", DEFAULT_AUTOOPTIMIZE_APP_REF
+    ).replace("__BLESSED_APP_REPO_URL__", BLESSED_APP_REPO_URL)
 
 
 def pma_dir(hub_root: Path) -> Path:
@@ -391,7 +405,7 @@ When pruning, append the prior context to the hub PMA `context_log.md` with a ti
 
 
 def pma_notes_content() -> str:
-    return PMA_DOCS_GENERATED_MARKER + "\n" + """# PMA Operations Guide
+    content = """# PMA Operations Guide
 
 ## Tickets (create/modify)
 
@@ -412,16 +426,17 @@ def pma_notes_content() -> str:
 ## CAR apps
 
 - Use `car apps list --repo <path>` to discover apps from configured app repos.
-- Use `car apps show blessed:apps/autooptimize --repo <path>` when a user asks about AutoOptimize.
+- Use `car apps show __DEFAULT_AUTOOPTIMIZE_APP_REF__ --repo <path>` when a user asks about AutoOptimize.
 - To use AutoOptimize:
-  `car apps install blessed:apps/autooptimize --repo <path>`
+  `car apps install __DEFAULT_AUTOOPTIMIZE_APP_REF__ --repo <path>`
   then
   `car apps apply blessed.autooptimize --repo <path> --set goal="<goal>"`.
 - If install reports an existing provenance conflict from the old in-repo
   AutoOptimize bundle, rerun with
-  `car apps install blessed:apps/autooptimize --repo <path> --force`.
+  `car apps install __DEFAULT_AUTOOPTIMIZE_APP_REF__ --repo <path> --force`.
 - Inspect runnable tools with `car apps tools blessed.autooptimize --repo <path>`.
-- Blessed app repo: `https://github.com/Git-on-my-level/blessed-car-apps`
+- Default app source: `__DEFAULT_AUTOOPTIMIZE_APP_REF__`
+- Blessed app repo: `__BLESSED_APP_REPO_URL__`
 
 ## Ticket flow (start/resume)
 
@@ -598,6 +613,7 @@ Notes:
 - Handlers should be idempotent; duplicate events can occur by design.
 - Canonical durable storage: hub `orchestration.sqlite3` automation tables.
 """
+    return PMA_DOCS_GENERATED_MARKER + "\n" + _render_app_doc_placeholders(content)
 
 
 def pma_about_content() -> str:
@@ -605,7 +621,7 @@ def pma_about_content() -> str:
 
 
 def pma_agents_content() -> str:
-    return """# PMA AGENTS (durable guidance + defaults)
+    content = """# PMA AGENTS (durable guidance + defaults)
 
 This document is jointly maintained by the user and PMA.
 
@@ -630,14 +646,15 @@ This document is jointly maintained by the user and PMA.
 ## CAR app shortcuts (optional)
 
 - Discover apps with `car apps list --repo <path>`.
-- AutoOptimize lives at `blessed:apps/autooptimize` and installs as `blessed.autooptimize`.
+- AutoOptimize lives at `__DEFAULT_AUTOOPTIMIZE_APP_REF__` and installs as `blessed.autooptimize`.
 - When a user asks to use AutoOptimize, inspect it with
-  `car apps show blessed:apps/autooptimize --repo <path>`, install it with
-  `car apps install blessed:apps/autooptimize --repo <path>`, then apply it with
+  `car apps show __DEFAULT_AUTOOPTIMIZE_APP_REF__ --repo <path>`, install it with
+  `car apps install __DEFAULT_AUTOOPTIMIZE_APP_REF__ --repo <path>`, then apply it with
   `car apps apply blessed.autooptimize --repo <path> --set goal="<goal>"`.
 - If install reports a provenance conflict from an older in-repo
   AutoOptimize install, rerun the install command with `--force`.
-- Blessed app repo: `https://github.com/Git-on-my-level/blessed-car-apps`
+- Default app source: `__DEFAULT_AUTOOPTIMIZE_APP_REF__`
+- Blessed app repo: `__BLESSED_APP_REPO_URL__`
 
 ## CLI help-first rule
 
@@ -649,6 +666,7 @@ This document is jointly maintained by the user and PMA.
 - Default to managed threads for straightforward single-session work; promote to ticket flow only when the work needs ordered multi-step structure.
 - After implementation work, add a final review ticket, then a ticket to open a PR.
 """
+    return _render_app_doc_placeholders(content)
 
 
 def pma_active_context_content() -> str:
