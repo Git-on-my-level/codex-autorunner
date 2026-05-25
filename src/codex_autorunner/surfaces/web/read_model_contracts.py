@@ -163,7 +163,13 @@ class ChatIndexFacets(ReadModelContract):
 
 
 class ChatFacetCounts(ReadModelContract):
-    """Backend projection counts for the full matching chat-index scope."""
+    """Backend projection counts for the full matching chat-index scope.
+
+    Counts are computed before pagination for the current backend query/filter
+    scope. ``transport`` is the user-facing external-channel count set and
+    intentionally excludes the PMA home/control surface even though rows may
+    still carry ``pma`` in ``facets.transports`` for badges and compatibility.
+    """
 
     category: dict[ChatFacetCategory, int] = Field(default_factory=dict)
     turn_kind: dict[ChatFacetTurnKind, int] = Field(default_factory=dict)
