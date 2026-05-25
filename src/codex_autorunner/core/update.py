@@ -475,6 +475,8 @@ def _write_update_status(status: str, message: str, **extra) -> None:
             "notify_platform",
             "notify_context",
             "notify_sent_at",
+            "phase_timings",
+            "last_phase_timing",
         ):
             if key not in payload and key in existing:
                 payload[key] = existing[key]
@@ -1059,6 +1061,8 @@ def _spawn_update_process(
         cmd.extend(["--discord-service-name", linux_discord_service_name])
     if skip_checks:
         cmd.append("--skip-checks")
+    else:
+        cmd.append("--no-skip-checks")
     try:
         with log_path.open("a", encoding="utf-8") as log_file:
             subprocess.Popen(
