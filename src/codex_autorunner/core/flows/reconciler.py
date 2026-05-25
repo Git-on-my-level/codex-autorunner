@@ -959,7 +959,8 @@ def reconcile_flow_run(
             )
             if restart_state_override is not None:
                 state = _with_resolved_external_commit_barrier(
-                    repo_root, restart_state_override
+                    repo_root,
+                    restart_state_override,
                 )
             elif restart_policy.exhausted:
                 state = _with_resolved_external_commit_barrier(repo_root, state)

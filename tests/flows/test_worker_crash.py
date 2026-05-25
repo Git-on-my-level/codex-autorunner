@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import subprocess
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -141,6 +142,129 @@ def test_reconcile_paused_dead_worker_creates_crash_dispatch(
 
     artifacts = store.get_artifacts(run_id)
     assert any(artifact.kind == "worker_crash" for artifact in artifacts)
+
+
+def test_reconcile_paused_dead_worker_dispatch_survives_barrier_cleanup(
+    monkeypatch, tmp_path: Path
+) -> None:
+    repo_root = tmp_path
+    subprocess.run(["git", "init"], cwd=repo_root, check=True, capture_output=True)
+    subprocess.run(
+        ["git", "config", "user.email", "test@example.com"],
+        cwd=repo_root,
+        check=True,
+        capture_output=True,
+    )
+    subprocess.run(
+        ["git", "config", "user.name", "Test User"],
+        cwd=repo_root,
+        check=True,
+        capture_output=True,
+    )
+    (repo_root / ".gitignore").write_text(
+        ".codex-autorunner/flows.db*\n.codex-autorunner/flows/\n",
+        encoding="utf-8",
+    )
+    ticket_path = repo_root / ".codex-autorunner" / "tickets" / "TICKET-001.md"
+    ticket_path.parent.mkdir(parents=True, exist_ok=True)
+    ticket_path.write_text(
+        "---\nticket_id: ticket-1\ndone: true\n---\n\nDone\n",
+        encoding="utf-8",
+    )
+    subprocess.run(["git", "add", "-A"], cwd=repo_root, check=True, capture_output=True)
+    subprocess.run(
+        ["git", "commit", "-m", "ticket committed externally"],
+        cwd=repo_root,
+        check=True,
+        capture_output=True,
+    )
+
+    run_id = "323e4567-e89b-12d3-a456-426614174001"
+    db = repo_root / ".codex-autorunner" / "flows.db"
+    db.parent.mkdir(parents=True, exist_ok=True)
+    store = FlowStore(db)
+    store.initialize()
+
+    state = {
+        "ticket_engine": {
+            "status": "paused",
+            "reason_code": "user_pause",
+            "current_ticket": ".codex-autorunner/tickets/TICKET-001.md",
+            "commit": {
+                "pending": True,
+                "barrier_epoch": "commit-barrier:test",
+                "head_before": "before",
+                "head_after": "before",
+                "status_porcelain": "M work.txt",
+            },
+        },
+        "recovery": {
+            "commit_barrier": {
+                "pending": True,
+                "worktree_dirty": True,
+                "resolution_state": "pending",
+            }
+        },
+    }
+    store.create_flow_run(
+        run_id=run_id,
+        flow_type="ticket_flow",
+        input_data={
+            "workspace_root": str(repo_root),
+            "runs_dir": ".codex-autorunner/runs",
+        },
+        state=state,
+    )
+    store.update_flow_run_status(
+        run_id=run_id,
+        status=FlowRunStatus.PAUSED,
+        state=state,
+    )
+
+    def _fake_health(_repo_root: Path, _run_id: str) -> SimpleNamespace:
+        return SimpleNamespace(
+            is_alive=False,
+            status="dead",
+            pid=9876,
+            message="worker PID not running",
+            exit_code=137,
+            stderr_tail="",
+            artifact_path=repo_root
+            / ".codex-autorunner"
+            / "flows"
+            / run_id
+            / "worker.json",
+            crash_info=None,
+        )
+
+    monkeypatch.setattr(
+        "codex_autorunner.core.flows.reconciler.check_worker_health", _fake_health
+    )
+
+    current = store.get_flow_run(run_id)
+    assert current is not None
+    recovered, updated, locked = reconcile_flow_run(repo_root, current, store)
+
+    assert recovered.status == FlowRunStatus.PAUSED
+    assert updated is True
+    assert locked is False
+    assert "commit_barrier" not in recovered.state.get("recovery", {})
+    commit = recovered.state["ticket_engine"]["commit"]
+    assert commit["pending"] is False
+    assert commit["resolution_state"] == "committed_externally"
+
+    dispatch_path = (
+        repo_root
+        / ".codex-autorunner"
+        / "runs"
+        / run_id
+        / "dispatch_history"
+        / "0001"
+        / "DISPATCH.md"
+    )
+    assert dispatch_path.exists()
+    dispatch_raw = dispatch_path.read_text(encoding="utf-8")
+    assert "Worker crashed" in dispatch_raw
 
 
 def test_write_worker_exit_info_with_shutdown_intent(tmp_path: Path) -> None:

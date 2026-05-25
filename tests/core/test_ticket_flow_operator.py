@@ -154,7 +154,7 @@ def test_extract_commit_barrier_ignores_resolved_clean_contradiction(
                 "ticket_engine": {
                     "commit": {
                         "pending": True,
-                        "commit_pending": True,
+                        "commit_pending": False,
                         "worktree_dirty": False,
                         "resolution_state": "pending",
                     }
@@ -165,6 +165,35 @@ def test_extract_commit_barrier_ignores_resolved_clean_contradiction(
         commit_barrier = operator_module._extract_commit_barrier_status(record)
 
     assert commit_barrier is None
+
+
+def test_extract_commit_barrier_keeps_unknown_worktree_state(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / ".codex-autorunner" / "flows.db"
+    with FlowStore(db_path) as store:
+        store.initialize()
+        record = store.create_flow_run(
+            run_id="unknown-worktree-barrier",
+            flow_type="ticket_flow",
+            input_data={},
+            state={
+                "recovery": {
+                    "commit_barrier": {
+                        "pending": True,
+                        "commit_pending": True,
+                        "worktree_dirty": False,
+                        "resolution_state": "pending",
+                    }
+                }
+            },
+        )
+
+        commit_barrier = operator_module._extract_commit_barrier_status(record)
+
+    assert commit_barrier is not None
+    assert commit_barrier["pending"] is True
+    assert commit_barrier["commit_pending"] is True
 
 
 def test_build_ticket_flow_run_state_marks_live_stale_alive_as_attention(
