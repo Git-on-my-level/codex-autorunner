@@ -881,20 +881,14 @@ def reconcile_flow_run(
                     dict(record.state or {}),
                 )
                 state = _with_commit_barrier_recovery(state, commit_barrier)
-                if state != (record.state or {}):
+                state_changed = state != (record.state or {})
+                if state_changed:
                     updated = store.update_flow_run_status(
                         run_id=record.id,
                         status=record.status,
                         state=state,
                     )
-                    emit_reconcile_noop(
-                        store=store,
-                        run_id=record.id,
-                        status=record.status,
-                        note=decision.note,
-                        worker_status=health.status,
-                    )
-                    return (updated or record), bool(updated), False
+                    record = updated or record
                 if record.status == FlowRunStatus.PAUSED and health.status in {
                     "dead",
                     "invalid",
@@ -917,6 +911,14 @@ def reconcile_flow_run(
                         worker_status=health.status,
                         crash_info=crash_info,
                     )
+                elif state_changed:
+                    emit_reconcile_noop(
+                        store=store,
+                        run_id=record.id,
+                        status=record.status,
+                        note=decision.note,
+                        worker_status=health.status,
+                    )
                 else:
                     emit_reconcile_noop(
                         store=store,
@@ -925,7 +927,7 @@ def reconcile_flow_run(
                         note="reconcile-noop",
                         worker_status=health.status,
                     )
-                return record, False, False
+                return record, state_changed, False
 
             result = reduce_flow_lifecycle(
                 record.status,
@@ -955,16 +957,20 @@ def reconcile_flow_run(
                 if result.state is not NO_CHANGE
                 else dict(record.state or {})
             )
-            state = _with_resolved_external_commit_barrier(repo_root, state)
             if restart_state_override is not None:
-                state = restart_state_override
+                state = _with_resolved_external_commit_barrier(
+                    repo_root, restart_state_override
+                )
             elif restart_policy.exhausted:
+                state = _with_resolved_external_commit_barrier(repo_root, state)
                 state = _with_restart_exhausted(
                     state,
                     max_attempts=restart_policy.max_attempts,
                     reason="restart-attempts-exhausted",
                     health=health,
                 )
+            else:
+                state = _with_resolved_external_commit_barrier(repo_root, state)
             state = _with_commit_barrier_recovery(state, commit_barrier)
             for effect in result.effects:
                 if effect.kind == EffectKind.ENRICH_FAILURE_PAYLOAD:
