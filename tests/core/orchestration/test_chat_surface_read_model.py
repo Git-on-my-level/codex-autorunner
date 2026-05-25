@@ -572,6 +572,15 @@ def test_chat_index_regular_category_excludes_ticket_automation_and_system(
 ) -> None:
     hub_root = tmp_path / "hub"
     _seed_thread(hub_root, thread_id="regular")
+    for request_kind in ("recovery", "publish", "lifecycle"):
+        _seed_thread(hub_root, thread_id=f"ordinary-{request_kind}")
+        _seed_execution(
+            hub_root,
+            thread_id=f"ordinary-{request_kind}",
+            status="completed",
+            execution_id=f"exec-ordinary-{request_kind}",
+            metadata={"origin": {"kind": request_kind, "source_id": "test"}},
+        )
     _seed_thread(
         hub_root,
         thread_id="ticket",
@@ -594,6 +603,15 @@ def test_chat_index_regular_category_excludes_ticket_automation_and_system(
         metadata={},
     )
     with open_orchestration_sqlite(hub_root, durable=False, migrate=True) as conn:
+        for request_kind in ("recovery", "publish", "lifecycle"):
+            conn.execute(
+                """
+                UPDATE orch_thread_executions
+                   SET request_kind = ?
+                 WHERE execution_id = ?
+                """,
+                (request_kind, f"exec-ordinary-{request_kind}"),
+            )
         conn.execute(
             """
             UPDATE orch_thread_executions
@@ -621,7 +639,12 @@ def test_chat_index_regular_category_excludes_ticket_automation_and_system(
         facets={"categories": ["regular"]},
         limit=20,
     )
-    assert [row["managed_thread_id"] for row in regular["rows"]] == ["regular"]
+    assert {row["managed_thread_id"] for row in regular["rows"]} == {
+        "ordinary-lifecycle",
+        "ordinary-publish",
+        "ordinary-recovery",
+        "regular",
+    }
 
     all_rows = {
         row["managed_thread_id"]: row
@@ -630,6 +653,56 @@ def test_chat_index_regular_category_excludes_ticket_automation_and_system(
     assert all_rows["ticket"]["facets"]["category"] == "ticket_run"
     assert all_rows["automation"]["facets"]["category"] == "automation"
     assert all_rows["system"]["facets"]["category"] == "system"
+    assert all_rows["ordinary-recovery"]["facets"]["category"] == "regular"
+    assert "recovery" in all_rows["ordinary-recovery"]["facets"]["turn_kinds"]
+    assert "recovery" in all_rows["ordinary-recovery"]["facets"]["origin_kinds"]
+
+
+def test_chat_index_regular_category_keeps_non_system_recovery_metadata(
+    tmp_path: Path,
+) -> None:
+    hub_root = tmp_path / "hub"
+    _seed_thread(hub_root, thread_id="regular-recovery")
+    _seed_execution(
+        hub_root,
+        thread_id="regular-recovery",
+        status="completed",
+        metadata={},
+    )
+    with open_orchestration_sqlite(hub_root, durable=False, migrate=True) as conn:
+        conn.execute(
+            """
+            UPDATE orch_thread_executions
+               SET request_kind = 'recovery',
+                   turn_request_json = ?
+             WHERE thread_target_id = 'regular-recovery'
+            """,
+            (
+                json.dumps(
+                    {
+                        "request_id": "req-regular-recovery",
+                        "target_kind": "thread",
+                        "target_id": "regular-recovery",
+                        "request_kind": "recovery",
+                        "prompt": "recover",
+                        "origin": {"kind": "surface", "source_id": "discord"},
+                    }
+                ),
+            ),
+        )
+
+    snapshot = ChatSurfaceReadService(hub_root, durable=False).chat_index_snapshot(
+        view="all",
+        limit=20,
+    )
+
+    row = next(
+        row
+        for row in snapshot["rows"]
+        if row["managed_thread_id"] == "regular-recovery"
+    )
+    assert row["facets"]["category"] == "regular"
+    assert "recovery" in row["facets"]["turn_kinds"]
 
 
 def test_chat_index_transport_facets_and_counts(tmp_path: Path) -> None:
@@ -671,12 +744,20 @@ def test_chat_index_transport_facets_and_counts(tmp_path: Path) -> None:
         limit=20,
     )
 
-    assert snapshot["facet_counts"]["transport"]["pma"] == 3
+    assert "pma" not in snapshot["facet_counts"]["transport"]
     assert snapshot["facet_counts"]["transport"]["discord"] == 1
     assert snapshot["facet_counts"]["transport"]["telegram"] == 1
     assert snapshot["facet_counts"]["transport"]["notification"] == 1
     rows = {row["managed_thread_id"]: row for row in snapshot["rows"]}
+    assert "pma" in rows["pma-thread"]["facets"]["transports"]
     assert "notification" in rows["discord-thread"]["facets"]["transports"]
+
+    discord = ChatSurfaceReadService(hub_root, durable=False).chat_index_snapshot(
+        view="all",
+        facets={"transports": ["discord"]},
+        limit=20,
+    )
+    assert [row["managed_thread_id"] for row in discord["rows"]] == ["discord-thread"]
 
 
 def test_chat_index_visible_chrome_uses_user_visible_prompt_metadata_not_delimiter_stripping(

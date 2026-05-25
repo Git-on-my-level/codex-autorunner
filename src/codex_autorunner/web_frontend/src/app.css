@@ -3941,6 +3941,11 @@ textarea:hover {
   margin: 0;
 }
 
+.state-panel .state-panel-detail {
+  color: var(--color-ink-muted);
+  font-size: var(--font-size-0);
+}
+
 .state-panel button {
   justify-self: start;
   margin-left: 0;

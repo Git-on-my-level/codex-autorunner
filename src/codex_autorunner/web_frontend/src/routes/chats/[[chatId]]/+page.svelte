@@ -20,7 +20,6 @@
     type PmaQueuedTurn
   } from '$lib/api/client';
   import {
-    CHAT_TICKET_RUN_GROUP_WINDOW_REQUEST,
     invalidateReadModelTags,
     readModelEntityStore,
     readModelEntityTags,
@@ -119,12 +118,14 @@
     mergeChatFacetSourceChats,
     mergeLocalChatPlaceholders,
     CHAT_FILTER_ORDER,
+    CHAT_EXTERNAL_TRANSPORT_FILTERS,
     CHAT_TICKET_RUNS_FILTER,
     pmaChatKind,
     pmaChatKindLabel,
     pmaChatHeaderScopeLine,
     pmaChatFacets,
     pmaChatTransportBadges,
+    chatCategoryLabel,
     chatTransportLabel,
     pmaChatScopeTagView,
     progressPercent,
@@ -234,7 +235,7 @@
     search
   });
   const currentChatIndexRequest = $derived<ChatIndexWindowRequest>(chatIndexRequestForCurrentFilters());
-  const ticketRunGroupRequest = $derived<ChatIndexWindowRequest>(CHAT_TICKET_RUN_GROUP_WINDOW_REQUEST);
+  const ticketRunGroupRequest = $derived<ChatIndexWindowRequest>(chatTicketRunGroupRequestForFilters());
   const persistedChats = $derived<PmaChatSummary[]>(selectPmaChats(readModelState, currentChatIndexRequest));
   const facetPersistedChats = $derived<PmaChatSummary[]>(selectPmaChats(readModelState, { filter: 'all', limit: 50 }));
   const backendTicketRunGroups = $derived(selectTicketRunGroups(readModelState, ticketRunGroupRequest));
@@ -495,8 +496,7 @@
   const filterSummaryChips = $derived(
     buildChatFilterSummaryChips(chatListFilters, {
       status: filterChipLabel,
-      category: (key) =>
-        key === 'ticket_run' ? 'Ticket Runs' : facetChipLabel(key),
+      category: chatCategoryLabel,
       transport: chatTransportLabel,
       scopeKind: facetChipLabel
     })
@@ -779,6 +779,20 @@
     };
   }
 
+  function chatTicketRunGroupRequestForFilters(): ChatIndexWindowRequest {
+    return {
+      filter: statusFilter,
+      query: search.trim() || null,
+      facets: {
+        categories: ['ticket_run'],
+        transports: transportFilter ? [transportFilter] : [],
+        scopeKinds: scopeKindFilter ? [scopeKindFilter] : []
+      },
+      groupBy: 'ticket_run',
+      limit: 50
+    };
+  }
+
   function chatStatusFilterCounts(): Record<ChatStatusFilter, number> {
     const counters = selectedChatWindowView.window ? selectedChatWindowView.counters : readModelState.chatCounters;
     const knownChats = facetChats;
@@ -806,15 +820,13 @@
 
   function chatCategoryFilterOptions(): { key: ChatFacetCategory; label: string; count: number }[] {
     const counts = contextualFacetCounts.category;
-    const order: { key: ChatFacetCategory; label: string }[] = [
-      { key: 'regular', label: 'Regular' },
-      { key: 'ticket_run', label: 'Ticket Runs' },
-      { key: 'automation', label: 'Automation' },
-      { key: 'system', label: 'System' }
+    const order: { key: ChatFacetCategory; label: string; count: number }[] = [
+      { key: 'regular', label: chatCategoryLabel('regular'), count: counts.regular ?? 0 },
+      { key: 'ticket_run', label: chatCategoryLabel('ticket_run'), count: ticketRunGroupCount },
+      { key: 'automation', label: chatCategoryLabel('automation'), count: counts.automation ?? 0 },
+      { key: 'system', label: chatCategoryLabel('system'), count: counts.system ?? 0 }
     ];
-    return order
-      .map((item) => ({ ...item, count: counts[item.key] ?? 0 }))
-      .filter((item) => item.count > 0 || categoryFilter === item.key);
+    return order.filter((item) => item.count > 0 || categoryFilter === item.key);
   }
 
   const hasNonStatusFilter = $derived(
@@ -881,8 +893,7 @@
 
   function chatTransportFilterOptions(): { key: ChatFacetTransport; label: string; count: number }[] {
     const counts = contextualFacetCounts.transport;
-    const order: ChatFacetTransport[] = ['pma', 'discord', 'telegram', 'notification'];
-    return order
+    return [...CHAT_EXTERNAL_TRANSPORT_FILTERS]
       .map((transport) => ({ key: transport, label: chatTransportLabel(transport), count: counts[transport] ?? 0 }))
       .filter((item) => item.count > 0 || transportFilter === item.key);
   }
@@ -948,6 +959,10 @@
 
   $effect(() => {
     pageController.setIndexRequest(currentChatIndexRequest);
+  });
+
+  $effect(() => {
+    chatIndexSession.setCompanionRequests([ticketRunGroupRequest]);
   });
 
   $effect(() => {
@@ -1520,6 +1535,15 @@
   function chatIndexLoadError(): ApiError | null {
     const data = safePageData();
     return data?.chatIndex?.status === 'error' ? data.chatIndex.error : null;
+  }
+
+  function apiErrorDetailText(error: ApiError): string | null {
+    const parts = [
+      error.status ? `HTTP ${error.status}` : null,
+      error.code && error.code !== `http_${error.status ?? ''}` ? error.code : null
+    ].filter(Boolean);
+    if (parts.length === 0) return null;
+    return parts.join(' · ');
   }
 
   function currentRouteSnapshot() {
@@ -2468,6 +2492,9 @@
         <div class="state-panel error">
           <strong>Could not load chats</strong>
           <p>{visibleChatError.message}</p>
+          {#if apiErrorDetailText(visibleChatError)}
+            <p class="state-panel-detail">{apiErrorDetailText(visibleChatError)}</p>
+          {/if}
           <button type="button" onclick={() => void pageController.refreshIndex()}>Retry</button>
         </div>
       {:else}

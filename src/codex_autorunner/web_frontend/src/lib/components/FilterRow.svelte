@@ -15,6 +15,7 @@
   interface Props {
     items: FilterChip[];
     ariaLabel?: string;
+    label?: string;
     rootClass?: string;
     role?: 'tablist';
     itemRole?: 'tab';
@@ -26,6 +27,7 @@
   const {
     items,
     ariaLabel,
+    label,
     rootClass = '',
     role,
     itemRole,
@@ -95,6 +97,9 @@
 
 <div class="filter-row-container" bind:this={containerEl}>
   <div class="{rowClass} filter-row-measure" bind:this={measureEl} aria-hidden="true">
+    {#if label}
+      <span class="filter-row-label">{label}</span>
+    {/if}
     {#each items as item (item.key)}
       <button class="chip" type="button" tabindex="-1" data-filter-chip>
         {item.label}
@@ -107,6 +112,9 @@
 
   {#if collapsed}
     <div class={rowClass} aria-label={ariaLabel}>
+      {#if label}
+        <span class="filter-row-label">{label}</span>
+      {/if}
       <!-- Keep the collapsed menu button-driven; native details/summary can swallow option clicks
         when this absolute menu is layered over virtualized scroll content. -->
       <div class="filter-dropdown" class:open={dropdownOpen} bind:this={dropdownEl}>
@@ -149,6 +157,9 @@
     </div>
   {:else}
     <div class={rowClass} {role} aria-label={ariaLabel}>
+      {#if label}
+        <span class="filter-row-label">{label}</span>
+      {/if}
       {#each items as item (item.key)}
         <button
           class:active={item.active}
@@ -218,5 +229,17 @@
   .filter-dropdown-menu :global(.chip) {
     justify-content: space-between;
     width: 100%;
+  }
+
+  .filter-row-label {
+    display: inline-flex;
+    align-items: center;
+    min-height: 26px;
+    color: var(--color-ink-muted);
+    font-size: var(--font-size-0);
+    font-weight: 700;
+    letter-spacing: 0;
+    text-transform: uppercase;
+    white-space: nowrap;
   }
 </style>

@@ -41,6 +41,7 @@ import {
   pmaChatKindLabel,
   pmaChatHeaderScopeLine,
   pmaChatIsAutomation,
+  chatCategoryLabel,
   chatRunGroupSummaryParts,
   chatMessengerSurface,
   pmaChatScopeLabelFromChat,
@@ -1023,6 +1024,31 @@ describe('PMA chat view helpers', () => {
     const list = [discordChat, hubChat];
     expect(filterPmaChats(list, chatSurfaceFilterToken('discord'), '')).toEqual([discordChat]);
     expect(chatSurfaceFilterOptions(list)).toEqual([{ slug: 'discord', label: 'Discord', count: 1 }]);
+  });
+
+  it('keeps PMA out of external channel filter options', () => {
+    const pmaOnly = {
+      ...baseChat,
+      id: 'pma-only',
+      title: 'PMA home chat',
+      raw: { facets: { category: 'regular', turnKinds: ['message'], originKinds: ['surface'], transports: ['pma'] } }
+    };
+    const discordBound = {
+      ...baseChat,
+      id: 'discord-bound',
+      title: 'Discord bound chat',
+      raw: { facets: { category: 'regular', turnKinds: ['message'], originKinds: ['surface'], transports: ['pma', 'discord'] } }
+    };
+
+    expect(chatMessengerSurface(pmaOnly)).toBeNull();
+    expect(chatSurfaceFilterOptions([pmaOnly, discordBound])).toEqual([
+      { slug: 'discord', label: 'Discord', count: 1 }
+    ]);
+  });
+
+  it('labels regular chat facets as user-facing chats', () => {
+    expect(chatCategoryLabel('regular')).toBe('Chats');
+    expect(chatCategoryLabel('ticket_run')).toBe('Ticket Runs');
   });
 
   it('renders transport badges from typed facets instead of raw surface fields', () => {

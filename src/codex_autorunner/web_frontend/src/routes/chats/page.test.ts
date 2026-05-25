@@ -176,18 +176,22 @@ describe('/chats page', () => {
         category: { regular: 2, automation: 1 },
         turnKind: { automation: 1 },
         originKind: { automation: 1 },
-        transport: { pma: 2, discord: 1 },
+        transport: { pma: 2, discord: 4 },
         scopeKind: { hub: 2, worktree: 1 },
         agentKind: { coding_agent: 1 }
       }
     });
 
     const { body } = render(Page);
+    const pageSource = chatDetailPageSource();
 
     expect(body).toContain('More filters');
-    expect(body).toContain('Automation');
     expect(body).toContain('Discord');
+    expect(body).not.toContain('PMA 2');
     expect(body).toContain('Automation Discord');
+    expect(pageSource).toContain("chatCategoryLabel('regular')");
+    expect(pageSource).toContain('CHAT_EXTERNAL_TRANSPORT_FILTERS');
+    expect(pageSource).toContain('contextualFacetCounts.transport');
   });
 
   it('renders cached chat rows instead of the skeleton while the index cursor is still missing', () => {
@@ -291,11 +295,14 @@ describe('/chats page', () => {
     );
 
     const { body } = render(Page);
+    const pageSource = chatDetailPageSource();
 
+    expect(body).toContain('More filters');
     expect(body).toContain('2 active');
     expect(body).toContain('3/5 done');
     expect(body).toContain('Generic completed chat');
     expect(body).not.toContain('4/6 done');
+    expect(pageSource).toContain('ticketRunGroupCount');
   });
 
   it('registers ticket-run aggregate refresh as a chat-index companion window', () => {

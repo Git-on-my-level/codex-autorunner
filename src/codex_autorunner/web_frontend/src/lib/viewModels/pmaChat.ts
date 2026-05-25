@@ -26,6 +26,8 @@ export type ChatFilter = ChatStatusFilter | 'ticket_runs' | 'automation' | `surf
 /** Token for the chats sidebar filter that lists only ticket-flow run groups (collapsed headers). */
 export const CHAT_TICKET_RUNS_FILTER = 'ticket_runs' as const satisfies ChatFilter;
 
+export const CHAT_EXTERNAL_TRANSPORT_FILTERS = ['discord', 'telegram', 'notification'] as const satisfies readonly ChatFacetTransport[];
+
 /** Synthetic list selection id for pinned PMA Memory in the chats sidebar. */
 export const CHAT_MEMORY_LIST_ID = '__memory__';
 
@@ -81,6 +83,16 @@ export function pmaChatFacets(chat: PmaChatSummary | null): ChatIndexFacets | nu
 
 export function chatTransportLabel(transport: ChatFacetTransport): string {
   return transport === 'pma' ? 'PMA' : messengerSurfaceLabel(transport);
+}
+
+export function chatCategoryLabel(category: ChatIndexFacets['category']): string {
+  const map: Record<ChatIndexFacets['category'], string> = {
+    regular: 'Chats',
+    ticket_run: 'Ticket Runs',
+    automation: 'Automation',
+    system: 'System'
+  };
+  return map[category];
 }
 
 export function pmaChatTransportBadges(

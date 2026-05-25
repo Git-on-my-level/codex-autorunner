@@ -696,6 +696,64 @@ def test_hub_read_models_chats_returns_backend_facets_and_counts(hub_env) -> Non
     assert snapshot.facet_request.categories == ["automation"]
 
 
+def test_hub_read_models_chats_transport_counts_are_external_channels(
+    hub_env,
+) -> None:
+    for index in range(5):
+        _insert_chat_thread_row(
+            hub_env.hub_root,
+            thread_id=f"route-pma-{index}",
+            repo_id="repo",
+            resource_kind="repo",
+            resource_id="repo",
+            display_name=f"Route PMA {index}",
+            runtime_status="idle",
+            updated_at=f"2026-05-11T00:0{index}:00Z",
+        )
+    _insert_chat_thread_row(
+        hub_env.hub_root,
+        thread_id="route-discord",
+        repo_id="repo",
+        resource_kind="repo",
+        resource_id="repo",
+        display_name="Route Discord",
+        runtime_status="idle",
+        updated_at="2026-05-10T00:00:00Z",
+    )
+    OrchestrationBindingStore(hub_env.hub_root, durable=True).upsert_binding(
+        surface_kind="discord",
+        surface_key="guild:channel",
+        thread_target_id="route-discord",
+        repo_id="repo",
+        resource_kind="repo",
+        resource_id="repo",
+    )
+
+    client = TestClient(create_hub_app(hub_env.hub_root))
+    response = client.get(
+        "/hub/read-models/chats",
+        params={"filter": "all", "limit": "1"},
+    )
+
+    assert response.status_code == 200
+    snapshot = load_read_model_contract(ChatIndexSnapshot, response.json())
+    assert snapshot.facet_counts.transport == {"discord": 1}
+
+    discord_response = client.get(
+        "/hub/read-models/chats",
+        params=[("filter", "all"), ("transport", "discord"), ("limit", "1")],
+    )
+
+    assert discord_response.status_code == 200
+    discord_snapshot = load_read_model_contract(
+        ChatIndexSnapshot, discord_response.json()
+    )
+    assert [row.chat_id for row in discord_snapshot.rows] == ["route-discord"]
+    assert discord_snapshot.rows[0].facets is not None
+    assert "discord" in discord_snapshot.rows[0].facets.transports
+    assert "pma" not in discord_snapshot.facet_counts.transport
+
+
 def test_chat_index_contract_status_matches_backend_effective_statuses(
     hub_env,
 ) -> None:

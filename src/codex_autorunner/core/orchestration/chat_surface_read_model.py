@@ -2766,13 +2766,16 @@ def _chat_row_facet_category(row: Mapping[str, Any]) -> str:
         return "ticket_run"
     if _chat_row_has_automation_facts(row):
         return "automation"
-    turn_kinds = set(_chat_row_facet_turn_kinds(row))
-    origin_kinds = set(_chat_row_facet_origin_kinds(row))
-    if turn_kinds & {"publish", "recovery", "lifecycle"}:
-        return "system"
-    if origin_kinds & {"publish", "recovery", "system"}:
+    if _chat_row_is_explicit_system_control_plane(row):
         return "system"
     return "regular"
+
+
+def _chat_row_is_explicit_system_control_plane(row: Mapping[str, Any]) -> bool:
+    explicit_kind = _normalize_kind(row.get("chat_kind") or row.get("thread_kind"))
+    if explicit_kind in {"system", "internal", "control_plane", "control-plane"}:
+        return True
+    return "system" in set(_chat_row_facet_origin_kinds(row))
 
 
 def _chat_row_has_automation_facts(row: Mapping[str, Any]) -> bool:
@@ -3015,6 +3018,8 @@ def _chat_index_facet_counts(
         for value in _values_from_pipe_list(row["facet_origin_kind_list"]):
             _increment_count(counts["origin_kind"], value)
         for value in _values_from_pipe_list(row["facet_transport_list"]):
+            if value == "pma":
+                continue
             _increment_count(counts["transport"], value)
         _increment_count(counts["scope_kind"], _normalize_text(row["facet_scope_kind"]))
         _increment_count(counts["agent_kind"], _normalize_text(row["facet_agent_kind"]))
