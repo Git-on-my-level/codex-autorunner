@@ -21,8 +21,11 @@ from ....core.artifact_instructions import (
     ARTIFACT_WORKSPACE_SCOPE_ENV,
     current_artifact_target_failure_message,
 )
+from ....core.chat_bindings import active_chat_binding_targets_for_repo
+from ....core.config import ConfigError, load_hub_config
 from ....core.filebox import list_regular_files, outbox_dir, outbox_pending_dir
 from ....core.utils import RepoNotFoundError, find_repo_root
+from ....manifest import ManifestError, load_manifest
 
 
 def _root(root: Optional[Path]) -> Path:
@@ -56,25 +59,110 @@ def _states(value: Optional[str]) -> tuple[DeliveryState, ...] | None:
     return tuple(states)
 
 
-def _current_target() -> tuple[str, str, str | None]:
-    surface = os.environ.get(ARTIFACT_TARGET_SURFACE_ENV, "").strip()
-    conversation = os.environ.get(ARTIFACT_TARGET_CONVERSATION_ENV, "").strip()
-    workspace = os.environ.get(ARTIFACT_WORKSPACE_SCOPE_ENV, "").strip() or None
+_CHAT_BINDING_SURFACES = frozenset({"discord", "telegram"})
+
+
+def _current_target(
+    root: Path, env: Optional[dict[str, str]] = None
+) -> tuple[str, str, str | None]:
+    values = os.environ if env is None else env
+    surface = values.get(ARTIFACT_TARGET_SURFACE_ENV, "").strip()
+    conversation = values.get(ARTIFACT_TARGET_CONVERSATION_ENV, "").strip()
+    workspace = values.get(ARTIFACT_WORKSPACE_SCOPE_ENV, "").strip() or None
     if not surface or not conversation:
-        message = current_artifact_target_failure_message(os.environ)
-        raise typer.BadParameter(message or "current artifact target is unavailable")
+        if surface or conversation or workspace:
+            message = current_artifact_target_failure_message(values)
+            raise typer.BadParameter(
+                message or "current artifact target is unavailable"
+            )
+        bound_target = _current_bound_chat_target(root)
+        if bound_target is not None:
+            return bound_target
+        message = current_artifact_target_failure_message(values)
+        raise typer.BadParameter(
+            message
+            or "current artifact target is unavailable and no unique chat binding was found"
+        )
     return surface, conversation, workspace
+
+
+def _current_bound_chat_target(root: Path) -> tuple[str, str, str | None] | None:
+    try:
+        hub = load_hub_config(root)
+        manifest = load_manifest(hub.manifest_path, hub.root)
+    except (ConfigError, ManifestError, OSError, ValueError):
+        return None
+    repo = manifest.get_by_path(hub.root, root)
+    if repo is None:
+        return None
+    candidates: list[tuple[str, str, str]] = []
+    for surface_kind, surface_key in active_chat_binding_targets_for_repo(
+        hub_root=hub.root,
+        raw_config=hub.raw,
+        repo_id=repo.id,
+    ):
+        if surface_kind not in _CHAT_BINDING_SURFACES:
+            continue
+        conversation = _artifact_conversation_for_binding(surface_kind, surface_key)
+        if conversation is not None:
+            candidates.append((surface_kind, conversation, f"repo:{root}"))
+    unique_candidates = sorted(set(candidates))
+    if not unique_candidates:
+        return None
+    if len(unique_candidates) == 1:
+        return unique_candidates[0]
+    lines = [
+        "Current artifact target is ambiguous; multiple active chat bindings match "
+        f"{root}:"
+    ]
+    lines.extend(
+        f"- {surface}:{conversation}" for surface, conversation, _ in unique_candidates
+    )
+    lines.append(
+        "Pass --to explicit with --surface and --conversation to choose a target."
+    )
+    raise typer.BadParameter("\n".join(lines))
+
+
+def _artifact_conversation_for_binding(
+    surface: object, surface_key: object
+) -> str | None:
+    surface = str(surface or "").strip()
+    surface_key = str(surface_key or "").strip()
+    if not surface or not surface_key:
+        return None
+    if surface == "discord":
+        if surface_key.startswith("channel:"):
+            return surface_key
+        return f"channel:{surface_key}"
+    if surface == "telegram":
+        try:
+            chat_raw, thread_raw, _scope = surface_key.split(":", 2)
+        except ValueError:
+            try:
+                chat_raw, thread_raw = surface_key.split(":", 1)
+            except ValueError:
+                return f"topic:{surface_key}"
+        chat_raw = chat_raw.strip()
+        thread_raw = thread_raw.strip()
+        if not chat_raw or not thread_raw:
+            return f"topic:{surface_key}"
+        if thread_raw == "root":
+            return f"chat:{chat_raw}"
+        return f"chat:{chat_raw}/thread:{thread_raw}"
+    return None
 
 
 def _target(
     *,
+    root: Path,
     to: str,
     surface: Optional[str],
     conversation: Optional[str],
     workspace_scope: Optional[str],
 ) -> tuple[str, str, str | None]:
     if to == "current":
-        return _current_target()
+        return _current_target(root)
     if to != "explicit":
         raise typer.BadParameter("--to must be current or explicit")
     if not surface or not conversation:
@@ -189,13 +277,14 @@ def register_artifacts_commands(app: typer.Typer) -> None:
         json_output: bool = typer.Option(False, "--json", help="Emit JSON output"),
     ) -> None:
         """Queue a file for artifact delivery."""
+        repo_root = _root(root)
         target_surface, target_conversation, target_workspace = _target(
+            root=repo_root,
             to=to,
             surface=surface,
             conversation=conversation,
             workspace_scope=workspace_scope,
         )
-        repo_root = _root(root)
         storage = ArtifactFileBoxStorage(repo_root)
         service = storage.delivery
         intent = storage.enqueue_delivery_file(
@@ -239,13 +328,15 @@ def register_artifacts_commands(app: typer.Typer) -> None:
         json_output: bool = typer.Option(False, "--json", help="Emit JSON output"),
     ) -> None:
         """Import legacy FileBox outbox files into delivery records."""
+        repo_root = _root(root)
         target_surface, target_conversation, target_workspace = _target(
+            root=repo_root,
             to=to,
             surface=surface,
             conversation=conversation,
             workspace_scope=workspace_scope,
         )
-        service = ArtifactDeliveryService(_root(root))
+        service = ArtifactDeliveryService(repo_root)
         intents = service.import_legacy_outbox(
             target_surface=target_surface,
             target_conversation_key=target_conversation,

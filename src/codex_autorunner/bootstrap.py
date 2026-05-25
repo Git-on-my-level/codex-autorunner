@@ -519,7 +519,7 @@ Do NOT copy `.codex-autorunner/` between worktrees:
 - User uploads arrive in `.codex-autorunner/filebox/inbox/`.
 - Archive reviewed uploads with `car pma file consume|dismiss <filename> --path <hub_root>`.
 - Restore archived uploads with `car pma file restore <filename> --path <hub_root>`.
-- Send user-facing files with `car artifacts send <file> --to current` when the active target is available.
+- Send user-facing files with `car artifacts send <file>` when the active target or one unique chat binding is available.
 
 ## PMA dispatches (user attention)
 
