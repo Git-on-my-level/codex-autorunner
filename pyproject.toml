@@ -50,6 +50,7 @@ voice-local = [
   "faster-whisper>=1.1.0",
 ]
 voice-mlx = [
+  "huggingface-hub>=0.23",
   "mlx-whisper>=0.4.2; platform_system == 'Darwin' and platform_machine == 'arm64'",
 ]
 github = []

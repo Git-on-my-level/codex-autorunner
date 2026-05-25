@@ -33,6 +33,8 @@ _MODEL_ALIAS_TO_REPO = {
 @dataclasses.dataclass
 class MlxWhisperSettings:
     model: str = "small"
+    cache_dir: Optional[str] = None
+    local_files_only: bool = False
     language: Optional[str] = None
     beam_size: Optional[int] = None
     temperature: float = 0.0
@@ -46,6 +48,12 @@ class MlxWhisperSettings:
         raw_beam_size = raw.get("beam_size")
         return cls(
             model=str(raw.get("model", "small")),
+            cache_dir=(
+                str(raw["cache_dir"]).strip() or None
+                if raw.get("cache_dir") is not None
+                else None
+            ),
+            local_files_only=bool(raw.get("local_files_only", False)),
             language=(
                 str(raw["language"]).strip()
                 if raw.get("language") is not None
@@ -213,7 +221,11 @@ class _MlxWhisperStream(TranscriptionStream):
 
     def _build_payload(self) -> Dict[str, Any]:
         payload: Dict[str, Any] = {
-            "path_or_hf_repo": _resolve_mlx_model_path(self._settings.model),
+            "path_or_hf_repo": _resolve_mlx_model_path(
+                self._settings.model,
+                cache_dir=self._settings.cache_dir,
+                local_files_only=self._settings.local_files_only,
+            ),
             "temperature": self._settings.temperature,
             "condition_on_previous_text": self._settings.condition_on_previous_text,
             "word_timestamps": self._settings.word_timestamps,
@@ -240,21 +252,56 @@ class _MlxWhisperStream(TranscriptionStream):
         return ".webm"
 
 
-def _resolve_mlx_model_path(model: str) -> str:
+def _resolve_mlx_model_path(
+    model: str,
+    *,
+    cache_dir: Optional[str] = None,
+    local_files_only: bool = False,
+) -> str:
     candidate = (model or "").strip()
     if not candidate:
-        return _MODEL_ALIAS_TO_REPO["small"]
-    if candidate.startswith("mlx-community/"):
-        return candidate
-    if "/" in candidate:
-        return candidate
+        candidate = _MODEL_ALIAS_TO_REPO["small"]
     if Path(candidate).exists():
         return candidate
-
+    if candidate.startswith("mlx-community/"):
+        return _resolve_cached_hf_model(
+            candidate, cache_dir=cache_dir, local_files_only=local_files_only
+        )
+    if "/" in candidate:
+        return _resolve_cached_hf_model(
+            candidate, cache_dir=cache_dir, local_files_only=local_files_only
+        )
     normalized = candidate.lower()
     if normalized in _MODEL_ALIAS_TO_REPO:
-        return _MODEL_ALIAS_TO_REPO[normalized]
+        return _resolve_cached_hf_model(
+            _MODEL_ALIAS_TO_REPO[normalized],
+            cache_dir=cache_dir,
+            local_files_only=local_files_only,
+        )
     return candidate
+
+
+def _resolve_cached_hf_model(
+    repo_id: str,
+    *,
+    cache_dir: Optional[str],
+    local_files_only: bool,
+) -> str:
+    if cache_dir is None and not local_files_only:
+        return repo_id
+    try:
+        from huggingface_hub import snapshot_download
+    except ImportError as exc:
+        raise RuntimeError(
+            "MLX Whisper cache_dir/local_files_only requires huggingface-hub. "
+            "Install with: pip install huggingface-hub"
+        ) from exc
+
+    return snapshot_download(
+        repo_id=repo_id,
+        cache_dir=cache_dir,
+        local_files_only=local_files_only,
+    )
 
 
 def _coerce_beam_size(raw: Any) -> Optional[int]:

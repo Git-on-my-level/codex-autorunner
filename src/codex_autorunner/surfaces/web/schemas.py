@@ -813,6 +813,14 @@ class SystemUpdateResponse(ResponseModel):
 class SystemUpdateStatusResponse(ResponseModel):
     status: str
     message: str
+    at: Optional[float] = None
+    phase: Optional[str] = None
+    error_type: Optional[str] = None
+    exit_code: Optional[int] = None
+    update_run_id: Optional[str] = None
+    update_target: Optional[str] = None
+    phase_timings: List[Dict[str, Any]] = Field(default_factory=list)
+    last_phase_timing: Optional[Dict[str, Any]] = None
 
 
 class SystemUpdateCheckResponse(ResponseModel):

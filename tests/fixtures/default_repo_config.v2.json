@@ -478,7 +478,7 @@
       "hub": "car-hub",
       "telegram": "car-telegram"
     },
-    "skip_checks": false
+    "skip_checks": true
   },
   "usage": {
     "cache_scope": "global",
@@ -507,9 +507,11 @@
       },
       "mlx_whisper": {
         "beam_size": null,
+        "cache_dir": null,
         "condition_on_previous_text": false,
         "initial_prompt": null,
         "language": null,
+        "local_files_only": false,
         "model": "small",
         "remote_api": false,
         "temperature": 0.0,

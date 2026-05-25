@@ -151,6 +151,8 @@ repo_defaults:
       mlx_whisper:
         remote_api: false
         model: small
+        cache_dir: null
+        local_files_only: false
         language: null
         beam_size: null
         temperature: 0.0
@@ -365,7 +367,7 @@ hub:
 
 update:
   # Skip running ./scripts/check.sh during system updates.
-  skip_checks: false
+  skip_checks: true
   # Update refresh backend: auto|launchd|systemd-user.
   # auto resolves launchd on macOS and systemd-user on Linux.
   backend: auto

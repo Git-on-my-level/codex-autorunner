@@ -19,7 +19,10 @@ _PRESERVED_STATUS_KEYS = (
     "notify_platform",
     "notify_context",
     "notify_sent_at",
+    "phase_timings",
+    "last_phase_timing",
 )
+_MAX_PHASE_TIMINGS = 24
 
 _ORCHESTRATION_DB_SUFFIXES = ("", "-wal", "-shm")
 _SNAPSHOT_METADATA = "snapshot.json"
@@ -84,14 +87,22 @@ def write_update_status_projection(
         payload["exit_code"] = exit_code
     if run_id:
         payload["update_run_id"] = run_id
-    if extra:
-        payload.update(extra)
-
     existing = _read_json(path) if path.exists() else None
     if isinstance(existing, dict):
         for key in _PRESERVED_STATUS_KEYS:
             if key not in payload and key in existing:
                 payload[key] = existing[key]
+
+    if extra:
+        phase_timing = extra.pop("phase_timing", None)
+        payload.update(extra)
+        if isinstance(phase_timing, dict):
+            timings = payload.get("phase_timings")
+            if not isinstance(timings, list):
+                timings = []
+            timings.append(phase_timing)
+            payload["phase_timings"] = timings[-_MAX_PHASE_TIMINGS:]
+            payload["last_phase_timing"] = phase_timing
 
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload), encoding="utf-8")

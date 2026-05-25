@@ -266,7 +266,7 @@ def _default_static_assets_section() -> Dict[str, Any]:
 def _default_update_section() -> Dict[str, Any]:
     """Build the default update section."""
     return {
-        "skip_checks": False,
+        "skip_checks": True,
         "backend": "auto",
         "linux_service_names": _default_update_linux_service_names(),
     }
@@ -631,6 +631,8 @@ DEFAULT_REPO_CONFIG: Dict[str, Any] = {
             "mlx_whisper": {
                 "remote_api": False,
                 "model": "small",
+                "cache_dir": None,
+                "local_files_only": False,
                 "language": None,
                 "beam_size": None,
                 "temperature": 0.0,

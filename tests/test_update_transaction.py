@@ -54,6 +54,62 @@ def test_write_update_status_projection_records_phase_and_preserves_notify(
     assert json.loads(status_path.read_text(encoding="utf-8")) == payload
 
 
+def test_write_update_status_projection_preserves_bounded_phase_timings(
+    tmp_path: Path,
+) -> None:
+    status_path = tmp_path / "update_status.json"
+    status_path.write_text(
+        json.dumps(
+            {
+                "status": "running",
+                "message": "old",
+                "phase_timings": [
+                    {"phase": f"phase-{index}", "duration_ms": index}
+                    for index in range(23)
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    payload = write_update_status_projection(
+        status_path,
+        status="running",
+        message="pip installed",
+        extra={
+            "phase_timing": {
+                "phase": "pip_install",
+                "status": "ok",
+                "duration_ms": 1234,
+            }
+        },
+    )
+
+    assert len(payload["phase_timings"]) == 24
+    assert payload["last_phase_timing"] == {
+        "phase": "pip_install",
+        "status": "ok",
+        "duration_ms": 1234,
+    }
+
+    payload = write_update_status_projection(
+        status_path,
+        status="running",
+        message="hub restarted",
+        extra={
+            "phase_timing": {
+                "phase": "hub_restart",
+                "status": "ok",
+                "duration_ms": 4567,
+            }
+        },
+    )
+
+    assert len(payload["phase_timings"]) == 24
+    assert payload["phase_timings"][0]["phase"] == "phase-1"
+    assert payload["phase_timings"][-1]["phase"] == "hub_restart"
+
+
 def test_orchestration_db_snapshot_restore_roundtrip(tmp_path: Path) -> None:
     hub_root = tmp_path / "hub"
     db_path = resolve_orchestration_sqlite_path(hub_root)

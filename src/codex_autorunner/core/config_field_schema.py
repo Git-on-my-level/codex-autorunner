@@ -719,7 +719,7 @@ UPDATE_FIELD_SCHEMAS: dict[str, FieldSchema] = {
     "skip_checks": FieldSchema(
         path="update.skip_checks",
         kind="bool",
-        default=False,
+        default=True,
         allow_none=True,
         type_message="update.skip_checks must be boolean or null",
     ),

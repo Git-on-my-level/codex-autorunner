@@ -62,11 +62,96 @@ if isinstance(existing, dict):
         "notify_thread_id",
         "notify_reply_to",
         "notify_sent_at",
+        "phase_timings",
+        "last_phase_timing",
     ):
         if key not in payload and key in existing:
             payload[key] = existing[key]
 path.write_text(json.dumps(payload), encoding="utf-8")
 PY
+}
+
+now_ms() {
+  "${HELPER_PYTHON}" - <<'PY'
+import time
+
+print(int(time.time() * 1000))
+PY
+}
+
+log_phase_timing() {
+  local phase status start_ms end_ms duration_ms
+  phase="$1"
+  status="$2"
+  start_ms="$3"
+  end_ms="$(now_ms)"
+  if [[ -n "${start_ms}" && "${start_ms}" =~ ^[0-9]+$ ]]; then
+    duration_ms=$(( end_ms - start_ms ))
+  else
+    duration_ms=0
+  fi
+  if [[ -n "${UPDATE_STATUS_PATH}" && -x "${HELPER_PYTHON}" ]]; then
+    UPDATE_STATUS_PATH_VALUE="${UPDATE_STATUS_PATH}" \
+    UPDATE_TIMING_PHASE="${phase}" \
+    UPDATE_TIMING_STATUS="${status}" \
+    UPDATE_TIMING_DURATION_MS="${duration_ms}" \
+    "${HELPER_PYTHON}" - <<'PY'
+import json
+import os
+import pathlib
+import time
+
+path = pathlib.Path(os.environ["UPDATE_STATUS_PATH_VALUE"])
+try:
+    payload = json.loads(path.read_text(encoding="utf-8"))
+except Exception:
+    payload = {"status": "running", "message": "Update running.", "at": time.time()}
+if not isinstance(payload, dict):
+    payload = {"status": "running", "message": "Update running.", "at": time.time()}
+timing = {
+    "phase": os.environ["UPDATE_TIMING_PHASE"],
+    "status": os.environ["UPDATE_TIMING_STATUS"],
+    "duration_ms": int(os.environ["UPDATE_TIMING_DURATION_MS"]),
+    "at": time.time(),
+}
+timings = payload.get("phase_timings")
+if not isinstance(timings, list):
+    timings = []
+timings.append(timing)
+payload["phase_timings"] = timings[-24:]
+payload["last_phase_timing"] = timing
+path.parent.mkdir(parents=True, exist_ok=True)
+path.write_text(json.dumps(payload), encoding="utf-8")
+PY
+  fi
+  UPDATE_TIMING_PHASE="${phase}" \
+  UPDATE_TIMING_STATUS="${status}" \
+  UPDATE_TIMING_DURATION_MS="${duration_ms}" \
+  "${HELPER_PYTHON}" - <<'PY'
+import json
+import os
+
+print(json.dumps({
+    "event": "update.phase_timing",
+    "phase": os.environ["UPDATE_TIMING_PHASE"],
+    "status": os.environ["UPDATE_TIMING_STATUS"],
+    "duration_ms": int(os.environ["UPDATE_TIMING_DURATION_MS"]),
+}, separators=(",", ":")))
+PY
+}
+
+run_timed_phase() {
+  local phase start_ms exit_code
+  phase="$1"
+  shift
+  start_ms="$(now_ms)"
+  if "$@"; then
+    log_phase_timing "${phase}" "ok" "${start_ms}"
+    return 0
+  fi
+  exit_code=$?
+  log_phase_timing "${phase}" "failed" "${start_ms}"
+  return "${exit_code}"
 }
 
 fail() {
@@ -269,9 +354,9 @@ PY
 }
 
 echo "Installing codex-autorunner from ${PACKAGE_SRC}..."
-"${HELPER_PYTHON}" -m pip -q install --upgrade pip
-"${HELPER_PYTHON}" -m pip -q install --upgrade "${PACKAGE_SRC}[browser]"
-ensure_playwright_chromium "${HELPER_PYTHON}"
+run_timed_phase "pip_upgrade" "${HELPER_PYTHON}" -m pip -q install --upgrade pip
+run_timed_phase "pip_install" "${HELPER_PYTHON}" -m pip -q install --upgrade "${PACKAGE_SRC}[browser]"
+run_timed_phase "playwright_chromium" ensure_playwright_chromium "${HELPER_PYTHON}"
 ensure_login_shell_path "${LOCAL_BIN}"
 
 if [[ -z "${HUB_ROOT}" ]]; then
@@ -279,11 +364,11 @@ if [[ -z "${HUB_ROOT}" ]]; then
 fi
 
 echo "Refreshing hub-managed repo artifacts under ${HUB_ROOT}..."
-HUB_ROOT="${HUB_ROOT}" HELPER_PYTHON="${HELPER_PYTHON}" \
+run_timed_phase "managed_repo_refresh" env HUB_ROOT="${HUB_ROOT}" HELPER_PYTHON="${HELPER_PYTHON}" \
   bash "${PACKAGE_SRC}/scripts/update-hub-managed-repos.sh"
 
 echo "Reloading systemd user manager..."
-systemctl --user daemon-reload
+run_timed_phase "systemd_daemon_reload" systemctl --user daemon-reload
 
 restart_web=false
 restart_telegram=false
@@ -294,14 +379,14 @@ if [[ "${target}" == "all" || "${target}" == "web" ]]; then
     fail "Hub service not found: ${UPDATE_HUB_SERVICE_NAME}"
   fi
   echo "Restarting hub service ${UPDATE_HUB_SERVICE_NAME}..."
-  systemctl --user restart "${UPDATE_HUB_SERVICE_NAME}"
+  run_timed_phase "hub_restart" systemctl --user restart "${UPDATE_HUB_SERVICE_NAME}"
   restart_web=true
 fi
 
 if [[ "${target}" == "all" || "${target}" == "chat" || "${target}" == "telegram" ]]; then
   if service_exists "${UPDATE_TELEGRAM_SERVICE_NAME}"; then
     echo "Restarting telegram service ${UPDATE_TELEGRAM_SERVICE_NAME}..."
-    systemctl --user restart "${UPDATE_TELEGRAM_SERVICE_NAME}"
+    run_timed_phase "telegram_restart" systemctl --user restart "${UPDATE_TELEGRAM_SERVICE_NAME}"
     restart_telegram=true
   elif [[ "${target}" == "telegram" ]]; then
     fail "Telegram service not found: ${UPDATE_TELEGRAM_SERVICE_NAME}"
@@ -313,7 +398,7 @@ fi
 if [[ "${target}" == "all" || "${target}" == "chat" || "${target}" == "discord" ]]; then
   if service_exists "${UPDATE_DISCORD_SERVICE_NAME}"; then
     echo "Restarting discord service ${UPDATE_DISCORD_SERVICE_NAME}..."
-    systemctl --user restart "${UPDATE_DISCORD_SERVICE_NAME}"
+    run_timed_phase "discord_restart" systemctl --user restart "${UPDATE_DISCORD_SERVICE_NAME}"
     restart_discord=true
   elif [[ "${target}" == "discord" ]]; then
     fail "Discord service not found: ${UPDATE_DISCORD_SERVICE_NAME}"
@@ -324,7 +409,7 @@ fi
 
 if [[ "${restart_web}" == "true" ]]; then
   echo "Checking web health at ${HEALTH_URL}..."
-  if ! wait_for_http_health; then
+  if ! run_timed_phase "hub_health_check" wait_for_http_health; then
     fail "Web health check failed at ${HEALTH_URL}."
   fi
 fi
