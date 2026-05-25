@@ -140,6 +140,33 @@ def test_codex_runtime_preflight_decodes_non_utf8_version_output(
     assert any(detail.startswith("version: codex") for detail in details)
 
 
+def test_extract_commit_barrier_ignores_resolved_clean_contradiction(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / ".codex-autorunner" / "flows.db"
+    with FlowStore(db_path) as store:
+        store.initialize()
+        record = store.create_flow_run(
+            run_id="clean-barrier",
+            flow_type="ticket_flow",
+            input_data={},
+            state={
+                "ticket_engine": {
+                    "commit": {
+                        "pending": True,
+                        "commit_pending": True,
+                        "worktree_dirty": False,
+                        "resolution_state": "pending",
+                    }
+                }
+            },
+        )
+
+        commit_barrier = operator_module._extract_commit_barrier_status(record)
+
+    assert commit_barrier is None
+
+
 def test_build_ticket_flow_run_state_marks_live_stale_alive_as_attention(
     tmp_path: Path, monkeypatch
 ) -> None:

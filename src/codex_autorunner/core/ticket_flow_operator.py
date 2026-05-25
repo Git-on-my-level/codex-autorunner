@@ -1142,6 +1142,11 @@ def _extract_commit_barrier_status(record: FlowRunRecord) -> Optional[dict[str, 
         if not isinstance(candidate, dict) or not candidate:
             continue
         payload = dict(candidate)
+        if (
+            payload.get("worktree_dirty") is False
+            and payload.get("required") is not True
+        ):
+            continue
         pending = any(
             bool(payload.get(key))
             for key in (
