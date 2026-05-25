@@ -4,6 +4,8 @@ import uuid
 from pathlib import Path
 from types import SimpleNamespace
 
+from tests.support.git_test_helpers import init_git_repo as _init_git_repo
+
 from codex_autorunner.core.flows.models import FlowEventType, FlowRunStatus
 from codex_autorunner.core.flows.reconciler import (
     _with_commit_barrier_recovery,
@@ -688,6 +690,387 @@ def test_stale_alive_worker_restarts_same_running_ticket_flow_run(
     restart = recovered.state["recovery"]["restart"]
     assert restart["count"] == 1
     assert "stale_alive" not in recovered.state["recovery"]
+
+
+def test_stale_alive_commit_barrier_restarts_and_preserves_recovery_payload(
+    monkeypatch, tmp_path: Path
+) -> None:
+    db = tmp_path / "flows.db"
+    store = FlowStore(db)
+    store.initialize()
+    run_id = str(uuid.uuid4())
+    _init_git_repo(tmp_path)
+    ticket_path = tmp_path / "TICKET-001.md"
+    ticket_path.write_text(
+        "---\ndone: true\n---\n\n# Ticket\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "work.txt").write_text("dirty\n", encoding="utf-8")
+    record = store.create_flow_run(
+        run_id=run_id,
+        flow_type="ticket_flow",
+        input_data={},
+        state={
+            "ticket_engine": {
+                "status": "running",
+                "current_ticket": "TICKET-001.md",
+                "commit": {
+                    "pending": True,
+                    "barrier_epoch": "commit-barrier:abc",
+                    "retries": 1,
+                    "max_retries": 3,
+                    "resolution_state": "pending",
+                },
+            }
+        },
+        current_step="ticket_turn",
+    )
+    store.update_flow_run_status(
+        run_id=record.id,
+        status=FlowRunStatus.RUNNING,
+        state=record.state,
+    )
+    artifact_dir = tmp_path / ".codex-autorunner" / "flows" / run_id
+    artifact_dir.mkdir(parents=True)
+
+    monkeypatch.setattr(
+        "codex_autorunner.core.flows.reconciler._latest_semantic_progress_at",
+        lambda _record, _store: "2026-05-12T00:00:00+00:00",
+    )
+    monkeypatch.setattr(
+        "codex_autorunner.core.flows.reconciler.now_iso",
+        lambda: "2026-05-12T01:00:00+00:00",
+    )
+    monkeypatch.setattr(
+        "codex_autorunner.core.flows.reconciler.check_worker_health",
+        lambda repo_root, run_id: SimpleNamespace(
+            is_alive=True,
+            status="alive",
+            pid=12345,
+            message="worker running",
+            active_tool=None,
+            artifact_path=artifact_dir / "worker.json",
+        ),
+    )
+    terminated: list[tuple[str, int]] = []
+    monkeypatch.setattr(
+        "codex_autorunner.core.flows.reconciler.terminate_flow_worker_pid",
+        lambda repo_root, run_id, *, pid, reason: terminated.append((run_id, pid))
+        or True,
+    )
+    spawned: list[str] = []
+
+    def fake_spawn(repo_root: Path, run_id: str):
+        spawned.append(run_id)
+        return (
+            SimpleNamespace(pid=999),
+            SimpleNamespace(close=lambda: None),
+            SimpleNamespace(close=lambda: None),
+        )
+
+    monkeypatch.setattr(
+        "codex_autorunner.core.flows.reconciler.spawn_flow_worker",
+        fake_spawn,
+    )
+
+    current_record = store.get_flow_run(record.id)
+    assert current_record is not None
+    recovered, updated, locked = reconcile_flow_run(tmp_path, current_record, store)
+
+    assert recovered.status == FlowRunStatus.RUNNING
+    assert updated is True
+    assert locked is False
+    assert terminated == [(run_id, 12345)]
+    assert spawned == [run_id]
+    recovery = recovered.state["recovery"]
+    restart = recovery["restart"]
+    assert restart["count"] == 1
+    assert restart["attempt_id"] == "restart:1"
+    assert restart["last_reason"] == "stale-alive-commit-barrier-active"
+    assert restart["last_outcome"] == "spawned"
+    assert restart["last_spawn_pid"] == 999
+    assert recovery["stale_alive"]["worker_pid"] == 12345
+    assert recovery["stale_alive"]["semantic_stale_age_seconds"] == 3600
+    commit_barrier = recovery["commit_barrier"]
+    assert commit_barrier["pending"] is True
+    assert commit_barrier["current_ticket"] == "TICKET-001.md"
+    assert commit_barrier["barrier_epoch"] == "commit-barrier:abc"
+    assert commit_barrier["retries"] == 1
+    assert commit_barrier["max_retries"] == 3
+    assert commit_barrier["worktree_dirty"] is True
+
+
+def test_stale_alive_commit_barrier_uses_ticket_flow_workspace_root(
+    monkeypatch, tmp_path: Path
+) -> None:
+    repo_root = tmp_path / "repo"
+    workspace_root = tmp_path / "workspace"
+    repo_root.mkdir()
+    workspace_root.mkdir()
+    _init_git_repo(workspace_root)
+    db = tmp_path / "flows.db"
+    store = FlowStore(db)
+    store.initialize()
+    run_id = str(uuid.uuid4())
+    ticket_path = workspace_root / "TICKET-001.md"
+    ticket_path.write_text(
+        "---\ndone: true\n---\n\n# Ticket\n",
+        encoding="utf-8",
+    )
+    (workspace_root / "work.txt").write_text("dirty\n", encoding="utf-8")
+    record = store.create_flow_run(
+        run_id=run_id,
+        flow_type="ticket_flow",
+        input_data={"workspace_root": str(workspace_root)},
+        state={
+            "ticket_engine": {
+                "status": "running",
+                "current_ticket": "TICKET-001.md",
+                "commit": {
+                    "pending": False,
+                    "barrier_epoch": "commit-barrier:workspace",
+                    "retries": 0,
+                    "max_retries": 2,
+                    "resolution_state": "pending",
+                },
+            }
+        },
+        current_step="ticket_turn",
+    )
+    store.update_flow_run_status(
+        run_id=record.id,
+        status=FlowRunStatus.RUNNING,
+        state=record.state,
+    )
+    artifact_dir = repo_root / ".codex-autorunner" / "flows" / run_id
+    artifact_dir.mkdir(parents=True)
+
+    monkeypatch.setattr(
+        "codex_autorunner.core.flows.reconciler._latest_semantic_progress_at",
+        lambda _record, _store: "2026-05-12T00:00:00+00:00",
+    )
+    monkeypatch.setattr(
+        "codex_autorunner.core.flows.reconciler.now_iso",
+        lambda: "2026-05-12T01:00:00+00:00",
+    )
+    monkeypatch.setattr(
+        "codex_autorunner.core.flows.reconciler.check_worker_health",
+        lambda _repo_root, _run_id: SimpleNamespace(
+            is_alive=True,
+            status="alive",
+            pid=12345,
+            message="worker running",
+            active_tool=None,
+            artifact_path=artifact_dir / "worker.json",
+        ),
+    )
+    terminated: list[tuple[str, int]] = []
+    monkeypatch.setattr(
+        "codex_autorunner.core.flows.reconciler.terminate_flow_worker_pid",
+        lambda _repo_root, run_id, *, pid, reason: terminated.append((run_id, pid))
+        or True,
+    )
+    spawned: list[str] = []
+
+    def fake_spawn(_repo_root: Path, run_id: str):
+        spawned.append(run_id)
+        return (
+            SimpleNamespace(pid=999),
+            SimpleNamespace(close=lambda: None),
+            SimpleNamespace(close=lambda: None),
+        )
+
+    monkeypatch.setattr(
+        "codex_autorunner.core.flows.reconciler.spawn_flow_worker",
+        fake_spawn,
+    )
+
+    current_record = store.get_flow_run(record.id)
+    assert current_record is not None
+    recovered, updated, locked = reconcile_flow_run(repo_root, current_record, store)
+
+    assert recovered.status == FlowRunStatus.RUNNING
+    assert updated is True
+    assert locked is False
+    assert terminated == [(run_id, 12345)]
+    assert spawned == [run_id]
+    commit_barrier = recovered.state["recovery"]["commit_barrier"]
+    assert commit_barrier["current_ticket_done"] is True
+    assert commit_barrier["worktree_dirty"] is True
+    assert commit_barrier["commit_pending"] is False
+
+
+def test_failed_stale_alive_commit_barrier_rescue_persists_diagnostics(
+    monkeypatch, tmp_path: Path
+) -> None:
+    db = tmp_path / "flows.db"
+    store = FlowStore(db)
+    store.initialize()
+    run_id = str(uuid.uuid4())
+    _init_git_repo(tmp_path)
+    ticket_path = tmp_path / "TICKET-001.md"
+    ticket_path.write_text("---\ndone: true\n---\n", encoding="utf-8")
+    (tmp_path / "work.txt").write_text("dirty\n", encoding="utf-8")
+    record = store.create_flow_run(
+        run_id=run_id,
+        flow_type="ticket_flow",
+        input_data={},
+        state={
+            "ticket_engine": {
+                "status": "running",
+                "current_ticket": "TICKET-001.md",
+                "commit": {
+                    "pending": True,
+                    "barrier_epoch": "commit-barrier:abc",
+                    "retries": 1,
+                    "max_retries": 3,
+                    "resolution_state": "pending",
+                },
+            }
+        },
+        current_step="ticket_turn",
+    )
+    store.update_flow_run_status(
+        run_id=record.id,
+        status=FlowRunStatus.RUNNING,
+        state=record.state,
+    )
+    artifact_dir = tmp_path / ".codex-autorunner" / "flows" / run_id
+    artifact_dir.mkdir(parents=True)
+    monkeypatch.setattr(
+        "codex_autorunner.core.flows.reconciler._latest_semantic_progress_at",
+        lambda _record, _store: "2026-05-12T00:00:00+00:00",
+    )
+    monkeypatch.setattr(
+        "codex_autorunner.core.flows.reconciler.now_iso",
+        lambda: "2026-05-12T01:00:00+00:00",
+    )
+    monkeypatch.setattr(
+        "codex_autorunner.core.flows.reconciler.check_worker_health",
+        lambda _repo_root, _run_id: SimpleNamespace(
+            is_alive=True,
+            status="alive",
+            pid=12345,
+            message="worker running",
+            active_tool=None,
+            artifact_path=artifact_dir / "worker.json",
+        ),
+    )
+    monkeypatch.setattr(
+        "codex_autorunner.core.flows.reconciler.terminate_flow_worker_pid",
+        lambda _repo_root, _run_id, *, pid, reason: False,
+    )
+    spawned: list[str] = []
+    monkeypatch.setattr(
+        "codex_autorunner.core.flows.reconciler.spawn_flow_worker",
+        lambda _repo_root, run_id: spawned.append(run_id),
+    )
+
+    current_record = store.get_flow_run(record.id)
+    assert current_record is not None
+    recovered, updated, locked = reconcile_flow_run(tmp_path, current_record, store)
+
+    assert recovered.status == FlowRunStatus.FAILED
+    assert updated is True
+    assert locked is False
+    assert spawned == []
+    recovery = recovered.state["recovery"]
+    assert recovery["stale_alive"]["worker_pid"] == 12345
+    assert recovery["commit_barrier"]["barrier_epoch"] == "commit-barrier:abc"
+    assert recovery["commit_barrier"]["pending"] is True
+    restart = recovery["restart"]
+    assert restart["last_outcome"] == "failed"
+    assert restart["last_failure_reason"].startswith("spawn_failed:")
+
+
+def test_stale_alive_exhausted_commit_barrier_does_not_spawn(
+    monkeypatch, tmp_path: Path
+) -> None:
+    db = tmp_path / "flows.db"
+    store = FlowStore(db)
+    store.initialize()
+    run_id = str(uuid.uuid4())
+    _init_git_repo(tmp_path)
+    ticket_path = tmp_path / "TICKET-001.md"
+    ticket_path.write_text(
+        "---\ndone: true\n---\n\n# Ticket\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "work.txt").write_text("dirty\n", encoding="utf-8")
+    record = store.create_flow_run(
+        run_id=run_id,
+        flow_type="ticket_flow",
+        input_data={},
+        state={
+            "ticket_engine": {
+                "status": "running",
+                "current_ticket": "TICKET-001.md",
+                "commit": {
+                    "pending": True,
+                    "barrier_epoch": "commit-barrier:abc",
+                    "retries": 3,
+                    "max_retries": 3,
+                    "exhausted": True,
+                    "resolution_state": "exhausted",
+                },
+            }
+        },
+        current_step="ticket_turn",
+    )
+    store.update_flow_run_status(
+        run_id=record.id,
+        status=FlowRunStatus.RUNNING,
+        state=record.state,
+    )
+    artifact_dir = tmp_path / ".codex-autorunner" / "flows" / run_id
+    artifact_dir.mkdir(parents=True)
+
+    monkeypatch.setattr(
+        "codex_autorunner.core.flows.reconciler._latest_semantic_progress_at",
+        lambda _record, _store: "2026-05-12T00:00:00+00:00",
+    )
+    monkeypatch.setattr(
+        "codex_autorunner.core.flows.reconciler.now_iso",
+        lambda: "2026-05-12T01:00:00+00:00",
+    )
+    monkeypatch.setattr(
+        "codex_autorunner.core.flows.reconciler.check_worker_health",
+        lambda repo_root, run_id: SimpleNamespace(
+            is_alive=True,
+            status="alive",
+            pid=12345,
+            message="worker running",
+            active_tool=None,
+            artifact_path=artifact_dir / "worker.json",
+        ),
+    )
+    terminated: list[str] = []
+    monkeypatch.setattr(
+        "codex_autorunner.core.flows.reconciler.terminate_flow_worker_pid",
+        lambda repo_root, run_id, *, pid, reason: terminated.append(run_id) or True,
+    )
+    spawned: list[str] = []
+    monkeypatch.setattr(
+        "codex_autorunner.core.flows.reconciler.spawn_flow_worker",
+        lambda repo_root, run_id: spawned.append(run_id),
+    )
+
+    current_record = store.get_flow_run(record.id)
+    assert current_record is not None
+    recovered, updated, locked = reconcile_flow_run(tmp_path, current_record, store)
+
+    assert recovered.status == FlowRunStatus.FAILED
+    assert updated is True
+    assert locked is False
+    assert terminated == []
+    assert spawned == []
+    commit_barrier = recovered.state["recovery"]["commit_barrier"]
+    assert commit_barrier["pending"] is True
+    assert commit_barrier["resolution_state"] == "exhausted"
+    assert recovered.state["recovery"]["stale_alive"]["worker_pid"] == 12345
+    assert (
+        recovered.state["recovery"]["stale_alive"]["semantic_stale_age_seconds"] == 3600
+    )
 
 
 def test_stale_alive_restart_does_not_spawn_if_live_worker_cannot_be_stopped(

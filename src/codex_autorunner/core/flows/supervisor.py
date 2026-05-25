@@ -46,6 +46,9 @@ class RecoveryIntentKind(str, Enum):
     WORKER_CRASH = "worker_crash"
     STALE_WORKER_REAPED = "stale_worker_reaped"
     STALE_ALIVE_WORKER = "stale_alive_worker"
+    STALE_ALIVE_COMMIT_BARRIER_ACTIVE = "stale_alive_commit_barrier_active"
+    STALE_ALIVE_COMMIT_BARRIER_EXHAUSTED = "stale_alive_commit_barrier_exhausted"
+    STALE_ALIVE_UNKNOWN = "stale_alive_unknown"
     BACKEND_DISCONNECT = "backend_disconnect"
     COMMIT_BARRIER_REQUIRED = "commit_barrier_required"
     COMMIT_BARRIER_EXHAUSTED = "commit_barrier_exhausted"
@@ -301,7 +304,16 @@ def supervise_flow_recovery(
                 intents,
                 effects,
                 note=(
-                    "stale-alive-worker"
+                    (
+                        "stale-alive-commit-barrier-active"
+                        if (
+                            worker.status == WorkerHealthStatus.STALE_ALIVE
+                            and observation.commit_barrier.required
+                            and not observation.commit_barrier.exhausted
+                            and observation.restart.can_attempt
+                        )
+                        else "stale-alive-worker"
+                    )
                     if worker.status == WorkerHealthStatus.STALE_ALIVE
                     else (
                         "stale-worker-reaped"
@@ -484,6 +496,38 @@ def _append_worker_dead_decision(
             )
         )
 
+    if stale_alive:
+        if observation.commit_barrier.required:
+            intents.append(
+                RecoveryIntent(
+                    (
+                        RecoveryIntentKind.STALE_ALIVE_COMMIT_BARRIER_EXHAUSTED
+                        if observation.commit_barrier.exhausted
+                        else RecoveryIntentKind.STALE_ALIVE_COMMIT_BARRIER_ACTIVE
+                    ),
+                    (
+                        "stale-alive-commit-barrier-exhausted"
+                        if observation.commit_barrier.exhausted
+                        else "stale-alive-commit-barrier-active"
+                    ),
+                    {
+                        **_worker_data(worker),
+                        "current_ticket": observation.commit_barrier.current_ticket,
+                        "barrier_epoch": observation.commit_barrier.barrier_epoch,
+                        "commit_retries": observation.commit_barrier.retries,
+                        "commit_max_retries": observation.commit_barrier.max_retries,
+                    },
+                )
+            )
+        else:
+            intents.append(
+                RecoveryIntent(
+                    RecoveryIntentKind.STALE_ALIVE_UNKNOWN,
+                    "stale-alive-without-classified-blocker",
+                    _worker_data(worker),
+                )
+            )
+
     if observation.commit_barrier.required:
         _append_commit_barrier_intent(observation, intents, effects)
 
@@ -534,7 +578,14 @@ def _append_worker_dead_decision(
         effects.append(
             _effect(SupervisorEffectKind.NOTIFY_SURFACES, "restart_exhausted")
         )
-    elif observation.restart.can_attempt and not observation.commit_barrier.required:
+    elif observation.restart.can_attempt and (
+        not observation.commit_barrier.required
+        or (
+            stale_alive
+            and observation.commit_barrier.required
+            and not observation.commit_barrier.exhausted
+        )
+    ):
         intents.append(
             RecoveryIntent(
                 RecoveryIntentKind.RESTART_ATTEMPTED,
@@ -545,7 +596,16 @@ def _append_worker_dead_decision(
                 },
             )
         )
-        effects.append(_effect(SupervisorEffectKind.SPAWN_WORKER, "restart_attempted"))
+        effects.append(
+            _effect(
+                SupervisorEffectKind.SPAWN_WORKER,
+                (
+                    "stale_alive_commit_barrier_active"
+                    if stale_alive and observation.commit_barrier.required
+                    else "restart_attempted"
+                ),
+            )
+        )
 
 
 def _append_commit_barrier_intent(

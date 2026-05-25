@@ -216,6 +216,7 @@ def _ticket_marked_done(path: Path) -> bool:
 def _commit_barrier_observation(
     repo_root: Path, record: FlowRunRecord
 ) -> CommitBarrierObservation:
+    workspace_root = _resolve_workspace_root(repo_root, record)
     state = record.state if isinstance(record.state, dict) else {}
     engine = state.get("ticket_engine") if isinstance(state, dict) else {}
     engine = engine if isinstance(engine, dict) else {}
@@ -225,9 +226,11 @@ def _commit_barrier_observation(
 
     commit = engine.get("commit")
     commit = commit if isinstance(commit, dict) else {}
-    ticket_path = repo_root / current_ticket
+    ticket_path = workspace_root / current_ticket
     current_ticket_done = ticket_path.exists() and _ticket_marked_done(ticket_path)
-    dirty_status = _git_status_porcelain(repo_root) if current_ticket_done else None
+    dirty_status = (
+        _git_status_porcelain(workspace_root) if current_ticket_done else None
+    )
     raw_retries = commit.get("retries")
     retries = (
         raw_retries
@@ -392,10 +395,12 @@ def _with_restart_attempt(
     restart.update(
         {
             "count": count,
+            "attempt_id": f"restart:{count}",
             "max_attempts": max_attempts,
             "last_attempted_at": now_iso(),
             "last_failure_reason": failure_reason,
             "last_reason": reason,
+            "last_outcome": "failed" if failure_reason else "attempting",
             "exhausted": count >= max_attempts if max_attempts > 0 else False,
         }
     )
@@ -408,6 +413,42 @@ def _with_restart_attempt(
         recovery["stale_alive"] = stale_alive_recovery_payload(health)
     else:
         recovery.pop("stale_alive", None)
+    updated["recovery"] = recovery
+    return updated
+
+
+def _with_restart_outcome(
+    state: dict[str, Any],
+    *,
+    outcome: str,
+    spawn_pid: Optional[int] = None,
+    failure_reason: Optional[str] = None,
+) -> dict[str, Any]:
+    updated = dict(state)
+    recovery = updated.get("recovery")
+    recovery = dict(recovery) if isinstance(recovery, dict) else {}
+    restart = recovery.get("restart")
+    restart = dict(restart) if isinstance(restart, dict) else {}
+    restart["last_outcome"] = outcome
+    if spawn_pid is not None:
+        restart["last_spawn_pid"] = spawn_pid
+    if failure_reason is not None:
+        restart["last_failure_reason"] = failure_reason
+    recovery["restart"] = restart
+    updated["recovery"] = recovery
+    return updated
+
+
+def _with_stale_alive_recovery(
+    state: dict[str, Any],
+    health: Optional[Any],
+) -> dict[str, Any]:
+    if health is None or getattr(health, "status", None) != "stale_alive":
+        return state
+    updated = dict(state)
+    recovery = updated.get("recovery")
+    recovery = dict(recovery) if isinstance(recovery, dict) else {}
+    recovery["stale_alive"] = stale_alive_recovery_payload(health)
     updated["recovery"] = recovery
     return updated
 
@@ -747,6 +788,18 @@ def reconcile_flow_run(
                     max_attempts=restart_policy.max_attempts,
                     reason=decision.note,
                     health=health,
+                    persist_stale_alive=(
+                        health.status == "stale_alive" and commit_barrier.required
+                    ),
+                )
+                restart_state = _with_commit_barrier_recovery(
+                    restart_state,
+                    commit_barrier,
+                )
+                store.update_flow_run_status(
+                    run_id=record.id,
+                    status=record.status,
+                    state=restart_state,
                 )
                 try:
                     if health.status == "stale_alive":
@@ -784,7 +837,16 @@ def reconcile_flow_run(
                         health=health,
                         persist_stale_alive=True,
                     )
+                    restart_state_override = _with_commit_barrier_recovery(
+                        restart_state_override,
+                        commit_barrier,
+                    )
                 else:
+                    restart_state = _with_restart_outcome(
+                        restart_state,
+                        outcome="spawned",
+                        spawn_pid=getattr(proc, "pid", None),
+                    )
                     store.set_stop_requested(record.id, False)
                     updated = store.update_flow_run_status(
                         run_id=record.id,
@@ -899,6 +961,8 @@ def reconcile_flow_run(
                     reason="restart-attempts-exhausted",
                     health=health,
                 )
+            elif commit_barrier.required:
+                state = _with_stale_alive_recovery(state, health)
             state = _with_commit_barrier_recovery(state, commit_barrier)
             for effect in result.effects:
                 if effect.kind == EffectKind.ENRICH_FAILURE_PAYLOAD:
