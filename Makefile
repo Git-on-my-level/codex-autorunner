@@ -65,7 +65,7 @@ $(VENV)/.python-ok: pyproject.toml
 		if ! "$(VENV_PYTHON)" -m pip --version >/dev/null 2>&1; then \
 			if "$(VENV_PYTHON)" -m ensurepip --version >/dev/null 2>&1; then \
 				echo "Seeding pip into existing $(VENV)"; \
-				"$(VENV_PYTHON)" -m ensurepip --upgrade; \
+				"$(VENV_PYTHON)" -m ensurepip --upgrade || exit 1; \
 			else \
 				echo "Existing $(VENV) has no pip and cannot be repaired with ensurepip." >&2; \
 				exit 1; \
