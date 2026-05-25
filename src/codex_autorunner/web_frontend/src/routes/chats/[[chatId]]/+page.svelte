@@ -20,7 +20,6 @@
     type PmaQueuedTurn
   } from '$lib/api/client';
   import {
-    CHAT_TICKET_RUN_GROUP_WINDOW_REQUEST,
     invalidateReadModelTags,
     readModelEntityStore,
     readModelEntityTags,
@@ -236,7 +235,7 @@
     search
   });
   const currentChatIndexRequest = $derived<ChatIndexWindowRequest>(chatIndexRequestForCurrentFilters());
-  const ticketRunGroupRequest = $derived<ChatIndexWindowRequest>(CHAT_TICKET_RUN_GROUP_WINDOW_REQUEST);
+  const ticketRunGroupRequest = $derived<ChatIndexWindowRequest>(chatTicketRunGroupRequestForFilters());
   const persistedChats = $derived<PmaChatSummary[]>(selectPmaChats(readModelState, currentChatIndexRequest));
   const facetPersistedChats = $derived<PmaChatSummary[]>(selectPmaChats(readModelState, { filter: 'all', limit: 50 }));
   const backendTicketRunGroups = $derived(selectTicketRunGroups(readModelState, ticketRunGroupRequest));
@@ -780,6 +779,20 @@
     };
   }
 
+  function chatTicketRunGroupRequestForFilters(): ChatIndexWindowRequest {
+    return {
+      filter: statusFilter,
+      query: search.trim() || null,
+      facets: {
+        categories: ['ticket_run'],
+        transports: transportFilter ? [transportFilter] : [],
+        scopeKinds: scopeKindFilter ? [scopeKindFilter] : []
+      },
+      groupBy: 'ticket_run',
+      limit: 50
+    };
+  }
+
   function chatStatusFilterCounts(): Record<ChatStatusFilter, number> {
     const counters = selectedChatWindowView.window ? selectedChatWindowView.counters : readModelState.chatCounters;
     const knownChats = facetChats;
@@ -946,6 +959,10 @@
 
   $effect(() => {
     pageController.setIndexRequest(currentChatIndexRequest);
+  });
+
+  $effect(() => {
+    chatIndexSession.setCompanionRequests([ticketRunGroupRequest]);
   });
 
   $effect(() => {
