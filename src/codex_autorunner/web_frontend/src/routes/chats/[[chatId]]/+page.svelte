@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { goto } from '$app/navigation';
+  import { afterNavigate, goto } from '$app/navigation';
   import { page } from '$app/state';
   import { onDestroy, onMount, tick } from 'svelte';
   import MasterDetail from '$lib/components/MasterDetail.svelte';
@@ -71,6 +71,22 @@
     type ChatDetailPageSupportData
   } from '$lib/application/chatDetailPageController';
   import { withRuntimeBasePath as href } from '$lib/runtime/basePath';
+  import {
+    buildChatsListHref,
+    chatListFiltersEqual,
+    DEFAULT_CHAT_LIST_FILTERS,
+    parseChatListFiltersFromSearchParams,
+    toggleChatFacetFilter,
+    toggleChatStatusFilter,
+    type ChatListFilters
+  } from '$lib/routes/chatListFiltersUrl';
+  import {
+    buildChatFilterSummaryChips,
+    formatChatListResultSummary,
+    selectChatFacetCountsForWindow,
+    shouldShowChatStatusFilterPill,
+    type ChatFilterSummaryChip
+  } from '$lib/routes/chatListFilterUi';
   import {
     repoContextspaceRoute,
     repoRoute,
@@ -196,12 +212,27 @@
   let selectedScopeId = $state('local');
   let selectedScopeSource = $state<PmaChatScopeSource>('default_hub');
   let newChatKind = $state<'pma' | 'agent'>('pma');
-  let statusFilter = $state<ChatStatusFilter>('all');
-  let categoryFilter = $state<ChatFacetCategory | null>(null);
-  let transportFilter = $state<ChatFacetTransport | null>(null);
-  let scopeKindFilter = $state<ChatFacetScopeKind | null>(null);
+  function readChatListFiltersFromRoute(): ChatListFilters {
+    try {
+      return parseChatListFiltersFromSearchParams(page.url.searchParams);
+    } catch {
+      return DEFAULT_CHAT_LIST_FILTERS;
+    }
+  }
+
+  let statusFilter = $state<ChatStatusFilter>(DEFAULT_CHAT_LIST_FILTERS.status);
+  let categoryFilter = $state<ChatFacetCategory | null>(DEFAULT_CHAT_LIST_FILTERS.category);
+  let transportFilter = $state<ChatFacetTransport | null>(DEFAULT_CHAT_LIST_FILTERS.transport);
+  let scopeKindFilter = $state<ChatFacetScopeKind | null>(DEFAULT_CHAT_LIST_FILTERS.scopeKind);
   let detailMode = $state<'list' | 'detail'>('list');
-  let search = $state('');
+  let search = $state(DEFAULT_CHAT_LIST_FILTERS.search);
+  const chatListFilters = $derived<ChatListFilters>({
+    status: statusFilter,
+    category: categoryFilter,
+    transport: transportFilter,
+    scopeKind: scopeKindFilter,
+    search
+  });
   const currentChatIndexRequest = $derived<ChatIndexWindowRequest>(chatIndexRequestForCurrentFilters());
   const ticketRunGroupRequest = $derived<ChatIndexWindowRequest>(CHAT_TICKET_RUN_GROUP_WINDOW_REQUEST);
   const persistedChats = $derived<PmaChatSummary[]>(selectPmaChats(readModelState, currentChatIndexRequest));
@@ -445,11 +476,34 @@
   const selectedChatWindow = $derived(selectedChatWindowView.window);
   const filteredEntries = $derived(sortEntriesForPinnedChats(filterChatEntries(chatListEntries, statusFilter, '', lastSeenMap), pinnedChatIds));
   const filterCounts = $derived(chatStatusFilterCounts());
+  const contextualFacetCounts = $derived(
+    selectChatFacetCountsForWindow(
+      Boolean(selectedChatWindow),
+      selectedChatWindowView.facetCounts,
+      readModelState.chatFacetCounts
+    )
+  );
   const ticketRunGroupCount = $derived(countSemanticTicketRunGroups(backendTicketRunGroups, facetChats));
   const localChatPlaceholderCount = $derived(visibleLocalChatPlaceholders.filter((chat) => !isPmaChatArchived(chat)).length);
   const activeChatCount = $derived(readModelState.chatCounters.total + localChatPlaceholderCount);
   const hasUsableChatIndex = $derived(Boolean(readModelState.chatIndexCursor || readModelState.chatOrder.length > 0));
   const hasSelectedChatWindow = $derived(Boolean(selectedChatWindow));
+  const chatListSummaryLoading = $derived(loadingChats && !hasSelectedChatWindow);
+  const chatListSummaryCount = $derived(
+    chatListSummaryLoading ? null : filterCounts.all
+  );
+  const filterSummaryChips = $derived(
+    buildChatFilterSummaryChips(chatListFilters, {
+      status: filterChipLabel,
+      category: (key) =>
+        key === 'ticket_run' ? 'Ticket Runs' : facetChipLabel(key),
+      transport: chatTransportLabel,
+      scopeKind: facetChipLabel
+    })
+  );
+  const chatListResultSummary = $derived(
+    formatChatListResultSummary(chatListSummaryCount, chatListSummaryLoading)
+  );
   const canLoadMoreChats = $derived(Boolean(selectedChatWindow?.window?.nextCursor));
   const initialChatIndexError = $derived(chatIndexLoadError());
   const visibleChatError = $derived(chatError ?? (!hasUsableChatIndex ? initialChatIndexError : null));
@@ -742,20 +796,91 @@
   const transportFilterOptions = $derived(chatTransportFilterOptions());
   const scopeKindFilterOptions = $derived(chatScopeKindFilterOptions());
 
-  function chatCategoryFilterOptions(): { key: ChatFacetCategory | null; label: string; count: number }[] {
-    const counts = readModelState.chatFacetCounts.category;
-    const items: { key: ChatFacetCategory | null; label: string; count: number }[] = [
-      { key: null, label: 'All', count: filterCounts.all },
-      { key: 'regular', label: 'Regular', count: counts.regular ?? 0 },
-      { key: 'ticket_run', label: 'Ticket Runs', count: counts.ticket_run ?? 0 },
-      { key: 'automation', label: 'Automation', count: counts.automation ?? 0 },
-      { key: 'system', label: 'System', count: counts.system ?? 0 }
-    ];
-    return items.filter((item) => item.key === null || item.count > 0 || categoryFilter === item.key);
+  function clearFilterSummaryChip(chip: ChatFilterSummaryChip): void {
+    if (chip.id === 'status') statusFilter = 'all';
+    else if (chip.id === 'category') categoryFilter = null;
+    else if (chip.id === 'transport') transportFilter = null;
+    else if (chip.id === 'scopeKind') scopeKindFilter = null;
+    else if (chip.id === 'search') search = '';
   }
 
+  function chatCategoryFilterOptions(): { key: ChatFacetCategory; label: string; count: number }[] {
+    const counts = contextualFacetCounts.category;
+    const order: { key: ChatFacetCategory; label: string }[] = [
+      { key: 'regular', label: 'Regular' },
+      { key: 'ticket_run', label: 'Ticket Runs' },
+      { key: 'automation', label: 'Automation' },
+      { key: 'system', label: 'System' }
+    ];
+    return order
+      .map((item) => ({ ...item, count: counts[item.key] ?? 0 }))
+      .filter((item) => item.count > 0 || categoryFilter === item.key);
+  }
+
+  const hasNonStatusFilter = $derived(
+    categoryFilter !== null || transportFilter !== null || scopeKindFilter !== null
+  );
+  const hasAnyFilter = $derived(hasNonStatusFilter || statusFilter !== 'all' || search.trim().length > 0);
+  const hasAdvancedFilterOptions = $derived(
+    categoryFilterOptions.length > 0 ||
+      transportFilterOptions.length > 0 ||
+      scopeKindFilterOptions.length > 0
+  );
+  const activeFacetFilterCount = $derived(
+    (categoryFilter ? 1 : 0) + (transportFilter ? 1 : 0) + (scopeKindFilter ? 1 : 0)
+  );
+  let facetFiltersExpanded = $state(false);
+
+  $effect(() => {
+    syncFacetFiltersExpandedFromFilters(chatListFilters);
+  });
+
+  function syncFacetFiltersExpandedFromFilters(filters: ChatListFilters): void {
+    if (filters.category || filters.transport || filters.scopeKind) {
+      facetFiltersExpanded = true;
+    }
+  }
+
+  function clearAllFilters(): void {
+    statusFilter = 'all';
+    categoryFilter = null;
+    transportFilter = null;
+    scopeKindFilter = null;
+    search = '';
+    facetFiltersExpanded = false;
+  }
+
+  function hydrateChatListFiltersFromUrl(): void {
+    const fromUrl = readChatListFiltersFromRoute();
+    if (chatListFiltersEqual(fromUrl, chatListFilters)) return;
+    statusFilter = fromUrl.status;
+    categoryFilter = fromUrl.category;
+    transportFilter = fromUrl.transport;
+    scopeKindFilter = fromUrl.scopeKind;
+    search = fromUrl.search;
+    syncFacetFiltersExpandedFromFilters(fromUrl);
+  }
+
+  function chatsHubHref(chatId: string | null = null): string {
+    let preserveParams: URLSearchParams | undefined;
+    try {
+      preserveParams = page.url.searchParams;
+    } catch {
+      preserveParams = undefined;
+    }
+    return buildChatsListHref(chatListFilters, {
+      chatId,
+      preserveParams,
+      withHref: href
+    });
+  }
+
+  afterNavigate(() => {
+    hydrateChatListFiltersFromUrl();
+  });
+
   function chatTransportFilterOptions(): { key: ChatFacetTransport; label: string; count: number }[] {
-    const counts = readModelState.chatFacetCounts.transport;
+    const counts = contextualFacetCounts.transport;
     const order: ChatFacetTransport[] = ['pma', 'discord', 'telegram', 'notification'];
     return order
       .map((transport) => ({ key: transport, label: chatTransportLabel(transport), count: counts[transport] ?? 0 }))
@@ -763,7 +888,7 @@
   }
 
   function chatScopeKindFilterOptions(): { key: ChatFacetScopeKind; label: string; count: number }[] {
-    const counts = readModelState.chatFacetCounts.scopeKind;
+    const counts = contextualFacetCounts.scopeKind;
     const order: ChatFacetScopeKind[] = ['hub', 'repo', 'worktree', 'filesystem'];
     return order
       .map((scopeKind) => ({ key: scopeKind, label: facetChipLabel(scopeKind), count: counts[scopeKind] ?? 0 }))
@@ -784,6 +909,7 @@
   }
 
   onMount(() => {
+    hydrateChatListFiltersFromUrl();
     document.addEventListener('pointerdown', captureDocumentChatPointer, true);
     removeDocumentChatPointerCapture = () => {
       document.removeEventListener('pointerdown', captureDocumentChatPointer, true);
@@ -822,6 +948,20 @@
 
   $effect(() => {
     pageController.setIndexRequest(currentChatIndexRequest);
+  });
+
+  $effect(() => {
+    try {
+      const fromUrl = readChatListFiltersFromRoute();
+      if (chatListFiltersEqual(chatListFilters, fromUrl)) return;
+      void goto(chatsHubHref(page.params.chatId ?? null), {
+        replaceState: true,
+        keepFocus: true,
+        noScroll: true
+      });
+    } catch {
+      // No SvelteKit page context during SSR-only renders.
+    }
   });
 
   $effect(() => {
@@ -1145,7 +1285,7 @@
       showCommandNotice('Chat retired.');
       if (activeChatId === chatId) {
         closeStream();
-        await goto(href('/chats'));
+        await goto(chatsHubHref(null));
       }
     } else {
       readModelEntityStore.revertOptimisticMutation(reconciliationId);
@@ -1176,7 +1316,7 @@
       );
       if (activeChatId && targets.includes(activeChatId)) {
         closeStream();
-        await goto(href('/chats'));
+        await goto(chatsHubHref(null));
       }
     } else {
       composeError = result.error;
@@ -1628,7 +1768,7 @@
     persistCurrentNewChatPreference();
     writeChatDetailSessionState(startLocalDraftChat(readChatDetailSessionState(), newDraftChatSummary()));
     closeStream();
-    void goto(href('/chats'), { replaceState: true });
+    void goto(chatsHubHref(null), { replaceState: true });
     creating = false;
   }
 
@@ -2028,60 +2168,53 @@
     </div>
 
     <div class="chat-filter-bar">
-      <FilterRow
-        rootClass="chat-filter-chips-row"
-        ariaLabel="Chat category filters"
-        maxRows={1}
-        items={categoryFilterOptions.map((item) => ({
-          key: `category:${item.key ?? 'all'}`,
-          label: item.label,
-          count: item.key === 'ticket_run' ? ticketRunGroupCount : item.count,
-          active: categoryFilter === item.key,
-          onSelect: () => (categoryFilter = item.key)
-        }))}
-      />
-      <FilterRow
-        rootClass="chat-filter-chips-row"
-        ariaLabel="Chat status filters"
-        maxRows={1}
-        items={CHAT_FILTER_ORDER.filter(
-          (item) => item !== 'unread' || filterCounts.unread > 0 || statusFilter === 'unread'
-        ).map((item) => ({
-          key: `status:${item}`,
-          label: filterChipLabel(item),
-          count: filterCounts[item],
-          active: statusFilter === item,
-          onSelect: () => (statusFilter = item)
-        }))}
-      />
-      {#if transportFilterOptions.length > 0}
-        <FilterRow
-          rootClass="chat-filter-chips-row"
-          ariaLabel="Chat transport filters"
-          maxRows={1}
-          items={transportFilterOptions.map((item) => ({
-            key: `transport:${item.key}`,
-            label: item.label,
-            count: item.count,
-            active: transportFilter === item.key,
-            onSelect: () => (transportFilter = transportFilter === item.key ? null : item.key)
-          }))}
-        />
-      {/if}
-      {#if scopeKindFilterOptions.length > 0}
-        <FilterRow
-          rootClass="chat-filter-chips-row"
-          ariaLabel="Chat scope filters"
-          maxRows={1}
-          items={scopeKindFilterOptions.map((item) => ({
-            key: `scope:${item.key}`,
-            label: item.label,
-            count: item.count,
-            active: scopeKindFilter === item.key,
-            onSelect: () => (scopeKindFilter = scopeKindFilter === item.key ? null : item.key)
-          }))}
-        />
-      {/if}
+      <div class="chat-filter-bar-primary">
+        <div class="chat-filter-group chat-filter-group-status" role="group" aria-label="Status">
+          <span class="chat-filter-group-label">Status</span>
+          <FilterRow
+            rootClass="chat-filter-chips-row"
+            ariaLabel="Chat status filters"
+            maxRows={1}
+            items={CHAT_FILTER_ORDER.filter((item) =>
+              shouldShowChatStatusFilterPill(item, filterCounts, statusFilter)
+            ).map((item) => ({
+              key: `status:${item}`,
+              label: filterChipLabel(item),
+              count: filterCounts[item],
+              active: statusFilter === item,
+              title:
+                statusFilter === item
+                  ? 'Click to clear'
+                  : `Filter by ${filterChipLabel(item).toLowerCase()}`,
+              onSelect: () => (statusFilter = toggleChatStatusFilter(statusFilter, item))
+            }))}
+          />
+        </div>
+        {#if hasAdvancedFilterOptions}
+          <button
+            type="button"
+            class="chip chat-filter-more-toggle"
+            class:active={facetFiltersExpanded || activeFacetFilterCount > 0}
+            aria-expanded={facetFiltersExpanded}
+            aria-controls="chat-facet-filters"
+            onclick={() => (facetFiltersExpanded = !facetFiltersExpanded)}
+          >
+            {facetFiltersExpanded ? 'Hide filters' : 'More filters'}
+            {#if activeFacetFilterCount > 0}
+              <span>{activeFacetFilterCount}</span>
+            {/if}
+            <span class="chat-filter-more-chevron" aria-hidden="true">{facetFiltersExpanded ? '▴' : '▾'}</span>
+          </button>
+        {/if}
+        <div class="chat-filter-bar-actions">
+        {#if hasAnyFilter}
+          <button
+            class="chat-filter-clear"
+            type="button"
+            onclick={clearAllFilters}
+            title="Clear all filters"
+          >Clear filters</button>
+        {/if}
       {#if statusFilter === 'unread' && filterCounts.unread > 0}
         <button
           class="new-chat-button"
@@ -2103,7 +2236,99 @@
           {archiving ? 'Retiring...' : 'Retire All'}
         </button>
       {/if}
+        </div>
+      </div>
+      {#if facetFiltersExpanded && hasAdvancedFilterOptions}
+        <div id="chat-facet-filters" class="chat-filter-bar-advanced">
+          {#if categoryFilterOptions.length > 0}
+            <div class="chat-filter-group" role="group" aria-label="Type">
+              <span class="chat-filter-group-label">Type</span>
+              <FilterRow
+                rootClass="chat-filter-chips-row"
+                ariaLabel="Chat category filters"
+                maxRows={1}
+                items={categoryFilterOptions.map((item) => ({
+                  key: `category:${item.key}`,
+                  label: item.label,
+                  count: item.key === 'ticket_run' ? ticketRunGroupCount : item.count,
+                  active: categoryFilter === item.key,
+                  title:
+                    categoryFilter === item.key
+                      ? 'Click to clear'
+                      : `Filter by ${item.label.toLowerCase()} (count matches current search and status)`,
+                  onSelect: () =>
+                    (categoryFilter = toggleChatFacetFilter(categoryFilter, item.key))
+                }))}
+              />
+            </div>
+          {/if}
+          {#if transportFilterOptions.length > 0}
+            <div class="chat-filter-group" role="group" aria-label="Channel">
+              <span class="chat-filter-group-label">Channel</span>
+              <FilterRow
+                rootClass="chat-filter-chips-row"
+                ariaLabel="Chat transport filters"
+                maxRows={1}
+                items={transportFilterOptions.map((item) => ({
+                  key: `transport:${item.key}`,
+                  label: item.label,
+                  count: item.count,
+                  active: transportFilter === item.key,
+                  title:
+                    transportFilter === item.key
+                      ? 'Click to clear'
+                      : `Filter by ${item.label.toLowerCase()} (count matches current search and status)`,
+                  onSelect: () =>
+                    (transportFilter = toggleChatFacetFilter(transportFilter, item.key))
+                }))}
+              />
+            </div>
+          {/if}
+          {#if scopeKindFilterOptions.length > 0}
+            <div class="chat-filter-group" role="group" aria-label="Scope">
+              <span class="chat-filter-group-label">Scope</span>
+              <FilterRow
+                rootClass="chat-filter-chips-row"
+                ariaLabel="Chat scope filters"
+                maxRows={1}
+                items={scopeKindFilterOptions.map((item) => ({
+                  key: `scope:${item.key}`,
+                  label: item.label,
+                  count: item.count,
+                  active: scopeKindFilter === item.key,
+                  title:
+                    scopeKindFilter === item.key
+                      ? 'Click to clear'
+                      : `Filter by ${item.label.toLowerCase()} (count matches current search and status)`,
+                  onSelect: () =>
+                    (scopeKindFilter = toggleChatFacetFilter(scopeKindFilter, item.key))
+                }))}
+              />
+            </div>
+          {/if}
+        </div>
+      {/if}
     </div>
+
+    {#if hasAnyFilter}
+      <div class="chat-filter-summary" aria-live="polite">
+        <p class="chat-filter-summary__lead">
+          <span class="chat-filter-summary__count">{chatListResultSummary}</span>
+          {#each filterSummaryChips as chip (chip.id)}
+            <span class="meta-dot" aria-hidden="true">·</span>
+            <button
+              type="button"
+              class="chip chat-filter-summary-chip"
+              title="Remove {chip.label} filter"
+              onclick={() => clearFilterSummaryChip(chip)}
+            >
+              {chip.label}
+              <span class="chat-filter-summary-chip-clear" aria-hidden="true">×</span>
+            </button>
+          {/each}
+        </p>
+      </div>
+    {/if}
 
     {#snippet chatRow(chat: import('$lib/viewModels/domain').PmaChatSummary, nested: boolean)}
       {@const scopeTags = pmaChatScopeTagView(chat, {
@@ -2342,8 +2567,14 @@
         {/if}
         {#if filteredEntries.length === 0}
           <div class="state-panel empty-state compact-empty chat-filter-empty">
-            <strong>No chats match this filter</strong>
-            <p>Clear the search or try another filter.</p>
+            {#if hasAnyFilter}
+              <strong>No chats match these filters</strong>
+              <p>Counts reflect totals before other filters apply; combining filters can yield no results.</p>
+              <button type="button" class="chat-filter-clear" onclick={clearAllFilters}>Clear filters</button>
+            {:else}
+              <strong>No chats yet</strong>
+              <p>Start a new chat to populate this list.</p>
+            {/if}
           </div>
         {/if}
       {/if}

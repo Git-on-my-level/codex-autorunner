@@ -111,8 +111,7 @@ describe('/chats page', () => {
     expect(body).not.toContain('memory-toggle-button');
     expect(body).toContain('+ New');
     expect(body).toContain('chat-list');
-    expect(body).toContain('Waiting');
-    expect(body).toContain('Active');
+    expect(body).toContain('Status');
     expect(body).not.toContain('Done');
     expect(body).toContain('Search chats');
     expect(body).toContain('Create or select a chat');
@@ -124,6 +123,29 @@ describe('/chats page', () => {
 
     expect(pageSource).toContain('query: search.trim() || null');
     expect(pageSource).toContain("filterChatEntries(chatListEntries, statusFilter, '', lastSeenMap)");
+  });
+
+  it('syncs list filters through the URL and toggles status chips like facets', () => {
+    const pageSource = chatDetailPageSource();
+
+    expect(pageSource).toContain('buildChatsListHref');
+    expect(pageSource).toContain('afterNavigate');
+    expect(pageSource).toContain('toggleChatStatusFilter');
+    expect(pageSource).toContain('shouldShowChatStatusFilterPill');
+  });
+
+  it('uses contextual facet counts from the active chat-index window', () => {
+    const pageSource = chatDetailPageSource();
+    expect(pageSource).toContain('selectChatFacetCountsForWindow');
+    expect(pageSource).toContain('contextualFacetCounts.category');
+    expect(pageSource).not.toMatch(/readModelState\.chatFacetCounts\.category/);
+  });
+
+  it('renders filter summary and hides empty status pills via shared helpers', () => {
+    const pageSource = chatDetailPageSource();
+    expect(pageSource).toContain('shouldShowChatStatusFilterPill');
+    expect(pageSource).toContain('chat-filter-summary');
+    expect(pageSource).toContain('filterSummaryChips');
   });
 
   it('renders backend-counted facet filters and typed row badges', () => {
@@ -162,10 +184,9 @@ describe('/chats page', () => {
 
     const { body } = render(Page);
 
-    expect(body).toContain('Regular');
+    expect(body).toContain('More filters');
     expect(body).toContain('Automation');
     expect(body).toContain('Discord');
-    expect(body).toContain('Worktree');
     expect(body).toContain('Automation Discord');
   });
 
