@@ -404,6 +404,7 @@ def _with_restart_attempt(
             "exhausted": count >= max_attempts if max_attempts > 0 else False,
         }
     )
+    restart.pop("last_spawn_pid", None)
     recovery["restart"] = restart
     if (
         persist_stale_alive

@@ -9,6 +9,7 @@ from tests.support.git_test_helpers import init_git_repo as _init_git_repo
 from codex_autorunner.core.flows.models import FlowEventType, FlowRunStatus
 from codex_autorunner.core.flows.reconciler import (
     _with_commit_barrier_recovery,
+    _with_restart_attempt,
     reconcile_flow_run,
 )
 from codex_autorunner.core.flows.store import FlowStore
@@ -31,6 +32,31 @@ def test_commit_barrier_recovery_facet_clears_when_observation_clears() -> None:
 
     assert "commit_barrier" not in updated["recovery"]
     assert "commit_barrier" in state["recovery"]
+
+
+def test_restart_attempt_clears_prior_spawn_pid() -> None:
+    state = {
+        "recovery": {
+            "restart": {
+                "count": 1,
+                "max_attempts": 3,
+                "last_outcome": "spawned",
+                "last_spawn_pid": 999,
+            }
+        }
+    }
+
+    updated = _with_restart_attempt(
+        state,
+        max_attempts=3,
+        reason="stale-alive-commit-barrier-active",
+    )
+
+    restart = updated["recovery"]["restart"]
+    assert restart["count"] == 2
+    assert restart["last_outcome"] == "attempting"
+    assert "last_spawn_pid" not in restart
+    assert "last_spawn_pid" in state["recovery"]["restart"]
 
 
 def test_reconcile_pending_stop_requested_without_worker_marks_stopped(
