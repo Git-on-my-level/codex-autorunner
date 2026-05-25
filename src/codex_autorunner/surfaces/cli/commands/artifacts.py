@@ -90,8 +90,8 @@ def _current_bound_chat_target(root: Path) -> tuple[str, str, str | None] | None
     try:
         hub = load_hub_config(root)
         manifest = load_manifest(hub.manifest_path, hub.root)
-    except (ConfigError, ManifestError, OSError, ValueError):
-        return None
+    except (ConfigError, ManifestError, OSError, ValueError) as exc:
+        raise typer.BadParameter(str(exc)) from exc
     repo = manifest.get_by_path(hub.root, root)
     if repo is None:
         return None

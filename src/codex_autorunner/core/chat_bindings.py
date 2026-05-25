@@ -639,6 +639,7 @@ def _read_orchestration_binding_rows(
                     ON t.thread_target_id = b.target_id
                  WHERE b.disabled_at IS NULL
                    AND b.target_kind = 'thread'
+                   AND COALESCE(t.lifecycle_status, 'active') != 'archived'
                 """).fetchall()
     except sqlite3.OperationalError as exc:
         if "no such table" in str(exc).lower():
