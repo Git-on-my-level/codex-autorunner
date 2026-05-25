@@ -15,6 +15,8 @@ from ...workspace import canonical_workspace_root, workspace_id_for_path
 from .client import ApprovalHandler, CodexAppServerClient, NotificationHandler
 
 EnvBuilder = Callable[[Path, str, Path], Dict[str, str]]
+_ACTIVE_TURN_DRAIN_TIMEOUT_SECONDS = 30.0
+_ACTIVE_TURN_DRAIN_POLL_SECONDS = 0.25
 
 
 def _reap_and_list_codex_app_server_records(
@@ -101,6 +103,7 @@ class WorkspaceAppServerSupervisor:
         startup_timeout_seconds: Optional[float] = None,
         terminate_grace_seconds: Optional[float] = None,
         terminate_kill_seconds: Optional[float] = None,
+        active_turn_drain_timeout_seconds: Optional[float] = None,
         registry_root: Optional[Path] = None,
         runtime_profile: Optional[str] = None,
         max_processes: Optional[int] = 6,
@@ -140,6 +143,11 @@ class WorkspaceAppServerSupervisor:
         self._startup_timeout_seconds = startup_timeout_seconds
         self._terminate_grace_seconds = terminate_grace_seconds
         self._terminate_kill_seconds = terminate_kill_seconds
+        self._active_turn_drain_timeout_seconds = (
+            _ACTIVE_TURN_DRAIN_TIMEOUT_SECONDS
+            if active_turn_drain_timeout_seconds is None
+            else max(0.0, float(active_turn_drain_timeout_seconds))
+        )
         self._registry_root = registry_root
         self._runtime_profile = runtime_profile
         self._max_processes = (
@@ -206,16 +214,7 @@ class WorkspaceAppServerSupervisor:
             self._handles = {}
         for handle in handles:
             try:
-                log_event(
-                    self._logger,
-                    logging.INFO,
-                    "app_server.handle.closing",
-                    reason="close_all",
-                    workspace_id=handle.workspace_id,
-                    workspace_root=str(handle.workspace_root),
-                    last_used_at=handle.last_used_at,
-                )
-                await handle.client.close()
+                await self._close_handle(handle, reason="close_all")
             except (
                 Exception
             ) as exc:  # intentional: best-effort cleanup during close_all
@@ -229,6 +228,7 @@ class WorkspaceAppServerSupervisor:
         closed = 0
         for handle in handles:
             try:
+                active_turns = int(getattr(handle.client, "active_turn_count", 0))
                 log_event(
                     self._logger,
                     logging.INFO,
@@ -236,10 +236,11 @@ class WorkspaceAppServerSupervisor:
                     reason="idle_ttl",
                     workspace_id=handle.workspace_id,
                     workspace_root=str(handle.workspace_root),
+                    active_turns=active_turns,
                     idle_ttl_seconds=self._idle_ttl_seconds,
                     last_used_at=handle.last_used_at,
                 )
-                await handle.client.close()
+                await self._close_handle(handle, reason="idle_ttl")
                 closed += 1
             except (
                 Exception
@@ -269,18 +270,12 @@ class WorkspaceAppServerSupervisor:
                 reason = (
                     "max_handles" if handle.workspace_id == evicted_id else "idle_ttl"
                 )
-                log_event(
-                    self._logger,
-                    logging.INFO,
-                    "app_server.handle.closing",
+                await self._close_handle(
+                    handle,
                     reason=reason,
-                    workspace_id=handle.workspace_id,
-                    workspace_root=str(handle.workspace_root),
                     idle_ttl_seconds=self._idle_ttl_seconds,
                     max_handles=self._max_handles,
-                    last_used_at=handle.last_used_at,
                 )
-                await handle.client.close()
             except Exception as exc:  # intentional: best-effort cleanup during eviction
                 self._logger.debug("Failed to close handle: %s", exc)
                 continue
@@ -365,6 +360,89 @@ class WorkspaceAppServerSupervisor:
             last_used_at_getter=lambda h: h.last_used_at or 0.0,
             active_getter=lambda h: getattr(h.client, "active_turn_count", 0) > 0,
         )
+
+    def _log_handle_closing(
+        self,
+        handle: AppServerHandle,
+        *,
+        reason: str,
+        **fields: Any,
+    ) -> None:
+        active_turns = int(getattr(handle.client, "active_turn_count", 0))
+        if active_turns > 0:
+            log_event(
+                self._logger,
+                logging.WARNING,
+                "app_server.handle.closing_with_active_turns",
+                reason=reason,
+                workspace_id=handle.workspace_id,
+                workspace_root=str(handle.workspace_root),
+                active_turns=active_turns,
+                last_used_at=handle.last_used_at,
+                **fields,
+            )
+        log_event(
+            self._logger,
+            logging.INFO,
+            "app_server.handle.closing",
+            reason=reason,
+            workspace_id=handle.workspace_id,
+            workspace_root=str(handle.workspace_root),
+            active_turns=active_turns,
+            last_used_at=handle.last_used_at,
+            **fields,
+        )
+
+    async def _close_handle(
+        self,
+        handle: AppServerHandle,
+        *,
+        reason: str,
+        **fields: Any,
+    ) -> None:
+        await self._drain_active_turns_before_close(handle, reason=reason, **fields)
+        self._log_handle_closing(handle, reason=reason, **fields)
+        await handle.client.close()
+
+    async def _drain_active_turns_before_close(
+        self,
+        handle: AppServerHandle,
+        *,
+        reason: str,
+        **fields: Any,
+    ) -> None:
+        active_turns = int(getattr(handle.client, "active_turn_count", 0))
+        if active_turns <= 0:
+            return
+        deadline = time.monotonic() + self._active_turn_drain_timeout_seconds
+        log_event(
+            self._logger,
+            logging.INFO,
+            "app_server.shutdown.waiting_for_active_turns",
+            reason=reason,
+            workspace_id=handle.workspace_id,
+            workspace_root=str(handle.workspace_root),
+            active_turns=active_turns,
+            drain_timeout_seconds=self._active_turn_drain_timeout_seconds,
+            **fields,
+        )
+        while active_turns > 0:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                log_event(
+                    self._logger,
+                    logging.WARNING,
+                    "app_server.shutdown.active_turns_deadline_exhausted",
+                    reason=reason,
+                    workspace_id=handle.workspace_id,
+                    workspace_root=str(handle.workspace_root),
+                    active_turns=active_turns,
+                    drain_timeout_seconds=self._active_turn_drain_timeout_seconds,
+                    **fields,
+                )
+                return
+            await asyncio.sleep(min(_ACTIVE_TURN_DRAIN_POLL_SECONDS, remaining))
+            active_turns = int(getattr(handle.client, "active_turn_count", 0))
 
     def active_workspace_ids(self) -> set[str]:
         return set(self._handles.keys())

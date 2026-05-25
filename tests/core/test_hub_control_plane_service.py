@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 from codex_autorunner.core.hub_control_plane import (
     AutomationEventListRequest,
     AutomationJobActionRequest,
@@ -26,6 +28,7 @@ from codex_autorunner.core.hub_control_plane import (
     ExecutionResultRecordRequest,
     ExecutionTimelinePersistRequest,
     HandshakeRequest,
+    HubControlPlaneError,
     HubSharedStateService,
     LatestExecutionLookupRequest,
     NotificationReplyTargetLookupRequest,
@@ -559,6 +562,78 @@ def test_shared_state_service_execution_lifecycle_delegates_to_thread_store(
     assert turn_request.prompt_text == "Second turn"
     assert interrupted.execution is not None
     assert interrupted.execution.status == "interrupted"
+
+
+def test_shared_state_service_create_execution_is_idempotent_for_same_turn_request(
+    tmp_path: Path,
+) -> None:
+    service, thread_target_id = _build_service(tmp_path)
+    turn_request = _test_turn_request(
+        tmp_path,
+        thread_target_id,
+        prompt="Retryable turn",
+        client_turn_id="client-retry",
+    )
+    request = ExecutionCreateRequest.from_mapping(
+        {
+            "thread_target_id": thread_target_id,
+            "prompt": "Retryable turn",
+            "client_request_id": "client-retry",
+            "turn_request": turn_request,
+        }
+    )
+
+    first = service.create_execution(request)
+    duplicate = service.create_execution(request)
+    queue_depth = service.get_queue_depth(
+        QueueDepthRequest.from_mapping({"thread_target_id": thread_target_id})
+    )
+
+    assert first.execution is not None
+    assert duplicate.execution is not None
+    assert duplicate.execution.execution_id == first.execution.execution_id
+    assert duplicate.execution.status == first.execution.status
+    assert queue_depth.queue_depth == 0
+
+
+def test_shared_state_service_rejects_conflicting_duplicate_execution_request(
+    tmp_path: Path,
+) -> None:
+    service, thread_target_id = _build_service(tmp_path)
+    first_request = ExecutionCreateRequest.from_mapping(
+        {
+            "thread_target_id": thread_target_id,
+            "prompt": "First prompt",
+            "client_request_id": "client-retry",
+            "turn_request": _test_turn_request(
+                tmp_path,
+                thread_target_id,
+                prompt="First prompt",
+                client_turn_id="client-retry",
+            ),
+        }
+    )
+    conflicting_request = ExecutionCreateRequest.from_mapping(
+        {
+            "thread_target_id": thread_target_id,
+            "prompt": "Different prompt",
+            "client_request_id": "client-retry",
+            "turn_request": _test_turn_request(
+                tmp_path,
+                thread_target_id,
+                prompt="Different prompt",
+                client_turn_id="client-retry",
+            ),
+        }
+    )
+
+    service.create_execution(first_request)
+
+    with pytest.raises(HubControlPlaneError) as exc_info:
+        service.create_execution(conflicting_request)
+
+    assert exc_info.value.code == "hub_rejected"
+    assert "conflicts with existing execution_id" in str(exc_info.value)
 
 
 def test_shared_state_service_execution_queue_controls_delegate_to_thread_store(

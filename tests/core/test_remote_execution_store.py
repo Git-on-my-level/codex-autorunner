@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import json
+import logging
 import threading
 import time
 from pathlib import Path
@@ -452,6 +454,32 @@ class _TransportFailingClient(_FakeHubClient):
         )
 
 
+class _TransientCreateFailureClient(_FakeHubClient):
+    def __init__(self) -> None:
+        super().__init__()
+        self.failures_remaining = 2
+
+    async def create_execution(self, request):
+        self.calls.append(("create_execution", request))
+        if self.failures_remaining > 0:
+            self.failures_remaining -= 1
+            raise HubControlPlaneError(
+                "transport_failure",
+                "connection reset during create_execution",
+            )
+        return self.execution_response
+
+
+class _CreateRejectedClient(_FakeHubClient):
+    async def create_execution(self, request):
+        self.calls.append(("create_execution", request))
+        raise HubControlPlaneError(
+            "hub_rejected",
+            "thread_target_id is invalid",
+            retryable=False,
+        )
+
+
 class _RejectedClient(_FakeHubClient):
     async def get_execution(self, request):
         self.calls.append(("get_execution", request))
@@ -512,9 +540,14 @@ class _SlowSetExecutionBackendIdClient(_FakeHubClient):
         return None
 
 
-def test_remote_execution_store_translates_transport_failures_to_hub_unavailable() -> (
-    None
-):
+def test_remote_execution_store_translates_transport_failures_to_hub_unavailable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "codex_autorunner.core.hub_control_plane.remote_execution_store."
+        "_EXECUTION_CREATE_RETRY_DEADLINE_SECONDS",
+        0.0,
+    )
     store = RemoteThreadExecutionStore(_TransportFailingClient())
     turn_request = build_test_turn_request(
         managed_thread_id="thread-1",
@@ -529,6 +562,68 @@ def test_remote_execution_store_translates_transport_failures_to_hub_unavailable
     assert "create_execution" in str(exc_info.value)
     assert exc_info.value.details["operation"] == "create_execution"
     assert exc_info.value.details["cause_code"] == "transport_failure"
+
+
+def test_remote_execution_store_retries_create_execution_transport_failures(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    monkeypatch.setattr(
+        "codex_autorunner.core.hub_control_plane.remote_execution_store."
+        "_EXECUTION_CREATE_RETRY_INITIAL_DELAY_SECONDS",
+        0.0,
+    )
+    monkeypatch.setattr(
+        "codex_autorunner.core.hub_control_plane.remote_execution_store.time.sleep",
+        lambda _seconds: None,
+    )
+    client = _TransientCreateFailureClient()
+    store = RemoteThreadExecutionStore(client)
+    caplog.set_level(
+        logging.WARNING,
+        logger="codex_autorunner.core.hub_control_plane.remote_execution_store",
+    )
+    turn_request = build_test_turn_request(
+        managed_thread_id="thread-1",
+        workspace_root="/workspace",
+        prompt="Run this",
+    )
+
+    created = store.create_execution(
+        "thread-1",
+        prompt="Run this",
+        turn_request=turn_request,
+    )
+
+    create_calls = [
+        name for name, _request in client.calls if name == "create_execution"
+    ]
+    retry_events = [json.loads(record.message) for record in caplog.records]
+    assert created.execution_id == "exec-1"
+    assert create_calls == ["create_execution", "create_execution", "create_execution"]
+    assert [event["event"] for event in retry_events] == [
+        "hub_control_plane.create_execution.retrying",
+        "hub_control_plane.create_execution.retrying",
+    ]
+    assert retry_events[0]["attempt"] == 1
+    assert retry_events[0]["cause_code"] == "transport_failure"
+    assert retry_events[0]["wrapped_code"] == "hub_unavailable"
+
+
+def test_remote_execution_store_does_not_retry_rejected_create_execution() -> None:
+    client = _CreateRejectedClient()
+    store = RemoteThreadExecutionStore(client)
+    turn_request = build_test_turn_request(
+        managed_thread_id="thread-1",
+        workspace_root="/workspace",
+        prompt="Run this",
+    )
+
+    with pytest.raises(HubControlPlaneError) as exc_info:
+        store.create_execution("thread-1", prompt="Run this", turn_request=turn_request)
+
+    assert exc_info.value.code == "hub_rejected"
+    assert [name for name, _request in client.calls] == ["create_execution"]
 
 
 def test_remote_execution_store_preserves_non_transport_hub_errors() -> None:

@@ -31,6 +31,7 @@ from .codex_item_normalizers import (
     is_commentary_agent_message,
 )
 from .runtime_payload_shapes import canonicalize_token_usage
+from .runtime_retry_semantics import is_retrying_turn_error
 
 RuntimeStateEventStatus = Literal["ok", "error", "interrupted"]
 
@@ -149,7 +150,8 @@ def normalize_runtime_state_events(raw_event: Any) -> list[RuntimeStateEvent]:
             )
     elif method in {"turn/failed", "turn/error", "error"}:
         failure_message = _extract_error_message(params)
-        terminal_status = "error"
+        if not is_retrying_turn_error(method, params):
+            terminal_status = "error"
     elif method == "item/completed":
         item = params.get("item")
         if (
@@ -192,7 +194,16 @@ def normalize_runtime_state_events(raw_event: Any) -> list[RuntimeStateEvent]:
     if assistant_message_text:
         events.append(AssistantMessage(text=assistant_message_text, source=method))
     if failure_message:
-        events.append(FailureSignal(error=failure_message, source=method))
+        if is_retrying_turn_error(method, params):
+            events.append(
+                ProgressSignal(
+                    kind="runtime_retry",
+                    message=failure_message,
+                    source=method,
+                )
+            )
+        else:
+            events.append(FailureSignal(error=failure_message, source=method))
     if terminal_status is not None:
         events.append(
             TerminalSignal(

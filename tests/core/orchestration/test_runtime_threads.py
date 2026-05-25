@@ -1334,6 +1334,69 @@ async def test_runtime_thread_stream_terminal_event_finishes_before_wait_return(
     assert harness.wait_cancelled.is_set()
 
 
+async def test_runtime_thread_retrying_turn_error_waits_for_later_completion(
+    tmp_path: Path,
+) -> None:
+    @dataclass
+    class _HarnessWithRetryingErrorThenCompletion(_HarnessWithBlockingWait):
+        capabilities: frozenset[str] = frozenset(
+            ["durable_threads", "message_turns", "interrupt", "event_streaming"]
+        )
+
+        async def stream_events(
+            self, workspace_root: Path, conversation_id: str, turn_id: str
+        ):
+            _ = workspace_root, conversation_id, turn_id
+            yield {
+                "message": {
+                    "method": "turn/error",
+                    "params": {
+                        "message": "Reconnecting... 2/5",
+                        "willRetry": True,
+                    },
+                }
+            }
+            yield {"message": {"method": "message.delta", "params": {"delta": "done"}}}
+            yield {
+                "message": {
+                    "method": "turn/completed",
+                    "params": {"status": "completed"},
+                }
+            }
+            await asyncio.Future()
+
+    harness = _HarnessWithRetryingErrorThenCompletion()
+    service = _build_service(tmp_path, harness)
+    workspace_root = tmp_path / "workspace"
+    workspace_root.mkdir()
+    thread = service.create_thread_target("codex", workspace_root)
+
+    started = await begin_runtime_thread_execution(
+        service,
+        MessageRequest(
+            target_id=thread.thread_target_id,
+            target_kind="thread",
+            message_text="user-visible prompt",
+        ),
+    )
+    outcome = await asyncio.wait_for(
+        await_runtime_thread_outcome(
+            started,
+            interrupt_event=None,
+            timeout_seconds=5,
+            execution_error_message="Managed thread execution failed",
+        ),
+        timeout=1,
+    )
+
+    assert outcome.status == "ok"
+    assert outcome.assistant_text == "done"
+    assert outcome.completion_source == "stream_terminal_event"
+    assert outcome.error is None
+    assert harness.interrupt_calls == []
+    assert harness.wait_cancelled.is_set()
+
+
 async def test_runtime_thread_stream_terminal_event_uses_final_output_payload(
     tmp_path: Path,
 ) -> None:

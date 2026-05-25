@@ -9,6 +9,7 @@ from codex_autorunner.core.orchestration.runtime_state_events import (
     AssistantDelta,
     AssistantMessage,
     FailureSignal,
+    ProgressSignal,
     TerminalSignal,
     TokenUsage,
     normalize_runtime_state_events,
@@ -385,3 +386,43 @@ def test_unknown_raw_event_remains_observable_without_terminal_mutation() -> Non
     assert state.failure_cause is None
     assert state.token_usage is None
     assert state.terminal_signals == []
+
+
+def test_retrying_turn_error_is_progress_not_terminal_failure() -> None:
+    raw = {
+        "method": "turn/error",
+        "params": {"message": "Transport lost; retrying", "willRetry": True},
+    }
+
+    events = normalize_runtime_state_events(raw)
+
+    assert events
+    assert any(
+        isinstance(event, ProgressSignal) and event.kind == "runtime_retry"
+        for event in events
+    )
+    assert not any(isinstance(event, FailureSignal) for event in events)
+    assert not any(isinstance(event, TerminalSignal) for event in events)
+
+    state = RuntimeTurnTerminalStateMachine(
+        backend_thread_id="thread-1",
+        backend_turn_id="turn-1",
+    )
+    state.note_raw_event(raw, timestamp="2026-01-01T00:00:00Z")
+
+    assert state.raw_events == [raw]
+    assert state.failure_cause is None
+    assert state.terminal_signals == []
+    assert not state.terminal_signal_waiter().is_set()
+
+
+def test_reconnecting_turn_error_without_retry_flag_is_terminal_failure() -> None:
+    raw = {
+        "method": "turn/error",
+        "params": {"message": "Reconnecting... 5/5", "willRetry": False},
+    }
+
+    events = normalize_runtime_state_events(raw)
+
+    assert any(isinstance(event, FailureSignal) for event in events)
+    assert any(isinstance(event, TerminalSignal) for event in events)

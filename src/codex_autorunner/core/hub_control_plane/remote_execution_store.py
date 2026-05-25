@@ -2,12 +2,15 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import logging
+import time
 from concurrent.futures import TimeoutError as FuturesTimeoutError
 from pathlib import Path
 from typing import Any, Callable, Coroutine, Optional, TypeVar
 
 from ..car_context import CarContextProfile, normalize_car_context_profile
 from ..domain.refs import ScopeRef
+from ..logging_utils import log_event
 from ..orchestration.interfaces import ThreadExecutionStore
 from ..orchestration.models import (
     BusyThreadPolicy,
@@ -54,9 +57,13 @@ from .models import (
 )
 
 ResultT = TypeVar("ResultT")
+_LOGGER = logging.getLogger(__name__)
 _THREAD_TARGET_CREATE_TIMEOUT_SECONDS = 30.0
 _EXECUTION_BACKEND_ID_TIMEOUT_SECONDS = 30.0
 _EXECUTION_RESULT_TIMEOUT_SECONDS = 30.0
+_EXECUTION_CREATE_RETRY_DEADLINE_SECONDS = 180.0
+_EXECUTION_CREATE_RETRY_INITIAL_DELAY_SECONDS = 1.0
+_EXECUTION_CREATE_RETRY_MAX_DELAY_SECONDS = 10.0
 _BACKGROUND_RUNNER = BoundedBackgroundRunner(
     max_workers=8,
     saturation_wait_seconds=0.05,
@@ -179,6 +186,67 @@ class RemoteThreadExecutionStore(ThreadExecutionStore):
                 message=str(exc) or exc.__class__.__name__,
                 details={"cause_type": exc.__class__.__name__},
             ) from exc
+
+    def _run_create_execution_with_retry(
+        self,
+        *,
+        action: Callable[[HubControlPlaneClient], Coroutine[Any, Any, ResultT]],
+    ) -> ResultT:
+        deadline = time.monotonic() + _EXECUTION_CREATE_RETRY_DEADLINE_SECONDS
+        delay = _EXECUTION_CREATE_RETRY_INITIAL_DELAY_SECONDS
+        attempt = 0
+        last_error: HubControlPlaneError | None = None
+        while True:
+            attempt += 1
+            try:
+                return self._run(operation="create_execution", action=action)
+            except HubControlPlaneError as exc:
+                if not self._should_retry_create_execution(exc):
+                    raise
+                last_error = exc
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    details = dict(exc.details)
+                    details.update(
+                        {
+                            "attempts": attempt,
+                            "retry_deadline_seconds": (
+                                _EXECUTION_CREATE_RETRY_DEADLINE_SECONDS
+                            ),
+                        }
+                    )
+                    raise self._hub_unavailable(
+                        operation="create_execution",
+                        message=(
+                            f"retry deadline exhausted after {attempt} attempts: {exc}"
+                        ),
+                        details=details,
+                    ) from exc
+                sleep_seconds = min(delay, remaining)
+                log_event(
+                    _LOGGER,
+                    logging.WARNING,
+                    "hub_control_plane.create_execution.retrying",
+                    attempt=attempt,
+                    delay_seconds=sleep_seconds,
+                    remaining_deadline_seconds=max(0.0, remaining),
+                    cause_code=exc.details.get("cause_code", exc.code),
+                    wrapped_code=exc.code,
+                    cause_message=str(exc),
+                )
+                time.sleep(sleep_seconds)
+                delay = min(
+                    delay * 2.0,
+                    _EXECUTION_CREATE_RETRY_MAX_DELAY_SECONDS,
+                )
+        assert last_error is not None  # pragma: no cover
+        raise last_error
+
+    @staticmethod
+    def _should_retry_create_execution(exc: HubControlPlaneError) -> bool:
+        if not bool(getattr(exc, "retryable", False)):
+            return False
+        return exc.code in {"hub_unavailable", "transport_failure"}
 
     @staticmethod
     def _require_thread(
@@ -429,8 +497,7 @@ class RemoteThreadExecutionStore(ThreadExecutionStore):
             raise RuntimeError(
                 "remote execution creation requires a canonical TurnExecutionRequest"
             )
-        response = self._run(
-            operation="create_execution",
+        response = self._run_create_execution_with_retry(
             action=lambda client: client.create_execution(
                 ExecutionCreateRequest(
                     thread_target_id=thread_target_id,

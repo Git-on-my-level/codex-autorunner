@@ -763,6 +763,42 @@ class TestErrorDecoder:
         assert events[0].error_message == "crash"
         assert state.last_error_message == "crash"
 
+    def test_retrying_turn_error_is_notice_not_failed(self) -> None:
+        state, ctx = _ctx(
+            "turn/error",
+            {"message": "Transport lost; retrying", "willRetry": True},
+        )
+
+        events = self.decoder.decode(
+            "turn/error",
+            {"message": "Transport lost; retrying", "willRetry": True},
+            state,
+            ctx,
+        )
+
+        assert len(events) == 1
+        assert isinstance(events[0], RunNotice)
+        assert events[0].kind == "runtime_retry"
+        assert events[0].message == "Transport lost; retrying"
+        assert state.last_error_message == "Transport lost; retrying"
+
+    def test_reconnecting_turn_error_without_retry_flag_still_fails(self) -> None:
+        state, ctx = _ctx(
+            "turn/error",
+            {"message": "Reconnecting... 5/5", "willRetry": False},
+        )
+
+        events = self.decoder.decode(
+            "turn/error",
+            {"message": "Reconnecting... 5/5", "willRetry": False},
+            state,
+            ctx,
+        )
+
+        assert len(events) == 1
+        assert isinstance(events[0], Failed)
+        assert events[0].error_message == "Reconnecting... 5/5"
+
     def test_generic_error(self) -> None:
         state, ctx = _ctx("error", {"error": {"message": "Auth required"}})
         events = self.decoder.decode(

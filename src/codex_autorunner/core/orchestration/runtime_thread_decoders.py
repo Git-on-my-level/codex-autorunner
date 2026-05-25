@@ -84,6 +84,7 @@ from .runtime_payload_shapes import (
     TokenUsageShape,
     canonicalize_token_usage,
 )
+from .runtime_retry_semantics import is_retrying_turn_error
 
 
 @dataclass
@@ -1201,6 +1202,15 @@ class ErrorDecoder(MessageDecoder):
             ):
                 turn_error_message = "Turn error"
             state.last_error_message = str(turn_error_message)
+            if is_retrying_turn_error(method, params):
+                return [
+                    RunNotice(
+                        timestamp=ts,
+                        kind="runtime_retry",
+                        message=str(turn_error_message),
+                        data={"will_retry": True},
+                    )
+                ]
             return [Failed(timestamp=ts, error_message=str(turn_error_message))]
 
         error = _coerce_dict(params.get("error"))

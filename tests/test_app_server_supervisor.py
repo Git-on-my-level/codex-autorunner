@@ -1,4 +1,6 @@
 import asyncio
+import json
+import logging
 import sys
 import time
 from pathlib import Path
@@ -268,6 +270,120 @@ async def test_prune_idle_skips_active_turn_handles(
 
     assert await supervisor.prune_idle() == 0
     assert "global" in supervisor._handles
+
+
+@pytest.mark.anyio
+async def test_close_all_logs_when_handle_has_active_turns(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    class FakeClient:
+        active_turn_count = 1
+
+        async def start(self) -> None:
+            return
+
+        async def close(self) -> None:
+            return
+
+    monkeypatch.setattr(
+        "codex_autorunner.adapters.app_server.supervisor.CodexAppServerClient",
+        lambda *args, **kwargs: FakeClient(),
+    )
+    logger = logging.getLogger("test.close_all.active_turns")
+    caplog.set_level(logging.INFO, logger=logger.name)
+    supervisor = WorkspaceAppServerSupervisor(
+        [sys.executable, "-c", "print('noop')"],
+        state_root=tmp_path / "state",
+        env_builder=lambda _root, _id, _state: {},
+        logger=logger,
+        active_turn_drain_timeout_seconds=0.0,
+    )
+    workspace = tmp_path / "repo"
+    workspace.mkdir()
+
+    await supervisor.get_client(workspace)
+    await supervisor.close_all()
+
+    events = [json.loads(record.message) for record in caplog.records]
+    active_close_events = [
+        event
+        for event in events
+        if event["event"] == "app_server.handle.closing_with_active_turns"
+    ]
+    assert active_close_events
+    assert active_close_events[0]["active_turns"] == 1
+    assert active_close_events[0]["reason"] == "close_all"
+    deadline_events = [
+        event
+        for event in events
+        if event["event"] == "app_server.shutdown.active_turns_deadline_exhausted"
+    ]
+    assert deadline_events
+
+
+@pytest.mark.anyio
+async def test_close_all_drains_active_turns_before_closing(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    class FakeClient:
+        def __init__(self) -> None:
+            self.active_turn_count = 1
+            self.closed_with_active_turns = False
+
+        async def start(self) -> None:
+            return
+
+        async def close(self) -> None:
+            self.closed_with_active_turns = self.active_turn_count > 0
+
+    clients: list[FakeClient] = []
+
+    def client_factory(*args: Any, **kwargs: Any) -> FakeClient:
+        client = FakeClient()
+        clients.append(client)
+        return client
+
+    monkeypatch.setattr(
+        "codex_autorunner.adapters.app_server.supervisor.CodexAppServerClient",
+        client_factory,
+    )
+    monkeypatch.setattr(
+        "codex_autorunner.adapters.app_server.supervisor."
+        "_ACTIVE_TURN_DRAIN_POLL_SECONDS",
+        0.01,
+    )
+    logger = logging.getLogger("test.close_all.drain")
+    caplog.set_level(logging.INFO, logger=logger.name)
+    supervisor = WorkspaceAppServerSupervisor(
+        [sys.executable, "-c", "print('noop')"],
+        state_root=tmp_path / "state",
+        env_builder=lambda _root, _id, _state: {},
+        logger=logger,
+        active_turn_drain_timeout_seconds=1.0,
+    )
+    workspace = tmp_path / "repo"
+    workspace.mkdir()
+
+    await supervisor.get_client(workspace)
+    close_task = asyncio.create_task(supervisor.close_all())
+    await asyncio.sleep(0.02)
+    clients[0].active_turn_count = 0
+    await close_task
+
+    assert clients[0].closed_with_active_turns is False
+    events = [json.loads(record.message) for record in caplog.records]
+    assert any(
+        event["event"] == "app_server.shutdown.waiting_for_active_turns"
+        for event in events
+    )
+    assert not any(
+        event["event"] == "app_server.shutdown.active_turns_deadline_exhausted"
+        for event in events
+    )
 
 
 @pytest.mark.anyio

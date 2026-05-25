@@ -1428,7 +1428,32 @@ class ManagedThreadStore:
             lifecycle_status = normalize_managed_thread_lifecycle_status(thread_status)
             if lifecycle_status.value != "active":
                 raise ManagedThreadNotActiveError(managed_thread_id, thread_status)
+            if turn_request is not None and turn_request.target_id != managed_thread_id:
+                raise ValueError(
+                    "canonical turn request target_id must match managed_thread_id"
+                )
             self._recover_stale_running_turns(conn, managed_thread_id)
+            existing_row = conn.execute(
+                """
+                SELECT *
+                  FROM orch_thread_executions
+                 WHERE thread_target_id = ?
+                   AND execution_id = ?
+                 LIMIT 1
+                """,
+                (managed_thread_id, managed_turn_id),
+            ).fetchone()
+            if existing_row is not None:
+                existing_request_json = existing_row["turn_request_json"]
+                if (
+                    turn_request is not None
+                    and isinstance(existing_request_json, str)
+                    and existing_request_json != turn_request.to_json()
+                ):
+                    raise ValueError(
+                        "canonical turn request conflicts with existing execution_id"
+                    )
+                return _execution_row_to_record(existing_row)
             with conn:
                 running_exists = conn.execute(
                     """
@@ -1476,10 +1501,6 @@ class ManagedThreadStore:
                         reasoning=reasoning,
                         client_turn_id=client_turn_id,
                         metadata=dict(metadata or {}),
-                    )
-                if turn_request.target_id != managed_thread_id:
-                    raise ValueError(
-                        "canonical turn request target_id must match managed_thread_id"
                     )
                 canonical_queue_payload = {
                     "turn_request": turn_request.to_dict(),
