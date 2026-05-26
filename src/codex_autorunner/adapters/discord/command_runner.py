@@ -30,6 +30,8 @@ from dataclasses import dataclass
 from typing import Any, Awaitable, Callable, Deque, Optional, Protocol, Sequence, Set
 
 from ...core.logging_utils import log_event
+from ...core.orchestration.compatibility import SchemaCompatibilityError
+from .errors import schema_compatibility_user_message
 from .ingress import IngressContext, IngressTiming, RuntimeInteractionEnvelope
 from .interaction_dispatch import (
     execute_ingressed_interaction,
@@ -854,7 +856,7 @@ class CommandRunner:
                 interaction_id=ctx.interaction_id,
                 exc=exc,
             )
-            await self._send_error_followup(ctx)
+            await self._send_error_followup(ctx, exc=exc)
         finally:
             if stall_task is not None:
                 stall_task.cancel()
@@ -969,13 +971,21 @@ class CommandRunner:
                 exc=exc,
             )
 
-    async def _send_error_followup(self, ctx: IngressContext) -> None:
+    async def _send_error_followup(
+        self,
+        ctx: IngressContext,
+        *,
+        exc: BaseException | None = None,
+    ) -> None:
         try:
+            text = "An unexpected error occurred. Please try again later."
+            if isinstance(exc, SchemaCompatibilityError):
+                text = schema_compatibility_user_message(exc)
             await self._service.send_or_respond_ephemeral(
                 interaction_id=ctx.interaction_id,
                 interaction_token=ctx.interaction_token,
                 deferred=ctx.deferred,
-                text="An unexpected error occurred. Please try again later.",
+                text=text,
             )
         except Exception as exc:
             log_event(

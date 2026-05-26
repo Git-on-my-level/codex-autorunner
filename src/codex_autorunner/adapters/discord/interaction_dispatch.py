@@ -18,8 +18,9 @@ import logging
 from typing import Any
 
 from ...core.logging_utils import log_event
+from ...core.orchestration.compatibility import SchemaCompatibilityError
 from .effects import DiscordEffectDeliveryError
-from .errors import DiscordTransientError
+from .errors import DiscordTransientError, schema_compatibility_user_message
 from .ingress import (
     IngressContext,
     InteractionKind,
@@ -52,6 +53,12 @@ async def handle_component_interaction(
         user_msg = exc.user_message or "An error occurred. Please try again later."
         await service.respond_ephemeral(
             ctx.interaction_id, ctx.interaction_token, user_msg
+        )
+    except SchemaCompatibilityError as exc:
+        await service.respond_ephemeral(
+            ctx.interaction_id,
+            ctx.interaction_token,
+            schema_compatibility_user_message(exc),
         )
     except DiscordEffectDeliveryError as exc:
         log_event(
@@ -95,6 +102,12 @@ async def handle_modal_submit_interaction(
             ctx.interaction_id,
             ctx.interaction_token,
             user_msg,
+        )
+    except SchemaCompatibilityError as exc:
+        await service.respond_ephemeral(
+            ctx.interaction_id,
+            ctx.interaction_token,
+            schema_compatibility_user_message(exc),
         )
     except DiscordEffectDeliveryError as exc:
         log_event(
@@ -163,6 +176,8 @@ async def handle_autocomplete_interaction(
             delivery_status=exc.delivery_status,
             exc=exc,
         )
+        await _respond_empty_autocomplete(service, ctx)
+    except SchemaCompatibilityError:
         await _respond_empty_autocomplete(service, ctx)
     except Exception as exc:  # intentional: top-level autocomplete error handler
         log_event(
@@ -250,6 +265,12 @@ async def execute_ingressed_interaction(
     except DiscordTransientError as exc:
         user_msg = exc.user_message or "An error occurred. Please try again later."
         await service.respond_ephemeral(interaction_id, interaction_token, user_msg)
+    except SchemaCompatibilityError as exc:
+        await service.respond_ephemeral(
+            interaction_id,
+            interaction_token,
+            schema_compatibility_user_message(exc),
+        )
     except DiscordEffectDeliveryError as exc:
         log_event(
             service._logger,

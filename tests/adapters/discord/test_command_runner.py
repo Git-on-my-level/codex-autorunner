@@ -18,6 +18,10 @@ from codex_autorunner.adapters.discord.ingress import (
     IngressTiming,
     InteractionKind,
 )
+from codex_autorunner.core.orchestration.compatibility import (
+    SchemaCompatibilityError,
+    evaluate_schema_compatibility,
+)
 
 
 def _make_ctx(
@@ -149,6 +153,17 @@ class _FakeService:
             deferred=deferred,
             text=text,
         )
+
+
+def _schema_compatibility_error() -> SchemaCompatibilityError:
+    return SchemaCompatibilityError(
+        evaluate_schema_compatibility(
+            observed_schema=43,
+            supported_schema=42,
+            process_role="discord",
+            build_id="test-build",
+        )
+    )
 
 
 def _slash_payload(
@@ -644,6 +659,37 @@ async def test_handler_error_sends_error_followup() -> None:
     service._respond_ephemeral.assert_awaited()
     call_args = service._respond_ephemeral.call_args
     assert "unexpected error" in call_args[0][2].lower()
+
+
+@pytest.mark.anyio
+async def test_schema_compatibility_error_sends_actionable_followup() -> None:
+    service = _FakeService()
+
+    async def failing_handler(*args: Any, **kwargs: Any) -> None:
+        raise _schema_compatibility_error()
+
+    service._handle_car_command.side_effect = failing_handler
+
+    runner = CommandRunner(
+        service,
+        config=RunnerConfig(timeout_seconds=5.0),
+        logger=service._logger,
+    )
+    ctx = _make_ctx(command_path=("car", "flow", "start"))
+    payload = _slash_payload(subcommand_name="flow")
+
+    runner.submit(ctx, payload)
+    for _ in range(30):
+        if service._respond_ephemeral.await_count > 0:
+            break
+        await asyncio.sleep(0.005)
+
+    service._respond_ephemeral.assert_awaited()
+    call_args = service._respond_ephemeral.call_args
+    text = call_args[0][2]
+    assert "schema mismatch" in text
+    assert "schema 43" in text
+    assert "schema 42" in text
 
 
 @pytest.mark.anyio

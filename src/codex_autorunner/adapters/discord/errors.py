@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Optional
 
 from ...core.exceptions import PermanentError, TransientError
+from ...core.orchestration.compatibility import SchemaCompatibilityError
 
 
 class DiscordError(Exception):
@@ -38,6 +39,16 @@ class DiscordPermanentError(DiscordAPIError, PermanentError):
 
     recoverable = PermanentError.recoverable
     severity = PermanentError.severity
+
+
+def schema_compatibility_user_message(exc: SchemaCompatibilityError) -> str:
+    evaluation = exc.evaluation
+    return (
+        "CAR runtime schema mismatch: orchestration.sqlite3 is at schema "
+        f"{evaluation.observed_schema}, but this process supports schema "
+        f"{evaluation.supported_schema}. Restart or refresh the CAR hub/runtime, "
+        "then retry the command."
+    )
 
 
 def is_unknown_interaction_error(error: BaseException | str | None) -> bool:

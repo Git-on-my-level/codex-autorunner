@@ -21,6 +21,10 @@ from codex_autorunner.adapters.discord.ingress import (
 from codex_autorunner.adapters.discord.interaction_dispatch import (
     execute_ingressed_interaction,
 )
+from codex_autorunner.core.orchestration.compatibility import (
+    SchemaCompatibilityError,
+    evaluate_schema_compatibility,
+)
 
 
 def _ctx(
@@ -78,6 +82,17 @@ class _FakeService:
         self._handle_approval_component = AsyncMock()
         self.respond_ephemeral = AsyncMock()
         self.respond_autocomplete = AsyncMock()
+
+
+def _schema_compatibility_error() -> SchemaCompatibilityError:
+    return SchemaCompatibilityError(
+        evaluate_schema_compatibility(
+            observed_schema=43,
+            supported_schema=42,
+            process_role="discord",
+            build_id="test-build",
+        )
+    )
 
 
 @pytest.mark.anyio
@@ -295,3 +310,20 @@ async def test_callback_errors_are_logged_separately_from_handler_errors() -> No
     assert callback_events
     assert callback_events[0]["interaction_id"] == "inter-1"
     service.respond_ephemeral.assert_not_awaited()
+
+
+@pytest.mark.anyio
+async def test_slash_schema_compatibility_error_is_actionable() -> None:
+    service = _FakeService()
+    service._handle_car_command.side_effect = _schema_compatibility_error()
+    ctx = _ctx(command_path=("car", "flow", "start"))
+
+    await execute_ingressed_interaction(service, ctx, {})
+
+    service.respond_ephemeral.assert_awaited_once()
+    call_args = service.respond_ephemeral.call_args
+    text = call_args[0][2]
+    assert "schema mismatch" in text
+    assert "schema 43" in text
+    assert "schema 42" in text
+    assert "Restart or refresh" in text
