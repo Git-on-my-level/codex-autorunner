@@ -1,14 +1,17 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Optional
 
-from ..manifest import ManifestError, load_manifest
+from ..manifest import ManifestError
 from .git_utils import git_branch
+from .hub_topology import HubTopologyRepository
 from .managed_thread_store import ManagedThreadStore
 from .pr_bindings import PrBinding, PrBindingStore
+from .state_roots import resolve_hub_manifest_path
 from .text_utils import _mapping, _normalize_text
 
 _BRANCH_METADATA_KEYS = ("head_branch", "branch", "git_branch")
@@ -16,6 +19,17 @@ _THREAD_TARGET_ID_KEYS = ("thread_target_id", "managed_thread_id")
 _CONTEXT_MAPPING_KEYS = ("manual_context", "scm", "scm_context", "context")
 _RECENT_TERMINAL_THREAD_LOOKBACK = timedelta(hours=24)
 _ACTIVE_PR_STATES = ("open", "draft")
+
+
+class PrBindingConfigurationError(ValueError):
+    """Raised when PR binding runtime identity is missing or invalid."""
+
+
+@dataclass(frozen=True)
+class PrBindingRuntimeContext:
+    hub_root: Path
+    workspace_root: Path
+    repo_id: Optional[str]
 
 
 def _parse_timestamp(value: Any) -> Optional[datetime]:
@@ -39,22 +53,62 @@ def _thread_changed_at(thread: Mapping[str, Any]) -> Optional[datetime]:
     return None
 
 
-def find_hub_binding_context(repo_root: Path) -> tuple[Optional[Path], Optional[str]]:
-    current = repo_root.resolve()
-    while True:
-        manifest_path = current / ".codex-autorunner" / "manifest.yml"
-        if manifest_path.exists():
-            try:
-                manifest = load_manifest(manifest_path, current)
-            except ManifestError:
-                return current, None
-            entry = manifest.get_by_path(current, repo_root.resolve())
-            repo_id = entry.id.strip() if entry and isinstance(entry.id, str) else None
-            return current, repo_id
-        parent = current.parent
-        if parent == current:
-            return None, None
-        current = parent
+def find_hub_binding_context(
+    repo_root: Path,
+    *,
+    hub_root: Optional[Path] = None,
+) -> tuple[Optional[Path], Optional[str]]:
+    """Resolve PR binding authority from an explicit hub root.
+
+    When no hub root is supplied, only ``repo_root`` itself is considered a
+    standalone hub. This avoids ancestor walking from a workspace in runtime
+    paths while preserving standalone CLI behavior.
+    """
+    resolved_hub_root = (hub_root or repo_root).resolve()
+    manifest_path = resolve_hub_manifest_path(resolved_hub_root)
+    if not manifest_path.exists():
+        return None, None
+    try:
+        return HubTopologyRepository(
+            hub_root=resolved_hub_root,
+            manifest_path=manifest_path,
+        ).binding_context_for_workspace(repo_root)
+    except ManifestError:
+        return resolved_hub_root, None
+
+
+def pr_binding_runtime_context(
+    *,
+    hub_root: Path,
+    workspace_root: Path,
+) -> PrBindingRuntimeContext:
+    """Resolve binding metadata from the explicit hub-owned control plane."""
+
+    resolved_hub_root = Path(hub_root).resolve()
+    resolved_workspace_root = Path(workspace_root).resolve()
+    manifest_path = resolve_hub_manifest_path(resolved_hub_root)
+    if not manifest_path.exists():
+        raise PrBindingConfigurationError(
+            f"hub manifest not found for PR binding context: {manifest_path}"
+        )
+    try:
+        authoritative_hub_root, repo_id = HubTopologyRepository(
+            hub_root=resolved_hub_root,
+            manifest_path=manifest_path,
+        ).binding_context_for_workspace(resolved_workspace_root)
+    except ManifestError as exc:
+        raise PrBindingConfigurationError(
+            f"hub manifest is invalid for PR binding context: {manifest_path}"
+        ) from exc
+    if authoritative_hub_root is None:
+        raise PrBindingConfigurationError(
+            f"workspace is not registered in hub manifest: {resolved_workspace_root}"
+        )
+    return PrBindingRuntimeContext(
+        hub_root=authoritative_hub_root.resolve(),
+        workspace_root=resolved_workspace_root,
+        repo_id=_normalize_text(repo_id),
+    )
 
 
 def thread_contexts(payload: Mapping[str, Any]) -> tuple[Mapping[str, Any], ...]:
@@ -374,6 +428,9 @@ __all__ = [
     "claim_pr_binding_for_thread",
     "explicit_thread_target_id",
     "find_hub_binding_context",
+    "PrBindingConfigurationError",
+    "PrBindingRuntimeContext",
+    "pr_binding_runtime_context",
     "resolve_head_branch",
     "resolve_thread_target_id",
     "thread_contexts",

@@ -24,6 +24,7 @@ from __future__ import annotations
 import ast
 import importlib.util
 import re
+from collections.abc import Iterable
 from dataclasses import dataclass
 from enum import IntEnum
 from pathlib import Path
@@ -422,6 +423,35 @@ def extract_imports_with_lines(
     return imports
 
 
+def _call_name(node: ast.AST) -> str | None:
+    if isinstance(node, ast.Name):
+        return node.id
+    if isinstance(node, ast.Attribute):
+        parent = _call_name(node.value)
+        return f"{parent}.{node.attr}" if parent else node.attr
+    return None
+
+
+def _root_arg_name(node: ast.AST) -> str | None:
+    if isinstance(node, ast.Name):
+        return node.id
+    if isinstance(node, ast.Attribute):
+        if isinstance(node.value, ast.Name):
+            return f"{node.value.id}.{node.attr}"
+        return node.attr
+    if isinstance(node, ast.Call) and _call_name(node.func) == "Path" and node.args:
+        return _root_arg_name(node.args[0])
+    return None
+
+
+def _iter_calls(source: str) -> Iterable[ast.Call]:
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        return ()
+    return (node for node in ast.walk(tree) if isinstance(node, ast.Call))
+
+
 def collect_python_files(root: Path) -> list[Path]:
     files = []
     for path in root.rglob("*.py"):
@@ -634,6 +664,173 @@ def test_pma_route_boundary_exceptions_are_documented_and_still_used() -> None:
         "PMA route boundary exceptions are no longer used and should be removed:\n"
         + "\n".join(f"{importer} imports {imported}" for importer, imported in stale)
     )
+
+
+# ---------------------------------------------------------------------------
+# Runtime control-plane authority guardrails
+# ---------------------------------------------------------------------------
+
+_CONTROL_PLANE_HOT_ROOTS = (
+    SRC_ROOT / "adapters" / "github",
+    SRC_ROOT / "core" / "scm_automation_service.py",
+    SRC_ROOT / "core" / "publish_executor.py",
+    SRC_ROOT / "core" / "publish_journal.py",
+    SRC_ROOT / "core" / "publish_operation_executors.py",
+    SRC_ROOT / "core" / "publish_operation_factories.py",
+    SRC_ROOT / "core" / "automation" / "executors.py",
+    SRC_ROOT / "core" / "pma_queue.py",
+    SRC_ROOT / "core" / "managed_thread_store.py",
+    SRC_ROOT / "core" / "pr_bindings.py",
+    SRC_ROOT / "core" / "scm_events.py",
+    SRC_ROOT / "core" / "scm_polling_watches.py",
+)
+
+_CONTROL_PLANE_AUTHORITY_ALLOWLIST: set[str] = set()
+
+_FORBIDDEN_AUTHORITY_RESOLVERS = {
+    "find_hub_binding_context",
+    "binding_context_from_root",
+    "pr_binding_store_from_root",
+}
+
+_HOT_STORE_SELECTORS = {
+    "open_orchestration_sqlite",
+    "resolve_orchestration_sqlite_path",
+    "PrBindingStore",
+    "ScmEventStore",
+    "ScmPollingWatchStore",
+    "PublishJournalStore",
+    "AutomationStore",
+    "ManagedThreadStore",
+    "PmaQueue",
+}
+
+_NON_AUTHORITY_ROOT_NAMES = {
+    "checkout_root",
+    "operation_checkout_root",
+    "cwd",
+    "repo_root",
+    "repo_root_arg",
+    "workspace_root",
+    "worktree_root",
+}
+
+
+def _control_plane_hot_files() -> list[Path]:
+    files: list[Path] = []
+    for root in _CONTROL_PLANE_HOT_ROOTS:
+        if root.is_dir():
+            files.extend(collect_python_files(root))
+        elif root.exists():
+            files.append(root)
+    return sorted(set(files))
+
+
+def _file_key(path: Path) -> str:
+    return str(path.relative_to(SRC_ROOT))
+
+
+def test_hot_runtime_paths_do_not_import_parent_walk_authority_resolvers() -> None:
+    violations: list[str] = []
+    for path in _control_plane_hot_files():
+        file_key = _file_key(path)
+        if file_key in _CONTROL_PLANE_AUTHORITY_ALLOWLIST:
+            continue
+        source = path.read_text(encoding="utf-8", errors="replace")
+        try:
+            tree = ast.parse(source)
+        except SyntaxError:
+            continue
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                for alias in node.names:
+                    if alias.name.endswith(".hub_binding_context"):
+                        violations.append(
+                            f"{file_key}:{node.lineno} imports {alias.name}; hot "
+                            "runtime paths must receive hub_root explicitly instead "
+                            "of rediscovering authority from a checkout path."
+                        )
+            elif isinstance(node, ast.ImportFrom):
+                imported_names = {alias.name for alias in node.names}
+                if not imported_names & _FORBIDDEN_AUTHORITY_RESOLVERS:
+                    continue
+                module = node.module or ""
+                if module.endswith("pr_binding_runtime") or module.endswith(
+                    "hub_binding_context"
+                ):
+                    forbidden = ", ".join(
+                        sorted(imported_names & _FORBIDDEN_AUTHORITY_RESOLVERS)
+                    )
+                    violations.append(
+                        f"{file_key}:{node.lineno} imports {forbidden} from "
+                        f"{module}; hot runtime paths must receive hub_root "
+                        "explicitly instead of rediscovering authority from a "
+                        "checkout path."
+                    )
+                elif node.level > 0:
+                    forbidden = ", ".join(
+                        sorted(imported_names & _FORBIDDEN_AUTHORITY_RESOLVERS)
+                    )
+                    violations.append(
+                        f"{file_key}:{node.lineno} imports {forbidden} via a "
+                        "relative import; hot runtime paths must not import "
+                        "parent-walk authority resolvers."
+                    )
+
+    assert not violations, "\n".join(violations)
+
+
+def test_hot_runtime_paths_do_not_call_parent_walk_authority_resolvers() -> None:
+    violations: list[str] = []
+    for path in _control_plane_hot_files():
+        file_key = _file_key(path)
+        if file_key in _CONTROL_PLANE_AUTHORITY_ALLOWLIST:
+            continue
+        source = path.read_text(encoding="utf-8", errors="replace")
+        for call in _iter_calls(source):
+            name = _call_name(call.func)
+            if name is None:
+                continue
+            if name.rsplit(".", 1)[-1] in _FORBIDDEN_AUTHORITY_RESOLVERS:
+                violations.append(
+                    f"{file_key}:{call.lineno} calls {name}; hot runtime paths "
+                    "must not infer the owning hub from a repo/worktree path."
+                )
+
+    assert not violations, "\n".join(violations)
+
+
+def test_hot_publish_and_enqueue_paths_do_not_select_stores_from_checkout_roots() -> (
+    None
+):
+    scoped = [
+        SRC_ROOT / "core" / "publish_operation_executors.py",
+        SRC_ROOT / "core" / "publish_journal.py",
+        SRC_ROOT / "core" / "publish_executor.py",
+        SRC_ROOT / "core" / "scm_automation_service.py",
+        SRC_ROOT / "core" / "automation" / "executors.py",
+        SRC_ROOT / "adapters" / "github" / "publisher.py",
+        SRC_ROOT / "adapters" / "github" / "polling.py",
+    ]
+    violations: list[str] = []
+    for path in [item for item in scoped if item.exists()]:
+        source = path.read_text(encoding="utf-8", errors="replace")
+        file_key = _file_key(path)
+        for call in _iter_calls(source):
+            name = _call_name(call.func)
+            if name is None or name.rsplit(".", 1)[-1] not in _HOT_STORE_SELECTORS:
+                continue
+            root_arg = call.args[0] if call.args else None
+            if root_arg is None:
+                continue
+            arg_name = _root_arg_name(root_arg)
+            if arg_name in _NON_AUTHORITY_ROOT_NAMES:
+                violations.append(
+                    f"{file_key}:{call.lineno} constructs {name} from {arg_name}; "
+                    "publish/enqueue/provider stores must be selected by hub_root."
+                )
+
+    assert not violations, "\n".join(violations)
 
 
 def test_engine_does_not_import_control_plane():

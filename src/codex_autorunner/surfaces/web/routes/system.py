@@ -12,6 +12,7 @@ from ....core.orchestration.execution_history_maintenance import (
     collect_execution_history_database_health,
 )
 from ....core.orchestration.sqlite import (
+    collect_orchestration_control_plane_status,
     evaluate_current_orchestration_compatibility,
     refresh_orchestration_process_heartbeat,
 )
@@ -94,6 +95,12 @@ def build_system_routes() -> APIRouter:
             )
             compatibility_ok = compatibility.compatible
             compatibility_payload = compatibility.to_dict()
+            control_plane_status = await asyncio.to_thread(
+                collect_orchestration_control_plane_status,
+                config.root,
+                process_role="hub",
+                durable=bool(getattr(config, "durable_writes", False)),
+            )
             if compatibility_ok:
                 await asyncio.to_thread(
                     refresh_orchestration_process_heartbeat,
@@ -120,6 +127,7 @@ def build_system_routes() -> APIRouter:
                     last_housekeeping if isinstance(last_housekeeping, dict) else None
                 ),
             )
+            orchestration_health["control_plane"] = control_plane_status
         response: dict = {
             "status": "ok" if compatibility_ok else "restart_required",
             "mode": mode,

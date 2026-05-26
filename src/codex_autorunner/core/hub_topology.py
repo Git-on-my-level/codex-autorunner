@@ -18,10 +18,10 @@ from .destinations import (
     default_local_destination,
     resolve_effective_repo_destination,
 )
-from .git_utils import git_available, git_is_clean
+from .git_utils import git_available, git_branch, git_is_clean
 from .locks import DEFAULT_RUNNER_CMD_HINTS, assess_lock, process_alive
 from .state import RunnerState, load_state, now_iso
-from .state_roots import resolve_repo_runner_state_db_path
+from .state_roots import ORCHESTRATION_DB_FILENAME, resolve_repo_runner_state_db_path
 from .utils import atomic_write
 
 logger = logging.getLogger("codex_autorunner.hub_topology")
@@ -61,6 +61,91 @@ class LockStatus(str, enum.Enum):
     UNLOCKED = "unlocked"
     LOCKED_ALIVE = "locked_alive"
     LOCKED_STALE = "locked_stale"
+
+
+class ControlPlaneRole(str, enum.Enum):
+    HUB_OWNED = "hub_owned"
+    REPO_LOCAL_DATA = "repo_local_data"
+    STANDALONE_HUB = "standalone_hub"
+    FOREIGN = "foreign"
+    ARCHIVED = "archived"
+
+
+@dataclasses.dataclass(frozen=True)
+class NonAuthoritativeArtifact:
+    kind: str
+    path: Path
+    reason: str
+
+    def to_dict(self, hub_root: Path) -> Dict[str, object]:
+        try:
+            path: Path | str = self.path.relative_to(hub_root)
+        except ValueError:
+            path = self.path
+        return {
+            "kind": self.kind,
+            "path": str(path),
+            "reason": self.reason,
+        }
+
+
+@dataclasses.dataclass(frozen=True)
+class WorkspaceRegistryEntry:
+    hub_root: Path
+    control_plane_id: str
+    authoritative_hub_root: Optional[Path]
+    repo_id: Optional[str]
+    workspace_root: Path
+    worktree_root: Optional[Path]
+    repo_slug: Optional[str]
+    kind: str
+    worktree_of: Optional[str]
+    resource_kind: str
+    enabled: bool
+    has_car_state: bool
+    default_branch: Optional[str]
+    current_branch_hint: Optional[str]
+    thread_target_ids: Tuple[str, ...]
+    control_plane_role: ControlPlaneRole
+    authority_reason: str
+    manifest_source: Optional[Path]
+    non_authoritative_artifacts: Tuple[NonAuthoritativeArtifact, ...]
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
+
+    def to_dict(self) -> Dict[str, object]:
+        return {
+            "hub_root": str(self.hub_root),
+            "control_plane_id": self.control_plane_id,
+            "authoritative_hub_root": (
+                str(self.authoritative_hub_root)
+                if self.authoritative_hub_root is not None
+                else None
+            ),
+            "repo_id": self.repo_id,
+            "workspace_root": str(self.workspace_root),
+            "worktree_root": str(self.worktree_root) if self.worktree_root else None,
+            "repo_slug": self.repo_slug,
+            "kind": self.kind,
+            "worktree_of": self.worktree_of,
+            "resource_kind": self.resource_kind,
+            "enabled": self.enabled,
+            "has_car_state": self.has_car_state,
+            "default_branch": self.default_branch,
+            "current_branch_hint": self.current_branch_hint,
+            "thread_target_ids": list(self.thread_target_ids),
+            "control_plane_role": self.control_plane_role.value,
+            "authority_reason": self.authority_reason,
+            "manifest_source": (
+                str(self.manifest_source) if self.manifest_source is not None else None
+            ),
+            "non_authoritative_artifacts": [
+                artifact.to_dict(self.hub_root)
+                for artifact in self.non_authoritative_artifacts
+            ],
+            "created_at": self.created_at,
+            "updated_at": self.updated_at,
+        }
 
 
 @dataclasses.dataclass
@@ -261,6 +346,113 @@ class HubTopologyRepository:
         repos_by_id = {entry.id: entry for entry in manifest.repos}
         return build_repo_snapshot(record, repos_by_id)
 
+    @property
+    def hub_root(self) -> Path:
+        return self._hub_root
+
+    @property
+    def control_plane_id(self) -> str:
+        return self._hub_root.resolve().as_posix()
+
+    def workspace_registry(self) -> List[WorkspaceRegistryEntry]:
+        manifest = self.load_manifest()
+        entries: List[WorkspaceRegistryEntry] = []
+        for repo in manifest.repos:
+            workspace_root = (self._hub_root / repo.path).resolve()
+            entries.append(
+                self._workspace_entry_for_manifest_repo(
+                    repo,
+                    workspace_root=workspace_root,
+                    role=ControlPlaneRole.HUB_OWNED,
+                    authority_reason="workspace is declared in the hub manifest",
+                )
+            )
+        return entries
+
+    def classify_workspace_path(self, path: Path) -> WorkspaceRegistryEntry:
+        """Classify an observed path without letting that path choose authority."""
+        observed = path.resolve()
+        manifest = self.load_manifest()
+        entry = manifest.get_by_path(self._hub_root, observed)
+        if entry is not None:
+            return self._workspace_entry_for_manifest_repo(
+                entry,
+                workspace_root=observed,
+                role=ControlPlaneRole.HUB_OWNED,
+                authority_reason="workspace is declared in the hub manifest",
+            )
+
+        role = ControlPlaneRole.FOREIGN
+        reason = "path is not declared in the hub manifest"
+        try:
+            observed.relative_to(self._hub_root.resolve())
+        except ValueError:
+            pass
+        else:
+            if observed.name in {"archive", "archives", "retired"} or any(
+                part in {"archive", "archives", "retired"} for part in observed.parts
+            ):
+                role = ControlPlaneRole.ARCHIVED
+                reason = "path appears under an archived workspace area"
+            elif observed != self._hub_root.resolve():
+                role = ControlPlaneRole.REPO_LOCAL_DATA
+                reason = (
+                    "path is under this hub but is not a manifest workspace; "
+                    "local CAR files are data only"
+                )
+
+        if observed == self._hub_root.resolve() and self._manifest_path.exists():
+            role = ControlPlaneRole.STANDALONE_HUB
+            reason = "path is the explicitly configured hub root"
+
+        return WorkspaceRegistryEntry(
+            hub_root=self._hub_root.resolve(),
+            control_plane_id=self.control_plane_id,
+            authoritative_hub_root=(
+                self._hub_root.resolve()
+                if role in {ControlPlaneRole.HUB_OWNED, ControlPlaneRole.STANDALONE_HUB}
+                else None
+            ),
+            repo_id=None,
+            workspace_root=observed,
+            worktree_root=None,
+            repo_slug=None,
+            kind="unknown",
+            worktree_of=None,
+            resource_kind="workspace",
+            enabled=False,
+            has_car_state=(observed / ".codex-autorunner").exists(),
+            default_branch=None,
+            current_branch_hint=_safe_git_branch(observed),
+            thread_target_ids=(),
+            control_plane_role=role,
+            authority_reason=reason,
+            manifest_source=(
+                self._manifest_path if self._manifest_path.exists() else None
+            ),
+            non_authoritative_artifacts=tuple(
+                _non_authoritative_artifacts(
+                    observed,
+                    authoritative_hub_root=(
+                        self._hub_root.resolve()
+                        if role == ControlPlaneRole.STANDALONE_HUB
+                        else None
+                    ),
+                )
+            ),
+        )
+
+    def binding_context_for_workspace(
+        self, workspace_root: Path
+    ) -> tuple[Optional[Path], Optional[str]]:
+        entry = self.classify_workspace_path(workspace_root)
+        if entry.control_plane_role not in {
+            ControlPlaneRole.HUB_OWNED,
+            ControlPlaneRole.STANDALONE_HUB,
+        }:
+            return None, None
+        return entry.authoritative_hub_root, entry.repo_id
+
     def resolve_workspace_archive_target(
         self,
         workspace_root: Path,
@@ -297,6 +489,90 @@ class HubTopologyRepository:
             initialized=(repo_path / ".codex-autorunner" / "tickets").exists(),
             init_error=None,
         )
+
+    def _workspace_entry_for_manifest_repo(
+        self,
+        repo: ManifestRepo,
+        *,
+        workspace_root: Path,
+        role: ControlPlaneRole,
+        authority_reason: str,
+    ) -> WorkspaceRegistryEntry:
+        return WorkspaceRegistryEntry(
+            hub_root=self._hub_root.resolve(),
+            control_plane_id=self.control_plane_id,
+            authoritative_hub_root=self._hub_root.resolve(),
+            repo_id=repo.id,
+            workspace_root=workspace_root,
+            worktree_root=workspace_root if repo.kind == "worktree" else None,
+            repo_slug=None,
+            kind=repo.kind,
+            worktree_of=repo.worktree_of,
+            resource_kind="worktree" if repo.kind == "worktree" else "repo",
+            enabled=repo.enabled,
+            has_car_state=(workspace_root / ".codex-autorunner").exists(),
+            default_branch=repo.branch if repo.kind == "base" else None,
+            current_branch_hint=_safe_git_branch(workspace_root),
+            thread_target_ids=(),
+            control_plane_role=role,
+            authority_reason=authority_reason,
+            manifest_source=self._manifest_path,
+            non_authoritative_artifacts=tuple(
+                _non_authoritative_artifacts(
+                    workspace_root,
+                    authoritative_hub_root=(
+                        self._hub_root.resolve()
+                        if (
+                            role == ControlPlaneRole.STANDALONE_HUB
+                            or workspace_root.resolve() == self._hub_root.resolve()
+                        )
+                        else None
+                    ),
+                )
+            ),
+        )
+
+
+def _safe_git_branch(workspace_root: Path) -> Optional[str]:
+    if not workspace_root.exists():
+        return None
+    try:
+        return git_branch(workspace_root)
+    except Exception:
+        return None
+
+
+def _non_authoritative_artifacts(
+    workspace_root: Path,
+    *,
+    authoritative_hub_root: Optional[Path],
+) -> List[NonAuthoritativeArtifact]:
+    artifacts: List[NonAuthoritativeArtifact] = []
+    state_root = workspace_root / ".codex-autorunner"
+    candidates = [
+        (
+            "manifest",
+            state_root / "manifest.yml",
+            "workspace manifest is data unless this process was launched as that hub",
+        ),
+        (
+            "orchestration_db",
+            state_root / ORCHESTRATION_DB_FILENAME,
+            "workspace orchestration database is not runtime authority for this hub",
+        ),
+    ]
+    for kind, candidate, reason in candidates:
+        if not candidate.exists():
+            continue
+        if (
+            authoritative_hub_root is not None
+            and workspace_root.resolve() == authoritative_hub_root.resolve()
+        ):
+            continue
+        artifacts.append(
+            NonAuthoritativeArtifact(kind=kind, path=candidate.resolve(), reason=reason)
+        )
+    return artifacts
 
 
 def read_lock_status(lock_path: Path) -> LockStatus:

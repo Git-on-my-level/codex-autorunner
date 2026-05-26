@@ -1327,6 +1327,10 @@ def build_notify_chat_executor(
 
         targets = _coerce_int((outcome or {}).get("targets", 0))
         published = _coerce_int((outcome or {}).get("published", 0))
+        if delivery == "primary_pma" and targets <= 0 and published <= 0:
+            raise TerminalPublishError(
+                "notify_chat primary_pma delivery found no configured repo-level target"
+            )
         result: dict[str, Any] = {
             "delivery": delivery,
             "repo_id": repo_id,

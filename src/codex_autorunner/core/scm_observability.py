@@ -16,6 +16,7 @@ from .time_utils import now_iso
 
 SCM_AUDIT_INGEST = "scm.ingest"
 SCM_AUDIT_BINDING_RESOLVED = "scm.binding_resolved"
+SCM_AUDIT_BINDING_DELIVERY_FAILED = "scm.binding_delivery_failed"
 SCM_AUDIT_ROUTED_INTENT = "scm.routed_intent"
 SCM_AUDIT_PUBLISH_CREATED = "scm.publish_created"
 SCM_AUDIT_PUBLISH_FINISHED = "scm.publish_finished"
@@ -292,6 +293,7 @@ class ScmAuditRecorder:
 
 __all__ = [
     "SCM_AUDIT_BINDING_RESOLVED",
+    "SCM_AUDIT_BINDING_DELIVERY_FAILED",
     "SCM_AUDIT_INGEST",
     "SCM_AUDIT_PUBLISH_CREATED",
     "SCM_AUDIT_PUBLISH_FINISHED",

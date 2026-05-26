@@ -51,6 +51,27 @@ def test_remote_hub_bootstrap_claim_creates_http_only_session(tmp_path: Path) ->
     )
 
 
+def test_health_reports_control_plane_schema_and_compatibility(tmp_path: Path) -> None:
+    hub_root = tmp_path / "hub"
+    seed_hub_files(hub_root, force=True)
+    client = TestClient(create_hub_app(hub_root))
+
+    response = client.get("/health")
+
+    assert response.status_code == 200
+    payload = response.json()
+    control_plane = payload["orchestration"]["control_plane"]
+    assert control_plane["db_exists"] is True
+    assert (
+        control_plane["schema_generation"] == control_plane["target_schema_generation"]
+    )
+    assert control_plane["compatibility"]["status"] == "compatible"
+    assert (
+        control_plane["metadata"]["schema_generation"]
+        == control_plane["schema_generation"]
+    )
+
+
 def test_bootstrap_token_is_single_use(tmp_path: Path) -> None:
     hub_root = tmp_path / "hub"
     seed_hub_files(hub_root, force=True)

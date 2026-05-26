@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import sqlite3
 from dataclasses import dataclass
@@ -16,9 +17,14 @@ from codex_autorunner.adapters.github.polling import (
     GitHubScmPollingService,
 )
 from codex_autorunner.adapters.github.polling_events import emit_new_conditions
+from codex_autorunner.core.automation.store import AutomationStore
 from codex_autorunner.core.config import CONFIG_FILENAME, DEFAULT_HUB_CONFIG
 from codex_autorunner.core.managed_thread_store import ManagedThreadStore
-from codex_autorunner.core.orchestration.sqlite import open_orchestration_sqlite
+from codex_autorunner.core.orchestration.migrations import ORCHESTRATION_SCHEMA_VERSION
+from codex_autorunner.core.orchestration.sqlite import (
+    open_orchestration_sqlite,
+    resolve_orchestration_sqlite_path,
+)
 from codex_autorunner.core.pr_binding_runtime import upsert_pr_binding
 from codex_autorunner.core.pr_bindings import PrBinding, PrBindingStore
 from codex_autorunner.core.publish_executor import PublishOperationProcessor
@@ -367,6 +373,61 @@ def _write_manifest(hub_root: Path, *, repo_rel: str, repo_id: str = "repo-1") -
         + "\n",
         encoding="utf-8",
     )
+
+
+def _write_stale_local_control_plane(root: Path) -> Path:
+    state_dir = root / ".codex-autorunner"
+    state_dir.mkdir(parents=True, exist_ok=True)
+    (state_dir / "manifest.yml").write_text(
+        "\n".join(
+            [
+                "version: 3",
+                "repos:",
+                "  - id: stale-local",
+                "    path: .",
+                "    enabled: true",
+                "    auto_run: false",
+                "    kind: base",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    db_path = state_dir / "orchestration.sqlite3"
+    conn = sqlite3.connect(db_path)
+    try:
+        with conn:
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS orch_schema_migrations (
+                    version INTEGER PRIMARY KEY,
+                    name TEXT NOT NULL,
+                    applied_at TEXT NOT NULL
+                )
+                """)
+            conn.execute(
+                """
+                INSERT OR REPLACE INTO orch_schema_migrations(version, name, applied_at)
+                VALUES (?, ?, ?)
+                """,
+                (
+                    ORCHESTRATION_SCHEMA_VERSION + 100,
+                    "future-stale-local",
+                    "2026-03-30T00:00:00Z",
+                ),
+            )
+            conn.execute(
+                "CREATE TABLE IF NOT EXISTS stale_sentinel (id TEXT PRIMARY KEY)"
+            )
+            conn.execute(
+                "INSERT OR IGNORE INTO stale_sentinel(id) VALUES ('untouched')"
+            )
+    finally:
+        conn.close()
+    return db_path
+
+
+def _sha256_file(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
 class _SimpleOutboxRecord:
@@ -895,7 +956,7 @@ def test_arm_watch_backfills_recent_review_comments_immediately(
     monkeypatch.setattr(
         GitHubScmPollingService,
         "_build_automation_service",
-        lambda self, reaction_config=None: _AutomationServiceFake(  # type: ignore[misc]
+        lambda self, reaction_config=None, checkout_root=None: _AutomationServiceFake(  # type: ignore[misc]
             tmp_path,
             reaction_config=reaction_config,
         ),
@@ -967,7 +1028,7 @@ def test_arm_watch_applies_post_open_boost_interval(
     monkeypatch.setattr(
         GitHubScmPollingService,
         "_build_automation_service",
-        lambda self, reaction_config=None: _AutomationServiceFake(  # type: ignore[misc]
+        lambda self, reaction_config=None, checkout_root=None: _AutomationServiceFake(  # type: ignore[misc]
             tmp_path,
             reaction_config=reaction_config,
         ),
@@ -1050,7 +1111,7 @@ def test_process_due_watches_applies_post_open_boost_scenarios(
     monkeypatch.setattr(
         GitHubScmPollingService,
         "_build_automation_service",
-        lambda self, reaction_config=None: _AutomationServiceFake(  # type: ignore[misc]
+        lambda self, reaction_config=None, checkout_root=None: _AutomationServiceFake(  # type: ignore[misc]
             tmp_path,
             reaction_config=reaction_config,
         ),
@@ -1269,7 +1330,7 @@ def test_arm_watch_backfill_uses_current_arm_time_for_reactivated_watch(
     monkeypatch.setattr(
         GitHubScmPollingService,
         "_build_automation_service",
-        lambda self, reaction_config=None: _AutomationServiceFake(  # type: ignore[misc]
+        lambda self, reaction_config=None, checkout_root=None: _AutomationServiceFake(  # type: ignore[misc]
             tmp_path,
             reaction_config=reaction_config,
         ),
@@ -1465,7 +1526,7 @@ def test_process_due_watches_emits_only_new_review_and_check_transitions(
     monkeypatch.setattr(
         GitHubScmPollingService,
         "_build_automation_service",
-        lambda self, reaction_config=None: _AutomationServiceFake(  # type: ignore[misc]
+        lambda self, reaction_config=None, checkout_root=None: _AutomationServiceFake(  # type: ignore[misc]
             tmp_path,
             reaction_config=reaction_config,
         ),
@@ -1665,7 +1726,7 @@ def test_process_due_watches_ignores_ambiguous_old_check_failure_on_new_head(
     monkeypatch.setattr(
         GitHubScmPollingService,
         "_build_automation_service",
-        lambda self, reaction_config=None: _AutomationServiceFake(  # type: ignore[misc]
+        lambda self, reaction_config=None, checkout_root=None: _AutomationServiceFake(  # type: ignore[misc]
             tmp_path,
             reaction_config=reaction_config,
         ),
@@ -1817,7 +1878,7 @@ def test_process_due_watches_emits_new_pr_comment_and_inline_review_comment(
     monkeypatch.setattr(
         GitHubScmPollingService,
         "_build_automation_service",
-        lambda self, reaction_config=None: _AutomationServiceFake(  # type: ignore[misc]
+        lambda self, reaction_config=None, checkout_root=None: _AutomationServiceFake(  # type: ignore[misc]
             tmp_path,
             reaction_config=reaction_config,
         ),
@@ -1857,6 +1918,17 @@ def test_process_due_watches_reacts_then_wakes_thread_and_notifies_bound_chat(
     hub_root = tmp_path / "hub"
     workspace_root = hub_root / "repo"
     workspace_root.mkdir(parents=True)
+    # Manual reproduction for this regression:
+    # 1. Start a hub whose manifest owns the worktree and disable webhooks.
+    # 2. Place a stale .codex-autorunner/manifest.yml plus future-generation
+    #    orchestration.sqlite3 inside the worktree.
+    # 3. Leave a GitHub PR review comment and run the polling processor.
+    # 4. Inspect the hub DB, not the worktree DB:
+    #    sqlite3 "$HUB/.codex-autorunner/orchestration.sqlite3" \
+    #      "select * from orch_pr_bindings; select * from orch_scm_events; \
+    #       select * from orch_publish_operations;"
+    stale_local_db = _write_stale_local_control_plane(workspace_root)
+    stale_local_digest = _sha256_file(stale_local_db)
     write_test_config(
         hub_root / CONFIG_FILENAME,
         DEFAULT_HUB_CONFIG,
@@ -1876,67 +1948,31 @@ def test_process_due_watches_reacts_then_wakes_thread_and_notifies_bound_chat(
         repo_id="repo-1",
         metadata={"head_branch": "feature/scm-polling"},
     )
-    binding = PrBindingStore(hub_root).upsert_binding(
-        provider="github",
-        repo_slug="acme/widgets",
-        repo_id="repo-1",
-        pr_number=17,
-        pr_state=pr_state,
-        head_branch="feature/scm-polling",
-        base_branch="main",
-        thread_target_id=str(thread["managed_thread_id"]),
-    )
     watch_store = ScmPollingWatchStore(hub_root)
-    watch_store.upsert_watch(
-        provider="github",
-        binding_id=binding.binding_id,
-        repo_slug=binding.repo_slug,
-        repo_id=binding.repo_id,
-        pr_number=binding.pr_number,
-        workspace_root=str(workspace_root.resolve()),
-        thread_target_id=str(thread["managed_thread_id"]),
-        poll_interval_seconds=90,
-        next_poll_at="2026-03-30T00:00:00Z",
-        expires_at="2099-03-30T01:00:00Z",
-        reaction_config={"enabled": True},
-        snapshot={
-            "head_sha": "oldsha",
-            "pr_state": pr_state,
-            "review_thread_comments": {},
-        },
-    )
 
-    def _factory(repo_root: Path, raw_config=None) -> _GitHubServiceStub:
-        return _GitHubServiceStub(
+    review_threads_payload: list[dict[str, object]] = []
+
+    class _DiscoverThenPollGitHubService(_DiscoveringGitHubServiceStub):
+        def __init__(self, repo_root: Path, raw_config=None) -> None:
+            super().__init__(
+                repo_root,
+                raw_config,
+                hub_root=hub_root,
+                repo_id="repo-1",
+                repo_slug="acme/widgets",
+                pr_number=17,
+                head_branch="feature/scm-polling",
+                pr_state=pr_state,
+            )
+
+        def pr_review_threads(self, *, owner: str, repo: str, number: int, cwd=None):
+            _ = owner, repo, number, cwd
+            return list(review_threads_payload)
+
+    def _factory(repo_root: Path, raw_config=None) -> _DiscoverThenPollGitHubService:
+        return _DiscoverThenPollGitHubService(
             repo_root,
             raw_config,
-            pr_view_payload={
-                "state": "OPEN",
-                "isDraft": pr_state == "draft",
-                "headRefOid": "newsha",
-                "author": {"login": "pr-author"},
-            },
-            reviews_payload=[],
-            checks_payload=[],
-            issue_comments_payload=[],
-            review_threads_payload=[
-                {
-                    "thread_id": "thread-1",
-                    "isResolved": False,
-                    "comments": [
-                        {
-                            "comment_id": "PRRC_kwDOAcmeNonNumeric",
-                            "body": "Please cover the inline review wakeup path too.",
-                            "author_login": "reviewer",
-                            "author_type": "User",
-                            "html_url": "https://github.com/acme/widgets/pull/17#discussion_r2844",
-                            "path": "src/codex_autorunner/adapters/github/polling.py",
-                            "line": 196,
-                            "updated_at": "2026-03-30T00:04:00Z",
-                        }
-                    ],
-                }
-            ],
         )
 
     automation_config = _polling_config()
@@ -1974,7 +2010,7 @@ def test_process_due_watches_reacts_then_wakes_thread_and_notifies_bound_chat(
         journal,
         executors={
             "react_pr_review_comment": build_react_pr_review_comment_executor(
-                repo_root=hub_root,
+                checkout_root=hub_root,
                 raw_config=automation_config,
                 github_service_factory=_ReactionGitHubService,
             ),
@@ -2007,7 +2043,7 @@ def test_process_due_watches_reacts_then_wakes_thread_and_notifies_bound_chat(
     monkeypatch.setattr(
         GitHubScmPollingService,
         "_build_automation_service",
-        lambda self, reaction_config=None: _AutomationWrapper(),  # type: ignore[misc]
+        lambda self, reaction_config=None, checkout_root=None: _AutomationWrapper(),  # type: ignore[misc]
     )
 
     service = GitHubScmPollingService(
@@ -2018,9 +2054,60 @@ def test_process_due_watches_reacts_then_wakes_thread_and_notifies_bound_chat(
         event_store=ScmEventStore(hub_root),
     )
 
+    discovery_result = service.process(limit=10)
+    assert discovery_result["candidate_workspaces"] == 1
+    assert discovery_result["bindings_discovered"] == 1
+    assert discovery_result["watches_armed"] == 1
+
+    discovered_binding = PrBindingStore(hub_root).get_binding_by_pr(
+        provider="github",
+        repo_slug="acme/widgets",
+        pr_number=17,
+    )
+    assert discovered_binding is not None
+    assert discovered_binding.thread_target_id == thread["managed_thread_id"]
+    discovered_watch = watch_store.get_watch(
+        provider="github",
+        binding_id=discovered_binding.binding_id,
+    )
+    assert discovered_watch is not None
+    assert discovered_watch.state == "active"
+
+    watch_store.refresh_watch(
+        watch_id=discovered_watch.watch_id,
+        next_poll_at="2026-03-30T00:00:00Z",
+        snapshot={
+            "head_sha": "oldsha",
+            "pr_state": pr_state,
+            "review_thread_comments": {},
+        },
+    )
+    review_threads_payload[:] = [
+        {
+            "thread_id": "thread-1",
+            "isResolved": False,
+            "comments": [
+                {
+                    "comment_id": "PRRC_kwDOAcmeNonNumeric",
+                    "body": "Please cover the inline review wakeup path too.",
+                    "author_login": "reviewer",
+                    "author_type": "User",
+                    "html_url": "https://github.com/acme/widgets/pull/17#discussion_r2844",
+                    "path": "src/codex_autorunner/adapters/github/polling.py",
+                    "line": 196,
+                    "updated_at": "2026-03-30T00:04:00Z",
+                }
+            ],
+        }
+    ]
+
     result = service.process_due_watches(limit=10)
 
     assert result["events_emitted"] == 1
+    hub_db_path = resolve_orchestration_sqlite_path(hub_root)
+    assert hub_db_path.exists()
+    assert stale_local_db != hub_db_path
+    assert _sha256_file(stale_local_db) == stale_local_digest
     assert [operation.operation_kind for operation in processed_operations] == [
         "react_pr_review_comment",
         "enqueue_managed_turn",
@@ -2049,6 +2136,49 @@ def test_process_due_watches_reacts_then_wakes_thread_and_notifies_bound_chat(
     assert confirmed[0].response["progress_start"]["targets"] == 1
     assert confirmed[0].response["progress_start"]["published"] == 1
     assert reaction_calls == [("acme", "widgets", str(hub_root), 2844, "eyes")]
+
+    hub_binding = PrBindingStore(hub_root).get_binding_by_pr(
+        provider="github",
+        repo_slug="acme/widgets",
+        pr_number=17,
+    )
+    assert hub_binding is not None
+    assert hub_binding.thread_target_id == thread["managed_thread_id"]
+    hub_watch = ScmPollingWatchStore(hub_root).get_watch(
+        provider="github",
+        binding_id=hub_binding.binding_id,
+    )
+    assert hub_watch is not None
+    assert hub_watch.state == "active"
+    hub_events = ScmEventStore(hub_root).list_events(
+        provider="github",
+        event_type="pull_request_review_comment",
+        limit=10,
+    )
+    assert len(hub_events) == 1
+    assert hub_events[0].payload["comment_id"] == "PRRC_kwDOAcmeNonNumeric"
+    automation_events = AutomationStore(hub_root).list_events(limit=10)
+    assert any(
+        event.event_id == f"scm:{hub_events[0].event_id}" for event in automation_events
+    )
+    automation_jobs = AutomationStore(hub_root).list_jobs(limit=10, order="newest")
+    assert automation_jobs
+    hub_operations = PublishJournalStore(hub_root).list_operations(limit=10)
+    assert {operation.operation_kind for operation in hub_operations} >= {
+        "react_pr_review_comment",
+        "enqueue_managed_turn",
+        "notify_chat",
+    }
+    with open_orchestration_sqlite(hub_root, durable=True, migrate=False) as conn:
+        audit_actions = {
+            row["action_type"]
+            for row in conn.execute(
+                "SELECT action_type FROM orch_audit_entries"
+            ).fetchall()
+        }
+    assert {"scm.binding_resolved", "scm.routed_intent", "scm.publish_created"} <= (
+        audit_actions
+    )
 
     turns = _thread_store.list_turns(thread["managed_thread_id"], limit=10)
     assert len(turns) == 1
@@ -2204,7 +2334,7 @@ def test_process_due_watches_keeps_distinct_bound_notices_for_multiple_review_co
         journal,
         executors={
             "react_pr_review_comment": build_react_pr_review_comment_executor(
-                repo_root=hub_root,
+                checkout_root=hub_root,
                 raw_config=automation_config,
                 github_service_factory=_ReactionGitHubService,
             ),
@@ -2237,7 +2367,7 @@ def test_process_due_watches_keeps_distinct_bound_notices_for_multiple_review_co
     monkeypatch.setattr(
         GitHubScmPollingService,
         "_build_automation_service",
-        lambda self, reaction_config=None: _AutomationWrapper(),  # type: ignore[misc]
+        lambda self, reaction_config=None, checkout_root=None: _AutomationWrapper(),  # type: ignore[misc]
     )
 
     service = GitHubScmPollingService(
@@ -2394,7 +2524,7 @@ def test_process_due_watches_does_not_reemit_when_thread_is_reopened_without_new
     monkeypatch.setattr(
         GitHubScmPollingService,
         "_build_automation_service",
-        lambda self, reaction_config=None: _AutomationServiceFake(  # type: ignore[misc]
+        lambda self, reaction_config=None, checkout_root=None: _AutomationServiceFake(  # type: ignore[misc]
             tmp_path,
             reaction_config=reaction_config,
         ),
@@ -2466,7 +2596,7 @@ def test_process_due_watches_uses_first_successful_poll_as_baseline(
     monkeypatch.setattr(
         GitHubScmPollingService,
         "_build_automation_service",
-        lambda self, reaction_config=None: _AutomationServiceFake(  # type: ignore[misc]
+        lambda self, reaction_config=None, checkout_root=None: _AutomationServiceFake(  # type: ignore[misc]
             tmp_path,
             reaction_config=reaction_config,
         ),
@@ -2569,7 +2699,7 @@ def test_process_due_watches_backfills_recent_comments_when_baseline_was_deferre
     monkeypatch.setattr(
         GitHubScmPollingService,
         "_build_automation_service",
-        lambda self, reaction_config=None: _AutomationServiceFake(  # type: ignore[misc]
+        lambda self, reaction_config=None, checkout_root=None: _AutomationServiceFake(  # type: ignore[misc]
             tmp_path,
             reaction_config=reaction_config,
         ),
@@ -2677,7 +2807,7 @@ def test_process_due_watches_uses_current_poll_time_for_deferred_baseline_backfi
     monkeypatch.setattr(
         GitHubScmPollingService,
         "_build_automation_service",
-        lambda self, reaction_config=None: _AutomationServiceFake(  # type: ignore[misc]
+        lambda self, reaction_config=None, checkout_root=None: _AutomationServiceFake(  # type: ignore[misc]
             tmp_path,
             reaction_config=reaction_config,
         ),
@@ -2985,6 +3115,13 @@ def test_process_uses_managed_thread_head_branch_hint_for_external_pr_discovery(
 
     assert result["candidate_workspaces"] == 1
     assert result["bindings_discovered"] == 1
+    events = ScmEventStore(hub_root).list_events(
+        provider="github",
+        event_type="polling.discovery",
+        limit=10,
+    )
+    assert len(events) == 1
+    assert events[0].payload["binding_status"] == "resolved"
     binding = PrBindingStore(hub_root).get_binding_by_pr(
         provider="github",
         repo_slug="acme/widgets",
@@ -2996,6 +3133,55 @@ def test_process_uses_managed_thread_head_branch_hint_for_external_pr_discovery(
     assert watch is not None
     assert watch.state == "active"
     assert watch.workspace_root == str(repo_root.resolve())
+
+
+def test_process_records_unresolved_discovery_event_without_binding(
+    tmp_path: Path,
+) -> None:
+    hub_root = tmp_path / "hub"
+    repo_root = hub_root / "worktrees" / "repo-1--codex-1"
+    repo_root.mkdir(parents=True)
+    ManagedThreadStore(hub_root).create_thread(
+        "codex",
+        repo_root,
+        repo_id="repo-1",
+        metadata={"head_branch": "feature/no-pr"},
+    )
+
+    def _factory(repo_root_arg: Path, raw_config=None) -> _DiscoveringGitHubServiceStub:
+        return _DiscoveringGitHubServiceStub(
+            repo_root_arg,
+            raw_config,
+            hub_root=hub_root,
+            repo_id="repo-1",
+            repo_slug="acme/widgets",
+            pr_number=45,
+            head_branch="feature/no-pr",
+            discover=False,
+        )
+
+    service = GitHubScmPollingService(
+        hub_root,
+        raw_config=_polling_config(),
+        github_service_factory=_factory,
+        watch_store=ScmPollingWatchStore(hub_root),
+        event_store=ScmEventStore(hub_root),
+    )
+
+    result = service.process(limit=10)
+
+    assert result["candidate_workspaces"] == 1
+    assert result["bindings_discovered"] == 0
+    events = ScmEventStore(hub_root).list_events(
+        provider="github",
+        event_type="polling.discovery",
+        limit=10,
+    )
+    assert len(events) == 1
+    assert events[0].repo_slug is None
+    assert events[0].payload["binding_status"] == "unresolved"
+    assert events[0].payload["workspace_root"] == str(repo_root.resolve())
+    assert "No active GitHub PR binding" in events[0].payload["error"]
 
 
 def test_process_repairs_active_watch_workspace_root_without_resetting_snapshot(

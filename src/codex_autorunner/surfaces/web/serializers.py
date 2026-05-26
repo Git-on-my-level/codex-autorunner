@@ -79,6 +79,8 @@ def build_orchestration_health(
     This replaces inline dict construction in the system health route so the
     contract is owned by a single serializer function.
     """
+    if database_health is None:
+        return {"last_housekeeping": last_housekeeping} if last_housekeeping else {}
     payload = OrchestrationHealthPayload(
         database_path=database_health.database_path,
         database_size_bytes=database_health.size_bytes,

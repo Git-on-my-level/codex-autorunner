@@ -12,8 +12,10 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Optional
 
 from ...core.pr_binding_runtime import (
+    PrBindingConfigurationError,
+    PrBindingRuntimeContext,
     binding_summary,
-    find_hub_binding_context,
+    pr_binding_runtime_context,
     upsert_pr_binding,
 )
 from ...core.pr_bindings import PrBinding, PrBindingStore
@@ -75,40 +77,25 @@ def normalize_pr_binding_summary(
     return summary
 
 
-def binding_context_from_root(
-    repo_root: Path,
-) -> tuple[Optional[Path], Optional[str]]:
-    return find_hub_binding_context(repo_root)
-
-
-def pr_binding_store_from_root(repo_root: Path) -> Optional[PrBindingStore]:
-    hub_root, _repo_id = binding_context_from_root(repo_root)
-    if hub_root is None:
-        return None
-    return PrBindingStore(hub_root)
-
-
 def persist_pr_binding(
     *,
-    repo_root: Path,
+    context: PrBindingRuntimeContext,
     repo_slug: str,
     summary: dict[str, Any],
     existing_binding: Optional[PrBinding] = None,
-) -> Optional[PrBinding]:
+) -> PrBinding:
     normalized_repo_slug = _normalize_optional_text(repo_slug)
     pr_number = normalize_positive_int(summary.get("pr_number"))
     pr_state = normalize_binding_pr_state(summary.get("pr_state"))
     if normalized_repo_slug is None or pr_number is None or pr_state is None:
-        return None
-
-    hub_root, repo_id = binding_context_from_root(repo_root)
-    if hub_root is None:
-        return None
+        raise PrBindingConfigurationError(
+            "valid repo_slug, pr_number, and pr_state are required"
+        )
     return upsert_pr_binding(
-        hub_root,
+        context.hub_root,
         provider="github",
         repo_slug=normalized_repo_slug,
-        repo_id=repo_id,
+        repo_id=context.repo_id,
         pr_number=pr_number,
         pr_state=pr_state,
         head_branch=_normalize_optional_text(summary.get("head_branch")),
@@ -129,8 +116,15 @@ def discover_pr_binding_summary(
     if not resolved_branch or resolved_branch == "HEAD":
         return None
 
-    hub_root, repo_id = binding_context_from_root(service.repo_root)
-    store = PrBindingStore(hub_root) if hub_root is not None else None
+    try:
+        context = pr_binding_runtime_context(
+            hub_root=service.config_root,
+            workspace_root=service.repo_root,
+        )
+    except PrBindingConfigurationError:
+        context = None
+    store = PrBindingStore(context.hub_root) if context is not None else None
+    repo_id = context.repo_id if context is not None else None
     if store is not None and repo_id is not None:
         canonical_bindings: list[PrBinding] = []
         for pr_state in ("open", "draft"):
@@ -185,11 +179,18 @@ def discover_pr_binding(
     if summary is None:
         return None
 
-    store = pr_binding_store_from_root(service.repo_root)
+    try:
+        context = pr_binding_runtime_context(
+            hub_root=service.config_root,
+            workspace_root=service.repo_root,
+        )
+    except PrBindingConfigurationError:
+        return None
+    store = PrBindingStore(context.hub_root)
     existing_binding: Optional[PrBinding] = None
     repo_slug = _normalize_optional_text(summary.get("repo_slug"))
     head_branch = _normalize_optional_text(summary.get("head_branch"))
-    if store is not None and repo_slug is not None and head_branch is not None:
+    if repo_slug is not None and head_branch is not None:
         existing_binding = store.find_active_binding_for_branch(
             provider="github",
             repo_slug=repo_slug,
@@ -198,7 +199,7 @@ def discover_pr_binding(
 
     return (
         persist_pr_binding(
-            repo_root=service.repo_root,
+            context=context,
             repo_slug=str(summary["repo_slug"]),
             summary=summary,
             existing_binding=existing_binding,
@@ -210,7 +211,7 @@ def discover_pr_binding(
 
 def arm_polling_watch_best_effort(
     *,
-    repo_root: Path,
+    hub_root: Path,
     raw_config: dict[str, Any],
     persisted_binding: PrBinding,
     workspace_root: Path,
@@ -221,10 +222,6 @@ def arm_polling_watch_best_effort(
     Intentionally swallows exceptions so callers (sync_pr, etc.) are not blocked.
     """
     from .polling import GitHubScmPollingService
-
-    hub_root, _repo_id = binding_context_from_root(repo_root)
-    if hub_root is None:
-        return
 
     try:
         GitHubScmPollingService(

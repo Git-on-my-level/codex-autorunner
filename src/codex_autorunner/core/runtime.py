@@ -10,7 +10,11 @@ from typing import Any, Optional
 
 from .config import RepoConfig, load_repo_config
 from .diagnostics.hermes import hermes_doctor_checks
-from .diagnostics.hub import hub_destination_doctor_checks, hub_worktree_doctor_checks
+from .diagnostics.hub import (
+    hub_control_plane_doctor_checks,
+    hub_destination_doctor_checks,
+    hub_worktree_doctor_checks,
+)
 from .diagnostics.opencode import summarize_opencode_lifecycle
 from .diagnostics.pma import pma_doctor_checks
 from .diagnostics.repository import doctor
@@ -155,6 +159,7 @@ __all__ = [
     "clear_stale_lock",
     "doctor",
     "hermes_doctor_checks",
+    "hub_control_plane_doctor_checks",
     "hub_destination_doctor_checks",
     "hub_worktree_doctor_checks",
     "pma_doctor_checks",

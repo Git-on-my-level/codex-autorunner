@@ -15,7 +15,6 @@ ALLOWED_RAW_STATE_PATH_FILES = {
     "src/codex_autorunner/core/config_defaults.py",
     "src/codex_autorunner/core/flows/pause_dispatch.py",
     "src/codex_autorunner/core/hub_repo_projection.py",
-    "src/codex_autorunner/core/pr_binding_runtime.py",
     "src/codex_autorunner/flows/ticket_flow/definition.py",
     "src/codex_autorunner/adapters/agents/agent_pool_impl.py",
     "src/codex_autorunner/adapters/discord/config.py",

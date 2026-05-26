@@ -5,8 +5,13 @@ from pathlib import Path
 
 import pytest
 
+from codex_autorunner.adapters.github.scm_discovery import persist_pr_binding
 from codex_autorunner.adapters.github.service import GitHubService, RepoInfo
 from codex_autorunner.core.managed_thread_store import ManagedThreadStore
+from codex_autorunner.core.pr_binding_runtime import (
+    PrBindingConfigurationError,
+    pr_binding_runtime_context,
+)
 from codex_autorunner.core.pr_bindings import PrBindingStore
 
 
@@ -500,7 +505,7 @@ def test_discover_pr_binding_summary_prefers_canonical_binding_for_hub_repo(
         base_branch="main",
     )
 
-    service = GitHubService(repo_root, raw_config={})
+    service = GitHubService(repo_root, raw_config={}, config_root=hub_root)
     monkeypatch.setattr(
         service,
         "pr_for_branch",
@@ -540,7 +545,7 @@ def test_discover_pr_binding_summary_ignores_closed_canonical_binding_and_uses_l
         base_branch="main",
     )
 
-    service = GitHubService(repo_root, raw_config={})
+    service = GitHubService(repo_root, raw_config={}, config_root=hub_root)
     monkeypatch.setattr(
         service,
         "pr_for_branch",
@@ -571,6 +576,84 @@ def test_discover_pr_binding_summary_ignores_closed_canonical_binding_and_uses_l
     }
 
 
+def test_persist_pr_binding_uses_explicit_hub_context_with_nested_stale_manifest(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    hub_root = tmp_path / "hub"
+    repo_root = hub_root / "workspace" / "repo"
+    repo_root.mkdir(parents=True)
+    _write_manifest(hub_root, repo_rel="workspace/repo", repo_id="hub-repo")
+    _write_manifest(repo_root, repo_rel=".", repo_id="stale-repo")
+
+    service = GitHubService(repo_root, raw_config={}, config_root=hub_root)
+    monkeypatch.setattr(
+        service,
+        "pr_for_branch",
+        lambda *, branch, cwd=None: {
+            "number": 101,
+            "state": "OPEN",
+            "isDraft": False,
+            "headRefName": branch,
+            "baseRefName": "main",
+        },
+    )
+    monkeypatch.setattr(
+        service,
+        "repo_info",
+        lambda: RepoInfo(
+            name_with_owner="acme/widgets",
+            url="https://github.com/acme/widgets",
+            default_branch="main",
+        ),
+    )
+
+    binding = service.discover_pr_binding(branch="feature/nested")
+
+    assert binding is not None
+    assert binding.repo_id == "hub-repo"
+    assert (
+        PrBindingStore(repo_root).get_binding_by_pr(
+            provider="github",
+            repo_slug="acme/widgets",
+            pr_number=101,
+        )
+        is None
+    )
+    assert (
+        PrBindingStore(hub_root)
+        .get_binding_by_pr(
+            provider="github",
+            repo_slug="acme/widgets",
+            pr_number=101,
+        )
+        .binding_id
+        == binding.binding_id
+    )
+
+
+def test_persist_pr_binding_requires_explicit_valid_runtime_identity(
+    tmp_path: Path,
+) -> None:
+    with pytest.raises(PrBindingConfigurationError, match="hub manifest not found"):
+        pr_binding_runtime_context(
+            hub_root=tmp_path / "missing-hub",
+            workspace_root=tmp_path / "repo",
+        )
+
+    hub_root = tmp_path / "hub"
+    repo_root = hub_root / "workspace" / "repo"
+    repo_root.mkdir(parents=True)
+    _write_manifest(hub_root, repo_rel="workspace/repo", repo_id="repo-1")
+    context = pr_binding_runtime_context(hub_root=hub_root, workspace_root=repo_root)
+
+    with pytest.raises(PrBindingConfigurationError, match="valid repo_slug"):
+        persist_pr_binding(
+            context=context,
+            repo_slug="",
+            summary={"pr_number": 17, "pr_state": "open"},
+        )
+
+
 def test_sync_pr_persists_binding_and_keeps_link_state_as_session_cache(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -586,7 +669,7 @@ def test_sync_pr_persists_binding_and_keeps_link_state_as_session_cache(
         metadata={"head_branch": "feature/login"},
     )
 
-    service = GitHubService(repo_root, raw_config={})
+    service = GitHubService(repo_root, raw_config={}, config_root=hub_root)
     monkeypatch.setattr(service, "gh_authenticated", lambda: True)
     monkeypatch.setattr(
         service,
@@ -673,7 +756,7 @@ def test_sync_pr_arms_polling_watch_from_hub_root_for_hub_repo(
     repo_root.mkdir(parents=True)
     _write_manifest(hub_root, repo_rel="workspace/repo")
 
-    service = GitHubService(repo_root, raw_config={})
+    service = GitHubService(repo_root, raw_config={}, config_root=hub_root)
     monkeypatch.setattr(service, "gh_authenticated", lambda: True)
     monkeypatch.setattr(
         service,

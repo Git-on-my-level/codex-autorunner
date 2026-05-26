@@ -626,7 +626,7 @@ def test_process_now_denies_post_pr_comment_without_github_side_effect(
         store,
         executors={
             "post_pr_comment": build_post_pr_comment_executor(
-                repo_root=tmp_path,
+                checkout_root=tmp_path,
                 github_service_factory=_factory,
             )
         },
@@ -734,7 +734,7 @@ def test_process_now_allows_pr_review_comment_reaction_when_policy_allows(
         store,
         executors={
             "react_pr_review_comment": build_react_pr_review_comment_executor(
-                repo_root=tmp_path,
+                checkout_root=tmp_path,
                 raw_config=_ALLOW_REVIEW_COMMENT_REACTION_POLICY,
                 github_service_factory=_factory,
             )
@@ -880,7 +880,7 @@ def test_github_enqueue_managed_turn_publishes_bound_progress_placeholder(
     )
 
     result = build_github_enqueue_managed_turn_executor(
-        repo_root=hub_root,
+        hub_root=hub_root,
         raw_config=raw_config,
     )(operation)
 
@@ -1617,7 +1617,7 @@ def test_process_now_runs_first_publish_operation_types(
                     hub_root=hub_root, thread_store=thread_store
                 ),
                 "post_pr_comment": build_post_pr_comment_executor(
-                    repo_root=workspace_root,
+                    checkout_root=workspace_root,
                     raw_config=_ALLOW_PR_COMMENT_POLICY,
                     github_service_factory=_FakeGitHubService,
                 ),

@@ -17,11 +17,14 @@ from codex_autorunner.core.orchestration import (
 from codex_autorunner.core.orchestration.compatibility import (
     CompatibilityRegistry,
     ProcessCompatibilityDeclaration,
+    SchemaCompatibilityError,
 )
 from codex_autorunner.core.orchestration.sqlite import (
     OrchestrationCompatibilityMetadata,
     OrchestrationMigrationRefused,
+    join_prepared_orchestration_sqlite,
     open_orchestration_sqlite,
+    prepare_hub_orchestration_db_provider,
     prepare_orchestration_sqlite,
     read_orchestration_compatibility_metadata,
     resolve_orchestration_compatibility_metadata_path,
@@ -349,6 +352,59 @@ def test_worker_prepare_refuses_to_advance_past_live_hub_schema(
         )
 
     assert _schema_generation(hub_root) == old_schema
+
+
+def test_worker_join_declares_compatibility_without_migration(tmp_path: Path) -> None:
+    hub_root = tmp_path / "hub"
+    prepare_hub_orchestration_db_provider(hub_root, durable=False)
+
+    provider = join_prepared_orchestration_sqlite(
+        hub_root,
+        process_role="worker",
+        durable=False,
+    )
+
+    with provider.open() as conn:
+        assert "orch_schema_migrations" in _table_names(conn)
+
+    metadata = read_orchestration_compatibility_metadata(hub_root)
+    assert metadata is not None
+    assert any(item.role == "worker" for item in metadata.registry.declarations)
+
+
+def test_worker_join_rejects_newer_hub_schema(tmp_path: Path) -> None:
+    hub_root = tmp_path / "hub"
+    prepare_hub_orchestration_db_provider(hub_root, durable=False)
+    with sqlite3.connect(resolve_orchestration_sqlite_path(hub_root)) as conn:
+        conn.execute(
+            "INSERT INTO orch_schema_migrations(version, name, applied_at) VALUES (?, ?, ?)",
+            (ORCHESTRATION_SCHEMA_VERSION + 1, "future", "2026-05-22T00:00:00Z"),
+        )
+
+    with pytest.raises(SchemaCompatibilityError):
+        join_prepared_orchestration_sqlite(
+            hub_root,
+            process_role="worker",
+            durable=False,
+        )
+
+
+def test_prepared_provider_open_never_attempts_migrations_after_startup(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    hub_root = tmp_path / "hub"
+    provider = prepare_hub_orchestration_db_provider(hub_root, durable=False)
+
+    def _fail_migrate(*_args, **_kwargs):  # type: ignore[no-untyped-def]
+        raise AssertionError("prepared hot-path opens must not run migrations")
+
+    monkeypatch.setattr(
+        "codex_autorunner.core.orchestration.sqlite.apply_orchestration_migrations",
+        _fail_migrate,
+    )
+
+    with provider.open() as conn:
+        assert "orch_schema_migrations" in _table_names(conn)
 
 
 def test_hub_migration_can_advance_under_owned_mode(tmp_path: Path) -> None:
