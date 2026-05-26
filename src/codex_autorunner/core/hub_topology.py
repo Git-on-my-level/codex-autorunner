@@ -521,8 +521,11 @@ class HubTopologyRepository:
                 _non_authoritative_artifacts(
                     workspace_root,
                     authoritative_hub_root=(
-                        workspace_root.resolve()
-                        if role == ControlPlaneRole.STANDALONE_HUB
+                        self._hub_root.resolve()
+                        if (
+                            role == ControlPlaneRole.STANDALONE_HUB
+                            or workspace_root.resolve() == self._hub_root.resolve()
+                        )
                         else None
                     ),
                 )

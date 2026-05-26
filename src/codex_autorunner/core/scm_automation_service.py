@@ -1783,6 +1783,25 @@ class ScmAutomationService:
                     ),
                 },
             )
+        elif binding is None and _scm_event_requires_delivery_target(event):
+            notify_only = all(
+                action.operation_kind == "notify_chat" for action in scm_actions
+            )
+            if notify_only:
+                self._audit_recorder.record(
+                    action_type=SCM_AUDIT_BINDING_DELIVERY_FAILED,
+                    correlation_id=correlation_id,
+                    event=event,
+                    binding=binding,
+                    payload={
+                        "reason": "repo_notification_target_must_be_confirmed_at_publish",
+                        "fallback_order": (
+                            "thread_target_id",
+                            "repo_id_bound_chat",
+                            "durable_audit",
+                        ),
+                    },
+                )
         reaction_intents = _legacy_intents_from_actions(scm_actions)
         automation_event = self._automation_event_for_scm_event(
             event=event,

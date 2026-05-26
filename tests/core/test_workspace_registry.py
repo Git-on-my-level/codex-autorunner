@@ -95,6 +95,25 @@ def test_nested_manifest_and_local_orchestration_db_are_non_authoritative(
     }
 
 
+def test_hub_root_manifest_entry_does_not_mark_authoritative_files_as_artifacts(
+    tmp_path: Path,
+) -> None:
+    hub_root = tmp_path / "hub"
+    state_root = hub_root / ".codex-autorunner"
+    state_root.mkdir(parents=True)
+    (state_root / "orchestration.sqlite3").write_bytes(b"hub-db")
+    _save_manifest(
+        hub_root,
+        Manifest(version=3, repos=[ManifestRepo(id="hub", path=Path("."))]),
+    )
+
+    entry = _repository(hub_root).classify_workspace_path(hub_root)
+
+    assert entry.control_plane_role == ControlPlaneRole.HUB_OWNED
+    assert entry.authoritative_hub_root == hub_root.resolve()
+    assert entry.non_authoritative_artifacts == ()
+
+
 def test_explicit_hub_root_classifies_as_standalone_hub(tmp_path: Path) -> None:
     hub_root = tmp_path / "standalone"
     _save_manifest(hub_root, Manifest(version=3, repos=[]))

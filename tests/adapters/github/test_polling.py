@@ -1948,67 +1948,31 @@ def test_process_due_watches_reacts_then_wakes_thread_and_notifies_bound_chat(
         repo_id="repo-1",
         metadata={"head_branch": "feature/scm-polling"},
     )
-    binding = PrBindingStore(hub_root).upsert_binding(
-        provider="github",
-        repo_slug="acme/widgets",
-        repo_id="repo-1",
-        pr_number=17,
-        pr_state=pr_state,
-        head_branch="feature/scm-polling",
-        base_branch="main",
-        thread_target_id=str(thread["managed_thread_id"]),
-    )
     watch_store = ScmPollingWatchStore(hub_root)
-    watch_store.upsert_watch(
-        provider="github",
-        binding_id=binding.binding_id,
-        repo_slug=binding.repo_slug,
-        repo_id=binding.repo_id,
-        pr_number=binding.pr_number,
-        workspace_root=str(workspace_root.resolve()),
-        thread_target_id=str(thread["managed_thread_id"]),
-        poll_interval_seconds=90,
-        next_poll_at="2026-03-30T00:00:00Z",
-        expires_at="2099-03-30T01:00:00Z",
-        reaction_config={"enabled": True},
-        snapshot={
-            "head_sha": "oldsha",
-            "pr_state": pr_state,
-            "review_thread_comments": {},
-        },
-    )
 
-    def _factory(repo_root: Path, raw_config=None) -> _GitHubServiceStub:
-        return _GitHubServiceStub(
+    review_threads_payload: list[dict[str, object]] = []
+
+    class _DiscoverThenPollGitHubService(_DiscoveringGitHubServiceStub):
+        def __init__(self, repo_root: Path, raw_config=None) -> None:
+            super().__init__(
+                repo_root,
+                raw_config,
+                hub_root=hub_root,
+                repo_id="repo-1",
+                repo_slug="acme/widgets",
+                pr_number=17,
+                head_branch="feature/scm-polling",
+                pr_state=pr_state,
+            )
+
+        def pr_review_threads(self, *, owner: str, repo: str, number: int, cwd=None):
+            _ = owner, repo, number, cwd
+            return list(review_threads_payload)
+
+    def _factory(repo_root: Path, raw_config=None) -> _DiscoverThenPollGitHubService:
+        return _DiscoverThenPollGitHubService(
             repo_root,
             raw_config,
-            pr_view_payload={
-                "state": "OPEN",
-                "isDraft": pr_state == "draft",
-                "headRefOid": "newsha",
-                "author": {"login": "pr-author"},
-            },
-            reviews_payload=[],
-            checks_payload=[],
-            issue_comments_payload=[],
-            review_threads_payload=[
-                {
-                    "thread_id": "thread-1",
-                    "isResolved": False,
-                    "comments": [
-                        {
-                            "comment_id": "PRRC_kwDOAcmeNonNumeric",
-                            "body": "Please cover the inline review wakeup path too.",
-                            "author_login": "reviewer",
-                            "author_type": "User",
-                            "html_url": "https://github.com/acme/widgets/pull/17#discussion_r2844",
-                            "path": "src/codex_autorunner/adapters/github/polling.py",
-                            "line": 196,
-                            "updated_at": "2026-03-30T00:04:00Z",
-                        }
-                    ],
-                }
-            ],
         )
 
     automation_config = _polling_config()
@@ -2089,6 +2053,53 @@ def test_process_due_watches_reacts_then_wakes_thread_and_notifies_bound_chat(
         watch_store=watch_store,
         event_store=ScmEventStore(hub_root),
     )
+
+    discovery_result = service.process(limit=10)
+    assert discovery_result["candidate_workspaces"] == 1
+    assert discovery_result["bindings_discovered"] == 1
+    assert discovery_result["watches_armed"] == 1
+
+    discovered_binding = PrBindingStore(hub_root).get_binding_by_pr(
+        provider="github",
+        repo_slug="acme/widgets",
+        pr_number=17,
+    )
+    assert discovered_binding is not None
+    assert discovered_binding.thread_target_id == thread["managed_thread_id"]
+    discovered_watch = watch_store.get_watch(
+        provider="github",
+        binding_id=discovered_binding.binding_id,
+    )
+    assert discovered_watch is not None
+    assert discovered_watch.state == "active"
+
+    watch_store.refresh_watch(
+        watch_id=discovered_watch.watch_id,
+        next_poll_at="2026-03-30T00:00:00Z",
+        snapshot={
+            "head_sha": "oldsha",
+            "pr_state": pr_state,
+            "review_thread_comments": {},
+        },
+    )
+    review_threads_payload[:] = [
+        {
+            "thread_id": "thread-1",
+            "isResolved": False,
+            "comments": [
+                {
+                    "comment_id": "PRRC_kwDOAcmeNonNumeric",
+                    "body": "Please cover the inline review wakeup path too.",
+                    "author_login": "reviewer",
+                    "author_type": "User",
+                    "html_url": "https://github.com/acme/widgets/pull/17#discussion_r2844",
+                    "path": "src/codex_autorunner/adapters/github/polling.py",
+                    "line": 196,
+                    "updated_at": "2026-03-30T00:04:00Z",
+                }
+            ],
+        }
+    ]
 
     result = service.process_due_watches(limit=10)
 

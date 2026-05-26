@@ -685,9 +685,7 @@ _CONTROL_PLANE_HOT_ROOTS = (
     SRC_ROOT / "core" / "scm_polling_watches.py",
 )
 
-_CONTROL_PLANE_AUTHORITY_ALLOWLIST = {
-    "adapters/github/scm_discovery.py",
-}
+_CONTROL_PLANE_AUTHORITY_ALLOWLIST: set[str] = set()
 
 _FORBIDDEN_AUTHORITY_RESOLVERS = {
     "find_hub_binding_context",
