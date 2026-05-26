@@ -188,19 +188,52 @@ def extract_turn_id(session_id: str, payload: Any) -> str:
 def extract_model_ids(payload: Any) -> tuple[Optional[str], Optional[str]]:
     if not isinstance(payload, dict):
         return None, None
-    for container in (payload, payload.get("properties"), payload.get("info")):
+    containers = [
+        payload,
+        payload.get("properties"),
+        payload.get("info"),
+        payload.get("session"),
+        payload.get("model"),
+    ]
+    session = payload.get("session")
+    if isinstance(session, dict):
+        containers.extend(
+            [
+                session.get("properties"),
+                session.get("info"),
+                session.get("model"),
+            ]
+        )
+    for container in containers:
         if not isinstance(container, dict):
             continue
         provider_id = (
             container.get("providerID")
             or container.get("providerId")
             or container.get("provider_id")
+            or container.get("provider")
         )
         model_id = (
             container.get("modelID")
             or container.get("modelId")
             or container.get("model_id")
+            or container.get("model")
         )
+        if isinstance(model_id, dict):
+            nested_provider = (
+                model_id.get("providerID")
+                or model_id.get("providerId")
+                or model_id.get("provider_id")
+                or model_id.get("provider")
+            )
+            nested_model = (
+                model_id.get("modelID")
+                or model_id.get("modelId")
+                or model_id.get("model_id")
+                or model_id.get("id")
+            )
+            provider_id = provider_id or nested_provider
+            model_id = nested_model
         if (
             isinstance(provider_id, str)
             and provider_id.strip()

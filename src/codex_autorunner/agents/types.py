@@ -62,7 +62,7 @@ class TerminalTurnResult:
     assistant_text: str
     errors: list[str] = field(default_factory=list)
     raw_events: list[dict[str, Any]] = field(default_factory=list)
-    effective_runtime: Optional[dict[str, Any]] = None
+    effective_runtime: Optional[Any] = None
 
 
 @dataclass(frozen=True)

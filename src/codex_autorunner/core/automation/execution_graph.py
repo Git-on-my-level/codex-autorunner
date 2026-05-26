@@ -442,7 +442,8 @@ def _latest_thread_execution_with_conn(
                    transcript_mirror_id,
                    started_at,
                    finished_at,
-                   created_at
+                   created_at,
+                   runtime_identity_json
               FROM orch_thread_executions
              WHERE execution_id = ?
              LIMIT 1
@@ -463,7 +464,8 @@ def _latest_thread_execution_with_conn(
                transcript_mirror_id,
                started_at,
                finished_at,
-               created_at
+               created_at,
+               runtime_identity_json
           FROM orch_thread_executions
          WHERE (? IS NOT NULL AND execution_id = ?)
             OR (? IS NOT NULL AND thread_target_id = ?)
@@ -498,6 +500,12 @@ def _thread_execution_row_to_dict(row: Any) -> dict[str, Any]:
         "started_at": row["started_at"],
         "finished_at": row["finished_at"],
         "created_at": row["created_at"],
+        "runtime_identity": (
+            _json_loads_object(row["runtime_identity_json"])
+            if "runtime_identity_json" in row.keys()
+            and row["runtime_identity_json"] is not None
+            else {}
+        ),
     }
 
 

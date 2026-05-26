@@ -297,6 +297,7 @@ class ExecutionResultRecordRequest:
     error: Optional[str] = None
     backend_turn_id: Optional[str] = None
     transcript_turn_id: Optional[str] = None
+    effective_runtime: Optional[dict[str, Any]] = None
 
     @classmethod
     def from_mapping(cls, data: Mapping[str, Any]) -> "ExecutionResultRecordRequest":
@@ -322,6 +323,11 @@ class ExecutionResultRecordRequest:
             error=normalize_optional_text(data.get("error")),
             backend_turn_id=normalize_optional_text(data.get("backend_turn_id")),
             transcript_turn_id=normalize_optional_text(data.get("transcript_turn_id")),
+            effective_runtime=(
+                dict(data["effective_runtime"])
+                if isinstance(data.get("effective_runtime"), Mapping)
+                else None
+            ),
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -336,6 +342,8 @@ class ExecutionResultRecordRequest:
         }
         if self.assistant_output is not None:
             payload["assistant_output"] = self.assistant_output
+        if self.effective_runtime is not None:
+            payload["effective_runtime"] = self.effective_runtime
         return payload
 
 

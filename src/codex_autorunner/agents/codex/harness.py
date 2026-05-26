@@ -11,6 +11,8 @@ from ...adapters.app_server.client import (
 )
 from ...adapters.app_server.event_buffer import AppServerEventBuffer
 from ...adapters.app_server.supervisor import WorkspaceAppServerSupervisor
+from ...core.runtime_identity import RUNTIME_STAGE_EFFECTIVE, RuntimeIdentityStage
+from ...core.time_utils import now_iso
 from ..base import AgentHarness
 from ..types import (
     AgentId,
@@ -129,14 +131,18 @@ class CodexHarness(AgentHarness):
         self._supervisor = supervisor
         self._events = events
         self._turn_handles: dict[tuple[str, str], Any] = {}
-        self._turn_effective_runtime: dict[tuple[str, str], dict[str, Any]] = {}
 
     async def ensure_ready(self, workspace_root: Path) -> None:
         await self._supervisor.get_client(workspace_root)
 
     async def backend_runtime_instance_id(self, workspace_root: Path) -> Optional[str]:
-        client = await self._supervisor.get_client(workspace_root)
-        await client.start()
+        get_client = getattr(self._supervisor, "get_client", None)
+        if not callable(get_client):
+            return None
+        client = await get_client(workspace_root)
+        start = getattr(client, "start", None)
+        if callable(start):
+            await start()
         runtime_instance_id = getattr(client, "runtime_instance_id", None)
         if not isinstance(runtime_instance_id, str) or not runtime_instance_id:
             return None
@@ -302,24 +308,6 @@ class CodexHarness(AgentHarness):
         if not isinstance(resolved_thread_id, str) or not resolved_thread_id:
             resolved_thread_id = conversation_id
         self._turn_handles[(resolved_thread_id, handle.turn_id)] = handle
-        self._turn_effective_runtime[(resolved_thread_id, handle.turn_id)] = {
-            "stage": "effective",
-            "logical_agent": "codex",
-            "runtime_agent": "codex",
-            "canonical_model_label": model,
-            "reasoning": reasoning,
-            "backend_runtime_id": handle.turn_id,
-            "provider_payload": {
-                key: value
-                for key, value in {
-                    "model": model,
-                    "effort": reasoning,
-                }.items()
-                if value
-            }
-            or None,
-            "source": "codex.turn_start",
-        }
         register_turn = getattr(self._events, "register_turn", None)
         if callable(register_turn):
             try:
@@ -427,9 +415,6 @@ class CodexHarness(AgentHarness):
             result = await handle.wait(timeout=timeout)
         finally:
             self._turn_handles.pop((conversation_id, turn_id), None)
-        effective_runtime = self._turn_effective_runtime.pop(
-            (conversation_id, turn_id), None
-        )
         agent_messages = [
             message.strip()
             for message in getattr(result, "agent_messages", []) or []
@@ -458,7 +443,41 @@ class CodexHarness(AgentHarness):
                 for event in (getattr(result, "raw_events", []) or [])
                 if isinstance(event, dict)
             ],
-            effective_runtime=effective_runtime,
+            effective_runtime=await self._effective_runtime_stage(
+                workspace_root,
+                conversation_id=conversation_id,
+                turn_id=turn_id,
+                result=result,
+            ),
+        )
+
+    async def _effective_runtime_stage(
+        self,
+        workspace_root: Path,
+        *,
+        conversation_id: str,
+        turn_id: str,
+        result: Any,
+    ) -> RuntimeIdentityStage:
+        runtime_instance_id = await self.backend_runtime_instance_id(workspace_root)
+        raw_events = [
+            event
+            for event in (getattr(result, "raw_events", []) or [])
+            if isinstance(event, dict)
+        ]
+        return RuntimeIdentityStage(
+            stage=RUNTIME_STAGE_EFFECTIVE,
+            logical_agent="codex",
+            runtime_agent="codex",
+            backend_runtime_id=runtime_instance_id,
+            provider_payload={"raw_events": raw_events[-5:]} if raw_events else None,
+            source="codex.app_server",
+            observed_at=now_iso(),
+            provenance={
+                "thread_id": conversation_id,
+                "turn_id": turn_id,
+                "model_source": "unknown",
+            },
         )
 
 

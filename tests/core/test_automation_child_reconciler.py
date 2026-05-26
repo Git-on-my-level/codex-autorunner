@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 from codex_autorunner.core.automation import (
@@ -242,6 +243,60 @@ def test_reconciler_closes_parent_from_durable_managed_thread_edge(
     assert not hasattr(saved, "managed_thread_execution_id")
     assert edges[0].terminal_state == "succeeded"
     assert edges[0].actual_runtime.model == "zai-coding-plan/glm-5.1"
+
+
+def test_reconciler_populates_actual_runtime_from_effective_stage(
+    tmp_path: Path,
+) -> None:
+    hub = tmp_path / "hub"
+    store = _store_with_running_managed_thread_job(hub)
+    _insert_thread_execution(
+        hub,
+        thread_id="29998b57-94e9-49a4-8299-0349872e4b70",
+        backend_thread_id="backend-session-1",
+        execution_id="exec-1",
+        status="ok",
+        error_text=None,
+        transcript_model_id=None,
+        runtime_identity={
+            "contract_version": 1,
+            "requested": None,
+            "resolved": None,
+            "launch": None,
+            "projected": None,
+            "effective": {
+                "stage": "effective",
+                "logical_agent": "opencode",
+                "runtime_agent": "opencode",
+                "provider_id": "zai-coding-plan",
+                "canonical_model_label": "zai-coding-plan/glm-5.1",
+                "provider_model_id": "glm-5.1",
+                "profile": None,
+                "reasoning": None,
+                "approval_policy": None,
+                "sandbox_policy": None,
+                "workspace_scope": None,
+                "prompt_ref": None,
+                "input_ref": None,
+                "backend_runtime_id": "session-1",
+                "provider_payload": {"id": "session-1"},
+                "source": "opencode.session",
+                "observed_at": None,
+                "provenance": {"session_id": "session-1"},
+                "metadata": {},
+            },
+            "metadata": {},
+        },
+    )
+
+    result = AutomationChildRunReconciler(
+        store, resolve_repo_path=lambda _repo_id: None, hub_root=hub
+    ).reconcile_running_jobs()
+
+    edges = store.list_child_execution_edges("job-pma")
+    assert result.completed == 1
+    assert edges[0].actual_runtime.model == "zai-coding-plan/glm-5.1"
+    assert edges[0].actual_runtime.backend_runtime_id == "session-1"
 
 
 def test_reducer_fails_authoritative_agent_task_runtime_mismatch(
@@ -888,6 +943,7 @@ def _insert_thread_execution(
     finished_at: str | None = None,
     insert_thread_target: bool = True,
     transcript_model_id: str | None = "zai-coding-plan/glm-5.1",
+    runtime_identity: dict[str, object] | None = None,
 ) -> None:
     transcript_mirror_id = f"transcript-{execution_id}" if transcript_model_id else None
     with open_orchestration_sqlite(hub, durable=True) as conn:
@@ -935,8 +991,8 @@ def _insert_thread_execution(
                     execution_id, thread_target_id, client_request_id, request_kind,
                     prompt_text, status, backend_turn_id, assistant_text, error_text,
                     model_id, reasoning_level, transcript_mirror_id, started_at,
-                    finished_at, created_at, metadata_json
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    finished_at, created_at, metadata_json, runtime_identity_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     execution_id,
@@ -962,6 +1018,11 @@ def _insert_thread_execution(
                     ),
                     started_at,
                     "{}",
+                    (
+                        json.dumps(runtime_identity)
+                        if runtime_identity is not None
+                        else None
+                    ),
                 ),
             )
             if transcript_mirror_id is not None:

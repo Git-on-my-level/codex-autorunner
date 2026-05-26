@@ -747,6 +747,7 @@ class HubSharedStateService:
                 error=request.error,
                 backend_turn_id=request.backend_turn_id,
                 transcript_turn_id=request.transcript_turn_id,
+                effective_runtime=request.effective_runtime,
             )
         except (KeyError, RuntimeError, ValueError) as exc:
             raise self._execution_rejected(

@@ -6,7 +6,7 @@ import logging
 import time
 from concurrent.futures import TimeoutError as FuturesTimeoutError
 from pathlib import Path
-from typing import Any, Callable, Coroutine, Optional, TypeVar
+from typing import Any, Callable, Coroutine, Mapping, Optional, TypeVar
 
 from ..car_context import CarContextProfile, normalize_car_context_profile
 from ..domain.refs import ScopeRef
@@ -76,6 +76,19 @@ def _assistant_output_payload(value: Any) -> Optional[dict[str, Any]]:
         return value.to_durable_dict()
     if isinstance(value, dict):
         return dict(value)
+    return None
+
+
+def _runtime_payload(value: Any) -> Optional[dict[str, Any]]:
+    if value is None:
+        return None
+    if isinstance(value, Mapping):
+        return dict(value)
+    to_dict = getattr(value, "to_dict", None)
+    if callable(to_dict):
+        payload = to_dict()
+        if isinstance(payload, Mapping):
+            return dict(payload)
     return None
 
 
@@ -695,6 +708,7 @@ class RemoteThreadExecutionStore(ThreadExecutionStore):
         error: Optional[str] = None,
         backend_turn_id: Optional[str] = None,
         transcript_turn_id: Optional[str] = None,
+        effective_runtime: Optional[Any] = None,
     ) -> ExecutionRecord:
         response = self._run(
             operation="record_execution_result",
@@ -709,6 +723,7 @@ class RemoteThreadExecutionStore(ThreadExecutionStore):
                     error=error,
                     backend_turn_id=backend_turn_id,
                     transcript_turn_id=transcript_turn_id,
+                    effective_runtime=_runtime_payload(effective_runtime),
                 )
             ),
         )

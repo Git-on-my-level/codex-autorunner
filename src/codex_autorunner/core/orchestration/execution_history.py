@@ -9,6 +9,7 @@ from ..ports.run_event import (
     Failed,
     Interrupted,
     OutputDelta,
+    ProviderRuntimeReported,
     RunEvent,
     RunNotice,
     Started,
@@ -338,7 +339,9 @@ def classify_run_event_family(event: RunEvent) -> ExecutionHistoryEventFamily:
         return "token_usage"
     if isinstance(event, (Completed, Failed, Interrupted)):
         return "terminal"
-    if isinstance(event, (Started, ApprovalRequested, RunNotice)):
+    if isinstance(
+        event, (Started, ApprovalRequested, RunNotice, ProviderRuntimeReported)
+    ):
         return "run_notice"
     raise TypeError(f"Unsupported run event type '{type(event).__name__}'")
 

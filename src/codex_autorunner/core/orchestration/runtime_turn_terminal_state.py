@@ -135,7 +135,7 @@ class RuntimeThreadOutcome:
     failure_cause: Optional[str] = None
     terminal_evidence: dict[str, Any] = field(default_factory=dict)
     assistant_output: Optional[TurnAssistantOutput] = None
-    effective_runtime: Optional[dict[str, Any]] = None
+    effective_runtime: Optional[Any] = None
 
 
 def reduce_terminal_evidence(evidence: TerminalEvidence) -> TerminalEvidenceDecision:
@@ -390,7 +390,7 @@ class RuntimeTurnTerminalStateMachine:
     last_progress_monotonic: Optional[float] = None
     failure_cause: Optional[str] = None
     token_usage: Optional[dict[str, Any]] = None
-    effective_runtime: Optional[dict[str, Any]] = None
+    effective_runtime: Optional[Any] = None
     last_runtime_method: Optional[str] = None
     raw_events: list[Any] = field(default_factory=list)
     terminal_signals: list[RuntimeThreadTerminalSignal] = field(default_factory=list)
@@ -486,8 +486,8 @@ class RuntimeTurnTerminalStateMachine:
     ) -> None:
         event_timestamp = timestamp or now_iso()
         effective_runtime = getattr(result, "effective_runtime", None)
-        if isinstance(effective_runtime, dict):
-            self.effective_runtime = dict(effective_runtime)
+        if effective_runtime is not None:
+            self.effective_runtime = effective_runtime
         transport_event = normalize_transport_returned(result)
         self.note_state_event(transport_event, timestamp=event_timestamp)
         merged_raw_events = _merge_runtime_raw_events(
@@ -636,11 +636,7 @@ class RuntimeTurnTerminalStateMachine:
             last_progress_timestamp=self.last_progress_timestamp,
             failure_cause=self.failure_cause,
             terminal_evidence=dict(terminal_evidence or {}),
-            effective_runtime=(
-                dict(self.effective_runtime)
-                if isinstance(self.effective_runtime, dict)
-                else None
-            ),
+            effective_runtime=self.effective_runtime,
         )
 
     def build_checkpoint(

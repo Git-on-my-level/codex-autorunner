@@ -1473,7 +1473,7 @@ async def test_collect_output_waits_if_session_busy(monkeypatch) -> None:
 
     assert output.text == ""
     assert output.error is None
-    assert len(statuses) == 4
+    assert len(statuses) == 5
 
 
 @pytest.mark.anyio

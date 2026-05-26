@@ -9,6 +9,7 @@ from ..ports.run_event import (
     Failed,
     Interrupted,
     OutputDelta,
+    ProviderRuntimeReported,
     RunEvent,
     RunNotice,
     Started,
@@ -16,6 +17,7 @@ from ..ports.run_event import (
     ToolCall,
     ToolResult,
 )
+from ..runtime_identity import RuntimeIdentityStage
 from ._normalizers import normalize_required_text
 
 
@@ -32,6 +34,8 @@ def serialize_run_event(event: RunEvent) -> dict[str, Any]:
         event_type = "approval_requested"
     elif isinstance(event, TokenUsage):
         event_type = "token_usage"
+    elif isinstance(event, ProviderRuntimeReported):
+        event_type = "provider_runtime_reported"
     elif isinstance(event, RunNotice):
         event_type = "run_notice"
     elif isinstance(event, Completed):
@@ -69,6 +73,15 @@ def deserialize_run_event(data: Mapping[str, Any]) -> RunEvent:
         return ApprovalRequested(**event_payload)
     if event_type == "token_usage":
         return TokenUsage(**event_payload)
+    if event_type == "provider_runtime_reported":
+        effective_runtime = event_payload.get("effective_runtime")
+        if isinstance(effective_runtime, Mapping):
+            event_payload["effective_runtime"] = RuntimeIdentityStage.from_mapping(
+                effective_runtime,
+                stage="effective",
+                field_name="effective_runtime",
+            )
+        return ProviderRuntimeReported(**event_payload)
     if event_type == "run_notice":
         return RunNotice(**event_payload)
     if event_type == "completed":

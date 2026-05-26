@@ -1784,7 +1784,7 @@ class ManagedThreadStore:
         error: Optional[str] = None,
         backend_turn_id: Optional[str] = None,
         transcript_turn_id: Optional[str] = None,
-        effective_runtime: Optional[dict[str, Any]] = None,
+        effective_runtime: Optional[RuntimeIdentityStage | dict[str, Any]] = None,
     ) -> bool:
         finished_at = now_iso()
         if isinstance(assistant_output, dict):
@@ -1956,15 +1956,6 @@ class ManagedThreadStore:
                     runtime_identity,
                     launch_stage,
                 )
-                if normalized_backend_turn_id is not None:
-                    runtime_identity = _runtime_identity_with_stage(
-                        runtime_identity,
-                        _effective_runtime_stage(
-                            turn_request,
-                            backend_turn_id=normalized_backend_turn_id,
-                            observed_at=runtime_started_at,
-                        ),
-                    )
             if (
                 confirmed_start
                 and normalized_backend_turn_id is not None

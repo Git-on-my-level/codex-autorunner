@@ -19,11 +19,13 @@ from ...core.ports.run_event import (
     Completed,
     Failed,
     OutputDelta,
+    ProviderRuntimeReported,
     RunEvent,
     Started,
     ToolCall,
     ToolResult,
 )
+from ...core.runtime_identity import RUNTIME_STAGE_EFFECTIVE, RuntimeIdentityStage
 
 _logger = logging.getLogger(__name__)
 
@@ -436,6 +438,13 @@ class CodexAppServerBackend(AgentBackend):
                         result,
                         driver=runtime_driver,
                     )
+                    yield ProviderRuntimeReported(
+                        timestamp=now_iso(),
+                        effective_runtime=self._effective_runtime_stage(
+                            client,
+                            result=result,
+                        ),
+                    )
                     yield Completed(
                         timestamp=now_iso(),
                         final_message=final_text,
@@ -477,6 +486,35 @@ class CodexAppServerBackend(AgentBackend):
             if assistant_text.strip():
                 return assistant_text
         return ""
+
+    def _effective_runtime_stage(
+        self,
+        client: CodexAppServerClient,
+        *,
+        result: Any,
+    ) -> RuntimeIdentityStage:
+        runtime_instance_id = getattr(client, "runtime_instance_id", None)
+        if not isinstance(runtime_instance_id, str) or not runtime_instance_id.strip():
+            runtime_instance_id = None
+        raw_events = [
+            event
+            for event in (getattr(result, "raw_events", []) or [])
+            if isinstance(event, dict)
+        ]
+        return RuntimeIdentityStage(
+            stage=RUNTIME_STAGE_EFFECTIVE,
+            logical_agent="codex",
+            runtime_agent="codex",
+            backend_runtime_id=runtime_instance_id,
+            provider_payload={"raw_events": raw_events[-5:]} if raw_events else None,
+            source="codex.app_server",
+            observed_at=now_iso(),
+            provenance={
+                "thread_id": self._thread_id,
+                "turn_id": self._turn_id,
+                "model_source": "unknown",
+            },
+        )
 
     async def stream_events(self, session_id: str) -> AsyncGenerator[AgentEvent, None]:
         if False:

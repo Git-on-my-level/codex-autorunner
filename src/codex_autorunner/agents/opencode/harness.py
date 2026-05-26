@@ -1173,18 +1173,41 @@ class OpenCodeHarness(AgentHarness):
                     await _close_progress_streams()
 
             async def _fetch_session() -> Any:
+                session_payload: Any = None
+                session_fetch_failed = False
+                try:
+                    session_payload = await client.get_session(conversation_id)
+                except (
+                    RuntimeError,
+                    OSError,
+                    ProcessLookupError,
+                    BrokenPipeError,
+                    httpx.HTTPError,
+                    AttributeError,
+                ):
+                    session_fetch_failed = True
+                    session_payload = None
                 statuses = await client.session_status(directory=str(workspace_root))
+                status_payload: dict[str, Any] = {}
                 if isinstance(statuses, dict):
                     session_status = statuses.get(conversation_id)
                     if session_status is None:
                         if command_task is not None and not command_task.done():
-                            return {"status": {"type": "busy"}}
-                        return {"status": {"type": "idle"}}
-                    if isinstance(session_status, dict):
-                        return {"status": session_status}
-                    if isinstance(session_status, str):
-                        return {"status": session_status}
-                return {"status": {}}
+                            status_payload = {"status": {"type": "busy"}}
+                        else:
+                            status_payload = {"status": {"type": "idle"}}
+                    elif isinstance(session_status, dict):
+                        status_payload = {"status": session_status}
+                    elif isinstance(session_status, str):
+                        status_payload = {"status": session_status}
+                if isinstance(session_payload, dict):
+                    merged = {**session_payload, **status_payload}
+                    if session_fetch_failed:
+                        merged["session_fetch_failed"] = True
+                    return merged
+                if session_fetch_failed:
+                    status_payload["session_fetch_failed"] = True
+                return status_payload or {"status": {}}
 
             async def _fetch_providers() -> Any:
                 return await client.providers(directory=str(workspace_root))
@@ -1317,7 +1340,10 @@ class OpenCodeHarness(AgentHarness):
                 assistant_text=lifecycle_result.assistant_text,
                 errors=errors,
                 raw_events=[dict(event) for event in lifecycle_result.raw_events],
-                effective_runtime=effective_runtime,
+                effective_runtime=(
+                    getattr(runtime_result.output, "effective_runtime", None)
+                    or effective_runtime
+                ),
             )
 
         try:

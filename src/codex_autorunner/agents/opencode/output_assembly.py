@@ -17,6 +17,8 @@ import httpx
 
 from ...core.coercion import coerce_int
 from ...core.logging_utils import log_event
+from ...core.runtime_identity import RUNTIME_STAGE_EFFECTIVE, RuntimeIdentityStage
+from ...core.time_utils import now_iso
 from .constants import OPENCODE_MODEL_CONTEXT_KEYS
 from .event_fields import (
     extract_message_id as extract_event_message_id,
@@ -46,6 +48,7 @@ class OutputAssemblyResult:
     error: Optional[str] = None
     usage: Optional[dict[str, Any]] = None
     output_source: OpenCodeTurnOutputSource = "none"
+    effective_runtime: Optional[RuntimeIdentityStage] = None
 
 
 class OutputAssembler:
@@ -411,6 +414,68 @@ class OutputAssembler:
             error=self._error,
             usage=self._latest_usage_snapshot,
             output_source=output_source,
+            effective_runtime=await self._effective_runtime_stage(),
+        )
+
+    async def _effective_runtime_stage(self) -> RuntimeIdentityStage:
+        provider_id: Optional[str] = None
+        model_id: Optional[str] = None
+        provider_payload: Optional[dict[str, Any]] = None
+        source = "opencode.unknown"
+        provenance: dict[str, Any] = {"session_id": self._session_id}
+        if isinstance(self._latest_usage_snapshot, dict):
+            provider_id, model_id = extract_model_ids(self._latest_usage_snapshot)
+            if provider_id or model_id:
+                provider_payload = dict(self._latest_usage_snapshot)
+                source = "opencode.usage_event"
+        if (
+            provider_id is None
+            and model_id is None
+            and self._session_fetcher is not None
+        ):
+            try:
+                session_payload = await self._session_fetcher()
+            except (httpx.HTTPError, ValueError, OSError):
+                provenance["session_fetch_failed"] = True
+            else:
+                session_provider_id, session_model_id = extract_model_ids(
+                    session_payload
+                )
+                if (
+                    isinstance(session_payload, dict)
+                    and session_payload.get("session_fetch_failed") is True
+                ):
+                    provenance["session_fetch_failed"] = True
+                if session_provider_id or session_model_id:
+                    provider_id = session_provider_id
+                    model_id = session_model_id
+                    provider_payload = (
+                        dict(session_payload)
+                        if isinstance(session_payload, dict)
+                        else {"session": session_payload}
+                    )
+                    source = "opencode.session"
+        if provider_id is None and model_id is None and self._default_model_ids:
+            provider_id, model_id = self._default_model_ids
+            if provider_id or model_id:
+                provider_payload = dict(self._model_payload or {})
+                source = "opencode.launch_fallback"
+                provenance["fallback_reason"] = "session_or_usage_model_unavailable"
+        canonical_label = (
+            f"{provider_id}/{model_id}" if provider_id and model_id else model_id
+        )
+        return RuntimeIdentityStage(
+            stage=RUNTIME_STAGE_EFFECTIVE,
+            logical_agent="opencode",
+            runtime_agent="opencode",
+            provider_id=provider_id,
+            provider_model_id=model_id,
+            canonical_model_label=canonical_label,
+            backend_runtime_id=self._session_id,
+            provider_payload=provider_payload,
+            source=source,
+            observed_at=now_iso(),
+            provenance=provenance,
         )
 
     def _flush_pending_no_id_as_assistant(self) -> None:

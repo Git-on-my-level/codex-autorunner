@@ -698,6 +698,7 @@ class DefaultAgentPool:
         error: Optional[str] = None
         assistant_text = ""
         result_status = "failed"
+        result: Optional[Any] = None
         try:
             result = await started.harness.wait_for_turn(
                 started.workspace_root,
@@ -803,6 +804,7 @@ class DefaultAgentPool:
                     error=None,
                     backend_turn_id=backend_turn_id,
                     transcript_turn_id=None,
+                    effective_runtime=getattr(result, "effective_runtime", None),
                 )
             elif status == "interrupted":
                 finalized = started.service.record_execution_interrupted(
@@ -818,6 +820,7 @@ class DefaultAgentPool:
                     error=error or _DEFAULT_EXECUTION_ERROR,
                     backend_turn_id=backend_turn_id,
                     transcript_turn_id=None,
+                    effective_runtime=getattr(result, "effective_runtime", None),
                 )
         except KeyError:
             finalized = started.service.get_execution(thread_id, execution_id)

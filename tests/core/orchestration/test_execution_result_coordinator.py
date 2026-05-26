@@ -66,6 +66,7 @@ def test_record_execution_result_persists_and_notifies_terminal_transition() -> 
             "error": None,
             "backend_turn_id": "backend-turn-1",
             "transcript_turn_id": None,
+            "effective_runtime": None,
         }
     ]
     assert transition_payloads[0]["to_state"] == "completed"
