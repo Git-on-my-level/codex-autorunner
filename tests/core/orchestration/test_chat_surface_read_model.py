@@ -110,6 +110,8 @@ def _seed_execution(
     status: str,
     execution_id: str | None = None,
     prompt_text: str | None = None,
+    model_id: str | None = None,
+    reasoning_level: str | None = None,
     metadata: dict[str, object] | None = None,
     created_at: str = "2026-05-11T00:01:00Z",
 ) -> None:
@@ -122,16 +124,20 @@ def _seed_execution(
                 thread_target_id,
                 request_kind,
                 prompt_text,
+                model_id,
+                reasoning_level,
                 metadata_json,
                 status,
                 created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 eid,
                 thread_id,
                 "message",
                 prompt_text,
+                model_id,
+                reasoning_level,
                 json.dumps(metadata or {}),
                 status,
                 created_at,
@@ -538,7 +544,8 @@ def test_chat_index_rebuilds_projection_when_facet_schema_marker_is_missing(
     service.rebuild_chat_index_projection()
 
     with open_orchestration_sqlite(hub_root, durable=False, migrate=True) as conn:
-        conn.execute("""
+        conn.execute(
+            """
             UPDATE orch_chat_index_projection
                SET facet_category = NULL,
                    facet_turn_kind_list = '',
@@ -547,11 +554,14 @@ def test_chat_index_rebuilds_projection_when_facet_schema_marker_is_missing(
                    facet_scope_kind = NULL,
                    facet_scope_id = NULL,
                    facet_agent_kind = NULL
-            """)
-        conn.execute("""
+            """
+        )
+        conn.execute(
+            """
             DELETE FROM orch_chat_index_projection_meta
              WHERE key = 'projection_schema_version'
-            """)
+            """
+        )
 
     assert service.chat_index_projection_status()["needs_rebuild"] is True
     automation = service.chat_index_snapshot(
@@ -984,6 +994,46 @@ def test_chat_surface_read_model_projects_thread_identity_from_metadata_json(
     assert surface["metadata"]["agent_id"] == "codex"
     assert surface["metadata"]["agent_profile"] == "m4-pma"
     assert surface["metadata"]["model"] == "gpt-5.5"
+
+
+def test_chat_surface_read_model_uses_execution_model_when_thread_metadata_missing(
+    tmp_path: Path,
+) -> None:
+    hub_root = tmp_path / "hub"
+    _seed_thread(
+        hub_root,
+        thread_id="automation-thread",
+        runtime_status="running",
+        metadata={
+            "automation": {
+                "job_id": "job-1",
+                "rule_id": "user:automation:daily-security-scan",
+            }
+        },
+    )
+    _seed_execution(
+        hub_root,
+        thread_id="automation-thread",
+        status="running",
+        model_id="zai-coding-plan/glm-5.1",
+    )
+
+    snapshot = ChatSurfaceReadService(hub_root, durable=False).snapshot()
+    by_kind_key = {
+        (surface["surface_kind"], surface["surface_key"]): surface
+        for surface in snapshot["surfaces"]
+    }
+
+    surface = by_kind_key[("pma", "automation-thread")]
+    assert surface["metadata"]["model"] == "zai-coding-plan/glm-5.1"
+
+    index = ChatSurfaceReadService(hub_root, durable=False).chat_index_snapshot(
+        view="all", limit=20
+    )
+    row = next(
+        row for row in index["rows"] if row["managed_thread_id"] == "automation-thread"
+    )
+    assert row["model"] == "zai-coding-plan/glm-5.1"
 
 
 def test_chat_surface_read_model_ignores_running_execution_on_archived_thread(
@@ -1827,11 +1877,13 @@ def test_chat_index_snapshot_repairs_missing_facet_projection_columns(
             str(row["name"])
             for row in conn.execute("PRAGMA table_info(orch_chat_index_projection)")
         }
-        stored_schema_version = conn.execute("""
+        stored_schema_version = conn.execute(
+            """
             SELECT value
               FROM orch_chat_index_projection_meta
              WHERE key = 'projection_schema_version'
-            """).fetchone()["value"]
+            """
+        ).fetchone()["value"]
 
     assert set(facet_columns).issubset(columns)
     assert stored_schema_version == "chat.index.projection.facets.v1"
