@@ -37,6 +37,7 @@ __all__ = [
     "ChatIndexRow",
     "ChatIndexSnapshot",
     "ChatQueueSummary",
+    "ChatRuntimeProjection",
     "ChatThreadProjection",
     "ChatTimelineIdentity",
     "ChatTimelineItem",
@@ -196,6 +197,27 @@ class ChatFacetRequest(ReadModelContract):
     agent_kinds: list[ChatFacetAgentKind] = Field(default_factory=list)
 
 
+class ChatRuntimeProjection(ReadModelContract):
+    stage: str
+    source: str
+    runtime_source: str
+    agent: Optional[str] = None
+    profile: Optional[str] = None
+    model: Optional[str] = None
+    provider_id: Optional[str] = None
+    provider_model_id: Optional[str] = None
+    reasoning: Optional[str] = None
+    backend_runtime_id: Optional[str] = None
+    model_unknown: bool = False
+    reasoning_unknown: bool = False
+    agent_unknown: bool = False
+    profile_unknown: bool = False
+    provider_unknown: bool = False
+    backend_runtime_unknown: bool = False
+    model_source: str
+    reasoning_source: str
+
+
 class ChatIndexRow(ReadModelContract):
     """Chat row contract shared by snapshots and patch payloads.
 
@@ -246,6 +268,11 @@ class ChatIndexRow(ReadModelContract):
     chat_kind: Optional[Literal["pma", "coding_agent"]] = None
     facets: Optional[ChatIndexFacets] = None
     model: Optional[str] = None
+    runtime: Optional[ChatRuntimeProjection] = None
+    runtime_source: Optional[str] = None
+    model_source: Optional[str] = None
+    reasoning: Optional[str] = None
+    reasoning_source: Optional[str] = None
     group_id: Optional[str] = None
     flow_type: Optional[Literal["ticket_flow"]] = None
     ticket_path: Optional[str] = None
@@ -428,6 +455,11 @@ class ChatThreadProjection(ReadModelContract):
     agent_profile: Optional[str] = None
     chat_kind: Optional[Literal["pma", "coding_agent"]] = None
     model: Optional[str] = None
+    runtime: Optional[ChatRuntimeProjection] = None
+    runtime_source: Optional[str] = None
+    model_source: Optional[str] = None
+    reasoning: Optional[str] = None
+    reasoning_source: Optional[str] = None
     archived: bool = False
 
 

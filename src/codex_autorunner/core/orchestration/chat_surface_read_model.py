@@ -17,6 +17,7 @@ from ..domain.workspace_scope import (
 )
 from ..hub_topology import load_hub_state
 from ..injected_context import strip_legacy_injected_context_transport_blocks
+from ..runtime_identity import RuntimeIdentityContractError, RuntimeIdentityEnvelope
 from ..sqlite_utils import ensure_columns, table_columns
 from ..state_roots import resolve_repo_flows_db_path
 from ..text_utils import _normalize_optional_text, _parse_iso_timestamp
@@ -1341,6 +1342,7 @@ class ChatSurfaceReadService:
                        metadata_json,
                        turn_request_json,
                        turn_record_json,
+                       runtime_identity_json,
                        created_at,
                        started_at,
                        finished_at,
@@ -1440,6 +1442,11 @@ class ChatSurfaceReadService:
             automation_metadata = metadata.get("automation")
             chat_kind = _normalize_text(metadata.get("chat_kind"))
             execution_model = _normalize_text(_row_get(execution, "model_id"))
+            runtime_projection = _runtime_projection_from_execution(
+                execution,
+                default_agent=_normalize_text(row["agent_id"]),
+                default_profile=_normalize_text(metadata.get("agent_profile")),
+            )
             run_id = _normalize_text(metadata.get("run_id"))
             visible_execution = visible_execution_by_thread.get(thread_id)
             execution_facets = execution_facets_by_thread.get(thread_id, {})
@@ -1501,7 +1508,12 @@ class ChatSurfaceReadService:
                     "backend_thread_id": _normalize_text(
                         _row_get(row, "backend_thread_id")
                     ),
-                    "model": _normalize_text(metadata.get("model")) or execution_model,
+                    "model": runtime_projection["model"] or execution_model,
+                    "runtime": runtime_projection,
+                    "runtime_source": runtime_projection["runtime_source"],
+                    "model_source": runtime_projection["model_source"],
+                    "reasoning": runtime_projection["reasoning"],
+                    "reasoning_source": runtime_projection["reasoning_source"],
                     "thread_kind": _normalize_text(metadata.get("thread_kind")),
                     "automation": (
                         dict(automation_metadata)
@@ -2117,6 +2129,11 @@ def _chat_index_rows_from_surfaces(
                 "agent": metadata_map.get("agent_id"),
                 "agent_profile": metadata_map.get("agent_profile"),
                 "model": metadata_map.get("model"),
+                "runtime": metadata_map.get("runtime"),
+                "runtime_source": metadata_map.get("runtime_source"),
+                "model_source": metadata_map.get("model_source"),
+                "reasoning": metadata_map.get("reasoning"),
+                "reasoning_source": metadata_map.get("reasoning_source"),
                 "active_turn_id": metadata_map.get("active_turn_id"),
                 "queue_depth": int(metadata_map.get("queue_depth") or 0),
                 "unread": bool(metadata_map.get("unread")),
@@ -2199,6 +2216,11 @@ def _chat_index_rows_from_surfaces(
                 "chat_kind",
                 "flow_type",
                 "model",
+                "runtime",
+                "runtime_source",
+                "model_source",
+                "reasoning",
+                "reasoning_source",
                 "active_turn_id",
                 "workspace_root",
                 "ticket_id",
@@ -3458,6 +3480,11 @@ def _chat_detail_thread_metadata(
         "agent": thread.get("agent") or thread.get("agent_id"),
         "agent_profile": metadata_map.get("agent_profile"),
         "model": metadata_map.get("model"),
+        "runtime": metadata_map.get("runtime"),
+        "runtime_source": metadata_map.get("runtime_source"),
+        "model_source": metadata_map.get("model_source"),
+        "reasoning": metadata_map.get("reasoning"),
+        "reasoning_source": metadata_map.get("reasoning_source"),
         "repo_id": thread.get("repo_id"),
         "resource_kind": thread.get("resource_kind"),
         "resource_id": thread.get("resource_id"),
@@ -3892,6 +3919,96 @@ def _latest_execution_by_thread(
     return result
 
 
+def _runtime_projection_from_execution(
+    execution: Optional[Mapping[str, Any]],
+    *,
+    default_agent: Optional[str],
+    default_profile: Optional[str],
+) -> dict[str, Any]:
+    envelope = _runtime_identity_from_execution(execution)
+    for stage_name in ("effective", "launch", "resolved", "requested"):
+        stage = getattr(envelope, stage_name)
+        if stage is None:
+            continue
+        model = _normalize_text(stage.canonical_model_label)
+        reasoning = _normalize_text(stage.reasoning)
+        agent = (
+            _normalize_text(stage.logical_agent)
+            or _normalize_text(stage.runtime_agent)
+            or default_agent
+        )
+        profile = _normalize_text(stage.profile) or default_profile
+        provider_id = _normalize_text(stage.provider_id)
+        provider_model_id = _normalize_text(stage.provider_model_id)
+        backend_runtime_id = _normalize_text(stage.backend_runtime_id)
+        source = _normalize_text(stage.source) or stage_name
+        runtime_source = (
+            f"{stage_name}:{source}" if source != stage_name else stage_name
+        )
+        return {
+            "stage": stage_name,
+            "source": source,
+            "runtime_source": runtime_source,
+            "agent": agent,
+            "profile": profile,
+            "model": model,
+            "provider_id": provider_id,
+            "provider_model_id": provider_model_id,
+            "reasoning": reasoning,
+            "backend_runtime_id": backend_runtime_id,
+            "model_unknown": model is None,
+            "reasoning_unknown": reasoning is None,
+            "agent_unknown": agent is None,
+            "profile_unknown": profile is None,
+            "provider_unknown": provider_id is None and provider_model_id is None,
+            "backend_runtime_unknown": backend_runtime_id is None,
+            "model_source": (
+                f"{stage_name}.canonical_model_label"
+                if model is not None
+                else "unknown"
+            ),
+            "reasoning_source": (
+                f"{stage_name}.reasoning" if reasoning is not None else "unknown"
+            ),
+        }
+    return {
+        "stage": "unknown",
+        "source": "unknown",
+        "runtime_source": "unknown",
+        "agent": default_agent,
+        "profile": default_profile,
+        "model": None,
+        "provider_id": None,
+        "provider_model_id": None,
+        "reasoning": None,
+        "backend_runtime_id": None,
+        "model_unknown": True,
+        "reasoning_unknown": True,
+        "agent_unknown": default_agent is None,
+        "profile_unknown": default_profile is None,
+        "provider_unknown": True,
+        "backend_runtime_unknown": True,
+        "model_source": "unknown",
+        "reasoning_source": "unknown",
+    }
+
+
+def _runtime_identity_from_execution(
+    execution: Optional[Mapping[str, Any]],
+) -> RuntimeIdentityEnvelope:
+    if execution is None:
+        return RuntimeIdentityEnvelope()
+    raw = _row_get(execution, "runtime_identity_json")
+    text = _normalize_text(raw)
+    if text is None:
+        return RuntimeIdentityEnvelope()
+    try:
+        return RuntimeIdentityEnvelope.from_json(text)
+    except RuntimeIdentityContractError:
+        logger.warning("ignoring invalid execution runtime_identity_json")
+        return RuntimeIdentityEnvelope()
+
+
 def _latest_visible_execution_by_thread(
     rows: Iterable[Mapping[str, Any]],
 ) -> dict[str, Mapping[str, Any]]:
@@ -4121,6 +4238,11 @@ def _pma_thread_from_surface(surface: Mapping[str, Any]) -> dict[str, Any]:
         "technical_title": managed_thread_id,
         "chat_display_name": chat_display_name,
         "model": _normalize_text(metadata.get("model")),
+        "runtime": metadata.get("runtime"),
+        "runtime_source": _normalize_text(metadata.get("runtime_source")),
+        "model_source": _normalize_text(metadata.get("model_source")),
+        "reasoning": _normalize_text(metadata.get("reasoning")),
+        "reasoning_source": _normalize_text(metadata.get("reasoning_source")),
         "backend_thread_id": _normalize_text(metadata.get("backend_thread_id")),
         "lifecycle_status": lifecycle_status,
         "runtime_status": runtime_status,

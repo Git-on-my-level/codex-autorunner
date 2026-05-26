@@ -47,6 +47,30 @@ describe('read model view-model selectors', () => {
       agentProfile: 'm4-pma',
       chatKind: 'coding_agent',
       model: 'gpt-5.5',
+      runtime: {
+        stage: 'effective',
+        source: 'opencode.session',
+        runtimeSource: 'effective:opencode.session',
+        agent: 'opencode',
+        profile: 'm4-pma',
+        model: 'zai-coding-plan/glm-5.1',
+        providerId: 'zai-coding-plan',
+        providerModelId: 'glm-5.1',
+        reasoning: 'medium',
+        backendRuntimeId: 'turn-1',
+        modelUnknown: false,
+        reasoningUnknown: false,
+        agentUnknown: false,
+        profileUnknown: false,
+        providerUnknown: false,
+        backendRuntimeUnknown: false,
+        modelSource: 'effective.canonical_model_label',
+        reasoningSource: 'effective.reasoning'
+      },
+      runtimeSource: 'effective:opencode.session',
+      modelSource: 'effective.canonical_model_label',
+      reasoning: 'medium',
+      reasoningSource: 'effective.reasoning',
       groupId: 'ticket:TICKET-005',
       facets: {
         category: 'ticket_run',
@@ -64,6 +88,9 @@ describe('read model view-model selectors', () => {
     expect(summary.status).toBe('waiting');
     expect(summary.chatKind).toBe('coding_agent');
     expect(summary.agentProfile).toBe('m4-pma');
+    expect(summary.runtime?.stage).toBe('effective');
+    expect(summary.modelSource).toBe('effective.canonical_model_label');
+    expect(summary.reasoning).toBe('medium');
     expect(summary.isTicketFlow).toBe(true);
     expect(summary.raw.surface_kind).toBe('discord');
     expect(summary.raw.agent_profile).toBe('m4-pma');
@@ -71,6 +98,8 @@ describe('read model view-model selectors', () => {
     expect(pmaChatSummaryToChatIndexRow(summary).agentProfile).toBe('m4-pma');
     expect(pmaChatSummaryToChatIndexRow(summary).chatId).toBe('chat-1');
     expect(pmaChatSummaryToChatIndexRow(summary).unreadCount).toBe(2);
+    expect(pmaChatSummaryToChatIndexRow(summary).runtime?.stage).toBe('effective');
+    expect(pmaChatSummaryToChatIndexRow(summary).modelSource).toBe('effective.canonical_model_label');
     expect(pmaChatSummaryToChatIndexRow(summary).facets?.category).toBe('ticket_run');
   });
 

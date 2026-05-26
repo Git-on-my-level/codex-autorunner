@@ -423,6 +423,32 @@ def _serialize_thread_target(
         or target_runtime_status
         or "idle"
     )
+    model = normalize_optional_text(getattr(thread, "model", None))
+    runtime = {
+        "stage": "unknown",
+        "source": "thread_target" if model else "unknown",
+        "runtime_source": "thread_target" if model else "unknown",
+        "agent": normalize_optional_text(thread.agent_id),
+        "profile": normalize_optional_text(thread.agent_profile),
+        "model": model,
+        "provider_id": None,
+        "provider_model_id": None,
+        "reasoning": None,
+        "backend_runtime_id": normalize_optional_text(
+            getattr(thread, "backend_runtime_instance_id", None)
+        ),
+        "model_unknown": model is None,
+        "reasoning_unknown": True,
+        "agent_unknown": normalize_optional_text(thread.agent_id) is None,
+        "profile_unknown": normalize_optional_text(thread.agent_profile) is None,
+        "provider_unknown": True,
+        "backend_runtime_unknown": normalize_optional_text(
+            getattr(thread, "backend_runtime_instance_id", None)
+        )
+        is None,
+        "model_source": "thread_target.model" if model else "unknown",
+        "reasoning_source": "unknown",
+    }
     payload = {
         "managed_thread_id": thread.thread_target_id,
         "agent": thread.agent_id,
@@ -432,7 +458,12 @@ def _serialize_thread_target(
         "resource_id": thread.resource_id,
         "workspace_root": thread.workspace_root,
         "name": thread.display_name,
-        "model": normalize_optional_text(getattr(thread, "model", None)),
+        "model": model,
+        "runtime": runtime,
+        "runtime_source": runtime["runtime_source"],
+        "model_source": runtime["model_source"],
+        "reasoning": runtime["reasoning"],
+        "reasoning_source": runtime["reasoning_source"],
         "backend_thread_id": thread.backend_thread_id,
         "lifecycle_status": thread.lifecycle_status,
         "runtime_status": effective_status,

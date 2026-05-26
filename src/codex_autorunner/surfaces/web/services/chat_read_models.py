@@ -27,6 +27,7 @@ from ..read_model_contracts import (
     ChatIndexRow,
     ChatIndexSnapshot,
     ChatQueueSummary,
+    ChatRuntimeProjection,
     ChatThreadProjection,
     ChatTimelineIdentity,
     ChatTimelineItem,
@@ -729,6 +730,11 @@ def hub_chat_row_to_chat_index_row(raw: Mapping[str, Any]) -> ChatIndexRow:
         chat_kind=ck_type,
         facets=facets,
         model=_str_or_none(raw.get("model")),
+        runtime=_runtime_projection_contract(raw.get("runtime")),
+        runtime_source=_str_or_none(raw.get("runtime_source")),
+        model_source=_str_or_none(raw.get("model_source")),
+        reasoning=_str_or_none(raw.get("reasoning")),
+        reasoning_source=_str_or_none(raw.get("reasoning_source")),
         group_id=_str_or_none(raw.get("group_id")),
         flow_type="ticket_flow" if is_ticket_flow else None,
         ticket_path=_str_or_none(raw.get("ticket_path")) if is_ticket_flow else None,
@@ -972,6 +978,12 @@ def _detail_thread_as_index_shape(thread: Mapping[str, Any]) -> dict[str, Any]:
         "agent_id": thread.get("agent_id"),
         "agent_profile": thread.get("agent_profile") or meta.get("agent_profile"),
         "model": thread.get("model") or meta.get("model"),
+        "runtime": thread.get("runtime") or meta.get("runtime"),
+        "runtime_source": thread.get("runtime_source") or meta.get("runtime_source"),
+        "model_source": thread.get("model_source") or meta.get("model_source"),
+        "reasoning": thread.get("reasoning") or meta.get("reasoning"),
+        "reasoning_source": thread.get("reasoning_source")
+        or meta.get("reasoning_source"),
         "chat_kind": meta.get("chat_kind") or meta.get("thread_kind"),
         "thread_kind": meta.get("thread_kind"),
         "automation": meta.get("automation"),
@@ -991,6 +1003,12 @@ def _detail_thread_as_index_shape(thread: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
+def _runtime_projection_contract(value: Any) -> Optional[ChatRuntimeProjection]:
+    if not isinstance(value, Mapping):
+        return None
+    return ChatRuntimeProjection(**dict(cast(Mapping[str, Any], value)))
+
+
 def hub_thread_detail_to_projection(thread: Mapping[str, Any]) -> ChatThreadProjection:
     row = hub_chat_row_to_chat_index_row(_detail_thread_as_index_shape(thread))
     return ChatThreadProjection(
@@ -1006,6 +1024,11 @@ def hub_thread_detail_to_projection(thread: Mapping[str, Any]) -> ChatThreadProj
         agent_profile=row.agent_profile,
         chat_kind=row.chat_kind,
         model=row.model,
+        runtime=row.runtime,
+        runtime_source=row.runtime_source,
+        model_source=row.model_source,
+        reasoning=row.reasoning,
+        reasoning_source=row.reasoning_source,
         archived=row.status == "archived",
     )
 
