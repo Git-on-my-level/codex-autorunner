@@ -155,9 +155,11 @@ def _format_phase_timing_summary(raw_timings: Any) -> str:
 
     slowest = sorted(timings, key=lambda item: item[2], reverse=True)[:3]
     return ", ".join(
-        f"{phase}={_format_duration_ms(duration_ms)}"
-        if state == "ok"
-        else f"{phase}={_format_duration_ms(duration_ms)} ({state})"
+        (
+            f"{phase}={_format_duration_ms(duration_ms)}"
+            if state == "ok"
+            else f"{phase}={_format_duration_ms(duration_ms)} ({state})"
+        )
         for phase, state, duration_ms in slowest
     )
 

@@ -179,9 +179,9 @@ class _MlxWhisperStream(TranscriptionStream):
             return []
 
         audio_bytes = b"".join(self._chunks)
-        payload = self._build_payload()
         file_suffix = self._session_file_suffix()
         try:
+            payload = self._build_payload()
             started = time.monotonic()
             result = self._provider._transcribe(audio_bytes, payload, file_suffix)
             latency_ms = int((time.monotonic() - started) * 1000)
@@ -297,11 +297,12 @@ def _resolve_cached_hf_model(
             "Install with: pip install huggingface-hub"
         ) from exc
 
-    return snapshot_download(
+    resolved = snapshot_download(
         repo_id=repo_id,
         cache_dir=cache_dir,
         local_files_only=local_files_only,
     )
+    return str(resolved)
 
 
 def _coerce_beam_size(raw: Any) -> Optional[int]:
