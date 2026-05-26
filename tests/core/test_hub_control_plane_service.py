@@ -38,6 +38,7 @@ from codex_autorunner.core.hub_control_plane import (
     RunningExecutionLookupRequest,
     SurfaceBindingListRequest,
     SurfaceBindingUpsertRequest,
+    ThreadCompactSeedUpdateRequest,
     ThreadTargetListRequest,
     TranscriptHistoryRequest,
     TranscriptWriteRequest,
@@ -162,6 +163,28 @@ def test_shared_state_service_thread_listing_accepts_status_alias(
 
     assert [thread.thread_target_id for thread in active.threads] == [thread_target_id]
     assert [thread.thread_target_id for thread in idle.threads] == [thread_target_id]
+
+
+def test_shared_state_service_compact_seed_records_compaction_action(
+    tmp_path: Path,
+) -> None:
+    service, thread_target_id = _build_service(tmp_path)
+
+    response = service.update_thread_compact_seed(
+        ThreadCompactSeedUpdateRequest(
+            thread_target_id=thread_target_id,
+            compact_seed="Keep the current goal.",
+        )
+    )
+
+    assert response.thread is not None
+    store = ManagedThreadStore(tmp_path / "hub", durable=False, bootstrap_on_init=False)
+    actions = store.list_thread_actions(thread_target_id)
+    assert len(actions) == 1
+    assert actions[0]["action_type"] == "managed_thread_compact"
+    payload = json.loads(actions[0]["payload_json"])
+    assert payload["summary"] == "Keep the current goal."
+    assert payload["summary_preview"] == "Keep the current goal."
 
 
 def test_shared_state_service_reply_lookup_and_binding_idempotency(

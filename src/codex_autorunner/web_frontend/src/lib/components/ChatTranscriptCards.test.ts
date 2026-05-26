@@ -74,6 +74,39 @@ describe('ChatTranscriptCards', () => {
     expect(body).toContain('Visible user-facing note.');
   });
 
+  it('renders context compaction as an expandable retained-context card', () => {
+    const cards: ChatTranscriptCard[] = [
+      {
+        kind: 'context_compaction',
+        id: 'compact-1',
+        title: 'Context compacted by CAR',
+        text: 'Earlier conversation was summarized.',
+        detail: '{"action_type":"managed_thread_compact"}',
+        turnId: null,
+        orderKey: '00000002|compact',
+        timestamp: '2026-05-10T00:01:00.000Z',
+        compaction: {
+          source: 'car',
+          provider: null,
+          summary: 'Keep the current goal.',
+          preview: 'Keep the current goal.',
+          scope: 'managed_thread',
+          startedFreshSession: true,
+          storedByCar: true
+        }
+      }
+    ];
+
+    const { body } = render(ChatTranscriptCards, { props: { cards } });
+
+    expect(body).toContain('class="tool-call-bar context-compaction-card"');
+    expect(body).toContain('<span>CAR</span>');
+    expect(body).toContain('Keep the current goal.');
+    expect(body).toContain('Retained context');
+    expect(body).toContain('<dt>Fresh session</dt>');
+    expect(body).toContain('<dd>yes</dd>');
+  });
+
   it('renders richer progress labels when the model supplies them', () => {
     const cards: ChatTranscriptCard[] = [
       {

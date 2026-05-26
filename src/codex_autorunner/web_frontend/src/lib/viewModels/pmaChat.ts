@@ -252,8 +252,29 @@ export type ChatTranscriptCard =
   | { kind: 'turn_summary'; id: string; title: string; cards: ChatTranscriptCard[]; turnId: string | null; orderKey: string; timestamp: string | null }
   | { kind: 'approval'; id: string; title: string; summary: string; detail: string | null; turnId: string | null; orderKey: string; timestamp: string | null }
   | { kind: 'lifecycle'; id: string; title: string; text: string; detail: string | null; turnId: string | null; orderKey: string; timestamp: string | null }
+  | {
+      kind: 'context_compaction';
+      id: string;
+      title: string;
+      text: string;
+      detail: string | null;
+      compaction: ChatContextCompaction;
+      turnId: string | null;
+      orderKey: string;
+      timestamp: string | null;
+    }
   | { kind: 'ticket'; id: string; title: string; summary: string | null; ticketId: string }
   | { kind: 'artifact'; id: string; artifact: SurfaceArtifact };
+
+export type ChatContextCompaction = {
+  source: 'car' | 'provider' | 'unknown';
+  provider: string | null;
+  summary: string | null;
+  preview: string | null;
+  scope: string | null;
+  startedFreshSession: boolean;
+  storedByCar: boolean;
+};
 
 export type ChatToolCallCard = {
   id: string;
@@ -1615,10 +1636,36 @@ function mapChatTranscriptRow(raw: Record<string, unknown>): ChatTranscriptCard 
       timestamp: nullableString(raw.timestamp)
     };
   }
+  if (kind === 'context_compaction') {
+    return {
+      kind: 'context_compaction',
+      id,
+      title: stringValue(raw.title) || 'Context compacted',
+      text: stringValue(raw.text),
+      detail: nullableString(raw.detail),
+      compaction: mapContextCompaction(asRecord(raw.context_compaction)),
+      turnId: nullableString(raw.turn_id),
+      orderKey: stringValue(raw.order_key),
+      timestamp: nullableString(raw.timestamp)
+    };
+  }
   if (kind === 'artifact') {
     return { kind: 'artifact', id, artifact: mapTranscriptArtifact(asRecord(raw.artifact)) };
   }
   return null;
+}
+
+function mapContextCompaction(raw: Record<string, unknown>): ChatContextCompaction {
+  const source = stringValue(raw.source).toLowerCase();
+  return {
+    source: source === 'car' || source === 'provider' ? source : 'unknown',
+    provider: nullableString(raw.provider),
+    summary: nullableString(raw.summary),
+    preview: nullableString(raw.preview),
+    scope: nullableString(raw.scope),
+    startedFreshSession: Boolean(raw.started_fresh_session ?? raw.startedFreshSession),
+    storedByCar: Boolean(raw.stored_by_car ?? raw.storedByCar)
+  };
 }
 
 function mapTranscriptToolCard(raw: Record<string, unknown>): ChatToolCallCard {
@@ -2168,6 +2215,20 @@ function timelineItemToCard(item: PmaTimelineItem): ChatTranscriptCard[] {
     const title = stringValue(item.payload.title) || 'Chat compacted';
     const preview = stringValue(item.payload.summary_preview);
     const text = stringValue(item.payload.text) || 'Chat compacted.';
+    const compaction = asRecord(item.payload.context_compaction);
+    if (compaction && Object.keys(compaction).length > 0) {
+      return [{
+        kind: 'context_compaction',
+        id: item.id,
+        title,
+        text: preview ? `${text}\n\n${preview}` : text,
+        detail: timelineDetail(item),
+        compaction: mapContextCompaction(compaction),
+        turnId: item.turnId,
+        orderKey: item.orderKey,
+        timestamp: item.timestamp
+      }];
+    }
     return [{
       kind: 'lifecycle',
       id: item.id,

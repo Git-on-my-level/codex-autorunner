@@ -296,11 +296,18 @@ def _tail_event_from_run_event(
         grouped = (*state.tool_group_items.get(item.group_id, ()), item)
         state.tool_group_items[item.group_id] = grouped
         progress_items = list(grouped)
-    return _tail_event_from_progress_item(
+    tail_event = _tail_event_from_progress_item(
         item,
         received_at=received_at,
         progress_items=progress_items,
     )
+    if isinstance(run_event, RunNotice):
+        tail_event["run_notice"] = {
+            "kind": run_event.kind,
+            "message": run_event.message,
+            "data": dict(run_event.data),
+        }
+    return tail_event
 
 
 def _tail_event_type_from_progress_item(item: ProgressProjectionItem) -> str:

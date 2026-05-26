@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import logging
 from importlib import metadata as importlib_metadata
 from pathlib import Path
@@ -602,6 +603,19 @@ class HubSharedStateService:
         self._thread_store.set_thread_compact_seed(
             request.thread_target_id,
             request.compact_seed,
+        )
+        self._thread_store.append_action(
+            "managed_thread_compact",
+            managed_thread_id=request.thread_target_id,
+            payload_json=json.dumps(
+                {
+                    "summary_length": len(request.compact_seed),
+                    "summary": request.compact_seed,
+                    "summary_preview": request.compact_seed[:240],
+                    "reset_backend": False,
+                },
+                ensure_ascii=True,
+            ),
         )
         return ThreadTargetResponse(
             thread=_thread_target_from_store_row(
