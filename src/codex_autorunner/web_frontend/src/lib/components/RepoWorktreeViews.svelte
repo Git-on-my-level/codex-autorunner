@@ -15,6 +15,8 @@
   import FilterRow from '$lib/components/FilterRow.svelte';
   import { repoAccent, repoInitials } from '$lib/viewModels/repoIdentity';
   import ContentSkeleton from '$lib/components/ContentSkeleton.svelte';
+  import OverflowMenu from '$lib/components/OverflowMenu.svelte';
+  import type { OverflowMenuItem } from '$lib/components/OverflowMenu';
 
   let {
     state: viewState,
@@ -56,10 +58,6 @@
   const artifactIssues = $derived(sectionIssues.filter((issue) => issue.id === 'artifacts'));
   const queueTickets = $derived(detail ? [...detail.currentTickets, ...detail.nextTickets] : []);
 
-  function pluralize(count: number, singular: string, plural?: string): string {
-    return `${count} ${count === 1 ? singular : plural ?? `${singular}s`}`;
-  }
-
   const shortDetailTitle = $derived.by(() => {
     if (!detail) return '';
     if (detail.kind === 'worktree' && detail.baseRepoLabel) {
@@ -69,13 +67,8 @@
     return detail.title;
   });
 
-  const detailSubtitle = $derived.by(() => {
-    if (!detail) return '';
-    const parts: string[] = [];
-    if (detail.branch) parts.push(detail.branch);
-    if (detail.path) parts.push(detail.path);
-    return parts.join(' · ');
-  });
+  // Detail subtitle intentionally omitted — the breadcrumb names the page and
+  // the path is duplicative with the H1. Branch is surfaced in the hero meta row.
 
   const showFlowStrip = $derived.by(() => {
     if (!detail) return false;
@@ -188,6 +181,160 @@
     if (isInteractiveTarget(event.target)) return;
     event.preventDefault();
     void goto(href(path));
+  }
+
+  type RepoWorktreeChildRowLike = {
+    id: string;
+    label: string;
+    hasCarState: boolean;
+    unboundManagedThreadCount: number;
+    chatBound: boolean;
+    cleanupBlockedByChatBinding: boolean;
+  };
+
+  function buildRowOverflowItems(row: RepoWorktreeIndexViewModel['rows'][number]): OverflowMenuItem[] {
+    const items: OverflowMenuItem[] = [];
+    if (row.kind === 'repo' && onOpenRepoSettings) {
+      items.push({
+        label: 'Repo settings',
+        title: 'Worktree setup commands and other repo settings',
+        onSelect: () =>
+          onOpenRepoSettings?.({
+            id: row.id,
+            label: row.label,
+            worktreeSetupCommands: row.worktreeSetupCommands ?? []
+          })
+      });
+    }
+    if (onRetireState && canRetireState(row)) {
+      items.push({
+        label: 'Clear state',
+        title: 'Retire CAR state without deleting git files',
+        danger: true,
+        onSelect: () =>
+          void onRetireState?.({
+            kind: row.kind,
+            id: row.id,
+            label: row.label,
+            hasCarState: row.hasCarState,
+            unboundManagedThreadCount: row.unboundManagedThreadCount
+          })
+      });
+    }
+    if (row.kind === 'worktree' && onRetireWorktree) {
+      items.push({
+        label: 'Retire worktree',
+        title: 'Preserve artifacts, then remove the checkout',
+        danger: true,
+        onSelect: () =>
+          void onRetireWorktree?.({
+            id: row.id,
+            label: row.label,
+            chatBound: row.chatBound,
+            cleanupBlockedByChatBinding: row.cleanupBlockedByChatBinding
+          })
+      });
+    }
+    return items;
+  }
+
+  function buildWorktreeRowOverflowItems(worktree: RepoWorktreeChildRowLike): OverflowMenuItem[] {
+    const items: OverflowMenuItem[] = [];
+    if (onRetireState && canRetireState(worktree)) {
+      items.push({
+        label: 'Clear state',
+        title: 'Retire CAR state without deleting git files',
+        danger: true,
+        onSelect: () =>
+          void onRetireState?.({
+            kind: 'worktree',
+            id: worktree.id,
+            label: worktree.label,
+            hasCarState: worktree.hasCarState,
+            unboundManagedThreadCount: worktree.unboundManagedThreadCount
+          })
+      });
+    }
+    if (onRetireWorktree) {
+      items.push({
+        label: 'Retire worktree',
+        title: 'Preserve artifacts, then remove the checkout',
+        danger: true,
+        onSelect: () =>
+          void onRetireWorktree?.({
+            id: worktree.id,
+            label: worktree.label,
+            chatBound: worktree.chatBound,
+            cleanupBlockedByChatBinding: worktree.cleanupBlockedByChatBinding
+          })
+      });
+    }
+    return items;
+  }
+
+  function buildDetailOverflowItems(d: NonNullable<typeof detail>): OverflowMenuItem[] {
+    const items: OverflowMenuItem[] = [];
+    if (d.kind === 'repo' && onOpenRepoSettings) {
+      items.push({
+        label: 'Repo settings',
+        title: 'Worktree setup commands and other repo settings',
+        onSelect: () =>
+          onOpenRepoSettings?.({
+            id: d.id,
+            label: shortDetailTitle,
+            worktreeSetupCommands: []
+          })
+      });
+    }
+    if (onSyncRepo) {
+      const behind = d.gitStatus?.behind ?? 0;
+      const dirty = d.gitStatus?.dirty ?? false;
+      const noUpstream = d.gitStatus?.hasUpstream === false;
+      const disabled = noUpstream || behind === 0 || dirty || syncRepoBusy;
+      const title = noUpstream
+        ? 'No upstream tracked — nothing to sync'
+        : behind === 0
+          ? 'Already up to date with origin'
+          : dirty
+            ? 'Commit or stash changes before syncing'
+            : 'Fetch and fast-forward the default branch from origin';
+      items.push({
+        label: syncRepoBusy ? 'Syncing…' : 'Sync main',
+        title,
+        disabled,
+        onSelect: () => void onSyncRepo?.()
+      });
+    }
+    if (onRetireState && canRetireState(d)) {
+      items.push({
+        label: 'Clear state',
+        title: 'Retire CAR state without deleting git files',
+        danger: true,
+        onSelect: () =>
+          void onRetireState?.({
+            kind: d.kind,
+            id: d.id,
+            label: shortDetailTitle,
+            hasCarState: d.hasCarState,
+            unboundManagedThreadCount: d.unboundManagedThreadCount
+          })
+      });
+    }
+    if (d.kind === 'worktree' && onRetireWorktree) {
+      items.push({
+        label: 'Retire worktree',
+        title: 'Preserve artifacts, then remove the checkout',
+        danger: true,
+        onSelect: () =>
+          void onRetireWorktree?.({
+            id: d.id,
+            label: shortDetailTitle,
+            chatBound: d.chatBound,
+            cleanupBlockedByChatBinding: d.cleanupBlockedByChatBinding
+          })
+      });
+    }
+    return items;
   }
 </script>
 
@@ -404,21 +551,12 @@
             <div class="repo-action-buttons repo-head-actions" aria-label={`Actions for ${row.label}`}>
               <a
                 class="row-action-button row-action-link is-primary-affordance"
-                href={href(row.pmaChatHref)}
-                title={`Start a new PMA chat scoped to ${row.label}`}
-                aria-label={`Start PMA chat for ${row.label}`}
+                href={href(row.newChatHref)}
+                title={`Start a new chat scoped to ${row.label} — pick PMA or coding agent in the composer`}
+                aria-label={`Start chat for ${row.label}`}
                 data-sveltekit-preload-data="tap"
               >
-                + PMA
-              </a>
-              <a
-                class="row-action-button row-action-link"
-                href={href(row.codingAgentChatHref)}
-                title={`Start a new coding agent chat scoped to ${row.label}`}
-                aria-label={`Start coding agent chat for ${row.label}`}
-                data-sveltekit-preload-data="tap"
-              >
-                + Agent
+                + Chat
               </a>
               {#if row.kind === 'repo' && onCreateWorktree}
                 <button
@@ -435,58 +573,19 @@
                   + Worktree
                 </button>
               {/if}
-              {#if
-                (row.kind === 'repo' && onOpenRepoSettings) ||
-                (onRetireState && canRetireState(row)) ||
-                (row.kind === 'worktree' && onRetireWorktree)}
-                <span class="repo-head-icon-actions">
-                  {#if row.kind === 'repo' && onOpenRepoSettings}
-                    <button
-                      class="icon-action settings"
-                      type="button"
-                      title="Repo settings (worktree setup, etc.)"
-                      aria-label={`Settings for ${row.label}`}
-                      onclick={(event) => {
-                        event.preventDefault();
-                        event.stopPropagation();
-                        onOpenRepoSettings?.({
-                          id: row.id,
-                          label: row.label,
-                          worktreeSetupCommands: row.worktreeSetupCommands ?? []
-                        });
-                      }}
-                    >
-                      {@render settingsIcon()}
-                    </button>
-                  {/if}
-                  {#if onRetireState && canRetireState(row)}
-                    <button
-                      class="icon-action retire-state"
-                      type="button"
-                      title="Retire CAR state without deleting git files"
-                      aria-label={`Retire CAR state for ${row.label}`}
-                      onclick={(event) => handleRetireStateClick(event, {
-                        kind: row.kind,
-                        id: row.id,
-                        label: row.label,
-                        hasCarState: row.hasCarState,
-                        unboundManagedThreadCount: row.unboundManagedThreadCount
-                      })}
-                    >
-                      {@render clearStateIcon()}
-                    </button>
-                  {/if}
-                  {#if row.kind === 'worktree' && onRetireWorktree}
-                    <button
-                      class="icon-action retire"
-                      type="button"
-                      title="Retire worktree: preserve artifacts, then remove the checkout"
-                      aria-label={`Retire worktree ${row.label}`}
-                      onclick={(event) => handleRetireClick(event, row)}
-                    >
-                      {@render trashIcon()}
-                    </button>
-                  {/if}
+              {#if buildRowOverflowItems(row).length > 0}
+                {@const rowMenuItems = buildRowOverflowItems(row)}
+                <span
+                  class="repo-row-overflow"
+                  onclick={(event) => event.stopPropagation()}
+                  onkeydown={(event) => event.stopPropagation()}
+                  role="presentation"
+                >
+                  <OverflowMenu
+                    items={rowMenuItems}
+                    ariaLabel={`More actions for ${row.label}`}
+                    triggerTitle="More actions"
+                  />
                 </span>
               {/if}
             </div>
@@ -610,52 +709,26 @@
                       <div class="repo-action-buttons" aria-label={`Actions for ${worktree.label}`}>
                         <a
                           class="row-action-button row-action-link is-primary-affordance"
-                          href={href(worktree.pmaChatHref)}
-                          title={`Start a new PMA chat scoped to ${worktree.label}`}
-                          aria-label={`Start PMA chat for ${worktree.label}`}
+                          href={href(worktree.newChatHref)}
+                          title={`Start a new chat scoped to ${worktree.label} — pick PMA or coding agent in the composer`}
+                          aria-label={`Start chat for ${worktree.label}`}
                           data-sveltekit-preload-data="tap"
                         >
-                          + PMA
+                          + Chat
                         </a>
-                        <a
-                          class="row-action-button row-action-link"
-                          href={href(worktree.codingAgentChatHref)}
-                          title={`Start a new coding agent chat scoped to ${worktree.label}`}
-                          aria-label={`Start coding agent chat for ${worktree.label}`}
-                          data-sveltekit-preload-data="tap"
-                        >
-                          + Agent
-                        </a>
-                        {#if (onRetireState && canRetireState(worktree)) || onRetireWorktree}
-                          <span class="worktree-row-icon-actions">
-                            {#if onRetireState && canRetireState(worktree)}
-                              <button
-                                class="icon-action retire-state"
-                                type="button"
-                                title="Retire CAR state without deleting git files"
-                                aria-label={`Retire CAR state for ${worktree.label}`}
-                                onclick={(event) => handleRetireStateClick(event, {
-                                  kind: 'worktree',
-                                  id: worktree.id,
-                                  label: worktree.label,
-                                  hasCarState: worktree.hasCarState,
-                                  unboundManagedThreadCount: worktree.unboundManagedThreadCount
-                                })}
-                              >
-                                {@render clearStateIcon()}
-                              </button>
-                            {/if}
-                            {#if onRetireWorktree}
-                              <button
-                                class="icon-action retire"
-                                type="button"
-                                title="Retire worktree: preserve artifacts, then remove the checkout"
-                                aria-label={`Retire worktree ${worktree.label}`}
-                                onclick={(event) => handleRetireClick(event, worktree)}
-                              >
-                                {@render trashIcon()}
-                              </button>
-                            {/if}
+                        {#if buildWorktreeRowOverflowItems(worktree).length > 0}
+                          {@const worktreeMenuItems = buildWorktreeRowOverflowItems(worktree)}
+                          <span
+                            class="repo-row-overflow"
+                            onclick={(event) => event.stopPropagation()}
+                            onkeydown={(event) => event.stopPropagation()}
+                            role="presentation"
+                          >
+                            <OverflowMenu
+                              items={worktreeMenuItems}
+                              ariaLabel={`More actions for ${worktree.label}`}
+                              triggerTitle="More actions"
+                            />
                           </span>
                         {/if}
                       </div>
@@ -690,81 +763,70 @@
         </div>
       </section>
     {:else}
-    <PageHero title={shortDetailTitle} subtitle={detailSubtitle}>
-      {#snippet actions()}
-        {#if onRetireState && canRetireState(detail)}
-          <button
-            class="ghost-button"
-            type="button"
-            title="Retire CAR state without deleting git files"
-            aria-label={`Clear CAR state for ${detail.title}`}
-            onclick={(event) => handleRetireStateClick(event, {
-              kind: detail.kind,
-              id: detail.id,
-              label: shortDetailTitle,
-              hasCarState: detail.hasCarState,
-              unboundManagedThreadCount: detail.unboundManagedThreadCount
-            })}
-          >
-            Clear state
-          </button>
+    <PageHero title={shortDetailTitle}>
+      {#snippet meta()}
+        {#if detail.branch}
+          <span class="hero-branch">
+            <span class="branch-glyph" aria-hidden="true">⎇</span>{detail.branch}
+          </span>
         {/if}
-        {#if detail.kind === 'worktree' && onRetireWorktree}
-          <button
-            class="ghost-button danger"
-            type="button"
-            title="Retire worktree: preserve artifacts, then remove the checkout"
-            aria-label={`Retire worktree ${detail.title}`}
-            onclick={(event) => handleRetireClick(event, {
-              id: detail.id,
-              label: shortDetailTitle,
-              chatBound: detail.chatBound,
-              cleanupBlockedByChatBinding: detail.cleanupBlockedByChatBinding
-            })}
-          >
-            {@render trashIcon()}
-            <span>Retire worktree</span>
-          </button>
+      {/snippet}
+      {#snippet actions()}
+        {@const detailMenuItems = buildDetailOverflowItems(detail)}
+        {#if detailMenuItems.length > 0}
+          <OverflowMenu
+            items={detailMenuItems}
+            ariaLabel={`More actions for ${detail.title}`}
+            triggerTitle="More actions"
+          />
         {/if}
       {/snippet}
     </PageHero>
 
     {#if detail.gitStatus}
       {@const git = detail.gitStatus}
+      {@const insertions = git.insertions ?? 0}
+      {@const deletions = git.deletions ?? 0}
       <div class="git-status-bar" aria-label="Git status">
-        <div class="git-status-chips">
-          <span class={`git-state-pill ${git.dirty ? 'dirty' : 'clean'}`}>
-            <span class="git-state-dot" aria-hidden="true"></span>
-            {git.dirty ? 'Dirty' : 'Clean'}
-          </span>
+        <span class={`git-state-pill ${git.dirty ? 'dirty' : 'clean'}`}>
+          <span class="git-state-dot" aria-hidden="true"></span>
+          {git.dirty ? 'Dirty' : 'Clean'}
+        </span>
+        <dl class="hero-stats git-hero-stats" aria-label="Git status counts">
           {#if git.filesChanged !== null && git.filesChanged > 0}
-            <span class="git-chip">{pluralize(git.filesChanged, 'file')} changed</span>
+            <div>
+              <dd>{git.filesChanged}</dd>
+              <dt>{git.filesChanged === 1 ? 'file changed' : 'files changed'}</dt>
+            </div>
           {/if}
-          <TicketDiffStats
-            extraClass="git-chip git-chip-diff"
-            stats={{
-              insertions: git.insertions ?? 0,
-              deletions: git.deletions ?? 0,
-              filesChanged: 0
-            }}
-          />
-          {#if git.staged !== null && git.staged > 0}
-            <span class="git-chip">{git.staged} staged</span>
+          {#if insertions > 0 || deletions > 0}
+            <div>
+              <dd class="git-hero-diff">
+                <TicketDiffStats
+                  stats={{ insertions, deletions, filesChanged: 0 }}
+                />
+              </dd>
+              <dt>diff</dt>
+            </div>
           {/if}
-          {#if git.untracked !== null && git.untracked > 0}
-            <span class="git-chip">{git.untracked} untracked</span>
-          {/if}
-          {#if git.hasUpstream === false}
-            <span class="git-chip git-chip-warn">No upstream</span>
-          {:else}
+          {#if git.hasUpstream !== false}
             {#if git.ahead !== null && git.ahead > 0}
-              <span class="git-chip git-chip-ahead">↑ {git.ahead} ahead</span>
+              <div class="active">
+                <dd>↑ {git.ahead}</dd>
+                <dt>ahead</dt>
+              </div>
             {/if}
             {#if git.behind !== null && git.behind > 0}
-              <span class="git-chip git-chip-behind">↓ {git.behind} behind</span>
+              <div class="waiting">
+                <dd>↓ {git.behind}</dd>
+                <dt>behind</dt>
+              </div>
             {/if}
           {/if}
-        </div>
+        </dl>
+        {#if git.hasUpstream === false}
+          <span class="git-no-upstream">No upstream</span>
+        {/if}
         {#if git.hasUpstream !== false && git.behind !== null && git.behind > 0 && onSyncRepo}
           <button
             type="button"
@@ -825,9 +887,7 @@
     <div class="detail-grid">
       {#if detail.hasActiveRun && detail.currentRuns.length > 0}
         <section class="page-panel execution-panel wide">
-          <div class="panel-heading-row">
-            <h2>Active run</h2>
-          </div>
+          <h2 class="page-panel-heading-solo">Active run</h2>
           {@render degradedIssues(currentRunIssues)}
           {#each detail.currentRuns as run}
             <article class={`run-card ${run.status}`}>
@@ -875,12 +935,11 @@
 
       <section class="page-panel execution-panel wide contextspace-panel">
         <div class="panel-heading-row">
-          <h2>Contextspace</h2>
-          <a
-            class="ghost-button"
-            href={href(detail.contextspaceHref)}
-            data-sveltekit-preload-data="tap"
-          >Browse all</a>
+          <h2 class="panel-heading-link-host">
+            <a class="panel-heading-link" href={href(detail.contextspaceHref)} data-sveltekit-preload-data="tap">
+              Contextspace<span class="panel-heading-link-chevron" aria-hidden="true">→</span>
+            </a>
+          </h2>
         </div>
         {@render degradedIssues(contextspaceIssues)}
         <ul class="contextspace-compact-list" role="list">
@@ -913,12 +972,11 @@
 
       <section class="page-panel execution-panel wide workspace-ticket-queue-panel">
         <div class="panel-heading-row">
-          <h2>{detail.kind === 'worktree' ? 'Worktree tickets' : 'Repo tickets'}</h2>
-          <a
-            class="ghost-button"
-            href={href(detail.ticketIndexHref)}
-            data-sveltekit-preload-data="tap"
-          >All tickets</a>
+          <h2 class="panel-heading-link-host">
+            <a class="panel-heading-link" href={href(detail.ticketIndexHref)} data-sveltekit-preload-data="tap">
+              {detail.kind === 'worktree' ? 'Worktree tickets' : 'Repo tickets'}<span class="panel-heading-link-chevron" aria-hidden="true">→</span>
+            </a>
+          </h2>
         </div>
         {@render degradedIssues(ticketIssues)}
         {#if detail.ticketOverview.total > 0}
@@ -931,10 +989,6 @@
             {#if detail.ticketOverview.failed > 0}
               <div class="is-failed"><span>Needs fix</span><strong>{detail.ticketOverview.failed}</strong></div>
             {/if}
-          </a>
-        {:else if ticketIssues.length === 0}
-          <a class="ticket-overview-stats ticket-overview-empty" href={href(detail.ticketIndexHref)} aria-label="View ticket queue" data-sveltekit-preload-data="tap">
-            <div><span>Tickets</span><strong>No tickets yet</strong></div>
           </a>
         {/if}
         <div class="workspace-ticket-list">
@@ -957,21 +1011,25 @@
               </a>
             {/if}
           {:else if ticketIssues.length === 0 && detail.ticketOverview.total === 0}
-            <div class="workspace-ticket-row empty-ticket-row" role="status">
-              <span>
-                <small>No scoped tickets are queued for this {detail.kind}.</small>
-              </span>
+            <div class="panel-empty-card" role="status">
+              <p class="panel-empty-card-title">No tickets yet for this {detail.kind}.</p>
+              <div class="panel-empty-card-actions">
+                <a class="ghost-button is-primary" href={href(detail.newTicketHref)} data-sveltekit-preload-data="tap">+ New ticket</a>
+              </div>
             </div>
           {/if}
         </div>
       </section>
 
       <section class="page-panel execution-panel wide">
-        <div class="panel-heading-row chats-panel-heading">
-          <h2>Chats</h2>
+        <div class="panel-heading-row">
+          <h2 class="panel-heading-link-host">
+            <a class="panel-heading-link" href={href(detail.scopedChatListHref)} data-sveltekit-preload-data="tap">
+              Chats<span class="panel-heading-link-chevron" aria-hidden="true">→</span>
+            </a>
+          </h2>
           <div class="panel-heading-actions">
-            <a class="ghost-button" href={href(detail.pmaChatHref)} data-sveltekit-preload-data="tap">New PMA chat</a>
-            <a class="ghost-button" href={href(detail.codingAgentChatHref)} data-sveltekit-preload-data="tap">New coding agent chat</a>
+            <a class="ghost-button is-primary" href={href(detail.newChatHref)} data-sveltekit-preload-data="tap" title={`Start a chat scoped to this ${detail.kind} — pick PMA or coding agent in the composer`}>+ New chat</a>
           </div>
         </div>
         {#if detail.chatList.totalChatCount > 0}
@@ -1033,7 +1091,8 @@
                         {/if}
                       </span>
                       <span class="scoped-chat-child-meta">
-                        {#if chat.agentId}<span class="chat-agent">{chat.agentId}</span>{/if}
+                        <span class="chat-id-tag">#{chat.shortId}</span>
+                        {#if chat.agentId}<span class="chat-meta-dot" aria-hidden="true">·</span><span class="chat-agent">{chat.agentId}</span>{/if}
                         {#if chat.agentId && chat.model}<span class="chat-meta-dot" aria-hidden="true">·</span>{/if}
                         {#if chat.model}<span class="chat-model">{chat.model}</span>{/if}
                         {#if chat.status !== 'idle' && chat.status !== 'done'}
@@ -1061,8 +1120,9 @@
                     <span class="chat-title-cluster">
                       <span class="chat-title-text-badge">
                         <strong>{chat.title}</strong>
-                        <span class={`chat-scope-kind-tag ${detail.kind}`}>{detail.kind === 'repo' ? 'REPO' : 'WORKTREE'}</span>
-                        <span class={`chat-kind-badge ${chat.kind}`}>{chat.kindLabel}</span>
+                        {#if chat.kind === 'coding_agent'}
+                          <span class="chat-kind-badge chat-kind-agent">{chat.kindLabel}</span>
+                        {/if}
                       </span>
                     </span>
                     <span class="chat-title-trailing">
@@ -1074,21 +1134,23 @@
                       {/if}
                     </span>
                   </span>
-                  {#if metaBits.length > 0}
-                    <span class="chat-meta-row">
+                  <span class="chat-meta-row">
+                    <span class="chat-id-tag">#{chat.shortId}</span>
+                    {#if metaBits.length > 0}
+                      <span class="chat-meta-dot" aria-hidden="true">·</span>
                       <span class="chat-agent-model">
                         {#each metaBits as bit, i}
                           {#if i > 0}<span class="chat-meta-dot" aria-hidden="true">·</span>{/if}
                           <span class={i === 0 ? 'chat-agent' : 'chat-model'}>{bit}</span>
                         {/each}
                       </span>
-                    </span>
-                  {/if}
+                    {/if}
+                  </span>
                 </span>
               </a>
             {/each}
             {#if detail.chatList.standaloneChats.length > 5}
-              <a class="row-overflow-link" href={href('/chats')}>+{detail.chatList.standaloneChats.length - 5} more chat{detail.chatList.standaloneChats.length - 5 === 1 ? '' : 's'}</a>
+              <a class="row-overflow-link" href={href(detail.scopedChatListHref)}>+{detail.chatList.standaloneChats.length - 5} more chat{detail.chatList.standaloneChats.length - 5 === 1 ? '' : 's'}</a>
             {/if}
           </div>
         {/if}
@@ -1989,6 +2051,16 @@
     gap: var(--space-2);
   }
 
+  /* Section heading with no trailing action — used when the panel-heading-row
+     flex wrapper would be visually empty on the right. Same vertical rhythm as
+     a panel-heading-row, no flex overhead. */
+  .page-panel-heading-solo {
+    margin: 0 0 var(--space-2) 0;
+    font-size: var(--font-size-2);
+    font-weight: 600;
+    letter-spacing: -0.01em;
+  }
+
   .chat-row-list {
     display: grid;
     gap: var(--space-2);
@@ -2060,6 +2132,82 @@
     background: var(--color-surface);
   }
 
+  /* Clickable section heading: title acts as the "go to all" affordance with a
+     chevron that animates on hover. Removes the redundant ghost button in the
+     panel header row. */
+  .panel-heading-link-host {
+    display: inline-flex;
+    align-items: center;
+  }
+  .panel-heading-link {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    color: inherit;
+    text-decoration: none;
+    transition: color var(--transition-fast);
+  }
+  .panel-heading-link:hover,
+  .panel-heading-link:focus-visible {
+    color: var(--color-accent);
+    outline: none;
+  }
+  .panel-heading-link-chevron {
+    display: inline-block;
+    font-weight: 400;
+    color: var(--color-ink-muted);
+    opacity: 0;
+    transform: translateX(-4px);
+    transition: opacity var(--transition-fast), transform var(--transition-fast), color var(--transition-fast);
+  }
+  .panel-heading-link:hover .panel-heading-link-chevron,
+  .panel-heading-link:focus-visible .panel-heading-link-chevron {
+    opacity: 1;
+    transform: translateX(0);
+    color: var(--color-accent);
+  }
+  .panel-heading-static {
+    color: inherit;
+  }
+
+  /* Centered empty-state card used inside panels (e.g., no tickets yet) with a
+     primary action button so the user has one obvious next step. */
+  .panel-empty-card {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: var(--space-3);
+    padding: var(--space-5) var(--space-4);
+    border: 1px dashed var(--color-border-subtle);
+    border-radius: var(--radius-2);
+    background: var(--color-surface);
+    text-align: center;
+  }
+  .panel-empty-card-title {
+    margin: 0;
+    color: var(--color-ink-muted);
+    font-size: var(--font-size-1);
+  }
+  .panel-empty-card-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-2);
+    justify-content: center;
+  }
+
+  /* Primary affordance variant of ghost-button: emphasized so the first
+     meaningful action in a section reads as the obvious next step. */
+  :global(.ghost-button.is-primary) {
+    border-color: var(--color-accent);
+    color: var(--color-accent);
+  }
+  :global(.ghost-button.is-primary:hover),
+  :global(.ghost-button.is-primary:focus-visible) {
+    background: var(--color-accent-soft);
+    color: var(--color-accent);
+  }
+
   .chat-row {
     display: grid;
     grid-template-columns: auto minmax(0, 1fr);
@@ -2108,28 +2256,19 @@
     }
   }
 
-  /* Git status bar — sits between hero and flow strip. Chips cluster on
-     the left as read-only badges; the Sync action lives on the right as
-     a proper ghost button so it never reads as another chip. */
+  /* Git status bar — sits between hero and flow strip. The Dirty/Clean
+     status pill leads as a discrete state; the numeric counts promote to
+     `<dl class="hero-stats">` per DESIGN.md "Inline KPI strip". Sync stays
+     as a ghost button on the right so it never reads as another badge. */
   .git-status-bar {
     display: flex;
     align-items: center;
     flex-wrap: wrap;
-    gap: var(--space-3);
+    gap: var(--space-4);
     padding: 0 2px;
   }
 
-  .git-status-chips {
-    display: flex;
-    align-items: center;
-    flex-wrap: wrap;
-    gap: 6px;
-    min-width: 0;
-    flex: 1 1 auto;
-  }
-
-  /* Badges in this row: no border, no hover, no cursor change. Soft fill
-     carries the state. */
+  /* Badge: no border, no hover, no cursor change. Soft fill carries state. */
   .git-state-pill {
     display: inline-flex;
     align-items: center;
@@ -2159,38 +2298,41 @@
     color: var(--color-warning);
   }
 
-  .git-chip {
+  /* Tighter hero-stats variant for the git status strip. The shared
+     `.hero-stats` rule sets a larger dd; we scale down here so the row
+     reads as a meta strip rather than a second hero-scale block. */
+  .git-hero-stats {
+    flex: 1 1 auto;
+    gap: var(--space-4);
+    align-items: center;
+  }
+
+  .git-hero-stats :global(dd) {
+    font-size: var(--font-size-2);
+    line-height: 1.1;
+  }
+
+  .git-hero-stats :global(dt) {
+    font-size: var(--font-size-0);
+  }
+
+  .git-hero-diff {
+    font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+    display: inline-flex;
+    gap: 4px;
+  }
+
+  .git-no-upstream {
+    font-size: var(--font-size-0);
+    color: var(--color-ink-muted);
+  }
+
+  .hero-branch {
     display: inline-flex;
     align-items: center;
-    height: 22px;
-    padding: 0 9px;
-    border-radius: 999px;
-    background: var(--color-surface-muted);
-    color: var(--color-ink-muted);
-    font-size: 11px;
-    font-weight: 500;
-    font-variant-numeric: tabular-nums;
-    white-space: nowrap;
-  }
-
-  .git-chip-diff {
+    gap: 4px;
     font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
-  }
-
-  .git-chip-ahead {
-    color: var(--color-accent);
-    background: var(--color-accent-soft);
-  }
-
-  .git-chip-behind {
-    color: var(--color-warning);
-    background: color-mix(in srgb, var(--color-warning) 12%, transparent);
-  }
-
-  .git-chip-warn {
-    color: var(--color-ink-muted);
-    background: transparent;
-    box-shadow: inset 0 0 0 1px var(--color-border-subtle);
+    color: var(--color-ink-soft);
   }
 
   /* Compact contextspace list */

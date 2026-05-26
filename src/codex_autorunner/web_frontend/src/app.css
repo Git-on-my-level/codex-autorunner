@@ -7290,14 +7290,24 @@ textarea:disabled {
   white-space: nowrap;
 }
 
+/* PMA — mediator / planner. Rounded pill with the accent (purple) fill. */
+.chat-kind-badge.chat-kind-pma,
 .chat-kind-badge.pma {
   color: var(--color-accent);
   background: var(--color-accent-soft);
+  border-radius: 999px;
+  padding: 1px 7px;
 }
 
+/* Coding agent — direct executor. Squared-off chip with a soft warning fill
+   so it reads as a different category of thing at a glance. */
+.chat-kind-badge.chat-kind-agent,
 .chat-kind-badge.coding_agent {
-  color: var(--color-success);
-  background: color-mix(in srgb, var(--color-success) 14%, transparent);
+  color: color-mix(in srgb, var(--color-warning) 82%, var(--color-ink));
+  background: color-mix(in srgb, var(--color-warning) 16%, transparent);
+  border-radius: 4px;
+  padding: 1px 5px;
+  letter-spacing: 0.02em;
 }
 
 .chat-kind-badge.automation {

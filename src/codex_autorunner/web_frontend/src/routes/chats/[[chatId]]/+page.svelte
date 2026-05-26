@@ -212,6 +212,10 @@
   let selectedScopeId = $state('local');
   let selectedScopeSource = $state<PmaChatScopeSource>('default_hub');
   let newChatKind = $state<'pma' | 'agent'>('pma');
+  /** True when the scope picker should be locked. Set when entering chats via a
+   *  non-local `?new=` deep-link from a repo or worktree page — the caller has
+   *  declared which scope this chat belongs to. */
+  let scopeLocked = $state(false);
   function readChatListFiltersFromRoute(): ChatListFilters {
     try {
       return parseChatListFiltersFromSearchParams(page.url.searchParams);
@@ -1119,6 +1123,7 @@
     if (!scopeOptions.some((scope) => scope.id === selectedScopeId)) {
       selectedScopeId = 'local';
       selectedScopeSource = 'default_hub';
+      scopeLocked = false;
     }
     if (!canStartCodingAgentChat) newChatKind = 'pma';
     agents = data.agents;
@@ -1190,6 +1195,10 @@
     }
     const requestedKind = page.url.searchParams.get('kind');
     newChatKind = requestedKind === 'agent' && selectedScopeId !== 'local' ? 'agent' : 'pma';
+    // Any non-local `?new=` deep-link is the caller saying "this chat belongs to
+    // that scope" — pin the scope picker so the user can't accidentally rescope
+    // a chat they entered from a repo/worktree page.
+    scopeLocked = appliedScope && selectedScopeId !== 'local';
     const params = new URLSearchParams(page.url.searchParams);
     params.delete('new');
     params.delete('kind');
@@ -1835,6 +1844,7 @@
         selectedScopeSource = 'default_hub';
         newChatKind = 'pma';
       }
+      scopeLocked = false;
     }
     persistCurrentNewChatPreference();
     writeChatDetailSessionState(startLocalDraftChat(readChatDetailSessionState(), newDraftChatSummary()));
@@ -2507,6 +2517,8 @@
           {/if}
 
           <span class="chat-row-meta">
+            <span class="chat-id-tag">#{chat.id.slice(0, 6).toLowerCase()}</span>
+            <span class="chat-meta-dot" aria-hidden="true">·</span>
             {#if !nested}
               <span
                 class="chat-scope-detail-tag"
@@ -2816,6 +2828,7 @@
             bind:modeValue={newChatKind}
             {models}
             {scopeOptions}
+            scopeLocked={scopeLocked}
             loading={loadingModels}
             showAgent={showAgentSelector}
             onAgentChange={handleAgentChange}

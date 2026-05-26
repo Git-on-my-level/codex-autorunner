@@ -14,11 +14,14 @@
   let {
     scopeOptions = [],
     value = $bindable('local'),
-    onChange = undefined
+    onChange = undefined,
+    disabled = false
   }: {
     scopeOptions?: PmaChatScopeOption[];
     value?: string;
     onChange?: (() => void) | undefined;
+    /** When true the picker is read-only — used by deep-linked "+ New chat" flows where the scope is fixed by the entry route. */
+    disabled?: boolean;
   } = $props();
 
   const groupedAll = $derived(groupPmaChatScopeOptions(scopeOptions));
@@ -70,11 +73,12 @@
   bind:value
   groups={selectGroups}
   labelText="scope"
-  ariaLabel="Chat scope"
+  ariaLabel={disabled ? 'Chat scope (locked to route)' : 'Chat scope'}
   rowClass="start-picker-row"
   searchable={true}
   searchPlaceholder="Search repos and worktrees"
   placeholder="Select scope"
   emptyText="No scopes match"
+  {disabled}
   onchange={onChange}
 />

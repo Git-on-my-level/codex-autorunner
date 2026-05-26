@@ -41,8 +41,7 @@ describe('repo/worktree view models', () => {
       openTickets: 1,
       totalTickets: 1,
       doneTickets: 0,
-      pmaChatHref: '/chats?new=repo:repo-1&kind=pma',
-      codingAgentChatHref: '/chats?new=repo:repo-1&kind=agent',
+      newChatHref: '/chats?new=repo:repo-1',
       signalWaiting: 0,
       signalFailed: 0,
       signalActive: 0,
@@ -50,8 +49,7 @@ describe('repo/worktree view models', () => {
         {
           id: 'worktree-1',
           href: '/repos/repo-1/worktrees/worktree-1',
-          pmaChatHref: '/chats?new=worktree:worktree-1&kind=pma',
-          codingAgentChatHref: '/chats?new=worktree:worktree-1&kind=agent',
+          newChatHref: '/chats?new=worktree:worktree-1',
           status: 'running',
           activeRuns: 1,
           lastActivityAt: '2026-05-04T00:02:00Z',
@@ -215,16 +213,14 @@ describe('repo/worktree view models', () => {
     expect(vm.rows.map((row) => row.id)).toEqual(['repo-1', 'orphan-worktree']);
     expect(vm.rows[0]).toMatchObject({
       id: 'repo-1',
-      pmaChatHref: '/chats?new=repo:repo-1&kind=pma',
-      codingAgentChatHref: '/chats?new=repo:repo-1&kind=agent',
+      newChatHref: '/chats?new=repo:repo-1',
       signalWaiting: 0,
       signalFailed: 0,
       signalActive: 0,
       childWorktrees: [
         {
           id: 'worktree-1',
-          pmaChatHref: '/chats?new=worktree:worktree-1&kind=pma',
-          codingAgentChatHref: '/chats?new=worktree:worktree-1&kind=agent'
+          newChatHref: '/chats?new=worktree:worktree-1'
         }
       ]
     });
@@ -233,8 +229,7 @@ describe('repo/worktree view models', () => {
       kind: 'worktree',
       repoHref: '/repos/missing-repo',
       ticketHref: '/repos/missing-repo/worktrees/orphan-worktree/tickets',
-      pmaChatHref: '/chats?new=worktree:orphan-worktree&kind=pma',
-      codingAgentChatHref: '/chats?new=worktree:orphan-worktree&kind=agent',
+      newChatHref: '/chats?new=worktree:orphan-worktree',
       signalWaiting: 0,
       signalFailed: 0,
       signalActive: 0,
@@ -261,8 +256,7 @@ describe('repo/worktree view models', () => {
       href: '/repos/repo-1/worktrees/worktree-1',
       ticketHref: '/repos/repo-1/worktrees/worktree-1/tickets',
       repoHref: '/repos/repo-1',
-      pmaChatHref: '/chats?new=worktree:worktree-1&kind=pma',
-      codingAgentChatHref: '/chats?new=worktree:worktree-1&kind=agent',
+      newChatHref: '/chats?new=worktree:worktree-1',
       signalWaiting: 0,
       signalFailed: 0,
       signalActive: 0

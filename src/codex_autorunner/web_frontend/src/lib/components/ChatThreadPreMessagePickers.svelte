@@ -19,6 +19,7 @@
     scopeValue = $bindable('local'),
     modeValue = $bindable<'pma' | 'agent'>('pma'),
     scopeOptions = [],
+    scopeLocked = false,
     loading = false,
     modelCatalogError = null,
     showAgent = undefined,
@@ -36,6 +37,8 @@
     scopeValue?: string;
     modeValue?: 'pma' | 'agent';
     scopeOptions?: PmaChatScopeOption[];
+    /** When true, the scope is fixed by the route ("+ New chat" from a repo/worktree page). */
+    scopeLocked?: boolean;
     loading?: boolean;
     modelCatalogError?: string | null;
     showAgent?: boolean;
@@ -50,6 +53,8 @@
 
   const scopedOptions = $derived(scopeOptions.filter((scope) => scope.kind !== 'local'));
   const visibleScopeOptions = $derived(modeValue === 'agent' ? scopedOptions : scopeOptions);
+  const lockedScopeOption = $derived(scopeOptions.find((scope) => scope.id === scopeValue) ?? null);
+  const lockedScopeLabel = $derived(lockedScopeOption?.label ?? scopeValue);
 
   function selectMode(next: 'pma' | 'agent'): void {
     if (next === 'agent' && scopedOptions.length === 0) return;
@@ -85,7 +90,19 @@
   </div>
 </div>
 
-{#if scopeOptions.length > 1}
+{#if scopeLocked}
+  <div class="start-picker-row scope-locked-row">
+    <span>scope</span>
+    <div class="scope-locked-value-wrap">
+      <span class="scope-locked-value">{lockedScopeLabel}</span>
+      <span
+        class="scope-locked-lock"
+        aria-label="Scope locked"
+        title="Scoped to this repo — open from Chats to change."
+      >🔒</span>
+    </div>
+  </div>
+{:else if scopeOptions.length > 1}
   <ChatScopePicker scopeOptions={visibleScopeOptions} bind:value={scopeValue} onChange={onScopeChange} />
 {/if}
 
@@ -143,5 +160,30 @@
   .mode-segment button:disabled {
     cursor: not-allowed;
     opacity: 0.45;
+  }
+
+  .scope-locked-row .scope-locked-value-wrap {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-2);
+    min-width: 0;
+    min-height: 30px;
+  }
+
+  .scope-locked-value {
+    font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: var(--font-size-1);
+    color: var(--color-ink);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    min-width: 0;
+  }
+
+  .scope-locked-lock {
+    font-size: 11px;
+    color: var(--color-ink-faint);
+    cursor: help;
+    line-height: 1;
   }
 </style>
