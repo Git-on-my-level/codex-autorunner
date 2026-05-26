@@ -85,3 +85,24 @@ def test_safe_refresh_local_mac_hub_script_keeps_build_logs_out_of_wheel_path() 
     assert '"${wheel_path}" != *.whl' in script
     assert '! -f "${wheel_path}"' in script
     assert "Invalid staged wheel path for pip install" in script
+
+
+def test_safe_refresh_local_mac_hub_script_records_phase_timing() -> None:
+    script = Path("scripts/safe-refresh-local-mac-hub.sh").read_text(encoding="utf-8")
+
+    assert '"event": "update.phase_timing"' in script
+    assert '"phase_timings"' in script
+    assert "_run_timed_phase() {" in script
+    assert '_run_timed_phase "pip_install"' in script
+    assert '_run_timed_phase "hub_restart"' in script
+    assert '_run_timed_phase "telegram_reload"' in script
+    assert '_run_timed_phase "discord_reload"' in script
+
+
+def test_safe_refresh_local_mac_hub_script_uses_pip_cache_for_dependencies() -> None:
+    script = Path("scripts/safe-refresh-local-mac-hub.sh").read_text(encoding="utf-8")
+
+    install_function = script.split("_install_package_from_wheel()", 1)[1].split(
+        "\n}\n", 1
+    )[0]
+    assert "--no-cache-dir" not in install_function

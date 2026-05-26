@@ -27,7 +27,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--hub-service-name")
     parser.add_argument("--telegram-service-name")
     parser.add_argument("--discord-service-name")
-    parser.add_argument("--skip-checks", action="store_true")
+    parser.add_argument(
+        "--skip-checks", action=argparse.BooleanOptionalAction, default=True
+    )
     args = parser.parse_args(argv)
 
     update_dir = Path(args.update_dir).expanduser()

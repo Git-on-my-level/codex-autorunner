@@ -104,6 +104,190 @@ HUB_HEALTH_WAIT_TIMED_OUT=false
 TELEGRAM_HEALTH_WAIT_TIMED_OUT=false
 DISCORD_HEALTH_WAIT_TIMED_OUT=false
 
+_now_ms() {
+  "${HELPER_PYTHON}" - <<'PY'
+import time
+
+print(int(time.time() * 1000))
+PY
+}
+
+_log_phase_timing() {
+  local phase status start_ms end_ms duration_ms
+  phase="$1"
+  status="$2"
+  start_ms="$3"
+  end_ms="$(_now_ms)"
+  if [[ -n "${start_ms}" && "${start_ms}" =~ ^[0-9]+$ ]]; then
+    duration_ms=$(( end_ms - start_ms ))
+  else
+    duration_ms=0
+  fi
+  if [[ -n "${UPDATE_STATUS_PATH}" && -x "${HELPER_PYTHON}" ]]; then
+    UPDATE_STATUS_PATH_VALUE="${UPDATE_STATUS_PATH}" \
+    UPDATE_TIMING_PHASE="${phase}" \
+    UPDATE_TIMING_STATUS="${status}" \
+    UPDATE_TIMING_DURATION_MS="${duration_ms}" \
+    UPDATE_RUN_ID_VALUE="${update_run_id}" \
+    "${HELPER_PYTHON}" - <<'PY'
+import json
+import os
+import pathlib
+import time
+
+path = pathlib.Path(os.environ["UPDATE_STATUS_PATH_VALUE"])
+try:
+    payload = json.loads(path.read_text(encoding="utf-8"))
+except Exception:
+    payload = {"status": "running", "message": "Update running.", "at": time.time()}
+if not isinstance(payload, dict):
+    payload = {"status": "running", "message": "Update running.", "at": time.time()}
+timing = {
+    "phase": os.environ["UPDATE_TIMING_PHASE"],
+    "status": os.environ["UPDATE_TIMING_STATUS"],
+    "duration_ms": int(os.environ["UPDATE_TIMING_DURATION_MS"]),
+    "at": time.time(),
+}
+run_id = os.environ.get("UPDATE_RUN_ID_VALUE") or ""
+if run_id:
+    timing["update_run_id"] = run_id
+    payload.setdefault("update_run_id", run_id)
+timings = payload.get("phase_timings")
+if not isinstance(timings, list):
+    timings = []
+timings.append(timing)
+payload["phase_timings"] = timings[-24:]
+payload["last_phase_timing"] = timing
+path.parent.mkdir(parents=True, exist_ok=True)
+path.write_text(json.dumps(payload), encoding="utf-8")
+PY
+  fi
+  UPDATE_TIMING_PHASE="${phase}" \
+  UPDATE_TIMING_STATUS="${status}" \
+  UPDATE_TIMING_DURATION_MS="${duration_ms}" \
+  UPDATE_RUN_ID_VALUE="${update_run_id}" \
+  "${HELPER_PYTHON}" - <<'PY'
+import json
+import os
+
+payload = {
+    "event": "update.phase_timing",
+    "phase": os.environ["UPDATE_TIMING_PHASE"],
+    "status": os.environ["UPDATE_TIMING_STATUS"],
+    "duration_ms": int(os.environ["UPDATE_TIMING_DURATION_MS"]),
+}
+run_id = os.environ.get("UPDATE_RUN_ID_VALUE") or ""
+if run_id:
+    payload["update_run_id"] = run_id
+print(json.dumps(payload, separators=(",", ":")))
+PY
+}
+
+_run_timed_phase() {
+  local phase start_ms exit_code
+  phase="$1"
+  shift
+  start_ms="$(_now_ms)"
+  if "$@"; then
+    _log_phase_timing "${phase}" "ok" "${start_ms}"
+    return 0
+  fi
+  exit_code=$?
+  _log_phase_timing "${phase}" "failed" "${start_ms}"
+  return "${exit_code}"
+}
+
+_create_staged_venv_phase() {
+  "${PIPX_PYTHON}" -m venv "${next_venv}" || return
+  "${next_venv}/bin/python" -m pip -q install --upgrade pip || return
+}
+
+_build_staged_wheel_phase() {
+  wheel_path="$(_build_package_wheel "${next_venv}/bin/python" "${wheel_dir}")" || return
+}
+
+_validate_candidate_phase() {
+  if [[ ! -x "${next_venv}/bin/codex-autorunner" ]]; then
+    fail "Staged venv is missing codex-autorunner console script." "candidate_validation_failed" "candidate_invalid"
+  fi
+  "${next_venv}/bin/python" - <<'PY' || return
+import importlib.util
+
+required_modules = (
+    "codex_autorunner.workspace",
+    "codex_autorunner.tickets",
+    "codex_autorunner.adapters.docker",
+)
+for module_name in required_modules:
+    if importlib.util.find_spec(module_name) is None:
+        raise SystemExit(f"required staged module missing: {module_name}")
+
+import codex_autorunner
+from codex_autorunner.server import create_hub_app
+
+print("staged imports ok")
+PY
+  echo "Smoke-checking hub startup lifecycle..."
+  "${next_venv}/bin/python" - <<'PY' || return
+from pathlib import Path
+from tempfile import TemporaryDirectory
+
+from fastapi.testclient import TestClient
+
+from codex_autorunner.bootstrap import seed_hub_files
+from codex_autorunner.server import create_hub_app
+
+with TemporaryDirectory() as tmp:
+    hub_root = Path(tmp)
+    seed_hub_files(hub_root, force=True)
+    app = create_hub_app(hub_root)
+    with TestClient(app) as client:
+        for path in ("/health", "/car/health"):
+            response = client.get(path)
+            if response.status_code == 200:
+                break
+        else:
+            raise SystemExit("hub startup smoke failed: /health endpoint unavailable")
+print("hub startup ok")
+PY
+  echo "Smoke-checking telegram module..."
+  "${next_venv}/bin/python" - <<'PY' || return
+import importlib.util
+import py_compile
+
+spec = importlib.util.find_spec("codex_autorunner.adapters.telegram.service")
+if spec is None or spec.origin is None:
+    raise SystemExit("telegram service module not found in staged venv")
+py_compile.compile(spec.origin, doraise=True)
+print("telegram service ok")
+PY
+}
+
+_snapshot_db_phase() {
+  snapshot_payload="$(
+    "${next_venv}/bin/python" -m codex_autorunner.core.update_transaction \
+      snapshot-db \
+      --hub-root "${HUB_ROOT}" \
+      --snapshot-root "${UPDATE_SNAPSHOT_ROOT}" \
+      --run-id "${update_run_id}"
+  )" || return
+  db_snapshot_dir="$(
+    SNAPSHOT_PAYLOAD="${snapshot_payload}" "${HELPER_PYTHON}" - <<'PY'
+import json
+import os
+
+payload = json.loads(os.environ["SNAPSHOT_PAYLOAD"])
+print(payload.get("snapshot_dir", ""))
+PY
+  )" || return
+}
+
+_restart_hub_phase() {
+  _ensure_plist_uses_current_venv || return
+  _stop_service || return
+  _start_service || return
+}
+
 write_status() {
   local status message phase error_type exit_code
   status="$1"
@@ -161,6 +345,8 @@ if isinstance(existing, dict):
         "notify_thread_id",
         "notify_reply_to",
         "notify_sent_at",
+        "phase_timings",
+        "last_phase_timing",
     ):
         if key not in payload and key in existing:
             payload[key] = existing[key]
@@ -684,7 +870,7 @@ _install_package_from_wheel() {
   install_spec="codex-autorunner${PACKAGE_EXTRAS} @ ${wheel_uri}"
 
   echo "Installing codex-autorunner from staged wheel ${wheel_path} into staged venv..."
-  "${python_bin}" -m pip -q install --force-reinstall --no-cache-dir "${install_spec}"
+  "${python_bin}" -m pip -q install --force-reinstall "${install_spec}"
 }
 
 if [[ ! -d "${PIPX_VENV}" ]]; then
@@ -731,76 +917,22 @@ fi
 
 echo "Creating staged venv at ${next_venv} (python: ${PIPX_PYTHON})..."
 write_status "running" "Creating staged venv at ${next_venv}." "venv_create_start"
-"${PIPX_PYTHON}" -m venv "${next_venv}"
-"${next_venv}/bin/python" -m pip -q install --upgrade pip
+_run_timed_phase "venv_create" _create_staged_venv_phase
 write_status "running" "Created staged venv at ${next_venv}." "venv_create_done"
 
 echo "Preparing staged wheel for ${PACKAGE_INSTALL_SPEC}..."
 write_status "running" "Building staged wheel." "wheel_build_start"
-wheel_path="$(_build_package_wheel "${next_venv}/bin/python" "${wheel_dir}")"
+_run_timed_phase "wheel_build" _build_staged_wheel_phase
 write_status "running" "Built staged wheel." "wheel_build_done"
 write_status "running" "Installing staged wheel into candidate venv." "pip_install_start"
-_install_package_from_wheel "${next_venv}/bin/python" "${wheel_path}"
+_run_timed_phase "pip_install" _install_package_from_wheel "${next_venv}/bin/python" "${wheel_path}"
 write_status "running" "Installed staged wheel into candidate venv." "pip_install_done"
-_ensure_playwright_chromium "${next_venv}/bin/python"
+_run_timed_phase "playwright_chromium" _ensure_playwright_chromium "${next_venv}/bin/python"
 rm -rf "${wheel_dir}"
 
 echo "Smoke-checking staged venv imports..."
 write_status "running" "Validating staged venv." "candidate_validation_start"
-if [[ ! -x "${next_venv}/bin/codex-autorunner" ]]; then
-  fail "Staged venv is missing codex-autorunner console script." "candidate_validation_failed" "candidate_invalid"
-fi
-"${next_venv}/bin/python" - <<'PY'
-import importlib.util
-
-required_modules = (
-    "codex_autorunner.workspace",
-    "codex_autorunner.tickets",
-    "codex_autorunner.adapters.docker",
-)
-for module_name in required_modules:
-    if importlib.util.find_spec(module_name) is None:
-        raise SystemExit(f"required staged module missing: {module_name}")
-
-import codex_autorunner
-from codex_autorunner.server import create_hub_app
-
-print("staged imports ok")
-PY
-echo "Smoke-checking hub startup lifecycle..."
-"${next_venv}/bin/python" - <<'PY'
-from pathlib import Path
-from tempfile import TemporaryDirectory
-
-from fastapi.testclient import TestClient
-
-from codex_autorunner.bootstrap import seed_hub_files
-from codex_autorunner.server import create_hub_app
-
-with TemporaryDirectory() as tmp:
-    hub_root = Path(tmp)
-    seed_hub_files(hub_root, force=True)
-    app = create_hub_app(hub_root)
-    with TestClient(app) as client:
-        for path in ("/health", "/car/health"):
-            response = client.get(path)
-            if response.status_code == 200:
-                break
-        else:
-            raise SystemExit("hub startup smoke failed: /health endpoint unavailable")
-print("hub startup ok")
-PY
-echo "Smoke-checking telegram module..."
-"${next_venv}/bin/python" - <<'PY'
-import importlib.util
-import py_compile
-
-spec = importlib.util.find_spec("codex_autorunner.adapters.telegram.service")
-if spec is None or spec.origin is None:
-    raise SystemExit("telegram service module not found in staged venv")
-py_compile.compile(spec.origin, doraise=True)
-print("telegram service ok")
-PY
+_run_timed_phase "candidate_validation" _validate_candidate_phase
 write_status "running" "Validated staged venv." "candidate_validation_done"
 
 domain="gui/$(id -u)/${LABEL}"
@@ -2023,22 +2155,7 @@ fi
 
 echo "Snapshotting orchestration DB before cutover..."
 write_status "running" "Snapshotting orchestration DB before cutover." "db_snapshot_start"
-snapshot_payload="$(
-  "${next_venv}/bin/python" -m codex_autorunner.core.update_transaction \
-    snapshot-db \
-    --hub-root "${HUB_ROOT}" \
-    --snapshot-root "${UPDATE_SNAPSHOT_ROOT}" \
-    --run-id "${update_run_id}"
-)"
-db_snapshot_dir="$(
-  SNAPSHOT_PAYLOAD="${snapshot_payload}" "${HELPER_PYTHON}" - <<'PY'
-import json
-import os
-
-payload = json.loads(os.environ["SNAPSHOT_PAYLOAD"])
-print(payload.get("snapshot_dir", ""))
-PY
-)"
+_run_timed_phase "db_snapshot" _snapshot_db_phase
 write_status "running" "Snapshot orchestration DB before cutover." "db_snapshot_done"
 
 echo "Switching ${PREV_VENV_LINK} -> ${current_target}"
@@ -2050,16 +2167,14 @@ swap_completed=true
 
 echo "Refreshing hub-managed repo artifacts under ${HUB_ROOT}..."
 write_status "running" "Refreshing hub-managed repo artifacts." "managed_repo_refresh_start"
-HUB_ROOT="${HUB_ROOT}" HELPER_PYTHON="${CURRENT_VENV_LINK}/bin/python" \
+_run_timed_phase "managed_repo_refresh" env HUB_ROOT="${HUB_ROOT}" HELPER_PYTHON="${CURRENT_VENV_LINK}/bin/python" \
   bash "${PACKAGE_SRC}/scripts/update-hub-managed-repos.sh"
 write_status "running" "Refreshed hub-managed repo artifacts." "managed_repo_refresh_done"
 
 if [[ "${should_reload_hub}" == "true" ]]; then
   echo "Restarting launchd service ${LABEL}..."
   write_status "running" "Restarting hub service." "service_restart_start"
-  _ensure_plist_uses_current_venv
-  _stop_service
-  _start_service
+  _run_timed_phase "hub_restart" _restart_hub_phase
   write_status "running" "Restarted hub service." "service_restart_done"
 fi
 
@@ -2067,34 +2182,61 @@ hub_warm_ok=true
 if [[ "${should_reload_hub}" == "true" && "${WAIT_HUB_HEALTH_BEFORE_CHAT_RELOAD}" == "true" ]] && \
    { [[ "${should_reload_telegram}" == "true" ]] || [[ "${should_reload_discord}" == "true" ]]; }; then
   echo "Waiting for hub health before restarting chat services..."
+  phase_start_ms="$(_now_ms)"
   if _wait_healthy "${HUB_PRE_CHAT_HEALTH_TIMEOUT_SECONDS}" "false"; then
     echo "Hub health OK before chat service reload."
+    _log_phase_timing "hub_pre_chat_health" "ok" "${phase_start_ms}"
     hub_health_verified_after_reload=true
   else
     echo "Hub health check failed before chat reload." >&2
+    _log_phase_timing "hub_pre_chat_health" "failed" "${phase_start_ms}"
     hub_warm_ok=false
   fi
 fi
 
 if [[ "${hub_warm_ok}" == "true" ]]; then
   if [[ "${should_reload_telegram}" == "true" ]]; then
-    _reload_telegram
+    _run_timed_phase "telegram_reload" _reload_telegram
   fi
   if [[ "${should_reload_discord}" == "true" ]]; then
-    _reload_discord
+    _run_timed_phase "discord_reload" _reload_discord
   fi
 fi
 
 health_ok="${hub_warm_ok}"
 if [[ "${health_ok}" == "true" ]]; then
+  phase_start_ms="$(_now_ms)"
+  hub_check_ok=true
   if ! _check_hub_health; then
+    hub_check_ok=false
     health_ok=false
   fi
+  if [[ "${hub_check_ok}" == "true" ]]; then
+    _log_phase_timing "hub_health_check" "ok" "${phase_start_ms}"
+  else
+    _log_phase_timing "hub_health_check" "failed" "${phase_start_ms}"
+  fi
+  phase_start_ms="$(_now_ms)"
+  telegram_check_ok=true
   if ! _check_telegram_health; then
+    telegram_check_ok=false
     health_ok=false
   fi
+  if [[ "${telegram_check_ok}" == "true" ]]; then
+    _log_phase_timing "telegram_health_check" "ok" "${phase_start_ms}"
+  else
+    _log_phase_timing "telegram_health_check" "failed" "${phase_start_ms}"
+  fi
+  phase_start_ms="$(_now_ms)"
+  discord_check_ok=true
   if ! _check_discord_health; then
+    discord_check_ok=false
     health_ok=false
+  fi
+  if [[ "${discord_check_ok}" == "true" ]]; then
+    _log_phase_timing "discord_health_check" "ok" "${phase_start_ms}"
+  else
+    _log_phase_timing "discord_health_check" "failed" "${phase_start_ms}"
   fi
 fi
 

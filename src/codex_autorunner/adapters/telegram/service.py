@@ -291,7 +291,7 @@ class TelegramBotService(
         housekeeping_config: Optional[HousekeepingConfig] = None,
         update_repo_url: Optional[str] = None,
         update_repo_ref: Optional[str] = None,
-        update_skip_checks: bool = False,
+        update_skip_checks: bool = True,
         update_backend: str = "auto",
         update_linux_service_names: Optional[dict[str, str]] = None,
         app_server_auto_restart: Optional[bool] = None,

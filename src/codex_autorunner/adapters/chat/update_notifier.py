@@ -125,9 +125,53 @@ def format_update_status_message(status: Optional[dict[str, Any]]) -> str:
         lines.append(f"Error: {error_type.strip()}")
     if message:
         lines.append(f"Message: {message}")
+    timing_summary = _format_phase_timing_summary(status.get("phase_timings"))
+    if timing_summary:
+        lines.append(f"Timings: {timing_summary}")
     if rendered_time:
         lines.append(f"Last updated: {rendered_time}")
     return "\n".join(lines)
+
+
+def _format_phase_timing_summary(raw_timings: Any) -> str:
+    if not isinstance(raw_timings, list):
+        return ""
+    timings: list[tuple[str, str, int]] = []
+    for raw in raw_timings:
+        if not isinstance(raw, dict):
+            continue
+        phase = raw.get("phase")
+        status = raw.get("status")
+        duration_ms = raw.get("duration_ms")
+        if (
+            isinstance(phase, str)
+            and phase.strip()
+            and isinstance(duration_ms, int)
+            and not isinstance(duration_ms, bool)
+        ):
+            timings.append((phase.strip(), str(status or "unknown"), duration_ms))
+    if not timings:
+        return ""
+
+    slowest = sorted(timings, key=lambda item: item[2], reverse=True)[:3]
+    return ", ".join(
+        (
+            f"{phase}={_format_duration_ms(duration_ms)}"
+            if state == "ok"
+            else f"{phase}={_format_duration_ms(duration_ms)} ({state})"
+        )
+        for phase, state, duration_ms in slowest
+    )
+
+
+def _format_duration_ms(duration_ms: int) -> str:
+    if duration_ms < 1000:
+        return f"{duration_ms}ms"
+    seconds = duration_ms / 1000
+    if seconds < 60:
+        return f"{seconds:.1f}s"
+    minutes, remaining_seconds = divmod(int(round(seconds)), 60)
+    return f"{minutes}m{remaining_seconds:02d}s"
 
 
 def mark_update_status_notified(

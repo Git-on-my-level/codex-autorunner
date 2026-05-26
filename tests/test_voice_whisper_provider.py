@@ -1,3 +1,8 @@
+import sys
+from types import SimpleNamespace
+
+import pytest
+
 from codex_autorunner.voice import (
     AudioChunk,
     LocalWhisperProvider,
@@ -212,6 +217,66 @@ def test_mlx_whisper_model_aliases_resolve_to_public_repos():
         mlx_whisper_provider._resolve_mlx_model_path("small.en")
         == "mlx-community/whisper-small.en-mlx"
     )
+
+
+def test_mlx_whisper_model_resolution_can_use_huggingface_cache(monkeypatch):
+    calls = []
+
+    def fake_snapshot_download(**kwargs):
+        calls.append(kwargs)
+        return "/cache/models--mlx-community--whisper-small-mlx/snapshots/abc"
+
+    monkeypatch.setitem(
+        sys.modules,
+        "huggingface_hub",
+        SimpleNamespace(snapshot_download=fake_snapshot_download),
+    )
+
+    resolved = mlx_whisper_provider._resolve_mlx_model_path(
+        "small",
+        cache_dir="/tmp/hf-cache",
+        local_files_only=True,
+    )
+
+    assert resolved == "/cache/models--mlx-community--whisper-small-mlx/snapshots/abc"
+    assert calls == [
+        {
+            "repo_id": "mlx-community/whisper-small-mlx",
+            "cache_dir": "/tmp/hf-cache",
+            "local_files_only": True,
+        }
+    ]
+
+
+def test_mlx_whisper_model_resolution_prefers_existing_absolute_path(tmp_path):
+    model_dir = tmp_path / "models" / "whisper"
+    model_dir.mkdir(parents=True)
+
+    assert mlx_whisper_provider._resolve_mlx_model_path(str(model_dir)) == str(
+        model_dir
+    )
+
+
+def test_mlx_whisper_model_resolution_prefers_existing_relative_path(
+    monkeypatch, tmp_path
+):
+    model_dir = tmp_path / "relative-model"
+    model_dir.mkdir()
+    monkeypatch.chdir(tmp_path)
+
+    assert mlx_whisper_provider._resolve_mlx_model_path("relative-model") == (
+        "relative-model"
+    )
+
+
+def test_mlx_whisper_cache_controls_require_huggingface_hub(monkeypatch):
+    monkeypatch.setitem(sys.modules, "huggingface_hub", None)
+
+    with pytest.raises(RuntimeError, match="requires huggingface-hub"):
+        mlx_whisper_provider._resolve_mlx_model_path(
+            "small",
+            cache_dir="/tmp/hf-cache",
+        )
 
 
 def test_mlx_whisper_beam_size_coercion_defaults_to_greedy():

@@ -33,6 +33,8 @@ DEFAULT_PROVIDER_CONFIG: Dict[str, Dict[str, Any]] = {
     "mlx_whisper": {
         "remote_api": False,
         "model": "small",
+        "cache_dir": None,
+        "local_files_only": False,
         "language": None,
         "beam_size": None,
         "temperature": 0.0,

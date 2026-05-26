@@ -193,7 +193,7 @@ def build_system_routes() -> APIRouter:
         # Determine URL
         repo_url = DEFAULT_UPDATE_REPO_URL
         repo_ref = DEFAULT_UPDATE_REPO_REF
-        skip_checks = False
+        skip_checks = True
         update_backend = "auto"
         update_services: Optional[dict[str, str]] = None
         linux_hub_service_name = None
@@ -206,7 +206,7 @@ def build_system_routes() -> APIRouter:
             configured_ref = getattr(config, "update_repo_ref", None)
             if configured_ref:
                 repo_ref = configured_ref
-            skip_checks = bool(getattr(config, "update_skip_checks", False))
+            skip_checks = bool(getattr(config, "update_skip_checks", True))
             update_backend = getattr(config, "update_backend", update_backend)
             update_services = getattr(config, "update_linux_service_names", None)
             if isinstance(update_services, dict):
@@ -214,7 +214,7 @@ def build_system_routes() -> APIRouter:
                 linux_telegram_service_name = update_services.get("telegram")
                 linux_discord_service_name = update_services.get("discord")
         elif config is not None:
-            skip_checks = bool(getattr(config, "update_skip_checks", False))
+            skip_checks = bool(getattr(config, "update_skip_checks", True))
             update_backend = getattr(config, "update_backend", update_backend)
             update_services = getattr(config, "update_linux_service_names", None)
             if isinstance(update_services, dict):
