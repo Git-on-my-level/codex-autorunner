@@ -139,7 +139,7 @@ describe('scoped ticket detail controller', () => {
       'entity:ticket:1',
       'entity:repo:repo-1'
     ]);
-    expect(harness.navigate).toHaveBeenCalledWith('/chats?chat=chat-1');
+    expect(harness.navigate).toHaveBeenCalledWith('/chats/chat-1');
   });
 });
 

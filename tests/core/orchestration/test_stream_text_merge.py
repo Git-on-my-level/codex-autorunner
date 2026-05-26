@@ -33,6 +33,80 @@ def test_append_assistant_stream_text_readably_keeps_subword_splits_glued() -> N
     assert append_assistant_stream_text_readably("re", "do") == "redo"
 
 
+def test_append_assistant_stream_text_readably_keeps_markdown_and_path_tokens_glued() -> (
+    None
+):
+    text = ""
+    for chunk in (
+        "**Current",
+        " State",
+        "**\n\n",
+        "**AG",
+        "ENTS.md",
+        "**: ",
+        "Current",
+        "\n- Workspace",
+        " path",
+        ": ",
+        "`/Users/d",
+        "az",
+        "heng/car-work",
+        "space/cod",
+        "ex-aut",
+        "orunner`",
+        "\n\n|",
+        " Section",
+        " |",
+        " Count",
+        " |\n|",
+        "---",
+        "|",
+        "---",
+        ":",
+        "|\n| PMA",
+        " file",
+        " inbox",
+        " |",
+        " 5",
+        " |",
+    ):
+        text = append_assistant_stream_text_readably(text, chunk)
+
+    assert text == (
+        "**Current State**\n\n"
+        "**AGENTS.md**: Current\n"
+        "- Workspace path: `/Users/dazheng/car-workspace/codex-autorunner`\n\n"
+        "| Section | Count |\n"
+        "|---|---:|\n"
+        "| PMA file inbox | 5 |"
+    )
+
+
+def test_append_assistant_stream_text_readably_keeps_opening_bold_delimiter_tight() -> (
+    None
+):
+    text = ""
+    for chunk in (
+        "**",
+        "Recommendation",
+        ":",
+        " No cleanup needed right now.",
+        "**",
+    ):
+        text = append_assistant_stream_text_readably(text, chunk)
+
+    assert text == "**Recommendation: No cleanup needed right now.**"
+
+
+def test_append_assistant_stream_text_readably_keeps_word_boundary_before_new_bold_span() -> (
+    None
+):
+    assert (
+        append_assistant_stream_text_readably("See", "**AGENTS.md**")
+        == "See **AGENTS.md**"
+    )
+
+
 def test_append_assistant_stream_text_readably_preserves_word_boundaries() -> None:
     text = ""
     for chunk in (

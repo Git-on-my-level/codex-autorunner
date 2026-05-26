@@ -16,12 +16,20 @@ import {
   savePinnedChats,
   sortEntriesForPinnedChats,
   startLocalDraftChat,
+  requestedChatDetailFromUrl,
   togglePinnedChatId
 } from './chatDetailSession';
 
 const now = '2026-05-16T12:00:00.000Z';
 
 describe('chat detail session', () => {
+  it('resolves canonical route ids and legacy query ids for clean migration', () => {
+    expect(requestedChatDetailFromUrl('chat-1', new URLSearchParams('chat=old'))).toBe('chat-1');
+    expect(requestedChatDetailFromUrl(null, new URLSearchParams('chat=chat-2'))).toBe('chat-2');
+    expect(requestedChatDetailFromUrl(null, new URLSearchParams('detail=chat%3Achat-3'))).toBe('chat-3');
+    expect(requestedChatDetailFromUrl(null, new URLSearchParams('detail=repo%3Arepo-1'))).toBeNull();
+  });
+
   it('activates a deep-linked chat before the chat index has loaded', () => {
     const command = activateChatDetailFromUrl(initialChatDetailSessionState(), {
       detailId: 'deep-linked-chat',

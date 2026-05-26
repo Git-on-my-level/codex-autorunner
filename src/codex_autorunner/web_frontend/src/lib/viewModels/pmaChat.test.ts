@@ -1381,6 +1381,63 @@ describe('PMA chat view helpers', () => {
     expect(snapshot.status).toMatchObject({ id: 'run-1', phase: 'testing' });
   });
 
+  it('keeps Hermes and Codex markdown transcript rows equivalent for render cards', () => {
+    const goldenMarkdown = [
+      '**Current State**',
+      '',
+      '- **active_context.md**: Empty',
+      '- **AGENTS.md**: Current',
+      '- Workspace path: `/Users/dazheng/car-workspace/codex-autorunner`',
+      '',
+      '| Section | Count |',
+      '|---|---:|',
+      '| PMA file inbox | 5 |'
+    ].join('\n');
+
+    const cardTextForAgent = (agent: 'hermes' | 'codex') => {
+      const snapshot = mapChatTranscriptSnapshot(
+        {
+          rows: [
+            {
+              kind: 'message',
+              id: `turn:1:assistant:${agent}`,
+              turn_id: '1',
+              order_key: '002',
+              timestamp: '2026-05-04T00:00:02Z',
+              message: {
+                id: `turn:1:assistant:${agent}`,
+                chat_id: 'chat-1',
+                role: 'assistant',
+                text: goldenMarkdown,
+                created_at: '2026-05-04T00:00:02Z',
+                status: 'done',
+                artifacts: [],
+                raw: { identity: { agent } }
+              }
+            }
+          ]
+        },
+        (raw) => ({ ...baseProgress, id: String(raw.managed_turn_id), phase: String(raw.phase) })
+      );
+      const [card] = snapshot.rows;
+      if (card?.kind !== 'message') throw new Error(`expected ${agent} message card`);
+      return card.message.text;
+    };
+
+    const hermesText = cardTextForAgent('hermes');
+    const codexText = cardTextForAgent('codex');
+
+    expect(hermesText).toBe(goldenMarkdown);
+    expect(hermesText).toBe(codexText);
+    for (const text of [hermesText, codexText]) {
+      expect(text).toContain('**AGENTS.md**');
+      expect(text).toContain('`/Users/dazheng/car-workspace/codex-autorunner`');
+      expect(text).not.toContain('AG ENTS');
+      expect(text).not.toContain('car-work space');
+      expect(text).not.toContain('cod ex-aut orunner');
+    }
+  });
+
   it('maps capsule-aware transcript user rows from backend metadata', () => {
     const rows = mapChatTranscriptSnapshot(
       {

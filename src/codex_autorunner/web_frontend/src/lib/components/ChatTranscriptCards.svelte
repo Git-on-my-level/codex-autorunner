@@ -233,10 +233,13 @@
         </div>
       </details>
     {/if}
-    <article class={`message ${card.message.role === 'user' ? 'user' : 'assistant'}`}>
+    {@const isOptimisticUser = card.message.role === 'user' && card.id.startsWith('optimistic:user:')}
+    <article class={`message ${card.message.role === 'user' ? 'user' : 'assistant'}${isOptimisticUser ? ' is-sending' : ''}`}>
       <span>{card.message.role === 'user' ? 'You' : assistantLabel}</span>
       {#if isStreaming}
-        <div class="message-markdown streaming">{visibleText}</div>
+        <div class="message-markdown markdown-body streaming">
+          {@html renderMarkdownToHtml(visibleText, { openLinksInNewTab: true })}
+        </div>
       {:else}
         <div class="message-markdown markdown-body">
           {@html renderMarkdownToHtml(visibleText, { openLinksInNewTab: true })}
@@ -262,10 +265,18 @@
           {/each}
         </ul>
       {/if}
-      {#if card.message.role === 'user' || card.message.role === 'assistant'}
+      {#if isOptimisticUser}
+        <span class="message-delivery sending" aria-live="polite">
+          <span class="message-delivery-dot" aria-hidden="true"></span>
+          Sending…
+        </span>
+      {:else if card.message.role === 'user' || card.message.role === 'assistant'}
         {@const sentLabel = formatCompactMessageDateTime(card.message.createdAt)}
         {#if sentLabel}
           <time class="message-timestamp" datetime={card.message.createdAt ?? undefined} title={card.message.createdAt ?? undefined}>
+            {#if card.message.role === 'user'}
+              <span class="message-delivery-tick" aria-label="Sent" title="Sent">✓</span>
+            {/if}
             {sentLabel}
           </time>
         {/if}

@@ -28,6 +28,7 @@ import {
   type TicketOwnerScope,
   type TicketWorkerActivity
 } from '$lib/viewModels/ticket';
+import { chatRoute } from '$lib/viewModels/routes';
 
 export type ScopedTicketDetailOwnerKind = 'repo' | 'worktree';
 
@@ -270,7 +271,7 @@ export class ScopedTicketDetailController {
       readModelEntityTags.chat(createResult.data.id),
       ...this.ownerMutationTags(this.state.ownerScope, this.state.ticketId, true)
     ]);
-    await this.navigate(`/chats?chat=${encodeURIComponent(createResult.data.id)}`);
+    await this.navigate(chatRoute(createResult.data.id));
   }
 
   private connectFlowStream(runId: string, ownerScope: ScopedTicketDetailOwnerScope): void {

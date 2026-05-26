@@ -71,6 +71,16 @@ export function worktreeContextspaceRoute(worktreeId: string, parentRepoId: stri
   return `${worktreeRoute(worktreeId, parentRepoId)}/contextspace`;
 }
 
+export function chatRoute(
+  chatId: string,
+  options: { searchParams?: URLSearchParams | string } = {}
+): string {
+  const path = `/chats/${encodeURIComponent(chatId)}`;
+  if (!options.searchParams) return path;
+  const query = new URLSearchParams(options.searchParams).toString();
+  return query ? `${path}?${query}` : path;
+}
+
 export type ScopedRouteKind = 'repo' | 'worktree';
 export type NewChatRouteKind = 'pma' | 'agent';
 

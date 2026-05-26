@@ -15,6 +15,7 @@ import { formatRelativeTime, pmaChatKind, pmaChatKindLabel, progressPercent, sor
 import type { PmaChatKind } from './pmaChat';
 import { buildChatsListHref, DEFAULT_CHAT_LIST_FILTERS } from '$lib/routes/chatListFiltersUrl';
 import {
+  chatRoute,
   repoContextspaceRoute,
   repoRoute,
   repoTicketRoute,
@@ -834,6 +835,10 @@ function scopedChatListHrefForKind(kind: RepoWorktreeKind): string {
   return buildChatsListHref({ ...DEFAULT_CHAT_LIST_FILTERS, scopeKind: kind });
 }
 
+function chatDetailHref(chatId: string): string {
+  return chatRoute(chatId);
+}
+
 function shortenWorktreeLabel(name: string, repoName: string | null): string {
   if (!repoName) return name;
   const prefix = `${repoName}--`;
@@ -890,7 +895,7 @@ function runToCard(
     progress: chat ? progressPercent(chat, run) : run.progressPercent,
     updatedAt: run.lastEventAt ?? chat?.updatedAt ?? null,
     ticketId,
-    chatHref: run.chatId ? `/chats?chat=${encodeURIComponent(run.chatId)}` : chat ? `/chats?chat=${encodeURIComponent(chat.id)}` : null,
+    chatHref: run.chatId ? chatDetailHref(run.chatId) : chat ? chatDetailHref(chat.id) : null,
     ticketHref: ticketId ? scopedTicketDetail(scopeKind, scopeId, ticketId, parentRepoId) : null
   };
 }
@@ -905,7 +910,7 @@ function chatToCard(chat: PmaChatSummary, scopeKind: RepoWorktreeKind, scopeId: 
     progress: progressPercent(chat),
     updatedAt: chat.updatedAt,
     ticketId: chat.ticketId,
-    chatHref: `/chats?chat=${encodeURIComponent(chat.id)}`,
+    chatHref: chatDetailHref(chat.id),
     ticketHref: chat.ticketId ? scopedTicketDetail(scopeKind, scopeId, chat.ticketId, parentRepoId) : null
   };
 }
@@ -1046,7 +1051,7 @@ function chatToRow(chat: PmaChatSummary): RepoWorktreeChatRow {
     agentId: chat.agentId,
     model: chat.model,
     updatedAt: chat.updatedAt,
-    href: `/chats?chat=${encodeURIComponent(chat.id)}`,
+    href: chatDetailHref(chat.id),
     ticketId: chat.ticketId,
     ticketDone: chat.ticketDone ?? null,
     ticketStatus: chat.ticketStatus ?? null

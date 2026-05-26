@@ -5,6 +5,7 @@
     type CurrentTicketChatPreviewState
   } from '$lib/application/currentTicketChatPreviewProjection';
   import { withRuntimeBasePath as href } from '$lib/runtime/basePath';
+  import { chatRoute } from '$lib/viewModels/routes';
 
   let {
     chatId,
@@ -40,7 +41,7 @@
 
   const dotClass = $derived(`stream-dot signal-${statusSignal} stream-${preview.streamState}`);
   const linkHref = $derived(ticketHref ? href(ticketHref) : null);
-  const chatHref = $derived(href(`/chats/${encodeURIComponent(chatId)}`));
+  const chatHref = $derived(href(chatRoute(chatId)));
 </script>
 
 <aside class="current-chat-stream" aria-label="Current ticket chat output">

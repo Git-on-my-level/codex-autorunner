@@ -39,7 +39,9 @@ _SUBWORD_PREFIXES_3_PLUS = frozenset(
 # Short compounds that stay glued when split across tiny trailing chunks.
 _SHORT_COMPOUND_MERGES = frozenset(
     {
+        "codex",
         "inbox",
+        "sitrep",
         "redo",
         "undo",
         "preset",
@@ -58,6 +60,42 @@ def _trailing_alpha_run(text: str) -> str:
             break
         run.append(char)
     return "".join(reversed(run))
+
+
+def _current_word_fragment(text: str) -> str:
+    fragment = []
+    for char in reversed(text):
+        if char.isspace():
+            break
+        fragment.append(char)
+    return "".join(reversed(fragment))
+
+
+def _trailing_markdown_star_run_is_opening(text: str) -> bool:
+    if not text.endswith("*"):
+        return False
+    run_length = 0
+    for char in reversed(text):
+        if char != "*":
+            break
+        run_length += 1
+    if run_length not in {1, 2}:
+        return False
+    before_run_index = len(text) - run_length - 1
+    if before_run_index < 0:
+        return True
+    before_run = text[before_run_index]
+    return before_run.isspace() or before_run in "([{"
+
+
+def _incoming_markdown_star_run_is_closing(current: str, incoming: str) -> bool:
+    if incoming not in {"*", "**"}:
+        return False
+    return current.count(incoming) % 2 == 1
+
+
+def _incoming_starts_closing_bold_run(current: str, incoming: str) -> bool:
+    return incoming.startswith("**") and current.count("**") % 2 == 1
 
 
 def _likely_subword_prefix_continuation(current: str, incoming: str) -> bool:
@@ -80,6 +118,21 @@ def _likely_subword_prefix_continuation(current: str, incoming: str) -> bool:
     return False
 
 
+def _looks_like_token_continuation(current: str, incoming: str) -> bool:
+    current_alpha = _trailing_alpha_run(current)
+    incoming_alpha = "".join(char for char in incoming if char.isalpha())
+    if not current_alpha or not incoming_alpha:
+        return False
+    if current_alpha.isupper() and incoming_alpha.isupper():
+        return True
+    fragment = _current_word_fragment(current)
+    if any(char in fragment for char in "/._-`*"):
+        return True
+    if any(char in incoming for char in "/_-") or "." in incoming[:-1]:
+        return True
+    return _likely_subword_prefix_continuation(current_alpha, incoming_alpha)
+
+
 def _needs_readable_boundary(current: str, incoming: str) -> bool:
     if not current or not incoming:
         return False
@@ -91,18 +144,22 @@ def _needs_readable_boundary(current: str, incoming: str) -> bool:
         return False
     if previous in _NO_SPACE_AFTER:
         return False
+    if _incoming_starts_closing_bold_run(current, incoming) and previous.isalnum():
+        return False
     if incoming and all(char == "*" for char in incoming):
+        if _incoming_markdown_star_run_is_closing(current, incoming):
+            return False
         return previous in {".", ":", ";", "!", "?"}
     if previous.isdigit() and next_char.isdigit():
         return False
     if previous.isalnum() and (next_char.isalnum() or next_char in {"`", "*"}):
         if previous.isalpha() and next_char.isalpha():
-            if _likely_subword_prefix_continuation(
-                _trailing_alpha_run(current), incoming
-            ):
+            if _looks_like_token_continuation(current, incoming):
                 return False
         return True
-    if previous in {"`", "*"} and next_char.isalnum():
+    if previous == "*" and next_char.isalnum():
+        return not _trailing_markdown_star_run_is_opening(current)
+    if previous == "`" and next_char.isalnum():
         return True
     if previous in {".", ":", ";", "!", "?"} and next_char in {"`", "*"}:
         return True

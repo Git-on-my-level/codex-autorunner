@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, AsyncIterator, Optional
 
@@ -42,10 +43,16 @@ class HermesHarness(AgentHarness):
 
     def __init__(self, supervisor: HermesSupervisor) -> None:
         self._supervisor = supervisor
+        self._session_runtime_models: dict[str, dict[str, Any]] = {}
+        self._turn_runtime_models: dict[tuple[str, str], dict[str, Any]] = {}
 
     def _conversation_ref_from_session(self, session: Any) -> ConversationRef:
         raw = getattr(session, "raw", None)
         raw_mapping = raw if isinstance(raw, dict) else {}
+        session_id = str(getattr(session, "session_id", "") or "")
+        runtime_model = _runtime_model_from_session_raw(raw_mapping)
+        if session_id and runtime_model is not None:
+            self._session_runtime_models[session_id] = runtime_model
         summary = _normalize_optional_text(getattr(session, "summary", None))
         if summary is None and raw_mapping:
             for key in ("summary", "subtitle", "description"):
@@ -54,7 +61,7 @@ class HermesHarness(AgentHarness):
                     break
         return ConversationRef(
             agent=self.agent_id,
-            id=str(getattr(session, "session_id", "") or ""),
+            id=session_id,
             title=_normalize_optional_text(getattr(session, "title", None)),
             summary=summary,
         )
@@ -117,6 +124,9 @@ class HermesHarness(AgentHarness):
             model=model,
             approval_mode=approval_mode,
         )
+        runtime_model = _runtime_model_from_model_id(model)
+        if runtime_model is not None:
+            self._turn_runtime_models[(conversation_id, turn_id)] = runtime_model
         return TurnRef(conversation_id=conversation_id, turn_id=turn_id)
 
     async def wait_for_turn(
@@ -130,12 +140,41 @@ class HermesHarness(AgentHarness):
         resolved_turn_id = str(turn_id or "").strip()
         if not resolved_turn_id:
             raise ValueError("Hermes wait_for_turn requires a turn id")
-        return await self._supervisor.wait_for_turn(
+        result = await self._supervisor.wait_for_turn(
             workspace_root,
             conversation_id,
             resolved_turn_id,
             timeout=timeout,
         )
+        if result.effective_runtime is None:
+            runtime_source = "hermes_turn_model_override"
+            runtime_model = self._turn_runtime_models.get(
+                (conversation_id, resolved_turn_id)
+            )
+            if runtime_model is None:
+                runtime_source = "hermes_session_models"
+                try:
+                    session = await self._supervisor.resume_session(
+                        workspace_root, conversation_id
+                    )
+                except ACPMissingSessionError:
+                    runtime_model = None
+                else:
+                    self._conversation_ref_from_session(session)
+                    runtime_model = self._session_runtime_models.get(conversation_id)
+            if runtime_model is not None:
+                return TerminalTurnResult(
+                    status=result.status,
+                    assistant_text=result.assistant_text,
+                    errors=list(result.errors),
+                    raw_events=list(result.raw_events),
+                    effective_runtime={
+                        **runtime_model,
+                        "stage": "effective",
+                        "source": runtime_source,
+                    },
+                )
+        return result
 
     async def interrupt(
         self, workspace_root: Path, conversation_id: str, turn_id: Optional[str]
@@ -157,3 +196,63 @@ class HermesHarness(AgentHarness):
     ) -> list[dict[str, Any]]:
         _ = conversation_id, kwargs
         return await self._supervisor.list_turn_events_snapshot(turn_id)
+
+
+def _runtime_model_from_session_raw(raw: Mapping[str, Any]) -> Optional[dict[str, Any]]:
+    models = raw.get("models")
+    if not isinstance(models, Mapping):
+        return None
+    current_model_id = _normalize_optional_text(
+        models.get("currentModelId") or models.get("current_model_id")
+    )
+    if current_model_id is None:
+        return None
+    display_name: Optional[str] = None
+    available = models.get("availableModels") or models.get("available_models")
+    if isinstance(available, list):
+        for entry in available:
+            if not isinstance(entry, Mapping):
+                continue
+            entry_model_id = _normalize_optional_text(
+                entry.get("modelId") or entry.get("model_id") or entry.get("id")
+            )
+            if entry_model_id == current_model_id:
+                display_name = _normalize_optional_text(entry.get("name"))
+                break
+    return _runtime_model_payload(current_model_id, display_name=display_name)
+
+
+def _runtime_model_from_model_id(model_id: Optional[str]) -> Optional[dict[str, Any]]:
+    current_model_id = _normalize_optional_text(model_id)
+    if current_model_id is None:
+        return None
+    return _runtime_model_payload(current_model_id, display_name=None)
+
+
+def _runtime_model_payload(
+    current_model_id: str, *, display_name: Optional[str]
+) -> dict[str, Any]:
+    provider_id: Optional[str] = None
+    provider_model_id: Optional[str] = None
+    if ":" in current_model_id:
+        provider_raw, model_raw = current_model_id.split(":", 1)
+        provider_id = _normalize_optional_text(provider_raw)
+        provider_model_id = _normalize_optional_text(model_raw)
+    elif "/" in current_model_id:
+        provider_raw, model_raw = current_model_id.split("/", 1)
+        provider_id = _normalize_optional_text(provider_raw)
+        provider_model_id = _normalize_optional_text(model_raw)
+    return {
+        "logical_agent": HERMES_RUNTIME_ID,
+        "runtime_agent": HERMES_RUNTIME_ID,
+        "canonical_model_label": display_name or current_model_id,
+        "provider_id": provider_id,
+        "provider_model_id": provider_model_id or current_model_id,
+        "provider_payload": {
+            "modelID": current_model_id,
+            "displayName": display_name,
+        },
+        "metadata": {
+            "hermes_current_model_id": current_model_id,
+        },
+    }

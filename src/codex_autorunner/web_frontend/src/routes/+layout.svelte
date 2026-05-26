@@ -6,6 +6,7 @@
   import { stripRuntimeBasePath, withRuntimeBasePath as href } from '$lib/runtime/basePath';
   import { webApi } from '$lib/api/client';
   import { Palette, createPaletteStore, scopeSource } from '$lib/palette';
+  import { connectionStore, type ConnectionStatus } from '$lib/runtime/connectionStore.svelte';
   import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
   import {
     applyThemePreference,
@@ -94,6 +95,30 @@
     }
   }
 
+  const connectionStatus = $derived<ConnectionStatus>(connectionStore.status);
+  const connectionLabel = $derived(
+    connectionStatus === 'connected'
+      ? 'Live'
+      : connectionStatus === 'connecting'
+        ? 'Connecting'
+        : connectionStatus === 'interrupted'
+          ? 'Reconnecting'
+          : connectionStatus === 'offline'
+            ? 'Offline'
+            : 'Idle'
+  );
+  const connectionTitle = $derived(
+    connectionStatus === 'connected'
+      ? 'Live updates connected'
+      : connectionStatus === 'connecting'
+        ? 'Connecting to the hub stream'
+        : connectionStatus === 'interrupted'
+          ? 'Reconnecting to the hub stream'
+          : connectionStatus === 'offline'
+            ? 'Browser is offline'
+            : 'No active stream'
+  );
+
   function handleWindowKeydown(event: KeyboardEvent): void {
     if (event.key === 'Escape') {
       if (paletteStore.open) {
@@ -181,8 +206,14 @@
           {/if}
         {/each}
       </nav>
-      <div class="hub-status" role="status" title="Hub ready" aria-label="Hub ready">
+      <div
+        class={`hub-status status-${connectionStatus}`}
+        role="status"
+        title={connectionTitle}
+        aria-label={connectionTitle}
+      >
         <span class="status-dot" aria-hidden="true"></span>
+        <span class="hub-status-label">{connectionLabel}</span>
       </div>
     </header>
 

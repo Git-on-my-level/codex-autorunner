@@ -1,6 +1,6 @@
 import type { JsonRecord } from '$lib/api/client';
 import type { WorkStatus } from '$lib/viewModels/domain';
-import { worktreeTicketRoute } from '$lib/viewModels/routes';
+import { chatRoute, worktreeTicketRoute } from '$lib/viewModels/routes';
 
 export type RunHistoryEntry = {
   id: string;
@@ -114,7 +114,7 @@ function childEdgeHrefFromRuntime(child: JsonRecord | null): string | null {
   const targetKind = nullableString(scope?.target_kind ?? scope?.targetKind)?.toLowerCase();
   const targetId = nullableString(scope?.target_id ?? scope?.targetId);
   if (targetKind === 'thread' && targetId) {
-    return `/chats/${encodeURIComponent(targetId)}`;
+    return chatRoute(targetId);
   }
   if (kind === 'ticket_flow') {
     const wt = nullableString(scope?.worktree_id ?? scope?.worktreeId ?? scope?.target_id ?? scope?.targetId);

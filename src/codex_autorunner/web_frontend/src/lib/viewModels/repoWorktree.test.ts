@@ -354,7 +354,7 @@ describe('repo/worktree view models', () => {
       title: 'Hub rewrite foundation',
       agentId: 'codex',
       ticketHref: '/repos/repo-1/tickets/TICKET-110',
-      chatHref: '/chats?chat=chat-1'
+      chatHref: '/chats/chat-1'
     });
     expect(vm.links.map((link) => link.label)).not.toContain('Open PMA chat');
     expect(vm.ticketIndexHref).toBe('/repos/repo-1/tickets');

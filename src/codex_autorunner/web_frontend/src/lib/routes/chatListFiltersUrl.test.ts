@@ -42,11 +42,20 @@ describe('chatListFiltersUrl', () => {
       { status: 'active', category: null, transport: null, scopeKind: null, search: 'ops' },
       {
         chatId: 'chat-1',
-        preserveParams: new URLSearchParams('kind=agent'),
+        preserveParams: new URLSearchParams('tab=activity'),
         withHref: (path) => `/base${path}`
       }
     );
-    expect(href).toBe('/base/chats/chat-1?kind=agent&filter=active&search=ops');
+    expect(href).toBe('/base/chats/chat-1?tab=activity&filter=active&search=ops');
+  });
+
+  it('strips stale chat detail query hooks when building canonical chat urls', () => {
+    const href = buildChatsListHref(DEFAULT_CHAT_LIST_FILTERS, {
+      chatId: 'chat-1',
+      preserveParams: new URLSearchParams('chat=old&detail=chat%3Aold&draft=x&new=agent&kind=agent&tab=activity')
+    });
+
+    expect(href).toBe('/chats/chat-1?tab=activity');
   });
 
   it('toggles status and facet filters like the list chips', () => {

@@ -43,7 +43,18 @@ class _StubSupervisor:
                 "session_id": "hermes-session-1",
                 "title": title,
                 "summary": "fresh conversation",
-                "raw": {"summary": "fresh conversation"},
+                "raw": {
+                    "summary": "fresh conversation",
+                    "models": {
+                        "currentModelId": "xai-oauth:grok-4.3",
+                        "availableModels": [
+                            {
+                                "modelId": "xai-oauth:grok-4.3",
+                                "name": "grok-4.3",
+                            }
+                        ],
+                    },
+                },
             },
         )()
 
@@ -58,7 +69,18 @@ class _StubSupervisor:
                 "session_id": session_id,
                 "title": "Resumed Hermes session",
                 "summary": "resumed summary",
-                "raw": {"summary": "resumed summary"},
+                "raw": {
+                    "summary": "resumed summary",
+                    "models": {
+                        "currentModelId": "xai-oauth:grok-4.3",
+                        "availableModels": [
+                            {
+                                "modelId": "xai-oauth:grok-4.3",
+                                "name": "grok-4.3",
+                            }
+                        ],
+                    },
+                },
             },
         )()
 
@@ -220,6 +242,22 @@ async def test_hermes_harness_session_lifecycle_and_model_override(
     assert turn.turn_id == "hermes-turn-1"
     assert terminal.status == "completed"
     assert terminal.assistant_text == "Hermes reply"
+    assert terminal.effective_runtime == {
+        "stage": "effective",
+        "source": "hermes_turn_model_override",
+        "logical_agent": "hermes",
+        "runtime_agent": "hermes",
+        "canonical_model_label": "anthropic/claude-opus",
+        "provider_id": "anthropic",
+        "provider_model_id": "claude-opus",
+        "provider_payload": {
+            "modelID": "anthropic/claude-opus",
+            "displayName": None,
+        },
+        "metadata": {
+            "hermes_current_model_id": "anthropic/claude-opus",
+        },
+    }
     assert supervisor.created == [(workspace_root, "Hermes Test")]
     assert supervisor.resumed == [(workspace_root, "hermes-session-1")]
     assert supervisor.started == [

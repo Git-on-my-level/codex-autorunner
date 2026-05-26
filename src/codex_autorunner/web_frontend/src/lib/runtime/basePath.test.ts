@@ -11,7 +11,7 @@ describe('runtime base path helpers', () => {
 
   it('prefixes same-origin root paths and leaves external URLs untouched', () => {
     expect(withRuntimeBasePath('/hub/pma/threads', '/car')).toBe('/car/hub/pma/threads');
-    expect(withRuntimeBasePath('/chats?chat=thread-1', '/car')).toBe('/car/chats?chat=thread-1');
+    expect(withRuntimeBasePath('/chats/thread-1', '/car')).toBe('/car/chats/thread-1');
     expect(withRuntimeBasePath('/car/chats', '/car')).toBe('/car/chats');
     expect(withRuntimeBasePath('https://example.test/chats', '/car')).toBe('https://example.test/chats');
     expect(withRuntimeBasePath('#active-runs', '/car')).toBe('#active-runs');

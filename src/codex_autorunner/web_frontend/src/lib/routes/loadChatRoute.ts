@@ -4,6 +4,7 @@ import {
   ensureChatIndexLoaded,
   type ReadModelLoaderResult
 } from '$lib/data';
+import { requestedChatDetailFromUrl } from '$lib/application/chatDetailSession';
 import { readModelLoaderOptions, type LoadReadModelRouteOptions } from './loadReadModelRoute';
 
 export type ChatRouteLoadData = {
@@ -17,9 +18,9 @@ const CHAT_INDEX_WINDOW_LIMIT = 50;
 
 /** Testable helper; must not live in `+page.ts` (SvelteKit allows only reserved route exports there). */
 export async function loadChatRoute(
-  options: LoadReadModelRouteOptions & { chatId?: string }
+  options: LoadReadModelRouteOptions & { chatId?: string; searchParams?: Pick<URLSearchParams, 'get'> }
 ): Promise<ChatRouteLoadData> {
-  const chatId = options.chatId?.trim() || null;
+  const chatId = requestedChatDetailFromUrl(options.chatId, options.searchParams);
   const chatIndexPromise = ensureChatIndexLoaded(
     { limit: CHAT_INDEX_WINDOW_LIMIT },
     {

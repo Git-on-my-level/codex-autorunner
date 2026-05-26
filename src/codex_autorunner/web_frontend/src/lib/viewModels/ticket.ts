@@ -10,7 +10,7 @@ import {
   type ManagedThreadCreatePayload,
   type PmaChatScopeOption
 } from './pmaChat';
-import { repoRoute, repoTicketRoute, worktreeRoute, worktreeTicketRoute } from './routes';
+import { chatRoute, repoRoute, repoTicketRoute, worktreeRoute, worktreeTicketRoute } from './routes';
 import {
   aliasesOverlap,
   buildTicketFlowStatusViewModel,
@@ -459,7 +459,7 @@ export function buildTicketDetailViewModel(
   const flowRunId = run?.id ?? detail.runId ?? null;
   const runHref = flowRunId ? `/api/flows/${encodeURIComponent(flowRunId)}/status` : null;
   const debugHref = run ? `/api/flows/${encodeURIComponent(run.id)}/dispatch_history` : null;
-  const chatHref = chat ? `/chats?chat=${encodeURIComponent(chat.id)}` : detail.chatKey ? `/chats?chat=${encodeURIComponent(detail.chatKey)}` : null;
+  const chatHref = chat ? chatRoute(chat.id) : detail.chatKey ? chatRoute(detail.chatKey) : null;
   const linkedChatId = chat?.id ?? null;
   const sourceTickets = source.tickets.map((ticket) => ticketToListRow(ticket, source, lookup)).sort(byTicketNumberThenTitle);
   const routeId = routeIdForTicket(detail);
@@ -756,7 +756,7 @@ function ticketToListRow(ticket: TicketSummary, source: TicketSourceData, lookup
     currentRunState: run?.status ?? chat?.status ?? null,
     currentRunId: run?.id ?? null,
     updatedAt: ticket.updatedAt ?? run?.lastEventAt ?? chat?.updatedAt ?? null,
-    chatHref: chat ? `/chats?chat=${encodeURIComponent(chat.id)}` : ticket.chatKey ? `/chats?chat=${encodeURIComponent(ticket.chatKey)}` : null,
+    chatHref: chat ? chatRoute(chat.id) : ticket.chatKey ? chatRoute(ticket.chatKey) : null,
     href: scopedTicketHrefFromBase(ownerHref, ticket) ?? '/chats',
     needsAttention: ticket.errors.length > 0 || ['waiting', 'failed', 'blocked', 'invalid'].includes(status),
     isCurrent: false
@@ -1063,7 +1063,7 @@ function linkedChatToVm(chat: PmaChatSummary): TicketLinkedChat {
     status: chat.status,
     agentId: chat.agentId,
     model: chat.model,
-    href: `/chats?chat=${encodeURIComponent(chat.id)}`,
+    href: chatRoute(chat.id),
     kind,
     kindLabel: pmaChatKindLabel(kind),
     updatedAt: chat.updatedAt

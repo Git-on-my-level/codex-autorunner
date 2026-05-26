@@ -2,6 +2,7 @@ import type { PaletteItem, PaletteSource } from './types';
 import type { PmaChatSummary, TicketSummary, ContextspaceDocument } from '$lib/viewModels/domain';
 import type { RepoSummary, WorktreeSummary } from '$lib/viewModels/domain';
 import {
+  chatRoute,
   repoRoute,
   repoTicketRoute,
   worktreeRoute,
@@ -38,7 +39,7 @@ export function threadSource(threads: PmaChatSummary[]): PaletteSource {
         label: thread.title,
         group: 'Threads',
         keywords: `${thread.id} ${thread.agentId ?? ''} ${thread.ticketId ?? ''} ${thread.model ?? ''}`,
-        action: { kind: 'navigate', href: `/chats?chat=${encodeURIComponent(thread.id)}` }
+        action: { kind: 'navigate', href: chatRoute(thread.id) }
       }))
   };
 }

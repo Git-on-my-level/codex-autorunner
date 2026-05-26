@@ -12,7 +12,10 @@
     class: className = '',
     itemClass = '',
     scrollable = true,
-    onEndReached
+    onEndReached,
+    onScrollState,
+    onReady,
+    bottomThresholdPx = 32
   }: {
     items: T[];
     children: Snippet<[T, number]>;
@@ -25,6 +28,9 @@
     itemClass?: string;
     scrollable?: boolean;
     onEndReached?: () => void;
+    onScrollState?: (state: { atBottom: boolean; distanceFromBottom: number }) => void;
+    onReady?: (api: { scrollToBottom: (behavior?: ScrollBehavior) => void }) => void;
+    bottomThresholdPx?: number;
   } = $props();
 
   let viewport: HTMLDivElement | null = $state(null);
@@ -60,6 +66,7 @@
   const canScroll = $derived(scrollable && totalHeight > viewportHeight + 1);
   const visibleItems = $derived(items.slice(startIndex, endIndex));
   const offsetY = $derived(itemOffsets[startIndex] ?? 0);
+  const itemUpdateToken = $derived(itemKeys.join('\u0000'));
   const rangeLabel = $derived(
     items.length === 0
       ? '0 items'
@@ -85,6 +92,19 @@
     if (distanceFromBottom <= safeItemSize * 4) onEndReached();
   }
 
+  function reportScrollState(): void {
+    if (!onScrollState || !viewport) return;
+    if (!scrollable) {
+      onScrollState({ atBottom: true, distanceFromBottom: 0 });
+      return;
+    }
+    const distanceFromBottom = Math.max(
+      0,
+      viewport.scrollHeight - viewport.scrollTop - viewport.clientHeight
+    );
+    onScrollState({ atBottom: distanceFromBottom <= bottomThresholdPx, distanceFromBottom });
+  }
+
   function updateMeasurements(): void {
     if (!viewport) return;
     scrollTop = viewport.scrollTop;
@@ -94,6 +114,12 @@
       rowGap = Number.isFinite(gap) ? gap : 0;
     }
     checkEndReached();
+    reportScrollState();
+  }
+
+  function scrollToBottom(behavior: ScrollBehavior = 'smooth'): void {
+    if (!viewport) return;
+    viewport.scrollTo({ top: viewport.scrollHeight, behavior });
   }
 
   function handleScroll(): void {
@@ -101,6 +127,8 @@
   }
 
   $effect(() => {
+    void items;
+    void itemUpdateToken;
     void items.length;
     void totalHeight;
     if (!mounted) return;
@@ -133,6 +161,7 @@
     void tick().then(updateMeasurements);
     const observer = new ResizeObserver(updateMeasurements);
     if (viewport) observer.observe(viewport);
+    onReady?.({ scrollToBottom });
     return () => observer.disconnect();
   });
 </script>

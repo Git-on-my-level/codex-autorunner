@@ -45,7 +45,7 @@ describe('ticket view models', () => {
       title: mockTicketSummary.title,
       repoLabel: 'Worktree: worktree-1',
       currentRunState: 'running',
-      chatHref: '/chats?chat=chat-1',
+      chatHref: '/chats/chat-1',
       modelLabel: 'configured model'
     });
     expect(vm.workspaceFilters.map((filter) => filter.id)).toContain('worktree:worktree-1');
@@ -315,12 +315,12 @@ Users can inspect tickets.
 
     expect(detail.flowRunId).toBe('run-nested');
     expect(detail.runHref).toBe('/api/flows/run-nested/status');
-    expect(detail.chatHref).toBe('/chats?chat=ticket%3ATICKET-110');
+    expect(detail.chatHref).toBe('/chats/ticket%3ATICKET-110');
     expect(detail.actions.find((action) => action.label === 'Open chat')).toMatchObject({
-      href: '/chats?chat=ticket%3ATICKET-110'
+      href: '/chats/ticket%3ATICKET-110'
     });
     expect(detail.timeline.map((item) => item.id)).toContain('run-run-nested');
-    expect(detail.timeline.find((item) => item.id === 'run-run-nested')?.href).toBe('/chats?chat=ticket%3ATICKET-110');
+    expect(detail.timeline.find((item) => item.id === 'run-run-nested')?.href).toBe('/chats/ticket%3ATICKET-110');
   });
 
   it('resolves ticket detail route ids emitted by the ticket list', () => {

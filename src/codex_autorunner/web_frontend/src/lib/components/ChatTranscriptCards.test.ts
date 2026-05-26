@@ -11,6 +11,38 @@ const baseTrace = {
   progressSourceIds: [] as string[]
 };
 
+const goldenHermesCodexMarkdown = [
+  '**Current State**',
+  '',
+  '- **active_context.md**: Empty',
+  '- **AGENTS.md**: Current',
+  '- Workspace path: `/Users/dazheng/car-workspace/codex-autorunner`',
+  '',
+  '| Section | Count |',
+  '|---|---:|',
+  '| PMA file inbox | 5 |'
+].join('\n');
+
+function assistantMessageCard(id: string, text: string): ChatTranscriptCard {
+  return {
+    kind: 'message',
+    id,
+    turnId: 't1',
+    orderKey: '00000002|a1',
+    timestamp: '2026-05-10T12:05:00.000Z',
+    message: {
+      id,
+      chatId: 'c1',
+      role: 'assistant',
+      text,
+      createdAt: '2026-05-10T12:05:00.000Z',
+      status: 'running',
+      artifacts: [],
+      raw: {}
+    }
+  };
+}
+
 describe('ChatTranscriptCards', () => {
   it('collapses thinking traces while keeping commentary visible', () => {
     const cards: ChatTranscriptCard[] = [
@@ -233,6 +265,49 @@ describe('ChatTranscriptCards', () => {
     expect(body).toContain('class="message-timestamp"');
     expect(body).toContain('datetime="2026-05-10T12:00:00.000Z"');
     expect(body).toContain('datetime="2026-05-10T12:05:00.000Z"');
+  });
+
+  it('renders markdown for the assistant message currently marked as streaming', () => {
+    const cards: ChatTranscriptCard[] = [assistantMessageCard('a-streaming', goldenHermesCodexMarkdown)];
+
+    const { body } = render(ChatTranscriptCards, {
+      props: { cards, streamingMessageId: 'a-streaming' }
+    });
+
+    expect(body).toContain('class="message-markdown markdown-body streaming"');
+    expect(body).toContain('<strong>Current State</strong>');
+    expect(body).toContain('<strong>AGENTS.md</strong>');
+    expect(body).toContain('<code>/Users/dazheng/car-workspace/codex-autorunner</code>');
+    expect(body).toContain('<table>');
+    expect(body).not.toContain('**Current State**');
+    expect(body).not.toContain('AG ENTS');
+    expect(body).not.toContain('car-work space');
+    expect(body).not.toContain('cod ex-aut orunner');
+  });
+
+  it('renders the Hermes/Codex golden markdown transcript identically when streaming and completed', () => {
+    const streaming = render(ChatTranscriptCards, {
+      props: {
+        cards: [assistantMessageCard('a-golden', goldenHermesCodexMarkdown)],
+        streamingMessageId: 'a-golden'
+      }
+    }).body;
+    const completed = render(ChatTranscriptCards, {
+      props: { cards: [assistantMessageCard('a-golden', goldenHermesCodexMarkdown)] }
+    }).body;
+
+    for (const body of [streaming, completed]) {
+      expect(body).toContain('<strong>Current State</strong>');
+      expect(body).toContain('<strong>active_context.md</strong>');
+      expect(body).toContain('<strong>AGENTS.md</strong>');
+      expect(body).toContain('<code>/Users/dazheng/car-workspace/codex-autorunner</code>');
+      expect(body).toContain('<table>');
+      expect(body).not.toContain('**AGENTS.md**');
+      expect(body).not.toContain('active_context.md **');
+      expect(body).not.toContain('AG ENTS');
+      expect(body).not.toContain('car-work space');
+      expect(body).not.toContain('cod ex-aut orunner');
+    }
   });
 
   it('renders model-only capsule metadata as a separate collapsed card above the user message', () => {

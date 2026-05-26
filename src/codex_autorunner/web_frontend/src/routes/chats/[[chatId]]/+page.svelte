@@ -45,6 +45,7 @@
     visibleChatDetailTranscriptCards
   } from '$lib/application/pmaChatArchitecture';
   import { createChatSendController } from '$lib/application/chatSendController';
+  import { connectionStore } from '$lib/runtime/connectionStore.svelte';
   import {
     createChatDetailLiveProjection,
     type ChatDetailLiveProjectionState
@@ -91,7 +92,8 @@
     repoTicketRoute,
     worktreeContextspaceRoute,
     worktreeRoute,
-    worktreeTicketRoute
+    worktreeTicketRoute,
+    chatRoute
   } from '$lib/viewModels/routes';
   import type {
     PmaChatSummary,
@@ -355,9 +357,12 @@
   let pendingPointerChatId: string | null = null;
   let pendingCommittedDetailUrlChatId = $state<string | null>(null);
   let removeDocumentChatPointerCapture: (() => void) | null = null;
+  let transcriptAtBottom = $state(true);
+  let transcriptApi: { scrollToBottom: (behavior?: ScrollBehavior) => void } | null = null;
 
   const COMPOSER_DEFAULT_MAX_PX = 360;
   const COMPOSER_MIN_MAX_PX = 120;
+  const TRANSCRIPT_BOTTOM_THRESHOLD_PX = 80;
   let composerMaxPx = $state(COMPOSER_DEFAULT_MAX_PX);
   /** True when draft content wants at least composerMaxPx height (auto-grow hit the cap). */
   let showComposerResizeGrip = $state(false);
@@ -1054,6 +1059,7 @@
   onDestroy(() => {
     removeDocumentChatPointerCapture?.();
     pageController.destroy();
+    connectionStore.reset();
   });
 
   $effect(() => {
@@ -1113,6 +1119,7 @@
     activeError = state.activeError;
     streamState = state.streamState;
     streamError = state.streamError;
+    connectionStore.setStreamStatus(state.streamState);
   }
 
   function applyInitialSupportingData(data: ChatDetailPageSupportData): void {
@@ -1385,11 +1392,8 @@
 
   async function syncDetailUrl(detailId: string): Promise<void> {
     const params = new URLSearchParams(page.url.searchParams);
-    params.delete('draft');
-    params.delete('detail');
-    params.delete('chat');
-    const query = params.toString();
-    const target = `/chats/${encodeURIComponent(detailId)}${query ? `?${query}` : ''}`;
+    for (const key of ['chat', 'detail', 'draft', 'new', 'kind']) params.delete(key);
+    const target = chatRoute(detailId, { searchParams: params });
     await goto(href(target), { keepFocus: true, noScroll: true });
   }
 
@@ -1803,7 +1807,7 @@
     const scroller = messageScroller();
     if (!scroller) return true;
     const distanceFromBottom = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight;
-    return distanceFromBottom < 80;
+    return distanceFromBottom <= TRANSCRIPT_BOTTOM_THRESHOLD_PX;
   }
 
   async function scrollMessagesToBottom(): Promise<void> {
@@ -2849,6 +2853,9 @@
           ariaLabel="Chat transcript"
           class="chat-transcript-virtual-list"
           itemClass="chat-transcript-virtual-item"
+          bottomThresholdPx={TRANSCRIPT_BOTTOM_THRESHOLD_PX}
+          onScrollState={({ atBottom }) => { transcriptAtBottom = atBottom; }}
+          onReady={(api) => { transcriptApi = api; }}
         >
           {#snippet children(item)}
             {#if item.kind === 'card'}
@@ -2871,6 +2878,20 @@
       {/if}
     </div>
     <div class="sr-only" aria-live="polite" aria-atomic="false">{srAnnouncement}</div>
+
+    {#if activeChat && transcriptListItems.length > 0 && !transcriptAtBottom}
+      <button
+        type="button"
+        class="jump-to-latest"
+        onclick={() => transcriptApi?.scrollToBottom('smooth')}
+        aria-label="Jump to latest message"
+      >
+        <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M12 5v14M19 12l-7 7-7-7" />
+        </svg>
+        Jump to latest
+      </button>
+    {/if}
 
     {#if showStatusBar && statusBar}
       <div class={`pma-status-bar composer-status-bar ${statusBar.state}`} aria-label="Turn status">

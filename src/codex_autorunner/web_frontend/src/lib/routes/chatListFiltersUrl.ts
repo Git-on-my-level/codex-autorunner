@@ -3,7 +3,9 @@ import type {
   ChatFacetScopeKind,
   ChatFacetTransport
 } from '$lib/api/readModelContracts';
+import { CHAT_DETAIL_TRANSIENT_QUERY_KEYS } from '$lib/application/chatDetailSession';
 import { CHAT_FILTER_ORDER, type ChatStatusFilter } from '$lib/viewModels/pmaChat';
+import { chatRoute } from '$lib/viewModels/routes';
 
 export type ChatListFilters = {
   status: ChatStatusFilter;
@@ -101,8 +103,9 @@ export function buildChatsListHref(
     new URLSearchParams(options.preserveParams ?? undefined),
     filters
   );
+  for (const key of CHAT_DETAIL_TRANSIENT_QUERY_KEYS) params.delete(key);
   const chatId = options.chatId?.trim();
-  const path = chatId ? `/chats/${encodeURIComponent(chatId)}` : '/chats';
+  const path = chatId ? chatRoute(chatId) : '/chats';
   const query = params.toString();
   const raw = `${path}${query ? `?${query}` : ''}`;
   return options.withHref ? options.withHref(raw) : raw;

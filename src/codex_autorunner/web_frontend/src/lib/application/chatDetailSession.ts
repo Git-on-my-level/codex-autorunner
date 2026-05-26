@@ -92,14 +92,27 @@ export function chatSummaryForSessionId(
   );
 }
 
+export const CHAT_DETAIL_TRANSIENT_QUERY_KEYS = ['chat', 'detail', 'draft', 'new', 'kind'] as const;
+
+export function legacyChatDetailFromSearchParams(
+  searchParams: Pick<URLSearchParams, 'get'> | null | undefined
+): string | null {
+  const detail = searchParams?.get('detail')?.trim();
+  if (detail?.startsWith('chat:')) return detail.slice('chat:'.length).trim() || null;
+  return searchParams?.get('chat')?.trim() || null;
+}
+
+export function canonicalChatDetailSearchParams(searchParams: URLSearchParams): URLSearchParams {
+  const next = new URLSearchParams(searchParams);
+  for (const key of CHAT_DETAIL_TRANSIENT_QUERY_KEYS) next.delete(key);
+  return next;
+}
+
 export function requestedChatDetailFromUrl(
   routeChatId: string | null | undefined,
-  searchParams: Pick<URLSearchParams, 'get'>
+  searchParams?: Pick<URLSearchParams, 'get'> | null
 ): string | null {
-  if (routeChatId) return routeChatId;
-  const detail = searchParams.get('detail');
-  if (detail?.startsWith('chat:')) return detail.slice('chat:'.length);
-  return searchParams.get('chat');
+  return routeChatId?.trim() || legacyChatDetailFromSearchParams(searchParams);
 }
 
 export function selectChatDetail(

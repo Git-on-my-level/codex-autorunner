@@ -513,10 +513,91 @@ a {
 .hub-status {
   display: inline-flex;
   align-items: center;
-  justify-content: center;
-  width: 16px;
-  height: 16px;
+  gap: 6px;
+  height: 18px;
+  padding: 0 6px 0 4px;
+  border-radius: 999px;
   color: var(--color-ink-muted);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.hub-status .status-dot {
+  flex: none;
+}
+
+/* Idle: no live stream open; render the dot neutral and hide the label so
+   the topbar stays calm. The label still ships for screen readers. */
+.hub-status.status-idle .status-dot {
+  background: var(--color-ink-faint);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--color-ink-faint) 14%, transparent);
+}
+
+.hub-status.status-idle .hub-status-label {
+  display: none;
+}
+
+/* Connected: success green dot, label hidden by default to stay quiet on
+   the topbar. Reveals on hover for verification. */
+.hub-status.status-connected .status-dot {
+  background: var(--color-success);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--color-success) 16%, transparent);
+}
+
+.hub-status.status-connected .hub-status-label {
+  display: none;
+}
+
+.hub-status.status-connected:hover .hub-status-label,
+.hub-status.status-connected:focus-visible .hub-status-label {
+  display: inline;
+  color: var(--color-success);
+}
+
+/* Connecting: warning amber pulsing dot, label always visible. */
+.hub-status.status-connecting {
+  color: var(--color-warning);
+}
+
+.hub-status.status-connecting .status-dot {
+  background: var(--color-warning);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--color-warning) 18%, transparent);
+  animation: hub-status-pulse 1.1s ease-in-out infinite;
+}
+
+/* Interrupted: same amber as connecting but the label tells the user we're
+   retrying. The store flips back to connected the moment the stream resumes. */
+.hub-status.status-interrupted {
+  color: var(--color-warning);
+}
+
+.hub-status.status-interrupted .status-dot {
+  background: var(--color-warning);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--color-warning) 18%, transparent);
+  animation: hub-status-pulse 1.1s ease-in-out infinite;
+}
+
+/* Offline: navigator.onLine === false. Loud red, always labelled. */
+.hub-status.status-offline {
+  color: var(--color-danger);
+  background: var(--color-danger-soft);
+}
+
+.hub-status.status-offline .status-dot {
+  background: var(--color-danger);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--color-danger) 20%, transparent);
+}
+
+@keyframes hub-status-pulse {
+  0%, 100% { opacity: 0.55; }
+  50% { opacity: 1; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .hub-status .status-dot { animation: none; }
 }
 
 .content-shell {
@@ -2388,6 +2469,65 @@ textarea:hover {
   text-align: right;
 }
 
+/* Delivery affordance on user messages: a static ✓ next to the timestamp on
+   committed messages, and a "Sending…" pulse while the row is optimistic.
+   The `.message.user span { display: none }` rule above hides the "You"
+   label, so all delivery span overrides need user-scoped specificity. */
+.message.user .message-delivery-tick,
+.message.assistant .message-delivery-tick {
+  display: inline-block;
+  margin-right: 4px;
+  color: var(--color-success);
+  font-weight: 600;
+  opacity: 0.7;
+  font-variant-numeric: tabular-nums;
+}
+
+.message.user.is-sending .message-markdown {
+  opacity: 0.7;
+  transition: opacity var(--transition-base) var(--ease-out);
+}
+
+.message.user .message-delivery,
+.message.assistant .message-delivery {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: var(--space-2);
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+  color: var(--color-ink-faint);
+  line-height: 1.35;
+  font-variant-numeric: tabular-nums;
+}
+
+.message.user .message-delivery {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: var(--space-3);
+  margin-bottom: 2px;
+}
+
+.message.user .message-delivery-dot,
+.message.assistant .message-delivery-dot {
+  display: inline-block;
+  width: 5px;
+  height: 5px;
+  border-radius: 999px;
+  background: var(--color-ink-muted);
+  animation: message-delivery-pulse 1.1s ease-in-out infinite;
+}
+
+@keyframes message-delivery-pulse {
+  0%, 100% { opacity: 0.3; transform: scale(0.85); }
+  50% { opacity: 1; transform: scale(1); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .message-delivery-dot { animation: none; opacity: 0.75; }
+}
+
 .message.assistant {
   border: 0;
   background: transparent;
@@ -2433,9 +2573,44 @@ textarea:hover {
 }
 
 .message-markdown.streaming {
-  white-space: pre-wrap;
   overflow-wrap: anywhere;
   word-break: break-word;
+}
+
+/* Live typing caret: lives at the tail of the streamed assistant text so a
+   long pause between tokens can't be mistaken for a hung response. The
+   caret targets the last leaf-ish child of the streaming container; for
+   lists we punch into the last <li> so it doesn't dangle below the list. */
+.message-markdown.streaming > :last-child:not(ul):not(ol):not(pre)::after,
+.message-markdown.streaming > :last-child:is(ul, ol) > li:last-child::after,
+.message-markdown.streaming > :last-child:is(pre) > code:last-child::after,
+.message-markdown.streaming:empty::after {
+  content: '';
+  display: inline-block;
+  width: 0.45em;
+  height: 0.95em;
+  margin-left: 2px;
+  vertical-align: -0.12em;
+  background: currentColor;
+  opacity: 0.55;
+  border-radius: 1px;
+  animation: streaming-caret-blink 1s steps(2, start) infinite;
+}
+
+@keyframes streaming-caret-blink {
+  50% {
+    opacity: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .message-markdown.streaming > :last-child:not(ul):not(ol):not(pre)::after,
+  .message-markdown.streaming > :last-child:is(ul, ol) > li:last-child::after,
+  .message-markdown.streaming > :last-child:is(pre) > code:last-child::after,
+  .message-markdown.streaming:empty::after {
+    animation: none;
+    opacity: 0.55;
+  }
 }
 
 .message-attachments {
@@ -2837,6 +3012,49 @@ textarea:hover {
   border-radius: 8px;
   container-type: inline-size;
   container-name: status-bar;
+}
+
+/* "Jump to latest" pill: floats above the status bar/composer whenever the
+   transcript is scrolled away from the bottom. Click drops the user back to
+   the live tail so streaming content doesn't keep happening off-screen. */
+.jump-to-latest {
+  align-self: center;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin: var(--space-2) 0 calc(var(--space-1) * -1);
+  padding: 6px 12px 6px 10px;
+  border: 1px solid var(--color-border-strong);
+  border-radius: 999px;
+  background: var(--color-surface);
+  color: var(--color-ink);
+  font-size: var(--font-size-0);
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  box-shadow:
+    0 8px 24px -16px rgb(15 15 20 / 0.18),
+    0 2px 6px -3px rgb(15 15 20 / 0.06);
+  cursor: pointer;
+  transition: border-color var(--transition-fast) var(--ease-out),
+    background var(--transition-fast) var(--ease-out),
+    transform var(--transition-base) var(--ease-out);
+}
+
+.jump-to-latest:hover {
+  border-color: var(--color-accent);
+  background: var(--color-surface-muted);
+}
+
+.jump-to-latest:focus-visible {
+  outline: none;
+  border-color: var(--color-accent);
+  box-shadow: var(--shadow-focus);
+}
+
+.jump-to-latest svg {
+  width: 14px;
+  height: 14px;
+  color: var(--color-ink-muted);
 }
 
 .chat-files-drawer {
