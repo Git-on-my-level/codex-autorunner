@@ -37,6 +37,7 @@ import {
   modelReasoningOptions,
   modelSelectorState,
   pmaChatTransportBadges,
+  pmaChatBadgeViews,
   showPmaAgentBadge,
   pmaChatKind,
   pmaChatKindLabel,
@@ -1082,6 +1083,9 @@ describe('PMA chat view helpers', () => {
     expect(pmaChatTransportBadges(codingAgentChat)).toEqual([]);
     expect(showPmaAgentBadge(pmaAgentChat)).toBe(true);
     expect(showPmaAgentBadge(codingAgentChat)).toBe(false);
+    expect(pmaChatBadgeViews(pmaAgentChat).map((badge) => badge.label)).toEqual(['PMA']);
+    expect(pmaChatBadgeViews(pmaAgentChat, { showPmaAgent: false })).toEqual([]);
+    expect(pmaChatBadgeViews(codingAgentChat).map((badge) => badge.label)).toEqual(['Coding agent']);
   });
 
   it('labels regular chat facets as user-facing chats', () => {
@@ -1105,6 +1109,11 @@ describe('PMA chat view helpers', () => {
     };
 
     expect(pmaChatTransportBadges(chat).map((badge) => badge.slug)).toEqual(['discord', 'notification']);
+    expect(pmaChatBadgeViews(chat, { agentLabel: 'Codex' }).map((badge) => badge.label)).toEqual([
+      'Discord',
+      'Notifications',
+      'Codex'
+    ]);
   });
 
   it('gives notification chats their own surface filter from typed transport facets', () => {

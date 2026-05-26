@@ -28,6 +28,7 @@ from ..read_model_contracts import (
     ChatIndexSnapshot,
     ChatQueueSummary,
     ChatRuntimeProjection,
+    ChatSurfaceBinding,
     ChatThreadProjection,
     ChatTimelineIdentity,
     ChatTimelineItem,
@@ -653,13 +654,13 @@ def hub_chat_row_to_chat_index_row(raw: Mapping[str, Any]) -> ChatIndexRow:
 
     normalized_status = chat_effective_status_from_row(raw)
     surface_bindings = [
-        dict(cast(Mapping[str, Any], surface))
+        _chat_surface_binding(surface)
         for surface in raw.get("surface_bindings") or raw.get("surfaces") or []
         if isinstance(surface, Mapping)
     ]
     primary_surface = raw.get("primary_surface") or raw.get("surface")
     primary_surface_out = (
-        dict(cast(Mapping[str, Any], primary_surface))
+        _chat_surface_binding(primary_surface)
         if isinstance(primary_surface, Mapping)
         else None
     )
@@ -766,6 +767,26 @@ def hub_chat_row_to_chat_index_row(raw: Mapping[str, Any]) -> ChatIndexRow:
             _ticket_status_from_raw(raw, normalized_status) if is_ticket_flow else None
         ),
         debug=debug_payload or None,
+    )
+
+
+def _chat_surface_binding(surface: Mapping[str, Any]) -> ChatSurfaceBinding:
+    return ChatSurfaceBinding(
+        surface_kind=str(
+            surface.get("surface_kind") or surface.get("surfaceKind") or ""
+        ),
+        surface_key=str(surface.get("surface_key") or surface.get("surfaceKey") or ""),
+        surface_urn=_str_or_none(
+            surface.get("surface_urn") or surface.get("surfaceUrn")
+        ),
+        lifecycle=_str_or_none(surface.get("lifecycle")),
+        display_name=_str_or_none(
+            surface.get("display_name") or surface.get("displayName")
+        ),
+        title=_str_or_none(surface.get("title")),
+        binding_display_name=_str_or_none(
+            surface.get("binding_display_name") or surface.get("bindingDisplayName")
+        ),
     )
 
 

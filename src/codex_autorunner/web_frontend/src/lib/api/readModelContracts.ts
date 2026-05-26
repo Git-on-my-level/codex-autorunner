@@ -114,6 +114,16 @@ export type ChatRuntimeProjection = {
   reasoningSource: string;
 };
 
+export type ChatSurfaceBinding = {
+  surfaceKind: string;
+  surfaceKey: string;
+  surfaceUrn?: string | null;
+  lifecycle?: string | null;
+  displayName?: string | null;
+  title?: string | null;
+  bindingDisplayName?: string | null;
+};
+
 export function normalizeChatFacetRequest(request: Partial<ChatFacetRequest> | null | undefined): ChatFacetRequest {
   return {
     categories: sortedUniqueFacetValues(request?.categories),
@@ -159,8 +169,8 @@ export type ChatIndexRow = {
   title: string;
   displayTitle?: string | null;
   technicalTitle?: string | null;
-  primarySurface?: Record<string, unknown> | null;
-  surfaceBindings?: Record<string, unknown>[];
+  primarySurface?: ChatSurfaceBinding | null;
+  surfaceBindings?: ChatSurfaceBinding[];
   bindingDisplayName?: string | null;
   bindingDisplayNames?: string[];
   lifecycle?: string | null;
@@ -594,8 +604,6 @@ function snakeToCamel(value: string): string {
 }
 
 const opaqueContractRecordKeys = new Set([
-  'primarySurface',
-  'surfaceBindings',
   'sortKey',
   'identity',
   'parentLinks',

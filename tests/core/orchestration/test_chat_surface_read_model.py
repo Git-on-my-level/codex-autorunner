@@ -2361,7 +2361,7 @@ def test_chat_index_uses_message_preview_before_thread_id_fallback(
     ][0]
 
     assert row["title"] == "Investigate failed deploy"
-    assert row["display_title"] == "Investigate failed deploy"
+    assert row["display_title"] == "Agent Nexus / #deploys"
     assert row["binding_display_name"] == "Agent Nexus / #deploys"
 
 

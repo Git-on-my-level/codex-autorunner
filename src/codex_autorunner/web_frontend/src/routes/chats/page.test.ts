@@ -266,6 +266,17 @@ describe('/chats page', () => {
     expect(pageSource).toContain('contextualFacetCounts.transport');
   });
 
+  it('does not render the generic Chat kind badge in the active header', () => {
+    const pageSource = chatDetailPageSource();
+    const subtitleBody = pageSource.match(
+      /<p class="chat-header-subtitle">[\s\S]*?<\/p>/
+    )?.[0];
+
+    expect(subtitleBody).toBeTruthy();
+    expect(pageSource).toContain("pmaChatBadgeViews(activeChat, { showPmaAgent: false })");
+    expect(subtitleBody).toContain('{#each activeChatBadges as badge}');
+  });
+
   it('renders cached chat rows instead of the skeleton while the index cursor is still missing', () => {
     readModelEntityStore.upsertChatIndexRows([chatIndexRow()]);
 
@@ -287,8 +298,8 @@ describe('/chats page', () => {
         status: 'running',
         unreadCount: 0,
         lastActivityAt: '2026-05-11T12:00:00Z',
-        primarySurface: { surface_kind: 'pma', lifecycle: 'running' },
-        surfaceBindings: [{ surface_kind: 'discord', surface_key: 'channel-1', lifecycle: 'archived' }]
+        primarySurface: { surfaceKind: 'pma', surfaceKey: 'thread-1', lifecycle: 'running' },
+        surfaceBindings: [{ surfaceKind: 'discord', surfaceKey: 'channel-1', lifecycle: 'archived' }]
       },
       {
         chatId: 'discord-old-archived',

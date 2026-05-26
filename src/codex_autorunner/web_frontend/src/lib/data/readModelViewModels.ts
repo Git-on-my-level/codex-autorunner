@@ -134,7 +134,7 @@ export function legacyChatIndexRecordToChatIndexRow(raw: JsonRecord): ChatIndexR
 }
 
 export function chatIndexRowToPmaChatSummary(row: ChatIndexRow): PmaChatSummary {
-  const title = row.displayTitle ?? row.bindingDisplayName ?? row.title;
+  const title = row.displayTitle ?? row.title;
   const raw: JsonRecord = {
     row,
     id: row.chatId,

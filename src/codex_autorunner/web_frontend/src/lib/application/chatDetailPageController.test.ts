@@ -105,16 +105,16 @@ describe('ChatDetailPageController', () => {
       ticketRunGroupRequest: CHAT_TICKET_RUN_GROUP_WINDOW_REQUEST
     });
     harness.store.applyChatIndexSnapshot(chatIndexSnapshot([
-      chatIndexRow('active', { primarySurface: { surface_kind: 'managed_thread', surface_key: 'scope-1' } })
+      chatIndexRow('active', { primarySurface: { surfaceKind: 'managed_thread', surfaceKey: 'scope-1' } })
     ]));
     harness.liveProjection.activate.mockClear();
 
     harness.store.applyChatIndexSnapshot(chatIndexSnapshot([
       chatIndexRow('active', {
         status: 'archived',
-        primarySurface: { surface_kind: 'managed_thread', surface_key: 'scope-1' }
+        primarySurface: { surfaceKind: 'managed_thread', surfaceKey: 'scope-1' }
       }),
-      chatIndexRow('replacement', { primarySurface: { surface_kind: 'managed_thread', surface_key: 'scope-1' } })
+      chatIndexRow('replacement', { primarySurface: { surfaceKind: 'managed_thread', surfaceKey: 'scope-1' } })
     ]));
 
     expect(harness.sessionState.activeChatId).toBe('replacement');

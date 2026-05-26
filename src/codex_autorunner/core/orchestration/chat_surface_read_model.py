@@ -2272,17 +2272,6 @@ def _chat_index_rows_from_surfaces(
             identity_title = _managed_thread_identity_title(row)
             row["title"] = identity_title
             row["chat_display_name"] = identity_title
-        row["display_title"] = _normalize_text(row.get("chat_display_name")) or str(
-            row.get("title") or row.get("chat_id") or row.get("row_id") or ""
-        )
-        _apply_ticket_flow_child_state(row)
-        row["technical_title"] = _normalize_text(row.get("technical_title")) or str(
-            row.get("managed_thread_id") or row.get("row_id") or ""
-        )
-        primary_surface = row.get("surface")
-        if not isinstance(primary_surface, Mapping):
-            primary_surface = _primary_surface(row)
-        row["primary_surface"] = dict(primary_surface) if primary_surface else None
         row["surface_bindings"] = [
             dict(surface)
             for surface in row.get("surfaces", [])
@@ -2293,6 +2282,21 @@ def _chat_index_rows_from_surfaces(
         row["binding_display_name"] = (
             binding_display_names[0] if binding_display_names else None
         )
+        row["display_title"] = _normalize_text(row.get("chat_display_name")) or str(
+            row.get("title") or row.get("chat_id") or row.get("row_id") or ""
+        )
+        if row.get("managed_thread_id") is not None:
+            binding_title = _direct_external_binding_display_name(row)
+            if binding_title is not None:
+                row["display_title"] = binding_title
+        _apply_ticket_flow_child_state(row)
+        row["technical_title"] = _normalize_text(row.get("technical_title")) or str(
+            row.get("managed_thread_id") or row.get("row_id") or ""
+        )
+        primary_surface = row.get("surface")
+        if not isinstance(primary_surface, Mapping):
+            primary_surface = _primary_surface(row)
+        row["primary_surface"] = dict(primary_surface) if primary_surface else None
         if (
             row.get("managed_thread_id") is not None
             and _normalize_kind(row.get("lifecycle_status")) != "archived"
@@ -2462,6 +2466,23 @@ def _binding_display_names(surfaces: Iterable[Mapping[str, Any]]) -> list[str]:
         if name not in names:
             names.append(name)
     return names
+
+
+def _direct_external_binding_display_name(row: Mapping[str, Any]) -> Optional[str]:
+    for surface in row.get("surface_bindings") or []:
+        if not isinstance(surface, Mapping):
+            continue
+        surface_kind = _normalize_kind(surface.get("surface_kind"))
+        if surface_kind in {None, "pma", "managed_thread", "notification"}:
+            continue
+        name = _visible_chrome_text(
+            surface.get("binding_display_name")
+            or surface.get("display_name")
+            or surface.get("title")
+        )
+        if name is not None and not _is_surface_id_title(name, surface):
+            return name
+    return None
 
 
 def _primary_surface(row: Mapping[str, Any]) -> Optional[Mapping[str, Any]]:
