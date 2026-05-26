@@ -52,6 +52,15 @@ describe('/chats page', () => {
     expect(pageSource).not.toContain('openChatTranscriptEventSource');
   });
 
+  it('does not mark active chat updates read without an explicit read action', () => {
+    const pageSource = chatDetailPageSource();
+
+    expect(pageSource).toContain('onMarkRead: markActiveChatRead');
+    expect(pageSource).toContain('markSessionChatRead(lastSeenMap, activeChatId, chats, localDraftChat)');
+    expect(pageSource).not.toContain('markActiveSummaryRead');
+    expect(pageSource).not.toContain('read-active:');
+  });
+
   it('clears the committed chat URL guard when committed detail navigation fails', () => {
     const source = chatDetailPageSource();
     const syncCommittedBody = source.match(

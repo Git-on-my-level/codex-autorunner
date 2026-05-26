@@ -54,7 +54,6 @@
     chatSummaryForSessionId,
     initialChatDetailSessionState,
     isLocalDraftChatId,
-    markActiveSummaryRead,
     markChatGroupRead,
     markSessionChatRead,
     markVisibleChatsRead,
@@ -994,13 +993,6 @@
     if (!chat || isLocalDraftChatId(chat.id) || !chat.agentId) return;
     if (`${chat.id}|${chat.agentId}` === syncedSelectorKey) return;
     syncSelectorsToActiveChat();
-  });
-
-  $effect(() => {
-    if (!activeChat) return;
-    const next = markActiveSummaryRead(lastSeenMap, activeChat);
-    if (next === lastSeenMap) return;
-    readModelEntityStore.optimisticReadMarkers(next, `read-active:${activeChat.id}:${Date.now()}`);
   });
 
   $effect(() => {
