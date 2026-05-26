@@ -319,17 +319,6 @@ export function markChatGroupRead(
   return next;
 }
 
-export function markActiveSummaryRead(
-  markers: ChatLastSeenMap,
-  chat: PmaChatSummary | null,
-  store: ChatDetailReadMarkerStore = browserReadMarkerStore
-): ChatLastSeenMap {
-  if (!chat?.updatedAt) return markers;
-  const next = markChatRead(markers, chat.id, chat.updatedAt);
-  if (next !== markers) store.save(next);
-  return next;
-}
-
 export function loadPinnedChats(storage: BrowserStorageAdapter | null = browserLocalStorage()): PinnedChatMap {
   if (!storage) return {};
   try {
