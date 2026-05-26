@@ -62,6 +62,15 @@ venv: $(VENV)/.python-ok
 $(VENV)/.python-ok: pyproject.toml
 	@if [ -x "$(VENV_PYTHON)" ] && "$(VENV_PYTHON)" -c 'import sys; raise SystemExit(0 if sys.version_info >= $(MIN_PYTHON) else 1)' >/dev/null 2>&1; then \
 		"$(VENV_PYTHON)" -c 'import sys; print(f"Using existing venv Python {sys.version.split()[0]}")'; \
+		if ! "$(VENV_PYTHON)" -m pip --version >/dev/null 2>&1; then \
+			if "$(VENV_PYTHON)" -m ensurepip --version >/dev/null 2>&1; then \
+				echo "Seeding pip into existing $(VENV)"; \
+				"$(VENV_PYTHON)" -m ensurepip --upgrade || exit 1; \
+			else \
+				echo "Existing $(VENV) has no pip and cannot be repaired with ensurepip." >&2; \
+				exit 1; \
+			fi; \
+		fi; \
 	else \
 		if [ -z "$(BOOTSTRAP_PYTHON)" ]; then \
 			echo "Python >=3.10 is required. Install python3.10+ or put it on PATH." >&2; \
@@ -78,7 +87,7 @@ $(VENV)/.python-ok: pyproject.toml
 venv-dev: $(VENV)/.installed-dev
 
 $(VENV)/.installed-dev: $(VENV)/.python-ok pyproject.toml
-	$(VENV_PIP) install -e .[dev]
+	$(VENV_PYTHON) -m pip install -e .[dev]
 	@touch $(VENV)/.installed-dev
 
 setup: venv-dev npm-install hooks
