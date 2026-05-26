@@ -446,6 +446,59 @@ def test_release_stale_claims_preserves_running_job_with_terminal_child_edge(
     assert running.started_at == "2026-01-01T00:00:01Z"
 
 
+def test_child_execution_edge_persists_runtime_identity_stages(tmp_path) -> None:
+    store = AutomationStore(tmp_path)
+    store.upsert_rule(_rule())
+    store.record_event(_event())
+    store.enqueue_job(
+        AutomationJob.create(
+            job_id="parent-runtime",
+            rule_id="rule-1",
+            event_id="event-1",
+            dedupe_key="dedupe-parent-runtime",
+            available_at="2026-01-01T00:00:00Z",
+            target={"repo_id": "repo-1"},
+            executor={"kind": LEGACY_EXECUTOR_MANAGED_THREAD_TURN},
+        )
+    )
+    edge = store.upsert_child_execution_edge(
+        AutomationChildExecutionEdge.create(
+            parent_job_id="parent-runtime",
+            child_kind=AUTOMATION_CHILD_KIND_AGENT_TASK,
+            child_id="child-runtime",
+            requested_runtime={
+                "agent": "opencode",
+                "model": "zai-coding-plan/glm-5.1",
+                "provider_payload": {
+                    "providerID": "zai-coding-plan",
+                    "modelID": "glm-5.1",
+                },
+            },
+        )
+    )
+
+    assert edge.runtime_identity.requested is not None
+    assert (
+        edge.runtime_identity.requested.canonical_model_label
+        == "zai-coding-plan/glm-5.1"
+    )
+
+    terminal = store.mark_child_execution_terminal(
+        edge.edge_id,
+        terminal_state=JOB_SUCCEEDED,
+        terminal_event_id="child-runtime",
+        actual_runtime={
+            "agent": "opencode",
+            "model": "zai-coding-plan/glm-5.1",
+            "backend_runtime_id": "session-1",
+        },
+    )
+
+    assert terminal.runtime_identity.requested is not None
+    assert terminal.runtime_identity.effective is not None
+    assert terminal.runtime_identity.effective.backend_runtime_id == "session-1"
+
+
 def test_schedule_crud(tmp_path) -> None:
     store = AutomationStore(tmp_path)
     rule = AutomationRule.hydrate_persisted(

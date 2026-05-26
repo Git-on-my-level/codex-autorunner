@@ -273,6 +273,7 @@ class ThreadExecutionStore(Protocol):
         error: Optional[str] = None,
         backend_turn_id: Optional[str] = None,
         transcript_turn_id: Optional[str] = None,
+        effective_runtime: Optional[dict[str, Any]] = None,
     ) -> ExecutionRecord: ...
 
     def record_execution_interrupted(
@@ -416,6 +417,7 @@ class OrchestrationThreadService(Protocol):
         error: Optional[str] = None,
         backend_turn_id: Optional[str] = None,
         transcript_turn_id: Optional[str] = None,
+        effective_runtime: Optional[dict[str, Any]] = None,
     ) -> ExecutionRecord: ...
 
     def record_execution_interrupted(

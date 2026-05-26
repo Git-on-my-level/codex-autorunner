@@ -156,6 +156,7 @@ class ExecutionResultCoordinator:
         error: Optional[str] = None,
         backend_turn_id: Optional[str] = None,
         transcript_turn_id: Optional[str] = None,
+        effective_runtime: Optional[dict[str, Any]] = None,
     ) -> ExecutionRecord:
         proposed_outcome = _terminal_outcome_from_status(status, error)
         existing = self.get_execution(thread_target_id, execution_id)
@@ -218,6 +219,8 @@ class ExecutionResultCoordinator:
             "backend_turn_id": backend_turn_id,
             "transcript_turn_id": transcript_turn_id,
         }
+        if effective_runtime is not None:
+            finish_kwargs["effective_runtime"] = effective_runtime
         if assistant_output is not None:
             finish_kwargs["assistant_output"] = assistant_output
         updated = self.mark_turn_finished(execution_id, **finish_kwargs)

@@ -481,6 +481,7 @@ class PmaExecutionRecord:
     metadata: dict[str, Any]
     turn_request: dict[str, Any]
     turn_record: dict[str, Any]
+    runtime_identity: dict[str, Any]
 
     @classmethod
     def from_orchestration_row(cls, row: Any) -> "PmaExecutionRecord":
@@ -520,6 +521,11 @@ class PmaExecutionRecord:
                 if "turn_record_json" in row.keys()
                 else {}
             ),
+            runtime_identity=(
+                _json_loads_object(row["runtime_identity_json"])
+                if "runtime_identity_json" in row.keys()
+                else {}
+            ),
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -532,6 +538,8 @@ class PmaExecutionRecord:
             metadata["turn_request"] = dict(self.turn_request)
         if self.turn_record:
             metadata["turn_record"] = dict(self.turn_record)
+        if self.runtime_identity:
+            metadata["runtime_identity"] = dict(self.runtime_identity)
         payload["metadata"] = metadata
         return ExecutionRecord.from_mapping(payload)
 

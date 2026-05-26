@@ -45,6 +45,7 @@ from .progress_synthesis import (
 )
 from .protocol_payload import (
     extract_message_info,
+    extract_model_ids,
     extract_status_type,
     status_is_idle,
 )
@@ -87,6 +88,35 @@ def _resolve_runtime_model_payload(model: Optional[str]) -> Optional[dict[str, s
     if resolved_model is None:
         resolved_model = resolve_agent_runtime_options("opencode").model
     return resolve_opencode_model_payload(resolved_model)
+
+
+def _effective_runtime_from_payload(
+    payload: Any,
+    *,
+    source: str,
+    backend_turn_id: Optional[str],
+) -> Optional[dict[str, Any]]:
+    provider_id, model_id = extract_model_ids(payload)
+    if not provider_id and not model_id:
+        return None
+    provider_payload: dict[str, Any] = {}
+    if provider_id:
+        provider_payload["providerID"] = provider_id
+    if model_id:
+        provider_payload["modelID"] = model_id
+    return {
+        "stage": "effective",
+        "logical_agent": "opencode",
+        "runtime_agent": "opencode",
+        "provider_id": provider_id,
+        "canonical_model_label": (
+            f"{provider_id}/{model_id}" if provider_id and model_id else model_id
+        ),
+        "provider_model_id": model_id,
+        "backend_runtime_id": backend_turn_id,
+        "provider_payload": provider_payload or None,
+        "source": source,
+    }
 
 
 def _first_text_field(entry: dict[str, Any], keys: tuple[str, ...]) -> Optional[str]:
@@ -1045,6 +1075,18 @@ class OpenCodeHarness(AgentHarness):
                     assistant_text=lifecycle_result.assistant_text,
                     errors=([lifecycle_result.error] if lifecycle_result.error else []),
                     raw_events=[dict(event) for event in lifecycle_result.raw_events],
+                    effective_runtime=_effective_runtime_from_payload(
+                        next(
+                            (
+                                event
+                                for event in reversed(lifecycle_result.raw_events)
+                                if extract_model_ids(event) != (None, None)
+                            ),
+                            {},
+                        ),
+                        source="opencode.raw_event",
+                        backend_turn_id=turn_id,
+                    ),
                 )
 
             streamed_raw_events: list[dict[str, Any]] = []
@@ -1252,11 +1294,30 @@ class OpenCodeHarness(AgentHarness):
             )
 
             errors = [lifecycle_result.error] if lifecycle_result.error else []
+            effective_runtime = _effective_runtime_from_payload(
+                output_result.usage,
+                source="opencode.usage",
+                backend_turn_id=turn_id,
+            )
+            if effective_runtime is None:
+                effective_runtime = _effective_runtime_from_payload(
+                    next(
+                        (
+                            event
+                            for event in reversed(lifecycle_result.raw_events)
+                            if extract_model_ids(event) != (None, None)
+                        ),
+                        {},
+                    ),
+                    source="opencode.raw_event",
+                    backend_turn_id=turn_id,
+                )
             return TerminalTurnResult(
                 status="error" if errors else "ok",
                 assistant_text=lifecycle_result.assistant_text,
                 errors=errors,
                 raw_events=[dict(event) for event in lifecycle_result.raw_events],
+                effective_runtime=effective_runtime,
             )
 
         try:

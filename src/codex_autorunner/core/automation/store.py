@@ -8,6 +8,7 @@ from typing import Any, Literal, Optional
 
 from ..orchestration.sqlite import open_orchestration_sqlite
 from ..pma_domain.automation_lifecycle import cancel_schedule_state
+from ..runtime_identity import RUNTIME_STAGE_EFFECTIVE, RuntimeIdentityEnvelope
 from ..text_utils import _json_dumps, _json_loads_object
 from ..time_utils import now_iso
 from .models import (
@@ -27,6 +28,7 @@ from .models import (
     AutomationJob,
     AutomationJobAttempt,
     AutomationRule,
+    AutomationRuntimeContract,
     AutomationSchedule,
     normalize_bool,
     normalize_non_negative_int,
@@ -840,14 +842,16 @@ class AutomationStore:
                         edge_id, parent_job_id, child_kind, child_id,
                         authoritative_for_parent_completion,
                         requested_runtime_json, actual_runtime_json,
+                        runtime_identity_json,
                         terminal_mapping_json, terminal_event_id, terminal_state,
                         terminal_observed_at, created_at, updated_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     ON CONFLICT(parent_job_id, child_kind, child_id) DO UPDATE SET
                         authoritative_for_parent_completion =
                             excluded.authoritative_for_parent_completion,
                         requested_runtime_json = excluded.requested_runtime_json,
                         actual_runtime_json = excluded.actual_runtime_json,
+                        runtime_identity_json = excluded.runtime_identity_json,
                         terminal_mapping_json = excluded.terminal_mapping_json,
                         terminal_event_id = COALESCE(
                             excluded.terminal_event_id,
@@ -875,6 +879,7 @@ class AutomationStore:
                             if edge.actual_runtime is not None
                             else None
                         ),
+                        edge.runtime_identity.to_json(),
                         _json_dumps(edge.terminal_mapping),
                         edge.terminal_event_id,
                         edge.terminal_state,
@@ -966,6 +971,25 @@ class AutomationStore:
                     if row["actual_runtime_json"] is not None
                     else None
                 )
+                runtime_identity = RuntimeIdentityEnvelope.from_json(
+                    row["runtime_identity_json"]
+                )
+                effective_runtime = actual_runtime or existing_actual
+                if effective_runtime is not None:
+                    effective_contract = AutomationRuntimeContract.from_dict(
+                        effective_runtime,
+                        field_name="actual_runtime",
+                    )
+                    runtime_identity = RuntimeIdentityEnvelope(
+                        requested=runtime_identity.requested,
+                        resolved=runtime_identity.resolved,
+                        launch=runtime_identity.launch,
+                        effective=effective_contract.to_runtime_stage(
+                            stage=RUNTIME_STAGE_EFFECTIVE
+                        ),
+                        projected=runtime_identity.projected,
+                        metadata=runtime_identity.metadata,
+                    )
                 conn.execute(
                     """
                     UPDATE orch_automation_child_execution_edges
@@ -973,6 +997,7 @@ class AutomationStore:
                            terminal_event_id = COALESCE(terminal_event_id, ?),
                            terminal_observed_at = COALESCE(terminal_observed_at, ?),
                            actual_runtime_json = ?,
+                           runtime_identity_json = ?,
                            updated_at = ?
                      WHERE edge_id = ?
                     """,
@@ -985,6 +1010,7 @@ class AutomationStore:
                             if (actual_runtime or existing_actual) is not None
                             else None
                         ),
+                        runtime_identity.to_json(),
                         stamp,
                         edge_id,
                     ),
@@ -1617,6 +1643,9 @@ class AutomationStore:
                 _json_loads_object(row["actual_runtime_json"])
                 if row["actual_runtime_json"] is not None
                 else None
+            ),
+            runtime_identity=RuntimeIdentityEnvelope.from_json(
+                row["runtime_identity_json"]
             ),
             terminal_mapping=_json_loads_object(row["terminal_mapping_json"]),
             terminal_event_id=row["terminal_event_id"],

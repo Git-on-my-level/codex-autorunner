@@ -597,6 +597,7 @@ class ManagedThreadExecutionStore(ThreadExecutionStore):
         error: Optional[str] = None,
         backend_turn_id: Optional[str] = None,
         transcript_turn_id: Optional[str] = None,
+        effective_runtime: Optional[dict[str, Any]] = None,
     ) -> ExecutionRecord:
         return self._execution_results.record_execution_result(
             thread_target_id,
@@ -607,6 +608,7 @@ class ManagedThreadExecutionStore(ThreadExecutionStore):
             error=error,
             backend_turn_id=backend_turn_id,
             transcript_turn_id=transcript_turn_id,
+            effective_runtime=effective_runtime,
         )
 
     def record_execution_interrupted(

@@ -430,6 +430,8 @@ def test_create_finish_turn_and_query(tmp_path: Path) -> None:
     assert turn["status"] == "running"
     assert turn["request_kind"] == "review"
     assert turn["started_at"]
+    assert turn["runtime_identity"]["resolved"]["canonical_model_label"] == "gpt-test"
+    assert turn["runtime_identity"]["resolved"]["reasoning"] == "high"
 
     store.mark_turn_finished(
         turn["managed_turn_id"],
@@ -450,6 +452,10 @@ def test_create_finish_turn_and_query(tmp_path: Path) -> None:
     assert fetched["metadata"] == {
         "bound_chat_execution": {"origin": {"kind": "pma_web"}}
     }
+    runtime_identity = fetched["runtime_identity"]
+    assert runtime_identity["resolved"]["canonical_model_label"] == "gpt-test"
+    assert runtime_identity["effective"]["canonical_model_label"] == "gpt-test"
+    assert runtime_identity["effective"]["backend_runtime_id"] == "backend-turn-1"
 
     listed = store.list_turns(thread["managed_thread_id"])
     assert len(listed) == 1
@@ -1337,6 +1343,9 @@ def test_set_turn_backend_turn_id_tracks_confirmed_runtime_start(
     assert confirmed is not None
     assert confirmed["backend_turn_id"] == "backend-turn-1"
     assert confirmed["metadata"].get("runtime_started_at")
+    runtime_identity = confirmed["runtime_identity"]
+    assert runtime_identity["launch"]["backend_runtime_id"] == "backend-turn-1"
+    assert runtime_identity["effective"]["backend_runtime_id"] == "backend-turn-1"
 
 
 def test_concurrent_create_turn_admission_is_atomic(tmp_path: Path) -> None:

@@ -92,6 +92,13 @@ from .orchestration.turn_execution_storage import (
     build_turn_execution_record_from_storage,
 )
 from .ports.thread_store import ThreadRecord, ThreadStatus
+from .runtime_identity import (
+    RUNTIME_STAGE_EFFECTIVE,
+    RUNTIME_STAGE_LAUNCH,
+    RUNTIME_STAGE_RESOLVED,
+    RuntimeIdentityEnvelope,
+    RuntimeIdentityStage,
+)
 from .text_utils import _json_dumps, _json_loads_object
 from .time_utils import now_iso
 
@@ -217,6 +224,113 @@ def _thread_model_to_port_record(thread: Any) -> ThreadRecord:
 
 def _execution_row_to_record(row: Any) -> dict[str, Any]:
     return PmaExecutionRecord.from_orchestration_row(row).to_dict()
+
+
+def _runtime_identity_from_json(payload: Any) -> RuntimeIdentityEnvelope:
+    text = _coerce_text(payload)
+    if text is None:
+        return RuntimeIdentityEnvelope()
+    return RuntimeIdentityEnvelope.from_json(text)
+
+
+def _runtime_identity_with_stage(
+    envelope: RuntimeIdentityEnvelope,
+    stage: RuntimeIdentityStage,
+) -> RuntimeIdentityEnvelope:
+    return RuntimeIdentityEnvelope(
+        requested=envelope.requested,
+        resolved=envelope.resolved,
+        launch=stage if stage.stage == RUNTIME_STAGE_LAUNCH else envelope.launch,
+        effective=(
+            stage if stage.stage == RUNTIME_STAGE_EFFECTIVE else envelope.effective
+        ),
+        projected=envelope.projected,
+        metadata=envelope.metadata,
+    )
+
+
+def _resolved_runtime_identity(
+    request: TurnExecutionRequest,
+) -> RuntimeIdentityEnvelope:
+    return RuntimeIdentityEnvelope(
+        resolved=RuntimeIdentityStage.from_turn_execution_request(
+            request.to_dict(), stage=RUNTIME_STAGE_RESOLVED
+        )
+    )
+
+
+def _launch_runtime_stage(
+    request: TurnExecutionRequest,
+    *,
+    backend_turn_id: Optional[str],
+) -> RuntimeIdentityStage:
+    provider_payload: dict[str, Any] = {}
+    if request.model_payload:
+        provider_payload = dict(request.model_payload)
+    elif request.model is not None:
+        provider_payload["model"] = request.model
+    if request.reasoning is not None:
+        provider_payload.setdefault("reasoning", request.reasoning)
+        provider_payload.setdefault("effort", request.reasoning)
+    return RuntimeIdentityStage(
+        stage=RUNTIME_STAGE_LAUNCH,
+        logical_agent=request.agent,
+        runtime_agent=request.agent,
+        canonical_model_label=request.model,
+        profile=request.profile,
+        reasoning=request.reasoning,
+        approval_policy=request.approval_policy,
+        sandbox_policy=request.sandbox_policy,
+        workspace_scope={
+            "target_kind": request.target_kind,
+            "target_id": request.target_id,
+            "workspace_root": request.workspace_root,
+        },
+        prompt_ref={
+            "kind": "turn_execution_request",
+            "request_id": request.request_id,
+        },
+        input_ref=(
+            {"kind": "turn_execution_input_items"} if request.input_items else None
+        ),
+        backend_runtime_id=backend_turn_id,
+        provider_payload=provider_payload or None,
+        source="managed_thread_launch",
+        observed_at=now_iso(),
+        provenance={"request_id": request.request_id},
+    )
+
+
+def _effective_runtime_stage(
+    request: TurnExecutionRequest,
+    *,
+    backend_turn_id: Optional[str],
+    observed_at: Optional[str] = None,
+    effective_runtime: Optional[RuntimeIdentityStage | dict[str, Any]] = None,
+) -> RuntimeIdentityStage:
+    if isinstance(effective_runtime, RuntimeIdentityStage):
+        return effective_runtime
+    if isinstance(effective_runtime, dict):
+        return RuntimeIdentityStage.from_mapping(
+            effective_runtime,
+            stage=RUNTIME_STAGE_EFFECTIVE,
+            field_name="effective_runtime",
+        )
+    return RuntimeIdentityStage(
+        stage=RUNTIME_STAGE_EFFECTIVE,
+        logical_agent=request.agent,
+        runtime_agent=request.agent,
+        canonical_model_label=request.model,
+        profile=request.profile,
+        reasoning=request.reasoning,
+        approval_policy=request.approval_policy,
+        sandbox_policy=request.sandbox_policy,
+        backend_runtime_id=backend_turn_id,
+        provider_payload=dict(request.model_payload) or None,
+        source="managed_thread_execution",
+        observed_at=observed_at or now_iso(),
+        provenance={"request_id": request.request_id},
+    )
 
 
 def prepare_managed_thread_store(hub_root: Path, *, durable: bool = False) -> None:
@@ -838,18 +952,34 @@ class ManagedThreadStore:
             request=request,
             queue_item=self._queue_item_for_execution(conn, managed_turn_id),
         )
+        runtime_identity = _runtime_identity_from_json(
+            execution.get("runtime_identity_json")
+        )
+        if runtime_identity.resolved is None:
+            runtime_identity = RuntimeIdentityEnvelope(
+                requested=runtime_identity.requested,
+                resolved=RuntimeIdentityStage.from_turn_execution_request(
+                    request.to_dict(), stage=RUNTIME_STAGE_RESOLVED
+                ),
+                launch=runtime_identity.launch,
+                effective=runtime_identity.effective,
+                projected=runtime_identity.projected,
+                metadata=runtime_identity.metadata,
+            )
         conn.execute(
             """
             UPDATE orch_thread_executions
                SET turn_contract_version = ?,
                    turn_request_json = ?,
-                   turn_record_json = ?
+                   turn_record_json = ?,
+                   runtime_identity_json = ?
              WHERE execution_id = ?
             """,
             (
                 TURN_EXECUTION_CONTRACT_VERSION,
                 request.to_json(),
                 record.to_json(),
+                runtime_identity.to_json(),
                 managed_turn_id,
             ),
         )
@@ -1509,9 +1639,22 @@ class ManagedThreadStore:
                         client_turn_id=client_turn_id,
                         metadata=request_metadata,
                     )
+                resolved_runtime_identity = _resolved_runtime_identity(turn_request)
+                resolved_model = (
+                    resolved_runtime_identity.resolved.canonical_model_label
+                    if resolved_runtime_identity.resolved is not None
+                    else turn_request.model
+                )
+                resolved_reasoning = (
+                    resolved_runtime_identity.resolved.reasoning
+                    if resolved_runtime_identity.resolved is not None
+                    else turn_request.reasoning
+                )
                 canonical_queue_payload = {
                     "turn_request": turn_request.to_dict(),
                 }
+                execution_mapping["model_id"] = resolved_model
+                execution_mapping["reasoning_level"] = resolved_reasoning
                 turn_record = build_turn_execution_record_from_storage(
                     execution=execution_mapping,
                     thread=thread_row,
@@ -1539,8 +1682,9 @@ class ManagedThreadStore:
                         created_at,
                         turn_contract_version,
                         turn_request_json,
-                        turn_record_json
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        turn_record_json,
+                        runtime_identity_json
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         managed_turn_id,
@@ -1552,8 +1696,8 @@ class ManagedThreadStore:
                         None,
                         None,
                         None,
-                        model,
-                        reasoning,
+                        resolved_model,
+                        resolved_reasoning,
                         _json_dumps(request_metadata),
                         None,
                         started_at,
@@ -1562,6 +1706,7 @@ class ManagedThreadStore:
                         TURN_EXECUTION_CONTRACT_VERSION,
                         turn_request.to_json(),
                         turn_record.to_json(),
+                        resolved_runtime_identity.to_json(),
                     ),
                 )
                 if execution_status == "queued":
@@ -1639,6 +1784,7 @@ class ManagedThreadStore:
         error: Optional[str] = None,
         backend_turn_id: Optional[str] = None,
         transcript_turn_id: Optional[str] = None,
+        effective_runtime: Optional[dict[str, Any]] = None,
     ) -> bool:
         finished_at = now_iso()
         if isinstance(assistant_output, dict):
@@ -1657,7 +1803,7 @@ class ManagedThreadStore:
         with self._write_conn() as conn:
             row = conn.execute(
                 """
-                SELECT thread_target_id
+                SELECT *
                   FROM orch_thread_executions
                  WHERE execution_id = ?
                 """,
@@ -1667,6 +1813,25 @@ class ManagedThreadStore:
                 return False
             managed_thread_id = str(row["thread_target_id"])
             with conn:
+                runtime_identity_json = None
+                request_payload = _coerce_text(row["turn_request_json"])
+                if request_payload is not None:
+                    turn_request = TurnExecutionRequest.from_json(request_payload)
+                    runtime_identity = _runtime_identity_from_json(
+                        row["runtime_identity_json"]
+                        if "runtime_identity_json" in row.keys()
+                        else None
+                    )
+                    runtime_identity = _runtime_identity_with_stage(
+                        runtime_identity,
+                        _effective_runtime_stage(
+                            turn_request,
+                            backend_turn_id=backend_turn_id,
+                            observed_at=finished_at,
+                            effective_runtime=effective_runtime,
+                        ),
+                    )
+                    runtime_identity_json = runtime_identity.to_json()
                 cursor = conn.execute(
                     """
                     UPDATE orch_thread_executions
@@ -1676,7 +1841,8 @@ class ManagedThreadStore:
                            error_text = ?,
                            backend_turn_id = ?,
                            transcript_mirror_id = ?,
-                           finished_at = ?
+                           finished_at = ?,
+                           runtime_identity_json = COALESCE(?, runtime_identity_json)
                      WHERE execution_id = ?
                        AND status = 'running'
                     """,
@@ -1692,6 +1858,7 @@ class ManagedThreadStore:
                         backend_turn_id,
                         transcript_turn_id,
                         finished_at,
+                        runtime_identity_json,
                         managed_turn_id,
                     ),
                 )
@@ -1755,7 +1922,7 @@ class ManagedThreadStore:
         with self._write_conn() as conn:
             row = conn.execute(
                 """
-                SELECT metadata_json
+                SELECT *
                   FROM orch_thread_executions
                  WHERE execution_id = ?
                 """,
@@ -1764,6 +1931,40 @@ class ManagedThreadStore:
             metadata = (
                 _json_loads_object(row["metadata_json"]) if row is not None else {}
             )
+            existing_runtime_identity = (
+                _runtime_identity_from_json(row["runtime_identity_json"])
+                if row is not None and "runtime_identity_json" in row.keys()
+                else RuntimeIdentityEnvelope()
+            )
+            request_payload = (
+                _coerce_text(row["turn_request_json"])
+                if row is not None and "turn_request_json" in row.keys()
+                else None
+            )
+            turn_request = (
+                TurnExecutionRequest.from_json(request_payload)
+                if request_payload is not None
+                else None
+            )
+            runtime_identity = existing_runtime_identity
+            if turn_request is not None:
+                launch_stage = _launch_runtime_stage(
+                    turn_request,
+                    backend_turn_id=normalized_backend_turn_id,
+                )
+                runtime_identity = _runtime_identity_with_stage(
+                    runtime_identity,
+                    launch_stage,
+                )
+                if normalized_backend_turn_id is not None:
+                    runtime_identity = _runtime_identity_with_stage(
+                        runtime_identity,
+                        _effective_runtime_stage(
+                            turn_request,
+                            backend_turn_id=normalized_backend_turn_id,
+                            observed_at=runtime_started_at,
+                        ),
+                    )
             if (
                 confirmed_start
                 and normalized_backend_turn_id is not None
@@ -1776,12 +1977,14 @@ class ManagedThreadStore:
                         """
                         UPDATE orch_thread_executions
                            SET backend_turn_id = ?,
-                               metadata_json = ?
+                               metadata_json = ?,
+                               runtime_identity_json = ?
                          WHERE execution_id = ?
                         """,
                         (
                             normalized_backend_turn_id,
                             _json_dumps(metadata),
+                            runtime_identity.to_json(),
                             managed_turn_id,
                         ),
                     )
@@ -1789,10 +1992,15 @@ class ManagedThreadStore:
                     conn.execute(
                         """
                         UPDATE orch_thread_executions
-                           SET backend_turn_id = ?
+                           SET backend_turn_id = ?,
+                               runtime_identity_json = ?
                          WHERE execution_id = ?
                         """,
-                        (normalized_backend_turn_id, managed_turn_id),
+                        (
+                            normalized_backend_turn_id,
+                            runtime_identity.to_json(),
+                            managed_turn_id,
+                        ),
                     )
                 self._refresh_turn_execution_envelopes(conn, managed_turn_id)
 

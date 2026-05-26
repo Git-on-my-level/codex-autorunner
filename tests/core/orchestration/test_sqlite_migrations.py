@@ -176,7 +176,8 @@ def test_fresh_orchestration_schema_reports_turn_execution_contract(
     assert columns["turn_contract_version"]["dflt_value"] == "1"
     assert "turn_request_json" in columns
     assert "turn_record_json" in columns
-    assert "Canonical turn execution request/record envelopes" in table.description
+    assert "runtime_identity_json" in columns
+    assert "runtime identity envelopes" in table.description
 
 
 def test_turn_execution_contract_migration_backfills_legacy_thread_rows(
@@ -343,7 +344,7 @@ def test_turn_execution_contract_migration_backfills_legacy_thread_rows(
         version = apply_orchestration_migrations(conn)
         rows = {row["execution_id"]: row for row in conn.execute("""
                 SELECT execution_id, turn_contract_version, turn_request_json,
-                       turn_record_json
+                       turn_record_json, runtime_identity_json
                   FROM orch_thread_executions
                  WHERE thread_target_id = 'thread-legacy'
                 """).fetchall()}
@@ -352,6 +353,7 @@ def test_turn_execution_contract_migration_backfills_legacy_thread_rows(
     queued_request = json.loads(rows["turn-queued"]["turn_request_json"])
     queued_record = json.loads(rows["turn-queued"]["turn_record_json"])
     terminal_record = json.loads(rows["turn-terminal"]["turn_record_json"])
+    queued_runtime_identity = json.loads(rows["turn-queued"]["runtime_identity_json"])
     assert rows["turn-queued"]["turn_contract_version"] == 1
     assert queued_request["request_kind"] == "review"
     assert queued_request["client_request_id"] == "client-queued"
@@ -366,6 +368,8 @@ def test_turn_execution_contract_migration_backfills_legacy_thread_rows(
     assert terminal_record["backend_turn_id"] == "backend-turn"
     assert terminal_record["assistant_text"] == "terminal output"
     assert terminal_record["transcript_ref"] == "transcript-turn"
+    assert queued_runtime_identity["resolved"]["canonical_model_label"] == "gpt-5.4"
+    assert queued_runtime_identity["resolved"]["reasoning"] == "high"
 
 
 def test_turn_execution_contract_migration_repairs_legacy_opencode_models(

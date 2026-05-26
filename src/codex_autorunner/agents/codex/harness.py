@@ -129,6 +129,7 @@ class CodexHarness(AgentHarness):
         self._supervisor = supervisor
         self._events = events
         self._turn_handles: dict[tuple[str, str], Any] = {}
+        self._turn_effective_runtime: dict[tuple[str, str], dict[str, Any]] = {}
 
     async def ensure_ready(self, workspace_root: Path) -> None:
         await self._supervisor.get_client(workspace_root)
@@ -301,6 +302,24 @@ class CodexHarness(AgentHarness):
         if not isinstance(resolved_thread_id, str) or not resolved_thread_id:
             resolved_thread_id = conversation_id
         self._turn_handles[(resolved_thread_id, handle.turn_id)] = handle
+        self._turn_effective_runtime[(resolved_thread_id, handle.turn_id)] = {
+            "stage": "effective",
+            "logical_agent": "codex",
+            "runtime_agent": "codex",
+            "canonical_model_label": model,
+            "reasoning": reasoning,
+            "backend_runtime_id": handle.turn_id,
+            "provider_payload": {
+                key: value
+                for key, value in {
+                    "model": model,
+                    "effort": reasoning,
+                }.items()
+                if value
+            }
+            or None,
+            "source": "codex.turn_start",
+        }
         register_turn = getattr(self._events, "register_turn", None)
         if callable(register_turn):
             try:
@@ -408,6 +427,9 @@ class CodexHarness(AgentHarness):
             result = await handle.wait(timeout=timeout)
         finally:
             self._turn_handles.pop((conversation_id, turn_id), None)
+        effective_runtime = self._turn_effective_runtime.pop(
+            (conversation_id, turn_id), None
+        )
         agent_messages = [
             message.strip()
             for message in getattr(result, "agent_messages", []) or []
@@ -436,6 +458,7 @@ class CodexHarness(AgentHarness):
                 for event in (getattr(result, "raw_events", []) or [])
                 if isinstance(event, dict)
             ],
+            effective_runtime=effective_runtime,
         )
 
 

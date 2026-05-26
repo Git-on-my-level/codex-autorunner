@@ -328,6 +328,7 @@ class TerminalTurnRecorder:
                     error=error,
                     backend_turn_id=backend_turn_id,
                     transcript_turn_id=transcript_turn_id,
+                    effective_runtime=outcome.effective_runtime,
                 )
             finalized_execution = (
                 await record_call if inspect.isawaitable(record_call) else record_call

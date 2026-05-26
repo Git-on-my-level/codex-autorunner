@@ -174,26 +174,29 @@ class AutomationChildRunReconciler:
         terminal_state = _managed_thread_terminal_state(status)
         if terminal_state is None:
             return ChildReconcileResult(inspected=1)
+        actual_runtime = {
+            **_actual_runtime_from_thread(
+                self._hub_root,
+                latest_execution.get("thread_target_id")
+                or _edge_thread_target_id(edge),
+                fallback=edge.requested_runtime.to_dict(),
+            ),
+            "backend_runtime_id": latest_execution.get("backend_turn_id"),
+        }
+        transcript_model = _actual_model_from_transcript(
+            self._hub_root,
+            latest_execution.get("execution_id"),
+            latest_execution.get("transcript_mirror_id"),
+        )
+        if transcript_model is not None:
+            actual_runtime["model"] = transcript_model
         self._store.mark_child_execution_terminal(
             edge.edge_id,
             terminal_state=terminal_state,
             terminal_event_id=str(
                 latest_execution.get("execution_id") or edge.child_id
             ),
-            actual_runtime={
-                **_actual_runtime_from_thread(
-                    self._hub_root,
-                    latest_execution.get("thread_target_id")
-                    or _edge_thread_target_id(edge),
-                    fallback=edge.requested_runtime.to_dict(),
-                ),
-                "model": _actual_model_from_transcript(
-                    self._hub_root,
-                    latest_execution.get("execution_id"),
-                    latest_execution.get("transcript_mirror_id"),
-                ),
-                "backend_runtime_id": latest_execution.get("backend_turn_id"),
-            },
+            actual_runtime=actual_runtime,
         )
         if terminal_state == "succeeded":
             reduce_hints["result_summary"] = _managed_thread_success_summary(

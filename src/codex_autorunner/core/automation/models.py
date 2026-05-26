@@ -647,6 +647,7 @@ class AutomationChildExecutionEdge:
     authoritative_for_parent_completion: bool
     requested_runtime: AutomationRuntimeContract
     actual_runtime: Optional[AutomationRuntimeContract]
+    runtime_identity: RuntimeIdentityEnvelope
     terminal_mapping: dict[str, str]
     terminal_event_id: Optional[str]
     terminal_state: Optional[str]
@@ -663,6 +664,7 @@ class AutomationChildExecutionEdge:
         child_id: str,
         requested_runtime: AutomationRuntimeContract | dict[str, Any],
         actual_runtime: Optional[AutomationRuntimeContract | dict[str, Any]] = None,
+        runtime_identity: Optional[RuntimeIdentityEnvelope | dict[str, Any]] = None,
         authoritative_for_parent_completion: bool = True,
         terminal_mapping: Optional[dict[str, Any]] = None,
         terminal_event_id: Optional[str] = None,
@@ -699,6 +701,19 @@ class AutomationChildExecutionEdge:
                 else None
             )
         )
+        if runtime_identity is None:
+            runtime_envelope = requested.to_runtime_envelope(
+                stage=RUNTIME_STAGE_REQUESTED
+            )
+            if actual is not None:
+                runtime_envelope = RuntimeIdentityEnvelope(
+                    requested=runtime_envelope.requested,
+                    effective=actual.to_runtime_stage(stage=RUNTIME_STAGE_EFFECTIVE),
+                )
+        elif isinstance(runtime_identity, RuntimeIdentityEnvelope):
+            runtime_envelope = runtime_identity
+        else:
+            runtime_envelope = RuntimeIdentityEnvelope.from_dict(runtime_identity)
         mapping = normalize_json_object(
             terminal_mapping or AUTOMATION_CHILD_TERMINAL_MAPPING,
             field_name="terminal_mapping",
@@ -725,6 +740,7 @@ class AutomationChildExecutionEdge:
             ),
             requested_runtime=requested,
             actual_runtime=actual,
+            runtime_identity=runtime_envelope,
             terminal_mapping=normalized_mapping,
             terminal_event_id=optional_text(terminal_event_id),
             terminal_state=optional_text(terminal_state),
@@ -762,6 +778,7 @@ class AutomationChildExecutionEdge:
             ),
             requested_runtime=requested_runtime,
             actual_runtime=data.get("actual_runtime"),
+            runtime_identity=data.get("runtime_identity"),
             terminal_mapping=data.get("terminal_mapping"),
             terminal_event_id=data.get("terminal_event_id"),
             terminal_state=data.get("terminal_state"),
@@ -776,6 +793,7 @@ class AutomationChildExecutionEdge:
         data["actual_runtime"] = (
             self.actual_runtime.to_dict() if self.actual_runtime is not None else None
         )
+        data["runtime_identity"] = self.runtime_identity.to_dict()
         return data
 
 
