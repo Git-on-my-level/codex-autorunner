@@ -100,11 +100,25 @@ export function pmaChatTransportBadges(
 ): { slug: ChatFacetTransport; label: string; badgeClass: string }[] {
   const facets = pmaChatFacets(chat);
   if (!facets) return [];
-  return facets.transports.map((transport) => ({
-    slug: transport,
-    label: chatTransportLabel(transport),
-    badgeClass: messengerBadgeClass(transport)
-  }));
+  return facets.transports
+    .filter((transport): transport is Exclude<ChatFacetTransport, 'pma'> => transport !== 'pma')
+    .map((transport) => ({
+      slug: transport,
+      label: chatTransportLabel(transport),
+      badgeClass: messengerBadgeClass(transport)
+    }));
+}
+
+/** True when the chat is owned by the project manager agent, not merely PMA-surface reachable. */
+export function showPmaAgentBadge(chat: PmaChatSummary | null): boolean {
+  if (!chat) return false;
+  const facets = pmaChatFacets(chat);
+  if (facets?.agentKind === 'coding_agent') return false;
+  if (facets?.agentKind === 'pma') return true;
+  if (pmaChatKind(chat) === 'coding_agent') return false;
+  if (chat.chatKind === 'pma') return true;
+  const rawKind = stringValue(chat.raw.chat_kind ?? chat.raw.thread_kind);
+  return rawKind === 'pma';
 }
 
 /** Badge + filter slug for chats bound to a backend-declared transport facet. */

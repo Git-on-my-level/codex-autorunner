@@ -206,7 +206,7 @@ async def test_stream_events_with_custom_paths() -> None:
 
 @pytest.mark.anyio
 async def test_stream_events_path_order_with_global_support() -> None:
-    """Characterization: path order depends on directory and global endpoint support."""
+    """Workspace turns must use /global/event first (OpenCode 1.14+ /event is connect-only)."""
     responses = {
         "/global/event": _FakeStreamResponse(200, lines=["data: ok\n\n"]),
     }
@@ -219,8 +219,8 @@ async def test_stream_events_path_order_with_global_support() -> None:
     async for _ in client.stream_events(directory="/workspace"):
         pass
 
-    assert fake_client.stream_calls[0][1] == "/event"
-    assert fake_client.stream_calls[1][1] == "/global/event"
+    assert fake_client.stream_calls[0][1] == "/global/event"
+    assert len(fake_client.stream_calls) == 1
 
 
 @pytest.mark.anyio
@@ -284,11 +284,11 @@ async def test_stream_events_with_session_id_uses_documented_paths_only() -> Non
 
 
 @pytest.mark.anyio
-async def test_stream_events_with_session_id_keeps_directory_path_order() -> None:
-    """Regression: session_id should not change the documented /event ordering."""
+async def test_stream_events_with_session_id_keeps_global_path_first() -> None:
+    """Regression: session_id must not bypass /global/event when directory is set."""
     event_data = 'data: {"type":"test","sessionID":"s1"}\n\n'
     responses = {
-        "/event": _FakeStreamResponse(200, lines=[event_data]),
+        "/global/event": _FakeStreamResponse(200, lines=[event_data]),
     }
     fake_client = _FakeAsyncClient(responses)
 
@@ -301,7 +301,7 @@ async def test_stream_events_with_session_id_keeps_directory_path_order() -> Non
         events.append(event)
 
     assert len(events) == 1
-    assert [call[1] for call in fake_client.stream_calls] == ["/event"]
+    assert [call[1] for call in fake_client.stream_calls] == ["/global/event"]
 
 
 @pytest.mark.anyio

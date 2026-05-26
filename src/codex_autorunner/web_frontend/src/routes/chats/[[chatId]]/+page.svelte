@@ -124,6 +124,7 @@
     pmaChatHeaderScopeLine,
     pmaChatFacets,
     pmaChatTransportBadges,
+    showPmaAgentBadge,
     chatCategoryLabel,
     chatTransportLabel,
     pmaChatScopeTagView,
@@ -2399,31 +2400,12 @@
           <span class="chat-pin-glyph" aria-hidden="true">📌</span>
         </button>
         <span class="chat-card-main">
-          <span class="chat-title-row">
-            <span class="chat-title-cluster">
-              {#if isChatUnread(chat, lastSeenMap)}
-                <span class="chat-unread-dot" aria-label="Unread"></span>
-              {/if}
-              <span class="chat-title-text-badge">
-                <strong>{nested && chat.ticketId ? chat.ticketId : chat.title}</strong>
-                {#if !nested}
-                  <span class={`chat-scope-kind-tag ${scopeTags.kindKey}`}>{scopeTags.kindLabel}</span>
-                {/if}
-                {#if isPmaChatArchived(chat)}
-                  <span class="chat-scope-kind-tag retired">Retired</span>
-                {/if}
-                {#if pmaChatKind(chat) === 'coding_agent'}
-                  <span class={`chat-kind-badge ${pmaChatKind(chat)}`}>{pmaChatKindLabel(pmaChatKind(chat))}</span>
-                {/if}
-                {#if facets?.category === 'automation'}
-                  <span class="chat-kind-badge automation">Automation</span>
-                {/if}
-                {#each transportBadges as transport}
-                  <span class={`chat-surface-badge ${transport.badgeClass}`}>{transport.label}</span>
-                {/each}
-              </span>
-            </span>
-            <span class="chat-title-trailing">
+          <span class="chat-row-title">
+            {#if isChatUnread(chat, lastSeenMap)}
+              <span class="chat-unread-dot" aria-label="Unread"></span>
+            {/if}
+            <strong class="chat-row-title-text">{nested && chat.ticketId ? chat.ticketId : chat.title}</strong>
+            <span class="chat-row-title-trailing">
               {#if chat.status !== 'idle' && chat.status !== 'done'}
                 <span class={`status-pill ${chat.status}`}>{statusLabel(chat.status)}</span>
               {/if}
@@ -2432,35 +2414,58 @@
               {/if}
             </span>
           </span>
-          <span class="chat-meta-group">
-            <span class="chat-meta-row chat-meta-row--scope">
-              {#if !nested}
-                <span class="chat-scope-tags">
-                  <span
-                    class="chat-scope-detail-tag"
-                    style={listScopeAccentHex ? `color: ${listScopeAccentHex}` : undefined}
-                    title={scopeTags.detailFull ?? scopeTags.detail}
-                  >{scopeTags.detail}</span>
-                </span>
-                {#if chat.ticketId}
-                  <span class="chat-meta-dot" aria-hidden="true">·</span>
-                  <code>{chat.ticketId}</code>
-                {/if}
-              {:else if chat.title && chat.title !== chat.ticketId}
-                <span class="chat-nested-title" title={chat.title}>{chat.title}</span>
+
+          {#if !nested}
+            <span class="chat-row-tags" role="list" aria-label="Chat tags">
+              <span class={`chat-scope-kind-tag ${scopeTags.kindKey}`}>{scopeTags.kindLabel}</span>
+              {#if isPmaChatArchived(chat)}
+                <span class="chat-scope-kind-tag retired">Retired</span>
+              {/if}
+              {#if showPmaAgentBadge(chat)}
+                <span class="chat-kind-badge pma">PMA</span>
+              {/if}
+              {#if pmaChatKind(chat) === 'coding_agent'}
+                <span class={`chat-kind-badge ${pmaChatKind(chat)}`}>{pmaChatKindLabel(pmaChatKind(chat))}</span>
+              {/if}
+              {#if facets?.category === 'automation'}
+                <span class="chat-kind-badge automation">Automation</span>
+              {/if}
+              {#each transportBadges as transport}
+                <span class={`chat-surface-badge ${transport.badgeClass}`}>{transport.label}</span>
+              {/each}
+              {#if listAgentLabel}
+                <span class="chat-agent-tag">{listAgentLabel}</span>
               {/if}
             </span>
-            {#if listAgentLabel || chat.model}
-              <span class="chat-meta-row chat-meta-row--agent">
-                {#if !nested || (chat.title && chat.title !== chat.ticketId)}
-                  <span class="chat-meta-dot" aria-hidden="true">·</span>
-                {/if}
-                <span class="chat-agent-model">
-                  {#if listAgentLabel}<span class="chat-agent">{listAgentLabel}</span>{/if}
-                  {#if listAgentLabel && chat.model}<span class="chat-meta-dot" aria-hidden="true">·</span>{/if}
-                  {#if chat.model}<span class="chat-model">{chat.model}</span>{/if}
-                </span>
-              </span>
+          {/if}
+
+          <span class="chat-row-meta">
+            {#if !nested}
+              <span
+                class="chat-scope-detail-tag"
+                style={listScopeAccentHex ? `color: ${listScopeAccentHex}` : undefined}
+                title={scopeTags.detailFull ?? scopeTags.detail}
+              >{scopeTags.detail}</span>
+              {#if chat.ticketId}
+                <span class="chat-meta-dot" aria-hidden="true">·</span>
+                <code>{chat.ticketId}</code>
+              {/if}
+              {#if chat.model}
+                <span class="chat-meta-dot" aria-hidden="true">·</span>
+                <span class="chat-model">{chat.model}</span>
+              {/if}
+            {:else}
+              {#if chat.title && chat.title !== chat.ticketId}
+                <span class="chat-nested-title" title={chat.title}>{chat.title}</span>
+              {/if}
+              {#if listAgentLabel}
+                {#if chat.title && chat.title !== chat.ticketId}<span class="chat-meta-dot" aria-hidden="true">·</span>{/if}
+                <span class="chat-agent">{listAgentLabel}</span>
+              {/if}
+              {#if chat.model}
+                {#if (chat.title && chat.title !== chat.ticketId) || listAgentLabel}<span class="chat-meta-dot" aria-hidden="true">·</span>{/if}
+                <span class="chat-model">{chat.model}</span>
+              {/if}
             {/if}
           </span>
           {#if chat.progressPercent !== null && Number.isFinite(chat.progressPercent)}
@@ -2833,72 +2838,96 @@
     {/if}
 
     {#if fileDrawerOpen}
+      {@const totalFileCount = inboxArtifacts.length + outboxArtifacts.length + activeSurfaceDeliveries.length}
       <section class="chat-files-drawer" aria-label="Chat files">
-        <div class="chat-files-drawer-head">
-          <div>
-            <span class="artifact-type">Files</span>
+        <header class="chat-files-drawer-head">
+          <div class="chat-files-drawer-title">
             <h2>Shared files</h2>
+            {#if totalFileCount > 0}
+              <span class="chat-files-drawer-count">{totalFileCount}</span>
+            {/if}
           </div>
           <div class="chat-files-drawer-actions">
             <button
               type="button"
-              class="chat-header-action"
+              class="icon-button"
+              aria-label={loadingArtifactDeliveries ? 'Refreshing files' : 'Refresh files'}
+              title="Refresh"
               disabled={!activeChat || loadingArtifactDeliveries}
               onclick={() => activeChat && void refreshArtifactDeliveries(activeChat.repoId ?? null)}
             >
-              {loadingArtifactDeliveries ? 'Refreshing...' : 'Refresh'}
+              <svg class:spinning={loadingArtifactDeliveries} viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M21 12a9 9 0 1 1-3-6.7" />
+                <path d="M21 4v5h-5" />
+              </svg>
             </button>
             <button
               type="button"
               class="icon-button"
               aria-label="Close files"
-              title="Close files"
+              title="Close"
               onclick={() => (fileDrawerOpen = false)}
             >
-              x
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M6 6l12 12M18 6 6 18" />
+              </svg>
             </button>
           </div>
-        </div>
+        </header>
         <div class="chat-files-sections">
           <section class="chat-files-section" aria-label="Files from you">
             <div class="chat-files-section-head">
               <h3>From you</h3>
-              <button
-                type="button"
-                class="chat-file-delete-all"
-                disabled={inboxArtifacts.length === 0 || deletingFileBox !== null}
-                onclick={() => deleteChatFileBox('inbox', inboxArtifacts.length)}
-              >
-                {deletingFileBox === 'inbox' ? 'Deleting...' : 'Delete all'}
-              </button>
+              {#if inboxArtifacts.length > 0}
+                <span class="chat-files-section-count">{inboxArtifacts.length}</span>
+                <button
+                  type="button"
+                  class="chat-file-delete-all"
+                  disabled={deletingFileBox !== null}
+                  title={deletingFileBox === 'inbox' ? 'Clearing…' : `Clear all ${inboxArtifacts.length}`}
+                  aria-label={`Clear all ${inboxArtifacts.length} files from you`}
+                  onclick={() => deleteChatFileBox('inbox', inboxArtifacts.length)}
+                >
+                  {deletingFileBox === 'inbox' ? 'Clearing…' : 'Clear all'}
+                </button>
+              {/if}
             </div>
             {#if inboxArtifacts.length === 0}
-              <p class="chat-files-empty">No uploaded files for this chat.</p>
+              <p class="chat-files-empty">No uploaded files yet.</p>
             {:else}
               <ul class="chat-files-list">
                 {#each inboxArtifacts as artifact (artifact.id)}
                   {@const box = fileBoxNameFromArtifact(artifact)}
                   {@const filename = fileBoxFilenameFromArtifact(artifact)}
                   <li>
-                    <span class="attachment-kind">{artifact.kind}</span>
-                    {#if artifact.url}
-                      <a href={href(artifact.url)} target="_blank" rel="noopener"><strong>{artifact.title}</strong></a>
-                    {:else}
-                      <strong>{artifact.title}</strong>
-                    {/if}
-                    {#if artifact.summary}
-                      <em>{artifact.summary}</em>
-                    {/if}
+                    <span class={`attachment-kind kind-${artifact.kind}`} aria-hidden="true">
+                      <svg viewBox="0 0 24 24"><path d="M14 2H7a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V7z"/><path d="M14 2v5h5"/></svg>
+                    </span>
+                    <span class="chat-files-list-body">
+                      {#if artifact.url}
+                        <a href={href(artifact.url)} target="_blank" rel="noopener"><strong>{artifact.title}</strong></a>
+                      {:else}
+                        <strong>{artifact.title}</strong>
+                      {/if}
+                      {#if artifact.summary}
+                        <em>{artifact.summary}</em>
+                      {/if}
+                    </span>
                     {#if box && filename}
                       <button
                         type="button"
-                        class="chat-file-delete"
+                        class="chat-file-delete icon-button"
                         disabled={isDeletingFile(box, filename) || deletingFileBox !== null}
                         aria-label={`Delete ${filename}`}
-                        title={`Delete ${filename}`}
+                        title={isDeletingFile(box, filename) ? 'Deleting…' : 'Delete'}
                         onclick={() => deleteChatFileBoxFile(artifact)}
                       >
-                        {isDeletingFile(box, filename) ? 'Deleting...' : 'Delete'}
+                        <svg viewBox="0 0 24 24" aria-hidden="true">
+                          <path d="M4 7h16" />
+                          <path d="M10 11v6M14 11v6" />
+                          <path d="M6 7l1 13a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-13" />
+                          <path d="M9 7V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v3" />
+                        </svg>
                       </button>
                     {/if}
                   </li>
@@ -2909,14 +2938,19 @@
           <section class="chat-files-section" aria-label="Files from assistant">
             <div class="chat-files-section-head">
               <h3>From agent</h3>
-              <button
-                type="button"
-                class="chat-file-delete-all"
-                disabled={outboxArtifacts.length === 0 || deletingFileBox !== null}
-                onclick={() => deleteChatFileBox('outbox', outboxArtifacts.length)}
-              >
-                {deletingFileBox === 'outbox' ? 'Deleting...' : 'Delete all'}
-              </button>
+              {#if outboxArtifacts.length > 0}
+                <span class="chat-files-section-count">{outboxArtifacts.length}</span>
+                <button
+                  type="button"
+                  class="chat-file-delete-all"
+                  disabled={deletingFileBox !== null}
+                  title={deletingFileBox === 'outbox' ? 'Clearing…' : `Clear all ${outboxArtifacts.length}`}
+                  aria-label={`Clear all ${outboxArtifacts.length} files from agent`}
+                  onclick={() => deleteChatFileBox('outbox', outboxArtifacts.length)}
+                >
+                  {deletingFileBox === 'outbox' ? 'Clearing…' : 'Clear all'}
+                </button>
+              {/if}
             </div>
             {#if outboxArtifacts.length > 0}
               <ul class="chat-files-list">
@@ -2924,25 +2958,34 @@
                   {@const box = fileBoxNameFromArtifact(artifact)}
                   {@const filename = fileBoxFilenameFromArtifact(artifact)}
                   <li>
-                    <span class="attachment-kind">{artifact.kind}</span>
-                    {#if artifact.url}
-                      <a href={href(artifact.url)} target="_blank" rel="noopener"><strong>{artifact.title}</strong></a>
-                    {:else}
-                      <strong>{artifact.title}</strong>
-                    {/if}
-                    {#if artifact.summary}
-                      <em>{artifact.summary}</em>
-                    {/if}
+                    <span class={`attachment-kind kind-${artifact.kind}`} aria-hidden="true">
+                      <svg viewBox="0 0 24 24"><path d="M14 2H7a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V7z"/><path d="M14 2v5h5"/></svg>
+                    </span>
+                    <span class="chat-files-list-body">
+                      {#if artifact.url}
+                        <a href={href(artifact.url)} target="_blank" rel="noopener"><strong>{artifact.title}</strong></a>
+                      {:else}
+                        <strong>{artifact.title}</strong>
+                      {/if}
+                      {#if artifact.summary}
+                        <em>{artifact.summary}</em>
+                      {/if}
+                    </span>
                     {#if box && filename}
                       <button
                         type="button"
-                        class="chat-file-delete"
+                        class="chat-file-delete icon-button"
                         disabled={isDeletingFile(box, filename) || deletingFileBox !== null}
                         aria-label={`Delete ${filename}`}
-                        title={`Delete ${filename}`}
+                        title={isDeletingFile(box, filename) ? 'Deleting…' : 'Delete'}
                         onclick={() => deleteChatFileBoxFile(artifact)}
                       >
-                        {isDeletingFile(box, filename) ? 'Deleting...' : 'Delete'}
+                        <svg viewBox="0 0 24 24" aria-hidden="true">
+                          <path d="M4 7h16" />
+                          <path d="M10 11v6M14 11v6" />
+                          <path d="M6 7l1 13a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-13" />
+                          <path d="M9 7V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v3" />
+                        </svg>
                       </button>
                     {/if}
                   </li>
@@ -2958,16 +3001,21 @@
                 {#each activeSurfaceDeliveries as delivery (delivery.deliveryId)}
                   {@const stateLabel = artifactDeliveryStateLabel(delivery)}
                   <li class={`delivery-${stateLabel}`}>
-                    <span class="attachment-kind">{stateLabel}</span>
-                    {#if delivery.downloadUrl}
-                      <a href={href(delivery.downloadUrl)} target="_blank" rel="noopener"><strong>{delivery.filename}</strong></a>
-                    {:else}
-                      <strong>{delivery.filename}</strong>
-                    {/if}
-                    <em>{artifactDeliveryMeta(delivery)}</em>
-                    {#if delivery.lastError}
-                      <small>{delivery.lastError}</small>
-                    {/if}
+                    <span class={`delivery-state delivery-state-${stateLabel}`}>
+                      <span class="status-dot" aria-hidden="true"></span>
+                      {stateLabel}
+                    </span>
+                    <span class="chat-files-list-body">
+                      {#if delivery.downloadUrl}
+                        <a href={href(delivery.downloadUrl)} target="_blank" rel="noopener"><strong>{delivery.filename}</strong></a>
+                      {:else}
+                        <strong>{delivery.filename}</strong>
+                      {/if}
+                      <em>{artifactDeliveryMeta(delivery)}</em>
+                      {#if delivery.lastError}
+                        <small>{delivery.lastError}</small>
+                      {/if}
+                    </span>
                   </li>
                 {/each}
               </ul>

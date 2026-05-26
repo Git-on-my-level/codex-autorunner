@@ -37,6 +37,7 @@ import {
   modelReasoningOptions,
   modelSelectorState,
   pmaChatTransportBadges,
+  showPmaAgentBadge,
   pmaChatKind,
   pmaChatKindLabel,
   pmaChatHeaderScopeLine,
@@ -1044,6 +1045,43 @@ describe('PMA chat view helpers', () => {
     expect(chatSurfaceFilterOptions([pmaOnly, discordBound])).toEqual([
       { slug: 'discord', label: 'Discord', count: 1 }
     ]);
+  });
+
+  it('keeps PMA transport off row badges and uses agent kind for the PMA tag', () => {
+    const pmaAgentChat = {
+      ...baseChat,
+      id: 'pma-agent',
+      chatKind: 'pma' as const,
+      raw: {
+        facets: {
+          category: 'regular',
+          turnKinds: ['message'],
+          originKinds: ['surface'],
+          transports: ['pma'],
+          agentKind: 'pma'
+        }
+      }
+    };
+    const codingAgentChat = {
+      ...baseChat,
+      id: 'coding-agent',
+      chatKind: 'coding_agent' as const,
+      agentId: 'codex',
+      raw: {
+        facets: {
+          category: 'regular',
+          turnKinds: ['message'],
+          originKinds: ['surface'],
+          transports: ['pma'],
+          agentKind: 'coding_agent'
+        }
+      }
+    };
+
+    expect(pmaChatTransportBadges(pmaAgentChat)).toEqual([]);
+    expect(pmaChatTransportBadges(codingAgentChat)).toEqual([]);
+    expect(showPmaAgentBadge(pmaAgentChat)).toBe(true);
+    expect(showPmaAgentBadge(codingAgentChat)).toBe(false);
   });
 
   it('labels regular chat facets as user-facing chats', () => {

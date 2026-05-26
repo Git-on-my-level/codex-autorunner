@@ -725,9 +725,12 @@ class OpenCodeClient:
         directory: Optional[str],
         profile: OpenCodeApiProfile,
     ) -> list[str]:
+        # Prefer /global/event whenever the server exposes it. OpenCode 1.14+
+        # workspace-scoped GET /event?directory=... stays open but only emits
+        # server.connected; turn progress (message.part.updated, session.status,
+        # etc.) is published on /global/event. stream_events stops after the
+        # first connected path returns, so /event must not be tried first.
         if profile.supports_global_endpoints:
-            if directory:
-                return ["/event", "/global/event"]
             return ["/global/event", "/event"]
         return ["/event"]
 

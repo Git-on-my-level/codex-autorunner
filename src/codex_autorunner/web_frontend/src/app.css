@@ -1450,6 +1450,90 @@ a.scope-chip-label:hover {
   box-shadow: 0 0 0 2px var(--color-surface);
 }
 
+/* Chat row: three-row layout (title, tags, meta). Keeps the title legible no
+   matter how many filter/transport/agent tags accumulate on a chat. */
+.chat-row-title {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.chat-row-title-text {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--font-size-1);
+  font-weight: 550;
+}
+
+.chat-row-title-trailing {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--space-2);
+  flex-shrink: 0;
+}
+
+.chat-row-tags {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+  padding-bottom: 1px;
+}
+
+.chat-row-tags::-webkit-scrollbar {
+  display: none;
+}
+
+.chat-row-tags > * {
+  flex-shrink: 0;
+}
+
+.chat-row-meta {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+  font-size: 11px;
+  color: var(--color-ink-faint);
+  overflow: hidden;
+}
+
+.chat-row-meta > * {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat-row-meta > .chat-meta-dot {
+  flex-shrink: 0;
+}
+
+.chat-agent-tag {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  min-height: 18px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  border: 1px solid var(--color-border-subtle);
+  background: var(--color-surface-muted);
+  color: var(--color-ink-muted);
+  font-size: 10px;
+  font-weight: 650;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+
 .chat-meta-row {
   flex-wrap: wrap;
   gap: var(--space-2);
@@ -2776,51 +2860,75 @@ textarea:hover {
 
 .chat-files-drawer {
   display: grid;
-  gap: var(--space-3);
+  gap: var(--space-4);
   width: 100%;
   margin-top: var(--space-3);
-  padding: var(--space-3);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-2);
+  padding: var(--space-4) var(--space-5);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-3);
   background: var(--color-surface);
-  box-shadow: var(--shadow-1);
-}
-
-.chat-files-drawer-head,
-.chat-files-drawer-actions,
-.chat-files-list li {
-  display: flex;
-  align-items: center;
 }
 
 .chat-files-drawer-head {
+  display: flex;
+  align-items: center;
   justify-content: space-between;
   gap: var(--space-3);
 }
 
-.chat-files-drawer h2,
-.chat-files-drawer h3 {
-  margin: 0;
-  letter-spacing: 0;
+.chat-files-drawer-title {
+  display: inline-flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  min-width: 0;
 }
 
 .chat-files-drawer h2 {
+  margin: 0;
   font-size: var(--font-size-3);
+  font-weight: 650;
+  letter-spacing: -0.01em;
+  color: var(--color-ink);
 }
 
-.chat-files-drawer h3 {
-  font-size: var(--font-size-1);
+.chat-files-drawer-count {
+  font-size: var(--font-size-0);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
   color: var(--color-ink-muted);
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: var(--color-surface-muted);
 }
 
 .chat-files-drawer-actions {
-  gap: var(--space-2);
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+
+.chat-files-drawer-actions .icon-button svg {
+  width: 14px;
+  height: 14px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.75;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.chat-files-drawer-actions .icon-button svg.spinning {
+  animation: chat-files-spin 0.9s linear infinite;
+}
+
+@keyframes chat-files-spin {
+  to { transform: rotate(360deg); }
 }
 
 .chat-files-sections {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: var(--space-3);
+  gap: var(--space-5);
 }
 
 .chat-files-section {
@@ -2833,26 +2941,61 @@ textarea:hover {
 .chat-files-section-head {
   display: flex;
   align-items: center;
-  justify-content: space-between;
   gap: var(--space-2);
   min-width: 0;
+  padding-bottom: var(--space-1);
+  border-bottom: 1px solid var(--color-border-subtle);
+}
+
+.chat-files-section-head h3 {
+  margin: 0;
+  font-size: var(--font-size-0);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--color-ink-muted);
+}
+
+.chat-files-section-count {
+  font-size: var(--font-size-0);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  color: var(--color-ink-faint);
+}
+
+.chat-files-section-head .chat-file-delete-all {
+  margin-left: auto;
 }
 
 .chat-files-list {
   display: grid;
-  gap: var(--space-2);
+  gap: 2px;
   margin: 0;
   padding: 0;
   list-style: none;
 }
 
 .chat-files-list li {
+  display: grid;
+  grid-template-columns: 20px minmax(0, 1fr) auto;
+  align-items: center;
   gap: var(--space-2);
   min-width: 0;
-  padding: var(--space-2);
-  border: 1px solid var(--color-border-subtle);
-  border-radius: var(--radius-2);
-  background: var(--color-panel-tint);
+  padding: 6px var(--space-2);
+  border-radius: var(--radius-1);
+  transition: background var(--transition-fast) var(--ease-out);
+}
+
+.chat-files-list li:hover {
+  background: var(--color-surface-muted);
+}
+
+.chat-files-list-body {
+  display: inline-flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  min-width: 0;
+  overflow: hidden;
 }
 
 .chat-files-list strong,
@@ -2862,6 +3005,24 @@ textarea:hover {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.chat-files-list strong {
+  font-size: var(--font-size-1);
+  font-weight: 550;
+  color: var(--color-ink);
+}
+
+.chat-files-list a {
+  min-width: 0;
+  color: inherit;
+  text-decoration: none;
+}
+
+.chat-files-list a:hover strong {
+  color: var(--color-accent);
+  text-decoration: underline;
+  text-underline-offset: 2px;
 }
 
 .chat-files-list em,
@@ -2874,6 +3035,9 @@ textarea:hover {
 
 .chat-files-empty {
   margin: 0;
+  padding: var(--space-3) var(--space-2);
+  color: var(--color-ink-muted);
+  font-size: var(--font-size-0);
 }
 
 .chat-files-empty.error {
@@ -2881,49 +3045,119 @@ textarea:hover {
 }
 
 .chat-files-list .attachment-kind {
-  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  color: var(--color-ink-faint);
+  background: transparent;
+  border: 0;
+  padding: 0;
+  font-size: 0;
 }
 
-.chat-file-delete,
+.chat-files-list .attachment-kind svg {
+  width: 14px;
+  height: 14px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
 .chat-file-delete-all {
   flex: 0 0 auto;
-  min-height: 28px;
-  border: 1px solid color-mix(in srgb, var(--color-danger) 48%, var(--color-border));
+  min-height: 24px;
+  padding: 0 var(--space-2);
+  border: 1px solid transparent;
   border-radius: var(--radius-1);
   background: transparent;
-  color: var(--color-danger);
+  color: var(--color-ink-muted);
   font: inherit;
   font-size: var(--font-size-0);
+  font-weight: 500;
   cursor: pointer;
+  transition: background var(--transition-fast) var(--ease-out),
+              color var(--transition-fast) var(--ease-out);
 }
 
-.chat-file-delete {
-  margin-left: auto;
-  padding: 0 var(--space-2);
+.chat-file-delete-all:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--color-danger) 10%, transparent);
+  color: var(--color-danger);
 }
 
-.chat-file-delete-all {
-  padding: 0 var(--space-2);
-}
-
-.chat-file-delete:disabled,
 .chat-file-delete-all:disabled {
   cursor: not-allowed;
   opacity: 0.45;
 }
 
-.chat-files-list li.delivery-sent {
-  border-color: color-mix(in srgb, var(--color-success) 36%, var(--color-border-subtle));
+.chat-file-delete.icon-button {
+  width: 24px;
+  height: 24px;
+  min-width: 0;
+  min-height: 0;
+  padding: 0;
+  color: var(--color-ink-faint);
+  opacity: 0;
+  transition: opacity var(--transition-fast) var(--ease-out),
+              background var(--transition-fast) var(--ease-out),
+              color var(--transition-fast) var(--ease-out);
 }
 
-.chat-files-list li.delivery-failed {
-  border-color: color-mix(in srgb, var(--color-danger) 48%, var(--color-border-subtle));
+.chat-file-delete.icon-button svg {
+  width: 13px;
+  height: 13px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 
-.chat-files-list li.delivery-pending,
-.chat-files-list li.delivery-sending {
-  border-color: color-mix(in srgb, var(--color-warning) 42%, var(--color-border-subtle));
+.chat-files-list li:hover .chat-file-delete.icon-button,
+.chat-file-delete.icon-button:focus-visible {
+  opacity: 1;
 }
+
+.chat-file-delete.icon-button:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--color-danger) 12%, transparent);
+  color: var(--color-danger);
+}
+
+.chat-file-delete.icon-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.4;
+}
+
+.delivery-state {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--color-ink-muted);
+}
+
+.delivery-state .status-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: var(--color-ink-faint);
+}
+
+.delivery-state-sent .status-dot { background: var(--color-success); }
+.delivery-state-failed .status-dot { background: var(--color-danger); }
+.delivery-state-pending .status-dot,
+.delivery-state-sending .status-dot { background: var(--color-warning); }
+
+.delivery-state-sent { color: var(--color-success); }
+.delivery-state-failed { color: var(--color-danger); }
+.delivery-state-pending,
+.delivery-state-sending { color: var(--color-warning); }
 
 @media (max-width: 760px) {
   .chat-files-sections {
@@ -6583,30 +6817,20 @@ textarea:disabled {
     flex-direction: column;
   }
 
-  /* Chat list: pull status + timestamp onto the scope/workspace line instead of
-     stacking them under the title (saves a full row on narrow viewports). */
-  .chat-card-main,
+  /* Run-group header keeps the legacy title-row structure; collapse status +
+     timestamp onto the meta line so the title gets the full first row. */
   .chat-run-group-main {
     grid-template-columns: minmax(0, 1fr) auto;
     column-gap: var(--space-2);
   }
 
-  .chat-card-main > .chat-title-row,
-  .chat-card-main > .chat-meta-group,
   .chat-run-group-main > .chat-title-row {
     display: contents;
   }
 
-  .chat-card-main > .chat-title-row > .chat-title-cluster,
   .chat-run-group-main > .chat-title-row > .chat-title-cluster {
     grid-column: 1 / -1;
     grid-row: 1;
-  }
-
-  .chat-card-main > .chat-meta-group > .chat-meta-row--scope {
-    grid-column: 1;
-    grid-row: 2;
-    min-width: 0;
   }
 
   .chat-run-group-main > .chat-meta-row.chat-run-meta {
@@ -6615,26 +6839,11 @@ textarea:disabled {
     min-width: 0;
   }
 
-  .chat-card-main > .chat-title-row > .chat-title-trailing,
   .chat-run-group-main > .chat-title-row > .chat-title-trailing {
     grid-column: 2;
     grid-row: 2;
     justify-self: end;
     align-self: center;
-  }
-
-  .chat-card-main > .chat-meta-group > .chat-meta-row--agent {
-    grid-column: 1 / -1;
-    grid-row: 3;
-  }
-
-  /* Agent line is on its own row; drop the leading · used for same-line scope separation on desktop. */
-  .chat-card-main .chat-meta-row--agent > .chat-meta-dot:first-child {
-    display: none;
-  }
-
-  .chat-card-main > .chat-card-footer {
-    grid-column: 1 / -1;
   }
 
   .workspace-row-shell,
