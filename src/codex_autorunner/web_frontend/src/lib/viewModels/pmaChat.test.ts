@@ -1927,14 +1927,21 @@ describe('PMA chat view helpers', () => {
     ).toEqual([]);
   });
 
-  it('renders compaction lifecycle timeline items as visible dividers', () => {
+  it('renders CAR compaction lifecycle timeline items as context compaction cards', () => {
     const cards = buildChatTranscriptCards(
       [
         timelineItem('action:1:compact', 'lifecycle', {
-          lifecycle_kind: 'chat_compacted',
-          title: 'Chat compacted',
-          text: 'Chat compacted. The next message starts a fresh backend session with the compacted context.',
-          summary_preview: 'Keep the current goal and constraints.'
+          lifecycle_kind: 'context_compaction',
+          title: 'Context compacted by CAR',
+          text: 'Earlier conversation was summarized and will be injected into the next turn.',
+          context_compaction: {
+            source: 'car',
+            summary: 'Keep the current goal and constraints.',
+            preview: 'Keep the current goal and constraints.',
+            scope: 'managed_thread',
+            started_fresh_session: true,
+            stored_by_car: true
+          }
         })
       ],
       null,
@@ -1943,9 +1950,50 @@ describe('PMA chat view helpers', () => {
 
     expect(cards).toHaveLength(1);
     expect(cards[0]).toMatchObject({
-      kind: 'lifecycle',
-      title: 'Chat compacted',
-      text: expect.stringContaining('Keep the current goal and constraints.')
+      kind: 'context_compaction',
+      title: 'Context compacted by CAR',
+      compaction: {
+        source: 'car',
+        summary: 'Keep the current goal and constraints.',
+        startedFreshSession: true,
+        storedByCar: true
+      }
+    });
+  });
+
+  it('renders provider-native compaction lifecycle timeline items as context compaction cards', () => {
+    const cards = buildChatTranscriptCards(
+      [
+        timelineItem('turn:one:context_compaction:1', 'lifecycle', {
+          lifecycle_kind: 'context_compaction',
+          title: 'Runtime compacted context',
+          text: 'The provider summarized or pruned its internal session context.',
+          context_compaction: {
+            source: 'provider',
+            provider: 'opencode',
+            summary: null,
+            preview: 'No retained summary was exposed.',
+            scope: 'provider_session',
+            started_fresh_session: false,
+            stored_by_car: false
+          }
+        })
+      ],
+      null,
+      []
+    );
+
+    expect(cards).toHaveLength(1);
+    expect(cards[0]).toMatchObject({
+      kind: 'context_compaction',
+      title: 'Runtime compacted context',
+      compaction: {
+        source: 'provider',
+        provider: 'opencode',
+        preview: 'No retained summary was exposed.',
+        startedFreshSession: false,
+        storedByCar: false
+      }
     });
   });
 

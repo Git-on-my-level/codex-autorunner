@@ -175,6 +175,23 @@
     return `${ref.capsuleId} v${ref.capsuleVersion} · ${ref.scope}`;
   }
 
+  function compactionSourceLabel(card: Extract<ChatTranscriptCard, { kind: 'context_compaction' }>): string {
+    if (card.compaction.source === 'car') return 'CAR';
+    if (card.compaction.provider) return card.compaction.provider;
+    if (card.compaction.source === 'provider') return 'Provider';
+    return 'Runtime';
+  }
+
+  function compactionScopeLabel(value: string | null): string {
+    if (value === 'managed_thread') return 'Managed thread';
+    if (value === 'provider_session') return 'Provider session';
+    return value || 'Context';
+  }
+
+  function compactionPreview(card: Extract<ChatTranscriptCard, { kind: 'context_compaction' }>): string {
+    return card.compaction.preview || card.compaction.summary || card.text || 'No retained summary was exposed.';
+  }
+
   function displayCardsFor(input: ChatTranscriptCard[]): ChatTranscriptCard[] {
     const cached = displayCardCache.get(input);
     if (cached) return cached;
@@ -413,6 +430,46 @@
       </section>
       <div></div>
     </article>
+  {:else if card.kind === 'context_compaction'}
+    <details class="tool-call-bar context-compaction-card">
+      <summary>
+        <span>{compactionSourceLabel(card)}</span>
+        <strong>{compactionPreview(card)}</strong>
+      </summary>
+      <div class="thinking-trace-body markdown-body">
+        <p>{card.text}</p>
+        {#if card.compaction.summary}
+          <h4>Retained context</h4>
+          {@html renderMarkdownToHtml(card.compaction.summary, { openLinksInNewTab: true })}
+        {:else}
+          <p>No retained summary was exposed.</p>
+        {/if}
+        <dl class="compaction-meta">
+          <div>
+            <dt>Source</dt>
+            <dd>{compactionSourceLabel(card)}</dd>
+          </div>
+          <div>
+            <dt>Scope</dt>
+            <dd>{compactionScopeLabel(card.compaction.scope)}</dd>
+          </div>
+          <div>
+            <dt>Fresh session</dt>
+            <dd>{card.compaction.startedFreshSession ? 'yes' : 'no'}</dd>
+          </div>
+          <div>
+            <dt>Stored by CAR</dt>
+            <dd>{card.compaction.storedByCar ? 'yes' : 'no'}</dd>
+          </div>
+        </dl>
+        {#if card.detail}
+          <details class="compaction-raw-detail">
+            <summary>Raw details</summary>
+            <pre class="timeline-detail">{card.detail}</pre>
+          </details>
+        {/if}
+      </div>
+    </details>
   {:else if card.kind === 'ticket'}
     <article class="artifact-card ticket-card">
       <span class="artifact-type">Ticket</span>

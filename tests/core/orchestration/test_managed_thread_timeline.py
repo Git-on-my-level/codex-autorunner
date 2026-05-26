@@ -523,6 +523,45 @@ def test_live_tail_event_carries_hidden_progress_metadata() -> None:
     assert item["payload"]["progress_item"]["hidden"] is True
 
 
+def test_live_tail_event_projects_provider_compaction_run_notice_data() -> None:
+    item = timeline_item_from_tail_event(
+        managed_thread_id="thread-1",
+        managed_turn_id="turn-1",
+        tail_event={
+            "event_id": 5,
+            "event_type": "progress",
+            "summary": "Provider retained key state.",
+            "title": "Provider Context Compaction",
+            "received_at": "2026-05-06T10:00:05Z",
+            "run_notice": {
+                "kind": "provider_context_compaction",
+                "message": "Provider retained key state.",
+                "data": {
+                    "provider": "opencode",
+                    "summary": "Provider retained key state.",
+                },
+            },
+            "progress_item": {
+                "item_id": "progress:notice:0005",
+                "kind": "notice",
+                "state": "running",
+                "title": "Provider Context Compaction",
+                "summary": "Provider retained key state.",
+                "event_ids": [5],
+            },
+            "progress_kind": "notice",
+            "progress_state": "running",
+        },
+    )
+
+    assert item is not None
+    assert item["kind"] == "lifecycle"
+    compaction = item["payload"]["context_compaction"]
+    assert compaction["source"] == "provider"
+    assert compaction["provider"] == "opencode"
+    assert compaction["summary"] == "Provider retained key state."
+
+
 def test_timeline_includes_delivery_state_items(tmp_path: Path) -> None:
     hub_root, store, thread_id = _store(tmp_path)
     turn = create_test_turn(store, thread_id, prompt="deliver this")
@@ -571,7 +610,8 @@ def test_timeline_includes_compaction_lifecycle_item(tmp_path: Path) -> None:
         "managed_thread_compact",
         managed_thread_id=thread_id,
         payload_json=(
-            '{"summary_length": 42, "summary_preview": "Keep the current goal.", '
+            '{"summary_length": 42, "summary": "Keep the current goal.\\nPreserve constraints.", '
+            '"summary_preview": "Keep the current goal.", '
             '"reset_backend": true}'
         ),
     )
@@ -585,10 +625,54 @@ def test_timeline_includes_compaction_lifecycle_item(tmp_path: Path) -> None:
     lifecycle = [item for item in payload["items"] if item["kind"] == "lifecycle"]
     assert len(lifecycle) == 1
     assert lifecycle[0]["item_id"] == "action:1:compact"
-    assert lifecycle[0]["payload"]["lifecycle_kind"] == "chat_compacted"
-    assert lifecycle[0]["payload"]["title"] == "Chat compacted"
-    assert lifecycle[0]["payload"]["summary_preview"] == "Keep the current goal."
-    assert lifecycle[0]["payload"]["reset_backend"] is True
+    assert lifecycle[0]["payload"]["lifecycle_kind"] == "context_compaction"
+    assert lifecycle[0]["payload"]["title"] == "Context compacted by CAR"
+    compaction = lifecycle[0]["payload"]["context_compaction"]
+    assert compaction["source"] == "car"
+    assert compaction["summary"] == "Keep the current goal.\nPreserve constraints."
+    assert compaction["preview"] == "Keep the current goal."
+    assert compaction["scope"] == "managed_thread"
+    assert compaction["started_fresh_session"] is True
+
+
+def test_timeline_projects_provider_native_compaction_notice(tmp_path: Path) -> None:
+    hub_root, store, thread_id = _store(tmp_path)
+    turn = create_test_turn(store, thread_id, prompt="continue")
+    turn_id = str(turn["managed_turn_id"])
+    persist_turn_timeline(
+        hub_root,
+        execution_id=turn_id,
+        target_kind="thread_target",
+        target_id=thread_id,
+        events=[
+            RunNotice(
+                timestamp="2026-05-06T10:00:00Z",
+                kind="provider_context_compaction",
+                message="Provider retained key state.",
+                data={
+                    "provider": "opencode",
+                    "summary": "Provider retained key state.",
+                },
+            )
+        ],
+    )
+
+    payload = build_managed_thread_timeline(
+        hub_root,
+        thread_store=store,
+        managed_thread_id=thread_id,
+    )
+
+    lifecycle = [item for item in payload["items"] if item["kind"] == "lifecycle"]
+    assert len(lifecycle) == 1
+    assert lifecycle[0]["payload"]["lifecycle_kind"] == "context_compaction"
+    assert lifecycle[0]["payload"]["title"] == "Runtime compacted context"
+    compaction = lifecycle[0]["payload"]["context_compaction"]
+    assert compaction["source"] == "provider"
+    assert compaction["provider"] == "opencode"
+    assert compaction["summary"] == "Provider retained key state."
+    assert compaction["scope"] == "provider_session"
+    assert compaction["started_fresh_session"] is False
 
 
 def test_timeline_projects_equivalent_delivery_state_for_chat_surfaces(

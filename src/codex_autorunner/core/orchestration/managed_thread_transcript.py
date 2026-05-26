@@ -9,6 +9,7 @@ from .managed_thread_timeline import (
     build_managed_thread_timeline,
     timeline_item_from_tail_event,
 )
+from .run_notice_visibility import is_internal_run_notice_kind
 
 TRANSCRIPT_CONTRACT_VERSION = "managed_thread_transcript.v2"
 
@@ -244,6 +245,34 @@ def _timeline_item_to_transcript_rows(item: Mapping[str, Any]) -> list[dict[str,
         title = _optional_text(payload.get("title")) or "Chat compacted"
         text = _optional_text(payload.get("text")) or "Chat compacted."
         preview = _optional_text(payload.get("summary_preview"))
+        compaction = _mapping(payload.get("context_compaction"))
+        if compaction or _optional_text(payload.get("lifecycle_kind")) in {
+            "chat_compacted",
+            "context_compaction",
+        }:
+            if not compaction:
+                compaction = {
+                    "source": "car",
+                    "provider": None,
+                    "summary": None,
+                    "preview": preview,
+                    "scope": "managed_thread",
+                    "started_fresh_session": payload.get("reset_backend") is True,
+                    "stored_by_car": True,
+                }
+            return [
+                {
+                    "kind": "context_compaction",
+                    "id": item_id,
+                    "title": title,
+                    "text": f"{text}\n\n{preview}" if preview else text,
+                    "detail": _json_detail(payload.get("event") or payload),
+                    "context_compaction": compaction,
+                    "turn_id": managed_turn_id,
+                    "order_key": order_key,
+                    "timestamp": timestamp,
+                }
+            ]
         return [
             {
                 "kind": "lifecycle",
@@ -488,6 +517,19 @@ def _is_hidden_intermediate(payload: Mapping[str, Any]) -> bool:
         return True
     intermediate_kind = str(payload.get("intermediate_kind") or "").lower()
     event_type = str(payload.get("event_type") or "").lower()
+    event = _mapping(payload.get("event"))
+    if any(
+        is_internal_run_notice_kind(candidate)
+        for candidate in (
+            intermediate_kind,
+            payload.get("title"),
+            event.get("kind"),
+            event.get("title"),
+            progress_item.get("kind"),
+            progress_item.get("title"),
+        )
+    ):
+        return True
     return event_type == "output_delta" and intermediate_kind in {
         "assistant_stream",
         "assistant_message",

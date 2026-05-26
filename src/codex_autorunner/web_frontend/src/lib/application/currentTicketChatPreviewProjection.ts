@@ -148,7 +148,13 @@ function rowPreview(row: Record<string, unknown>): { text: string; role: Current
     const role = String((message as Record<string, unknown>).role ?? '') === 'user' ? 'user' : 'assistant';
     return { text, role };
   }
-  if (kind === 'intermediate' || kind === 'tool_group' || kind === 'approval' || kind === 'lifecycle') {
+  if (
+    kind === 'intermediate' ||
+    kind === 'tool_group' ||
+    kind === 'approval' ||
+    kind === 'lifecycle' ||
+    kind === 'context_compaction'
+  ) {
     const text = String(row.text ?? row.summary ?? row.title ?? '').trim();
     return text ? { text, role: 'intermediate' } : null;
   }

@@ -31,6 +31,19 @@ def _intermediate_item(payload: dict) -> dict:
     }
 
 
+def _lifecycle_item(payload: dict) -> dict:
+    return {
+        "kind": "lifecycle",
+        "item_id": "action:1:compact",
+        "order_key": "003",
+        "timestamp": "2026-05-10T12:00:02Z",
+        "managed_thread_id": "thread-1",
+        "managed_turn_id": None,
+        "payload": payload,
+        "identity": {"timeline_item_id": "action:1:compact"},
+    }
+
+
 def test_transcript_projects_legacy_injected_prompt_as_model_context() -> None:
     rows = transcript_rows_from_timeline_items(
         [
@@ -63,7 +76,6 @@ def test_transcript_hides_internal_lifecycle_notices() -> None:
                     "text": "terminal=3977ms",
                     "event_type": "run_notice",
                     "event": {"kind": "chat_execution_journal"},
-                    "hidden": True,
                 }
             ),
             _intermediate_item(
@@ -72,7 +84,6 @@ def test_transcript_hides_internal_lifecycle_notices() -> None:
                     "text": "Compacted hot timeline rows.",
                     "event_type": "run_notice",
                     "event": {"kind": "compaction_summary"},
-                    "progress_item": {"hidden": True},
                 }
             ),
             _intermediate_item(
@@ -80,7 +91,7 @@ def test_transcript_hides_internal_lifecycle_notices() -> None:
                     "intermediate_kind": "notice",
                     "text": "Decoder missed event shape.",
                     "event_type": "run_notice",
-                    "progress_item": {"hidden": True},
+                    "event": {"kind": "decode_failure"},
                 }
             ),
             _intermediate_item(
@@ -97,6 +108,44 @@ def test_transcript_hides_internal_lifecycle_notices() -> None:
     assert len(rows) == 1
     assert rows[0]["kind"] == "intermediate"
     assert rows[0]["text"] == "Reading files"
+
+
+def test_transcript_projects_context_compaction_card() -> None:
+    rows = transcript_rows_from_timeline_items(
+        [
+            _lifecycle_item(
+                {
+                    "lifecycle_kind": "context_compaction",
+                    "title": "Context compacted by CAR",
+                    "text": "Earlier conversation was summarized.",
+                    "context_compaction": {
+                        "source": "car",
+                        "provider": None,
+                        "summary": "Keep the current goal.",
+                        "preview": "Keep the current goal.",
+                        "scope": "managed_thread",
+                        "started_fresh_session": True,
+                        "stored_by_car": True,
+                    },
+                }
+            )
+        ]
+    )
+
+    assert len(rows) == 1
+    assert rows[0]["kind"] == "context_compaction"
+    assert rows[0]["id"] == "action:1:compact"
+    assert rows[0]["title"] == "Context compacted by CAR"
+    assert rows[0]["text"] == "Earlier conversation was summarized."
+    assert rows[0]["context_compaction"] == {
+        "source": "car",
+        "provider": None,
+        "summary": "Keep the current goal.",
+        "preview": "Keep the current goal.",
+        "scope": "managed_thread",
+        "started_fresh_session": True,
+        "stored_by_car": True,
+    }
 
 
 def test_transcript_projects_capsule_only_model_context_refs() -> None:

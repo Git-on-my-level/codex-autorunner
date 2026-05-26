@@ -23,6 +23,10 @@ from .progress_projection import (
     ProgressProjectionState,
     reduce_progress_event_merged,
 )
+from .run_notice_visibility import (
+    is_context_compaction_notice_kind,
+    is_internal_run_notice_kind,
+)
 from .turn_timeline import list_turn_timeline, list_turn_timelines
 
 TIMELINE_CONTRACT_VERSION = "managed_thread_timeline.v3"
@@ -219,6 +223,129 @@ def _progress_label_text(value: Any) -> str:
     if text is None:
         return ""
     return " ".join(text.replace("_", " ").replace(".", " ").split())
+
+
+def _is_internal_run_notice(event: dict[str, Any], progress_item: Any = None) -> bool:
+    progress = progress_item if isinstance(progress_item, dict) else {}
+    return any(
+        is_internal_run_notice_kind(candidate)
+        for candidate in (
+            event.get("kind"),
+            event.get("title"),
+            event.get("event_type"),
+            event.get("progress_kind"),
+            progress.get("kind"),
+            progress.get("title"),
+            progress.get("progress_kind"),
+        )
+    )
+
+
+def _context_compaction_preview(summary: Optional[str], fallback: str) -> str:
+    text = _normalize_optional_text(summary)
+    if text is None:
+        return fallback
+    first_line = next(
+        (line.strip() for line in text.splitlines() if line.strip()), text
+    )
+    return _truncate_text(first_line, 240)
+
+
+def _context_compaction_payload(
+    *,
+    source: str,
+    provider: Optional[str],
+    summary: Optional[str],
+    preview: Optional[str],
+    scope: str,
+    started_fresh_session: bool,
+    stored_by_car: bool,
+    raw_event: Optional[dict[str, Any]] = None,
+) -> dict[str, Any]:
+    normalized_summary = _normalize_optional_text(summary)
+    normalized_preview = _normalize_optional_text(
+        preview
+    ) or _context_compaction_preview(
+        normalized_summary,
+        "No retained summary was exposed.",
+    )
+    return {
+        "source": source,
+        "provider": _normalize_optional_text(provider),
+        "summary": normalized_summary,
+        "preview": normalized_preview,
+        "scope": scope,
+        "started_fresh_session": started_fresh_session,
+        "stored_by_car": stored_by_car,
+        "raw_event": raw_event,
+    }
+
+
+def _provider_compaction_payload_from_notice(
+    event: dict[str, Any],
+) -> Optional[dict[str, Any]]:
+    run_notice = event.get("run_notice")
+    notice = run_notice if isinstance(run_notice, dict) else {}
+    data = event.get("data")
+    event_data = data if isinstance(data, dict) else {}
+    notice_data = notice.get("data")
+    if isinstance(notice_data, dict):
+        event_data = {**notice_data, **event_data}
+    progress_item = event.get("progress_item")
+    progress = progress_item if isinstance(progress_item, dict) else {}
+    if not any(
+        is_context_compaction_notice_kind(candidate)
+        for candidate in (
+            event.get("kind"),
+            event.get("title"),
+            event.get("event_type"),
+            event.get("progress_kind"),
+            notice.get("kind"),
+            progress.get("kind"),
+            progress.get("title"),
+            event_data.get("kind"),
+            event_data.get("event_type"),
+        )
+    ):
+        return None
+    summary = (
+        _normalize_optional_text(event_data.get("summary"))
+        or _normalize_optional_text(event_data.get("retained_context"))
+        or _normalize_optional_text(event_data.get("compact_seed"))
+        or _normalize_optional_text(progress.get("summary"))
+        or _normalize_optional_text(event.get("summary"))
+    )
+    message = _normalize_optional_text(
+        event.get("message")
+    ) or _normalize_optional_text(notice.get("message"))
+    if (
+        summary is None
+        and message
+        and message.lower()
+        not in {
+            "context compaction",
+            "provider context compaction",
+            "runtime context compaction",
+        }
+    ):
+        summary = message
+    provider = (
+        _normalize_optional_text(event_data.get("provider"))
+        or _normalize_optional_text(event_data.get("provider_id"))
+        or _normalize_optional_text(event_data.get("runtime"))
+        or _normalize_optional_text(event_data.get("agent"))
+        or _normalize_optional_text(progress.get("provider"))
+    )
+    return _context_compaction_payload(
+        source="provider",
+        provider=provider,
+        summary=summary,
+        preview=_normalize_optional_text(event_data.get("preview")),
+        scope="provider_session",
+        started_fresh_session=False,
+        stored_by_car=summary is not None,
+        raw_event=event,
+    )
 
 
 def _progress_display_title(
@@ -765,6 +892,34 @@ def _append_timeline_event_items(
             continue
 
         if event_type == "run_notice":
+            provider_compaction = _provider_compaction_payload_from_notice(event)
+            if provider_compaction is not None:
+                item_id = f"turn:{managed_turn_id}:context_compaction:{event_stable_id}"
+                items.append(
+                    ManagedThreadTimelineItem(
+                        item_id=item_id,
+                        kind="lifecycle",
+                        order_key=_order_key(timestamp, sequence, item_id),
+                        timestamp=timestamp,
+                        managed_thread_id=managed_thread_id,
+                        managed_turn_id=managed_turn_id,
+                        status=str(entry.get("status") or "recorded"),
+                        identity=_timeline_identity(item_id),
+                        provenance=_timeline_provenance(source_event_ids=[event_index]),
+                        payload={
+                            "lifecycle_kind": "context_compaction",
+                            "title": "Runtime compacted context",
+                            "text": "The provider summarized or pruned its internal session context.",
+                            "context_compaction": provider_compaction,
+                            "source_event_ids": [event_index],
+                            "source_event_type": event_type,
+                        },
+                    )
+                )
+                sequence += 1
+                continue
+            if _is_internal_run_notice(event, progress_item):
+                continue
             if _merge_streamed_intermediate_timeline_item(
                 items,
                 progress_item=progress_item,
@@ -1013,6 +1168,33 @@ def timeline_item_from_tail_event(
     if (
         event_type in {"progress", "assistant_update"} and progress_kind != "approval"
     ) or progress_kind in {"assistant_update", "notice"}:
+        provider_compaction = _provider_compaction_payload_from_notice(tail_event)
+        if provider_compaction is not None:
+            item_id = f"turn:{normalized_turn_id}:context_compaction:{source_event_key}"
+            item = {
+                **base,
+                "item_id": item_id,
+                "kind": "lifecycle",
+                "payload": {
+                    "lifecycle_kind": "context_compaction",
+                    "title": "Runtime compacted context",
+                    "text": "The provider summarized or pruned its internal session context.",
+                    "context_compaction": provider_compaction,
+                    "source_event_ids": source_event_ids,
+                    "source_event_type": event_type,
+                    "live_tail_event": dict(tail_event),
+                },
+            }
+            return _with_contract_metadata(
+                item,
+                progress_item_ids=_progress_item_ids_from_items(progress_items),
+                source_event_ids=source_event_ids,
+                progress_event_ids=_progress_event_ids_from_items(progress_items)
+                or list(source_event_ids),
+                cursor_event_id=event_id or None,
+            )
+        if _is_internal_run_notice(tail_event, progress):
+            return None
         item_id = f"turn:{normalized_turn_id}:intermediate:" f"{source_event_key}"
         text = str(tail_event.get("summary") or "")
         title = _progress_display_title(
@@ -1291,6 +1473,10 @@ def _append_compact_lifecycle_item(
     payload = _decode_action_payload(action)
     timestamp = _normalize_optional_text(action.get("created_at"))
     item_id = f"action:{action_id}:compact"
+    summary = _normalize_optional_text(
+        payload.get("summary")
+    ) or _normalize_optional_text(payload.get("compact_seed"))
+    preview = _normalize_optional_text(payload.get("summary_preview"))
     items.append(
         ManagedThreadTimelineItem(
             item_id=item_id,
@@ -1304,9 +1490,18 @@ def _append_compact_lifecycle_item(
             provenance=_timeline_provenance(),
             payload={
                 **payload,
-                "lifecycle_kind": "chat_compacted",
-                "title": "Chat compacted",
-                "text": "Chat compacted. The next message starts a fresh backend session with the compacted context.",
+                "lifecycle_kind": "context_compaction",
+                "title": "Context compacted by CAR",
+                "text": "Earlier conversation was summarized and will be injected into the next turn.",
+                "context_compaction": _context_compaction_payload(
+                    source="car",
+                    provider=_normalize_optional_text(payload.get("provider")),
+                    summary=summary,
+                    preview=preview,
+                    scope="managed_thread",
+                    started_fresh_session=bool(payload.get("reset_backend") is True),
+                    stored_by_car=True,
+                ),
                 "action_id": action_id,
                 "action_type": action_type,
             },
