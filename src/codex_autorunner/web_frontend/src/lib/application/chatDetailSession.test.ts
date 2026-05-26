@@ -5,6 +5,7 @@ import type { ChatListEntry } from '$lib/viewModels/pmaChat';
 import {
   activateChatDetailFromUrl,
   activateRequestedChatFromRows,
+  chatSummaryForSessionId,
   clearCommittedDraftPlaceholderIfPersisted,
   commitLocalDraftChat,
   initialChatDetailSessionState,
@@ -112,6 +113,30 @@ describe('chat detail session', () => {
       'managed-thread-1'
     );
     expect(clearCommittedDraftPlaceholderIfPersisted(committed, [chat({ id: 'managed-thread-1' })]).committedDraftChat).toBeNull();
+  });
+
+  it('resolves a committed draft placeholder even when the active chat window is stale', () => {
+    const draft = chat({
+      id: 'draft:pma:1',
+      title: 'New chat',
+      lifecycleStatus: 'draft',
+      raw: { draft: true }
+    });
+    const committed = commitLocalDraftChat(
+      startLocalDraftChat(initialChatDetailSessionState(), draft),
+      draft,
+      'managed-thread-1',
+      now
+    );
+
+    expect(chatSummaryForSessionId('managed-thread-1', [], null, committed.committedDraftChat)).toMatchObject({
+      id: 'managed-thread-1',
+      title: 'New chat',
+      raw: {
+        draft_committed_placeholder: true,
+        managed_thread_id: 'managed-thread-1'
+      }
+    });
   });
 
   it('keeps a committed draft selected while the detail URL is still catching up', () => {

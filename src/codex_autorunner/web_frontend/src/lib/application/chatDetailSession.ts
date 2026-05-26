@@ -81,11 +81,15 @@ export function isLocalDraftChatId(chatId: string | null): boolean {
 export function chatSummaryForSessionId(
   chatId: string | null,
   chats: PmaChatSummary[],
-  localDraftChat: PmaChatSummary | null
+  localDraftChat: PmaChatSummary | null,
+  committedDraftChat: PmaChatSummary | null = null
 ): PmaChatSummary | null {
   if (!chatId) return null;
   if (localDraftChat?.id === chatId) return localDraftChat;
-  return chats.find((chat) => chat.id === chatId) ?? null;
+  return (
+    chats.find((chat) => chat.id === chatId) ??
+    (committedDraftChat?.id === chatId ? committedDraftChat : null)
+  );
 }
 
 export function requestedChatDetailFromUrl(
