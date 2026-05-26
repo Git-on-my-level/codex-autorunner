@@ -57,6 +57,7 @@ class ChatReadModelService:
     """Thin read-model façade over ChatSurfaceReadService."""
 
     def __init__(self, hub_root):
+        self._hub_root = hub_root
         self._surface = ChatSurfaceReadService(hub_root, durable=True)
 
     def chat_index_contract(
@@ -182,6 +183,28 @@ class ChatReadModelService:
             if isinstance(raw, dict)
         ]
         return {"cursor": batch.get("cursor"), "events": events}
+
+    def runtime_chain(
+        self,
+        *,
+        chat_id: Optional[str] = None,
+        managed_thread_id: Optional[str] = None,
+        execution_id: Optional[str] = None,
+        automation_job_id: Optional[str] = None,
+        automation_child_edge_id: Optional[str] = None,
+    ) -> dict[str, Any]:
+        from codex_autorunner.core.orchestration.runtime_chain_diagnostics import (
+            build_runtime_chain_diagnostic,
+        )
+
+        return build_runtime_chain_diagnostic(
+            self._hub_root,
+            chat_id=chat_id,
+            managed_thread_id=managed_thread_id,
+            execution_id=execution_id,
+            automation_job_id=automation_job_id,
+            automation_child_edge_id=automation_child_edge_id,
+        ).to_dict()
 
     def _chat_index_patch_event_from_hub(
         self, raw: Mapping[str, Any]

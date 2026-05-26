@@ -15,6 +15,10 @@ from .execution_history import timeline_hot_family_for_event_type
 from .execution_history_maintenance import (
     ExecutionHistoryMaintenancePolicy,
 )
+from .runtime_chain_diagnostics import (
+    RuntimeChainReport,
+    collect_runtime_chain_invariant_diagnostics,
+)
 from .sqlite import open_orchestration_sqlite
 
 logger = logging.getLogger("codex_autorunner.execution_history_diagnostics")
@@ -126,6 +130,7 @@ class ExecutionHistoryDiagnosticReport:
     top_n: ExecutionHistoryTopN
     threshold_breaches: tuple[ExecutionHistoryThresholdBreach, ...]
     canonical_turns: tuple[CanonicalTurnStateDiagnostic, ...]
+    runtime_chains: tuple[RuntimeChainReport, ...]
     startup_recovery_duration_seconds: Optional[float]
     generated_at: str
 
@@ -663,6 +668,7 @@ def run_execution_history_diagnostics(
     breaches = check_thresholds(metrics, thresholds=t)
     gap_detections = detect_completion_gap_repeated_attempts(hub_root, thresholds=t)
     canonical_turns = collect_canonical_turn_state_diagnostics(hub_root)
+    runtime_chains = collect_runtime_chain_invariant_diagnostics(hub_root)
 
     gap_breaches = [
         ExecutionHistoryThresholdBreach(
@@ -681,6 +687,28 @@ def run_execution_history_diagnostics(
             context=gap.context,
         )
         for gap in gap_detections
+    ]
+    runtime_chain_breaches = [
+        ExecutionHistoryThresholdBreach(
+            level=(
+                "error"
+                if any(finding.severity == "error" for finding in chain.findings)
+                else "warning"
+            ),
+            metric="runtime_chain_invariant",
+            value=len(chain.findings),
+            threshold=0,
+            message=(
+                "Runtime-chain invariant findings for "
+                f"{chain.row_identity.get('execution_id') or chain.row_identity.get('chat_id')}"
+            ),
+            context={
+                "lookup": chain.lookup,
+                "row_identity": chain.row_identity,
+                "codes": [finding.code for finding in chain.findings],
+            },
+        )
+        for chain in runtime_chains
     ]
 
     elapsed = time.monotonic() - start
@@ -707,7 +735,7 @@ def run_execution_history_diagnostics(
             )
         )
 
-    all_breaches = tuple(breaches) + tuple(gap_breaches)
+    all_breaches = tuple(breaches) + tuple(gap_breaches) + tuple(runtime_chain_breaches)
 
     _emit_diagnostic_log(metrics, all_breaches, gap_detections, elapsed)
 
@@ -716,6 +744,7 @@ def run_execution_history_diagnostics(
         top_n=top_n,
         threshold_breaches=all_breaches,
         canonical_turns=canonical_turns,
+        runtime_chains=runtime_chains,
         startup_recovery_duration_seconds=startup_duration,
         generated_at=now_iso(),
     )

@@ -27,9 +27,19 @@ from codex_autorunner.core.orchestration.execution_history_diagnostics import (
     log_vacuum,
     run_execution_history_diagnostics,
 )
+from codex_autorunner.core.orchestration.runtime_chain_diagnostics import (
+    RUNTIME_CHAIN_DRIFT,
+    RUNTIME_CHAIN_PROJECTED_UNKNOWN,
+    build_runtime_chain_diagnostic,
+)
 from codex_autorunner.core.orchestration.sqlite import (
     initialize_orchestration_sqlite,
     open_orchestration_sqlite,
+)
+from codex_autorunner.core.runtime_identity import (
+    RUNTIME_STAGE_LAUNCH,
+    RuntimeIdentityEnvelope,
+    RuntimeIdentityStage,
 )
 
 
@@ -997,6 +1007,171 @@ def test_run_diagnostics_full_report(tmp_path: Path) -> None:
     assert isinstance(report.top_n, ExecutionHistoryTopN)
     assert isinstance(report.threshold_breaches, tuple)
     assert report.generated_at
+
+
+def test_runtime_chain_diagnostic_reports_automation_edge_drift(
+    tmp_path: Path,
+) -> None:
+    hub_root = tmp_path / "hub"
+    initialize_orchestration_sqlite(hub_root, durable=False)
+    with open_orchestration_sqlite(hub_root, durable=False) as conn:
+        conn.execute(
+            """
+            INSERT INTO orch_automation_rules (
+                rule_id, name, trigger_kind, target_policy, executor_kind,
+                created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "rule-runtime",
+                "Runtime rule",
+                "manual",
+                "default",
+                "agent_task_turn",
+                "2026-05-11T00:00:00Z",
+                "2026-05-11T00:00:00Z",
+            ),
+        )
+        conn.execute(
+            """
+            INSERT INTO orch_automation_events (
+                event_id, event_type, observed_at
+            ) VALUES (?, ?, ?)
+            """,
+            (
+                "event-runtime",
+                "manual.run",
+                "2026-05-11T00:00:00Z",
+            ),
+        )
+        conn.execute(
+            """
+            INSERT INTO orch_automation_jobs (
+                job_id, rule_id, event_id, state, dedupe_key, available_at,
+                updated_at, created_at, target_json, executor_json, policy_json,
+                payload_json
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "job-runtime",
+                "rule-runtime",
+                "event-runtime",
+                "running",
+                "dedupe-runtime",
+                "2026-05-11T00:00:00Z",
+                "2026-05-11T00:00:00Z",
+                "2026-05-11T00:00:00Z",
+                "{}",
+                json.dumps(
+                    {
+                        "kind": "agent_task_turn",
+                        "requested_runtime": {
+                            "agent": "opencode",
+                            "model": "zai-coding-plan/glm-5.1",
+                        },
+                    }
+                ),
+                "{}",
+                "{}",
+            ),
+        )
+        conn.execute(
+            """
+            INSERT INTO orch_automation_child_execution_edges (
+                edge_id, parent_job_id, child_kind, child_id,
+                requested_runtime_json, actual_runtime_json,
+                terminal_mapping_json, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "edge-runtime",
+                "job-runtime",
+                "agent_task",
+                "turn-runtime",
+                json.dumps({"agent": "opencode", "model": "zai-coding-plan/glm-5.1"}),
+                json.dumps({"agent": "opencode", "model": "glm-5v-turbo"}),
+                "{}",
+                "2026-05-11T00:00:00Z",
+                "2026-05-11T00:00:00Z",
+            ),
+        )
+
+    report = build_runtime_chain_diagnostic(
+        hub_root,
+        automation_child_edge_id="edge-runtime",
+        durable=False,
+    )
+
+    assert report.row_identity["automation_job_id"] == "job-runtime"
+    assert report.stages["requested"]["canonical_model_label"] == (
+        "zai-coding-plan/glm-5.1"
+    )
+    assert report.stages["effective"]["canonical_model_label"] == "glm-5v-turbo"
+    assert RUNTIME_CHAIN_DRIFT in {finding.code for finding in report.findings}
+
+
+def test_execution_history_diagnostics_include_runtime_chain_invariants(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    hub_root = tmp_path / "hub"
+    initialize_orchestration_sqlite(hub_root, durable=False)
+    runtime_identity = RuntimeIdentityEnvelope(
+        launch=RuntimeIdentityStage(
+            stage=RUNTIME_STAGE_LAUNCH,
+            logical_agent="opencode",
+            canonical_model_label="zai-coding-plan/glm-5.1",
+            source="managed_thread_launch",
+        )
+    )
+    with open_orchestration_sqlite(hub_root, durable=False) as conn:
+        conn.execute(
+            """
+            INSERT INTO orch_thread_targets (
+                thread_target_id, agent_id, display_name, lifecycle_status,
+                runtime_status, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "missing-thread",
+                "opencode",
+                "Missing projection",
+                "active",
+                "running",
+                "2026-05-11T00:00:00Z",
+                "2026-05-11T00:00:00Z",
+            ),
+        )
+        conn.execute(
+            """
+            INSERT INTO orch_thread_executions (
+                execution_id, thread_target_id, request_kind, status,
+                runtime_identity_json, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "turn-without-projection",
+                "missing-thread",
+                "message",
+                "running",
+                runtime_identity.to_json(),
+                "2026-05-11T00:00:00Z",
+            ),
+        )
+    monkeypatch.setattr(
+        "codex_autorunner.core.orchestration.runtime_chain_diagnostics._projected_chat_row",
+        lambda *args, **kwargs: None,
+    )
+
+    report = run_execution_history_diagnostics(hub_root)
+
+    assert report.runtime_chains
+    assert RUNTIME_CHAIN_PROJECTED_UNKNOWN in {
+        finding.code for chain in report.runtime_chains for finding in chain.findings
+    }
+    assert any(
+        breach.metric == "runtime_chain_invariant"
+        for breach in report.threshold_breaches
+    )
 
 
 def test_run_diagnostics_with_custom_thresholds(tmp_path: Path) -> None:
