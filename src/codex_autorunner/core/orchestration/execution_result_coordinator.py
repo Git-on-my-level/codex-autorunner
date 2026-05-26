@@ -218,7 +218,6 @@ class ExecutionResultCoordinator:
             "error": error,
             "backend_turn_id": backend_turn_id,
             "transcript_turn_id": transcript_turn_id,
-            "effective_runtime": effective_runtime,
         }
         if effective_runtime is not None:
             finish_kwargs["effective_runtime"] = effective_runtime

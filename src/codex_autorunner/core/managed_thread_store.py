@@ -95,6 +95,8 @@ from .ports.thread_store import ThreadRecord, ThreadStatus
 from .runtime_identity import (
     RUNTIME_STAGE_EFFECTIVE,
     RUNTIME_STAGE_LAUNCH,
+    RUNTIME_STAGE_PROJECTED,
+    RUNTIME_STAGE_REQUESTED,
     RUNTIME_STAGE_RESOLVED,
     RuntimeIdentityEnvelope,
     RuntimeIdentityStage,
@@ -237,14 +239,19 @@ def _runtime_identity_with_stage(
     envelope: RuntimeIdentityEnvelope,
     stage: RuntimeIdentityStage,
 ) -> RuntimeIdentityEnvelope:
+    stage_name = stage.stage
     return RuntimeIdentityEnvelope(
-        requested=envelope.requested,
-        resolved=envelope.resolved,
-        launch=stage if stage.stage == RUNTIME_STAGE_LAUNCH else envelope.launch,
-        effective=(
-            stage if stage.stage == RUNTIME_STAGE_EFFECTIVE else envelope.effective
+        requested=(
+            stage if stage_name == RUNTIME_STAGE_REQUESTED else envelope.requested
         ),
-        projected=envelope.projected,
+        resolved=(stage if stage_name == RUNTIME_STAGE_RESOLVED else envelope.resolved),
+        launch=stage if stage_name == RUNTIME_STAGE_LAUNCH else envelope.launch,
+        effective=(
+            stage if stage_name == RUNTIME_STAGE_EFFECTIVE else envelope.effective
+        ),
+        projected=(
+            stage if stage_name == RUNTIME_STAGE_PROJECTED else envelope.projected
+        ),
         metadata=envelope.metadata,
     )
 
