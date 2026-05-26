@@ -343,7 +343,7 @@ def _provider_compaction_payload_from_notice(
         preview=_normalize_optional_text(event_data.get("preview")),
         scope="provider_session",
         started_fresh_session=False,
-        stored_by_car=summary is not None,
+        stored_by_car=False,
         raw_event=event,
     )
 

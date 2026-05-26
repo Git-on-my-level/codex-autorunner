@@ -612,7 +612,7 @@ class HubSharedStateService:
                     "summary_length": len(request.compact_seed),
                     "summary": request.compact_seed,
                     "summary_preview": request.compact_seed[:240],
-                    "reset_backend": True,
+                    "reset_backend": False,
                 },
                 ensure_ascii=True,
             ),
