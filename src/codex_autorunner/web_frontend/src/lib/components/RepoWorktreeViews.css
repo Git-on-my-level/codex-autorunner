@@ -1,0 +1,1377 @@
+.repos-index-v2 {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3);
+    min-height: 0;
+    height: 100%;
+  }
+
+  .repos-controls {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+    padding: 0 2px;
+  }
+
+  .repos-controls-row {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    width: 100%;
+  }
+
+  .repos-search {
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+
+  .row-action-button {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex: 0 0 auto;
+    min-height: 28px;
+    padding: 4px 10px;
+    border: 1px solid var(--color-border);
+    border-radius: 6px;
+    background: var(--color-surface);
+    color: var(--color-ink-soft);
+    font-family: inherit;
+    font-size: var(--font-size-0);
+    font-weight: 600;
+    cursor: pointer;
+    text-decoration: none;
+    transition: border-color var(--transition-fast), background-color var(--transition-fast), color var(--transition-fast);
+  }
+  .row-action-button:hover {
+    border-color: color-mix(in srgb, var(--color-accent) 38%, var(--color-border));
+    background: var(--color-accent-soft);
+    color: var(--color-accent);
+  }
+
+  /* Quiet secondary action buttons so identity reads first.
+     Default row-action-button stays ghost; non-primary affordances get
+     a softer border and muted ink at rest. */
+  .row-action-button:not(.is-primary-affordance) {
+    border-color: var(--color-border-subtle);
+    color: var(--color-ink-muted);
+    font-weight: 550;
+  }
+
+  /* Primary affordance: "+ PMA" reads as the strongest of the row.
+     Still ghost-shaped — accent-tinted border and ink-strong text at rest. */
+  .row-action-button.is-primary-affordance {
+    border-color: color-mix(in srgb, var(--color-accent) 22%, var(--color-border-subtle));
+    color: var(--color-ink);
+  }
+  .row-action-button.is-primary-affordance:hover {
+    border-color: color-mix(in srgb, var(--color-accent) 50%, var(--color-border));
+  }
+
+  /* Zero-count filter chips: keep the dimension visible but mute the number. */
+  .filter-row .chip.filter-chip-zero:not(.active) span {
+    color: var(--color-ink-faint);
+  }
+
+  /* Branch glyph in meta rows — decorative, ink-faint, mono nudge. */
+  .branch-glyph {
+    color: var(--color-ink-faint);
+    font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 11px;
+    line-height: 1;
+  }
+
+  .repos-empty {
+    border-radius: 12px;
+    padding: var(--space-5);
+  }
+
+  .repos-list {
+    --virtual-list-gap: var(--space-3);
+    flex: 1 1 auto;
+    min-height: 0;
+    height: auto;
+    margin: 0;
+    padding: 0;
+  }
+
+  .repo-item {
+    --repo-accent: var(--color-accent);
+    position: relative;
+    border: 1px solid var(--color-border-subtle);
+    border-radius: 12px;
+    background: var(--color-surface);
+    box-shadow: 0 1px 0 rgb(15 15 20 / 0.02);
+    overflow: hidden;
+    transition: border-color var(--transition-base), box-shadow var(--transition-base), transform var(--transition-base);
+  }
+
+  .repo-item:hover {
+    border-color: var(--color-border-strong);
+    box-shadow: 0 8px 24px -16px rgb(15 15 20 / 0.18), 0 2px 6px -3px rgb(15 15 20 / 0.06);
+  }
+
+  .repo-head {
+    position: relative;
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    padding-right: var(--space-5);
+    transition: background-color var(--transition-fast);
+  }
+
+  .repo-head:hover {
+    background: var(--color-surface-muted);
+  }
+
+  .repo-collapse-toggle {
+    display: inline-grid;
+    place-items: center;
+    flex: 0 0 auto;
+    width: 24px;
+    height: 24px;
+    margin-left: var(--space-3);
+    border: none;
+    border-radius: 6px;
+    background: transparent;
+    color: var(--color-ink-muted);
+    cursor: pointer;
+    transition: background-color var(--transition-fast), color var(--transition-fast);
+  }
+  .repo-collapse-toggle:hover {
+    background: var(--color-surface-muted);
+    color: var(--color-ink);
+  }
+  .repo-collapse-toggle.is-placeholder {
+    pointer-events: none;
+    cursor: default;
+  }
+  .repo-collapse-toggle.is-placeholder:hover {
+    background: transparent;
+  }
+  .repo-collapse-toggle:focus-visible {
+    outline: 2px solid color-mix(in srgb, var(--color-accent) 55%, transparent);
+    outline-offset: 2px;
+  }
+  .repo-collapse-toggle .chevron-svg {
+    width: 14px;
+    height: 14px;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 2;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+    transition: transform var(--transition-base);
+  }
+  .repo-item.is-collapsed .repo-collapse-toggle .chevron-svg {
+    transform: rotate(-90deg);
+  }
+
+  .collapse-all-button {
+    margin-left: auto;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    min-height: 28px;
+    padding: 0 var(--space-2);
+  }
+  .collapse-all-button svg {
+    width: 12px;
+    height: 12px;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 2;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+  }
+
+  .count-chip.is-in-use {
+    background: color-mix(in srgb, var(--color-warning) 14%, transparent);
+    color: var(--color-warning);
+  }
+  .count-chip.is-in-use strong,
+  .count-chip.is-in-use em {
+    color: var(--color-warning);
+  }
+  .count-chip.is-in-use.idle {
+    background: var(--color-surface-muted);
+    color: var(--color-ink-muted);
+  }
+  .count-chip.is-in-use.idle strong,
+  .count-chip.is-in-use.idle em {
+    color: var(--color-ink-muted);
+  }
+
+  .repo-card {
+    position: relative;
+    flex: 1 1 auto;
+    min-width: 0;
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    align-items: center;
+    gap: var(--space-4);
+    padding: var(--space-4) var(--space-5);
+    color: var(--color-ink);
+  }
+
+  .repo-avatar-slot {
+    position: relative;
+    display: grid;
+    place-items: center;
+    width: 40px;
+    height: 40px;
+    padding: 0;
+    border: none;
+    background: transparent;
+    color: inherit;
+  }
+
+  .repo-avatar-slot.pinnable {
+    cursor: pointer;
+    border-radius: 10px;
+  }
+
+  .repo-avatar-slot.pinnable:focus-visible {
+    outline: 2px solid color-mix(in srgb, var(--color-accent) 55%, transparent);
+    outline-offset: 2px;
+  }
+
+  .repo-avatar-slot .repo-avatar,
+  .repo-avatar-slot .repo-pin-glyph {
+    grid-area: 1 / 1;
+    transition: opacity var(--transition-fast);
+  }
+
+  .repo-pin-glyph {
+    font-size: 20px;
+    line-height: 1;
+    transform: rotate(-18deg);
+    opacity: 0;
+    pointer-events: none;
+  }
+
+  .repo-avatar-slot:not(.pinnable) .repo-pin-glyph {
+    display: none;
+  }
+
+  .repo-head:hover .repo-avatar-slot.pinnable .repo-pin-glyph,
+  .repo-avatar-slot.pinnable.is-pinned .repo-pin-glyph {
+    opacity: 1;
+  }
+
+  .repo-head:hover .repo-avatar-slot.pinnable .repo-avatar,
+  .repo-avatar-slot.pinnable.is-pinned .repo-avatar {
+    opacity: 0;
+  }
+
+  .repo-head:hover .repo-avatar-slot.pinnable:not(.is-pinned) .repo-pin-glyph {
+    opacity: 0.55;
+    filter: grayscale(1);
+  }
+
+  .repo-card-main {
+    display: flex;
+    align-items: center;
+    min-width: 0;
+    color: inherit;
+    text-decoration: none;
+    border-radius: 8px;
+    margin: calc(var(--space-1) * -1);
+    padding: var(--space-1);
+  }
+
+  .repo-card-main:focus-visible {
+    outline: 2px solid color-mix(in srgb, var(--color-accent) 55%, transparent);
+    outline-offset: 2px;
+  }
+
+  .repo-head-actions {
+    flex: 0 0 auto;
+  }
+
+  .repo-head-icon-actions,
+  .worktree-row-icon-actions {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    margin-left: 8px;
+  }
+
+  .repo-signal-pills {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-2);
+    padding: var(--space-2) var(--space-5) var(--space-3);
+    border-top: 1px solid var(--color-border-subtle);
+    background: var(--color-surface-muted);
+  }
+
+  .repo-action-buttons {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    flex: 0 0 auto;
+  }
+
+  .icon-action {
+    display: inline-grid;
+    place-items: center;
+    width: 28px;
+    height: 28px;
+    border-radius: 6px;
+    border: 1px solid var(--color-border-subtle);
+    background: var(--color-surface);
+    color: var(--color-ink-muted);
+    cursor: pointer;
+    transition: color var(--transition-fast), border-color var(--transition-fast), background-color var(--transition-fast);
+  }
+
+  .icon-action:hover {
+    color: var(--color-ink);
+    border-color: var(--color-border-strong);
+    background: var(--color-surface-muted);
+  }
+
+  .icon-action.retire:hover {
+    color: var(--color-danger);
+    border-color: color-mix(in srgb, var(--color-danger) 40%, var(--color-border));
+  }
+
+  .icon-action svg {
+    width: 16px;
+    height: 16px;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 1.8;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+  }
+
+  .repo-signal-pills {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+
+  /* Read-only badge: soft fill, no border, no cursor change. The matching
+     soft-colored background carries the state; the border would make this
+     look clickable when it isn't. */
+  .signal-pill {
+    display: inline-flex;
+    align-items: center;
+    padding: 2px 8px;
+    border-radius: 999px;
+    font-size: 11px;
+    font-weight: 600;
+    background: var(--color-surface-muted);
+  }
+
+  .signal-pill.waiting {
+    color: var(--color-warning);
+    background: color-mix(in srgb, var(--color-warning) 14%, transparent);
+  }
+
+  .signal-pill.failed {
+    color: var(--color-danger);
+    background: color-mix(in srgb, var(--color-danger) 12%, transparent);
+  }
+
+  .signal-pill.active {
+    color: var(--color-success);
+    background: var(--color-success-soft);
+  }
+
+  .repo-avatar {
+    display: grid;
+    place-items: center;
+    flex: 0 0 auto;
+    width: 40px;
+    height: 40px;
+    border-radius: 10px;
+    background: color-mix(in srgb, var(--repo-accent) 12%, white);
+    color: var(--repo-accent);
+    font-weight: 650;
+    font-size: 13px;
+    letter-spacing: -0.01em;
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--repo-accent) 18%, transparent);
+  }
+
+  .repo-card-body {
+    min-width: 0;
+    display: grid;
+    gap: 4px;
+  }
+
+  .repo-card-title {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    min-width: 0;
+  }
+
+  .repo-name {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--color-ink);
+    font-size: var(--font-size-2);
+    font-weight: 600;
+    letter-spacing: -0.01em;
+  }
+
+  .repo-card-meta,
+  .worktree-card-meta {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 6px;
+    color: var(--color-ink-muted);
+    font-size: var(--font-size-0);
+    line-height: 1.4;
+    min-width: 0;
+  }
+
+  .repo-meta-kind {
+    display: inline-flex;
+    align-items: center;
+    height: 18px;
+    padding: 0 6px;
+    border-radius: 4px;
+    background: var(--color-surface-muted);
+    color: var(--color-ink-muted);
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+  }
+
+  .repo-meta-dot {
+    color: var(--color-ink-faint);
+    opacity: 0.7;
+  }
+
+  .repo-meta-branch {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 11px;
+    color: var(--color-ink-soft);
+  }
+
+  .repo-meta-time {
+    color: var(--color-ink-faint);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .chat-binding-pill {
+    display: inline-flex;
+    align-items: center;
+    min-height: 18px;
+    padding: 0 6px;
+    border-radius: 4px;
+    background: var(--color-accent-soft);
+    color: var(--color-accent);
+    font-size: 10px;
+    font-weight: 650;
+    line-height: 1;
+    text-transform: uppercase;
+  }
+
+  .chat-binding-meta {
+    min-width: 0;
+    max-width: 34ch;
+    overflow: hidden;
+    color: var(--color-ink-soft);
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .repo-card-counts,
+  .worktree-card-counts {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+
+  .repo-card-counts {
+    grid-column: 3;
+    justify-self: end;
+  }
+
+  .count-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    min-height: 24px;
+    padding: 2px 10px;
+    border-radius: 999px;
+    background: var(--color-surface-muted);
+    color: var(--color-ink-muted);
+    font-size: 11px;
+    font-weight: 500;
+    line-height: 1.2;
+    white-space: nowrap;
+    transition: background-color var(--transition-fast), color var(--transition-fast);
+  }
+
+  .count-chip strong {
+    color: var(--color-ink);
+    font-weight: 650;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .count-chip em {
+    font-style: normal;
+    color: var(--color-ink-muted);
+  }
+
+  .count-chip.is-active {
+    background: var(--color-success-soft);
+    color: var(--color-success);
+  }
+
+  .count-chip.is-active strong,
+  .count-chip.is-active em {
+    color: var(--color-success);
+  }
+
+  .count-chip.is-tickets {
+    background: var(--color-accent-soft);
+    color: var(--color-accent);
+  }
+
+  .count-chip.is-tickets strong,
+  .count-chip.is-tickets em {
+    color: var(--color-accent);
+  }
+
+  .count-chip-navigable {
+    text-decoration: none;
+    border: 1px solid color-mix(in srgb, var(--color-accent) 28%, transparent);
+  }
+
+  .count-chip-navigable:hover {
+    border-color: var(--color-accent);
+    background: color-mix(in srgb, var(--color-accent) 18%, transparent);
+  }
+
+  .count-chip-progress {
+    margin-left: 4px;
+    padding-left: 6px;
+    border-left: 1px solid color-mix(in srgb, currentColor 35%, transparent);
+    font-variant-numeric: tabular-nums;
+    opacity: 0.85;
+    font-size: 10px;
+  }
+
+  .ticket-progress {
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    height: 2px;
+    background: color-mix(in srgb, var(--color-accent) 14%, transparent);
+    overflow: hidden;
+    pointer-events: none;
+  }
+
+  .ticket-progress::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    width: var(--progress, 0%);
+    background: var(--color-accent);
+    transition: width var(--transition-base);
+  }
+
+  /* Match horizontal extent of nested `.worktree-list` rows: list uses the same
+   * horizontal padding; `repo-head` already has matching `padding-right`. */
+  .ticket-progress--repo-head {
+    left: var(--space-5);
+    right: 0;
+    z-index: 1;
+  }
+
+  .ticket-progress--worktree {
+    height: 2px;
+    background: color-mix(in srgb, var(--color-accent) 14%, transparent);
+  }
+
+  /* Repo/worktree detail — active run: same done/total width as index `.ticket-progress`,
+   * thicker rail + success fill (index keeps accent/teal). */
+  .ticket-progress--detail-run {
+    position: relative;
+    left: auto;
+    right: auto;
+    bottom: auto;
+    width: 100%;
+    height: var(--space-2);
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--color-success) 16%, transparent);
+    pointer-events: none;
+  }
+
+  .ticket-progress--detail-run::after {
+    background: var(--color-success);
+  }
+
+  .repo-status {
+    text-transform: lowercase;
+  }
+
+  /* Worktree children — Linear-style nested list with rail */
+  .worktree-list {
+    --virtual-list-gap: 0;
+    margin: 0;
+    padding: 0 var(--space-5) var(--space-3);
+    background: linear-gradient(180deg, transparent, var(--color-surface-sunken) 8%);
+    border-top: 1px solid var(--color-border-subtle);
+  }
+
+  .repo-item.has-children .repo-card {
+    padding-bottom: var(--space-3);
+  }
+
+  .worktree-item + .worktree-item {
+    border-top: 1px solid var(--color-border-subtle);
+  }
+
+  .worktree-card {
+    position: relative;
+    display: grid;
+    grid-template-columns: 28px minmax(0, 1fr) auto auto;
+    align-items: center;
+    gap: var(--space-3);
+    padding: var(--space-2) var(--space-5) var(--space-2) 8px;
+    color: var(--color-ink);
+    text-decoration: none;
+    border-radius: 6px;
+    transition: background-color var(--transition-fast);
+  }
+
+  .worktree-card > .repo-action-buttons {
+    grid-column: 4;
+    justify-self: end;
+  }
+
+  .worktree-card:hover {
+    background: var(--color-surface-muted);
+  }
+
+  .worktree-rail {
+    position: absolute;
+    left: 19px;
+    top: -1px;
+    bottom: 50%;
+    width: 1px;
+    background: var(--color-border-strong);
+  }
+
+  .worktree-item:last-child .worktree-rail {
+    bottom: 50%;
+  }
+
+  .worktree-card::before {
+    content: "";
+    position: absolute;
+    left: 19px;
+    top: 50%;
+    width: 12px;
+    height: 1px;
+    background: var(--color-border-strong);
+  }
+
+  .worktree-dot {
+    grid-column: 1;
+    justify-self: end;
+    width: 6px;
+    height: 6px;
+    margin-right: 2px;
+    border-radius: 999px;
+    background: var(--color-ink-faint);
+    box-shadow: 0 0 0 3px var(--color-surface);
+    z-index: 1;
+  }
+
+  .worktree-item.status-running .worktree-dot { background: var(--color-success); }
+  .worktree-item.status-waiting .worktree-dot,
+  .worktree-item.status-blocked .worktree-dot { background: var(--color-warning); }
+  .worktree-item.status-failed .worktree-dot { background: var(--color-danger); }
+
+  .worktree-card-body {
+    min-width: 0;
+    display: grid;
+    gap: 2px;
+  }
+
+  .worktree-card-title {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    min-width: 0;
+  }
+
+  .worktree-name {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--color-ink);
+    font-size: var(--font-size-1);
+    font-weight: 550;
+    text-decoration: none;
+  }
+
+  .worktree-name:hover {
+    color: var(--color-accent);
+  }
+
+  .worktree-run-title {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    max-width: 32ch;
+  }
+
+  /* Status accent strip removed in favor of the bottom progress bar. */
+
+  @media (max-width: 760px) {
+    .repos-controls {
+      flex-direction: column;
+      align-items: stretch;
+      gap: var(--space-2);
+      padding: 0;
+    }
+    .repo-card {
+      grid-template-columns: auto minmax(0, 1fr);
+      grid-template-rows: auto auto;
+      row-gap: var(--space-2);
+      padding: var(--space-3) var(--space-4);
+    }
+    .repo-card-main {
+      grid-column: 1 / -1;
+      grid-row: 1;
+    }
+    .repo-card-counts {
+      grid-column: 1 / -1;
+      grid-row: 2;
+      justify-self: start;
+    }
+    .worktree-list {
+      padding: 0 var(--space-4) var(--space-3);
+    }
+
+    .repo-head {
+      padding-right: var(--space-4);
+    }
+
+    .ticket-progress--repo-head {
+      left: var(--space-4);
+      right: 0;
+    }
+    .worktree-card {
+      grid-template-columns: 24px minmax(0, 1fr);
+      grid-template-rows: auto auto;
+      row-gap: 4px;
+    }
+    .worktree-card-counts {
+      grid-column: 2;
+    }
+    .worktree-card > .repo-action-buttons {
+      grid-column: 2;
+      justify-self: end;
+    }
+  }
+
+  .panel-heading-actions {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-2);
+  }
+
+  .chat-row-list {
+    display: grid;
+    gap: var(--space-2);
+  }
+
+  .contextspace-row-list {
+    display: grid;
+    gap: var(--space-2);
+  }
+
+  .contextspace-row {
+    display: grid;
+    grid-template-columns: minmax(140px, auto) minmax(0, 1fr) auto;
+    align-items: center;
+    gap: var(--space-3);
+    padding: var(--space-3) var(--space-4);
+    border-radius: var(--radius-2);
+    border: 1px solid var(--color-border-subtle);
+    background: var(--color-surface);
+    color: inherit;
+    text-decoration: none;
+    transition: border-color var(--transition-fast), background var(--transition-fast),
+      color var(--transition-fast);
+  }
+
+  .contextspace-row:hover {
+    border-color: var(--color-accent);
+    background: var(--color-surface-muted);
+    color: var(--color-accent);
+  }
+  .contextspace-row:hover .contextspace-row-title {
+    color: var(--color-accent);
+  }
+
+  .contextspace-row-kind {
+    font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 11px;
+    color: var(--color-ink-soft);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .contextspace-row-body {
+    display: grid;
+    gap: 2px;
+    min-width: 0;
+  }
+
+  .contextspace-row-title {
+    font-weight: 600;
+    color: var(--color-text-strong, inherit);
+  }
+
+  .contextspace-row-meta {
+    font-size: 0.85rem;
+    color: var(--color-text-muted);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .workspace-ticket-row.empty-ticket-row {
+    cursor: default;
+  }
+
+  .workspace-ticket-row.empty-ticket-row:hover {
+    border-color: var(--color-border-subtle);
+    background: var(--color-surface);
+  }
+
+  .chat-row {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    align-items: center;
+    gap: var(--space-3);
+    padding: var(--space-3) var(--space-4);
+    border-radius: var(--radius-2);
+    border: 1px solid var(--color-border-subtle);
+    background: var(--color-surface);
+    text-decoration: none;
+    color: inherit;
+    transition: border-color var(--transition-fast), background var(--transition-fast);
+  }
+  .chat-row:hover {
+    border-color: var(--color-accent);
+    background: var(--color-surface-muted);
+  }
+  .chat-row-main {
+    display: grid;
+    gap: 4px;
+    min-width: 0;
+  }
+
+  .row-overflow-link {
+    display: block;
+    padding: var(--space-2) var(--space-4);
+    border-radius: var(--radius-2);
+    border: 1px dashed var(--color-border-subtle);
+    color: var(--color-ink-muted);
+    text-decoration: none;
+    font-size: var(--font-size-1);
+    text-align: center;
+    transition: color var(--transition-fast), border-color var(--transition-fast);
+  }
+  .row-overflow-link:hover {
+    color: var(--color-accent);
+    border-color: var(--color-accent);
+  }
+
+  @media (max-width: 760px) {
+    .contextspace-row {
+      grid-template-columns: minmax(0, 1fr) auto;
+    }
+    .contextspace-row-kind {
+      grid-column: 1 / -1;
+    }
+  }
+
+  /* Git status bar — sits between hero and flow strip. Chips cluster on
+     the left as read-only badges; the Sync action lives on the right as
+     a proper ghost button so it never reads as another chip. */
+  .git-status-bar {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: var(--space-3);
+    padding: 0 2px;
+  }
+
+  .git-status-chips {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 6px;
+    min-width: 0;
+    flex: 1 1 auto;
+  }
+
+  /* Badges in this row: no border, no hover, no cursor change. Soft fill
+     carries the state. */
+  .git-state-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    height: 22px;
+    padding: 0 10px;
+    border-radius: 999px;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.01em;
+  }
+
+  .git-state-pill .git-state-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 999px;
+    background: currentColor;
+  }
+
+  .git-state-pill.clean {
+    background: var(--color-success-soft);
+    color: var(--color-success);
+  }
+
+  .git-state-pill.dirty {
+    background: color-mix(in srgb, var(--color-warning) 14%, transparent);
+    color: var(--color-warning);
+  }
+
+  .git-chip {
+    display: inline-flex;
+    align-items: center;
+    height: 22px;
+    padding: 0 9px;
+    border-radius: 999px;
+    background: var(--color-surface-muted);
+    color: var(--color-ink-muted);
+    font-size: 11px;
+    font-weight: 500;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+  }
+
+  .git-chip-diff {
+    font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+
+  .git-chip-ahead {
+    color: var(--color-accent);
+    background: var(--color-accent-soft);
+  }
+
+  .git-chip-behind {
+    color: var(--color-warning);
+    background: color-mix(in srgb, var(--color-warning) 12%, transparent);
+  }
+
+  .git-chip-warn {
+    color: var(--color-ink-muted);
+    background: transparent;
+    box-shadow: inset 0 0 0 1px var(--color-border-subtle);
+  }
+
+  /* Compact contextspace list */
+  .contextspace-compact-list {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .contextspace-compact-item {
+    display: flex;
+    flex-direction: column;
+    border-radius: 6px;
+  }
+
+  .contextspace-compact-row {
+    display: grid;
+    grid-template-columns: 10px minmax(120px, auto) minmax(0, 1fr) auto;
+    align-items: center;
+    gap: var(--space-3);
+    padding: 8px 10px;
+    color: inherit;
+    text-decoration: none;
+    border-radius: 6px;
+    transition: background-color var(--transition-fast);
+  }
+
+  .contextspace-compact-row:hover {
+    background: var(--color-surface-muted);
+  }
+
+  .contextspace-compact-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 999px;
+    background: var(--color-border-strong);
+    justify-self: center;
+  }
+
+  .contextspace-compact-dot.present {
+    background: var(--color-success);
+  }
+
+  .contextspace-compact-name {
+    font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 11px;
+    color: var(--color-ink-soft);
+    white-space: nowrap;
+  }
+
+  .contextspace-compact-summary {
+    font-size: var(--font-size-0);
+    color: var(--color-ink-muted);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    min-width: 0;
+  }
+
+  .contextspace-compact-item.empty .contextspace-compact-summary {
+    color: var(--color-ink-faint);
+    font-style: italic;
+  }
+
+  .contextspace-compact-time {
+    font-size: 11px;
+    color: var(--color-ink-faint);
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+  }
+
+  .contextspace-spec-preview {
+    position: relative;
+    display: block;
+    margin: 6px 10px 10px;
+    border: 1px solid var(--color-border-subtle);
+    border-radius: 8px;
+    background: var(--color-surface-sunken);
+    text-decoration: none;
+    color: inherit;
+    overflow: hidden;
+    transition: border-color var(--transition-base);
+  }
+
+  .contextspace-spec-preview:hover {
+    border-color: var(--color-border-strong);
+  }
+
+  .contextspace-spec-preview-body {
+    padding: 14px 18px 18px;
+    max-height: 360px;
+    overflow: hidden;
+    color: var(--color-ink);
+    font-size: var(--font-size-1);
+    line-height: 1.55;
+  }
+
+  .contextspace-spec-preview-body h1,
+  .contextspace-spec-preview-body h2,
+  .contextspace-spec-preview-body h3 {
+    margin: 0 0 8px;
+    font-weight: 650;
+    letter-spacing: -0.01em;
+  }
+
+  .contextspace-spec-preview-body h1 { font-size: var(--font-size-2); }
+  .contextspace-spec-preview-body h2 { font-size: var(--font-size-1); margin-top: 14px; }
+  .contextspace-spec-preview-body h3 { font-size: var(--font-size-1); color: var(--color-ink-soft); margin-top: 10px; }
+
+  .contextspace-spec-preview-body p {
+    margin: 0 0 8px;
+    color: var(--color-ink-soft);
+  }
+
+  .contextspace-spec-preview-body ul {
+    margin: 0 0 8px;
+    padding-left: 20px;
+    color: var(--color-ink-soft);
+  }
+
+  .contextspace-spec-preview-body li {
+    margin-bottom: 2px;
+  }
+
+  .contextspace-spec-preview-body code {
+    font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 0.92em;
+    padding: 1px 5px;
+    border-radius: 4px;
+    background: var(--color-surface-muted);
+    color: var(--color-ink);
+  }
+
+  .contextspace-spec-preview-body pre {
+    margin: 0 0 8px;
+    padding: 10px 12px;
+    border-radius: 6px;
+    background: var(--color-surface-muted);
+    overflow: auto;
+    font-size: 12px;
+  }
+
+  .contextspace-spec-preview-body pre code {
+    background: transparent;
+    padding: 0;
+  }
+
+  .contextspace-spec-preview-body strong {
+    color: var(--color-ink);
+  }
+
+  .contextspace-spec-preview-body a {
+    color: var(--color-accent);
+    text-decoration: none;
+  }
+
+  .contextspace-spec-preview-fade {
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    height: 56px;
+    pointer-events: none;
+    background: linear-gradient(180deg, transparent, var(--color-surface-sunken));
+  }
+
+  .contextspace-spec-preview pre {
+    margin: 0;
+    padding: 10px 14px;
+    max-height: 220px;
+    overflow: auto;
+    font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 12px;
+    line-height: 1.5;
+    color: var(--color-ink-soft);
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+
+  /* Ticket overview compact stats — full-width navigable link to ticket index */
+  .ticket-overview-stats {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-3) var(--space-5);
+    padding: var(--space-3) var(--space-3) var(--space-3) 2px;
+    border-bottom: 1px solid var(--color-border-subtle);
+    border-radius: 6px;
+    margin-bottom: var(--space-2);
+    text-decoration: none;
+    color: inherit;
+    transition: background-color var(--transition-fast), border-color var(--transition-fast);
+  }
+
+  .ticket-overview-stats:hover {
+    background: var(--color-surface-muted);
+    border-color: var(--color-border-strong);
+  }
+
+  .ticket-overview-stats > div {
+    display: inline-flex;
+    align-items: baseline;
+    gap: 6px;
+  }
+
+  .ticket-overview-stats span {
+    color: var(--color-ink-muted);
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+
+  .ticket-overview-stats strong {
+    color: var(--color-ink);
+    font-size: var(--font-size-2);
+    font-weight: 650;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .ticket-overview-stats .is-active strong { color: var(--color-success); }
+  .ticket-overview-stats .is-failed strong { color: var(--color-danger); }
+
+  .ticket-overview-empty strong {
+    color: var(--color-ink-muted);
+    font-size: var(--font-size-1);
+    font-weight: 500;
+  }
+
+  .ticket-overview-more {
+    display: block;
+    padding: var(--space-2) var(--space-4);
+    border-radius: var(--radius-2);
+    border: 1px dashed var(--color-border-subtle);
+    background: transparent;
+    font-size: var(--font-size-1);
+    color: var(--color-ink-muted);
+    text-decoration: none;
+    text-align: center;
+    transition: color var(--transition-fast), border-color var(--transition-fast);
+  }
+
+  .ticket-overview-more:hover {
+    color: var(--color-accent);
+    border-color: var(--color-accent);
+  }
+
+  .scoped-chat-run-group {
+    border: 1px solid var(--color-border-subtle);
+    border-radius: 10px;
+    background: var(--color-surface);
+    overflow: hidden;
+    transition: border-color var(--transition-fast);
+  }
+  .scoped-chat-run-group:hover {
+    border-color: var(--color-border-strong);
+  }
+  .scoped-chat-run-group + .scoped-chat-run-group,
+  .scoped-chat-run-group + .chat-row,
+  .chat-row + .scoped-chat-run-group {
+    margin-top: var(--space-2);
+  }
+  .scoped-chat-run-summary {
+    display: flex;
+    align-items: flex-start;
+    gap: var(--space-2);
+    padding: var(--space-2) var(--space-3);
+    cursor: pointer;
+    list-style: none;
+  }
+  .scoped-chat-run-summary::-webkit-details-marker { display: none; }
+  .scoped-chat-run-group[open] > .scoped-chat-run-summary {
+    border-bottom: 1px solid var(--color-border-subtle);
+    background: var(--color-surface-muted);
+  }
+  .scoped-chat-run-group[open] .scoped-chat-run-chevron {
+    transform: rotate(90deg);
+  }
+  .scoped-chat-run-chevron {
+    color: var(--color-ink-faint);
+    font-size: 11px;
+    margin-left: var(--space-2);
+    transition: transform var(--transition-base) var(--ease-out);
+    display: inline-block;
+  }
+  .scoped-chat-run-main {
+    flex: 1;
+    min-width: 0;
+    display: grid;
+    gap: 4px;
+  }
+  .scoped-chat-run-title-row {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: var(--space-2);
+    font-size: var(--font-size-1);
+    color: var(--color-ink);
+    font-weight: 600;
+  }
+  .scoped-chat-run-trailing {
+    margin-left: auto;
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-2);
+    font-weight: 500;
+    color: var(--color-ink-faint);
+  }
+  .scoped-chat-run-meta {
+    display: inline-flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 6px;
+    font-size: var(--font-size-0);
+    color: var(--color-ink-muted);
+    font-variant-numeric: tabular-nums;
+  }
+  .scoped-chat-run-children {
+    display: flex;
+    flex-direction: column;
+    background: var(--color-surface-sunken);
+  }
+  .scoped-chat-run-child-list {
+    --virtual-list-gap: 0;
+    max-height: min(420px, 48vh);
+  }
+  .scoped-chat-child-row {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    padding: var(--space-2) var(--space-3) var(--space-2) calc(var(--space-3) + 28px + var(--space-2));
+    text-decoration: none;
+    color: var(--color-ink);
+    font-size: var(--font-size-1);
+    transition: background-color var(--transition-fast);
+    border-top: 1px solid var(--color-border-subtle);
+  }
+  .scoped-chat-child-row:first-child {
+    border-top: 0;
+  }
+  .scoped-chat-child-row:hover {
+    background: var(--color-surface-muted);
+  }
+  .scoped-chat-child-title {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    align-items: baseline;
+    gap: var(--space-2);
+    overflow: hidden;
+  }
+  .scoped-chat-child-title strong {
+    font-weight: 600;
+    font-family: var(--font-mono);
+    font-size: var(--font-size-1);
+    color: var(--color-ink);
+  }
+  .scoped-chat-child-subtitle {
+    color: var(--color-ink-muted);
+    font-size: var(--font-size-0);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .scoped-chat-child-meta {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-2);
+    color: var(--color-ink-faint);
+    font-size: var(--font-size-0);
+  }
+  .scoped-chat-child-arrow {
+    color: var(--color-ink-faint);
+    transition: transform var(--transition-fast), color var(--transition-fast);
+  }
+  .scoped-chat-child-row:hover .scoped-chat-child-arrow {
+    color: var(--color-ink-soft);
+    transform: translateX(2px);
+  }

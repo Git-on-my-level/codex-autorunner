@@ -17,7 +17,7 @@
     ticketLabel?: string | null;
     ticketHref?: string | null;
     statusLabel?: string | null;
-    statusSignal?: 'active' | 'waiting' | 'blocked' | 'failed' | 'invalid' | 'idle' | 'done';
+    statusSignal?: 'running' | 'waiting' | 'blocked' | 'failed' | 'invalid' | 'idle' | 'done';
   } = $props();
 
   let preview = $state<CurrentTicketChatPreviewState>({
@@ -94,7 +94,7 @@
     background: var(--color-ink-faint);
     flex-shrink: 0;
   }
-  .stream-dot.signal-active { background: var(--color-success); box-shadow: 0 0 0 0 color-mix(in srgb, var(--color-success) 50%, transparent); animation: cs-pulse 1.6s ease-out infinite; }
+  .stream-dot.signal-running { background: var(--color-success); box-shadow: 0 0 0 0 color-mix(in srgb, var(--color-success) 50%, transparent); animation: cs-pulse 1.6s ease-out infinite; }
   .stream-dot.signal-waiting { background: var(--color-warning); }
   .stream-dot.signal-blocked,
   .stream-dot.signal-failed,
@@ -130,7 +130,7 @@
     font-weight: 600;
     color: var(--color-ink-muted);
   }
-  .cs-status.signal-active { color: var(--color-success); }
+  .cs-status.signal-running { color: var(--color-success); }
   .cs-status.signal-waiting { color: var(--color-warning); }
   .cs-status.signal-blocked,
   .cs-status.signal-failed,

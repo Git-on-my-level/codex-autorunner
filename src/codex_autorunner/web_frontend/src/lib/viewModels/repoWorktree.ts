@@ -13,7 +13,16 @@ import type {
 } from './domain';
 import { formatRelativeTime, pmaChatKind, pmaChatKindLabel, progressPercent, sortChatsUnreadFirst, statusLabel } from './pmaChat';
 import type { PmaChatKind } from './pmaChat';
-import { repoContextspaceRoute, repoRoute, repoTicketRoute, worktreeContextspaceRoute, worktreeRoute, worktreeTicketRoute } from './routes';
+import {
+  repoContextspaceRoute,
+  repoRoute,
+  repoTicketRoute,
+  scopedNewChatRoute,
+  scopedTicketRoute,
+  worktreeContextspaceRoute,
+  worktreeRoute,
+  worktreeTicketRoute
+} from './routes';
 import {
   aliasesOverlap,
   buildTicketFlowStatusViewModel,
@@ -442,8 +451,8 @@ export function buildRepoWorktreeDetailViewModel(
     hasActiveRun: activeRunCards.length > 0,
     missingIndexHref: kind === 'repo' ? '/repos' : '/worktrees',
     missingIndexLabel: kind === 'repo' ? 'Back to repos' : 'Back to worktrees',
-    pmaChatHref: scopedChatHref(kind, id, 'pma'),
-    codingAgentChatHref: scopedChatHref(kind, id, 'agent'),
+    pmaChatHref: scopedNewChatRoute(kind, id, 'pma'),
+    codingAgentChatHref: scopedNewChatRoute(kind, id, 'agent'),
     gitStatus: resource.gitStatus ?? null,
     hasCarState: boolFromRaw(resource.raw, 'has_car_state'),
     unboundManagedThreadCount: numberFromRaw(resource.raw, 'unbound_managed_thread_count'),
@@ -699,8 +708,8 @@ function repoToIndexRow(repo: RepoSummary, worktrees: WorktreeSummary[], source:
     signalWaiting: 0,
     signalFailed: 0,
     signalActive: 0,
-    pmaChatHref: scopedChatHref('repo', repo.id, 'pma'),
-    codingAgentChatHref: scopedChatHref('repo', repo.id, 'agent'),
+    pmaChatHref: scopedNewChatRoute('repo', repo.id, 'pma'),
+    codingAgentChatHref: scopedNewChatRoute('repo', repo.id, 'agent'),
     hasCarState: boolFromRaw(repo.raw, 'has_car_state'),
     unboundManagedThreadCount: numberFromRaw(repo.raw, 'unbound_managed_thread_count'),
     chatBound: boolFromRaw(repo.raw, 'chat_bound'),
@@ -749,8 +758,8 @@ function worktreeToNavChildRow(
     lastActivityAt: worktree.lastActivityAt,
     href: worktreeRoute(worktree.id, worktree.repoId),
     ticketHref: worktreeTicketRoute(worktree.id, worktree.repoId),
-    pmaChatHref: scopedChatHref('worktree', worktree.id, 'pma'),
-    codingAgentChatHref: scopedChatHref('worktree', worktree.id, 'agent'),
+    pmaChatHref: scopedNewChatRoute('worktree', worktree.id, 'pma'),
+    codingAgentChatHref: scopedNewChatRoute('worktree', worktree.id, 'agent'),
     signalWaiting: signals.waiting,
     signalFailed: signals.failed,
     signalActive: signals.active,
@@ -791,8 +800,8 @@ function worktreeToIndexRow(worktree: WorktreeSummary, source: RepoWorktreeSourc
     signalWaiting: 0,
     signalFailed: 0,
     signalActive: 0,
-    pmaChatHref: scopedChatHref('worktree', worktree.id, 'pma'),
-    codingAgentChatHref: scopedChatHref('worktree', worktree.id, 'agent'),
+    pmaChatHref: scopedNewChatRoute('worktree', worktree.id, 'pma'),
+    codingAgentChatHref: scopedNewChatRoute('worktree', worktree.id, 'agent'),
     hasCarState: boolFromRaw(worktree.raw, 'has_car_state'),
     unboundManagedThreadCount: numberFromRaw(worktree.raw, 'unbound_managed_thread_count'),
     chatBound: boolFromRaw(worktree.raw, 'chat_bound'),
@@ -806,15 +815,6 @@ function worktreeToIndexRow(worktree: WorktreeSummary, source: RepoWorktreeSourc
     worktreeSetupCommands: null,
     isPinned: false
   };
-}
-
-function scopedChatHref(
-  kind: RepoWorktreeKind,
-  id: string,
-  chatKind: 'pma' | 'agent' = 'pma'
-): string {
-  const scope = kind === 'repo' ? `repo:${encodeURIComponent(id)}` : `worktree:${encodeURIComponent(id)}`;
-  return `/chats?new=${scope}&kind=${chatKind}`;
 }
 
 function shortenWorktreeLabel(name: string, repoName: string | null): string {
@@ -1201,7 +1201,7 @@ function buildContextLinks(_kind: RepoWorktreeKind, _id: string, artifacts: Repo
 }
 
 function scopedTicketHref(kind: RepoWorktreeKind, id: string, parentRepoId: string | null = null): string {
-  return kind === 'repo' ? repoTicketRoute(id) : worktreeTicketRoute(id, parentRepoId);
+  return scopedTicketRoute(kind, id, parentRepoId);
 }
 
 function ticketDetailHref(ticket: TicketSummary): string {

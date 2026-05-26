@@ -29,11 +29,21 @@ describe('/chats page', () => {
     )?.[0];
 
     expect(createChatBody).toContain('if (!options.preserveSelectedScope)');
-    expect(createChatBody).toMatch(
-      /applyLastNewChatPreference\(newChatKind === 'agent' \? 'agent' : 'pma'\)/
-    );
+    expect(createChatBody).toContain('applyLastNewChatPreference()');
+    expect(createChatBody).toContain('if (options.preserveSelectedKind)');
+    expect(createChatBody).toContain('ensureCodingAgentScope()');
     expect(createChatBody).toContain('persistCurrentNewChatPreference();');
     expect(createChatBody).not.toMatch(/detailMode = 'detail';\s*newChatKind = 'pma';/);
+  });
+
+  it('preserves explicit slash-command chat mode when starting a new draft', () => {
+    const source = chatDetailPageSource();
+    const slashCommandBody = source.match(
+      /async function executeSlashCommand[\s\S]*?\n  function addFiles/
+    )?.[0];
+
+    expect(slashCommandBody).toBeTruthy();
+    expect(slashCommandBody).toContain("await createChat({ preserveSelectedKind: true });");
   });
 
   it('delegates terminal snapshot queue reconciliation to the live projection service', () => {

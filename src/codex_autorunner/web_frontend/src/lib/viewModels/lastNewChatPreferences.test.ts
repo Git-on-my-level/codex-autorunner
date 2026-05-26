@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   getLastNewChatPreference,
-  loadLastNewChatPreferences,
+  loadLastNewChatPreference,
   persistLastNewChatPreference
 } from './lastNewChatPreferences';
 
@@ -31,21 +31,20 @@ describe('lastNewChatPreferences', () => {
     vi.unstubAllGlobals();
   });
 
-  it('persists PMA and coding-agent new-chat scopes separately', () => {
-    persistLastNewChatPreference('pma', { scopeId: 'local' });
-    persistLastNewChatPreference('agent', { scopeId: 'worktree:wt-1' });
+  it('persists one last new-chat scope and kind', () => {
+    persistLastNewChatPreference({ scopeId: ' local ', kind: 'pma' });
+    expect(getLastNewChatPreference()).toEqual({ scopeId: 'local', kind: 'pma' });
 
-    expect(getLastNewChatPreference('pma')).toEqual({ scopeId: 'local' });
-    expect(getLastNewChatPreference('agent')).toEqual({ scopeId: 'worktree:wt-1' });
-    expect(loadLastNewChatPreferences()).toEqual({
-      pma: { scopeId: 'local' },
-      agent: { scopeId: 'worktree:wt-1' }
-    });
+    persistLastNewChatPreference({ scopeId: 'worktree:wt-1', kind: 'agent' });
+    expect(getLastNewChatPreference()).toEqual({ scopeId: 'worktree:wt-1', kind: 'agent' });
+    expect(loadLastNewChatPreference()).toEqual({ scopeId: 'worktree:wt-1', kind: 'agent' });
   });
 
   it('ignores malformed stored values', () => {
-    window.localStorage.setItem('car.web.chat.lastNewChatPreferences.v1', '{"pma":{"scopeId":""},"agent":{"scopeId":42}}');
+    window.localStorage.setItem('car.web.chat.lastNewChatPreference.v2', '{"scopeId":"","kind":"agent"}');
+    expect(loadLastNewChatPreference()).toBeNull();
 
-    expect(loadLastNewChatPreferences()).toEqual({});
+    window.localStorage.setItem('car.web.chat.lastNewChatPreference.v2', '{"scopeId":"worktree:wt-1","kind":"other"}');
+    expect(loadLastNewChatPreference()).toBeNull();
   });
 });

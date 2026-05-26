@@ -326,6 +326,12 @@ Loud status surfaces (pills, accent strips, sticky banners) are for
 `blocked`, `failed`. Terminal/stable states (`done`, `idle`) should
 either be silent or fold into an existing meta row.
 
+Use those literal tokens in view-model status fields and CSS status
+modifiers. Reserve `active` for UI buckets such as selected filters or
+aggregate counts, not as a status synonym for `running`. Repo/worktree
+metadata such as `dirty` and `chat_bound` should stay separate from work
+status.
+
 - After a turn finishes, the assistant's reply itself signals "done."
   A persistent `done · 4s elapsed` chip on top of that is duplicated
   signal. If completion timing is genuinely useful (audit, debugging),

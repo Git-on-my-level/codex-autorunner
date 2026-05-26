@@ -4,6 +4,9 @@ import {
   repoContextspaceRoute,
   repoRoute,
   repoTicketRoute,
+  scopedNewChatRoute,
+  scopedNewTicketRoute,
+  scopedTicketRoute,
   worktreeContextspaceRoute,
   worktreeRoute,
   worktreeTicketRoute
@@ -22,6 +25,21 @@ describe('scope-nested frontend routes', () => {
     expect(worktreeContextspaceRoute('wt-1', 'repo-1')).toBe('/repos/repo-1/worktrees/wt-1/contextspace');
     expect(repoTicketRoute('repo-1', '42')).toBe('/repos/repo-1/tickets/42');
     expect(worktreeTicketRoute('wt-1', 'repo-1', '42')).toBe('/repos/repo-1/worktrees/wt-1/tickets/42');
+  });
+
+  it('builds scoped new-chat URLs with encoded repo and worktree ids', () => {
+    expect(scopedNewChatRoute('repo', 'my repo', 'pma')).toBe('/chats?new=repo:my%20repo&kind=pma');
+    expect(scopedNewChatRoute('worktree', 'wt/1', 'agent')).toBe('/chats?new=worktree:wt%2F1&kind=agent');
+  });
+
+  it('builds scoped ticket and new-ticket URLs', () => {
+    expect(scopedTicketRoute('repo', 'repo 1', null, 'TICKET-001')).toBe('/repos/repo%201/tickets/TICKET-001');
+    expect(scopedTicketRoute('worktree', 'wt 1', 'repo 1', 'TICKET-001')).toBe(
+      '/repos/repo%201/worktrees/wt%201/tickets/TICKET-001'
+    );
+    expect(scopedNewTicketRoute('repo', 'repo 1')).toBe('/repos/repo%201/tickets/new');
+    expect(scopedNewTicketRoute('worktree', 'wt 1', 'repo 1')).toBe('/repos/repo%201/worktrees/wt%201/tickets/new');
+    expect(scopedNewTicketRoute('worktree', 'orphan')).toBeNull();
   });
 
   it('keeps flat worktree URLs only as parentless compatibility fallbacks', () => {

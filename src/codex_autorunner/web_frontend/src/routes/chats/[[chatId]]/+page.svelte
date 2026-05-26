@@ -165,8 +165,7 @@
   import { getLastModelForAgent, persistLastModelForAgent } from '$lib/viewModels/lastModelByAgent';
   import {
     getLastNewChatPreference,
-    persistLastNewChatPreference,
-    type NewChatPreferenceKind
+    persistLastNewChatPreference
   } from '$lib/viewModels/lastNewChatPreferences';
   import {
     buildSlashCommandSuggestions,
@@ -1153,7 +1152,7 @@
     applyNewChatQueryParam();
     if (pendingInitialDraftCreate && !page.url.searchParams.get('new')) {
       pendingInitialDraftCreate = false;
-      applyLastNewChatPreference('pma');
+      applyLastNewChatPreference();
       void createChat({ preserveSelectedScope: true });
     }
   }
@@ -1203,13 +1202,13 @@
     });
   }
 
-  function applyLastNewChatPreference(kind: NewChatPreferenceKind): boolean {
-    const preference = getLastNewChatPreference(kind);
+  function applyLastNewChatPreference(): boolean {
+    const preference = getLastNewChatPreference();
     if (!preference) return false;
     if (!scopeOptions.some((scope) => scope.id === preference.scopeId)) return false;
     selectedScopeId = preference.scopeId;
     selectedScopeSource = preference.scopeId === 'local' ? 'default_hub' : 'picker_explicit';
-    newChatKind = kind === 'agent' && preference.scopeId !== 'local' ? 'agent' : 'pma';
+    newChatKind = preference.kind === 'agent' && preference.scopeId !== 'local' ? 'agent' : 'pma';
     return true;
   }
 
@@ -1683,12 +1682,22 @@
     persistCurrentNewChatPreference();
   }
 
-  function currentNewChatPreferenceKind(): NewChatPreferenceKind {
-    return newChatKind === 'agent' && canStartCodingAgentChat ? 'agent' : 'pma';
+  function ensureCodingAgentScope(): void {
+    if (selectedScopeId !== 'local' && scopeOptions.some((scope) => scope.id === selectedScopeId)) return;
+    const scoped = firstScopedScopeOption();
+    if (scoped) {
+      selectedScopeId = scoped.id;
+      selectedScopeSource = 'picker_explicit';
+    } else {
+      newChatKind = 'pma';
+    }
   }
 
   function persistCurrentNewChatPreference(): void {
-    persistLastNewChatPreference(currentNewChatPreferenceKind(), { scopeId: selectedScopeId });
+    persistLastNewChatPreference({
+      scopeId: selectedScopeId,
+      kind: newChatKind === 'agent' && canStartCodingAgentChat ? 'agent' : 'pma'
+    });
   }
 
   function newChatDisplayName(): string {
@@ -1825,16 +1834,21 @@
     };
   });
 
-  async function createChat(options: { preserveSelectedScope?: boolean } = {}): Promise<void> {
+  async function createChat(options: { preserveSelectedScope?: boolean; preserveSelectedKind?: boolean } = {}): Promise<void> {
     creating = true;
     composeError = null;
+    const requestedKind = newChatKind;
     if (!options.preserveSelectedScope) {
-      const applied = applyLastNewChatPreference(newChatKind === 'agent' ? 'agent' : 'pma');
+      const applied = applyLastNewChatPreference();
       if (!applied) {
         selectedScopeId = 'local';
         selectedScopeSource = 'default_hub';
-        newChatKind = 'pma';
+        if (!options.preserveSelectedKind) newChatKind = 'pma';
       }
+    }
+    if (options.preserveSelectedKind) {
+      newChatKind = requestedKind;
+      if (newChatKind === 'agent') ensureCodingAgentScope();
     }
     persistCurrentNewChatPreference();
     writeChatDetailSessionState(startLocalDraftChat(readChatDetailSessionState(), newDraftChatSummary()));
@@ -1947,13 +1961,13 @@
     if (spec.id === 'new') {
       const kind = args.toLowerCase();
       newChatKind = kind === 'agent' || kind === 'coding-agent' || kind === 'newt' ? 'agent' : 'pma';
-      await createChat();
+      await createChat({ preserveSelectedKind: true });
       clearSlashDraft();
       return true;
     }
     if (spec.id === 'newt') {
       newChatKind = 'agent';
-      await createChat();
+      await createChat({ preserveSelectedKind: true });
       showCommandNotice('Started a fresh coding chat.');
       clearSlashDraft();
       return true;
@@ -2038,7 +2052,7 @@
     }
     if (spec.id === 'reset') {
       newChatKind = 'pma';
-      await createChat();
+      await createChat({ preserveSelectedKind: true });
       showCommandNotice('Started a fresh replacement chat.');
       clearSlashDraft();
       return true;
