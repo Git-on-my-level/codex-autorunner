@@ -37,18 +37,24 @@ class ACPIngressNormalizedOutput:
 
 
 def _latest_assistant_section(text: str) -> tuple[str, bool]:
-    current = str(text or "").strip()
+    # ACP agent_message_chunk payloads may be true deltas whose leading spaces
+    # and standalone newlines are semantically part of markdown output.
+    # Only transcript marker extraction may trim; plain chunks stay exact.
+    current = str(text or "")
     if not current:
         return "", False
+    stripped = current.strip()
+    if not stripped:
+        return current, False
     matches = [
-        match.group(1).strip() for match in _ASSISTANT_MARKER_RE.finditer(current)
+        match.group(1).strip() for match in _ASSISTANT_MARKER_RE.finditer(stripped)
     ]
     matches = [match for match in matches if match]
     if matches:
         return matches[-1], True
     marker = "\n\nAssistant:\n"
-    if marker in current:
-        return current.rsplit(marker, 1)[-1].strip(), True
+    if marker in stripped:
+        return stripped.rsplit(marker, 1)[-1].strip(), True
     return current, False
 
 
@@ -69,7 +75,13 @@ def normalize_acp_ingress_output(
         )
 
     candidate, transcript_projection = _latest_assistant_section(raw)
-    if not candidate.strip():
+    if not candidate and input_kind != "current_turn_snapshot":
+        return ACPIngressNormalizedOutput(
+            text="",
+            classification="invalid_stale_output",
+            input_kind=input_kind,
+        )
+    if not candidate.strip() and input_kind != "current_turn_snapshot":
         return ACPIngressNormalizedOutput(
             text="",
             classification="invalid_stale_output",

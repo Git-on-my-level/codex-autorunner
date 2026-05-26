@@ -97,6 +97,86 @@ def test_prompt_state_session_update_chunks_preserve_word_boundaries() -> None:
     )
 
 
+def test_prompt_state_session_update_chunks_preserve_exact_whitespace() -> None:
+    state = _PromptState(session_id="session-1", turn_id="turn-1")
+
+    for chunk in (
+        "##",
+        " P",
+        "MA",
+        " Sit",
+        "rep",
+        " -",
+        " ",
+        "202",
+        "6",
+        "-",
+        "05",
+        "-",
+        "27",
+        "\n",
+        "###",
+        " Snapshot",
+        " Status",
+        ":",
+        " St",
+        "ale",
+        "\n",
+        "|",
+        " Section",
+        " |",
+        " Count",
+        " |",
+        " St",
+        "ale",
+        " |\n",
+        "|",
+        "---",
+        "|",
+        "---",
+        ":",
+        "|",
+        "---",
+        ":",
+        "|\n",
+        "|",
+        " p",
+        "ma",
+        "_file",
+        "_in",
+        "box",
+        " |",
+        " ",
+        "5",
+        " |",
+        " ",
+        "5",
+        " |\n\n",
+        "Bottom",
+        " line",
+        ":",
+        " No",
+        " active",
+        " work",
+        " blocking",
+        ".",
+    ):
+        state.note_output_delta(
+            chunk,
+            merge_snapshot=True,
+            preserve_word_boundaries=True,
+        )
+
+    assert state.final_output == (
+        "## PMA Sitrep - 2026-05-27\n"
+        "### Snapshot Status: Stale\n"
+        "| Section | Count | Stale |\n"
+        "|---|---:|---:|\n"
+        "| pma_file_inbox | 5 | 5 |\n\n"
+        "Bottom line: No active work blocking."
+    )
+
+
 @pytest.mark.parametrize(("method"), ("session/update", "session/request_permission"))
 @pytest.mark.asyncio
 async def test_client_maps_session_scoped_official_events_without_turn_id(
