@@ -1337,6 +1337,8 @@ class ChatSurfaceReadService:
                        execution_id,
                        request_kind,
                        status,
+                       model_id,
+                       reasoning_level,
                        prompt_text,
                        metadata_json,
                        turn_request_json,
@@ -1439,6 +1441,7 @@ class ChatSurfaceReadService:
             metadata = _json_object(_row_get(row, "metadata_json"))
             automation_metadata = metadata.get("automation")
             chat_kind = _normalize_text(metadata.get("chat_kind"))
+            execution_model = _normalize_text(_row_get(execution, "model_id"))
             run_id = _normalize_text(metadata.get("run_id"))
             visible_execution = visible_execution_by_thread.get(thread_id)
             execution_facets = execution_facets_by_thread.get(thread_id, {})
@@ -1500,7 +1503,7 @@ class ChatSurfaceReadService:
                     "backend_thread_id": _normalize_text(
                         _row_get(row, "backend_thread_id")
                     ),
-                    "model": _normalize_text(metadata.get("model")),
+                    "model": _normalize_text(metadata.get("model")) or execution_model,
                     "thread_kind": _normalize_text(metadata.get("thread_kind")),
                     "automation": (
                         dict(automation_metadata)
