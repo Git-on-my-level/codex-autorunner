@@ -1318,7 +1318,7 @@ class OpenCodeHarness(AgentHarness):
 
             errors = [lifecycle_result.error] if lifecycle_result.error else []
             effective_runtime = _effective_runtime_from_payload(
-                output_result.usage,
+                runtime_result.output.usage,
                 source="opencode.usage",
                 backend_turn_id=turn_id,
             )

@@ -543,11 +543,13 @@ def resolve_managed_thread_list_query(
     ):
         normalized_lifecycle_status = normalized_status
         normalized_status = None
-    normalized_resource_kind, normalized_resource_id, normalized_repo_id = (
-        _normalize_resource_owner(
-            resource_kind=resource_kind,
-            resource_id=resource_id,
-        )
+    (
+        normalized_resource_kind,
+        normalized_resource_id,
+        normalized_repo_id,
+    ) = _normalize_resource_owner(
+        resource_kind=resource_kind,
+        resource_id=resource_id,
     )
     return ManagedThreadListQuery(
         agent_id=normalize_optional_text(agent),
@@ -569,11 +571,13 @@ def resolve_owner_scoped_query(
 ) -> ManagedThreadOwnerScopedQuery:
     if limit <= 0:
         raise HTTPException(status_code=400, detail="limit must be greater than 0")
-    normalized_resource_kind, normalized_resource_id, normalized_repo_id = (
-        _normalize_resource_owner(
-            resource_kind=resource_kind,
-            resource_id=resource_id,
-        )
+    (
+        normalized_resource_kind,
+        normalized_resource_id,
+        normalized_repo_id,
+    ) = _normalize_resource_owner(
+        resource_kind=resource_kind,
+        resource_id=resource_id,
     )
     return ManagedThreadOwnerScopedQuery(
         agent_id=normalize_optional_text(agent),

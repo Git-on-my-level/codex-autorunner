@@ -454,7 +454,9 @@ def test_create_finish_turn_and_query(tmp_path: Path) -> None:
     }
     runtime_identity = fetched["runtime_identity"]
     assert runtime_identity["resolved"]["canonical_model_label"] == "gpt-test"
-    assert runtime_identity["effective"] is None
+    assert runtime_identity["effective"]["canonical_model_label"] == "gpt-test"
+    assert runtime_identity["effective"]["backend_runtime_id"] == "backend-turn-1"
+    assert runtime_identity["effective"]["source"] == "managed_thread_execution"
 
     listed = store.list_turns(thread["managed_thread_id"])
     assert len(listed) == 1

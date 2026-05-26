@@ -2692,6 +2692,7 @@ def _backfill_automation_edge_runtime_identity(conn: sqlite3.Connection) -> None
             (envelope.to_json(), row["edge_id"]),
         )
 
+
 def _apply_v44(conn: sqlite3.Connection) -> None:
     _ensure_column(
         conn,

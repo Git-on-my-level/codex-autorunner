@@ -1997,7 +1997,7 @@ def test_apply_v43_renames_legacy_pma_automation_metadata_keys(
                 "2026-01-01T00:00:00Z",
             ),
         )
-        conn.execute("DELETE FROM orch_schema_migrations WHERE version = 43")
+        conn.execute("DELETE FROM orch_schema_migrations WHERE version >= 43")
 
         version_after = apply_orchestration_migrations(conn)
         rule_row = conn.execute("""

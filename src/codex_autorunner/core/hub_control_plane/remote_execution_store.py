@@ -310,9 +310,12 @@ class RemoteThreadExecutionStore(ThreadExecutionStore):
                 raise ValueError(
                     "scope cannot be combined with repo_id/resource_kind/resource_id"
                 )
-            scope_repo_id, scope_resource_kind, scope_resource_id, scope_workspace = (
-                owner_fields_from_scope_ref(scope)
-            )
+            (
+                scope_repo_id,
+                scope_resource_kind,
+                scope_resource_id,
+                scope_workspace,
+            ) = owner_fields_from_scope_ref(scope)
             repo_id = scope_repo_id
             resource_kind = scope_resource_kind
             resource_id = scope_resource_id

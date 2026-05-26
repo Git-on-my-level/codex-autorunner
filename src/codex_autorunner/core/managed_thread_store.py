@@ -679,9 +679,12 @@ class ManagedThreadStore:
                 raise ValueError(
                     "scope cannot be combined with repo_id/resource_kind/resource_id"
                 )
-            scope_repo_id, scope_resource_kind, scope_resource_id, scope_workspace = (
-                owner_fields_from_scope_ref(scope)
-            )
+            (
+                scope_repo_id,
+                scope_resource_kind,
+                scope_resource_id,
+                scope_workspace,
+            ) = owner_fields_from_scope_ref(scope)
             repo_id = scope_repo_id
             resource_kind = scope_resource_kind
             resource_id = scope_resource_id
@@ -699,12 +702,14 @@ class ManagedThreadStore:
         workspace = workspace_root
         if not workspace.is_absolute():
             raise ValueError("workspace_root must be absolute")
-        normalized_resource_kind, normalized_resource_id, normalized_repo_id = (
-            normalize_resource_owner_fields(
-                resource_kind=resource_kind,
-                resource_id=resource_id,
-                repo_id=repo_id,
-            )
+        (
+            normalized_resource_kind,
+            normalized_resource_id,
+            normalized_repo_id,
+        ) = normalize_resource_owner_fields(
+            resource_kind=resource_kind,
+            resource_id=resource_id,
+            repo_id=repo_id,
         )
         normalized_backend_thread_id = _coerce_text(backend_thread_id)
         metadata_payload = _enrich_thread_metadata_for_workspace(
@@ -1057,12 +1062,14 @@ class ManagedThreadStore:
         if normalized_status is not None:
             query += " AND runtime_status = ?"
             params.append(normalized_status)
-        normalized_resource_kind, normalized_resource_id, normalized_repo_id = (
-            normalize_resource_owner_fields(
-                resource_kind=resource_kind,
-                resource_id=resource_id,
-                repo_id=repo_id,
-            )
+        (
+            normalized_resource_kind,
+            normalized_resource_id,
+            normalized_repo_id,
+        ) = normalize_resource_owner_fields(
+            resource_kind=resource_kind,
+            resource_id=resource_id,
+            repo_id=repo_id,
         )
         if normalized_resource_kind is not None:
             query += " AND resource_kind = ?"
