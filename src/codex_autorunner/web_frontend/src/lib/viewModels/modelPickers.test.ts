@@ -11,7 +11,8 @@ import {
   modelLabel,
   modelRecordForValue,
   pickerReasoningOptions,
-  resolveAgentModelSelection
+  resolveAgentModelSelection,
+  resolvePmaChatSelectorsForActiveChat
 } from './modelPickers';
 
 describe('model picker helpers', () => {
@@ -120,6 +121,68 @@ describe('model picker helpers', () => {
         catalog: models,
         currentReasoning: 'high',
         keepReasoning: true,
+        allowEmptyModel: true
+      })
+    ).toEqual({ canListModels: true, model: '', reasoning: '' });
+  });
+
+  it('keeps existing chats with unknown projected models empty even when picker memory exists', () => {
+    const incidentAgents = [
+      ...agents,
+      {
+        id: 'zai-coding-plan',
+        name: 'Z.ai Coding Plan',
+        capability_projection: { actions: { list_models: { allowed: true, missing_capabilities: [] } } }
+      }
+    ];
+    const incidentCatalog = [
+      { id: 'zai-coding-plan/glm-5.1', label: 'GLM 5.1' },
+      { id: 'zai-coding-plan/glm-5v-turbo', label: 'GLM 5V Turbo' }
+    ];
+    const rememberedModel = 'zai-coding-plan/glm-5v-turbo';
+    const resolved = resolvePmaChatSelectorsForActiveChat(
+      {
+        id: 'chat-zai',
+        title: 'Existing Z.ai chat',
+        lifecycleStatus: 'active',
+        status: 'running',
+        agentId: 'zai-coding-plan',
+        chatKind: 'coding_agent',
+        agentProfile: null,
+        model: null,
+        runtimeSource: 'unknown',
+        modelSource: 'unknown',
+        repoId: null,
+        worktreeId: null,
+        ticketId: null,
+        isTicketFlow: false,
+        progressPercent: null,
+        updatedAt: null,
+        raw: {}
+      },
+      incidentAgents,
+      'zai-coding-plan',
+      ''
+    );
+
+    expect(resolved).toMatchObject({ mode: 'chat-bound', agentId: 'zai-coding-plan', model: null });
+    expect(
+      resolveAgentModelSelection({
+        agents: incidentAgents,
+        agentId: resolved.agentId,
+        catalog: incidentCatalog,
+        rememberedModel,
+        allowEmptyModel: true
+      }).model
+    ).toBe('zai-coding-plan/glm-5v-turbo');
+    expect(
+      resolveAgentModelSelection({
+        agents: incidentAgents,
+        agentId: resolved.agentId,
+        catalog: incidentCatalog,
+        preferredModel: resolved.mode === 'chat-bound' ? resolved.model : null,
+        rememberedModel: null,
+        currentModel: null,
         allowEmptyModel: true
       })
     ).toEqual({ canListModels: true, model: '', reasoning: '' });

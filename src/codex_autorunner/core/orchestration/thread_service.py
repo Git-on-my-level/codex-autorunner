@@ -1298,6 +1298,7 @@ class HarnessBackedOrchestrationService(OrchestrationThreadService):
         error: Optional[str] = None,
         backend_turn_id: Optional[str] = None,
         transcript_turn_id: Optional[str] = None,
+        effective_runtime: Optional[Any] = None,
     ) -> ExecutionRecord:
         return self.thread_store.record_execution_result(
             thread_target_id,
@@ -1308,6 +1309,7 @@ class HarnessBackedOrchestrationService(OrchestrationThreadService):
             error=error,
             backend_turn_id=backend_turn_id,
             transcript_turn_id=transcript_turn_id,
+            effective_runtime=effective_runtime,
         )
 
     def record_execution_interrupted(

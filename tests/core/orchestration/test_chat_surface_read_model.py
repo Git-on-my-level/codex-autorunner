@@ -20,6 +20,13 @@ from codex_autorunner.core.orchestration.chat_surface_read_model import (
 )
 from codex_autorunner.core.orchestration.sqlite import open_orchestration_sqlite
 from codex_autorunner.core.pma_notification_store import PmaNotificationStore
+from codex_autorunner.core.runtime_identity import (
+    RUNTIME_STAGE_EFFECTIVE,
+    RUNTIME_STAGE_LAUNCH,
+    RUNTIME_STAGE_RESOLVED,
+    RuntimeIdentityEnvelope,
+    RuntimeIdentityStage,
+)
 
 _FIXTURE_PATH = (
     Path(__file__).resolve().parents[2]
@@ -112,6 +119,7 @@ def _seed_execution(
     prompt_text: str | None = None,
     model_id: str | None = None,
     reasoning_level: str | None = None,
+    runtime_identity: RuntimeIdentityEnvelope | None = None,
     metadata: dict[str, object] | None = None,
     created_at: str = "2026-05-11T00:01:00Z",
 ) -> None:
@@ -127,9 +135,10 @@ def _seed_execution(
                 model_id,
                 reasoning_level,
                 metadata_json,
+                runtime_identity_json,
                 status,
                 created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 eid,
@@ -139,6 +148,7 @@ def _seed_execution(
                 model_id,
                 reasoning_level,
                 json.dumps(metadata or {}),
+                runtime_identity.to_json() if runtime_identity is not None else None,
                 status,
                 created_at,
             ),
@@ -989,7 +999,10 @@ def test_chat_surface_read_model_projects_thread_identity_from_metadata_json(
     assert surface["managed_thread_id"] == "thread-pma-profiled"
     assert surface["metadata"]["agent_id"] == "codex"
     assert surface["metadata"]["agent_profile"] == "m4-pma"
-    assert surface["metadata"]["model"] == "gpt-5.5"
+    assert surface["metadata"]["model"] is None
+    assert surface["metadata"]["model_source"] == "unknown"
+    assert surface["metadata"]["runtime"]["stage"] == "unknown"
+    assert surface["metadata"]["runtime"]["model_unknown"] is True
 
 
 def test_chat_surface_read_model_uses_execution_model_when_thread_metadata_missing(
@@ -1030,6 +1043,155 @@ def test_chat_surface_read_model_uses_execution_model_when_thread_metadata_missi
         row for row in index["rows"] if row["managed_thread_id"] == "automation-thread"
     )
     assert row["model"] == "zai-coding-plan/glm-5.1"
+
+
+def test_chat_surface_runtime_projection_prefers_effective_stage(
+    tmp_path: Path,
+) -> None:
+    hub_root = tmp_path / "hub"
+    _seed_thread(
+        hub_root,
+        thread_id="automation-thread",
+        runtime_status="running",
+        metadata={"model": "stale-picker-value"},
+    )
+    _seed_execution(
+        hub_root,
+        thread_id="automation-thread",
+        status="running",
+        model_id="fallback-model",
+        runtime_identity=RuntimeIdentityEnvelope(
+            resolved=RuntimeIdentityStage(
+                stage=RUNTIME_STAGE_RESOLVED,
+                logical_agent="opencode",
+                canonical_model_label="zai-coding-plan/glm-5.1",
+                reasoning="medium",
+                source="turn_execution_request",
+            ),
+            launch=RuntimeIdentityStage(
+                stage=RUNTIME_STAGE_LAUNCH,
+                logical_agent="opencode",
+                canonical_model_label="zai-coding-plan/glm-5.1",
+                reasoning="medium",
+                backend_runtime_id="turn-1",
+                source="managed_thread_launch",
+            ),
+            effective=RuntimeIdentityStage(
+                stage=RUNTIME_STAGE_EFFECTIVE,
+                logical_agent="opencode",
+                provider_id="zai-coding-plan",
+                canonical_model_label="zai-coding-plan/glm-5.1",
+                provider_model_id="glm-5.1",
+                reasoning="medium",
+                backend_runtime_id="turn-1",
+                source="opencode.session",
+            ),
+        ),
+    )
+
+    service = ChatSurfaceReadService(hub_root, durable=False)
+    surface = next(
+        surface
+        for surface in service.snapshot()["surfaces"]
+        if surface["managed_thread_id"] == "automation-thread"
+    )
+    runtime = surface["metadata"]["runtime"]
+    assert surface["metadata"]["model"] == "zai-coding-plan/glm-5.1"
+    assert surface["metadata"]["model_source"] == "effective.canonical_model_label"
+    assert runtime["stage"] == "effective"
+    assert runtime["provider_id"] == "zai-coding-plan"
+    assert runtime["provider_model_id"] == "glm-5.1"
+    assert runtime["model_unknown"] is False
+
+    row = next(
+        row
+        for row in service.chat_index_snapshot(view="all", limit=20)["rows"]
+        if row["managed_thread_id"] == "automation-thread"
+    )
+    assert row["model"] == "zai-coding-plan/glm-5.1"
+    assert row["model_source"] == "effective.canonical_model_label"
+    assert row["runtime"]["stage"] == "effective"
+    assert row["reasoning"] == "medium"
+    assert row["reasoning_source"] == "effective.reasoning"
+
+
+def test_chat_surface_runtime_projection_falls_back_to_launch_then_resolved(
+    tmp_path: Path,
+) -> None:
+    hub_root = tmp_path / "hub"
+    _seed_thread(hub_root, thread_id="launch-thread")
+    _seed_execution(
+        hub_root,
+        thread_id="launch-thread",
+        status="running",
+        runtime_identity=RuntimeIdentityEnvelope(
+            resolved=RuntimeIdentityStage(
+                stage=RUNTIME_STAGE_RESOLVED,
+                logical_agent="codex",
+                canonical_model_label="gpt-5-mini",
+                reasoning="low",
+            ),
+            launch=RuntimeIdentityStage(
+                stage=RUNTIME_STAGE_LAUNCH,
+                logical_agent="codex",
+                canonical_model_label="gpt-5",
+                reasoning="high",
+                backend_runtime_id="backend-launch",
+            ),
+        ),
+    )
+    _seed_thread(hub_root, thread_id="resolved-thread")
+    _seed_execution(
+        hub_root,
+        thread_id="resolved-thread",
+        status="queued",
+        runtime_identity=RuntimeIdentityEnvelope(
+            resolved=RuntimeIdentityStage(
+                stage=RUNTIME_STAGE_RESOLVED,
+                logical_agent="codex",
+                canonical_model_label="gpt-5-mini",
+                reasoning="low",
+            )
+        ),
+    )
+
+    rows = {
+        row["managed_thread_id"]: row
+        for row in ChatSurfaceReadService(hub_root, durable=False).chat_index_snapshot(
+            view="all", limit=20
+        )["rows"]
+    }
+
+    assert rows["launch-thread"]["model"] == "gpt-5"
+    assert rows["launch-thread"]["runtime"]["stage"] == "launch"
+    assert rows["launch-thread"]["model_source"] == "launch.canonical_model_label"
+    assert rows["launch-thread"]["reasoning"] == "high"
+    assert rows["resolved-thread"]["model"] == "gpt-5-mini"
+    assert rows["resolved-thread"]["runtime"]["stage"] == "resolved"
+    assert rows["resolved-thread"]["model_source"] == "resolved.canonical_model_label"
+
+
+def test_chat_surface_runtime_projection_makes_unknown_runtime_explicit(
+    tmp_path: Path,
+) -> None:
+    hub_root = tmp_path / "hub"
+    _seed_thread(hub_root, thread_id="unknown-thread")
+    _seed_execution(hub_root, thread_id="unknown-thread", status="running")
+
+    row = next(
+        row
+        for row in ChatSurfaceReadService(hub_root, durable=False).chat_index_snapshot(
+            view="all", limit=20
+        )["rows"]
+        if row["managed_thread_id"] == "unknown-thread"
+    )
+
+    assert row["model"] is None
+    assert row["model_source"] == "unknown"
+    assert row["runtime_source"] == "unknown"
+    assert row["runtime"]["stage"] == "unknown"
+    assert row["runtime"]["model_unknown"] is True
+    assert row["runtime"]["reasoning_unknown"] is True
 
 
 def test_chat_surface_read_model_ignores_running_execution_on_archived_thread(
@@ -2346,6 +2508,26 @@ def test_chat_surface_read_model_builds_pma_compat_snapshot(tmp_path: Path) -> N
     assert snapshot["contract_version"] == "pma_chat_events.v1"
     assert snapshot["cursor"] == 1
     assert len(snapshot["revision"]) == 64
+    unknown_runtime = {
+        "stage": "unknown",
+        "source": "unknown",
+        "runtime_source": "unknown",
+        "agent": "codex",
+        "profile": None,
+        "model": None,
+        "provider_id": None,
+        "provider_model_id": None,
+        "reasoning": None,
+        "backend_runtime_id": None,
+        "model_unknown": True,
+        "reasoning_unknown": True,
+        "agent_unknown": False,
+        "profile_unknown": True,
+        "provider_unknown": True,
+        "backend_runtime_unknown": True,
+        "model_source": "unknown",
+        "reasoning_source": "unknown",
+    }
     assert snapshot["threads"] == [
         {
             "managed_thread_id": "thread-pma",
@@ -2359,6 +2541,11 @@ def test_chat_surface_read_model_builds_pma_compat_snapshot(tmp_path: Path) -> N
             "display_title": "Discord channel",
             "technical_title": "thread-pma",
             "model": None,
+            "runtime": unknown_runtime,
+            "runtime_source": "unknown",
+            "model_source": "unknown",
+            "reasoning": None,
+            "reasoning_source": "unknown",
             "backend_thread_id": None,
             "lifecycle_status": "active",
             "runtime_status": "queued",

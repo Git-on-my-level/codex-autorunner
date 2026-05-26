@@ -93,6 +93,27 @@ export type ChatFacetRequest = {
   agentKinds: ChatFacetAgentKind[];
 };
 
+export type ChatRuntimeProjection = {
+  stage: string;
+  source: string;
+  runtimeSource: string;
+  agent?: string | null;
+  profile?: string | null;
+  model?: string | null;
+  providerId?: string | null;
+  providerModelId?: string | null;
+  reasoning?: string | null;
+  backendRuntimeId?: string | null;
+  modelUnknown: boolean;
+  reasoningUnknown: boolean;
+  agentUnknown: boolean;
+  profileUnknown: boolean;
+  providerUnknown: boolean;
+  backendRuntimeUnknown: boolean;
+  modelSource: string;
+  reasoningSource: string;
+};
+
 export function normalizeChatFacetRequest(request: Partial<ChatFacetRequest> | null | undefined): ChatFacetRequest {
   return {
     categories: sortedUniqueFacetValues(request?.categories),
@@ -166,6 +187,11 @@ export type ChatIndexRow = {
   chatKind?: 'pma' | 'coding_agent' | null;
   facets?: ChatIndexFacets | null;
   model?: string | null;
+  runtime?: ChatRuntimeProjection | null;
+  runtimeSource?: string | null;
+  modelSource?: string | null;
+  reasoning?: string | null;
+  reasoningSource?: string | null;
   groupId?: string | null;
   flowType?: 'ticket_flow' | null;
   ticketPath?: string | null;
@@ -312,6 +338,11 @@ export type ChatThreadProjection = {
   agentProfile?: string | null;
   chatKind?: 'pma' | 'coding_agent' | null;
   model?: string | null;
+  runtime?: ChatRuntimeProjection | null;
+  runtimeSource?: string | null;
+  modelSource?: string | null;
+  reasoning?: string | null;
+  reasoningSource?: string | null;
   archived: boolean;
 };
 

@@ -1,6 +1,7 @@
 import inspect
 import itertools
 import json
+import os
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -968,7 +969,7 @@ def test_pma_cli_thread_status_output_renders_paginated_assistant_text(
     monkeypatch.setattr(
         managed_thread_commands.shutil,
         "get_terminal_size",
-        lambda fallback=(80, 24): SimpleNamespace(columns=80, lines=12),
+        lambda fallback=(80, 24): os.terminal_size((80, 12)),
     )
 
     def _fake_request_json(
@@ -1098,7 +1099,7 @@ def test_pma_cli_thread_output_supports_continue_and_output_file(
     monkeypatch.setattr(
         managed_thread_commands.shutil,
         "get_terminal_size",
-        lambda fallback=(80, 24): SimpleNamespace(columns=80, lines=12),
+        lambda fallback=(80, 24): os.terminal_size((80, 12)),
     )
 
     def _fake_request_json(

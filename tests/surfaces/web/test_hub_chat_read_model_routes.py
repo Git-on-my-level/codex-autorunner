@@ -14,6 +14,11 @@ from codex_autorunner.core.orchestration import (
 )
 from codex_autorunner.core.orchestration.sqlite import open_orchestration_sqlite
 from codex_autorunner.core.pma_notification_store import PmaNotificationStore
+from codex_autorunner.core.runtime_identity import (
+    RUNTIME_STAGE_EFFECTIVE,
+    RuntimeIdentityEnvelope,
+    RuntimeIdentityStage,
+)
 from codex_autorunner.server import create_hub_app
 from codex_autorunner.surfaces.web.read_model_contracts import (
     ChatDetailSnapshot,
@@ -311,6 +316,73 @@ def test_chat_index_snapshot_filters_groups_and_bounds_large_windows(hub_env) ->
     ).json()
     assert children["window"]["returned"] == 0
     assert children["rows"] == []
+
+
+def test_chat_runtime_chain_route_returns_full_projection_chain(hub_env) -> None:
+    with open_orchestration_sqlite(
+        hub_env.hub_root, durable=True, migrate=True
+    ) as conn:
+        conn.execute(
+            """
+            INSERT INTO orch_thread_targets (
+                thread_target_id, agent_id, repo_id, resource_kind, resource_id,
+                display_name, lifecycle_status, runtime_status, metadata_json,
+                created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "thread-runtime-chain",
+                "opencode",
+                "repo",
+                "repo",
+                "repo",
+                "Runtime chain",
+                "active",
+                "running",
+                "{}",
+                "2026-05-11T00:00:00Z",
+                "2026-05-11T00:00:00Z",
+            ),
+        )
+        conn.execute(
+            """
+            INSERT INTO orch_thread_executions (
+                execution_id, thread_target_id, request_kind, status,
+                runtime_identity_json, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "turn-runtime-chain",
+                "thread-runtime-chain",
+                "message",
+                "running",
+                RuntimeIdentityEnvelope(
+                    effective=RuntimeIdentityStage(
+                        stage=RUNTIME_STAGE_EFFECTIVE,
+                        logical_agent="opencode",
+                        provider_id="zai-coding-plan",
+                        canonical_model_label="zai-coding-plan/glm-5.1",
+                        provider_model_id="glm-5.1",
+                        source="opencode.session",
+                    )
+                ).to_json(),
+                "2026-05-11T00:01:00Z",
+            ),
+        )
+
+    client = TestClient(create_hub_app(hub_env.hub_root))
+    response = client.get("/hub/read-models/chats/thread-runtime-chain/runtime-chain")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["row_identity"]["execution_id"] == "turn-runtime-chain"
+    assert payload["stages"]["effective"]["canonical_model_label"] == (
+        "zai-coding-plan/glm-5.1"
+    )
+    assert payload["stages"]["projected"]["canonical_model_label"] == (
+        "zai-coding-plan/glm-5.1"
+    )
+    assert payload["findings"] == []
 
 
 def test_chat_index_group_contract_uses_explicit_ticket_run_group_kind() -> None:

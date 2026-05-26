@@ -40,6 +40,7 @@ from ...core.ports.run_event import (
     Completed,
     Failed,
     OutputDelta,
+    ProviderRuntimeReported,
     RunEvent,
     RunNotice,
     Started,
@@ -498,6 +499,12 @@ class OpenCodeBackend(AgentBackend):
                 )
                 self._last_token_total = _usage_to_token_total(canonical_usage)
                 yield TokenUsage(timestamp=now_iso(), usage=dict(canonical_usage))
+
+            if output_result.effective_runtime is not None:
+                yield ProviderRuntimeReported(
+                    timestamp=now_iso(),
+                    effective_runtime=output_result.effective_runtime,
+                )
 
             if output_result.text:
                 yield Completed(timestamp=now_iso(), final_message=output_result.text)

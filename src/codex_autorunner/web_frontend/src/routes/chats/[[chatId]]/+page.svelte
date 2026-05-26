@@ -157,7 +157,6 @@
     agentRecordForId,
     modelExists,
     modelLabel,
-    modelRecordForValue,
     pickerReasoningOptions,
     resolveAgentModelSelection,
     resolvePmaChatSelectorsForActiveChat,
@@ -590,7 +589,6 @@
   const selectedAgentRecord = $derived(agentRecordForId(agents, selectedAgent));
   const hermesProfileChoices = $derived(agentProfileEntriesForRecord(selectedAgentRecord));
   const selectedAgentCanListModels = $derived(agentCanListModels(selectedAgentRecord));
-  const selectedModelRecord = $derived(modelRecordForValue(models, selectedModel));
   const reasoningOptions = $derived(pickerReasoningOptions(models, selectedModel));
   const showAgentSelector = $derived(Boolean(activeChat && agents.length > 0));
   const showModelSelector = $derived(Boolean(activeChat && selectedAgentCanListModels && (loadingModels || models.length > 0)));
@@ -726,9 +724,11 @@
     })
   );
   const showSlashCommandMenu = $derived(slashSuggestions.length > 0 && composerFocused);
-  const selectedAgentLabel = $derived(selectedAgentRecord ? agentLabel(selectedAgentRecord) : selectedAgent || 'Agent');
-  const selectedModelLabel = $derived(selectedModelRecord ? modelLabel(selectedModelRecord) : selectedModel || '');
-  const selectedEffortLabel = $derived(selectedReasoning || 'default');
+  type ModelLoadMode = 'draft' | 'chat-bound';
+  type ModelLoadOptions = {
+    preferredModel?: string | null;
+    mode?: ModelLoadMode;
+  };
 
   function markComposerEdited(): void {
     composerEditVersion += 1;
@@ -921,6 +921,43 @@
     return 'Chat';
   }
 
+  function runtimeRecordBoolean(record: Record<string, unknown> | null | undefined, ...keys: string[]): boolean {
+    if (!record) return false;
+    return keys.some((key) => record[key] === true);
+  }
+
+  function runtimeModelIsExplicitlyUnknown(chat: PmaChatSummary): boolean {
+    if (chat.model) return false;
+    return Boolean(
+      chat.modelSource ||
+        chat.runtimeSource ||
+        runtimeRecordBoolean(chat.runtime, 'modelUnknown', 'model_unknown')
+    );
+  }
+
+  function chatModelMetaLabel(chat: PmaChatSummary): string | null {
+    const model = chat.model?.trim();
+    if (model) return model;
+    return runtimeModelIsExplicitlyUnknown(chat) ? 'model unknown' : null;
+  }
+
+  function chatModelMetaTitle(chat: PmaChatSummary): string | undefined {
+    const parts = [
+      chat.modelSource ? `model: ${chat.modelSource}` : null,
+      chat.runtimeSource ? `runtime: ${chat.runtimeSource}` : null
+    ].filter((part): part is string => Boolean(part));
+    return parts.length > 0 ? parts.join(' · ') : undefined;
+  }
+
+  function activeChatRuntimeConfigLabel(chat: PmaChatSummary): string {
+    const parts = [
+      agentDisplayForChat(agents, chat) || chat.agentId || activeChatKindLabel,
+      chatModelMetaLabel(chat),
+      chat.reasoning ? `effort ${chat.reasoning}` : null
+    ].filter((part): part is string => Boolean(part));
+    return parts.join(' · ');
+  }
+
   onMount(() => {
     hydrateChatListFiltersFromUrl();
     document.addEventListener('pointerdown', captureDocumentChatPointer, true);
@@ -1108,7 +1145,11 @@
         selectedReasoning = resolved.reasoning;
       }
     }
-    void loadModels(selectedAgent, activeChat?.model ?? selectedModel);
+    const activeChatAgentId = activeChat?.agentId;
+    void loadModels(selectedAgent, {
+      preferredModel: activeChatAgentId ? activeChat?.model : selectedModel,
+      mode: activeChatAgentId ? 'chat-bound' : 'draft'
+    });
     applyNewChatQueryParam();
     if (pendingInitialDraftCreate && !page.url.searchParams.get('new')) {
       pendingInitialDraftCreate = false;
@@ -1172,7 +1213,9 @@
     return true;
   }
 
-  async function loadModels(agentId: string, preferredModel?: string): Promise<void> {
+  async function loadModels(agentId: string, options: ModelLoadOptions = {}): Promise<void> {
+    const preferredModel = options.preferredModel;
+    const mode = options.mode ?? 'draft';
     const initialSelection = resolveAgentModelSelection({ agents, agentId });
     if (!initialSelection.canListModels) {
       loadModelsSeq += 1;
@@ -1205,13 +1248,13 @@
       agentId,
       catalog: result.data,
       preferredModel,
-      rememberedModel: getLastModelForAgent(agentId),
+      rememberedModel: mode === 'draft' ? getLastModelForAgent(agentId) : null,
       currentReasoning,
-      keepReasoning: true
+      keepReasoning: true,
+      allowEmptyModel: mode === 'chat-bound'
     });
     selectedModel = selection.model;
     selectedReasoning = selection.reasoning;
-    persistLastModelForAgent(agentId, selectedModel);
     loadingModels = false;
   }
 
@@ -1583,7 +1626,7 @@
       selectedAgent = resolved.agentId;
       selectedProfile = resolved.agentProfile;
       selectedReasoning = resolved.reasoning;
-      void loadModels(selectedAgent);
+      void loadModels(selectedAgent, { mode: 'draft' });
       return;
     }
     const previousAgent = selectedAgent;
@@ -1591,15 +1634,20 @@
     selectedProfile = resolved.agentProfile;
     selectedReasoning = resolved.reasoning;
     if (previousAgent !== resolved.agentId || models.length === 0) {
-      void loadModels(resolved.agentId, resolved.model ?? selectedModel);
+      void loadModels(resolved.agentId, {
+        preferredModel: resolved.model,
+        mode: 'chat-bound'
+      });
     } else if (resolved.model) {
       selectedModel = resolved.model;
+    } else {
+      selectedModel = '';
     }
   }
 
   function handleAgentChange(): void {
     if (selectedAgent !== 'hermes') selectedProfile = '';
-    void loadModels(selectedAgent);
+    void loadModels(selectedAgent, { mode: 'draft' });
   }
 
   function handlePickerChange(): void {
@@ -2469,9 +2517,13 @@
                 <span class="chat-meta-dot" aria-hidden="true">·</span>
                 <code>{chat.ticketId}</code>
               {/if}
-              {#if chat.model}
+              {#if chatModelMetaLabel(chat)}
                 <span class="chat-meta-dot" aria-hidden="true">·</span>
-                <span class="chat-model">{chat.model}</span>
+                <span
+                  class:runtime-unknown={runtimeModelIsExplicitlyUnknown(chat)}
+                  class="chat-model"
+                  title={chatModelMetaTitle(chat)}
+                >{chatModelMetaLabel(chat)}</span>
               {/if}
             {:else}
               {#if chat.title && chat.title !== chat.ticketId}
@@ -2481,9 +2533,13 @@
                 {#if chat.title && chat.title !== chat.ticketId}<span class="chat-meta-dot" aria-hidden="true">·</span>{/if}
                 <span class="chat-agent">{listAgentLabel}</span>
               {/if}
-              {#if chat.model}
+              {#if chatModelMetaLabel(chat)}
                 {#if (chat.title && chat.title !== chat.ticketId) || listAgentLabel}<span class="chat-meta-dot" aria-hidden="true">·</span>{/if}
-                <span class="chat-model">{chat.model}</span>
+                <span
+                  class:runtime-unknown={runtimeModelIsExplicitlyUnknown(chat)}
+                  class="chat-model"
+                  title={chatModelMetaTitle(chat)}
+                >{chatModelMetaLabel(chat)}</span>
               {/if}
             {/if}
           </span>
@@ -2680,8 +2736,8 @@
             {/if}
             {#if chatHasActivity}
               <span class="chat-meta-dot" aria-hidden="true">·</span>
-              <span class="chat-header-config" title="Locked for this chat">
-                {selectedAgentLabel}{selectedModelLabel ? ` · ${selectedModelLabel}` : ''}{showEffortSelector ? ` · ${selectedEffortLabel}` : ''}
+              <span class="chat-header-config" title={chatModelMetaTitle(activeChat) ?? 'Locked for this chat'}>
+                {activeChatRuntimeConfigLabel(activeChat)}
               </span>
             {/if}
           </p>

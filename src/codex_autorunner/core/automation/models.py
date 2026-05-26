@@ -6,6 +6,13 @@ from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Optional
 
+from ..runtime_identity import (
+    RUNTIME_IDENTITY_CONTRACT_VERSION,
+    RUNTIME_STAGE_EFFECTIVE,
+    RUNTIME_STAGE_REQUESTED,
+    RuntimeIdentityEnvelope,
+    RuntimeIdentityStage,
+)
 from ..text_utils import _normalize_text
 from ..time_utils import now_iso
 
@@ -193,16 +200,6 @@ def normalize_json_object(value: Any, *, field_name: str) -> dict[str, Any]:
         return {}
     if not isinstance(value, dict):
         raise ValueError(f"{field_name} must be a JSON object")
-    return dict(value)
-
-
-def normalize_optional_json_object(
-    value: Any, *, field_name: str
-) -> Optional[dict[str, Any]]:
-    if value is None:
-        return None
-    if not isinstance(value, dict):
-        raise ValueError(f"{field_name} must be a JSON object when present")
     return dict(value)
 
 
@@ -535,6 +532,8 @@ def default_dedupe_key(*, rule_id: str, event_id: str, target: dict[str, Any]) -
 
 @dataclass(frozen=True)
 class AutomationRuntimeContract:
+    """Automation compatibility wrapper for a canonical runtime identity stage."""
+
     agent: Optional[str] = None
     model: Optional[str] = None
     profile: Optional[str] = None
@@ -547,33 +546,82 @@ class AutomationRuntimeContract:
     backend_runtime_id: Optional[str] = None
     provider_payload: Optional[dict[str, Any]] = None
 
+    def __post_init__(self) -> None:
+        stage = RuntimeIdentityStage(
+            stage=RUNTIME_STAGE_REQUESTED,
+            logical_agent=self.agent,
+            canonical_model_label=self.model,
+            profile=self.profile,
+            reasoning=self.reasoning,
+            approval_policy=self.approval_policy,
+            sandbox_policy=self.sandbox_policy,
+            prompt_ref=self.prompt_ref,
+            input_ref=self.input_ref,
+            workspace_scope=self.workspace_scope,
+            backend_runtime_id=self.backend_runtime_id,
+            provider_payload=self.provider_payload,
+            source="automation_runtime_contract",
+        )
+        normalized = stage.to_automation_runtime_dict()
+        object.__setattr__(self, "agent", normalized["agent"])
+        object.__setattr__(self, "model", normalized["model"])
+        object.__setattr__(self, "profile", normalized["profile"])
+        object.__setattr__(self, "reasoning", normalized["reasoning"])
+        object.__setattr__(self, "approval_policy", normalized["approval_policy"])
+        object.__setattr__(self, "sandbox_policy", normalized["sandbox_policy"])
+        object.__setattr__(self, "prompt_ref", normalized["prompt_ref"])
+        object.__setattr__(self, "input_ref", normalized["input_ref"])
+        object.__setattr__(self, "workspace_scope", normalized["workspace_scope"])
+        object.__setattr__(self, "backend_runtime_id", normalized["backend_runtime_id"])
+        object.__setattr__(self, "provider_payload", normalized["provider_payload"])
+
     @classmethod
     def from_dict(
         cls, value: Any, *, field_name: str = "runtime"
     ) -> "AutomationRuntimeContract":
         data = normalize_json_object(value, field_name=field_name)
+        stage = RuntimeIdentityStage.from_automation_runtime(
+            data, stage=RUNTIME_STAGE_REQUESTED
+        )
+        return cls.from_runtime_stage(stage)
+
+    @classmethod
+    def from_runtime_stage(
+        cls, stage: RuntimeIdentityStage
+    ) -> "AutomationRuntimeContract":
+        data = stage.to_automation_runtime_dict()
         return cls(
-            agent=optional_text(data.get("agent")),
-            model=optional_text(data.get("model")),
-            profile=optional_text(data.get("profile")),
-            reasoning=optional_text(data.get("reasoning")),
-            approval_policy=optional_text(data.get("approval_policy")),
-            sandbox_policy=optional_text(data.get("sandbox_policy")),
-            prompt_ref=normalize_optional_json_object(
-                data.get("prompt_ref"), field_name=f"{field_name}.prompt_ref"
-            ),
-            input_ref=normalize_optional_json_object(
-                data.get("input_ref"), field_name=f"{field_name}.input_ref"
-            ),
-            workspace_scope=normalize_optional_json_object(
-                data.get("workspace_scope"),
-                field_name=f"{field_name}.workspace_scope",
-            ),
-            backend_runtime_id=optional_text(data.get("backend_runtime_id")),
-            provider_payload=normalize_optional_json_object(
-                data.get("provider_payload"),
-                field_name=f"{field_name}.provider_payload",
-            ),
+            agent=data["agent"],
+            model=data["model"],
+            profile=data["profile"],
+            reasoning=data["reasoning"],
+            approval_policy=data["approval_policy"],
+            sandbox_policy=data["sandbox_policy"],
+            prompt_ref=data["prompt_ref"],
+            input_ref=data["input_ref"],
+            workspace_scope=data["workspace_scope"],
+            backend_runtime_id=data["backend_runtime_id"],
+            provider_payload=data["provider_payload"],
+        )
+
+    def to_runtime_stage(
+        self, *, stage: str = RUNTIME_STAGE_REQUESTED
+    ) -> RuntimeIdentityStage:
+        return RuntimeIdentityStage.from_automation_runtime(self.to_dict(), stage=stage)
+
+    def to_runtime_envelope(
+        self, *, stage: str = RUNTIME_STAGE_REQUESTED
+    ) -> RuntimeIdentityEnvelope:
+        runtime_stage = self.to_runtime_stage(stage=stage)
+        if stage == RUNTIME_STAGE_REQUESTED:
+            return RuntimeIdentityEnvelope(requested=runtime_stage)
+        if stage == RUNTIME_STAGE_EFFECTIVE:
+            return RuntimeIdentityEnvelope(effective=runtime_stage)
+        return RuntimeIdentityEnvelope.from_dict(
+            {
+                "contract_version": RUNTIME_IDENTITY_CONTRACT_VERSION,
+                stage: runtime_stage.to_dict(),
+            }
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -589,6 +637,7 @@ class AutomationChildExecutionEdge:
     authoritative_for_parent_completion: bool
     requested_runtime: AutomationRuntimeContract
     actual_runtime: Optional[AutomationRuntimeContract]
+    runtime_identity: RuntimeIdentityEnvelope
     terminal_mapping: dict[str, str]
     terminal_event_id: Optional[str]
     terminal_state: Optional[str]
@@ -605,6 +654,7 @@ class AutomationChildExecutionEdge:
         child_id: str,
         requested_runtime: AutomationRuntimeContract | dict[str, Any],
         actual_runtime: Optional[AutomationRuntimeContract | dict[str, Any]] = None,
+        runtime_identity: Optional[RuntimeIdentityEnvelope | dict[str, Any]] = None,
         authoritative_for_parent_completion: bool = True,
         terminal_mapping: Optional[dict[str, Any]] = None,
         terminal_event_id: Optional[str] = None,
@@ -641,6 +691,19 @@ class AutomationChildExecutionEdge:
                 else None
             )
         )
+        if runtime_identity is None:
+            runtime_envelope = requested.to_runtime_envelope(
+                stage=RUNTIME_STAGE_REQUESTED
+            )
+            if actual is not None:
+                runtime_envelope = RuntimeIdentityEnvelope(
+                    requested=runtime_envelope.requested,
+                    effective=actual.to_runtime_stage(stage=RUNTIME_STAGE_EFFECTIVE),
+                )
+        elif isinstance(runtime_identity, RuntimeIdentityEnvelope):
+            runtime_envelope = runtime_identity
+        else:
+            runtime_envelope = RuntimeIdentityEnvelope.from_dict(runtime_identity)
         mapping = normalize_json_object(
             terminal_mapping or AUTOMATION_CHILD_TERMINAL_MAPPING,
             field_name="terminal_mapping",
@@ -667,6 +730,7 @@ class AutomationChildExecutionEdge:
             ),
             requested_runtime=requested,
             actual_runtime=actual,
+            runtime_identity=runtime_envelope,
             terminal_mapping=normalized_mapping,
             terminal_event_id=optional_text(terminal_event_id),
             terminal_state=optional_text(terminal_state),
@@ -704,6 +768,7 @@ class AutomationChildExecutionEdge:
             ),
             requested_runtime=requested_runtime,
             actual_runtime=data.get("actual_runtime"),
+            runtime_identity=data.get("runtime_identity"),
             terminal_mapping=data.get("terminal_mapping"),
             terminal_event_id=data.get("terminal_event_id"),
             terminal_state=data.get("terminal_state"),
@@ -718,6 +783,7 @@ class AutomationChildExecutionEdge:
         data["actual_runtime"] = (
             self.actual_runtime.to_dict() if self.actual_runtime is not None else None
         )
+        data["runtime_identity"] = self.runtime_identity.to_dict()
         return data
 
 

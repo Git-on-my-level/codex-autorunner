@@ -60,6 +60,11 @@ export function pmaChatSummaryToChatIndexRow(chat: PmaChatSummary): ChatIndexRow
       chat.chatKind ??
       normalizeManagedThreadChatKind(chat.raw.chat_kind ?? chat.raw.thread_kind),
     model: chat.model,
+    runtime: chatRuntimeValue(chat.runtime),
+    runtimeSource: chat.runtimeSource,
+    modelSource: chat.modelSource,
+    reasoning: chat.reasoning,
+    reasoningSource: chat.reasoningSource,
     groupId: chat.ticketId ? `ticket:${chat.ticketId}` : chat.runId ? `run:${chat.runId}` : null,
     flowType: chat.flowType === 'ticket_flow' ? 'ticket_flow' : null,
     ticketPath: stringValue(chat.raw.ticket_path ?? chat.raw.ticketPath),
@@ -113,6 +118,11 @@ export function legacyChatIndexRecordToChatIndexRow(raw: JsonRecord): ChatIndexR
     agentProfile: stringValue(raw.agent_profile ?? raw.agentProfile),
     chatKind: normalizeManagedThreadChatKind(raw.chat_kind ?? raw.chatKind ?? raw.thread_kind),
     model: stringValue(raw.model),
+    runtime: chatRuntimeValue(raw.runtime),
+    runtimeSource: stringValue(raw.runtime_source ?? raw.runtimeSource),
+    modelSource: stringValue(raw.model_source ?? raw.modelSource),
+    reasoning: stringValue(raw.reasoning),
+    reasoningSource: stringValue(raw.reasoning_source ?? raw.reasoningSource),
     groupId: stringValue(raw.group_id),
     flowType: stringValue(raw.flow_type ?? raw.flowType) === 'ticket_flow' ? 'ticket_flow' : null,
     ticketPath: stringValue(raw.ticket_path ?? raw.ticketPath),
@@ -160,6 +170,11 @@ export function chatIndexRowToPmaChatSummary(row: ChatIndexRow): PmaChatSummary 
     agent_profile: row.agentProfile,
     chat_kind: row.chatKind,
     model: row.model,
+    runtime: row.runtime,
+    runtime_source: row.runtimeSource,
+    model_source: row.modelSource,
+    reasoning: row.reasoning,
+    reasoning_source: row.reasoningSource,
     unreadCount: row.unreadCount,
     last_activity_at: row.lastActivityAt,
     last_visible_message_at: row.lastVisibleMessageAt,
@@ -179,6 +194,11 @@ export function chatIndexRowToPmaChatSummary(row: ChatIndexRow): PmaChatSummary 
     chatKind: row.chatKind ?? null,
     agentProfile: row.agentProfile ?? null,
     model: row.model ?? null,
+    runtime: row.runtime ?? null,
+    runtimeSource: row.runtimeSource ?? null,
+    modelSource: row.modelSource ?? null,
+    reasoning: row.reasoning ?? null,
+    reasoningSource: row.reasoningSource ?? null,
     repoId: row.repoId ?? null,
     worktreeId: row.worktreeId ?? null,
     ticketId: row.ticketId ?? null,
@@ -437,6 +457,12 @@ function recordValue(value: unknown): Record<string, unknown> | null {
     return value as Record<string, unknown>;
   }
   return null;
+}
+
+function chatRuntimeValue(value: unknown): ChatIndexRow['runtime'] {
+  const record = recordValue(value);
+  if (!record) return null;
+  return record as NonNullable<ChatIndexRow['runtime']>;
 }
 
 function chatFacetsValue(value: unknown): ChatIndexFacets | null {

@@ -215,6 +215,21 @@ def build_hub_chat_read_model_router(context: HubAppContext) -> APIRouter:
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
+    @router.get("/hub/read-models/chats/{chat_id}/runtime-chain")
+    def chat_runtime_chain(
+        chat_id: str,
+        execution_id: Annotated[Optional[str], Query()] = None,
+        automation_job_id: Annotated[Optional[str], Query()] = None,
+        automation_child_edge_id: Annotated[Optional[str], Query()] = None,
+    ):
+        return service.runtime_chain(
+            chat_id=chat_id,
+            managed_thread_id=chat_id,
+            execution_id=execution_id,
+            automation_job_id=automation_job_id,
+            automation_child_edge_id=automation_child_edge_id,
+        )
+
     @router.get("/hub/read-models/chats/{chat_id}/patches")
     async def stream_chat_detail_patches(
         request: Request,

@@ -15,6 +15,7 @@ from ..ports.run_event import (
     Failed,
     Interrupted,
     OutputDelta,
+    ProviderRuntimeReported,
     RunEvent,
     RunNotice,
     Started,
@@ -81,6 +82,8 @@ def _event_type_and_status(event: RunEvent) -> tuple[str, str]:
         return "approval_requested", "recorded"
     if isinstance(event, TokenUsage):
         return "token_usage", "recorded"
+    if isinstance(event, ProviderRuntimeReported):
+        return "provider_runtime_reported", "recorded"
     if isinstance(event, RunNotice):
         return "run_notice", "recorded"
     if isinstance(event, Completed):

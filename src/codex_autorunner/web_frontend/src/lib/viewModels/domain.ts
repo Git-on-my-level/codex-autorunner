@@ -15,6 +15,11 @@ export type PmaChatSummary = {
   /** Hermes (and similar) runtime profile when set on the managed thread. */
   agentProfile: string | null;
   model: string | null;
+  runtime?: JsonRecord | null;
+  runtimeSource?: string | null;
+  modelSource?: string | null;
+  reasoning?: string | null;
+  reasoningSource?: string | null;
   repoId: string | null;
   worktreeId: string | null;
   ticketId: string | null;
@@ -333,6 +338,7 @@ export function mapPmaChatSummary(raw: JsonRecord): PmaChatSummary {
     nullableString(raw.worktree_repo_id ?? raw.worktree_id) ?? (resourceKind === 'worktree' ? resourceId : null);
   const ticketId = ticketIdFromRaw(raw);
   const isTicketFlow = detectTicketFlowChat(raw, ticketId);
+  const runtime = asRecord(raw.runtime);
   const archiveState = nullableString(raw.archive_state ?? raw.archiveState);
   const lifecycleField = nullableString(raw.lifecycle_status ?? raw.lifecycleStatus);
   const lifecycleRoot = nullableString(raw.lifecycle);
@@ -364,6 +370,11 @@ export function mapPmaChatSummary(raw: JsonRecord): PmaChatSummary {
     chatKind: normalizeManagedThreadChatKind(raw.chat_kind ?? raw.chatKind ?? raw.thread_kind),
     agentProfile: nullableString(raw.agent_profile ?? raw.agentProfile),
     model: nullableString(raw.model ?? latest.model),
+    runtime: Object.keys(runtime).length > 0 ? runtime : null,
+    runtimeSource: nullableString(raw.runtime_source ?? raw.runtimeSource),
+    modelSource: nullableString(raw.model_source ?? raw.modelSource),
+    reasoning: nullableString(raw.reasoning ?? latest.reasoning),
+    reasoningSource: nullableString(raw.reasoning_source ?? raw.reasoningSource),
     repoId,
     worktreeId,
     ticketId,

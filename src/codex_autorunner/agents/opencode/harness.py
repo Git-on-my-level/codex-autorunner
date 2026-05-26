@@ -45,6 +45,7 @@ from .progress_synthesis import (
 )
 from .protocol_payload import (
     extract_message_info,
+    extract_model_ids,
     extract_status_type,
     status_is_idle,
 )
@@ -87,6 +88,35 @@ def _resolve_runtime_model_payload(model: Optional[str]) -> Optional[dict[str, s
     if resolved_model is None:
         resolved_model = resolve_agent_runtime_options("opencode").model
     return resolve_opencode_model_payload(resolved_model)
+
+
+def _effective_runtime_from_payload(
+    payload: Any,
+    *,
+    source: str,
+    backend_turn_id: Optional[str],
+) -> Optional[dict[str, Any]]:
+    provider_id, model_id = extract_model_ids(payload)
+    if not provider_id and not model_id:
+        return None
+    provider_payload: dict[str, Any] = {}
+    if provider_id:
+        provider_payload["providerID"] = provider_id
+    if model_id:
+        provider_payload["modelID"] = model_id
+    return {
+        "stage": "effective",
+        "logical_agent": "opencode",
+        "runtime_agent": "opencode",
+        "provider_id": provider_id,
+        "canonical_model_label": (
+            f"{provider_id}/{model_id}" if provider_id and model_id else model_id
+        ),
+        "provider_model_id": model_id,
+        "backend_runtime_id": backend_turn_id,
+        "provider_payload": provider_payload or None,
+        "source": source,
+    }
 
 
 def _first_text_field(entry: dict[str, Any], keys: tuple[str, ...]) -> Optional[str]:
@@ -1045,6 +1075,18 @@ class OpenCodeHarness(AgentHarness):
                     assistant_text=lifecycle_result.assistant_text,
                     errors=([lifecycle_result.error] if lifecycle_result.error else []),
                     raw_events=[dict(event) for event in lifecycle_result.raw_events],
+                    effective_runtime=_effective_runtime_from_payload(
+                        next(
+                            (
+                                event
+                                for event in reversed(lifecycle_result.raw_events)
+                                if extract_model_ids(event) != (None, None)
+                            ),
+                            {},
+                        ),
+                        source="opencode.raw_event",
+                        backend_turn_id=turn_id,
+                    ),
                 )
 
             streamed_raw_events: list[dict[str, Any]] = []
@@ -1131,18 +1173,41 @@ class OpenCodeHarness(AgentHarness):
                     await _close_progress_streams()
 
             async def _fetch_session() -> Any:
+                session_payload: Any = None
+                session_fetch_failed = False
+                try:
+                    session_payload = await client.get_session(conversation_id)
+                except (
+                    RuntimeError,
+                    OSError,
+                    ProcessLookupError,
+                    BrokenPipeError,
+                    httpx.HTTPError,
+                    AttributeError,
+                ):
+                    session_fetch_failed = True
+                    session_payload = None
                 statuses = await client.session_status(directory=str(workspace_root))
+                status_payload: dict[str, Any] = {}
                 if isinstance(statuses, dict):
                     session_status = statuses.get(conversation_id)
                     if session_status is None:
                         if command_task is not None and not command_task.done():
-                            return {"status": {"type": "busy"}}
-                        return {"status": {"type": "idle"}}
-                    if isinstance(session_status, dict):
-                        return {"status": session_status}
-                    if isinstance(session_status, str):
-                        return {"status": session_status}
-                return {"status": {}}
+                            status_payload = {"status": {"type": "busy"}}
+                        else:
+                            status_payload = {"status": {"type": "idle"}}
+                    elif isinstance(session_status, dict):
+                        status_payload = {"status": session_status}
+                    elif isinstance(session_status, str):
+                        status_payload = {"status": session_status}
+                if isinstance(session_payload, dict):
+                    merged = {**session_payload, **status_payload}
+                    if session_fetch_failed:
+                        merged["session_fetch_failed"] = True
+                    return merged
+                if session_fetch_failed:
+                    status_payload["session_fetch_failed"] = True
+                return status_payload or {"status": {}}
 
             async def _fetch_providers() -> Any:
                 return await client.providers(directory=str(workspace_root))
@@ -1252,11 +1317,33 @@ class OpenCodeHarness(AgentHarness):
             )
 
             errors = [lifecycle_result.error] if lifecycle_result.error else []
+            effective_runtime = _effective_runtime_from_payload(
+                runtime_result.output.usage,
+                source="opencode.usage",
+                backend_turn_id=turn_id,
+            )
+            if effective_runtime is None:
+                effective_runtime = _effective_runtime_from_payload(
+                    next(
+                        (
+                            event
+                            for event in reversed(lifecycle_result.raw_events)
+                            if extract_model_ids(event) != (None, None)
+                        ),
+                        {},
+                    ),
+                    source="opencode.raw_event",
+                    backend_turn_id=turn_id,
+                )
             return TerminalTurnResult(
                 status="error" if errors else "ok",
                 assistant_text=lifecycle_result.assistant_text,
                 errors=errors,
                 raw_events=[dict(event) for event in lifecycle_result.raw_events],
+                effective_runtime=(
+                    getattr(runtime_result.output, "effective_runtime", None)
+                    or effective_runtime
+                ),
             )
 
         try:

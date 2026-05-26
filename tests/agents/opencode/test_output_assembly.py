@@ -461,6 +461,70 @@ async def test_usage_backfills_context_from_providers() -> None:
 
 
 @pytest.mark.anyio
+async def test_effective_runtime_uses_usage_event_model() -> None:
+    asm = OutputAssembler(session_id="s1")
+    await asm.emit_usage_update(
+        {
+            "sessionID": "s1",
+            "usage": {"total": 100},
+            "info": {"providerID": "anthropic", "modelID": "claude-sonnet"},
+        },
+        is_primary_session=True,
+    )
+
+    result = await asm.build_result()
+
+    assert result.effective_runtime is not None
+    assert result.effective_runtime.source == "opencode.usage_event"
+    assert result.effective_runtime.provider_id == "anthropic"
+    assert result.effective_runtime.provider_model_id == "claude-sonnet"
+    assert result.effective_runtime.canonical_model_label == ("anthropic/claude-sonnet")
+
+
+@pytest.mark.anyio
+async def test_effective_runtime_uses_session_model_without_usage() -> None:
+    async def _fetch_session():
+        return {
+            "id": "s1",
+            "session": {
+                "model": {
+                    "providerID": "zai-coding-plan",
+                    "modelID": "glm-5.1",
+                }
+            },
+        }
+
+    asm = OutputAssembler(session_id="s1", session_fetcher=_fetch_session)
+
+    result = await asm.build_result()
+
+    assert result.effective_runtime is not None
+    assert result.effective_runtime.source == "opencode.session"
+    assert result.effective_runtime.canonical_model_label == "zai-coding-plan/glm-5.1"
+
+
+@pytest.mark.anyio
+async def test_effective_runtime_labels_launch_fallback_when_session_fetch_fails() -> (
+    None
+):
+    async def _fetch_session():
+        raise httpx.ConnectError("offline")
+
+    asm = OutputAssembler(
+        session_id="s1",
+        model_payload={"providerID": "openrouter", "modelID": "gpt-5-mini"},
+        session_fetcher=_fetch_session,
+    )
+
+    result = await asm.build_result()
+
+    assert result.effective_runtime is not None
+    assert result.effective_runtime.source == "opencode.launch_fallback"
+    assert result.effective_runtime.canonical_model_label == "openrouter/gpt-5-mini"
+    assert result.effective_runtime.provenance["session_fetch_failed"] is True
+
+
+@pytest.mark.anyio
 async def test_messages_fetcher_recovery() -> None:
     async def _fetch_messages():
         return [

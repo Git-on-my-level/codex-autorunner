@@ -174,26 +174,34 @@ class AutomationChildRunReconciler:
         terminal_state = _managed_thread_terminal_state(status)
         if terminal_state is None:
             return ChildReconcileResult(inspected=1)
+        actual_runtime = _actual_runtime_from_execution(
+            latest_execution,
+            fallback=edge.requested_runtime.to_dict(),
+        )
+        if not actual_runtime:
+            actual_runtime = _actual_runtime_from_thread(
+                self._hub_root,
+                latest_execution.get("thread_target_id")
+                or _edge_thread_target_id(edge),
+                fallback=edge.requested_runtime.to_dict(),
+            )
+        actual_runtime["backend_runtime_id"] = actual_runtime.get(
+            "backend_runtime_id"
+        ) or latest_execution.get("backend_turn_id")
+        transcript_model = _actual_model_from_transcript(
+            self._hub_root,
+            latest_execution.get("execution_id"),
+            latest_execution.get("transcript_mirror_id"),
+        )
+        if transcript_model is not None:
+            actual_runtime["model"] = transcript_model
         self._store.mark_child_execution_terminal(
             edge.edge_id,
             terminal_state=terminal_state,
             terminal_event_id=str(
                 latest_execution.get("execution_id") or edge.child_id
             ),
-            actual_runtime={
-                **_actual_runtime_from_thread(
-                    self._hub_root,
-                    latest_execution.get("thread_target_id")
-                    or _edge_thread_target_id(edge),
-                    fallback=edge.requested_runtime.to_dict(),
-                ),
-                "model": _actual_model_from_transcript(
-                    self._hub_root,
-                    latest_execution.get("execution_id"),
-                    latest_execution.get("transcript_mirror_id"),
-                ),
-                "backend_runtime_id": latest_execution.get("backend_turn_id"),
-            },
+            actual_runtime=actual_runtime,
         )
         if terminal_state == "succeeded":
             reduce_hints["result_summary"] = _managed_thread_success_summary(
@@ -404,6 +412,34 @@ def _actual_runtime_from_thread(
         or actual.get("backend_runtime_id")
     )
     return actual
+
+
+def _actual_runtime_from_execution(
+    execution: dict[str, object],
+    *,
+    fallback: dict[str, object],
+) -> dict[str, object]:
+    runtime_identity = execution.get("runtime_identity")
+    if not isinstance(runtime_identity, dict):
+        return {}
+    effective = runtime_identity.get("effective")
+    if not isinstance(effective, dict):
+        return {}
+    actual = dict(fallback)
+    actual.update(
+        {
+            "agent": effective.get("logical_agent") or effective.get("agent"),
+            "model": effective.get("canonical_model_label") or effective.get("model"),
+            "profile": effective.get("profile"),
+            "reasoning": effective.get("reasoning"),
+            "approval_policy": effective.get("approval_policy"),
+            "sandbox_policy": effective.get("sandbox_policy"),
+            "workspace_scope": effective.get("workspace_scope"),
+            "backend_runtime_id": effective.get("backend_runtime_id"),
+            "provider_payload": effective.get("provider_payload"),
+        }
+    )
+    return {key: value for key, value in actual.items() if value is not None}
 
 
 def _actual_model_from_transcript(

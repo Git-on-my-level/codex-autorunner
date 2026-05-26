@@ -35,3 +35,9 @@ The JSON payload includes:
 - `startup.duration_seconds`
 - `recovery.duration_seconds` plus PMA and Discord-bound checkpoint-restore results
 - `trace_validation` for the preserved heavy execution
+
+When runtime identity migrations are in scope, also inspect runtime-chain
+diagnostics for `RUNTIME_CHAIN_PARTIAL_HISTORICAL_BACKFILL` and drift findings.
+Partial historical rows are acceptable only when their missing stages are
+explicit in envelope metadata and no frontend picker or current default was used
+as evidence.

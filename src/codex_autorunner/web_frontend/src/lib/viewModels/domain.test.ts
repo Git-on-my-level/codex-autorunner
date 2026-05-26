@@ -111,6 +111,35 @@ describe('view model mappers', () => {
     });
   });
 
+  it('preserves explicit unknown runtime without inventing a model', () => {
+    const vm = mapPmaChatSummary({
+      thread_target_id: 'thread-runtime-unknown',
+      display_name: 'Runtime unknown',
+      agent_id: 'codex',
+      lifecycle_status: 'active',
+      normalized_status: 'running',
+      runtime: {
+        stage: 'unknown',
+        source: 'unknown',
+        runtime_source: 'unknown',
+        model: null,
+        model_unknown: true,
+        reasoning_unknown: true,
+        model_source: 'unknown',
+        reasoning_source: 'unknown'
+      },
+      runtime_source: 'unknown',
+      model_source: 'unknown',
+      reasoning_source: 'unknown'
+    });
+
+    expect(vm.model).toBeNull();
+    expect(vm.runtime?.model_unknown).toBe(true);
+    expect(vm.runtimeSource).toBe('unknown');
+    expect(vm.modelSource).toBe('unknown');
+    expect(vm.reasoning).toBeNull();
+  });
+
   it('trusts backend-projected summary titles without client delimiter cleanup', () => {
     const vm = mapPmaChatSummary({
       thread_target_id: 'thread-inj',

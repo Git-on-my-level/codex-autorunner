@@ -756,6 +756,25 @@ def register_doctor_commands(
                     )
                 )
 
+        if report.runtime_chains:
+            typer.echo(f"runtime-chain findings: {len(report.runtime_chains)}")
+            for chain in report.runtime_chains[:top_n]:
+                identity = chain.row_identity
+                codes = ", ".join(finding.code for finding in chain.findings[:3])
+                if len(chain.findings) > 3:
+                    codes += f", +{len(chain.findings) - 3} more"
+                typer.echo(
+                    "  execution={execution} chat={chat} job={job} edge={edge}: {codes}".format(
+                        execution=identity.get("execution_id") or "-",
+                        chat=identity.get("chat_id")
+                        or identity.get("thread_target_id")
+                        or "-",
+                        job=identity.get("automation_job_id") or "-",
+                        edge=identity.get("automation_child_edge_id") or "-",
+                        codes=codes or "-",
+                    )
+                )
+
         if report.threshold_breaches:
             typer.echo(f"threshold breaches: {len(report.threshold_breaches)}")
             for breach in report.threshold_breaches:
@@ -767,3 +786,80 @@ def register_doctor_commands(
             typer.echo(
                 f"scan_duration: {report.startup_recovery_duration_seconds:.3f}s"
             )
+
+    @doctor_app.command("runtime-chain")
+    def doctor_runtime_chain(
+        repo: Optional[Path] = typer.Option(None, "--repo", help="Repo or hub path"),
+        chat_id: Optional[str] = typer.Option(None, "--chat-id", help="Chat id"),
+        managed_thread_id: Optional[str] = typer.Option(
+            None, "--thread-id", help="Managed thread id"
+        ),
+        execution_id: Optional[str] = typer.Option(
+            None, "--execution-id", help="Managed turn execution id"
+        ),
+        automation_job_id: Optional[str] = typer.Option(
+            None, "--automation-job-id", help="Automation job id"
+        ),
+        automation_child_edge_id: Optional[str] = typer.Option(
+            None, "--automation-child-edge-id", help="Automation child edge id"
+        ),
+        json_output: bool = typer.Option(False, "--json", help="Output JSON"),
+    ):
+        """Show requested/resolved/launch/effective/projected runtime chain facts."""
+        from ....core.orchestration.runtime_chain_diagnostics import (
+            build_runtime_chain_diagnostic,
+        )
+
+        if not any(
+            (
+                chat_id,
+                managed_thread_id,
+                execution_id,
+                automation_job_id,
+                automation_child_edge_id,
+            )
+        ):
+            raise_exit(
+                "Provide one of --chat-id, --thread-id, --execution-id, --automation-job-id, or --automation-child-edge-id"
+            )
+        try:
+            hub_config = load_hub_config(repo or Path.cwd())
+        except ConfigError as exc:
+            raise_exit("No hub config found", cause=exc)
+        report = build_runtime_chain_diagnostic(
+            hub_config.root,
+            chat_id=chat_id,
+            managed_thread_id=managed_thread_id,
+            execution_id=execution_id,
+            automation_job_id=automation_job_id,
+            automation_child_edge_id=automation_child_edge_id,
+        )
+        payload = report.to_dict()
+        if json_output:
+            typer.echo(json.dumps(payload, indent=2))
+            return
+        typer.echo(f"lookup: {payload['lookup']}")
+        typer.echo(f"rows: {payload['row_identity']}")
+        for stage_name, stage in payload["stages"].items():
+            if stage is None:
+                typer.echo(f"{stage_name}: unknown")
+                continue
+            typer.echo(
+                "{stage}: agent={agent} model={model} reasoning={reasoning} source={source}".format(
+                    stage=stage_name,
+                    agent=stage.get("logical_agent")
+                    or stage.get("runtime_agent")
+                    or "-",
+                    model=stage.get("canonical_model_label") or "-",
+                    reasoning=stage.get("reasoning") or "-",
+                    source=stage.get("source") or "-",
+                )
+            )
+        if report.findings:
+            typer.echo(f"findings: {len(report.findings)}")
+            for finding in report.findings:
+                typer.echo(
+                    f"  {finding.severity.upper()}: {finding.code} {finding.message}"
+                )
+        else:
+            typer.echo("findings: none")

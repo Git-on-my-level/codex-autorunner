@@ -181,15 +181,19 @@ async def observe_turn_runtime(
         raw_events=raw_events,
     )
     usage: Optional[dict[str, Any]] = None
+    effective_runtime = None
     if collect_task.done() and not collect_task.cancelled():
         with contextlib.suppress(Exception):
-            usage = collect_task.result().usage
+            collect_result = collect_task.result()
+            usage = collect_result.usage
+            effective_runtime = collect_result.effective_runtime
     output = OpenCodeTurnOutput(
         text=lifecycle.assistant_text,
         error=lifecycle.error,
         usage=usage,
         output_source=lifecycle.output_source,
         terminal_signal=lifecycle.terminal_signal,
+        effective_runtime=effective_runtime,
     )
     return OpenCodeRuntimeObservation(output=output, lifecycle=lifecycle)
 

@@ -1378,6 +1378,11 @@ function seedDetailBackedChatRow(state: ReadModelEntityState, thread: ChatThread
     agentProfile: thread.agentProfile ?? null,
     chatKind: thread.chatKind ?? null,
     model: thread.model ?? null,
+    runtime: thread.runtime ?? null,
+    runtimeSource: thread.runtimeSource ?? null,
+    modelSource: thread.modelSource ?? null,
+    reasoning: thread.reasoning ?? null,
+    reasoningSource: thread.reasoningSource ?? null,
     groupId: null
   };
   state.chatOrder.push(thread.chatId);

@@ -6,6 +6,14 @@ import uuid
 from dataclasses import dataclass
 from typing import Callable
 
+from ..runtime_identity import (
+    RUNTIME_STAGE_EFFECTIVE,
+    RUNTIME_STAGE_LAUNCH,
+    RUNTIME_STAGE_REQUESTED,
+    RUNTIME_STAGE_RESOLVED,
+    RuntimeIdentityEnvelope,
+    RuntimeIdentityStage,
+)
 from ..sqlite_utils import table_columns, table_exists
 from ..time_utils import now_iso
 from .compatibility import SchemaCompatibilityError, evaluate_schema_compatibility
@@ -20,7 +28,7 @@ from .turn_execution_storage import (
     build_turn_execution_request_from_storage,
 )
 
-ORCHESTRATION_SCHEMA_VERSION = 43
+ORCHESTRATION_SCHEMA_VERSION = 44
 
 
 @dataclass(frozen=True)
@@ -2356,6 +2364,295 @@ def _apply_v43(conn: sqlite3.Connection) -> None:
             )
 
 
+def _json_object(payload: object) -> dict[str, object]:
+    if isinstance(payload, dict):
+        return dict(payload)
+    if not isinstance(payload, str) or not payload.strip():
+        return {}
+    try:
+        loaded = json.loads(payload)
+    except (TypeError, ValueError):
+        return {}
+    return dict(loaded) if isinstance(loaded, dict) else {}
+
+
+def _runtime_identity_from_json(payload: object) -> RuntimeIdentityEnvelope:
+    if not isinstance(payload, str) or not payload.strip():
+        return RuntimeIdentityEnvelope()
+    try:
+        return RuntimeIdentityEnvelope.from_json(payload)
+    except (TypeError, ValueError):
+        return RuntimeIdentityEnvelope(
+            metadata={
+                "backfill_source": "migration_v44_invalid_runtime_identity_json",
+                "partial_reason": "existing runtime_identity_json was invalid",
+            }
+        )
+
+
+def _stage_from_turn_request(
+    payload: object,
+    *,
+    stage: str,
+    source: str,
+    backend_runtime_id: object = None,
+    observed_at: object = None,
+) -> RuntimeIdentityStage | None:
+    request = _json_object(payload)
+    if not request:
+        return None
+    try:
+        base = RuntimeIdentityStage.from_turn_execution_request(request, stage=stage)
+    except (TypeError, ValueError):
+        return None
+    data = base.to_dict()
+    data["source"] = source
+    data["backend_runtime_id"] = backend_runtime_id
+    data["observed_at"] = observed_at
+    data["provenance"] = {
+        **base.provenance,
+        "backfill_source": source,
+        "source_column": "turn_request_json",
+    }
+    return RuntimeIdentityStage.from_mapping(data, stage=stage)
+
+
+def _stage_from_automation_runtime_json(
+    payload: object, *, stage: str, source: str
+) -> RuntimeIdentityStage | None:
+    runtime = _json_object(payload)
+    if not runtime:
+        return None
+    try:
+        base = RuntimeIdentityStage.from_automation_runtime(runtime, stage=stage)
+    except (TypeError, ValueError):
+        return None
+    data = base.to_dict()
+    data["source"] = source
+    data["provenance"] = {
+        **base.provenance,
+        "backfill_source": source,
+    }
+    return RuntimeIdentityStage.from_mapping(data, stage=stage)
+
+
+def _merge_envelope_stage(
+    *,
+    envelope: RuntimeIdentityEnvelope,
+    requested: RuntimeIdentityStage | None = None,
+    resolved: RuntimeIdentityStage | None = None,
+    launch: RuntimeIdentityStage | None = None,
+    effective: RuntimeIdentityStage | None = None,
+    metadata: dict[str, object] | None = None,
+) -> RuntimeIdentityEnvelope:
+    return RuntimeIdentityEnvelope(
+        requested=envelope.requested or requested,
+        resolved=envelope.resolved or resolved,
+        launch=envelope.launch or launch,
+        effective=envelope.effective or effective,
+        projected=envelope.projected,
+        metadata={**envelope.metadata, **(metadata or {})},
+    )
+
+
+def _stage_value(stage: RuntimeIdentityStage | None, field: str) -> object:
+    if stage is None:
+        return None
+    if field == "agent":
+        return stage.logical_agent or stage.runtime_agent
+    if field == "model":
+        return stage.canonical_model_label
+    if field == "reasoning":
+        return stage.reasoning
+    return getattr(stage, field)
+
+
+def _runtime_identity_metadata(
+    envelope: RuntimeIdentityEnvelope,
+) -> dict[str, object]:
+    missing = [
+        name
+        for name in ("requested", "resolved", "launch", "effective", "projected")
+        if getattr(envelope, name) is None
+    ]
+    contradictions: list[dict[str, object]] = []
+    stages = [
+        ("requested", envelope.requested),
+        ("resolved", envelope.resolved),
+        ("launch", envelope.launch),
+        ("effective", envelope.effective),
+        ("projected", envelope.projected),
+    ]
+    for field in ("agent", "model", "reasoning"):
+        previous_name: str | None = None
+        previous_value: object = None
+        for stage_name, stage in stages:
+            value = _stage_value(stage, field)
+            if value is None:
+                continue
+            if previous_value is not None and value != previous_value:
+                contradictions.append(
+                    {
+                        "field": field,
+                        "expected_stage": previous_name,
+                        "actual_stage": stage_name,
+                        "expected": previous_value,
+                        "actual": value,
+                    }
+                )
+            previous_name = stage_name
+            previous_value = value
+    metadata: dict[str, object] = {
+        "backfill_source": "migration_v44_runtime_identity_backfill",
+        "partial": bool(missing),
+        "missing_stages": missing,
+    }
+    if missing:
+        metadata["partial_reason"] = (
+            "no durable historical evidence exists for one or more runtime stages"
+        )
+    if contradictions:
+        metadata["contradictions"] = contradictions
+    return metadata
+
+
+def _backfill_thread_execution_runtime_identity(conn: sqlite3.Connection) -> None:
+    if not table_exists(conn, "orch_thread_executions"):
+        return
+    columns = _table_columns(conn, "orch_thread_executions")
+
+    def expr(name: str) -> str:
+        return name if name in columns else f"NULL AS {name}"
+
+    rows = conn.execute(f"""
+        SELECT execution_id, status, {expr("backend_turn_id")},
+               {expr("model_id")}, {expr("reasoning_level")},
+               {expr("started_at")}, {expr("finished_at")},
+               {expr("turn_request_json")}, {expr("runtime_identity_json")}
+          FROM orch_thread_executions
+    """).fetchall()
+    for row in rows:
+        envelope = _runtime_identity_from_json(row["runtime_identity_json"])
+        resolved = _stage_from_turn_request(
+            row["turn_request_json"],
+            stage=RUNTIME_STAGE_RESOLVED,
+            source="migration_v44.turn_request.resolved",
+        )
+        launch = None
+        if str(row["status"] or "").lower() not in {"queued", "pending", "claiming"}:
+            launch = _stage_from_turn_request(
+                row["turn_request_json"],
+                stage=RUNTIME_STAGE_LAUNCH,
+                source="migration_v44.turn_request.launch",
+                backend_runtime_id=row["backend_turn_id"],
+                observed_at=row["started_at"] or row["finished_at"],
+            )
+        envelope = _merge_envelope_stage(
+            envelope=envelope,
+            resolved=resolved,
+            launch=launch,
+        )
+        envelope = _merge_envelope_stage(
+            envelope=envelope,
+            metadata=_runtime_identity_metadata(envelope),
+        )
+        model_id = row["model_id"]
+        reasoning_level = row["reasoning_level"]
+        for stage in (envelope.resolved, envelope.launch, envelope.effective):
+            if model_id is None and stage is not None:
+                model_id = stage.canonical_model_label
+            if reasoning_level is None and stage is not None:
+                reasoning_level = stage.reasoning
+        assignments = ["runtime_identity_json = ?"]
+        values: list[object] = [envelope.to_json()]
+        if "model_id" in columns:
+            assignments.append("model_id = COALESCE(model_id, ?)")
+            values.append(model_id)
+        if "reasoning_level" in columns:
+            assignments.append("reasoning_level = COALESCE(reasoning_level, ?)")
+            values.append(reasoning_level)
+        values.append(row["execution_id"])
+        conn.execute(
+            f"""
+            UPDATE orch_thread_executions
+               SET {", ".join(assignments)}
+             WHERE execution_id = ?
+            """,
+            tuple(values),
+        )
+
+
+def _backfill_automation_edge_runtime_identity(conn: sqlite3.Connection) -> None:
+    if not table_exists(conn, "orch_automation_child_execution_edges"):
+        return
+    if table_exists(conn, "orch_thread_executions"):
+        rows = conn.execute("""
+            SELECT edge.edge_id, edge.child_kind, edge.child_id,
+                   edge.requested_runtime_json, edge.actual_runtime_json,
+                   edge.runtime_identity_json,
+                   exec.runtime_identity_json AS child_runtime_identity_json
+              FROM orch_automation_child_execution_edges AS edge
+              LEFT JOIN orch_thread_executions AS exec
+                ON exec.execution_id = edge.child_id
+        """).fetchall()
+    else:
+        rows = conn.execute("""
+            SELECT edge_id, child_kind, child_id, requested_runtime_json,
+                   actual_runtime_json, runtime_identity_json,
+                   NULL AS child_runtime_identity_json
+              FROM orch_automation_child_execution_edges
+        """).fetchall()
+    for row in rows:
+        envelope = _runtime_identity_from_json(row["runtime_identity_json"])
+        child_envelope = _runtime_identity_from_json(row["child_runtime_identity_json"])
+        requested = _stage_from_automation_runtime_json(
+            row["requested_runtime_json"],
+            stage=RUNTIME_STAGE_REQUESTED,
+            source="migration_v44.automation_child_edge.requested_runtime_json",
+        )
+        effective = _stage_from_automation_runtime_json(
+            row["actual_runtime_json"],
+            stage=RUNTIME_STAGE_EFFECTIVE,
+            source="migration_v44.automation_child_edge.actual_runtime_json",
+        )
+        envelope = _merge_envelope_stage(
+            envelope=envelope,
+            requested=requested,
+            resolved=child_envelope.resolved,
+            launch=child_envelope.launch,
+            effective=effective or child_envelope.effective,
+        )
+        envelope = _merge_envelope_stage(
+            envelope=envelope,
+            metadata=_runtime_identity_metadata(envelope),
+        )
+        conn.execute(
+            """
+            UPDATE orch_automation_child_execution_edges
+               SET runtime_identity_json = ?
+             WHERE edge_id = ?
+            """,
+            (envelope.to_json(), row["edge_id"]),
+        )
+
+
+def _apply_v44(conn: sqlite3.Connection) -> None:
+    _ensure_column(
+        conn,
+        "orch_thread_executions",
+        "runtime_identity_json",
+        "runtime_identity_json TEXT",
+    )
+    _ensure_column(
+        conn,
+        "orch_automation_child_execution_edges",
+        "runtime_identity_json",
+        "runtime_identity_json TEXT",
+    )
+    _backfill_thread_execution_runtime_identity(conn)
+    _backfill_automation_edge_runtime_identity(conn)
+
+
 _MIGRATIONS = (
     _MigrationStep(1, "create_core_orchestration_schema", _apply_v1),
     _MigrationStep(2, "add_binding_and_flow_projection_scaffolding", _apply_v2),
@@ -2468,6 +2765,11 @@ _MIGRATIONS = (
         "rename_legacy_pma_automation_metadata_keys",
         _apply_v43,
     ),
+    _MigrationStep(
+        44,
+        "backfill_historical_runtime_identity_envelopes",
+        _apply_v44,
+    ),
 )
 
 
@@ -2480,7 +2782,7 @@ _TABLE_DEFINITIONS = (
     OrchestrationTableDefinition(
         name="orch_thread_executions",
         role="authoritative",
-        description="Canonical turn execution request/record envelopes plus indexed execution metadata for thread targets.",
+        description="Canonical turn execution request/record/runtime identity envelopes plus indexed execution metadata for thread targets.",
     ),
     OrchestrationTableDefinition(
         name="orch_thread_actions",

@@ -27,6 +27,7 @@ from ..read_model_contracts import (
     ChatIndexRow,
     ChatIndexSnapshot,
     ChatQueueSummary,
+    ChatRuntimeProjection,
     ChatThreadProjection,
     ChatTimelineIdentity,
     ChatTimelineItem,
@@ -56,6 +57,7 @@ class ChatReadModelService:
     """Thin read-model façade over ChatSurfaceReadService."""
 
     def __init__(self, hub_root):
+        self._hub_root = hub_root
         self._surface = ChatSurfaceReadService(hub_root, durable=True)
 
     def chat_index_contract(
@@ -181,6 +183,28 @@ class ChatReadModelService:
             if isinstance(raw, dict)
         ]
         return {"cursor": batch.get("cursor"), "events": events}
+
+    def runtime_chain(
+        self,
+        *,
+        chat_id: Optional[str] = None,
+        managed_thread_id: Optional[str] = None,
+        execution_id: Optional[str] = None,
+        automation_job_id: Optional[str] = None,
+        automation_child_edge_id: Optional[str] = None,
+    ) -> dict[str, Any]:
+        from codex_autorunner.core.orchestration.runtime_chain_diagnostics import (
+            build_runtime_chain_diagnostic,
+        )
+
+        return build_runtime_chain_diagnostic(
+            self._hub_root,
+            chat_id=chat_id,
+            managed_thread_id=managed_thread_id,
+            execution_id=execution_id,
+            automation_job_id=automation_job_id,
+            automation_child_edge_id=automation_child_edge_id,
+        ).to_dict()
 
     def _chat_index_patch_event_from_hub(
         self, raw: Mapping[str, Any]
@@ -729,6 +753,11 @@ def hub_chat_row_to_chat_index_row(raw: Mapping[str, Any]) -> ChatIndexRow:
         chat_kind=ck_type,
         facets=facets,
         model=_str_or_none(raw.get("model")),
+        runtime=_runtime_projection_contract(raw.get("runtime")),
+        runtime_source=_str_or_none(raw.get("runtime_source")),
+        model_source=_str_or_none(raw.get("model_source")),
+        reasoning=_str_or_none(raw.get("reasoning")),
+        reasoning_source=_str_or_none(raw.get("reasoning_source")),
         group_id=_str_or_none(raw.get("group_id")),
         flow_type="ticket_flow" if is_ticket_flow else None,
         ticket_path=_str_or_none(raw.get("ticket_path")) if is_ticket_flow else None,
@@ -972,6 +1001,12 @@ def _detail_thread_as_index_shape(thread: Mapping[str, Any]) -> dict[str, Any]:
         "agent_id": thread.get("agent_id"),
         "agent_profile": thread.get("agent_profile") or meta.get("agent_profile"),
         "model": thread.get("model") or meta.get("model"),
+        "runtime": thread.get("runtime") or meta.get("runtime"),
+        "runtime_source": thread.get("runtime_source") or meta.get("runtime_source"),
+        "model_source": thread.get("model_source") or meta.get("model_source"),
+        "reasoning": thread.get("reasoning") or meta.get("reasoning"),
+        "reasoning_source": thread.get("reasoning_source")
+        or meta.get("reasoning_source"),
         "chat_kind": meta.get("chat_kind") or meta.get("thread_kind"),
         "thread_kind": meta.get("thread_kind"),
         "automation": meta.get("automation"),
@@ -991,6 +1026,12 @@ def _detail_thread_as_index_shape(thread: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
+def _runtime_projection_contract(value: Any) -> Optional[ChatRuntimeProjection]:
+    if not isinstance(value, Mapping):
+        return None
+    return ChatRuntimeProjection(**dict(cast(Mapping[str, Any], value)))
+
+
 def hub_thread_detail_to_projection(thread: Mapping[str, Any]) -> ChatThreadProjection:
     row = hub_chat_row_to_chat_index_row(_detail_thread_as_index_shape(thread))
     return ChatThreadProjection(
@@ -1006,6 +1047,11 @@ def hub_thread_detail_to_projection(thread: Mapping[str, Any]) -> ChatThreadProj
         agent_profile=row.agent_profile,
         chat_kind=row.chat_kind,
         model=row.model,
+        runtime=row.runtime,
+        runtime_source=row.runtime_source,
+        model_source=row.model_source,
+        reasoning=row.reasoning,
+        reasoning_source=row.reasoning_source,
         archived=row.status == "archived",
     )
 

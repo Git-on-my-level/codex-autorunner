@@ -2163,7 +2163,7 @@ async def test_opencode_harness_managed_turn_auto_approves_child_session_permiss
 
     assert result.status == "ok"
     assert client.permission_replies == [("perm-1", "once")]
-    assert client.get_session_calls == ["child-1"]
+    assert client.get_session_calls == ["child-1", "session-1"]
 
 
 @pytest.mark.asyncio

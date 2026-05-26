@@ -26,6 +26,7 @@ from typing import (
 import httpx
 
 from ...core.logging_utils import log_event
+from ...core.runtime_identity import RuntimeIdentityStage
 from ...core.sse import SSEEvent
 from ...core.utils import resolve_opencode_auth_path
 from .event_fields import (
@@ -88,6 +89,7 @@ class OpenCodeTurnOutput:
     usage: Optional[dict[str, Any]] = None
     output_source: OpenCodeTurnOutputSource = "none"
     terminal_signal: Optional[str] = None
+    effective_runtime: Optional[RuntimeIdentityStage] = None
 
 
 def opencode_event_is_progress_signal(
@@ -675,6 +677,7 @@ async def collect_opencode_output_from_events(
         usage=result.usage,
         output_source=result.output_source,
         terminal_signal=terminal_signal,
+        effective_runtime=result.effective_runtime,
     )
 
 
@@ -720,16 +723,31 @@ async def collect_opencode_output(
         )
 
     async def _fetch_session() -> Any:
+        session_payload: Any = None
+        session_fetch_failed = False
+        try:
+            session_payload = await client.get_session(session_id)
+        except (httpx.HTTPError, ValueError, OSError, AttributeError):
+            session_fetch_failed = True
+            session_payload = None
         statuses = await client.session_status(directory=workspace_path)
+        status_payload: dict[str, Any] = {}
         if isinstance(statuses, dict):
             session_status = statuses.get(session_id)
             if session_status is None:
-                return {"status": {"type": "idle"}}
-            if isinstance(session_status, dict):
-                return {"status": session_status}
-            if isinstance(session_status, str):
-                return {"status": session_status}
-        return {"status": {}}
+                status_payload = {"status": {"type": "idle"}}
+            elif isinstance(session_status, dict):
+                status_payload = {"status": session_status}
+            elif isinstance(session_status, str):
+                status_payload = {"status": session_status}
+        if isinstance(session_payload, dict):
+            merged = {**session_payload, **status_payload}
+            if session_fetch_failed:
+                merged["session_fetch_failed"] = True
+            return merged
+        if session_fetch_failed:
+            status_payload["session_fetch_failed"] = True
+        return status_payload or {"status": {}}
 
     async def _fetch_providers() -> Any:
         return await client.providers(directory=workspace_path)

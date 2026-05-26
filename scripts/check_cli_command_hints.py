@@ -20,7 +20,7 @@ import re
 import sys
 import time
 from pathlib import Path
-from typing import Iterable
+from typing import Any, Iterable
 
 import click
 
@@ -122,33 +122,40 @@ _PROSE_TAIL = frozenset(
 )
 
 
-def _load_cli() -> tuple[click.Group, frozenset[str]]:
+def _command_children(command: Any) -> dict[str, click.Command]:
+    commands = getattr(command, "commands", None)
+    return commands if isinstance(commands, dict) else {}
+
+
+def _load_cli() -> tuple[Any, frozenset[str]]:
     from typer.main import get_command
 
     from codex_autorunner.surfaces.cli.cli import app
 
     root = get_command(app)
-    assert isinstance(root, click.Group)
-    roots = frozenset(root.commands.keys())
+    roots = frozenset(_command_children(root).keys())
+    if not roots:
+        raise RuntimeError("CLI root did not expose any subcommands")
     return root, roots
 
 
-def _classify_hint_path(root: click.Group, path: tuple[str, ...]) -> str:
+def _classify_hint_path(root: Any, path: tuple[str, ...]) -> str:
     """Return 'ok', 'bad', or 'prose' (skip reporting)."""
     if not path:
         return "bad"
-    cmd: click.Command = root
+    cmd: Any = root
     i = 0
     while i < len(path):
-        if not isinstance(cmd, click.Group):
+        children = _command_children(cmd)
+        if not children:
             rest = path[i:]
             if rest and rest[0].lower() in _PROSE_TAIL:
                 return "prose"
             return "ok"
         name = path[i]
-        if name not in cmd.commands:
+        if name not in children:
             return "bad"
-        cmd = cmd.commands[name]
+        cmd = children[name]
         i += 1
     return "ok"
 

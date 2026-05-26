@@ -13,6 +13,7 @@ from ...core.ports.run_event import (
     Failed,
     Interrupted,
     OutputDelta,
+    ProviderRuntimeReported,
     RunEvent,
     RunNotice,
     Started,
@@ -20,6 +21,7 @@ from ...core.ports.run_event import (
     ToolCall,
     ToolResult,
 )
+from ...core.runtime_identity import RuntimeIdentityStage
 from ...core.time_utils import now_iso
 
 CHAT_EXECUTION_JOURNAL_SCHEMA_VERSION = 1
@@ -264,6 +266,16 @@ def journal_events_from_run_events(
                 source_event_type="token_usage",
                 data={"usage": dict(event.usage)},
             )
+        elif isinstance(event, ProviderRuntimeReported):
+            mapped = _standard_journal_event(
+                timestamp=event.timestamp,
+                domain="execution",
+                name="provider_runtime_reported",
+                event_index=event_index,
+                event_type=event_type,
+                source_event_type="provider_runtime_reported",
+                data={"effective_runtime": event.effective_runtime.to_dict()},
+            )
         elif isinstance(event, RunNotice):
             mapped = _journal_event_from_notice(
                 event,
@@ -374,6 +386,18 @@ def _run_event_from_timeline_entry(entry: Mapping[str, Any]) -> Optional[RunEven
         return TokenUsage(
             timestamp=str(payload.get("timestamp") or ""),
             usage=_copy_mapping(payload.get("usage")),
+        )
+    if event_type == "provider_runtime_reported":
+        effective_runtime = payload.get("effective_runtime")
+        if not isinstance(effective_runtime, Mapping):
+            return None
+        return ProviderRuntimeReported(
+            timestamp=str(payload.get("timestamp") or ""),
+            effective_runtime=RuntimeIdentityStage.from_mapping(
+                effective_runtime,
+                stage="effective",
+                field_name="effective_runtime",
+            ),
         )
     if event_type == "run_notice":
         return RunNotice(

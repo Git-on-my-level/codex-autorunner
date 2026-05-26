@@ -209,16 +209,6 @@ def _legacy_residue_counts(conn: sqlite3.Connection) -> dict[str, int]:
     return counts
 
 
-def _row_exists(conn: sqlite3.Connection, table: str, column: str, value: str) -> bool:
-    if not table_exists(conn, table):
-        return False
-    row = conn.execute(
-        f"SELECT 1 FROM {table} WHERE {column} = ? LIMIT 1",
-        (value,),
-    ).fetchone()
-    return row is not None
-
-
 def migrate_legacy_automation_executor_shapes(
     hub_root: Path, *, durable: bool = True
 ) -> AutomationLegacyExecutorMigrationResult:

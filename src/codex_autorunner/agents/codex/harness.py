@@ -11,6 +11,8 @@ from ...adapters.app_server.client import (
 )
 from ...adapters.app_server.event_buffer import AppServerEventBuffer
 from ...adapters.app_server.supervisor import WorkspaceAppServerSupervisor
+from ...core.runtime_identity import RUNTIME_STAGE_EFFECTIVE, RuntimeIdentityStage
+from ...core.time_utils import now_iso
 from ..base import AgentHarness
 from ..types import (
     AgentId,
@@ -134,8 +136,13 @@ class CodexHarness(AgentHarness):
         await self._supervisor.get_client(workspace_root)
 
     async def backend_runtime_instance_id(self, workspace_root: Path) -> Optional[str]:
-        client = await self._supervisor.get_client(workspace_root)
-        await client.start()
+        get_client = getattr(self._supervisor, "get_client", None)
+        if not callable(get_client):
+            return None
+        client = await get_client(workspace_root)
+        start = getattr(client, "start", None)
+        if callable(start):
+            await start()
         runtime_instance_id = getattr(client, "runtime_instance_id", None)
         if not isinstance(runtime_instance_id, str) or not runtime_instance_id:
             return None
@@ -436,6 +443,41 @@ class CodexHarness(AgentHarness):
                 for event in (getattr(result, "raw_events", []) or [])
                 if isinstance(event, dict)
             ],
+            effective_runtime=await self._effective_runtime_stage(
+                workspace_root,
+                conversation_id=conversation_id,
+                turn_id=turn_id,
+                result=result,
+            ),
+        )
+
+    async def _effective_runtime_stage(
+        self,
+        workspace_root: Path,
+        *,
+        conversation_id: str,
+        turn_id: str,
+        result: Any,
+    ) -> RuntimeIdentityStage:
+        runtime_instance_id = await self.backend_runtime_instance_id(workspace_root)
+        raw_events = [
+            event
+            for event in (getattr(result, "raw_events", []) or [])
+            if isinstance(event, dict)
+        ]
+        return RuntimeIdentityStage(
+            stage=RUNTIME_STAGE_EFFECTIVE,
+            logical_agent="codex",
+            runtime_agent="codex",
+            backend_runtime_id=runtime_instance_id,
+            provider_payload={"raw_events": raw_events[-5:]} if raw_events else None,
+            source="codex.app_server",
+            observed_at=now_iso(),
+            provenance={
+                "thread_id": conversation_id,
+                "turn_id": turn_id,
+                "model_source": "unknown",
+            },
         )
 
 

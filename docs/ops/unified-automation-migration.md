@@ -26,6 +26,13 @@ rules.
 Operators should inspect canonical state in hub `orchestration.sqlite3`
 automation tables.
 
+Automation child execution edges also expose canonical runtime identity
+envelopes. Historical edge rows preserve `requested_runtime_json` and
+`actual_runtime_json` compatibility while the migration backfills requested,
+linked child launch, and effective stages when durable evidence exists. See
+[runtime-identity-backfill.md](runtime-identity-backfill.md) for source
+precedence and partial-row diagnostics.
+
 ## Diagnostics And Release Gate
 
 Automation migration blockers are exposed through stable JSON diagnostics:

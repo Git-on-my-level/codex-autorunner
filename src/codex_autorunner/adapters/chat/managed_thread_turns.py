@@ -291,6 +291,7 @@ class TerminalTurnRecorder:
         backend_turn_id: Optional[str],
         transcript_turn_id: Optional[str] = None,
         assistant_output: Optional[TurnAssistantOutput] = None,
+        effective_runtime: Optional[Any] = None,
         trace_fields: Optional[dict[str, Any]] = None,
     ) -> Any:
         fields = _managed_thread_trace_fields(
@@ -328,6 +329,7 @@ class TerminalTurnRecorder:
                     error=error,
                     backend_turn_id=backend_turn_id,
                     transcript_turn_id=transcript_turn_id,
+                    effective_runtime=effective_runtime,
                 )
             finalized_execution = (
                 await record_call if inspect.isawaitable(record_call) else record_call
@@ -2547,9 +2549,11 @@ def _surface_metadata(
     backend_turn_id: Optional[str],
     status: str,
 ) -> dict[str, Any]:
-    _, fresh_backend_session_reason, fresh_backend_session_started = (
-        managed_thread_session_metadata(started.request)
-    )
+    (
+        _,
+        fresh_backend_session_reason,
+        fresh_backend_session_started,
+    ) = managed_thread_session_metadata(started.request)
     metadata = {
         "agent": getattr(started.thread, "agent_id", None),
         "execution_id": started.execution.execution_id,
@@ -3530,6 +3534,7 @@ async def finalize_managed_thread_execution(
             backend_turn_id=outcome.backend_turn_id or started.execution.backend_id,
             transcript_turn_id=None,
             assistant_output=outcome.assistant_output,
+            effective_runtime=outcome.effective_runtime,
             trace_fields=runtime_trace_fields(event_state)
             | terminal_evidence_trace_fields(outcome),
         )
@@ -3849,6 +3854,7 @@ async def finalize_managed_thread_execution(
             error=errors.interrupted_error,
             backend_thread_id=resolved_backend_thread_id,
             backend_turn_id=outcome.backend_turn_id or started.execution.backend_id,
+            effective_runtime=outcome.effective_runtime,
             trace_fields=runtime_trace_fields(event_state)
             | terminal_evidence_trace_fields(outcome),
         )
@@ -3933,6 +3939,7 @@ async def finalize_managed_thread_execution(
         backend_thread_id=resolved_backend_thread_id,
         backend_turn_id=outcome.backend_turn_id or started.execution.backend_id,
         transcript_turn_id=None,
+        effective_runtime=outcome.effective_runtime,
         trace_fields=runtime_trace_fields(event_state)
         | terminal_evidence_trace_fields(outcome),
     )

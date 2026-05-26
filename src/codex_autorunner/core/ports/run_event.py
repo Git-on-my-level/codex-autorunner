@@ -79,6 +79,12 @@ class TokenUsage:
 
 
 @dataclass(frozen=True)
+class ProviderRuntimeReported:
+    timestamp: str
+    effective_runtime: Any
+
+
+@dataclass(frozen=True)
 class RunNotice:
     timestamp: str
     kind: str
@@ -111,6 +117,7 @@ RunEvent = Union[
     ToolResult,
     ApprovalRequested,
     TokenUsage,
+    ProviderRuntimeReported,
     RunNotice,
     Completed,
     Failed,
@@ -136,6 +143,7 @@ __all__ = [
     "Failed",
     "Interrupted",
     "OutputDelta",
+    "ProviderRuntimeReported",
     "RunEvent",
     "RunNotice",
     "Started",
