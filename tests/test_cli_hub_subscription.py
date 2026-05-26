@@ -40,7 +40,7 @@ def _seed_subscription(
             executor={"lane_id": lane_id, "message_text": "Follow up"},
             metadata={
                 "purpose": "managed_thread_lifecycle_subscription",
-                "legacy_subscription_id": subscription_id,
+                "subscription_id": subscription_id,
             },
         )
     )

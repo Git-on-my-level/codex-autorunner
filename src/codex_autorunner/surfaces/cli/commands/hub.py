@@ -606,12 +606,6 @@ def register_hub_commands(
             typer.echo(json.dumps(payload, indent=2))
             return
         typer.echo(f"schema: {current_version}/{ORCHESTRATION_SCHEMA_VERSION}")
-        mirror_health = automation_migration.get("mirror_health")
-        mirror_status = (
-            mirror_health.get("status")
-            if isinstance(mirror_health, dict)
-            else "unknown"
-        )
         pending_migration_versions = automation_migration.get(
             "pending_migration_versions"
         )
@@ -623,8 +617,7 @@ def register_hub_commands(
         typer.echo(
             "automation_migration: "
             f"status={automation_migration['status']} "
-            f"pending_migrations={pending_migration_count} "
-            f"mirror={mirror_status}"
+            f"pending_migrations={pending_migration_count}"
         )
         for diagnostic in automation_migration.get("diagnostics") or []:
             typer.echo(

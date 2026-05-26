@@ -81,8 +81,7 @@ def automation_migration_doctor_checks(
                 passed=True,
                 message=(
                     "Automation migration gate OK "
-                    f"(schema={report.schema_version}/{report.target_schema_version}, "
-                    f"mirror={report.mirror_health.status})"
+                    f"(schema={report.schema_version}/{report.target_schema_version})"
                 ),
                 check_id="automation.migration",
                 severity="info",

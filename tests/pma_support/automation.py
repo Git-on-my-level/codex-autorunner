@@ -458,7 +458,7 @@ def test_pma_automation_cancel_subscription_can_disable_unified_only_rule(
         executor={"lane_id": "pma:default"},
         metadata={
             "purpose": "pma_lifecycle_subscription",
-            "legacy_subscription_id": subscription_id,
+            "subscription_id": subscription_id,
         },
     )
     app = create_hub_app(hub_env.hub_root)
@@ -527,7 +527,7 @@ def test_pma_automation_cancel_timer_can_cancel_unified_only_schedule(hub_env) -
         target={"thread_id": "thread-unified"},
         executor_kind="managed_thread_turn",
         executor={"lane_id": "pma:default", "wake_up_kind": "pma_timer"},
-        metadata={"purpose": "pma_timer", "legacy_timer_id": timer_id},
+        metadata={"purpose": "pma_timer", "timer_id": timer_id},
     )
     automation_store.upsert_schedule(
         AutomationSchedule.create(
@@ -536,7 +536,7 @@ def test_pma_automation_cancel_timer_can_cancel_unified_only_schedule(hub_env) -
             schedule_kind="one_shot",
             next_fire_at="2026-01-01T00:00:00Z",
             schedule={
-                "legacy_timer_id": timer_id,
+                "timer_id": timer_id,
                 "payload": {"timer_id": timer_id, "thread_id": "thread-unified"},
             },
             state="active",

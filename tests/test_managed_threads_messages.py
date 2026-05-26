@@ -84,11 +84,11 @@ def _subscription_rows(
             continue
         rows.append(
             {
-                "subscription_id": rule.metadata.get("legacy_subscription_id")
+                "subscription_id": rule.metadata.get("subscription_id")
                 or rule.rule_id.removeprefix(PMA_SUBSCRIPTION_RULE_PREFIX),
                 "state": "active" if rule.enabled else "cancelled",
                 "thread_id": rule_thread_id,
-                "match_count": rule.metadata.get("legacy_match_count") or 0,
+                "match_count": rule.metadata.get("match_count") or 0,
             }
         )
     return rows

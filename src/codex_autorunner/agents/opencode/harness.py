@@ -56,6 +56,7 @@ from .runtime import (
     map_approval_policy_to_permission,
     opencode_stream_timeouts,
 )
+from .sse_filters import opencode_sse_event_is_noise
 from .supervisor_protocol import OpenCodeHarnessSupervisorProtocol
 from .turn_lifecycle import (
     OpenCodeTurnObservation,
@@ -1058,6 +1059,9 @@ class OpenCodeHarness(AgentHarness):
                 await pending.event_buffer.close()
 
             async def _process_stream_event(event: Any) -> None:
+                event_type = str(getattr(event, "event", "") or "").strip().lower()
+                if opencode_sse_event_is_noise(event_type):
+                    return
                 payload = event.data
                 try:
                     parsed = json.loads(payload) if payload else {}

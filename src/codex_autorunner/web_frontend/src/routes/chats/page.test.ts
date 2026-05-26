@@ -141,6 +141,8 @@ describe('/chats page', () => {
     expect(pageSource).toContain('afterNavigate');
     expect(pageSource).toContain('toggleChatStatusFilter');
     expect(pageSource).toContain('shouldShowChatStatusFilterPill');
+    expect(pageSource).toContain("item !== 'archived'");
+    expect(pageSource).toContain('chat-filter-archive-toggle');
   });
 
   it('uses contextual facet counts from the active chat-index window', () => {

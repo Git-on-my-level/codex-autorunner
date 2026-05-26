@@ -565,7 +565,7 @@ def test_automation_migration_doctor_reports_blockers(tmp_path: Path) -> None:
     by_id = {check.check_id: check for check in checks}
     assert by_id["automation.migration"].passed is False
     assert (
-        "PMA_LEGACY_AUTOMATION_MALFORMED_JSON" in by_id["automation.migration"].message
+        "AUTOMATION_MIGRATION_LEGACY_RESIDUE" in by_id["automation.migration"].message
     )
 
 

@@ -21,7 +21,7 @@ function automationFixture(id: string, overrides: Record<string, unknown> = {}):
       can_run_now: true,
       can_edit_raw: false
     },
-    managed: { managed: false, system_owned: false, legacy: false },
+    managed: { managed: false, system_owned: false },
     schedule_editor: { kind: 'daily', editable: true, fields: { timezone: 'UTC', hour: 9, minute: 0 }, summary: 'Daily 09:00 UTC' },
     trigger_summary: { kind: 'schedule', label: 'schedule.fire', event_types: [] },
     message_source: 'executor.message',
@@ -194,18 +194,17 @@ describe('API client error handling', () => {
             kind: 'pma_prompt',
             executor_kind: 'managed_thread_turn',
             editable: { can_edit_schedule: false, can_edit_message: false, can_edit_ticket_body: false, can_run_now: true, can_enable: true },
-            managed: { managed: true, system_owned: true, legacy: true, legacy_source: 'legacy_timer_id', reason: 'System-managed automation: pma_timer' },
+            managed: { managed: true, system_owned: true, reason: 'System-managed automation: pma_timer' },
             schedule_editor: { kind: 'one_shot', fields: { due_at: '2026-01-02T00:00:00Z' }, summary: 'Once at 2026-01-02T00:00:00Z' },
             message_source: 'executor.message',
-            message_preview: 'Automation wake-up received.',
-            diagnostics: [{ code: 'AUTOMATION_LEGACY_MIGRATED', message: 'This automation was migrated from legacy PMA state.' }]
+            message_preview: 'Automation wake-up received.'
           }),
           automationFixture('github-scm', {
             system_owned: true,
             kind: 'publish_operation',
             executor_kind: 'publish_operation',
             editable: { can_edit_schedule: false, can_edit_message: false, can_edit_ticket_body: false, can_run_now: true, can_enable: true },
-            managed: { managed: true, system_owned: true, legacy: false, reason: 'System-managed automation: github_scm_reaction' },
+            managed: { managed: true, system_owned: true, reason: 'System-managed automation: github_scm_reaction' },
             schedule_editor: { kind: 'event_driven', fields: {}, summary: 'Event driven' },
             message_source: 'executor.actions.message.template',
             message_preview: 'SCM review requires follow-up for PR {{ event.payload.pr_number }}.',
@@ -215,7 +214,7 @@ describe('API client error handling', () => {
             kind: 'security_scan_pr',
             executor_kind: 'managed_thread_turn',
             editable: { can_edit_schedule: true, can_edit_message: true, can_edit_ticket_body: false, can_run_now: true, can_enable: true },
-            managed: { managed: false, system_owned: false, legacy: false },
+            managed: { managed: false, system_owned: false },
             schedule_editor: { kind: 'daily', editable: true, fields: { timezone: 'UTC', hour: 9, minute: 0 }, summary: 'Daily 09:00 UTC' },
             message_source: 'executor.message',
             message_preview: 'Run a security scan.'
@@ -224,7 +223,7 @@ describe('API client error handling', () => {
             kind: 'weekly_ticket_flow',
             executor_kind: 'ticket_flow',
             editable: { can_edit_schedule: true, can_edit_message: false, can_edit_ticket_body: true, can_run_now: true, can_enable: true },
-            managed: { managed: false, system_owned: false, legacy: false },
+            managed: { managed: false, system_owned: false },
             schedule_editor: { kind: 'weekly', editable: true, fields: { timezone: 'UTC', weekday: 0, hour: 10, minute: 0 }, summary: 'Mon 10:00 UTC' },
             message_source: 'executor.ticket_pack.tickets[0].content',
             message_preview: 'Run the configured weekly maintenance ticket.'
@@ -241,9 +240,8 @@ describe('API client error handling', () => {
     if (result.ok) {
       const byId = Object.fromEntries(result.data.automations.map((automation) => [automation.id, automation]));
       expect(byId['pma-timer'].product).toMatchObject({
-        managed: { managed: true, legacy: true, legacySource: 'legacy_timer_id' },
-        scheduleEditor: { kind: 'one_shot', fields: { due_at: '2026-01-02T00:00:00Z' } },
-        diagnostics: [{ code: 'AUTOMATION_LEGACY_MIGRATED' }]
+        managed: { managed: true },
+        scheduleEditor: { kind: 'one_shot', fields: { due_at: '2026-01-02T00:00:00Z' } }
       });
       expect(byId['github-scm'].product).toMatchObject({
         scheduleEditor: { kind: 'event_driven' },

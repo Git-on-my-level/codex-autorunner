@@ -6,24 +6,14 @@ import sqlite3
 from pathlib import Path
 from typing import Any
 
-from ..orchestration.legacy_backfill_gate import legacy_orchestration_backfill_complete
 from ..orchestration.migrate_legacy_state import LEGACY_PMA_AUTOMATION_PATH
 from ..orchestration.migrations import collect_orchestration_migration_status
 from ..orchestration.sqlite import (
     open_orchestration_sqlite,
     resolve_orchestration_sqlite_path,
 )
-from ..pma_automation_unified import (
-    PmaLegacyAutomationMigration,
-    PmaLegacyAutomationMigrationDiagnostic,
-)
 from ..sqlite_utils import table_exists
 from ..text_utils import _json_dumps
-from .builtins import (
-    PMA_SUBSCRIPTION_RULE_PREFIX,
-    PMA_TIMER_RULE_PREFIX,
-    PMA_TIMER_SCHEDULE_PREFIX,
-)
 from .models import (
     AUTOMATION_CHILD_KIND_AGENT_TASK,
     AUTOMATION_CHILD_KIND_PMA_OPERATOR,
@@ -41,11 +31,7 @@ from .models import (
 from .store import AutomationStore
 
 AUTOMATION_MIGRATION_SCHEMA_PENDING = "AUTOMATION_MIGRATION_SCHEMA_PENDING"
-AUTOMATION_MIGRATION_LEGACY_BACKFILL_PENDING = (
-    "AUTOMATION_MIGRATION_LEGACY_BACKFILL_PENDING"
-)
 AUTOMATION_MIGRATION_LEGACY_RESIDUE = "AUTOMATION_MIGRATION_LEGACY_RESIDUE"
-AUTOMATION_MIGRATION_MIRROR_INCOMPLETE = "AUTOMATION_MIGRATION_MIRROR_INCOMPLETE"
 AUTOMATION_MIGRATION_INSPECTION_FAILED = "AUTOMATION_MIGRATION_INSPECTION_FAILED"
 AUTOMATION_MIGRATION_LEGACY_EXECUTOR_SHAPE = (
     "AUTOMATION_MIGRATION_LEGACY_EXECUTOR_SHAPE"
@@ -57,17 +43,6 @@ _LEGACY_TABLES = (
     "orch_automation_timers",
     "orch_automation_wakeups",
 )
-
-
-@dataclasses.dataclass(frozen=True)
-class AutomationMirrorHealth:
-    status: str
-    expected: dict[str, int]
-    mirrored: dict[str, int]
-    missing: dict[str, list[str]]
-
-    def to_dict(self) -> dict[str, Any]:
-        return dataclasses.asdict(self)
 
 
 @dataclasses.dataclass(frozen=True)
@@ -115,10 +90,8 @@ class AutomationMigrationReadModel:
     schema_version: int
     target_schema_version: int
     pending_migration_versions: tuple[int, ...]
-    legacy_backfill_complete: bool
     legacy_residue: dict[str, int]
     legacy_file_present: bool
-    mirror_health: AutomationMirrorHealth
     diagnostics: tuple[AutomationMigrationDiagnostic, ...]
     next_steps: tuple[str, ...]
 
@@ -128,10 +101,8 @@ class AutomationMigrationReadModel:
             "schema_version": self.schema_version,
             "target_schema_version": self.target_schema_version,
             "pending_migration_versions": list(self.pending_migration_versions),
-            "legacy_backfill_complete": self.legacy_backfill_complete,
             "legacy_residue": dict(self.legacy_residue),
             "legacy_file_present": self.legacy_file_present,
-            "mirror_health": self.mirror_health.to_dict(),
             "diagnostics": [item.to_dict() for item in self.diagnostics],
             "next_steps": list(self.next_steps),
         }
@@ -146,20 +117,7 @@ def collect_automation_migration_read_model(
     schema_version = 0
     target_schema_version = 0
     pending_versions: tuple[int, ...] = ()
-    legacy_backfill_done = False
     residue = {table: 0 for table in _LEGACY_TABLES}
-    mirror_health = AutomationMirrorHealth(
-        status="ok",
-        expected={"subscriptions": 0, "timers": 0, "wakeups": 0},
-        mirrored={
-            "subscription_rules": 0,
-            "timer_rules": 0,
-            "timer_schedules": 0,
-            "wakeup_events": 0,
-            "wakeup_jobs": 0,
-        },
-        missing={"subscriptions": [], "timers": [], "wakeups": []},
-    )
 
     if not database_exists and not legacy_file_present:
         return AutomationMigrationReadModel(
@@ -167,10 +125,8 @@ def collect_automation_migration_read_model(
             schema_version=schema_version,
             target_schema_version=target_schema_version,
             pending_migration_versions=pending_versions,
-            legacy_backfill_complete=legacy_backfill_done,
             legacy_residue=residue,
             legacy_file_present=legacy_file_present,
-            mirror_health=mirror_health,
             diagnostics=(),
             next_steps=(),
         )
@@ -183,9 +139,7 @@ def collect_automation_migration_read_model(
             schema_version = migration_status.current_version
             target_schema_version = migration_status.target_version
             pending_versions = migration_status.pending_versions
-            legacy_backfill_done = legacy_orchestration_backfill_complete(conn)
             residue = _legacy_residue_counts(conn)
-            mirror_health = _collect_mirror_health(conn)
     except (OSError, sqlite3.Error, ValueError, TypeError, KeyError) as exc:
         diagnostics.append(
             AutomationMigrationDiagnostic(
@@ -206,35 +160,25 @@ def collect_automation_migration_read_model(
                 next_step="Start the hub or run an orchestration command that opens the database with migrations enabled.",
             )
         )
-    if not legacy_backfill_done and (legacy_file_present or any(residue.values())):
-        diagnostics.append(
-            AutomationMigrationDiagnostic(
-                code=AUTOMATION_MIGRATION_LEGACY_BACKFILL_PENDING,
-                message="Legacy orchestration backfill has not completed while legacy automation input is present.",
-                next_step="Start the hub once to run legacy orchestration backfill, then rerun automation migration diagnostics.",
-            )
-        )
     if legacy_file_present:
         diagnostics.append(
             AutomationMigrationDiagnostic(
                 code=AUTOMATION_MIGRATION_LEGACY_RESIDUE,
-                severity="warning",
                 message=f"Legacy PMA automation JSON remains at {LEGACY_PMA_AUTOMATION_PATH}.",
-                next_step="Confirm compatibility consumers no longer need the mirror, then remove or regenerate it from canonical state.",
+                next_step="Delete the legacy PMA automation JSON; unified automation no longer imports or mirrors it.",
             )
         )
-
-    diagnostics.extend(_legacy_row_diagnostics(hub_root, durable=durable))
-    diagnostics.extend(_legacy_executor_shape_diagnostics(hub_root, durable=durable))
-
-    if mirror_health.status != "ok":
+    legacy_row_count = sum(residue.values())
+    if legacy_row_count:
         diagnostics.append(
             AutomationMigrationDiagnostic(
-                code=AUTOMATION_MIGRATION_MIRROR_INCOMPLETE,
-                message="Legacy PMA automation rows are not fully represented in unified automation tables.",
-                next_step="Run the explicit PMA legacy automation migration and resolve any row-level diagnostics it reports.",
+                code=AUTOMATION_MIGRATION_LEGACY_RESIDUE,
+                message=f"Legacy PMA automation tables contain {legacy_row_count} inert row(s).",
+                next_step="Delete legacy PMA automation rows or drop the legacy PMA automation tables; they are no longer imported.",
             )
         )
+
+    diagnostics.extend(_legacy_executor_shape_diagnostics(hub_root, durable=durable))
 
     next_steps = _dedupe(item.next_step for item in diagnostics)
     status = (
@@ -247,10 +191,8 @@ def collect_automation_migration_read_model(
         schema_version=schema_version,
         target_schema_version=target_schema_version,
         pending_migration_versions=pending_versions,
-        legacy_backfill_complete=legacy_backfill_done,
         legacy_residue=residue,
         legacy_file_present=legacy_file_present,
-        mirror_health=mirror_health,
         diagnostics=tuple(diagnostics),
         next_steps=tuple(next_steps),
     )
@@ -267,123 +209,6 @@ def _legacy_residue_counts(conn: sqlite3.Connection) -> dict[str, int]:
     return counts
 
 
-def _collect_mirror_health(conn: sqlite3.Connection) -> AutomationMirrorHealth:
-    if not all(table_exists(conn, table) for table in _LEGACY_TABLES):
-        return AutomationMirrorHealth(
-            status="ok",
-            expected={"subscriptions": 0, "timers": 0, "wakeups": 0},
-            mirrored={
-                "subscription_rules": 0,
-                "timer_rules": 0,
-                "timer_schedules": 0,
-                "wakeup_events": 0,
-                "wakeup_jobs": 0,
-            },
-            missing={"subscriptions": [], "timers": [], "wakeups": []},
-        )
-
-    subscription_ids = _ids(conn, "orch_automation_subscriptions", "subscription_id")
-    timer_ids = _ids(conn, "orch_automation_timers", "timer_id")
-    wakeup_ids = _ids(conn, "orch_automation_wakeups", "wakeup_id")
-
-    missing_subscriptions = [
-        legacy_id
-        for legacy_id in subscription_ids
-        if not _row_exists(
-            conn,
-            "orch_automation_rules",
-            "rule_id",
-            f"{PMA_SUBSCRIPTION_RULE_PREFIX}{legacy_id}",
-        )
-    ]
-    missing_timers = [
-        legacy_id
-        for legacy_id in timer_ids
-        if not (
-            _row_exists(
-                conn,
-                "orch_automation_rules",
-                "rule_id",
-                f"{PMA_TIMER_RULE_PREFIX}{legacy_id}",
-            )
-            and _row_exists(
-                conn,
-                "orch_automation_schedules",
-                "schedule_id",
-                f"{PMA_TIMER_SCHEDULE_PREFIX}{legacy_id}",
-            )
-        )
-    ]
-    missing_wakeups = [
-        legacy_id
-        for legacy_id in wakeup_ids
-        if not (
-            _row_exists(
-                conn,
-                "orch_automation_events",
-                "event_id",
-                f"legacy-pma-wakeup:{legacy_id}",
-            )
-            and _row_exists(
-                conn,
-                "orch_automation_jobs",
-                "job_id",
-                f"legacy-pma-wakeup:{legacy_id}",
-            )
-        )
-    ]
-    missing = {
-        "subscriptions": missing_subscriptions,
-        "timers": missing_timers,
-        "wakeups": missing_wakeups,
-    }
-    mirrored = {
-        "subscription_rules": len(subscription_ids) - len(missing_subscriptions),
-        "timer_rules": sum(
-            1
-            for legacy_id in timer_ids
-            if _row_exists(
-                conn,
-                "orch_automation_rules",
-                "rule_id",
-                f"{PMA_TIMER_RULE_PREFIX}{legacy_id}",
-            )
-        ),
-        "timer_schedules": len(timer_ids) - len(missing_timers),
-        "wakeup_events": sum(
-            1
-            for legacy_id in wakeup_ids
-            if _row_exists(
-                conn,
-                "orch_automation_events",
-                "event_id",
-                f"legacy-pma-wakeup:{legacy_id}",
-            )
-        ),
-        "wakeup_jobs": len(wakeup_ids) - len(missing_wakeups),
-    }
-    status = "ok" if not any(missing.values()) else "blocked"
-    return AutomationMirrorHealth(
-        status=status,
-        expected={
-            "subscriptions": len(subscription_ids),
-            "timers": len(timer_ids),
-            "wakeups": len(wakeup_ids),
-        },
-        mirrored=mirrored,
-        missing=missing,
-    )
-
-
-def _ids(conn: sqlite3.Connection, table: str, column: str) -> list[str]:
-    rows = conn.execute(
-        f"SELECT {column} AS legacy_id FROM {table} ORDER BY created_at ASC, {column} ASC"
-    ).fetchall()
-    return [
-        str(row["legacy_id"]) for row in rows if str(row["legacy_id"] or "").strip()
-    ]
-
-
 def _row_exists(conn: sqlite3.Connection, table: str, column: str, value: str) -> bool:
     if not table_exists(conn, table):
         return False
@@ -392,25 +217,6 @@ def _row_exists(conn: sqlite3.Connection, table: str, column: str, value: str) -
         (value,),
     ).fetchone()
     return row is not None
-
-
-def _legacy_row_diagnostics(
-    hub_root: Path, *, durable: bool
-) -> tuple[AutomationMigrationDiagnostic, ...]:
-    store = AutomationStore(hub_root, durable=durable)
-    try:
-        low_level = PmaLegacyAutomationMigration(
-            store, migrate=False
-        ).collect_diagnostics()
-    except (OSError, sqlite3.Error, ValueError, TypeError, KeyError) as exc:
-        return (
-            AutomationMigrationDiagnostic(
-                code=AUTOMATION_MIGRATION_INSPECTION_FAILED,
-                message=f"Legacy PMA row validation failed: {exc}",
-                next_step="Apply pending orchestration migrations and rerun automation migration diagnostics.",
-            ),
-        )
-    return tuple(_from_pma_diagnostic(item) for item in low_level)
 
 
 def migrate_legacy_automation_executor_shapes(
@@ -864,19 +670,6 @@ def _optional_text(value: Any) -> str | None:
     return text or None
 
 
-def _from_pma_diagnostic(
-    item: PmaLegacyAutomationMigrationDiagnostic,
-) -> AutomationMigrationDiagnostic:
-    payload = item.to_dict()
-    return AutomationMigrationDiagnostic(
-        code=payload["code"],
-        table=payload["table"],
-        legacy_id=payload["legacy_id"],
-        message=payload["message"],
-        next_step=payload["next_step"],
-    )
-
-
 def _dedupe(values: Any) -> list[str]:
     result: list[str] = []
     for value in values:
@@ -888,16 +681,13 @@ def _dedupe(values: Any) -> list[str]:
 
 __all__ = [
     "AUTOMATION_MIGRATION_INSPECTION_FAILED",
-    "AUTOMATION_MIGRATION_LEGACY_BACKFILL_PENDING",
     "AUTOMATION_MIGRATION_LEGACY_EXECUTOR_SHAPE",
     "AUTOMATION_MIGRATION_LEGACY_JOB_AMBIGUOUS",
     "AUTOMATION_MIGRATION_LEGACY_RESIDUE",
-    "AUTOMATION_MIGRATION_MIRROR_INCOMPLETE",
     "AUTOMATION_MIGRATION_SCHEMA_PENDING",
     "AutomationLegacyExecutorMigrationResult",
     "AutomationMigrationDiagnostic",
     "AutomationMigrationReadModel",
-    "AutomationMirrorHealth",
     "collect_automation_migration_read_model",
     "migrate_legacy_automation_executor_shapes",
 ]

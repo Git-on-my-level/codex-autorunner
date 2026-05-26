@@ -14,6 +14,12 @@ from fastapi.testclient import TestClient
 from codex_autorunner.adapters.app_server.event_buffer import AppServerEventBuffer
 from codex_autorunner.agents.hermes.harness import HermesHarness
 from codex_autorunner.core.managed_thread_store import ManagedThreadStore
+from codex_autorunner.core.orchestration.managed_thread_timeline import (
+    timeline_item_from_tail_event,
+)
+from codex_autorunner.core.orchestration.progress_projection import (
+    ProgressProjectionState,
+)
 from codex_autorunner.core.orchestration.turn_timeline import persist_turn_timeline
 from codex_autorunner.core.ports.run_event import OutputDelta
 from codex_autorunner.server import create_hub_app
@@ -50,6 +56,50 @@ def test_runtime_tail_default_timestamp_uses_stable_turn_time_instead_of_read_ti
 
     assert events
     assert {event["received_at"] for event in events} == {default_received_at}
+
+
+def test_runtime_tail_merges_live_stream_deltas_into_stable_progress_item() -> None:
+    state = tail_stream.RuntimeThreadRunEventState()
+    projection_state = ProgressProjectionState()
+    serialized: list[dict[str, Any]] = []
+    event_id_start = 0
+
+    for text in ("Read", "ing", " files"):
+        events = asyncio.run(
+            _serialize_runtime_raw_tail_events(
+                {"method": "prompt/progress", "params": {"delta": text}},
+                state,
+                level="info",
+                event_id_start=event_id_start,
+                projection_state=projection_state,
+                default_received_at="2026-04-06T10:00:00+00:00",
+            )
+        )
+        assert len(events) == 1
+        serialized.extend(events)
+        event_id_start = int(events[-1]["event_id"])
+
+    assert [event["summary"] for event in serialized] == [
+        "Read",
+        "Reading",
+        "Reading files",
+    ]
+    assert {event["progress_item_id"] for event in serialized} == {
+        "progress:assistant_update:0001"
+    }
+    assert serialized[-1]["progress_event_ids"] == [1, 2, 3]
+
+    timeline_items = [
+        timeline_item_from_tail_event(
+            managed_thread_id="thread-1",
+            managed_turn_id="turn-1",
+            tail_event=event,
+        )
+        for event in serialized
+    ]
+    assert {item["item_id"] for item in timeline_items if item is not None} == {
+        "turn:turn-1:intermediate:progress:assistant_update:0001"
+    }
 
 
 def _seed_managed_thread_with_events(hub_env, app) -> tuple[str, str]:

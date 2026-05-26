@@ -1,6 +1,7 @@
 import { render } from 'svelte/server';
 import { describe, expect, it } from 'vitest';
-import FilterRow, { type FilterChip } from './FilterRow.svelte';
+import type { FilterChip } from './FilterRow';
+import FilterRow from './FilterRow.svelte';
 
 describe('FilterRow', () => {
   it('renders direct filter buttons without native details disclosure chrome', () => {

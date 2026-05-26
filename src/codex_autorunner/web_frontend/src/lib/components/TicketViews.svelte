@@ -350,7 +350,7 @@
               {#if queueActionEnabled(action)}
                 <button
                   type="button"
-                  class={action === 'start' ? 'primary-button hero-action' : 'ghost-button hero-action'}
+                  class={action === 'start' ? 'primary-button' : 'ghost-button'}
                   title={queueActionReason(action)}
                   onclick={() => onQueueCommand?.(action)}
                 >
@@ -361,7 +361,7 @@
           </div>
         {/if}
         {#if newTicketHref}
-          <a class="ghost-button hero-action" href={href(newTicketHref)} data-sveltekit-preload-data="tap">+ New ticket</a>
+          <a class="ghost-button" href={href(newTicketHref)} data-sveltekit-preload-data="tap">+ New ticket</a>
         {/if}
       {/snippet}
     </PageHero>
@@ -471,7 +471,7 @@
                 ondragstart={(event) => beginTicketDrag(event, row)}
                 ondragend={resetTicketDrag}
               >
-                <span aria-hidden="true">☰</span>
+                {@render gripIcon()}
               </button>
               <a class="ticket-card-body" href={href(row.href)} data-sveltekit-preload-data="hover">
                 <span class="ticket-card-num" aria-label={hasNumber ? `Ticket ${numberDigits}` : row.numberLabel}>
@@ -542,7 +542,7 @@
         {#if detail.needsRepair}
           <button
             type="button"
-            class="status-pill invalid status-pill-button"
+            class="ghost-button danger"
             aria-expanded={repairOpen}
             aria-controls="ticket-repair-panel"
             title="Show what needs repair"
@@ -581,7 +581,7 @@
               aria-controls="ticket-queue-drawer"
               onclick={() => (queueOpen = !queueOpen)}
             >
-              <span aria-hidden="true">☰</span> Queue
+              Queue
               <span class="muted">({detail.sourceTickets.length})</span>
             </button>
           {/if}
@@ -616,13 +616,12 @@
           <span class="ticket-chats-label">Chats</span>
           <div class="ticket-chats-pills">
             {#each detail.linkedChats as chat (chat.id)}
-              <a class={`ticket-chat-pill status-${chat.status}`} href={href(chat.href)} title={`Open chat · ${chat.title}`}>
+              <a class={`ghost-button ticket-chat-pill status-${chat.status}`} href={href(chat.href)} title={`Open chat · ${chat.title}`}>
                 <span class={`status-dot status-${chat.status}`} aria-hidden="true"></span>
                 <span class="ticket-chat-pill-agent">{chat.agentId ?? chat.kindLabel}</span>
                 {#if chat.status !== 'idle' && chat.status !== 'done'}
                   <span class="ticket-chat-pill-status">{statusLabel(chat.status)}</span>
                 {/if}
-                <span class="ticket-chat-pill-arrow" aria-hidden="true">→</span>
               </a>
             {/each}
           </div>
@@ -787,7 +786,7 @@
           {/snippet}
         </VirtualList>
         {#if detail.ownerTicketListHref}
-          <a class="ticket-queue-footer-link" href={href(detail.ownerTicketListHref)}>View full queue →</a>
+          <a class="ghost-button ticket-queue-footer-link" href={href(detail.ownerTicketListHref)}>View full queue</a>
         {/if}
       </aside>
     {/if}
@@ -802,6 +801,17 @@
       {#if onRetry}<button type="button" onclick={() => onRetry?.()}>{issue.retryLabel}</button>{/if}
     </div>
   {/each}
+{/snippet}
+
+{#snippet gripIcon()}
+  <svg viewBox="0 0 24 24" aria-hidden="true" class="grip-svg">
+    <circle cx="9" cy="6" r="1.4" />
+    <circle cx="15" cy="6" r="1.4" />
+    <circle cx="9" cy="12" r="1.4" />
+    <circle cx="15" cy="12" r="1.4" />
+    <circle cx="9" cy="18" r="1.4" />
+    <circle cx="15" cy="18" r="1.4" />
+  </svg>
 {/snippet}
 
 <style>
@@ -935,6 +945,12 @@
   .ticket-drag-handle:hover:not(:disabled) {
     color: var(--color-ink);
     background: var(--color-surface-sunken, transparent);
+  }
+  .ticket-drag-handle :global(.grip-svg) {
+    width: 14px;
+    height: 14px;
+    fill: currentColor;
+    stroke: none;
   }
 
   .ticket-card-body {
@@ -1172,18 +1188,6 @@
     line-height: 1.4;
   }
 
-  .status-pill-button {
-    border: none;
-    cursor: pointer;
-    font-family: inherit;
-  }
-  .status-pill-button:hover,
-  .status-pill-button:focus-visible {
-    filter: brightness(1.08);
-    outline: none;
-    box-shadow: 0 0 0 2px color-mix(in srgb, var(--color-warning) 35%, transparent);
-  }
-
   .ticket-inline-meta.muted {
     color: var(--color-ink-faint);
     font-style: italic;
@@ -1390,23 +1394,8 @@
     gap: var(--space-2);
   }
   .ticket-chat-pill {
-    display: inline-flex;
-    align-items: center;
     gap: 6px;
-    padding: 4px 10px;
-    border: 1px solid var(--color-border-subtle);
-    border-radius: 999px;
-    background: var(--color-surface);
-    color: var(--color-ink-soft);
-    font-size: var(--font-size-0);
-    font-weight: 550;
     text-decoration: none;
-    transition: border-color var(--transition-fast), background-color var(--transition-fast), color var(--transition-fast);
-  }
-  .ticket-chat-pill:hover {
-    border-color: var(--color-border-strong);
-    background: var(--color-surface-muted);
-    color: var(--color-ink);
   }
   .ticket-chat-pill .status-dot {
     width: 6px;
@@ -1417,15 +1406,6 @@
     color: var(--color-ink-muted);
     font-size: 11px;
     text-transform: lowercase;
-  }
-  .ticket-chat-pill-arrow {
-    color: var(--color-ink-faint);
-    font-size: 11px;
-    transition: transform var(--transition-fast), color var(--transition-fast);
-  }
-  .ticket-chat-pill:hover .ticket-chat-pill-arrow {
-    color: var(--color-ink-soft);
-    transform: translateX(2px);
   }
 
   .ticket-inline-path {

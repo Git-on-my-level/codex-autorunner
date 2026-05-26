@@ -8,7 +8,8 @@
     type PmaChatScopeOption,
     groupPmaChatScopeOptions
   } from '$lib/viewModels/pmaChat';
-  import DropdownSelect, { type DropdownSelectGroup } from './DropdownSelect.svelte';
+  import type { DropdownSelectGroup } from './DropdownSelect';
+  import DropdownSelect from './DropdownSelect.svelte';
 
   let {
     scopeOptions = [],

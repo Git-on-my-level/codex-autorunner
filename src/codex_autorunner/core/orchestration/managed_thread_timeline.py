@@ -21,7 +21,7 @@ from .progress_projection import (
     ProgressProjectionInput,
     ProgressProjectionItem,
     ProgressProjectionState,
-    reduce_progress_event,
+    reduce_progress_event_merged,
 )
 from .turn_timeline import list_turn_timeline, list_turn_timelines
 
@@ -315,15 +315,85 @@ def _event_index(entry: dict[str, Any], fallback: int) -> int:
         return fallback
 
 
+def _streamed_intermediate_item_id(
+    managed_turn_id: str,
+    *,
+    progress_item: Optional[ProgressProjectionItem],
+    event_stable_id: str,
+) -> str:
+    if progress_item is not None and progress_item.event_ids:
+        return f"turn:{managed_turn_id}:intermediate:{progress_item.event_ids[-1]:04d}"
+    return f"turn:{managed_turn_id}:intermediate:{event_stable_id}"
+
+
+def _merge_streamed_intermediate_timeline_item(
+    items: list[ManagedThreadTimelineItem],
+    *,
+    progress_item: Optional[ProgressProjectionItem],
+    progress_merged: bool,
+    event_index: int,
+    timestamp: Optional[str],
+    intermediate_kind: str,
+    text: str,
+    event_type: str,
+    event: dict[str, Any],
+) -> bool:
+    if not progress_merged or not items or items[-1].kind != "intermediate":
+        return False
+    last = items[-1]
+    progress_item_ids, progress_event_ids = _progress_item_metadata(progress_item)
+    source_event_ids = list(last.provenance.source_event_ids or ())
+    if event_index not in source_event_ids:
+        source_event_ids.append(event_index)
+    progress_event_ids = list(progress_event_ids or [event_index])
+    merged_text = (
+        progress_item.summary
+        if progress_item is not None and progress_item.summary
+        else text
+    )
+    items[-1] = ManagedThreadTimelineItem(
+        item_id=last.item_id,
+        kind=last.kind,
+        order_key=last.order_key,
+        timestamp=timestamp or last.timestamp,
+        managed_thread_id=last.managed_thread_id,
+        managed_turn_id=last.managed_turn_id,
+        status=last.status,
+        identity=_timeline_identity(
+            last.item_id,
+            progress_item_ids=progress_item_ids or last.identity.progress_item_ids,
+        ),
+        provenance=_timeline_provenance(
+            source_event_ids=source_event_ids,
+            progress_event_ids=progress_event_ids,
+        ),
+        payload={
+            **dict(last.payload or {}),
+            "intermediate_kind": intermediate_kind,
+            "text": merged_text,
+            "event_type": event_type,
+            "event": event,
+            "source_event_ids": source_event_ids,
+            "source_event_type": event_type,
+            "detail_available": True,
+            "hidden": bool(progress_item is not None and progress_item.hidden),
+            "progress_item": (
+                progress_item.to_dict() if progress_item is not None else None
+            ),
+        },
+    )
+    return True
+
+
 def _progress_item_for_entry(
     entry: dict[str, Any],
     *,
     event_index: int,
     timestamp: Optional[str],
     state: ProgressProjectionState,
-) -> Optional[ProgressProjectionItem]:
+) -> tuple[Optional[ProgressProjectionItem], bool]:
     if timestamp is None:
-        return None
+        return None, False
     event_type = str(entry.get("event_type") or "")
     event = _event_payload(entry)
     run_event: Optional[RunEvent] = None
@@ -366,8 +436,8 @@ def _progress_item_for_entry(
             context=dict(context) if isinstance(context, dict) else {},
         )
     if run_event is None:
-        return None
-    item = reduce_progress_event(
+        return None, False
+    return reduce_progress_event_merged(
         state,
         ProgressProjectionInput(
             event_id=event_index,
@@ -375,9 +445,6 @@ def _progress_item_for_entry(
             event=run_event,
         ),
     )
-    if item is None:
-        return None
-    return item
 
 
 def _assistant_text_from_timeline(entries: Iterable[dict[str, Any]]) -> Optional[str]:
@@ -609,7 +676,7 @@ def _append_timeline_event_items(
         event_index = _event_index(entry, fallback)
         timestamp = _event_timestamp(entry)
         event_stable_id = f"{event_index:04d}"
-        progress_item = _progress_item_for_entry(
+        progress_item, progress_merged = _progress_item_for_entry(
             entry,
             event_index=event_index,
             timestamp=timestamp,
@@ -698,7 +765,23 @@ def _append_timeline_event_items(
             continue
 
         if event_type == "run_notice":
-            item_id = f"turn:{managed_turn_id}:intermediate:{event_stable_id}"
+            if _merge_streamed_intermediate_timeline_item(
+                items,
+                progress_item=progress_item,
+                progress_merged=progress_merged,
+                event_index=event_index,
+                timestamp=timestamp,
+                intermediate_kind=str(event.get("kind") or "notice"),
+                text=str(event.get("message") or ""),
+                event_type=event_type,
+                event=event,
+            ):
+                continue
+            item_id = _streamed_intermediate_item_id(
+                managed_turn_id,
+                progress_item=progress_item,
+                event_stable_id=event_stable_id,
+            )
             progress_item_ids, progress_event_ids = _progress_item_metadata(
                 progress_item
             )
@@ -743,7 +826,23 @@ def _append_timeline_event_items(
         if event_type == "output_delta":
             if _is_default_timeline_suppressed_output_delta(event):
                 continue
-            item_id = f"turn:{managed_turn_id}:intermediate:{event_stable_id}"
+            if _merge_streamed_intermediate_timeline_item(
+                items,
+                progress_item=progress_item,
+                progress_merged=progress_merged,
+                event_index=event_index,
+                timestamp=timestamp,
+                intermediate_kind=str(event.get("delta_type") or "output"),
+                text=str(event.get("content") or ""),
+                event_type=event_type,
+                event=event,
+            ):
+                continue
+            item_id = _streamed_intermediate_item_id(
+                managed_turn_id,
+                progress_item=progress_item,
+                event_stable_id=event_stable_id,
+            )
             progress_item_ids, progress_event_ids = _progress_item_metadata(
                 progress_item
             )
@@ -914,7 +1013,7 @@ def timeline_item_from_tail_event(
     if (
         event_type in {"progress", "assistant_update"} and progress_kind != "approval"
     ) or progress_kind in {"assistant_update", "notice"}:
-        item_id = f"turn:{normalized_turn_id}:intermediate:{source_event_key}"
+        item_id = f"turn:{normalized_turn_id}:intermediate:" f"{source_event_key}"
         text = str(tail_event.get("summary") or "")
         title = _progress_display_title(
             fallback_kind=progress_kind or event_type or "Update",

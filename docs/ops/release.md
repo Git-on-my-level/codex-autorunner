@@ -26,7 +26,7 @@ tmp_root="$(mktemp -d)"; .venv/bin/python -m codex_autorunner.cli hub orchestrat
 
 The gate must show that `car doctor --json`, `car hub orchestration status --json`,
 and `car automation migration-status --json` continue to expose pending
-schema migrations, legacy PMA automation residue, malformed rows, mirror health,
+schema migrations, legacy PMA automation residue, legacy executor-shape blockers,
 and next steps as stable JSON.
 
 Example:

@@ -7,7 +7,8 @@
   } from '$lib/viewModels/settings';
   import PageHero from './PageHero.svelte';
   import AutoDismissNotice from './AutoDismissNotice.svelte';
-  import DropdownSelect, { type DropdownSelectGroup, type DropdownSelectOption } from './DropdownSelect.svelte';
+  import type { DropdownSelectGroup, DropdownSelectOption } from './DropdownSelect';
+  import DropdownSelect from './DropdownSelect.svelte';
   import {
     applyThemePreference,
     isThemePreference,

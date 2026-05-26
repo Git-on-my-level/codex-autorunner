@@ -59,7 +59,6 @@ from codex_autorunner.core.hub_topology import (
 from codex_autorunner.core.hub_worktree_manager import WorktreeManager
 from codex_autorunner.core.managed_thread_store import ManagedThreadStore
 from codex_autorunner.core.orchestration.bindings import OrchestrationBindingStore
-from codex_autorunner.core.pma_automation_unified import PmaUnifiedAutomationAdapter
 from codex_autorunner.core.runner_controller import ProcessRunnerController
 from codex_autorunner.core.state import RunnerState, save_state
 from codex_autorunner.manifest import load_manifest, sanitize_repo_id, save_manifest
@@ -3460,22 +3459,12 @@ def test_process_automation_timers_returns_zero_for_bad_limit(
         supervisor.shutdown()
 
 
-def test_process_automation_timers_does_not_call_legacy_dequeue(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_process_automation_timers_uses_unified_schedules(tmp_path: Path) -> None:
     hub_root = tmp_path / "hub"
     supervisor = _make_basic_supervisor(hub_root)
     try:
         supervisor.set_managed_thread_queue_worker_starter(lambda _thread_id: None)
         _seed_due_managed_thread_schedule(hub_root)
-        monkeypatch.setattr(
-            PmaUnifiedAutomationAdapter,
-            "due_timer_schedules",
-            lambda *_args, **_kwargs: (_ for _ in ()).throw(
-                AssertionError("legacy timer adapter should not be called")
-            ),
-            raising=False,
-        )
         assert supervisor.process_automation_timers() == 1
     finally:
         supervisor.shutdown()

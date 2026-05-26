@@ -64,6 +64,7 @@ from .protocol_payload import (
     status_is_idle,
     summarize_question_answers,
 )
+from .sse_filters import opencode_sse_event_is_noise
 from .stream_lifecycle import (
     _OPENCODE_FIRST_EVENT_TIMEOUT_REASON,
     _OPENCODE_FIRST_EVENT_TIMEOUT_SECONDS,
@@ -97,15 +98,16 @@ def opencode_event_is_progress_signal(
 ) -> bool:
     """Whether *event* should count as stream progress for stall / first-event logic.
 
-    Ignores transport noise (``server.connected``, ``server.heartbeat``). For
-    ``session.status``, only idle-like statuses count; busy heartbeats must not
-    reset timers. Session scope: primary *session_id*, or any id in
-    *progress_session_ids* when the turn spans multiple server sessions.
+    Ignores transport noise (``server.connected``, ``server.heartbeat``, ``sync``,
+    ``session.next.*``). For ``session.status``, only idle-like statuses count;
+    busy heartbeats must not reset timers. Session scope: primary *session_id*,
+    or any id in *progress_session_ids* when the turn spans multiple server
+    sessions.
 
     Used only on the OpenCode SSE path; Codex/Hermes harnesses do not call this.
     """
     event_type = (event.event or "").strip().lower()
-    if event_type in {"server.connected", "server.heartbeat"}:
+    if opencode_sse_event_is_noise(event_type):
         return False
 
     raw = event.data or ""

@@ -1,7 +1,8 @@
 import { render } from 'svelte/server';
 import { describe, expect, it } from 'vitest';
 import ChatScopePicker from './ChatScopePicker.svelte';
-import DropdownSelect, { dropdownSearchMatches, dropdownSearchTerms } from './DropdownSelect.svelte';
+import { dropdownSearchMatches, dropdownSearchTerms } from './DropdownSelect';
+import DropdownSelect from './DropdownSelect.svelte';
 
 describe('DropdownSelect', () => {
   it('renders the shared trigger without falling back to a native select', () => {

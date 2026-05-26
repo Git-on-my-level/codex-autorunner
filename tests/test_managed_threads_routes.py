@@ -75,11 +75,11 @@ def _subscription_rows(
             continue
         rows.append(
             {
-                "subscription_id": rule.metadata.get("legacy_subscription_id")
+                "subscription_id": rule.metadata.get("subscription_id")
                 or rule.rule_id.removeprefix(PMA_SUBSCRIPTION_RULE_PREFIX),
                 "state": "active" if rule.enabled else "cancelled",
                 "thread_id": rule_thread_id,
-                "match_count": rule.metadata.get("legacy_match_count") or 0,
+                "match_count": rule.metadata.get("match_count") or 0,
             }
         )
     return rows
@@ -1611,7 +1611,7 @@ def test_create_subscription_persists_max_matches_and_thread_scope(hub_env) -> N
     )
     assert rule is not None
     assert rule.target["thread_id"] == thread_id
-    assert rule.metadata["legacy_max_matches"] == 1
+    assert rule.metadata["max_matches"] == 1
 
 
 def test_create_subscription_rejects_negative_max_matches(hub_env) -> None:

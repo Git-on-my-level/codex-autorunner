@@ -911,13 +911,10 @@ def _editable_projection(
 
 def _managed_projection(rule: AutomationRule) -> dict[str, Any]:
     reason = _system_reason(rule)
-    legacy_source = _legacy_source(rule)
     return {
         "system_owned": rule.system_owned,
-        "managed": rule.system_owned or legacy_source is not None,
+        "managed": rule.system_owned,
         "reason": reason,
-        "legacy": legacy_source is not None,
-        "legacy_source": legacy_source,
     }
 
 
@@ -927,19 +924,6 @@ def _system_reason(rule: AutomationRule) -> Optional[str]:
         if purpose:
             return f"System-managed automation: {purpose}"
         return "System-managed automation"
-    return None
-
-
-def _legacy_source(rule: AutomationRule) -> Optional[str]:
-    for key in (
-        "legacy_source_table",
-        "legacy_timer_id",
-        "legacy_subscription_id",
-        "legacy_wakeup_id",
-    ):
-        value = _optional_text(rule.metadata.get(key))
-        if value is not None:
-            return value if key == "legacy_source_table" else key
     return None
 
 
@@ -1196,14 +1180,6 @@ def _product_diagnostics(
                 "message": (
                     "This automation uses an executor kind that this build cannot run."
                 ),
-            }
-        )
-    if _legacy_source(rule) is not None:
-        diagnostics.append(
-            {
-                "code": "AUTOMATION_LEGACY_MIGRATED",
-                "severity": "info",
-                "message": "This automation was migrated from legacy PMA state.",
             }
         )
     if message["source"] == "none":

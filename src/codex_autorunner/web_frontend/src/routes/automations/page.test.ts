@@ -23,7 +23,7 @@ describe('/automations page', () => {
 
     expect(source).toContain('const userAutomations = $derived(automations.filter((automation) => !isManagedAutomation(automation)))');
     expect(source).toContain('const managedAutomations = $derived(automations.filter(isManagedAutomation))');
-    expect(source).toContain('Managed &amp; legacy diagnostics');
+    expect(source).toContain('Managed diagnostics');
     expect(source).toContain("selectedAutomation()?.product.scheduleEditor.kind");
     expect(source).toContain("selectedKind === 'automation' && selectedScheduleKind() === 'one_shot'");
     expect(source).toContain("selectedKind === 'automation' && selectedScheduleKind() === 'interval'");
@@ -44,6 +44,17 @@ describe('/automations page', () => {
     expect(source).toContain('renderPresetTemplate(preset.promptTemplate, selectedRepoId)');
     expect(source).toContain('preset.ticketBodyTemplate ? renderPresetTemplate(preset.ticketBodyTemplate, selectedRepoId) :');
     expect(source).not.toContain('const PRESETS');
+  });
+
+  it('allows enabled unsupported automations to be paused without allowing resume', () => {
+    const source = pageSource();
+    const canToggleEnabled = source.match(
+      /function canToggleEnabled\(\): boolean \{[\s\S]*?\n  \}/
+    )?.[0] ?? '';
+
+    expect(canToggleEnabled).toContain('if (!automation) return false;');
+    expect(canToggleEnabled).toContain('if (automation.enabled) return true;');
+    expect(canToggleEnabled).toContain('return Boolean(automation.product.editable.canEnable);');
   });
 
   it('loads the workspace index before hydrating detail, repo, and agent controls', () => {

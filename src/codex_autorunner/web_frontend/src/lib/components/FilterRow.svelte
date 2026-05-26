@@ -1,16 +1,6 @@
 <script lang="ts">
   import { onMount, type Snippet } from 'svelte';
-
-  export type FilterChip = {
-    key: string;
-    label: string;
-    count?: number | null;
-    active?: boolean;
-    onSelect: () => void;
-    title?: string;
-    ariaSelected?: boolean;
-    className?: string;
-  };
+  import type { FilterChip } from './FilterRow';
 
   interface Props {
     items: FilterChip[];

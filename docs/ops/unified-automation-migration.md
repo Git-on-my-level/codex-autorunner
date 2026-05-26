@@ -21,8 +21,7 @@ rules.
 - Lifecycle transitions are recorded as normalized automation events. Matching
   rules enqueue jobs in `orch_automation_jobs`.
 - Existing legacy subscription, timer, and wakeup rows are diagnostic residue
-  only. Unsupported old shapes fail with stable `PMA_LEGACY_AUTOMATION_*`
-  diagnostics instead of silently materializing runtime rules.
+  only. They are not imported, mirrored, or validated as runtime input.
 
 Operators should inspect canonical state in hub `orchestration.sqlite3`
 automation tables.
@@ -38,12 +37,10 @@ car automation migration-status --json
 ```
 
 The machine-readable payload reports pending orchestration schema versions,
-legacy PMA automation residue, malformed compatibility rows, mirror health, and
-operator next steps. Blockers use stable codes such as
-`AUTOMATION_MIGRATION_SCHEMA_PENDING`,
-`AUTOMATION_MIGRATION_LEGACY_BACKFILL_PENDING`,
-`AUTOMATION_MIGRATION_MIRROR_INCOMPLETE`, and the row-level
-`PMA_LEGACY_AUTOMATION_*` diagnostics raised by the explicit PMA migration.
+legacy PMA automation residue, legacy executor shapes still present in unified
+automation tables, and operator next steps. Legacy PMA automation rows are now
+reported only as `AUTOMATION_MIGRATION_LEGACY_RESIDUE`; operators should delete
+those rows or drop the retired tables instead of migrating them forward.
 
 The release gate must run:
 

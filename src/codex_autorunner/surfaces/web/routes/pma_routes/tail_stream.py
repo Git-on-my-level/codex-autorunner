@@ -233,6 +233,8 @@ def _load_managed_thread_status_state(
         service=service,
         managed_thread_id=managed_thread_id,
     )
+    serialized_thread["status"] = thread.status
+    serialized_thread["normalized_status"] = thread.status
     queued_turns = thread_store.list_pending_turn_queue_items(
         managed_thread_id,
         limit=min(limit, 50),
@@ -292,6 +294,7 @@ async def _build_managed_thread_tail_snapshot(
     resume_after: Optional[int],
     resume_after_managed_turn_id: Optional[str] = None,
     include_runtime_overlay: bool = True,
+    runtime_projection_state: ProgressProjectionState | None = None,
 ) -> dict[str, Any]:
     context = get_pma_request_context(request)
     thread, turn, persisted_timeline_entries, turn_record = await asyncio.to_thread(
@@ -423,7 +426,7 @@ async def _build_managed_thread_tail_snapshot(
             ):  # intentional: dynamic harness method - exception types depend on backend
                 raw_events = []
             state = RuntimeThreadRunEventState()
-            projection_state = ProgressProjectionState()
+            projection_state = runtime_projection_state or ProgressProjectionState()
             event_id_start = persisted_max_event_id
             overlay_floor = persisted_max_event_id
             for raw_event in raw_events:
@@ -742,6 +745,7 @@ async def _build_managed_thread_transcript_snapshot(
     limit: int = _TRANSCRIPT_STREAM_LIMIT,
     level: str = "info",
     include_runtime_overlay: bool = True,
+    runtime_projection_state: ProgressProjectionState | None = None,
 ) -> dict[str, Any]:
     context = get_pma_request_context(request)
     progress_snapshot = await _build_managed_thread_tail_snapshot(
@@ -755,6 +759,7 @@ async def _build_managed_thread_transcript_snapshot(
         resume_after=None,
         resume_after_managed_turn_id=None,
         include_runtime_overlay=include_runtime_overlay,
+        runtime_projection_state=runtime_projection_state,
     )
     _apply_sse_lifetime_to_snapshot(progress_snapshot)
     return await asyncio.to_thread(
@@ -899,6 +904,7 @@ def build_managed_thread_tail_routes(
             since_event_id=since_event_id,
             since_managed_turn_id=since_managed_turn_id,
         )
+        runtime_projection_state = ProgressProjectionState()
         initial = await _build_managed_thread_transcript_snapshot(
             request=request,
             service=service,
@@ -906,6 +912,7 @@ def build_managed_thread_tail_routes(
             harness=harness,
             limit=min(limit, _TRANSCRIPT_STREAM_LIMIT),
             level=normalized_level,
+            runtime_projection_state=runtime_projection_state,
         )
 
         async def _stream() -> Any:
@@ -961,6 +968,7 @@ def build_managed_thread_tail_routes(
                     resume_after=last_event_id,
                     resume_after_managed_turn_id=last_managed_turn_id,
                     include_runtime_overlay=True,
+                    runtime_projection_state=runtime_projection_state,
                 )
                 _apply_sse_lifetime_to_snapshot(refreshed)
                 rows: list[dict[str, Any]] = []

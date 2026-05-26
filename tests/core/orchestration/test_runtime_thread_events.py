@@ -1818,7 +1818,7 @@ async def test_message_delta_reasoning_does_not_pollute_stream_when_paired_with_
             "app-server",
             {
                 "message": {
-                    "method": "message.part.delta",
+                    "method": "message.part.updated",
                     "params": {
                         "properties": {
                             "part": {
@@ -1826,7 +1826,27 @@ async def test_message_delta_reasoning_does_not_pollute_stream_when_paired_with_
                                 "type": "reasoning",
                                 "text": "Let me think",
                             },
-                            "delta": {"text": "Let me think"},
+                        }
+                    },
+                }
+            },
+        ),
+        state,
+    )
+
+    duplicate_part_events = await normalize_runtime_thread_raw_event(
+        format_sse(
+            "app-server",
+            {
+                "message": {
+                    "method": "message.part.updated",
+                    "params": {
+                        "properties": {
+                            "part": {
+                                "id": "r1",
+                                "type": "reasoning",
+                                "text": "Let me think",
+                            },
                         }
                     },
                 }
@@ -1837,6 +1857,7 @@ async def test_message_delta_reasoning_does_not_pollute_stream_when_paired_with_
 
     assert delta_events == []
     assert len(part_events) == 1
+    assert duplicate_part_events == []
     assert isinstance(part_events[0], RunNotice)
     assert part_events[0].kind == "thinking"
     assert state.assistant_stream_text == ""

@@ -504,6 +504,8 @@
   const chatListResultSummary = $derived(
     formatChatListResultSummary(chatListSummaryCount, chatListSummaryLoading)
   );
+  const archiveFilterCount = $derived(filterCounts.archived);
+  const showArchiveFilterToggle = $derived(statusFilter === 'archived' || archiveFilterCount > 0);
   const canLoadMoreChats = $derived(Boolean(selectedChatWindow?.window?.nextCursor));
   const initialChatIndexError = $derived(chatIndexLoadError());
   const visibleChatError = $derived(chatError ?? (!hasUsableChatIndex ? initialChatIndexError : null));
@@ -1511,6 +1513,10 @@
   }
 
   async function openFileDrawer(): Promise<void> {
+    if (fileDrawerOpen) {
+      fileDrawerOpen = false;
+      return;
+    }
     fileDrawerOpen = true;
     const refreshes: Promise<unknown>[] = [refreshChatFileBox({ quiet: true })];
     if (activeChat && !isLocalDraftChatId(activeChat.id)) {
@@ -2193,6 +2199,7 @@
             ariaLabel="Chat status filters"
             maxRows={1}
             items={CHAT_FILTER_ORDER.filter((item) =>
+              item !== 'archived' &&
               shouldShowChatStatusFilterPill(item, filterCounts, statusFilter)
             ).map((item) => ({
               key: `status:${item}`,
@@ -2207,6 +2214,18 @@
             }))}
           />
         </div>
+        {#if showArchiveFilterToggle}
+          <button
+            type="button"
+            class="chip chat-filter-archive-toggle"
+            class:active={statusFilter === 'archived'}
+            title={statusFilter === 'archived' ? 'Hide archived chats' : 'Show archived chats'}
+            onclick={() => (statusFilter = toggleChatStatusFilter(statusFilter, 'archived'))}
+          >
+            Archived
+            <span>{archiveFilterCount}</span>
+          </button>
+        {/if}
         {#if hasAdvancedFilterOptions}
           <button
             type="button"
@@ -2226,7 +2245,7 @@
         <div class="chat-filter-bar-actions">
         {#if hasAnyFilter}
           <button
-            class="chat-filter-clear"
+            class="ghost-button chat-filter-clear"
             type="button"
             onclick={clearAllFilters}
             title="Clear all filters"
@@ -2234,7 +2253,7 @@
         {/if}
       {#if statusFilter === 'unread' && filterCounts.unread > 0}
         <button
-          class="new-chat-button"
+          class="ghost-button accent"
           type="button"
           onclick={markAllUnreadChatsRead}
           aria-label="Mark all chats as read"
@@ -2244,13 +2263,13 @@
       {/if}
       {#if activeChatCount > 0 && statusFilter !== 'archived'}
         <button
-          class="new-chat-button retire-all-button"
+          class="ghost-button danger"
           type="button"
           onclick={retireAllActiveChats}
           disabled={archiving}
           aria-label="Retire all active chats"
         >
-          {archiving ? 'Retiring...' : 'Retire All'}
+          {archiving ? 'Retiring…' : 'Retire all'}
         </button>
       {/if}
         </div>
@@ -2492,7 +2511,7 @@
           {#if apiErrorDetailText(visibleChatError)}
             <p class="state-panel-detail">{apiErrorDetailText(visibleChatError)}</p>
           {/if}
-          <button type="button" onclick={() => void pageController.refreshIndex()}>Retry</button>
+          <button class="ghost-button" type="button" onclick={() => void pageController.refreshIndex()}>Retry</button>
         </div>
       {:else}
         <VirtualList
@@ -2576,7 +2595,7 @@
                   {#if group.unreadCount > 0}
                     <button
                       type="button"
-                      class="chat-run-mark-read"
+                      class="ghost-button chat-run-mark-read"
                       onclick={(event) => { event.stopPropagation(); markGroupRead(group); }}
                     >Mark run as read</button>
                   {/if}
@@ -2594,7 +2613,7 @@
             {#if hasAnyFilter}
               <strong>No chats match these filters</strong>
               <p>Counts reflect totals before other filters apply; combining filters can yield no results.</p>
-              <button type="button" class="chat-filter-clear" onclick={clearAllFilters}>Clear filters</button>
+              <button type="button" class="ghost-button chat-filter-clear" onclick={clearAllFilters}>Clear filters</button>
             {:else}
               <strong>No chats yet</strong>
               <p>Start a new chat to populate this list.</p>
@@ -2671,7 +2690,7 @@
       {#if activeChat && (showStreamHealthAside || !isPmaChatArchived(activeChat) || activeSharedFileCount > 0 || inboxArtifacts.length > 0 || outboxArtifacts.length > 0)}
         <div class="chat-header-tools">
           <button
-            class="chat-header-action files-action"
+            class="ghost-button files-action"
             type="button"
             onclick={() => void openFileDrawer()}
             aria-label="Open chat files"
@@ -2680,13 +2699,13 @@
           </button>
           {#if !isPmaChatArchived(activeChat) && !isLocalDraftChatId(activeChat.id)}
             <button
-              class="chat-header-action"
+              class="ghost-button danger"
               type="button"
               onclick={() => retireChat(activeChat.id)}
               disabled={archiving}
               aria-label="Retire this chat"
             >
-              {archiving ? 'Retiring...' : 'Retire'}
+              {archiving ? 'Retiring…' : 'Retire chat'}
             </button>
           {/if}
           {#if showStreamHealthAside}
@@ -2701,7 +2720,7 @@
                   {/if}
                 </span>
                 {#if streamState === 'interrupted'}
-                  <button type="button" onclick={retryStream}>Reconnect</button>
+                  <button class="ghost-button" type="button" onclick={retryStream}>Reconnect</button>
                 {/if}
               </div>
             </aside>
@@ -2721,13 +2740,13 @@
         <div class="state-panel error">
           <strong>Could not load this chat</strong>
           <p>{activeError.message}</p>
-          <button type="button" onclick={() => activeChatId && refreshActive(activeChatId)}>Retry</button>
+          <button class="ghost-button" type="button" onclick={() => activeChatId && refreshActive(activeChatId)}>Retry</button>
         </div>
       {:else if !activeChat}
         <div class="state-panel empty-state">
           <strong>No chat is selected</strong>
           <p>Pick a conversation or create a new chat to start work.</p>
-          <button type="button" onclick={() => (detailMode = 'list')}>Browse chats</button>
+          <button class="ghost-button" type="button" onclick={() => (detailMode = 'list')}>Browse chats</button>
         </div>
       {:else if showStartPicker}
         <div class="start-picker" aria-label="Start of chat configuration">
@@ -2882,7 +2901,7 @@
                 <span class="chat-files-section-count">{inboxArtifacts.length}</span>
                 <button
                   type="button"
-                  class="chat-file-delete-all"
+                  class="ghost-button danger chat-file-delete-all"
                   disabled={deletingFileBox !== null}
                   title={deletingFileBox === 'inbox' ? 'Clearing…' : `Clear all ${inboxArtifacts.length}`}
                   aria-label={`Clear all ${inboxArtifacts.length} files from you`}
@@ -2942,7 +2961,7 @@
                 <span class="chat-files-section-count">{outboxArtifacts.length}</span>
                 <button
                   type="button"
-                  class="chat-file-delete-all"
+                  class="ghost-button danger chat-file-delete-all"
                   disabled={deletingFileBox !== null}
                   title={deletingFileBox === 'outbox' ? 'Clearing…' : `Clear all ${outboxArtifacts.length}`}
                   aria-label={`Clear all ${outboxArtifacts.length} files from agent`}
@@ -3102,7 +3121,7 @@
             <span class="queue-panel-hint">Runs after the current turn</span>
             {#if queuedTurns.length > 1}
               <button
-                class="queue-panel-clear"
+                class="ghost-button danger queue-panel-clear"
                 type="button"
                 onclick={clearQueueFromPanel}
               >
@@ -3128,14 +3147,14 @@
                     Interrupt
                   </button>
                   <button
-                    class="queue-item-cancel"
+                    class="icon-button queue-item-cancel"
                     type="button"
                     disabled={pending}
                     aria-label={`Cancel queued message ${index + 1}`}
                     title="Cancel this queued message"
                     onclick={() => cancelQueuedTurn(turn)}
                   >
-                    <svg viewBox="0 0 24 24" aria-hidden="true">
+                    <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
                       <path d="M6 6l12 12M18 6 6 18" />
                     </svg>
                   </button>
@@ -3152,7 +3171,11 @@
               <span>{attachment.kind}</span>
               <strong>{attachment.title}</strong>
               {#if attachment.sizeLabel}<em>{attachment.sizeLabel}</em>{/if}
-              <button type="button" aria-label={`Remove ${attachment.title}`} onclick={() => removeAttachment(attachment.id)}>x</button>
+              <button class="icon-button" type="button" aria-label={`Remove ${attachment.title}`} onclick={() => removeAttachment(attachment.id)}>
+                <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
+                  <path d="M6 6l12 12M18 6 6 18" />
+                </svg>
+              </button>
             </span>
           {/each}
         </div>
@@ -3235,7 +3258,7 @@
             />
           </label>
           <div class="modal-actions">
-            <button type="button" class="secondary-link" onclick={cancelLinkDialog}>Cancel</button>
+            <button type="button" class="ghost-button" onclick={cancelLinkDialog}>Cancel</button>
             <button type="button" class="send-button" disabled={!linkDraft.trim()} onclick={addLink}>Attach</button>
           </div>
         </div>

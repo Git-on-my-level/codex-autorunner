@@ -176,6 +176,24 @@ describe('PMA chat detail state composition', () => {
     expect(merged.elapsedSeconds).toBe(20);
     expect(merged.events.map((event) => event.id)).toEqual(['event-1', 'event-2']);
   });
+
+  it('replaces live progress events by canonical progress item id', () => {
+    const previous = progress('run-1', 10, [
+      artifact('event-1', { item_id: 'progress:assistant_update:0001', summary: 'Read' })
+    ]);
+    const next = progress('run-1', 11, [
+      artifact('event-2', { item_id: 'progress:assistant_update:0001', summary: 'Reading files' })
+    ]);
+
+    const merged = mergePmaProgressUpdate(previous, next, Date.parse(now) + 11_000);
+
+    expect(merged.events).toHaveLength(1);
+    expect(merged.events[0].id).toBe('event-2');
+    expect(merged.events[0].raw.progress_item).toMatchObject({
+      item_id: 'progress:assistant_update:0001',
+      summary: 'Reading files'
+    });
+  });
 });
 
 function userCard(id: string, text: string, raw: Record<string, unknown>): MessageTranscriptCard {
@@ -224,7 +242,7 @@ function queuedTurn(managedTurnId: string, raw: Record<string, unknown> = {}): P
   };
 }
 
-function artifact(id: string): SurfaceArtifact {
+function artifact(id: string, progressItem: Record<string, unknown> = {}): SurfaceArtifact {
   return {
     id,
     kind: 'progress',
@@ -232,7 +250,7 @@ function artifact(id: string): SurfaceArtifact {
     summary: null,
     url: null,
     createdAt: now,
-    raw: {}
+    raw: Object.keys(progressItem).length ? { progress_item: progressItem } : {}
   };
 }
 

@@ -200,7 +200,7 @@ def _create_terminal_followup_rule(
                 "pma_lifecycle_subscription",
             }:
                 continue
-            if rule.metadata.get("legacy_idempotency_key") == idempotency_key:
+            if rule.metadata.get("idempotency_key") == idempotency_key:
                 return _subscription_row_from_rule(rule)
 
     stamp = now_iso()
@@ -249,11 +249,11 @@ def _create_terminal_followup_rule(
         metadata={
             "builtin": True,
             "purpose": "managed_thread_lifecycle_subscription",
-            "legacy_subscription_id": subscription_id,
-            "legacy_idempotency_key": idempotency_key,
-            "legacy_max_matches": 1 if bool(payload.get("notify_once")) else None,
-            "legacy_match_count": 0,
-            "legacy_metadata": metadata,
+            "subscription_id": subscription_id,
+            "idempotency_key": idempotency_key,
+            "max_matches": 1 if bool(payload.get("notify_once")) else None,
+            "match_count": 0,
+            "metadata": metadata,
         },
         created_at=stamp,
         updated_at=stamp,
@@ -267,7 +267,7 @@ def _subscription_row_from_rule(rule: AutomationRule) -> dict[str, Any]:
     target = rule.target if isinstance(rule.target, dict) else {}
     filters = rule.filters if isinstance(rule.filters, dict) else {}
     return {
-        "subscription_id": rule.metadata.get("legacy_subscription_id")
+        "subscription_id": rule.metadata.get("subscription_id")
         or rule.rule_id.removeprefix(PMA_SUBSCRIPTION_RULE_PREFIX),
         "created_at": rule.created_at,
         "updated_at": rule.updated_at,
@@ -279,9 +279,9 @@ def _subscription_row_from_rule(rule: AutomationRule) -> dict[str, Any]:
         "lane_id": executor.get("lane_id") or "pma:default",
         "from_state": filters.get("event.payload.from_state"),
         "to_state": filters.get("event.payload.to_state"),
-        "reason": rule.metadata.get("legacy_reason"),
-        "idempotency_key": rule.metadata.get("legacy_idempotency_key"),
-        "max_matches": rule.metadata.get("legacy_max_matches"),
-        "match_count": rule.metadata.get("legacy_match_count") or 0,
-        "metadata": dict(rule.metadata.get("legacy_metadata") or {}),
+        "reason": rule.metadata.get("reason"),
+        "idempotency_key": rule.metadata.get("idempotency_key"),
+        "max_matches": rule.metadata.get("max_matches"),
+        "match_count": rule.metadata.get("match_count") or 0,
+        "metadata": dict(rule.metadata.get("metadata") or {}),
     }

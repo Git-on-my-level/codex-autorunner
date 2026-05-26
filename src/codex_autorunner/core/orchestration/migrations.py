@@ -20,7 +20,7 @@ from .turn_execution_storage import (
     build_turn_execution_request_from_storage,
 )
 
-ORCHESTRATION_SCHEMA_VERSION = 42
+ORCHESTRATION_SCHEMA_VERSION = 43
 
 
 @dataclass(frozen=True)
@@ -2276,6 +2276,86 @@ def _apply_v42(conn: sqlite3.Connection) -> None:
             )
 
 
+_PMA_AUTOMATION_METADATA_RENAMES = (
+    ("legacy_subscription_id", "subscription_id"),
+    ("legacy_timer_id", "timer_id"),
+    ("legacy_reason", "reason"),
+    ("legacy_idempotency_key", "idempotency_key"),
+    ("legacy_max_matches", "max_matches"),
+    ("legacy_match_count", "match_count"),
+    ("legacy_metadata", "metadata"),
+)
+
+
+def _rename_legacy_pma_metadata_keys(payload: object) -> dict[str, object] | None:
+    if not isinstance(payload, dict):
+        return None
+    changed = False
+    normalized = dict(payload)
+    for legacy_key, clean_key in _PMA_AUTOMATION_METADATA_RENAMES:
+        if legacy_key not in normalized:
+            continue
+        if clean_key not in normalized:
+            normalized[clean_key] = normalized[legacy_key]
+        del normalized[legacy_key]
+        changed = True
+    if "legacy_source_table" in normalized:
+        del normalized["legacy_source_table"]
+        changed = True
+    return normalized if changed else None
+
+
+def _apply_v43(conn: sqlite3.Connection) -> None:
+    if table_exists(conn, "orch_automation_rules"):
+        rows = conn.execute("""
+            SELECT rule_id, metadata_json
+              FROM orch_automation_rules
+        """).fetchall()
+        for row in rows:
+            try:
+                metadata = json.loads(str(row["metadata_json"] or "{}"))
+            except (TypeError, ValueError):
+                continue
+            normalized = _rename_legacy_pma_metadata_keys(metadata)
+            if normalized is None:
+                continue
+            conn.execute(
+                """
+                UPDATE orch_automation_rules
+                   SET metadata_json = ?
+                 WHERE rule_id = ?
+                """,
+                (json.dumps(normalized, sort_keys=True), row["rule_id"]),
+            )
+
+    if table_exists(conn, "orch_automation_schedules"):
+        rows = conn.execute("""
+            SELECT schedule_id, schedule_json
+              FROM orch_automation_schedules
+        """).fetchall()
+        for row in rows:
+            try:
+                schedule = json.loads(str(row["schedule_json"] or "{}"))
+            except (TypeError, ValueError):
+                continue
+            if not isinstance(schedule, dict):
+                continue
+            payload = schedule.get("payload")
+            normalized_payload = _rename_legacy_pma_metadata_keys(payload)
+            if normalized_payload is None:
+                continue
+            normalized_schedule = dict(schedule)
+            normalized_schedule["payload"] = normalized_payload
+            conn.execute(
+                """
+                UPDATE orch_automation_schedules
+                   SET schedule_json = ?
+                 WHERE schedule_id = ?
+                """,
+                (json.dumps(normalized_schedule, sort_keys=True), row["schedule_id"]),
+            )
+
+
 _MIGRATIONS = (
     _MigrationStep(1, "create_core_orchestration_schema", _apply_v1),
     _MigrationStep(2, "add_binding_and_flow_projection_scaffolding", _apply_v2),
@@ -2382,6 +2462,11 @@ _MIGRATIONS = (
         42,
         "add_durable_turn_assistant_output_payloads",
         _apply_v42,
+    ),
+    _MigrationStep(
+        43,
+        "rename_legacy_pma_automation_metadata_keys",
+        _apply_v43,
     ),
 )
 

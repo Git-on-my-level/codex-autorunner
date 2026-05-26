@@ -5,10 +5,9 @@ import sqlite3
 from pathlib import Path
 
 from codex_autorunner.core.automation.migration_diagnostics import (
-    AUTOMATION_MIGRATION_MIRROR_INCOMPLETE,
+    AUTOMATION_MIGRATION_LEGACY_RESIDUE,
     collect_automation_migration_read_model,
 )
-from codex_autorunner.core.automation.store import AutomationStore
 from codex_autorunner.core.orchestration import (
     ORCHESTRATION_SCHEMA_VERSION,
     apply_orchestration_migrations,
@@ -548,7 +547,7 @@ def test_turn_execution_contract_migration_repairs_legacy_opencode_models(
     assert legacy_model_record["status"] == "queued"
 
 
-def test_automation_migration_diagnostics_report_blocked_mirror(
+def test_automation_migration_diagnostics_report_legacy_residue(
     tmp_path: Path,
 ) -> None:
     hub_root = tmp_path / "hub"
@@ -558,53 +557,8 @@ def test_automation_migration_diagnostics_report_blocked_mirror(
 
     assert payload["status"] == "blocked"
     assert payload["legacy_residue"]["orch_automation_subscriptions"] == 1
-    assert payload["mirror_health"]["status"] == "blocked"
-    assert payload["mirror_health"]["missing"]["subscriptions"] == ["sub-legacy"]
     assert any(
-        item["code"] == AUTOMATION_MIGRATION_MIRROR_INCOMPLETE
-        for item in payload["diagnostics"]
-    )
-
-
-def test_automation_migration_diagnostics_report_clean_mirror(
-    tmp_path: Path,
-) -> None:
-    hub_root = tmp_path / "hub"
-    _insert_legacy_automation_rows(hub_root)
-    AutomationStore(hub_root).migrate_legacy_pma_automation()
-
-    payload = collect_automation_migration_read_model(hub_root).to_dict()
-
-    assert payload["status"] == "complete"
-    assert payload["mirror_health"]["status"] == "ok"
-    assert payload["mirror_health"]["missing"] == {
-        "subscriptions": [],
-        "timers": [],
-        "wakeups": [],
-    }
-
-
-def test_automation_migration_diagnostics_report_malformed_rows(
-    tmp_path: Path,
-) -> None:
-    hub_root = tmp_path / "hub"
-    _insert_legacy_automation_rows(hub_root)
-    with _connect(hub_root / ".codex-autorunner" / "orchestration.sqlite3") as conn:
-        conn.execute(
-            """
-            UPDATE orch_automation_subscriptions
-               SET event_types_json = ?
-             WHERE subscription_id = ?
-            """,
-            ("not-json", "sub-legacy"),
-        )
-
-    payload = collect_automation_migration_read_model(hub_root).to_dict()
-
-    assert payload["status"] == "blocked"
-    assert any(
-        item["code"] == "PMA_LEGACY_AUTOMATION_MALFORMED_JSON"
-        and item["table"] == "orch_automation_subscriptions"
+        item["code"] == AUTOMATION_MIGRATION_LEGACY_RESIDUE
         for item in payload["diagnostics"]
     )
 
@@ -1742,3 +1696,107 @@ def test_apply_v29_purges_removed_workspace_owner_threads_and_bindings(
 
     assert thread_ids == {"repo-scope"}
     assert binding_kinds == {"thread"}
+
+
+def test_apply_v43_renames_legacy_pma_automation_metadata_keys(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "orchestration.sqlite3"
+    with _connect(db_path) as conn:
+        apply_orchestration_migrations(conn)
+        conn.execute(
+            """
+            INSERT INTO orch_automation_rules (
+                rule_id, name, enabled, system_owned, trigger_kind,
+                trigger_json, filters_json, target_policy, target_json,
+                executor_kind, executor_json, policy_json, metadata_json,
+                created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "pma:subscription:sub-legacy",
+                "legacy subscription",
+                1,
+                1,
+                "event",
+                json.dumps({"event_types": ["lifecycle.flow_failed"]}),
+                "{}",
+                "hub",
+                "{}",
+                "pma_operator_turn",
+                "{}",
+                "{}",
+                json.dumps(
+                    {
+                        "purpose": "pma_lifecycle_subscription",
+                        "legacy_source_table": "orch_automation_subscriptions",
+                        "legacy_subscription_id": "sub-legacy",
+                        "legacy_idempotency_key": "sub-key",
+                        "legacy_reason": "watch failures",
+                        "legacy_max_matches": 3,
+                        "legacy_match_count": 1,
+                        "legacy_metadata": {"source": "migration-test"},
+                    }
+                ),
+                "2026-01-01T00:00:00Z",
+                "2026-01-01T00:00:00Z",
+            ),
+        )
+        conn.execute(
+            """
+            INSERT INTO orch_automation_schedules (
+                schedule_id, rule_id, schedule_kind, next_fire_at, schedule_json,
+                state, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "pma:timer-schedule:timer-legacy",
+                "pma:subscription:sub-legacy",
+                "one_shot",
+                "2026-01-02T00:00:00Z",
+                json.dumps(
+                    {
+                        "payload": {
+                            "legacy_timer_id": "timer-legacy",
+                            "legacy_idempotency_key": "timer-key",
+                            "legacy_metadata": {"source": "timer"},
+                        }
+                    }
+                ),
+                "active",
+                "2026-01-01T00:00:00Z",
+                "2026-01-01T00:00:00Z",
+            ),
+        )
+        conn.execute("DELETE FROM orch_schema_migrations WHERE version = 43")
+
+        version_after = apply_orchestration_migrations(conn)
+        rule_row = conn.execute("""
+            SELECT metadata_json
+              FROM orch_automation_rules
+             WHERE rule_id = 'pma:subscription:sub-legacy'
+            """).fetchone()
+        schedule_row = conn.execute("""
+            SELECT schedule_json
+              FROM orch_automation_schedules
+             WHERE schedule_id = 'pma:timer-schedule:timer-legacy'
+            """).fetchone()
+
+    assert version_after == ORCHESTRATION_SCHEMA_VERSION
+    assert rule_row is not None
+    metadata = json.loads(rule_row["metadata_json"])
+    assert metadata["subscription_id"] == "sub-legacy"
+    assert metadata["idempotency_key"] == "sub-key"
+    assert metadata["reason"] == "watch failures"
+    assert metadata["max_matches"] == 3
+    assert metadata["match_count"] == 1
+    assert metadata["metadata"] == {"source": "migration-test"}
+    assert not any(key.startswith("legacy_") for key in metadata)
+
+    assert schedule_row is not None
+    schedule = json.loads(schedule_row["schedule_json"])
+    payload = schedule["payload"]
+    assert payload["timer_id"] == "timer-legacy"
+    assert payload["idempotency_key"] == "timer-key"
+    assert payload["metadata"] == {"source": "timer"}
+    assert not any(key.startswith("legacy_") for key in payload)

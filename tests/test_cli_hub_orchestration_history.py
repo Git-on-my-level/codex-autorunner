@@ -225,7 +225,7 @@ def test_hub_orchestration_status_reports_automation_migration(
     assert result.exit_code == 0
     payload = json.loads(result.output)
     assert payload["automation_migration"]["status"] == "complete"
-    assert payload["automation_migration"]["mirror_health"]["status"] == "ok"
+    assert "mirror_health" not in payload["automation_migration"]
 
 
 def test_hub_orchestration_canary_command(tmp_path: Path) -> None:

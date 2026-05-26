@@ -69,7 +69,7 @@
       </span>
     {/if}
   </div>
-  <a class="cs-open" href={chatHref} aria-label="Open chat thread">Open →</a>
+  <a class="cs-open ghost-button" href={chatHref} aria-label="Open chat thread">Open chat</a>
 </aside>
 
 <style>
@@ -154,12 +154,8 @@
   .cs-text.muted { color: var(--color-ink-faint); font-style: italic; font-family: inherit; }
 
   .cs-open {
-    color: var(--color-ink-muted);
-    text-decoration: none;
-    font-weight: 500;
     flex-shrink: 0;
   }
-  .cs-open:hover { color: var(--color-ink); }
 
   @media (max-width: 760px) {
     .current-chat-stream {

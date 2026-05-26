@@ -24,7 +24,7 @@ def subscription_row_from_rule(
 ) -> dict[str, Any]:
     executor, target, filters = _rule_executor_target_filters(rule)
     row: dict[str, Any] = {
-        "subscription_id": rule.metadata.get("legacy_subscription_id")
+        "subscription_id": rule.metadata.get("subscription_id")
         or rule.rule_id.removeprefix(PMA_SUBSCRIPTION_RULE_PREFIX),
         "created_at": rule.created_at,
         "updated_at": rule.updated_at,
@@ -36,11 +36,11 @@ def subscription_row_from_rule(
         "lane_id": executor.get("lane_id") or "pma:default",
         "from_state": filters.get("event.payload.from_state"),
         "to_state": filters.get("event.payload.to_state"),
-        "reason": rule.metadata.get("legacy_reason"),
-        "idempotency_key": rule.metadata.get("legacy_idempotency_key"),
-        "max_matches": rule.metadata.get("legacy_max_matches"),
-        "match_count": rule.metadata.get("legacy_match_count") or 0,
-        "metadata": dict(rule.metadata.get("legacy_metadata") or {}),
+        "reason": rule.metadata.get("reason"),
+        "idempotency_key": rule.metadata.get("idempotency_key"),
+        "max_matches": rule.metadata.get("max_matches"),
+        "match_count": rule.metadata.get("match_count") or 0,
+        "metadata": dict(rule.metadata.get("metadata") or {}),
     }
     if include_rule_id:
         row["rule_id"] = rule.rule_id
@@ -60,7 +60,7 @@ def timer_row_from_rule_and_schedule(rule: Any, schedule: Any) -> dict[str, Any]
     schedule_config, payload = _schedule_payload(schedule)
     return {
         "timer_id": payload.get("timer_id")
-        or rule.metadata.get("legacy_timer_id")
+        or rule.metadata.get("timer_id")
         or schedule.schedule_id.removeprefix(PMA_TIMER_SCHEDULE_PREFIX),
         "due_at": schedule.next_fire_at,
         "created_at": schedule.created_at,
@@ -79,7 +79,7 @@ def timer_row_from_rule_and_schedule(rule: Any, schedule: Any) -> dict[str, Any]
         "from_state": payload.get("from_state"),
         "to_state": payload.get("to_state"),
         "reason": payload.get("reason"),
-        "idempotency_key": rule.metadata.get("legacy_idempotency_key"),
+        "idempotency_key": rule.metadata.get("idempotency_key"),
         "metadata": dict(payload.get("metadata") or {}),
     }
 

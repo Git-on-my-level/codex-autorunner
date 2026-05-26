@@ -377,27 +377,94 @@ Use the segmented-pill pattern (see `.memory-tabs-v2` in `PmaMemoryView`):
   on the active tab.
 - Optional mono `<small>` filename suffix for file/document tabs.
 
-## Buttons
+## Buttons and badges
 
-Three variants, no more. Pick deliberately — every extra primary button
-on a page is a vote against the one that actually matters.
+The app has exactly **four interactive/decorative shapes**. Every clickable
+or labeled element on the page must be one of them. Pick deliberately —
+every extra primary button on a page is a vote against the one that
+actually matters.
+
+### The four shapes
 
 1. **Primary action** (`.send-button`, `.new-chat-button`): accent fill,
    white text, weight 550, soft accent shadow. **One per surface.** If
    you find yourself adding a second, ask whether it should be a ghost
    button or an icon button.
 2. **Secondary / ghost** (`.ghost-button`, `.memory-copy-button`): 1px
-   border, surface background, ink-soft text. Hover strengthens border
-   and switches to `--color-surface-muted`. Use for inline actions inside
-   a card header, or for any action that should not compete with the
-   page's primary CTA.
-3. **Icon button** (`.icon-button`): 30×30px, transparent until hover,
-   ink-faint icon. Use only when an inline label would clutter the row.
-   Always `aria-label`.
+   border in `--color-border`, surface background, ink-soft text, 28–32px
+   tall. Hover strengthens border and switches to `--color-surface-muted`.
+   Use for inline actions inside a card header, every section-header
+   action ("Browse all", "New PMA chat", "Sync"), and any non-primary
+   verb. **This is the workhorse — when in doubt, pick this.**
+   - `.ghost-button.danger` — border and text switch to `--color-danger`,
+     hover fills `--color-danger-soft`. Use for destructive verbs only.
+3. **Icon button** (`.icon-button`, `.icon-action`): 30×30px, transparent
+   until hover, ink-faint icon. Use only when an inline label would
+   clutter the row, never for a page-level or section-level action.
+   Always `aria-label`. **No emoji-only buttons.** Emoji is decoration,
+   not a glyph — use the SVG icon set or render a labeled ghost button.
+4. **Badge / chip** (`.status-pill`, `.count-chip`, `.id-tag`, `.kind-chip`):
+   no border, no hover state, no cursor change. Soft background derived
+   from a semantic token (`--color-*-soft` or `--color-surface-muted`),
+   small radius (4–8px for category tags; 999px for status/count pills).
+   **Badges are read-only.** If a badge needs to be clickable, it's not
+   a badge — promote it to a ghost button.
 
-Heights: 28–34px depending on density. Inputs match button heights.
+Heights: 28–34px for buttons, 20–24px for badges. Inputs match button heights.
+
+### The disambiguation rule
+
+> **A button has a border (or is a primary fill, or is an icon-only
+> hover-reveal). A badge does not. Buttons and badges never share the
+> same chrome on the same row.**
+
+This is the rule that prevents the "is that thing clickable?" question.
+Practical consequences:
+
+- **Never give a `<button>` or `<a>` the same shape as an adjacent
+  badge.** If the git-status row carries `Clean` and `69 behind` chips
+  (borderless soft pills), the `Sync` action on the same row must be a
+  ghost button (bordered, taller, ink-soft text) — not a third pill.
+- **Never render a badge that looks like a button.** No borders on
+  status pills, no `cursor: pointer` on count chips that don't actually
+  navigate.
+- **Never style two distinct actions identically.** If a row has both
+  "Clear state" and "Retire worktree", they get distinct labels (not
+  two "Retire" buttons differentiated only by emoji), and the destructive
+  one gets the `.danger` variant.
+
+### Section-header actions
+
+A right-aligned text link styled as `Browse all →` next to a section H2
+reads as a sibling label, not an action — the user can't tell which is
+clickable. Don't ship them. Instead:
+
+```svelte
+<header class="section-header">
+  <h2>Contextspace</h2>
+  <a class="ghost-button" href={…}>Browse all</a>
+</header>
+```
+
+The section header is a flex row with `space-between`. The action is a
+ghost button (small height, 28px). No trailing `→`; the ghost shape and
+hover are enough affordance. The same pattern handles `+ PMA`,
+`+ Coding agent`, and `All tickets`.
+
+### Status communication and badges
+
+Status pills are badges. They are read-only by the rule above:
+
+- `.status-pill.<status>` — discrete state on a title row, lowercase, soft
+  fill + solid text, no border, no hover.
+- Git status chips (`.git-state-pill`, `.git-chip`) follow the same
+  rule. Adjacent action buttons (e.g. `Sync`) must use the ghost shape.
+- `.id-tag` / `.chat-id-tag` — uppercase 6-char mono id, square radius
+  (4–6px), surface-muted background, no border. Lives in a meta row.
 
 ### Dirty-state buttons (form save)
+
+### Dirty-state ghost buttons (form save)
 
 Form save buttons should not exist as a permanently-loud primary CTA next
 to a settings panel header. Instead:

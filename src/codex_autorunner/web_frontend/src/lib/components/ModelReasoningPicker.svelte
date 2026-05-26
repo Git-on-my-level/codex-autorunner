@@ -1,5 +1,6 @@
 <script lang="ts">
-  import DropdownSelect, { type DropdownSelectOption } from '$lib/components/DropdownSelect.svelte';
+  import type { DropdownSelectOption } from '$lib/components/DropdownSelect';
+  import DropdownSelect from '$lib/components/DropdownSelect.svelte';
   import {
     modelExists,
     modelLabel,

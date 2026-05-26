@@ -108,7 +108,6 @@
       gap: var(--space-1);
     }
 
-    /* Hero actions on mobile: tight ghost icons rather than full rows.
-       The .hero-action class shrinks via global mobile override below. */
+    /* Hero actions on mobile: tight ghost icons rather than full rows. */
   }
 </style>

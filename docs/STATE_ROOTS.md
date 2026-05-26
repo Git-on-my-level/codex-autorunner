@@ -274,9 +274,10 @@ All canonical PMA state lives in `orchestration.sqlite3` tables:
 Migration blockers for remaining compatibility rows are surfaced by
 `car doctor --json`, `car hub orchestration status --json`, and
 `car automation migration-status --json`. The JSON diagnostics report pending
-schema versions, legacy residue counts, malformed row codes, mirror health, and
-operator next steps. Normal runtime no longer auto-materializes legacy PMA
-subscription, timer, or wakeup rows into unified automation rules.
+schema versions, legacy residue counts, legacy executor-shape blockers, and
+operator next steps. Normal runtime no longer imports, mirrors, or
+auto-materializes legacy PMA subscription, timer, or wakeup rows into unified
+automation rules.
 
 Filesystem mirrors are **not** the source of truth:
 

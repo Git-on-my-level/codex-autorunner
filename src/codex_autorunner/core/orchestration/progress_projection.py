@@ -172,6 +172,31 @@ def _merge_streamed_item_summary(
     return f"{previous_summary}{incoming_summary}"
 
 
+def reduce_progress_event_merged(
+    state: ProgressProjectionState,
+    event_input: ProgressProjectionInput,
+) -> tuple[ProgressProjectionItem | None, bool]:
+    """Reduce one event and fold it into ``state.last_item`` when merge_key matches.
+
+    Returns ``(item, merged_into_previous)``. *item* is the projection row callers
+    should surface (stable ``item_id`` across streamed thinking snapshots).
+    """
+
+    item = reduce_progress_event(state, event_input)
+    if item is None or item.hidden:
+        return None, False
+    if (
+        state.last_item is not None
+        and item.merge_key is not None
+        and state.last_item.merge_key == item.merge_key
+    ):
+        merged = _with_merged_streamed_item(state.last_item, item)
+        state.last_item = merged
+        return merged, True
+    state.last_item = item
+    return item, False
+
+
 def project_progress_events(
     events: Iterable[ProgressProjectionInput],
 ) -> list[ProgressProjectionItem]:
@@ -180,20 +205,13 @@ def project_progress_events(
     state = ProgressProjectionState()
     items: list[ProgressProjectionItem] = []
     for event in events:
-        item = reduce_progress_event(state, event)
+        item, merged = reduce_progress_event_merged(state, event)
         if item is None or item.hidden:
             continue
-        if (
-            items
-            and item.merge_key is not None
-            and items[-1].merge_key == item.merge_key
-        ):
-            merged = _with_merged_streamed_item(items[-1], item)
-            items[-1] = merged
-            state.last_item = merged
+        if merged and items:
+            items[-1] = item
             continue
         items.append(item)
-        state.last_item = item
     return items
 
 

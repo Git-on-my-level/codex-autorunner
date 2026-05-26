@@ -1196,9 +1196,7 @@ class ChatSurfaceReadService:
                 "unread": int(counters_row["unread"] or 0),
                 "archived": int(counters_row["archived"] or 0),
             }
-            facet_counts = _chat_index_facet_counts(
-                conn, where_counters_sql, counters_params
-            )
+            facet_counts = _chat_index_facet_counts(conn, where_sql, params)
             if group_by == "ticket_run" and parent_group_id is None:
                 all_rows = [
                     _chat_index_row_from_projection(row)

@@ -64,6 +64,11 @@
     const id = await resolveWorkspaceId();
     const docs = await webApi.contextspace.listDocuments(id);
     if (!docs.ok) {
+      if (docs.error.status === 404) {
+        vm = buildContextspaceViewModel(id, [], repoList, worktreeList);
+        loading = false;
+        return;
+      }
       error = docs.error;
       vm = null;
       loading = false;

@@ -865,8 +865,8 @@ def test_build_hub_snapshot_includes_automation_summary(hub_env) -> None:
                 system_owned=True,
                 metadata={
                     "purpose": "managed_thread_lifecycle_subscription",
-                    "legacy_subscription_id": "snapshot-sub-1",
-                    "legacy_idempotency_key": "snapshot-sub-1",
+                    "subscription_id": "snapshot-sub-1",
+                    "idempotency_key": "snapshot-sub-1",
                 },
             )
         )
@@ -880,7 +880,7 @@ def test_build_hub_snapshot_includes_automation_summary(hub_env) -> None:
             system_owned=True,
             metadata={
                 "purpose": "managed_thread_timer",
-                "legacy_timer_id": "snapshot-timer-1",
+                "timer_id": "snapshot-timer-1",
             },
         )
         store.upsert_rule(timer_rule)
@@ -974,7 +974,7 @@ def test_build_hub_snapshot_includes_action_queue_with_supersession(hub_env) -> 
                 system_owned=True,
                 metadata={
                     "purpose": "managed_thread_lifecycle_subscription",
-                    "legacy_subscription_id": "snapshot-action-queue",
+                    "subscription_id": "snapshot-action-queue",
                 },
             )
         )

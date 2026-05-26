@@ -31,18 +31,27 @@
   let saveState = $state('');
   let lastDocId = $state('');
   let textarea = $state<HTMLTextAreaElement | null>(null);
+  let autoEditing = $state(false);
 
   $effect(() => {
     if (docId !== lastDocId) {
       lastDocId = docId;
       draft = content;
-      editing = false;
+      autoEditing = isMissing && editable;
+      editing = autoEditing;
       saving = false;
       saveState = '';
       return;
     }
     if (!editing && draft !== content) {
       draft = content;
+    }
+  });
+
+  $effect(() => {
+    if (autoEditing && textarea) {
+      autoEditing = false;
+      void tick().then(() => resizeEditor());
     }
   });
 

@@ -3,7 +3,21 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from codex_autorunner.core.automation import AutomationStore
+from codex_autorunner.core.automation import (
+    EXECUTOR_PMA_OPERATOR_TURN,
+    PMA_SUBSCRIPTION_RULE_PREFIX,
+    PMA_TIMER_RULE_PREFIX,
+    PMA_TIMER_SCHEDULE_PREFIX,
+    AutomationRule,
+    AutomationSchedule,
+    AutomationStore,
+)
+from codex_autorunner.core.automation.builtins import _normalize_reactive_event_types
+from codex_autorunner.core.automation.models import (
+    SCHEDULE_ONE_SHOT,
+    TARGET_POLICY_HUB,
+    TRIGGER_KIND_EVENT,
+)
 from codex_autorunner.core.config import load_hub_config
 from codex_autorunner.core.flows.models import FlowRunStatus
 from codex_autorunner.core.flows.store import FlowStore
@@ -13,7 +27,6 @@ from codex_autorunner.core.pma_automation_records import (
     PmaAutomationTimer,
     PmaLifecycleSubscription,
 )
-from codex_autorunner.core.pma_automation_unified import PmaUnifiedAutomationAdapter
 from codex_autorunner.manifest import load_manifest, save_manifest
 
 
@@ -82,6 +95,171 @@ def _read_queue_items(
 
 def _automation_jobs(hub_root: Path) -> list[dict[str, object]]:
     return [job.to_dict() for job in AutomationStore(hub_root).list_jobs()]
+
+
+def _upsert_subscription_rule(
+    hub_root: Path, subscription: PmaLifecycleSubscription
+) -> None:
+    subscription_id = subscription.subscription_id
+    filters = {
+        path: value
+        for path, value in (
+            ("event.repo_id", subscription.repo_id),
+            ("event.payload.run_id", subscription.run_id),
+            ("event.payload.thread_id", subscription.thread_id),
+            ("event.payload.from_state", subscription.from_state),
+            ("event.payload.to_state", subscription.to_state),
+        )
+        if value is not None
+    }
+    AutomationStore(hub_root).upsert_rule(
+        AutomationRule.create(
+            rule_id=f"{PMA_SUBSCRIPTION_RULE_PREFIX}{subscription_id}",
+            name=f"PMA subscription {subscription_id}",
+            enabled=subscription.state == "active",
+            system_owned=True,
+            trigger_kind=TRIGGER_KIND_EVENT,
+            trigger={
+                "event_types": _normalize_reactive_event_types(subscription.event_types)
+            },
+            filters=filters,
+            target_policy=TARGET_POLICY_HUB,
+            target={
+                "repo_id": subscription.repo_id,
+                "run_id": subscription.run_id,
+                "thread_id": subscription.thread_id,
+            },
+            executor_kind=EXECUTOR_PMA_OPERATOR_TURN,
+            executor={
+                "wake_up_kind": "pma_subscription",
+                "source": "transition",
+                "subscription_id": subscription_id,
+                "lane_id": subscription.lane_id,
+                "event_type": "{{ event.payload.event_type }}",
+                "repo_id": "{{ event.repo_id }}",
+                "run_id": "{{ event.payload.run_id }}",
+                "thread_id": "{{ event.payload.thread_id }}",
+                "from_state": "{{ event.payload.from_state }}",
+                "to_state": "{{ event.payload.to_state }}",
+                "reason": "{{ event.payload.reason }}",
+                "timestamp": "{{ event.raw_payload.timestamp }}",
+                "message_text": (
+                    "Automation wake-up received.\n"
+                    "source: transition\n"
+                    "event_type: {{ event.payload.event_type }}\n"
+                    f"subscription_id: {subscription_id}\n"
+                    "repo_id: {{ event.repo_id }}\n"
+                    "run_id: {{ event.payload.run_id }}\n"
+                    "thread_id: {{ event.payload.thread_id }}\n"
+                    "from_state: {{ event.payload.from_state }}\n"
+                    "to_state: {{ event.payload.to_state }}\n"
+                    "reason: {{ event.payload.reason }}\n"
+                    "timestamp: {{ event.raw_payload.timestamp }}\n"
+                    "suggested_next_action: inspect the transition and adjust "
+                    "the generalized automation rule or schedule as needed."
+                ),
+                **dict(subscription.metadata or {}),
+            },
+            policy={
+                "dedupe_key": f"pma-subscription:{subscription_id}:{{{{ event.event_id }}}}",
+                "approval_mode": "pause_and_request_user",
+                "max_attempts": 3,
+                "max_concurrent_per_rule": 1,
+                "max_concurrent_per_target": 1,
+            },
+            metadata={
+                "builtin": True,
+                "purpose": "pma_lifecycle_subscription",
+                "subscription_id": subscription_id,
+                "idempotency_key": subscription.idempotency_key,
+                "reason": subscription.reason,
+                "max_matches": subscription.max_matches,
+                "match_count": subscription.match_count,
+                "metadata": dict(subscription.metadata or {}),
+            },
+            created_at=subscription.created_at,
+            updated_at=subscription.updated_at,
+        )
+    )
+
+
+def _upsert_timer_schedule(hub_root: Path, timer: PmaAutomationTimer) -> None:
+    timer_id = timer.timer_id
+    store = AutomationStore(hub_root)
+    rule = store.upsert_rule(
+        AutomationRule.create(
+            rule_id=f"{PMA_TIMER_RULE_PREFIX}{timer_id}",
+            name=f"PMA timer {timer_id}",
+            enabled=timer.state == "pending",
+            system_owned=True,
+            trigger_kind=TRIGGER_KIND_EVENT,
+            trigger={"event_types": ["schedule.fire"]},
+            filters={"schedule.rule_id": f"{PMA_TIMER_RULE_PREFIX}{timer_id}"},
+            target_policy=TARGET_POLICY_HUB,
+            target={
+                "repo_id": timer.repo_id,
+                "run_id": timer.run_id,
+                "thread_id": timer.thread_id,
+            },
+            executor_kind=EXECUTOR_PMA_OPERATOR_TURN,
+            executor={
+                "message_text": (
+                    "Automation wake-up received.\n"
+                    "source: timer\n"
+                    f"timer_id: {timer_id}\n"
+                    "repo_id: {{ schedule.payload.repo_id }}\n"
+                    "run_id: {{ schedule.payload.run_id }}\n"
+                    "thread_id: {{ schedule.payload.thread_id }}\n"
+                    "suggested_next_action: verify progress, then inspect or pause "
+                    "the generalized automation schedule as needed."
+                ),
+                "wake_up_kind": "pma_timer",
+            },
+            policy={
+                "dedupe_key": f"pma-timer:{timer_id}:{{{{ schedule.next_fire_at }}}}",
+                "approval_mode": "pause_and_request_user",
+                "max_attempts": 3,
+                "max_concurrent_per_rule": 1,
+                "max_concurrent_per_target": 1,
+            },
+            metadata={
+                "builtin": True,
+                "purpose": "pma_timer",
+                "timer_id": timer_id,
+                "idempotency_key": timer.idempotency_key,
+            },
+            created_at=timer.created_at,
+            updated_at=timer.updated_at,
+        )
+    )
+    store.upsert_schedule(
+        AutomationSchedule.create(
+            schedule_id=f"{PMA_TIMER_SCHEDULE_PREFIX}{timer_id}",
+            rule_id=rule.rule_id,
+            schedule_kind=SCHEDULE_ONE_SHOT,
+            next_fire_at=timer.due_at if timer.state == "pending" else None,
+            last_fire_at=timer.fired_at,
+            schedule={
+                "timer_id": timer_id,
+                "timer_kind": timer.timer_type,
+                "payload": {
+                    "timer_id": timer_id,
+                    "timer_type": timer.timer_type,
+                    "repo_id": timer.repo_id,
+                    "run_id": timer.run_id,
+                    "thread_id": timer.thread_id,
+                    "lane_id": timer.lane_id,
+                    "from_state": timer.from_state,
+                    "to_state": timer.to_state,
+                    "reason": timer.reason,
+                    "metadata": dict(timer.metadata or {}),
+                },
+            },
+            state="active" if timer.state == "pending" else timer.state,
+            created_at=timer.created_at,
+            updated_at=timer.updated_at,
+        )
+    )
 
 
 def test_lifecycle_dispatch_auto_resolve_does_not_enqueue_pma(
@@ -390,9 +568,7 @@ def test_lifecycle_subscription_enqueues_wakeup_payload(tmp_path: Path) -> None:
             to_state="failed",
             idempotency_key="sub-flow-failed-1",
         )
-        PmaUnifiedAutomationAdapter(AutomationStore(hub_root)).mirror_subscription_rule(
-            subscription=subscription
-        )
+        _upsert_subscription_rule(hub_root, subscription)
 
         supervisor.lifecycle_emitter.emit_flow_failed(
             "repo-1",
@@ -438,9 +614,7 @@ def test_automation_timer_due_drains_to_pma_queue(tmp_path: Path) -> None:
             reason="timer_due",
             idempotency_key="timer-thread-123",
         )
-        PmaUnifiedAutomationAdapter(AutomationStore(hub_root)).mirror_timer_schedule(
-            timer=timer
-        )
+        _upsert_timer_schedule(hub_root, timer)
 
         supervisor.process_automation_timers()
         assert len(_automation_jobs(hub_root)) == 1
@@ -482,9 +656,7 @@ def test_flow_completion_subscription_can_trigger_next_lane(tmp_path: Path) -> N
             lane_id="pma:lane-next",
             idempotency_key="sub-next-lane",
         )
-        PmaUnifiedAutomationAdapter(AutomationStore(hub_root)).mirror_subscription_rule(
-            subscription=subscription
-        )
+        _upsert_subscription_rule(hub_root, subscription)
 
         supervisor.lifecycle_emitter.emit_flow_completed(
             "repo-1",
@@ -526,9 +698,7 @@ def test_drain_automation_wakeup_copies_delivery_target_from_subscription(
             },
             idempotency_key="sub-delivery-target",
         )
-        PmaUnifiedAutomationAdapter(AutomationStore(hub_root)).mirror_subscription_rule(
-            subscription=subscription
-        )
+        _upsert_subscription_rule(hub_root, subscription)
 
         supervisor.lifecycle_emitter.emit_flow_completed("repo-1", "run-1")
         supervisor.process_lifecycle_events()

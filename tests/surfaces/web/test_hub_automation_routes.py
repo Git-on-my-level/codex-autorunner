@@ -848,6 +848,32 @@ def test_hub_automations_delete_requires_paused(tmp_path):
     assert after.status_code == 404
 
 
+def test_hub_automations_delete_rejects_system_owned_rules(tmp_path):
+    hub_root = tmp_path / "hub"
+    seed_hub_files(hub_root, force=True)
+    store = AutomationStore(hub_root)
+    rule = store.upsert_rule(
+        AutomationRule.create(
+            rule_id="builtin:pma:system-rule",
+            name="System rule",
+            enabled=False,
+            system_owned=True,
+            trigger_kind=TRIGGER_KIND_EVENT,
+            trigger={"event_types": ["manual.run"]},
+            target_policy=TARGET_POLICY_HUB,
+            executor_kind=EXECUTOR_PMA_OPERATOR_TURN,
+            executor={"message_text": "Managed follow-up"},
+        )
+    )
+    client = TestClient(create_hub_app(hub_root))
+
+    response = client.delete(f"/hub/automations/{rule.rule_id}")
+
+    assert response.status_code == 400
+    assert response.json()["detail"]["code"] == "AUTOMATION_DELETE_SYSTEM_OWNED"
+    assert AutomationStore(hub_root).get_rule(rule.rule_id) is not None
+
+
 def test_hub_automations_get_and_update_details(tmp_path):
     hub_root = tmp_path / "hub"
     seed_hub_files(hub_root, force=True)
@@ -998,7 +1024,7 @@ def test_hub_automations_project_pma_one_shot_timer(tmp_path):
             metadata={
                 "builtin": True,
                 "purpose": "pma_timer",
-                "legacy_timer_id": "timer-1",
+                "timer_id": "timer-1",
             },
         )
     )
@@ -1008,7 +1034,7 @@ def test_hub_automations_project_pma_one_shot_timer(tmp_path):
             rule_id=rule.rule_id,
             schedule_kind=SCHEDULE_ONE_SHOT,
             next_fire_at="2026-01-02T00:00:00Z",
-            schedule={"legacy_timer_id": "timer-1", "timer_kind": "one_shot"},
+            schedule={"timer_id": "timer-1", "timer_kind": "one_shot"},
         )
     )
     client = TestClient(create_hub_app(hub_root))
@@ -1021,9 +1047,7 @@ def test_hub_automations_project_pma_one_shot_timer(tmp_path):
     assert automation["schedule_editor"]["fields"] == {"due_at": "2026-01-02T00:00:00Z"}
     assert automation["editable"]["can_edit_schedule"] is False
     assert automation["managed"]["managed"] is True
-    assert automation["managed"]["legacy"] is True
     assert {item["code"] for item in automation["diagnostics"]} >= {
-        "AUTOMATION_LEGACY_MIGRATED",
         "AUTOMATION_ONE_SHOT_SCHEDULE",
     }
 

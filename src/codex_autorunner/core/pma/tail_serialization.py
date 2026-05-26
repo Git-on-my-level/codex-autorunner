@@ -16,7 +16,7 @@ from ..orchestration.progress_projection import (
     ProgressProjectionItem,
     ProgressProjectionState,
     project_progress_events,
-    reduce_progress_event,
+    reduce_progress_event_merged,
 )
 from ..orchestration.runtime_thread_events import (
     RuntimeThreadRunEventState,
@@ -281,7 +281,7 @@ def _tail_event_from_run_event(
     projection_state: ProgressProjectionState | None = None,
 ) -> dict[str, Any] | None:
     state = projection_state or ProgressProjectionState()
-    item = reduce_progress_event(
+    item, _merged = reduce_progress_event_merged(
         state,
         ProgressProjectionInput(
             event_id=event_id,

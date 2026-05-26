@@ -895,7 +895,9 @@
 
   function canToggleEnabled(): boolean {
     const automation = selectedAutomation();
-    return Boolean(automation?.product.editable.canEnable);
+    if (!automation) return false;
+    if (automation.enabled) return true;
+    return Boolean(automation.product.editable.canEnable);
   }
 
   function canDelete(): boolean {
@@ -947,7 +949,6 @@
           <span>{status.label}</span>
           <span class="meta-dot">·</span>
           <span class="meta-schedule">{scheduleLabel(automation)}</span>
-          <span class="kind-chip">{kindLabel(automation.kind)}</span>
         </span>
       </span>
       <span class="card-chevron" aria-hidden="true">→</span>
@@ -987,7 +988,9 @@
             disabled={loading}
             aria-label="Refresh automations"
             title="Refresh"
-          >↻</button>
+          >
+            {@render refreshIcon()}
+          </button>
         </div>
         <button type="button" class="primary-button list-create" onclick={() => openPmaWithDraft(createNewAutomationPrompt())}>
           Create with PMA
@@ -1051,8 +1054,6 @@
                       <span class="automation-card-title">{preset.name}</span>
                       <span class="automation-card-meta">
                         <span>{preset.schedule.kind}</span>
-                        <span class="meta-dot">·</span>
-                        <span class="kind-chip">{kindLabel(preset.executorKind)}</span>
                       </span>
                     </span>
                     <span class="card-chevron" aria-hidden="true">→</span>
@@ -1065,7 +1066,7 @@
           {#if managedAutomations.length > 0}
             <details class="list-group system-group">
               <summary>
-                <span class="system-summary-label">Managed &amp; legacy diagnostics</span>
+                <span class="system-summary-label">Managed diagnostics</span>
                 <span class="system-count">{managedAutomations.length}</span>
               </summary>
               <p class="group-empty system-note">Built-in, PMA-mirrored, and legacy-migrated rules. They are diagnostics-first and only typed editable fields can be changed.</p>
@@ -1138,7 +1139,7 @@
             {#if canDelete()}
               <button
                 type="button"
-                class="ghost-button danger-button"
+                class="ghost-button danger"
                 disabled={deleting || actionId === selectedAutomation()?.id}
                 onclick={() => selectedAutomation() && void deleteAutomation(selectedAutomation() as AutomationSummary)}
               >{deleting ? 'Deleting…' : 'Delete'}</button>
@@ -1160,9 +1161,6 @@
       {:else if selectedAutomation()?.product.managed.managed}
         <p class="detail-banner system">
           {selectedAutomation()?.product.managed.reason || 'Managed automation.'}
-          {#if selectedAutomation()?.product.managed.legacy}
-            Migrated from {selectedAutomation()?.product.managed.legacySource || 'legacy PMA state'}.
-          {/if}
         </p>
       {/if}
 
@@ -1388,7 +1386,7 @@
           <div class="raw-link-row">
             {#each Object.entries(selectedAutomation()?.product.rawLinks ?? {}) as [key, value]}
               {#if typeof value === 'string'}
-                <a href={href(value)}>{rawLinkLabel(key)}</a>
+                <a class="ghost-button" href={href(value)}>{rawLinkLabel(key)}</a>
               {/if}
             {/each}
           </div>
@@ -1424,6 +1422,15 @@
     {/if}
   {/snippet}
 </MasterDetail>
+
+{#snippet refreshIcon()}
+  <svg viewBox="0 0 24 24" aria-hidden="true" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M21 12a9 9 0 0 1-15.36 6.36" />
+    <path d="M3 12a9 9 0 0 1 15.36-6.36" />
+    <path d="M21 4v5h-5" />
+    <path d="M3 20v-5h5" />
+  </svg>
+{/snippet}
 
 <style>
   .automation-notice {
@@ -1520,10 +1527,9 @@
   .refresh-chip {
     align-self: flex-start;
     padding: 2px var(--space-2);
-    border: 1px solid var(--color-border-subtle);
     border-radius: var(--radius-2);
     color: var(--color-ink-muted);
-    background: var(--color-surface-sunken);
+    background: var(--color-surface-muted);
     font-size: 10px;
     font-weight: 650;
     text-transform: uppercase;
@@ -1658,8 +1664,7 @@
     font-size: var(--font-size-0);
     font-weight: 600;
     color: var(--color-ink-muted);
-    background: var(--color-surface);
-    border: 1px solid var(--color-border-subtle);
+    background: var(--color-surface-muted);
     border-radius: 999px;
     padding: 1px 8px;
     font-variant-numeric: tabular-nums;
@@ -1781,19 +1786,6 @@
     opacity: 0.7;
   }
 
-  .kind-chip {
-    flex: 0 0 auto;
-    font-size: 10px;
-    font-weight: 600;
-    letter-spacing: 0.02em;
-    text-transform: uppercase;
-    color: var(--color-ink-muted);
-    background: var(--color-surface-muted);
-    padding: 1px 6px;
-    border-radius: 4px;
-    margin-left: auto;
-  }
-
   .card-chevron {
     flex: 0 0 auto;
     color: var(--color-ink-faint);
@@ -1861,16 +1853,6 @@
     display: flex;
     gap: var(--space-2);
     flex-wrap: wrap;
-  }
-
-  .danger-button {
-    color: var(--color-danger);
-    border-color: color-mix(in srgb, var(--color-danger) 28%, transparent);
-  }
-
-  .danger-button:hover:not(:disabled) {
-    background: var(--color-danger-soft);
-    border-color: var(--color-danger);
   }
 
   .automation-detail-empty {
@@ -2071,10 +2053,9 @@
 
   .source-chip {
     max-width: 100%;
-    border: 1px solid var(--color-border-subtle);
     border-radius: 999px;
     padding: 2px 8px;
-    background: var(--color-surface-sunken);
+    background: var(--color-surface-muted);
     color: var(--color-ink-muted);
     font-family: var(--font-mono);
     font-size: 11px;
@@ -2184,15 +2165,9 @@
     margin-top: var(--space-3);
   }
 
-  .raw-link-row a {
-    border: 1px solid var(--color-border-subtle);
-    border-radius: 999px;
-    padding: 3px 9px;
-    color: var(--color-ink-muted);
-    background: var(--color-surface-sunken);
-    font-size: var(--font-size-0);
-    text-decoration: none;
+  .raw-link-row :global(.ghost-button) {
     text-transform: capitalize;
+    text-decoration: none;
   }
 
   .json-editor {

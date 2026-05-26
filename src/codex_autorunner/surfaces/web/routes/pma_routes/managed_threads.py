@@ -180,12 +180,19 @@ def _serialize_managed_thread_queue_item(
     queue_payload: Optional[dict[str, Any]] = None,
 ) -> dict[str, Any]:
     attachments: list[dict[str, Any]] = []
-    request_payload = (
-        queue_payload.get("request") if isinstance(queue_payload, dict) else None
-    )
-    metadata = (
-        request_payload.get("metadata") if isinstance(request_payload, dict) else None
-    )
+    metadata = None
+    if isinstance(queue_payload, dict):
+        turn_request = queue_payload.get("turn_request")
+        if isinstance(turn_request, dict):
+            metadata = turn_request.get("metadata")
+        if not isinstance(metadata, dict):
+            request_payload = queue_payload.get("request")
+            if isinstance(request_payload, dict):
+                metadata = request_payload.get("metadata")
+    if not isinstance(metadata, dict):
+        turn_request = item.get("turn_request")
+        if isinstance(turn_request, dict):
+            metadata = turn_request.get("metadata")
     raw_attachments = (
         metadata.get("attachments") if isinstance(metadata, dict) else None
     )
@@ -390,12 +397,12 @@ def _create_unified_pma_subscription(
         metadata={
             "builtin": True,
             "purpose": "managed_thread_lifecycle_subscription",
-            "legacy_subscription_id": subscription_id,
-            "legacy_idempotency_key": idempotency_key,
-            "legacy_reason": reason,
-            "legacy_max_matches": max_matches,
-            "legacy_match_count": 0,
-            "legacy_metadata": metadata,
+            "subscription_id": subscription_id,
+            "idempotency_key": idempotency_key,
+            "reason": reason,
+            "max_matches": max_matches,
+            "match_count": 0,
+            "metadata": metadata,
         },
         created_at=created_at,
         updated_at=created_at,
@@ -703,8 +710,8 @@ def _create_unified_pma_timer(
         metadata={
             "builtin": True,
             "purpose": "managed_thread_timer",
-            "legacy_timer_id": timer_id,
-            "legacy_idempotency_key": idempotency_key,
+            "timer_id": timer_id,
+            "idempotency_key": idempotency_key,
         },
         created_at=created_at,
         updated_at=created_at,
@@ -715,7 +722,7 @@ def _create_unified_pma_timer(
         schedule_kind=SCHEDULE_ONE_SHOT,
         next_fire_at=due_at,
         schedule={
-            "legacy_timer_id": timer_id,
+            "timer_id": timer_id,
             "timer_kind": timer_type,
             "payload": {
                 "timer_id": timer_id,
@@ -814,7 +821,7 @@ def _find_pma_rule_by_idempotency(
     for rule in store.list_rules():
         if rule.metadata.get("purpose") not in purpose_set:
             continue
-        if rule.metadata.get("legacy_idempotency_key") == idempotency_key:
+        if rule.metadata.get("idempotency_key") == idempotency_key:
             return rule
     return None
 

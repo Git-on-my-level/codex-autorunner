@@ -1389,17 +1389,6 @@ class AutomationStore:
             ).fetchone()
         return int(row["c"] if row is not None else 0)
 
-    def migrate_legacy_pma_automation(self) -> dict[str, Any]:
-        from ..pma_automation_unified import PmaUnifiedAutomationAdapter
-
-        return PmaUnifiedAutomationAdapter(self).migrate_legacy_rows().to_dict()
-
-    def backfill_legacy_pma_automation(self) -> dict[str, Any]:
-        raise RuntimeError(
-            "PMA legacy automation backfill was removed; run "
-            "migrate_legacy_pma_automation() explicitly and handle diagnostics."
-        )
-
     def _transition_job(
         self,
         job_id: str,

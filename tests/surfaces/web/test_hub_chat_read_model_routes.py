@@ -953,8 +953,8 @@ def test_hub_read_models_chats_all_excludes_effectively_archived_rows(
                         "thread-stale-archived-runtime",
                         "codex",
                         "repo",
-                        "repo",
-                        "repo",
+                        "worktree",
+                        "repo--archived",
                         "Stale archived runtime",
                         "archived",
                         "completed",
@@ -975,6 +975,7 @@ def test_hub_read_models_chats_all_excludes_effectively_archived_rows(
     assert [row.chat_id for row in snapshot.rows] == ["thread-active"]
     assert snapshot.counters.total == 1
     assert snapshot.counters.archived == 1
+    assert snapshot.facet_counts.scope_kind == {"repo": 1}
 
     archived_response = client.get(
         "/hub/read-models/chats", params={"filter": "archived", "limit": 20}
@@ -986,6 +987,7 @@ def test_hub_read_models_chats_all_excludes_effectively_archived_rows(
     assert [row.chat_id for row in archived_snapshot.rows] == [
         "thread-stale-archived-runtime"
     ]
+    assert archived_snapshot.facet_counts.scope_kind == {"worktree": 1}
 
 
 def test_hub_read_models_chats_discord_rebind_uses_managed_archive_state(

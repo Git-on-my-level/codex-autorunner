@@ -1745,25 +1745,6 @@ a.scope-chip-label:hover {
   min-width: 0;
 }
 
-.chat-header-action {
-  flex: 0 0 auto;
-  min-height: 28px;
-  padding: 0 var(--space-3);
-  border: 1px solid var(--color-border);
-  border-radius: 6px;
-  background: var(--color-surface);
-  color: var(--color-ink-muted);
-  cursor: pointer;
-  font-size: var(--font-size-0);
-  font-weight: 600;
-}
-
-.chat-header-action:hover:not(:disabled) {
-  border-color: var(--color-border-strong);
-  background: var(--color-surface-muted);
-  color: var(--color-ink);
-}
-
 .chat-header-subtitle {
   display: inline-flex;
   align-items: center;
@@ -4989,55 +4970,6 @@ textarea:disabled {
   letter-spacing: -0.01em;
 }
 
-/* Full-width panel title row: one large tap target to open the scoped index
-   (contextspace, tickets, etc.) instead of a tiny text link beside the title. */
-.panel-heading-row > .panel-heading-primary-link {
-  display: flex;
-  flex: 1;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--space-3);
-  min-width: 0;
-  min-height: 44px;
-  padding: var(--space-2) var(--space-3);
-  border-radius: 8px;
-  border: 1px solid var(--color-border-subtle);
-  background: var(--color-surface);
-  color: inherit;
-  font-size: inherit;
-  font-weight: inherit;
-  text-decoration: none;
-  transition:
-    border-color var(--transition-fast),
-    background-color var(--transition-fast);
-}
-
-.panel-heading-row > .panel-heading-primary-link:hover {
-  border-color: var(--color-border-strong);
-  background: var(--color-surface-muted);
-}
-
-.panel-heading-row > .panel-heading-primary-link h2 {
-  color: var(--color-ink);
-  flex: 1;
-  min-width: 0;
-}
-
-.panel-heading-primary-hint {
-  display: inline-flex;
-  align-items: center;
-  gap: 2px;
-  flex-shrink: 0;
-  color: var(--color-ink-muted);
-  font-size: var(--font-size-1);
-  font-weight: 600;
-  white-space: nowrap;
-}
-
-.panel-heading-row > .panel-heading-primary-link:hover .panel-heading-primary-hint {
-  color: var(--color-ink);
-}
-
 .panel-heading-stack {
   display: flex;
   flex-direction: column;
@@ -6707,13 +6639,6 @@ textarea:disabled {
     margin-bottom: var(--space-2);
   }
 
-  /* Hero actions become compact ghost chips on mobile so a 2-button row
-     doesn't eat 40px of vertical space. */
-  .hero-action {
-    min-height: 26px;
-    padding: 0 var(--space-2);
-    font-size: var(--font-size-0);
-  }
   /* .hero-stats and .compact-definition mobile overrides live in the
      trailing @media block at end of file (must come after their desktop
      rules, which are themselves below this block in source order). */
@@ -7122,41 +7047,40 @@ textarea:disabled {
   background: var(--color-accent-soft);
 }
 
-/* Page-hero secondary action. Subtle text link with a trailing chevron —
-   reads as navigation rather than a Bootstrap button. The hero stays calm,
-   and the action is still hit-target sized for click. */
-.hero-action {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  min-height: 28px;
-  padding: 0 var(--space-2);
-  border: 0;
-  border-radius: 6px;
-  background: transparent;
-  color: var(--color-ink-muted);
-  font-size: var(--font-size-1);
-  font-weight: 550;
-  text-decoration: none;
-  transition: color var(--transition-fast), background-color var(--transition-fast);
+/* Promoted ghost — accent border + accent text for positive secondary actions
+   like "Mark all as read". Sits between plain ghost and primary. */
+.ghost-button.accent {
+  border-color: color-mix(in srgb, var(--color-accent) 40%, var(--color-border));
+  color: var(--color-accent);
 }
 
-.hero-action::after {
-  content: "→";
-  display: inline-block;
-  color: var(--color-ink-faint);
-  transition: transform var(--transition-fast), color var(--transition-fast);
-  font-weight: 500;
+.ghost-button.accent:hover:not(:disabled) {
+  border-color: var(--color-accent);
+  background: var(--color-accent-soft);
+  color: var(--color-accent);
 }
 
-.hero-action:hover {
-  background: var(--color-surface-muted);
-  color: var(--color-ink);
+/* Destructive ghost — same shape, switches to danger color. Used for verbs like
+   "Retire worktree", "Delete chat". Never combine with a primary fill. */
+.ghost-button.danger {
+  border-color: color-mix(in srgb, var(--color-danger) 32%, var(--color-border));
+  color: var(--color-danger);
 }
 
-.hero-action:hover::after {
-  color: var(--color-ink);
-  transform: translateX(2px);
+.ghost-button.danger:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--color-danger) 55%, var(--color-border));
+  background: color-mix(in srgb, var(--color-danger) 10%, transparent);
+  color: var(--color-danger);
+}
+
+.ghost-button.danger svg {
+  width: 14px;
+  height: 14px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 
 /* Activity-kind chip — only render when there's a real artifact kind.
@@ -7289,6 +7213,8 @@ textarea:disabled {
   max-width: 100%;
 }
 
+/* Category badge — small uppercase tag in a meta row. Read-only: no border,
+   no hover, no cursor change. Soft fill alone carries the category. */
 .chat-scope-kind-tag {
   flex-shrink: 0;
   font-size: 9px;
@@ -7297,38 +7223,32 @@ textarea:disabled {
   text-transform: uppercase;
   padding: 1px 6px;
   border-radius: 4px;
-  border: 1px solid rgb(255 255 255 / 0.1);
   color: var(--color-ink-muted);
-  background: rgb(255 255 255 / 0.04);
+  background: var(--color-surface-muted);
 }
 
 .chat-scope-kind-tag.repo {
   color: var(--color-accent);
-  border-color: color-mix(in srgb, var(--color-accent) 40%, transparent);
   background: color-mix(in srgb, var(--color-accent) 14%, transparent);
 }
 
 .chat-scope-kind-tag.worktree {
   color: var(--color-success);
-  border-color: color-mix(in srgb, var(--color-success) 40%, transparent);
   background: color-mix(in srgb, var(--color-success) 12%, transparent);
 }
 
 .chat-scope-kind-tag.hub {
   color: var(--color-ink-soft);
-  border-color: color-mix(in srgb, var(--color-ink-muted) 40%, transparent);
   background: color-mix(in srgb, var(--color-ink-muted) 10%, transparent);
 }
 
 .chat-scope-kind-tag.tickets {
   color: color-mix(in srgb, var(--color-warning) 82%, var(--color-ink));
-  border-color: color-mix(in srgb, var(--color-warning) 38%, var(--color-border));
-  background: color-mix(in srgb, var(--color-warning) 12%, var(--color-surface-muted));
+  background: color-mix(in srgb, var(--color-warning) 14%, transparent);
 }
 
 .chat-scope-kind-tag.retired {
   color: var(--color-ink-faint);
-  border-color: color-mix(in srgb, var(--color-ink-faint) 34%, var(--color-border));
   background: color-mix(in srgb, var(--color-ink-faint) 10%, transparent);
 }
 
@@ -7353,13 +7273,15 @@ textarea:disabled {
   font-size: 10.5px;
 }
 
-.chat-kind-badge {
+/* Read-only category badges in chat title rows. Soft fill alone carries the
+   category — no border, no hover, no cursor change. */
+.chat-kind-badge,
+.chat-surface-badge {
   display: inline-flex;
   align-items: center;
   min-height: 18px;
   padding: 1px 6px;
   border-radius: 999px;
-  border: 1px solid var(--color-border-subtle);
   background: var(--color-surface-muted);
   color: var(--color-ink-muted);
   font-size: 10px;
@@ -7370,47 +7292,27 @@ textarea:disabled {
 
 .chat-kind-badge.pma {
   color: var(--color-accent);
-  border-color: color-mix(in srgb, var(--color-accent) 28%, var(--color-border));
   background: var(--color-accent-soft);
 }
 
 .chat-kind-badge.coding_agent {
   color: var(--color-success);
-  border-color: color-mix(in srgb, var(--color-success) 28%, var(--color-border));
-  background: color-mix(in srgb, var(--color-success) 12%, var(--color-surface));
+  background: color-mix(in srgb, var(--color-success) 14%, transparent);
 }
 
 .chat-kind-badge.automation {
   color: var(--color-warning);
-  border-color: color-mix(in srgb, var(--color-warning) 32%, var(--color-border));
-  background: color-mix(in srgb, var(--color-warning) 12%, var(--color-surface));
-}
-
-.chat-surface-badge {
-  display: inline-flex;
-  align-items: center;
-  min-height: 18px;
-  padding: 1px 6px;
-  border-radius: 999px;
-  border: 1px solid var(--color-border-subtle);
-  background: var(--color-surface-muted);
-  color: var(--color-ink-muted);
-  font-size: 10px;
-  font-weight: 650;
-  line-height: 1.2;
-  white-space: nowrap;
+  background: color-mix(in srgb, var(--color-warning) 14%, transparent);
 }
 
 .chat-surface-badge.surface-discord {
   color: color-mix(in srgb, #5865f2 82%, var(--color-ink));
-  border-color: color-mix(in srgb, #5865f2 38%, var(--color-border));
-  background: color-mix(in srgb, #5865f2 14%, var(--color-surface-muted));
+  background: color-mix(in srgb, #5865f2 16%, transparent);
 }
 
 .chat-surface-badge.surface-telegram {
   color: color-mix(in srgb, #229ed9 85%, var(--color-ink));
-  border-color: color-mix(in srgb, #229ed9 38%, var(--color-border));
-  background: color-mix(in srgb, #229ed9 13%, var(--color-surface-muted));
+  background: color-mix(in srgb, #229ed9 16%, transparent);
 }
 
 .chat-card .chat-meta-row code {

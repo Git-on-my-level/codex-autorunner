@@ -190,7 +190,7 @@ def pma_automation_migration_status(
     output_json: bool = typer.Option(False, "--json", help="Emit JSON output"),
     path: Optional[Path] = hub_root_path_option(),
 ):
-    """Report legacy automation migration blockers and mirror health."""
+    """Report automation migration blockers and legacy residue."""
     hub_root = resolve_hub_path(path)
     report = collect_automation_migration_read_model(hub_root)
     payload = report.to_dict()
@@ -200,8 +200,7 @@ def pma_automation_migration_status(
     typer.echo(
         "automation migration: "
         f"status={payload['status']} "
-        f"schema={payload['schema_version']}/{payload['target_schema_version']} "
-        f"mirror={payload['mirror_health']['status']}"
+        f"schema={payload['schema_version']}/{payload['target_schema_version']}"
     )
     for diagnostic in payload.get("diagnostics") or []:
         typer.echo(

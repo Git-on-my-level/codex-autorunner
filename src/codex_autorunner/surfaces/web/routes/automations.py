@@ -208,6 +208,14 @@ def build_automation_routes(context: HubAppContext) -> APIRouter:
             raise HTTPException(
                 status_code=404, detail=f"Automation not found: {rule_id}"
             )
+        if existing.system_owned:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "code": "AUTOMATION_DELETE_SYSTEM_OWNED",
+                    "message": "System-owned automations cannot be deleted.",
+                },
+            )
         if existing.enabled:
             raise HTTPException(
                 status_code=400,

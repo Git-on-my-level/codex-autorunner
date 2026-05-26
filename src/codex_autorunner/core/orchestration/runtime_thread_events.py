@@ -360,6 +360,7 @@ def _merge_pending_stream_text(current: str, incoming: str) -> str:
 @dataclass
 class RuntimeThreadRunEventState:
     reasoning_buffers: dict[str, str] = field(default_factory=dict)
+    reasoning_last_emitted: dict[str, str] = field(default_factory=dict)
     assistant_stream_text: str = ""
     assistant_message_text: str = ""
     token_usage: Optional[dict[str, Any]] = None

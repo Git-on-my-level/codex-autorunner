@@ -437,7 +437,7 @@ def _serialize_thread_target(
         "lifecycle_status": thread.lifecycle_status,
         "runtime_status": effective_status,
         "normalized_status": effective_status,
-        "status": target_runtime_status or effective_status,
+        "status": effective_status,
         "target_runtime_status": target_runtime_status,
         "execution_status": execution_status,
         "active_turn_id": (
@@ -482,7 +482,7 @@ def _serialize_thread_target(
     payload["created_at"] = normalize_optional_text(thread.created_at)
     payload.update(
         _build_operator_status_fields(
-            normalized_status=thread.status,
+            normalized_status=target_runtime_status,
             lifecycle_status=thread.lifecycle_status,
         )
     )

@@ -4,10 +4,11 @@
    *
    * **Hub chat threads:** before the first message, render via `ChatThreadPreMessagePickers`
    * in the transcript stack only — do not embed profile (or duplicate these rows) inside the
-   * chat composer form.
-   */
+  * chat composer form.
+  */
   import ModelReasoningPicker from '$lib/components/ModelReasoningPicker.svelte';
-  import DropdownSelect, { type DropdownSelectOption } from '$lib/components/DropdownSelect.svelte';
+  import type { DropdownSelectOption } from '$lib/components/DropdownSelect';
+  import DropdownSelect from '$lib/components/DropdownSelect.svelte';
   import {
     agentCanListModels,
     agentId,

@@ -83,7 +83,7 @@ def _create_subscription_rule(
             executor={"lane_id": "pma:default", "message_text": "Follow up"},
             metadata={
                 "purpose": "managed_thread_lifecycle_subscription",
-                "legacy_subscription_id": subscription_id,
+                "subscription_id": subscription_id,
             },
         )
     )
@@ -110,7 +110,7 @@ def _create_timer_schedule(
             target={"repo_id": repo_id},
             executor_kind=LEGACY_EXECUTOR_MANAGED_THREAD_TURN,
             executor={"message_text": "Timer follow up"},
-            metadata={"purpose": "managed_thread_timer", "legacy_timer_id": timer_id},
+            metadata={"purpose": "managed_thread_timer", "timer_id": timer_id},
         )
     )
     schedule = store.upsert_schedule(
@@ -121,7 +121,7 @@ def _create_timer_schedule(
             next_fire_at=next_fire_at if state == "active" else None,
             state=state,
             schedule={
-                "legacy_timer_id": timer_id,
+                "timer_id": timer_id,
                 "timer_kind": "one_shot",
                 "payload": {
                     "timer_id": timer_id,

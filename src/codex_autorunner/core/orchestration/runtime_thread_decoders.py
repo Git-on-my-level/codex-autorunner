@@ -520,6 +520,7 @@ def _normalize_message_part_updated(
     state: RuntimeThreadRunEventState,
     *,
     timestamp: Optional[str] = None,
+    suppress_reasoning_prefix_growth: bool = False,
 ) -> list[RunEvent]:
     part = _extract_message_part(params)
     part_id = _extract_part_id(params, part=part)
@@ -560,6 +561,33 @@ def _normalize_message_part_updated(
         content = _extract_opencode_reasoning_text(params, part_for_processing, state)
         if not content:
             return []
+        emit_key = (
+            part_id
+            or _extract_part_message_id(params)
+            or _extract_message_id(params)
+            or "reasoning"
+        )
+        last_emitted = state.reasoning_last_emitted.get(emit_key, "")
+        if content == last_emitted:
+            return []
+        # OpenCode sends full growing reasoning snapshots on part.updated.
+        # Real part.delta events still need to emit the newly extended thought.
+        is_synthetic_descendant = bool(
+            isinstance(part_id, str) and part_id.startswith("descendant-progress:")
+        )
+        has_explicit_delta = bool(
+            _event_extract_output_delta(params, include_part_text=False)
+        )
+        if (
+            suppress_reasoning_prefix_growth
+            and not is_synthetic_descendant
+            and not has_explicit_delta
+            and last_emitted
+            and content.startswith(last_emitted)
+        ):
+            state.reasoning_last_emitted[emit_key] = content
+            return []
+        state.reasoning_last_emitted[emit_key] = content
         return [
             RunNotice(
                 timestamp=timestamp or now_iso(),
@@ -1122,7 +1150,15 @@ class OpenCodeMessageDecoder(MessageDecoder):
     def decode(self, method, params, state, ctx):
         ts = ctx.timestamp
 
-        if method in {"message.part.updated", "message.part.delta"}:
+        if method == "message.part.updated":
+            return _normalize_message_part_updated(
+                params,
+                state,
+                timestamp=ts,
+                suppress_reasoning_prefix_growth=True,
+            )
+
+        if method == "message.part.delta":
             return _normalize_message_part_updated(params, state, timestamp=ts)
 
         if method in {"message.updated", "message.completed"}:

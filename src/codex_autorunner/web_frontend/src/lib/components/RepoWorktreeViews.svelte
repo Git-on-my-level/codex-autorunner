@@ -229,7 +229,7 @@
           {#snippet trailing()}
             {#if collapsibleRepoCount > 0}
               <button
-                class="chip collapse-all-chip"
+                class="ghost-button collapse-all-button"
                 type="button"
                 title={globalCollapsed ? 'Expand all repos' : 'Collapse all repos'}
                 aria-label={globalCollapsed ? 'Expand all repos' : 'Collapse all repos'}
@@ -374,21 +374,16 @@
                     </span>
                   {/if}
                   {#if row.activeRuns > 0}
-                    <a
-                      class="count-chip count-chip-link is-active"
-                      href={href(row.href)}
-                      title="Open runs and execution state"
+                    <span
+                      class="count-chip is-active"
+                      title="Active runs"
                     >
                       <strong>{row.activeRuns}</strong><em>run{row.activeRuns === 1 ? '' : 's'}</em>
-                    </a>
+                    </span>
                   {/if}
                   {#if row.openTickets > 0}
                     {#if row.ticketHref}
-                      <a
-                        class="count-chip count-chip-link is-tickets"
-                        href={href(row.ticketHref)}
-                        title={row.totalTickets > 0 ? `${row.doneTickets} of ${row.totalTickets} done` : 'Open tickets'}
-                      >
+                      <a class="count-chip is-tickets count-chip-navigable" href={href(row.ticketHref)} title={row.totalTickets > 0 ? `${row.doneTickets} of ${row.totalTickets} done` : 'Open tickets'}>
                         <strong>{row.openTickets}</strong><em>ticket{row.openTickets === 1 ? '' : 's'}</em>
                         {#if row.totalTickets > 0 && row.doneTickets > 0}
                           <span class="count-chip-progress">{row.doneTickets}/{row.totalTickets}</span>
@@ -461,7 +456,7 @@
                         });
                       }}
                     >
-                      <span class="emoji-icon" aria-hidden="true">⚙️</span>
+                      {@render settingsIcon()}
                     </button>
                   {/if}
                   {#if onRetireState && canRetireState(row)}
@@ -478,7 +473,7 @@
                         unboundManagedThreadCount: row.unboundManagedThreadCount
                       })}
                     >
-                      <span class="emoji-icon" aria-hidden="true">🧹</span>
+                      {@render clearStateIcon()}
                     </button>
                   {/if}
                   {#if row.kind === 'worktree' && onRetireWorktree}
@@ -586,11 +581,7 @@
                           {/if}
                           {#if worktree.openTickets > 0}
                             {#if worktree.ticketHref}
-                              <a
-                                class="count-chip count-chip-link is-tickets"
-                                href={href(worktree.ticketHref)}
-                                title={worktree.totalTickets > 0 ? `${worktree.doneTickets} of ${worktree.totalTickets} done` : 'Open worktree tickets'}
-                              >
+                              <a class="count-chip is-tickets count-chip-navigable" href={href(worktree.ticketHref)} title={worktree.totalTickets > 0 ? `${worktree.doneTickets} of ${worktree.totalTickets} done` : 'Open worktree tickets'}>
                                 <strong>{worktree.openTickets}</strong><em>ticket{worktree.openTickets === 1 ? '' : 's'}</em>
                                 {#if worktree.totalTickets > 0 && worktree.doneTickets > 0}
                                   <span class="count-chip-progress">{worktree.doneTickets}/{worktree.totalTickets}</span>
@@ -651,7 +642,7 @@
                                   unboundManagedThreadCount: worktree.unboundManagedThreadCount
                                 })}
                               >
-                                <span class="emoji-icon" aria-hidden="true">🧹</span>
+                                {@render clearStateIcon()}
                               </button>
                             {/if}
                             {#if onRetireWorktree}
@@ -687,7 +678,7 @@
         subtitle={`Route id ${detail.id} does not match a known ${detail.kind} in the current hub inventory.`}
       >
         {#snippet actions()}
-          <a class="hero-action" href={href(detail.missingIndexHref)}>{detail.missingIndexLabel}</a>
+          <a class="ghost-button" href={href(detail.missingIndexHref)}>{detail.missingIndexLabel}</a>
         {/snippet}
       </PageHero>
 
@@ -703,10 +694,10 @@
       {#snippet actions()}
         {#if onRetireState && canRetireState(detail)}
           <button
-            class="hero-action icon-hero-action"
+            class="ghost-button"
             type="button"
             title="Retire CAR state without deleting git files"
-            aria-label={`Retire CAR state for ${detail.title}`}
+            aria-label={`Clear CAR state for ${detail.title}`}
             onclick={(event) => handleRetireStateClick(event, {
               kind: detail.kind,
               id: detail.id,
@@ -715,13 +706,12 @@
               unboundManagedThreadCount: detail.unboundManagedThreadCount
             })}
           >
-            <span class="emoji-icon" aria-hidden="true">🧹</span>
-            <span>Retire</span>
+            Clear state
           </button>
         {/if}
         {#if detail.kind === 'worktree' && onRetireWorktree}
           <button
-            class="hero-action icon-hero-action danger"
+            class="ghost-button danger"
             type="button"
             title="Retire worktree: preserve artifacts, then remove the checkout"
             aria-label={`Retire worktree ${detail.title}`}
@@ -733,7 +723,7 @@
             })}
           >
             {@render trashIcon()}
-            <span>Retire</span>
+            <span>Retire worktree</span>
           </button>
         {/if}
       {/snippet}
@@ -742,54 +732,56 @@
     {#if detail.gitStatus}
       {@const git = detail.gitStatus}
       <div class="git-status-bar" aria-label="Git status">
-        <span class={`git-state-pill ${git.dirty ? 'dirty' : 'clean'}`}>
-          <span class="git-state-dot" aria-hidden="true"></span>
-          {git.dirty ? 'Dirty' : 'Clean'}
-        </span>
-        {#if git.filesChanged !== null && git.filesChanged > 0}
-          <span class="git-chip">{pluralize(git.filesChanged, 'file')} changed</span>
-        {/if}
-        <TicketDiffStats
-          extraClass="git-chip git-chip-diff"
-          stats={{
-            insertions: git.insertions ?? 0,
-            deletions: git.deletions ?? 0,
-            filesChanged: 0
-          }}
-        />
-        {#if git.staged !== null && git.staged > 0}
-          <span class="git-chip">{git.staged} staged</span>
-        {/if}
-        {#if git.untracked !== null && git.untracked > 0}
-          <span class="git-chip">{git.untracked} untracked</span>
-        {/if}
-        {#if git.hasUpstream === false}
-          <span class="git-chip git-chip-warn">No upstream</span>
-        {:else}
-          {#if git.ahead !== null && git.ahead > 0}
-            <span class="git-chip git-chip-ahead">↑ {git.ahead} ahead</span>
+        <div class="git-status-chips">
+          <span class={`git-state-pill ${git.dirty ? 'dirty' : 'clean'}`}>
+            <span class="git-state-dot" aria-hidden="true"></span>
+            {git.dirty ? 'Dirty' : 'Clean'}
+          </span>
+          {#if git.filesChanged !== null && git.filesChanged > 0}
+            <span class="git-chip">{pluralize(git.filesChanged, 'file')} changed</span>
           {/if}
-          {#if git.behind !== null && git.behind > 0}
-            <span class="git-chip git-chip-behind">↓ {git.behind} behind</span>
-            {#if onSyncRepo}
-              <button
-                type="button"
-                class="git-sync-btn"
-                disabled={syncRepoBusy || git.dirty}
-                title={git.dirty
-                  ? 'Commit or stash changes before syncing'
-                  : 'Fetch and fast-forward the default branch from origin'}
-                aria-busy={syncRepoBusy ? 'true' : undefined}
-                onclick={(event) => {
-                  event.preventDefault();
-                  event.stopPropagation();
-                  void onSyncRepo?.();
-                }}
-              >
-                {syncRepoBusy ? 'Syncing…' : 'Sync'}
-              </button>
+          <TicketDiffStats
+            extraClass="git-chip git-chip-diff"
+            stats={{
+              insertions: git.insertions ?? 0,
+              deletions: git.deletions ?? 0,
+              filesChanged: 0
+            }}
+          />
+          {#if git.staged !== null && git.staged > 0}
+            <span class="git-chip">{git.staged} staged</span>
+          {/if}
+          {#if git.untracked !== null && git.untracked > 0}
+            <span class="git-chip">{git.untracked} untracked</span>
+          {/if}
+          {#if git.hasUpstream === false}
+            <span class="git-chip git-chip-warn">No upstream</span>
+          {:else}
+            {#if git.ahead !== null && git.ahead > 0}
+              <span class="git-chip git-chip-ahead">↑ {git.ahead} ahead</span>
+            {/if}
+            {#if git.behind !== null && git.behind > 0}
+              <span class="git-chip git-chip-behind">↓ {git.behind} behind</span>
             {/if}
           {/if}
+        </div>
+        {#if git.hasUpstream !== false && git.behind !== null && git.behind > 0 && onSyncRepo}
+          <button
+            type="button"
+            class="ghost-button"
+            disabled={syncRepoBusy || git.dirty}
+            title={git.dirty
+              ? 'Commit or stash changes before syncing'
+              : 'Fetch and fast-forward the default branch from origin'}
+            aria-busy={syncRepoBusy ? 'true' : undefined}
+            onclick={(event) => {
+              event.preventDefault();
+              event.stopPropagation();
+              void onSyncRepo?.();
+            }}
+          >
+            {syncRepoBusy ? 'Syncing…' : 'Sync'}
+          </button>
         {/if}
       </div>
     {/if}
@@ -883,14 +875,12 @@
 
       <section class="page-panel execution-panel wide contextspace-panel">
         <div class="panel-heading-row">
+          <h2>Contextspace</h2>
           <a
-            class="panel-heading-primary-link"
+            class="ghost-button"
             href={href(detail.contextspaceHref)}
             data-sveltekit-preload-data="tap"
-          >
-            <h2>Contextspace</h2>
-            <span class="panel-heading-primary-hint">Browse all<span aria-hidden="true"> →</span></span>
-          </a>
+          >Browse all</a>
         </div>
         {@render degradedIssues(contextspaceIssues)}
         <ul class="contextspace-compact-list" role="list">
@@ -923,18 +913,16 @@
 
       <section class="page-panel execution-panel wide workspace-ticket-queue-panel">
         <div class="panel-heading-row">
+          <h2>{detail.kind === 'worktree' ? 'Worktree tickets' : 'Repo tickets'}</h2>
           <a
-            class="panel-heading-primary-link"
+            class="ghost-button"
             href={href(detail.ticketIndexHref)}
             data-sveltekit-preload-data="tap"
-          >
-            <h2>{detail.kind === 'worktree' ? 'Worktree tickets' : 'Repo tickets'}</h2>
-            <span class="panel-heading-primary-hint">All tickets<span aria-hidden="true"> →</span></span>
-          </a>
+          >All tickets</a>
         </div>
         {@render degradedIssues(ticketIssues)}
         {#if detail.ticketOverview.total > 0}
-          <div class="ticket-overview-stats" aria-label="Ticket overview">
+          <a class="ticket-overview-stats" href={href(detail.ticketIndexHref)} aria-label="Ticket overview — view all tickets" data-sveltekit-preload-data="tap">
             <div><span>Open</span><strong>{detail.ticketOverview.open}</strong></div>
             <div><span>Done/total</span><strong>{detail.ticketOverview.done}/{detail.ticketOverview.total}</strong></div>
             {#if detail.ticketOverview.active > 0}
@@ -943,7 +931,11 @@
             {#if detail.ticketOverview.failed > 0}
               <div class="is-failed"><span>Needs fix</span><strong>{detail.ticketOverview.failed}</strong></div>
             {/if}
-          </div>
+          </a>
+        {:else if ticketIssues.length === 0}
+          <a class="ticket-overview-stats ticket-overview-empty" href={href(detail.ticketIndexHref)} aria-label="View ticket queue" data-sveltekit-preload-data="tap">
+            <div><span>Tickets</span><strong>No tickets yet</strong></div>
+          </a>
         {/if}
         <div class="workspace-ticket-list">
           {#if detail.ticketOverview.preview.length > 0}
@@ -964,13 +956,11 @@
                 +{detail.ticketOverview.remaining} more open ticket{detail.ticketOverview.remaining === 1 ? '' : 's'}
               </a>
             {/if}
-          {:else if ticketIssues.length === 0}
+          {:else if ticketIssues.length === 0 && detail.ticketOverview.total === 0}
             <div class="workspace-ticket-row empty-ticket-row" role="status">
               <span>
-                <strong>No tickets</strong>
                 <small>No scoped tickets are queued for this {detail.kind}.</small>
               </span>
-              <span class="status-pill idle">idle</span>
             </div>
           {/if}
         </div>
@@ -980,8 +970,8 @@
         <div class="panel-heading-row chats-panel-heading">
           <h2>Chats</h2>
           <div class="panel-heading-actions">
-            <a class="chip-button" href={href(detail.pmaChatHref)} data-sveltekit-preload-data="tap">+ PMA</a>
-            <a class="chip-button" href={href(detail.codingAgentChatHref)} data-sveltekit-preload-data="tap">+ Coding agent</a>
+            <a class="ghost-button" href={href(detail.pmaChatHref)} data-sveltekit-preload-data="tap">New PMA chat</a>
+            <a class="ghost-button" href={href(detail.codingAgentChatHref)} data-sveltekit-preload-data="tap">New coding agent chat</a>
           </div>
         </div>
         {#if detail.chatList.totalChatCount > 0}
@@ -1165,6 +1155,21 @@
     <path d="M6 6l1 15h10l1-15" />
     <path d="M10 10v7" />
     <path d="M14 10v7" />
+  </svg>
+{/snippet}
+
+{#snippet settingsIcon()}
+  <svg viewBox="0 0 24 24" aria-hidden="true">
+    <circle cx="12" cy="12" r="3" />
+    <path d="M19.4 15a1.7 1.7 0 0 0 .34 1.87l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.7 1.7 0 0 0-1.87-.34 1.7 1.7 0 0 0-1.03 1.56V21a2 2 0 1 1-4 0v-.09a1.7 1.7 0 0 0-1.11-1.56 1.7 1.7 0 0 0-1.87.34l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.7 1.7 0 0 0 .34-1.87 1.7 1.7 0 0 0-1.56-1.03H3a2 2 0 1 1 0-4h.09a1.7 1.7 0 0 0 1.56-1.11 1.7 1.7 0 0 0-.34-1.87l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.7 1.7 0 0 0 1.87.34H9a1.7 1.7 0 0 0 1.03-1.56V3a2 2 0 1 1 4 0v.09a1.7 1.7 0 0 0 1.03 1.56 1.7 1.7 0 0 0 1.87-.34l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.7 1.7 0 0 0-.34 1.87V9c.27.62.88 1.03 1.56 1.03H21a2 2 0 1 1 0 4h-.09a1.7 1.7 0 0 0-1.51 1z" />
+  </svg>
+{/snippet}
+
+{#snippet clearStateIcon()}
+  <svg viewBox="0 0 24 24" aria-hidden="true">
+    <path d="M3 21h7" />
+    <path d="M19 5l-2-2-9 9-2 5 5-2 9-9z" />
+    <path d="M14 6l4 4" />
   </svg>
 {/snippet}
 
@@ -1358,13 +1363,15 @@
     transform: rotate(-90deg);
   }
 
-  .collapse-all-chip {
+  .collapse-all-button {
     margin-left: auto;
     display: inline-flex;
     align-items: center;
     gap: 6px;
+    min-height: 28px;
+    padding: 0 var(--space-2);
   }
-  .collapse-all-chip svg {
+  .collapse-all-button svg {
     width: 12px;
     height: 12px;
     fill: none;
@@ -1375,9 +1382,8 @@
   }
 
   .count-chip.is-in-use {
-    background: color-mix(in srgb, var(--color-warning) 12%, transparent);
+    background: color-mix(in srgb, var(--color-warning) 14%, transparent);
     color: var(--color-warning);
-    border: 1px solid color-mix(in srgb, var(--color-warning) 28%, transparent);
   }
   .count-chip.is-in-use strong,
   .count-chip.is-in-use em {
@@ -1386,7 +1392,6 @@
   .count-chip.is-in-use.idle {
     background: var(--color-surface-muted);
     color: var(--color-ink-muted);
-    border-color: var(--color-border-subtle);
   }
   .count-chip.is-in-use.idle strong,
   .count-chip.is-in-use.idle em {
@@ -1504,14 +1509,6 @@
     flex: 0 0 auto;
   }
 
-  .emoji-icon {
-    display: inline-grid;
-    place-items: center;
-    font-size: 14px;
-    line-height: 1;
-    filter: grayscale(0.2);
-  }
-
   .icon-action {
     display: inline-grid;
     place-items: center;
@@ -1531,8 +1528,7 @@
     background: var(--color-surface-muted);
   }
 
-  .icon-action.retire:hover,
-  .icon-hero-action.danger:hover {
+  .icon-action.retire:hover {
     color: var(--color-danger);
     border-color: color-mix(in srgb, var(--color-danger) 40%, var(--color-border));
   }
@@ -1547,28 +1543,15 @@
     stroke-linejoin: round;
   }
 
-  .icon-hero-action {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-  }
-
-  .icon-hero-action svg {
-    width: 15px;
-    height: 15px;
-    fill: none;
-    stroke: currentColor;
-    stroke-width: 1.8;
-    stroke-linecap: round;
-    stroke-linejoin: round;
-  }
-
   .repo-signal-pills {
     display: flex;
     flex-wrap: wrap;
     gap: 6px;
   }
 
+  /* Read-only badge: soft fill, no border, no cursor change. The matching
+     soft-colored background carries the state; the border would make this
+     look clickable when it isn't. */
   .signal-pill {
     display: inline-flex;
     align-items: center;
@@ -1576,23 +1559,22 @@
     border-radius: 999px;
     font-size: 11px;
     font-weight: 600;
-    background: var(--color-surface);
-    border: 1px solid var(--color-border-subtle);
+    background: var(--color-surface-muted);
   }
 
   .signal-pill.waiting {
     color: var(--color-warning);
-    border-color: color-mix(in srgb, var(--color-warning) 35%, var(--color-border));
+    background: color-mix(in srgb, var(--color-warning) 14%, transparent);
   }
 
   .signal-pill.failed {
     color: var(--color-danger);
-    border-color: color-mix(in srgb, var(--color-danger) 35%, var(--color-border));
+    background: color-mix(in srgb, var(--color-danger) 12%, transparent);
   }
 
   .signal-pill.active {
     color: var(--color-success);
-    border-color: color-mix(in srgb, var(--color-success) 35%, var(--color-border));
+    background: var(--color-success-soft);
   }
 
   .repo-avatar {
@@ -1684,10 +1666,9 @@
     align-items: center;
     min-height: 18px;
     padding: 0 6px;
-    border: 1px solid color-mix(in srgb, var(--color-accent) 42%, var(--color-border));
     border-radius: 4px;
-    background: color-mix(in srgb, var(--color-accent) 12%, transparent);
-    color: var(--color-ink);
+    background: var(--color-accent-soft);
+    color: var(--color-accent);
     font-size: 10px;
     font-weight: 650;
     line-height: 1;
@@ -1763,6 +1744,16 @@
     color: var(--color-accent);
   }
 
+  .count-chip-navigable {
+    text-decoration: none;
+    border: 1px solid color-mix(in srgb, var(--color-accent) 28%, transparent);
+  }
+
+  .count-chip-navigable:hover {
+    border-color: var(--color-accent);
+    background: color-mix(in srgb, var(--color-accent) 18%, transparent);
+  }
+
   .count-chip-progress {
     margin-left: 4px;
     padding-left: 6px;
@@ -1821,20 +1812,6 @@
 
   .ticket-progress--detail-run::after {
     background: var(--color-success);
-  }
-
-  a.count-chip-link {
-    text-decoration: none;
-    transition: filter var(--transition-base), box-shadow var(--transition-base);
-  }
-
-  a.count-chip-link:hover {
-    filter: brightness(0.95);
-    box-shadow: 0 0 0 2px color-mix(in srgb, var(--color-accent) 20%, transparent);
-  }
-
-  a.count-chip-link.is-active:hover {
-    box-shadow: 0 0 0 2px color-mix(in srgb, var(--color-success) 22%, transparent);
   }
 
   .repo-status {
@@ -2122,30 +2099,6 @@
     border-color: var(--color-accent);
   }
 
-  .chip-button {
-    display: inline-flex;
-    align-items: center;
-    gap: 4px;
-    min-height: 26px;
-    padding: 0 var(--space-3);
-    border: 1px solid var(--color-border);
-    border-radius: var(--radius-2);
-    background: transparent;
-    color: var(--color-ink-muted);
-    font-family: var(--font-mono);
-    font-size: var(--font-size-1);
-    font-weight: 500;
-    text-decoration: none;
-    cursor: pointer;
-    transition: color var(--transition-fast), border-color var(--transition-fast),
-      background var(--transition-fast);
-  }
-  .chip-button:hover {
-    color: var(--color-accent);
-    border-color: var(--color-accent);
-    background: var(--color-accent-soft);
-  }
-
   @media (max-width: 760px) {
     .contextspace-row {
       grid-template-columns: minmax(0, 1fr) auto;
@@ -2155,15 +2108,28 @@
     }
   }
 
-  /* Git status bar — sits between hero and flow strip. */
+  /* Git status bar — sits between hero and flow strip. Chips cluster on
+     the left as read-only badges; the Sync action lives on the right as
+     a proper ghost button so it never reads as another chip. */
   .git-status-bar {
     display: flex;
     align-items: center;
     flex-wrap: wrap;
-    gap: 6px;
+    gap: var(--space-3);
     padding: 0 2px;
   }
 
+  .git-status-chips {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 6px;
+    min-width: 0;
+    flex: 1 1 auto;
+  }
+
+  /* Badges in this row: no border, no hover, no cursor change. Soft fill
+     carries the state. */
   .git-state-pill {
     display: inline-flex;
     align-items: center;
@@ -2174,7 +2140,6 @@
     font-size: 11px;
     font-weight: 600;
     letter-spacing: 0.01em;
-    border: 1px solid transparent;
   }
 
   .git-state-pill .git-state-dot {
@@ -2187,13 +2152,11 @@
   .git-state-pill.clean {
     background: var(--color-success-soft);
     color: var(--color-success);
-    border-color: color-mix(in srgb, var(--color-success) 30%, transparent);
   }
 
   .git-state-pill.dirty {
     background: color-mix(in srgb, var(--color-warning) 14%, transparent);
     color: var(--color-warning);
-    border-color: color-mix(in srgb, var(--color-warning) 35%, transparent);
   }
 
   .git-chip {
@@ -2207,7 +2170,6 @@
     font-size: 11px;
     font-weight: 500;
     font-variant-numeric: tabular-nums;
-    border: 1px solid var(--color-border-subtle);
     white-space: nowrap;
   }
 
@@ -2217,46 +2179,18 @@
 
   .git-chip-ahead {
     color: var(--color-accent);
-    border-color: color-mix(in srgb, var(--color-accent) 32%, transparent);
     background: var(--color-accent-soft);
   }
 
   .git-chip-behind {
     color: var(--color-warning);
-    border-color: color-mix(in srgb, var(--color-warning) 32%, transparent);
     background: color-mix(in srgb, var(--color-warning) 12%, transparent);
-  }
-
-  .git-sync-btn {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    height: 22px;
-    padding: 0 10px;
-    border-radius: 999px;
-    border: 1px solid color-mix(in srgb, var(--color-accent) 35%, var(--color-border));
-    background: var(--color-accent-soft);
-    color: var(--color-accent);
-    font-size: 11px;
-    font-weight: 600;
-    cursor: pointer;
-    transition: background-color var(--transition-fast), border-color var(--transition-fast), opacity var(--transition-fast);
-    white-space: nowrap;
-  }
-
-  .git-sync-btn:hover:not(:disabled) {
-    border-color: color-mix(in srgb, var(--color-accent) 55%, var(--color-border));
-    background: color-mix(in srgb, var(--color-accent) 22%, transparent);
-  }
-
-  .git-sync-btn:disabled {
-    cursor: not-allowed;
-    opacity: 0.55;
   }
 
   .git-chip-warn {
     color: var(--color-ink-muted);
-    border-style: dashed;
+    background: transparent;
+    box-shadow: inset 0 0 0 1px var(--color-border-subtle);
   }
 
   /* Compact contextspace list */
@@ -2439,14 +2373,23 @@
     word-break: break-word;
   }
 
-  /* Ticket overview compact stats */
+  /* Ticket overview compact stats — full-width navigable link to ticket index */
   .ticket-overview-stats {
     display: flex;
     flex-wrap: wrap;
     gap: var(--space-3) var(--space-5);
-    padding: 4px 2px var(--space-2);
-    border-bottom: 1px dashed var(--color-border-subtle);
+    padding: var(--space-3) var(--space-3) var(--space-3) 2px;
+    border-bottom: 1px solid var(--color-border-subtle);
+    border-radius: 6px;
     margin-bottom: var(--space-2);
+    text-decoration: none;
+    color: inherit;
+    transition: background-color var(--transition-fast), border-color var(--transition-fast);
+  }
+
+  .ticket-overview-stats:hover {
+    background: var(--color-surface-muted);
+    border-color: var(--color-border-strong);
   }
 
   .ticket-overview-stats > div {
@@ -2471,6 +2414,12 @@
 
   .ticket-overview-stats .is-active strong { color: var(--color-success); }
   .ticket-overview-stats .is-failed strong { color: var(--color-danger); }
+
+  .ticket-overview-empty strong {
+    color: var(--color-ink-muted);
+    font-size: var(--font-size-1);
+    font-weight: 500;
+  }
 
   .ticket-overview-more {
     display: block;

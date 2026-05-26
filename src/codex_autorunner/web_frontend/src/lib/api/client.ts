@@ -186,8 +186,6 @@ export type AutomationProductProjection = {
     systemOwned: boolean;
     managed: boolean;
     reason: string | null;
-    legacy: boolean;
-    legacySource: string | null;
     raw: JsonRecord;
   };
   scheduleEditor: {
@@ -1250,8 +1248,6 @@ function mapAutomationProductProjection(raw: JsonRecord): AutomationProductProje
       systemOwned: Boolean(managed.system_owned ?? managed.systemOwned),
       managed: Boolean(managed.managed),
       reason: nullableString(managed.reason),
-      legacy: Boolean(managed.legacy),
-      legacySource: nullableString(managed.legacy_source ?? managed.legacySource),
       raw: managed
     },
     scheduleEditor: {

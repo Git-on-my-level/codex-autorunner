@@ -305,11 +305,17 @@ export function mergePmaProgressUpdate(
   if (!previousProgress || previousProgress.id !== nextProgress.id) return nextProgress;
   const incomingElapsed = nextProgress.elapsedSeconds ?? 0;
   const mergedElapsed = Math.max(progressElapsedWithLiveWall(previousProgress, nowMs), incomingElapsed);
-  const seen = new Set<string>();
+  const seen = new Map<string, number>();
   const events: SurfaceArtifact[] = [];
   for (const ev of [...previousProgress.events, ...nextProgress.events]) {
-    if (!ev.id || seen.has(ev.id)) continue;
-    seen.add(ev.id);
+    const key = canonicalProgressEventKey(ev);
+    if (!key) continue;
+    const existingIndex = seen.get(key);
+    if (existingIndex !== undefined) {
+      events[existingIndex] = { ...events[existingIndex], ...ev, raw: { ...events[existingIndex].raw, ...ev.raw } };
+      continue;
+    }
+    seen.set(key, events.length);
     events.push(ev);
   }
   return {
@@ -318,6 +324,14 @@ export function mergePmaProgressUpdate(
     elapsedSeconds: mergedElapsed,
     events
   };
+}
+
+function canonicalProgressEventKey(event: SurfaceArtifact): string {
+  const raw = event.raw && typeof event.raw === 'object' && !Array.isArray(event.raw) ? event.raw : {};
+  const progressItem = raw.progress_item && typeof raw.progress_item === 'object' && !Array.isArray(raw.progress_item)
+    ? raw.progress_item as Record<string, unknown>
+    : {};
+  return String(progressItem.item_id ?? raw.progress_item_id ?? event.id ?? '');
 }
 
 function signal(

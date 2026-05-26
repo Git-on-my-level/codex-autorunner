@@ -32,6 +32,8 @@ describe('RepoWorktreeViews', () => {
     expect(body).toContain('codex-autorunner');
     expect(body).toContain('discord-5');
     expect(body).toContain('href="/repos/repo-1"');
+    expect(body).toContain('count-chip is-tickets');
+    expect(body).toContain('count-chip-navigable');
     expect(body).toContain('href="/repos/repo-1/tickets"');
     expect(body).toContain('href="/repos/repo-1/worktrees/worktree-1"');
     expect(body).toContain('repo-head row-click-target');

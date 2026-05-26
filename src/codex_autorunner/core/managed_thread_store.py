@@ -1471,6 +1471,13 @@ class ManagedThreadStore:
                 if execution_status == "queued" and busy_policy != "queue":
                     raise ManagedThreadAlreadyHasRunningTurnError(managed_thread_id)
                 thread_row = {key: status_row[key] for key in status_row.keys()}
+                request_metadata = dict(metadata or {})
+                if isinstance(queue_payload, dict):
+                    raw_request = queue_payload.get("request")
+                    if isinstance(raw_request, dict):
+                        raw_request_metadata = raw_request.get("metadata")
+                        if isinstance(raw_request_metadata, dict):
+                            request_metadata.update(raw_request_metadata)
                 execution_mapping = {
                     "execution_id": managed_turn_id,
                     "thread_target_id": managed_thread_id,
@@ -1483,7 +1490,7 @@ class ManagedThreadStore:
                     "error_text": None,
                     "model_id": model,
                     "reasoning_level": reasoning,
-                    "metadata_json": _json_dumps(dict(metadata or {})),
+                    "metadata_json": _json_dumps(request_metadata),
                     "transcript_mirror_id": None,
                     "started_at": started_at,
                     "finished_at": None,
@@ -1500,7 +1507,7 @@ class ManagedThreadStore:
                         model=model,
                         reasoning=reasoning,
                         client_turn_id=client_turn_id,
-                        metadata=dict(metadata or {}),
+                        metadata=request_metadata,
                     )
                 canonical_queue_payload = {
                     "turn_request": turn_request.to_dict(),
@@ -1547,7 +1554,7 @@ class ManagedThreadStore:
                         None,
                         model,
                         reasoning,
-                        _json_dumps(dict(metadata or {})),
+                        _json_dumps(request_metadata),
                         None,
                         started_at,
                         None,
