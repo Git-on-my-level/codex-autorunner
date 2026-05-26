@@ -121,7 +121,10 @@ def test_policy_classifies_stale_alive_worker_as_unhealthy() -> None:
     )
 
     assert decision.note == "stale-alive-worker"
-    assert _intent_kinds(decision) == [RecoveryIntentKind.STALE_ALIVE_WORKER]
+    assert _intent_kinds(decision) == [
+        RecoveryIntentKind.STALE_ALIVE_WORKER,
+        RecoveryIntentKind.STALE_ALIVE_UNKNOWN,
+    ]
     assert SupervisorEffectKind.WRITE_CRASH_ARTIFACT in _effect_kinds(decision)
     trigger = decision.first_lifecycle_trigger()
     assert trigger is not None
@@ -140,9 +143,77 @@ def test_policy_restarts_stale_alive_worker_when_budget_remains() -> None:
 
     assert _intent_kinds(decision) == [
         RecoveryIntentKind.STALE_ALIVE_WORKER,
+        RecoveryIntentKind.STALE_ALIVE_UNKNOWN,
         RecoveryIntentKind.RESTART_ATTEMPTED,
     ]
     assert SupervisorEffectKind.SPAWN_WORKER in _effect_kinds(decision)
+
+
+def test_policy_restarts_stale_alive_commit_barrier_when_budget_remains() -> None:
+    decision = supervise_flow_recovery(
+        FlowSupervisorObservation(
+            run=_run(),
+            worker=_worker(
+                WorkerHealthStatus.STALE_ALIVE,
+                pid=123,
+                last_semantic_progress_at="2026-05-12T00:00:00+00:00",
+                stale_reason="semantic_progress_stale_without_active_tool",
+                semantic_stale_age_seconds=2400,
+            ),
+            commit_barrier=CommitBarrierObservation(
+                current_ticket=".codex-autorunner/tickets/TICKET-001.md",
+                current_ticket_done=True,
+                worktree_dirty=True,
+                commit_pending=True,
+                barrier_epoch="commit-barrier:abc",
+                retries=1,
+                max_retries=3,
+            ),
+            restart=RestartPolicyObservation(enabled=True, attempts=0, max_attempts=2),
+        )
+    )
+
+    assert decision.note == "stale-alive-commit-barrier-active"
+    assert _intent_kinds(decision) == [
+        RecoveryIntentKind.STALE_ALIVE_WORKER,
+        RecoveryIntentKind.STALE_ALIVE_COMMIT_BARRIER_ACTIVE,
+        RecoveryIntentKind.COMMIT_BARRIER_REQUIRED,
+        RecoveryIntentKind.RESTART_ATTEMPTED,
+    ]
+    assert SupervisorEffectKind.SPAWN_WORKER in _effect_kinds(decision)
+    spawn_effects = [
+        effect
+        for effect in decision.effects
+        if effect.kind == SupervisorEffectKind.SPAWN_WORKER
+    ]
+    assert spawn_effects[0].data["reason"] == "stale_alive_commit_barrier_active"
+
+
+def test_policy_does_not_restart_exhausted_stale_alive_commit_barrier() -> None:
+    decision = supervise_flow_recovery(
+        FlowSupervisorObservation(
+            run=_run(),
+            worker=_worker(WorkerHealthStatus.STALE_ALIVE, pid=123),
+            commit_barrier=CommitBarrierObservation(
+                current_ticket=".codex-autorunner/tickets/TICKET-001.md",
+                current_ticket_done=True,
+                worktree_dirty=True,
+                commit_pending=True,
+                barrier_epoch="commit-barrier:abc",
+                retries=3,
+                max_retries=3,
+                exhausted=True,
+            ),
+            restart=RestartPolicyObservation(enabled=True, attempts=0, max_attempts=2),
+        )
+    )
+
+    assert _intent_kinds(decision) == [
+        RecoveryIntentKind.STALE_ALIVE_WORKER,
+        RecoveryIntentKind.STALE_ALIVE_COMMIT_BARRIER_EXHAUSTED,
+        RecoveryIntentKind.COMMIT_BARRIER_EXHAUSTED,
+    ]
+    assert SupervisorEffectKind.SPAWN_WORKER not in _effect_kinds(decision)
 
 
 def test_policy_treats_signal_shutdown_as_recoverable_crash() -> None:
