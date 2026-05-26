@@ -627,14 +627,19 @@ def _read_orchestration_binding_rows(
                     b.surface_kind,
                     b.surface_key,
                     b.repo_id,
+                    b.resource_kind,
+                    b.resource_id,
                     b.updated_at,
                     t.repo_id AS thread_repo_id,
+                    t.resource_kind AS thread_resource_kind,
+                    t.resource_id AS thread_resource_id,
                     t.workspace_root
                   FROM orch_bindings AS b
              LEFT JOIN orch_thread_targets AS t
                     ON t.thread_target_id = b.target_id
                  WHERE b.disabled_at IS NULL
                    AND b.target_kind = 'thread'
+                   AND COALESCE(t.lifecycle_status, 'active') != 'archived'
                 """).fetchall()
     except sqlite3.OperationalError as exc:
         if "no such table" in str(exc).lower():
@@ -651,6 +656,12 @@ def _read_orchestration_binding_rows(
             repo_id_by_workspace=repo_id_by_workspace,
             workspace_values=((workspace_root,) if workspace_root is not None else ()),
         )
+        resource_kind = _normalize_scope(
+            row["resource_kind"] or row["thread_resource_kind"]
+        )
+        resource_id = _normalize_scope(row["resource_id"] or row["thread_resource_id"])
+        if repo_id is None and resource_kind in {"repo", "worktree"}:
+            repo_id = resource_id
         if repo_id is None:
             continue
         surface_kind = _normalize_scope(row["surface_kind"])
@@ -662,6 +673,8 @@ def _read_orchestration_binding_rows(
                 "surface_kind": surface_kind,
                 "surface_key": surface_key,
                 "repo_id": repo_id,
+                "resource_kind": resource_kind,
+                "resource_id": resource_id,
                 "workspace_root": workspace_root,
                 "updated_at": row["updated_at"],
             }
@@ -817,6 +830,190 @@ def orchestration_surface_targets_for_thread(
         seen.add(pair)
         out.append(pair)
     return tuple(out)
+
+
+def active_chat_binding_targets_for_repo(
+    *, hub_root: Path, raw_config: Mapping[str, Any], repo_id: str
+) -> tuple[tuple[str, str], ...]:
+    """Return active Discord/Telegram surface targets for a repo or worktree id."""
+
+    normalized_repo_id = _normalize_repo_id(repo_id)
+    if normalized_repo_id is None:
+        return ()
+    repo_id_by_workspace = _repo_id_by_workspace_path(hub_root, raw_config)
+    targets: list[tuple[str, str]] = []
+    for row in _read_orchestration_binding_rows(
+        hub_root=hub_root, repo_id_by_workspace=repo_id_by_workspace
+    ):
+        if not _binding_row_matches_repo(
+            row_repo_id=row["repo_id"],
+            row_resource_kind=row["resource_kind"],
+            row_resource_id=row["resource_id"],
+            row_workspace=row["workspace_root"],
+            repo_id=normalized_repo_id,
+            repo_id_by_workspace=repo_id_by_workspace,
+        ):
+            continue
+        surface_kind = _normalize_scope(row["surface_kind"])
+        surface_key = _normalize_scope(row["surface_key"])
+        if surface_kind in {"discord", "telegram"} and surface_key is not None:
+            targets.append((surface_kind, surface_key))
+
+    targets.extend(
+        _read_discord_binding_targets_for_repo(
+            db_path=_resolve_discord_state_path(hub_root, raw_config),
+            repo_id=normalized_repo_id,
+            repo_id_by_workspace=repo_id_by_workspace,
+        )
+    )
+    targets.extend(
+        _read_telegram_binding_targets_for_repo(
+            db_path=_resolve_telegram_state_path(hub_root, raw_config),
+            repo_id=normalized_repo_id,
+            repo_id_by_workspace=repo_id_by_workspace,
+        )
+    )
+
+    out: list[tuple[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+    for surface_kind, surface_key in targets:
+        pair = (surface_kind, surface_key)
+        if pair in seen:
+            continue
+        seen.add(pair)
+        out.append(pair)
+    return tuple(out)
+
+
+def _binding_row_matches_repo(
+    *,
+    row_repo_id: Any,
+    row_resource_kind: Any,
+    row_resource_id: Any,
+    row_workspace: Any,
+    repo_id: str,
+    repo_id_by_workspace: Mapping[str, str],
+) -> bool:
+    resolved_repo_id = _resolve_bound_repo_id(
+        repo_id=row_repo_id,
+        repo_id_by_workspace=repo_id_by_workspace,
+        workspace_values=(row_workspace,),
+    )
+    if resolved_repo_id == repo_id:
+        return True
+    resource_kind = _normalize_scope(row_resource_kind)
+    resource_id = _normalize_scope(row_resource_id)
+    return resource_kind in {"repo", "worktree"} and resource_id == repo_id
+
+
+def _read_discord_binding_targets_for_repo(
+    *,
+    db_path: Path,
+    repo_id: str,
+    repo_id_by_workspace: Mapping[str, str],
+) -> tuple[tuple[str, str], ...]:
+    if not db_path.exists():
+        return ()
+    try:
+        with open_sqlite(db_path) as conn:
+            columns = _table_columns(conn, "channel_bindings")
+            if not columns or "channel_id" not in columns:
+                return ()
+            select_columns = [
+                "channel_id",
+                "repo_id" if "repo_id" in columns else "NULL AS repo_id",
+                (
+                    "workspace_path"
+                    if "workspace_path" in columns
+                    else "NULL AS workspace_path"
+                ),
+                (
+                    "resource_kind"
+                    if "resource_kind" in columns
+                    else "NULL AS resource_kind"
+                ),
+                "resource_id" if "resource_id" in columns else "NULL AS resource_id",
+            ]
+            rows = conn.execute(
+                f"SELECT {', '.join(select_columns)} FROM channel_bindings"
+            ).fetchall()
+    except sqlite3.OperationalError as exc:
+        if "no such table" in str(exc).lower():
+            return ()
+        raise RuntimeError(
+            f"Failed reading Discord chat bindings from {db_path}: {exc}"
+        ) from exc
+
+    targets: list[tuple[str, str]] = []
+    for row in rows:
+        channel_id = _normalize_scope(row["channel_id"])
+        if channel_id is None:
+            continue
+        if _binding_row_matches_repo(
+            row_repo_id=row["repo_id"],
+            row_resource_kind=row["resource_kind"],
+            row_resource_id=row["resource_id"],
+            row_workspace=row["workspace_path"],
+            repo_id=repo_id,
+            repo_id_by_workspace=repo_id_by_workspace,
+        ):
+            targets.append(("discord", channel_id))
+    return tuple(targets)
+
+
+def _read_telegram_binding_targets_for_repo(
+    *,
+    db_path: Path,
+    repo_id: str,
+    repo_id_by_workspace: Mapping[str, str],
+) -> tuple[tuple[str, str], ...]:
+    if not db_path.exists():
+        return ()
+    try:
+        with open_sqlite(db_path) as conn:
+            columns = _table_columns(conn, "telegram_topics")
+            if not columns or "topic_key" not in columns:
+                return ()
+            select_columns = [
+                "topic_key",
+                "chat_id" if "chat_id" in columns else "NULL AS chat_id",
+                "thread_id" if "thread_id" in columns else "NULL AS thread_id",
+                "scope" if "scope" in columns else "NULL AS scope",
+                "repo_id" if "repo_id" in columns else "NULL AS repo_id",
+                (
+                    "workspace_path"
+                    if "workspace_path" in columns
+                    else "NULL AS workspace_path"
+                ),
+            ]
+            rows = conn.execute(
+                f"SELECT {', '.join(select_columns)} FROM telegram_topics"
+            ).fetchall()
+            scope_map = _read_telegram_current_scope_map(conn)
+    except sqlite3.OperationalError as exc:
+        if "no such table" in str(exc).lower():
+            return ()
+        raise RuntimeError(
+            f"Failed reading Telegram chat bindings from {db_path}: {exc}"
+        ) from exc
+
+    targets: list[tuple[str, str]] = []
+    for row in rows:
+        topic = _normalize_scope(row["topic_key"])
+        if topic is None or not _is_current_telegram_topic_row(
+            row=row, scope_map=scope_map
+        ):
+            continue
+        if _binding_row_matches_repo(
+            row_repo_id=row["repo_id"],
+            row_resource_kind=None,
+            row_resource_id=None,
+            row_workspace=row["workspace_path"],
+            repo_id=repo_id,
+            repo_id_by_workspace=repo_id_by_workspace,
+        ):
+            targets.append(("telegram", topic))
+    return tuple(targets)
 
 
 def _orchestration_binding_timestamps_by_workspace(
@@ -1267,6 +1464,7 @@ __all__ = [
     "active_chat_binding_counts",
     "active_chat_binding_counts_by_source",
     "active_chat_binding_metadata_by_thread",
+    "active_chat_binding_targets_for_repo",
     "backfill_adapter_chat_surface_events",
     "emit_adapter_archive_chat_surface_event",
     "emit_adapter_binding_chat_surface_event",

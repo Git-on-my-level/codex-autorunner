@@ -2514,7 +2514,8 @@ async def test_message_create_non_pma_injects_filebox_hint_for_outbox_keyword(
         prompt = captured_prompts[0]
         assert "outbox me" in prompt
         assert "Artifact delivery (this turn):" in prompt
-        assert "car artifacts send <file> --to current" in prompt
+        assert "car artifacts send <file>" in prompt
+        assert "--to current" not in prompt
         assert "channel:channel-1" in prompt
         assert str(inbox_dir(workspace.resolve())) in prompt
     finally:

@@ -123,7 +123,8 @@ def test_build_attachment_context_payload_formats_transcripts_and_images() -> No
     assert "Transcript: spoken request" in payload.prompt_text
     assert "Transcript may be inaccurate." in payload.prompt_text
     assert "Artifact delivery (this turn):" in payload.prompt_text
-    assert "car artifacts send <file> --to current" in payload.prompt_text
+    assert "car artifacts send <file>" in payload.prompt_text
+    assert "--to current" not in payload.prompt_text
     assert "filebox/outbox" not in payload.prompt_text
     assert payload.user_visible_transcript == "User:\nspoken request"
     assert payload.native_input_items_payload == [
