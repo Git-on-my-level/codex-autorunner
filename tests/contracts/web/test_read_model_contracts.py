@@ -159,7 +159,7 @@ def test_chat_index_snapshot_and_patch_round_trip_with_camel_case_payloads() -> 
     assert payload["rows"][0]["facets"]["turnKinds"] == ["message", "review"]
     assert payload["facetRequest"]["categories"] == ["ticket_run"]
     assert payload["facetCounts"]["transport"]["discord"] == 14
-    assert payload["rows"][0]["surfaceBindings"][0]["surface_kind"] == "discord"
+    assert payload["rows"][0]["surfaceBindings"][0]["surfaceKind"] == "discord"
     assert load_read_model_contract(ChatIndexSnapshot, payload) == snapshot
 
     event = ChatIndexPatchEvent(

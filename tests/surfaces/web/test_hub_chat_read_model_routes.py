@@ -1474,9 +1474,9 @@ def test_hub_read_models_chats_includes_binding_display_contract_fields(
     assert response.status_code == 200
     row = response.json()["rows"][0]
     assert row["chatId"] == "thread-0003"
-    assert row["displayTitle"] == "Thread 0003"
+    assert row["displayTitle"] == "Release room"
     assert row["technicalTitle"] == "thread-0003"
-    assert row["primarySurface"]["surface_kind"] == "pma"
+    assert row["primarySurface"]["surfaceKind"] == "pma"
     assert "Release room" in row["bindingDisplayNames"]
     assert row["archiveState"] == "active"
     assert row["resourceKind"] == "ticket"

@@ -122,9 +122,7 @@
     pmaChatKind,
     pmaChatKindLabel,
     pmaChatHeaderScopeLine,
-    pmaChatFacets,
-    pmaChatTransportBadges,
-    showPmaAgentBadge,
+    pmaChatBadgeViews,
     chatCategoryLabel,
     chatTransportLabel,
     pmaChatScopeTagView,
@@ -684,7 +682,7 @@
     const text = (card.message.text ?? '').trim();
     return text.length > 120 ? text.slice(text.length - 120) : text;
   });
-  const activeTransportBadges = $derived(pmaChatTransportBadges(activeChat));
+  const activeChatBadges = $derived(pmaChatBadgeViews(activeChat, { showPmaAgent: false }));
   const activeSharedFileCount = $derived(activeSurfaceDeliveries.length);
   const activeRepoIngress = $derived(repoIngressForChat(activeChat));
   const createChatLabel = $derived(creating ? 'Creating...' : '+ New');
@@ -2443,11 +2441,10 @@
         repoLabel: repoLabelForRepoId,
         worktreeLabel: (wid) => worktreeScopeOption(wid)?.label ?? null
       })}
-      {@const facets = pmaChatFacets(chat)}
-      {@const transportBadges = pmaChatTransportBadges(chat)}
       {@const listScopeAccent = chatListScopeAccentLabel(chat, scopeTags)}
       {@const listScopeAccentHex = listScopeAccent ? repoAccent(listScopeAccent) : null}
       {@const listAgentLabel = agentDisplayForChat(agents, chat)}
+      {@const listBadges = pmaChatBadgeViews(chat, { agentLabel: listAgentLabel })}
       <div
         class:active={chat.id === activeChatId}
         class:nested
@@ -2512,21 +2509,9 @@
               {#if isPmaChatArchived(chat)}
                 <span class="chat-scope-kind-tag retired">Retired</span>
               {/if}
-              {#if showPmaAgentBadge(chat)}
-                <span class="chat-kind-badge pma">PMA</span>
-              {/if}
-              {#if pmaChatKind(chat) === 'coding_agent'}
-                <span class={`chat-kind-badge ${pmaChatKind(chat)}`}>{pmaChatKindLabel(pmaChatKind(chat))}</span>
-              {/if}
-              {#if facets?.category === 'automation'}
-                <span class="chat-kind-badge automation">Automation</span>
-              {/if}
-              {#each transportBadges as transport}
-                <span class={`chat-surface-badge ${transport.badgeClass}`}>{transport.label}</span>
+              {#each listBadges as badge}
+                <span class={badge.className}>{badge.label}</span>
               {/each}
-              {#if listAgentLabel}
-                <span class="chat-agent-tag">{listAgentLabel}</span>
-              {/if}
             </span>
           {/if}
 
@@ -2736,12 +2721,8 @@
             </span>
           </div>
           <p class="chat-header-subtitle">
-            <span class={`chat-kind-badge ${activeChatKind}`}>{activeChatKindLabel}</span>
-            {#if pmaChatFacets(activeChat)?.category === 'automation'}
-              <span class="chat-kind-badge automation">Automation</span>
-            {/if}
-            {#each activeTransportBadges as transport}
-              <span class={`chat-surface-badge ${transport.badgeClass}`}>{transport.label}</span>
+            {#each activeChatBadges as badge}
+              <span class={badge.className}>{badge.label}</span>
             {/each}
             {#if activeChat.status === 'done' && displayedProgress?.elapsedSeconds !== null && displayedProgress?.elapsedSeconds !== undefined && statusBar}
               <span class={`status-dot status-${activeChat.status}`} aria-hidden="true"></span>

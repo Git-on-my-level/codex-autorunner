@@ -103,6 +103,60 @@ describe('read model view-model selectors', () => {
     expect(pmaChatSummaryToChatIndexRow(summary).facets?.category).toBe('ticket_run');
   });
 
+  it('trusts backend display titles for chat-bound rows', () => {
+    const row: ChatIndexRow = {
+      chatId: 'discord-chat-1',
+      surface: 'discord',
+      title: 'Can you root cause why this failed?',
+      displayTitle: 'Personal Workspace / #car-1',
+      bindingDisplayName: 'Personal Workspace / #car-1',
+      status: 'idle',
+      unreadCount: 0,
+      lastActivityAt: now,
+      facets: {
+        category: 'regular',
+        turnKinds: ['message'],
+        originKinds: ['surface'],
+        transports: ['discord'],
+        scopeKind: 'worktree',
+        scopeId: 'repo-1--discord-1',
+        agentKind: 'coding_agent'
+      }
+    };
+
+    expect(chatIndexRowToPmaChatSummary(row).title).toBe('Personal Workspace / #car-1');
+  });
+
+  it('does not infer titles from surface bindings when display title is available', () => {
+    const row: ChatIndexRow = {
+      chatId: 'telegram-chat-1',
+      surface: 'pma',
+      title: 'Latest Telegram message',
+      displayTitle: 'Latest Telegram message',
+      status: 'idle',
+      unreadCount: 0,
+      lastActivityAt: now,
+      surfaceBindings: [
+        {
+          surfaceKind: 'telegram',
+          surfaceKey: 'chat-123',
+          displayName: 'Audits / safe-global'
+        }
+      ],
+      facets: {
+        category: 'regular',
+        turnKinds: ['message'],
+        originKinds: ['surface'],
+        transports: ['telegram'],
+        scopeKind: 'repo',
+        scopeId: 'repo-1',
+        agentKind: 'pma'
+      }
+    };
+
+    expect(chatIndexRowToPmaChatSummary(row).title).toBe('Latest Telegram message');
+  });
+
   it('keeps active rebound chat-index rows visible despite stale raw surface archive fields', () => {
     const row: ChatIndexRow = {
       chatId: 'discord-rebound-active',
@@ -124,13 +178,14 @@ describe('read model view-model selectors', () => {
         agentKind: 'coding_agent'
       },
       primarySurface: {
-        surface_kind: 'pma',
+        surfaceKind: 'pma',
+        surfaceKey: 'thread-1',
         lifecycle: 'running'
       },
       surfaceBindings: [
         {
-          surface_kind: 'discord',
-          surface_key: 'channel-1',
+          surfaceKind: 'discord',
+          surfaceKey: 'channel-1',
           lifecycle: 'archived'
         }
       ]

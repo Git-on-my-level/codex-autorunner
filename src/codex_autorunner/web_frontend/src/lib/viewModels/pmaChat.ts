@@ -109,6 +109,36 @@ export function pmaChatTransportBadges(
     }));
 }
 
+export type PmaChatBadgeView =
+  | { kind: 'agent-kind'; label: string; className: string }
+  | { kind: 'category'; label: string; className: string }
+  | { kind: 'surface'; label: string; className: string }
+  | { kind: 'agent'; label: string; className: string };
+
+export function pmaChatBadgeViews(
+  chat: PmaChatSummary | null,
+  opts: { agentLabel?: string | null; showPmaAgent?: boolean } = {}
+): PmaChatBadgeView[] {
+  const badges: PmaChatBadgeView[] = [];
+  if (opts.showPmaAgent !== false && showPmaAgentBadge(chat)) {
+    badges.push({ kind: 'agent-kind', label: 'PMA', className: 'chat-kind-badge pma' });
+  }
+  if (pmaChatKind(chat) === 'coding_agent') {
+    badges.push({ kind: 'agent-kind', label: pmaChatKindLabel('coding_agent'), className: 'chat-kind-badge coding_agent' });
+  }
+  if (pmaChatFacets(chat)?.category === 'automation') {
+    badges.push({ kind: 'category', label: 'Automation', className: 'chat-kind-badge automation' });
+  }
+  for (const transport of pmaChatTransportBadges(chat)) {
+    badges.push({ kind: 'surface', label: transport.label, className: `chat-surface-badge ${transport.badgeClass}` });
+  }
+  const agentLabel = opts.agentLabel?.trim();
+  if (agentLabel) {
+    badges.push({ kind: 'agent', label: agentLabel, className: 'chat-agent-tag' });
+  }
+  return badges;
+}
+
 /** True when the chat is owned by the project manager agent, not merely PMA-surface reachable. */
 export function showPmaAgentBadge(chat: PmaChatSummary | null): boolean {
   if (!chat) return false;
@@ -532,8 +562,8 @@ export function pmaChatBindingKey(chat: PmaChatSummary | null): string | null {
   const primarySurface = raw.primary_surface;
   if (primarySurface && typeof primarySurface === 'object' && !Array.isArray(primarySurface)) {
     const primary = primarySurface as Record<string, unknown>;
-    const primaryKind = typeof primary.surface_kind === 'string' ? primary.surface_kind.trim() : '';
-    const primaryKey = typeof primary.surface_key === 'string' ? primary.surface_key.trim() : '';
+    const primaryKind = typeof (primary.surface_kind ?? primary.surfaceKind) === 'string' ? String(primary.surface_kind ?? primary.surfaceKind).trim() : '';
+    const primaryKey = typeof (primary.surface_key ?? primary.surfaceKey) === 'string' ? String(primary.surface_key ?? primary.surfaceKey).trim() : '';
     if (primaryKind && primaryKey) return `${primaryKind}:${primaryKey}`;
   }
   return null;

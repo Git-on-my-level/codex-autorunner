@@ -36,6 +36,7 @@ __all__ = [
     "ChatIndexPatchEvent",
     "ChatIndexRow",
     "ChatIndexSnapshot",
+    "ChatSurfaceBinding",
     "ChatQueueSummary",
     "ChatRuntimeProjection",
     "ChatThreadProjection",
@@ -218,6 +219,16 @@ class ChatRuntimeProjection(ReadModelContract):
     reasoning_source: str
 
 
+class ChatSurfaceBinding(ReadModelContract):
+    surface_kind: str
+    surface_key: str
+    surface_urn: Optional[str] = None
+    lifecycle: Optional[str] = None
+    display_name: Optional[str] = None
+    title: Optional[str] = None
+    binding_display_name: Optional[str] = None
+
+
 class ChatIndexRow(ReadModelContract):
     """Chat row contract shared by snapshots and patch payloads.
 
@@ -240,8 +251,8 @@ class ChatIndexRow(ReadModelContract):
     title: str
     display_title: Optional[str] = None
     technical_title: Optional[str] = None
-    primary_surface: Optional[dict[str, Any]] = None
-    surface_bindings: list[dict[str, Any]] = Field(default_factory=list)
+    primary_surface: Optional[ChatSurfaceBinding] = None
+    surface_bindings: list[ChatSurfaceBinding] = Field(default_factory=list)
     binding_display_name: Optional[str] = None
     binding_display_names: list[str] = Field(default_factory=list)
     lifecycle: Optional[str] = None
