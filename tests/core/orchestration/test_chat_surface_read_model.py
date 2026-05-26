@@ -544,7 +544,8 @@ def test_chat_index_rebuilds_projection_when_facet_schema_marker_is_missing(
     service.rebuild_chat_index_projection()
 
     with open_orchestration_sqlite(hub_root, durable=False, migrate=True) as conn:
-        conn.execute("""
+        conn.execute(
+            """
             UPDATE orch_chat_index_projection
                SET facet_category = NULL,
                    facet_turn_kind_list = '',
@@ -553,11 +554,14 @@ def test_chat_index_rebuilds_projection_when_facet_schema_marker_is_missing(
                    facet_scope_kind = NULL,
                    facet_scope_id = NULL,
                    facet_agent_kind = NULL
-            """)
-        conn.execute("""
+            """
+        )
+        conn.execute(
+            """
             DELETE FROM orch_chat_index_projection_meta
              WHERE key = 'projection_schema_version'
-            """)
+            """
+        )
 
     assert service.chat_index_projection_status()["needs_rebuild"] is True
     automation = service.chat_index_snapshot(
@@ -1873,11 +1877,13 @@ def test_chat_index_snapshot_repairs_missing_facet_projection_columns(
             str(row["name"])
             for row in conn.execute("PRAGMA table_info(orch_chat_index_projection)")
         }
-        stored_schema_version = conn.execute("""
+        stored_schema_version = conn.execute(
+            """
             SELECT value
               FROM orch_chat_index_projection_meta
              WHERE key = 'projection_schema_version'
-            """).fetchone()["value"]
+            """
+        ).fetchone()["value"]
 
     assert set(facet_columns).issubset(columns)
     assert stored_schema_version == "chat.index.projection.facets.v1"
