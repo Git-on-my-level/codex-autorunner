@@ -5,12 +5,14 @@
     title,
     subtitle = null,
     stats = undefined,
-    actions = undefined
+    actions = undefined,
+    meta = undefined
   }: {
     title: string;
     subtitle?: string | null;
     stats?: Snippet | undefined;
     actions?: Snippet | undefined;
+    meta?: Snippet | undefined;
   } = $props();
 </script>
 
@@ -19,6 +21,11 @@
     <h1>{title}</h1>
     {#if subtitle}
       <p class="page-hero-sub">{subtitle}</p>
+    {/if}
+    {#if meta}
+      <div class="page-hero-meta">
+        {@render meta()}
+      </div>
     {/if}
   </div>
   {#if stats}
@@ -60,6 +67,17 @@
     margin: 0;
     color: var(--color-ink-muted);
     font-size: var(--font-size-1);
+  }
+
+  .page-hero-meta {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-2);
+    margin-top: 2px;
+    color: var(--color-ink-muted);
+    font-size: var(--font-size-0);
+    line-height: 1.4;
   }
 
   .page-hero-actions {

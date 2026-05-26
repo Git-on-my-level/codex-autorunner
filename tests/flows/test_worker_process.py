@@ -231,9 +231,14 @@ def test_spawn_flow_worker_closes_streams_when_popen_fails(
             self.closed = True
 
     opened: list[DummyHandle] = []
+    opened_paths: list[str] = []
+    original_open = worker_process.Path.open
 
-    def fake_open(_self, _mode="r", *args, **kwargs):  # type: ignore[no-untyped-def]
+    def fake_open(self, _mode="r", *args, **kwargs):  # type: ignore[no-untyped-def]
+        if self.name not in {"worker.out.log", "worker.err.log"}:
+            return original_open(self, _mode, *args, **kwargs)
         handle = DummyHandle()
+        opened_paths.append(self.name)
         opened.append(handle)
         return handle
 
@@ -247,6 +252,7 @@ def test_spawn_flow_worker_closes_streams_when_popen_fails(
     with pytest.raises(RuntimeError, match="spawn failed"):
         worker_process.spawn_flow_worker(tmp_path, run_id)
 
+    assert opened_paths == ["worker.out.log", "worker.err.log"]
     assert len(opened) == 2
     assert all(handle.closed for handle in opened)
 

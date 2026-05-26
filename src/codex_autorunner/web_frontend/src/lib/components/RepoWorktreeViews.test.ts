@@ -206,7 +206,7 @@ describe('RepoWorktreeViews', () => {
     expect(body).not.toContain('Create a worktree when a ticket needs isolated repo state.');
     expect(body).toContain('Repo tickets');
     expect(body).toContain('No tickets');
-    expect(body).toContain('No scoped tickets are queued for this repo.');
+    expect(body).toContain('No tickets yet for this repo.');
     expect(body).toContain('Contextspace');
     expect(body).toContain('active_context.md');
     expect(body).toContain('No context recorded');
@@ -217,7 +217,7 @@ describe('RepoWorktreeViews', () => {
     expect(body).not.toContain('Analytics');
     const tickets = body.indexOf('Repo tickets');
     const contextspace = body.indexOf('Contextspace');
-    const chats = body.indexOf('>Chats<');
+    const chats = body.indexOf('chats-panel-heading');
     expect(contextspace).toBeGreaterThan(-1);
     expect(contextspace).toBeLessThan(tickets);
     expect(tickets).toBeLessThan(chats);

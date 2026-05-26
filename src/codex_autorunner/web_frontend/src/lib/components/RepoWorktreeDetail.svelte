@@ -330,11 +330,18 @@
       <section class="page-panel execution-panel wide workspace-ticket-queue-panel">
         <div class="panel-heading-row">
           <h2>{detail.kind === 'worktree' ? 'Worktree tickets' : 'Repo tickets'}</h2>
-          <a
-            class="ghost-button"
-            href={href(detail.ticketIndexHref)}
-            data-sveltekit-preload-data="tap"
-          >All tickets</a>
+          <div class="panel-heading-actions">
+            <a
+              class="ghost-button is-primary"
+              href={href(detail.newTicketHref)}
+              data-sveltekit-preload-data="tap"
+            >+ New ticket</a>
+            <a
+              class="ghost-button"
+              href={href(detail.ticketIndexHref)}
+              data-sveltekit-preload-data="tap"
+            >All tickets</a>
+          </div>
         </div>
         {@render degradedIssues(ticketIssues)}
         {#if detail.ticketOverview.total > 0}
@@ -373,10 +380,11 @@
               </a>
             {/if}
           {:else if ticketIssues.length === 0 && detail.ticketOverview.total === 0}
-            <div class="workspace-ticket-row empty-ticket-row" role="status">
-              <span>
-                <small>No scoped tickets are queued for this {detail.kind}.</small>
-              </span>
+            <div class="panel-empty-card" role="status">
+              <p class="panel-empty-card-title">No tickets yet for this {detail.kind}.</p>
+              <div class="panel-empty-card-actions">
+                <a class="ghost-button is-primary" href={href(detail.newTicketHref)} data-sveltekit-preload-data="tap">+ New ticket</a>
+              </div>
             </div>
           {/if}
         </div>
@@ -384,7 +392,11 @@
 
       <section class="page-panel execution-panel wide">
         <div class="panel-heading-row chats-panel-heading">
-          <h2>Chats</h2>
+          <h2 class="panel-heading-link-host">
+            <a class="panel-heading-link" href={href(detail.scopedChatListHref)} data-sveltekit-preload-data="tap">
+              Chats<span class="panel-heading-link-chevron" aria-hidden="true">→</span>
+            </a>
+          </h2>
           <div class="panel-heading-actions">
             <a class="ghost-button" href={href(detail.pmaChatHref)} data-sveltekit-preload-data="tap">New PMA chat</a>
             <a class="ghost-button" href={href(detail.codingAgentChatHref)} data-sveltekit-preload-data="tap">New coding agent chat</a>
@@ -449,7 +461,8 @@
                         {/if}
                       </span>
                       <span class="scoped-chat-child-meta">
-                        {#if chat.agentId}<span class="chat-agent">{chat.agentId}</span>{/if}
+                        <span class="chat-id-tag">#{chat.shortId}</span>
+                        {#if chat.agentId}<span class="chat-meta-dot" aria-hidden="true">·</span><span class="chat-agent">{chat.agentId}</span>{/if}
                         {#if chat.agentId && chat.model}<span class="chat-meta-dot" aria-hidden="true">·</span>{/if}
                         {#if chat.model}<span class="chat-model">{chat.model}</span>{/if}
                         {#if chat.status !== 'idle' && chat.status !== 'done'}
@@ -490,21 +503,23 @@
                       {/if}
                     </span>
                   </span>
-                  {#if metaBits.length > 0}
-                    <span class="chat-meta-row">
+                  <span class="chat-meta-row">
+                    <span class="chat-id-tag">#{chat.shortId}</span>
+                    {#if metaBits.length > 0}
+                      <span class="chat-meta-dot" aria-hidden="true">·</span>
                       <span class="chat-agent-model">
                         {#each metaBits as bit, i}
                           {#if i > 0}<span class="chat-meta-dot" aria-hidden="true">·</span>{/if}
                           <span class={i === 0 ? 'chat-agent' : 'chat-model'}>{bit}</span>
                         {/each}
                       </span>
-                    </span>
-                  {/if}
+                    {/if}
+                  </span>
                 </span>
               </a>
             {/each}
             {#if detail.chatList.standaloneChats.length > 5}
-              <a class="row-overflow-link" href={href('/chats')}>+{detail.chatList.standaloneChats.length - 5} more chat{detail.chatList.standaloneChats.length - 5 === 1 ? '' : 's'}</a>
+              <a class="row-overflow-link" href={href(detail.scopedChatListHref)}>+{detail.chatList.standaloneChats.length - 5} more chat{detail.chatList.standaloneChats.length - 5 === 1 ? '' : 's'}</a>
             {/if}
           </div>
         {/if}

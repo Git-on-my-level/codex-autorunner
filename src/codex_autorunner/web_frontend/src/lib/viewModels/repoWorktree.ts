@@ -13,11 +13,13 @@ import type {
 } from './domain';
 import { formatRelativeTime, pmaChatKind, pmaChatKindLabel, progressPercent, sortChatsUnreadFirst, statusLabel } from './pmaChat';
 import type { PmaChatKind } from './pmaChat';
+import { buildChatsListHref, DEFAULT_CHAT_LIST_FILTERS } from '$lib/routes/chatListFiltersUrl';
 import {
   repoContextspaceRoute,
   repoRoute,
   repoTicketRoute,
   scopedNewChatRoute,
+  scopedNewTicketRoute,
   scopedTicketRoute,
   worktreeContextspaceRoute,
   worktreeRoute,
@@ -158,6 +160,7 @@ export type RepoWorktreeChatList = {
 
 export type RepoWorktreeChatRow = {
   id: string;
+  shortId: string;
   title: string;
   status: WorkStatus;
   kind: PmaChatKind;
@@ -286,6 +289,10 @@ export type RepoWorktreeDetailViewModel = {
   missingIndexLabel: string;
   pmaChatHref: string;
   codingAgentChatHref: string;
+  /** Chats list URL filtered to this detail's scope kind. */
+  scopedChatListHref: string;
+  /** "+ New ticket" URL for the scoped tickets/new route. */
+  newTicketHref: string;
   gitStatus: GitStatusSummary | null;
   hasCarState: boolean;
   unboundManagedThreadCount: number;
@@ -453,6 +460,9 @@ export function buildRepoWorktreeDetailViewModel(
     missingIndexLabel: kind === 'repo' ? 'Back to repos' : 'Back to worktrees',
     pmaChatHref: scopedNewChatRoute(kind, id, 'pma'),
     codingAgentChatHref: scopedNewChatRoute(kind, id, 'agent'),
+    scopedChatListHref: scopedChatListHrefForKind(kind),
+    newTicketHref:
+      scopedNewTicketRoute(kind, id, parentRepoId) ?? `${scopedTicketHref(kind, id, parentRepoId)}/new`,
     gitStatus: resource.gitStatus ?? null,
     hasCarState: boolFromRaw(resource.raw, 'has_car_state'),
     unboundManagedThreadCount: numberFromRaw(resource.raw, 'unbound_managed_thread_count'),
@@ -521,6 +531,8 @@ function missingDetailViewModel(kind: RepoWorktreeKind, id: string): RepoWorktre
     missingIndexLabel: kind === 'repo' ? 'Back to repos' : 'Back to worktrees',
     pmaChatHref: '/chats',
     codingAgentChatHref: '/chats',
+    scopedChatListHref: scopedChatListHrefForKind(kind),
+    newTicketHref: kind === 'repo' ? '/repos' : '/worktrees',
     gitStatus: null,
     hasCarState: false,
     unboundManagedThreadCount: 0,
@@ -817,6 +829,11 @@ function worktreeToIndexRow(worktree: WorktreeSummary, source: RepoWorktreeSourc
   };
 }
 
+/** Chats list URL filtered to the given scope kind (repo vs worktree). */
+function scopedChatListHrefForKind(kind: RepoWorktreeKind): string {
+  return buildChatsListHref({ ...DEFAULT_CHAT_LIST_FILTERS, scopeKind: kind });
+}
+
 function shortenWorktreeLabel(name: string, repoName: string | null): string {
   if (!repoName) return name;
   const prefix = `${repoName}--`;
@@ -1021,6 +1038,7 @@ function chatToRow(chat: PmaChatSummary): RepoWorktreeChatRow {
   const kind = pmaChatKind(chat);
   return {
     id: chat.id,
+    shortId: chat.id.slice(0, 6).toLowerCase(),
     title: chat.title,
     status: chat.status,
     kind,
