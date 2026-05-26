@@ -2667,6 +2667,7 @@ def _chat_row_search_text(row: Mapping[str, Any]) -> str:
     values = [
         row.get("managed_thread_id"),
         _visible_chrome_text(row.get("title")),
+        _visible_chrome_text(row.get("display_title")),
         row.get("repo_id"),
         row.get("resource_kind"),
         row.get("resource_id"),
