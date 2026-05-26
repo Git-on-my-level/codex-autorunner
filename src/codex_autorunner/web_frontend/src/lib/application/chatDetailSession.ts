@@ -86,8 +86,10 @@ export function chatSummaryForSessionId(
 ): PmaChatSummary | null {
   if (!chatId) return null;
   if (localDraftChat?.id === chatId) return localDraftChat;
-  if (committedDraftChat?.id === chatId) return committedDraftChat;
-  return chats.find((chat) => chat.id === chatId) ?? null;
+  return (
+    chats.find((chat) => chat.id === chatId) ??
+    (committedDraftChat?.id === chatId ? committedDraftChat : null)
+  );
 }
 
 export function requestedChatDetailFromUrl(
