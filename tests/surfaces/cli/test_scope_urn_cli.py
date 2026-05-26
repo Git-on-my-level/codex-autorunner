@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import pytest
+import typer
 
 from codex_autorunner.surfaces.cli.hub_control_plane_client import (
     normalize_scope_urn_to_owner_fields,
@@ -48,7 +49,5 @@ def test_normalize_scope_urn_empty():
 
 
 def test_normalize_scope_urn_invalid_exits():
-    from click.exceptions import Exit
-
-    with pytest.raises(Exit):
+    with pytest.raises(typer.Exit):
         normalize_scope_urn_to_owner_fields("invalid-kind:whatever")

@@ -203,16 +203,6 @@ def normalize_json_object(value: Any, *, field_name: str) -> dict[str, Any]:
     return dict(value)
 
 
-def normalize_optional_json_object(
-    value: Any, *, field_name: str
-) -> Optional[dict[str, Any]]:
-    if value is None:
-        return None
-    if not isinstance(value, dict):
-        raise ValueError(f"{field_name} must be a JSON object when present")
-    return dict(value)
-
-
 def normalize_bool(value: Any, *, fallback: bool = False) -> bool:
     if isinstance(value, bool):
         return value

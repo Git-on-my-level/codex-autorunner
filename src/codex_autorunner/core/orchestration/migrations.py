@@ -7,7 +7,6 @@ from dataclasses import dataclass
 from typing import Callable
 
 from ..runtime_identity import (
-    RUNTIME_IDENTITY_CONTRACT_VERSION,
     RUNTIME_STAGE_EFFECTIVE,
     RUNTIME_STAGE_LAUNCH,
     RUNTIME_STAGE_REQUESTED,
@@ -2363,62 +2362,6 @@ def _apply_v43(conn: sqlite3.Connection) -> None:
                 """,
                 (json.dumps(normalized_schedule, sort_keys=True), row["schedule_id"]),
             )
-
-
-def _empty_runtime_identity_json(source: str) -> str:
-    return json.dumps(
-        {
-            "contract_version": RUNTIME_IDENTITY_CONTRACT_VERSION,
-            "requested": None,
-            "resolved": None,
-            "launch": None,
-            "effective": None,
-            "projected": None,
-            "metadata": {"backfill_source": source},
-        },
-        sort_keys=True,
-        separators=(",", ":"),
-    )
-
-
-def _runtime_identity_json_from_turn_request(payload: object) -> str:
-    if isinstance(payload, str) and payload.strip():
-        try:
-            loaded = json.loads(payload)
-        except (TypeError, ValueError):
-            loaded = None
-        if isinstance(loaded, dict):
-            try:
-                return RuntimeIdentityEnvelope(
-                    resolved=RuntimeIdentityStage.from_turn_execution_request(
-                        loaded,
-                        stage=RUNTIME_STAGE_RESOLVED,
-                    ),
-                    metadata={"backfill_source": "migration_v44_turn_request"},
-                ).to_json()
-            except (TypeError, ValueError):
-                pass
-    return _empty_runtime_identity_json("migration_v44_unknown_turn_request")
-
-
-def _runtime_identity_json_from_requested_runtime(payload: object) -> str:
-    if isinstance(payload, str) and payload.strip():
-        try:
-            loaded = json.loads(payload)
-        except (TypeError, ValueError):
-            loaded = None
-        if isinstance(loaded, dict):
-            try:
-                return RuntimeIdentityEnvelope(
-                    requested=RuntimeIdentityStage.from_automation_runtime(
-                        loaded,
-                        stage=RUNTIME_STAGE_REQUESTED,
-                    ),
-                    metadata={"backfill_source": "migration_v44_requested_runtime"},
-                ).to_json()
-            except (TypeError, ValueError):
-                pass
-    return _empty_runtime_identity_json("migration_v44_unknown_requested_runtime")
 
 
 def _json_object(payload: object) -> dict[str, object]:
