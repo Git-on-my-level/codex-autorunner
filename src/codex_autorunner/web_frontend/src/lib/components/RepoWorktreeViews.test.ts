@@ -40,12 +40,12 @@ describe('RepoWorktreeViews', () => {
     expect(body).toContain('worktree-card row-click-target');
     expect(body).toContain('aria-label="Open codex-autorunner detail"');
     expect(body).toContain('aria-label="Open discord-5 detail"');
-    expect(body).toContain('href="/chats?new=repo:repo-1"');
-    expect(body).toContain('href="/chats?new=worktree:worktree-1"');
-    expect(body).toContain('Start chat for codex-autorunner');
-    expect(body).toContain('Start chat for discord-5');
-    expect(body).not.toContain('Start PMA chat for');
-    expect(body).not.toContain('Start coding agent chat for');
+    expect(body).toContain('href="/chats?new=repo:repo-1&amp;kind=pma"');
+    expect(body).toContain('href="/chats?new=repo:repo-1&amp;kind=agent"');
+    expect(body).toContain('href="/chats?new=worktree:worktree-1&amp;kind=pma"');
+    expect(body).toContain('href="/chats?new=worktree:worktree-1&amp;kind=agent"');
+    expect(body).toContain('Start PMA chat for codex-autorunner');
+    expect(body).toContain('Start coding agent chat for discord-5');
     expect(body).toContain('1 worktree');
     expect(body).not.toContain('Terminal');
     expect(body).not.toContain('Analytics');
@@ -98,12 +98,13 @@ describe('RepoWorktreeViews', () => {
       }
     });
 
-    // Lifecycle actions are now consolidated into a per-row overflow menu.
-    expect(body).toContain('More actions for codex-autorunner');
-    expect(body).toContain('More actions for discord-5');
+    expect(body).toContain('Retire CAR state for codex-autorunner');
+    expect(body).toContain('Retire CAR state for discord-5');
+    expect(body).toContain('Retire worktree discord-5');
     expect(body).toContain('Chat-bound');
     expect(body).toContain('CAR / #ops');
-    expect(body).toContain('overflow-menu');
+    expect(body).toContain('icon-action retire');
+    expect(body).toContain('icon-action retire-state');
   });
 
   it('renders sparse repo index empty-state copy', () => {
@@ -204,23 +205,19 @@ describe('RepoWorktreeViews', () => {
     expect(body).not.toContain('Active run');
     expect(body).not.toContain('Create a worktree when a ticket needs isolated repo state.');
     expect(body).toContain('Repo tickets');
+    expect(body).toContain('No tickets');
     expect(body).toContain('No tickets yet for this repo.');
-    expect(body).toContain('+ New ticket');
-    expect(body).toContain('href="/repos/repo-1/tickets/new"');
     expect(body).toContain('Contextspace');
     expect(body).toContain('active_context.md');
     expect(body).toContain('No context recorded');
     expect(body).toContain('href="/repos/repo-1/contextspace#active_context"');
     expect(body).toContain('Chats');
-    expect(body).toContain('href="/chats?new=repo:repo-1"');
-    expect(body).toContain('+ New chat');
-    expect(body).not.toContain('New PMA chat');
-    expect(body).not.toContain('New coding agent chat');
+    expect(body).toContain('href="/chats?new=repo:repo-1&amp;kind=pma"');
     expect(body).not.toContain('Terminal');
     expect(body).not.toContain('Analytics');
     const tickets = body.indexOf('Repo tickets');
     const contextspace = body.indexOf('Contextspace');
-    const chats = body.indexOf('>Chats<');
+    const chats = body.indexOf('chats-panel-heading');
     expect(contextspace).toBeGreaterThan(-1);
     expect(contextspace).toBeLessThan(tickets);
     expect(tickets).toBeLessThan(chats);
@@ -269,19 +266,12 @@ describe('RepoWorktreeViews', () => {
     const { body } = render(RepoWorktreeViews, { props: { state: 'ready', mode: 'detail', detail } });
 
     expect(body).toContain('Dirty');
-    // Numeric git counts now render as <dl class="hero-stats"> per DESIGN.md
-    // "Inline KPI strip": value first, label below.
-    expect(body).toContain('hero-stats');
-    expect(body).toContain('files changed');
+    expect(body).toContain('3 files changed');
     expect(body).toContain('+42');
     expect(body).toContain('-7');
-    expect(body).toContain('↑ 2');
-    expect(body).toContain('↓ 1');
-    expect(body).toContain('ahead');
-    expect(body).toContain('behind');
-    // Branch lives in the hero meta row, not the subtitle.
-    expect(body).toContain('hero-branch');
-    expect(body).toContain('main');
+    expect(body).toContain('1 untracked');
+    expect(body).toContain('↑ 2 ahead');
+    expect(body).toContain('↓ 1 behind');
     expect(body).toContain('contextspace-spec-preview');
     expect(body).toContain('<h1>Build the thing</h1>');
     expect(body).toContain('Ship feature X');

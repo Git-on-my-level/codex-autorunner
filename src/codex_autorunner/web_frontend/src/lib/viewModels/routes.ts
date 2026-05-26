@@ -71,6 +71,36 @@ export function worktreeContextspaceRoute(worktreeId: string, parentRepoId: stri
   return `${worktreeRoute(worktreeId, parentRepoId)}/contextspace`;
 }
 
+export type ScopedRouteKind = 'repo' | 'worktree';
+export type NewChatRouteKind = 'pma' | 'agent';
+
+export function scopedNewChatRoute(
+  kind: ScopedRouteKind,
+  id: string,
+  chatKind: NewChatRouteKind = 'pma'
+): string {
+  const scope = kind === 'repo' ? `repo:${encodeURIComponent(id)}` : `worktree:${encodeURIComponent(id)}`;
+  return `/chats?new=${scope}&kind=${chatKind}`;
+}
+
+export function scopedTicketRoute(
+  kind: ScopedRouteKind,
+  id: string,
+  parentRepoId: string | null = null,
+  ticketId?: string
+): string {
+  return kind === 'repo' ? repoTicketRoute(id, ticketId) : worktreeTicketRoute(id, parentRepoId, ticketId);
+}
+
+export function scopedNewTicketRoute(
+  kind: ScopedRouteKind,
+  id: string,
+  parentRepoId: string | null = null
+): string | null {
+  if (kind === 'worktree' && !parentRepoId) return null;
+  return `${scopedTicketRoute(kind, id, parentRepoId)}/new`;
+}
+
 export function legacyWorktreeRedirectPath(pathname: string, worktreeId: string, parentRepoId: string | null): string | null {
   if (!parentRepoId) return null;
   const expectedPrefix = `/worktrees/${encodeURIComponent(worktreeId)}`;

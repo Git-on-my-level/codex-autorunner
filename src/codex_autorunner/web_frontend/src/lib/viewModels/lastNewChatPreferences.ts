@@ -1,53 +1,46 @@
 /** Browser persistence for `/chats` new-chat pickers. */
 
-const STORAGE_KEY = 'car.web.chat.lastNewChatPreferences.v1';
+const STORAGE_KEY = 'car.web.chat.lastNewChatPreference.v2';
 
 export type NewChatPreferenceKind = 'pma' | 'agent';
 
-export type NewChatPreference = {
+export type LastNewChatPreference = {
   scopeId: string;
+  kind: NewChatPreferenceKind;
 };
 
-export type LastNewChatPreferences = Partial<Record<NewChatPreferenceKind, NewChatPreference>>;
-
-export function loadLastNewChatPreferences(): LastNewChatPreferences {
-  if (typeof window === 'undefined') return {};
+export function loadLastNewChatPreference(): LastNewChatPreference | null {
+  if (typeof window === 'undefined') return null;
   try {
     const raw = window.localStorage.getItem(STORAGE_KEY);
-    if (!raw) return {};
+    if (!raw) return null;
     const parsed = JSON.parse(raw);
-    if (!parsed || typeof parsed !== 'object') return {};
-    const out: LastNewChatPreferences = {};
-    for (const kind of ['pma', 'agent'] as const) {
-      const value = (parsed as Record<string, unknown>)[kind];
-      if (!value || typeof value !== 'object') continue;
-      const scopeId = (value as Record<string, unknown>).scopeId;
-      if (typeof scopeId !== 'string' || !scopeId.trim()) continue;
-      out[kind] = { scopeId: scopeId.trim() };
-    }
-    return out;
+    if (!parsed || typeof parsed !== 'object') return null;
+    const scopeId = (parsed as Record<string, unknown>).scopeId;
+    const kind = (parsed as Record<string, unknown>).kind;
+    if (typeof scopeId !== 'string' || !scopeId.trim()) return null;
+    if (kind !== 'pma' && kind !== 'agent') return null;
+    return { scopeId: scopeId.trim(), kind };
   } catch {
-    return {};
+    return null;
   }
 }
 
-function saveLastNewChatPreferences(preferences: LastNewChatPreferences): void {
+function saveLastNewChatPreference(preference: LastNewChatPreference): void {
   if (typeof window === 'undefined') return;
   try {
-    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(preferences));
+    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(preference));
   } catch {
     // Best-effort; ignore quota / disabled storage.
   }
 }
 
-export function getLastNewChatPreference(kind: NewChatPreferenceKind): NewChatPreference | null {
-  return loadLastNewChatPreferences()[kind] ?? null;
+export function getLastNewChatPreference(): LastNewChatPreference | null {
+  return loadLastNewChatPreference();
 }
 
-export function persistLastNewChatPreference(kind: NewChatPreferenceKind, preference: NewChatPreference): void {
+export function persistLastNewChatPreference(preference: LastNewChatPreference): void {
   const scopeId = preference.scopeId.trim();
   if (!scopeId) return;
-  const preferences = loadLastNewChatPreferences();
-  preferences[kind] = { scopeId };
-  saveLastNewChatPreferences(preferences);
+  saveLastNewChatPreference({ scopeId, kind: preference.kind });
 }

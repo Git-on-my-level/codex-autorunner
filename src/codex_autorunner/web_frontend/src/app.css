@@ -5060,7 +5060,7 @@ textarea:disabled {
   vertical-align: middle;
 }
 
-.ticket-flow-strip.active > div:first-child > strong::before {
+.ticket-flow-strip.running > div:first-child > strong::before {
   background: var(--color-success);
 }
 

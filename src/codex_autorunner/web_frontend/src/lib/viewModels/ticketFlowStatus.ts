@@ -13,7 +13,7 @@ export type TicketFlowStatusViewModel = {
   progressLabel: string;
   lastActivityLabel: string;
   reasonLabel: string;
-  signal: 'active' | 'waiting' | 'blocked' | 'failed' | 'invalid' | 'idle' | 'done';
+  signal: 'running' | 'waiting' | 'blocked' | 'failed' | 'invalid' | 'idle' | 'done';
 };
 
 export type TicketFlowOwnerScope = {
@@ -318,7 +318,7 @@ function recoveryStatusLabel(state: string | null): string | null {
 }
 
 function recoverySignal(state: string | null): TicketFlowStatusViewModel['signal'] | null {
-  if (state === 'restarted') return 'active';
+  if (state === 'restarted') return 'running';
   if (state === 'recovering' || state === 'commit_barrier_pending') return 'waiting';
   if (state === 'commit_barrier_exhausted') return 'blocked';
   if (state === 'stale_alive') return 'blocked';
@@ -333,7 +333,7 @@ function reasonFromTickets(tickets: TicketSummary[]): string | null {
 }
 
 function statusSignal(status: WorkStatus): TicketFlowStatusViewModel['signal'] {
-  if (status === 'running') return 'active';
+  if (status === 'running') return 'running';
   if (status === 'waiting') return 'waiting';
   if (status === 'blocked') return 'blocked';
   if (status === 'failed') return 'failed';

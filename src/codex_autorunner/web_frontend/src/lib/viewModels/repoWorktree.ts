@@ -13,8 +13,18 @@ import type {
 } from './domain';
 import { formatRelativeTime, pmaChatKind, pmaChatKindLabel, progressPercent, sortChatsUnreadFirst, statusLabel } from './pmaChat';
 import type { PmaChatKind } from './pmaChat';
-import { repoContextspaceRoute, repoRoute, repoTicketRoute, worktreeContextspaceRoute, worktreeRoute, worktreeTicketRoute } from './routes';
 import { buildChatsListHref, DEFAULT_CHAT_LIST_FILTERS } from '$lib/routes/chatListFiltersUrl';
+import {
+  repoContextspaceRoute,
+  repoRoute,
+  repoTicketRoute,
+  scopedNewChatRoute,
+  scopedNewTicketRoute,
+  scopedTicketRoute,
+  worktreeContextspaceRoute,
+  worktreeRoute,
+  worktreeTicketRoute
+} from './routes';
 import {
   aliasesOverlap,
   buildTicketFlowStatusViewModel,
@@ -47,8 +57,10 @@ export type RepoWorktreeIndexRow = {
   signalWaiting: number;
   signalFailed: number;
   signalActive: number;
-  /** Deep-link into chats with the scope pre-pinned and the picker locked. PMA / coding-agent is chosen in the composer. */
-  newChatHref: string;
+  /** Deep-link into chats with the new-chat scope picker preset for PMA mediation. */
+  pmaChatHref: string;
+  /** Deep-link into chats with the new-chat scope picker preset for direct agent control. */
+  codingAgentChatHref: string;
   hasCarState: boolean;
   unboundManagedThreadCount: number;
   chatBound: boolean;
@@ -82,8 +94,10 @@ export type RepoWorktreeChildRow = {
   lastActivityAt: string | null;
   href: string;
   ticketHref: string | null;
-  /** Deep-link into chats with the scope pre-pinned and the picker locked. */
-  newChatHref: string;
+  /** Deep-link into chats with PMA mediation scoped to this worktree. */
+  pmaChatHref: string;
+  /** Deep-link into chats with direct agent control scoped to this worktree. */
+  codingAgentChatHref: string;
   /** PMA chats + ticket-flow runs scoped to this worktree. */
   signalWaiting: number;
   signalFailed: number;
@@ -273,8 +287,8 @@ export type RepoWorktreeDetailViewModel = {
   hasActiveRun: boolean;
   missingIndexHref: string;
   missingIndexLabel: string;
-  /** Single-button "+ New chat" URL: scope pinned & locked, kind chosen in composer. */
-  newChatHref: string;
+  pmaChatHref: string;
+  codingAgentChatHref: string;
   /** Chats list URL filtered to this detail's scope kind. */
   scopedChatListHref: string;
   /** "+ New ticket" URL for the scoped tickets/new route. */
@@ -444,9 +458,11 @@ export function buildRepoWorktreeDetailViewModel(
     hasActiveRun: activeRunCards.length > 0,
     missingIndexHref: kind === 'repo' ? '/repos' : '/worktrees',
     missingIndexLabel: kind === 'repo' ? 'Back to repos' : 'Back to worktrees',
-    newChatHref: scopedNewChatHref(kind, id),
-    scopedChatListHref: scopedChatListHref(kind),
-    newTicketHref: `${scopedTicketHref(kind, id, parentRepoId)}/new`,
+    pmaChatHref: scopedNewChatRoute(kind, id, 'pma'),
+    codingAgentChatHref: scopedNewChatRoute(kind, id, 'agent'),
+    scopedChatListHref: scopedChatListHrefForKind(kind),
+    newTicketHref:
+      scopedNewTicketRoute(kind, id, parentRepoId) ?? `${scopedTicketHref(kind, id, parentRepoId)}/new`,
     gitStatus: resource.gitStatus ?? null,
     hasCarState: boolFromRaw(resource.raw, 'has_car_state'),
     unboundManagedThreadCount: numberFromRaw(resource.raw, 'unbound_managed_thread_count'),
@@ -513,8 +529,9 @@ function missingDetailViewModel(kind: RepoWorktreeKind, id: string): RepoWorktre
     hasActiveRun: false,
     missingIndexHref: kind === 'repo' ? '/repos' : '/worktrees',
     missingIndexLabel: kind === 'repo' ? 'Back to repos' : 'Back to worktrees',
-    newChatHref: '/chats',
-    scopedChatListHref: scopedChatListHref(kind),
+    pmaChatHref: '/chats',
+    codingAgentChatHref: '/chats',
+    scopedChatListHref: scopedChatListHrefForKind(kind),
     newTicketHref: kind === 'repo' ? '/repos' : '/worktrees',
     gitStatus: null,
     hasCarState: false,
@@ -703,7 +720,8 @@ function repoToIndexRow(repo: RepoSummary, worktrees: WorktreeSummary[], source:
     signalWaiting: 0,
     signalFailed: 0,
     signalActive: 0,
-    newChatHref: scopedNewChatHref('repo', repo.id),
+    pmaChatHref: scopedNewChatRoute('repo', repo.id, 'pma'),
+    codingAgentChatHref: scopedNewChatRoute('repo', repo.id, 'agent'),
     hasCarState: boolFromRaw(repo.raw, 'has_car_state'),
     unboundManagedThreadCount: numberFromRaw(repo.raw, 'unbound_managed_thread_count'),
     chatBound: boolFromRaw(repo.raw, 'chat_bound'),
@@ -752,7 +770,8 @@ function worktreeToNavChildRow(
     lastActivityAt: worktree.lastActivityAt,
     href: worktreeRoute(worktree.id, worktree.repoId),
     ticketHref: worktreeTicketRoute(worktree.id, worktree.repoId),
-    newChatHref: scopedNewChatHref('worktree', worktree.id),
+    pmaChatHref: scopedNewChatRoute('worktree', worktree.id, 'pma'),
+    codingAgentChatHref: scopedNewChatRoute('worktree', worktree.id, 'agent'),
     signalWaiting: signals.waiting,
     signalFailed: signals.failed,
     signalActive: signals.active,
@@ -793,7 +812,8 @@ function worktreeToIndexRow(worktree: WorktreeSummary, source: RepoWorktreeSourc
     signalWaiting: 0,
     signalFailed: 0,
     signalActive: 0,
-    newChatHref: scopedNewChatHref('worktree', worktree.id),
+    pmaChatHref: scopedNewChatRoute('worktree', worktree.id, 'pma'),
+    codingAgentChatHref: scopedNewChatRoute('worktree', worktree.id, 'agent'),
     hasCarState: boolFromRaw(worktree.raw, 'has_car_state'),
     unboundManagedThreadCount: numberFromRaw(worktree.raw, 'unbound_managed_thread_count'),
     chatBound: boolFromRaw(worktree.raw, 'chat_bound'),
@@ -809,19 +829,8 @@ function worktreeToIndexRow(worktree: WorktreeSummary, source: RepoWorktreeSourc
   };
 }
 
-/** Deep link to the chats page with a non-local scope pre-pinned. The chats page
- *  locks the scope picker whenever this entry point is used (the caller is
- *  declaring "this chat belongs to that scope") and the user picks PMA vs
- *  coding-agent in the composer. */
-function scopedNewChatHref(kind: RepoWorktreeKind, id: string): string {
-  const scope = kind === 'repo' ? `repo:${encodeURIComponent(id)}` : `worktree:${encodeURIComponent(id)}`;
-  return `/chats?new=${scope}`;
-}
-
-/** Chats list URL filtered to the given scope kind. The chats list filter
- *  bar currently scopes by kind (`repo` / `worktree`), not by specific id,
- *  so this is the closest scoped view we can deep-link to. */
-function scopedChatListHref(kind: RepoWorktreeKind): string {
+/** Chats list URL filtered to the given scope kind (repo vs worktree). */
+function scopedChatListHrefForKind(kind: RepoWorktreeKind): string {
   return buildChatsListHref({ ...DEFAULT_CHAT_LIST_FILTERS, scopeKind: kind });
 }
 
@@ -1210,7 +1219,7 @@ function buildContextLinks(_kind: RepoWorktreeKind, _id: string, artifacts: Repo
 }
 
 function scopedTicketHref(kind: RepoWorktreeKind, id: string, parentRepoId: string | null = null): string {
-  return kind === 'repo' ? repoTicketRoute(id) : worktreeTicketRoute(id, parentRepoId);
+  return scopedTicketRoute(kind, id, parentRepoId);
 }
 
 function ticketDetailHref(ticket: TicketSummary): string {

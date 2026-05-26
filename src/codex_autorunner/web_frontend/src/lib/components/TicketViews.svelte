@@ -26,6 +26,7 @@
   import ContentSkeleton from '$lib/components/ContentSkeleton.svelte';
   import { agentCanListModels, agentRecordForId } from '$lib/viewModels/modelPickers';
   import { agentIdsFromPmaAgentsPayload } from '$lib/viewModels/ticketSettingsContract';
+  import { scopedNewTicketRoute } from '$lib/viewModels/routes';
 
   let {
     state: viewState,
@@ -154,10 +155,7 @@
   const newTicketHref = $derived.by(() => {
     const owner = list?.scopedOwner;
     if (!owner) return null;
-    if (owner.kind === 'repo') return `/repos/${encodeURIComponent(owner.id)}/tickets/new`;
-    const parent = owner.parentRepoId ?? null;
-    if (parent) return `/repos/${encodeURIComponent(parent)}/worktrees/${encodeURIComponent(owner.id)}/tickets/new`;
-    return null;
+    return scopedNewTicketRoute(owner.kind, owner.id, owner.parentRepoId ?? null);
   });
 
   const agentOptions = $derived(agents.length > 0 ? agentIdsFromPmaAgentsPayload(agents) : supportedAgentIds);
