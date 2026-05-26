@@ -895,7 +895,7 @@ def test_arm_watch_backfills_recent_review_comments_immediately(
     monkeypatch.setattr(
         GitHubScmPollingService,
         "_build_automation_service",
-        lambda self, reaction_config=None: _AutomationServiceFake(  # type: ignore[misc]
+        lambda self, reaction_config=None, checkout_root=None: _AutomationServiceFake(  # type: ignore[misc]
             tmp_path,
             reaction_config=reaction_config,
         ),
@@ -967,7 +967,7 @@ def test_arm_watch_applies_post_open_boost_interval(
     monkeypatch.setattr(
         GitHubScmPollingService,
         "_build_automation_service",
-        lambda self, reaction_config=None: _AutomationServiceFake(  # type: ignore[misc]
+        lambda self, reaction_config=None, checkout_root=None: _AutomationServiceFake(  # type: ignore[misc]
             tmp_path,
             reaction_config=reaction_config,
         ),
@@ -1050,7 +1050,7 @@ def test_process_due_watches_applies_post_open_boost_scenarios(
     monkeypatch.setattr(
         GitHubScmPollingService,
         "_build_automation_service",
-        lambda self, reaction_config=None: _AutomationServiceFake(  # type: ignore[misc]
+        lambda self, reaction_config=None, checkout_root=None: _AutomationServiceFake(  # type: ignore[misc]
             tmp_path,
             reaction_config=reaction_config,
         ),
@@ -1269,7 +1269,7 @@ def test_arm_watch_backfill_uses_current_arm_time_for_reactivated_watch(
     monkeypatch.setattr(
         GitHubScmPollingService,
         "_build_automation_service",
-        lambda self, reaction_config=None: _AutomationServiceFake(  # type: ignore[misc]
+        lambda self, reaction_config=None, checkout_root=None: _AutomationServiceFake(  # type: ignore[misc]
             tmp_path,
             reaction_config=reaction_config,
         ),
@@ -1465,7 +1465,7 @@ def test_process_due_watches_emits_only_new_review_and_check_transitions(
     monkeypatch.setattr(
         GitHubScmPollingService,
         "_build_automation_service",
-        lambda self, reaction_config=None: _AutomationServiceFake(  # type: ignore[misc]
+        lambda self, reaction_config=None, checkout_root=None: _AutomationServiceFake(  # type: ignore[misc]
             tmp_path,
             reaction_config=reaction_config,
         ),
@@ -1665,7 +1665,7 @@ def test_process_due_watches_ignores_ambiguous_old_check_failure_on_new_head(
     monkeypatch.setattr(
         GitHubScmPollingService,
         "_build_automation_service",
-        lambda self, reaction_config=None: _AutomationServiceFake(  # type: ignore[misc]
+        lambda self, reaction_config=None, checkout_root=None: _AutomationServiceFake(  # type: ignore[misc]
             tmp_path,
             reaction_config=reaction_config,
         ),
@@ -1817,7 +1817,7 @@ def test_process_due_watches_emits_new_pr_comment_and_inline_review_comment(
     monkeypatch.setattr(
         GitHubScmPollingService,
         "_build_automation_service",
-        lambda self, reaction_config=None: _AutomationServiceFake(  # type: ignore[misc]
+        lambda self, reaction_config=None, checkout_root=None: _AutomationServiceFake(  # type: ignore[misc]
             tmp_path,
             reaction_config=reaction_config,
         ),
@@ -1974,7 +1974,7 @@ def test_process_due_watches_reacts_then_wakes_thread_and_notifies_bound_chat(
         journal,
         executors={
             "react_pr_review_comment": build_react_pr_review_comment_executor(
-                repo_root=hub_root,
+                checkout_root=hub_root,
                 raw_config=automation_config,
                 github_service_factory=_ReactionGitHubService,
             ),
@@ -2007,7 +2007,7 @@ def test_process_due_watches_reacts_then_wakes_thread_and_notifies_bound_chat(
     monkeypatch.setattr(
         GitHubScmPollingService,
         "_build_automation_service",
-        lambda self, reaction_config=None: _AutomationWrapper(),  # type: ignore[misc]
+        lambda self, reaction_config=None, checkout_root=None: _AutomationWrapper(),  # type: ignore[misc]
     )
 
     service = GitHubScmPollingService(
@@ -2204,7 +2204,7 @@ def test_process_due_watches_keeps_distinct_bound_notices_for_multiple_review_co
         journal,
         executors={
             "react_pr_review_comment": build_react_pr_review_comment_executor(
-                repo_root=hub_root,
+                checkout_root=hub_root,
                 raw_config=automation_config,
                 github_service_factory=_ReactionGitHubService,
             ),
@@ -2237,7 +2237,7 @@ def test_process_due_watches_keeps_distinct_bound_notices_for_multiple_review_co
     monkeypatch.setattr(
         GitHubScmPollingService,
         "_build_automation_service",
-        lambda self, reaction_config=None: _AutomationWrapper(),  # type: ignore[misc]
+        lambda self, reaction_config=None, checkout_root=None: _AutomationWrapper(),  # type: ignore[misc]
     )
 
     service = GitHubScmPollingService(
@@ -2394,7 +2394,7 @@ def test_process_due_watches_does_not_reemit_when_thread_is_reopened_without_new
     monkeypatch.setattr(
         GitHubScmPollingService,
         "_build_automation_service",
-        lambda self, reaction_config=None: _AutomationServiceFake(  # type: ignore[misc]
+        lambda self, reaction_config=None, checkout_root=None: _AutomationServiceFake(  # type: ignore[misc]
             tmp_path,
             reaction_config=reaction_config,
         ),
@@ -2466,7 +2466,7 @@ def test_process_due_watches_uses_first_successful_poll_as_baseline(
     monkeypatch.setattr(
         GitHubScmPollingService,
         "_build_automation_service",
-        lambda self, reaction_config=None: _AutomationServiceFake(  # type: ignore[misc]
+        lambda self, reaction_config=None, checkout_root=None: _AutomationServiceFake(  # type: ignore[misc]
             tmp_path,
             reaction_config=reaction_config,
         ),
@@ -2569,7 +2569,7 @@ def test_process_due_watches_backfills_recent_comments_when_baseline_was_deferre
     monkeypatch.setattr(
         GitHubScmPollingService,
         "_build_automation_service",
-        lambda self, reaction_config=None: _AutomationServiceFake(  # type: ignore[misc]
+        lambda self, reaction_config=None, checkout_root=None: _AutomationServiceFake(  # type: ignore[misc]
             tmp_path,
             reaction_config=reaction_config,
         ),
@@ -2677,7 +2677,7 @@ def test_process_due_watches_uses_current_poll_time_for_deferred_baseline_backfi
     monkeypatch.setattr(
         GitHubScmPollingService,
         "_build_automation_service",
-        lambda self, reaction_config=None: _AutomationServiceFake(  # type: ignore[misc]
+        lambda self, reaction_config=None, checkout_root=None: _AutomationServiceFake(  # type: ignore[misc]
             tmp_path,
             reaction_config=reaction_config,
         ),

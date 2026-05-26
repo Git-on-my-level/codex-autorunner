@@ -207,7 +207,7 @@ def publish_pr_review_comment_reaction(
 
 def build_post_pr_comment_executor(
     *,
-    repo_root: Path,
+    checkout_root: Path,
     raw_config: Optional[dict[str, Any]] = None,
     github_service_factory: Optional[GitHubServiceFactory] = None,
 ) -> PublishActionExecutor:
@@ -216,12 +216,14 @@ def build_post_pr_comment_executor(
     def executor(operation: PublishOperation) -> dict[str, Any]:
         payload = _normalize_payload(operation.payload)
         workspace_override = _normalize_optional_text(payload.get("workspace_root"))
-        operation_repo_root = (
-            Path(workspace_override).resolve() if workspace_override else repo_root
+        operation_checkout_root = (
+            Path(workspace_override).resolve() if workspace_override else checkout_root
         )
         try:
-            service = service_factory(operation_repo_root, raw_config)
-            return publish_pr_comment(payload, service=service, cwd=operation_repo_root)
+            service = service_factory(operation_checkout_root, raw_config)
+            return publish_pr_comment(
+                payload, service=service, cwd=operation_checkout_root
+            )
         except GitHubError as exc:
             raise TerminalPublishError(str(exc)) from exc
 
@@ -231,7 +233,7 @@ def build_post_pr_comment_executor(
 
 def build_react_pr_review_comment_executor(
     *,
-    repo_root: Path,
+    checkout_root: Path,
     raw_config: Optional[dict[str, Any]] = None,
     github_service_factory: Optional[GitHubServiceFactory] = None,
 ) -> PublishActionExecutor:
@@ -240,15 +242,15 @@ def build_react_pr_review_comment_executor(
     def executor(operation: PublishOperation) -> dict[str, Any]:
         payload = _normalize_payload(operation.payload)
         workspace_override = _normalize_optional_text(payload.get("workspace_root"))
-        operation_repo_root = (
-            Path(workspace_override).resolve() if workspace_override else repo_root
+        operation_checkout_root = (
+            Path(workspace_override).resolve() if workspace_override else checkout_root
         )
         try:
-            service = service_factory(operation_repo_root, raw_config)
+            service = service_factory(operation_checkout_root, raw_config)
             return publish_pr_review_comment_reaction(
                 payload,
                 service=service,
-                cwd=operation_repo_root,
+                cwd=operation_checkout_root,
             )
         except GitHubError as exc:
             raise TerminalPublishError(str(exc)) from exc
@@ -352,10 +354,10 @@ async def _start_scm_bound_live_progress(
 
 def build_github_enqueue_managed_turn_executor(
     *,
-    repo_root: Path,
+    hub_root: Path,
     raw_config: Optional[dict[str, Any]] = None,
 ) -> PublishActionExecutor:
-    base_executor = build_enqueue_managed_turn_executor(hub_root=repo_root)
+    base_executor = build_enqueue_managed_turn_executor(hub_root=hub_root)
 
     def executor(operation: PublishOperation) -> Optional[dict[str, Any]]:
         from ..chat.bound_live_progress import bound_chat_live_progress_targets
@@ -364,7 +366,7 @@ def build_github_enqueue_managed_turn_executor(
         requested_thread_id = _normalize_optional_text(payload.get("thread_target_id"))
         progress_targets = (
             bound_chat_live_progress_targets(
-                hub_root=repo_root,
+                hub_root=hub_root,
                 managed_thread_id=requested_thread_id,
             )
             if requested_thread_id is not None
@@ -391,7 +393,7 @@ def build_github_enqueue_managed_turn_executor(
                 try:
                     published = _run_coroutine_sync(
                         _start_scm_bound_live_progress(
-                            hub_root=repo_root,
+                            hub_root=hub_root,
                             raw_config=raw_config,
                             managed_thread_id=managed_thread_id,
                             managed_turn_id=managed_turn_id,
@@ -423,17 +425,18 @@ def build_github_enqueue_managed_turn_executor(
 
 def build_github_publish_executors(
     *,
-    repo_root: Path,
+    hub_root: Path,
+    checkout_root: Path,
     raw_config: Optional[dict[str, Any]] = None,
     github_service_factory: Optional[GitHubServiceFactory] = None,
 ) -> dict[str, PublishActionExecutor]:
     return {
         "enqueue_managed_turn": build_github_enqueue_managed_turn_executor(
-            repo_root=repo_root,
+            hub_root=hub_root,
             raw_config=raw_config,
         ),
         "react_pr_review_comment": build_react_pr_review_comment_executor(
-            repo_root=repo_root,
+            checkout_root=checkout_root,
             raw_config=raw_config,
             github_service_factory=github_service_factory,
         ),

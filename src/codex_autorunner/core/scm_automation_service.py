@@ -56,6 +56,7 @@ from .scm_feedback_bundle import (
     merge_feedback_bundles,
 )
 from .scm_observability import (
+    SCM_AUDIT_BINDING_DELIVERY_FAILED,
     SCM_AUDIT_BINDING_RESOLVED,
     SCM_AUDIT_PUBLISH_CREATED,
     SCM_AUDIT_PUBLISH_FINISHED,
@@ -163,7 +164,8 @@ class PublishExecutorFactory(Protocol):
     def __call__(
         self,
         *,
-        repo_root: Path,
+        hub_root: Path,
+        checkout_root: Path,
         raw_config: Optional[dict[str, Any]] = None,
     ) -> Mapping[str, PublishActionExecutor]: ...
 
@@ -721,6 +723,39 @@ def _automation_event_type_for_scm_event(event: ScmEvent) -> Optional[str]:
     return None
 
 
+def _scm_event_requires_delivery_target(event: ScmEvent) -> bool:
+    if event.provider != "github":
+        return False
+    payload = _normalize_mapping(event.payload)
+    action = (_normalize_text(payload.get("action")) or "").lower()
+    status = (_normalize_text(payload.get("status")) or "").lower()
+    conclusion = (_normalize_text(payload.get("conclusion")) or "").lower()
+    review_state = (_normalize_text(payload.get("review_state")) or "").lower()
+    state = (_normalize_text(payload.get("state")) or "").lower()
+    if event.event_type == "check_run":
+        return status == "completed" and conclusion in {
+            "action_required",
+            "cancelled",
+            "failure",
+            "startup_failure",
+            "stale",
+            "timed_out",
+        }
+    if event.event_type == "pull_request_review":
+        return action == "submitted" and review_state in {
+            "approved",
+            "changes_requested",
+            "commented",
+        }
+    if event.event_type in {"issue_comment", "pull_request_review_comment"}:
+        return action == "created"
+    if event.event_type == "pull_request":
+        return action == "closed" and (
+            payload.get("merged") is True or state == "merged"
+        )
+    return False
+
+
 def _builtin_scm_rule_id(reaction_kind: ReactionKind) -> str:
     return f"builtin:scm:github:{reaction_kind}"
 
@@ -1268,6 +1303,7 @@ def _default_publish_processor(
     *,
     journal: PublishJournalStore,
     publish_executor_factory: Optional[PublishExecutorFactory] = None,
+    checkout_root: Optional[Path] = None,
 ) -> PublishOperationProcessor:
     raw_config = load_hub_config(hub_root).raw
     executors: dict[str, PublishActionExecutor] = {
@@ -1279,7 +1315,8 @@ def _default_publish_processor(
             {
                 str(operation_kind): executor
                 for operation_kind, executor in publish_executor_factory(
-                    repo_root=hub_root,
+                    hub_root=hub_root,
+                    checkout_root=checkout_root or hub_root,
                     raw_config=raw_config,
                 ).items()
             }
@@ -1322,11 +1359,13 @@ class ScmAutomationService:
         journal: Optional[PublishJournalWriter] = None,
         publish_processor: Optional[PublishOperationDrainer] = None,
         publish_executor_factory: Optional[PublishExecutorFactory] = None,
+        checkout_root: Optional[Path] = None,
         automation_store: Optional[AutomationStore] = None,
         automation_rule_engine: Optional[ScmAutomationRuleEvaluator] = None,
         schedule_deferred_publish_drain: bool = False,
     ) -> None:
         self._hub_root = Path(hub_root)
+        self._checkout_root = Path(checkout_root).resolve() if checkout_root else None
         self._event_store = event_store or ScmEventStore(self._hub_root)
         self._binding_resolver = binding_resolver or _default_binding_resolver(
             self._hub_root
@@ -1354,6 +1393,7 @@ class ScmAutomationService:
                 self._hub_root,
                 journal=resolved_journal,
                 publish_executor_factory=publish_executor_factory,
+                checkout_root=self._checkout_root,
             )
         else:
             raise TypeError(
@@ -1724,6 +1764,25 @@ class ScmAutomationService:
                 config=self._reaction_config,
             )
         )
+        if (
+            binding is None
+            and not scm_actions
+            and _scm_event_requires_delivery_target(event)
+        ):
+            self._audit_recorder.record(
+                action_type=SCM_AUDIT_BINDING_DELIVERY_FAILED,
+                correlation_id=correlation_id,
+                event=event,
+                binding=binding,
+                payload={
+                    "reason": "no_bound_thread_or_repo_notification_target",
+                    "fallback_order": (
+                        "thread_target_id",
+                        "repo_id_bound_chat",
+                        "durable_audit",
+                    ),
+                },
+            )
         reaction_intents = _legacy_intents_from_actions(scm_actions)
         automation_event = self._automation_event_for_scm_event(
             event=event,

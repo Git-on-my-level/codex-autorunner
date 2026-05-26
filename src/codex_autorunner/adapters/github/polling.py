@@ -264,11 +264,13 @@ class GitHubScmPollingService:
         self,
         *,
         reaction_config: Mapping[str, Any] | None,
+        checkout_root: Path | None = None,
     ):
         from ...core.scm_automation_service import ScmAutomationService
 
         return ScmAutomationService(
             self._hub_root,
+            checkout_root=checkout_root,
             reaction_config=reaction_config or self._raw_config,
             publish_executor_factory=build_github_publish_executors,
             schedule_deferred_publish_drain=True,
@@ -371,6 +373,7 @@ class GitHubScmPollingService:
                 window_seconds=polling_config.comment_backfill_window_seconds,
                 automation_service_factory=lambda: self._build_automation_service(
                     reaction_config=watch.reaction_config or self._raw_config,
+                    checkout_root=Path(watch.workspace_root),
                 ),
                 parse_optional_iso=_parse_optional_iso,
                 now_iso_fn=now_iso,
@@ -710,6 +713,7 @@ class GitHubScmPollingService:
             ) -> Any:
                 return self._build_automation_service(
                     reaction_config=_w.reaction_config or self._raw_config,
+                    checkout_root=Path(_w.workspace_root),
                 )
 
             emitted = 0

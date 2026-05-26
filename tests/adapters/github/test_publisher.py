@@ -6,6 +6,7 @@ from typing import Any
 import pytest
 
 from codex_autorunner.adapters.github.publisher import (
+    build_github_publish_executors,
     build_post_pr_comment_executor,
     build_react_pr_review_comment_executor,
     publish_pr_comment,
@@ -95,7 +96,7 @@ def test_post_pr_comment_executor_uses_service_repo_for_numeric_pr_ref(
     )()
 
     executor = build_post_pr_comment_executor(
-        repo_root=tmp_path,
+        checkout_root=tmp_path,
         github_service_factory=_factory,
     )
     result = executor(operation)
@@ -116,6 +117,57 @@ def test_post_pr_comment_executor_uses_service_repo_for_numeric_pr_ref(
             "cwd": tmp_path,
         }
     ]
+
+
+def test_github_publish_factory_keeps_hub_and_checkout_roots_distinct(
+    tmp_path: Path,
+) -> None:
+    hub_root = tmp_path / "hub"
+    checkout_root = tmp_path / "checkout"
+    nested_state = checkout_root / ".codex-autorunner"
+    nested_state.mkdir(parents=True)
+    hub_root.mkdir()
+    service_roots: list[Path] = []
+
+    class _ReactionService(_FakeGitHubService):
+        def create_pull_request_review_comment_reaction(
+            self,
+            *,
+            owner: str,
+            repo: str,
+            comment_id: int,
+            content: str,
+            cwd: Path | None = None,
+        ) -> dict[str, object]:
+            return {"id": 123, "url": f"https://github.com/{owner}/{repo}"}
+
+    def _factory(root: Path, raw_config: Any = None) -> _FakeGitHubService:
+        _ = raw_config
+        service_roots.append(root)
+        return _ReactionService()
+
+    executors = build_github_publish_executors(
+        hub_root=hub_root,
+        checkout_root=checkout_root,
+        github_service_factory=_factory,
+    )
+    operation = type(
+        "Operation",
+        (),
+        {
+            "payload": {
+                "repo_slug": "acme/widgets",
+                "comment_id": 42,
+                "content": "eyes",
+            },
+            "operation_kind": "react_pr_review_comment",
+            "operation_key": "react:42",
+        },
+    )()
+
+    executors["react_pr_review_comment"](operation)
+
+    assert service_roots == [checkout_root]
 
 
 def test_publish_pr_comment_requires_body() -> None:
@@ -188,7 +240,7 @@ class TestPublisherBoundaryNoRetryState:
         )()
 
         executor = build_post_pr_comment_executor(
-            repo_root=tmp_path, github_service_factory=_factory
+            checkout_root=tmp_path, github_service_factory=_factory
         )
 
         with pytest.raises(TerminalPublishError, match="rate limit"):
@@ -239,7 +291,7 @@ class TestPublisherBoundaryNoRetryState:
         )()
 
         executor = build_post_pr_comment_executor(
-            repo_root=tmp_path, github_service_factory=_factory
+            checkout_root=tmp_path, github_service_factory=_factory
         )
 
         with pytest.raises(TerminalPublishError):
@@ -266,7 +318,7 @@ class TestPublisherBoundaryNoRetryState:
         )()
 
         executor = build_react_pr_review_comment_executor(
-            repo_root=tmp_path, github_service_factory=_factory
+            checkout_root=tmp_path, github_service_factory=_factory
         )
 
         with pytest.raises(TerminalPublishError, match="forbidden"):

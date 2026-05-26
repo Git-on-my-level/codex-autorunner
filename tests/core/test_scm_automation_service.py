@@ -10,10 +10,14 @@ from codex_autorunner.core.automation import AutomationStore
 from codex_autorunner.core.automation.models import (
     AUTOMATION_CHILD_KIND_PUBLISH_OPERATION,
 )
+from codex_autorunner.core.orchestration.sqlite import open_orchestration_sqlite
 from codex_autorunner.core.pr_bindings import PrBinding
-from codex_autorunner.core.publish_journal import PublishOperation
+from codex_autorunner.core.publish_journal import PublishJournalStore, PublishOperation
 from codex_autorunner.core.scm_automation_service import ScmAutomationService
 from codex_autorunner.core.scm_events import ScmEvent
+from codex_autorunner.core.scm_observability import (
+    SCM_AUDIT_BINDING_DELIVERY_FAILED,
+)
 from codex_autorunner.core.scm_reaction_router import route_scm_reactions
 from codex_autorunner.core.scm_reaction_state import ScmReactionStateStore
 from codex_autorunner.core.scm_reaction_types import ReactionIntent, ScmReactionConfig
@@ -1944,3 +1948,79 @@ def test_ingest_event_no_binding_notify_chat_has_no_binding_id(
     notify_op = result.publish_operations[0]
     assert notify_op.operation_kind == "notify_chat"
     assert notify_op.payload.get("binding_id") is None
+
+
+def test_ingest_event_without_thread_or_repo_records_binding_failure_audit(
+    tmp_path: Path,
+) -> None:
+    event = ScmEvent(
+        event_id="github:no-delivery-target",
+        provider="github",
+        event_type="pull_request_review",
+        occurred_at="2026-03-26T00:00:00Z",
+        received_at="2026-03-26T00:00:01Z",
+        created_at="2026-03-26T00:00:02Z",
+        repo_slug="acme/widgets",
+        repo_id=None,
+        pr_number=42,
+        delivery_id="delivery-1",
+        payload={"action": "submitted", "review_state": "changes_requested"},
+        raw_payload=None,
+    )
+    service = ScmAutomationService(
+        tmp_path,
+        event_store=_EventStoreFake(event),
+        binding_resolver=_BindingResolverFake(None),
+        reaction_router=route_scm_reactions,
+        reaction_state_store=_PermissiveReactionStateFake(),
+        journal=_JournalFake(),
+        publish_processor=_ProcessorFake(processed=[]),
+    )
+
+    result = service.ingest_event(event)
+
+    assert result.binding is None
+    assert result.publish_operations == ()
+    with open_orchestration_sqlite(tmp_path) as conn:
+        rows = conn.execute(
+            """
+            SELECT action_type, payload_json
+              FROM orch_audit_entries
+             WHERE action_type = ?
+            """,
+            (SCM_AUDIT_BINDING_DELIVERY_FAILED,),
+        ).fetchall()
+    assert len(rows) == 1
+    assert "no_bound_thread_or_repo_notification_target" in rows[0]["payload_json"]
+
+
+def test_publish_journal_writes_to_hub_when_checkout_has_nested_car_state(
+    tmp_path: Path,
+) -> None:
+    hub_root = tmp_path / "hub"
+    checkout_root = tmp_path / "checkout"
+    (checkout_root / ".codex-autorunner").mkdir(parents=True)
+    hub_root.mkdir()
+    event = _event(event_id="github:nested-checkout")
+    journal = PublishJournalStore(hub_root)
+    service = ScmAutomationService(
+        hub_root,
+        checkout_root=checkout_root,
+        event_store=_EventStoreFake(event),
+        binding_resolver=_BindingResolverFake(None),
+        reaction_router=route_scm_reactions,
+        reaction_state_store=_PermissiveReactionStateFake(),
+        journal=journal,
+        publish_processor=_ProcessorFake(processed=[]),
+    )
+
+    result = service.ingest_event(event)
+
+    assert len(result.publish_operations) == 1
+    with open_orchestration_sqlite(hub_root) as conn:
+        hub_count = conn.execute(
+            "SELECT COUNT(*) FROM orch_publish_operations"
+        ).fetchone()[0]
+    assert hub_count == 1
+    checkout_db = checkout_root / ".codex-autorunner" / "orchestration.sqlite3"
+    assert not checkout_db.exists()
