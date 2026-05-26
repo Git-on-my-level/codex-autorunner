@@ -370,10 +370,10 @@ class GitHubService:
     def _binding_context(self) -> tuple[Optional[Path], Optional[str]]:
         from .scm_discovery import binding_context_from_root
 
-        return binding_context_from_root(self.repo_root)
+        return binding_context_from_root(self.repo_root, hub_root=self.config_root)
 
     def _pr_binding_store(self):
-        return pr_binding_store_from_root(self.repo_root)
+        return pr_binding_store_from_root(self.repo_root, hub_root=self.config_root)
 
     def _persist_pr_binding(
         self,
@@ -387,6 +387,7 @@ class GitHubService:
             repo_slug=repo_slug,
             summary=summary,
             existing_binding=existing_binding,
+            hub_root=self.config_root,
         )
 
     def _load_gh_path(self) -> tuple[str, bool]:
@@ -1373,6 +1374,7 @@ class GitHubService:
                     persisted_binding=persisted_binding,
                     workspace_root=self.repo_root,
                     reaction_config=self.raw_config,
+                    hub_root=self.config_root,
                 )
 
         state["repo"] = {"nameWithOwner": repo.name_with_owner, "url": repo.url}

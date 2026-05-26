@@ -500,7 +500,7 @@ def test_discover_pr_binding_summary_prefers_canonical_binding_for_hub_repo(
         base_branch="main",
     )
 
-    service = GitHubService(repo_root, raw_config={})
+    service = GitHubService(repo_root, raw_config={}, config_root=hub_root)
     monkeypatch.setattr(
         service,
         "pr_for_branch",
@@ -540,7 +540,7 @@ def test_discover_pr_binding_summary_ignores_closed_canonical_binding_and_uses_l
         base_branch="main",
     )
 
-    service = GitHubService(repo_root, raw_config={})
+    service = GitHubService(repo_root, raw_config={}, config_root=hub_root)
     monkeypatch.setattr(
         service,
         "pr_for_branch",
@@ -586,7 +586,7 @@ def test_sync_pr_persists_binding_and_keeps_link_state_as_session_cache(
         metadata={"head_branch": "feature/login"},
     )
 
-    service = GitHubService(repo_root, raw_config={})
+    service = GitHubService(repo_root, raw_config={}, config_root=hub_root)
     monkeypatch.setattr(service, "gh_authenticated", lambda: True)
     monkeypatch.setattr(
         service,
@@ -673,7 +673,7 @@ def test_sync_pr_arms_polling_watch_from_hub_root_for_hub_repo(
     repo_root.mkdir(parents=True)
     _write_manifest(hub_root, repo_rel="workspace/repo")
 
-    service = GitHubService(repo_root, raw_config={})
+    service = GitHubService(repo_root, raw_config={}, config_root=hub_root)
     monkeypatch.setattr(service, "gh_authenticated", lambda: True)
     monkeypatch.setattr(
         service,

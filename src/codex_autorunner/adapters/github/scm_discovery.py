@@ -77,15 +77,23 @@ def normalize_pr_binding_summary(
 
 def binding_context_from_root(
     repo_root: Path,
+    *,
+    hub_root: Optional[Path] = None,
 ) -> tuple[Optional[Path], Optional[str]]:
-    return find_hub_binding_context(repo_root)
+    return find_hub_binding_context(repo_root, hub_root=hub_root)
 
 
-def pr_binding_store_from_root(repo_root: Path) -> Optional[PrBindingStore]:
-    hub_root, _repo_id = binding_context_from_root(repo_root)
-    if hub_root is None:
+def pr_binding_store_from_root(
+    repo_root: Path,
+    *,
+    hub_root: Optional[Path] = None,
+) -> Optional[PrBindingStore]:
+    authoritative_hub_root, _repo_id = binding_context_from_root(
+        repo_root, hub_root=hub_root
+    )
+    if authoritative_hub_root is None:
         return None
-    return PrBindingStore(hub_root)
+    return PrBindingStore(authoritative_hub_root)
 
 
 def persist_pr_binding(
@@ -94,6 +102,7 @@ def persist_pr_binding(
     repo_slug: str,
     summary: dict[str, Any],
     existing_binding: Optional[PrBinding] = None,
+    hub_root: Optional[Path] = None,
 ) -> Optional[PrBinding]:
     normalized_repo_slug = _normalize_optional_text(repo_slug)
     pr_number = normalize_positive_int(summary.get("pr_number"))
@@ -101,11 +110,13 @@ def persist_pr_binding(
     if normalized_repo_slug is None or pr_number is None or pr_state is None:
         return None
 
-    hub_root, repo_id = binding_context_from_root(repo_root)
-    if hub_root is None:
+    authoritative_hub_root, repo_id = binding_context_from_root(
+        repo_root, hub_root=hub_root
+    )
+    if authoritative_hub_root is None:
         return None
     return upsert_pr_binding(
-        hub_root,
+        authoritative_hub_root,
         provider="github",
         repo_slug=normalized_repo_slug,
         repo_id=repo_id,
@@ -129,7 +140,9 @@ def discover_pr_binding_summary(
     if not resolved_branch or resolved_branch == "HEAD":
         return None
 
-    hub_root, repo_id = binding_context_from_root(service.repo_root)
+    hub_root, repo_id = binding_context_from_root(
+        service.repo_root, hub_root=service.config_root
+    )
     store = PrBindingStore(hub_root) if hub_root is not None else None
     if store is not None and repo_id is not None:
         canonical_bindings: list[PrBinding] = []
@@ -185,7 +198,7 @@ def discover_pr_binding(
     if summary is None:
         return None
 
-    store = pr_binding_store_from_root(service.repo_root)
+    store = pr_binding_store_from_root(service.repo_root, hub_root=service.config_root)
     existing_binding: Optional[PrBinding] = None
     repo_slug = _normalize_optional_text(summary.get("repo_slug"))
     head_branch = _normalize_optional_text(summary.get("head_branch"))
@@ -202,6 +215,7 @@ def discover_pr_binding(
             repo_slug=str(summary["repo_slug"]),
             summary=summary,
             existing_binding=existing_binding,
+            hub_root=service.config_root,
         )
         if repo_slug is not None
         else None
@@ -215,6 +229,7 @@ def arm_polling_watch_best_effort(
     persisted_binding: PrBinding,
     workspace_root: Path,
     reaction_config: Any,
+    hub_root: Optional[Path] = None,
 ) -> None:
     """Best-effort SCM polling watch arming.
 
@@ -222,13 +237,16 @@ def arm_polling_watch_best_effort(
     """
     from .polling import GitHubScmPollingService
 
-    hub_root, _repo_id = binding_context_from_root(repo_root)
-    if hub_root is None:
+    authoritative_hub_root, _repo_id = binding_context_from_root(
+        repo_root,
+        hub_root=hub_root,
+    )
+    if authoritative_hub_root is None:
         return
 
     try:
         GitHubScmPollingService(
-            hub_root,
+            authoritative_hub_root,
             raw_config=raw_config if isinstance(raw_config, dict) else None,
         ).arm_watch(
             binding=persisted_binding,

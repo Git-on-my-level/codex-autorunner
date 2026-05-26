@@ -5,10 +5,12 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Optional
 
-from ..manifest import ManifestError, load_manifest
+from ..manifest import ManifestError
 from .git_utils import git_branch
+from .hub_topology import HubTopologyRepository
 from .managed_thread_store import ManagedThreadStore
 from .pr_bindings import PrBinding, PrBindingStore
+from .state_roots import resolve_hub_manifest_path
 from .text_utils import _mapping, _normalize_text
 
 _BRANCH_METADATA_KEYS = ("head_branch", "branch", "git_branch")
@@ -39,22 +41,28 @@ def _thread_changed_at(thread: Mapping[str, Any]) -> Optional[datetime]:
     return None
 
 
-def find_hub_binding_context(repo_root: Path) -> tuple[Optional[Path], Optional[str]]:
-    current = repo_root.resolve()
-    while True:
-        manifest_path = current / ".codex-autorunner" / "manifest.yml"
-        if manifest_path.exists():
-            try:
-                manifest = load_manifest(manifest_path, current)
-            except ManifestError:
-                return current, None
-            entry = manifest.get_by_path(current, repo_root.resolve())
-            repo_id = entry.id.strip() if entry and isinstance(entry.id, str) else None
-            return current, repo_id
-        parent = current.parent
-        if parent == current:
-            return None, None
-        current = parent
+def find_hub_binding_context(
+    repo_root: Path,
+    *,
+    hub_root: Optional[Path] = None,
+) -> tuple[Optional[Path], Optional[str]]:
+    """Resolve PR binding authority from an explicit hub root.
+
+    When no hub root is supplied, only ``repo_root`` itself is considered a
+    standalone hub. This avoids ancestor walking from a workspace in runtime
+    paths while preserving standalone CLI behavior.
+    """
+    resolved_hub_root = (hub_root or repo_root).resolve()
+    manifest_path = resolve_hub_manifest_path(resolved_hub_root)
+    if not manifest_path.exists():
+        return None, None
+    try:
+        return HubTopologyRepository(
+            hub_root=resolved_hub_root,
+            manifest_path=manifest_path,
+        ).binding_context_for_workspace(repo_root)
+    except ManifestError:
+        return resolved_hub_root, None
 
 
 def thread_contexts(payload: Mapping[str, Any]) -> tuple[Mapping[str, Any], ...]:
