@@ -12,7 +12,7 @@ ARTIFACT_WORKSPACE_SCOPE_ENV = "CAR_ARTIFACT_WORKSPACE_SCOPE"
 
 @dataclass(frozen=True)
 class ArtifactDeliveryCommands:
-    send_current: str = "car artifacts send <file> --to current"
+    send_current: str = "car artifacts send <file>"
     list_deliveries: str = "car artifacts list"
     inspect_delivery: str = "car artifacts inspect <delivery_id>"
 

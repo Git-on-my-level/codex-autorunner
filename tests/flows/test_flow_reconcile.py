@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import subprocess
 import uuid
 from pathlib import Path
 from types import SimpleNamespace
@@ -57,6 +58,198 @@ def test_restart_attempt_clears_prior_spawn_pid() -> None:
     assert restart["last_outcome"] == "attempting"
     assert "last_spawn_pid" not in restart
     assert "last_spawn_pid" in state["recovery"]["restart"]
+
+
+def test_reconcile_resolves_stale_clean_commit_barrier(
+    monkeypatch, tmp_path: Path
+) -> None:
+    subprocess.run(["git", "init"], cwd=tmp_path, check=True, capture_output=True)
+    subprocess.run(
+        ["git", "config", "user.email", "test@example.com"],
+        cwd=tmp_path,
+        check=True,
+        capture_output=True,
+    )
+    subprocess.run(
+        ["git", "config", "user.name", "Test User"],
+        cwd=tmp_path,
+        check=True,
+        capture_output=True,
+    )
+    ticket_path = tmp_path / ".codex-autorunner" / "tickets" / "TICKET-001.md"
+    ticket_path.parent.mkdir(parents=True, exist_ok=True)
+    ticket_path.write_text(
+        "---\nticket_id: ticket-1\ndone: true\n---\n\nDone\n",
+        encoding="utf-8",
+    )
+    (tmp_path / ".gitignore").write_text(
+        ".codex-autorunner/flows.db*\n.codex-autorunner/flows/\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "work.txt").write_text("committed\n", encoding="utf-8")
+    subprocess.run(["git", "add", "-A"], cwd=tmp_path, check=True, capture_output=True)
+    subprocess.run(
+        ["git", "commit", "-m", "external commit"],
+        cwd=tmp_path,
+        check=True,
+        capture_output=True,
+    )
+    head = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=tmp_path,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+
+    db = tmp_path / ".codex-autorunner" / "flows.db"
+    store = FlowStore(db)
+    store.initialize()
+    run_id = "run-clean-barrier"
+    record = store.create_flow_run(
+        run_id=run_id,
+        flow_type="ticket_flow",
+        input_data={},
+        state={
+            "ticket_engine": {
+                "current_ticket": ".codex-autorunner/tickets/TICKET-001.md",
+                "commit": {
+                    "pending": True,
+                    "barrier_epoch": "commit-barrier:test",
+                    "head_before": "before",
+                    "head_after": "before",
+                    "status_porcelain": "M work.txt",
+                    "worktree_summary": {
+                        "head_before": "before",
+                        "head_after": "before",
+                        "status_porcelain": "M work.txt",
+                    },
+                },
+            },
+            "recovery": {
+                "commit_barrier": {
+                    "pending": True,
+                    "worktree_dirty": True,
+                    "resolution_state": "pending",
+                }
+            },
+        },
+        current_step="ticket_turn",
+    )
+    store.update_flow_run_status(run_id=record.id, status=FlowRunStatus.RUNNING)
+
+    monkeypatch.setattr(
+        "codex_autorunner.core.flows.reconciler.check_worker_health",
+        lambda repo_root, run_id: SimpleNamespace(
+            is_alive=True, status="alive", artifact_path=tmp_path
+        ),
+    )
+
+    current_record = store.get_flow_run(record.id)
+    assert current_record is not None
+    recovered, updated, locked = reconcile_flow_run(tmp_path, current_record, store)
+
+    assert updated is True
+    assert locked is False
+    assert "recovery" not in recovered.state
+    commit = recovered.state["ticket_engine"]["commit"]
+    assert commit["pending"] is False
+    assert commit["resolution_state"] == "committed_externally"
+    assert commit["head_after"] == head
+    assert commit["status_porcelain"] == ""
+
+
+def test_reconcile_spawn_failure_keeps_external_commit_barrier_resolution(
+    monkeypatch, tmp_path: Path
+) -> None:
+    subprocess.run(["git", "init"], cwd=tmp_path, check=True, capture_output=True)
+    subprocess.run(
+        ["git", "config", "user.email", "test@example.com"],
+        cwd=tmp_path,
+        check=True,
+        capture_output=True,
+    )
+    subprocess.run(
+        ["git", "config", "user.name", "Test User"],
+        cwd=tmp_path,
+        check=True,
+        capture_output=True,
+    )
+    ticket_path = tmp_path / ".codex-autorunner" / "tickets" / "TICKET-001.md"
+    ticket_path.parent.mkdir(parents=True, exist_ok=True)
+    ticket_path.write_text(
+        "---\nticket_id: ticket-1\ndone: true\n---\n\nDone\n",
+        encoding="utf-8",
+    )
+    (tmp_path / ".gitignore").write_text(
+        ".codex-autorunner/flows.db*\n.codex-autorunner/flows/\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "work.txt").write_text("committed\n", encoding="utf-8")
+    subprocess.run(["git", "add", "-A"], cwd=tmp_path, check=True, capture_output=True)
+    subprocess.run(
+        ["git", "commit", "-m", "external commit"],
+        cwd=tmp_path,
+        check=True,
+        capture_output=True,
+    )
+
+    db = tmp_path / ".codex-autorunner" / "flows.db"
+    store = FlowStore(db)
+    store.initialize()
+    run_id = str(uuid.uuid4())
+    record = store.create_flow_run(
+        run_id=run_id,
+        flow_type="ticket_flow",
+        input_data={},
+        state={
+            "ticket_engine": {
+                "status": "running",
+                "current_ticket": ".codex-autorunner/tickets/TICKET-001.md",
+                "commit": {
+                    "pending": True,
+                    "barrier_epoch": "commit-barrier:test",
+                    "head_before": "before",
+                    "head_after": "before",
+                    "status_porcelain": "M work.txt",
+                },
+            }
+        },
+        current_step="ticket_turn",
+    )
+    store.update_flow_run_status(run_id=record.id, status=FlowRunStatus.RUNNING)
+    artifact_dir = tmp_path / ".codex-autorunner" / "flows" / run_id
+    artifact_dir.mkdir(parents=True, exist_ok=True)
+
+    monkeypatch.setattr(
+        "codex_autorunner.core.flows.reconciler.check_worker_health",
+        lambda repo_root, run_id: SimpleNamespace(
+            is_alive=False,
+            status="dead",
+            pid=12345,
+            message="worker PID not running",
+            artifact_path=artifact_dir / "worker.json",
+        ),
+    )
+    monkeypatch.setattr(
+        "codex_autorunner.core.flows.reconciler.spawn_flow_worker",
+        lambda repo_root, run_id: (_ for _ in ()).throw(OSError("spawn boom")),
+    )
+
+    current_record = store.get_flow_run(record.id)
+    assert current_record is not None
+    recovered, updated, locked = reconcile_flow_run(tmp_path, current_record, store)
+
+    assert recovered.status == FlowRunStatus.FAILED
+    assert updated is True
+    assert locked is False
+    commit = recovered.state["ticket_engine"]["commit"]
+    assert commit["pending"] is False
+    assert commit["resolution_state"] == "committed_externally"
+    assert commit["status_porcelain"] == ""
+    assert recovered.state["recovery"]["restart"]["last_failure_reason"] == (
+        "spawn_failed: spawn boom"
+    )
 
 
 def test_reconcile_pending_stop_requested_without_worker_marks_stopped(

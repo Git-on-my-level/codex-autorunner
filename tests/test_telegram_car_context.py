@@ -116,7 +116,8 @@ async def test_telegram_file_hints_injected_for_plain_text_outbox_keyword(
     )
 
     assert "Artifact delivery (this turn):" in prompt
-    assert "car artifacts send <file> --to current" in prompt
+    assert "car artifacts send <file>" in prompt
+    assert "--to current" not in prompt
     assert "chat:3/thread:4" in prompt
     assert "Legacy pending outbox:" not in prompt
     assert "User uploads may appear under:" in prompt

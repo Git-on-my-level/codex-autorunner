@@ -11,7 +11,7 @@ from codex_autorunner.core.artifact_instructions import (
 )
 
 
-def test_agent_artifact_instructions_are_current_target_only(tmp_path: Path) -> None:
+def test_agent_artifact_instructions_use_default_send_command(tmp_path: Path) -> None:
     rendered = render_agent_artifact_instructions(
         ArtifactDeliveryContext(
             surface="telegram",
@@ -23,7 +23,8 @@ def test_agent_artifact_instructions_are_current_target_only(tmp_path: Path) -> 
     )
 
     assert "Artifact delivery (this turn):" in rendered
-    assert "car artifacts send <file> --to current" in rendered
+    assert "car artifacts send <file>" in rendered
+    assert "--to current" not in rendered
     assert "chat:1/thread:2" in rendered
     assert "filebox/inbox" in rendered
     assert "--to explicit" not in rendered
@@ -43,7 +44,8 @@ def test_agent_artifact_instructions_omit_inbox_when_absent() -> None:
         )
     )
 
-    assert "car artifacts send <file> --to current" in rendered
+    assert "car artifacts send <file>" in rendered
+    assert "--to current" not in rendered
     assert "User uploads may appear under" not in rendered
 
 
@@ -51,7 +53,8 @@ def test_human_artifact_overview_uses_same_current_command() -> None:
     rendered = render_human_artifact_overview(include_upload_inbox=True)
 
     assert "## Artifact delivery" in rendered
-    assert "car artifacts send <file> --to current" in rendered
+    assert "car artifacts send <file>" in rendered
+    assert "--to current" not in rendered
     assert "car artifacts list" in rendered
     assert ".codex-autorunner/filebox/inbox/" in rendered
     assert "filebox/outbox" not in rendered

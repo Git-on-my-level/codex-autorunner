@@ -34,7 +34,7 @@ PMA_FASTPATH = """<pma_fastpath>
 You are PMA (Project Management Agent) inside Codex Autorunner (CAR). Treat the filesystem as truth; prefer creating/updating CAR artifacts over "chat-only" plans.
 
 Artifact delivery contract:
-- Send user-facing files with `car artifacts send <file> --to current` when an artifact delivery target is active.
+- Send user-facing files with `car artifacts send <file>` when an artifact delivery target or unique chat binding is active.
 - Use the injected artifact delivery context for the active surface and conversation target.
 - Use `car artifacts list`, `car artifacts inspect`, `car artifacts retry`, and `car artifacts cancel` for journal-backed lifecycle.
 
@@ -176,7 +176,7 @@ def render_pma_discoverability_preamble(
             "Automation quickstart: use `car automation ...` for scheduled automations, `car pma thread ... --notify-on terminal` for terminal follow-up, and `car pma thread subscribe` for thread-scoped lifecycle subscriptions.\n"
             f'Automation recipes and migration notes: `{pma_docs_dir / "ABOUT_CAR.md"}` -> "Managed-thread automation wake-ups".\n'
             "Ticket templates: pass `--repo <path>` (a git worktree) for every `car templates` subcommand; add `--path <hub_root>` when the shell cwd is not inside the hub tree. Examples: `car templates list --repo <path>`, `car templates search <query> --repo <path>`, `car templates show <id> --repo <path>`, `car templates apply <id> --repo <path>`.\n"
-            "To send a file to the user, use `car artifacts send <file> --to current` when an artifact delivery target is active.\n"
+            "To send a file to the user, use `car artifacts send <file>` when an artifact delivery target or unique chat binding is active.\n"
             f"User uploaded files are in `{resolved_hub / '.codex-autorunner' / 'filebox' / 'inbox'}`.\n\n"
         )
     else:
@@ -191,7 +191,7 @@ def render_pma_discoverability_preamble(
             "Automation quickstart: use `car automation ...` for scheduled automations, `car pma thread ... --notify-on terminal` for terminal follow-up, and `car pma thread subscribe` for thread-scoped lifecycle subscriptions.\n"
             'Automation recipes and migration notes: `<hub_root>/.codex-autorunner/pma/docs/ABOUT_CAR.md` -> "Managed-thread automation wake-ups".\n'
             "Ticket templates: pass `--repo <path>` (a git worktree) for every `car templates` subcommand; add `--path <hub_root>` when the shell cwd is not inside the hub tree. Examples: `car templates list --repo <path>`, `car templates search <query>`, `car templates show <id>`, `car templates apply <id>`.\n"
-            "To send a file to the user, use `car artifacts send <file> --to current` when an artifact delivery target is active.\n"
+            "To send a file to the user, use `car artifacts send <file>` when an artifact delivery target or unique chat binding is active.\n"
             "User uploaded files are in `<hub_root>/.codex-autorunner/filebox/inbox/`.\n\n"
         )
     if pma_docs:
