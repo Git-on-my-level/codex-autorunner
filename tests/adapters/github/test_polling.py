@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import sqlite3
 from dataclasses import dataclass
@@ -16,9 +17,14 @@ from codex_autorunner.adapters.github.polling import (
     GitHubScmPollingService,
 )
 from codex_autorunner.adapters.github.polling_events import emit_new_conditions
+from codex_autorunner.core.automation.store import AutomationStore
 from codex_autorunner.core.config import CONFIG_FILENAME, DEFAULT_HUB_CONFIG
 from codex_autorunner.core.managed_thread_store import ManagedThreadStore
-from codex_autorunner.core.orchestration.sqlite import open_orchestration_sqlite
+from codex_autorunner.core.orchestration.migrations import ORCHESTRATION_SCHEMA_VERSION
+from codex_autorunner.core.orchestration.sqlite import (
+    open_orchestration_sqlite,
+    resolve_orchestration_sqlite_path,
+)
 from codex_autorunner.core.pr_binding_runtime import upsert_pr_binding
 from codex_autorunner.core.pr_bindings import PrBinding, PrBindingStore
 from codex_autorunner.core.publish_executor import PublishOperationProcessor
@@ -367,6 +373,61 @@ def _write_manifest(hub_root: Path, *, repo_rel: str, repo_id: str = "repo-1") -
         + "\n",
         encoding="utf-8",
     )
+
+
+def _write_stale_local_control_plane(root: Path) -> Path:
+    state_dir = root / ".codex-autorunner"
+    state_dir.mkdir(parents=True, exist_ok=True)
+    (state_dir / "manifest.yml").write_text(
+        "\n".join(
+            [
+                "version: 3",
+                "repos:",
+                "  - id: stale-local",
+                "    path: .",
+                "    enabled: true",
+                "    auto_run: false",
+                "    kind: base",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    db_path = state_dir / "orchestration.sqlite3"
+    conn = sqlite3.connect(db_path)
+    try:
+        with conn:
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS orch_schema_migrations (
+                    version INTEGER PRIMARY KEY,
+                    name TEXT NOT NULL,
+                    applied_at TEXT NOT NULL
+                )
+                """)
+            conn.execute(
+                """
+                INSERT OR REPLACE INTO orch_schema_migrations(version, name, applied_at)
+                VALUES (?, ?, ?)
+                """,
+                (
+                    ORCHESTRATION_SCHEMA_VERSION + 100,
+                    "future-stale-local",
+                    "2026-03-30T00:00:00Z",
+                ),
+            )
+            conn.execute(
+                "CREATE TABLE IF NOT EXISTS stale_sentinel (id TEXT PRIMARY KEY)"
+            )
+            conn.execute(
+                "INSERT OR IGNORE INTO stale_sentinel(id) VALUES ('untouched')"
+            )
+    finally:
+        conn.close()
+    return db_path
+
+
+def _sha256_file(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
 class _SimpleOutboxRecord:
@@ -1857,6 +1918,17 @@ def test_process_due_watches_reacts_then_wakes_thread_and_notifies_bound_chat(
     hub_root = tmp_path / "hub"
     workspace_root = hub_root / "repo"
     workspace_root.mkdir(parents=True)
+    # Manual reproduction for this regression:
+    # 1. Start a hub whose manifest owns the worktree and disable webhooks.
+    # 2. Place a stale .codex-autorunner/manifest.yml plus future-generation
+    #    orchestration.sqlite3 inside the worktree.
+    # 3. Leave a GitHub PR review comment and run the polling processor.
+    # 4. Inspect the hub DB, not the worktree DB:
+    #    sqlite3 "$HUB/.codex-autorunner/orchestration.sqlite3" \
+    #      "select * from orch_pr_bindings; select * from orch_scm_events; \
+    #       select * from orch_publish_operations;"
+    stale_local_db = _write_stale_local_control_plane(workspace_root)
+    stale_local_digest = _sha256_file(stale_local_db)
     write_test_config(
         hub_root / CONFIG_FILENAME,
         DEFAULT_HUB_CONFIG,
@@ -2021,6 +2093,10 @@ def test_process_due_watches_reacts_then_wakes_thread_and_notifies_bound_chat(
     result = service.process_due_watches(limit=10)
 
     assert result["events_emitted"] == 1
+    hub_db_path = resolve_orchestration_sqlite_path(hub_root)
+    assert hub_db_path.exists()
+    assert stale_local_db != hub_db_path
+    assert _sha256_file(stale_local_db) == stale_local_digest
     assert [operation.operation_kind for operation in processed_operations] == [
         "react_pr_review_comment",
         "enqueue_managed_turn",
@@ -2049,6 +2125,49 @@ def test_process_due_watches_reacts_then_wakes_thread_and_notifies_bound_chat(
     assert confirmed[0].response["progress_start"]["targets"] == 1
     assert confirmed[0].response["progress_start"]["published"] == 1
     assert reaction_calls == [("acme", "widgets", str(hub_root), 2844, "eyes")]
+
+    hub_binding = PrBindingStore(hub_root).get_binding_by_pr(
+        provider="github",
+        repo_slug="acme/widgets",
+        pr_number=17,
+    )
+    assert hub_binding is not None
+    assert hub_binding.thread_target_id == thread["managed_thread_id"]
+    hub_watch = ScmPollingWatchStore(hub_root).get_watch(
+        provider="github",
+        binding_id=hub_binding.binding_id,
+    )
+    assert hub_watch is not None
+    assert hub_watch.state == "active"
+    hub_events = ScmEventStore(hub_root).list_events(
+        provider="github",
+        event_type="pull_request_review_comment",
+        limit=10,
+    )
+    assert len(hub_events) == 1
+    assert hub_events[0].payload["comment_id"] == "PRRC_kwDOAcmeNonNumeric"
+    automation_events = AutomationStore(hub_root).list_events(limit=10)
+    assert any(
+        event.event_id == f"scm:{hub_events[0].event_id}" for event in automation_events
+    )
+    automation_jobs = AutomationStore(hub_root).list_jobs(limit=10, order="newest")
+    assert automation_jobs
+    hub_operations = PublishJournalStore(hub_root).list_operations(limit=10)
+    assert {operation.operation_kind for operation in hub_operations} >= {
+        "react_pr_review_comment",
+        "enqueue_managed_turn",
+        "notify_chat",
+    }
+    with open_orchestration_sqlite(hub_root, durable=True, migrate=False) as conn:
+        audit_actions = {
+            row["action_type"]
+            for row in conn.execute(
+                "SELECT action_type FROM orch_audit_entries"
+            ).fetchall()
+        }
+    assert {"scm.binding_resolved", "scm.routed_intent", "scm.publish_created"} <= (
+        audit_actions
+    )
 
     turns = _thread_store.list_turns(thread["managed_thread_id"], limit=10)
     assert len(turns) == 1
