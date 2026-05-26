@@ -134,6 +134,57 @@ describe('/chats page', () => {
     expect(pageSource).toContain("filterChatEntries(chatListEntries, statusFilter, '', lastSeenMap)");
   });
 
+  it('does not let remembered picker models describe existing chats with unknown runtime models', () => {
+    const pageSource = chatDetailPageSource();
+
+    expect(pageSource).toContain("mode: 'chat-bound'");
+    expect(pageSource).toContain("allowEmptyModel: mode === 'chat-bound'");
+    expect(pageSource).toContain("rememberedModel: mode === 'draft' ? getLastModelForAgent(agentId) : null");
+    expect(pageSource).toContain('runtimeModelIsExplicitlyUnknown');
+    expect(pageSource).toContain('model unknown');
+    expect(pageSource).not.toContain('activeChat?.model ?? selectedModel');
+    expect(pageSource).not.toContain('resolved.model ?? selectedModel');
+  });
+
+  it('renders unknown for existing chat rows with missing projected models', () => {
+    readModelEntityStore.applyChatIndexSnapshot({
+      cursor: projectionCursor(),
+      rows: [
+        {
+          ...chatIndexRow(),
+          chatId: 'chat-zai-unknown',
+          title: 'Existing Z.ai chat',
+          agent: 'zai-coding-plan',
+          model: null,
+          modelSource: 'unknown',
+          runtimeSource: 'unknown',
+          runtime: {
+            stage: 'unknown',
+            source: 'unknown',
+            runtimeSource: 'unknown',
+            model: null,
+            modelUnknown: true,
+            reasoningUnknown: true,
+            agentUnknown: false,
+            profileUnknown: true,
+            providerUnknown: true,
+            backendRuntimeUnknown: true,
+            modelSource: 'unknown',
+            reasoningSource: 'unknown'
+          }
+        }
+      ],
+      groups: [],
+      counters: { total: 1, waiting: 0, running: 1, unread: 0, archived: 0 }
+    });
+
+    const { body } = render(Page);
+
+    expect(body).toContain('Existing Z.ai chat');
+    expect(body).toContain('model unknown');
+    expect(body).not.toContain('glm-5v-turbo');
+  });
+
   it('syncs list filters through the URL and toggles status chips like facets', () => {
     const pageSource = chatDetailPageSource();
 
