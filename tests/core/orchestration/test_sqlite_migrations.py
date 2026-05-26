@@ -372,6 +372,231 @@ def test_turn_execution_contract_migration_backfills_legacy_thread_rows(
     assert queued_runtime_identity["resolved"]["reasoning"] == "high"
 
 
+def test_runtime_identity_backfill_reconstructs_historical_stage_evidence(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "orchestration.sqlite3"
+    request_payload = {
+        "contract_version": 1,
+        "request_id": "turn-runtime",
+        "target_id": "thread-runtime",
+        "target_kind": "thread",
+        "workspace_root": str(tmp_path / "workspace"),
+        "request_kind": "automation",
+        "busy_policy": "reject",
+        "prompt_text": "run automation",
+        "input_items": [{"type": "text", "text": "run automation"}],
+        "context_profile": "car_core",
+        "agent": "opencode",
+        "profile": None,
+        "model": "zai-coding-plan/glm-5.1",
+        "model_payload": {"providerID": "zai-coding-plan", "modelID": "glm-5.1"},
+        "reasoning": "high",
+        "approval_policy": "never",
+        "approval_mode": None,
+        "sandbox_policy": "dangerFullAccess",
+        "client_request_id": "client-runtime",
+        "idempotency_key": "client-runtime",
+        "correlation_id": None,
+        "origin": {
+            "kind": "automation",
+            "source_id": "job-runtime",
+            "automation_rule_id": "rule-runtime",
+            "metadata": {},
+        },
+        "metadata": {},
+        "delivery_intents": [],
+    }
+    empty_envelope = {
+        "contract_version": 1,
+        "requested": None,
+        "resolved": None,
+        "launch": None,
+        "effective": None,
+        "projected": None,
+        "metadata": {"backfill_source": "migration_v43_unknown_turn_request"},
+    }
+
+    with _connect(db_path) as conn:
+        apply_orchestration_migrations(conn)
+        conn.execute(
+            """
+            INSERT INTO orch_thread_targets (
+                thread_target_id, agent_id, backend_thread_id, repo_id,
+                workspace_root, display_name, lifecycle_status, runtime_status,
+                created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "thread-runtime",
+                "opencode",
+                "backend-thread-runtime",
+                "repo-runtime",
+                str(tmp_path / "workspace"),
+                "Runtime Thread",
+                "active",
+                "completed",
+                "2026-05-11T00:00:00Z",
+                "2026-05-11T00:00:00Z",
+            ),
+        )
+        conn.execute(
+            """
+            INSERT INTO orch_thread_executions (
+                execution_id, thread_target_id, client_request_id, request_kind,
+                prompt_text, status, backend_turn_id, model_id, reasoning_level,
+                created_at, started_at, finished_at, turn_request_json,
+                runtime_identity_json
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "turn-runtime",
+                "thread-runtime",
+                "client-runtime",
+                "automation",
+                "run automation",
+                "completed",
+                "backend-turn-runtime",
+                None,
+                None,
+                "2026-05-11T00:00:00Z",
+                "2026-05-11T00:00:01Z",
+                "2026-05-11T00:00:05Z",
+                json.dumps(request_payload),
+                json.dumps(empty_envelope),
+            ),
+        )
+        conn.execute(
+            """
+            INSERT INTO orch_automation_rules (
+                rule_id, name, trigger_kind, target_policy, executor_kind,
+                created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "rule-runtime",
+                "Runtime rule",
+                "manual",
+                "default",
+                "agent_task_turn",
+                "2026-05-11T00:00:00Z",
+                "2026-05-11T00:00:00Z",
+            ),
+        )
+        conn.execute(
+            """
+            INSERT INTO orch_automation_events (
+                event_id, event_type, observed_at
+            ) VALUES (?, ?, ?)
+            """,
+            ("event-runtime", "manual.run", "2026-05-11T00:00:00Z"),
+        )
+        conn.execute(
+            """
+            INSERT INTO orch_automation_jobs (
+                job_id, rule_id, event_id, state, dedupe_key, available_at,
+                updated_at, created_at, target_json, executor_json, policy_json,
+                payload_json
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "job-runtime",
+                "rule-runtime",
+                "event-runtime",
+                "completed",
+                "dedupe-runtime",
+                "2026-05-11T00:00:00Z",
+                "2026-05-11T00:00:00Z",
+                "2026-05-11T00:00:00Z",
+                "{}",
+                json.dumps(
+                    {
+                        "kind": "agent_task_turn",
+                        "requested_runtime": {
+                            "agent": "opencode",
+                            "model": "zai-coding-plan/glm-5.1",
+                            "reasoning": "high",
+                        },
+                    }
+                ),
+                "{}",
+                "{}",
+            ),
+        )
+        conn.execute(
+            """
+            INSERT INTO orch_automation_child_execution_edges (
+                edge_id, parent_job_id, child_kind, child_id,
+                requested_runtime_json, actual_runtime_json,
+                terminal_mapping_json, runtime_identity_json, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "edge-runtime",
+                "job-runtime",
+                "agent_task",
+                "turn-runtime",
+                json.dumps(
+                    {
+                        "agent": "opencode",
+                        "model": "zai-coding-plan/glm-5.1",
+                        "reasoning": "high",
+                    }
+                ),
+                json.dumps(
+                    {
+                        "agent": "opencode",
+                        "model": "glm-5v-turbo",
+                        "reasoning": "high",
+                    }
+                ),
+                "{}",
+                json.dumps(empty_envelope),
+                "2026-05-11T00:00:00Z",
+                "2026-05-11T00:00:00Z",
+            ),
+        )
+        conn.execute("DELETE FROM orch_schema_migrations WHERE version >= 44")
+
+        version = apply_orchestration_migrations(conn)
+        execution = conn.execute("""
+            SELECT model_id, reasoning_level, runtime_identity_json
+              FROM orch_thread_executions
+             WHERE execution_id = 'turn-runtime'
+            """).fetchone()
+        edge = conn.execute("""
+            SELECT runtime_identity_json
+              FROM orch_automation_child_execution_edges
+             WHERE edge_id = 'edge-runtime'
+            """).fetchone()
+
+    execution_identity = json.loads(execution["runtime_identity_json"])
+    edge_identity = json.loads(edge["runtime_identity_json"])
+    assert version == ORCHESTRATION_SCHEMA_VERSION
+    assert execution["model_id"] == "zai-coding-plan/glm-5.1"
+    assert execution["reasoning_level"] == "high"
+    assert execution_identity["resolved"]["source"] == (
+        "migration_v44.turn_request.resolved"
+    )
+    assert execution_identity["launch"]["backend_runtime_id"] == "backend-turn-runtime"
+    assert execution_identity["metadata"]["partial"] is True
+    assert "requested" in execution_identity["metadata"]["missing_stages"]
+    assert edge_identity["requested"]["canonical_model_label"] == (
+        "zai-coding-plan/glm-5.1"
+    )
+    assert edge_identity["launch"]["backend_runtime_id"] == "backend-turn-runtime"
+    assert edge_identity["effective"]["canonical_model_label"] == "glm-5v-turbo"
+    assert edge_identity["metadata"]["contradictions"] == [
+        {
+            "field": "model",
+            "expected_stage": "launch",
+            "actual_stage": "effective",
+            "expected": "zai-coding-plan/glm-5.1",
+            "actual": "glm-5v-turbo",
+        }
+    ]
+
+
 def test_turn_execution_contract_migration_repairs_legacy_opencode_models(
     tmp_path: Path,
 ) -> None:

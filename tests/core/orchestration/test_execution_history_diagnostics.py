@@ -29,6 +29,7 @@ from codex_autorunner.core.orchestration.execution_history_diagnostics import (
 )
 from codex_autorunner.core.orchestration.runtime_chain_diagnostics import (
     RUNTIME_CHAIN_DRIFT,
+    RUNTIME_CHAIN_PARTIAL_HISTORICAL_BACKFILL,
     RUNTIME_CHAIN_PROJECTED_UNKNOWN,
     build_runtime_chain_diagnostic,
 )
@@ -38,6 +39,7 @@ from codex_autorunner.core.orchestration.sqlite import (
 )
 from codex_autorunner.core.runtime_identity import (
     RUNTIME_STAGE_LAUNCH,
+    RUNTIME_STAGE_RESOLVED,
     RuntimeIdentityEnvelope,
     RuntimeIdentityStage,
 )
@@ -1172,6 +1174,71 @@ def test_execution_history_diagnostics_include_runtime_chain_invariants(
         breach.metric == "runtime_chain_invariant"
         for breach in report.threshold_breaches
     )
+
+
+def test_runtime_chain_diagnostic_reports_partial_historical_backfill(
+    tmp_path: Path,
+) -> None:
+    hub_root = tmp_path / "hub"
+    initialize_orchestration_sqlite(hub_root, durable=False)
+    runtime_identity = RuntimeIdentityEnvelope(
+        resolved=RuntimeIdentityStage(
+            stage=RUNTIME_STAGE_RESOLVED,
+            logical_agent="opencode",
+            canonical_model_label="zai-coding-plan/glm-5.1",
+            source="migration_v44.turn_request.resolved",
+        ),
+        metadata={
+            "backfill_source": "migration_v44_runtime_identity_backfill",
+            "partial": True,
+            "missing_stages": ["requested", "effective", "projected"],
+            "partial_reason": "no durable historical evidence exists",
+        },
+    )
+    with open_orchestration_sqlite(hub_root, durable=False) as conn:
+        conn.execute(
+            """
+            INSERT INTO orch_thread_targets (
+                thread_target_id, agent_id, display_name, lifecycle_status,
+                runtime_status, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "partial-thread",
+                "opencode",
+                "Partial Runtime",
+                "active",
+                "completed",
+                "2026-05-11T00:00:00Z",
+                "2026-05-11T00:00:00Z",
+            ),
+        )
+        conn.execute(
+            """
+            INSERT INTO orch_thread_executions (
+                execution_id, thread_target_id, request_kind, status,
+                runtime_identity_json, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "partial-turn",
+                "partial-thread",
+                "message",
+                "completed",
+                runtime_identity.to_json(),
+                "2026-05-11T00:00:00Z",
+            ),
+        )
+
+    report = build_runtime_chain_diagnostic(
+        hub_root,
+        execution_id="partial-turn",
+        durable=False,
+    )
+
+    assert RUNTIME_CHAIN_PARTIAL_HISTORICAL_BACKFILL in {
+        finding.code for finding in report.findings
+    }
 
 
 def test_run_diagnostics_with_custom_thresholds(tmp_path: Path) -> None:

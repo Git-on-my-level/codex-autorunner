@@ -74,6 +74,13 @@ diagnostics/compatibility paths only. Primary Web Hub chat data remains the
 `/hub/read-models/chats*` snapshots/streams plus PMA transcript mirror and
 `/hub/pma/history/status` coverage routes.
 
+Runtime model, agent, reasoning, and provider labels shown in chat read models
+must come from persisted runtime identity facts and include provenance. For
+historical rows whose runtime identity was migrated from partial evidence, see
+[runtime-identity-backfill.md](runtime-identity-backfill.md). Frontend picker
+state is input state for new turns only and is not a valid source for existing
+chat rows.
+
 ## Responsiveness Budget Smoke
 
 Run the deterministic large-hub smoke without touching live hub state:

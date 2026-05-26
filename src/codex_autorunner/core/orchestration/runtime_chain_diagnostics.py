@@ -27,6 +27,7 @@ RUNTIME_CHAIN_PROJECTION_PROVENANCE_MISSING = (
 RUNTIME_CHAIN_AUTOMATION_MISMATCH_UNREFLECTED = (
     "RUNTIME_CHAIN_AUTOMATION_MISMATCH_UNREFLECTED"
 )
+RUNTIME_CHAIN_PARTIAL_HISTORICAL_BACKFILL = "RUNTIME_CHAIN_PARTIAL_HISTORICAL_BACKFILL"
 
 _STAGE_ORDER = (
     RUNTIME_STAGE_REQUESTED,
@@ -109,6 +110,11 @@ def build_runtime_chain_diagnostic(
         if edge is not None:
             identities.update(_edge_identity(edge))
             _merge_stages(stages, _envelope_from_row(edge), prefer_existing=False)
+            findings.extend(
+                _runtime_identity_metadata_findings(
+                    edge, row_kind="automation_child_edge"
+                )
+            )
             _merge_edge_runtime_fallbacks(stages, edge)
             if lookup["automation_job_id"] is None:
                 lookup["automation_job_id"] = _clean(edge.get("parent_job_id"))
@@ -141,6 +147,11 @@ def build_runtime_chain_diagnostic(
                 execution.get("thread_target_id")
             )
             _merge_stages(stages, _envelope_from_row(execution), prefer_existing=False)
+            findings.extend(
+                _runtime_identity_metadata_findings(
+                    execution, row_kind="thread_execution"
+                )
+            )
 
         thread = _thread_for_lookup(
             conn,
@@ -321,6 +332,33 @@ def _envelope_from_row(row: Mapping[str, Any]) -> RuntimeIdentityEnvelope:
         return RuntimeIdentityEnvelope(
             metadata={"unknown_reason": "invalid_runtime_identity_json"}
         )
+
+
+def _runtime_identity_metadata_findings(
+    row: Mapping[str, Any], *, row_kind: str
+) -> list[RuntimeChainFinding]:
+    envelope = _envelope_from_row(row)
+    metadata = envelope.metadata
+    if not metadata.get("partial"):
+        return []
+    missing = metadata.get("missing_stages")
+    missing_text = (
+        ", ".join(str(item) for item in missing)
+        if isinstance(missing, list)
+        else "unknown"
+    )
+    reason = metadata.get("partial_reason")
+    return [
+        RuntimeChainFinding(
+            code=RUNTIME_CHAIN_PARTIAL_HISTORICAL_BACKFILL,
+            severity="warning",
+            message=(
+                f"{row_kind} runtime identity was historically backfilled with "
+                f"partial evidence; missing stages: {missing_text}."
+            ),
+            explanation=str(reason) if reason else None,
+        )
+    ]
 
 
 def _merge_stages(
@@ -633,6 +671,7 @@ def _projection_identity(row: Mapping[str, Any]) -> dict[str, Any]:
 __all__ = [
     "RUNTIME_CHAIN_AUTOMATION_MISMATCH_UNREFLECTED",
     "RUNTIME_CHAIN_DRIFT",
+    "RUNTIME_CHAIN_PARTIAL_HISTORICAL_BACKFILL",
     "RUNTIME_CHAIN_PROJECTED_UNKNOWN",
     "RUNTIME_CHAIN_PROJECTION_PROVENANCE_MISSING",
     "RuntimeChainFinding",
