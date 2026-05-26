@@ -412,8 +412,12 @@ class RuntimeTurnTerminalStateMachine:
             stream_text=self.last_assistant_text,
         )
 
-    def _note_assistant_stream_text(self, text: str) -> None:
-        self._assistant_text.note_stream_snapshot(text)
+    def _note_assistant_stream_text(
+        self, text: str, *, preserve_word_boundaries: bool = False
+    ) -> None:
+        self._assistant_text.note_stream_snapshot(
+            text, preserve_word_boundaries=preserve_word_boundaries
+        )
         self.last_assistant_text = self._assistant_text.text
 
     def _note_assistant_message_text(self, text: str) -> None:
@@ -442,7 +446,10 @@ class RuntimeTurnTerminalStateMachine:
     ) -> None:
         event_timestamp = timestamp or now_iso()
         if isinstance(event, AssistantDelta):
-            self._note_assistant_stream_text(event.text)
+            self._note_assistant_stream_text(
+                event.text,
+                preserve_word_boundaries=event.source == "session/update",
+            )
             return
         if isinstance(event, AssistantMessage):
             self._note_assistant_message_text(event.text)

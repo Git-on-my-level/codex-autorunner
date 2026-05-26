@@ -1,6 +1,14 @@
+from codex_autorunner.adapters.chat.managed_thread_progress import (
+    ProgressRuntimeState,
+    apply_run_event_to_progress_tracker,
+)
 from codex_autorunner.adapters.telegram.progress_stream import (
     TurnProgressTracker,
     render_progress_text,
+)
+from codex_autorunner.core.ports.run_event import (
+    RUN_EVENT_DELTA_TYPE_ASSISTANT_STREAM,
+    OutputDelta,
 )
 
 
@@ -58,6 +66,82 @@ def test_note_output_does_not_insert_artificial_spaces_between_chunks() -> None:
     tracker.note_output("tration")
     tracker.note_output(" isn't")
     tracker.note_output(" broken")
+
+    rendered = render_progress_text(tracker, max_length=2000, now=1.0)
+
+    assert "orchestration isn't broken" in rendered
+    assert "orches tration" not in rendered
+
+
+def test_note_output_preserves_hermes_token_word_boundaries() -> None:
+    tracker = TurnProgressTracker(
+        started_at=0.0,
+        agent="hermes",
+        model="mock-model",
+        label="working",
+        max_actions=10,
+        max_output_chars=200,
+    )
+
+    for chunk in ("Alpha", "beta", "gamma", "delta", "."):
+        tracker.note_output(chunk, preserve_word_boundaries=True)
+
+    rendered = render_progress_text(tracker, max_length=2000, now=1.0)
+
+    assert "Alpha beta gamma delta." in rendered
+    assert "Alphabetagammadelta" not in rendered
+
+
+def test_assistant_stream_progress_preserves_hermes_token_word_boundaries() -> None:
+    tracker = TurnProgressTracker(
+        started_at=0.0,
+        agent="hermes",
+        model="mock-model",
+        label="working",
+        max_actions=10,
+        max_output_chars=200,
+    )
+    runtime_state = ProgressRuntimeState()
+
+    for chunk in ("Alpha", "beta", "gamma", "delta", "."):
+        apply_run_event_to_progress_tracker(
+            tracker,
+            OutputDelta(
+                timestamp="2026-01-01T00:00:00Z",
+                content=chunk,
+                delta_type=RUN_EVENT_DELTA_TYPE_ASSISTANT_STREAM,
+                data={"preserve_word_boundaries": True},
+            ),
+            runtime_state=runtime_state,
+        )
+
+    rendered = render_progress_text(tracker, max_length=2000, now=1.0)
+
+    assert "Alpha beta gamma delta." in rendered
+    assert "Alphabetagammadelta" not in rendered
+
+
+def test_assistant_stream_progress_keeps_regular_split_word_chunks_glued() -> None:
+    tracker = TurnProgressTracker(
+        started_at=0.0,
+        agent="codex",
+        model="mock-model",
+        label="working",
+        max_actions=10,
+        max_output_chars=200,
+    )
+    runtime_state = ProgressRuntimeState()
+
+    for chunk in ("orches", "tration", " isn't", " broken"):
+        apply_run_event_to_progress_tracker(
+            tracker,
+            OutputDelta(
+                timestamp="2026-01-01T00:00:00Z",
+                content=chunk,
+                delta_type=RUN_EVENT_DELTA_TYPE_ASSISTANT_STREAM,
+            ),
+            runtime_state=runtime_state,
+        )
 
     rendered = render_progress_text(tracker, max_length=2000, now=1.0)
 

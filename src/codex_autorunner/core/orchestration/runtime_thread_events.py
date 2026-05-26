@@ -280,6 +280,9 @@ def note_run_event_state(
             event_state.note_stream_text(
                 str(run_event.content or ""),
                 merge_snapshot=run_event.stream_mode == RUN_EVENT_STREAM_MODE_SNAPSHOT,
+                preserve_word_boundaries=bool(
+                    run_event.data.get("preserve_word_boundaries")
+                ),
             )
             return
         if run_event.delta_type == RUN_EVENT_DELTA_TYPE_ASSISTANT_MESSAGE:

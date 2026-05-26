@@ -4,6 +4,9 @@ import time
 from dataclasses import dataclass, field
 from typing import Optional
 
+from ...core.orchestration.stream_text_merge import (
+    append_assistant_stream_text_readably,
+)
 from ...core.text_utils import _truncate_text
 
 COMPACT_MAX_ACTIONS = 10
@@ -47,7 +50,9 @@ def _truncate_tail(text: str, limit: int) -> str:
     return f"...{text[-(limit - 3) :]}"
 
 
-def _merge_output_text(current: str, incoming: str) -> str:
+def _merge_output_text(
+    current: str, incoming: str, *, preserve_word_boundaries: bool = False
+) -> str:
     if not current:
         return incoming
     if incoming.startswith(current):
@@ -58,6 +63,8 @@ def _merge_output_text(current: str, incoming: str) -> str:
     for overlap in range(max_overlap, 0, -1):
         if current[-overlap:] == incoming[:overlap]:
             return f"{current}{incoming[overlap:]}"
+    if preserve_word_boundaries:
+        return append_assistant_stream_text_readably(current, incoming)
     return f"{current}{incoming}"
 
 
@@ -280,6 +287,7 @@ class TurnProgressTracker:
         text: str,
         *,
         new_segment: bool = False,
+        preserve_word_boundaries: bool = False,
     ) -> None:
         output_piece = _normalize_output_text(text)
         if not output_piece.strip():
@@ -299,7 +307,11 @@ class TurnProgressTracker:
             return
         current_output = self.actions[self.last_output_index].text
         self.output_buffer = _truncate_tail(
-            _merge_output_text(current_output, output_piece),
+            _merge_output_text(
+                current_output,
+                output_piece,
+                preserve_word_boundaries=preserve_word_boundaries,
+            ),
             self.max_output_chars,
         )
         self.update_action_raw(self.last_output_index, self.output_buffer, "update")
