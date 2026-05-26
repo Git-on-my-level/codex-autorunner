@@ -54,6 +54,7 @@ from codex_autorunner.core.diagnostics.automation import (
 )
 from codex_autorunner.core.diagnostics.hermes import hermes_doctor_checks
 from codex_autorunner.core.diagnostics.hub import (
+    hub_control_plane_doctor_checks,
     hub_destination_doctor_checks,
     hub_worktree_doctor_checks,
 )
@@ -71,7 +72,10 @@ from codex_autorunner.core.managed_processes.registry import ProcessRecord
 from codex_autorunner.core.orchestration.legacy_backfill_gate import (
     LEGACY_ORCHESTRATION_BACKFILL_KEY,
 )
-from codex_autorunner.core.orchestration.sqlite import open_orchestration_sqlite
+from codex_autorunner.core.orchestration.sqlite import (
+    open_orchestration_sqlite,
+    prepare_hub_orchestration_db_provider,
+)
 from tests.conftest import write_test_config
 
 
@@ -1296,6 +1300,35 @@ def test_hub_destination_doctor_checks_reports_effective_destination(
         for check in checks
     )
     assert all(check.passed for check in checks)
+
+
+def test_hub_control_plane_doctor_reports_authority_and_nested_artifacts(
+    tmp_path: Path,
+) -> None:
+    hub_root = tmp_path / "hub"
+    seed_hub_files(hub_root, force=True)
+    prepare_hub_orchestration_db_provider(hub_root, durable=False)
+    repo_state = hub_root / "worktrees" / "repo" / ".codex-autorunner"
+    repo_state.mkdir(parents=True)
+    (repo_state / "orchestration.sqlite3").write_bytes(b"local artifact")
+    (repo_state / "manifest.yml").write_text(
+        "version: 2\nrepos: []\n", encoding="utf-8"
+    )
+
+    hub_config = load_hub_config(hub_root)
+    checks = hub_control_plane_doctor_checks(hub_config)
+    by_id = {check.check_id: check for check in checks}
+
+    assert by_id["hub.control_plane.orchestration_db"].passed is True
+    assert "schema=" in by_id["hub.control_plane.orchestration_db"].message
+    assert (
+        "active_declarations="
+        in by_id["hub.control_plane.compatibility_declarations"].message
+    )
+    nested = by_id["hub.control_plane.nested_artifacts"]
+    assert nested.passed is True
+    assert "non-authoritative orchestration DB(s)" in nested.message
+    assert "repo/worktree artifacts" in nested.message
 
 
 def test_hub_destination_doctor_checks_reports_daemon_unreachable(

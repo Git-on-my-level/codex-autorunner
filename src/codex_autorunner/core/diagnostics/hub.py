@@ -8,6 +8,13 @@ from ..destinations import (
     probe_docker_readiness,
     resolve_effective_repo_destination,
 )
+from ..orchestration.sqlite import collect_orchestration_control_plane_status
+from ..state_roots import (
+    HUB_MANIFEST_FILENAME,
+    ORCHESTRATION_DB_FILENAME,
+    resolve_hub_manifest_path,
+    resolve_hub_orchestration_db_path,
+)
 from .types import DoctorCheck
 
 
@@ -205,4 +212,111 @@ def hub_destination_doctor_checks(hub_config: HubConfig) -> list[DoctorCheck]:
     return checks
 
 
-__all__ = ["hub_destination_doctor_checks", "hub_worktree_doctor_checks"]
+def hub_control_plane_doctor_checks(hub_config: HubConfig) -> list[DoctorCheck]:
+    """Report authoritative hub DB compatibility and nested local artifacts."""
+    checks: list[DoctorCheck] = []
+    status = collect_orchestration_control_plane_status(hub_config.root)
+    compatibility = status.get("compatibility")
+    compatible = (
+        isinstance(compatibility, dict)
+        and compatibility.get("status") == "compatible"
+        and status.get("error") is None
+    )
+    checks.append(
+        DoctorCheck(
+            name="Hub control-plane orchestration DB",
+            passed=compatible,
+            message=(
+                "authoritative DB "
+                f"{status.get('db_path')} schema={status.get('schema_generation')} "
+                f"target={status.get('target_schema_generation')} "
+                f"compatibility={compatibility.get('status') if isinstance(compatibility, dict) else 'unknown'}"
+            ),
+            severity="error" if not compatible else "info",
+            check_id="hub.control_plane.orchestration_db",
+            fix=(
+                None
+                if compatible
+                else "Start the hub with the current build or run the explicit hub upgrade path."
+            ),
+        )
+    )
+    active_count = len(status.get("active_declarations") or [])
+    stale_count = len(status.get("stale_declarations") or [])
+    checks.append(
+        DoctorCheck(
+            name="Hub control-plane compatibility declarations",
+            passed=True,
+            message=(
+                f"active_declarations={active_count}; stale_declarations={stale_count}; "
+                f"metadata_present={status.get('metadata') is not None}"
+            ),
+            severity="info",
+            check_id="hub.control_plane.compatibility_declarations",
+        )
+    )
+
+    canonical_db = resolve_hub_orchestration_db_path(hub_config.root).resolve()
+    canonical_manifest = resolve_hub_manifest_path(
+        hub_config.root,
+        raw_config=hub_config.raw,
+    ).resolve()
+    nested_db_count = 0
+    nested_manifest_count = 0
+    for pattern, filename in (
+        (
+            f"**/.codex-autorunner/{ORCHESTRATION_DB_FILENAME}",
+            ORCHESTRATION_DB_FILENAME,
+        ),
+        (f"**/.codex-autorunner/{HUB_MANIFEST_FILENAME}", HUB_MANIFEST_FILENAME),
+    ):
+        try:
+            candidates = list(hub_config.root.glob(pattern))
+        except OSError:
+            candidates = []
+        for candidate in candidates:
+            try:
+                resolved = candidate.resolve()
+            except OSError:
+                continue
+            if filename == ORCHESTRATION_DB_FILENAME:
+                if resolved == canonical_db:
+                    continue
+                nested_db_count += 1
+            else:
+                if resolved == canonical_manifest:
+                    continue
+                nested_manifest_count += 1
+    if nested_db_count or nested_manifest_count:
+        checks.append(
+            DoctorCheck(
+                name="Nested non-authoritative control-plane artifacts",
+                passed=True,
+                message=(
+                    f"Found {nested_db_count} non-authoritative orchestration DB(s) "
+                    f"and {nested_manifest_count} non-authoritative manifest(s) under "
+                    f"{hub_config.root}. These are repo/worktree artifacts, not the "
+                    "running hub authority."
+                ),
+                severity="info",
+                check_id="hub.control_plane.nested_artifacts",
+            )
+        )
+    else:
+        checks.append(
+            DoctorCheck(
+                name="Nested non-authoritative control-plane artifacts",
+                passed=True,
+                message="No nested non-authoritative orchestration DBs or manifests found.",
+                severity="info",
+                check_id="hub.control_plane.nested_artifacts",
+            )
+        )
+    return checks
+
+
+__all__ = [
+    "hub_control_plane_doctor_checks",
+    "hub_destination_doctor_checks",
+    "hub_worktree_doctor_checks",
+]

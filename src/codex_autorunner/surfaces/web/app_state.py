@@ -41,7 +41,7 @@ from ...core.logging_utils import safe_log, setup_rotating_logger
 from ...core.managed_thread_identity import ManagedThreadIdentityStore
 from ...core.managed_thread_store import prepare_managed_thread_store
 from ...core.optional_dependencies import require_optional_dependencies
-from ...core.orchestration.sqlite import prepare_orchestration_sqlite
+from ...core.orchestration.sqlite import prepare_hub_orchestration_db_provider
 from ...core.runtime import RuntimeContext
 from ...core.runtime_services import RuntimeServices
 from ...core.state import load_state
@@ -633,7 +633,7 @@ def build_hub_context(
         else config.server_base_path
     )
     durable_writes = bool(getattr(config, "durable_writes", False))
-    prepare_orchestration_sqlite(config.root, durable=durable_writes)
+    prepare_hub_orchestration_db_provider(config.root, durable=durable_writes)
     prepare_managed_thread_store(config.root, durable=durable_writes)
     supervisor = HubSupervisor(
         config,

@@ -7,7 +7,11 @@ from typing import Callable, Optional
 from ..config import HubConfig
 from .automation import automation_migration_doctor_checks
 from .hermes import hermes_doctor_checks
-from .hub import hub_destination_doctor_checks, hub_worktree_doctor_checks
+from .hub import (
+    hub_control_plane_doctor_checks,
+    hub_destination_doctor_checks,
+    hub_worktree_doctor_checks,
+)
 from .pma import pma_doctor_checks
 from .repository import doctor
 from .types import DoctorCheck, DoctorReport
@@ -37,6 +41,10 @@ def runtime_doctor_providers(
         DoctorProvider(
             name="hub_worktree",
             collect=lambda: hub_worktree_doctor_checks(hub_config),
+        ),
+        DoctorProvider(
+            name="hub_control_plane",
+            collect=lambda: hub_control_plane_doctor_checks(hub_config),
         ),
         DoctorProvider(
             name="hub_destination",

@@ -114,6 +114,24 @@ class OrchestrationCompatibilityMetadata:
         }
 
 
+@dataclass(frozen=True)
+class PreparedOrchestrationSqlite:
+    hub_root: Path
+    db_path: Path
+    durable: bool
+    metadata: OrchestrationCompatibilityMetadata
+
+    @contextmanager
+    def open(self) -> Iterator[sqlite3.Connection]:
+        with open_orchestration_sqlite(
+            self.hub_root,
+            durable=self.durable,
+            migrate=False,
+            process_role="prepared",
+        ) as conn:
+            yield conn
+
+
 def orchestration_sqlite_busy_timeout_ms() -> int:
     return _DEFAULT_ORCH_BUSY_TIMEOUT_MS
 
@@ -204,6 +222,35 @@ def _write_orchestration_compatibility_metadata(
     metadata_path.parent.mkdir(parents=True, exist_ok=True)
     atomic_write(metadata_path, json.dumps(metadata.to_dict(), indent=2) + "\n")
     return metadata
+
+
+def _write_orchestration_process_declaration(
+    hub_root: Path,
+    *,
+    process_role: str,
+    observed_schema_generation: int,
+    max_supported_schema_generation: int,
+    control_plane_api_version: str = "1.0.0",
+    heartbeat_ttl_seconds: int = 120,
+) -> OrchestrationCompatibilityMetadata:
+    previous = read_orchestration_compatibility_metadata(hub_root)
+    registry = previous.registry if previous is not None else CompatibilityRegistry()
+    declaration = build_process_declaration(
+        role=process_role,
+        supported_control_plane_api_version=control_plane_api_version,
+        max_supported_schema_generation=max_supported_schema_generation,
+        observed_schema_generation=observed_schema_generation,
+        ttl_seconds=heartbeat_ttl_seconds,
+        existing=_current_process_declaration(
+            registry,
+            process_role=process_role,
+        ),
+    )
+    return _write_orchestration_compatibility_metadata(
+        hub_root,
+        schema_generation=observed_schema_generation,
+        declaration=declaration,
+    )
 
 
 def read_orchestration_compatibility_metadata(
@@ -401,6 +448,61 @@ def prepare_orchestration_sqlite(
         )
 
 
+def prepare_hub_orchestration_db_provider(
+    hub_root: Path,
+    *,
+    durable: bool = True,
+    process_role: str = "hub",
+    control_plane_api_version: str = "1.0.0",
+    heartbeat_ttl_seconds: int = 120,
+) -> PreparedOrchestrationSqlite:
+    metadata = prepare_orchestration_sqlite(
+        hub_root,
+        durable=durable,
+        process_role=process_role,
+        control_plane_api_version=control_plane_api_version,
+        heartbeat_ttl_seconds=heartbeat_ttl_seconds,
+        migration_mode="hub",
+    )
+    return PreparedOrchestrationSqlite(
+        hub_root=hub_root,
+        db_path=resolve_orchestration_sqlite_path(hub_root),
+        durable=durable,
+        metadata=metadata,
+    )
+
+
+def join_prepared_orchestration_sqlite(
+    hub_root: Path,
+    *,
+    process_role: str,
+    supported_schema_generation: int = ORCHESTRATION_SCHEMA_VERSION,
+    durable: bool = True,
+    control_plane_api_version: str = "1.0.0",
+    heartbeat_ttl_seconds: int = 120,
+) -> PreparedOrchestrationSqlite:
+    evaluation = assert_current_orchestration_compatible(
+        hub_root,
+        process_role=process_role,
+        supported_schema_generation=supported_schema_generation,
+        durable=durable,
+    )
+    metadata = _write_orchestration_process_declaration(
+        hub_root,
+        process_role=process_role,
+        observed_schema_generation=evaluation.observed_schema,
+        max_supported_schema_generation=supported_schema_generation,
+        control_plane_api_version=control_plane_api_version,
+        heartbeat_ttl_seconds=heartbeat_ttl_seconds,
+    )
+    return PreparedOrchestrationSqlite(
+        hub_root=hub_root,
+        db_path=resolve_orchestration_sqlite_path(hub_root),
+        durable=durable,
+        metadata=metadata,
+    )
+
+
 def evaluate_current_orchestration_compatibility(
     hub_root: Path,
     *,
@@ -450,24 +552,66 @@ def refresh_orchestration_process_heartbeat(
     control_plane_api_version: str = "1.0.0",
     heartbeat_ttl_seconds: int = 120,
 ) -> OrchestrationCompatibilityMetadata:
-    previous = read_orchestration_compatibility_metadata(hub_root)
-    registry = previous.registry if previous is not None else CompatibilityRegistry()
-    declaration = build_process_declaration(
-        role=process_role,
-        supported_control_plane_api_version=control_plane_api_version,
-        max_supported_schema_generation=ORCHESTRATION_SCHEMA_VERSION,
-        observed_schema_generation=observed_schema_generation,
-        ttl_seconds=heartbeat_ttl_seconds,
-        existing=_current_process_declaration(
-            registry,
-            process_role=process_role,
-        ),
-    )
-    return _write_orchestration_compatibility_metadata(
+    return _write_orchestration_process_declaration(
         hub_root,
-        schema_generation=observed_schema_generation,
-        declaration=declaration,
+        process_role=process_role,
+        observed_schema_generation=observed_schema_generation,
+        max_supported_schema_generation=ORCHESTRATION_SCHEMA_VERSION,
+        control_plane_api_version=control_plane_api_version,
+        heartbeat_ttl_seconds=heartbeat_ttl_seconds,
     )
+
+
+def collect_orchestration_control_plane_status(
+    hub_root: Path,
+    *,
+    process_role: str = "hub",
+    supported_schema_generation: int = ORCHESTRATION_SCHEMA_VERSION,
+    durable: bool = True,
+) -> dict[str, Any]:
+    db_path = resolve_orchestration_sqlite_path(hub_root)
+    metadata = read_orchestration_compatibility_metadata(hub_root)
+    schema_generation: int | None = None
+    compatibility_payload: dict[str, Any] | None = None
+    error_text: str | None = None
+    if db_path.exists():
+        try:
+            build_id, _unknown_reason = resolve_build_identity()
+            with open_sqlite(
+                db_path,
+                durable=durable,
+                busy_timeout_ms=orchestration_sqlite_busy_timeout_ms(),
+            ) as conn:
+                schema_generation = _read_orchestration_schema_version_if_present(conn)
+            evaluation = evaluate_schema_compatibility(
+                observed_schema=schema_generation,
+                supported_schema=supported_schema_generation,
+                process_role=process_role,
+                build_id=build_id,
+            )
+            compatibility_payload = evaluation.to_dict()
+        except Exception as exc:  # diagnostics must report, not mask, DB failures
+            error_text = str(exc)
+    active_declarations: list[dict[str, Any]] = []
+    stale_declarations: list[dict[str, Any]] = []
+    if metadata is not None:
+        registry = _registry_with_stale_declarations_pruned(
+            metadata.registry,
+            now_timestamp=time.time(),
+        )
+        active_declarations = [item.to_dict() for item in registry.declarations]
+        stale_declarations = [item.to_dict() for item in registry.stale_declarations]
+    return {
+        "db_path": str(db_path),
+        "db_exists": db_path.exists(),
+        "schema_generation": schema_generation,
+        "target_schema_generation": ORCHESTRATION_SCHEMA_VERSION,
+        "metadata": metadata.to_dict() if metadata is not None else None,
+        "compatibility": compatibility_payload,
+        "active_declarations": active_declarations,
+        "stale_declarations": stale_declarations,
+        "error": error_text,
+    }
 
 
 def _read_orchestration_schema_version_if_present(conn: sqlite3.Connection) -> int:
@@ -570,13 +714,17 @@ __all__ = [
     "ORCHESTRATION_COMPATIBILITY_METADATA_FILENAME",
     "ORCHESTRATION_DB_FILENAME",
     "assert_current_orchestration_compatible",
+    "collect_orchestration_control_plane_status",
     "evaluate_current_orchestration_compatibility",
     "initialize_orchestration_sqlite",
+    "join_prepared_orchestration_sqlite",
     "OrchestrationCompatibilityMetadata",
     "OrchestrationMigrationRefusal",
     "OrchestrationMigrationRefused",
     "open_orchestration_sqlite",
     "orchestration_sqlite_busy_timeout_ms",
+    "PreparedOrchestrationSqlite",
+    "prepare_hub_orchestration_db_provider",
     "prepare_orchestration_sqlite",
     "read_orchestration_compatibility_metadata",
     "refresh_orchestration_process_heartbeat",
