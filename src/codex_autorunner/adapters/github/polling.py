@@ -439,16 +439,34 @@ class GitHubScmPollingService:
                         branch=workspace_branch_hints.get(workspace_root),
                         cwd=workspace_root,
                     )
-                except Exception:
+                except Exception as exc:
                     _LOGGER.warning(
                         "Failed discovering polling binding for workspace %s",
                         workspace_root,
                         exc_info=True,
                     )
+                    self._record_discovery_event(
+                        workspace_root=workspace_root,
+                        binding_status="error",
+                        error_text=str(exc),
+                    )
                     counts["discovery_errors"] += 1
                     continue
                 if binding is None or binding.pr_state not in _ACTIVE_PR_STATES:
+                    self._record_discovery_event(
+                        workspace_root=workspace_root,
+                        binding_status="unresolved",
+                        error_text=(
+                            "No active GitHub PR binding could be resolved for "
+                            "workspace"
+                        ),
+                    )
                     continue
+                self._record_discovery_event(
+                    workspace_root=workspace_root,
+                    binding_status="resolved",
+                    binding=binding,
+                )
                 if binding.binding_id not in active_bindings:
                     counts["bindings_discovered"] += 1
                 active_bindings[binding.binding_id] = binding
@@ -841,6 +859,38 @@ class GitHubScmPollingService:
                 continue
             active_bindings[binding.binding_id] = binding
         return active_bindings, invalid_rows
+
+    def _record_discovery_event(
+        self,
+        *,
+        workspace_root: Path,
+        binding_status: str,
+        binding: Optional[PrBinding] = None,
+        error_text: Optional[str] = None,
+    ) -> None:
+        payload = {
+            "binding_status": binding_status,
+            "workspace_root": str(workspace_root.resolve()),
+        }
+        if binding is not None:
+            payload["binding_id"] = binding.binding_id
+        if error_text is not None:
+            payload["error"] = error_text
+        try:
+            self._event_store.record_event(
+                provider="github",
+                event_type="polling.discovery",
+                repo_slug=binding.repo_slug if binding is not None else None,
+                repo_id=binding.repo_id if binding is not None else None,
+                pr_number=binding.pr_number if binding is not None else None,
+                payload=payload,
+            )
+        except Exception:
+            _LOGGER.warning(
+                "Failed recording SCM polling discovery event for workspace %s",
+                workspace_root,
+                exc_info=True,
+            )
 
     def _thread_activity(
         self,

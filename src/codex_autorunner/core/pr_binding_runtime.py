@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Optional
@@ -18,6 +19,17 @@ _THREAD_TARGET_ID_KEYS = ("thread_target_id", "managed_thread_id")
 _CONTEXT_MAPPING_KEYS = ("manual_context", "scm", "scm_context", "context")
 _RECENT_TERMINAL_THREAD_LOOKBACK = timedelta(hours=24)
 _ACTIVE_PR_STATES = ("open", "draft")
+
+
+class PrBindingConfigurationError(ValueError):
+    """Raised when PR binding runtime identity is missing or invalid."""
+
+
+@dataclass(frozen=True)
+class PrBindingRuntimeContext:
+    hub_root: Path
+    workspace_root: Path
+    repo_id: Optional[str]
 
 
 def _parse_timestamp(value: Any) -> Optional[datetime]:
@@ -63,6 +75,40 @@ def find_hub_binding_context(
         ).binding_context_for_workspace(repo_root)
     except ManifestError:
         return resolved_hub_root, None
+
+
+def pr_binding_runtime_context(
+    *,
+    hub_root: Path,
+    workspace_root: Path,
+) -> PrBindingRuntimeContext:
+    """Resolve binding metadata from the explicit hub-owned control plane."""
+
+    resolved_hub_root = Path(hub_root).resolve()
+    resolved_workspace_root = Path(workspace_root).resolve()
+    manifest_path = resolve_hub_manifest_path(resolved_hub_root)
+    if not manifest_path.exists():
+        raise PrBindingConfigurationError(
+            f"hub manifest not found for PR binding context: {manifest_path}"
+        )
+    try:
+        authoritative_hub_root, repo_id = HubTopologyRepository(
+            hub_root=resolved_hub_root,
+            manifest_path=manifest_path,
+        ).binding_context_for_workspace(resolved_workspace_root)
+    except ManifestError as exc:
+        raise PrBindingConfigurationError(
+            f"hub manifest is invalid for PR binding context: {manifest_path}"
+        ) from exc
+    if authoritative_hub_root is None:
+        raise PrBindingConfigurationError(
+            f"workspace is not registered in hub manifest: {resolved_workspace_root}"
+        )
+    return PrBindingRuntimeContext(
+        hub_root=authoritative_hub_root.resolve(),
+        workspace_root=resolved_workspace_root,
+        repo_id=_normalize_text(repo_id),
+    )
 
 
 def thread_contexts(payload: Mapping[str, Any]) -> tuple[Mapping[str, Any], ...]:
@@ -382,6 +428,9 @@ __all__ = [
     "claim_pr_binding_for_thread",
     "explicit_thread_target_id",
     "find_hub_binding_context",
+    "PrBindingConfigurationError",
+    "PrBindingRuntimeContext",
+    "pr_binding_runtime_context",
     "resolve_head_branch",
     "resolve_thread_target_id",
     "thread_contexts",

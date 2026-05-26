@@ -13,6 +13,11 @@ from ...core.git_utils import (
     git_is_clean,
     run_git,
 )
+from ...core.pr_binding_runtime import (
+    PrBindingConfigurationError,
+    pr_binding_runtime_context,
+)
+from ...core.pr_bindings import PrBindingStore
 from ...core.prompts import build_github_issue_to_spec_prompt, build_sync_agent_prompt
 from ...core.text_utils import _normalize_optional_text
 from ...core.utils import (
@@ -27,7 +32,6 @@ from .scm_discovery import (
     arm_polling_watch_best_effort,
     normalize_positive_int,
     persist_pr_binding,
-    pr_binding_store_from_root,
 )
 from .scm_discovery import (
     discover_pr_binding as _discover_pr_binding_impl,
@@ -368,12 +372,24 @@ class GitHubService:
         )
 
     def _binding_context(self) -> tuple[Optional[Path], Optional[str]]:
-        from .scm_discovery import binding_context_from_root
-
-        return binding_context_from_root(self.repo_root, hub_root=self.config_root)
+        try:
+            context = pr_binding_runtime_context(
+                hub_root=self.config_root,
+                workspace_root=self.repo_root,
+            )
+        except PrBindingConfigurationError:
+            return None, None
+        return context.hub_root, context.repo_id
 
     def _pr_binding_store(self):
-        return pr_binding_store_from_root(self.repo_root, hub_root=self.config_root)
+        try:
+            context = pr_binding_runtime_context(
+                hub_root=self.config_root,
+                workspace_root=self.repo_root,
+            )
+        except PrBindingConfigurationError:
+            return None
+        return PrBindingStore(context.hub_root)
 
     def _persist_pr_binding(
         self,
@@ -383,11 +399,13 @@ class GitHubService:
         existing_binding=None,
     ):
         return persist_pr_binding(
-            repo_root=self.repo_root,
+            context=pr_binding_runtime_context(
+                hub_root=self.config_root,
+                workspace_root=self.repo_root,
+            ),
             repo_slug=repo_slug,
             summary=summary,
             existing_binding=existing_binding,
-            hub_root=self.config_root,
         )
 
     def _load_gh_path(self) -> tuple[str, bool]:
@@ -1362,19 +1380,25 @@ class GitHubService:
                 pr=pr, repo_slug=repo.name_with_owner
             )
         if binding_summary is not None:
-            persisted_binding = self._persist_pr_binding(
-                repo_slug=repo.name_with_owner,
-                summary=binding_summary,
-                existing_binding=binding_hint,
-            )
+            try:
+                persisted_binding = self._persist_pr_binding(
+                    repo_slug=repo.name_with_owner,
+                    summary=binding_summary,
+                    existing_binding=binding_hint,
+                )
+            except PrBindingConfigurationError:
+                persisted_binding = None
+                logger.warning(
+                    "Unable to persist GitHub PR binding without explicit hub identity",
+                    exc_info=True,
+                )
             if persisted_binding is not None:
                 arm_polling_watch_best_effort(
-                    repo_root=self.repo_root,
+                    hub_root=self.config_root,
                     raw_config=self.raw_config,
                     persisted_binding=persisted_binding,
                     workspace_root=self.repo_root,
                     reaction_config=self.raw_config,
-                    hub_root=self.config_root,
                 )
 
         state["repo"] = {"nameWithOwner": repo.name_with_owner, "url": repo.url}

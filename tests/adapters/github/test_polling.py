@@ -2985,6 +2985,13 @@ def test_process_uses_managed_thread_head_branch_hint_for_external_pr_discovery(
 
     assert result["candidate_workspaces"] == 1
     assert result["bindings_discovered"] == 1
+    events = ScmEventStore(hub_root).list_events(
+        provider="github",
+        event_type="polling.discovery",
+        limit=10,
+    )
+    assert len(events) == 1
+    assert events[0].payload["binding_status"] == "resolved"
     binding = PrBindingStore(hub_root).get_binding_by_pr(
         provider="github",
         repo_slug="acme/widgets",
@@ -2996,6 +3003,55 @@ def test_process_uses_managed_thread_head_branch_hint_for_external_pr_discovery(
     assert watch is not None
     assert watch.state == "active"
     assert watch.workspace_root == str(repo_root.resolve())
+
+
+def test_process_records_unresolved_discovery_event_without_binding(
+    tmp_path: Path,
+) -> None:
+    hub_root = tmp_path / "hub"
+    repo_root = hub_root / "worktrees" / "repo-1--codex-1"
+    repo_root.mkdir(parents=True)
+    ManagedThreadStore(hub_root).create_thread(
+        "codex",
+        repo_root,
+        repo_id="repo-1",
+        metadata={"head_branch": "feature/no-pr"},
+    )
+
+    def _factory(repo_root_arg: Path, raw_config=None) -> _DiscoveringGitHubServiceStub:
+        return _DiscoveringGitHubServiceStub(
+            repo_root_arg,
+            raw_config,
+            hub_root=hub_root,
+            repo_id="repo-1",
+            repo_slug="acme/widgets",
+            pr_number=45,
+            head_branch="feature/no-pr",
+            discover=False,
+        )
+
+    service = GitHubScmPollingService(
+        hub_root,
+        raw_config=_polling_config(),
+        github_service_factory=_factory,
+        watch_store=ScmPollingWatchStore(hub_root),
+        event_store=ScmEventStore(hub_root),
+    )
+
+    result = service.process(limit=10)
+
+    assert result["candidate_workspaces"] == 1
+    assert result["bindings_discovered"] == 0
+    events = ScmEventStore(hub_root).list_events(
+        provider="github",
+        event_type="polling.discovery",
+        limit=10,
+    )
+    assert len(events) == 1
+    assert events[0].repo_slug is None
+    assert events[0].payload["binding_status"] == "unresolved"
+    assert events[0].payload["workspace_root"] == str(repo_root.resolve())
+    assert "No active GitHub PR binding" in events[0].payload["error"]
 
 
 def test_process_repairs_active_watch_workspace_root_without_resetting_snapshot(
