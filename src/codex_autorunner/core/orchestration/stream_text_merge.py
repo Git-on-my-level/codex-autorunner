@@ -39,6 +39,7 @@ _SUBWORD_PREFIXES_3_PLUS = frozenset(
 # Short compounds that stay glued when split across tiny trailing chunks.
 _SHORT_COMPOUND_MERGES = frozenset(
     {
+        "inbox",
         "redo",
         "undo",
         "preset",
@@ -48,6 +49,15 @@ _SHORT_COMPOUND_MERGES = frozenset(
         "reedit",
     }
 )
+
+
+def _trailing_alpha_run(text: str) -> str:
+    run = []
+    for char in reversed(text):
+        if not char.isalpha():
+            break
+        run.append(char)
+    return "".join(reversed(run))
 
 
 def _likely_subword_prefix_continuation(current: str, incoming: str) -> bool:
@@ -83,9 +93,13 @@ def _needs_readable_boundary(current: str, incoming: str) -> bool:
         return False
     if incoming and all(char == "*" for char in incoming):
         return previous in {".", ":", ";", "!", "?"}
+    if previous.isdigit() and next_char.isdigit():
+        return False
     if previous.isalnum() and (next_char.isalnum() or next_char in {"`", "*"}):
         if previous.isalpha() and next_char.isalpha():
-            if _likely_subword_prefix_continuation(current, incoming):
+            if _likely_subword_prefix_continuation(
+                _trailing_alpha_run(current), incoming
+            ):
                 return False
         return True
     if previous in {"`", "*"} and next_char.isalnum():
@@ -129,16 +143,37 @@ class AssistantTextAccumulator:
 
     stream_text: str = ""
     final_text: str = ""
+    last_stream_chunk_had_explicit_spacing: bool = False
+
+    @staticmethod
+    def _has_explicit_spacing(text: str) -> bool:
+        return any(char.isspace() for char in text)
+
+    def _should_append_verbatim(self, text: str) -> bool:
+        # ACP streams are mixed in practice. Hermes chunks often carry leading
+        # spaces for the next word and then finish that same word in a following
+        # chunk (``" Sit"`` + ``"rep"``), while other agents still need a
+        # readable-boundary fallback later in the same turn.
+        return (
+            self._has_explicit_spacing(text)
+            or self.last_stream_chunk_had_explicit_spacing
+        )
 
     def append_delta(self, text: str, *, preserve_word_boundaries: bool = False) -> str:
         """Record a strict append-only stream delta."""
         if isinstance(text, str) and text:
             if preserve_word_boundaries:
-                self.stream_text = append_assistant_stream_text_readably(
-                    self.stream_text, text
-                )
+                if self._should_append_verbatim(text):
+                    self.stream_text = f"{self.stream_text}{text}"
+                else:
+                    self.stream_text = append_assistant_stream_text_readably(
+                        self.stream_text, text
+                    )
             else:
                 self.stream_text = f"{self.stream_text}{text}"
+            self.last_stream_chunk_had_explicit_spacing = self._has_explicit_spacing(
+                text
+            )
         return self.text
 
     def merge_snapshot(
@@ -149,11 +184,15 @@ class AssistantTextAccumulator:
             merged = merge_assistant_stream_text(self.stream_text, text)
             if (
                 preserve_word_boundaries
+                and not self._should_append_verbatim(text)
                 and merged == f"{self.stream_text}{text}"
                 and not text.startswith(self.stream_text)
             ):
                 merged = append_assistant_stream_text_readably(self.stream_text, text)
             self.stream_text = merged
+            self.last_stream_chunk_had_explicit_spacing = self._has_explicit_spacing(
+                text
+            )
         return self.text
 
     def replace_final(self, text: str) -> str:

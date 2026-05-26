@@ -62,6 +62,30 @@ def test_assistant_text_accumulator_subword_snapshots_avoid_spurious_spaces() ->
     assert accumulator.text == "international"
 
 
+def test_assistant_text_accumulator_mixed_spacing_snapshots_keep_fallback() -> None:
+    accumulator = AssistantTextAccumulator()
+
+    for chunk in (
+        "Confirmed:",
+        "\n",
+        "**",
+        "`/car/hub/read-models/chats`",
+        "returns",
+        "500",
+        "**",
+        "everything",
+        "else",
+        "is",
+        "healthy.",
+    ):
+        accumulator.merge_snapshot(chunk, preserve_word_boundaries=True)
+
+    assert (
+        accumulator.text
+        == "Confirmed:\n**`/car/hub/read-models/chats` returns 500** everything else is healthy."
+    )
+
+
 def test_assistant_text_accumulator_records_strict_deltas() -> None:
     accumulator = AssistantTextAccumulator()
 
