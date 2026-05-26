@@ -38,7 +38,7 @@ Use `demo` when you need deterministic, step-by-step interactions from a manifes
 
 Use `demo-workflow` when you need built-in multi-service startup ordering, readiness checks, demo capture, export manifest generation, and optional legacy outbox publishing.
 
-Artifact delivery note: `car render` still publishes to `.codex-autorunner/filebox/outbox/` for compatibility. To send a rendered file to a chat target, prefer `car artifacts send <file> --to current`; import already-published legacy files with `car artifacts import-legacy` when needed.
+Artifact delivery note: `car render` still publishes to `.codex-autorunner/filebox/outbox/` for compatibility. To send a rendered file to a chat target, prefer `car artifacts send <file>`; import already-published legacy files with `car artifacts import-legacy` when needed.
 
 ## URL Mode vs Serve Mode
 

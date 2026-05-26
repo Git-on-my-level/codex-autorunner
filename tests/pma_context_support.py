@@ -1909,7 +1909,8 @@ def test_format_pma_prompt_includes_artifact_delivery_contract(tmp_path: Path) -
 
     hub = tmp_path.expanduser().resolve()
     assert "Artifact delivery contract:" in result
-    assert "car artifacts send <file> --to current" in result
+    assert "car artifacts send <file>" in result
+    assert "--to current" not in result
     assert str(hub / ".codex-autorunner/filebox/outbox") not in result
     assert str(hub / ".codex-autorunner/filebox/inbox") in result
     assert "--to explicit" not in result

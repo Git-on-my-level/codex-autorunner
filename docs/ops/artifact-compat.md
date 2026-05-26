@@ -3,7 +3,7 @@
 Normal agent-facing delivery should use the artifact journal:
 
 ```bash
-car artifacts send <file> --to current
+car artifacts send <file>
 ```
 
 This page is for operators debugging broken target injection, stranded files, or
@@ -12,18 +12,20 @@ generated repo docs, or normal chat-agent instructions.
 
 ## Current target diagnostics
 
-`--to current` requires these runtime environment variables:
+`--to current` first uses these runtime environment variables when present:
 
 - `CAR_ARTIFACT_TARGET_SURFACE`
 - `CAR_ARTIFACT_TARGET_CONVERSATION_KEY`
 - `CAR_ARTIFACT_WORKSPACE_SCOPE` when the target is workspace-scoped
 
-If the first two variables are missing, fix the chat/runtime target injection
-before asking an agent to send files.
+If they are absent, the CLI falls back to the unique Discord or Telegram chat
+binding for the current repo/worktree. If no binding exists or multiple bindings
+match, pass an explicit target.
 
 ## Explicit operator send
 
-Use an explicit target only when debugging current-target wiring:
+Use an explicit target to send somewhere other than the current turn or bound
+chat:
 
 ```bash
 car artifacts send <file> --to explicit --surface <surface> --conversation <conversation>
