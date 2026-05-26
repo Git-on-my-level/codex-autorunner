@@ -345,6 +345,9 @@ def _assistant_stream_events(
             content=content,
             delta_type=RUN_EVENT_DELTA_TYPE_ASSISTANT_STREAM,
             stream_mode=stream_mode,
+            data=(
+                {"preserve_word_boundaries": True} if preserve_word_boundaries else {}
+            ),
         )
     ]
 

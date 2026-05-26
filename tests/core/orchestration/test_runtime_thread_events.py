@@ -804,6 +804,7 @@ async def test_normalize_runtime_thread_raw_event_preserves_hermes_token_boundar
         )
         assert len(events) == 1
         assert isinstance(events[0], OutputDelta)
+        assert events[0].data == {"preserve_word_boundaries": True}
 
     assert (
         state.best_assistant_text()

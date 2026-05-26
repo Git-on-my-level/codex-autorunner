@@ -96,7 +96,12 @@ def apply_run_event_to_progress_tracker(
                 tracker.note_output(delta, new_segment=True)
                 tracker.end_output_segment()
         else:
-            tracker.note_output(delta)
+            tracker.note_output(
+                delta,
+                preserve_word_boundaries=bool(
+                    run_event.data.get("preserve_word_boundaries")
+                ),
+            )
         return ProgressTrackerEventOutcome(changed=True)
 
     if isinstance(run_event, ToolCall):

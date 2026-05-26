@@ -46,6 +46,7 @@ class OutputDelta:
     content: str
     delta_type: str = "text"
     stream_mode: str = RUN_EVENT_STREAM_MODE_DELTA
+    data: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)

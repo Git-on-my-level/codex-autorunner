@@ -125,6 +125,55 @@ async def _assistant_text_from_turn_events(
     return state.assistant_stream_text.strip()
 
 
+def _text_without_whitespace(value: str) -> str:
+    return "".join(str(value or "").split())
+
+
+def _formatted_current_turn_output(
+    *,
+    final_output: str,
+    stream_output: str,
+) -> str:
+    """Prefer terminal formatting while keeping only the current streamed turn.
+
+    Hermes ACP exposes two imperfect views: `session/update` chunks are scoped
+    to the active turn but may be tokenizer fragments with poor spacing, while
+    terminal `finalOutput` preserves formatting but may include prior transcript
+    text. The compact suffix match lets the stream prove the current-turn scope
+    before we trust terminal formatting.
+    """
+
+    final_text = str(final_output or "")
+    stream_text = str(stream_output or "")
+    if not final_text.strip():
+        return stream_text.strip()
+    if not stream_text.strip():
+        return final_text.strip()
+    final_stripped = final_text.strip()
+    stream_stripped = stream_text.strip()
+    if final_stripped == stream_stripped:
+        return final_stripped
+
+    stream_compact = _text_without_whitespace(stream_stripped)
+    if not stream_compact:
+        return final_stripped
+    compact_suffix_reversed: list[str] = []
+    target_length = len(stream_compact)
+    for index in range(len(final_text) - 1, -1, -1):
+        char = final_text[index]
+        if char.isspace():
+            continue
+        compact_suffix_reversed.append(char)
+        if len(compact_suffix_reversed) > target_length:
+            break
+        if (
+            len(compact_suffix_reversed) == target_length
+            and "".join(reversed(compact_suffix_reversed)) == stream_compact
+        ):
+            return final_text[index:].strip()
+    return stream_stripped
+
+
 def _replace_session_update_content_text(content: Any, text: str) -> Any:
     if isinstance(content, dict):
         updated = dict(content)
@@ -622,7 +671,10 @@ class HermesSupervisor:
             )
         else:
             if stream_assistant_text:
-                assistant_text = stream_assistant_text
+                assistant_text = _formatted_current_turn_output(
+                    final_output=result.final_output,
+                    stream_output=stream_assistant_text,
+                )
         log_event(
             self._logger,
             logging.INFO,

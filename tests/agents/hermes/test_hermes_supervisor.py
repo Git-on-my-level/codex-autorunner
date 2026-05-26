@@ -17,6 +17,7 @@ from codex_autorunner.agents.acp.events import normalize_notification
 from codex_autorunner.agents.hermes.supervisor import (
     HermesSupervisor,
     HermesSupervisorError,
+    _formatted_current_turn_output,
     _should_close_turn_buffer,
     build_hermes_supervisor_from_config,
     hermes_runtime_preflight,
@@ -34,6 +35,26 @@ FIXTURE_PATH = Path(__file__).resolve().parents[2] / "fixtures" / "fake_acp_serv
 
 def fixture_command(scenario: str) -> list[str]:
     return [sys.executable, "-u", str(FIXTURE_PATH), "--scenario", scenario]
+
+
+def test_formatted_current_turn_output_prefers_terminal_spacing() -> None:
+    assert (
+        _formatted_current_turn_output(
+            final_output="### 🔴 Active (Running Now) | Thread",
+            stream_output="###🔴Active(Running Now)|Thread",
+        )
+        == "### 🔴 Active (Running Now) | Thread"
+    )
+
+
+def test_formatted_current_turn_output_trims_cumulative_terminal_output() -> None:
+    assert (
+        _formatted_current_turn_output(
+            final_output="prior reply\n\n### 🔴 Active (Running Now) | Thread",
+            stream_output="###🔴Active(Running Now)|Thread",
+        )
+        == "### 🔴 Active (Running Now) | Thread"
+    )
 
 
 class _HermesPreflightConfig:
