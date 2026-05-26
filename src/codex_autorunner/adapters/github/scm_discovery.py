@@ -179,10 +179,13 @@ def discover_pr_binding(
     if summary is None:
         return None
 
-    context = pr_binding_runtime_context(
-        hub_root=service.config_root,
-        workspace_root=service.repo_root,
-    )
+    try:
+        context = pr_binding_runtime_context(
+            hub_root=service.config_root,
+            workspace_root=service.repo_root,
+        )
+    except PrBindingConfigurationError:
+        return None
     store = PrBindingStore(context.hub_root)
     existing_binding: Optional[PrBinding] = None
     repo_slug = _normalize_optional_text(summary.get("repo_slug"))

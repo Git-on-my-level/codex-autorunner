@@ -19,6 +19,7 @@ from ...core.pr_binding_runtime import (
 )
 from ...core.pr_bindings import PrBindingStore
 from ...core.prompts import build_github_issue_to_spec_prompt, build_sync_agent_prompt
+from ...core.state_roots import resolve_hub_manifest_path
 from ...core.text_utils import _normalize_optional_text
 from ...core.utils import (
     atomic_write,
@@ -342,6 +343,18 @@ def _normalize_optional_identifier_text(value: Any) -> Optional[str]:
 _normalize_positive_int = normalize_positive_int
 
 
+def _resolve_default_config_root(repo_root: Path) -> Path:
+    current = Path(repo_root).resolve()
+    while True:
+        if resolve_hub_manifest_path(current).exists():
+            return current
+        parent = current.parent
+        if parent == current:
+            break
+        current = parent
+    return Path(repo_root).resolve()
+
+
 class GitHubService:
     def __init__(
         self,
@@ -354,7 +367,11 @@ class GitHubService:
         gh_runner: Optional[Callable[..., subprocess.CompletedProcess[str]]] = None,
     ):
         self.repo_root = repo_root
-        self.config_root = Path(config_root) if config_root is not None else repo_root
+        self.config_root = (
+            Path(config_root)
+            if config_root is not None
+            else _resolve_default_config_root(repo_root)
+        )
         self.raw_config = raw_config or {}
         self.github_path = repo_root / ".codex-autorunner" / "github.json"
         self.gh_path, self.gh_override = self._load_gh_path()
