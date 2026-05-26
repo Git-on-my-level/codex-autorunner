@@ -193,6 +193,20 @@ def _git_status_porcelain(repo_root: Path) -> Optional[str]:
     return (proc.stdout or "").strip()
 
 
+def _git_head(repo_root: Path) -> Optional[str]:
+    try:
+        proc = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=repo_root,
+            check=True,
+            text=True,
+            capture_output=True,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return (proc.stdout or "").strip() or None
+
+
 def _ticket_marked_done(path: Path) -> bool:
     try:
         text = path.read_text(encoding="utf-8")
@@ -228,6 +242,9 @@ def _commit_barrier_observation(
     ticket_path = repo_root / current_ticket
     current_ticket_done = ticket_path.exists() and _ticket_marked_done(ticket_path)
     dirty_status = _git_status_porcelain(repo_root) if current_ticket_done else None
+    commit_pending = bool(commit.get("pending")) and (
+        dirty_status is None or bool(dirty_status)
+    )
     raw_retries = commit.get("retries")
     retries = (
         raw_retries
@@ -244,7 +261,7 @@ def _commit_barrier_observation(
         current_ticket=current_ticket,
         current_ticket_done=current_ticket_done,
         worktree_dirty=bool(dirty_status),
-        commit_pending=bool(commit.get("pending")),
+        commit_pending=commit_pending,
         barrier_epoch=(
             commit.get("barrier_epoch")
             if isinstance(commit.get("barrier_epoch"), str)
@@ -256,6 +273,54 @@ def _commit_barrier_observation(
             commit.get("exhausted") or commit.get("resolution_state") == "exhausted"
         ),
     )
+
+
+def _with_resolved_external_commit_barrier(
+    repo_root: Path,
+    state: dict[str, Any],
+) -> dict[str, Any]:
+    updated = dict(state)
+    engine = updated.get("ticket_engine")
+    if not isinstance(engine, dict):
+        return updated
+    commit = engine.get("commit")
+    if not isinstance(commit, dict) or not commit.get("pending"):
+        return updated
+    current_ticket = engine.get("current_ticket")
+    if not isinstance(current_ticket, str) or not current_ticket.strip():
+        return updated
+    ticket_path = repo_root / current_ticket
+    if not (ticket_path.exists() and _ticket_marked_done(ticket_path)):
+        return updated
+    dirty_status = _git_status_porcelain(repo_root)
+    if dirty_status is None or dirty_status.strip():
+        return updated
+
+    head_after = _git_head(repo_root)
+    worktree_summary = commit.get("worktree_summary")
+    worktree_summary = (
+        dict(worktree_summary) if isinstance(worktree_summary, dict) else {}
+    )
+    resolved = {
+        **commit,
+        "pending": False,
+        "commit_pending": False,
+        "worktree_dirty": False,
+        "status_porcelain": "",
+        "head_after": head_after or commit.get("head_after"),
+        "agent_committed_this_turn": True,
+        "resolution_state": "committed_externally",
+        "resolved_at": now_iso(),
+        "worktree_summary": {
+            **worktree_summary,
+            "status_porcelain": "",
+            "head_after": head_after or worktree_summary.get("head_after"),
+        },
+    }
+    new_engine = dict(engine)
+    new_engine["commit"] = resolved
+    updated["ticket_engine"] = new_engine
+    return updated
 
 
 def _restart_state(record: FlowRunRecord) -> dict[str, Any]:
@@ -811,25 +876,19 @@ def reconcile_flow_run(
                     return (updated or record), bool(updated), False
 
             if trigger is None:
-                if commit_barrier.required:
-                    state = _with_commit_barrier_recovery(
-                        dict(record.state or {}),
-                        commit_barrier,
+                state = _with_resolved_external_commit_barrier(
+                    repo_root,
+                    dict(record.state or {}),
+                )
+                state = _with_commit_barrier_recovery(state, commit_barrier)
+                state_changed = state != (record.state or {})
+                if state_changed:
+                    updated = store.update_flow_run_status(
+                        run_id=record.id,
+                        status=record.status,
+                        state=state,
                     )
-                    if state != (record.state or {}):
-                        updated = store.update_flow_run_status(
-                            run_id=record.id,
-                            status=record.status,
-                            state=state,
-                        )
-                        emit_reconcile_noop(
-                            store=store,
-                            run_id=record.id,
-                            status=record.status,
-                            note=decision.note,
-                            worker_status=health.status,
-                        )
-                        return (updated or record), bool(updated), False
+                    record = updated or record
                 if record.status == FlowRunStatus.PAUSED and health.status in {
                     "dead",
                     "invalid",
@@ -852,6 +911,14 @@ def reconcile_flow_run(
                         worker_status=health.status,
                         crash_info=crash_info,
                     )
+                elif state_changed:
+                    emit_reconcile_noop(
+                        store=store,
+                        run_id=record.id,
+                        status=record.status,
+                        note=decision.note,
+                        worker_status=health.status,
+                    )
                 else:
                     emit_reconcile_noop(
                         store=store,
@@ -860,7 +927,7 @@ def reconcile_flow_run(
                         note="reconcile-noop",
                         worker_status=health.status,
                     )
-                return record, False, False
+                return record, state_changed, False
 
             result = reduce_flow_lifecycle(
                 record.status,
@@ -891,14 +958,20 @@ def reconcile_flow_run(
                 else dict(record.state or {})
             )
             if restart_state_override is not None:
-                state = restart_state_override
+                state = _with_resolved_external_commit_barrier(
+                    repo_root,
+                    restart_state_override,
+                )
             elif restart_policy.exhausted:
+                state = _with_resolved_external_commit_barrier(repo_root, state)
                 state = _with_restart_exhausted(
                     state,
                     max_attempts=restart_policy.max_attempts,
                     reason="restart-attempts-exhausted",
                     health=health,
                 )
+            else:
+                state = _with_resolved_external_commit_barrier(repo_root, state)
             state = _with_commit_barrier_recovery(state, commit_barrier)
             for effect in result.effects:
                 if effect.kind == EffectKind.ENRICH_FAILURE_PAYLOAD:
