@@ -267,7 +267,7 @@
   );
 
   function chatSummaryForId(chatId: string | null): PmaChatSummary | null {
-    return chatSummaryForSessionId(chatId, chats, localDraftChat)
+    return chatSummaryForSessionId(chatId, chats, localDraftChat, committedDraftChat)
       ?? (chatId ? selectPmaChats(readModelState).find((chat) => chat.id === chatId) ?? null : null);
   }
   const transcriptCards = $derived<ChatTranscriptCard[]>(selectChatTranscript(readModelState, activeChatId));
