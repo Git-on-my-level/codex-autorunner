@@ -300,6 +300,151 @@ async def test_turn_runtime_collector_fails_failed_question_tool_part() -> None:
 
 
 @pytest.mark.asyncio
+async def test_turn_runtime_collector_fails_question_tool_part_missing_request_id() -> (
+    None
+):
+    async def _events():
+        yield SSEEvent(
+            event="message.part.updated",
+            data=json.dumps(
+                {
+                    "sessionID": "session-1",
+                    "properties": {
+                        "part": {
+                            "id": "prt-q1",
+                            "type": "tool",
+                            "tool": "question",
+                            "state": {
+                                "status": "pending",
+                                "input": {
+                                    "questions": [{"question": "Continue?"}],
+                                },
+                            },
+                        }
+                    },
+                }
+            ),
+        )
+        yield SSEEvent(
+            event="session.status",
+            data='{"sessionID":"session-1","properties":{"status":{"type":"idle"}}}',
+        )
+
+    output = await collect_opencode_output_from_events(
+        _events(),
+        session_id="session-1",
+    )
+
+    assert output.text == ""
+    assert output.error == "OpenCode question tool missing request id"
+
+
+@pytest.mark.asyncio
+async def test_turn_runtime_collector_error_clears_partial_text() -> None:
+    async def _events():
+        yield SSEEvent(
+            event="message.updated",
+            data=json.dumps(
+                {
+                    "sessionID": "session-1",
+                    "info": {"id": "msg-1", "role": "assistant"},
+                }
+            ),
+        )
+        yield SSEEvent(
+            event="message.part.delta",
+            data=json.dumps(
+                {
+                    "sessionID": "session-1",
+                    "properties": {
+                        "part": {
+                            "id": "text-1",
+                            "messageID": "msg-1",
+                            "type": "text",
+                        },
+                        "delta": {"text": "partial"},
+                    },
+                }
+            ),
+        )
+        yield SSEEvent(
+            event="session.error",
+            data=json.dumps(
+                {
+                    "sessionID": "session-1",
+                    "error": {"message": "boom"},
+                }
+            ),
+        )
+
+    output = await collect_opencode_output_from_events(
+        _events(),
+        session_id="session-1",
+    )
+
+    assert output.text == ""
+    assert output.error == "boom"
+
+
+@pytest.mark.asyncio
+async def test_turn_runtime_idle_after_only_tool_call_checkpoint_is_not_final_output() -> (
+    None
+):
+    async def _events():
+        yield SSEEvent(
+            event="message.updated",
+            data=json.dumps(
+                {
+                    "sessionID": "session-1",
+                    "info": {"id": "msg-1", "role": "assistant"},
+                }
+            ),
+        )
+        yield SSEEvent(
+            event="message.part.delta",
+            data=json.dumps(
+                {
+                    "sessionID": "session-1",
+                    "properties": {
+                        "part": {
+                            "id": "text-1",
+                            "messageID": "msg-1",
+                            "type": "text",
+                        },
+                        "delta": {"text": "Let me check."},
+                    },
+                }
+            ),
+        )
+        yield SSEEvent(
+            event="message.completed",
+            data=json.dumps(
+                {
+                    "sessionID": "session-1",
+                    "info": {
+                        "id": "msg-1",
+                        "role": "assistant",
+                        "finish": "tool-calls",
+                    },
+                    "parts": [{"type": "text", "text": "Let me check."}],
+                }
+            ),
+        )
+        yield SSEEvent(
+            event="session.status",
+            data='{"sessionID":"session-1","properties":{"status":{"type":"idle"}}}',
+        )
+
+    output = await collect_opencode_output_from_events(
+        _events(),
+        session_id="session-1",
+    )
+
+    assert output.text == ""
+    assert output.error == "OpenCode turn ended without terminal assistant message"
+
+
+@pytest.mark.asyncio
 async def test_turn_runtime_cancels_preconnected_stream_once(tmp_path: Path) -> None:
     client = _HangingStreamClient()
     stream = await pre_connect_event_stream(client, tmp_path, "session-1")

@@ -539,8 +539,9 @@ def extract_question_tool_request(
 
     Some OpenCode builds expose the user-input helper as a normal ``tool`` part
     named ``question`` instead of a top-level ``question.asked`` event.  The
-    request payload lives under ``state.input.questions`` and the part id is the
-    only stable request identifier in the stream.
+    request payload lives under ``state.input.questions``.  The request id must
+    come from the question state/input payload; the tool part id identifies only
+    the rendered part and is not valid for ``/question/{requestID}/reply``.
     """
 
     if not isinstance(part, dict):

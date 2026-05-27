@@ -282,6 +282,8 @@ async def collect_opencode_output_from_events(
 
     terminal_signal: Optional[str] = None
     fatal_question_tool_error: Optional[str] = None
+    terminal_assistant_completion_seen = False
+    nonterminal_assistant_checkpoint_seen = False
 
     async def _handle_question_request(
         request_id: Optional[str],
@@ -620,6 +622,12 @@ async def collect_opencode_output_from_events(
                             assembler.error = fatal_question_tool_error
                             break
                         if question_status not in {"completed", "complete", "success"}:
+                            if not question_request_id:
+                                fatal_question_tool_error = (
+                                    "OpenCode question tool missing request id"
+                                )
+                                assembler.error = fatal_question_tool_error
+                                break
                             await _handle_question_request(
                                 question_request_id,
                                 question_props,
@@ -692,9 +700,15 @@ async def collect_opencode_output_from_events(
                 )
             if event.event == "message.completed" and is_primary_session:
                 assembler.on_primary_assistant_completion(payload, message_role)
-                if message_role == "assistant" and message_completion_is_turn_terminal(
-                    payload
+                completion_is_terminal = message_completion_is_turn_terminal(payload)
+                if message_role in {"assistant", None} and completion_is_terminal:
+                    terminal_assistant_completion_seen = True
+                elif (
+                    message_role in {"assistant", None}
+                    and parse_message_response(payload).text
                 ):
+                    nonterminal_assistant_checkpoint_seen = True
+                if message_role == "assistant" and completion_is_terminal:
                     lifecycle.on_primary_completion()
             if event.event == "session.idle" or (
                 event.event == "session.status"
@@ -731,6 +745,20 @@ async def collect_opencode_output_from_events(
             output_source=result.output_source,
             effective_runtime=result.effective_runtime,
         )
+    elif (
+        result.text
+        and result.output_source == "event_stream"
+        and nonterminal_assistant_checkpoint_seen
+        and not terminal_assistant_completion_seen
+    ):
+        error = "OpenCode turn ended without terminal assistant message"
+        result = OutputAssemblyResult(
+            text="",
+            error=error,
+            usage=result.usage,
+            output_source=result.output_source,
+            effective_runtime=result.effective_runtime,
+        )
     if (
         error
         and error.startswith(_OPENCODE_FIRST_EVENT_TIMEOUT_REASON)
@@ -738,6 +766,14 @@ async def collect_opencode_output_from_events(
         and result.text
     ):
         error = None
+    if error and result.text:
+        result = OutputAssemblyResult(
+            text="",
+            error=error,
+            usage=result.usage,
+            output_source=result.output_source,
+            effective_runtime=result.effective_runtime,
+        )
     return OpenCodeTurnOutput(
         text=result.text,
         error=error,
