@@ -125,3 +125,87 @@ def test_control_plane_cleanup_never_touches_standalone_hub(tmp_path: Path) -> N
             "explicit standalone hub control plane",
         ),
     }
+
+
+def test_control_plane_cleanup_skips_nested_standalone_hub(
+    tmp_path: Path,
+) -> None:
+    outer_hub_root = tmp_path / "outer"
+    nested_hub_root = outer_hub_root / "workspace" / "nested-hub"
+    outer_manifest_path = _save_manifest(
+        outer_hub_root,
+        Manifest(version=3, repos=[]),
+    )
+    nested_manifest_path = _save_manifest(
+        nested_hub_root,
+        Manifest(version=3, repos=[]),
+    )
+    (nested_hub_root / ".codex-autorunner" / "config.yml").write_text(
+        "mode: hub\n",
+        encoding="utf-8",
+    )
+    nested_db = nested_hub_root / ".codex-autorunner" / "orchestration.sqlite3"
+    nested_db.write_bytes(b"nested-live")
+
+    dry_run = plan_control_plane_cleanup(
+        hub_root=outer_hub_root,
+        manifest_path=outer_manifest_path,
+        archive_stamp="stamp",
+    )
+    applied = apply_control_plane_cleanup(dry_run)
+
+    assert dry_run.candidates == ()
+    assert applied.candidates == ()
+    assert nested_manifest_path.exists()
+    assert nested_db.read_bytes() == b"nested-live"
+    skipped = {(item["path"], item["reason"]) for item in dry_run.skipped}
+    assert {
+        (
+            "workspace/nested-hub/.codex-autorunner/manifest.yml",
+            "nested standalone hub control plane under workspace/nested-hub",
+        ),
+        (
+            "workspace/nested-hub/.codex-autorunner/orchestration.sqlite3",
+            "nested standalone hub control plane under workspace/nested-hub",
+        ),
+    } <= skipped
+
+
+def test_control_plane_cleanup_skips_workspaces_inside_nested_standalone_hub(
+    tmp_path: Path,
+) -> None:
+    outer_hub_root = tmp_path / "outer"
+    nested_hub_root = outer_hub_root / "workspace" / "nested-hub"
+    nested_repo_root = nested_hub_root / "workspace" / "repo"
+    nested_repo_state = nested_repo_root / ".codex-autorunner"
+    nested_repo_state.mkdir(parents=True)
+    outer_manifest_path = _save_manifest(
+        outer_hub_root,
+        Manifest(version=3, repos=[]),
+    )
+    _save_manifest(
+        nested_hub_root,
+        Manifest(
+            version=3,
+            repos=[ManifestRepo(id="repo", path=Path("workspace/repo"), kind="base")],
+        ),
+    )
+    (nested_hub_root / ".codex-autorunner" / "config.yml").write_text(
+        "mode: hub\n",
+        encoding="utf-8",
+    )
+    nested_repo_db = nested_repo_state / "orchestration.sqlite3"
+    nested_repo_db.write_bytes(b"nested-repo-db")
+
+    report = plan_control_plane_cleanup(
+        hub_root=outer_hub_root,
+        manifest_path=outer_manifest_path,
+        archive_stamp="stamp",
+    )
+
+    assert report.candidates == ()
+    assert nested_repo_db.read_bytes() == b"nested-repo-db"
+    assert (
+        "workspace/nested-hub/workspace/repo/.codex-autorunner/orchestration.sqlite3",
+        "nested standalone hub control plane under workspace/nested-hub",
+    ) in {(item["path"], item["reason"]) for item in report.skipped}

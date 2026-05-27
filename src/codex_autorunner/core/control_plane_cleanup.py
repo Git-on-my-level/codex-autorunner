@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
 
+from .config_sources import CONFIG_FILENAME
 from .hub_topology import (
     ControlPlaneRole,
     HubTopologyRepository,
@@ -113,6 +114,21 @@ def plan_control_plane_cleanup(
 
     for path in _candidate_paths(resolved_hub):
         workspace_root = path.parent.parent
+        nested_hub_root = _nested_standalone_hub_root(
+            workspace_root,
+            outer_hub_root=resolved_hub,
+        )
+        if nested_hub_root is not None:
+            skipped.append(
+                {
+                    "path": _display_path(path, resolved_hub),
+                    "reason": (
+                        "nested standalone hub control plane under "
+                        f"{_display_path(nested_hub_root, resolved_hub)}"
+                    ),
+                }
+            )
+            continue
         entry = repository.classify_workspace_path(workspace_root)
         if entry.control_plane_role == ControlPlaneRole.STANDALONE_HUB:
             skipped.append(
@@ -204,6 +220,28 @@ def _candidate_paths(hub_root: Path) -> Iterable[Path]:
             candidate = state_root / filename
             if candidate.is_file() or candidate.is_symlink():
                 yield candidate.resolve()
+
+
+def _nested_standalone_hub_root(
+    workspace_root: Path,
+    *,
+    outer_hub_root: Path,
+) -> Path | None:
+    resolved_outer = outer_hub_root.resolve()
+    current = workspace_root.resolve()
+    for candidate in (current, *current.parents):
+        if candidate == resolved_outer:
+            return None
+        try:
+            candidate.relative_to(resolved_outer)
+        except ValueError:
+            return None
+        state_root = candidate / ".codex-autorunner"
+        if (candidate / CONFIG_FILENAME).is_file() and (
+            state_root / HUB_MANIFEST_FILENAME
+        ).is_file():
+            return candidate
+    return None
 
 
 def _artifact_for_path(

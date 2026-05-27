@@ -18,7 +18,8 @@ car cleanup control-plane --hub /path/to/hub --json
 The report lists each artifact, byte size, classification reason, workspace
 role, and proposed archive path. It uses the hub workspace registry and
 control-plane classification, so an explicitly launched standalone hub is not
-cleaned.
+cleaned. Nested standalone hubs under the selected hub root, and their managed
+workspaces, are skipped as separate control planes.
 
 Apply cleanup only after reviewing the dry run:
 
