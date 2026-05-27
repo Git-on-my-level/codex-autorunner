@@ -25,7 +25,7 @@ import {
   planSendExistingChat,
   planStartAndSendChat
 } from './pmaChatCommands';
-import { commitLocalDraftChat, isLocalDraftChatId, type ChatDetailSessionState } from './chatDetailSession';
+import type { ChatDetailSessionState } from './chatDetailSession';
 
 export type ChatSendBusyPolicy = 'queue' | 'interrupt' | null;
 
@@ -73,7 +73,6 @@ export type ChatSendControllerDeps = {
   readSessionState: () => ChatDetailSessionState;
   writeSessionState: (state: ChatDetailSessionState) => void;
   getLocalDraftChat: () => PmaChatSummary | null;
-  syncDetailUrl: (chatId: string) => Promise<void>;
   invalidateChatMutation: (chatId: string) => Promise<void>;
   refreshActive: (chatId: string, options: { quiet?: boolean }) => Promise<void>;
   setSending: (value: boolean) => void;
@@ -173,7 +172,6 @@ export function createChatSendController(deps: ChatSendControllerDeps): ChatSend
     const hasInFlightOptimisticTurn = chatTranscriptHasInFlightOptimisticTurn(transcript);
     const displayedProgress = deps.getDisplayedProgress();
     const willQueueOptimistically =
-      !isLocalDraftChatId(optimisticChatId) &&
       busyPolicy !== 'interrupt' &&
       (busyPolicy === 'queue' || displayedProgress?.status === 'running' || hasInFlightOptimisticTurn);
     const optimisticId = optimisticClientTurnId();
@@ -211,16 +209,6 @@ export function createChatSendController(deps: ChatSendControllerDeps): ChatSend
     deps.setSending(true);
     deps.setComposeError(null);
 
-    const moveOptimisticToCommittedChat = (committedChatId: string) => {
-      if (committedChatId === optimisticChatId) return;
-      deps.readModelStore.upsertChatTranscriptCards(committedChatId, [
-        {
-          ...optimisticPlaceholder,
-          message: { ...optimisticPlaceholder.message, chatId: committedChatId }
-        }
-      ]);
-      deps.readModelStore.removeOptimisticChatTranscriptCards(optimisticChatId);
-    };
     const removeOptimistic = (chatId = optimisticChatId, options: { requireBackendRow?: boolean } = {}) => {
       if (options.requireBackendRow && !transcriptHasBackendUserRow(chatId, optimisticId)) return false;
       deps.readModelStore.removeOptimisticChatTranscriptCards(chatId);
@@ -253,11 +241,12 @@ export function createChatSendController(deps: ChatSendControllerDeps): ChatSend
     const activeChat = deps.getActiveChat();
     const attachmentsForMessage = uploaded;
     const message = composeMessageWithAttachments(draftSnapshot, attachmentsForMessage);
-    const targetIsDraft = isLocalDraftChatId(targetChatId);
+    const targetIsNewChat = deps.getLocalDraftChat()?.id === targetChatId;
     const targetIsRunning = deps.getDisplayedProgress()?.status === 'running';
     const profileForSend = activeChat?.agentProfile?.trim() || deps.getSelectedProfile().trim() || '';
-    const commandPlan = targetIsDraft
+    const commandPlan = targetIsNewChat
       ? planStartAndSendChat(
+          targetChatId,
           deps.getSelectedScope(),
           deps.getSelectedAgent(),
           deps.getSelectedProfile(),
@@ -298,7 +287,7 @@ export function createChatSendController(deps: ChatSendControllerDeps): ChatSend
 
     const result = await executePmaChatCommandPlan(deps.api, commandPlan);
     if (result.ok) {
-      const committedChatId = targetIsDraft ? result.data.chatId : targetChatId;
+      const committedChatId = targetIsNewChat ? result.data.chatId : targetChatId;
       if (!committedChatId) {
         removeOptimistic();
         deps.setComposeError({
@@ -310,19 +299,14 @@ export function createChatSendController(deps: ChatSendControllerDeps): ChatSend
         deps.setSending(false);
         return;
       }
-      if (targetIsDraft) {
-        const localDraftChat = deps.getLocalDraftChat();
-        const draftChatForPlaceholder =
-          localDraftChat?.id === targetChatId
-            ? localDraftChat
-            : activeChat && activeChat.id === targetChatId
-              ? activeChat
-              : null;
-        deps.writeSessionState(
-          commitLocalDraftChat(deps.readSessionState(), draftChatForPlaceholder, committedChatId, optimisticTimestamp)
-        );
-        moveOptimisticToCommittedChat(committedChatId);
-        await deps.syncDetailUrl(committedChatId);
+      if (targetIsNewChat) {
+        deps.writeSessionState({
+          ...deps.readSessionState(),
+          activeChatId: committedChatId,
+          detailMode: 'detail',
+          loadingActive: false,
+          activeError: null
+        });
       }
       await deps.invalidateChatMutation(committedChatId);
       await deps.refreshActive(committedChatId, { quiet: true });

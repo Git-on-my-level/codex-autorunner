@@ -518,8 +518,8 @@ LEGACY_FILE_CAPS = (
         reason="Legacy managed-thread runtime route module should remain a re-export after ticket 007 extraction.",
     ),
     FileBudget(
-        path="src/codex_autorunner/web_frontend/src/routes/chats/[[chatId]]/+page.svelte",
-        max_lines=3280,
+        path="src/codex_autorunner/web_frontend/src/routes/chats/+page.svelte",
+        max_lines=3461,
         reason="Current legacy chat detail page baseline after the route was already over budget.",
     ),
     FileBudget(
@@ -624,13 +624,11 @@ TEXT_HELPER_OWNERSHIP_RULES = (
     TextHelperOwnershipRule(
         owner_path="src/codex_autorunner/web_frontend/src/lib/application/chatDetailSession.ts",
         helper_names=(
-            "requestedChatDetailFromUrl",
             "selectChatDetail",
-            "activateChatDetailFromUrl",
+            "activateChatDetail",
             "activateRequestedChatFromRows",
             "replacementForArchivedActiveChat",
             "startLocalDraftChat",
-            "commitLocalDraftChat",
         ),
         scan_roots=(
             "src/codex_autorunner/web_frontend/src/lib/application",

@@ -176,6 +176,7 @@ class ManagedThreadExecutionStore(ThreadExecutionStore):
         agent_id: str,
         workspace_root: Path,
         *,
+        thread_target_id: Optional[str] = None,
         repo_id: Optional[str] = None,
         resource_kind: Optional[str] = None,
         resource_id: Optional[str] = None,
@@ -192,6 +193,7 @@ class ManagedThreadExecutionStore(ThreadExecutionStore):
         created = self._store.create_thread(
             agent_id,
             workspace_root,
+            managed_thread_id=thread_target_id,
             scope=scope,
             repo_id=repo_id,
             resource_kind=resource_kind,

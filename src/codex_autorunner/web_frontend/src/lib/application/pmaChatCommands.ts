@@ -79,6 +79,7 @@ export function planStartChat(
 }
 
 export function planStartAndSendChat(
+  chatId: string,
   scope: PmaChatScopeOption,
   agent: string,
   profile: string,
@@ -96,6 +97,7 @@ export function planStartAndSendChat(
   return {
     kind: 'StartAndSendChat',
     body: buildManagedThreadStartMessagePayload(
+      chatId,
       scope,
       agent,
       profile,

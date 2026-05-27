@@ -293,6 +293,7 @@ class ThreadActivityRecordRequest:
 class ThreadTargetCreateRequest:
     agent_id: str
     workspace_root: str
+    thread_target_id: Optional[str] = None
     repo_id: Optional[str] = None
     resource_kind: Optional[str] = None
     resource_id: Optional[str] = None
@@ -311,6 +312,7 @@ class ThreadTargetCreateRequest:
                 data.get("workspace_root"),
                 field_name="workspace_root",
             ),
+            thread_target_id=normalize_optional_text(data.get("thread_target_id")),
             repo_id=normalize_optional_text(data.get("repo_id")),
             resource_kind=normalize_optional_text(data.get("resource_kind")),
             resource_id=normalize_optional_text(data.get("resource_id")),
@@ -323,6 +325,7 @@ class ThreadTargetCreateRequest:
         return {
             "agent_id": self.agent_id,
             "workspace_root": self.workspace_root,
+            "thread_target_id": self.thread_target_id,
             "repo_id": self.repo_id,
             "resource_kind": self.resource_kind,
             "resource_id": self.resource_id,

@@ -65,7 +65,6 @@
     chatListVirtualKey as chatListVirtualKeyForPins,
     chatSummaryForSessionId,
     initialChatDetailSessionState,
-    isLocalDraftChatId,
     markChatGroupRead,
     markSessionChatRead,
     markVisibleChatsRead,
@@ -190,12 +189,10 @@
   const COMPACT_SUMMARY_PROMPT =
     'Summarize the conversation so far into a concise context block I can paste into a new thread. Include goals, constraints, decisions, and current state.';
   let readModelState = $state(readModelEntityStore.snapshot());
-  let activeChatId = $state<string | null>(null);
   // Unsent new chats are page-local only: `localDraftChat` drives the composer until
   // the first send creates the managed thread. They are intentionally omitted from
   // the sidebar index (`chats`) so leaving the flow does not surface a draft row.
   let localDraftChat = $state<PmaChatSummary | null>(null);
-  let committedDraftChat = $state<PmaChatSummary | null>(null);
   let agents = $state<JsonRecord[]>([]);
   let models = $state<JsonRecord[]>([]);
   let scopeOptions = $state<PmaChatScopeOption[]>(buildPmaChatScopeOptions([], []));
@@ -258,9 +255,7 @@
       ? selectTicketRunGroups(readModelState, currentChatIndexRequest)
       : backendTicketRunGroups
   );
-  const committedChatPlaceholders = $derived<PmaChatSummary[]>(
-    [committedDraftChat].filter((chat): chat is PmaChatSummary => Boolean(chat))
-  );
+  const committedChatPlaceholders = $derived<PmaChatSummary[]>([]);
   const visibleLocalChatPlaceholders = $derived<PmaChatSummary[]>(
     selectVisibleLocalChatPlaceholders(persistedChats, committedChatPlaceholders)
   );
@@ -282,9 +277,10 @@
   const chatListSourceChats = $derived<PmaChatSummary[]>(
     statusFilter === 'drafts' ? filteredDraftChats : categoryFilter === 'ticket_run' ? facetChats : chats
   );
+  const activeChatId = $derived<string | null>(readModelState.activeChatId);
 
   function chatSummaryForId(chatId: string | null): PmaChatSummary | null {
-    return chatSummaryForSessionId(chatId, chats, localDraftChat, committedDraftChat)
+    return chatSummaryForSessionId(chatId, chats, localDraftChat)
       ?? (chatId ? selectPmaChats(readModelState).find((chat) => chat.id === chatId) ?? null : null);
   }
 
@@ -302,7 +298,6 @@
     const known =
       selectPmaChats(readModelState).find((chat) => chat.id === record.chatId) ??
       (localDraftChat?.id === record.chatId ? localDraftChat : null) ??
-      (committedDraftChat?.id === record.chatId ? committedDraftChat : null) ??
       record.chatSnapshot ??
       null;
     const raw = known?.raw ?? {};
@@ -348,7 +343,7 @@
   let draft = $state('');
   let loadingChats = $state(true);
   let loadingMoreChats = $state(false);
-  let loadingActive = $state(false);
+  let refreshingActive = $state(false);
   let sending = $state(false);
   let creating = $state(false);
   let archiving = $state(false);
@@ -425,7 +420,6 @@
   let composerEditVersion = 0;
   let pendingInitialDraftCreate = false;
   let pendingPointerChatId: string | null = null;
-  let pendingCommittedDetailUrlChatId = $state<string | null>(null);
   let removeDocumentChatPointerCapture: (() => void) | null = null;
   let transcriptAtBottom = $state(true);
   let transcriptApi: { scrollToBottom: (behavior?: ScrollBehavior) => void } | null = null;
@@ -704,7 +698,7 @@
       activeChat,
       assistantSharedFileCount: assistantSharedFiles.length,
       streamState,
-      loadingActive,
+      loadingActive: refreshingActive,
       activeError,
       draft,
       pendingAttachmentCount: pendingAttachments.length
@@ -762,7 +756,6 @@
     readSessionState: readChatDetailSessionState,
     writeSessionState: writeChatDetailSessionState,
     getLocalDraftChat: () => localDraftChat,
-    syncDetailUrl: syncCommittedDetailUrl,
     invalidateChatMutation,
     refreshActive,
     setSending: (value) => {
@@ -971,6 +964,7 @@
 
   afterNavigate(() => {
     hydrateChatListFiltersFromUrl();
+    pageController.setRoute(currentRouteSnapshot());
   });
 
   function chatTransportFilterOptions(): { key: ChatFacetTransport; label: string; count: number }[] {
@@ -1051,9 +1045,16 @@
     };
     readModelEntityStore.setReadMarkers(loadLastSeenMap());
     pageController.mount({
-      route: currentRouteSnapshot(),
+      route: initialRouteSnapshot(),
       currentRequest: currentChatIndexRequest,
       ticketRunGroupRequest
+    });
+    const handlePopState = () => {
+      pageController.setRoute(currentRouteSnapshot());
+    };
+    window.addEventListener('popstate', handlePopState);
+    onDestroy(() => {
+      window.removeEventListener('popstate', handlePopState);
     });
   });
 
@@ -1064,10 +1065,6 @@
   $effect(() => {
     activeChatId;
     syncComposerToActiveChat();
-  });
-
-  $effect(() => {
-    pageController.setRoute(currentRouteSnapshot());
   });
 
   $effect(() => {
@@ -1098,7 +1095,7 @@
     try {
       const fromUrl = readChatListFiltersFromRoute();
       if (chatListFiltersEqual(chatListFilters, fromUrl)) return;
-      void goto(chatsHubHref(page.params.chatId ?? null), {
+      void goto(chatsHubHref(activeChatId), {
         replaceState: true,
         keepFocus: true,
         noScroll: true
@@ -1120,14 +1117,14 @@
   // output for a foreign model, so the agent silently stops responding.
   $effect(() => {
     const chat = activeChat;
-    if (!chat || isLocalDraftChatId(chat.id) || !chat.agentId) return;
+    if (!chat || !chat.agentId) return;
     if (`${chat.id}|${chat.agentId}` === syncedSelectorKey) return;
     syncSelectorsToActiveChat();
   });
 
   $effect(() => {
     const chat = activeChat;
-    if (!chat || isLocalDraftChatId(chat.id)) {
+    if (!chat) {
       artifactDeliveries = [];
       artifactDeliveryError = null;
       artifactDeliveryLoadKey = '';
@@ -1153,7 +1150,7 @@
     const cardCountChanged = cardCount !== lastScrolledCardCount;
     const eventCountChanged = eventCount !== lastScrolledEventCount;
 
-    if (!activeChat || loadingActive || (!chatChanged && !cardCountChanged && !eventCountChanged)) return;
+    if (!activeChat || refreshingActive || (!chatChanged && !cardCountChanged && !eventCountChanged)) return;
 
     // Switching to a new chat re-arms sticky-bottom; otherwise let the
     // user's current followBottom state decide.
@@ -1170,36 +1167,29 @@
       activeChatId,
       detailMode,
       localDraftChat,
-      committedDraftChat,
-      pendingCommittedDetailUrlChatId,
-      loadingActive,
+      loadingActive: refreshingActive,
       activeError
     };
   }
 
   function writeChatDetailSessionState(state: ChatDetailSessionState): void {
+    readModelEntityStore.setActiveChatId(state.activeChatId);
     if (
-      activeChatId === state.activeChatId &&
       detailMode === state.detailMode &&
       localDraftChat === state.localDraftChat &&
-      committedDraftChat === state.committedDraftChat &&
-      pendingCommittedDetailUrlChatId === state.pendingCommittedDetailUrlChatId &&
-      loadingActive === state.loadingActive &&
+      refreshingActive === state.loadingActive &&
       activeError === state.activeError
     ) {
       return;
     }
-    activeChatId = state.activeChatId;
     detailMode = state.detailMode;
     localDraftChat = state.localDraftChat;
-    committedDraftChat = state.committedDraftChat;
-    pendingCommittedDetailUrlChatId = state.pendingCommittedDetailUrlChatId;
-    loadingActive = state.loadingActive;
+    refreshingActive = state.loadingActive;
     activeError = state.activeError;
   }
 
   function writeLiveProjectionState(state: ChatDetailLiveProjectionState): void {
-    loadingActive = state.loadingActive;
+    refreshingActive = state.loadingActive;
     activeError = state.activeError;
     streamState = state.streamState;
     streamError = state.streamError;
@@ -1357,8 +1347,7 @@
 
   async function selectChat(chatId: string): Promise<void> {
     await pageController.selectChat(chatId, { syncUrl: true });
-    const urlPromise = syncDetailUrl(chatId);
-    await urlPromise;
+    await syncCommittedDetailUrl(chatId, { mode: 'push' });
   }
 
   function chatIdFromRowEvent(event: Event, fallbackChatId: string): string {
@@ -1414,7 +1403,6 @@
 
   async function retireChat(chatId: string, options: { confirmed?: boolean } = {}): Promise<void> {
     if (archiving) return;
-    if (isLocalDraftChatId(chatId)) return;
     if (!options.confirmed) {
       const chat = chatSummaryForId(chatId);
       const ok = await confirmDialog({
@@ -1474,23 +1462,23 @@
     archiving = false;
   }
 
-  async function syncDetailUrl(detailId: string): Promise<void> {
+  async function replaceDetailUrl(detailId: string): Promise<void> {
     const params = new URLSearchParams(page.url.searchParams);
     for (const key of ['chat', 'detail', 'draft', 'new', 'kind']) params.delete(key);
     const target = chatRoute(detailId, { searchParams: params });
-    await goto(href(target), { keepFocus: true, noScroll: true });
+    history.replaceState(history.state, '', href(target));
   }
 
-  async function syncCommittedDetailUrl(detailId: string): Promise<void> {
-    try {
-      await syncDetailUrl(detailId);
-    } catch (error) {
-      if (pendingCommittedDetailUrlChatId === detailId) {
-        pendingCommittedDetailUrlChatId = null;
-        pageController.setRoute(currentRouteSnapshot());
-      }
-      throw error;
+  async function syncCommittedDetailUrl(detailId: string, options: { mode?: 'push' | 'replace' } = {}): Promise<void> {
+    if (!detailId) return;
+    if (options.mode !== 'push') {
+      await replaceDetailUrl(detailId);
+      return;
     }
+    const params = new URLSearchParams(currentBrowserUrl().searchParams);
+    for (const key of ['chat', 'detail', 'draft', 'new', 'kind']) params.delete(key);
+    const target = chatRoute(detailId, { searchParams: params });
+    history.pushState(history.state, '', href(target));
   }
 
   async function refreshActive(chatId: string, options: { quiet?: boolean } = {}): Promise<void> {
@@ -1656,7 +1644,7 @@
     }
     fileDrawerOpen = true;
     const refreshes: Promise<unknown>[] = [refreshChatFileBox({ quiet: true })];
-    if (activeChat && !isLocalDraftChatId(activeChat.id)) {
+    if (activeChat) {
       const key = `${activeChat.id}|${activeChat.repoId ?? ''}`;
       artifactDeliveryLoadKey = key;
       refreshes.push(refreshArtifactDeliveries(activeChat.repoId ?? null, key));
@@ -1682,12 +1670,35 @@
     return parts.join(' · ');
   }
 
-  function currentRouteSnapshot() {
+  function initialRouteSnapshot() {
+    const url = currentBrowserUrl();
     return {
-      chatId: page.params.chatId,
-      searchParams: page.url.searchParams,
+      chatId: chatIdFromPath(url.pathname),
+      searchParams: url.searchParams,
       data: safePageData()
     };
+  }
+
+  function currentRouteSnapshot() {
+    const url = currentBrowserUrl();
+    return {
+      chatId: chatIdFromPath(url.pathname),
+      searchParams: url.searchParams,
+      data: safePageData()
+    };
+  }
+
+  function currentBrowserUrl(): URL {
+    if (typeof window !== 'undefined') return new URL(window.location.href);
+    return page.url;
+  }
+
+  function chatIdFromPath(pathname: string): string | null {
+    const marker = '/chats/';
+    const index = pathname.indexOf(marker);
+    if (index < 0) return null;
+    const encoded = pathname.slice(index + marker.length).split('/')[0]?.trim();
+    return encoded ? decodeURIComponent(encoded) : null;
   }
 
   function safePageData(): ChatRouteLoadData | undefined {
@@ -1806,7 +1817,7 @@
     const scope = selectedScope;
     const chatKind = newChatKind === 'agent' && canStartCodingAgentChat ? 'coding_agent' : 'pma';
     return {
-      id: `draft:pma:${Date.now()}`,
+      id: `pma:${crypto.randomUUID()}`,
       title: newChatDisplayName(),
       lifecycleStatus: 'draft',
       status: 'idle',
@@ -1947,9 +1958,10 @@
       if (newChatKind === 'agent') ensureCodingAgentScope();
     }
     persistCurrentNewChatPreference();
-    writeChatDetailSessionState(startLocalDraftChat(readChatDetailSessionState(), newDraftChatSummary()));
+    const draftChat = newDraftChatSummary();
+    writeChatDetailSessionState(startLocalDraftChat(readChatDetailSessionState(), draftChat));
     closeStream();
-    void goto(chatsHubHref(null), { replaceState: true });
+    void syncCommittedDetailUrl(draftChat.id);
     creating = false;
   }
 
@@ -2166,7 +2178,7 @@
     if (spec.id === 'files') {
       const refreshedCount = await refreshChatFileBox({ quiet: true });
       if (refreshedCount !== null) {
-        if (activeChat && !isLocalDraftChatId(activeChat.id)) {
+        if (activeChat) {
           const key = `${activeChat.id}|${activeChat.repoId ?? ''}`;
           artifactDeliveryLoadKey = key;
           await refreshArtifactDeliveries(activeChat.repoId ?? null, key, { quiet: true });
@@ -2850,7 +2862,7 @@
           onSelect: () => void openFileDrawer(),
           ariaLabel: 'Open chat files'
         } satisfies OverflowMenuItem}
-        {@const overflowItems = !isPmaChatArchived(activeChat) && !isLocalDraftChatId(activeChat.id)
+        {@const overflowItems = !isPmaChatArchived(activeChat)
           ? [
               filesItem,
               {
@@ -2891,13 +2903,7 @@
     </div>
 
     <div bind:this={messageStack} class="message-stack" aria-live="off">
-      {#if loadingActive && (activeChat || activeChatId)}
-        <div class="state-panel loading-state">
-          <span class="state-icon" aria-hidden="true"></span>
-          <strong>Loading active chat</strong>
-          <p>Collecting timeline and status.</p>
-        </div>
-      {:else if activeError}
+      {#if activeError}
         <div class="state-panel error">
           <strong>Could not load this chat</strong>
           <p>{activeError.message}</p>
