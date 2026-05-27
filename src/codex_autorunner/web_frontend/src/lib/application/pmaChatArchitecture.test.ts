@@ -221,6 +221,50 @@ describe('PMA chat detail state composition', () => {
     expect(model.alertAnnouncement).toBe('');
   });
 
+  it('does not duplicate visible assertive alerts in the sr-only alert region', () => {
+    const activeErrorModel = buildChatDetailDisplayReadModel({
+      transcriptCards: [],
+      queuedTurns: [],
+      displayedProgress: null,
+      activeChat: chatSummary('chat-1'),
+      assistantSharedFileCount: 0,
+      streamState: 'connected',
+      loadingActive: false,
+      activeError: new Error('backend unavailable'),
+      draft: '',
+      pendingAttachmentCount: 0
+    });
+    const interruptedModel = buildChatDetailDisplayReadModel({
+      transcriptCards: [],
+      queuedTurns: [],
+      displayedProgress: null,
+      activeChat: chatSummary('chat-1'),
+      assistantSharedFileCount: 0,
+      streamState: 'interrupted',
+      loadingActive: false,
+      activeError: null,
+      draft: '',
+      pendingAttachmentCount: 0
+    });
+    const failedProgress = { ...progress('run-1', 3, []), status: 'failed' as const, phase: 'tool_error' };
+    const failedModel = buildChatDetailDisplayReadModel({
+      transcriptCards: [],
+      queuedTurns: [],
+      displayedProgress: failedProgress,
+      activeChat: chatSummary('chat-1'),
+      assistantSharedFileCount: 0,
+      streamState: 'connected',
+      loadingActive: false,
+      activeError: null,
+      draft: '',
+      pendingAttachmentCount: 0
+    });
+
+    expect(activeErrorModel.alertAnnouncement).toBe('');
+    expect(interruptedModel.alertAnnouncement).toBe('');
+    expect(failedModel.alertAnnouncement).toBe('Turn failed: tool error');
+  });
+
   it('shows the start picker only for an idle selected chat with no projected activity', () => {
     const model = buildChatDetailDisplayReadModel({
       transcriptCards: [],

@@ -237,8 +237,6 @@
     {@const isOptimisticUser = card.message.role === 'user' && card.id.startsWith('optimistic:user:')}
     <article
       class={`message ${card.message.role === 'user' ? 'user' : 'assistant'}${isOptimisticUser ? ' is-sending' : ''}`}
-      aria-live={isStreaming ? undefined : 'polite'}
-      aria-atomic="true"
     >
       <span>{card.message.role === 'user' ? 'You' : assistantLabel}</span>
       {#if isStreaming}
@@ -289,7 +287,7 @@
     </article>
   {:else if card.kind === 'intermediate'}
     {#if isThinkingTrace(card)}
-      <details class="tool-call-bar thinking-trace" aria-live="polite" aria-atomic="true">
+      <details class="tool-call-bar thinking-trace">
         <summary>
           <span>Thinking</span>
           <strong>{thinkingTraceLabel(card)}</strong>
@@ -299,14 +297,14 @@
         </div>
       </details>
     {:else if isCommentaryTrace(card)}
-      <article class="message commentary" aria-live="polite" aria-atomic="true">
+      <article class="message commentary">
         <span class="commentary-kind">{card.title}</span>
         <div class="message-markdown markdown-body">
           {@html renderMarkdownToHtml(card.text, { openLinksInNewTab: true })}
         </div>
       </article>
     {:else}
-      <details class="tool-call-bar trace-update" aria-live="polite" aria-atomic="true">
+      <details class="tool-call-bar trace-update">
         <summary>
           <span>{traceKindLabel(card)}</span>
           <strong>{traceSummaryLabel(card)}</strong>
@@ -352,7 +350,7 @@
         {#each visibleTurnSummaryCards(card) as traceCard (traceCard.id)}
           {#if traceCard.kind === 'intermediate'}
             {#if isThinkingTrace(traceCard)}
-              <details class="tool-call-bar thinking-trace nested-trace" aria-live="polite" aria-atomic="true">
+              <details class="tool-call-bar thinking-trace nested-trace">
                 <summary>
                   <span>Thinking</span>
                   <strong>{thinkingTraceLabel(traceCard)}</strong>
@@ -362,14 +360,14 @@
                 </div>
               </details>
             {:else if isCommentaryTrace(traceCard)}
-              <article class="message commentary nested-commentary" aria-live="polite" aria-atomic="true">
+              <article class="message commentary nested-commentary">
                 <span class="commentary-kind">{traceCard.title}</span>
                 <div class="message-markdown markdown-body">
                   {@html renderMarkdownToHtml(traceCard.text, { openLinksInNewTab: true })}
                 </div>
               </article>
             {:else}
-              <details class="tool-call-bar trace-update nested-trace" aria-live="polite" aria-atomic="true">
+              <details class="tool-call-bar trace-update nested-trace">
                 <summary>
                   <span>{traceKindLabel(traceCard)}</span>
                   <strong>{traceSummaryLabel(traceCard)}</strong>
