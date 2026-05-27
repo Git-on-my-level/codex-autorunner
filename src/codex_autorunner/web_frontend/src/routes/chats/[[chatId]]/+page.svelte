@@ -2520,8 +2520,6 @@
           {/if}
 
           <span class="chat-row-meta">
-            <span class="chat-id-tag">#{chat.id.slice(0, 6).toLowerCase()}</span>
-            <span class="chat-meta-dot" aria-hidden="true">·</span>
             {#if !nested}
               <span
                 class="chat-scope-detail-tag"

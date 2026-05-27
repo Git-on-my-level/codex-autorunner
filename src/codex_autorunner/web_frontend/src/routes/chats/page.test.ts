@@ -286,6 +286,25 @@ describe('/chats page', () => {
     expect(body).not.toContain('Loading chats');
   });
 
+  it('does not render short chat ID tags in chat list rows', () => {
+    readModelEntityStore.upsertChatIndexRows([
+      {
+        ...chatIndexRow(),
+        chatId: '51e8dc9a-chat-row',
+        title: 'New coding agent chat',
+        repoId: 'car-workspace'
+      }
+    ]);
+
+    const { body } = render(Page);
+    const pageSource = chatDetailPageSource();
+
+    expect(body).toContain('New coding agent chat');
+    expect(body).toContain('car-workspace');
+    expect(body).not.toContain('#51e8dc');
+    expect(pageSource).not.toContain('chat.id.slice(0, 6)');
+  });
+
   it('renders active rebound rows from chat-index even when raw lifecycle fields are stale archived', () => {
     readModelEntityStore.upsertChatIndexRows([
       {
