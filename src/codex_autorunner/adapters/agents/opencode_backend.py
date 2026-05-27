@@ -508,10 +508,10 @@ class OpenCodeBackend(AgentBackend):
                     effective_runtime=output_result.effective_runtime,
                 )
 
-            if output_result.text:
-                yield Completed(timestamp=now_iso(), final_message=output_result.text)
-            elif output_result.error:
+            if output_result.error:
                 yield Failed(timestamp=now_iso(), error_message=output_result.error)
+            elif output_result.text:
+                yield Completed(timestamp=now_iso(), final_message=output_result.text)
             else:
                 yield Completed(timestamp=now_iso(), final_message="")
         finally:

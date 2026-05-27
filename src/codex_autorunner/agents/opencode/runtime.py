@@ -35,7 +35,7 @@ from .event_fields import (
 from .event_fields import (
     extract_part_message_id as extract_event_part_message_id,
 )
-from .output_assembly import OutputAssembler
+from .output_assembly import OutputAssembler, OutputAssemblyResult
 from .protocol_payload import (
     OPENCODE_PERMISSION_REJECT,
     PERMISSION_ALLOW,
@@ -49,6 +49,7 @@ from .protocol_payload import (
     extract_part_and_delta,
     extract_permission_request,
     extract_question_request,
+    extract_question_tool_request,
     extract_session_id,
     extract_status_type,
     extract_turn_id,
@@ -280,6 +281,151 @@ async def collect_opencode_output_from_events(
         raise ValueError("events or event_stream_factory must be provided")
 
     terminal_signal: Optional[str] = None
+    fatal_question_tool_error: Optional[str] = None
+    terminal_assistant_completion_seen = False
+    nonterminal_assistant_checkpoint_seen = False
+
+    async def _handle_question_request(
+        request_id: Optional[str],
+        props: dict[str, Any],
+        *,
+        event_session_id: Optional[str],
+        source: str,
+    ) -> None:
+        nonlocal fatal_question_tool_error
+        questions = props.get("questions") if isinstance(props, dict) else []
+        question_count = len(questions) if isinstance(questions, list) else 0
+        log_event(
+            logger,
+            logging.INFO,
+            "opencode.question.asked",
+            request_id=request_id,
+            question_count=question_count,
+            session_id=event_session_id,
+            source=source,
+        )
+        if not request_id:
+            return
+        dedupe_key = (event_session_id, request_id)
+        if dedupe_key in seen_question_request_ids:
+            return
+        seen_question_request_ids.add(dedupe_key)
+        if question_handler is not None:
+            try:
+                answers = await question_handler(request_id, props)
+            except Exception as exc:  # intentional: pluggable callback handler
+                log_event(
+                    logger,
+                    logging.WARNING,
+                    "opencode.question.auto_reply_failed",
+                    request_id=request_id,
+                    session_id=event_session_id,
+                    source=source,
+                    exc=exc,
+                )
+                if reject_question is not None:
+                    try:
+                        await reject_question(request_id)
+                    except (OSError, RuntimeError, ValueError):
+                        logger.debug(
+                            "reject_question after auto_reply_failed failed",
+                            exc_info=True,
+                        )
+                return
+            if answers is None:
+                if reject_question is not None:
+                    try:
+                        await reject_question(request_id)
+                    except (OSError, RuntimeError, ValueError):
+                        logger.debug(
+                            "reject_question for null answers failed",
+                            exc_info=True,
+                        )
+                return
+            normalized_answers = normalize_question_answers(
+                answers, question_count=question_count
+            )
+            if reply_question is not None:
+                try:
+                    await reply_question(request_id, normalized_answers)
+                    log_event(
+                        logger,
+                        logging.INFO,
+                        "opencode.question.replied",
+                        request_id=request_id,
+                        question_count=question_count,
+                        session_id=event_session_id,
+                        mode="handler",
+                        source=source,
+                    )
+                except (OSError, RuntimeError, ValueError) as exc:
+                    log_event(
+                        logger,
+                        logging.WARNING,
+                        "opencode.question.auto_reply_failed",
+                        request_id=request_id,
+                        session_id=event_session_id,
+                        source=source,
+                        exc=exc,
+                    )
+                    if source == "tool_part":
+                        fatal_question_tool_error = (
+                            "OpenCode question reply failed: " f"{exc}"
+                        )
+            return
+        if normalized_question_policy == "ignore":
+            return
+        if normalized_question_policy == "reject":
+            if reject_question is not None:
+                try:
+                    await reject_question(request_id)
+                except (OSError, RuntimeError, ValueError) as exc:
+                    log_event(
+                        logger,
+                        logging.WARNING,
+                        "opencode.question.auto_reply_failed",
+                        request_id=request_id,
+                        session_id=event_session_id,
+                        source=source,
+                        exc=exc,
+                    )
+            return
+        auto_answers = auto_answers_for_questions(
+            questions if isinstance(questions, list) else [],
+            normalized_question_policy,
+        )
+        normalized_answers = normalize_question_answers(
+            auto_answers, question_count=question_count
+        )
+        if reply_question is not None:
+            try:
+                await reply_question(request_id, normalized_answers)
+                log_event(
+                    logger,
+                    logging.INFO,
+                    "opencode.question.auto_replied",
+                    request_id=request_id,
+                    question_count=question_count,
+                    session_id=event_session_id,
+                    policy=normalized_question_policy,
+                    answers=summarize_question_answers(normalized_answers),
+                    source=source,
+                )
+            except (OSError, RuntimeError, ValueError) as exc:
+                log_event(
+                    logger,
+                    logging.WARNING,
+                    "opencode.question.auto_reply_failed",
+                    request_id=request_id,
+                    session_id=event_session_id,
+                    source=source,
+                    exc=exc,
+                )
+                if source == "tool_part":
+                    fatal_question_tool_error = (
+                        "OpenCode question reply failed: " f"{exc}"
+                    )
+
     try:
         while True:
             if should_stop is not None and should_stop():
@@ -358,123 +504,12 @@ async def collect_opencode_output_from_events(
             is_primary_session = event_session_id == session_id or not event_session_id
             if event.event == "question.asked":
                 request_id, props = extract_question_request(payload)
-                questions = props.get("questions") if isinstance(props, dict) else []
-                question_count = len(questions) if isinstance(questions, list) else 0
-                log_event(
-                    logger,
-                    logging.INFO,
-                    "opencode.question.asked",
-                    request_id=request_id,
-                    question_count=question_count,
-                    session_id=event_session_id,
+                await _handle_question_request(
+                    request_id,
+                    props,
+                    event_session_id=event_session_id,
+                    source="event",
                 )
-                if not request_id:
-                    continue
-                dedupe_key = (event_session_id, request_id)
-                if dedupe_key in seen_question_request_ids:
-                    continue
-                seen_question_request_ids.add(dedupe_key)
-                if question_handler is not None:
-                    try:
-                        answers = await question_handler(request_id, props)
-                    except Exception as exc:  # intentional: pluggable callback handler
-                        log_event(
-                            logger,
-                            logging.WARNING,
-                            "opencode.question.auto_reply_failed",
-                            request_id=request_id,
-                            session_id=event_session_id,
-                            exc=exc,
-                        )
-                        if reject_question is not None:
-                            try:
-                                await reject_question(request_id)
-                            except (OSError, RuntimeError, ValueError):
-                                logger.debug(
-                                    "reject_question after auto_reply_failed failed",
-                                    exc_info=True,
-                                )
-                        continue
-                    if answers is None:
-                        if reject_question is not None:
-                            try:
-                                await reject_question(request_id)
-                            except (OSError, RuntimeError, ValueError):
-                                logger.debug(
-                                    "reject_question for null answers failed",
-                                    exc_info=True,
-                                )
-                        continue
-                    normalized_answers = normalize_question_answers(
-                        answers, question_count=question_count
-                    )
-                    if reply_question is not None:
-                        try:
-                            await reply_question(request_id, normalized_answers)
-                            log_event(
-                                logger,
-                                logging.INFO,
-                                "opencode.question.replied",
-                                request_id=request_id,
-                                question_count=question_count,
-                                session_id=event_session_id,
-                                mode="handler",
-                            )
-                        except (OSError, RuntimeError, ValueError) as exc:
-                            log_event(
-                                logger,
-                                logging.WARNING,
-                                "opencode.question.auto_reply_failed",
-                                request_id=request_id,
-                                session_id=event_session_id,
-                                exc=exc,
-                            )
-                    continue
-                if normalized_question_policy == "ignore":
-                    continue
-                if normalized_question_policy == "reject":
-                    if reject_question is not None:
-                        try:
-                            await reject_question(request_id)
-                        except (OSError, RuntimeError, ValueError) as exc:
-                            log_event(
-                                logger,
-                                logging.WARNING,
-                                "opencode.question.auto_reply_failed",
-                                request_id=request_id,
-                                session_id=event_session_id,
-                                exc=exc,
-                            )
-                    continue
-                auto_answers = auto_answers_for_questions(
-                    questions if isinstance(questions, list) else [],
-                    normalized_question_policy,
-                )
-                normalized_answers = normalize_question_answers(
-                    auto_answers, question_count=question_count
-                )
-                if reply_question is not None:
-                    try:
-                        await reply_question(request_id, normalized_answers)
-                        log_event(
-                            logger,
-                            logging.INFO,
-                            "opencode.question.auto_replied",
-                            request_id=request_id,
-                            question_count=question_count,
-                            session_id=event_session_id,
-                            policy=normalized_question_policy,
-                            answers=summarize_question_answers(normalized_answers),
-                        )
-                    except (OSError, RuntimeError, ValueError) as exc:
-                        log_event(
-                            logger,
-                            logging.WARNING,
-                            "opencode.question.auto_reply_failed",
-                            request_id=request_id,
-                            session_id=event_session_id,
-                            exc=exc,
-                        )
                 continue
             if event.event == "permission.asked":
                 request_id, props = extract_permission_request(payload)
@@ -570,6 +605,38 @@ async def collect_opencode_output_from_events(
                     if isinstance(part_type, str)
                     else assembler.lookup_part_type(part_id)
                 )
+                if resolved_part_type == "tool" and isinstance(part_dict, dict):
+                    (
+                        question_request_id,
+                        question_props,
+                        question_status,
+                        question_error,
+                    ) = extract_question_tool_request(part_dict)
+                    if question_request_id or question_props:
+                        if question_status == "error":
+                            fatal_question_tool_error = "OpenCode question tool failed"
+                            if question_error:
+                                fatal_question_tool_error = (
+                                    f"{fatal_question_tool_error}: {question_error}"
+                                )
+                            assembler.error = fatal_question_tool_error
+                            break
+                        if question_status not in {"completed", "complete", "success"}:
+                            if not question_request_id:
+                                fatal_question_tool_error = (
+                                    "OpenCode question tool missing request id"
+                                )
+                                assembler.error = fatal_question_tool_error
+                                break
+                            await _handle_question_request(
+                                question_request_id,
+                                question_props,
+                                event_session_id=event_session_id,
+                                source="tool_part",
+                            )
+                            if fatal_question_tool_error is not None:
+                                assembler.error = fatal_question_tool_error
+                                break
                 if part_with_session is None and (
                     isinstance(part_id, str)
                     or isinstance(part_message_id, str)
@@ -633,9 +700,15 @@ async def collect_opencode_output_from_events(
                 )
             if event.event == "message.completed" and is_primary_session:
                 assembler.on_primary_assistant_completion(payload, message_role)
-                if message_role == "assistant" and message_completion_is_turn_terminal(
-                    payload
+                completion_is_terminal = message_completion_is_turn_terminal(payload)
+                if message_role in {"assistant", None} and completion_is_terminal:
+                    terminal_assistant_completion_seen = True
+                elif (
+                    message_role in {"assistant", None}
+                    and parse_message_response(payload).text
                 ):
+                    nonterminal_assistant_checkpoint_seen = True
+                if message_role == "assistant" and completion_is_terminal:
                     lifecycle.on_primary_completion()
             if event.event == "session.idle" or (
                 event.event == "session.status"
@@ -663,6 +736,29 @@ async def collect_opencode_output_from_events(
 
     result = await assembler.build_result()
     error = result.error
+    if fatal_question_tool_error:
+        error = fatal_question_tool_error
+        result = OutputAssemblyResult(
+            text="",
+            error=error,
+            usage=result.usage,
+            output_source=result.output_source,
+            effective_runtime=result.effective_runtime,
+        )
+    elif (
+        result.text
+        and result.output_source == "event_stream"
+        and nonterminal_assistant_checkpoint_seen
+        and not terminal_assistant_completion_seen
+    ):
+        error = "OpenCode turn ended without terminal assistant message"
+        result = OutputAssemblyResult(
+            text="",
+            error=error,
+            usage=result.usage,
+            output_source=result.output_source,
+            effective_runtime=result.effective_runtime,
+        )
     if (
         error
         and error.startswith(_OPENCODE_FIRST_EVENT_TIMEOUT_REASON)
@@ -670,6 +766,14 @@ async def collect_opencode_output_from_events(
         and result.text
     ):
         error = None
+    if error and result.text:
+        result = OutputAssemblyResult(
+            text="",
+            error=error,
+            usage=result.usage,
+            output_source=result.output_source,
+            effective_runtime=result.effective_runtime,
+        )
     return OpenCodeTurnOutput(
         text=result.text,
         error=error,
