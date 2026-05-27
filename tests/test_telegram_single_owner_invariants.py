@@ -692,8 +692,13 @@ class TestPlaceholderDeliveryInvariants:
         second_wait.set()
         await asyncio.gather(task_one, task_two)
 
-        placeholder_id = handler._placeholder_ids[2]
-        assert (placeholder_id, PLACEHOLDER_TEXT) in handler._edit_calls
+        assert handler._delete_calls == [(10, 102)]
+        working_placeholders = [
+            call
+            for call in handler._placeholder_calls
+            if call["reply_to"] == 2 and call["text"] == PLACEHOLDER_TEXT
+        ]
+        assert working_placeholders
 
     @pytest.mark.anyio
     async def test_successful_delivery_deletes_placeholder(self) -> None:

@@ -518,8 +518,13 @@ async def test_turn_placeholder_sent_while_queued() -> None:
     second_wait.set()
     await asyncio.gather(task_one, task_two)
 
-    placeholder_id = handler._placeholder_ids[2]
-    assert (placeholder_id, PLACEHOLDER_TEXT) in handler._edit_calls
+    assert handler._delete_calls == [(10, 102)]
+    working_placeholders = [
+        call
+        for call in handler._placeholder_calls
+        if call["reply_to"] == 2 and call["text"] == PLACEHOLDER_TEXT
+    ]
+    assert working_placeholders
 
 
 @pytest.mark.anyio
@@ -544,8 +549,9 @@ async def test_queue_wait_uses_refreshed_placeholder_when_available() -> None:
     finally:
         handler._turn_semaphore.release()
 
-    assert resolved_placeholder_id == 222
-    assert handler._edit_calls[-1] == (222, PLACEHOLDER_TEXT)
+    assert resolved_placeholder_id == 101
+    assert handler._delete_calls == [(10, 222)]
+    assert handler._placeholder_calls[-1]["text"] == PLACEHOLDER_TEXT
 
 
 @pytest.mark.anyio
