@@ -10,6 +10,8 @@
   import ChatThreadPreMessagePickers from '$lib/components/ChatThreadPreMessagePickers.svelte';
   import VoiceComposerButton from '$lib/components/VoiceComposerButton.svelte';
   import ContentSkeleton from '$lib/components/ContentSkeleton.svelte';
+  import OverflowMenu from '$lib/components/OverflowMenu.svelte';
+  import type { OverflowMenuItem } from '$lib/components/OverflowMenu';
   import { confirmDialog } from '$lib/components/confirmDialog';
   import {
     webApi,
@@ -46,6 +48,14 @@
     type ChatTranscriptListItem
   } from '$lib/application/pmaChatArchitecture';
   import { createChatSendController } from '$lib/application/chatSendController';
+  import {
+    loadChatDraftRecords,
+    saveChatDraftRecords,
+    setChatDraftText,
+    sortedChatDraftRecords,
+    type ChatDraftRecord,
+    type ChatDraftRecordMap
+  } from '$lib/application/chatDraftStore';
   import { connectionStore } from '$lib/runtime/connectionStore.svelte';
   import {
     createChatDetailLiveProjection,
@@ -111,6 +121,7 @@
     buildManagedThreadMessagePayload,
     countSemanticTicketRunGroups,
     filterChatEntries,
+    filterPmaChats,
     formatBytes,
     formatRelativeTime,
     isPmaChatArchived,
@@ -124,6 +135,7 @@
     pmaChatKindLabel,
     pmaChatHeaderScopeLine,
     pmaChatBadgeViews,
+    pmaChatFacets,
     chatCategoryLabel,
     chatTransportLabel,
     pmaChatScopeTagView,
@@ -224,6 +236,10 @@
   let scopeKindFilter = $state<ChatFacetScopeKind | null>(DEFAULT_CHAT_LIST_FILTERS.scopeKind);
   let detailMode = $state<'list' | 'detail'>('list');
   let search = $state(DEFAULT_CHAT_LIST_FILTERS.search);
+  let chatDraftRecords = $state<ChatDraftRecordMap>({});
+  let pendingAttachmentsByChat = $state<Record<string, PendingAttachment[]>>({});
+  let draftHydratedChatId: string | null | undefined = undefined;
+  let pendingInitialDraftText: string | null = null;
   const chatListFilters = $derived<ChatListFilters>({
     status: statusFilter,
     category: categoryFilter,
@@ -231,6 +247,7 @@
     scopeKind: scopeKindFilter,
     search
   });
+  const lastSeenMap = $derived<ChatLastSeenMap>(selectReadMarkers(readModelState) as ChatLastSeenMap);
   const currentChatIndexRequest = $derived<ChatIndexWindowRequest>(chatIndexRequestForCurrentFilters());
   const ticketRunGroupRequest = $derived<ChatIndexWindowRequest>(chatTicketRunGroupRequestForFilters());
   const persistedChats = $derived<PmaChatSummary[]>(selectPmaChats(readModelState, currentChatIndexRequest));
@@ -256,13 +273,71 @@
   const facetChats = $derived<PmaChatSummary[]>(
     mergeChatFacetSourceChats(facetPersistedChats, persistedChats, committedChatPlaceholders)
   );
+  const draftChats = $derived<PmaChatSummary[]>(
+    sortedChatDraftRecords(chatDraftRecords).map(draftRecordChatSummary)
+  );
+  const filteredDraftChats = $derived<PmaChatSummary[]>(
+    filterDraftChatsForCurrentFilters(draftChats)
+  );
   const chatListSourceChats = $derived<PmaChatSummary[]>(
-    categoryFilter === 'ticket_run' ? facetChats : chats
+    statusFilter === 'drafts' ? filteredDraftChats : categoryFilter === 'ticket_run' ? facetChats : chats
   );
 
   function chatSummaryForId(chatId: string | null): PmaChatSummary | null {
     return chatSummaryForSessionId(chatId, chats, localDraftChat, committedDraftChat)
       ?? (chatId ? selectPmaChats(readModelState).find((chat) => chat.id === chatId) ?? null : null);
+  }
+
+  function filterDraftChatsForCurrentFilters(source: PmaChatSummary[]): PmaChatSummary[] {
+    return filterPmaChats(source, 'drafts', search, lastSeenMap).filter((chat) => {
+      const facets = pmaChatFacets(chat);
+      if (categoryFilter && facets?.category !== categoryFilter) return false;
+      if (transportFilter && !facets?.transports.includes(transportFilter)) return false;
+      if (scopeKindFilter && facets?.scopeKind !== scopeKindFilter) return false;
+      return true;
+    });
+  }
+
+  function draftRecordChatSummary(record: ChatDraftRecord): PmaChatSummary {
+    const known =
+      selectPmaChats(readModelState).find((chat) => chat.id === record.chatId) ??
+      (localDraftChat?.id === record.chatId ? localDraftChat : null) ??
+      (committedDraftChat?.id === record.chatId ? committedDraftChat : null) ??
+      record.chatSnapshot ??
+      null;
+    const raw = known?.raw ?? {};
+    return {
+      id: record.chatId,
+      title: known?.title ?? record.chatId,
+      lifecycleStatus: known?.lifecycleStatus ?? 'active',
+      status: known?.status ?? 'idle',
+      agentId: known?.agentId ?? null,
+      chatKind: known?.chatKind ?? null,
+      agentProfile: known?.agentProfile ?? null,
+      model: known?.model ?? null,
+      runtime: known?.runtime ?? null,
+      runtimeSource: known?.runtimeSource ?? null,
+      modelSource: known?.modelSource ?? null,
+      reasoning: known?.reasoning ?? null,
+      reasoningSource: known?.reasoningSource ?? null,
+      repoId: known?.repoId ?? null,
+      worktreeId: known?.worktreeId ?? null,
+      ticketId: known?.ticketId ?? null,
+      ticketPath: known?.ticketPath ?? null,
+      runId: known?.runId ?? null,
+      unreadCount: known?.unreadCount ?? 0,
+      flowType: known?.flowType ?? null,
+      isTicketFlow: known?.isTicketFlow ?? false,
+      ticketDone: known?.ticketDone ?? null,
+      ticketStatus: known?.ticketStatus ?? null,
+      progressPercent: known?.progressPercent ?? null,
+      updatedAt: record.updatedAt,
+      raw: {
+        ...raw,
+        has_local_draft: true,
+        local_draft_updated_at: record.updatedAt
+      }
+    };
   }
   const transcriptCards = $derived<ChatTranscriptCard[]>(selectChatTranscript(readModelState, activeChatId));
   const progress = $derived<PmaRunProgress | null>(selectPmaProgress(readModelState, activeChatId));
@@ -270,7 +345,6 @@
   const inboxArtifacts = $derived(artifacts.filter((artifact) => String(artifact.raw.box ?? '').toLowerCase() === 'inbox'));
   const outboxArtifacts = $derived(artifacts.filter((artifact) => String(artifact.raw.box ?? '').toLowerCase() === 'outbox'));
   const queuedTurns = $derived<PmaQueuedTurn[]>(selectPmaQueue(readModelState, activeChatId));
-  const lastSeenMap = $derived<ChatLastSeenMap>(selectReadMarkers(readModelState) as ChatLastSeenMap);
   let draft = $state('');
   let loadingChats = $state(true);
   let loadingMoreChats = $state(false);
@@ -330,7 +404,8 @@
       pinnedChatIds = pinned;
     },
     onInitialDraft: (value) => {
-      draft = value;
+      pendingInitialDraftText = value;
+      setComposerDraft(value, null);
     },
     onCreateInitialDraft: () => {
       pendingInitialDraftCreate = true;
@@ -408,13 +483,53 @@
     autosizeComposer();
   }
 
+  function persistDraftRecords(next: ChatDraftRecordMap): void {
+    chatDraftRecords = next;
+    saveChatDraftRecords(next);
+  }
+
+  function setComposerDraft(value: string, chatId: string | null = activeChatId): void {
+    if (!chatId) {
+      draft = value;
+      return;
+    }
+    if (activeChatId === chatId) draft = value;
+    persistDraftRecords(setChatDraftText(chatDraftRecords, chatId, value, chatSummaryForId(chatId)));
+  }
+
+  function setComposerAttachments(value: PendingAttachment[], chatId: string | null = activeChatId): void {
+    if (!chatId) {
+      pendingAttachments = value;
+      return;
+    }
+    if (activeChatId === chatId) pendingAttachments = value;
+    pendingAttachmentsByChat = value.length > 0
+      ? { ...pendingAttachmentsByChat, [chatId]: value }
+      : Object.fromEntries(Object.entries(pendingAttachmentsByChat).filter(([id]) => id !== chatId));
+  }
+
+  function syncComposerToActiveChat(): void {
+    const chatId = activeChatId;
+    if (draftHydratedChatId === chatId) return;
+    draftHydratedChatId = chatId;
+    const routeDraft = pendingInitialDraftText;
+    const nextDraft = chatId ? (routeDraft ?? chatDraftRecords[chatId]?.text ?? '') : '';
+    draft = nextDraft;
+    pendingAttachments = chatId ? (pendingAttachmentsByChat[chatId] ?? []) : [];
+    if (chatId && routeDraft !== null) {
+      pendingInitialDraftText = null;
+      persistDraftRecords(setChatDraftText(chatDraftRecords, chatId, routeDraft, chatSummaryForId(chatId)));
+    }
+    queueMicrotask(() => autosizeComposer());
+  }
+
   function applyTranscript(text: string): void {
     if (!text) return;
     voiceNotice = null;
     const trimmed = text.trim();
     if (!trimmed) return;
     const sep = draft && !/\s$/.test(draft) ? ' ' : '';
-    draft = `${draft}${sep}${trimmed}`;
+    setComposerDraft(`${draft}${sep}${trimmed}`);
     markComposerEdited();
     queueMicrotask(() => {
       autosizeComposer();
@@ -475,7 +590,12 @@
   );
   const selectedChatWindowView = $derived(selectChatIndexWindowView(readModelState, currentChatIndexRequest));
   const selectedChatWindow = $derived(selectedChatWindowView.window);
-  const filteredEntries = $derived(sortEntriesForPinnedChats(filterChatEntries(chatListEntries, statusFilter, '', lastSeenMap), pinnedChatIds));
+  const filteredEntries = $derived(
+    sortEntriesForPinnedChats(
+      filterChatEntries(chatListEntries, statusFilter === 'drafts' ? 'all' : statusFilter, '', lastSeenMap),
+      pinnedChatIds
+    )
+  );
   const filterCounts = $derived(chatStatusFilterCounts());
   const contextualFacetCounts = $derived(
     selectChatFacetCountsForWindow(
@@ -491,7 +611,7 @@
   const hasSelectedChatWindow = $derived(Boolean(selectedChatWindow));
   const chatListSummaryLoading = $derived(loadingChats && !hasSelectedChatWindow);
   const chatListSummaryCount = $derived(
-    chatListSummaryLoading ? null : filterCounts.all
+    chatListSummaryLoading ? null : filterCounts[statusFilter]
   );
   const filterSummaryChips = $derived(
     buildChatFilterSummaryChips(chatListFilters, {
@@ -506,10 +626,12 @@
   );
   const archiveFilterCount = $derived(filterCounts.archived);
   const showArchiveFilterToggle = $derived(statusFilter === 'archived' || archiveFilterCount > 0);
-  const canLoadMoreChats = $derived(Boolean(selectedChatWindow?.window?.nextCursor));
+  const canLoadMoreChats = $derived(statusFilter !== 'drafts' && Boolean(selectedChatWindow?.window?.nextCursor));
   const initialChatIndexError = $derived(chatIndexLoadError());
   const visibleChatError = $derived(chatError ?? (!hasUsableChatIndex ? initialChatIndexError : null));
-  const showChatListSkeleton = $derived(loadingChats && !hasSelectedChatWindow && !visibleChatError);
+  const showChatListSkeleton = $derived(
+    loadingChats && !hasSelectedChatWindow && !visibleChatError && !(statusFilter === 'drafts' && filteredDraftChats.length > 0)
+  );
 
   function isGroupExpanded(group: ChatRunGroup): boolean {
     if (group.key in expandedRunGroups) return expandedRunGroups[group.key];
@@ -620,12 +742,12 @@
     getActiveChat: () => activeChat,
     getDisplayedProgress: () => displayedProgress,
     getDraft: () => draft,
-    setDraft: (value) => {
-      draft = value;
+    setDraft: (value, chatId) => {
+      setComposerDraft(value, chatId ?? activeChatId);
     },
     getPendingAttachments: () => pendingAttachments,
-    setPendingAttachments: (value) => {
-      pendingAttachments = value;
+    setPendingAttachments: (value, chatId) => {
+      setComposerAttachments(value, chatId ?? activeChatId);
     },
     getComposerEditVersion: () => composerEditVersion,
     getSelectedScope: () => selectedScope,
@@ -711,6 +833,7 @@
   }
 
   function filterChipLabel(key: ChatStatusFilter): string {
+    if (key === 'drafts') return 'Drafts';
     return key === 'all' ? 'All' : key.charAt(0).toUpperCase() + key.slice(1);
   }
 
@@ -725,7 +848,7 @@
       scopeKinds: scopeKindFilter ? [scopeKindFilter] : []
     };
     return {
-      filter: statusFilter,
+      filter: backendChatIndexFilter(statusFilter),
       query: search.trim() || null,
       facets,
       groupBy: categoryFilter === 'ticket_run' ? 'ticket_run' : null,
@@ -735,7 +858,7 @@
 
   function chatTicketRunGroupRequestForFilters(): ChatIndexWindowRequest {
     return {
-      filter: statusFilter,
+      filter: backendChatIndexFilter(statusFilter),
       query: search.trim() || null,
       facets: {
         categories: ['ticket_run'],
@@ -756,8 +879,13 @@
       active: counters.running + localStatusCounts.active,
       waiting: counters.waiting + localStatusCounts.waiting,
       unread: adjustedUnreadFilterCount(counters.unread, knownChats, lastSeenMap),
+      drafts: statusFilter === 'drafts' ? filteredDraftChats.length : sortedChatDraftRecords(chatDraftRecords).length,
       archived: counters.archived
     };
+  }
+
+  function backendChatIndexFilter(filter: ChatStatusFilter): ChatIndexWindowRequest['filter'] {
+    return filter === 'drafts' ? 'all' : filter;
   }
 
   const categoryFilterOptions = $derived(chatCategoryFilterOptions());
@@ -873,6 +1001,10 @@
     return 'Chat';
   }
 
+  function chatHasLocalDraft(chat: PmaChatSummary): boolean {
+    return Boolean(chatDraftRecords[chat.id]?.text.trim());
+  }
+
   function runtimeRecordBoolean(record: Record<string, unknown> | null | undefined, ...keys: string[]): boolean {
     if (!record) return false;
     return keys.some((key) => record[key] === true);
@@ -911,6 +1043,7 @@
   }
 
   onMount(() => {
+    chatDraftRecords = loadChatDraftRecords();
     hydrateChatListFiltersFromUrl();
     document.addEventListener('pointerdown', captureDocumentChatPointer, true);
     removeDocumentChatPointerCapture = () => {
@@ -926,6 +1059,11 @@
 
   $effect(() => {
     pageController.setProgressStatus(progress?.status);
+  });
+
+  $effect(() => {
+    activeChatId;
+    syncComposerToActiveChat();
   });
 
   $effect(() => {
@@ -1885,13 +2023,13 @@
   }
 
   function clearSlashDraft(): void {
-    draft = '';
+    setComposerDraft('');
     markComposerEdited();
     queueMicrotask(() => autosizeComposer());
   }
 
   function applySlashCommand(spec: SlashCommandSpec): void {
-    draft = `/${spec.name}${spec.id === 'compact' || spec.id === 'cancel' || spec.id === 'agent' || spec.id === 'model' || spec.id === 'reasoning' || spec.id === 'profile' || spec.id === 'new' ? ' ' : ''}`;
+    setComposerDraft(`/${spec.name}${spec.id === 'compact' || spec.id === 'cancel' || spec.id === 'agent' || spec.id === 'model' || spec.id === 'reasoning' || spec.id === 'profile' || spec.id === 'new' ? ' ' : ''}`);
     markComposerEdited();
     queueMicrotask(() => {
       autosizeComposer();
@@ -1919,15 +2057,15 @@
     if (spec.id === 'new') {
       const kind = args.toLowerCase();
       newChatKind = kind === 'agent' || kind === 'coding-agent' || kind === 'newt' ? 'agent' : 'pma';
-      await createChat({ preserveSelectedKind: true });
       clearSlashDraft();
+      await createChat({ preserveSelectedKind: true });
       return true;
     }
     if (spec.id === 'newt') {
       newChatKind = 'agent';
+      clearSlashDraft();
       await createChat({ preserveSelectedKind: true });
       showCommandNotice('Started a fresh coding chat.');
-      clearSlashDraft();
       return true;
     }
     if (spec.id === 'agent') {
@@ -2010,9 +2148,9 @@
     }
     if (spec.id === 'reset') {
       newChatKind = 'pma';
+      clearSlashDraft();
       await createChat({ preserveSelectedKind: true });
       showCommandNotice('Started a fresh replacement chat.');
-      clearSlashDraft();
       return true;
     }
     if (spec.id === 'tickets' || spec.id === 'contextspace') {
@@ -2112,7 +2250,7 @@
       uploadState: 'pending' as const,
       file
     }));
-    pendingAttachments = [...pendingAttachments, ...next];
+    setComposerAttachments([...pendingAttachments, ...next]);
     markComposerEdited();
   }
 
@@ -2129,7 +2267,7 @@
   function addLink(): void {
     const href = linkDraft.trim();
     if (!href) return;
-    pendingAttachments = [
+    setComposerAttachments([
       ...pendingAttachments,
       {
         id: `link-${Date.now()}`,
@@ -2140,13 +2278,13 @@
         uploadedName: null,
         uploadState: 'uploaded'
       }
-    ];
+    ]);
     markComposerEdited();
     cancelLinkDialog();
   }
 
   function removeAttachment(attachmentId: string): void {
-    pendingAttachments = removePendingAttachment(pendingAttachments, attachmentId);
+    setComposerAttachments(removePendingAttachment(pendingAttachments, attachmentId));
     markComposerEdited();
   }
 
@@ -2182,6 +2320,7 @@
   }
 
   function handleComposerInput(): void {
+    setComposerDraft(draft);
     markComposerEdited();
     autosizeComposer();
   }
@@ -2281,16 +2420,20 @@
           Mark all as read
         </button>
       {/if}
-      {#if activeChatCount > 0 && statusFilter !== 'archived'}
-        <button
-          class="ghost-button danger"
-          type="button"
-          onclick={retireAllActiveChats}
-          disabled={archiving}
-          aria-label="Retire all active chats"
-        >
-          {archiving ? 'Retiring…' : 'Retire all'}
-        </button>
+      {#if activeChatCount > 0 && statusFilter !== 'archived' && statusFilter !== 'drafts'}
+        <OverflowMenu
+          ariaLabel="Chat list actions"
+          triggerTitle="More actions"
+          items={[
+            {
+              label: archiving ? 'Retiring…' : 'Retire all active chats',
+              onSelect: () => void retireAllActiveChats(),
+              danger: true,
+              disabled: archiving,
+              ariaLabel: 'Retire all active chats'
+            } satisfies OverflowMenuItem
+          ]}
+        />
       {/if}
         </div>
       </div>
@@ -2458,6 +2601,9 @@
               <span class={`chat-scope-kind-tag ${scopeTags.kindKey}`}>{scopeTags.kindLabel}</span>
               {#if isPmaChatArchived(chat)}
                 <span class="chat-scope-kind-tag retired">Retired</span>
+              {/if}
+              {#if chatHasLocalDraft(chat)}
+                <span class="chat-scope-kind-tag draft">Draft</span>
               {/if}
               {#each listBadges as badge}
                 <span class={badge.className}>{badge.label}</span>
@@ -2699,26 +2845,30 @@
         {/if}
       </div>
       {#if activeChat && (showStreamHealthAside || !isPmaChatArchived(activeChat) || activeSharedFileCount > 0 || inboxArtifacts.length > 0 || outboxArtifacts.length > 0)}
+        {@const filesItem = {
+          label: `Files${activeSharedFileCount > 0 ? ` (${activeSharedFileCount})` : ''}`,
+          onSelect: () => void openFileDrawer(),
+          ariaLabel: 'Open chat files'
+        } satisfies OverflowMenuItem}
+        {@const overflowItems = !isPmaChatArchived(activeChat) && !isLocalDraftChatId(activeChat.id)
+          ? [
+              filesItem,
+              {
+                label: archiving ? 'Retiring…' : 'Retire chat',
+                onSelect: () => void retireChat(activeChat.id),
+                danger: true,
+                disabled: archiving,
+                ariaLabel: 'Retire this chat'
+              } satisfies OverflowMenuItem
+            ]
+          : [filesItem]}
         <div class="chat-header-tools">
-          <button
-            class="ghost-button files-action"
-            type="button"
-            onclick={() => void openFileDrawer()}
-            aria-label="Open chat files"
-          >
-            Files{activeSharedFileCount > 0 ? ` ${activeSharedFileCount}` : ''}
-          </button>
-          {#if !isPmaChatArchived(activeChat) && !isLocalDraftChatId(activeChat.id)}
-            <button
-              class="ghost-button danger"
-              type="button"
-              onclick={() => retireChat(activeChat.id)}
-              disabled={archiving}
-              aria-label="Retire this chat"
-            >
-              {archiving ? 'Retiring…' : 'Retire chat'}
-            </button>
-          {/if}
+          <OverflowMenu
+            ariaLabel="Chat actions"
+            triggerTitle="Chat actions"
+            items={overflowItems}
+          />
+
           {#if showStreamHealthAside}
             <aside class="chat-header-aside" aria-label="Chat stream status">
               <div class={`stream-health ${streamState}`} role="status">
@@ -2823,21 +2973,23 @@
     </div>
     <div class="sr-only" aria-live="polite" aria-atomic="false">{srAnnouncement}</div>
 
-    {#if activeChat && transcriptListItems.length > 0 && !transcriptAtBottom}
-      <button
-        type="button"
-        class="jump-to-latest"
-        onclick={() => transcriptApi?.scrollToBottom('smooth')}
-        aria-label="Jump to latest message"
-      >
-        <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <path d="M12 5v14M19 12l-7 7-7-7" />
-        </svg>
-        Jump to latest
-      </button>
-    {/if}
-
-    {#if showStatusBar && statusBar}
+    {#if (activeChat && transcriptListItems.length > 0 && !transcriptAtBottom) || (showStatusBar && statusBar)}
+      <div class="composer-overlay-anchor">
+        <div class="composer-overlay">
+          {#if activeChat && transcriptListItems.length > 0 && !transcriptAtBottom}
+            <button
+              type="button"
+              class="jump-to-latest"
+              onclick={() => transcriptApi?.scrollToBottom('smooth')}
+              aria-label="Jump to latest message"
+            >
+              <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M12 5v14M19 12l-7 7-7-7" />
+              </svg>
+              Jump to latest
+            </button>
+          {/if}
+          {#if showStatusBar && statusBar}
       <div class={`pma-status-bar composer-status-bar ${statusBar.state}`} aria-label="Turn status">
         <span class="status-dot" aria-hidden="true"></span>
         <strong>{statusLabel(statusBar.state)}</strong>
@@ -2882,6 +3034,9 @@
             </span>
           </span>
         {/if}
+      </div>
+          {/if}
+        </div>
       </div>
     {/if}
 

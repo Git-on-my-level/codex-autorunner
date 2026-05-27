@@ -8,7 +8,18 @@
   import RepoSettingsDialog, { type RepoSettingsTarget } from '$lib/components/RepoSettingsDialog.svelte';
   import { confirmAndRetireState, confirmAndRetireWorktree, type ActionNotice } from '$lib/actions/repoWorktreeActions';
   import { webApi, type ApiError, type PartialPageIssue } from '$lib/api/client';
-  import { ensureRepoWorktreeIndexLoaded, invalidateReadModelTags, readModelEntityStore, readModelEntityTags, selectRepoSummaries, selectWorktreeSummaries } from '$lib/data';
+  import {
+    ensureChatIndexLoaded,
+    ensureRepoWorktreeIndexLoaded,
+    ensureTicketIndexLoaded,
+    invalidateReadModelTags,
+    readModelEntityStore,
+    readModelEntityTags,
+    selectPmaChats,
+    selectRepoSummaries,
+    selectTicketSummaries,
+    selectWorktreeSummaries
+  } from '$lib/data';
   import {
     buildRepoWorktreeIndexViewModel,
     type RepoWorktreeIndexViewModel
@@ -17,15 +28,16 @@
   let { data = { status: 'cold' as const, tags: [] } } = $props();
   let readModelState = $state(readModelEntityStore.snapshot());
   let unsubscribeReadModels: (() => void) | null = null;
+  let ticketsListLoaded = $state(false);
   const index = $derived<RepoWorktreeIndexViewModel | null>(
     buildRepoWorktreeIndexViewModel({
       repos: selectRepoSummaries(readModelState),
       worktrees: selectWorktreeSummaries(readModelState),
       runs: [],
-      chats: [],
-      tickets: [],
+      chats: selectPmaChats(readModelState),
+      tickets: selectTicketSummaries(readModelState, 'all'),
       artifacts: [],
-      ticketsListLoaded: false
+      ticketsListLoaded
     })
   );
   const hasCachedRows = $derived(Boolean(index && index.rows.length > 0));
@@ -59,9 +71,19 @@
     refreshError = null;
     sectionIssues = [];
     try {
-      const result = await ensureRepoWorktreeIndexLoaded({ refresh: true });
-      if (result.status === 'error') {
-        refreshError = result.error;
+      const [topoResult, chatResult, ticketResult] = await Promise.all([
+        ensureRepoWorktreeIndexLoaded({ refresh: true }),
+        ensureChatIndexLoaded({}, { refresh: true }),
+        ensureTicketIndexLoaded({ refresh: true })
+      ]);
+      if (topoResult.status === 'error') {
+        refreshError = topoResult.error;
+      } else if (chatResult.status === 'error') {
+        refreshError = chatResult.error;
+      } else if (ticketResult.status === 'error') {
+        refreshError = ticketResult.error;
+      } else {
+        ticketsListLoaded = true;
       }
     } finally {
       coldHydrating = false;

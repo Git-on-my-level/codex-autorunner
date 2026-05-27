@@ -41,11 +41,9 @@ describe('RepoWorktreeViews', () => {
     expect(body).toContain('aria-label="Open codex-autorunner detail"');
     expect(body).toContain('aria-label="Open discord-5 detail"');
     expect(body).toContain('href="/chats?new=repo:repo-1&amp;kind=pma"');
-    expect(body).toContain('href="/chats?new=repo:repo-1&amp;kind=agent"');
     expect(body).toContain('href="/chats?new=worktree:worktree-1&amp;kind=pma"');
-    expect(body).toContain('href="/chats?new=worktree:worktree-1&amp;kind=agent"');
-    expect(body).toContain('Start PMA chat for codex-autorunner');
-    expect(body).toContain('Start coding agent chat for discord-5');
+    expect(body).toContain('New chat for codex-autorunner');
+    expect(body).toContain('New chat for discord-5');
     expect(body).toContain('1 worktree');
     expect(body).not.toContain('Terminal');
     expect(body).not.toContain('Analytics');
@@ -205,12 +203,10 @@ describe('RepoWorktreeViews', () => {
     expect(body).not.toContain('Active run');
     expect(body).not.toContain('Create a worktree when a ticket needs isolated repo state.');
     expect(body).toContain('Repo tickets');
-    expect(body).toContain('No tickets');
     expect(body).toContain('No tickets yet for this repo.');
     expect(body).toContain('Contextspace');
-    expect(body).toContain('active_context.md');
-    expect(body).toContain('No context recorded');
-    expect(body).toContain('href="/repos/repo-1/contextspace#active_context"');
+    expect(body).toContain('Set up contextspace');
+    expect(body).toContain('href="/repos/repo-1/contextspace"');
     expect(body).toContain('Chats');
     expect(body).toContain('href="/chats?new=repo:repo-1&amp;kind=pma"');
     expect(body).not.toContain('Terminal');
@@ -219,8 +215,8 @@ describe('RepoWorktreeViews', () => {
     const contextspace = body.indexOf('Contextspace');
     const chats = body.indexOf('chats-panel-heading');
     expect(contextspace).toBeGreaterThan(-1);
-    expect(contextspace).toBeLessThan(tickets);
-    expect(tickets).toBeLessThan(chats);
+    expect(chats).toBeLessThan(tickets);
+    expect(tickets).toBeLessThan(contextspace);
   });
 
   it('renders git status pills and an inline spec preview when data is available', () => {

@@ -3009,11 +3009,39 @@ textarea:hover {
   background: var(--color-danger);
 }
 
+.composer-overlay-anchor {
+  position: relative;
+  height: 0;
+  pointer-events: none;
+  z-index: 2;
+}
+
+.composer-overlay {
+  position: absolute;
+  left: 0;
+  right: 0;
+  /* Sit inside the transcript's scroll area (above the composer's top edge)
+     so the space between the bar and composer reveals scrolling text rather
+     than opaque .active-chat background. Pairs with .composer { margin-top: 0 }. */
+  bottom: var(--space-3);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-2);
+  pointer-events: none;
+}
+
+.composer-overlay > * {
+  pointer-events: auto;
+}
+
 .composer-status-bar {
-  max-width: none;
   width: 100%;
-  margin-top: var(--space-3);
+  max-width: none;
   border-radius: 8px;
+  background: color-mix(in srgb, var(--color-surface-sunken) 70%, transparent);
+  backdrop-filter: blur(10px) saturate(140%);
+  -webkit-backdrop-filter: blur(10px) saturate(140%);
   container-type: inline-size;
   container-name: status-bar;
 }
@@ -3022,11 +3050,9 @@ textarea:hover {
    transcript is scrolled away from the bottom. Click drops the user back to
    the live tail so streaming content doesn't keep happening off-screen. */
 .jump-to-latest {
-  align-self: center;
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  margin: var(--space-2) 0 calc(var(--space-1) * -1);
   padding: 6px 12px 6px 10px;
   border: 1px solid var(--color-border-strong);
   border-radius: 999px;
@@ -4575,10 +4601,13 @@ textarea:hover {
     "textarea textarea textarea"
     "actions interrupt send";
   grid-template-columns: 1fr auto auto;
-  gap: var(--space-2);
+  /* row-gap is 0 so empty optional rows (queue/attachments/commands) don't
+     stack visible whitespace above the textarea; each rendered optional row
+     and the textarea adds its own margin-bottom below for spacing. */
+  row-gap: 0;
+  column-gap: var(--space-2);
   align-items: center;
   padding: 0 var(--space-2) var(--space-2) var(--space-3);
-  margin-top: var(--space-3);
   border: 1px solid var(--color-border);
   border-radius: 12px;
   background: var(--color-surface);
@@ -4630,6 +4659,13 @@ textarea:hover {
 
 .composer textarea {
   grid-area: textarea;
+  margin-bottom: var(--space-2);
+}
+
+.composer > .queue-panel,
+.composer > .pending-attachments,
+.composer > .slash-command-menu {
+  margin-bottom: var(--space-2);
 }
 
 .slash-command-menu {
@@ -7452,6 +7488,11 @@ textarea:disabled {
 .chat-scope-kind-tag.retired {
   color: var(--color-ink-faint);
   background: color-mix(in srgb, var(--color-ink-faint) 10%, transparent);
+}
+
+.chat-scope-kind-tag.draft {
+  color: color-mix(in srgb, var(--color-warning) 88%, var(--color-ink));
+  background: color-mix(in srgb, var(--color-warning) 16%, transparent);
 }
 
 .chat-scope-detail-tag {

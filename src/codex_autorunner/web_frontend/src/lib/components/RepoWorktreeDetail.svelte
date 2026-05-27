@@ -52,6 +52,16 @@
     return parts.join(' · ');
   });
 
+  const contextspaceHasContent = $derived(detail.contextspace.some((doc) => doc.status === 'present'));
+
+  const ticketKanban = $derived.by(() => {
+    const overview = detail.ticketOverview;
+    const failed = overview.failed;
+    const active = Math.max(0, overview.active - failed);
+    const queued = Math.max(0, overview.open - overview.active - failed);
+    return { queued, active, failed, done: overview.done, total: overview.total };
+  });
+
   const showFlowStrip = $derived.by(() => {
     const f = detail.flowStatus;
     const hasSignal = f.signal !== 'idle' && f.signal !== 'done';
@@ -108,99 +118,10 @@
     {:else}
     <PageHero title={shortDetailTitle} subtitle={detailSubtitle}>
       {#snippet actions()}
-        {#if onRetireState && canRetireState(detail)}
-          <button
-            class="ghost-button"
-            type="button"
-            title="Retire CAR state without deleting git files"
-            aria-label={`Clear CAR state for ${detail.title}`}
-            onclick={(event) => handleRetireStateClick(event, {
-              kind: detail.kind,
-              id: detail.id,
-              label: shortDetailTitle,
-              hasCarState: detail.hasCarState,
-              unboundManagedThreadCount: detail.unboundManagedThreadCount
-            })}
-          >
-            Clear state
-          </button>
-        {/if}
-        {#if detail.kind === 'worktree' && onRetireWorktree}
-          <button
-            class="ghost-button danger"
-            type="button"
-            title="Retire worktree: preserve artifacts, then remove the checkout"
-            aria-label={`Retire worktree ${detail.title}`}
-            onclick={(event) => handleRetireClick(event, {
-              id: detail.id,
-              label: shortDetailTitle,
-              chatBound: detail.chatBound,
-              cleanupBlockedByChatBinding: detail.cleanupBlockedByChatBinding
-            })}
-          >
-            {@render trashIcon()}
-            <span>Retire worktree</span>
-          </button>
-        {/if}
+        <a class="ghost-button is-primary" href={href(detail.pmaChatHref)} data-sveltekit-preload-data="tap">+ New chat</a>
+        <a class="ghost-button" href={href(detail.newTicketHref)} data-sveltekit-preload-data="tap">+ New ticket</a>
       {/snippet}
     </PageHero>
-
-    {#if detail.gitStatus}
-      {@const git = detail.gitStatus}
-      <div class="git-status-bar" aria-label="Git status">
-        <div class="git-status-chips">
-          <span class={`git-state-pill ${git.dirty ? 'dirty' : 'clean'}`}>
-            <span class="git-state-dot" aria-hidden="true"></span>
-            {git.dirty ? 'Dirty' : 'Clean'}
-          </span>
-          {#if git.filesChanged !== null && git.filesChanged > 0}
-            <span class="git-chip">{pluralize(git.filesChanged, 'file')} changed</span>
-          {/if}
-          <TicketDiffStats
-            extraClass="git-chip git-chip-diff"
-            stats={{
-              insertions: git.insertions ?? 0,
-              deletions: git.deletions ?? 0,
-              filesChanged: 0
-            }}
-          />
-          {#if git.staged !== null && git.staged > 0}
-            <span class="git-chip">{git.staged} staged</span>
-          {/if}
-          {#if git.untracked !== null && git.untracked > 0}
-            <span class="git-chip">{git.untracked} untracked</span>
-          {/if}
-          {#if git.hasUpstream === false}
-            <span class="git-chip git-chip-warn">No upstream</span>
-          {:else}
-            {#if git.ahead !== null && git.ahead > 0}
-              <span class="git-chip git-chip-ahead">↑ {git.ahead} ahead</span>
-            {/if}
-            {#if git.behind !== null && git.behind > 0}
-              <span class="git-chip git-chip-behind">↓ {git.behind} behind</span>
-            {/if}
-          {/if}
-        </div>
-        {#if git.hasUpstream !== false && git.behind !== null && git.behind > 0 && onSyncRepo}
-          <button
-            type="button"
-            class="ghost-button"
-            disabled={syncRepoBusy || git.dirty}
-            title={git.dirty
-              ? 'Commit or stash changes before syncing'
-              : 'Fetch and fast-forward the default branch from origin'}
-            aria-busy={syncRepoBusy ? 'true' : undefined}
-            onclick={(event) => {
-              event.preventDefault();
-              event.stopPropagation();
-              void onSyncRepo?.();
-            }}
-          >
-            {syncRepoBusy ? 'Syncing…' : 'Sync'}
-          </button>
-        {/if}
-      </div>
-    {/if}
 
     {#if showFlowStrip}
       <section class={`ticket-flow-strip ${detail.flowStatus.signal}`} aria-label="Ticket flow status">
@@ -289,43 +210,7 @@
         </section>
       {/if}
 
-      <section class="page-panel execution-panel wide contextspace-panel">
-        <div class="panel-heading-row">
-          <h2>Contextspace</h2>
-          <a
-            class="ghost-button"
-            href={href(detail.contextspaceHref)}
-            data-sveltekit-preload-data="tap"
-          >Browse all</a>
-        </div>
-        {@render degradedIssues(contextspaceIssues)}
-        <ul class="contextspace-compact-list" role="list">
-          {#each detail.contextspace as doc}
-            <li class={`contextspace-compact-item ${doc.status}`} class:has-preview={Boolean(doc.preview)}>
-              <a class="contextspace-compact-row" href={href(doc.href)}>
-                <span class={`contextspace-compact-dot ${doc.status}`} aria-hidden="true"></span>
-                <span class="contextspace-compact-name">{doc.filename}</span>
-                <span class="contextspace-compact-summary">{doc.summary}</span>
-                {#if doc.updatedAt}
-                  <span class="contextspace-compact-time">{rowRelativeTime({ updatedAt: doc.updatedAt })}</span>
-                {/if}
-              </a>
-              {#if doc.previewHtml}
-                <a class="contextspace-spec-preview" href={href(doc.href)} aria-label={`Open ${doc.filename}`}>
-                  <div class="contextspace-spec-preview-body markdown-body">
-                    {@html doc.previewHtml}
-                  </div>
-                  <span class="contextspace-spec-preview-fade" aria-hidden="true"></span>
-                </a>
-              {:else if doc.preview}
-                <a class="contextspace-spec-preview" href={href(doc.href)}>
-                  <pre>{doc.preview}</pre>
-                </a>
-              {/if}
-            </li>
-          {/each}
-        </ul>
-      </section>
+      {@render chatsSection()}
 
       <section class="page-panel execution-panel wide workspace-ticket-queue-panel">
         <div class="panel-heading-row">
@@ -345,19 +230,16 @@
         </div>
         {@render degradedIssues(ticketIssues)}
         {#if detail.ticketOverview.total > 0}
-          <a class="ticket-overview-stats" href={href(detail.ticketIndexHref)} aria-label="Ticket overview — view all tickets" data-sveltekit-preload-data="tap">
-            <div><span>Open</span><strong>{detail.ticketOverview.open}</strong></div>
-            <div><span>Done/total</span><strong>{detail.ticketOverview.done}/{detail.ticketOverview.total}</strong></div>
-            {#if detail.ticketOverview.active > 0}
-              <div class="is-active"><span>Active</span><strong>{detail.ticketOverview.active}</strong></div>
-            {/if}
-            {#if detail.ticketOverview.failed > 0}
-              <div class="is-failed"><span>Needs fix</span><strong>{detail.ticketOverview.failed}</strong></div>
-            {/if}
-          </a>
-        {:else if ticketIssues.length === 0}
-          <a class="ticket-overview-stats ticket-overview-empty" href={href(detail.ticketIndexHref)} aria-label="View ticket queue" data-sveltekit-preload-data="tap">
-            <div><span>Tickets</span><strong>No tickets yet</strong></div>
+          <a
+            class="ticket-kanban-strip"
+            href={href(detail.ticketIndexHref)}
+            aria-label="Ticket flow — view all tickets"
+            data-sveltekit-preload-data="tap"
+          >
+            <div class="kanban-col kanban-queued"><span>Queued</span><strong>{ticketKanban.queued}</strong></div>
+            <div class="kanban-col kanban-active"><span>Active</span><strong>{ticketKanban.active}</strong></div>
+            <div class="kanban-col kanban-failed"><span>Needs fix</span><strong>{ticketKanban.failed}</strong></div>
+            <div class="kanban-col kanban-done"><span>Done</span><strong>{ticketKanban.done}<em>/{ticketKanban.total}</em></strong></div>
           </a>
         {/if}
         <div class="workspace-ticket-list">
@@ -390,6 +272,8 @@
         </div>
       </section>
 
+      <!-- chatsSection snippet is rendered above via {@render chatsSection()} -->
+      {#snippet chatsSection()}
       <section class="page-panel execution-panel wide">
         <div class="panel-heading-row chats-panel-heading">
           <h2 class="panel-heading-link-host">
@@ -402,6 +286,15 @@
             <a class="ghost-button" href={href(detail.codingAgentChatHref)} data-sveltekit-preload-data="tap">New coding agent chat</a>
           </div>
         </div>
+        {#if detail.chatList.totalChatCount === 0}
+          <div class="panel-empty-card" role="status">
+            <p class="panel-empty-card-title">No chats scoped to this {detail.kind} yet.</p>
+            <div class="panel-empty-card-actions">
+              <a class="ghost-button is-primary" href={href(detail.pmaChatHref)} data-sveltekit-preload-data="tap">+ New PMA chat</a>
+              <a class="ghost-button" href={href(detail.codingAgentChatHref)} data-sveltekit-preload-data="tap">+ New coding agent chat</a>
+            </div>
+          </div>
+        {/if}
         {#if detail.chatList.totalChatCount > 0}
           {@const accentHex = repoAccent(detail.title)}
           {@const initials = repoInitials(detail.title)}
@@ -477,7 +370,7 @@
                 </div>
               </details>
             {/each}
-            {#each detail.chatList.standaloneChats.slice(0, 5) as chat}
+            {#each detail.chatList.standaloneChats as chat}
               {@const metaBits = [chat.agentId, chat.model].filter((p): p is string => typeof p === 'string' && p.length > 0)}
               <a class={`chat-row status-${chat.status}`} href={href(chat.href)}>
                 <span
@@ -518,12 +411,119 @@
                 </span>
               </a>
             {/each}
-            {#if detail.chatList.standaloneChats.length > 5}
-              <a class="row-overflow-link" href={href(detail.scopedChatListHref)}>+{detail.chatList.standaloneChats.length - 5} more chat{detail.chatList.standaloneChats.length - 5 === 1 ? '' : 's'}</a>
-            {/if}
           </div>
         {/if}
       </section>
+      {/snippet}
+
+      {#if detail.gitStatus}
+        {@const git = detail.gitStatus}
+        <section class="page-panel execution-panel wide status-panel-section">
+          <div class="panel-heading-row">
+            <h2>Status</h2>
+            {#if git.hasUpstream !== false && git.behind !== null && git.behind > 0 && onSyncRepo}
+              <button
+                type="button"
+                class="ghost-button"
+                disabled={syncRepoBusy || git.dirty}
+                title={git.dirty
+                  ? 'Commit or stash changes before syncing'
+                  : 'Fetch and fast-forward the default branch from origin'}
+                aria-busy={syncRepoBusy ? 'true' : undefined}
+                onclick={(event) => {
+                  event.preventDefault();
+                  event.stopPropagation();
+                  void onSyncRepo?.();
+                }}
+              >
+                {syncRepoBusy ? 'Syncing…' : 'Sync'}
+              </button>
+            {/if}
+          </div>
+          <div class="git-status-bar" aria-label="Git status">
+            <div class="git-status-chips">
+              <span class={`git-state-pill ${git.dirty ? 'dirty' : 'clean'}`}>
+                <span class="git-state-dot" aria-hidden="true"></span>
+                {git.dirty ? 'Dirty' : 'Clean'}
+              </span>
+              {#if git.filesChanged !== null && git.filesChanged > 0}
+                <span class="git-chip">{pluralize(git.filesChanged, 'file')} changed</span>
+              {/if}
+              <TicketDiffStats
+                extraClass="git-chip git-chip-diff"
+                stats={{
+                  insertions: git.insertions ?? 0,
+                  deletions: git.deletions ?? 0,
+                  filesChanged: 0
+                }}
+              />
+              {#if git.staged !== null && git.staged > 0}
+                <span class="git-chip">{git.staged} staged</span>
+              {/if}
+              {#if git.untracked !== null && git.untracked > 0}
+                <span class="git-chip">{git.untracked} untracked</span>
+              {/if}
+              {#if git.hasUpstream === false}
+                <span class="git-chip git-chip-warn">No upstream</span>
+              {:else}
+                {#if git.ahead !== null && git.ahead > 0}
+                  <span class="git-chip git-chip-ahead">↑ {git.ahead} ahead</span>
+                {/if}
+                {#if git.behind !== null && git.behind > 0}
+                  <span class="git-chip git-chip-behind">↓ {git.behind} behind</span>
+                {/if}
+              {/if}
+            </div>
+          </div>
+        </section>
+      {/if}
+
+      {#if contextspaceHasContent || contextspaceIssues.length > 0}
+        <section class="page-panel execution-panel wide contextspace-panel">
+          <div class="panel-heading-row">
+            <h2>Contextspace</h2>
+            <a
+              class="ghost-button"
+              href={href(detail.contextspaceHref)}
+              data-sveltekit-preload-data="tap"
+            >Browse all</a>
+          </div>
+          {@render degradedIssues(contextspaceIssues)}
+          <ul class="contextspace-compact-list" role="list">
+            {#each detail.contextspace as doc}
+              <li class={`contextspace-compact-item ${doc.status}`} class:has-preview={Boolean(doc.preview)}>
+                <a class="contextspace-compact-row" href={href(doc.href)}>
+                  <span class={`contextspace-compact-dot ${doc.status}`} aria-hidden="true"></span>
+                  <span class="contextspace-compact-name">{doc.filename}</span>
+                  <span class="contextspace-compact-summary">{doc.summary}</span>
+                  {#if doc.updatedAt}
+                    <span class="contextspace-compact-time">{rowRelativeTime({ updatedAt: doc.updatedAt })}</span>
+                  {/if}
+                </a>
+                {#if doc.previewHtml}
+                  <a class="contextspace-spec-preview" href={href(doc.href)} aria-label={`Open ${doc.filename}`}>
+                    <div class="contextspace-spec-preview-body markdown-body">
+                      {@html doc.previewHtml}
+                    </div>
+                    <span class="contextspace-spec-preview-fade" aria-hidden="true"></span>
+                  </a>
+                {:else if doc.preview}
+                  <a class="contextspace-spec-preview" href={href(doc.href)}>
+                    <pre>{doc.preview}</pre>
+                  </a>
+                {/if}
+              </li>
+            {/each}
+          </ul>
+        </section>
+      {:else if detail.contextspace.length > 0}
+        <section class="page-panel execution-panel wide contextspace-panel contextspace-empty-panel">
+          <div class="panel-heading-row">
+            <h2>Contextspace</h2>
+            <a class="ghost-button" href={href(detail.contextspaceHref)} data-sveltekit-preload-data="tap">Set up contextspace →</a>
+          </div>
+        </section>
+      {/if}
 
       {#if detail.artifacts.length > 0 || artifactIssues.length > 0}
         <section class="page-panel execution-panel wide">
@@ -532,6 +532,48 @@
           {#if detail.artifacts.length > 0}
             {@render compactList(detail.artifacts, '')}
           {/if}
+        </section>
+      {/if}
+
+      {#if (onRetireState && canRetireState(detail)) || (detail.kind === 'worktree' && onRetireWorktree)}
+        <section class="danger-zone-panel" aria-label="Danger zone">
+          <h2 class="danger-zone-heading">Danger zone</h2>
+          <div class="danger-zone-actions">
+            {#if onRetireState && canRetireState(detail)}
+              <button
+                class="ghost-button"
+                type="button"
+                title="Retire CAR state without deleting git files"
+                aria-label={`Clear CAR state for ${detail.title}`}
+                onclick={(event) => handleRetireStateClick(event, {
+                  kind: detail.kind,
+                  id: detail.id,
+                  label: shortDetailTitle,
+                  hasCarState: detail.hasCarState,
+                  unboundManagedThreadCount: detail.unboundManagedThreadCount
+                })}
+              >
+                Clear state
+              </button>
+            {/if}
+            {#if detail.kind === 'worktree' && onRetireWorktree}
+              <button
+                class="ghost-button danger"
+                type="button"
+                title="Retire worktree: preserve artifacts, then remove the checkout"
+                aria-label={`Retire worktree ${detail.title}`}
+                onclick={(event) => handleRetireClick(event, {
+                  id: detail.id,
+                  label: shortDetailTitle,
+                  chatBound: detail.chatBound,
+                  cleanupBlockedByChatBinding: detail.cleanupBlockedByChatBinding
+                })}
+              >
+                {@render trashIcon()}
+                <span>Retire worktree</span>
+              </button>
+            {/if}
+          </div>
         </section>
       {/if}
     </div>

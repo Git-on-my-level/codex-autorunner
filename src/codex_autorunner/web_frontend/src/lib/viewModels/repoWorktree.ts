@@ -49,6 +49,9 @@ export type RepoWorktreeIndexRow = {
   openTickets: number;
   totalTickets: number;
   doneTickets: number;
+  activeTickets: number;
+  failedTickets: number;
+  queuedTickets: number;
   lastActivityAt: string | null;
   href: string;
   ticketHref: string | null;
@@ -90,6 +93,10 @@ export type RepoWorktreeChildRow = {
   openTickets: number;
   totalTickets: number;
   doneTickets: number;
+  activeTickets: number;
+  failedTickets: number;
+  queuedTickets: number;
+  chats: RepoWorktreeChatRow[];
   currentRunTitle: string | null;
   currentTicketId: string | null;
   lastActivityAt: string | null;
@@ -554,11 +561,23 @@ function hubTicketListLoaded(source: RepoWorktreeSourceData): boolean {
 }
 
 /** Single source for repo/worktree index ticket chips: `/hub/tickets` summaries scoped per row. */
-function ticketIndexRollup(scoped: TicketSummary[]): { open: number; total: number; done: number } {
+function ticketIndexRollup(scoped: TicketSummary[]): {
+  open: number;
+  total: number;
+  done: number;
+  active: number;
+  failed: number;
+  queued: number;
+} {
   const total = scoped.length;
   const done = scoped.filter((ticket) => ticket.status === 'done').length;
   const open = scoped.filter((ticket) => ticket.status !== 'done').length;
-  return { open, total, done };
+  const active = scoped.filter(
+    (ticket) => ticket.status === 'running' || ticket.status === 'waiting' || ticket.status === 'blocked'
+  ).length;
+  const failed = scoped.filter((ticket) => ticket.status === 'failed' || ticket.status === 'invalid').length;
+  const queued = Math.max(0, open - active - failed);
+  return { open, total, done, active, failed, queued };
 }
 
 function chatBindingSourcesFromRaw(raw: Record<string, unknown>): Record<string, number> {
@@ -686,7 +705,9 @@ function repoToIndexRow(repo: RepoSummary, worktrees: WorktreeSummary[], source:
     .map((worktree) => worktreeToNavChildRow(worktree, repo.name, source, lookup))
     .sort(byChildActiveThenLabel);
   const repoScoped = ticketsForResource(source.tickets, 'repo', repo.id, lookup);
-  const rollup = listLoaded ? ticketIndexRollup(repoScoped) : { open: 0, total: 0, done: 0 };
+  const rollup = listLoaded
+    ? ticketIndexRollup(repoScoped)
+    : { open: 0, total: 0, done: 0, active: 0, failed: 0, queued: 0 };
   let dirtyWorktrees = 0;
   let inUseWorktrees = 0;
   for (const worktree of worktrees) {
@@ -713,6 +734,9 @@ function repoToIndexRow(repo: RepoSummary, worktrees: WorktreeSummary[], source:
     openTickets: rollup.open,
     totalTickets: rollup.total,
     doneTickets: rollup.done,
+    activeTickets: rollup.active,
+    failedTickets: rollup.failed,
+    queuedTickets: rollup.queued,
     lastActivityAt: repo.lastActivityAt,
     href: repoRoute(repo.id),
     ticketHref: repoTicketRoute(repo.id),
@@ -749,13 +773,17 @@ function worktreeToNavChildRow(
   const chatBindingSources = chatBindingSourcesFromRaw(worktree.raw);
   const chatBindingDisplayNames = chatBindingDisplayNamesFromRaw(worktree.raw);
   const scoped = source ? ticketsForResource(source.tickets, 'worktree', worktree.id, lookup ?? undefined) : [];
-  const rollup = listLoaded ? ticketIndexRollup(scoped) : { open: 0, total: 0, done: 0 };
+  const rollup = listLoaded ? ticketIndexRollup(scoped) : { open: 0, total: 0, done: 0, active: 0, failed: 0, queued: 0 };
   const primaryRuns = lookup?.runsByResource.get(resourceKey('worktree', worktree.id)) ?? (source ? source.runs.filter((run) => runMatchesResource(run, 'worktree', worktree.id)) : []);
   const primaryChats = lookup?.chatsByResource.get(resourceKey('worktree', worktree.id)) ?? (source ? source.chats.filter((chat) => chatMatchesResource(chat, 'worktree', worktree.id)) : []);
   const currentRun =
     mergeRunCards(primaryRuns, primaryChats, 'worktree', worktree.id, worktree.repoId)
       .find((run) => run.status === 'running' || run.status === 'waiting' || run.status === 'blocked') ?? null;
   const signals = source ? scopedSignals(source, 'worktree', worktree.id, [], lookup ?? undefined) : { waiting: 0, failed: 0, active: 0 };
+  const chatRows = primaryChats
+    .map((chat) => chatToRow(chat))
+    .sort((a, b) => (b.updatedAt ?? '').localeCompare(a.updatedAt ?? ''))
+    .slice(0, 3);
   return {
     id: worktree.id,
     label: shortenWorktreeLabel(worktree.name, repoName),
@@ -766,6 +794,10 @@ function worktreeToNavChildRow(
     openTickets: rollup.open,
     totalTickets: rollup.total,
     doneTickets: rollup.done,
+    activeTickets: rollup.active,
+    failedTickets: rollup.failed,
+    queuedTickets: rollup.queued,
+    chats: chatRows,
     currentRunTitle: currentRun?.title ?? null,
     currentTicketId: currentRun?.ticketId ?? null,
     lastActivityAt: worktree.lastActivityAt,
@@ -792,7 +824,9 @@ function worktreeToIndexRow(worktree: WorktreeSummary, source: RepoWorktreeSourc
   const chatBindingSources = chatBindingSourcesFromRaw(worktree.raw);
   const chatBindingDisplayNames = chatBindingDisplayNamesFromRaw(worktree.raw);
   const scoped = ticketsForResource(source.tickets, 'worktree', worktree.id, lookup);
-  const rollup = listLoaded ? ticketIndexRollup(scoped) : { open: 0, total: 0, done: 0 };
+  const rollup = listLoaded
+    ? ticketIndexRollup(scoped)
+    : { open: 0, total: 0, done: 0, active: 0, failed: 0, queued: 0 };
   return {
     id: worktree.id,
     kind: 'worktree',
@@ -805,6 +839,9 @@ function worktreeToIndexRow(worktree: WorktreeSummary, source: RepoWorktreeSourc
     openTickets: rollup.open,
     totalTickets: rollup.total,
     doneTickets: rollup.done,
+    activeTickets: rollup.active,
+    failedTickets: rollup.failed,
+    queuedTickets: rollup.queued,
     lastActivityAt: worktree.lastActivityAt,
     href: worktreeRoute(worktree.id, worktree.repoId),
     ticketHref: worktree.repoId ? worktreeTicketRoute(worktree.id, worktree.repoId) : null,

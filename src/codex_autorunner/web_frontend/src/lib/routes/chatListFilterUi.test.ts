@@ -36,7 +36,7 @@ describe('chatListFilterUi', () => {
   });
 
   it('hides zero status pills except the selected one, and suppresses live buckets on archived', () => {
-    const counts = { all: 10, waiting: 0, active: 0, unread: 0, archived: 10 };
+    const counts = { all: 10, waiting: 0, active: 0, unread: 0, drafts: 0, archived: 10 };
     expect(shouldShowChatStatusFilterPill('waiting', counts, 'archived')).toBe(false);
     expect(shouldShowChatStatusFilterPill('archived', counts, 'archived')).toBe(true);
     expect(shouldShowChatStatusFilterPill('waiting', counts, 'all')).toBe(false);

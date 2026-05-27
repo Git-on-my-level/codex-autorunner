@@ -18,7 +18,7 @@ import { mapPmaMessageCapsuleRef, normalizeOptionalWorkStatus, pmaChatArchivedFr
 import { isChatUnread } from './unread';
 
 /** Status chips (All / Waiting / …) on the chat list. */
-export type ChatStatusFilter = 'all' | 'active' | 'waiting' | 'unread' | 'archived';
+export type ChatStatusFilter = 'all' | 'active' | 'waiting' | 'unread' | 'drafts' | 'archived';
 
 /** Full list filter: status chips, grouped ticket runs, automation chats, or `surface:<slug>` messenger filters. */
 export type ChatFilter = ChatStatusFilter | 'ticket_runs' | 'automation' | `surface:${string}`;
@@ -31,7 +31,7 @@ export const CHAT_EXTERNAL_TRANSPORT_FILTERS = ['discord', 'telegram', 'notifica
 /** Synthetic list selection id for pinned PMA Memory in the chats sidebar. */
 export const CHAT_MEMORY_LIST_ID = '__memory__';
 
-export const CHAT_FILTER_ORDER: ChatStatusFilter[] = ['all', 'waiting', 'active', 'unread', 'archived'];
+export const CHAT_FILTER_ORDER: ChatStatusFilter[] = ['all', 'waiting', 'active', 'unread', 'drafts', 'archived'];
 
 const TOOL_PROGRESS_KINDS = new Set(['tool', 'tool_call', 'tool_result', 'function_call']);
 const MAX_COMPACT_ACTIVITY_SOURCE_IDS = 200;
@@ -740,6 +740,7 @@ export function filterPmaChats(
       }
       if (filter === 'ticket_runs') return chatRunGroupKey(chat) !== null;
       if (filter === 'automation') return pmaChatIsAutomation(chat);
+      if (filter === 'drafts') return chat.raw.has_local_draft === true;
       if (filter === 'active') return activeStatuses.includes(chat.status);
       if (filter === 'waiting') return waitingStatuses.includes(chat.status);
       if (filter === 'unread') {
@@ -811,6 +812,7 @@ export function summarizeFilterCounts(
     active: activeChats.filter((chat) => activeStatuses.includes(chat.status)).length,
     waiting: activeChats.filter((chat) => waitingStatuses.includes(chat.status)).length,
     unread: activeChats.filter((chat) => isUnread(chat, lastSeen)).length,
+    drafts: 0,
     archived: chats.filter(isPmaChatArchived).length
   };
 }

@@ -157,7 +157,7 @@ describe('/chats page', () => {
     const pageSource = chatDetailPageSource();
 
     expect(pageSource).toContain('query: search.trim() || null');
-    expect(pageSource).toContain("filterChatEntries(chatListEntries, statusFilter, '', lastSeenMap)");
+    expect(pageSource).toContain("filterChatEntries(chatListEntries, statusFilter === 'drafts' ? 'all' : statusFilter, '', lastSeenMap)");
   });
 
   it('does not let remembered picker models describe existing chats with unknown runtime models', () => {
@@ -222,6 +222,33 @@ describe('/chats page', () => {
     expect(pageSource).toContain('chat-filter-archive-toggle');
   });
 
+  it('keeps composer drafts keyed by chat and treats draft filtering as a local overlay', () => {
+    const pageSource = chatDetailPageSource();
+
+    expect(pageSource).toContain('loadChatDraftRecords');
+    expect(pageSource).toContain('setChatDraftText(chatDraftRecords, chatId, value, chatSummaryForId(chatId))');
+    expect(pageSource).toContain("statusFilter === 'drafts' ? filteredDraftChats");
+    expect(pageSource).toContain("filterPmaChats(source, 'drafts', search, lastSeenMap)");
+    expect(pageSource).toContain("facets?.category !== categoryFilter");
+    expect(pageSource).toContain("filter === 'drafts' ? 'all' : filter");
+    expect(pageSource).toContain("filterChatEntries(chatListEntries, statusFilter === 'drafts' ? 'all' : statusFilter");
+  });
+
+  it('clears slash new/reset commands before switching to a replacement draft chat', () => {
+    const pageSource = chatDetailPageSource();
+    const slashBody = pageSource.match(
+      /async function executeSlashCommand[\s\S]*?\n  function handleComposerKeydown/
+    )?.[0];
+
+    expect(slashBody).toBeTruthy();
+    expect(slashBody).toContain("if (spec.id === 'new')");
+    expect(slashBody).toContain("if (spec.id === 'newt')");
+    expect(slashBody).toContain("if (spec.id === 'reset')");
+    expect(slashBody).toMatch(/if \(spec\.id === 'new'\)[\s\S]*?clearSlashDraft\(\);[\s\S]*?await createChat/);
+    expect(slashBody).toMatch(/if \(spec\.id === 'newt'\)[\s\S]*?clearSlashDraft\(\);[\s\S]*?await createChat/);
+    expect(slashBody).toMatch(/if \(spec\.id === 'reset'\)[\s\S]*?clearSlashDraft\(\);[\s\S]*?await createChat/);
+  });
+
   it('uses contextual facet counts from the active chat-index window', () => {
     const pageSource = chatDetailPageSource();
     expect(pageSource).toContain('selectChatFacetCountsForWindow');
@@ -282,14 +309,14 @@ describe('/chats page', () => {
     expect(pageSource).toContain('contextualFacetCounts.transport');
   });
 
-  it('does not render the generic Chat kind badge in the active header', () => {
+  it('renders the agent-kind badge (PMA or Coding agent) in the active header', () => {
     const pageSource = chatDetailPageSource();
     const subtitleBody = pageSource.match(
       /<p class="chat-header-subtitle">[\s\S]*?<\/p>/
     )?.[0];
 
     expect(subtitleBody).toBeTruthy();
-    expect(pageSource).toContain("pmaChatBadgeViews(activeChat, { showPmaAgent: false })");
+    expect(pageSource).toContain('pmaChatBadgeViews(activeChat, { showPmaAgent: false })');
     expect(subtitleBody).toContain('{#each activeChatBadges as badge}');
   });
 

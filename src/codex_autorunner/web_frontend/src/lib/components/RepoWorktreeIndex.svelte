@@ -297,7 +297,7 @@
                   </div>
                 </div>
               </a>
-              {#if row.activeRuns > 0 || (ticketMetricsReady && row.openTickets > 0) || (collapsed && row.totalWorktrees > 0)}
+              {#if row.activeRuns > 0 || (ticketMetricsReady && row.totalTickets > 0) || (collapsed && row.totalWorktrees > 0)}
                 <div class="repo-card-counts" aria-label="Activity counts">
                   {#if collapsed && row.totalWorktrees > 0}
                     {@const dirtyLabel = row.dirtyWorktrees > 0 ? `${row.dirtyWorktrees} dirty, ` : ''}
@@ -317,45 +317,21 @@
                       <strong>{row.activeRuns}</strong><em>run{row.activeRuns === 1 ? '' : 's'}</em>
                     </span>
                   {/if}
-                  {#if row.openTickets > 0}
-                    {#if row.ticketHref}
-                      <a class="count-chip is-tickets count-chip-navigable" href={href(row.ticketHref)} title={row.totalTickets > 0 ? `${row.doneTickets} of ${row.totalTickets} done` : 'Open tickets'}>
-                        <strong>{row.openTickets}</strong><em>ticket{row.openTickets === 1 ? '' : 's'}</em>
-                        {#if row.totalTickets > 0 && row.doneTickets > 0}
-                          <span class="count-chip-progress">{row.doneTickets}/{row.totalTickets}</span>
-                        {/if}
-                      </a>
-                    {:else}
-                      <span class="count-chip is-tickets" title={row.totalTickets > 0 ? `${row.doneTickets} of ${row.totalTickets} done` : 'Open tickets'}>
-                        <strong>{row.openTickets}</strong><em>ticket{row.openTickets === 1 ? '' : 's'}</em>
-                        {#if row.totalTickets > 0 && row.doneTickets > 0}
-                          <span class="count-chip-progress">{row.doneTickets}/{row.totalTickets}</span>
-                        {/if}
-                      </span>
-                    {/if}
+                  {#if ticketMetricsReady && row.totalTickets > 0}
+                    {@render ticketFlowChip(row)}
                   {/if}
                 </div>
               {/if}
             </div>
             <div class="repo-action-buttons repo-head-actions" aria-label={`Actions for ${row.label}`}>
               <a
-                class="row-action-button row-action-link is-primary-affordance"
+                class="row-action-button is-primary-affordance"
                 href={href(row.pmaChatHref)}
-                title={`Start a new PMA chat scoped to ${row.label}`}
-                aria-label={`Start PMA chat for ${row.label}`}
+                title={`New chat scoped to ${row.label}`}
+                aria-label={`New chat for ${row.label}`}
                 data-sveltekit-preload-data="tap"
-              >
-                + PMA
-              </a>
-              <a
-                class="row-action-button row-action-link"
-                href={href(row.codingAgentChatHref)}
-                title={`Start a new coding agent chat scoped to ${row.label}`}
-                aria-label={`Start coding agent chat for ${row.label}`}
-                data-sveltekit-preload-data="tap"
-              >
-                + Agent
-              </a>
+                onclick={(event) => event.stopPropagation()}
+              >+ Chat</a>
               {#if row.kind === 'repo' && onCreateWorktree}
                 <button
                   class="row-action-button"
@@ -367,9 +343,7 @@
                     event.stopPropagation();
                     onCreateWorktree?.({ id: row.id, label: row.label });
                   }}
-                >
-                  + Worktree
-                </button>
+                >+ Worktree</button>
               {/if}
               {#if
                 (row.kind === 'repo' && onOpenRepoSettings) ||
@@ -499,7 +473,7 @@
                           </div>
                         {/if}
                       </div>
-                      {#if worktree.activeRuns > 0 || (ticketMetricsReady && worktree.openTickets > 0) || worktree.signalWaiting > 0 || worktree.signalFailed > 0 || worktree.signalActive > 0}
+                      {#if worktree.activeRuns > 0 || (ticketMetricsReady && worktree.totalTickets > 0) || worktree.signalWaiting > 0 || worktree.signalFailed > 0 || worktree.signalActive > 0}
                         <div class="worktree-card-counts">
                           {#if worktree.signalWaiting > 0}
                             <span class="signal-pill waiting" title="Scoped chats or runs waiting for attention">{worktree.signalWaiting} waiting</span>
@@ -515,53 +489,20 @@
                               <strong>{worktree.activeRuns}</strong><em>run{worktree.activeRuns === 1 ? '' : 's'}</em>
                             </span>
                           {/if}
-                          {#if worktree.openTickets > 0}
-                            {#if worktree.ticketHref}
-                              <a class="count-chip is-tickets count-chip-navigable" href={href(worktree.ticketHref)} title={worktree.totalTickets > 0 ? `${worktree.doneTickets} of ${worktree.totalTickets} done` : 'Open worktree tickets'}>
-                                <strong>{worktree.openTickets}</strong><em>ticket{worktree.openTickets === 1 ? '' : 's'}</em>
-                                {#if worktree.totalTickets > 0 && worktree.doneTickets > 0}
-                                  <span class="count-chip-progress">{worktree.doneTickets}/{worktree.totalTickets}</span>
-                                {/if}
-                              </a>
-                            {:else}
-                              <span class="count-chip is-tickets" title={worktree.totalTickets > 0 ? `${worktree.doneTickets} of ${worktree.totalTickets} done` : 'Open worktree tickets'}>
-                                <strong>{worktree.openTickets}</strong><em>ticket{worktree.openTickets === 1 ? '' : 's'}</em>
-                                {#if worktree.totalTickets > 0 && worktree.doneTickets > 0}
-                                  <span class="count-chip-progress">{worktree.doneTickets}/{worktree.totalTickets}</span>
-                                {/if}
-                              </span>
-                            {/if}
+                          {#if ticketMetricsReady && worktree.totalTickets > 0}
+                            {@render ticketFlowChip(worktree)}
                           {/if}
                         </div>
                       {/if}
-                      {#if ticketMetricsReady && worktree.totalTickets > 0}
-                        {@const wpct = Math.round((worktree.doneTickets / worktree.totalTickets) * 100)}
-                        <span
-                          class="ticket-progress ticket-progress--worktree"
-                          title={`${worktree.doneTickets}/${worktree.totalTickets} tickets done (${wpct}%)`}
-                          aria-hidden="true"
-                          style:--progress={`${wpct}%`}
-                        ></span>
-                      {/if}
                       <div class="repo-action-buttons" aria-label={`Actions for ${worktree.label}`}>
                         <a
-                          class="row-action-button row-action-link is-primary-affordance"
+                          class="row-action-button is-primary-affordance"
                           href={href(worktree.pmaChatHref)}
-                          title={`Start a new PMA chat scoped to ${worktree.label}`}
-                          aria-label={`Start PMA chat for ${worktree.label}`}
+                          title={`New chat scoped to ${worktree.label}`}
+                          aria-label={`New chat for ${worktree.label}`}
                           data-sveltekit-preload-data="tap"
-                        >
-                          + PMA
-                        </a>
-                        <a
-                          class="row-action-button row-action-link"
-                          href={href(worktree.codingAgentChatHref)}
-                          title={`Start a new coding agent chat scoped to ${worktree.label}`}
-                          aria-label={`Start coding agent chat for ${worktree.label}`}
-                          data-sveltekit-preload-data="tap"
-                        >
-                          + Agent
-                        </a>
+                          onclick={(event) => event.stopPropagation()}
+                        >+ Chat</a>
                         {#if (onRetireState && canRetireState(worktree)) || onRetireWorktree}
                           <span class="worktree-row-icon-actions">
                             {#if onRetireState && canRetireState(worktree)}
@@ -596,6 +537,26 @@
                         {/if}
                       </div>
                     </div>
+                    {#if worktree.chats.length > 0}
+                      <ul class="worktree-chats-inline" aria-label={`Recent chats in ${worktree.label}`}>
+                        {#each worktree.chats as chat (chat.id)}
+                          <li>
+                            <a class={`worktree-chat-link status-${chat.status}`} href={href(chat.href)}>
+                              <span class={`status-dot status-${chat.status}`} aria-hidden="true"></span>
+                              <span class="worktree-chat-title">{chat.title}</span>
+                              {#if chat.ticketDone !== null}
+                                <span class="worktree-chat-ticket-pill" title={chat.ticketDone ? 'Ticket done' : 'Ticket open'}>
+                                  {chat.ticketDone ? 'done' : 'open'}
+                                </span>
+                              {/if}
+                              {#if chat.updatedAt}
+                                <span class="worktree-chat-time">{rowRelativeTime({ updatedAt: chat.updatedAt })}</span>
+                              {/if}
+                            </a>
+                          </li>
+                        {/each}
+                      </ul>
+                    {/if}
                     </div>
                   {/snippet}
                 </VirtualList>
@@ -644,6 +605,60 @@
       {#if onRetry}<button type="button" onclick={() => onRetry?.()}>{issue.retryLabel}</button>{/if}
     </div>
   {/each}
+{/snippet}
+
+{#snippet ticketFlowChip(target: {
+  ticketHref: string | null;
+  totalTickets: number;
+  doneTickets: number;
+  activeTickets: number;
+  failedTickets: number;
+  queuedTickets: number;
+})}
+  {@const pct = target.totalTickets > 0 ? Math.round((target.doneTickets / target.totalTickets) * 100) : 0}
+  {@const flowTitle = `${target.doneTickets} done · ${target.activeTickets} active · ${target.failedTickets} need fix · ${target.queuedTickets} queued`}
+  {#if target.ticketHref}
+    <a
+      class="count-chip is-tickets count-chip-navigable ticket-flow-chip"
+      class:has-failed={target.failedTickets > 0}
+      class:has-active={target.activeTickets > 0}
+      href={href(target.ticketHref)}
+      title={flowTitle}
+      style:--progress={`${pct}%`}
+    >
+      <span class="ticket-flow-chip-fill" aria-hidden="true"></span>
+      <span class="ticket-flow-chip-text">
+        <span class="ticket-flow-chip-count"><strong>{target.doneTickets}</strong><em>/{target.totalTickets}</em></span>
+        <em>ticket{target.totalTickets === 1 ? '' : 's'}</em>
+        {#if target.failedTickets > 0}
+          <span class="ticket-flow-chip-dot ticket-flow-chip-dot--failed" aria-hidden="true"></span>
+        {/if}
+        {#if target.activeTickets > 0}
+          <span class="ticket-flow-chip-dot ticket-flow-chip-dot--active" aria-hidden="true"></span>
+        {/if}
+      </span>
+    </a>
+  {:else}
+    <span
+      class="count-chip is-tickets ticket-flow-chip"
+      class:has-failed={target.failedTickets > 0}
+      class:has-active={target.activeTickets > 0}
+      title={flowTitle}
+      style:--progress={`${pct}%`}
+    >
+      <span class="ticket-flow-chip-fill" aria-hidden="true"></span>
+      <span class="ticket-flow-chip-text">
+        <span class="ticket-flow-chip-count"><strong>{target.doneTickets}</strong><em>/{target.totalTickets}</em></span>
+        <em>ticket{target.totalTickets === 1 ? '' : 's'}</em>
+        {#if target.failedTickets > 0}
+          <span class="ticket-flow-chip-dot ticket-flow-chip-dot--failed" aria-hidden="true"></span>
+        {/if}
+        {#if target.activeTickets > 0}
+          <span class="ticket-flow-chip-dot ticket-flow-chip-dot--active" aria-hidden="true"></span>
+        {/if}
+      </span>
+    </span>
+  {/if}
 {/snippet}
 
 {#snippet trashIcon()}

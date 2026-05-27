@@ -412,7 +412,7 @@ describe('PMA chat view helpers', () => {
       'chat-2',
       'chat-3'
     ]);
-    expect(summarizeFilterCounts(chats, lastSeen)).toEqual({ all: 3, active: 1, waiting: 1, unread: 2, archived: 0 });
+    expect(summarizeFilterCounts(chats, lastSeen)).toEqual({ all: 3, active: 1, waiting: 1, unread: 2, drafts: 0, archived: 0 });
   });
 
   it('filters automation-owned chats by typed backend facets', () => {
@@ -462,7 +462,7 @@ describe('PMA chat view helpers', () => {
     expect(filterPmaChats(chats, 'all', '').map((chat) => chat.id)).toEqual(['chat-1', 'chat-3']);
     expect(filterPmaChats(chats, 'archived', 'support').map((chat) => chat.id)).toEqual(['chat-2']);
     expect(filterPmaChats(chats, 'unread', '').map((chat) => chat.id).sort()).toEqual(['chat-1', 'chat-3']);
-    expect(summarizeFilterCounts(chats)).toEqual({ all: 2, active: 1, waiting: 1, unread: 2, archived: 1 });
+    expect(summarizeFilterCounts(chats)).toEqual({ all: 2, active: 1, waiting: 1, unread: 2, drafts: 0, archived: 1 });
   });
 
   it('keeps unread membership aligned with backend unread rows while allowing local read markers to suppress known rows', () => {

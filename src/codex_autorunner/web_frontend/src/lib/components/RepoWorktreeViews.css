@@ -558,6 +558,56 @@
     background: color-mix(in srgb, var(--color-accent) 18%, transparent);
   }
 
+  /* Unified ticket flow chip: single navigable pill that visualizes
+     done/total via a left-anchored progress fill in the chip's
+     negative space. Replaces the old kanban-mini + tickets count-chip
+     pair. */
+  .ticket-flow-chip {
+    position: relative;
+    isolation: isolate;
+    overflow: hidden;
+    gap: 6px;
+    padding: 2px 10px;
+    min-height: 24px;
+  }
+
+  .ticket-flow-chip-fill {
+    position: absolute;
+    inset: 0;
+    width: var(--progress, 0%);
+    background: color-mix(in srgb, var(--color-accent) 22%, transparent);
+    transition: width var(--transition-base);
+    z-index: 0;
+    pointer-events: none;
+  }
+
+  .ticket-flow-chip-text {
+    position: relative;
+    z-index: 1;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .ticket-flow-chip-count {
+    display: inline-flex;
+    align-items: baseline;
+  }
+
+  .ticket-flow-chip-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 999px;
+  }
+
+  .ticket-flow-chip-dot--failed { background: var(--color-danger); }
+  .ticket-flow-chip-dot--active { background: var(--color-success); }
+
+  .ticket-flow-chip.has-failed {
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--color-danger) 35%, transparent);
+  }
+
   .count-chip-progress {
     margin-left: 4px;
     padding-left: 6px;
@@ -595,12 +645,7 @@
     z-index: 1;
   }
 
-  .ticket-progress--worktree {
-    height: 2px;
-    background: color-mix(in srgb, var(--color-accent) 14%, transparent);
-  }
-
-  /* Repo/worktree detail — active run: same done/total width as index `.ticket-progress`,
+/* Repo/worktree detail — active run: same done/total width as index `.ticket-progress`,
    * thicker rail + success fill (index keeps accent/teal). */
   .ticket-progress--detail-run {
     position: relative;
@@ -1223,6 +1268,146 @@
     color: var(--color-ink-muted);
     font-size: var(--font-size-1);
     font-weight: 500;
+  }
+
+  /* Inline chats under each worktree on the repos index */
+  .worktree-chats-inline {
+    list-style: none;
+    margin: 4px 0 6px 28px;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+
+  .worktree-chat-link {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 2px 6px;
+    border-radius: var(--radius-1);
+    text-decoration: none;
+    color: var(--color-ink);
+    font-size: var(--font-size-1);
+    line-height: 1.4;
+  }
+
+  .worktree-chat-link:hover {
+    background: var(--color-surface-muted);
+  }
+
+  .worktree-chat-title {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    max-width: 60ch;
+  }
+
+  .worktree-chat-ticket-pill {
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--color-ink-muted);
+    padding: 0 4px;
+    border: 1px solid var(--color-border-subtle);
+    border-radius: 4px;
+  }
+
+  .worktree-chat-time {
+    margin-left: auto;
+    color: var(--color-ink-muted);
+    font-size: 11px;
+  }
+
+  /* Kanban-style ticket flow strip on detail page */
+  .ticket-kanban-strip {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: var(--space-2);
+    padding: var(--space-2) var(--space-3);
+    border: 1px solid var(--color-border-subtle);
+    border-radius: var(--radius-2);
+    background: var(--color-surface-muted);
+    margin-bottom: var(--space-3);
+    text-decoration: none;
+    color: inherit;
+    transition: background-color var(--transition-fast), border-color var(--transition-fast);
+  }
+
+  .ticket-kanban-strip:hover {
+    border-color: var(--color-border-strong);
+  }
+
+  .kanban-col {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 2px;
+    padding: var(--space-1) var(--space-2);
+    border-radius: var(--radius-1);
+    border-left: 3px solid var(--color-border-subtle);
+  }
+
+  .kanban-col span {
+    color: var(--color-ink-muted);
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+
+  .kanban-col strong {
+    color: var(--color-ink);
+    font-size: var(--font-size-3);
+    font-weight: 650;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .kanban-col strong em {
+    color: var(--color-ink-muted);
+    font-style: normal;
+    font-weight: 500;
+    font-size: var(--font-size-1);
+  }
+
+  .kanban-queued { border-left-color: var(--color-border-strong); }
+  .kanban-active { border-left-color: var(--color-success); }
+  .kanban-active strong { color: var(--color-success); }
+  .kanban-failed { border-left-color: var(--color-danger); }
+  .kanban-failed strong { color: var(--color-danger); }
+  .kanban-done { border-left-color: var(--color-ink-muted); }
+
+  /* Status panel wrapper for relocated git status bar */
+  .status-panel-section .git-status-bar {
+    border: 0;
+    padding: 0;
+    margin: 0;
+  }
+
+  /* Contextspace: empty-state collapsed CTA */
+  .contextspace-empty-panel {
+    padding-bottom: var(--space-2);
+  }
+
+  /* Danger zone footer — quiet section, no panel chrome */
+  .danger-zone-panel {
+    margin-top: var(--space-4);
+    padding-top: var(--space-3);
+    border-top: 1px dashed var(--color-border-subtle);
+  }
+
+  .danger-zone-heading {
+    margin: 0 0 var(--space-2) 0;
+    font-size: var(--font-size-1);
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--color-ink-muted);
+  }
+
+  .danger-zone-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-2);
   }
 
   .ticket-overview-more {

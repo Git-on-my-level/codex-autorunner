@@ -57,9 +57,9 @@ export type ChatSendControllerDeps = {
   getActiveChat: () => PmaChatSummary | null;
   getDisplayedProgress: () => PmaRunProgress | null;
   getDraft: () => string;
-  setDraft: (value: string) => void;
+  setDraft: (value: string, chatId?: string | null) => void;
   getPendingAttachments: () => PendingAttachment[];
-  setPendingAttachments: (value: PendingAttachment[]) => void;
+  setPendingAttachments: (value: PendingAttachment[], chatId?: string | null) => void;
   getComposerEditVersion: () => number;
   getSelectedScope: () => PmaChatScopeOption;
   getSelectedScopeSource: () => PmaChatScopeSource;
@@ -205,8 +205,8 @@ export function createChatSendController(deps: ChatSendControllerDeps): ChatSend
       deps.readModelStore.upsertChatTranscriptCards(optimisticChatId, [optimisticPlaceholder]);
     }
 
-    deps.setDraft('');
-    deps.setPendingAttachments([]);
+    deps.setDraft('', activeChatId);
+    deps.setPendingAttachments([], activeChatId);
     const composerVersionAtClear = deps.getComposerEditVersion();
     deps.setSending(true);
     deps.setComposeError(null);
@@ -233,8 +233,8 @@ export function createChatSendController(deps: ChatSendControllerDeps): ChatSend
         deps.readModelStore.failOptimisticMutation(optimisticId);
       }
       if (deps.getComposerEditVersion() !== composerVersionAtClear) return;
-      deps.setDraft(draftSnapshot);
-      deps.setPendingAttachments(attachmentsSnapshot);
+      deps.setDraft(draftSnapshot, optimisticChatId);
+      deps.setPendingAttachments(attachmentsSnapshot, optimisticChatId);
     };
 
     const uploaded = await uploadAttachments(attachmentsSnapshot);

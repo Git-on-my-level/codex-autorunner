@@ -61,6 +61,7 @@ describe('chatListFiltersUrl', () => {
   it('toggles status and facet filters like the list chips', () => {
     expect(toggleChatStatusFilter('active', 'active')).toBe('all');
     expect(toggleChatStatusFilter('all', 'waiting')).toBe('waiting');
+    expect(parseChatListFiltersFromSearchParams(new URLSearchParams('filter=drafts')).status).toBe('drafts');
     expect(toggleChatFacetFilter('discord', 'discord')).toBeNull();
     expect(toggleChatFacetFilter(null, 'discord')).toBe('discord');
   });
