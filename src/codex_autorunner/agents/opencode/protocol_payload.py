@@ -430,7 +430,7 @@ def normalize_message_finish(value: Any) -> Optional[str]:
 def extract_message_finish(payload: Any) -> Optional[str]:
     if not isinstance(payload, dict):
         return None
-    for container in _walk_nested_containers(payload, include_parts=True):
+    for container in _walk_nested_containers(payload):
         finish = normalize_message_finish(
             container.get("finish")
             or container.get("finishReason")
