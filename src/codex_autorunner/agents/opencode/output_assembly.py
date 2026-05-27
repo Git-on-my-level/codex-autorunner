@@ -89,6 +89,7 @@ class OutputAssembler:
 
         self._text_parts: list[str] = []
         self._part_lengths: dict[str, int] = {}
+        self._part_accumulated_text: dict[str, str] = {}
         self._last_full_text = ""
         self._error: Optional[str] = None
         self._message_roles: dict[str, str] = {}
@@ -255,16 +256,13 @@ class OutputAssembler:
                     elif delta_text:
                         self._append_text_for_message(part_message_id, delta_text)
                     self._part_lengths[part_id] = len(text)
+                    self._part_accumulated_text[part_id] = text
                 else:
                     self._append_text_for_message(part_message_id, delta_text)
-                    self._part_lengths[part_id] = self._part_lengths.get(
-                        part_id, 0
-                    ) + len(delta_text)
+                    self._track_part_delta(part_id, delta_text)
             else:
                 self._append_text_for_message(part_message_id, delta_text)
-                self._part_lengths[part_id] = self._part_lengths.get(part_id, 0) + len(
-                    delta_text
-                )
+                self._track_part_delta(part_id, delta_text)
         elif isinstance(part_dict, dict):
             text = part_dict.get("text")
             if isinstance(text, str):
@@ -302,6 +300,7 @@ class OutputAssembler:
             if len(text) > last_len:
                 self._append_text_for_message(part_message_id, text[last_len:])
                 self._part_lengths[part_id] = len(text)
+                self._part_accumulated_text[part_id] = text
         else:
             if self._last_full_text and text.startswith(self._last_full_text):
                 self._append_text_for_message(
@@ -555,6 +554,12 @@ class OutputAssembler:
             text,
             preserve_word_boundaries=preserve_word_boundaries,
         )
+
+    def _track_part_delta(self, part_id: str, delta_text: str) -> None:
+        accumulated = self._part_accumulated_text.get(part_id, "")
+        updated = append_assistant_stream_text_readably(accumulated, delta_text)
+        self._part_accumulated_text[part_id] = updated
+        self._part_lengths[part_id] = len(updated)
 
     def _append_readable_text(
         self,
