@@ -32,6 +32,7 @@ from ..ports.run_event import (
     TokenUsage,
     ToolCall,
     ToolResult,
+    UserInputRequested,
 )
 from ..redaction import redact_text
 from ..text_utils import _normalize_optional_text as normalize_optional_text
@@ -401,6 +402,23 @@ def _run_event_from_timeline_entry(entry: dict[str, Any]) -> Any | None:
             timestamp=timestamp,
             request_id=str(event.get("request_id") or ""),
             description=str(event.get("description") or ""),
+            context=coerce_dict(event.get("context")),
+        )
+    if event_type == "user_input_requested":
+        questions = event.get("questions")
+        return UserInputRequested(
+            timestamp=timestamp,
+            request_id=str(event.get("request_id") or ""),
+            description=str(event.get("description") or ""),
+            questions=(
+                tuple(
+                    dict(question)
+                    for question in questions
+                    if isinstance(question, dict)
+                )
+                if isinstance(questions, list)
+                else ()
+            ),
             context=coerce_dict(event.get("context")),
         )
     if event_type == "token_usage":

@@ -20,6 +20,7 @@ from ...core.ports.run_event import (
     TokenUsage,
     ToolCall,
     ToolResult,
+    UserInputRequested,
 )
 from ...core.runtime_identity import RuntimeIdentityStage
 from ...core.time_utils import now_iso
@@ -256,6 +257,22 @@ def journal_events_from_run_events(
                     "context": dict(event.context),
                 },
             )
+        elif isinstance(event, UserInputRequested):
+            mapped = _standard_journal_event(
+                timestamp=event.timestamp,
+                domain="user_input",
+                name="requested",
+                event_index=event_index,
+                event_type=event_type,
+                source_event_type="user_input_requested",
+                status="requested",
+                message=event.description,
+                data={
+                    "request_id": event.request_id,
+                    "questions": [dict(question) for question in event.questions],
+                    "context": dict(event.context),
+                },
+            )
         elif isinstance(event, TokenUsage):
             mapped = _standard_journal_event(
                 timestamp=event.timestamp,
@@ -380,6 +397,23 @@ def _run_event_from_timeline_entry(entry: Mapping[str, Any]) -> Optional[RunEven
             timestamp=str(payload.get("timestamp") or ""),
             request_id=str(payload.get("request_id") or ""),
             description=str(payload.get("description") or ""),
+            context=_copy_mapping(payload.get("context")),
+        )
+    if event_type == "user_input_requested":
+        questions = payload.get("questions")
+        return UserInputRequested(
+            timestamp=str(payload.get("timestamp") or ""),
+            request_id=str(payload.get("request_id") or ""),
+            description=str(payload.get("description") or ""),
+            questions=(
+                tuple(
+                    dict(question)
+                    for question in questions
+                    if isinstance(question, Mapping)
+                )
+                if isinstance(questions, list)
+                else ()
+            ),
             context=_copy_mapping(payload.get("context")),
         )
     if event_type == "token_usage":

@@ -9,7 +9,9 @@ from codex_autorunner.adapters.discord.service_normalization import (
     build_attachment_context_payload,
     build_discord_approval_message,
     build_discord_queue_notice_message,
+    build_discord_user_input_components,
     format_discord_update_status_message,
+    format_discord_user_input_prompt,
     format_hub_flow_overview_line,
 )
 
@@ -27,15 +29,40 @@ def test_build_discord_approval_message_shapes_prompt_and_components() -> None:
     )
 
     assert message.content == (
-        "Approval required\n"
-        "Reason: Need permission\n"
-        "Command: /bin/zsh -c ps -p 123"
+        "Approval required\nReason: Need permission\nCommand: /bin/zsh -c ps -p 123"
     )
     payload = message.to_payload()
     action_rows = payload["components"]
     assert action_rows[0]["components"][0]["custom_id"] == "approval:abc123:accept"
     assert action_rows[0]["components"][1]["custom_id"] == "approval:abc123:decline"
     assert action_rows[1]["components"][0]["custom_id"] == "approval:abc123:cancel"
+
+
+def test_build_discord_user_input_components_support_select_and_text_modal() -> None:
+    prompt = format_discord_user_input_prompt(
+        {"text": "Which framework?", "options": ["pytest", "unittest"]},
+        index=0,
+        total=1,
+    )
+    select_components = build_discord_user_input_components(
+        "tok123",
+        question_index=0,
+        question={"text": "Which framework?", "options": ["pytest", "unittest"]},
+    )
+    text_components = build_discord_user_input_components(
+        "tok456",
+        question_index=0,
+        question={"text": "Describe the change"},
+    )
+
+    assert prompt == "Question:\nWhich framework?"
+    assert select_components[0]["components"][0]["custom_id"] == (
+        "question_select:tok123:0"
+    )
+    assert [button["custom_id"] for button in text_components[0]["components"]] == [
+        "question:tok456:answer",
+        "question:tok456:cancel",
+    ]
 
 
 def test_build_discord_queue_notice_message_serializes_optional_components() -> None:

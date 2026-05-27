@@ -17,6 +17,7 @@ from ..ports.run_event import (
     TokenUsage,
     ToolCall,
     ToolResult,
+    UserInputRequested,
 )
 from ..redaction import redact_text
 from ..text_utils import _truncate_text
@@ -378,6 +379,17 @@ def reduce_progress_event(
             state="waiting",
             title="Approval requested",
             summary=_summary(event.description, "Approval requested"),
+            event_ids=(event_id,),
+            timestamp=timestamp,
+        )
+
+    if isinstance(event, UserInputRequested):
+        return ProgressProjectionItem(
+            item_id=f"progress:user_input:{event.request_id or event_key}",
+            kind="user_input",
+            state="waiting",
+            title="User input requested",
+            summary=_summary(event.description, "User input requested"),
             event_ids=(event_id,),
             timestamp=timestamp,
         )

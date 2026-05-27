@@ -37,6 +37,7 @@ from .....core.pma.runtime_results import (
 from .....core.ports.run_event import (
     Completed,
     RunEvent,
+    UserInputRequested,
 )
 from .....core.time_utils import now_iso
 from ...services.pma import get_pma_request_context
@@ -705,6 +706,39 @@ async def execute_opencode(
             if asyncio.iscoroutine(maybe):
                 await maybe
 
+    async def _question_handler(
+        request_id: str,
+        props: dict[str, Any],
+    ) -> list[list[str]] | None:
+        questions_raw = props.get("questions") if isinstance(props, dict) else None
+        questions = (
+            tuple(
+                dict(question)
+                for question in questions_raw
+                if isinstance(question, dict)
+            )
+            if isinstance(questions_raw, list)
+            else ()
+        )
+        description = "User input requested"
+        if questions:
+            first = questions[0]
+            for key in ("text", "prompt", "title", "label", "question", "header"):
+                value = first.get(key)
+                if isinstance(value, str) and value.strip():
+                    description = value.strip()
+                    break
+        timeline_events.append(
+            UserInputRequested(
+                timestamp=now_iso(),
+                request_id=request_id,
+                description=description,
+                questions=questions,
+                context=dict(props),
+            )
+        )
+        return None
+
     stall_timeout, first_event_timeout = opencode_stream_timeouts(
         stall_timeout_seconds,
     )
@@ -715,7 +749,7 @@ async def execute_opencode(
             workspace_path=str(hub_root),
             model_payload=model_payload,
             permission_policy=PERMISSION_ALLOW,
-            question_policy="auto_first_option",
+            question_handler=_question_handler,
             should_stop=interrupt_event.is_set,
             ready_event=ready_event,
             part_handler=_timeline_part_handler,

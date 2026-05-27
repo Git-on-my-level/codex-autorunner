@@ -18,6 +18,7 @@ from codex_autorunner.core.ports.run_event import (
     TokenUsage,
     ToolCall,
     ToolResult,
+    UserInputRequested,
 )
 
 
@@ -227,6 +228,25 @@ def test_progress_projection_keeps_approvals_and_notices_interleaved() -> None:
 
     assert [item.kind for item in items] == ["notice", "approval", "notice"]
     assert [item.event_ids for item in items] == [(1,), (2,), (3,)]
+
+
+def test_progress_projection_projects_user_input_requests() -> None:
+    items = _project(
+        UserInputRequested(
+            timestamp="2026-05-06T10:00:02Z",
+            request_id="question-1",
+            description="Which framework?",
+            questions=({"id": "framework", "text": "Which framework?"},),
+            context={"source": "opencode"},
+        )
+    )
+
+    assert len(items) == 1
+    assert items[0].kind == "user_input"
+    assert items[0].state == "waiting"
+    assert items[0].title == "User input requested"
+    assert items[0].summary == "Which framework?"
+    assert items[0].item_id == "progress:user_input:question-1"
 
 
 def test_progress_projection_merges_streamed_progress_fragments() -> None:

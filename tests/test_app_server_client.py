@@ -780,21 +780,30 @@ async def test_approval_flow(tmp_path: Path) -> None:
 @pytest.mark.anyio
 async def test_request_user_input_flow(tmp_path: Path) -> None:
     questions: list[dict] = []
+    notifications: list[dict] = []
 
     async def answer(request: dict) -> dict:
         questions.append(request)
         return {"answers": {"framework": {"answers": ["pytest"]}}}
 
+    async def notify(message: dict) -> None:
+        notifications.append(message)
+
     client = CodexAppServerClient(
         fixture_command("question"),
         cwd=tmp_path,
         question_handler=answer,
+        notification_handler=notify,
     )
     try:
         thread = await client.thread_start(str(tmp_path))
         handle = await client.turn_start(thread["id"], "hi")
         result = await handle.wait()
         assert questions
+        assert any(
+            event.get("method") == "item/tool/requestUserInput"
+            for event in notifications
+        )
         assert result.status == "completed"
         assert result.final_message == "Selected framework: pytest"
         assert result.agent_messages == ["Selected framework: pytest"]

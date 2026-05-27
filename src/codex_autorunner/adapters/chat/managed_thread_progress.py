@@ -15,6 +15,7 @@ from ...core.ports.run_event import (
     OutputDelta,
     RunNotice,
     ToolCall,
+    UserInputRequested,
 )
 from .progress_primitives import (
     ProgressAction,
@@ -114,6 +115,15 @@ def apply_run_event_to_progress_tracker(
     if isinstance(run_event, ApprovalRequested):
         summary = run_event.description.strip() if run_event.description else ""
         tracker.note_approval(summary or "Approval requested")
+        return ProgressTrackerEventOutcome(changed=True, force=True)
+
+    if isinstance(run_event, UserInputRequested):
+        summary = run_event.description.strip() if run_event.description else ""
+        tracker.add_action(
+            "question",
+            summary or "User input requested",
+            "waiting",
+        )
         return ProgressTrackerEventOutcome(changed=True, force=True)
 
     if isinstance(run_event, RunNotice):

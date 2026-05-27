@@ -39,6 +39,7 @@ from ..ports.run_event import (
     TokenUsage,
     ToolCall,
     ToolResult,
+    UserInputRequested,
 )
 from ..time_utils import now_iso
 from .codex_item_normalizers import (
@@ -210,6 +211,47 @@ def _approval_summary(method: str, params: dict[str, Any]) -> str:
                 return ", ".join(paths)
         return "File approval requested"
     return "Approval requested"
+
+
+def _extract_question_text(question: dict[str, Any]) -> str:
+    for key in ("text", "prompt", "title", "label", "question", "header"):
+        value = question.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return "Question"
+
+
+def _extract_user_input_questions(params: dict[str, Any]) -> tuple[dict[str, Any], ...]:
+    questions = params.get("questions")
+    if isinstance(questions, list):
+        return tuple(
+            dict(question) for question in questions if isinstance(question, dict)
+        )
+    question_text = None
+    for key in ("question", "text", "prompt", "title", "label", "header"):
+        value = params.get(key)
+        if isinstance(value, str) and value.strip():
+            question_text = value.strip()
+            break
+    if isinstance(question_text, str) and question_text.strip():
+        question_id = (
+            params.get("id") or params.get("questionId") or params.get("question_id")
+        )
+        question: dict[str, Any] = dict(params)
+        if isinstance(question_id, str) and question_id.strip():
+            question["id"] = question_id.strip()
+        context = params.get("context")
+        if isinstance(context, list):
+            question["context"] = context
+        return (question,)
+    return ()
+
+
+def _user_input_summary(params: dict[str, Any]) -> str:
+    questions = _extract_user_input_questions(params)
+    if questions:
+        return _extract_question_text(questions[0])
+    return "User input requested"
 
 
 def _extract_already_streamed_flag(payload: dict[str, Any]) -> bool:
@@ -683,6 +725,7 @@ class CodexItemDecoder(MessageDecoder):
                     "item/agentMessage/delta",
                     "item/toolCall/start",
                     "item/toolCall/end",
+                    "item/tool/requestUserInput",
                 }
             )
             | _APPROVAL_METHODS
@@ -752,6 +795,18 @@ class CodexItemDecoder(MessageDecoder):
                     status="error" if error else "completed",
                     result=result,
                     error=error,
+                )
+            ]
+
+        if method == "item/tool/requestUserInput":
+            request_id = _request_id_for_event(method, params)
+            return [
+                UserInputRequested(
+                    timestamp=ts,
+                    request_id=request_id,
+                    description=_user_input_summary(params),
+                    questions=_extract_user_input_questions(params),
+                    context=dict(params),
                 )
             ]
 
@@ -982,6 +1037,7 @@ class PermissionDecoder(MessageDecoder):
                 "permission/decision",
                 "permission",
                 "question",
+                "question.asked",
             }
         )
 
@@ -1043,12 +1099,12 @@ class PermissionDecoder(MessageDecoder):
             ]
 
         request_id = _request_id_for_event(method, params)
-        question_text = str(params.get("question") or "").strip()
         return [
-            ApprovalRequested(
+            UserInputRequested(
                 timestamp=ts,
                 request_id=request_id,
-                description=question_text or "Question pending",
+                description=_user_input_summary(params),
+                questions=_extract_user_input_questions(params),
                 context=dict(params),
             )
         ]

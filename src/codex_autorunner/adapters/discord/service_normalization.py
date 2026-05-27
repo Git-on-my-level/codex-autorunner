@@ -29,6 +29,8 @@ from .components import (
     build_button,
     build_queue_notice_buttons,
     build_queue_status_buttons,
+    build_select_menu,
+    build_select_option,
 )
 from .rendering import format_discord_message, truncate_for_discord
 
@@ -362,6 +364,78 @@ def build_discord_approval_message(
     return DiscordMessagePayload(
         content=format_discord_approval_prompt(request),
         components=build_discord_approval_components(token),
+    )
+
+
+def _extract_question_text(question: Mapping[str, Any]) -> str:
+    for key in ("text", "prompt", "title", "label", "question", "header"):
+        value = question.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return "Question"
+
+
+def _extract_question_options(question: Mapping[str, Any]) -> tuple[list[str], bool]:
+    multiple = bool(question.get("multiple"))
+    for key in ("options", "choices"):
+        raw = question.get(key)
+        if not isinstance(raw, list):
+            continue
+        options: list[str] = []
+        for option in raw:
+            if isinstance(option, str) and option.strip():
+                options.append(option.strip())
+                continue
+            if isinstance(option, Mapping):
+                for label_key in ("label", "text", "value", "name", "id"):
+                    value = option.get(label_key)
+                    if isinstance(value, str) and value.strip():
+                        options.append(value.strip())
+                        break
+        return options, multiple
+    return [], multiple
+
+
+def format_discord_user_input_prompt(
+    question: Mapping[str, Any], *, index: int, total: int
+) -> str:
+    prefix = f"Question {index + 1} of {total}" if total > 1 else "Question"
+    return f"{prefix}:\n{_extract_question_text(question)}"
+
+
+def build_discord_user_input_components(
+    token: str,
+    *,
+    question_index: int,
+    question: Mapping[str, Any],
+) -> tuple[dict[str, Any], ...]:
+    options, multiple = _extract_question_options(question)
+    if not options:
+        return (
+            build_action_row(
+                [
+                    build_button("Answer", f"question:{token}:answer"),
+                    build_button("Cancel", f"question:{token}:cancel"),
+                ]
+            ),
+        )
+    select_options = [
+        build_select_option(label[:100], str(index))
+        for index, label in enumerate(options[:25])
+    ]
+    return (
+        build_action_row(
+            [
+                build_select_menu(
+                    f"question_select:{token}:{question_index}",
+                    select_options,
+                    placeholder="Choose answer",
+                    min_values=1,
+                    max_values=len(select_options) if multiple else 1,
+                )
+            ]
+        ),
+        build_action_row([build_button("Cancel", f"question:{token}:cancel")]),
     )
 
 

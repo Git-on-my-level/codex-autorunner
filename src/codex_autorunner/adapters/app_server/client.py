@@ -1014,6 +1014,11 @@ class CodexAppServerClient:
                 method=method,
                 turn_id=turn_id or approval.params.get("turnId"),
             )
+            self._schedule_notification_handler(
+                message,
+                method=method,
+                handled=True,
+            )
             try:
                 decision = await self._callback_registry.approval_adapter_for(
                     approval
@@ -1067,6 +1072,11 @@ class CodexAppServerClient:
                 method=method,
                 turn_id=user_input.request.turn_id or user_input.params.get("turnId"),
                 question_count=len(user_input.request.questions),
+            )
+            self._schedule_notification_handler(
+                message,
+                method=method,
+                handled=True,
             )
             try:
                 result = await self._callback_registry.user_input_adapter_for(

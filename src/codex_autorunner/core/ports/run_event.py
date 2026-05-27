@@ -74,6 +74,15 @@ class ApprovalRequested:
 
 
 @dataclass(frozen=True)
+class UserInputRequested:
+    timestamp: str
+    request_id: str
+    description: str
+    questions: tuple[dict[str, Any], ...] = ()
+    context: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
 class TokenUsage:
     timestamp: str
     usage: dict[str, Any]
@@ -117,6 +126,7 @@ RunEvent = Union[
     ToolCall,
     ToolResult,
     ApprovalRequested,
+    UserInputRequested,
     TokenUsage,
     ProviderRuntimeReported,
     RunNotice,
@@ -151,6 +161,7 @@ __all__ = [
     "TokenUsage",
     "ToolCall",
     "ToolResult",
+    "UserInputRequested",
     "is_terminal_run_event",
     "now_iso",
 ]

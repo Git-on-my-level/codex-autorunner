@@ -1129,13 +1129,14 @@ async def _execute_discord_thread_message(
         allow_cross_repo=dispatch.pma_enabled,
     )
     if existing_session_prompt_text is not None:
-        existing_session_prompt_text, _ = (
-            await dispatch.service._maybe_inject_github_context(
-                existing_session_prompt_text,
-                request_workspace_root,
-                link_source_text=dispatch.turn_text,
-                allow_cross_repo=dispatch.pma_enabled,
-            )
+        (
+            existing_session_prompt_text,
+            _,
+        ) = await dispatch.service._maybe_inject_github_context(
+            existing_session_prompt_text,
+            request_workspace_root,
+            link_source_text=dispatch.turn_text,
+            allow_cross_repo=dispatch.pma_enabled,
         )
     if dispatch.pending_compact_seed:
         prompt_text = f"{dispatch.pending_compact_seed}\n\n{prompt_text}"
@@ -2313,6 +2314,37 @@ async def _run_discord_orchestrated_turn_for_message(
             supervision.set_execution_id(progress_execution_id)
         if bool(getattr(submission, "queued", False)):
             return
+        service._register_discord_turn_approval_context(
+            started_execution=started_execution,
+            channel_id=channel_id,
+        )
+        configure_turn_handlers = getattr(
+            getattr(started_execution, "harness", None),
+            "configure_turn_handlers",
+            None,
+        )
+        backend_thread_id = (
+            str(
+                getattr(started_execution.thread, "backend_thread_id", "") or ""
+            ).strip()
+            or None
+        )
+        backend_turn_id = (
+            str(getattr(started_execution.execution, "backend_id", "") or "").strip()
+            or None
+        )
+        if callable(configure_turn_handlers) and backend_thread_id and backend_turn_id:
+            configure_turn_handlers(
+                backend_thread_id,
+                backend_turn_id,
+                question_handler=lambda request_id, props: (
+                    service._handle_opencode_question_request(
+                        request_id,
+                        props,
+                        turn_id=backend_turn_id,
+                    )
+                ),
+            )
         await _set_progress_lease_state(
             execution_id=progress_execution_id,
             state="active",
@@ -2575,6 +2607,11 @@ async def _run_discord_orchestrated_turn_for_message(
         )
 
     async def _after_completion(_flow: Any) -> None:
+        started_execution = getattr(_flow, "started_execution", None)
+        if started_execution is not None:
+            service._clear_discord_turn_approval_context(
+                started_execution=started_execution
+            )
         await _stop_progress_heartbeat()
 
     if turn_envelope is None:

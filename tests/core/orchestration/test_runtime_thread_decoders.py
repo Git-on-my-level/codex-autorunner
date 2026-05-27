@@ -29,6 +29,7 @@ from codex_autorunner.core.ports.run_event import (
     TokenUsage,
     ToolCall,
     ToolResult,
+    UserInputRequested,
 )
 
 
@@ -137,6 +138,7 @@ class TestCodexItemDecoder:
         assert "item/toolCall/end" in methods
         assert "item/commandExecution/requestApproval" in methods
         assert "item/fileChange/requestApproval" in methods
+        assert "item/tool/requestUserInput" in methods
 
     def test_item_started_structural_event_returns_empty(self) -> None:
         state, ctx = _ctx(
@@ -367,6 +369,32 @@ class TestCodexItemDecoder:
         assert isinstance(events[0], ApprovalRequested)
         assert "src/main.py" in events[0].description
 
+    def test_request_user_input(self) -> None:
+        params = {
+            "requestId": "question-1",
+            "questions": [
+                {
+                    "id": "framework",
+                    "text": "Which framework?",
+                    "options": [{"label": "pytest"}, {"label": "unittest"}],
+                }
+            ],
+        }
+        state, ctx = _ctx("item/tool/requestUserInput", params)
+        events = self.decoder.decode("item/tool/requestUserInput", params, state, ctx)
+
+        assert len(events) == 1
+        assert isinstance(events[0], UserInputRequested)
+        assert events[0].request_id == "question-1"
+        assert events[0].description == "Which framework?"
+        assert events[0].questions == (
+            {
+                "id": "framework",
+                "text": "Which framework?",
+                "options": [{"label": "pytest"}, {"label": "unittest"}],
+            },
+        )
+
     def test_empty_delta_returns_empty(self) -> None:
         state, ctx = _ctx(
             "item/reasoning/summaryTextDelta",
@@ -523,6 +551,7 @@ class TestPermissionDecoder:
         assert "permission/decision" in methods
         assert "permission" in methods
         assert "question" in methods
+        assert "question.asked" in methods
 
     def test_permission_requested(self) -> None:
         state, ctx = _ctx(
@@ -568,8 +597,27 @@ class TestPermissionDecoder:
         state, ctx = _ctx("question", {"question": "Continue?"})
         events = self.decoder.decode("question", {"question": "Continue?"}, state, ctx)
         assert len(events) == 1
-        assert isinstance(events[0], ApprovalRequested)
+        assert isinstance(events[0], UserInputRequested)
         assert events[0].description == "Continue?"
+
+    def test_question_asked(self) -> None:
+        state, ctx = _ctx(
+            "question.asked",
+            {"id": "question-1", "text": "Pick one", "choices": ["a", "b"]},
+        )
+        events = self.decoder.decode(
+            "question.asked",
+            {"id": "question-1", "text": "Pick one", "choices": ["a", "b"]},
+            state,
+            ctx,
+        )
+
+        assert len(events) == 1
+        assert isinstance(events[0], UserInputRequested)
+        assert events[0].request_id == "question-1"
+        assert events[0].questions == (
+            {"id": "question-1", "text": "Pick one", "choices": ["a", "b"]},
+        )
 
 
 class TestUsageDecoder:

@@ -24,6 +24,7 @@ from ..ports.run_event import (
     Started,
     TokenUsage,
     ToolCall,
+    UserInputRequested,
 )
 from ..sse import SSEEvent, parse_sse_lines
 from ..time_utils import now_iso
@@ -52,6 +53,7 @@ DECODE_FAILURE_REASON_MALFORMED_SSE_JSON = "malformed_sse_json"
 DIRECT_RUN_EVENT_TYPES = (
     OutputDelta,
     ToolCall,
+    UserInputRequested,
     ApprovalRequested,
     RunNotice,
     TokenUsage,
