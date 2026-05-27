@@ -78,6 +78,15 @@ describe('/chats page', () => {
     expect(pageSource).not.toContain("streamState === 'connecting' || streamState === 'interrupted'");
   });
 
+  it('uses targeted live regions instead of transcript-wide live announcements', () => {
+    const pageSource = chatDetailPageSource();
+
+    expect(pageSource).not.toContain('aria-live="off"');
+    expect(pageSource).toContain('srStatusAnnouncement');
+    expect(pageSource).toContain('srAlertAnnouncement');
+    expect(pageSource).toContain("role={streamState === 'interrupted' ? 'alert' : 'status'}");
+  });
+
   it('does not mark active chat updates read without an explicit read action', () => {
     const pageSource = chatDetailPageSource();
 

@@ -37,7 +37,8 @@ export type ChatDetailDisplayReadModel = {
   streamingMessageId: string | null;
   showTypingIndicator: boolean;
   transcriptListItems: ChatTranscriptListItem[];
-  srAnnouncement: string;
+  statusAnnouncement: string;
+  alertAnnouncement: string;
   showStreamHealthAside: boolean;
   showStatusBar: boolean;
   chatHasActivity: boolean;
@@ -247,7 +248,8 @@ export function buildChatDetailDisplayReadModel(
       ...(showTypingIndicator ? [{ kind: 'typing' as const, id: 'typing-indicator', title: 'Assistant is typing' }] : []),
       ...(input.assistantSharedFileCount > 0 ? [{ kind: 'shared-files' as const, id: 'assistant-shared-files' }] : [])
     ],
-    srAnnouncement: screenReaderStreamingAnnouncement(input.displayedProgress, lastAssistantMessageCard),
+    statusAnnouncement: screenReaderStatusAnnouncement(input, statusBar, lastAssistantMessageCard),
+    alertAnnouncement: screenReaderAlertAnnouncement(input, statusBar),
     showStreamHealthAside: input.streamState === 'connecting' || input.streamState === 'interrupted',
     showStatusBar,
     chatHasActivity,
@@ -288,15 +290,59 @@ function shouldShowTypingIndicator(
   return Boolean(last && last.kind === 'message' && last.message.role === 'user');
 }
 
-function screenReaderStreamingAnnouncement(
-  progress: PmaRunProgress | null,
+function screenReaderStatusAnnouncement(
+  input: ChatDetailDisplayReadModelInput,
+  statusBar: PmaStatusBar | null,
   card: ChatTranscriptCard | null
 ): string {
-  if (progress?.status !== 'running') return '';
-  if (!card || card.kind !== 'message') return '';
-  if (card.turnId && progress.id && card.turnId !== progress.id) return '';
-  const text = (card.message.text ?? '').trim();
-  return text.length > 120 ? text.slice(text.length - 120) : text;
+  const queueDepth = input.queuedTurns.length || input.displayedProgress?.queueDepth || 0;
+  const queueText = queueDepth > 0
+    ? `${queueDepth} queued message${queueDepth === 1 ? '' : 's'}`
+    : '';
+  if (statusBar?.state === 'running') {
+    return ['Assistant is responding', queueText].filter(Boolean).join('. ');
+  }
+  if (statusBar?.state === 'waiting') {
+    return ['Assistant is waiting', queueText].filter(Boolean).join('. ');
+  }
+  if (statusBar?.state === 'blocked') {
+    return ['Assistant needs attention', queueText].filter(Boolean).join('. ');
+  }
+  if (statusBar?.state === 'done') {
+    const hasCurrentAssistantReply = Boolean(
+      card &&
+        card.kind === 'message' &&
+        (!card.turnId || !input.displayedProgress?.id || card.turnId === input.displayedProgress.id)
+    );
+    return [hasCurrentAssistantReply ? 'Assistant replied' : 'Turn completed', queueText].filter(Boolean).join('. ');
+  }
+  if (input.streamState === 'connecting') return 'Connecting to live chat updates';
+  return queueText;
+}
+
+function screenReaderAlertAnnouncement(
+  input: ChatDetailDisplayReadModelInput,
+  statusBar: PmaStatusBar | null
+): string {
+  if (input.activeError) {
+    return `Could not load this chat: ${errorMessage(input.activeError)}`;
+  }
+  if (input.streamState === 'interrupted') {
+    return 'Live chat updates were interrupted. Reconnecting and repairing from the latest snapshot.';
+  }
+  if (statusBar?.state === 'failed') {
+    return statusBar.phase ? `Turn failed: ${statusBar.phase}` : 'Turn failed';
+  }
+  return '';
+}
+
+function errorMessage(error: unknown): string {
+  if (error instanceof Error && error.message) return error.message;
+  if (error && typeof error === 'object') {
+    const message = (error as { message?: unknown }).message;
+    if (typeof message === 'string' && message.trim()) return message.trim();
+  }
+  return 'Unknown error';
 }
 
 function shouldShowChatDetailStatusBar(

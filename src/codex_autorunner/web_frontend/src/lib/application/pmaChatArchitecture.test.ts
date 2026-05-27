@@ -190,7 +190,8 @@ describe('PMA chat detail state composition', () => {
     ]);
     expect(model.streamingMessageId).toBe('turn:run-1:assistant');
     expect(model.transcriptListItems.map((item) => item.kind)).toEqual(['card', 'card', 'shared-files']);
-    expect(model.srAnnouncement).toBe('working');
+    expect(model.statusAnnouncement).toBe('Assistant is responding. 1 queued message');
+    expect(model.alertAnnouncement).toBe('');
     expect(model.showStreamHealthAside).toBe(true);
     expect(model.showStatusBar).toBe(true);
     expect(model.chatHasActivity).toBe(true);
@@ -216,7 +217,8 @@ describe('PMA chat detail state composition', () => {
     });
 
     expect(model.streamingMessageId).toBeNull();
-    expect(model.srAnnouncement).toBe('');
+    expect(model.statusAnnouncement).toBe('Assistant is responding');
+    expect(model.alertAnnouncement).toBe('');
   });
 
   it('shows the start picker only for an idle selected chat with no projected activity', () => {

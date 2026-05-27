@@ -775,7 +775,8 @@
   });
   const streamingMessageId = $derived(chatDetailDisplay.streamingMessageId);
   const transcriptListItems = $derived<ChatTranscriptListItem[]>(chatDetailDisplay.transcriptListItems);
-  const srAnnouncement = $derived(chatDetailDisplay.srAnnouncement);
+  const srStatusAnnouncement = $derived(chatDetailDisplay.statusAnnouncement);
+  const srAlertAnnouncement = $derived(chatDetailDisplay.alertAnnouncement);
   const activeChatBadges = $derived(pmaChatBadgeViews(activeChat, { showPmaAgent: false }));
   const activeSharedFileCount = $derived(activeSurfaceDeliveries.length);
   const activeRepoIngress = $derived(repoIngressForChat(activeChat));
@@ -2666,7 +2667,7 @@
       {#if showChatListSkeleton}
         <ContentSkeleton variant="chat-list" rows={6} />
       {:else if visibleChatError}
-        <div class="state-panel error">
+        <div class="state-panel error" role="alert">
           <strong>Could not load chats</strong>
           <p>{visibleChatError.message}</p>
           {#if apiErrorDetailText(visibleChatError)}
@@ -2871,7 +2872,7 @@
 
           {#if showStreamHealthAside}
             <aside class="chat-header-aside" aria-label="Chat stream status">
-              <div class={`stream-health ${streamState}`} role="status">
+              <div class={`stream-health ${streamState}`} role={streamState === 'interrupted' ? 'alert' : 'status'}>
                 <span class="status-dot" aria-hidden="true"></span>
                 <span>
                   {#if streamState === 'connecting'}
@@ -2890,7 +2891,7 @@
       {/if}
     </div>
 
-    <div bind:this={messageStack} class="message-stack" aria-live="off">
+    <div bind:this={messageStack} class="message-stack">
       {#if loadingActive && (activeChat || activeChatId)}
         <div class="state-panel loading-state">
           <span class="state-icon" aria-hidden="true"></span>
@@ -2898,7 +2899,7 @@
           <p>Collecting timeline and status.</p>
         </div>
       {:else if activeError}
-        <div class="state-panel error">
+        <div class="state-panel error" role="alert">
           <strong>Could not load this chat</strong>
           <p>{activeError.message}</p>
           <button class="ghost-button" type="button" onclick={() => activeChatId && refreshActive(activeChatId)}>Retry</button>
@@ -2971,7 +2972,8 @@
         </VirtualList>
       {/if}
     </div>
-    <div class="sr-only" aria-live="polite" aria-atomic="false">{srAnnouncement}</div>
+    <div class="sr-only" aria-live="polite" aria-atomic="true">{srStatusAnnouncement}</div>
+    <div class="sr-only" role="alert" aria-atomic="true">{srAlertAnnouncement}</div>
 
     {#if (activeChat && transcriptListItems.length > 0 && !transcriptAtBottom) || (showStatusBar && statusBar)}
       <div class="composer-overlay-anchor">
